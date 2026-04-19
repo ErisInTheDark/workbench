@@ -87,7 +87,7 @@ function ExplorerModifiedDot ({ hidden = false }: { hidden?: boolean }) {
     <span
       data-role="tree-modified"
       hidden={hidden}
-      className="inline-block size-1.5 shrink-0 rounded-full bg-accent"
+      className="inline-block h-2 w-2 shrink-0 rounded-full bg-[#d0ad12] dark:bg-[#ffd84d]"
       aria-hidden="true"
     />
   );

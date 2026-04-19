@@ -222,9 +222,13 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
   editor.addEventListener("input", (event) => {
     const transformedListItem = maybeTransformParagraphIntoListItem(event);
+    const commentCaretMarker = maybeExpandBlockCommentStarter(event);
     syncStructuredBlockStyles();
     if (transformedListItem) {
       restoreListItemSelection([transformedListItem], { collapsed: true });
+    }
+    if (commentCaretMarker) {
+      restoreCaretToMarker(commentCaretMarker);
     }
     inspectCurrentDraft();
     syncCurrentDraftBuffer();
@@ -903,6 +907,24 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     return beforeRange.toString().replaceAll("\u00a0", " ");
   }
 
+  function getInlineExpansionContainer(node: Node | null) {
+    const listItem = getClosestListItem(node);
+    if (listItem) {
+      return getListItemTextContainer(listItem);
+    }
+
+    let current: Node | null = node;
+    while (current && current !== editor) {
+      if (current instanceof HTMLElement && current.parentNode === editor) {
+        return current;
+      }
+
+      current = current.parentNode;
+    }
+
+    return null;
+  }
+
   function getTextPositionAtOffset(root: Node, offset: number) {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let remaining = offset;
@@ -1037,6 +1059,57 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     ensureListItemHasEditableContent(item);
     insertListItemAtParagraphPosition(paragraph, item);
     return item;
+  }
+
+  function restoreCaretToMarker(marker: HTMLElement) {
+    const selection = window.getSelection();
+    if (!selection || !marker.parentNode) {
+      marker.remove();
+      return;
+    }
+
+    const range = document.createRange();
+    range.setStartBefore(marker);
+    range.collapse(true);
+    marker.remove();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  function maybeExpandBlockCommentStarter(event: Event) {
+    if (!(event instanceof InputEvent) || state.mode !== "rich") {
+      return null;
+    }
+
+    if (event.inputType !== "insertText" || event.data !== "!") {
+      return null;
+    }
+
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !selection.isCollapsed) {
+      return null;
+    }
+
+    const range = selection.getRangeAt(0);
+    const container = getInlineExpansionContainer(range.startContainer);
+    if (!container) {
+      return null;
+    }
+
+    const beforeText = getTextBeforeSelectionInElement(selection, container);
+    if (!beforeText.endsWith("<!")) {
+      return null;
+    }
+
+    const prefixNode = document.createTextNode("-- ");
+    const marker = document.createElement("span");
+    marker.dataset.commentCaret = "true";
+    const suffixNode = document.createTextNode(" -->");
+
+    range.insertNode(suffixNode);
+    range.insertNode(marker);
+    range.insertNode(prefixNode);
+    return marker;
   }
 
   function createParagraphFromTopLevelListItem(item: HTMLLIElement, { preserveEmptyListBreak }: { preserveEmptyListBreak: boolean }) {
