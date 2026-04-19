@@ -1,0 +1,332 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light dark;
+  --bg: #f7f3ea;
+  --bg-soft: rgba(49, 34, 15, 0.045);
+  --text: #191614;
+  --muted: rgba(25, 22, 20, 0.62);
+  --accent: #8a4b08;
+  --accent-soft: rgba(138, 75, 8, 0.12);
+  --danger: #8f3d3d;
+  --success: #237254;
+  --shadow: rgba(14, 12, 10, 0.12);
+  --selection: rgba(138, 75, 8, 0.18);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101112;
+    --bg-soft: rgba(239, 225, 203, 0.08);
+    --text: #eee8df;
+    --muted: rgba(238, 232, 223, 0.65);
+    --accent: #ffb36a;
+    --accent-soft: rgba(255, 179, 106, 0.14);
+    --danger: #ff8f8f;
+    --success: #87dcb6;
+    --shadow: rgba(0, 0, 0, 0.35);
+    --selection: rgba(255, 179, 106, 0.2);
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg-soft: var(--bg-soft);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+  --font-sans: "Aptos", "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  --font-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --font-mono: "Cascadia Code", "Consolas", monospace;
+  --shadow-float: 0 0.4rem 1rem var(--shadow);
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    min-height: 100%;
+  }
+
+  body {
+    margin: 0;
+    color: var(--text);
+    font-family: var(--font-sans);
+  }
+  
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    box-shadow: var(--shadow-float);
+    background:
+      radial-gradient(circle at top left, var(--bg-soft), transparent 26rem),
+      var(--bg);
+      z-index: -1;
+  }
+
+  ::selection {
+    background: var(--selection);
+  }
+}
+
+@layer components {
+  .ui-sticky-header::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: linear-gradient(to bottom, var(--bg) 50%, transparent);
+    max-width: 56rem;
+    margin: auto;
+  }
+  
+  .ui-icon-button {
+    align-items: center;
+    border-radius: 0.7rem;
+    color: inherit;
+    display: inline-flex;
+    justify-content: center;
+    min-height: 2.65rem;
+    min-width: 2.65rem;
+    padding: 0.55rem;
+    position: relative;
+    transition:
+      background-color 160ms ease,
+      color 160ms ease,
+      opacity 160ms ease;
+  }
+
+  .ui-icon-button[data-invalid="true"] .save-icon-slash {
+    opacity: 1;
+  }
+
+  .ui-icon-button[data-invalid="true"] .save-icon-main {
+    opacity: 0.45;
+  }
+
+  .ui-icon-button:hover,
+  .ui-icon-button:focus-visible {
+    background: var(--accent-soft);
+    color: var(--accent);
+    outline: none;
+  }
+
+  .ui-icon-button[data-invalid="true"] {
+    background: color-mix(in srgb, var(--danger) 14%, transparent);
+    color: var(--danger);
+  }
+
+  .ui-icon-button[data-invalid="true"]:hover,
+  .ui-icon-button[data-invalid="true"]:focus-visible {
+    background: color-mix(in srgb, var(--danger) 18%, transparent);
+    color: var(--danger);
+  }
+
+  .explorer-scrollbar {
+    scrollbar-color: transparent transparent;
+    scrollbar-width: thin;
+  }
+
+  .explorer-scrollbar:hover {
+    scrollbar-color: color-mix(in srgb, var(--text) 16%, transparent) transparent;
+  }
+
+  .explorer-scrollbar::-webkit-scrollbar {
+    height: 0.7rem;
+    width: 0.7rem;
+  }
+
+  .explorer-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .explorer-scrollbar::-webkit-scrollbar-thumb {
+    background-clip: content-box;
+    background-color: transparent;
+    border: 0.2rem solid transparent;
+    border-radius: 999px;
+  }
+
+  .explorer-scrollbar:hover::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--text) 16%, transparent);
+  }
+
+  .editor-content:empty::before {
+    color: var(--muted);
+    content: attr(data-placeholder);
+  }
+
+  .editor-content p,
+  .editor-content blockquote,
+  .editor-content ul,
+  .editor-content ol,
+  .editor-content pre,
+  .editor-content h1,
+  .editor-content h2,
+  .editor-content h3,
+  .editor-content h4,
+  .editor-content h5,
+  .editor-content h6 {
+    margin: 0 0 1rem;
+  }
+
+  .editor-content h1,
+  .editor-content h2,
+  .editor-content h3,
+  .editor-content h4,
+  .editor-content h5,
+  .editor-content h6 {
+    font-family: var(--font-sans);
+    font-weight: 600;
+    line-height: 1.15;
+  }
+
+  .editor-content h1 {
+    font-size: clamp(2.1rem, 2vw + 1.4rem, 3.2rem);
+  }
+
+  .editor-content h2 {
+    font-size: clamp(1.5rem, 1vw + 1.2rem, 2.1rem);
+  }
+
+  .editor-content h3 {
+    font-size: 1.25rem;
+  }
+
+  .editor-content ul,
+  .editor-content ol {
+    list-style-position: outside;
+    padding-left: 1.3rem;
+  }
+
+  .editor-content ul {
+    list-style-type: disc;
+  }
+
+  .editor-content ul ul {
+    list-style-type: circle;
+  }
+
+  .editor-content ul ul ul {
+    list-style-type: square;
+  }
+
+  .editor-content ol {
+    list-style-type: decimal;
+  }
+
+  .editor-content li > details {
+    display: block;
+  }
+  
+  .editor-content li > details > summary {
+    display: flex;
+    list-style: none;
+    cursor: pointer;
+  }
+  
+  .editor-content li > details > summary > span {
+    cursor: text;
+  }
+
+  .editor-content li > details > summary::after {
+    content: "";
+    display: inline-block;
+    width: 1.2em;
+    height: 1.2em;
+    flex-shrink: 0;
+    align-self: center;
+    background-color: currentColor;
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M7 5.75 12 10 7 14.25' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    mask-position: center;
+    mask-repeat: no-repeat;
+    mask-size: contain;
+    transition: transform 160ms ease;
+  }
+
+  .editor-content li > details[open] > summary::after {
+    transform: rotate(90deg);
+  }
+
+  .editor-content blockquote {
+    color: var(--muted);
+  }
+
+  .editor-content a {
+    color: inherit;
+    text-decoration-color: var(--accent);
+    text-decoration-thickness: 0.08em;
+  }
+
+  .editor-content code {
+    font-family: var(--font-mono);
+    font-size: 0.94em;
+    background: color-mix(in srgb, var(--text) 7%, transparent);
+    border-radius: 0.35rem;
+    padding: 0.08em 0.34em;
+  }
+
+  .editor-content pre {
+    overflow-x: auto;
+    white-space: pre-wrap;
+  }
+
+  .editor-content pre code {
+    background: transparent;
+    border-radius: 0;
+    padding: 0;
+  }
+  
+  .editor-content p:has(+ :where(br, [data-single-break="true"]) + [data-block-comment="true"]) {
+    margin-bottom: 0;
+  }
+  
+  .editor-content p:has(+ [data-block-comment="true"]) {
+    margin-bottom: -0.1rem;
+  }
+  
+  .editor-content [data-block-comment="true"] + :where(br, [data-single-break="true"]) {
+    margin-bottom: 0;
+  }
+
+  .editor-content [data-block-comment="true"] {
+    background: color-mix(in srgb, var(--text) 6%, transparent);
+    border-radius: 0.45rem;
+    padding: 0.45rem 0.75rem;
+    margin-block: 0;
+    margin-inline: -0.75rem;
+    white-space: pre-wrap;
+    font-family: var(--font-sans);
+    color: color-mix(in srgb, var(--text) 60%, transparent);
+    font-size: 0.85em;
+  }
+
+  .editor-content ins {
+    background: color-mix(in srgb, var(--success) 16%, transparent);
+    border-radius: 0.2em;
+    color: inherit;
+    font-weight: inherit;
+    margin-inline: -0.04em;
+    padding-inline: 0.08em;
+    text-decoration: none;
+  }
+
+  .editor-content del {
+    background: color-mix(in srgb, var(--danger) 16%, transparent);
+    border-radius: 0.2em;
+    color: inherit;
+    font-weight: inherit;
+    margin-inline: -0.04em;
+    padding-inline: 0.08em;
+    text-decoration-color: currentColor;
+    text-decoration-thickness: 0.08em;
+  }
+}
