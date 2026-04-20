@@ -1,5 +1,5 @@
-import Workbench from "../components/workbench";
+import WorkbenchPage from "../components/workbench-page";
 
 export default function Page() {
-  return <Workbench />;
+  return <WorkbenchPage />;
 }

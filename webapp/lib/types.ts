@@ -36,6 +36,7 @@ export interface ExplorerSnapshot {
 export interface WorkbenchControls {
   openFile: (path: string) => Promise<void>;
   toggleDirectory: (path: string) => void;
+  createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
 }
 
 export interface WorkbenchBindings {
@@ -49,6 +50,11 @@ export interface FilePayload {
   headContent: string | null;
   updatedAt: string;
   mtimeMs: number;
+}
+
+export interface CreateEntryPayload extends ProjectSnapshot {
+  path: string;
+  type: "directory" | "file";
 }
 
 export interface SaveFilePayload {

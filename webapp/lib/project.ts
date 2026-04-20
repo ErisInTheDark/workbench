@@ -23,6 +23,57 @@ export function safeResolve(requestPath: string) {
   return absolute;
 }
 
+function normalizeEntryName(name: string, type: "directory" | "file") {
+  const trimmedName = String(name ?? "").trim();
+  if (!trimmedName) {
+    throw new Error(`A ${type === "file" ? "file" : "folder"} name is required.`);
+  }
+
+  if (trimmedName === "." || trimmedName === ".." || /[\\/]/.test(trimmedName)) {
+    throw new Error("Names cannot contain path separators.");
+  }
+
+  if (type === "directory") {
+    return trimmedName;
+  }
+
+  const withoutExtension = trimmedName.replace(/\.md$/i, "").trim();
+  if (!withoutExtension) {
+    throw new Error("A file name is required.");
+  }
+
+  return `${withoutExtension}.md`;
+}
+
+export async function createProjectEntry(parentPath: string, name: string, type: "directory" | "file") {
+  const absoluteParentPath = safeResolve(parentPath);
+  const parentStats = await fs.stat(absoluteParentPath);
+  if (!parentStats.isDirectory()) {
+    throw new Error("New entries can only be created inside folders.");
+  }
+
+  const normalizedName = normalizeEntryName(name, type);
+  const absoluteEntryPath = path.join(absoluteParentPath, normalizedName);
+  const relativeEntryPath = normalizeRelativePath(path.relative(projectRoot, absoluteEntryPath));
+
+  try {
+    await fs.access(absoluteEntryPath);
+    throw new Error(`A ${type === "file" ? "file" : "folder"} with that name already exists.`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  if (type === "directory") {
+    await fs.mkdir(absoluteEntryPath);
+  } else {
+    await fs.writeFile(absoluteEntryPath, "", "utf8");
+  }
+
+  return relativeEntryPath;
+}
+
 export async function buildTree(currentDir = projectRoot): Promise<TreeNode[]> {
   const entries = await fs.readdir(currentDir, { withFileTypes: true });
   const visibleEntries = entries

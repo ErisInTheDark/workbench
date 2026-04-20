@@ -1,5 +1,6 @@
 import type {
     ChangeSummary,
+    CreateEntryPayload,
     ExplorerSnapshot,
     FilePayload,
     ProjectSnapshot,
@@ -565,6 +566,14 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     }
   }, { signal });
 
+  const refreshInlineToolbars = () => {
+    window.requestAnimationFrame(() => {
+      updateFloatingToolbar();
+      updateRevisionHoverToolbar();
+      updateCustomCaret();
+    });
+  };
+
   document.addEventListener("selectionchange", () => {
     if (pendingInlineFormats) {
       if (preservePendingInlineFormatSelectionChanges > 0) {
@@ -576,12 +585,11 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
     updateHistorySelection(captureEditorSelection());
     scheduleSelectionPersistence();
-    window.requestAnimationFrame(() => {
-      updateFloatingToolbar();
-      updateRevisionHoverToolbar();
-      updateCustomCaret();
-    });
+    refreshInlineToolbars();
   }, { signal });
+
+  document.addEventListener("touchend", refreshInlineToolbars, { signal, passive: true });
+  document.addEventListener("pointerup", refreshInlineToolbars, { signal });
 
   editor.addEventListener("focus", () => {
     editorHasFocus = true;
@@ -613,13 +621,17 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     }, { signal });
   }
 
-  floatingToolbar.addEventListener("mousedown", (event) => {
+  const preserveToolbarSelection = (event: Event) => {
     event.preventDefault();
-  }, { signal });
+  };
 
-  revisionHoverToolbar.addEventListener("mousedown", (event) => {
-    event.preventDefault();
-  }, { signal });
+  floatingToolbar.addEventListener("mousedown", preserveToolbarSelection, { signal });
+  floatingToolbar.addEventListener("pointerdown", preserveToolbarSelection, { signal });
+  floatingToolbar.addEventListener("touchstart", preserveToolbarSelection, { signal, passive: false });
+
+  revisionHoverToolbar.addEventListener("mousedown", preserveToolbarSelection, { signal });
+  revisionHoverToolbar.addEventListener("pointerdown", preserveToolbarSelection, { signal });
+  revisionHoverToolbar.addEventListener("touchstart", preserveToolbarSelection, { signal, passive: false });
 
   floatingToolbar.addEventListener("click", (event) => {
     const button = event.target instanceof Element
@@ -696,6 +708,9 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     updateRevisionHoverToolbar();
     updateCustomCaret();
   }, { signal });
+
+  window.visualViewport?.addEventListener("resize", refreshInlineToolbars, { signal });
+  window.visualViewport?.addEventListener("scroll", refreshInlineToolbars, { signal });
 
   window.addEventListener("beforeunload", (event) => {
     const hasMarkupMismatch = Boolean(state.saveIssue) || Array.from(state.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue));
@@ -3968,6 +3983,54 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     updateCustomCaret();
   }
 
+  function applyFilePayloadToCurrentFile(
+    payload: FilePayload,
+    {
+      preserveSelection = false,
+      statusMessage,
+    }: {
+      preserveSelection?: boolean;
+      statusMessage?: string;
+    } = {},
+  ) {
+    const mode = isMarkdownFile(payload.path) ? "rich" : "plain";
+    const selectionSnapshot = preserveSelection ? captureEditorSelection() : null;
+
+    clearWriteConflict();
+    state.currentPath = payload.path;
+    state.expectedMtimeMs = payload.mtimeMs;
+    state.headContent = payload.headContent;
+    filePathLabel.textContent = payload.path;
+    editor.setAttribute("contenteditable", isTextLikeFile(payload.path) ? "true" : "false");
+    renderEditorDocument(payload.content, mode);
+    if (mode === "rich") {
+      state.baselineContent = refreshSaveGuardState().markdown;
+      state.currentContent = state.baselineContent;
+    } else {
+      state.baselineContent = payload.content;
+      state.currentContent = payload.content;
+      state.saveIssue = null;
+      updateSaveButtonState();
+    }
+    state.mode = mode;
+    state.dirty = false;
+    state.history = createInitialEditHistory(state.currentContent);
+    state.pendingWriteConflict = null;
+    state.saveIssue = null;
+    state.lastLoggedSaveIssue = null;
+
+    if (selectionSnapshot) {
+      restoreEditorSelection(selectionSnapshot);
+      updateHistorySelection(captureEditorSelection());
+    }
+
+    updateStatusLine(statusMessage);
+    scheduleDiffGutterRefresh();
+    updateFloatingToolbar();
+    updateRevisionHoverToolbar();
+    updateCustomCaret();
+  }
+
   function applyHistoryState(history: EditHistoryState, nextIndex: number) {
     const clampedIndex = Math.max(0, Math.min(nextIndex, history.frames.length - 1));
     const nextContent = materializeHistoryContent(history, clampedIndex);
@@ -4046,16 +4109,10 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       void persistDraftBuffer(filePath, null);
     }
 
-    clearWriteConflict();
-    state.currentPath = payload.path;
-    state.expectedMtimeMs = payload.mtimeMs;
-    state.headContent = payload.headContent;
-    filePathLabel.textContent = payload.path;
-    const mode = isMarkdownFile(payload.path) ? "rich" : "plain";
-    editor.setAttribute("contenteditable", isTextLikeFile(payload.path) ? "true" : "false");
-    setEditorContent(payload.content, mode);
+    applyFilePayloadToCurrentFile(payload, {
+      statusMessage: `${source === "reload" ? "Reloaded" : "Read"} ${formatTimestamp(payload.updatedAt)}`,
+    });
     syncCurrentPathToUrl(payload.path);
-    updateStatusLine(`${source === "reload" ? "Reloaded" : "Read"} ${formatTimestamp(payload.updatedAt)}`);
     expandPath(payload.path);
     emitExplorerStateChange();
   }
@@ -4107,6 +4164,49 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     await openFile(state.currentPath, { ignoreDirty: true, source: "reload" });
     updateStatusLine(`Reset to HEAD - ${formatTimestamp(payload.updatedAt)}`);
     editor.focus();
+  }
+
+  async function createEntry(parentPath: string, name: string, type: "directory" | "file") {
+    const response = await fetch("/api/tree", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        parentPath,
+        name,
+        type,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: "Unable to create entry." }));
+      throw new Error(error.error);
+    }
+
+    const payload = await response.json() as CreateEntryPayload;
+    state.root = payload.root;
+    state.tree = payload.tree;
+    state.changes = payload.changes;
+
+    if (parentPath) {
+      state.expandedDirectories.add(parentPath);
+    }
+    if (type === "directory") {
+      state.expandedDirectories.add(payload.path);
+    }
+
+    persistExpandedDirectories();
+    emitExplorerStateChange();
+
+    if (type === "file") {
+      await openFile(payload.path);
+      updateStatusLine(`Created ${payload.path}`);
+    } else {
+      updateStatusLine(`Created ${payload.path}`);
+    }
+
+    return payload.path;
   }
 
   function expandPath(filePath: string) {
@@ -4377,6 +4477,30 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     beforeRange.selectNodeContents(element);
     beforeRange.setEnd(range.startContainer, range.startOffset);
     return beforeRange.toString().replaceAll("\u00a0", " ").trim() === "";
+  }
+
+  async function refreshCurrentFileFromDiskIfSafe() {
+    if (
+      !state.currentPath ||
+      state.dirty ||
+      state.saveIssue ||
+      state.pendingWriteConflict ||
+      !treeContainsFilePath(state.tree, state.currentPath)
+    ) {
+      return;
+    }
+
+    const payload = await fetchFilePayload(state.currentPath);
+    if (!payload || payload.mtimeMs === state.expectedMtimeMs) {
+      return;
+    }
+
+    applyFilePayloadToCurrentFile(payload, {
+      preserveSelection: true,
+      statusMessage: `Updated from disk - ${formatTimestamp(payload.updatedAt)}`,
+    });
+    syncCurrentPathToUrl(payload.path);
+    emitExplorerStateChange();
   }
 
   function isSelectionAtElementEnd(selection: Selection, element: HTMLElement) {
@@ -5033,6 +5157,30 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     selection?.removeAllRanges();
     selection?.addRange(range);
     return markerRect;
+  }
+
+  function getExpandedRangeRect(range: Range) {
+    const directRect = range.getBoundingClientRect();
+    if (directRect.width > 0 || directRect.height > 0) {
+      return directRect;
+    }
+
+    const rects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 || rect.height > 0);
+    if (rects.length > 0) {
+      return rects[0];
+    }
+
+    return directRect;
+  }
+
+  function getVisualViewportMetrics() {
+    const viewport = window.visualViewport;
+    return {
+      height: viewport?.height ?? window.innerHeight,
+      left: viewport?.offsetLeft ?? 0,
+      top: viewport?.offsetTop ?? 0,
+      width: viewport?.width ?? window.innerWidth,
+    };
   }
 
   function getCaretInlineContext(range: Range): CaretRenderContext | null {
@@ -6110,7 +6258,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       return null;
     }
 
-    const rect = range.getBoundingClientRect();
+    const rect = getExpandedRangeRect(range);
     if (!rect.width && !rect.height) {
       return null;
     }
@@ -6211,17 +6359,29 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     revisionHoverRejectButton.title = rejectLabel;
     revisionHoverToolbar.hidden = false;
 
+    const viewport = getVisualViewportMetrics();
+    const contextTop = viewport.top + context.rect.top;
+    const contextBottom = viewport.top + context.rect.bottom;
+    if (contextBottom < viewport.top + 8 || contextTop > viewport.top + viewport.height - 8) {
+      revisionHoverToolbar.hidden = true;
+      return;
+    }
+
+    const leftEdge = viewport.left + 12;
+    const rightEdge = viewport.left + viewport.width - revisionHoverToolbar.offsetWidth - 12;
     const x = Math.min(
-      window.innerWidth - revisionHoverToolbar.offsetWidth - 12,
-      Math.max(12, context.rect.left + context.rect.width / 2 - revisionHoverToolbar.offsetWidth / 2),
+      rightEdge,
+      Math.max(leftEdge, viewport.left + context.rect.left + context.rect.width / 2 - revisionHoverToolbar.offsetWidth / 2),
     );
-    const preferredTop = context.rect.top - revisionHoverToolbar.offsetHeight - 10;
-    const y = preferredTop >= 12
+    const preferredTop = viewport.top + context.rect.top - revisionHoverToolbar.offsetHeight - 10;
+    const fallbackTop = viewport.top + context.rect.bottom + 10;
+    const maxTop = viewport.top + viewport.height - revisionHoverToolbar.offsetHeight - 12;
+    const y = preferredTop >= viewport.top + 12
       ? preferredTop
-      : Math.min(window.innerHeight - revisionHoverToolbar.offsetHeight - 12, context.rect.bottom + 10);
+      : Math.min(maxTop, fallbackTop);
 
     revisionHoverToolbar.style.left = `${x}px`;
-    revisionHoverToolbar.style.top = `${Math.max(12, y)}px`;
+    revisionHoverToolbar.style.top = `${Math.max(viewport.top + 12, y)}px`;
   }
 
   function applyHoveredRevisionAction(action: "accept" | "reject") {
@@ -6281,19 +6441,33 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     }
 
     const range = selection.getRangeAt(0);
-    const rect = range.getBoundingClientRect();
+    const rect = getExpandedRangeRect(range);
     if (!rect.width && !rect.height) {
       floatingToolbar.hidden = true;
       return;
     }
 
-    floatingToolbar.hidden = false;
+    const viewport = getVisualViewportMetrics();
+    const selectionTop = viewport.top + rect.top;
+    const selectionBottom = viewport.top + rect.bottom;
+    if (selectionBottom < viewport.top + 8 || selectionTop > viewport.top + viewport.height - 8) {
+      floatingToolbar.hidden = true;
+      return;
+    }
 
+    floatingToolbar.hidden = false;
+    const leftEdge = viewport.left + 12;
+    const rightEdge = viewport.left + viewport.width - floatingToolbar.offsetWidth - 12;
     const x = Math.min(
-      window.innerWidth - floatingToolbar.offsetWidth - 12,
-      Math.max(12, rect.left + rect.width / 2 - floatingToolbar.offsetWidth / 2),
+      rightEdge,
+      Math.max(leftEdge, viewport.left + rect.left + rect.width / 2 - floatingToolbar.offsetWidth / 2),
     );
-    const y = Math.max(12, rect.top - floatingToolbar.offsetHeight - 10);
+    const preferredTop = viewport.top + rect.top - floatingToolbar.offsetHeight - 10;
+    const fallbackTop = viewport.top + rect.bottom + 10;
+    const maxTop = viewport.top + viewport.height - floatingToolbar.offsetHeight - 12;
+    const y = preferredTop >= viewport.top + 12
+      ? preferredTop
+      : Math.min(maxTop, fallbackTop);
 
     floatingToolbar.style.left = `${x}px`;
     floatingToolbar.style.top = `${y}px`;
@@ -6308,7 +6482,10 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     emitExplorerStateChange();
 
     if (preserveSelection && state.currentPath) {
-      return;
+      if (treeContainsFilePath(state.tree, state.currentPath)) {
+        await refreshCurrentFileFromDiskIfSafe();
+        return;
+      }
     }
 
     const requestedPath = getRequestedPathFromUrl();
@@ -6369,6 +6546,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   }
 
   const controls: WorkbenchControls = {
+    createEntry,
     openFile,
     toggleDirectory,
   };

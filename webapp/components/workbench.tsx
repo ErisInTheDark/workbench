@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useEffect, useState, type ReactNode } from "react";
+import { startTransition, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type {
   ChangeSummary,
@@ -17,6 +17,50 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   expandedDirectories: [""],
   locallyModifiedPaths: [],
 };
+
+const MOBILE_MEDIA_QUERY = "(max-width: 767px)";
+type MobilePane = "editor" | "explorer";
+
+function getCurrentFileSearchParam () {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  try {
+    const url = new URL(window.location.href);
+    return url.searchParams.get("file") ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function syncCurrentFileSearchParam (filePath: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    const url = new URL(window.location.href);
+    if (filePath) {
+      url.searchParams.set("file", filePath);
+    } else {
+      url.searchParams.delete("file");
+    }
+
+    const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+    window.history.replaceState(window.history.state, "", nextUrl);
+  } catch {
+    // Ignore URL update failures and keep the workbench usable.
+  }
+}
+
+function getPreferredMobilePane (isMobileViewport: boolean): MobilePane {
+  if (!isMobileViewport) {
+    return "editor";
+  }
+
+  return getCurrentFileSearchParam() ? "editor" : "explorer";
+}
 
 function SaveIcon () {
   return (
@@ -72,6 +116,25 @@ function ZoomInIcon () {
   );
 }
 
+function BackArrowIcon () {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
+      <path d="M12.75 4.75L7.25 10L12.75 15.25" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M7.75 10H16.25" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function NewEntryIcon () {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
+      <path d="M6 2.75H11.75L15.5 6.5V16.25C15.5 16.94 14.94 17.5 14.25 17.5H6C5.31 17.5 4.75 16.94 4.75 16.25V4C4.75 3.31 5.31 2.75 6 2.75Z" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M11.75 2.75V6.5H15.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M10.125 9V14M7.625 11.5H12.625" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function ExplorerChevronIcon ({ expanded }: { expanded: boolean }) {
   return (
     <svg
@@ -122,6 +185,8 @@ interface WorkbenchDialogProps {
   children: ReactNode;
   eyebrow: string;
   id: string;
+  isOpen?: boolean;
+  onBackdropClick?: () => void;
   summaryId?: string;
   title: string;
   titleId: string;
@@ -132,6 +197,8 @@ function WorkbenchDialog ({
   children,
   eyebrow,
   id,
+  isOpen,
+  onBackdropClick,
   summaryId,
   title,
   titleId,
@@ -139,13 +206,18 @@ function WorkbenchDialog ({
   return (
     <div
       id={id}
-      hidden
+      hidden={typeof isOpen === "boolean" ? !isOpen : true}
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
       aria-describedby={summaryId}
       data-workbench-dialog="true"
       className="fixed inset-0 z-40 flex items-center justify-center bg-[color-mix(in_srgb,var(--bg)_74%,transparent)] px-5 backdrop-blur-sm"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onBackdropClick?.();
+        }
+      }}
     >
       <div className="w-full max-w-md rounded-[1.4rem] bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] px-5 py-4 shadow-float">
         <p className="m-0 text-[0.84rem] tracking-[0.02em] text-muted">{eyebrow}</p>
@@ -193,6 +265,8 @@ interface ExplorerTreeProps {
   modifiedPaths: Set<string>;
   nested?: boolean;
   nodes: TreeNode[];
+  onCreateInDirectory?: (path: string) => void;
+  onOpenFile?: (path: string) => void;
 }
 
 function ExplorerTree ({
@@ -203,6 +277,8 @@ function ExplorerTree ({
   modifiedPaths,
   nested = false,
   nodes,
+  onCreateInDirectory,
+  onOpenFile,
 }: ExplorerTreeProps) {
   return (
     <ul
@@ -222,11 +298,11 @@ function ExplorerTree ({
               data-tree-key={`${node.type}:${node.path}`}
               data-tree-type={node.type}
             >
-              <div className="flex min-w-0 items-center gap-2">
+              <div className="tree-folder-row flex min-w-0 items-center gap-2 justify-between">
                 <button
                   data-role="tree-button"
                   type="button"
-                  className="inline-flex max-w-full items-center gap-2 rounded-lg px-2 py-0.5 text-left text-muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+                  className="inline-flex max-w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:py-0.5"
                   onClick={() => {
                     controls?.toggleDirectory(node.path);
                   }}
@@ -234,6 +310,18 @@ function ExplorerTree ({
                   <ExplorerChevronIcon expanded={isExpanded} />
                   <span data-role="tree-label" className="min-w-0 truncate">{node.name}</span>
                   <ExplorerModifiedDot hidden={!isModified} />
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Create in ${node.name}`}
+                  title={`Create in ${node.name}`}
+                  className="new-entry-button ui-icon-button shrink-0"
+                  onClick={() => {
+                    onCreateInDirectory?.(node.path);
+                  }}
+                >
+                  <NewEntryIcon />
+                  <span className="sr-only">{`Create in ${node.name}`}</span>
                 </button>
               </div>
               {isExpanded ? (
@@ -245,6 +333,8 @@ function ExplorerTree ({
                   modifiedPaths={modifiedPaths}
                   nested
                   nodes={node.children}
+                  onCreateInDirectory={onCreateInDirectory}
+                  onOpenFile={onOpenFile}
                 />
               ) : null}
             </li>
@@ -267,8 +357,13 @@ function ExplorerTree ({
               <button
                 data-role="tree-button"
                 type="button"
-                className={`inline-flex max-w-full items-center gap-2 rounded-lg px-2 py-0.5 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none${isCurrent ? " font-semibold text-accent" : ""}`}
+                className={`inline-flex max-w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:py-0.5${isCurrent ? " font-semibold text-accent" : ""}`}
                 onClick={() => {
+                  if (onOpenFile) {
+                    onOpenFile(node.path);
+                    return;
+                  }
+
                   void controls?.openFile(node.path);
                 }}
               >
@@ -294,6 +389,13 @@ function ExplorerTree ({
 export default function Workbench () {
   const [explorer, setExplorer] = useState(INITIAL_EXPLORER_SNAPSHOT);
   const [controls, setControls] = useState<WorkbenchControls | null>(null);
+  const [isMobile, setIsMobile] = useState(false);
+  const [mobilePane, setMobilePane] = useState<MobilePane>("explorer");
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [createDialogParentPath, setCreateDialogParentPath] = useState("");
+  const [createEntryName, setCreateEntryName] = useState("");
+  const [isCreatingEntry, setIsCreatingEntry] = useState(false);
+  const [createDialogError, setCreateDialogError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -333,88 +435,410 @@ export default function Workbench () {
     };
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia(MOBILE_MEDIA_QUERY);
+    const applyMatch = () => {
+      setIsMobile(mediaQuery.matches);
+      setMobilePane(getPreferredMobilePane(mediaQuery.matches));
+    };
+
+    applyMatch();
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", applyMatch);
+    } else {
+      mediaQuery.addListener(applyMatch);
+    }
+    return () => {
+      if (typeof mediaQuery.removeEventListener === "function") {
+        mediaQuery.removeEventListener("change", applyMatch);
+      } else {
+        mediaQuery.removeListener(applyMatch);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const syncPaneFromUrl = () => {
+      setMobilePane(getPreferredMobilePane(window.matchMedia?.(MOBILE_MEDIA_QUERY).matches ?? false));
+    };
+
+    window.addEventListener("popstate", syncPaneFromUrl);
+    return () => {
+      window.removeEventListener("popstate", syncPaneFromUrl);
+    };
+  }, []);
+
   const expandedDirectories = new Set(explorer.expandedDirectories);
   const modifiedPaths = new Set(explorer.locallyModifiedPaths);
+  const closeCreateDialog = () => {
+    if (isCreatingEntry) {
+      return;
+    }
+
+    setIsCreateDialogOpen(false);
+    setCreateDialogParentPath("");
+    setCreateEntryName("");
+    setCreateDialogError("");
+  };
+  const openCreateDialog = (parentPath: string) => {
+    setIsCreateDialogOpen(true);
+    setCreateDialogParentPath(parentPath);
+    setCreateEntryName("");
+    setCreateDialogError("");
+  };
+  const openFileFromExplorer = async (path: string) => {
+    if (!controls) {
+      return;
+    }
+
+    await controls.openFile(path);
+    if (isMobile) {
+      setMobilePane("editor");
+    }
+  };
+
+  const workbenchControls = useMemo<WorkbenchControls | null>(() => {
+    if (!controls) {
+      return null;
+    }
+
+    return {
+      ...controls,
+      openFile: openFileFromExplorer,
+    };
+  }, [controls, isMobile]);
+
+  const mobileTrackStyle = isMobile
+    ? { transform: mobilePane === "explorer" ? "translateX(0)" : "translateX(-50%)" }
+    : undefined;
+  const createDialogParentLabel = createDialogParentPath || "project";
+  const handleCreateEntry = async (type: "directory" | "file") => {
+    if (!controls || isCreatingEntry) {
+      return;
+    }
+
+    setIsCreatingEntry(true);
+    setCreateDialogError("");
+    try {
+      await controls.createEntry(createDialogParentPath, createEntryName, type);
+      setIsCreatingEntry(false);
+
+      closeCreateDialog();
+      if (isMobile && type === "file") {
+        setMobilePane("editor");
+      }
+    } catch (error) {
+      setIsCreatingEntry(false);
+      setCreateDialogError(error instanceof Error ? error.message : `Couldn't create the ${type === "file" ? "file" : "folder"}.`);
+    }
+  };
 
   return (
-    <div className="min-h-screen md:grid md:grid-cols-[minmax(16rem,21rem)_1fr] md:items-start">
-      <aside className="flex min-h-0 min-w-0 flex-col px-5 pb-5 md:sticky md:top-0 md:h-screen md:self-start md:px-6 md:py-5">
-        <nav
-          id="file-tree"
-          className="explorer-scrollbar min-h-0 flex-1 overflow-y-auto pb-8 pr-2 text-[0.95rem] leading-6 -ml-3"
-          aria-label="Project files"
-        >
-          <ExplorerTree
-            changes={explorer.changes}
-            controls={controls}
-            currentPath={explorer.currentPath}
-            expandedDirectories={expandedDirectories}
-            modifiedPaths={modifiedPaths}
-            nodes={explorer.tree}
-          />
-        </nav>
-      </aside>
-
-      <main className="flex min-h-0 min-w-0 flex-col px-5 pb-5 md:px-6 md:pb-5">
-        <header className="ui-sticky-header sticky top-0 z-10 flex items-end justify-between gap-4 py-3">
-          <div className="min-w-0">
-            <p id="file-path" className="truncate text-base font-semibold leading-tight">
-              Select a file
-            </p>
-            <p id="status-line" className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted">
-              Markdown files open as rich text. Save with Ctrl/Cmd+S.
-            </p>
-          </div>
-          <div className="flex items-center gap-1.5">
+    <div className="min-h-screen overflow-x-hidden md:grid md:grid-cols-[minmax(16rem,21rem)_1fr] md:items-start md:overflow-visible">
+      <div
+        className="mobile-workbench-track flex min-h-screen w-[200vw] transition-transform duration-200 ease-out md:contents md:w-auto md:transform-none"
+        style={mobileTrackStyle}
+      >
+        <aside className="flex min-h-screen w-screen min-w-0 shrink-0 flex-col px-5 pb-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:px-6 md:py-5">
+          <div className="tree-folder-row flex items-center justify-between gap-3 pr-2 md:pr-4.5">
+            <p className="m-0 text-base font-semibold leading-tight">Project</p>
             <button
-              id="zoom-out"
               type="button"
-              title="Decrease editor text size"
-              aria-label="Decrease editor text size"
-              className="ui-icon-button"
+              aria-label="Create in project"
+              title="Create in project"
+              className="new-entry-button ui-icon-button p-0 shrink-0"
+              onClick={() => {
+                openCreateDialog("");
+              }}
             >
-              <ZoomOutIcon />
-              <span className="sr-only">Decrease editor text size</span>
-            </button>
-            <button
-              id="zoom-in"
-              type="button"
-              title="Increase editor text size"
-              aria-label="Increase editor text size"
-              className="ui-icon-button"
-            >
-              <ZoomInIcon />
-              <span className="sr-only">Increase editor text size</span>
-            </button>
-            <button
-              id="save-file"
-              type="button"
-              title="Save current file"
-              aria-label="Save current file"
-              className="ui-icon-button group"
-              data-invalid="false"
-            >
-              <SaveIcon />
-              <span className="sr-only">Save current file</span>
-            </button>
-            <button
-              id="reset-draft"
-              type="button"
-              title="Discard the current draft"
-              aria-label="Discard the current draft"
-              className="ui-icon-button"
-            >
-              <BinIcon />
-              <span className="sr-only">Discard the current draft</span>
+              <NewEntryIcon />
+              <span className="sr-only">Create in project</span>
             </button>
           </div>
-        </header>
+          <nav
+            id="file-tree"
+            className="explorer-scrollbar min-h-0 flex-1 overflow-y-auto pb-8 pr-2 text-[0.95rem] leading-6 -ml-3"
+            aria-label="Project files"
+          >
+            <ExplorerTree
+              changes={explorer.changes}
+              controls={workbenchControls}
+              currentPath={explorer.currentPath}
+              expandedDirectories={expandedDirectories}
+              modifiedPaths={modifiedPaths}
+              nodes={explorer.tree}
+              onCreateInDirectory={openCreateDialog}
+              onOpenFile={(path) => {
+                void openFileFromExplorer(path);
+              }}
+            />
+          </nav>
+        </aside>
 
-        <div
-          id="floating-toolbar"
-          className="fixed left-0 top-0 z-30 flex items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--bg)_88%,transparent)] p-1 shadow-float backdrop-blur-xl"
-          hidden
+        <main
+          className="flex min-h-screen w-screen min-w-0 shrink-0 flex-col px-5 pb-5 md:w-auto md:px-6 md:pb-5"
         >
+          <header className="ui-sticky-header sticky top-0 z-10 py-3">
+            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+              <div className="order-2 min-w-0 md:order-1">
+                <p id="file-path" className="truncate text-base font-semibold leading-tight">
+                  Select a file
+                </p>
+                <p id="status-line" className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted">
+                  Markdown files open as rich text. Save with Ctrl/Cmd+S.
+                </p>
+              </div>
+              <div className="order-1 flex items-center justify-between gap-3 md:order-2 md:flex-none md:justify-end">
+                <button
+                  type="button"
+                  aria-label="Back to file explorer"
+                  title="Back to file explorer"
+                  hidden={!isMobile || mobilePane !== "editor"}
+                  className="ui-icon-button shrink-0 md:hidden"
+                  onClick={() => {
+                    syncCurrentFileSearchParam("");
+                    setMobilePane("explorer");
+                  }}
+                >
+                  <BackArrowIcon />
+                  <span className="sr-only">Back to file explorer</span>
+                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    id="zoom-out"
+                    type="button"
+                    title="Decrease editor text size"
+                    aria-label="Decrease editor text size"
+                    className="ui-icon-button"
+                  >
+                    <ZoomOutIcon />
+                    <span className="sr-only">Decrease editor text size</span>
+                  </button>
+                  <button
+                    id="zoom-in"
+                    type="button"
+                    title="Increase editor text size"
+                    aria-label="Increase editor text size"
+                    className="ui-icon-button"
+                  >
+                    <ZoomInIcon />
+                    <span className="sr-only">Increase editor text size</span>
+                  </button>
+                  <button
+                    id="save-file"
+                    type="button"
+                    title="Save current file"
+                    aria-label="Save current file"
+                    className="ui-icon-button group"
+                    data-invalid="false"
+                  >
+                    <SaveIcon />
+                    <span className="sr-only">Save current file</span>
+                  </button>
+                  <button
+                    id="reset-draft"
+                    type="button"
+                    title="Discard the current draft"
+                    aria-label="Discard the current draft"
+                    className="ui-icon-button"
+                  >
+                    <BinIcon />
+                    <span className="sr-only">Discard the current draft</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </header>
+
+          <section className="min-h-0 flex-1">
+            <div className="editor-shell relative mx-auto grid w-[calc(100%+1.25rem)] md:w-full grid-cols-[0.72rem_minmax(0,1fr)] gap-[0.53rem] md:max-w-[calc(56rem+2.5rem)] md:grid-cols-[1.25rem_minmax(0,56rem)] md:gap-3 -ml-5 md:ml-auto">
+              <div
+                id="editor-diff-gutter"
+                className="editor-diff-gutter opacity-50"
+                aria-hidden="true"
+              />
+              <div
+                id="editor"
+                className="editor-content min-h-[calc(100vh-6rem)] pb-16 font-serif text-[1.08rem] leading-[1.72] whitespace-normal outline-none"
+                contentEditable
+                suppressContentEditableWarning
+                spellCheck
+                data-placeholder="Select a markdown file to start editing."
+              />
+              <div
+                id="editor-custom-caret"
+                className="editor-custom-caret"
+                aria-hidden="true"
+                hidden
+              />
+            </div>
+          </section>
+
+          <WorkbenchDialog
+            id="save-conflict-dialog"
+            titleId="save-conflict-title"
+            summaryId="save-conflict-summary"
+            eyebrow="Write conflict"
+            title="This file changed on disk"
+            actions={
+              <>
+                <button
+                  id="save-conflict-keep-editing"
+                  type="button"
+                  className={dialogButtonClassName}
+                >
+                  Keep editing
+                </button>
+                <button
+                  id="save-conflict-reload"
+                  type="button"
+                  className={dialogButtonClassName}
+                >
+                  Reload from disk
+                </button>
+                <button
+                  id="save-conflict-overwrite"
+                  type="button"
+                  className={dialogButtonClassName}
+                >
+                  Overwrite anyway
+                </button>
+              </>
+            }
+          >
+            <>
+              <p id="save-conflict-summary" className="mt-3 text-sm leading-6 text-muted">
+                Reload from disk to discard your unsaved editor state, or overwrite anyway to write what is currently in the editor.
+              </p>
+              <p id="save-conflict-expected" className="mt-3 text-[0.84rem] tracking-[0.02em] text-muted" />
+              <p id="save-conflict-actual" className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted" />
+            </>
+          </WorkbenchDialog>
+
+          <WorkbenchDialog
+            id="reset-draft-dialog"
+            titleId="reset-draft-title"
+            summaryId="reset-draft-summary"
+            eyebrow="Discard draft"
+            title="Reset this draft?"
+            actions={
+              <>
+                <button
+                  id="reset-draft-cancel"
+                  type="button"
+                  className={dialogButtonClassName}
+                >
+                  Cancel
+                </button>
+                <button
+                  id="reset-draft-head"
+                  type="button"
+                  className={dialogButtonClassName}
+                >
+                  Reset to HEAD
+                </button>
+                <button
+                  id="reset-draft-saved"
+                  type="button"
+                  className={dialogButtonClassName}
+                >
+                  Reset to saved
+                </button>
+              </>
+            }
+          >
+            <p id="reset-draft-summary" className="mt-3 text-sm leading-6 text-muted">
+              Reset to saved discards the current draft and reloads the file from disk. Reset to HEAD overwrites the file on disk with the current git HEAD version, then reloads it here.
+            </p>
+          </WorkbenchDialog>
+
+          <WorkbenchDialog
+            id="create-entry-dialog"
+            titleId="create-entry-title"
+            summaryId="create-entry-summary"
+            eyebrow="Create entry"
+            title={`New item in ${createDialogParentLabel}`}
+            isOpen={isCreateDialogOpen}
+            onBackdropClick={closeCreateDialog}
+            actions={
+              <>
+                <button
+                  id="create-entry-cancel"
+                  type="button"
+                  className={dialogButtonClassName}
+                  onClick={closeCreateDialog}
+                  disabled={isCreatingEntry}
+                >
+                  Cancel
+                </button>
+                <button
+                  id="create-entry-folder"
+                  type="button"
+                  className={dialogButtonClassName}
+                  onClick={() => {
+                    void handleCreateEntry("directory");
+                  }}
+                  disabled={isCreatingEntry}
+                >
+                  Make folder
+                </button>
+                <button
+                  id="create-entry-file"
+                  type="button"
+                  className={dialogButtonClassName}
+                  onClick={() => {
+                    void handleCreateEntry("file");
+                  }}
+                  disabled={isCreatingEntry}
+                >
+                  Make file
+                </button>
+              </>
+            }
+          >
+            <>
+              <p id="create-entry-summary" className="mt-3 text-sm leading-6 text-muted">
+                Enter a name for the new file or folder. New files are created as markdown files.
+              </p>
+              <label className="mt-4 block text-sm text-muted" htmlFor="create-entry-name">
+                Name
+              </label>
+              <input
+                id="create-entry-name"
+                type="text"
+                value={createEntryName}
+                autoFocus
+                onChange={(event) => {
+                  setCreateEntryName(event.target.value);
+                  if (createDialogError) {
+                    setCreateDialogError("");
+                  }
+                }}
+                className="mt-2 w-full rounded-xl bg-[color-mix(in_srgb,var(--bg)_86%,transparent)] px-3 py-2 text-base outline-none ring-0 transition focus:bg-[color-mix(in_srgb,var(--bg)_94%,transparent)]"
+                placeholder="chapter-notes"
+              />
+              {createDialogError ? (
+                <p className="mt-3 text-sm leading-6 text-danger">{createDialogError}</p>
+              ) : null}
+            </>
+          </WorkbenchDialog>
+        </main>
+      </div>
+
+      <div
+        id="floating-toolbar"
+        className="fixed left-0 top-0 z-30 flex flex-wrap items-start justify-center gap-1 rounded-[1.4rem] bg-[color-mix(in_srgb,var(--bg)_88%,transparent)] p-1 shadow-float backdrop-blur-xl"
+        hidden
+      >
+        <div className="flex min-w-0 flex-wrap items-center justify-center gap-1" data-toolbar-group="inline">
           <button
             data-command="bold"
             type="button"
@@ -455,6 +879,8 @@ export default function Workbench () {
           >
             ins
           </button>
+        </div>
+        <div className="flex min-w-0 flex-wrap items-center justify-center gap-1" data-toolbar-group="block">
           <button
             data-command="h1"
             type="button"
@@ -496,132 +922,30 @@ export default function Workbench () {
             &gt;
           </button>
         </div>
+      </div>
 
-        <div
-          id="revision-hover-toolbar"
-          className="fixed left-0 top-0 z-30 flex items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--bg)_88%,transparent)] p-1 shadow-float backdrop-blur-xl"
-          hidden
+      <div
+        id="revision-hover-toolbar"
+        className="fixed left-0 top-0 z-30 flex items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--bg)_88%,transparent)] p-1 shadow-float backdrop-blur-xl"
+        hidden
+      >
+        <button
+          id="revision-hover-accept"
+          type="button"
+          title="Accept revision"
+          className="min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
         >
-          <button
-            id="revision-hover-accept"
-            type="button"
-            title="Accept revision"
-            className="min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-          >
-            accept
-          </button>
-          <button
-            id="revision-hover-reject"
-            type="button"
-            title="Reject revision"
-            className="min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-          >
-            reject
-          </button>
-        </div>
-
-        <section className="min-h-0 flex-1">
-          <div className="editor-shell relative mx-auto grid max-w-[calc(56rem+2.5rem)] grid-cols-[1.25rem_minmax(0,56rem)] gap-3">
-            <div
-              id="editor-diff-gutter"
-              className="editor-diff-gutter"
-              aria-hidden="true"
-            />
-            <div
-              id="editor"
-              className="editor-content min-h-[calc(100vh-6rem)] pb-16 font-serif text-[1.08rem] leading-[1.72] whitespace-normal outline-none"
-              contentEditable
-              suppressContentEditableWarning
-              spellCheck
-              data-placeholder="Select a markdown file to start editing."
-            />
-            <div
-              id="editor-custom-caret"
-              className="editor-custom-caret"
-              aria-hidden="true"
-              hidden
-            />
-          </div>
-        </section>
-
-        <WorkbenchDialog
-          id="save-conflict-dialog"
-          titleId="save-conflict-title"
-          summaryId="save-conflict-summary"
-          eyebrow="Write conflict"
-          title="This file changed on disk"
-          actions={
-            <>
-              <button
-                id="save-conflict-keep-editing"
-                type="button"
-                className={dialogButtonClassName}
-              >
-                Keep editing
-              </button>
-              <button
-                id="save-conflict-reload"
-                type="button"
-                className={dialogButtonClassName}
-              >
-                Reload from disk
-              </button>
-              <button
-                id="save-conflict-overwrite"
-                type="button"
-                className={dialogButtonClassName}
-              >
-                Overwrite anyway
-              </button>
-            </>
-          }
+          accept
+        </button>
+        <button
+          id="revision-hover-reject"
+          type="button"
+          title="Reject revision"
+          className="min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
         >
-          <>
-            <p id="save-conflict-summary" className="mt-3 text-sm leading-6 text-muted">
-              Reload from disk to discard your unsaved editor state, or overwrite anyway to write what is currently in the editor.
-            </p>
-            <p id="save-conflict-expected" className="mt-3 text-[0.84rem] tracking-[0.02em] text-muted" />
-            <p id="save-conflict-actual" className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted" />
-          </>
-        </WorkbenchDialog>
-
-        <WorkbenchDialog
-          id="reset-draft-dialog"
-          titleId="reset-draft-title"
-          summaryId="reset-draft-summary"
-          eyebrow="Discard draft"
-          title="Reset this draft?"
-          actions={
-            <>
-              <button
-                id="reset-draft-cancel"
-                type="button"
-                className={dialogButtonClassName}
-              >
-                Cancel
-              </button>
-              <button
-                id="reset-draft-head"
-                type="button"
-                className={dialogButtonClassName}
-              >
-                Reset to HEAD
-              </button>
-              <button
-                id="reset-draft-saved"
-                type="button"
-                className={dialogButtonClassName}
-              >
-                Reset to saved
-              </button>
-            </>
-          }
-        >
-          <p id="reset-draft-summary" className="mt-3 text-sm leading-6 text-muted">
-            Reset to saved discards the current draft and reloads the file from disk. Reset to HEAD overwrites the file on disk with the current git HEAD version, then reloads it here.
-          </p>
-        </WorkbenchDialog>
-      </main>
+          reject
+        </button>
+      </div>
     </div>
   );
 }
