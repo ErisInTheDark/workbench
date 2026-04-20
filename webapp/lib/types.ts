@@ -46,6 +46,7 @@ export interface WorkbenchBindings {
 export interface FilePayload {
   path: string;
   content: string;
+  headContent: string | null;
   updatedAt: string;
   mtimeMs: number;
 }

@@ -120,3 +120,16 @@ export async function getGitChanges(rootDir: string): Promise<Record<string, Cha
 
   return Object.fromEntries(changes);
 }
+
+export async function getHeadFileContent(rootDir: string, filePath: string): Promise<string | null> {
+  if (!(await hasHeadCommit(rootDir))) {
+    return null;
+  }
+
+  try {
+    const { stdout } = await runGit(rootDir, ["show", `HEAD:${filePath.replace(/\\/g, "/")}`]);
+    return stdout;
+  } catch {
+    return null;
+  }
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useEffect, useState } from "react";
+import { startTransition, useEffect, useState, type ReactNode } from "react";
 
 import type {
   ChangeSummary,
@@ -22,10 +22,11 @@ function SaveIcon () {
   return (
     <span className="relative block size-5">
       <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="save-icon-main size-5">
-        <path d="M4.25 4.25h9l2.5 2.5v9h-11.5z" strokeLinejoin="round" />
-        <path d="M7 4.25v4h5v-4" strokeLinejoin="round" />
-        <path d="M7.25 15h5.5" strokeLinecap="round" />
+        <path d="M15.5 17.5H4.5a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1H14l2.5 2.5V16.5a1 1 0 0 1-1 1z" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M7.5 2.5v5h5v-5" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M5.5 12h9v5.5h-9z" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
+      {/* the slash only shows when saving is not currently possible */}
       <svg
         viewBox="0 0 20 20"
         fill="none"
@@ -34,18 +35,29 @@ function SaveIcon () {
         aria-hidden="true"
         className="save-icon-slash pointer-events-none absolute inset-0 size-5 opacity-0 transition-opacity"
       >
-        <path d="M4 16 16 4" strokeLinecap="round" />
+        <path d="M3.5 16.5L16.5 3.5" strokeLinecap="round" />
       </svg>
     </span>
+  );
+}
+
+function BinIcon () {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
+      <path d="M3.5 6.5H16.5" strokeLinecap="round" />
+      <path d="M8.5 3.5H11.5C11.78 3.5 12 3.72 12 4V6.5H8V4C8 3.72 8.22 3.5 8.5 3.5Z" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5.5 6.5L6.5 16C6.56 16.56 7.04 17 7.6 17H12.4C12.96 17 13.44 16.56 13.5 16L14.5 6.5H5.5Z" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8.5 9V14M11.5 9V14" strokeLinecap="round" />
+    </svg>
   );
 }
 
 function ZoomOutIcon () {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
-      <path d="M8.25 12.75a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9Z" />
-      <path d="M11.75 11.75 16 16" strokeLinecap="round" />
-      <path d="M6.5 8.25h3.5" strokeLinecap="round" />
+      <circle cx="8.75" cy="8.75" r="5.25" />
+      <path d="M5.75 8.75H11.75" strokeLinecap="round" />
+      <path d="M14 14L17.5 17.5" strokeLinecap="round" />
     </svg>
   );
 }
@@ -53,10 +65,9 @@ function ZoomOutIcon () {
 function ZoomInIcon () {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
-      <path d="M8.25 12.75a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9Z" />
-      <path d="M11.75 11.75 16 16" strokeLinecap="round" />
-      <path d="M8.25 6.5v3.5" strokeLinecap="round" />
-      <path d="M6.5 8.25h3.5" strokeLinecap="round" />
+      <circle cx="8.75" cy="8.75" r="5.25" />
+      <path d="M8.75 5.75V11.75M5.75 8.75H11.75" strokeLinecap="round" />
+      <path d="M14 14L17.5 17.5" strokeLinecap="round" />
     </svg>
   );
 }
@@ -101,6 +112,52 @@ function ExplorerFileSpacer () {
       style={{ width: "1.1rem", height: "1.1rem" }}
       aria-hidden="true"
     />
+  );
+}
+
+const dialogButtonClassName = "rounded-xl px-3 py-1.5 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none";
+
+interface WorkbenchDialogProps {
+  actions: ReactNode;
+  children: ReactNode;
+  eyebrow: string;
+  id: string;
+  summaryId?: string;
+  title: string;
+  titleId: string;
+}
+
+function WorkbenchDialog ({
+  actions,
+  children,
+  eyebrow,
+  id,
+  summaryId,
+  title,
+  titleId,
+}: WorkbenchDialogProps) {
+  return (
+    <div
+      id={id}
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      aria-describedby={summaryId}
+      data-workbench-dialog="true"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-[color-mix(in_srgb,var(--bg)_74%,transparent)] px-5 backdrop-blur-sm"
+    >
+      <div className="w-full max-w-md rounded-[1.4rem] bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] px-5 py-4 shadow-float">
+        <p className="m-0 text-[0.84rem] tracking-[0.02em] text-muted">{eyebrow}</p>
+        <h2 id={titleId} className="mt-0.5 text-base font-semibold leading-tight">
+          {title}
+        </h2>
+        {children}
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          {actions}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -340,12 +397,22 @@ export default function Workbench () {
               <SaveIcon />
               <span className="sr-only">Save current file</span>
             </button>
+            <button
+              id="reset-draft"
+              type="button"
+              title="Discard the current draft"
+              aria-label="Discard the current draft"
+              className="ui-icon-button"
+            >
+              <BinIcon />
+              <span className="sr-only">Discard the current draft</span>
+            </button>
           </div>
         </header>
 
         <div
           id="floating-toolbar"
-          className="fixed left-0 top-0 z-30 hidden items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--bg)_88%,transparent)] p-1 shadow-float backdrop-blur-xl"
+          className="fixed left-0 top-0 z-30 flex items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--bg)_88%,transparent)] p-1 shadow-float backdrop-blur-xl"
           hidden
         >
           <button
@@ -430,60 +497,130 @@ export default function Workbench () {
           </button>
         </div>
 
+        <div
+          id="revision-hover-toolbar"
+          className="fixed left-0 top-0 z-30 flex items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--bg)_88%,transparent)] p-1 shadow-float backdrop-blur-xl"
+          hidden
+        >
+          <button
+            id="revision-hover-accept"
+            type="button"
+            title="Accept revision"
+            className="min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+          >
+            accept
+          </button>
+          <button
+            id="revision-hover-reject"
+            type="button"
+            title="Reject revision"
+            className="min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+          >
+            reject
+          </button>
+        </div>
+
         <section className="min-h-0 flex-1">
-          <div
-            id="editor"
-            className="editor-content mx-auto min-h-[calc(100vh-6rem)] max-w-[56rem] pb-16 font-serif text-[1.08rem] leading-[1.72] whitespace-normal outline-none"
-            contentEditable
-            suppressContentEditableWarning
-            spellCheck
-            data-placeholder="Select a markdown file to start editing."
-          />
+          <div className="editor-shell relative mx-auto grid max-w-[calc(56rem+2.5rem)] grid-cols-[1.25rem_minmax(0,56rem)] gap-3">
+            <div
+              id="editor-diff-gutter"
+              className="editor-diff-gutter"
+              aria-hidden="true"
+            />
+            <div
+              id="editor"
+              className="editor-content min-h-[calc(100vh-6rem)] pb-16 font-serif text-[1.08rem] leading-[1.72] whitespace-normal outline-none"
+              contentEditable
+              suppressContentEditableWarning
+              spellCheck
+              data-placeholder="Select a markdown file to start editing."
+            />
+            <div
+              id="editor-custom-caret"
+              className="editor-custom-caret"
+              aria-hidden="true"
+              hidden
+            />
+          </div>
         </section>
 
-        <div
+        <WorkbenchDialog
           id="save-conflict-dialog"
-          hidden
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="save-conflict-title"
-          className="fixed inset-0 z-40 flex items-center justify-center bg-[color-mix(in_srgb,var(--bg)_74%,transparent)] px-5 backdrop-blur-sm"
-        >
-          <div className="w-full max-w-md rounded-[1.4rem] bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] px-5 py-4 shadow-float">
-            <p className="m-0 text-[0.84rem] tracking-[0.02em] text-muted">Write conflict</p>
-            <h2 id="save-conflict-title" className="mt-0.5 text-base font-semibold leading-tight">
-              This file changed on disk
-            </h2>
-            <p id="save-conflict-summary" className="mt-3 text-sm leading-6 text-muted">
-              Reload from disk to discard your unsaved editor state, or overwrite anyway to write what is currently in the editor.
-            </p>
-            <p id="save-conflict-expected" className="mt-3 text-[0.84rem] tracking-[0.02em] text-muted" />
-            <p id="save-conflict-actual" className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted" />
-            <div className="mt-5 flex flex-wrap justify-end gap-2">
+          titleId="save-conflict-title"
+          summaryId="save-conflict-summary"
+          eyebrow="Write conflict"
+          title="This file changed on disk"
+          actions={
+            <>
               <button
                 id="save-conflict-keep-editing"
                 type="button"
-                className="rounded-xl px-3 py-1.5 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+                className={dialogButtonClassName}
               >
                 Keep editing
               </button>
               <button
                 id="save-conflict-reload"
                 type="button"
-                className="rounded-xl px-3 py-1.5 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+                className={dialogButtonClassName}
               >
                 Reload from disk
               </button>
               <button
                 id="save-conflict-overwrite"
                 type="button"
-                className="rounded-xl px-3 py-1.5 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+                className={dialogButtonClassName}
               >
                 Overwrite anyway
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+        >
+          <>
+            <p id="save-conflict-summary" className="mt-3 text-sm leading-6 text-muted">
+              Reload from disk to discard your unsaved editor state, or overwrite anyway to write what is currently in the editor.
+            </p>
+            <p id="save-conflict-expected" className="mt-3 text-[0.84rem] tracking-[0.02em] text-muted" />
+            <p id="save-conflict-actual" className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted" />
+          </>
+        </WorkbenchDialog>
+
+        <WorkbenchDialog
+          id="reset-draft-dialog"
+          titleId="reset-draft-title"
+          summaryId="reset-draft-summary"
+          eyebrow="Discard draft"
+          title="Reset this draft?"
+          actions={
+            <>
+              <button
+                id="reset-draft-cancel"
+                type="button"
+                className={dialogButtonClassName}
+              >
+                Cancel
+              </button>
+              <button
+                id="reset-draft-head"
+                type="button"
+                className={dialogButtonClassName}
+              >
+                Reset to HEAD
+              </button>
+              <button
+                id="reset-draft-saved"
+                type="button"
+                className={dialogButtonClassName}
+              >
+                Reset to saved
+              </button>
+            </>
+          }
+        >
+          <p id="reset-draft-summary" className="mt-3 text-sm leading-6 text-muted">
+            Reset to saved discards the current draft and reloads the file from disk. Reset to HEAD overwrites the file on disk with the current git HEAD version, then reloads it here.
+          </p>
+        </WorkbenchDialog>
       </main>
     </div>
   );
