@@ -150,7 +150,7 @@
     }
   }
 
-  .tree-folder-row:where(:hover, :focus-within) .new-entry-button {
+  .tree-folder-row:where(:hover, :has(:focus-visible)) .new-entry-button {
     opacity: 1;
   }
 
@@ -210,6 +210,10 @@
 
   .editor-custom-caret[data-caret-kind="code"] {
     background: color-mix(in srgb, var(--text) 56%, var(--bg) 44%);
+  }
+
+  .editor-custom-caret[data-caret-kind="comment"] {
+    background: color-mix(in srgb, var(--text) 42%, var(--bg) 58%);
   }
 
   .editor-custom-caret[data-caret-kind="del"] {
@@ -457,6 +461,18 @@
     font-size: 0.85em;
   }
 
+  .editor-content [data-inline-comment="true"] {
+    background: color-mix(in srgb, var(--text) 6%, transparent);
+    border-radius: 0.35rem;
+    color: color-mix(in srgb, var(--text) 60%, transparent);
+    padding: 0.08em 0.34em;
+  }
+
+  .editor-content [data-block-comment="true"][data-revision-hover-active="true"],
+  .editor-content [data-inline-comment="true"][data-revision-hover-active="true"] {
+    background: color-mix(in srgb, var(--text) 12%, transparent);
+  }
+
   .editor-content ins {
     background: color-mix(in srgb, var(--success) 16%, transparent);
     border-radius: 0.2em;
@@ -492,5 +508,9 @@
 
   #revision-hover-toolbar[data-revision-kind="del"] {
     background: color-mix(in srgb, var(--danger) 12%, var(--bg) 88%);
+  }
+
+  #revision-hover-toolbar[data-revision-kind="comment"] {
+    background: color-mix(in srgb, var(--text) 8%, var(--bg) 92%);
   }
 }

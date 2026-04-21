@@ -105,7 +105,7 @@ type SerializedMarkdownToken =
   | { type: "break"; count: number };
 
 type DiffMarkerSymbol = "+" | "-" | "*";
-type RevisionHoverKind = "del" | "ins";
+type RevisionHoverKind = "comment" | "del" | "ins";
 type RevisionToolbarKind = RevisionHoverKind | "mixed";
 
 interface DiffRow {
@@ -138,15 +138,16 @@ interface RevisionToolbarContext {
 interface CaretRenderContext {
   bold: boolean;
   italic: boolean;
-  kind: "default" | "code" | "del" | "ins";
+  kind: "comment" | "default" | "code" | "del" | "ins";
   rect: DOMRect;
 }
 
-type PendingInlineFormatKey = "bold" | "italic" | "code" | "del" | "ins";
+type PendingInlineFormatKey = "bold" | "italic" | "code" | "comment" | "del" | "ins";
 
 interface PendingInlineFormats {
   bold: boolean;
   code: boolean;
+  comment: boolean;
   del: boolean;
   ins: boolean;
   italic: boolean;
@@ -154,13 +155,13 @@ interface PendingInlineFormats {
 
 interface InlineMark {
   href?: string;
-  tag: "a" | "code" | "del" | "em" | "ins" | "strong";
+  tag: "a" | "code" | "comment" | "del" | "em" | "ins" | "strong";
 }
 
 type InlineLeaf =
   | { type: "text"; marks: InlineMark[]; text: string }
   | { type: "break"; marks: InlineMark[] }
-  | { type: "marker"; role: "caret" | "selection-start" | "selection-end" };
+  | { type: "marker"; role: "caret" | "selection-start" | "selection-end"; marks?: InlineMark[] };
 
 interface WorkbenchState {
   baselineContent: string;
@@ -201,16 +202,18 @@ const INLINE_FORMAT_ORDER: Array<{ key: PendingInlineFormatKey; tagName: keyof H
   { key: "bold", tagName: "strong" },
   { key: "italic", tagName: "em" },
   { key: "code", tagName: "code" },
+  { key: "comment", tagName: "span" },
   { key: "del", tagName: "del" },
   { key: "ins", tagName: "ins" },
 ];
 const INLINE_MARK_RANK: Record<InlineMark["tag"], number> = {
   a: 0,
-  del: 1,
-  ins: 2,
-  em: 3,
-  strong: 4,
-  code: 5,
+  comment: 1,
+  del: 2,
+  ins: 3,
+  em: 4,
+  strong: 5,
+  code: 6,
 };
 
 export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<() => void> {
@@ -439,7 +442,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   editor.addEventListener("input", (event) => {
     const previousContent = state.currentContent;
     const transformedListItem = maybeTransformParagraphIntoListItem(event);
-    const commentCaretMarker = maybeExpandBlockCommentStarter(event);
+    const commentCaretMarker = maybeExpandBlockCommentStarter(event) ?? maybeActivateInlineCommentShortcut(event);
     syncStructuredBlockStyles();
     if (transformedListItem) {
       restoreListItemSelection([transformedListItem], { collapsed: true });
@@ -578,6 +581,8 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     if (pendingInlineFormats) {
       if (preservePendingInlineFormatSelectionChanges > 0) {
         preservePendingInlineFormatSelectionChanges -= 1;
+      } else if (shouldPreservePendingInlineFormatsForSelection()) {
+        updateCustomCaret();
       } else {
         clearPendingInlineFormats();
       }
@@ -676,7 +681,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
   document.addEventListener("pointermove", (event) => {
     const revisionNode = event.target instanceof Element
-      ? event.target.closest<HTMLElement>("del, ins")
+      ? event.target.closest<HTMLElement>('del, ins, [data-inline-comment="true"], [data-block-comment="true"]')
       : null;
     if (revisionNode && editor.contains(revisionNode)) {
       setHoveredRevisionNode(revisionNode);
@@ -1815,6 +1820,29 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     return beforeRange.toString().replaceAll("\u00a0", " ");
   }
 
+  function deleteTextImmediatelyBeforeSelection(selection: Selection, element: HTMLElement, characterCount: number) {
+    if (!selection.rangeCount || characterCount <= 0) {
+      return false;
+    }
+
+    const beforeText = getTextBeforeSelectionInElement(selection, element);
+    if (beforeText.length < characterCount) {
+      return false;
+    }
+
+    const startPosition = getTextPositionAtOffset(element, beforeText.length - characterCount);
+    const endPosition = getTextPositionAtOffset(element, beforeText.length);
+    if (!startPosition || !endPosition) {
+      return false;
+    }
+
+    const range = document.createRange();
+    range.setStart(startPosition.node, startPosition.offset);
+    range.setEnd(endPosition.node, endPosition.offset);
+    range.deleteContents();
+    return true;
+  }
+
   function getInlineExpansionContainer(node: Node | null) {
     const listItem = getClosestListItem(node);
     if (listItem) {
@@ -2006,7 +2034,14 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     }
 
     const range = document.createRange();
-    range.setStartBefore(marker);
+    const parentElement = marker.parentElement;
+    const parentMark = parentElement ? getInlineMarkForElement(parentElement) : null;
+    if (parentElement && parentMark) {
+      const markerIndex = Array.from(parentElement.childNodes).indexOf(marker);
+      range.setStart(parentElement, Math.max(0, markerIndex));
+    } else {
+      range.setStartBefore(marker);
+    }
     range.collapse(true);
     marker.remove();
     selection.removeAllRanges();
@@ -2087,6 +2122,44 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     }
 
     return marker;
+  }
+
+  function maybeActivateInlineCommentShortcut(event: Event) {
+    if (!(event instanceof InputEvent) || state.mode !== "rich") {
+      return null;
+    }
+
+    if (event.inputType !== "insertText" || event.data !== "!") {
+      return null;
+    }
+
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !selection.isCollapsed) {
+      return null;
+    }
+
+    const container = getInlineExpansionContainer(selection.getRangeAt(0).startContainer);
+    if (!container || !editor.contains(container) || container.dataset.blockComment === "true") {
+      return null;
+    }
+
+    const beforeText = getTextBeforeSelectionInElement(selection, container);
+    if (!beforeText.endsWith("<!")) {
+      return null;
+    }
+
+    if (!deleteTextImmediatelyBeforeSelection(selection, container, 2)) {
+      return null;
+    }
+
+    const baseFormats = pendingInlineFormats ?? getInlineFormatStateFromNode(selection.getRangeAt(0).startContainer);
+    pendingInlineFormats = {
+      ...baseFormats,
+      comment: true,
+    };
+    materializePendingInlineFormatsAtCaret(pendingInlineFormats);
+    updateCustomCaret();
+    return null;
   }
 
   function createParagraphFromTopLevelListItem(item: HTMLLIElement, { preserveEmptyListBreak }: { preserveEmptyListBreak: boolean }) {
@@ -2359,6 +2432,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     normalizeNestedListHierarchy(root);
     mergeAdjacentSiblingLists(root);
     canonicalizeAllInlineRunContainers(root);
+    removeEmptyInlineFormattingArtifacts(root);
 
     const candidates = root instanceof HTMLDivElement && root === editor
       ? Array.from(root.children)
@@ -2620,6 +2694,16 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
         if (closeIndex !== -1) {
           html += `<ins>${renderInline(markdown.slice(index + 5, closeIndex))}</ins>`;
           index = closeIndex + 6;
+          continue;
+        }
+      }
+
+      if (markdown.startsWith("<!--", index)) {
+        const closeIndex = markdown.indexOf("-->", index + 4);
+        if (closeIndex !== -1) {
+          const commentBody = markdown.slice(index + 4, closeIndex).trim();
+          html += `<span data-inline-comment="true">${renderInline(commentBody)}</span>`;
+          index = closeIndex + 3;
           continue;
         }
       }
@@ -3037,6 +3121,10 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
         continue;
       }
 
+       if (span.dataset.inlineComment === "true") {
+        continue;
+      }
+
       span.removeAttribute("style");
 
       if (span.getAttributeNames().length > 0) {
@@ -3050,6 +3138,27 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     }
   }
 
+  function removeEmptyInlineFormattingArtifacts(root: ParentNode) {
+    removeEmptyInlineFormatElements(["strong", "em", "code", "del", "ins"], root);
+
+    if (!("querySelectorAll" in root)) {
+      return;
+    }
+
+    const protectedElements = getProtectedEmptyInlineFormatElements(root);
+    for (const commentElement of Array.from(root.querySelectorAll<HTMLElement>('[data-inline-comment="true"]'))) {
+      if (protectedElements.has(commentElement)) {
+        continue;
+      }
+
+      if ((commentElement.textContent ?? "").replaceAll("\u00a0", "").length > 0) {
+        continue;
+      }
+
+      commentElement.remove();
+    }
+  }
+
   function normalizeEditorMarkup(root: ParentNode = editor) {
     replaceTag(root, "b", "strong");
     replaceTag(root, "i", "em");
@@ -3059,6 +3168,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     normalizeNestedListHierarchy(root);
     mergeAdjacentSiblingLists(root);
     canonicalizeAllInlineRunContainers(root);
+    removeEmptyInlineFormattingArtifacts(root);
     (root as Node).normalize();
   }
 
@@ -3129,6 +3239,131 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       .join("");
   }
 
+  function normalizeInlineLeavesForMarkupSignature(
+    leaves: InlineLeaf[],
+    trimTrailingWhitespace: boolean,
+  ) {
+    const mergedLeaves = normalizeInlineLeavesForSerialization(leaves);
+    let leadingBreakCount = 0;
+    while (mergedLeaves[0]?.type === "break") {
+      mergedLeaves.shift();
+      leadingBreakCount += 1;
+    }
+
+    let trailingBreakCount = 0;
+    while (mergedLeaves.at(-1)?.type === "break") {
+      mergedLeaves.pop();
+      trailingBreakCount += 1;
+    }
+
+    if (!trimTrailingWhitespace) {
+      return {
+        leaves: mergedLeaves,
+        leadingBreakCount,
+        trailingBreakCount,
+      };
+    }
+
+    const lastLeaf = mergedLeaves.at(-1);
+    if (!lastLeaf || lastLeaf.type !== "text") {
+      return {
+        leaves: mergedLeaves,
+        leadingBreakCount,
+        trailingBreakCount,
+      };
+    }
+
+    const trimmedText = lastLeaf.text.replace(/[ \t\u00a0]+$/g, "");
+    if (trimmedText === lastLeaf.text) {
+      return {
+        leaves: mergedLeaves,
+        leadingBreakCount,
+        trailingBreakCount,
+      };
+    }
+
+    if (trimmedText) {
+      lastLeaf.text = trimmedText;
+      return {
+        leaves: mergedLeaves,
+        leadingBreakCount,
+        trailingBreakCount,
+      };
+    }
+
+    mergedLeaves.pop();
+    return {
+      leaves: mergedLeaves,
+      leadingBreakCount,
+      trailingBreakCount,
+    };
+  }
+
+  function wrapMarkupSignatureContent(content: string, mark: InlineMark) {
+    if (!content) {
+      return "";
+    }
+
+    if (mark.tag === "comment") {
+      return `<span data-inline-comment=true>${content}</span>`;
+    }
+
+    if (mark.tag === "a") {
+      const href = mark.href ? ` href=${JSON.stringify(mark.href)}` : "";
+      return `<a${href}>${content}</a>`;
+    }
+
+    return `<${mark.tag}>${content}</${mark.tag}>`;
+  }
+
+  function serializeInlineLeafForMarkupSignature(leaf: InlineLeaf) {
+    if (leaf.type === "marker") {
+      return "";
+    }
+
+    let content = leaf.type === "break"
+      ? "<br>"
+      : `text(${JSON.stringify(leaf.text.replaceAll("\u00a0", " "))})`;
+
+    for (let index = leaf.marks.length - 1; index >= 0; index -= 1) {
+      content = wrapMarkupSignatureContent(content, leaf.marks[index]);
+    }
+
+    return content;
+  }
+
+  function serializeInlineLeafToMarkdown(leaf: InlineLeaf) {
+    if (leaf.type === "marker") {
+      return "";
+    }
+
+    let content = leaf.type === "break"
+      ? "\n"
+      : escapeMarkdownText(leaf.text);
+
+    for (let index = leaf.marks.length - 1; index >= 0; index -= 1) {
+      content = wrapMarkdownWithInlineMark(content, leaf.marks[index]);
+    }
+
+    return content;
+  }
+
+  function serializeInlineRunContainerForMarkupSignature(element: HTMLElement, trimTrailingWhitespace: boolean) {
+    const normalized = normalizeInlineLeavesForMarkupSignature(
+      flattenInlineContent(element.childNodes),
+      trimTrailingWhitespace,
+    );
+
+    return {
+      leadingBreakCount: normalized.leadingBreakCount,
+      content: normalized.leaves
+        .map((leaf) => serializeInlineLeafForMarkupSignature(leaf))
+        .filter(Boolean)
+        .join(""),
+      trailingBreakCount: normalized.trailingBreakCount,
+    };
+  }
+
   function isTrailingWhitespaceBoundaryTag(tag: string) {
     return /^(p|div|h1|h2|h3|h4|h5|h6|blockquote|li|summary)$/i.test(tag);
   }
@@ -3160,6 +3395,16 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       }
     }
 
+    if (element instanceof HTMLElement) {
+      if (element.dataset.inlineComment === "true") {
+        attributes.push("data-inline-comment=true");
+      }
+
+      if (element.dataset.blockComment === "true") {
+        attributes.push("data-block-comment=true");
+      }
+    }
+
     if (tag === "pre") {
       const language = element instanceof HTMLElement
         ? element.dataset.language ?? ""
@@ -3171,13 +3416,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
     const childNodes = Array.from(element.childNodes);
     const trimLastChild = trimTrailingWhitespace || isTrailingWhitespaceBoundaryTag(tag);
-    const lastChildIndex = childNodes.length - 1;
-    const children = childNodes
-      .map((childNode, index) => serializeMarkupNode(
-        childNode,
-        trimLastChild && index === lastChildIndex && tag !== "pre" && tag !== "code",
-      ))
-      .join("");
     const openingTag = attributes.length > 0
       ? `<${tag} ${attributes.join(" ")}>`
       : `<${tag}>`;
@@ -3185,6 +3423,22 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     if (tag === "br" || tag === "hr") {
       return openingTag;
     }
+
+    if (element instanceof HTMLElement && isInlineRunContainer(element)) {
+      const children = serializeInlineRunContainerForMarkupSignature(
+        element,
+        trimLastChild && tag !== "pre" && tag !== "code",
+      );
+      return `${"<br>".repeat(children.leadingBreakCount)}${openingTag}${children.content}</${tag}>${"<br>".repeat(children.trailingBreakCount)}`;
+    }
+
+    const lastChildIndex = childNodes.length - 1;
+    const children = childNodes
+      .map((childNode, index) => serializeMarkupNode(
+        childNode,
+        trimLastChild && index === lastChildIndex && tag !== "pre" && tag !== "code",
+      ))
+      .join("");
 
     return `${openingTag}${children}</${tag}>`;
   }
@@ -3545,7 +3799,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
   function logSaveGuardIssue(issue: SaveGuardIssue, trigger: string) {
     const difference = describeFirstDifference(issue.currentMarkup, issue.roundTripMarkup);
-    const markdownPreview = createConsolePreview(issue.markdown);
     const report = [
       "[workbench] UNSAFE MARKDOWN SAVE BLOCKED",
       `file: ${state.currentPath}`,
@@ -3558,11 +3811,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       "",
       "round-tripped markup around the mismatch:",
       difference.roundTripExcerpt || "(empty)",
-      "",
-      `markdown preview (${issue.markdown.length} chars, truncated if needed):`,
-      markdownPreview,
-      "",
-      "Send this entire report back to Codex if you want help fixing the serializer.",
     ].join("\n");
 
     console.warn(report);
@@ -3575,7 +3823,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       roundTripMarkupLength: issue.roundTripMarkup.length,
       roundTripMarkupExcerpt: difference.roundTripExcerpt || "(empty)",
       markdownLength: issue.markdown.length,
-      markdownPreview,
+      markdown: issue.markdown,
     });
   }
 
@@ -3628,6 +3876,11 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       .replaceAll("]", "\\]");
   }
 
+  function formatInlineCommentMarkdown(content: string) {
+    const commentBody = content.replace(/[ \t\u00a0]+$/g, "").trim();
+    return commentBody ? `<!-- ${commentBody} -->` : "<!-- -->";
+  }
+
   function wrapMarkdownWithInlineMark(content: string, mark: InlineMark) {
     switch (mark.tag) {
       case "strong":
@@ -3636,6 +3889,9 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
         return content.includes("*") ? `_${content}_` : `*${content}*`;
       case "code":
         return `\`${content.replaceAll("`", "\\`")}\``;
+      case "comment": {
+        return formatInlineCommentMarkdown(content);
+      }
       case "a":
         return `[${content || mark.href || ""}](${mark.href ?? ""})`;
       case "del":
@@ -3648,7 +3904,11 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   }
 
   function serializeInlineNodes(nodes: ArrayLike<Node>) {
-    return Array.from(nodes).map((node) => serializeInlineNode(node)).join("");
+    return normalizeInlineLeavesForSerialization(
+      flattenInlineContent(Array.from(nodes)),
+    )
+      .map((leaf) => serializeInlineLeafToMarkdown(leaf))
+      .join("");
   }
 
   function serializeInlineNode(node: Node) {
@@ -3683,6 +3943,11 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
         return `<del>${inner}</del>`;
       case "ins":
         return `<ins>${inner}</ins>`;
+      case "span":
+        if (element instanceof HTMLElement && element.dataset.inlineComment === "true") {
+          return formatInlineCommentMarkdown(inner);
+        }
+        return inner;
       case "br":
         return "\n";
       default:
@@ -4862,8 +5127,14 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       return;
     }
 
+    const protectedElements = getProtectedEmptyInlineFormatElements(root);
+
     for (const codeElement of Array.from(root.querySelectorAll("code"))) {
       if (!(codeElement instanceof HTMLElement)) {
+        continue;
+      }
+
+      if (protectedElements.has(codeElement)) {
         continue;
       }
 
@@ -4890,12 +5161,12 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
   function getClosestInlineFormatElement(
     node: Node | null,
-    tagNames: readonly string[],
+    format: PendingInlineFormatKey,
   ) {
     let current: Node | null = node;
 
     while (current && current !== editor) {
-      if (current instanceof HTMLElement && tagNames.includes(current.tagName)) {
+      if (current instanceof HTMLElement && elementMatchesInlineFormat(current, format)) {
         return current;
       }
       current = current.parentNode;
@@ -4908,6 +5179,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     return {
       bold: false,
       code: false,
+      comment: false,
       del: false,
       ins: false,
       italic: false,
@@ -4919,11 +5191,19 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
     for (const format of INLINE_FORMAT_ORDER) {
       formats[format.key] = Boolean(
-        getClosestInlineFormatElement(node, getInlineFormatTagNames(format.key) ?? []),
+        getClosestInlineFormatElement(node, format.key),
       );
     }
 
     return formats;
+  }
+
+  function getInlineMarksFromPendingFormats(formats: PendingInlineFormats) {
+    return normalizeInlineMarks(
+      INLINE_FORMAT_ORDER
+        .filter((format) => formats[format.key])
+        .map((format) => getInlineMarkForFormat(format.key)),
+    );
   }
 
   function arePendingInlineFormatsEqual(
@@ -4937,8 +5217,149 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     return left.bold === right.bold
       && left.italic === right.italic
       && left.code === right.code
+      && left.comment === right.comment
       && left.del === right.del
       && left.ins === right.ins;
+  }
+
+  function shouldPreservePendingInlineFormatsForSelection() {
+    if (!pendingInlineFormats) {
+      return false;
+    }
+
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !selection.isCollapsed || !editor.contains(selection.anchorNode)) {
+      return false;
+    }
+
+    const range = selection.getRangeAt(0);
+    const currentFormats = getInlineFormatStateFromNode(range.startContainer);
+    if (arePendingInlineFormatsEqual(currentFormats, pendingInlineFormats)) {
+      return true;
+    }
+
+    return hasAdjacentEmptyPendingInlineWrapper(range, pendingInlineFormats);
+  }
+
+  function hasAdjacentEmptyPendingInlineWrapper(range: Range, formats: PendingInlineFormats) {
+    return findAdjacentInlineWrapper(range, formats, { requireEmpty: true }) !== null;
+  }
+
+  function findAdjacentInlineWrapper(
+    range: Range,
+    formats: PendingInlineFormats,
+    { requireEmpty }: { requireEmpty: boolean },
+  ) {
+    const targetContainer = getInlineRunContainer(range.startContainer);
+    if (!targetContainer) {
+      return null;
+    }
+
+    const pendingMarks = getInlineMarksFromPendingFormats(formats);
+    if (!pendingMarks.length) {
+      return null;
+    }
+
+    const candidateNodes: Node[] = [];
+    if (range.startContainer instanceof Text) {
+      if (range.startOffset === 0 && range.startContainer.previousSibling) {
+        candidateNodes.push(range.startContainer.previousSibling);
+      }
+      if (range.startOffset === (range.startContainer.textContent?.length ?? 0) && range.startContainer.nextSibling) {
+        candidateNodes.push(range.startContainer.nextSibling);
+      }
+    } else if (range.startContainer instanceof HTMLElement) {
+      const beforeNode = range.startContainer.childNodes[range.startOffset - 1];
+      const afterNode = range.startContainer.childNodes[range.startOffset];
+      if (beforeNode) {
+        candidateNodes.push(beforeNode);
+      }
+      if (afterNode) {
+        candidateNodes.push(afterNode);
+      }
+    }
+
+    return candidateNodes.find((node): node is HTMLElement => {
+      if (!(node instanceof HTMLElement)) {
+        return false;
+      }
+
+      const marks = getMarksFromInlineWrapper(node, { requireEmpty });
+      return Boolean(marks && areInlineMarkListsEqual(marks, pendingMarks));
+    }) ?? null;
+  }
+
+  function getMarksFromInlineWrapper(node: HTMLElement, { requireEmpty }: { requireEmpty: boolean }): InlineMark[] | null {
+    const mark = getInlineMarkForElement(node);
+    if (!mark) {
+      return null;
+    }
+
+    const nonWhitespaceText = (node.textContent ?? "").replaceAll("\u00a0", "").trim();
+    if (requireEmpty && nonWhitespaceText.length > 0) {
+      return null;
+    }
+
+    const childElements = Array.from(node.children).filter((child): child is HTMLElement => child instanceof HTMLElement);
+    const nonElementChildren = Array.from(node.childNodes).filter((child) => child.nodeType !== Node.ELEMENT_NODE);
+    if (requireEmpty && nonElementChildren.some((child) => (child.textContent ?? "").replaceAll("\u00a0", "").trim().length > 0)) {
+      return null;
+    }
+
+    if (!childElements.length) {
+      return [mark];
+    }
+
+    if (childElements.length !== 1) {
+      return null;
+    }
+
+    const childMarks = getMarksFromInlineWrapper(childElements[0], { requireEmpty });
+    if (!childMarks) {
+      return null;
+    }
+
+    return normalizeInlineMarks([mark, ...childMarks]);
+  }
+
+  function moveCaretIntoAdjacentPendingInlineWrapper(formats: PendingInlineFormats) {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !selection.isCollapsed || !editor.contains(selection.anchorNode)) {
+      return false;
+    }
+
+    const range = selection.getRangeAt(0);
+    const wrapper = findAdjacentInlineWrapper(range, formats, { requireEmpty: false });
+    if (!wrapper) {
+      return false;
+    }
+
+    let deepestWrapper: HTMLElement = wrapper;
+    while (true) {
+      const childElements = Array.from(deepestWrapper.children).filter((child): child is HTMLElement => child instanceof HTMLElement);
+      if (childElements.length !== 1) {
+        break;
+      }
+
+      const childMarks = getMarksFromInlineWrapper(childElements[0], { requireEmpty: false });
+      if (!childMarks) {
+        break;
+      }
+
+      deepestWrapper = childElements[0];
+    }
+
+    const nextRange = document.createRange();
+    const parentContainer = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement;
+    const wrapperBeforeCaret = parentContainer === wrapper.parentElement
+      && range.startContainer instanceof Element
+      && range.startContainer.childNodes[range.startOffset - 1] === wrapper;
+    nextRange.setStart(deepestWrapper, wrapperBeforeCaret ? deepestWrapper.childNodes.length : 0);
+    nextRange.collapse(true);
+    preservePendingInlineFormatSelectionChanges = Math.max(preservePendingInlineFormatSelectionChanges, 2);
+    selection.removeAllRanges();
+    selection.addRange(nextRange);
+    return true;
   }
 
   function clearPendingInlineFormats() {
@@ -4959,10 +5380,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
     const baseFormats = pendingInlineFormats ?? getInlineFormatStateFromNode(selection.getRangeAt(0).startContainer);
     const nextFormats = { ...baseFormats, [format]: !baseFormats[format] } satisfies PendingInlineFormats;
-    const tagNames = getInlineFormatTagNames(format);
-    const activeFormatElement = tagNames
-      ? getClosestInlineFormatElement(selection.getRangeAt(0).startContainer, tagNames)
-      : null;
+    const activeFormatElement = getClosestInlineFormatElement(selection.getRangeAt(0).startContainer, format);
 
     if (!nextFormats[format] && activeFormatElement) {
       splitInlineFormatElementAtCaret(activeFormatElement);
@@ -4977,7 +5395,46 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     }
 
     pendingInlineFormats = nextFormats;
+    materializePendingInlineFormatsAtCaret(nextFormats);
     updateCustomCaret();
+    return true;
+  }
+
+  function materializePendingInlineFormatsAtCaret(formats: PendingInlineFormats) {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !selection.isCollapsed || !editor.contains(selection.anchorNode)) {
+      return false;
+    }
+
+    const targetContainer = getInlineRunContainer(selection.getRangeAt(0).startContainer);
+    if (!targetContainer) {
+      return false;
+    }
+
+    const range = selection.getRangeAt(0);
+    if (!targetContainer.contains(range.startContainer) || !targetContainer.contains(range.endContainer)) {
+      return false;
+    }
+
+    const marker = createInlineSelectionMarker("caret");
+    range.insertNode(marker);
+    const markerMarks = getInlineMarksFromPendingFormats(formats);
+    const rebuiltLeaves = normalizeInlineLeaves(
+      flattenInlineContent(targetContainer.childNodes).map((leaf) => {
+        if (leaf.type === "marker" && leaf.role === "caret") {
+          return {
+            ...leaf,
+            marks: markerMarks,
+          } satisfies InlineLeaf;
+        }
+
+        return leaf;
+      }),
+    );
+
+    rebuildInlineRunContainer(targetContainer, rebuiltLeaves);
+    preservePendingInlineFormatSelectionChanges = Math.max(preservePendingInlineFormatSelectionChanges, 2);
+    restoreCaretToMarker(targetContainer.querySelector<HTMLElement>('[data-inline-selection-marker="caret"]') ?? marker);
     return true;
   }
 
@@ -5005,6 +5462,20 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
     const element = source.cloneNode(false) as HTMLElement;
     element.append(fragment);
+    return element;
+  }
+
+  function createInlineMarkElement(mark: InlineMark) {
+    if (mark.tag === "comment") {
+      const element = document.createElement("span");
+      element.dataset.inlineComment = "true";
+      return element;
+    }
+
+    const element = document.createElement(mark.tag);
+    if (mark.tag === "a") {
+      element.setAttribute("href", mark.href ?? "");
+    }
     return element;
   }
 
@@ -5057,13 +5528,20 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       return false;
     }
 
-    const range = selection.getRangeAt(0);
-    if (!editor.contains(range.startContainer)) {
+    moveCaretIntoAdjacentPendingInlineWrapper(pendingInlineFormats);
+
+    const insertionSelection = window.getSelection();
+    if (!insertionSelection?.rangeCount || !insertionSelection.isCollapsed) {
+      return false;
+    }
+
+    const insertionRange = insertionSelection.getRangeAt(0);
+    if (!editor.contains(insertionRange.startContainer)) {
       return false;
     }
 
     const activeAncestors: HTMLElement[] = [];
-    let currentNode: Node | null = range.startContainer;
+    let currentNode: Node | null = insertionRange.startContainer;
     while (currentNode && currentNode !== editor) {
       if (currentNode instanceof HTMLElement) {
         const currentElement = currentNode;
@@ -5084,33 +5562,24 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       }
     }
 
-    const insertionSelection = window.getSelection();
-    if (!insertionSelection?.rangeCount) {
-      return false;
-    }
-
-    const insertionRange = insertionSelection.getRangeAt(0);
     const currentFormats = getInlineFormatStateFromNode(insertionRange.startContainer);
     const textNode = document.createTextNode(text);
     let rootNode: Node = textNode;
 
     for (const format of INLINE_FORMAT_ORDER) {
       if (pendingInlineFormats[format.key] && !currentFormats[format.key]) {
-        const wrapper = document.createElement(format.tagName);
+        const wrapper = createInlineMarkElement(getInlineMarkForFormat(format.key));
         wrapper.append(rootNode);
         rootNode = wrapper;
       }
     }
 
     insertionRange.insertNode(rootNode);
+    const caretMarker = createInlineSelectionMarker("caret");
+    textNode.parentNode?.insertBefore(caretMarker, textNode.nextSibling);
     rootNode.parentNode?.normalize();
-
-    const nextRange = document.createRange();
-    nextRange.setStart(textNode, textNode.textContent?.length ?? 0);
-    nextRange.collapse(true);
     preservePendingInlineFormatSelectionChanges = 2;
-    insertionSelection.removeAllRanges();
-    insertionSelection.addRange(nextRange);
+    restoreCaretToMarker(caretMarker);
     syncEditorAfterStructuralChange();
     return true;
   }
@@ -5202,7 +5671,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     return {
       bold: formats.bold,
       italic: formats.italic,
-      kind: formats.del ? "del" : formats.ins ? "ins" : formats.code ? "code" : "default",
+      kind: formats.del ? "del" : formats.ins ? "ins" : formats.comment ? "comment" : formats.code ? "code" : "default",
       rect,
     };
   }
@@ -5260,6 +5729,8 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
         return ["STRONG", "B"] as const;
       case "code":
         return ["CODE"] as const;
+      case "comment":
+        return ["SPAN"] as const;
       case "del":
       case "s":
       case "strike":
@@ -5269,6 +5740,12 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       default:
         return null;
     }
+  }
+
+  function isInlineCommentElement(element: Element | null): element is HTMLElement {
+    return element instanceof HTMLElement
+      && element.tagName === "SPAN"
+      && element.dataset.inlineComment === "true";
   }
 
   function isBlockLikeChildElement(element: HTMLElement) {
@@ -5330,6 +5807,10 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   }
 
   function getInlineMarkForElement(element: Element): InlineMark | null {
+    if (isInlineCommentElement(element)) {
+      return { tag: "comment" };
+    }
+
     const tag = element.tagName.toLowerCase();
     switch (tag) {
       case "strong":
@@ -5357,6 +5838,8 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
         return { tag: "em" };
       case "code":
         return { tag: "code" };
+      case "comment":
+        return { tag: "comment" };
       case "del":
         return { tag: "del" };
       case "ins":
@@ -5404,15 +5887,197 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   }
 
   function normalizeInlineLeaves(leaves: InlineLeaf[]) {
+    const commentPaddedLeaves = normalizeInlineCommentPadding(leaves);
     const result: InlineLeaf[] = [];
 
+    for (const leaf of commentPaddedLeaves) {
+      appendInlineLeaf(result, leaf);
+    }
+
+    return result;
+  }
+
+  function normalizeInlineLeavesForSerialization(leaves: InlineLeaf[]) {
+    const boundaryNormalizedLeaves: InlineLeaf[] = [];
+
     for (const leaf of leaves) {
-      if (leaf.type !== "text") {
-        appendInlineLeaf(result, leaf);
+      for (const normalizedLeaf of normalizeInlineLeafBoundaries(leaf)) {
+        appendInlineLeaf(boundaryNormalizedLeaves, normalizedLeaf);
+      }
+    }
+
+    const commentPaddedLeaves = normalizeInlineCommentPadding(boundaryNormalizedLeaves);
+    const result: InlineLeaf[] = [];
+
+    for (const leaf of commentPaddedLeaves) {
+      appendInlineLeaf(result, leaf);
+    }
+
+    stripSingularTrailingBreak(result);
+    return result;
+  }
+
+  function stripSingularTrailingBreak(leaves: InlineLeaf[]) {
+    const lastLeaf = leaves.at(-1);
+    if (!lastLeaf || lastLeaf.type !== "break") {
+      return;
+    }
+
+    const previousLeaf = leaves.at(-2);
+    if (previousLeaf?.type === "break") {
+      return;
+    }
+
+    leaves.pop();
+  }
+
+  function normalizeInlineLeafBoundaries(leaf: InlineLeaf) {
+    if (
+      leaf.type !== "text"
+      || leaf.marks.length === 0
+      || leaf.text.length === 0
+      || leaf.marks.some((mark) => mark.tag === "ins" || mark.tag === "del")
+    ) {
+      return [leaf];
+    }
+
+    const parts: InlineLeaf[] = [];
+    const leadingWhitespaceMatch = leaf.text.match(/^[ \t\u00a0]+/);
+    const trailingWhitespaceMatch = leaf.text.match(/[ \t\u00a0]+$/);
+    const leadingWhitespace = leadingWhitespaceMatch?.[0] ?? "";
+    const trailingWhitespace = trailingWhitespaceMatch?.[0] ?? "";
+    const contentStart = leadingWhitespace.length;
+    const contentEnd = leaf.text.length - trailingWhitespace.length;
+    const coreText = leaf.text.slice(contentStart, Math.max(contentStart, contentEnd));
+
+    if (leadingWhitespace) {
+      parts.push({
+        type: "text",
+        marks: [],
+        text: leadingWhitespace,
+      });
+    }
+
+    if (coreText) {
+      parts.push({
+        ...leaf,
+        text: coreText,
+      });
+    }
+
+    if (trailingWhitespace) {
+      parts.push({
+        type: "text",
+        marks: [],
+        text: trailingWhitespace,
+      });
+    }
+
+    return parts.length ? parts : [];
+  }
+
+  function leafHasCommentMark(leaf: InlineLeaf) {
+    const marks = leaf.type === "marker" ? leaf.marks ?? [] : leaf.marks;
+    return marks.some((mark) => mark.tag === "comment");
+  }
+
+  function isTextLeafWithVisibleContent(leaf: InlineLeaf | undefined): leaf is Extract<InlineLeaf, { type: "text" }> {
+    return !!leaf && leaf.type === "text" && /[^\t \u00a0]/.test(leaf.text);
+  }
+
+  function ensureSinglePlainSpaceBeforeComment(result: InlineLeaf[], commentStartIndex: number) {
+    const previousLeaf = result[commentStartIndex - 1];
+    if (!previousLeaf || previousLeaf.type !== "text") {
+      return commentStartIndex;
+    }
+
+    if (previousLeaf.marks.length > 0) {
+      if (/[^\t \u00a0]/.test(previousLeaf.text)) {
+        result.splice(commentStartIndex, 0, {
+          type: "text",
+          marks: [],
+          text: " ",
+        });
+        return commentStartIndex + 1;
+      }
+      return commentStartIndex;
+    }
+
+    previousLeaf.text = previousLeaf.text.replace(/[ \t\u00a0]+$/g, "");
+    if (previousLeaf.text.length === 0) {
+      result.splice(commentStartIndex - 1, 1);
+      commentStartIndex -= 1;
+    }
+
+    const updatedPreviousLeaf = result[commentStartIndex - 1];
+    if (isTextLeafWithVisibleContent(updatedPreviousLeaf)) {
+      result.splice(commentStartIndex, 0, {
+        type: "text",
+          marks: [],
+          text: " ",
+      });
+      return commentStartIndex + 1;
+    }
+
+    return commentStartIndex;
+  }
+
+  function ensureSinglePlainSpaceAfterComment(result: InlineLeaf[], commentEndIndex: number) {
+    const nextLeaf = result[commentEndIndex + 1];
+    if (!nextLeaf || nextLeaf.type !== "text") {
+      return;
+    }
+
+    if (nextLeaf.marks.length > 0) {
+      if (/[^\t \u00a0]/.test(nextLeaf.text)) {
+        result.splice(commentEndIndex + 1, 0, {
+          type: "text",
+          marks: [],
+          text: " ",
+        });
+      }
+      return;
+    }
+
+    nextLeaf.text = nextLeaf.text.replace(/^[ \t\u00a0]+/g, "");
+    if (nextLeaf.text.length === 0) {
+      result.splice(commentEndIndex + 1, 1);
+    }
+
+    const updatedNextLeaf = result[commentEndIndex + 1];
+    if (isTextLeafWithVisibleContent(updatedNextLeaf)) {
+      result.splice(commentEndIndex + 1, 0, {
+        type: "text",
+        marks: [],
+        text: " ",
+      });
+    }
+  }
+
+  function normalizeInlineCommentPadding(leaves: InlineLeaf[]) {
+    const result = [...leaves];
+    let index = 0;
+
+    while (index < result.length) {
+      if (!leafHasCommentMark(result[index])) {
+        index += 1;
         continue;
       }
 
-      appendInlineLeaf(result, leaf);
+      let segmentStart = index;
+      let segmentEnd = index;
+      while (segmentEnd + 1 < result.length && leafHasCommentMark(result[segmentEnd + 1])) {
+        segmentEnd += 1;
+      }
+
+      segmentStart = ensureSinglePlainSpaceBeforeComment(result, segmentStart);
+      segmentEnd = segmentStart;
+      while (segmentEnd + 1 < result.length && leafHasCommentMark(result[segmentEnd + 1])) {
+        segmentEnd += 1;
+      }
+      ensureSinglePlainSpaceAfterComment(result, segmentEnd);
+
+      index = segmentEnd + 1;
     }
 
     return result;
@@ -5420,7 +6085,10 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
   function appendInlineLeaf(leaves: InlineLeaf[], nextLeaf: InlineLeaf) {
     const normalizedLeaf = nextLeaf.type === "marker"
-      ? nextLeaf
+      ? {
+        ...nextLeaf,
+        marks: nextLeaf.marks ? normalizeInlineMarks(nextLeaf.marks) : undefined,
+      } satisfies InlineLeaf
       : { ...nextLeaf, marks: normalizeInlineMarks(nextLeaf.marks) } satisfies InlineLeaf;
 
     if (normalizedLeaf.type !== "text" || !normalizedLeaf.text) {
@@ -5458,7 +6126,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       const element = node as HTMLElement;
       const markerRole = element.dataset.inlineSelectionMarker;
       if (markerRole === "caret" || markerRole === "selection-start" || markerRole === "selection-end") {
-        leaves.push({ type: "marker", role: markerRole });
+        leaves.push({ type: "marker", role: markerRole, marks: [...marks] });
         continue;
       }
 
@@ -5480,34 +6148,71 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   }
 
   function appendCanonicalInlineLeaf(container: HTMLElement, leaf: InlineLeaf) {
+    const marks = leaf.type === "marker" ? leaf.marks ?? [] : leaf.marks;
+    let contentNode: Node;
+
     if (leaf.type === "marker") {
-      const marker = createInlineSelectionMarker(leaf.role);
-      container.append(marker);
+      contentNode = createInlineSelectionMarker(leaf.role);
+    } else if (leaf.type === "break") {
+      contentNode = document.createElement("br");
+    } else {
+      contentNode = document.createTextNode(leaf.text);
+    }
+
+    if (marks.length) {
+      const existingRun = getDeepestMatchingMarkedRun(container.lastChild, marks);
+      if (existingRun) {
+        existingRun.append(contentNode);
+        return;
+      }
+
+      for (let index = marks.length - 1; index >= 0; index -= 1) {
+        const wrapper = createInlineMarkElement(marks[index]);
+        wrapper.append(contentNode);
+        contentNode = wrapper;
+      }
+      container.append(contentNode);
       return;
     }
 
-    let contentNode: Node = document.createTextNode(leaf.type === "text" ? leaf.text : "");
-    if (leaf.type === "break") {
-      contentNode = document.createElement("br");
-    }
-
-    for (let index = leaf.marks.length - 1; index >= 0; index -= 1) {
-      const mark = leaf.marks[index];
-      const wrapper = document.createElement(mark.tag);
-      if (mark.tag === "a") {
-        wrapper.setAttribute("href", mark.href ?? "");
-      }
-      wrapper.append(contentNode);
-      contentNode = wrapper;
-    }
-
-    if (!leaf.marks.length && leaf.type === "text") {
+    if (leaf.type === "text") {
       const wrapper = document.createElement("span");
       wrapper.append(contentNode);
       contentNode = wrapper;
     }
 
     container.append(contentNode);
+  }
+
+  function getDeepestMatchingMarkedRun(node: Node | null, marks: InlineMark[]) {
+    if (!(node instanceof HTMLElement) || !marks.length) {
+      return null;
+    }
+
+    let current: HTMLElement | null = node;
+    for (let index = 0; index < marks.length; index += 1) {
+      if (!current) {
+        return null;
+      }
+
+      const currentMark = getInlineMarkForElement(current);
+      if (!currentMark || !areInlineMarksEqual(currentMark, marks[index])) {
+        return null;
+      }
+
+      if (index === marks.length - 1) {
+        return current;
+      }
+
+      const childElements = Array.from(current.children).filter((child): child is HTMLElement => child instanceof HTMLElement);
+      if (childElements.length !== 1) {
+        return null;
+      }
+
+      current = childElements[0];
+    }
+
+    return null;
   }
 
   function rebuildInlineRunContainer(container: HTMLElement, leaves: InlineLeaf[]) {
@@ -5605,6 +6310,10 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   }
 
   function elementMatchesInlineFormat(element: HTMLElement, format: PendingInlineFormatKey) {
+    if (format === "comment") {
+      return isInlineCommentElement(element);
+    }
+
     const tagNames = getInlineFormatTagNames(format);
     return Boolean(tagNames && (tagNames as readonly string[]).includes(element.tagName));
   }
@@ -5615,12 +6324,11 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       return false;
     }
 
-    const tagNames = getInlineFormatTagNames(format);
-    if (!tagNames) {
+    if (!INLINE_FORMAT_ORDER.some((inlineFormat) => inlineFormat.key === format)) {
       return false;
     }
 
-    const formatElement = getClosestInlineFormatElement(selection.getRangeAt(0).startContainer, tagNames);
+    const formatElement = getClosestInlineFormatElement(selection.getRangeAt(0).startContainer, format as PendingInlineFormatKey);
     if (!formatElement || !isSelectionAtElementEnd(selection, formatElement)) {
       return false;
     }
@@ -5650,12 +6358,57 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     return codeElement;
   }
 
+  function getInlineFormatSelector(format: PendingInlineFormatKey) {
+    switch (format) {
+      case "bold":
+        return "strong, b";
+      case "italic":
+        return "em, i";
+      case "code":
+        return "code";
+      case "comment":
+        return 'span[data-inline-comment="true"]';
+      case "del":
+        return "del, s, strike";
+      case "ins":
+        return "ins";
+      default:
+        return "";
+    }
+  }
+
   function unwrapElementsByTagNames(root: ParentNode, tagNames: readonly string[]) {
     if (!("querySelectorAll" in root) || !tagNames.length) {
       return;
     }
 
     const selector = tagNames.map((tagName) => tagName.toLowerCase()).join(", ");
+    for (const element of Array.from(root.querySelectorAll(selector))) {
+      const parent = element.parentNode;
+      if (!parent) {
+        continue;
+      }
+
+      while (element.firstChild) {
+        parent.insertBefore(element.firstChild, element);
+      }
+      element.remove();
+    }
+  }
+
+  function unwrapInlineFormatElements(
+    root: ParentNode,
+    format: PendingInlineFormatKey,
+  ) {
+    if (!("querySelectorAll" in root)) {
+      return;
+    }
+
+    const selector = getInlineFormatSelector(format);
+    if (!selector) {
+      return;
+    }
+
     for (const element of Array.from(root.querySelectorAll(selector))) {
       const parent = element.parentNode;
       if (!parent) {
@@ -5677,14 +6430,77 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       return;
     }
 
+    const protectedElements = getProtectedEmptyInlineFormatElements(root);
     const selector = tagNames.map((tagName) => tagName.toLowerCase()).join(", ");
     for (const element of Array.from(root.querySelectorAll<HTMLElement>(selector))) {
+      if (protectedElements.has(element)) {
+        continue;
+      }
+
       if ((element.textContent ?? "").replaceAll("\u00a0", "").length > 0) {
         continue;
       }
 
       element.remove();
     }
+  }
+
+  function removeEmptyInlineFormatElementsForFormat(
+    format: PendingInlineFormatKey,
+    root: ParentNode = editor,
+  ) {
+    if (!("querySelectorAll" in root)) {
+      return;
+    }
+
+    const selector = getInlineFormatSelector(format);
+    if (!selector) {
+      return;
+    }
+
+    const protectedElements = getProtectedEmptyInlineFormatElements(root);
+    for (const element of Array.from(root.querySelectorAll<HTMLElement>(selector))) {
+      if (protectedElements.has(element)) {
+        continue;
+      }
+
+      if ((element.textContent ?? "").replaceAll("\u00a0", "").length > 0) {
+        continue;
+      }
+
+      element.remove();
+    }
+  }
+
+  function getProtectedEmptyInlineFormatElements(root: ParentNode) {
+    const protectedElements = new Set<HTMLElement>();
+    if (root !== editor) {
+      return protectedElements;
+    }
+
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) {
+      return protectedElements;
+    }
+
+    const boundaryNodes = [
+      selection.anchorNode,
+      selection.focusNode,
+      selection.getRangeAt(0).startContainer,
+      selection.getRangeAt(0).endContainer,
+    ];
+
+    for (const boundaryNode of boundaryNodes) {
+      let current: Node | null = boundaryNode;
+      while (current && current !== editor) {
+        if (current instanceof HTMLElement && getInlineMarkForElement(current)) {
+          protectedElements.add(current);
+        }
+        current = current.parentNode;
+      }
+    }
+
+    return protectedElements;
   }
 
   function rangeIntersectsNodeSafely(range: Range, node: Node) {
@@ -5695,7 +6511,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     }
   }
 
-  function selectionContainsOnlyInlineFormat(range: Range, tagNames: readonly string[]) {
+  function selectionContainsOnlyInlineFormat(range: Range, format: PendingInlineFormatKey) {
     const root = range.commonAncestorContainer;
     const selectedNodes: Node[] = [];
     const maybePushSelectedNode = (node: Node) => {
@@ -5758,7 +6574,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       let current: Node | null = node.nodeType === Node.TEXT_NODE ? node.parentNode : node.parentNode;
 
       while (current && current !== editor) {
-        if (current instanceof HTMLElement && tagNames.includes(current.tagName)) {
+        if (current instanceof HTMLElement && elementMatchesInlineFormat(current, format)) {
           return true;
         }
         current = current.parentNode;
@@ -5943,7 +6759,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     syncEditorAfterStructuralChange();
   }
 
-  function wrapSelection(tagName: keyof HTMLElementTagNameMap) {
+  function wrapSelection(tagName: keyof HTMLElementTagNameMap | "comment") {
     if (state.mode !== "rich") {
       return;
     }
@@ -5958,7 +6774,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
         ? "bold"
         : tagName === "em"
           ? "italic"
-          : tagName === "code" || tagName === "del" || tagName === "ins"
+          : tagName === "code" || tagName === "comment" || tagName === "del" || tagName === "ins"
             ? tagName
             : null;
 
@@ -6002,6 +6818,11 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       return;
     }
 
+    if (tagName === "comment") {
+      toggleInlineFormatSelection(selection, range, "comment", "comment");
+      return;
+    }
+
     const wrapper = document.createElement(tagName);
     wrapper.append(range.extractContents());
     range.insertNode(wrapper);
@@ -6022,6 +6843,9 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
         break;
       case "inline-code":
         wrapSelection("code");
+        break;
+      case "comment":
+        wrapSelection("comment");
         break;
       case "del":
         wrapSelection("del");
@@ -6052,7 +6876,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   function toggleInlineFormatSelection(
     selection: Selection,
     range: Range,
-    tagName: "strong" | "em" | "del" | "ins",
+    tagName: "comment" | "strong" | "em" | "del" | "ins",
     formatKey: PendingInlineFormatKey,
   ) {
     const container = getInlineRunContainer(range.commonAncestorContainer) ?? getInlineRunContainer(range.startContainer);
@@ -6137,21 +6961,25 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       return;
     }
 
-    const tagNames = getInlineFormatTagNames(formatKey) ?? [tagName.toUpperCase()];
-    const startFormatElement = getClosestInlineFormatElement(range.startContainer, tagNames);
-    const shouldUnwrap = selectionContainsOnlyInlineFormat(range, tagNames);
+    const startFormatElement = getClosestInlineFormatElement(range.startContainer, formatKey);
+    const shouldUnwrap = selectionContainsOnlyInlineFormat(range, formatKey);
 
     if (
       shouldUnwrap
       && startFormatElement
       && startFormatElement.contains(range.commonAncestorContainer)
     ) {
-      unwrapSelectionFromSingleFormatElement(selection, range, startFormatElement, tagNames);
+      unwrapSelectionFromSingleFormatElement(
+        selection,
+        range,
+        startFormatElement,
+        getInlineFormatTagNames(formatKey) ?? [startFormatElement.tagName],
+      );
       return;
     }
 
     const extractedFragment = range.extractContents();
-    unwrapElementsByTagNames(extractedFragment, tagNames);
+    unwrapInlineFormatElements(extractedFragment, formatKey);
 
     if (shouldUnwrap) {
       const insertedNodes = Array.from(extractedFragment.childNodes);
@@ -6159,16 +6987,16 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       fallbackRange.setStart(range.startContainer, range.startOffset);
       fallbackRange.collapse(true);
       range.insertNode(extractedFragment);
-      removeEmptyInlineFormatElements(tagNames);
+      removeEmptyInlineFormatElementsForFormat(formatKey);
       selectInsertedNodes(selection, insertedNodes, fallbackRange);
       syncEditorAfterStructuralChange();
       return;
     }
 
-    const wrapper = document.createElement(tagName);
+    const wrapper = createInlineMarkElement(getInlineMarkForFormat(formatKey));
     wrapper.append(extractedFragment);
     range.insertNode(wrapper);
-    removeEmptyInlineFormatElements(tagNames);
+    removeEmptyInlineFormatElementsForFormat(formatKey);
     selection.removeAllRanges();
     const nextRange = document.createRange();
     nextRange.selectNodeContents(wrapper);
@@ -6191,6 +7019,10 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       return null;
     }
 
+    if (element.dataset.inlineComment === "true" || element.dataset.blockComment === "true") {
+      return "comment";
+    }
+
     const tag = element.tagName.toLowerCase();
     return tag === "del" || tag === "ins" ? tag : null;
   }
@@ -6207,16 +7039,27 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   }
 
   function getRevisionToolbarKind(nodes: HTMLElement[]): RevisionToolbarKind | null {
+    let hasComments = false;
     let hasInsertions = false;
     let hasDeletions = false;
 
     for (const node of nodes) {
       const kind = getHoveredRevisionKind(node);
-      if (kind === "ins") {
+      if (kind === "comment") {
+        hasComments = true;
+      } else if (kind === "ins") {
         hasInsertions = true;
       } else if (kind === "del") {
         hasDeletions = true;
       }
+    }
+
+    if (hasComments && (hasInsertions || hasDeletions)) {
+      return null;
+    }
+
+    if (hasComments) {
+      return "comment";
     }
 
     if (hasInsertions && hasDeletions) {
@@ -6247,7 +7090,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     }
 
     const range = selection.getRangeAt(0);
-    const nodes = Array.from(editor.querySelectorAll<HTMLElement>("del, ins"))
+    const nodes = Array.from(editor.querySelectorAll<HTMLElement>('del, ins, [data-inline-comment="true"], [data-block-comment="true"]'))
       .filter((element) => range.intersectsNode(element));
     if (!nodes.length) {
       return null;
@@ -6324,9 +7167,11 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       revisionHoverToolbar.hidden = true;
       delete revisionHoverToolbar.dataset.revisionKind;
       revisionHoverToolbar.style.background = "";
+      revisionHoverAcceptButton.hidden = false;
       revisionHoverAcceptButton.textContent = "accept";
       revisionHoverAcceptButton.setAttribute("aria-label", "Accept revision");
       revisionHoverAcceptButton.title = "Accept revision";
+      revisionHoverRejectButton.hidden = false;
       revisionHoverRejectButton.textContent = "reject";
       revisionHoverRejectButton.setAttribute("aria-label", "Reject revision");
       revisionHoverRejectButton.title = "Reject revision";
@@ -6335,7 +7180,9 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
     setActiveRevisionNodes(context.nodes);
     const isBulkSelection = context.nodes.length > 1;
-    const acceptLabel = context.kind === "del"
+    const acceptLabel = context.kind === "comment"
+      ? isBulkSelection ? "Resolve selected comments" : "Resolve comment"
+      : context.kind === "del"
       ? isBulkSelection ? "Accept selected deletions" : "Accept deletion"
       : context.kind === "ins"
         ? isBulkSelection ? "Accept selected insertions" : "Accept insertion"
@@ -6346,14 +7193,18 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
         ? isBulkSelection ? "Reject selected insertions" : "Reject insertion"
         : "Reject selected revisions";
     revisionHoverToolbar.dataset.revisionKind = context.kind;
-    revisionHoverToolbar.style.background = context.kind === "del"
+    revisionHoverToolbar.style.background = context.kind === "comment"
+      ? "color-mix(in srgb, var(--text) 10%, var(--bg) 90%)"
+      : context.kind === "del"
       ? "color-mix(in srgb, var(--danger) 20%, var(--bg) 80%)"
       : context.kind === "ins"
         ? "color-mix(in srgb, var(--success) 20%, var(--bg) 80%)"
         : "color-mix(in srgb, #d0ad12 22%, var(--bg) 78%)";
-    revisionHoverAcceptButton.textContent = "accept";
+    revisionHoverAcceptButton.hidden = false;
+    revisionHoverAcceptButton.textContent = context.kind === "comment" ? "resolve" : "accept";
     revisionHoverAcceptButton.setAttribute("aria-label", acceptLabel);
     revisionHoverAcceptButton.title = acceptLabel;
+    revisionHoverRejectButton.hidden = context.kind === "comment";
     revisionHoverRejectButton.textContent = "reject";
     revisionHoverRejectButton.setAttribute("aria-label", rejectLabel);
     revisionHoverRejectButton.title = rejectLabel;
@@ -6408,6 +7259,11 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       const revisionKind = getHoveredRevisionKind(target);
       const parent = target.parentNode;
       if (!revisionKind || !parent) {
+        continue;
+      }
+
+      if (revisionKind === "comment") {
+        target.remove();
         continue;
       }
 

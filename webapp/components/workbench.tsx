@@ -864,6 +864,14 @@ export default function Workbench () {
             code
           </button>
           <button
+            data-command="comment"
+            type="button"
+            title="Inline comment"
+            className="min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+          >
+            note
+          </button>
+          <button
             data-command="del"
             type="button"
             title="Deleted text"
