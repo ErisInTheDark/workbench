@@ -5,6 +5,7 @@ import { startTransition, useEffect, useMemo, useState, type ReactNode } from "r
 import type {
   ChangeSummary,
   ExplorerSnapshot,
+  ThreadSummary,
   TreeNode,
   WorkbenchControls,
 } from "../lib/types";
@@ -12,29 +13,49 @@ import type {
 const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   root: "Project",
   tree: [],
+  threads: [],
   changes: {},
   currentPath: "",
+  currentThreadId: "",
   expandedDirectories: [""],
   locallyModifiedPaths: [],
+  threadsError: "",
 };
 
 const MOBILE_MEDIA_QUERY = "(max-width: 767px)";
 type MobilePane = "editor" | "explorer";
+const FILE_SEARCH_PARAM = "file";
+const THREAD_SEARCH_PARAM = "thread";
 
-function getCurrentFileSearchParam () {
+function getCurrentSelectionSearchParams () {
   if (typeof window === "undefined") {
-    return "";
+    return {
+      filePath: "",
+      threadId: "",
+    };
   }
 
   try {
     const url = new URL(window.location.href);
-    return url.searchParams.get("file") ?? "";
+    return {
+      filePath: url.searchParams.get(FILE_SEARCH_PARAM) ?? "",
+      threadId: url.searchParams.get(THREAD_SEARCH_PARAM) ?? "",
+    };
   } catch {
-    return "";
+    return {
+      filePath: "",
+      threadId: "",
+    };
   }
 }
 
-function syncCurrentFileSearchParam (filePath: string) {
+function syncCurrentSelectionSearchParams ({
+  filePath = "",
+  threadId = "",
+}: {
+  filePath?: string;
+  threadId?: string;
+}) {
   if (typeof window === "undefined") {
     return;
   }
@@ -42,9 +63,15 @@ function syncCurrentFileSearchParam (filePath: string) {
   try {
     const url = new URL(window.location.href);
     if (filePath) {
-      url.searchParams.set("file", filePath);
+      url.searchParams.set(FILE_SEARCH_PARAM, filePath);
     } else {
-      url.searchParams.delete("file");
+      url.searchParams.delete(FILE_SEARCH_PARAM);
+    }
+
+    if (threadId) {
+      url.searchParams.set(THREAD_SEARCH_PARAM, threadId);
+    } else {
+      url.searchParams.delete(THREAD_SEARCH_PARAM);
     }
 
     const nextUrl = `${url.pathname}${url.search}${url.hash}`;
@@ -59,7 +86,8 @@ function getPreferredMobilePane (isMobileViewport: boolean): MobilePane {
     return "editor";
   }
 
-  return getCurrentFileSearchParam() ? "editor" : "explorer";
+  const { filePath, threadId } = getCurrentSelectionSearchParams();
+  return filePath || threadId ? "editor" : "explorer";
 }
 
 function SaveIcon () {
@@ -175,6 +203,42 @@ function ExplorerFileSpacer () {
       style={{ width: "1.1rem", height: "1.1rem" }}
       aria-hidden="true"
     />
+  );
+}
+
+function ThreadsList ({
+  currentThreadId,
+  nodes,
+  onOpenThread,
+}: {
+  currentThreadId: string;
+  nodes: ThreadSummary[];
+  onOpenThread: (threadId: string) => void;
+}) {
+  return (
+    <ul className="m-0 p-0">
+      {nodes.map((thread) => {
+        const label = thread.name || thread.preview || thread.id;
+        const isCurrent = thread.id === currentThreadId;
+
+        return (
+          <li key={thread.id} className="m-0 list-none">
+            <button
+              type="button"
+              className={`inline-flex w-full flex-col items-start gap-0.5 rounded-lg px-2 py-1.5 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:py-1${isCurrent ? " text-accent" : " text-muted"}`}
+              onClick={() => {
+                onOpenThread(thread.id);
+              }}
+            >
+              <span className={`min-w-0 truncate ${isCurrent ? "font-semibold" : ""}`}>{label}</span>
+              <span className="min-w-0 truncate text-[0.78rem] leading-5 opacity-80">
+                {thread.status} · {thread.source}
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -504,6 +568,16 @@ export default function Workbench () {
       setMobilePane("editor");
     }
   };
+  const openThreadFromExplorer = async (threadId: string) => {
+    if (!controls) {
+      return;
+    }
+
+    await controls.openThread(threadId);
+    if (isMobile) {
+      setMobilePane("editor");
+    }
+  };
 
   const workbenchControls = useMemo<WorkbenchControls | null>(() => {
     if (!controls) {
@@ -513,6 +587,7 @@ export default function Workbench () {
     return {
       ...controls,
       openFile: openFileFromExplorer,
+      openThread: openThreadFromExplorer,
     };
   }, [controls, isMobile]);
 
@@ -548,6 +623,28 @@ export default function Workbench () {
         style={mobileTrackStyle}
       >
         <aside className="flex min-h-screen w-screen min-w-0 shrink-0 flex-col px-5 pb-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:px-6 md:py-5">
+          <div className="tree-folder-row flex items-center justify-between gap-3 pr-2 md:pr-4.5">
+            <p className="m-0 text-base font-semibold leading-tight">Threads</p>
+          </div>
+          {explorer.threads.length ? (
+            <nav
+              className="explorer-scrollbar max-h-56 overflow-y-auto pb-6 pr-2 text-[0.95rem] leading-6 -ml-3"
+              aria-label="Codex threads"
+            >
+              <ThreadsList
+                currentThreadId={explorer.currentThreadId}
+                nodes={explorer.threads}
+                onOpenThread={(threadId) => {
+                  void openThreadFromExplorer(threadId);
+                }}
+              />
+            </nav>
+          ) : explorer.threadsError ? (
+            <p className="pb-6 pr-2 text-[0.84rem] leading-6 text-muted">
+              {explorer.threadsError}
+            </p>
+          ) : null}
+
           <div className="tree-folder-row flex items-center justify-between gap-3 pr-2 md:pr-4.5">
             <p className="m-0 text-base font-semibold leading-tight">Project</p>
             <button
@@ -604,7 +701,7 @@ export default function Workbench () {
                   hidden={!isMobile || mobilePane !== "editor"}
                   className="ui-icon-button shrink-0 md:hidden"
                   onClick={() => {
-                    syncCurrentFileSearchParam("");
+                    syncCurrentSelectionSearchParams({});
                     setMobilePane("explorer");
                   }}
                 >

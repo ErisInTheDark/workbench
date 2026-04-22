@@ -3,6 +3,29 @@ export interface ChangeSummary {
   deletions: number;
 }
 
+export interface ThreadSummary {
+  id: string;
+  name: string | null;
+  preview: string;
+  updatedAt: number;
+  status: string;
+  cwd: string;
+  source: string;
+  path: string | null;
+}
+
+export interface ThreadPayload {
+  id: string;
+  name: string | null;
+  preview: string;
+  updatedAt: number;
+  status: string;
+  cwd: string;
+  source: string;
+  path: string | null;
+  markdown: string;
+}
+
 export interface FileNode {
   type: "file";
   name: string;
@@ -27,14 +50,18 @@ export interface ProjectSnapshot {
 export interface ExplorerSnapshot {
   root: string;
   tree: TreeNode[];
+  threads: ThreadSummary[];
   changes: Record<string, ChangeSummary>;
   currentPath: string;
+  currentThreadId: string;
   expandedDirectories: string[];
   locallyModifiedPaths: string[];
+  threadsError: string;
 }
 
 export interface WorkbenchControls {
   openFile: (path: string) => Promise<void>;
+  openThread: (threadId: string) => Promise<void>;
   toggleDirectory: (path: string) => void;
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
 }

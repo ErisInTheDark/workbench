@@ -6,6 +6,8 @@ import type {
     ProjectSnapshot,
     SaveConflictPayload,
     SaveFilePayload,
+    ThreadPayload,
+    ThreadSummary,
     TreeNode,
     WorkbenchBindings,
     WorkbenchControls,
@@ -168,12 +170,15 @@ interface WorkbenchState {
   changes: Record<string, ChangeSummary>;
   currentContent: string;
   currentPath: string;
+  currentThreadId: string;
   draftBuffers: Map<string, DraftBuffer>;
   dirty: boolean;
   expectedMtimeMs: number | null;
   headContent: string | null;
   history: EditHistoryState | null;
   root: string;
+  threads: ThreadSummary[];
+  threadsError: string;
   tree: TreeNode[];
   mode: EditorMode;
   fontSize: number;
@@ -189,6 +194,7 @@ const MAX_EDITOR_FONT_SIZE = 1.72;
 const EDITOR_FONT_STEP = 0.08;
 const AUTO_REFRESH_INTERVAL_MS = 1500;
 const CURRENT_FILE_SEARCH_PARAM = "file";
+const CURRENT_THREAD_SEARCH_PARAM = "thread";
 const DRAFT_DATABASE_NAME = "workbench";
 const DRAFT_DATABASE_VERSION = 1;
 const DRAFT_STORE_NAME = "drafts";
@@ -222,12 +228,15 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     changes: {},
     currentContent: "",
     currentPath: "",
+    currentThreadId: "",
     draftBuffers: new Map(),
     dirty: false,
     expectedMtimeMs: null,
     headContent: null,
     history: null,
     root: "Project",
+    threads: [],
+    threadsError: "",
     tree: [],
     mode: "rich",
     fontSize: readStoredFontSize(),
@@ -793,13 +802,34 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     }
   }
 
-  function syncCurrentPathToUrl(filePath: string) {
+  function getRequestedThreadIdFromUrl() {
+    try {
+      const url = new URL(window.location.href);
+      return url.searchParams.get(CURRENT_THREAD_SEARCH_PARAM) ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  function syncCurrentSelectionToUrl({
+    filePath = "",
+    threadId = "",
+  }: {
+    filePath?: string;
+    threadId?: string;
+  }) {
     try {
       const url = new URL(window.location.href);
       if (filePath) {
         url.searchParams.set(CURRENT_FILE_SEARCH_PARAM, filePath);
       } else {
         url.searchParams.delete(CURRENT_FILE_SEARCH_PARAM);
+      }
+
+      if (threadId) {
+        url.searchParams.set(CURRENT_THREAD_SEARCH_PARAM, threadId);
+      } else {
+        url.searchParams.delete(CURRENT_THREAD_SEARCH_PARAM);
       }
 
       const nextUrl = `${url.pathname}${url.search}${url.hash}`;
@@ -2462,6 +2492,8 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
   function updateSaveButtonState() {
     saveFileButton.dataset.invalid = state.saveIssue ? "true" : "false";
+    saveFileButton.disabled = !state.currentPath;
+    resetDraftButton.disabled = !state.currentPath;
   }
 
   function hideSaveConflictDialog() {
@@ -2515,10 +2547,13 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     return {
       root: state.root,
       tree: state.tree,
+      threads: state.threads,
       changes: state.changes,
       currentPath: state.currentPath,
+      currentThreadId: state.currentThreadId,
       expandedDirectories: Array.from(state.expandedDirectories).sort((left, right) => left.localeCompare(right)),
       locallyModifiedPaths: getLocallyModifiedPaths(),
+      threadsError: state.threadsError,
     };
   }
 
@@ -2583,6 +2618,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   function restoreDraftBuffer(filePath: string, buffer: DraftBuffer) {
     clearWriteConflict();
     state.currentPath = filePath;
+    state.currentThreadId = "";
     state.expectedMtimeMs = buffer.expectedMtimeMs;
     state.mode = buffer.mode;
     editor.dataset.placeholder = buffer.mode === "rich"
@@ -4263,6 +4299,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
     clearWriteConflict();
     state.currentPath = payload.path;
+    state.currentThreadId = "";
     state.expectedMtimeMs = payload.mtimeMs;
     state.headContent = payload.headContent;
     filePathLabel.textContent = payload.path;
@@ -4342,6 +4379,82 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     return await response.json() as FilePayload;
   }
 
+  async function fetchThreadPayload(threadId: string) {
+    const response = await fetch(`/api/codex/thread?threadId=${encodeURIComponent(threadId)}`, { cache: "no-store" });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: "Unable to open Codex thread.", detail: "" }));
+      statusLine.textContent = error.detail ? `${error.error} ${error.detail}` : error.error;
+      return null;
+    }
+
+    return await response.json() as ThreadPayload;
+  }
+
+  async function refreshThreads() {
+    try {
+      const response = await fetch("/api/codex/threads", { cache: "no-store" });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: "Unable to load Codex threads.", detail: "" }));
+        state.threads = [];
+        state.threadsError = error.detail ? `${error.error} ${error.detail}` : error.error;
+        return;
+      }
+
+      const payload = await response.json() as { threads: ThreadSummary[] };
+      state.threads = payload.threads;
+      state.threadsError = "";
+    } catch (error) {
+      state.threads = [];
+      state.threadsError = error instanceof Error ? error.message : "Unable to load Codex threads.";
+    }
+  }
+
+  function applyThreadPayloadToCurrentView(payload: ThreadPayload, statusMessage?: string) {
+    clearWriteConflict();
+    state.currentPath = "";
+    state.currentThreadId = payload.id;
+    state.expectedMtimeMs = null;
+    state.headContent = null;
+    state.pendingWriteConflict = null;
+    state.saveIssue = null;
+    state.lastLoggedSaveIssue = null;
+    filePathLabel.textContent = payload.name || payload.preview || payload.id;
+    editor.setAttribute("contenteditable", "false");
+    renderEditorDocument(payload.markdown, "rich");
+    state.baselineContent = payload.markdown;
+    state.currentContent = payload.markdown;
+    state.mode = "rich";
+    state.dirty = false;
+    state.history = createInitialEditHistory(state.currentContent);
+    updateStatusLine(statusMessage);
+    scheduleDiffGutterRefresh();
+    updateFloatingToolbar();
+    updateRevisionHoverToolbar();
+    updateCustomCaret();
+  }
+
+  async function openThread(
+    threadId: string,
+    { source = "open" }: { source?: "open" | "reload" } = {},
+  ) {
+    if (source === "open" && threadId === state.currentThreadId) {
+      return;
+    }
+
+    if (state.currentPath) {
+      syncCurrentDraftBuffer();
+    }
+
+    const payload = await fetchThreadPayload(threadId);
+    if (!payload) {
+      return;
+    }
+
+    applyThreadPayloadToCurrentView(payload, `Read thread ${new Date(payload.updatedAt * 1000).toLocaleString()}`);
+    syncCurrentSelectionToUrl({ threadId: payload.id });
+    emitExplorerStateChange();
+  }
+
   async function openFile(filePath: string, { ignoreDirty = false, source = "open" }: { ignoreDirty?: boolean; source?: "open" | "reload" } = {}) {
     if (source === "open" && filePath === state.currentPath) {
       return;
@@ -4356,7 +4469,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       if (bufferedDraft) {
         editor.setAttribute("contenteditable", isTextLikeFile(filePath) ? "true" : "false");
         restoreDraftBuffer(filePath, bufferedDraft);
-        syncCurrentPathToUrl(filePath);
+    syncCurrentSelectionToUrl({ filePath });
         updateStatusLine(`Opened draft`);
         expandPath(filePath);
         emitExplorerStateChange();
@@ -4377,7 +4490,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     applyFilePayloadToCurrentFile(payload, {
       statusMessage: `${source === "reload" ? "Reloaded" : "Read"} ${formatTimestamp(payload.updatedAt)}`,
     });
-    syncCurrentPathToUrl(payload.path);
+    syncCurrentSelectionToUrl({ filePath: payload.path });
     expandPath(payload.path);
     emitExplorerStateChange();
   }
@@ -4501,6 +4614,11 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     }
 
     if (!state.currentPath) {
+      if (state.currentThreadId) {
+        statusLine.textContent = "Codex thread (read-only).";
+        return;
+      }
+
       statusLine.textContent = "Markdown files open as rich text. Save with Ctrl/Cmd+S.";
       return;
     }
@@ -4764,7 +4882,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       preserveSelection: true,
       statusMessage: `Updated from disk - ${formatTimestamp(payload.updatedAt)}`,
     });
-    syncCurrentPathToUrl(payload.path);
+    syncCurrentSelectionToUrl({ filePath: payload.path });
     emitExplorerStateChange();
   }
 
@@ -7335,13 +7453,25 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     state.root = payload.root;
     state.tree = payload.tree;
     state.changes = payload.changes;
+    await refreshThreads();
     emitExplorerStateChange();
+
+    if (preserveSelection && state.currentThreadId) {
+      await openThread(state.currentThreadId, { source: "reload" });
+      return;
+    }
 
     if (preserveSelection && state.currentPath) {
       if (treeContainsFilePath(state.tree, state.currentPath)) {
         await refreshCurrentFileFromDiskIfSafe();
         return;
       }
+    }
+
+    const requestedThreadId = getRequestedThreadIdFromUrl();
+    if (requestedThreadId) {
+      await openThread(requestedThreadId);
+      return;
     }
 
     const requestedPath = getRequestedPathFromUrl();
@@ -7358,6 +7488,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
     state.baselineContent = "";
     state.currentPath = "";
+    state.currentThreadId = "";
     state.currentContent = "";
     state.dirty = false;
     state.expectedMtimeMs = null;
@@ -7372,7 +7503,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     filePathLabel.textContent = "Select a file";
     updateSaveButtonState();
     updateStatusLine();
-    syncCurrentPathToUrl("");
+    syncCurrentSelectionToUrl({});
     scheduleDiffGutterRefresh();
     updateCustomCaret();
   }
@@ -7404,6 +7535,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   const controls: WorkbenchControls = {
     createEntry,
     openFile,
+    openThread,
     toggleDirectory,
   };
 

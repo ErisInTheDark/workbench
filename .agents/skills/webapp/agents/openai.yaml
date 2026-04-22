@@ -1,0 +1,4 @@
+interface:
+  display_name: "Webapp Work"
+  short_description: "webapp workflow"
+  default_prompt: "Use $webapp to update the webapp."
