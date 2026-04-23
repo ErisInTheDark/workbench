@@ -1,3 +1,14 @@
+/*
+ * Exports:
+ * - appRoot: absolute path to the Next.js app workspace. Keywords: project, app root, workspace.
+ * - projectRoot: absolute path to the repository root used by the workbench. Keywords: project, repo root, workspace.
+ * - normalizeRelativePath: normalize project paths to forward-slash form for client transport. Keywords: path, normalize, relative.
+ * - safeResolve: resolve and validate project-relative paths inside the repo root. Keywords: path, resolve, safety.
+ * - isPathWithinRoot: test whether an absolute path belongs to the current project root. Keywords: path, root, thread filter.
+ * - createProjectEntry: create a new project file or directory and return its normalized relative path. Keywords: create, file, directory.
+ * - buildTree: build the visible explorer tree for the project. Keywords: tree, explorer, filesystem.
+ * - getProjectSnapshot: assemble the project tree, root info, and git change summary for the client. Keywords: snapshot, project, explorer.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -21,6 +32,24 @@ export function safeResolve(requestPath: string) {
   }
 
   return absolute;
+}
+
+function normalizePathForComparison(filePath: string) {
+  const normalized = path.resolve(String(filePath ?? "")).split(path.sep).join("/").replace(/\/+$/, "");
+  return process.platform === "win32"
+    ? normalized.toLowerCase()
+    : normalized;
+}
+
+export function isPathWithinRoot(candidatePath: string, rootPath = projectRoot) {
+  if (!String(candidatePath ?? "").trim() || !String(rootPath ?? "").trim()) {
+    return false;
+  }
+
+  const normalizedCandidatePath = normalizePathForComparison(candidatePath);
+  const normalizedRootPath = normalizePathForComparison(rootPath);
+  return normalizedCandidatePath === normalizedRootPath
+    || normalizedCandidatePath.startsWith(`${normalizedRootPath}/`);
 }
 
 function normalizeEntryName(name: string, type: "directory" | "file") {
@@ -119,6 +148,7 @@ export async function getProjectSnapshot() {
   const [tree, changes] = await Promise.all([buildTree(), getGitChanges(projectRoot)]);
   return {
     root: path.basename(projectRoot),
+    rootPath: normalizeRelativePath(projectRoot),
     tree,
     changes,
   } satisfies ProjectSnapshot;

@@ -1,3 +1,8 @@
+/*
+ * Exports:
+ * - initWorkbench: wire the workbench DOM, polling, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, polling.
+ */
+import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
 import type {
     ChangeSummary,
     CreateEntryPayload,
@@ -12,6 +17,48 @@ import type {
     WorkbenchBindings,
     WorkbenchControls,
 } from "./types";
+import {
+    MAX_EDITOR_FONT_SIZE,
+    MIN_EDITOR_FONT_SIZE,
+    getRequestedPathFromUrl,
+    getRequestedThreadIdFromUrl,
+    persistExpandedDirectories,
+    persistFontSize,
+    readStoredExpandedDirectories,
+    readStoredFontSize,
+    syncCurrentSelectionToUrl,
+} from "./workbench/browser-state";
+import {
+    escapeMarkdownText,
+    formatBlockCommentLine,
+    formatInlineCommentMarkdown,
+    isBlockCommentLine,
+    parseBlockCommentBody,
+} from "./workbench/comment-markdown";
+import {
+    cloneEditHistory,
+    cloneHistorySelection,
+    countHistoryStatesSinceSnapshot,
+    createHistoryPatch,
+    createInitialEditHistory,
+    materializeHistoryContent,
+    mergeHistoryPatches,
+    normalizeEditHistory,
+    trimEditHistory,
+    type EditHistorySelection,
+    type EditHistorySelectionPoint,
+    type EditHistoryState,
+} from "./workbench/edit-history";
+import {
+    parseBlocks as parseMarkdownBlocks,
+    markdownToHtml as renderMarkdownToHtml,
+} from "./workbench/markdown-render";
+import {
+    formatTimestamp,
+    getFirstFile,
+    isMarkdownFile,
+    isTextLikeFile
+} from "./workbench/tree-utils";
 
 type EditorMode = "rich" | "plain";
 
@@ -59,41 +106,6 @@ interface PersistedDraftRecord {
   headContent: string | null;
   history?: EditHistoryState | null;
   mode: EditorMode;
-}
-
-interface EditHistoryPatch {
-  deletedText: string;
-  insertedText: string;
-  start: number;
-}
-
-interface EditHistorySelectionPoint {
-  offset: number;
-  path: number[];
-}
-
-interface EditHistorySelection {
-  end: EditHistorySelectionPoint;
-  start: EditHistorySelectionPoint;
-}
-
-type EditHistoryFrame =
-  | {
-    type: "snapshot";
-    content: string;
-    selection: EditHistorySelection | null;
-    timestamp: number;
-  }
-  | {
-    type: "patch";
-    patch: EditHistoryPatch;
-    selection: EditHistorySelection | null;
-    timestamp: number;
-  };
-
-interface EditHistoryState {
-  currentIndex: number;
-  frames: EditHistoryFrame[];
 }
 
 interface SerializedBlock {
@@ -170,6 +182,7 @@ interface WorkbenchState {
   changes: Record<string, ChangeSummary>;
   currentContent: string;
   currentPath: string;
+  currentThread: ThreadPayload | null;
   currentThreadId: string;
   draftBuffers: Map<string, DraftBuffer>;
   dirty: boolean;
@@ -177,6 +190,7 @@ interface WorkbenchState {
   headContent: string | null;
   history: EditHistoryState | null;
   root: string;
+  rootPath: string;
   threads: ThreadSummary[];
   threadsError: string;
   tree: TreeNode[];
@@ -188,21 +202,12 @@ interface WorkbenchState {
   expandedDirectories: Set<string>;
 }
 
-const DEFAULT_EDITOR_FONT_SIZE = 1.08;
-const MIN_EDITOR_FONT_SIZE = 0.84;
-const MAX_EDITOR_FONT_SIZE = 1.72;
 const EDITOR_FONT_STEP = 0.08;
 const AUTO_REFRESH_INTERVAL_MS = 1500;
-const CURRENT_FILE_SEARCH_PARAM = "file";
-const CURRENT_THREAD_SEARCH_PARAM = "thread";
 const DRAFT_DATABASE_NAME = "workbench";
 const DRAFT_DATABASE_VERSION = 1;
 const DRAFT_STORE_NAME = "drafts";
-const EXPANDED_DIRECTORIES_STORAGE_KEY = "workbench:expanded-directories";
-const FONT_SIZE_STORAGE_KEY = "workbench:font-size";
 const HISTORY_KEYFRAME_INTERVAL = 50;
-const HISTORY_MERGE_WINDOW_MS = 1600;
-const HISTORY_STATE_LIMIT = 200;
 const REVISION_HOVER_PROXIMITY_PX = 18;
 const INLINE_FORMAT_ORDER: Array<{ key: PendingInlineFormatKey; tagName: keyof HTMLElementTagNameMap }> = [
   { key: "bold", tagName: "strong" },
@@ -228,6 +233,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     changes: {},
     currentContent: "",
     currentPath: "",
+    currentThread: null,
     currentThreadId: "",
     draftBuffers: new Map(),
     dirty: false,
@@ -235,6 +241,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     headContent: null,
     history: null,
     root: "Project",
+    rootPath: "",
     threads: [],
     threadsError: "",
     tree: [],
@@ -736,109 +743,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     event.returnValue = "";
   }, { signal });
 
-  function readStoredExpandedDirectories() {
-    try {
-      const rawValue = window.localStorage.getItem(EXPANDED_DIRECTORIES_STORAGE_KEY);
-      if (!rawValue) {
-        return [""];
-      }
-
-      const parsedValue = JSON.parse(rawValue);
-      if (!Array.isArray(parsedValue)) {
-        return [""];
-      }
-
-      const normalizedPaths = parsedValue
-        .filter((value): value is string => typeof value === "string")
-        .sort((left, right) => left.localeCompare(right));
-
-      return normalizedPaths.length > 0 ? normalizedPaths : [""];
-    } catch {
-      return [""];
-    }
-  }
-
-  function persistExpandedDirectories() {
-    try {
-      const serialized = JSON.stringify(Array.from(state.expandedDirectories).sort((left, right) => left.localeCompare(right)));
-      window.localStorage.setItem(EXPANDED_DIRECTORIES_STORAGE_KEY, serialized);
-    } catch {
-      // Ignore storage failures and keep the in-memory explorer state working.
-    }
-  }
-
-  function readStoredFontSize() {
-    try {
-      const rawValue = window.localStorage.getItem(FONT_SIZE_STORAGE_KEY);
-      if (!rawValue) {
-        return DEFAULT_EDITOR_FONT_SIZE;
-      }
-
-      const numericValue = Number.parseFloat(rawValue);
-      if (Number.isNaN(numericValue)) {
-        return DEFAULT_EDITOR_FONT_SIZE;
-      }
-
-      return Math.min(MAX_EDITOR_FONT_SIZE, Math.max(MIN_EDITOR_FONT_SIZE, numericValue));
-    } catch {
-      return DEFAULT_EDITOR_FONT_SIZE;
-    }
-  }
-
-  function persistFontSize() {
-    try {
-      window.localStorage.setItem(FONT_SIZE_STORAGE_KEY, String(state.fontSize));
-    } catch {
-      // Ignore storage failures and keep the in-memory zoom state working.
-    }
-  }
-
-  function getRequestedPathFromUrl() {
-    try {
-      const url = new URL(window.location.href);
-      return url.searchParams.get(CURRENT_FILE_SEARCH_PARAM) ?? "";
-    } catch {
-      return "";
-    }
-  }
-
-  function getRequestedThreadIdFromUrl() {
-    try {
-      const url = new URL(window.location.href);
-      return url.searchParams.get(CURRENT_THREAD_SEARCH_PARAM) ?? "";
-    } catch {
-      return "";
-    }
-  }
-
-  function syncCurrentSelectionToUrl({
-    filePath = "",
-    threadId = "",
-  }: {
-    filePath?: string;
-    threadId?: string;
-  }) {
-    try {
-      const url = new URL(window.location.href);
-      if (filePath) {
-        url.searchParams.set(CURRENT_FILE_SEARCH_PARAM, filePath);
-      } else {
-        url.searchParams.delete(CURRENT_FILE_SEARCH_PARAM);
-      }
-
-      if (threadId) {
-        url.searchParams.set(CURRENT_THREAD_SEARCH_PARAM, threadId);
-      } else {
-        url.searchParams.delete(CURRENT_THREAD_SEARCH_PARAM);
-      }
-
-      const nextUrl = `${url.pathname}${url.search}${url.hash}`;
-      window.history.replaceState(window.history.state, "", nextUrl);
-    } catch {
-      // Ignore URL update failures and keep the editor working.
-    }
-  }
-
   function wrapIndexedDbRequest<T>(request: IDBRequest<T>) {
     return new Promise<T>((resolve, reject) => {
       request.onsuccess = () => {
@@ -941,264 +845,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     return draftPersistenceQueue;
   }
 
-  function cloneHistorySelectionPoint(point: EditHistorySelectionPoint): EditHistorySelectionPoint {
-    return {
-      offset: point.offset,
-      path: [...point.path],
-    };
-  }
-
-  function cloneHistorySelection(selection: EditHistorySelection | null): EditHistorySelection | null {
-    if (!selection) {
-      return null;
-    }
-
-    return {
-      start: cloneHistorySelectionPoint(selection.start),
-      end: cloneHistorySelectionPoint(selection.end),
-    };
-  }
-
-  function cloneHistoryPatch(patch: EditHistoryPatch): EditHistoryPatch {
-    return { ...patch };
-  }
-
-  function cloneHistoryFrame(frame: EditHistoryFrame): EditHistoryFrame {
-    if (frame.type === "snapshot") {
-      return {
-        type: "snapshot",
-        content: frame.content,
-        selection: cloneHistorySelection(frame.selection),
-        timestamp: frame.timestamp,
-      };
-    }
-
-    return {
-      type: "patch",
-      patch: cloneHistoryPatch(frame.patch),
-      selection: cloneHistorySelection(frame.selection),
-      timestamp: frame.timestamp,
-    };
-  }
-
-  function cloneEditHistory(history: EditHistoryState | null): EditHistoryState | null {
-    if (!history) {
-      return null;
-    }
-
-    return {
-      currentIndex: history.currentIndex,
-      frames: history.frames.map((frame) => cloneHistoryFrame(frame)),
-    };
-  }
-
-  function createInitialEditHistory(content: string, selection: EditHistorySelection | null = null): EditHistoryState {
-    return {
-      currentIndex: 0,
-      frames: [{
-        type: "snapshot",
-        content,
-        selection: cloneHistorySelection(selection),
-        timestamp: Date.now(),
-      }],
-    };
-  }
-
-  function applyHistoryPatch(content: string, patch: EditHistoryPatch) {
-    return `${content.slice(0, patch.start)}${patch.insertedText}${content.slice(patch.start + patch.deletedText.length)}`;
-  }
-
-  function materializeHistoryContent(history: EditHistoryState, targetIndex: number) {
-    const clampedIndex = Math.max(0, Math.min(targetIndex, history.frames.length - 1));
-    let snapshotIndex = clampedIndex;
-
-    while (snapshotIndex > 0 && history.frames[snapshotIndex].type !== "snapshot") {
-      snapshotIndex -= 1;
-    }
-
-    const snapshotFrame = history.frames[snapshotIndex];
-    let content = snapshotFrame.type === "snapshot" ? snapshotFrame.content : "";
-
-    for (let index = snapshotIndex + 1; index <= clampedIndex; index += 1) {
-      const frame = history.frames[index];
-      if (frame.type === "snapshot") {
-        content = frame.content;
-        continue;
-      }
-
-      content = applyHistoryPatch(content, frame.patch);
-    }
-
-    return content;
-  }
-
-  function getCurrentHistoryContent(history: EditHistoryState | null) {
-    if (!history || !history.frames.length) {
-      return "";
-    }
-
-    return materializeHistoryContent(history, history.currentIndex);
-  }
-
-  function countHistoryStatesSinceSnapshot(history: EditHistoryState) {
-    let count = 0;
-
-    for (let index = history.frames.length - 1; index >= 0; index -= 1) {
-      if (history.frames[index].type === "snapshot") {
-        break;
-      }
-
-      count += 1;
-    }
-
-    return count;
-  }
-
-  function createHistoryPatch(previousContent: string, nextContent: string): EditHistoryPatch | null {
-    if (previousContent === nextContent) {
-      return null;
-    }
-
-    let start = 0;
-    while (
-      start < previousContent.length
-      && start < nextContent.length
-      && previousContent[start] === nextContent[start]
-    ) {
-      start += 1;
-    }
-
-    let previousEnd = previousContent.length;
-    let nextEnd = nextContent.length;
-    while (
-      previousEnd > start
-      && nextEnd > start
-      && previousContent[previousEnd - 1] === nextContent[nextEnd - 1]
-    ) {
-      previousEnd -= 1;
-      nextEnd -= 1;
-    }
-
-    return {
-      start,
-      deletedText: previousContent.slice(start, previousEnd),
-      insertedText: nextContent.slice(start, nextEnd),
-    };
-  }
-
-  function mergeHistoryPatches(
-    previousFrame: Extract<EditHistoryFrame, { type: "patch" }>,
-    nextPatch: EditHistoryPatch,
-    nextSelection: EditHistorySelection | null,
-    nextTimestamp: number,
-  ): EditHistoryFrame | null {
-    if (nextTimestamp - previousFrame.timestamp > HISTORY_MERGE_WINDOW_MS) {
-      return null;
-    }
-
-    const previousPatch = previousFrame.patch;
-    const previousInsertOnly = previousPatch.deletedText === "" && previousPatch.insertedText.length > 0;
-    const nextInsertOnly = nextPatch.deletedText === "" && nextPatch.insertedText.length > 0;
-    if (previousInsertOnly && nextInsertOnly) {
-      if (nextPatch.start === previousPatch.start + previousPatch.insertedText.length) {
-        return {
-          type: "patch",
-          timestamp: nextTimestamp,
-          selection: cloneHistorySelection(nextSelection),
-          patch: {
-            start: previousPatch.start,
-            deletedText: "",
-            insertedText: `${previousPatch.insertedText}${nextPatch.insertedText}`,
-          },
-        };
-      }
-
-      if (nextPatch.start === previousPatch.start) {
-        return {
-          type: "patch",
-          timestamp: nextTimestamp,
-          selection: cloneHistorySelection(nextSelection),
-          patch: {
-            start: previousPatch.start,
-            deletedText: "",
-            insertedText: `${nextPatch.insertedText}${previousPatch.insertedText}`,
-          },
-        };
-      }
-    }
-
-    const previousDeleteOnly = previousPatch.insertedText === "" && previousPatch.deletedText.length > 0;
-    const nextDeleteOnly = nextPatch.insertedText === "" && nextPatch.deletedText.length > 0;
-    if (previousDeleteOnly && nextDeleteOnly) {
-      if (nextPatch.start === previousPatch.start) {
-        return {
-          type: "patch",
-          timestamp: nextTimestamp,
-          selection: cloneHistorySelection(nextSelection),
-          patch: {
-            start: previousPatch.start,
-            insertedText: "",
-            deletedText: `${previousPatch.deletedText}${nextPatch.deletedText}`,
-          },
-        };
-      }
-
-      if (nextPatch.start + nextPatch.deletedText.length === previousPatch.start) {
-        return {
-          type: "patch",
-          timestamp: nextTimestamp,
-          selection: cloneHistorySelection(nextSelection),
-          patch: {
-            start: nextPatch.start,
-            insertedText: "",
-            deletedText: `${nextPatch.deletedText}${previousPatch.deletedText}`,
-          },
-        };
-      }
-    }
-
-    return null;
-  }
-
-  function normalizeEditHistory(history: EditHistoryState | null, currentContent: string): EditHistoryState {
-    if (!history?.frames.length) {
-      return createInitialEditHistory(currentContent);
-    }
-
-    const nextHistory = cloneEditHistory(history) ?? createInitialEditHistory(currentContent);
-    nextHistory.currentIndex = Math.max(0, Math.min(nextHistory.currentIndex, nextHistory.frames.length - 1));
-    if (getCurrentHistoryContent(nextHistory) !== currentContent) {
-      return createInitialEditHistory(currentContent);
-    }
-
-    return nextHistory;
-  }
-
-  function trimEditHistory(history: EditHistoryState) {
-    if (history.frames.length <= HISTORY_STATE_LIMIT) {
-      return history;
-    }
-
-    let sliceStart = history.frames.length - HISTORY_STATE_LIMIT;
-    if (history.currentIndex < sliceStart) {
-      sliceStart = history.currentIndex;
-    }
-
-    const snapshotContent = materializeHistoryContent(history, sliceStart);
-    const snapshotSelection = cloneHistorySelection(history.frames[sliceStart]?.selection ?? null);
-    const snapshotTimestamp = history.frames[sliceStart]?.timestamp ?? Date.now();
-    const trimmedFrames: EditHistoryFrame[] = [{
-      type: "snapshot",
-      content: snapshotContent,
-      selection: snapshotSelection,
-      timestamp: snapshotTimestamp,
-    }, ...history.frames.slice(sliceStart + 1).map((frame) => cloneHistoryFrame(frame))];
-
-    history.frames = trimmedFrames.slice(0, HISTORY_STATE_LIMIT);
-    history.currentIndex = Math.max(0, Math.min(history.currentIndex - sliceStart, history.frames.length - 1));
-    return history;
-  }
-
   function updateHistorySelection(selection: EditHistorySelection | null) {
     if (!state.history?.frames.length) {
       return;
@@ -1284,7 +930,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
   function createEditorStateFromContent(content: string, mode: EditorMode) {
     return mode === "rich"
-      ? markdownToHtml(content)
+      ? renderMarkdownToHtml(content)
       : content;
   }
 
@@ -1320,53 +966,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     });
   }
 
-  function treeContainsFilePath(nodes: TreeNode[], filePath: string): boolean {
-    for (const node of nodes) {
-      if (node.type === "file" && node.path === filePath) {
-        return true;
-      }
-      if (node.type === "directory" && treeContainsFilePath(node.children, filePath)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  function formatTimestamp(value: string) {
-    if (!value) {
-      return "";
-    }
-
-    return new Intl.DateTimeFormat(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
-    }).format(new Date(value));
-  }
-
-  function isMarkdownFile(filePath: string) {
-    return /\.md(?:own)?$/i.test(filePath);
-  }
-
-  function isTextLikeFile(filePath: string) {
-    return /\.(?:md|txt|json|js|mjs|cjs|css|html|yml|yaml|toml|gitignore)$/i.test(filePath) || !/\.[a-z0-9]+$/i.test(filePath);
-  }
-
-  function getFirstFile(nodes: TreeNode[], predicate: (filePath: string) => boolean = () => true) {
-    for (const node of nodes) {
-      if (node.type === "file" && predicate(node.path)) {
-        return node.path;
-      }
-      if (node.type === "directory") {
-        const nested = getFirstFile(node.children, predicate);
-        if (nested) {
-          return nested;
-        }
-      }
-    }
-    return "";
-  }
-
   function describeChange(filePath: string) {
     const entry = state.changes[filePath];
     if (!entry) {
@@ -1381,24 +980,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       parts.push(`-${entry.deletions}`);
     }
     return parts.join(" ");
-  }
-
-  function isBlockCommentLine(text: string) {
-    const trimmed = text.trim();
-    return trimmed.startsWith("<!--") && trimmed.endsWith("-->");
-  }
-
-  function parseBlockCommentBody(text: string) {
-    if (!isBlockCommentLine(text)) {
-      return null;
-    }
-
-    return text.trim().slice(4, -3).trim();
-  }
-
-  function formatBlockCommentLine(body: string) {
-    const normalizedBody = body.replace(/\s*\n+\s*/g, " ").trim();
-    return normalizedBody ? `<!-- ${normalizedBody} -->` : "<!-- -->";
   }
 
   function isSingleBreakParagraph(element: HTMLElement) {
@@ -2546,6 +2127,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   function getExplorerSnapshot(): ExplorerSnapshot {
     return {
       root: state.root,
+      rootPath: state.rootPath,
       tree: state.tree,
       threads: state.threads,
       changes: state.changes,
@@ -2554,11 +2136,46 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       expandedDirectories: Array.from(state.expandedDirectories).sort((left, right) => left.localeCompare(right)),
       locallyModifiedPaths: getLocallyModifiedPaths(),
       threadsError: state.threadsError,
+      fontSize: state.fontSize,
     };
   }
 
   function emitExplorerStateChange() {
     bindings.onExplorerStateChange?.(getExplorerSnapshot());
+  }
+
+  function emitCurrentThreadChange() {
+    bindings.onCurrentThreadChange?.(state.currentThread);
+  }
+
+  function areThreadPayloadsEquivalent(left: ThreadPayload | null, right: ThreadPayload | null) {
+    if (left === right) {
+      return true;
+    }
+
+    if (!left || !right) {
+      return false;
+    }
+
+    return left.id === right.id
+      && left.name === right.name
+      && left.preview === right.preview
+      && left.createdAt === right.createdAt
+      && left.updatedAt === right.updatedAt
+      && left.status === right.status
+      && left.cwd === right.cwd
+      && left.source === right.source
+      && left.path === right.path
+      && left.turns.length === right.turns.length;
+  }
+
+  function setCurrentThread(thread: ThreadPayload | null) {
+    if (areThreadPayloadsEquivalent(state.currentThread, thread)) {
+      return;
+    }
+
+    state.currentThread = thread;
+    emitCurrentThreadChange();
   }
 
   function toggleDirectory(path: string) {
@@ -2572,7 +2189,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       state.expandedDirectories.add(path);
     }
 
-    persistExpandedDirectories();
+    persistExpandedDirectories(state.expandedDirectories);
     emitExplorerStateChange();
   }
 
@@ -2617,6 +2234,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
   function restoreDraftBuffer(filePath: string, buffer: DraftBuffer) {
     clearWriteConflict();
+    setCurrentThread(null);
     state.currentPath = filePath;
     state.currentThreadId = "";
     state.expectedMtimeMs = buffer.expectedMtimeMs;
@@ -2681,8 +2299,9 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
     state.fontSize = nextFontSize;
     applyEditorFontSize();
-    persistFontSize();
+    persistFontSize(state.fontSize);
     scheduleDiffGutterRefresh();
+    emitExplorerStateChange();
   }
 
   function escapeHtml(value: string) {
@@ -3024,7 +2643,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     const rows: DiffRow[] = [];
     let blockIndex = 0;
 
-    for (const block of parseBlocks(markdown ?? "")) {
+    for (const block of parseMarkdownBlocks(markdown ?? "")) {
       switch (block.type) {
         case "break":
         case "list-break":
@@ -3484,7 +3103,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     const markdown = editorToMarkdown(editorSnapshot);
     const currentMarkup = createMarkupSignature(editorSnapshot);
     const roundTripRoot = document.createElement("div");
-    roundTripRoot.innerHTML = markdownToHtml(markdown);
+    roundTripRoot.innerHTML = renderMarkdownToHtml(markdown);
     normalizeEditorMarkup(roundTripRoot);
 
     const roundTripMarkup = createMarkupSignature(roundTripRoot);
@@ -3902,21 +3521,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     };
   }
 
-  function escapeMarkdownText(value: string) {
-    return value
-      .replaceAll("\\", "\\\\")
-      .replaceAll("*", "\\*")
-      .replaceAll("_", "\\_")
-      .replaceAll("`", "\\`")
-      .replaceAll("[", "\\[")
-      .replaceAll("]", "\\]");
-  }
-
-  function formatInlineCommentMarkdown(content: string) {
-    const commentBody = content.replace(/[ \t\u00a0]+$/g, "").trim();
-    return commentBody ? `<!-- ${commentBody} -->` : "<!-- -->";
-  }
-
   function wrapMarkdownWithInlineMark(content: string, mark: InlineMark) {
     switch (mark.tag) {
       case "strong":
@@ -4243,7 +3847,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
   function canonicalizeRichMarkdown(content: string) {
     const root = document.createElement("div");
-    root.innerHTML = markdownToHtml(content);
+    root.innerHTML = renderMarkdownToHtml(content);
     return editorToMarkdown(root);
   }
 
@@ -4254,7 +3858,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       : "Plain text mode";
 
     if (mode === "rich") {
-      editor.innerHTML = markdownToHtml(content);
+      editor.innerHTML = renderMarkdownToHtml(content);
     } else {
       editor.textContent = content;
     }
@@ -4298,6 +3902,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     const selectionSnapshot = preserveSelection ? captureEditorSelection() : null;
 
     clearWriteConflict();
+    setCurrentThread(null);
     state.currentPath = payload.path;
     state.currentThreadId = "";
     state.expectedMtimeMs = payload.mtimeMs;
@@ -4401,7 +4006,13 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       }
 
       const payload = await response.json() as { threads: ThreadSummary[] };
-      state.threads = payload.threads;
+      state.threads = [...payload.threads].sort((left, right) => {
+        if (right.updatedAt !== left.updatedAt) {
+          return right.updatedAt - left.updatedAt;
+        }
+
+        return left.id.localeCompare(right.id);
+      });
       state.threadsError = "";
     } catch (error) {
       state.threads = [];
@@ -4409,8 +4020,135 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     }
   }
 
+  function isCurrentThreadUpToDate(threadId: string) {
+    const currentThread = state.currentThread;
+    if (!currentThread || currentThread.id !== threadId) {
+      return false;
+    }
+
+    const threadSummary = state.threads.find((thread) => thread.id === threadId);
+    if (!threadSummary) {
+      return false;
+    }
+
+    return currentThread.updatedAt === threadSummary.updatedAt
+      && currentThread.status === threadSummary.status;
+  }
+
+  function getLastInProgressTurn(thread: ThreadPayload | null) {
+    if (!thread || !thread.status.startsWith("active")) {
+      return null;
+    }
+
+    for (let index = thread.turns.length - 1; index >= 0; index -= 1) {
+      const turn = thread.turns[index];
+      if (turn?.status === "inProgress") {
+        return turn;
+      }
+    }
+
+    return null;
+  }
+
+  function cloneUserInput(input: UserInput): UserInput {
+    switch (input.type) {
+      case "text":
+        return {
+          ...input,
+          text_elements: [...input.text_elements],
+        };
+      default:
+        return { ...input };
+    }
+  }
+
+  function doesUserMessageMatchInput(
+    item: ThreadPayload["turns"][number]["items"][number],
+    input: UserInput[],
+  ) {
+    if (item.type !== "userMessage" || item.content.length !== input.length) {
+      return false;
+    }
+
+    return item.content.every((content, index) => {
+      const nextInput = input[index];
+      if (!nextInput || content.type !== nextInput.type) {
+        return false;
+      }
+
+      switch (nextInput.type) {
+        case "text":
+          return content.type === "text"
+            && content.text.trim() === nextInput.text.trim();
+        case "image":
+          return content.type === "image"
+            && content.url === nextInput.url;
+        case "localImage":
+          return content.type === "localImage"
+            && content.path === nextInput.path;
+        case "skill":
+          return content.type === "skill"
+            && content.name === nextInput.name
+            && content.path === nextInput.path;
+        case "mention":
+          return content.type === "mention"
+            && content.name === nextInput.name
+            && content.path === nextInput.path;
+        default:
+          return false;
+      }
+    });
+  }
+
+  function createOptimisticUserMessage(input: UserInput[]): Extract<ThreadPayload["turns"][number]["items"][number], { type: "userMessage" }> {
+    return {
+      type: "userMessage",
+      id: `optimistic-user-message:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      content: input.map((entry) => cloneUserInput(entry)),
+    };
+  }
+
+  function applyOptimisticSteerMessage(
+    payload: ThreadPayload,
+    previousThread: ThreadPayload | null,
+    input: UserInput[],
+  ) {
+    const previousTargetTurn = getLastInProgressTurn(previousThread);
+    if (!previousTargetTurn) {
+      return payload;
+    }
+
+    const nextTurnIndex = payload.turns.findIndex((turn) => turn.id === previousTargetTurn.id);
+    if (nextTurnIndex === -1) {
+      return payload;
+    }
+
+    const nextTurn = payload.turns[nextTurnIndex];
+    if (nextTurn.status !== "inProgress") {
+      return payload;
+    }
+
+    const newItems = nextTurn.items.slice(previousTargetTurn.items.length);
+    if (newItems.some((item) => doesUserMessageMatchInput(item, input))) {
+      return payload;
+    }
+
+    return {
+      ...payload,
+      turns: payload.turns.map((turn, index) => (
+        index === nextTurnIndex
+          ? {
+            ...turn,
+            items: [...turn.items, createOptimisticUserMessage(input)],
+          }
+          : turn
+      )),
+    };
+  }
+
   function applyThreadPayloadToCurrentView(payload: ThreadPayload, statusMessage?: string) {
     clearWriteConflict();
+    setCurrentThread(payload);
     state.currentPath = "";
     state.currentThreadId = payload.id;
     state.expectedMtimeMs = null;
@@ -4418,14 +4156,19 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     state.pendingWriteConflict = null;
     state.saveIssue = null;
     state.lastLoggedSaveIssue = null;
+    editor.dataset.placeholder = "Select a markdown file to start editing.";
     filePathLabel.textContent = payload.name || payload.preview || payload.id;
     editor.setAttribute("contenteditable", "false");
-    renderEditorDocument(payload.markdown, "rich");
-    state.baselineContent = payload.markdown;
-    state.currentContent = payload.markdown;
+    editor.textContent = "";
+    editor.scrollTop = 0;
+    state.baselineContent = "";
+    state.currentContent = "";
     state.mode = "rich";
     state.dirty = false;
-    state.history = createInitialEditHistory(state.currentContent);
+    state.history = null;
+    clearPendingInlineFormats();
+    setHoveredRevisionNode(null);
+    updateSaveButtonState();
     updateStatusLine(statusMessage);
     scheduleDiffGutterRefresh();
     updateFloatingToolbar();
@@ -4452,6 +4195,45 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
     applyThreadPayloadToCurrentView(payload, `Read thread ${new Date(payload.updatedAt * 1000).toLocaleString()}`);
     syncCurrentSelectionToUrl({ threadId: payload.id });
+    emitExplorerStateChange();
+  }
+
+  async function sendThreadMessage(threadId: string, input: UserInput[]) {
+    const previousThread = state.currentThread && state.currentThread.id === threadId
+      ? state.currentThread
+      : null;
+    const runtimeInput = input as UserInput[] | string;
+    const textFallback = Array.isArray(runtimeInput)
+      ? runtimeInput.find((entry) => entry.type === "text")?.text ?? ""
+      : typeof runtimeInput === "string"
+        ? runtimeInput
+        : "";
+
+    const response = await fetch("/api/codex/thread", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        input: runtimeInput,
+        text: textFallback,
+        threadId,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: "Unable to send the Codex thread message.", detail: "" }));
+      throw new Error(error.detail ? `${error.error} ${error.detail}` : error.error);
+    }
+
+    const payload = applyOptimisticSteerMessage(
+      await response.json() as ThreadPayload,
+      previousThread,
+      Array.isArray(runtimeInput) ? runtimeInput : [{ type: "text", text: textFallback, text_elements: [] }],
+    );
+    applyThreadPayloadToCurrentView(payload, "Sent message.");
+    syncCurrentSelectionToUrl({ threadId: payload.id });
+    await refreshThreads();
     emitExplorerStateChange();
   }
 
@@ -4564,6 +4346,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
     const payload = await response.json() as CreateEntryPayload;
     state.root = payload.root;
+    state.rootPath = payload.rootPath;
     state.tree = payload.tree;
     state.changes = payload.changes;
 
@@ -4574,7 +4357,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       state.expandedDirectories.add(payload.path);
     }
 
-    persistExpandedDirectories();
+    persistExpandedDirectories(state.expandedDirectories);
     emitExplorerStateChange();
 
     if (type === "file") {
@@ -4601,7 +4384,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     }
 
     if (didExpand) {
-      persistExpandedDirectories();
+      persistExpandedDirectories(state.expandedDirectories);
     }
   }
 
@@ -4613,11 +4396,11 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       return;
     }
 
-    if (!state.currentPath) {
-      if (state.currentThreadId) {
-        statusLine.textContent = "Codex thread (read-only).";
-        return;
-      }
+      if (!state.currentPath) {
+        if (state.currentThreadId) {
+          statusLine.textContent = "Codex thread. Continue below.";
+          return;
+        }
 
       statusLine.textContent = "Markdown files open as rich text. Save with Ctrl/Cmd+S.";
       return;
@@ -4867,8 +4650,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       !state.currentPath ||
       state.dirty ||
       state.saveIssue ||
-      state.pendingWriteConflict ||
-      !treeContainsFilePath(state.tree, state.currentPath)
+      state.pendingWriteConflict
     ) {
       return;
     }
@@ -7451,35 +7233,55 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     const response = await fetch("/api/tree", { cache: "no-store" });
     const payload = (await response.json()) as ProjectSnapshot;
     state.root = payload.root;
+    state.rootPath = payload.rootPath;
     state.tree = payload.tree;
     state.changes = payload.changes;
     await refreshThreads();
     emitExplorerStateChange();
 
     if (preserveSelection && state.currentThreadId) {
-      await openThread(state.currentThreadId, { source: "reload" });
-      return;
+      const currentThreadId = state.currentThreadId;
+      if (state.threads.some((thread) => thread.id === currentThreadId)) {
+        if (!isCurrentThreadUpToDate(currentThreadId)) {
+          await openThread(currentThreadId, { source: "reload" });
+        }
+        if (state.currentThreadId === currentThreadId) {
+          return;
+        }
+      } else {
+        setCurrentThread(null);
+        state.currentThreadId = "";
+        syncCurrentSelectionToUrl({});
+        emitExplorerStateChange();
+      }
     }
 
     if (preserveSelection && state.currentPath) {
-      if (treeContainsFilePath(state.tree, state.currentPath)) {
-        await refreshCurrentFileFromDiskIfSafe();
+      const currentPath = state.currentPath;
+      await refreshCurrentFileFromDiskIfSafe();
+      if (state.currentPath === currentPath) {
         return;
       }
     }
 
     const requestedThreadId = getRequestedThreadIdFromUrl();
-    if (requestedThreadId) {
+    if (requestedThreadId && state.threads.some((thread) => thread.id === requestedThreadId)) {
       await openThread(requestedThreadId);
-      return;
+      if (state.currentThreadId === requestedThreadId) {
+        return;
+      }
     }
 
     const requestedPath = getRequestedPathFromUrl();
-    const preferredFile = requestedPath && treeContainsFilePath(state.tree, requestedPath)
-      ? requestedPath
-      : "";
+    if (requestedPath) {
+      await openFile(requestedPath);
+      if (state.currentPath === requestedPath) {
+        return;
+      }
+    }
+
     const firstMarkdownFile = getFirstFile(state.tree, (filePath) => isMarkdownFile(filePath));
-    const fallbackFile = preferredFile || firstMarkdownFile || getFirstFile(state.tree);
+    const fallbackFile = firstMarkdownFile || getFirstFile(state.tree);
 
     if (fallbackFile) {
       await openFile(fallbackFile);
@@ -7488,6 +7290,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
     state.baselineContent = "";
     state.currentPath = "";
+    setCurrentThread(null);
     state.currentThreadId = "";
     state.currentContent = "";
     state.dirty = false;
@@ -7536,12 +7339,14 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     createEntry,
     openFile,
     openThread,
+    sendThreadMessage,
     toggleDirectory,
   };
 
   hydrateDraftBuffers(await getPersistedDraftRecords());
   bindings.onControlsReady?.(controls);
   emitExplorerStateChange();
+  emitCurrentThreadChange();
   applyEditorFontSize();
   updateSaveButtonState();
   await refreshTree();

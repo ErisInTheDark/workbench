@@ -1,13 +1,29 @@
+/*
+ * Exports:
+ * - requestCodexAppServer: open a typed WebSocket request against the local Codex app-server. Keywords: codex, websocket, json-rpc.
+ * - toThreadSummary: normalize a raw thread into the workbench sidebar summary shape. Keywords: thread, summary, sidebar.
+ * - renderThreadMarkdown: flatten a raw thread into markdown for legacy thread rendering. Keywords: thread, markdown, legacy.
+ * - listCodexThreads: fetch recent Codex threads ordered by newest activity. Keywords: thread list, updated_at, ordering.
+ * - readCodexThread: fetch a single Codex thread with turns for detailed rendering. Keywords: thread read, turns.
+ * - resumeCodexThread: load a persisted Codex thread into the active app-server session. Keywords: thread, resume, loaded.
+ * - sendCodexThreadMessage: continue an existing Codex thread with user inputs and return the refreshed thread. Keywords: thread, turn, steer, send, image.
+ */
 import type { ClientRequest } from "./generated/app-server/ClientRequest";
 import type { Thread } from "./generated/app-server/v2/Thread";
 import type { ThreadListResponse } from "./generated/app-server/v2/ThreadListResponse";
 import type { ThreadReadResponse } from "./generated/app-server/v2/ThreadReadResponse";
+import type { ThreadResumeResponse } from "./generated/app-server/v2/ThreadResumeResponse";
+import type { TurnStartResponse } from "./generated/app-server/v2/TurnStartResponse";
+import type { TurnSteerResponse } from "./generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "./generated/app-server/v2/UserInput";
+import { isPathWithinRoot, projectRoot } from "../project";
 import type { ThreadSummary } from "../types";
 import {
   getCodexAppServerUrl,
 } from "./config";
 import {
+  createTextInput,
+  createInitializeCapabilities,
   createInitializeRequest,
   createInitializedNotification,
   isCodexJsonRpcFailure,
@@ -15,10 +31,12 @@ import {
 } from "./protocol";
 
 const APP_SERVER_TIMEOUT_MS = 5000;
+const DEFAULT_TURN_REASONING_SUMMARY = "detailed" as const;
 
 interface CodexServerError extends Error {
   detail?: string;
   phase?: "connect" | "initialize" | "request";
+  status?: number;
 }
 
 function createCodexServerError(
@@ -26,14 +44,17 @@ function createCodexServerError(
   {
     detail,
     phase,
+    status,
   }: {
     detail?: string;
     phase?: "connect" | "initialize" | "request";
+    status?: number;
   } = {},
 ) {
   const error = new Error(message) as CodexServerError;
   error.detail = detail;
   error.phase = phase;
+  error.status = status;
   return error;
 }
 
@@ -41,6 +62,11 @@ export async function requestCodexAppServer<TResponse>(
   request: Omit<ClientRequest, "id"> & { id?: number },
 ): Promise<TResponse> {
   const url = getCodexAppServerUrl();
+  const initializeRequest = createInitializeRequest(0, {
+    capabilities: createInitializeCapabilities({
+      experimentalApi: true,
+    }),
+  });
 
   return await new Promise<TResponse>((resolve, reject) => {
     let settled = false;
@@ -89,7 +115,7 @@ export async function requestCodexAppServer<TResponse>(
     }
 
     socket.onopen = () => {
-      socket.send(JSON.stringify(createInitializeRequest(0)));
+      socket.send(JSON.stringify(initializeRequest));
     };
 
     socket.onmessage = (event) => {
@@ -193,6 +219,7 @@ export function toThreadSummary(thread: Thread): ThreadSummary {
     id: thread.id,
     name: thread.name,
     preview: thread.preview,
+    createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
     status: formatThreadStatus(thread.status),
     cwd: thread.cwd,
@@ -218,6 +245,14 @@ function formatThreadStatus(status: Thread["status"]) {
   }
 }
 
+function isThreadActive(thread: Thread) {
+  return thread.status.type === "active";
+}
+
+function isProjectThread(thread: Pick<Thread, "cwd">, rootPath = projectRoot) {
+  return isPathWithinRoot(thread.cwd, rootPath);
+}
+
 function formatUserInput(input: UserInput) {
   switch (input.type) {
     case "text":
@@ -233,6 +268,70 @@ function formatUserInput(input: UserInput) {
     default:
       return JSON.stringify(input);
   }
+}
+
+function normalizeThreadMessageInput(input: UserInput[]) {
+  const normalized: UserInput[] = [];
+
+  for (const entry of input) {
+    switch (entry.type) {
+      case "text": {
+        const text = entry.text.trim();
+        if (text) {
+          normalized.push(createTextInput(text));
+        }
+        break;
+      }
+      case "image": {
+        const url = entry.url.trim();
+        if (url) {
+          normalized.push({
+            type: "image",
+            url,
+          });
+        }
+        break;
+      }
+      case "localImage": {
+        const path = entry.path.trim();
+        if (path) {
+          normalized.push({
+            type: "localImage",
+            path,
+          });
+        }
+        break;
+      }
+      case "skill": {
+        const name = entry.name.trim();
+        const path = entry.path.trim();
+        if (name && path) {
+          normalized.push({
+            type: "skill",
+            name,
+            path,
+          });
+        }
+        break;
+      }
+      case "mention": {
+        const name = entry.name.trim();
+        const path = entry.path.trim();
+        if (name && path) {
+          normalized.push({
+            type: "mention",
+            name,
+            path,
+          });
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  return normalized;
 }
 
 function renderThreadItemMarkdown(item: Thread["turns"][number]["items"][number]) {
@@ -359,19 +458,29 @@ export function renderThreadMarkdown(thread: Thread) {
   return `${lines.join("\n").trim()}\n`;
 }
 
-export async function listCodexThreads() {
+export async function listCodexThreads(rootPath = projectRoot) {
   const response = await requestCodexAppServer<ThreadListResponse>({
     method: "thread/list",
     params: {
       archived: false,
       limit: 50,
+      sortKey: "updated_at",
     },
   });
 
-  return response.data.map((thread) => toThreadSummary(thread));
+  return response.data
+    .filter((thread) => isProjectThread(thread, rootPath))
+    .map((thread) => toThreadSummary(thread))
+    .sort((left, right) => {
+      if (right.updatedAt !== left.updatedAt) {
+        return right.updatedAt - left.updatedAt;
+      }
+
+      return left.id.localeCompare(right.id);
+    });
 }
 
-export async function readCodexThread(threadId: string) {
+export async function readCodexThread(threadId: string, rootPath = projectRoot) {
   const response = await requestCodexAppServer<ThreadReadResponse>({
     method: "thread/read",
     params: {
@@ -380,5 +489,79 @@ export async function readCodexThread(threadId: string) {
     },
   });
 
+  if (!isProjectThread(response.thread, rootPath)) {
+    throw createCodexServerError("That Codex thread doesn't belong to this project.", {
+      phase: "request",
+      status: 404,
+    });
+  }
+
   return response.thread;
+}
+
+export async function resumeCodexThread(threadId: string, rootPath = projectRoot) {
+  const response = await requestCodexAppServer<ThreadResumeResponse>({
+    method: "thread/resume",
+    params: {
+      persistExtendedHistory: true,
+      threadId,
+    },
+  });
+
+  if (!isProjectThread(response.thread, rootPath)) {
+    throw createCodexServerError("That Codex thread doesn't belong to this project.", {
+      phase: "request",
+      status: 404,
+    });
+  }
+
+  return response.thread;
+}
+
+export async function sendCodexThreadMessage(
+  threadId: string,
+  input: UserInput[],
+  rootPath = projectRoot,
+) {
+  const normalizedInput = normalizeThreadMessageInput(input);
+  if (!threadId.trim()) {
+    throw createCodexServerError("Missing thread id.", {
+      phase: "request",
+      status: 400,
+    });
+  }
+
+  if (!normalizedInput.length) {
+    throw createCodexServerError("Message input cannot be empty.", {
+      phase: "request",
+      status: 400,
+    });
+  }
+
+  const thread = await resumeCodexThread(threadId, rootPath);
+  const latestInProgressTurn = [...thread.turns]
+    .reverse()
+    .find((turn) => turn.status === "inProgress") ?? null;
+
+  if (isThreadActive(thread) && latestInProgressTurn) {
+    await requestCodexAppServer<TurnSteerResponse>({
+      method: "turn/steer",
+      params: {
+        expectedTurnId: latestInProgressTurn.id,
+        input: normalizedInput,
+        threadId,
+      },
+    });
+  } else {
+    await requestCodexAppServer<TurnStartResponse>({
+      method: "turn/start",
+      params: {
+        input: normalizedInput,
+        summary: DEFAULT_TURN_REASONING_SUMMARY,
+        threadId,
+      },
+    });
+  }
+
+  return await readCodexThread(threadId, rootPath);
 }

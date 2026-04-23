@@ -78,82 +78,6 @@
 }
 
 @layer components {
-  .ui-sticky-header::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    background: linear-gradient(to bottom, var(--bg) 50%, transparent);
-    max-width: 58rem;
-    margin: auto;
-  }
-
-  @media (max-width: 767px) {
-    .ui-sticky-header::before {
-      display: none;
-    }
-  }
-  
-  .ui-icon-button {
-    align-items: center;
-    border-radius: 0.7rem;
-    color: inherit;
-    display: inline-flex;
-    justify-content: center;
-    min-height: 2.65rem;
-    min-width: 2.65rem;
-    padding: 0.55rem;
-    position: relative;
-    transition:
-      background-color 160ms ease,
-      color 160ms ease,
-      opacity 160ms ease;
-  }
-
-  .ui-icon-button[data-invalid="true"] .save-icon-slash {
-    opacity: 1;
-  }
-
-  .ui-icon-button[data-invalid="true"] .save-icon-main {
-    opacity: 0.45;
-  }
-
-  .ui-icon-button:hover,
-  .ui-icon-button:focus-visible {
-    background: var(--accent-soft);
-    color: var(--accent);
-    outline: none;
-  }
-
-  .ui-icon-button[data-invalid="true"] {
-    background: color-mix(in srgb, var(--danger) 14%, transparent);
-    color: var(--danger);
-  }
-
-  .ui-icon-button[data-invalid="true"]:hover,
-  .ui-icon-button[data-invalid="true"]:focus-visible {
-    background: color-mix(in srgb, var(--danger) 18%, transparent);
-    color: var(--danger);
-  }
-  
-  .new-entry-button {
-    padding: 0.25rem !important;
-    min-width: 0;
-    min-height: 0;
-    height: 100%;
-    aspect-ratio: 1/1;
-  }
-  
-  @media (min-width: 767px) {
-    .new-entry-button {
-      opacity: 0;
-    }
-  }
-
-  .tree-folder-row:where(:hover, :has(:focus-visible)) .new-entry-button {
-    opacity: 1;
-  }
-
   .explorer-scrollbar {
     scrollbar-color: transparent transparent;
     scrollbar-width: thin;
@@ -246,12 +170,6 @@
     }
   }
 
-  .editor-diff-gutter {
-    pointer-events: none;
-    position: relative;
-    user-select: none;
-  }
-
   .editor-diff-marker {
     left: 50%;
     position: absolute;
@@ -289,29 +207,6 @@
     .editor-diff-marker-icon {
       width: 0.82rem;
       height: 0.82rem;
-    }
-  }
-
-  #floating-toolbar {
-    max-width: calc(100vw - 1.5rem);
-    width: max-content;
-    justify-content: center;
-  }
-
-  #floating-toolbar [data-toolbar-group] {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.25rem;
-    justify-content: center;
-    min-width: 0;
-  }
-
-  @media (max-width: 767px) {
-    #floating-toolbar {
-      flex-direction: column;
-      align-items: center !important;
-      width: auto;
-      max-width: calc(100vw - 1.5rem);
     }
   }
 
@@ -502,15 +397,4 @@
     background: color-mix(in srgb, var(--danger) 24%, transparent);
   }
 
-  #revision-hover-toolbar[data-revision-kind="ins"] {
-    background: color-mix(in srgb, var(--success) 12%, var(--bg) 88%);
-  }
-
-  #revision-hover-toolbar[data-revision-kind="del"] {
-    background: color-mix(in srgb, var(--danger) 12%, var(--bg) 88%);
-  }
-
-  #revision-hover-toolbar[data-revision-kind="comment"] {
-    background: color-mix(in srgb, var(--text) 8%, var(--bg) 92%);
-  }
 }

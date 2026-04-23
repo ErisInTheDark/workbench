@@ -1,3 +1,6 @@
+import type { Turn } from "./codex/generated/app-server/v2/Turn";
+import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
+
 export interface ChangeSummary {
   additions: number;
   deletions: number;
@@ -7,6 +10,7 @@ export interface ThreadSummary {
   id: string;
   name: string | null;
   preview: string;
+  createdAt: number;
   updatedAt: number;
   status: string;
   cwd: string;
@@ -18,12 +22,13 @@ export interface ThreadPayload {
   id: string;
   name: string | null;
   preview: string;
+  createdAt: number;
   updatedAt: number;
   status: string;
   cwd: string;
   source: string;
   path: string | null;
-  markdown: string;
+  turns: Turn[];
 }
 
 export interface FileNode {
@@ -43,12 +48,14 @@ export type TreeNode = DirectoryNode | FileNode;
 
 export interface ProjectSnapshot {
   root: string;
+  rootPath: string;
   tree: TreeNode[];
   changes: Record<string, ChangeSummary>;
 }
 
 export interface ExplorerSnapshot {
   root: string;
+  rootPath: string;
   tree: TreeNode[];
   threads: ThreadSummary[];
   changes: Record<string, ChangeSummary>;
@@ -57,17 +64,20 @@ export interface ExplorerSnapshot {
   expandedDirectories: string[];
   locallyModifiedPaths: string[];
   threadsError: string;
+  fontSize: number;
 }
 
 export interface WorkbenchControls {
   openFile: (path: string) => Promise<void>;
   openThread: (threadId: string) => Promise<void>;
+  sendThreadMessage: (threadId: string, input: UserInput[]) => Promise<void>;
   toggleDirectory: (path: string) => void;
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
 }
 
 export interface WorkbenchBindings {
   onExplorerStateChange?: (snapshot: ExplorerSnapshot) => void;
+  onCurrentThreadChange?: (thread: ThreadPayload | null) => void;
   onControlsReady?: (controls: WorkbenchControls) => void;
 }
 

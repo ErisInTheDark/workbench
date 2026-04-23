@@ -11,11 +11,14 @@ export async function GET() {
       },
     });
   } catch (error) {
+    const status = error instanceof Error && "status" in error && typeof (error as { status?: unknown }).status === "number"
+      ? (error as { status: number }).status
+      : 503;
     return NextResponse.json({
       error: error instanceof Error ? error.message : "Unable to list Codex threads.",
       detail: error instanceof Error && "detail" in error ? (error as { detail?: string }).detail ?? "" : "",
     }, {
-      status: 503,
+      status,
       headers: {
         "Cache-Control": "no-store",
       },

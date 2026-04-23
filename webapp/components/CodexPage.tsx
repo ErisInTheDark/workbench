@@ -119,7 +119,7 @@ export default function CodexPage() {
             {readyStatus ? (
               <div className="mt-2 space-y-1 text-xs leading-6 text-muted">
                 <p>{readyStatus.status ?? "ERR"} {readyStatus.statusText}</p>
-                <p>{readyStatus.phase} · {readyStatus.url}</p>
+                <p>{readyStatus.phase} Â· {readyStatus.url}</p>
                 <p>{readyStatus.detail}</p>
               </div>
             ) : null}

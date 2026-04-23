@@ -1,4 +1,4 @@
-import CodexPage from "../../components/codex-page";
+import CodexPage from "../../components/CodexPage";
 
 export default function Page() {
   return <CodexPage />;

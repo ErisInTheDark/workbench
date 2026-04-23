@@ -1,0 +1,629 @@
+/*
+ * Exports:
+ * - ThreadTurnDetails: render one thread turn with grouped commands and typed item sections. Keywords: workbench, thread, turn.
+ * - Local helpers: summarize inputs, group command and reasoning sequences, and render the supported thread item variants. Keywords: thread items, command sequence, reasoning, rendering.
+ */
+"use client";
+
+import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
+import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
+import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
+import { getThreadCommandDisplay } from "../../../lib/workbench/thread-command-matchers";
+import {
+  formatThreadTimestamp,
+  humanizeThreadLabel,
+  ThreadCommandSummary,
+  ThreadTextBlock,
+} from "./thread-view-primitives";
+import ThreadContextCompactionItem from "./ThreadContextCompactionItem";
+import ThreadDisclosure from "./ThreadDisclosure";
+import ThreadDurationText from "./ThreadDurationText";
+import ThreadFileChangeItem from "./ThreadFileChangeItem";
+import ThreadMarkdown from "./ThreadMarkdown";
+import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
+import ThreadReasoningItem from "./ThreadReasoningItem";
+import ThreadSummaryText from "./ThreadSummaryText";
+import ThreadUserImage from "./ThreadUserImage";
+
+type CommandItem = Extract<ThreadItem, { type: "commandExecution" }>;
+type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
+type NonGroupedItem = Exclude<ThreadItem, { type: "commandExecution" } | { type: "reasoning" }>;
+
+type ThreadRenderableBlock =
+  | { kind: "commandSequence"; items: CommandItem[] }
+  | { kind: "reasoningSequence"; durationMs: number | null; items: ReasoningItem[] }
+  | { kind: "item"; item: NonGroupedItem };
+
+function getFinalAgentMessageId (turn: Turn) {
+  let fallbackId: string | null = null;
+
+  // Prefer the explicit final-answer phase, but keep legacy turns readable when phase is absent.
+  for (let index = turn.items.length - 1; index >= 0; index -= 1) {
+    const item = turn.items[index];
+    if (item.type !== "agentMessage" || !item.text.trim()) {
+      continue;
+    }
+
+    if (item.phase === "final_answer") {
+      return item.id;
+    }
+
+    if (fallbackId === null) {
+      fallbackId = item.id;
+    }
+  }
+
+  return fallbackId;
+}
+
+function isUserMessageBlock (block: ThreadRenderableBlock) {
+  return block.kind === "item" && block.item.type === "userMessage";
+}
+
+function isFinalAgentMessageBlock (block: ThreadRenderableBlock, finalAgentMessageId: string | null) {
+  return block.kind === "item"
+    && block.item.type === "agentMessage"
+    && block.item.id === finalAgentMessageId;
+}
+
+function getWorkedSummary (turn: Turn) {
+  return turn.durationMs === null
+    ? "Worked"
+    : (
+      <span>
+        Worked for <ThreadDurationText durationMs={turn.durationMs} />
+      </span>
+    );
+}
+
+function getReasonedSummary (durationMs: number | null) {
+  return durationMs === null
+    ? "Reasoned"
+    : (
+      <span>
+        Reasoned for <ThreadDurationText durationMs={durationMs} />
+      </span>
+    );
+}
+
+function getThreadItemDurationMs (item: ThreadItem) {
+  return "durationMs" in item && typeof item.durationMs === "number"
+    ? item.durationMs
+    : null;
+}
+
+function getBlockDurationMs (items: ThreadItem[]) {
+  let durationMs = 0;
+  let hasDuration = false;
+
+  for (const item of items) {
+    const itemDurationMs = getThreadItemDurationMs(item);
+    if (itemDurationMs === null) {
+      continue;
+    }
+
+    durationMs += itemDurationMs;
+    hasDuration = true;
+  }
+
+  return hasDuration ? durationMs : null;
+}
+
+function buildRenderableBlocks (items: ThreadItem[]): ThreadRenderableBlock[] {
+  const blocks: ThreadRenderableBlock[] = [];
+  let pendingCommands: CommandItem[] = [];
+  let pendingReasoning: ReasoningItem[] = [];
+
+  const flushPendingCommands = () => {
+    if (!pendingCommands.length) {
+      return;
+    }
+
+    blocks.push({
+      kind: "commandSequence",
+      items: pendingCommands,
+    });
+    pendingCommands = [];
+  };
+
+  const flushPendingReasoning = () => {
+    if (!pendingReasoning.length) {
+      return;
+    }
+
+    blocks.push({
+      kind: "reasoningSequence",
+      durationMs: getBlockDurationMs(pendingReasoning),
+      items: pendingReasoning,
+    });
+    pendingReasoning = [];
+  };
+
+  for (const item of items) {
+    if (item.type === "commandExecution") {
+      flushPendingReasoning();
+      pendingCommands.push(item);
+      continue;
+    }
+
+    if (item.type === "reasoning") {
+      flushPendingCommands();
+      pendingReasoning.push(item);
+      continue;
+    }
+
+    flushPendingCommands();
+    flushPendingReasoning();
+    blocks.push({
+      kind: "item",
+      item,
+    });
+  }
+
+  flushPendingCommands();
+  flushPendingReasoning();
+  return blocks;
+}
+
+function ThreadUserInputLine ({
+  input,
+  onOpenFile,
+  projectRootPath,
+}: {
+  input: UserInput;
+  onOpenFile?: (path: string) => Promise<void>;
+  projectRootPath?: string;
+}) {
+  switch (input.type) {
+    case "text": {
+      const text = input.text.trim();
+      return (
+        <ThreadMarkdown
+          markdown={text || "No text captured."}
+          onOpenFile={onOpenFile}
+          projectRootPath={projectRootPath}
+        />
+      );
+    }
+    case "image":
+      return (
+        <ThreadUserImage
+          alt="User-provided image"
+          className="max-w-[22rem]"
+          src={input.url}
+        />
+      );
+    case "localImage":
+      return (
+        <p className="m-0 break-all font-mono text-[0.78em] leading-[1.6] text-muted">
+          Local image: {input.path}
+        </p>
+      );
+    case "skill":
+      return (
+        <p className="m-0 text-[0.92em] leading-[1.6] text-muted">
+          Skill: <span className="text-text">{input.name}</span>{" "}
+          <span className="break-all font-mono text-[0.78em]">({input.path})</span>
+        </p>
+      );
+    case "mention":
+      return (
+        <p className="m-0 text-[0.92em] leading-[1.6] text-muted">
+          Mention: <span className="text-text">{input.name}</span>{" "}
+          <span className="break-all font-mono text-[0.78em]">({input.path})</span>
+        </p>
+      );
+    default:
+      return null;
+  }
+}
+
+function ThreadMessageTimestamp ({
+  align = "left",
+  className = "",
+  timestampSeconds,
+}: {
+  align?: "left" | "right";
+  className?: string;
+  timestampSeconds: number | null;
+}) {
+  if (timestampSeconds === null) {
+    return null;
+  }
+
+  return (
+    <p className={`m-0 text-[0.67em] leading-[1.5] text-muted${align === "right" ? " text-right" : ""}${className ? ` ${className}` : ""}`}>
+      {formatThreadTimestamp(timestampSeconds)}
+    </p>
+  );
+}
+
+function ThreadUserMessageItem ({
+  item,
+  onOpenFile,
+  projectRootPath,
+  showStartedAt,
+  startedAt,
+}: {
+  item: Extract<ThreadItem, { type: "userMessage" }>;
+  onOpenFile?: (path: string) => Promise<void>;
+  projectRootPath?: string;
+  showStartedAt: boolean;
+  startedAt: number | null;
+}) {
+  return (
+    <section className="flex flex-col items-end py-2">
+      <div className="w-full max-w-[42rem] rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3">
+        <div className="space-y-2 text-left">
+          {item.content.length ? item.content.map((content, index) => (
+            <ThreadUserInputLine
+              key={`${item.id}:content:${index}:${content.type}`}
+              input={content}
+              onOpenFile={onOpenFile}
+              projectRootPath={projectRootPath}
+            />
+          )) : (
+            <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No user content captured.</p>
+          )}
+        </div>
+      </div>
+      {showStartedAt ? <ThreadMessageTimestamp align="right" className="mt-1" timestampSeconds={startedAt} /> : null}
+    </section>
+  );
+}
+
+function ThreadAgentMessageItem ({
+  completedAt,
+  isFinal,
+  item,
+  onOpenFile,
+  projectRootPath,
+}: {
+  completedAt: number | null;
+  isFinal: boolean;
+  item: Extract<ThreadItem, { type: "agentMessage" }>;
+  onOpenFile?: (path: string) => Promise<void>;
+  projectRootPath?: string;
+}) {
+  return (
+    <section className="py-2">
+      <ThreadMarkdown
+        markdown={item.text || "No assistant text captured."}
+        onOpenFile={onOpenFile}
+        projectRootPath={projectRootPath}
+      />
+      {isFinal ? <ThreadMessageTimestamp className="mt-1" timestampSeconds={completedAt} /> : null}
+    </section>
+  );
+}
+
+function ThreadPlanItem ({ item }: { item: Extract<ThreadItem, { type: "plan" }> }) {
+  return (
+    <ThreadDisclosure
+      className="py-2"
+      contentClassName="mt-2 pl-6"
+      summary={<ThreadSummaryText text="Plan" />}
+      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+    >
+      <>
+        <ThreadTextBlock>{item.text || "No plan text captured."}</ThreadTextBlock>
+      </>
+    </ThreadDisclosure>
+  );
+}
+
+function ThreadReasoningSequence ({
+  block,
+  isMostRecent,
+}: {
+  block: Extract<ThreadRenderableBlock, { kind: "reasoningSequence" }>;
+  isMostRecent: boolean;
+}) {
+  const content = (
+    <div className="space-y-4">
+      {block.items.map((item, index) => (
+        <ThreadReasoningItem
+          key={item.id}
+          className={index ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4" : undefined}
+          item={item}
+          showLabel={block.items.length === 1}
+        />
+      ))}
+    </div>
+  );
+
+  if (block.items.length > 1 && !isMostRecent) {
+    return (
+      <ThreadDisclosure
+        className="py-2"
+        contentClassName="mt-2 space-y-4 pl-6"
+        summary={getReasonedSummary(block.durationMs)}
+        summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      >
+        {content}
+      </ThreadDisclosure>
+    );
+  }
+
+  return (
+    <section className="py-2">
+      {content}
+    </section>
+  );
+}
+
+function ThreadCommandExecutionDetails ({
+  item,
+  projectRootPath,
+}: {
+  item: CommandItem;
+  projectRootPath?: string;
+}) {
+  const commandDisplay = getThreadCommandDisplay({
+    command: item.command,
+    commandActions: item.commandActions,
+    cwd: item.cwd,
+    projectRootPath,
+  });
+  const metaParts = [];
+
+  if (item.status !== "completed") {
+    metaParts.push(
+      <ThreadSummaryText
+        key={`${item.id}:status`}
+        text={humanizeThreadLabel(item.status)}
+      />,
+    );
+  }
+
+  if (item.exitCode !== null && item.exitCode !== 0) {
+    metaParts.push(
+      <ThreadSummaryText
+        key={`${item.id}:exit`}
+        text={`exit ${item.exitCode}`}
+      />,
+    );
+  }
+
+  if (item.durationMs !== null) {
+    metaParts.push(
+      <ThreadDurationText
+        key={`${item.id}:duration`}
+        durationMs={item.durationMs}
+      />,
+    );
+  }
+
+  return (
+    <ThreadDisclosure
+      className="py-1"
+      contentClassName="mt-2 space-y-2 pl-6"
+      open={item.status !== "completed"}
+      summary={(
+        <>
+          <ThreadCommandSummary display={commandDisplay} />
+          {metaParts.length ? (
+            <span className="ml-2 text-[0.78em] text-muted">
+              {metaParts.map((part, index) => (
+                <span key={`${item.id}:meta:${index}`}>
+                  {index ? <span className="text-muted"> | </span> : null}
+                  {part}
+                </span>
+              ))}
+            </span>
+          ) : null}
+        </>
+      )}
+      summaryClassName="text-[0.92em] leading-[1.6] text-text"
+    >
+      <>
+        {/*commandDisplay.showShell && commandDisplay.shell ? (
+          <p className="m-0 text-[0.78em] leading-[1.6] text-muted">
+            Shell: <span className="font-mono text-text">{commandDisplay.shell}</span>
+          </p>
+        ) : null*/}
+        {commandDisplay.cwdDisplay ? (
+          <p className="m-0 text-[0.78em] leading-[1.6] text-muted">
+            Working dir: <span className="break-all font-mono text-text">{commandDisplay.cwdDisplay}</span>
+          </p>
+        ) : null}
+        <div>
+          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded-[0.9rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text">
+            {item.command}
+          </pre>
+        </div>
+        {item.aggregatedOutput?.trim() ? (
+          <ThreadDisclosure
+            contentClassName="pl-6"
+            summary={<ThreadSummaryText text="Output" />}
+            summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+          >
+            <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words font-mono text-[0.78em] leading-[1.6] text-text">
+              {item.aggregatedOutput.trim()}
+            </pre>
+          </ThreadDisclosure>
+        ) : null}
+      </>
+    </ThreadDisclosure>
+  );
+}
+
+function ThreadCommandSequence ({
+  items,
+  projectRootPath,
+}: {
+  items: CommandItem[];
+  projectRootPath?: string;
+}) {
+  if (items.length === 1) {
+    return <ThreadCommandExecutionDetails item={items[0]} projectRootPath={projectRootPath} />;
+  }
+
+  return (
+    <ThreadDisclosure
+      className="py-2"
+      contentClassName="mt-2 space-y-1 pl-6"
+      open={items.some((item) => item.status !== "completed")}
+      summary={<ThreadSummaryText text={`Ran ${items.length} commands`} />}
+      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+    >
+      <>
+        {items.map((item) => (
+          <ThreadCommandExecutionDetails key={item.id} item={item} projectRootPath={projectRootPath} />
+        ))}
+      </>
+    </ThreadDisclosure>
+  );
+}
+
+function ThreadFallbackItem ({ item }: { item: NonGroupedItem }) {
+  return (
+    <ThreadDisclosure
+      className="py-2"
+      contentClassName="mt-2 pl-6"
+      summary={<ThreadSummaryText text={item.type} />}
+      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+    >
+      <pre className="m-0 overflow-x-auto whitespace-pre-wrap break-words rounded-[0.9rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text">
+        {JSON.stringify(item, null, 2)}
+      </pre>
+    </ThreadDisclosure>
+  );
+}
+
+function ThreadRenderableBlockView ({
+  block,
+  finalAgentMessageId,
+  isMostRecentBlock,
+  onOpenFile,
+  primaryUserBlock,
+  projectRootPath,
+  turnCompletedAt,
+  turnStartedAt,
+}: {
+  block: ThreadRenderableBlock;
+  finalAgentMessageId: string | null;
+  isMostRecentBlock: boolean;
+  onOpenFile?: (path: string) => Promise<void>;
+  primaryUserBlock: ThreadRenderableBlock | null;
+  projectRootPath?: string;
+  turnCompletedAt: number | null;
+  turnStartedAt: number | null;
+}) {
+  if (block.kind === "commandSequence") {
+    return <ThreadCommandSequence items={block.items} projectRootPath={projectRootPath} />;
+  }
+
+  if (block.kind === "reasoningSequence") {
+    return <ThreadReasoningSequence block={block} isMostRecent={isMostRecentBlock} />;
+  }
+
+  switch (block.item.type) {
+    case "userMessage":
+      return (
+        <ThreadUserMessageItem
+          item={block.item}
+          onOpenFile={onOpenFile}
+          projectRootPath={projectRootPath}
+          showStartedAt={block === primaryUserBlock}
+          startedAt={turnStartedAt}
+        />
+      );
+    case "agentMessage":
+      return (
+        <ThreadAgentMessageItem
+          completedAt={turnCompletedAt}
+          isFinal={block.item.id === finalAgentMessageId}
+          item={block.item}
+          onOpenFile={onOpenFile}
+          projectRootPath={projectRootPath}
+        />
+      );
+    case "plan":
+      return <ThreadPlanItem item={block.item} />;
+    case "fileChange":
+      return <ThreadFileChangeItem item={block.item} projectRootPath={projectRootPath} />;
+    case "contextCompaction":
+      return <ThreadContextCompactionItem item={block.item} />;
+    case "mcpToolCall":
+      return <ThreadMcpToolCallItem item={block.item} />;
+    default:
+      return <ThreadFallbackItem item={block.item} />;
+  }
+}
+
+export function ThreadTurnDetails ({
+  onOpenFile,
+  projectRootPath,
+  turn,
+}: {
+  onOpenFile?: (path: string) => Promise<void>;
+  projectRootPath?: string;
+  turn: Turn;
+}) {
+  const blocks = buildRenderableBlocks(turn.items);
+  const finalAgentMessageId = getFinalAgentMessageId(turn);
+  const isCompleted = turn.status === "completed";
+  const primaryUserBlock = isCompleted
+    ? blocks.find((block) => isUserMessageBlock(block)) ?? null
+    : null;
+  const finalAgentBlocks = isCompleted
+    ? blocks.filter((block) => isFinalAgentMessageBlock(block, finalAgentMessageId))
+    : [];
+  const workedBlocks = isCompleted
+    ? blocks.filter((block) => block !== primaryUserBlock && !isFinalAgentMessageBlock(block, finalAgentMessageId))
+    : blocks;
+
+  const renderBlock = (block: ThreadRenderableBlock, index: number) => (
+    <ThreadRenderableBlockView
+      key={block.kind === "commandSequence"
+        ? `commands:${block.items[0]?.id ?? index}`
+        : block.kind === "reasoningSequence"
+          ? `reasoning:${block.items[0]?.id ?? index}`
+          : `item:${block.item.id}`}
+      block={block}
+      finalAgentMessageId={finalAgentMessageId}
+      isMostRecentBlock={block === blocks[blocks.length - 1]}
+      onOpenFile={onOpenFile}
+      primaryUserBlock={primaryUserBlock}
+      projectRootPath={projectRootPath}
+      turnCompletedAt={turn.completedAt}
+      turnStartedAt={turn.startedAt}
+    />
+  );
+
+  return (
+    <section className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-3">
+      {isCompleted ? (
+        <div className="space-y-2">
+          {primaryUserBlock ? renderBlock(primaryUserBlock, 0) : null}
+          {workedBlocks.length ? (
+            <ThreadDisclosure
+              className="py-2"
+              contentClassName="mt-2 space-y-2 pl-6"
+              summary={getWorkedSummary(turn)}
+              summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+            >
+              <div className="space-y-2">
+                {workedBlocks.map(renderBlock)}
+              </div>
+            </ThreadDisclosure>
+          ) : null}
+          {finalAgentBlocks.map(renderBlock)}
+          {!primaryUserBlock && !workedBlocks.length && !finalAgentBlocks.length ? (
+            <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No captured items.</p>
+          ) : null}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <p className="m-0 text-[0.67em] uppercase tracking-[0.18em] text-muted">
+            {humanizeThreadLabel(turn.status)}
+          </p>
+          {workedBlocks.length ? workedBlocks.map(renderBlock) : (
+            <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No captured items.</p>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}

@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 
-const Workbench = dynamic(() => import("./workbench"), {
+const Workbench = dynamic(() => import("./Workbench"), {
   ssr: false,
   loading: () => <div className="min-h-screen" suppressHydrationWarning />,
 });
