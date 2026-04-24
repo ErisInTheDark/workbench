@@ -1,3 +1,13 @@
+/*
+ * Exports:
+ * - CodexClientRequest/CodexClientNotification: generated client-to-server app-server messages. Keywords: codex, json-rpc, request.
+ * - CodexServerEvent/CodexRolloutEvent: generated rollout event messages persisted inside thread history. Keywords: codex, EventMsg, raw events.
+ * - CodexJsonRpcResponse helpers: typed JSON-RPC success/failure checks. Keywords: json-rpc, response, error.
+ * - createCodexClientInfo/createInitializeCapabilities/createInitializeParams: initialize payload builders. Keywords: app-server, handshake.
+ * - createInitializeRequest/createInitializedNotification/createBootstrapMessages: app-server bootstrap messages. Keywords: initialize, initialized.
+ * - createTextInput/createThreadStartRequest/createTurnStartRequest: typed Codex request builders. Keywords: thread, turn, user input.
+ * - createRequestIdGenerator/isCodexEventType: small protocol helpers. Keywords: ids, event type.
+ */
 import type { ClientInfo } from "./generated/app-server/ClientInfo";
 import type { ClientNotification } from "./generated/app-server/ClientNotification";
 import type { ClientRequest } from "./generated/app-server/ClientRequest";
@@ -14,7 +24,8 @@ import { CODEX_CLIENT_INFO } from "./config";
 
 export type CodexClientRequest = ClientRequest;
 export type CodexClientNotification = ClientNotification;
-export type CodexServerEvent = EventMsg;
+export type CodexRolloutEvent = EventMsg;
+export type CodexServerEvent = CodexRolloutEvent;
 
 export interface CodexJsonRpcSuccess<TResult> {
   id: number;

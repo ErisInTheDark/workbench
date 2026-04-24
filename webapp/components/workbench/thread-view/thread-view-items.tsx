@@ -8,7 +8,10 @@
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
-import { getThreadCommandDisplay } from "../../../lib/workbench/thread-command-matchers";
+import {
+  getThreadCommandBlockDisplay,
+  getThreadCommandDisplay,
+} from "../../../lib/workbench/thread-command-matchers";
 import {
   formatThreadTimestamp,
   humanizeThreadLabel,
@@ -26,12 +29,14 @@ import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadUserImage from "./ThreadUserImage";
 
 type CommandItem = Extract<ThreadItem, { type: "commandExecution" }>;
+type FileChangeItem = Extract<ThreadItem, { type: "fileChange" }>;
 type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
-type NonGroupedItem = Exclude<ThreadItem, { type: "commandExecution" } | { type: "reasoning" }>;
+type NonGroupedItem = Exclude<ThreadItem, { type: "commandExecution" } | { type: "fileChange" } | { type: "reasoning" }>;
 
 type ThreadRenderableBlock =
   | { kind: "commandSequence"; items: CommandItem[] }
-  | { kind: "reasoningSequence"; durationMs: number | null; items: ReasoningItem[] }
+  | { kind: "fileChangeSequence"; items: FileChangeItem[] }
+  | { kind: "reasoningSequence"; items: ReasoningItem[] }
   | { kind: "item"; item: NonGroupedItem };
 
 function getFinalAgentMessageId (turn: Turn) {
@@ -76,42 +81,10 @@ function getWorkedSummary (turn: Turn) {
     );
 }
 
-function getReasonedSummary (durationMs: number | null) {
-  return durationMs === null
-    ? "Reasoned"
-    : (
-      <span>
-        Reasoned for <ThreadDurationText durationMs={durationMs} />
-      </span>
-    );
-}
-
-function getThreadItemDurationMs (item: ThreadItem) {
-  return "durationMs" in item && typeof item.durationMs === "number"
-    ? item.durationMs
-    : null;
-}
-
-function getBlockDurationMs (items: ThreadItem[]) {
-  let durationMs = 0;
-  let hasDuration = false;
-
-  for (const item of items) {
-    const itemDurationMs = getThreadItemDurationMs(item);
-    if (itemDurationMs === null) {
-      continue;
-    }
-
-    durationMs += itemDurationMs;
-    hasDuration = true;
-  }
-
-  return hasDuration ? durationMs : null;
-}
-
 function buildRenderableBlocks (items: ThreadItem[]): ThreadRenderableBlock[] {
   const blocks: ThreadRenderableBlock[] = [];
   let pendingCommands: CommandItem[] = [];
+  let pendingFileChanges: FileChangeItem[] = [];
   let pendingReasoning: ReasoningItem[] = [];
 
   const flushPendingCommands = () => {
@@ -133,27 +106,48 @@ function buildRenderableBlocks (items: ThreadItem[]): ThreadRenderableBlock[] {
 
     blocks.push({
       kind: "reasoningSequence",
-      durationMs: getBlockDurationMs(pendingReasoning),
       items: pendingReasoning,
     });
     pendingReasoning = [];
   };
 
+  const flushPendingFileChanges = () => {
+    if (!pendingFileChanges.length) {
+      return;
+    }
+
+    blocks.push({
+      kind: "fileChangeSequence",
+      items: pendingFileChanges,
+    });
+    pendingFileChanges = [];
+  };
+
   for (const item of items) {
     if (item.type === "commandExecution") {
       flushPendingReasoning();
+      flushPendingFileChanges();
       pendingCommands.push(item);
       continue;
     }
 
     if (item.type === "reasoning") {
       flushPendingCommands();
+      flushPendingFileChanges();
       pendingReasoning.push(item);
+      continue;
+    }
+
+    if (item.type === "fileChange") {
+      flushPendingCommands();
+      flushPendingReasoning();
+      pendingFileChanges.push(item);
       continue;
     }
 
     flushPendingCommands();
     flushPendingReasoning();
+    flushPendingFileChanges();
     blocks.push({
       kind: "item",
       item,
@@ -162,6 +156,7 @@ function buildRenderableBlocks (items: ThreadItem[]): ThreadRenderableBlock[] {
 
   flushPendingCommands();
   flushPendingReasoning();
+  flushPendingFileChanges();
   return blocks;
 }
 
@@ -315,10 +310,15 @@ function ThreadPlanItem ({ item }: { item: Extract<ThreadItem, { type: "plan" }>
 function ThreadReasoningSequence ({
   block,
   isMostRecent,
+  onOpenFile,
+  projectRootPath,
 }: {
   block: Extract<ThreadRenderableBlock, { kind: "reasoningSequence" }>;
   isMostRecent: boolean;
+  onOpenFile?: (path: string) => Promise<void>;
+  projectRootPath?: string;
 }) {
+  const totalItems = block.items.reduce((sum, item) => sum + item.summary.length, 0);
   const content = (
     <div className="space-y-4">
       {block.items.map((item, index) => (
@@ -326,29 +326,27 @@ function ThreadReasoningSequence ({
           key={item.id}
           className={index ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4" : undefined}
           item={item}
-          showLabel={block.items.length === 1}
+          onOpenFile={onOpenFile}
+          projectRootPath={projectRootPath}
         />
       ))}
     </div>
   );
 
-  if (block.items.length > 1 && !isMostRecent) {
-    return (
-      <ThreadDisclosure
-        className="py-2"
-        contentClassName="mt-2 space-y-4 pl-6"
-        summary={getReasonedSummary(block.durationMs)}
-        summaryClassName="text-[0.92em] leading-[1.6] text-muted"
-      >
-        {content}
-      </ThreadDisclosure>
-    );
-  }
-
   return (
-    <section className="py-2">
+    <ThreadDisclosure
+      className="py-2"
+      contentClassName="mt-2 space-y-4 pl-6"
+      open={isMostRecent}
+      summary={totalItems === 1 ? "Reasoned" : (<>
+        <span>Reasoned over </span>
+        <span className="text-text">{totalItems}</span>
+        <span> steps</span>
+      </>)}
+      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+    >
       {content}
-    </section>
+    </ThreadDisclosure>
   );
 }
 
@@ -396,7 +394,7 @@ function ThreadCommandExecutionDetails ({
 
   return (
     <ThreadDisclosure
-      className="py-1"
+      className="py-2"
       contentClassName="mt-2 space-y-2 pl-6"
       open={item.status !== "completed"}
       summary={(
@@ -459,12 +457,21 @@ function ThreadCommandSequence ({
     return <ThreadCommandExecutionDetails item={items[0]} projectRootPath={projectRootPath} />;
   }
 
+  const commandBlockDisplay = getThreadCommandBlockDisplay({
+    items: items.map((item) => ({
+      command: item.command,
+      commandActions: item.commandActions,
+      cwd: item.cwd,
+    })),
+    projectRootPath,
+  });
+
   return (
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 space-y-1 pl-6"
       open={items.some((item) => item.status !== "completed")}
-      summary={<ThreadSummaryText text={`Ran ${items.length} commands`} />}
+      summary={<ThreadCommandSummary display={commandBlockDisplay} />}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"
     >
       <>
@@ -514,8 +521,19 @@ function ThreadRenderableBlockView ({
     return <ThreadCommandSequence items={block.items} projectRootPath={projectRootPath} />;
   }
 
+  if (block.kind === "fileChangeSequence") {
+    return <ThreadFileChangeItem items={block.items} projectRootPath={projectRootPath} />;
+  }
+
   if (block.kind === "reasoningSequence") {
-    return <ThreadReasoningSequence block={block} isMostRecent={isMostRecentBlock} />;
+    return (
+      <ThreadReasoningSequence
+        block={block}
+        isMostRecent={isMostRecentBlock}
+        onOpenFile={onOpenFile}
+        projectRootPath={projectRootPath}
+      />
+    );
   }
 
   switch (block.item.type) {
@@ -541,8 +559,6 @@ function ThreadRenderableBlockView ({
       );
     case "plan":
       return <ThreadPlanItem item={block.item} />;
-    case "fileChange":
-      return <ThreadFileChangeItem item={block.item} projectRootPath={projectRootPath} />;
     case "contextCompaction":
       return <ThreadContextCompactionItem item={block.item} />;
     case "mcpToolCall":
@@ -578,9 +594,11 @@ export function ThreadTurnDetails ({
     <ThreadRenderableBlockView
       key={block.kind === "commandSequence"
         ? `commands:${block.items[0]?.id ?? index}`
-        : block.kind === "reasoningSequence"
-          ? `reasoning:${block.items[0]?.id ?? index}`
-          : `item:${block.item.id}`}
+        : block.kind === "fileChangeSequence"
+          ? `fileChanges:${block.items[0]?.id ?? index}`
+          : block.kind === "reasoningSequence"
+            ? `reasoning:${block.items[0]?.id ?? index}`
+            : `item:${block.item.id}`}
       block={block}
       finalAgentMessageId={finalAgentMessageId}
       isMostRecentBlock={block === blocks[blocks.length - 1]}

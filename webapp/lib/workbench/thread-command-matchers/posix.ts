@@ -31,6 +31,7 @@ export const POSIX_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        summaryStats: { readFiles: 1 },
         summaryParts: [
           CommandMatcher.Text("Read "),
           pathPart,
@@ -67,6 +68,7 @@ export const POSIX_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
 
       if (startLine === endLine) {
         return CommandMatcher.Result({
+          summaryStats: { readFiles: 1 },
           summaryParts: [
             CommandMatcher.Text("Read "),
             CommandMatcher.Path({
@@ -78,6 +80,7 @@ export const POSIX_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        summaryStats: { readFiles: 1 },
         summaryParts: [
           CommandMatcher.Text(`Read lines ${startLine}-${endLine} of `),
           pathPart,
@@ -110,6 +113,7 @@ export const POSIX_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        summaryStats: { listedFiles: 1 },
         summaryParts: [
           CommandMatcher.Text("List files under "),
           pathPart,
@@ -142,7 +146,10 @@ export const POSIX_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         summaryParts.push(CommandMatcher.Text(" in "), pathPart);
       }
 
-      return CommandMatcher.Result({ summaryParts });
+      return CommandMatcher.Result({
+        summaryParts,
+        summaryStats: { searchedFiles: 1 },
+      });
     },
   }),
 ];
@@ -285,6 +292,7 @@ function matchHeadOrTail(
   }
 
   return CommandMatcher.Result({
+    summaryStats: { readFiles: 1 },
     summaryParts: [
       CommandMatcher.Text(`Read ${kind === "head" ? "first" : "last"} ${lineCount} lines of `),
       pathPart,

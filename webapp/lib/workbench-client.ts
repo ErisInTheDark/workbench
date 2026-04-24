@@ -3,6 +3,7 @@
  * - initWorkbench: wire the workbench DOM, polling, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, polling.
  */
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
+import { getCurrentInProgressTurn, getCurrentTurn } from "./codex/thread-state";
 import type {
     ChangeSummary,
     CreateEntryPayload,
@@ -2148,6 +2149,21 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     bindings.onCurrentThreadChange?.(state.currentThread);
   }
 
+  function areCurrentTurnsEquivalent(left: ThreadPayload | null, right: ThreadPayload | null) {
+    const leftTurn = getCurrentTurn(left);
+    const rightTurn = getCurrentTurn(right);
+
+    if (leftTurn === rightTurn) {
+      return true;
+    }
+
+    if (!leftTurn || !rightTurn) {
+      return false;
+    }
+
+    return JSON.stringify(leftTurn) === JSON.stringify(rightTurn);
+  }
+
   function areThreadPayloadsEquivalent(left: ThreadPayload | null, right: ThreadPayload | null) {
     if (left === right) {
       return true;
@@ -2166,7 +2182,8 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       && left.cwd === right.cwd
       && left.source === right.source
       && left.path === right.path
-      && left.turns.length === right.turns.length;
+      && left.turns.length === right.turns.length
+      && areCurrentTurnsEquivalent(left, right);
   }
 
   function setCurrentThread(thread: ThreadPayload | null) {
@@ -4026,6 +4043,10 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       return false;
     }
 
+    if (getCurrentInProgressTurn(currentThread)) {
+      return false;
+    }
+
     const threadSummary = state.threads.find((thread) => thread.id === threadId);
     if (!threadSummary) {
       return false;
@@ -4033,21 +4054,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
     return currentThread.updatedAt === threadSummary.updatedAt
       && currentThread.status === threadSummary.status;
-  }
-
-  function getLastInProgressTurn(thread: ThreadPayload | null) {
-    if (!thread || !thread.status.startsWith("active")) {
-      return null;
-    }
-
-    for (let index = thread.turns.length - 1; index >= 0; index -= 1) {
-      const turn = thread.turns[index];
-      if (turn?.status === "inProgress") {
-        return turn;
-      }
-    }
-
-    return null;
   }
 
   function cloneUserInput(input: UserInput): UserInput {
@@ -4113,7 +4119,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     previousThread: ThreadPayload | null,
     input: UserInput[],
   ) {
-    const previousTargetTurn = getLastInProgressTurn(previousThread);
+    const previousTargetTurn = getCurrentInProgressTurn(previousThread);
     if (!previousTargetTurn) {
       return payload;
     }

@@ -1,35 +1,53 @@
+/*
+ * Exports:
+ * - CodexAppServerClient: persistent typed WebSocket client for JSON-RPC requests and app-server notifications. Keywords: codex, websocket, notifications.
+ */
 import { getCodexAppServerUrl } from "./config";
+import type {
+  CodexAppServerNotification,
+  CodexAppServerNotificationHandling,
+} from "./app-server-notifications";
+import {
+  classifyCodexAppServerNotification,
+  isCodexAppServerNotification,
+} from "./app-server-notifications";
 import type {
   CodexClientNotification,
   CodexClientRequest,
+  CodexInitializeResponse,
   CodexJsonRpcResponse,
-  CodexServerEvent,
 } from "./protocol";
-import { createRequestIdGenerator } from "./protocol";
+import {
+  createInitializeCapabilities,
+  createInitializeRequest,
+  createInitializedNotification,
+  createRequestIdGenerator,
+  isCodexJsonRpcFailure,
+} from "./protocol";
 
 type PendingResponseHandler = {
   reject: (reason?: unknown) => void;
   resolve: (value: CodexJsonRpcResponse<unknown>) => void;
 };
 
-type CodexIncomingMessage = CodexJsonRpcResponse<unknown> | CodexServerEvent;
-
-function isCodexServerEvent(message: unknown): message is CodexServerEvent {
-  return !!message && typeof message === "object" && "type" in message;
-}
+type CodexIncomingMessage = CodexJsonRpcResponse<unknown> | CodexAppServerNotification;
 
 function isCodexJsonRpcResponse(message: unknown): message is CodexJsonRpcResponse<unknown> {
   return !!message && typeof message === "object" && "id" in message && ("result" in message || "error" in message);
 }
 
 export class CodexAppServerClient {
-  private readonly eventListeners = new Set<(event: CodexServerEvent) => void>();
+  private readonly notificationListeners = new Set<(
+    notification: CodexAppServerNotification,
+    handling: CodexAppServerNotificationHandling,
+  ) => void>();
   private readonly pendingResponses = new Map<number, PendingResponseHandler>();
   private readonly nextRequestId = createRequestIdGenerator();
+  private initialized = false;
   private socket: WebSocket | null = null;
 
   async connect(url = getCodexAppServerUrl()) {
-    if (this.socket && this.socket.readyState <= WebSocket.OPEN) {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN && this.initialized) {
       return;
     }
 
@@ -45,6 +63,7 @@ export class CodexAppServerClient {
         pending.reject(new Error("Codex app-server connection closed."));
       }
       this.pendingResponses.clear();
+      this.initialized = false;
       this.socket = null;
     });
 
@@ -54,17 +73,45 @@ export class CodexAppServerClient {
         once: true,
       });
     });
+
+    const initializeRequest = createInitializeRequest(0, {
+      capabilities: createInitializeCapabilities({
+        experimentalApi: true,
+      }),
+    });
+    const response = await this.sendRequest<CodexInitializeResponse>({
+      method: initializeRequest.method,
+      id: 0,
+      params: initializeRequest.params,
+    });
+
+    if (isCodexJsonRpcFailure(response)) {
+      throw new Error(response.error.message);
+    }
+
+    this.send(createInitializedNotification());
+    this.initialized = true;
   }
 
   close(code?: number, reason?: string) {
     this.socket?.close(code, reason);
   }
 
-  onEvent(listener: (event: CodexServerEvent) => void) {
-    this.eventListeners.add(listener);
+  onNotification(listener: (
+    notification: CodexAppServerNotification,
+    handling: CodexAppServerNotificationHandling,
+  ) => void) {
+    this.notificationListeners.add(listener);
     return () => {
-      this.eventListeners.delete(listener);
+      this.notificationListeners.delete(listener);
     };
+  }
+
+  onEvent(listener: (
+    notification: CodexAppServerNotification,
+    handling: CodexAppServerNotificationHandling,
+  ) => void) {
+    return this.onNotification(listener);
   }
 
   send(message: CodexClientRequest | CodexClientNotification) {
@@ -102,9 +149,10 @@ export class CodexAppServerClient {
 
     const parsed = JSON.parse(payload) as CodexIncomingMessage;
 
-    if (isCodexServerEvent(parsed)) {
-      for (const listener of this.eventListeners) {
-        listener(parsed);
+    if (isCodexAppServerNotification(parsed)) {
+      const handling = classifyCodexAppServerNotification(parsed);
+      for (const listener of this.notificationListeners) {
+        listener(parsed, handling);
       }
       return;
     }

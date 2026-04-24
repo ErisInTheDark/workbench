@@ -33,6 +33,7 @@ export const CMD_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        summaryStats: { listedFiles: 1 },
         summaryParts: [
           CommandMatcher.Text("List files in "),
           pathPart,
@@ -55,6 +56,7 @@ export const CMD_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        summaryStats: { readFiles: 1 },
         summaryParts: [
           CommandMatcher.Text("Read "),
           pathPart,
@@ -85,7 +87,10 @@ export const CMD_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         summaryParts.push(CommandMatcher.Text(" in "), pathPart);
       }
 
-      return CommandMatcher.Result({ summaryParts });
+      return CommandMatcher.Result({
+        summaryParts,
+        summaryStats: { searchedFiles: 1 },
+      });
     },
   }),
 ];

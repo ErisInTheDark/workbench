@@ -16,6 +16,7 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        summaryStats: { typescriptValidations: 1 },
         summaryParts: [CommandMatcher.Text("TypeScript build (no emit)")],
       });
     },
@@ -28,6 +29,7 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        summaryStats: { typescriptBuilds: 1 },
         summaryParts: [CommandMatcher.Text("TypeScript build")],
       });
     },
@@ -40,7 +42,31 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        summaryStats: { gitStatusChecks: 1 },
         summaryParts: [CommandMatcher.Text("Git status")],
+      });
+    },
+  }),
+  CommandMatcher({
+    id: "git-ls-files",
+    match: (context) => {
+      if (!/^git\s+ls-files(?:\s|$)/i.test(context.stage.text)) {
+        return null;
+      }
+
+      const path = getGitLsFilesPath(context.stage.text);
+      const pathPart = path
+        ? buildCommandPathPart(path, context)
+        : null;
+
+      return CommandMatcher.Result({
+        summaryStats: { listedFiles: 1 },
+        summaryParts: pathPart
+          ? [
+            CommandMatcher.Text(looksLikeTrackedFilePath(path) ? "Check tracked file " : "List tracked files under "),
+            pathPart,
+          ]
+          : [CommandMatcher.Text("List tracked files")],
       });
     },
   }),
@@ -52,6 +78,7 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        summaryStats: { gitDiffChecks: 1 },
         summaryParts: [CommandMatcher.Text("Git diff (stat)")],
       });
     },
@@ -94,6 +121,7 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       });
 
       return CommandMatcher.Result({
+        summaryStats: { gitDiffChecks: 1 },
         summaryParts,
       });
     },
@@ -101,6 +129,31 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
 ];
 
 function tokenizeGitDiffPaths(pathText: string) {
+  return tokenizeGitArguments(pathText);
+}
+
+function getGitLsFilesPath(stageText: string) {
+  const argumentText = stageText.replace(/^git\s+ls-files(?:\s+|$)/i, "");
+  const argumentsList = tokenizeGitArguments(argumentText);
+  const separatorIndex = argumentsList.indexOf("--");
+  const pathTokens = separatorIndex >= 0
+    ? argumentsList.slice(separatorIndex + 1)
+    : argumentsList.filter((token) => !token.startsWith("-"));
+
+  return pathTokens.at(-1) ?? null;
+}
+
+function looksLikeTrackedFilePath(path: string | null) {
+  if (!path) {
+    return false;
+  }
+
+  const normalizedPath = path.replace(/\\/g, "/").replace(/\/+$/, "");
+  const basename = normalizedPath.split("/").at(-1) ?? normalizedPath;
+  return /\.[A-Za-z0-9_-]+$/.test(basename);
+}
+
+function tokenizeGitArguments(pathText: string) {
   const tokens: string[] = [];
   let index = 0;
 

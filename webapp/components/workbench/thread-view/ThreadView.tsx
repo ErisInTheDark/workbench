@@ -1,6 +1,6 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useLayoutEffect, useRef } from "react";
 
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import type { ThreadPayload } from "../../../lib/types";
@@ -26,6 +26,17 @@ function ThreadView({
   thread: ThreadPayload;
 }) {
   const title = getThreadTitle(thread);
+  const bottomSentinelRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const frameId = window.requestAnimationFrame(() => {
+      bottomSentinelRef.current?.scrollIntoView({ block: "end" });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [thread.id]);
 
   return (
     <div className="mx-auto w-full max-w-[56rem] pb-16" style={{ fontSize: `${fontSizeRem}rem` }}>
@@ -70,9 +81,9 @@ function ThreadView({
       </div>
       <ThreadComposer
         onSendMessage={onSendMessage}
-        threadId={thread.id}
-        threadStatus={thread.status}
+        thread={thread}
       />
+      <div ref={bottomSentinelRef} aria-hidden="true" className="h-px w-full" />
     </div>
   );
 }

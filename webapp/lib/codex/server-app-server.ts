@@ -18,6 +18,15 @@ import type { TurnSteerResponse } from "./generated/app-server/v2/TurnSteerRespo
 import type { UserInput } from "./generated/app-server/v2/UserInput";
 import { isPathWithinRoot, projectRoot } from "../project";
 import type { ThreadSummary } from "../types";
+import { getCurrentInProgressTurn, getCurrentTurn } from "./thread-state";
+import type {
+  CodexAppServerNotification,
+  CodexAppServerNotificationHandling,
+} from "./app-server-notifications";
+import {
+  classifyCodexAppServerNotification,
+  isCodexAppServerNotification,
+} from "./app-server-notifications";
 import {
   getCodexAppServerUrl,
 } from "./config";
@@ -37,6 +46,13 @@ interface CodexServerError extends Error {
   detail?: string;
   phase?: "connect" | "initialize" | "request";
   status?: number;
+}
+
+interface RequestCodexAppServerOptions {
+  onNotification?: (
+    notification: CodexAppServerNotification,
+    handling: CodexAppServerNotificationHandling,
+  ) => void;
 }
 
 function createCodexServerError(
@@ -60,6 +76,7 @@ function createCodexServerError(
 
 export async function requestCodexAppServer<TResponse>(
   request: Omit<ClientRequest, "id"> & { id?: number },
+  options: RequestCodexAppServerOptions = {},
 ): Promise<TResponse> {
   const url = getCodexAppServerUrl();
   const initializeRequest = createInitializeRequest(0, {
@@ -123,6 +140,9 @@ export async function requestCodexAppServer<TResponse>(
         const message = JSON.parse(String(event.data));
 
         if (typeof message !== "object" || message === null || !("id" in message)) {
+          if (isCodexAppServerNotification(message)) {
+            options.onNotification?.(message, classifyCodexAppServerNotification(message));
+          }
           return;
         }
 
@@ -243,10 +263,6 @@ function formatThreadStatus(status: Thread["status"]) {
     default:
       return "unknown";
   }
-}
-
-function isThreadActive(thread: Thread) {
-  return thread.status.type === "active";
 }
 
 function isProjectThread(thread: Pick<Thread, "cwd">, rootPath = projectRoot) {
@@ -538,16 +554,28 @@ export async function sendCodexThreadMessage(
     });
   }
 
+  const readableThread = await readCodexThread(threadId, rootPath);
   const thread = await resumeCodexThread(threadId, rootPath);
-  const latestInProgressTurn = [...thread.turns]
-    .reverse()
-    .find((turn) => turn.status === "inProgress") ?? null;
+  const currentInProgressTurn = getCurrentInProgressTurn(thread);
+  const visibleCurrentTurn = getCurrentTurn(readableThread);
 
-  if (isThreadActive(thread) && latestInProgressTurn) {
+  if (
+    visibleCurrentTurn?.status === "completed"
+    && currentInProgressTurn
+    && currentInProgressTurn.id !== visibleCurrentTurn.id
+  ) {
+    throw createCodexServerError("This thread is out of sync with the app-server.", {
+      detail: "New messages are disabled here for now.",
+      phase: "request",
+      status: 409,
+    });
+  }
+
+  if (currentInProgressTurn) {
     await requestCodexAppServer<TurnSteerResponse>({
       method: "turn/steer",
       params: {
-        expectedTurnId: latestInProgressTurn.id,
+        expectedTurnId: currentInProgressTurn.id,
         input: normalizedInput,
         threadId,
       },

@@ -2,30 +2,30 @@
 
 import type { MouseEvent } from "react";
 
-import { markdownToHtml } from "../../../lib/workbench/markdown-render";
 import {
   parseCodexFileLinkHref,
   toProjectRelativeFilePath,
 } from "../../../lib/workbench/markdown-links";
+import { markdownToHtml } from "../../../lib/workbench/markdown-render";
 
-function joinClasses(...values: Array<string | undefined>) {
+function joinClasses (...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
 const THREAD_MARKDOWN_CLASS = [
-  "text-[1em] leading-[1.72] text-text",
+  "leading-[1.72]",
   "[&:not(:first-child)]:mt-[0.2rem]",
-  "[&_p]:mb-[0.9rem]",
-  "[&_blockquote]:mb-[0.9rem]",
-  "[&_ul]:mb-[0.9rem]",
-  "[&_ol]:mb-[0.9rem]",
-  "[&_pre]:mb-[0.9rem]",
-  "[&_h1]:mb-[0.9rem]",
-  "[&_h2]:mb-[0.9rem]",
-  "[&_h3]:mb-[0.9rem]",
-  "[&_h4]:mb-[0.9rem]",
-  "[&_h5]:mb-[0.9rem]",
-  "[&_h6]:mb-[0.9rem]",
+  "[&_p]:mb-[0.9em]",
+  "[&_blockquote]:mb-[0.9em]",
+  "[&_ul]:mb-[0.9em]",
+  "[&_ol]:mb-[0.9em]",
+  "[&_pre]:mb-[0.9em]",
+  "[&_h1]:mb-[0.9em]",
+  "[&_h2]:mb-[0.9em]",
+  "[&_h3]:mb-[0.9em]",
+  "[&_h4]:mb-[0.9em]",
+  "[&_h5]:mb-[0.9em]",
+  "[&_h6]:mb-[0.9em]",
   "[&>*:last-child]:mb-0",
   "[&_h1]:font-sans [&_h1]:text-[1.16em] [&_h1]:font-semibold [&_h1]:leading-[1.2]",
   "[&_h2]:font-sans [&_h2]:text-[1.08em] [&_h2]:font-semibold [&_h2]:leading-[1.2]",
@@ -48,7 +48,7 @@ const THREAD_MARKDOWN_CLASS = [
   "[&_del]:-mx-[0.04em] [&_del]:rounded-[0.2em] [&_del]:bg-[color-mix(in_srgb,var(--danger)_16%,transparent)] [&_del]:px-[0.08em] [&_del]:text-inherit [&_del]:decoration-current [&_del]:decoration-[0.08em]",
 ].join(" ");
 
-export default function ThreadMarkdown({
+export default function ThreadMarkdown ({
   className,
   markdown,
   onOpenFile,

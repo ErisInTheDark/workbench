@@ -12,8 +12,8 @@
 
 import type { ReactNode } from "react";
 import type {
-  ThreadCommandDisplay,
   ThreadCommandDisplayPart,
+  ThreadCommandSummaryDisplay,
 } from "../../../lib/workbench/thread-command-matchers";
 
 import ProjectFilePath from "../ProjectFilePath";
@@ -168,7 +168,7 @@ function ThreadCommandStageParts ({ parts }: { parts: ThreadCommandDisplayPart[]
   );
 }
 
-export function ThreadCommandSummary ({ display }: { display: ThreadCommandDisplay }) {
+export function ThreadCommandSummary ({ display }: { display: ThreadCommandSummaryDisplay }) {
   const stages = splitCommandSummaryStages(display.summaryParts);
 
   return (

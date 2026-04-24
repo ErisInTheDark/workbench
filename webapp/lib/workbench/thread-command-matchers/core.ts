@@ -6,6 +6,8 @@
 
 import {
   collapseWhitespace,
+  createEmptyCommandSummaryStats,
+  mergeCommandSummaryStats,
   summarizeDisplayParts,
 } from "./helpers";
 import { consumeNextCommandStage } from "./shells";
@@ -61,14 +63,18 @@ export const CommandMatcher: CommandMatcherBuilder = Object.assign(
       } satisfies ThreadCommandDisplayPart;
     },
     Result({
+      hide = false,
       remainingCommand,
       stop = false,
       summaryParts,
+      summaryStats,
     }: CommandMatcherResult) {
       return {
+        hide,
         remainingCommand,
         stop,
         summaryParts,
+        summaryStats,
       } satisfies CommandMatcherResult;
     },
     Separator() {
@@ -96,6 +102,7 @@ export function runThreadCommandMatchers(
   const claimedMatcherIds: string[] = [];
   const matchers = [...commonMatchers, ...shellMatchers];
   const summaryParts: ThreadCommandDisplayPart[] = [];
+  const summaryStats = createEmptyCommandSummaryStats();
   let hadUnmatchedRemainder = false;
   let remainingCommand: string | null = context.unwrappedCommand;
 
@@ -130,16 +137,22 @@ export function runThreadCommandMatchers(
 
       summaryParts.push(CommandMatcher.Separator());
       summaryParts.push(CommandMatcher.Code(collapseWhitespace(remainingCommand), { clamp: true }));
+      summaryStats.otherCommands += countCommandStages(remainingCommand, context.shellGroup);
       hadUnmatchedRemainder = true;
       remainingCommand = null;
       break;
     }
 
-    if (summaryParts.length) {
+    const shouldRenderSummaryParts = !matchedResult.hide && matchedResult.summaryParts.length > 0;
+
+    if (shouldRenderSummaryParts && summaryParts.length) {
       summaryParts.push(CommandMatcher.Separator());
     }
 
-    summaryParts.push(...matchedResult.summaryParts);
+    if (shouldRenderSummaryParts) {
+      summaryParts.push(...matchedResult.summaryParts);
+    }
+    mergeCommandSummaryStats(summaryStats, matchedResult.summaryStats);
     claimedMatcherIds.push(matchedId ?? "unknown");
 
     const nextRemainingCommand = matchedResult.remainingCommand === undefined
@@ -163,6 +176,27 @@ export function runThreadCommandMatchers(
     showShell: hadUnmatchedRemainder,
     summaryParts,
     summaryKind: "matched" as const,
+    summaryStats,
     summaryText: summarizeDisplayParts(summaryParts),
   };
+}
+
+function countCommandStages(
+  command: string | null | undefined,
+  shellGroup: ParsedCommandDisplayContext["shellGroup"],
+) {
+  let count = 0;
+  let remainingCommand = collapseWhitespace(command ?? "");
+
+  while (remainingCommand) {
+    const stage = consumeNextCommandStage(remainingCommand, shellGroup);
+    if (!stage) {
+      break;
+    }
+
+    count += 1;
+    remainingCommand = collapseWhitespace(stage.remainingCommand ?? "");
+  }
+
+  return count || (collapseWhitespace(command ?? "") ? 1 : 0);
 }

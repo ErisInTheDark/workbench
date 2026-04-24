@@ -18,6 +18,48 @@ interface ParsedPowerShellStage {
 
 export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
+    id: "powershell.read-numbered-lines",
+    match: (context) => {
+      const assignedRead = readPowerShellAssignedReadStage(context.stage.text, context);
+      if (!assignedRead || !context.stage.remainingCommand) {
+        return null;
+      }
+
+      const nextStage = consumeNextCommandStage(context.stage.remainingCommand, "powershell");
+      if (!nextStage) {
+        return null;
+      }
+
+      const lineRange = readPowerShellNumberedLineRange(nextStage.text, assignedRead.variableName);
+      if (!lineRange) {
+        return null;
+      }
+
+      if (lineRange.startLine === lineRange.endLine) {
+        return CommandMatcher.Result({
+          remainingCommand: nextStage.remainingCommand,
+          summaryStats: { readFiles: 1 },
+          summaryParts: [
+            CommandMatcher.Text("Read "),
+            CommandMatcher.Path({
+              ...assignedRead.pathPart,
+              lineNumber: lineRange.startLine,
+            }),
+          ],
+        });
+      }
+
+      return CommandMatcher.Result({
+        remainingCommand: nextStage.remainingCommand,
+        summaryStats: { readFiles: 1 },
+        summaryParts: [
+          CommandMatcher.Text(`Read lines ${lineRange.startLine}-${lineRange.endLine} of `),
+          assignedRead.pathPart,
+        ],
+      });
+    },
+  }),
+  CommandMatcher({
     id: "powershell.read",
     match: (context) => {
       const parsedStage = parsePowerShellStage(context.stage.text);
@@ -44,6 +86,7 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       if (skip !== null && first !== null) {
         if (first === 1) {
           return CommandMatcher.Result({
+            summaryStats: { readFiles: 1 },
             summaryParts: [
               CommandMatcher.Text("Read "),
               CommandMatcher.Path({
@@ -55,6 +98,7 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         }
 
         return CommandMatcher.Result({
+          summaryStats: { readFiles: 1 },
           summaryParts: [
             CommandMatcher.Text(`Read lines ${skip + 1}-${skip + first} of `),
             pathPart,
@@ -64,6 +108,7 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
 
       if (first !== null) {
         return CommandMatcher.Result({
+          summaryStats: { readFiles: 1 },
           summaryParts: [
             CommandMatcher.Text(`Read first ${first} lines of `),
             pathPart,
@@ -73,6 +118,7 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
 
       if (totalCount !== null) {
         return CommandMatcher.Result({
+          summaryStats: { readFiles: 1 },
           summaryParts: [
             CommandMatcher.Text(`Read first ${totalCount} lines of `),
             pathPart,
@@ -81,6 +127,7 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        summaryStats: { readFiles: 1 },
         summaryParts: [
           CommandMatcher.Text("Read "),
           pathPart,
@@ -109,6 +156,7 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
 
       if (includePatterns.length) {
         return CommandMatcher.Result({
+          summaryStats: { listedFiles: 1 },
           summaryParts: [
             CommandMatcher.Text("List "),
             CommandMatcher.Code(includePatterns.join(", ")),
@@ -119,10 +167,68 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        summaryStats: { listedFiles: 1 },
         summaryParts: [
           CommandMatcher.Text(`List ${collectionLabel} ${locationLabel} `),
           pathPart,
         ],
+      });
+    },
+  }),
+  CommandMatcher({
+    id: "powershell.list-rg-files",
+    match: (context) => {
+      const parsedStage = parsePowerShellStage(context.stage.text);
+      if (!matchesRipgrepCommand(parsedStage) || !hasPowerShellFlag(parsedStage, "--files")) {
+        return null;
+      }
+
+      const positionalArguments = getPowerShellPositionalArguments(parsedStage);
+      const pathPart = positionalArguments[0]
+        ? buildCommandPathPart(positionalArguments[0], context)
+        : buildDisplayPathPart(context.cwdDisplay);
+      if (!pathPart) {
+        return null;
+      }
+
+      return CommandMatcher.Result({
+        summaryStats: { listedFiles: 1 },
+        summaryParts: [
+          CommandMatcher.Text("List files under "),
+          pathPart,
+        ],
+      });
+    },
+  }),
+  CommandMatcher({
+    id: "powershell.search-rg",
+    match: (context) => {
+      const parsedStage = parsePowerShellStage(context.stage.text);
+      if (matchesRipgrepCommand(parsedStage) === false || hasPowerShellFlag(parsedStage, "--files")) {
+        return null;
+      }
+
+      const positionalArguments = getPowerShellPositionalArguments(parsedStage);
+      const query = readPowerShellNamedValue(parsedStage, ["-e", "--regexp"]) ?? positionalArguments[0];
+      if (!query) {
+        return null;
+      }
+
+      const summaryParts = [
+        CommandMatcher.Text("Search for "),
+        CommandMatcher.Code(`"${formatPatternForDisplay(query)}"`),
+      ];
+      const path = getPowerShellRipgrepPathArgument(parsedStage, positionalArguments);
+      const pathPart = path
+        ? buildCommandPathPart(path, context)
+        : buildDisplayPathPart(context.cwdDisplay);
+      if (pathPart) {
+        summaryParts.push(CommandMatcher.Text(" in "), pathPart);
+      }
+
+      return CommandMatcher.Result({
+        summaryParts,
+        summaryStats: { searchedFiles: 1 },
       });
     },
   }),
@@ -134,16 +240,54 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         return null;
       }
 
-      const excludedPattern = summarizeWhereObjectExclusion(parsedStage);
-      if (!excludedPattern) {
+      const whereObjectFilter = summarizeWhereObjectFilter(parsedStage);
+      if (!whereObjectFilter) {
         return null;
       }
 
       return CommandMatcher.Result({
-        summaryParts: [
-          CommandMatcher.Text("Exclude "),
-          CommandMatcher.Code(excludedPattern),
-        ],
+        summaryStats: { otherCommands: 1 },
+        summaryParts: whereObjectFilter.mode === "exclude"
+          ? [
+            CommandMatcher.Text("Exclude "),
+            CommandMatcher.Code(whereObjectFilter.pattern),
+          ]
+          : [
+            CommandMatcher.Text("Filter to "),
+            CommandMatcher.Code(whereObjectFilter.pattern),
+          ],
+      });
+    },
+  }),
+  CommandMatcher({
+    id: "powershell.hide-select-object",
+    match: (context) => {
+      const parsedStage = parsePowerShellStage(context.stage.text);
+      if (!matchesPowerShellCommand(parsedStage, ["select-object", "select"])) {
+        return null;
+      }
+
+      return CommandMatcher.Result({
+        hide: true,
+        summaryParts: [],
+      });
+    },
+  }),
+  CommandMatcher({
+    id: "powershell.hide-foreach-formatting",
+    match: (context) => {
+      const parsedStage = parsePowerShellStage(context.stage.text);
+      if (!matchesPowerShellCommand(parsedStage, ["foreach-object", "%"])) {
+        return null;
+      }
+
+      if (!shouldHidePowerShellForEachFormattingStage(parsedStage)) {
+        return null;
+      }
+
+      return CommandMatcher.Result({
+        hide: true,
+        summaryParts: [],
       });
     },
   }),
@@ -169,13 +313,16 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         summaryParts.push(CommandMatcher.Text(" in "), pathPart);
       }
 
-      return CommandMatcher.Result({ summaryParts });
+      return CommandMatcher.Result({
+        summaryParts,
+        summaryStats: { searchedFiles: 1 },
+      });
     },
   }),
 ];
 
 function parsePowerShellStage(stageText: string): ParsedPowerShellStage {
-  const tokens = tokenizePowerShell(stageText);
+  const tokens = tokenizePowerShell(unwrapPowerShellStageText(stageText));
   return {
     commandName: tokens[0]?.toLowerCase() ?? null,
     tokens,
@@ -364,7 +511,13 @@ function readPowerShellScriptBlock(stageText: string, startIndex: number) {
 }
 
 function matchesPowerShellCommand(parsedStage: ParsedPowerShellStage, names: string[]) {
-  return parsedStage.commandName !== null && names.includes(parsedStage.commandName);
+  const normalizedCommandName = normalizePowerShellCommandName(parsedStage.commandName);
+  return normalizedCommandName !== null && names.includes(normalizedCommandName);
+}
+
+function matchesRipgrepCommand(parsedStage: ParsedPowerShellStage) {
+  const normalizedCommandName = normalizePowerShellCommandName(parsedStage.commandName);
+  return normalizedCommandName === "rg" || normalizedCommandName === "rg.exe";
 }
 
 function hasPowerShellFlag(parsedStage: ParsedPowerShellStage, flag: string) {
@@ -410,6 +563,7 @@ function readPowerShellNumericValue(parsedStage: ParsedPowerShellStage, flag: st
 
 function getPowerShellPositionalArguments(parsedStage: ParsedPowerShellStage) {
   const argumentsList: string[] = [];
+  const consumingFlags = getPowerShellValueFlags(parsedStage.commandName);
 
   for (let index = 1; index < parsedStage.tokens.length; index += 1) {
     const token = parsedStage.tokens[index];
@@ -418,8 +572,12 @@ function getPowerShellPositionalArguments(parsedStage: ParsedPowerShellStage) {
       continue;
     }
 
+    if (token.includes(":")) {
+      continue;
+    }
+
     const nextToken = parsedStage.tokens[index + 1];
-    if (nextToken && !nextToken.startsWith("-")) {
+    if (consumingFlags.has(token.toLowerCase()) && nextToken && !nextToken.startsWith("-")) {
       index += 1;
     }
   }
@@ -428,8 +586,63 @@ function getPowerShellPositionalArguments(parsedStage: ParsedPowerShellStage) {
 }
 
 function getPowerShellStagePathPart(parsedStage: ParsedPowerShellStage, context: Parameters<typeof buildCommandPathPart>[1]) {
-  const path = readPowerShellNamedValue(parsedStage, ["-LiteralPath", "-Path"]) ?? getPowerShellPositionalArguments(parsedStage)[0];
+  const path = readPowerShellNamedValue(parsedStage, ["-LiteralPath", "-Path"]) ?? getPowerShellPositionalPathArgument(parsedStage);
   return path ? buildCommandPathPart(path, context) : null;
+}
+
+function readPowerShellAssignedReadStage(
+  stageText: string,
+  context: Parameters<typeof buildCommandPathPart>[1],
+) {
+  const assignmentMatch = unwrapPowerShellStageText(stageText).match(/^\$([A-Za-z_][\w]*)\s*=\s*([\s\S]+)$/);
+  if (!assignmentMatch?.[1] || !assignmentMatch[2]) {
+    return null;
+  }
+
+  const parsedAssignedStage = parsePowerShellStage(assignmentMatch[2]);
+  if (!matchesPowerShellCommand(parsedAssignedStage, ["get-content", "gc"])) {
+    return null;
+  }
+
+  const pathPart = getPowerShellStagePathPart(parsedAssignedStage, context);
+  if (!pathPart) {
+    return null;
+  }
+
+  return {
+    pathPart,
+    variableName: assignmentMatch[1],
+  };
+}
+
+function readPowerShellNumberedLineRange(stageText: string, variableName: string) {
+  const normalizedStageText = unwrapPowerShellStageText(stageText);
+  const loopMatch = normalizedStageText.match(
+    /^for\s*\(\s*\$([A-Za-z_][\w]*)\s*=\s*(\d+)\s*;\s*\$\1\s*-le\s*(\d+)\s*;\s*\$\1\s*\+\+\s*\)\s*\{([\s\S]+)\}$/i,
+  );
+  if (!loopMatch?.[1] || !loopMatch[2] || !loopMatch[3] || !loopMatch[4]) {
+    return null;
+  }
+
+  const indexVariableName = loopMatch[1];
+  const startIndex = Number(loopMatch[2]);
+  const endIndex = Number(loopMatch[3]);
+  const body = loopMatch[4];
+  if (
+    !Number.isFinite(startIndex)
+    || !Number.isFinite(endIndex)
+    || endIndex < startIndex
+    || !new RegExp(`\\$${escapeRegExp(variableName)}\\s*\\[\\s*\\$${escapeRegExp(indexVariableName)}\\s*\\]`, "i").test(body)
+  ) {
+    return null;
+  }
+
+  const usesOneBasedDisplay = new RegExp(`\\$${escapeRegExp(indexVariableName)}\\s*\\+\\s*1`, "i").test(body);
+  const lineOffset = usesOneBasedDisplay ? 1 : 0;
+  return {
+    endLine: endIndex + lineOffset,
+    startLine: startIndex + lineOffset,
+  };
 }
 
 function buildPowerShellSelectObjectReadSummary(
@@ -462,6 +675,7 @@ function buildPowerShellSelectObjectReadSummary(
 
     return CommandMatcher.Result({
       remainingCommand: nextStage.remainingCommand,
+      summaryStats: { readFiles: 1 },
       summaryParts: first === 1
         ? [
           CommandMatcher.Text("Read "),
@@ -477,6 +691,7 @@ function buildPowerShellSelectObjectReadSummary(
   if (first !== null) {
     return CommandMatcher.Result({
       remainingCommand: nextStage.remainingCommand,
+      summaryStats: { readFiles: 1 },
       summaryParts: [
         CommandMatcher.Text(`Read first ${first} lines of `),
         pathPart,
@@ -487,6 +702,7 @@ function buildPowerShellSelectObjectReadSummary(
   if (last !== null) {
     return CommandMatcher.Result({
       remainingCommand: nextStage.remainingCommand,
+      summaryStats: { readFiles: 1 },
       summaryParts: [
         CommandMatcher.Text(`Read last ${last} lines of `),
         pathPart,
@@ -497,6 +713,7 @@ function buildPowerShellSelectObjectReadSummary(
   if (skip !== null) {
     return CommandMatcher.Result({
       remainingCommand: nextStage.remainingCommand,
+      summaryStats: { readFiles: 1 },
       summaryParts: [
         CommandMatcher.Text(`Read from line ${skip + 1} of `),
         pathPart,
@@ -514,33 +731,43 @@ function splitPowerShellList(value: string | null) {
     .filter(Boolean);
 }
 
-function summarizeWhereObjectExclusion(parsedStage: ParsedPowerShellStage) {
-  const scriptBlock = parsedStage.tokens.slice(1).join(" ").trim();
-  if (!scriptBlock) {
+function summarizeWhereObjectFilter(parsedStage: ParsedPowerShellStage) {
+  const normalizedScript = getNormalizedPowerShellScriptBlock(parsedStage);
+  if (!normalizedScript) {
     return null;
   }
 
-  const normalizedScript = scriptBlock
-    .replace(/^\{\s*/, "")
-    .replace(/\s*\}$/, "")
-    .trim();
-  const rawMatch = normalizedScript.match(/\$_(?:\.[A-Za-z_][\w]*)*\s+-notmatch\s+([\s\S]+)$/i);
-  if (!rawMatch?.[1]) {
+  const rawMatch = normalizedScript.match(/\$_(?:\.[A-Za-z_][\w]*)*\s+-(notmatch|match)\s+([\s\S]+)$/i);
+  if (!rawMatch?.[1] || !rawMatch[2]) {
     return null;
   }
 
-  const rawExpression = rawMatch[1].trim();
+  const mode = rawMatch[1].toLowerCase() === "notmatch" ? "exclude" : "include";
+  const rawExpression = rawMatch[2].trim();
   const quotedCandidates = readPowerShellQuotedFragments(rawExpression)
-    .map((fragment) => formatExclusionPattern(fragment))
+    .map((fragment) => formatWhereObjectPattern(fragment, mode))
     .filter((fragment) => /[A-Za-z0-9]/.test(fragment));
-  if (quotedCandidates.length) {
-    return quotedCandidates[quotedCandidates.length - 1] ?? null;
+  const pattern = quotedCandidates.length
+    ? quotedCandidates[quotedCandidates.length - 1] ?? null
+    : formatWhereObjectPattern(rawExpression, mode);
+  if (!pattern || !/[A-Za-z0-9]/.test(pattern)) {
+    return null;
   }
 
-  const formattedExpression = formatExclusionPattern(rawExpression);
-  return /[A-Za-z0-9]/.test(formattedExpression)
-    ? formattedExpression
-    : null;
+  return {
+    mode,
+    pattern,
+  } as const;
+}
+
+function formatWhereObjectPattern(pattern: string, mode: "exclude" | "include") {
+  if (mode === "exclude") {
+    return formatExclusionPattern(pattern);
+  }
+
+  return formatPatternForDisplay(pattern)
+    .replace(/^['"`]+|['"`]+$/g, "")
+    .trim();
 }
 
 function formatExclusionPattern(pattern: string) {
@@ -592,4 +819,300 @@ function readPowerShellQuotedFragments(value: string) {
   }
 
   return fragments;
+}
+
+function getNormalizedPowerShellScriptBlock(parsedStage: ParsedPowerShellStage) {
+  const scriptBlock = parsedStage.tokens.slice(1).join(" ").trim();
+  if (!scriptBlock) {
+    return null;
+  }
+
+  return scriptBlock
+    .replace(/^\{\s*/, "")
+    .replace(/\s*\}$/, "")
+    .trim();
+}
+
+function shouldHidePowerShellForEachFormattingStage(parsedStage: ParsedPowerShellStage) {
+  const normalizedScript = getNormalizedPowerShellScriptBlock(parsedStage);
+  if (!normalizedScript) {
+    return false;
+  }
+
+  if (/[|;]/.test(normalizedScript)) {
+    return false;
+  }
+
+  if (/\b(?:if|foreach|switch|try|catch|throw|return)\b/i.test(normalizedScript)) {
+    return false;
+  }
+
+  if (!/\$_\.(?:Context|Filename|FullName|Line|LineNumber|Path)\b/i.test(normalizedScript)) {
+    return false;
+  }
+
+  return !/\b(?:Write-|Out-|Format-|Get-|Set-|Select-|Where-|ForEach-|Sort-|Measure-)[A-Za-z]+\b/i.test(normalizedScript);
+}
+
+function unwrapPowerShellStageText(stageText: string) {
+  let currentText = String(stageText ?? "").trim();
+
+  for (let index = 0; index < 4; index += 1) {
+    const unwrappedText = unwrapPowerShellQuotedTextOnce(currentText)
+      ?? unwrapPowerShellTestPathIfStageOnce(currentText);
+    if (unwrappedText === null || unwrappedText === currentText) {
+      break;
+    }
+
+    currentText = unwrappedText.trim();
+  }
+
+  return currentText;
+}
+
+function unwrapPowerShellQuotedTextOnce(value: string) {
+  if (value.length < 2) {
+    return null;
+  }
+
+  if (value.startsWith("'") && value.endsWith("'")) {
+    const segment = readPowerShellSingleQuotedSegment(value, 0);
+    return segment.nextIndex === value.length ? segment.value : null;
+  }
+
+  if (value.startsWith("\"") && value.endsWith("\"")) {
+    const segment = readPowerShellDoubleQuotedSegment(value, 0);
+    return segment.nextIndex === value.length ? segment.value : null;
+  }
+
+  return null;
+}
+
+function unwrapPowerShellTestPathIfStageOnce(stageText: string) {
+  const normalizedStageText = String(stageText ?? "").trim();
+  const ifMatch = normalizedStageText.match(/^if\b/i);
+  if (!ifMatch) {
+    return null;
+  }
+
+  let index = ifMatch[0].length;
+  while (index < normalizedStageText.length && /\s/.test(normalizedStageText[index])) {
+    index += 1;
+  }
+
+  if (normalizedStageText[index] !== "(") {
+    return null;
+  }
+
+  const condition = readPowerShellParenthesizedExpression(normalizedStageText, index);
+  if (!condition || !/\btest-path\b/i.test(condition.value)) {
+    return null;
+  }
+
+  index = condition.nextIndex;
+  while (index < normalizedStageText.length && /\s/.test(normalizedStageText[index])) {
+    index += 1;
+  }
+
+  if (normalizedStageText[index] !== "{") {
+    return null;
+  }
+
+  const body = readPowerShellScriptBlock(normalizedStageText, index);
+  if (!body.value.trim()) {
+    return null;
+  }
+
+  const trailingText = normalizedStageText.slice(body.nextIndex).trim();
+  if (trailingText) {
+    return null;
+  }
+
+  return body.value
+    .replace(/^\{\s*/, "")
+    .replace(/\s*\}$/, "")
+    .trim();
+}
+
+function readPowerShellParenthesizedExpression(stageText: string, startIndex: number) {
+  let depth = 0;
+  let index = startIndex;
+  let inDoubleQuote = false;
+  let inSingleQuote = false;
+  let value = "";
+
+  while (index < stageText.length) {
+    const character = stageText[index];
+    const nextCharacter = stageText[index + 1] ?? "";
+    value += character;
+
+    if (inSingleQuote) {
+      if (character === "'" && nextCharacter === "'") {
+        value += nextCharacter;
+        index += 2;
+        continue;
+      }
+
+      if (character === "'") {
+        inSingleQuote = false;
+      }
+
+      index += 1;
+      continue;
+    }
+
+    if (inDoubleQuote) {
+      if (character === "`") {
+        value += nextCharacter;
+        index += 2;
+        continue;
+      }
+
+      if (character === "\"") {
+        inDoubleQuote = false;
+      }
+
+      index += 1;
+      continue;
+    }
+
+    if (character === "'") {
+      inSingleQuote = true;
+      index += 1;
+      continue;
+    }
+
+    if (character === "\"") {
+      inDoubleQuote = true;
+      index += 1;
+      continue;
+    }
+
+    if (character === "(") {
+      depth += 1;
+    } else if (character === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        index += 1;
+        break;
+      }
+    }
+
+    index += 1;
+  }
+
+  if (depth !== 0) {
+    return null;
+  }
+
+  return {
+    nextIndex: index,
+    value,
+  };
+}
+
+function getPowerShellPositionalPathArgument(parsedStage: ParsedPowerShellStage) {
+  const positionalArguments = getPowerShellPositionalArguments(parsedStage);
+
+  if (matchesPowerShellCommand(parsedStage, ["select-string", "sls"])) {
+    return readPowerShellNamedValue(parsedStage, ["-Pattern"])
+      ? positionalArguments[0] ?? null
+      : positionalArguments[1] ?? null;
+  }
+
+  if (matchesRipgrepCommand(parsedStage)) {
+    return getPowerShellRipgrepPathArgument(parsedStage, positionalArguments);
+  }
+
+  return positionalArguments[0] ?? null;
+}
+
+function getPowerShellRipgrepPathArgument(
+  parsedStage: ParsedPowerShellStage,
+  positionalArguments = getPowerShellPositionalArguments(parsedStage),
+) {
+  if (hasPowerShellFlag(parsedStage, "--files")) {
+    return positionalArguments[0] ?? null;
+  }
+
+  return readPowerShellNamedValue(parsedStage, ["-e", "--regexp"])
+    ? positionalArguments[0] ?? null
+    : positionalArguments[1] ?? null;
+}
+
+function getPowerShellValueFlags(commandName: string | null) {
+  const normalizedCommandName = normalizePowerShellCommandName(commandName) ?? "";
+
+  switch (normalizedCommandName) {
+    case "get-content":
+    case "gc":
+      return new Set(["-first", "-literalpath", "-path", "-skip", "-totalcount"]);
+    case "get-childitem":
+    case "dir":
+    case "ls":
+      return new Set(["-depth", "-exclude", "-filter", "-include", "-literalpath", "-path"]);
+    case "select-object":
+    case "select":
+      return new Set(["-first", "-index", "-last", "-skip"]);
+    case "select-string":
+    case "sls":
+      return new Set(["-exclude", "-include", "-literalpath", "-path", "-pattern"]);
+    case "rg":
+    case "rg.exe":
+      return new Set([
+        "-A",
+        "--after-context",
+        "-B",
+        "--before-context",
+        "-C",
+        "--context",
+        "-e",
+        "--regexp",
+        "-f",
+        "--file",
+        "-g",
+        "--glob",
+        "--iglob",
+        "-j",
+        "--threads",
+        "-M",
+        "--max-columns",
+        "-m",
+        "--max-count",
+        "--max-depth",
+        "--max-filesize",
+        "--path-separator",
+        "--pre",
+        "--pre-glob",
+        "--replace",
+        "--sort",
+        "--sortr",
+        "-t",
+        "--type",
+        "-T",
+        "--type-not",
+      ]);
+    default:
+      return new Set<string>();
+  }
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizePowerShellCommandName(commandName: string | null) {
+  const trimmedCommandName = String(commandName ?? "").trim();
+  if (!trimmedCommandName) {
+    return null;
+  }
+
+  const unwrappedCommandName = trimWrappingQuotes(trimmedCommandName.replace(/^([&.]\s*)+/, ""));
+  const basename = unwrappedCommandName.split(/[\\/]/).at(-1) ?? unwrappedCommandName;
+  const normalizedCommandName = trimWrappingQuotes(basename).toLowerCase();
+  return normalizedCommandName || null;
+}
+
+function trimWrappingQuotes(value: string) {
+  return value.replace(/^['"]+|['"]+$/g, "");
 }

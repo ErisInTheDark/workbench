@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useCallback, useEffect, useMemo, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type {
@@ -54,6 +54,10 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   fontSize: 1.08,
 };
 
+type SelectionLoadingState =
+  | { kind: "file"; requestId: number }
+  | { kind: "thread"; requestId: number };
+
 export default function Workbench () {
   const [explorer, setExplorer] = useState(INITIAL_EXPLORER_SNAPSHOT);
   const [currentThread, setCurrentThread] = useState<ThreadPayload | null>(null);
@@ -65,6 +69,8 @@ export default function Workbench () {
   const [createEntryName, setCreateEntryName] = useState("");
   const [isCreatingEntry, setIsCreatingEntry] = useState(false);
   const [createDialogError, setCreateDialogError] = useState("");
+  const [selectionLoading, setSelectionLoading] = useState<SelectionLoadingState | null>(null);
+  const selectionLoadRequestIdRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -181,22 +187,50 @@ export default function Workbench () {
       return;
     }
 
-    await controls.openFile(path);
     if (isMobile) {
       setMobilePane("editor");
     }
-  }, [controls, isMobile]);
+
+    if (path === explorer.currentPath) {
+      return;
+    }
+
+    const requestId = selectionLoadRequestIdRef.current + 1;
+    selectionLoadRequestIdRef.current = requestId;
+    setSelectionLoading({ kind: "file", requestId });
+    try {
+      await controls.openFile(path);
+    } finally {
+      setSelectionLoading((current) => {
+        return current?.requestId === requestId ? null : current;
+      });
+    }
+  }, [controls, explorer.currentPath, isMobile]);
 
   const openThreadFromExplorer = useCallback(async (threadId: string) => {
     if (!controls) {
       return;
     }
 
-    await controls.openThread(threadId);
     if (isMobile) {
       setMobilePane("editor");
     }
-  }, [controls, isMobile]);
+
+    if (threadId === explorer.currentThreadId) {
+      return;
+    }
+
+    const requestId = selectionLoadRequestIdRef.current + 1;
+    selectionLoadRequestIdRef.current = requestId;
+    setSelectionLoading({ kind: "thread", requestId });
+    try {
+      await controls.openThread(threadId);
+    } finally {
+      setSelectionLoading((current) => {
+        return current?.requestId === requestId ? null : current;
+      });
+    }
+  }, [controls, explorer.currentThreadId, isMobile]);
 
   const sendThreadMessage = useCallback(async (threadId: string, input: UserInput[]) => {
     if (!controls) {
@@ -222,6 +256,7 @@ export default function Workbench () {
     ? { transform: mobilePane === "explorer" ? "translateX(0)" : "translateX(-50%)" }
     : undefined;
   const createDialogParentLabel = createDialogParentPath || "project";
+  const selectionLoadingLabel = selectionLoading?.kind === "thread" ? "Loading thread..." : "Loading file...";
 
   const handleCreateEntry = async (type: "directory" | "file") => {
     if (!controls || isCreatingEntry) {
@@ -386,7 +421,7 @@ export default function Workbench () {
             </div>
           </header>
 
-          <section className="min-h-0 flex-1">
+          <section className="relative min-h-0 flex-1" aria-busy={Boolean(selectionLoading)}>
             {currentThread ? (
               <ThreadView
                 thread={currentThread}
@@ -420,6 +455,21 @@ export default function Workbench () {
                 hidden
               />
             </div>
+            {selectionLoading ? (
+              <div
+                role="status"
+                aria-live="polite"
+                className="absolute inset-0 z-20 flex items-start justify-center bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] px-4 pt-20 backdrop-blur-[1.5px] md:pt-24"
+              >
+                <div className="shadow-float flex min-w-[12rem] items-center gap-3 rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] px-4 py-3 text-sm text-muted">
+                  <span
+                    aria-hidden="true"
+                    className="h-5 w-5 animate-spin rounded-full border-2 border-[color-mix(in_srgb,var(--text)_16%,transparent)] border-t-[var(--text)]"
+                  />
+                  <span>{selectionLoadingLabel}</span>
+                </div>
+              </div>
+            ) : null}
           </section>
 
           <WorkbenchDialog

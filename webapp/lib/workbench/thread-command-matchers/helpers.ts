@@ -3,6 +3,9 @@
  * - buildCommandPathPart: resolve a raw path into a project-relative path part for command summaries. Keywords: thread, command, path, relative.
  * - buildDisplayPathPart: turn a display path into a labeled command-summary path part. Keywords: thread, command, path, label.
  * - collapseWhitespace: normalize whitespace in command text for compact summaries. Keywords: thread, command, whitespace.
+ * - createEmptyCommandSummaryStats: build a zeroed aggregate-summary counter object. Keywords: thread, command, summary, aggregate.
+ * - mergeCommandSummaryStats: add aggregate command-summary counters together. Keywords: thread, command, summary, aggregate.
+ * - countKnownCommandSummaryStats: total the categorized command-summary counters without the other bucket. Keywords: thread, command, summary, aggregate.
  * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text. Keywords: path, command, relative, display.
  * - summarizeDisplayParts: flatten structured command-summary parts into plain text. Keywords: thread, command, summary, text.
  */
@@ -15,6 +18,7 @@ import type {
   CommandPathDisplayPart,
   ParsedCommandDisplayContext,
   ThreadCommandDisplayPart,
+  ThreadCommandSummaryStats,
 } from "./types";
 
 interface PathPartOptions {
@@ -56,6 +60,49 @@ export function buildCommandPathPart(
 
 export function collapseWhitespace(value: string) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+export function createEmptyCommandSummaryStats(): ThreadCommandSummaryStats {
+  return {
+    gitDiffChecks: 0,
+    gitStatusChecks: 0,
+    listedFiles: 0,
+    otherCommands: 0,
+    readFiles: 0,
+    searchedFiles: 0,
+    typescriptBuilds: 0,
+    typescriptValidations: 0,
+  };
+}
+
+export function mergeCommandSummaryStats(
+  target: ThreadCommandSummaryStats,
+  source?: Partial<ThreadCommandSummaryStats> | null,
+) {
+  if (!source) {
+    return target;
+  }
+
+  for (const key of Object.keys(target) as Array<keyof ThreadCommandSummaryStats>) {
+    const value = source[key];
+    if (!value) {
+      continue;
+    }
+
+    target[key] += value;
+  }
+
+  return target;
+}
+
+export function countKnownCommandSummaryStats(stats: ThreadCommandSummaryStats) {
+  return stats.readFiles
+    + stats.searchedFiles
+    + stats.listedFiles
+    + stats.gitDiffChecks
+    + stats.gitStatusChecks
+    + stats.typescriptBuilds
+    + stats.typescriptValidations;
 }
 
 export function summarizeDisplayParts(parts: ThreadCommandDisplayPart[]) {

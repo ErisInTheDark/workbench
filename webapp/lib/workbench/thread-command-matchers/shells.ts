@@ -44,7 +44,7 @@ export function unwrapShellCommand(command: string) {
   }
 
   return {
-    command: stripOuterQuotes(currentCommand.trim()),
+    command: normalizeShellCommandText(currentCommand),
     shell,
   };
 }
@@ -93,7 +93,7 @@ function unwrapShellCommandOnce(command: string) {
     }
 
     const launcher = firstDefined(match[1], match[2]) ?? "";
-    const innerCommand = stripOuterQuotes(match[3] ?? "");
+    const innerCommand = normalizeShellCommandText(match[3] ?? "");
     if (!innerCommand.trim()) {
       continue;
     }
@@ -351,4 +351,18 @@ function stripOuterQuotes(value: string) {
   }
 
   return value;
+}
+
+function normalizeShellCommandText(value: string) {
+  const trimmedValue = String(value ?? "").trim();
+  const unwrappedValue = stripOuterQuotes(trimmedValue);
+  if (unwrappedValue !== trimmedValue) {
+    return unwrappedValue.trim();
+  }
+
+  if (trimmedValue.startsWith("\"") || trimmedValue.startsWith("'")) {
+    return trimmedValue.slice(1).trimStart();
+  }
+
+  return trimmedValue;
 }

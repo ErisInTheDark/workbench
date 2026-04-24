@@ -3,14 +3,12 @@
 import { useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
 
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
+import { getCurrentInProgressTurn, hasStaleApprovalState, isCurrentTurnWaitingOnApproval } from "../../../lib/codex/thread-state";
+import type { ThreadPayload } from "../../../lib/types";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 
 function joinClasses(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
-}
-
-function isWaitingOnApproval(threadStatus: string) {
-  return threadStatus.includes("waitingOnApproval");
 }
 
 interface ComposerImageAttachment {
@@ -46,12 +44,10 @@ function readFileAsDataUrl(file: File) {
 
 export default function ThreadComposer ({
   onSendMessage,
-  threadId,
-  threadStatus,
+  thread,
 }: {
   onSendMessage: (threadId: string, input: UserInput[]) => Promise<void>;
-  threadId: string;
-  threadStatus: string;
+  thread: ThreadPayload;
 }) {
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<ComposerImageAttachment[]>([]);
@@ -61,11 +57,13 @@ export default function ThreadComposer ({
   const [isSending, setIsSending] = useState(false);
   const trimmedValue = value.trim();
   const isAttaching = pendingAttachmentReads > 0;
-  const isApprovalBlocked = isWaitingOnApproval(threadStatus);
-  const isActiveThread = threadStatus.startsWith("active");
+  const isThreadStateBroken = hasStaleApprovalState(thread);
+  const isApprovalBlocked = isCurrentTurnWaitingOnApproval(thread);
+  const isActiveThread = getCurrentInProgressTurn(thread) !== null;
+  const isInputDisabled = isSending || isAttaching || isThreadStateBroken;
 
   const submit = async () => {
-    if ((!trimmedValue && !attachments.length) || isSending || isAttaching) {
+    if ((!trimmedValue && !attachments.length) || isInputDisabled) {
       return;
     }
 
@@ -87,7 +85,7 @@ export default function ThreadComposer ({
     setIsSending(true);
     setError("");
     try {
-      await onSendMessage(threadId, input);
+      await onSendMessage(thread.id, input);
       setValue("");
       setAttachments([]);
     } catch (submissionError) {
@@ -175,10 +173,10 @@ export default function ThreadComposer ({
             ))}
           </div>
         ) : null}
-        <label className="block" htmlFor={`thread-composer:${threadId}`}>
+        <label className="block" htmlFor={`thread-composer:${thread.id}`}>
           <span className="sr-only">Message thread</span>
           <textarea
-            id={`thread-composer:${threadId}`}
+            id={`thread-composer:${thread.id}`}
             value={value}
             onChange={(event) => {
               setValue(event.target.value);
@@ -194,15 +192,24 @@ export default function ThreadComposer ({
             }}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            placeholder={isActiveThread ? "Message the current turn..." : "Continue this thread..."}
+            placeholder={isThreadStateBroken
+              ? "New messages are disabled for this thread."
+              : isActiveThread
+              ? "Message the current turn..."
+              : "Continue this thread..."}
             className="min-h-[5.75rem] w-full resize-y border-0 bg-transparent px-1 py-1 text-[0.96em] leading-[1.65] text-text outline-none placeholder:text-muted"
-            disabled={isSending}
+            disabled={isInputDisabled}
           />
         </label>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-          <p className="m-0 text-[0.78em] leading-[1.6] text-muted">
+          <p className={joinClasses(
+            "m-0 text-[0.78em] leading-[1.6]",
+            isThreadStateBroken ? "text-danger" : "text-muted",
+          )}>
             {isAttaching
               ? "Attaching pasted image..."
+              : isThreadStateBroken
+              ? "Thread state is out of sync. Sending is disabled here."
               : isApprovalBlocked
               ? "Current turn is waiting on approval. Sending adds guidance to that in-progress turn."
               : isActiveThread
@@ -211,15 +218,15 @@ export default function ThreadComposer ({
           </p>
           <button
             type="submit"
-            disabled={(!trimmedValue && !attachments.length) || isSending || isAttaching}
+            disabled={(!trimmedValue && !attachments.length) || isInputDisabled}
             className={joinClasses(
               "rounded-full px-4 py-2 text-[0.84em] font-medium transition",
               "bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] text-[var(--bg)]",
               "hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]",
-              ((!trimmedValue && !attachments.length) || isSending || isAttaching) && "cursor-not-allowed opacity-45",
+              ((!trimmedValue && !attachments.length) || isInputDisabled) && "cursor-not-allowed opacity-45",
             )}
           >
-            {isSending ? "Sending..." : isAttaching ? "Attaching..." : "Send"}
+            {isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : "Send"}
           </button>
         </div>
       </div>
