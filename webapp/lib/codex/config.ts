@@ -1,4 +1,5 @@
-export const DEFAULT_CODEX_APP_SERVER_URL = "ws://127.0.0.1:4500";
+export const DEFAULT_CODEX_APP_SERVER_BRIDGE_URL = "ws://127.0.0.1:4500";
+export const DEFAULT_CODEX_APP_SERVER_URL = DEFAULT_CODEX_APP_SERVER_BRIDGE_URL;
 
 export const CODEX_CLIENT_INFO = {
   name: "workbench",

@@ -5,7 +5,6 @@
   "scripts": {
     "dev": "node orchestrator.js",
     "dev:next": "next dev -p 3002",
-    "dev:app-server": "codex app-server --listen ws://127.0.0.1:4500",
     "codex:generate-types": "codex app-server generate-ts --out lib/codex/generated/app-server"
   },
   "dependencies": {

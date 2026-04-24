@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - CodexAppServerClient: persistent typed WebSocket client for JSON-RPC requests and app-server notifications. Keywords: codex, websocket, notifications.
+ * - CodexAppServerClient: persistent typed WebSocket client for the local stdio bridge and app-server notifications. Keywords: codex, websocket, stdio, notifications.
  */
 import { getCodexAppServerUrl } from "./config";
 import type {
@@ -43,6 +43,7 @@ export class CodexAppServerClient {
   ) => void>();
   private readonly pendingResponses = new Map<number, PendingResponseHandler>();
   private readonly nextRequestId = createRequestIdGenerator();
+  private connectPromise: Promise<void> | null = null;
   private initialized = false;
   private socket: WebSocket | null = null;
 
@@ -51,6 +52,20 @@ export class CodexAppServerClient {
       return;
     }
 
+    if (this.connectPromise) {
+      await this.connectPromise;
+      return;
+    }
+
+    this.connectPromise = this.openAndInitialize(url);
+    try {
+      await this.connectPromise;
+    } finally {
+      this.connectPromise = null;
+    }
+  }
+
+  private async openAndInitialize(url: string) {
     const socket = new WebSocket(url);
     this.socket = socket;
 

@@ -2,7 +2,26 @@
  * Exports:
  * - initWorkbench: wire the workbench DOM, polling, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, polling.
  */
+import { CodexAppServerClient } from "./codex/app-server-client";
+import type { CodexAppServerNotification, CodexAppServerNotificationHandling } from "./codex/app-server-notifications";
+import type { GetAccountRateLimitsResponse } from "./codex/generated/app-server/v2/GetAccountRateLimitsResponse";
+import type { RateLimitSnapshot } from "./codex/generated/app-server/v2/RateLimitSnapshot";
+import type { ThreadItem } from "./codex/generated/app-server/v2/ThreadItem";
+import type { ThreadListResponse } from "./codex/generated/app-server/v2/ThreadListResponse";
+import type { ThreadReadResponse } from "./codex/generated/app-server/v2/ThreadReadResponse";
+import type { ThreadResumeResponse } from "./codex/generated/app-server/v2/ThreadResumeResponse";
+import type { Turn } from "./codex/generated/app-server/v2/Turn";
+import type { TurnStartResponse } from "./codex/generated/app-server/v2/TurnStartResponse";
+import type { TurnSteerResponse } from "./codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
+import type { CodexClientRequest } from "./codex/protocol";
+import { createTextInput, isCodexJsonRpcFailure } from "./codex/protocol";
+import {
+    formatThreadStatus,
+    isProjectCodexThread,
+    toThreadPayload,
+    toThreadSummary,
+} from "./codex/thread-adapter";
 import { getCurrentInProgressTurn, getCurrentTurn } from "./codex/thread-state";
 import type {
     ChangeSummary,
@@ -199,12 +218,16 @@ interface WorkbenchState {
   fontSize: number;
   lastLoggedSaveIssue: SaveGuardIssue | null;
   pendingWriteConflict: SaveConflictPayload | null;
+  rateLimits: RateLimitSnapshot | null;
   saveIssue: SaveGuardIssue | null;
   expandedDirectories: Set<string>;
 }
 
 const EDITOR_FONT_STEP = 0.08;
 const AUTO_REFRESH_INTERVAL_MS = 1500;
+const CODEX_NOTIFICATION_THREAD_REFRESH_DELAY_MS = 350;
+const CODEX_NOTIFICATION_THREAD_LIST_REFRESH_DELAY_MS = 750;
+const DEFAULT_TURN_REASONING_SUMMARY = "detailed" as const;
 const DRAFT_DATABASE_NAME = "workbench";
 const DRAFT_DATABASE_VERSION = 1;
 const DRAFT_STORE_NAME = "drafts";
@@ -250,6 +273,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     fontSize: readStoredFontSize(),
     lastLoggedSaveIssue: null,
     pendingWriteConflict: null,
+    rateLimits: null,
     saveIssue: null,
     expandedDirectories: new Set(readStoredExpandedDirectories()),
   };
@@ -326,8 +350,11 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
   const abortController = new AbortController();
   const { signal } = abortController;
+  const codexClient = new CodexAppServerClient();
   let autoRefreshTimeoutId: number | null = null;
   let autoRefreshStopped = false;
+  let codexThreadRefreshTimeoutId: number | null = null;
+  let codexThreadListRefreshTimeoutId: number | null = null;
   let diffRefreshFrameId: number | null = null;
   let selectionPersistenceTimeoutId: number | null = null;
   let hoveredRevisionNode: HTMLElement | null = null;
@@ -2149,6 +2176,15 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     bindings.onCurrentThreadChange?.(state.currentThread);
   }
 
+  function emitRateLimitsChange() {
+    bindings.onRateLimitsChange?.(state.rateLimits);
+  }
+
+  function setRateLimits(rateLimits: RateLimitSnapshot | null) {
+    state.rateLimits = rateLimits;
+    emitRateLimitsChange();
+  }
+
   function areCurrentTurnsEquivalent(left: ThreadPayload | null, right: ThreadPayload | null) {
     const leftTurn = getCurrentTurn(left);
     const rightTurn = getCurrentTurn(right);
@@ -2193,6 +2229,27 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
     state.currentThread = thread;
     emitCurrentThreadChange();
+  }
+
+  function updateCurrentThread(updater: (thread: ThreadPayload) => ThreadPayload | null) {
+    if (!state.currentThread) {
+      return false;
+    }
+
+    const nextThread = updater(state.currentThread);
+    if (!nextThread) {
+      return false;
+    }
+
+    setCurrentThread(nextThread);
+    return true;
+  }
+
+  function updateCurrentThreadFields(fields: Partial<Omit<ThreadPayload, "turns">>) {
+    return updateCurrentThread((thread) => ({
+      ...thread,
+      ...fields,
+    }));
   }
 
   function toggleDirectory(path: string) {
@@ -4001,29 +4058,84 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     return await response.json() as FilePayload;
   }
 
-  async function fetchThreadPayload(threadId: string) {
-    const response = await fetch(`/api/codex/thread?threadId=${encodeURIComponent(threadId)}`, { cache: "no-store" });
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "Unable to open Codex thread.", detail: "" }));
-      statusLine.textContent = error.detail ? `${error.error} ${error.detail}` : error.error;
-      return null;
+  async function sendCodexRequest<TResponse>(
+    request: Omit<CodexClientRequest, "id"> & { id?: number },
+  ) {
+    await codexClient.connect();
+    const response = await codexClient.sendRequest<TResponse>(request);
+    if (isCodexJsonRpcFailure(response)) {
+      const detail = response.error.data ? ` ${JSON.stringify(response.error.data)}` : "";
+      throw new Error(`${response.error.message}${detail}`);
     }
 
-    return await response.json() as ThreadPayload;
+    return response.result;
+  }
+
+  async function fetchThreadPayload(threadId: string) {
+    try {
+      const response = await sendCodexRequest<ThreadResumeResponse>({
+        method: "thread/resume",
+        params: {
+          persistExtendedHistory: true,
+          threadId,
+        },
+      });
+
+      if (state.rootPath && !isProjectCodexThread(response.thread, state.rootPath)) {
+        statusLine.textContent = "That Codex thread doesn't belong to this project.";
+        return null;
+      }
+
+      return toThreadPayload(response.thread);
+    } catch (error) {
+      statusLine.textContent = error instanceof Error ? error.message : "Unable to open Codex thread.";
+      return null;
+    }
+  }
+
+  async function readThreadPayload(threadId: string) {
+    try {
+      const response = await sendCodexRequest<ThreadReadResponse>({
+        method: "thread/read",
+        params: {
+          includeTurns: true,
+          threadId,
+        },
+      });
+
+      if (state.rootPath && !isProjectCodexThread(response.thread, state.rootPath)) {
+        statusLine.textContent = "That Codex thread doesn't belong to this project.";
+        return null;
+      }
+
+      return toThreadPayload(response.thread);
+    } catch (error) {
+      statusLine.textContent = error instanceof Error ? error.message : "Unable to read Codex thread.";
+      return null;
+    }
   }
 
   async function refreshThreads() {
     try {
-      const response = await fetch("/api/codex/threads", { cache: "no-store" });
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: "Unable to load Codex threads.", detail: "" }));
+      if (!state.rootPath) {
         state.threads = [];
-        state.threadsError = error.detail ? `${error.error} ${error.detail}` : error.error;
+        state.threadsError = "";
         return;
       }
 
-      const payload = await response.json() as { threads: ThreadSummary[] };
-      state.threads = [...payload.threads].sort((left, right) => {
+      const response = await sendCodexRequest<ThreadListResponse>({
+        method: "thread/list",
+        params: {
+          archived: false,
+          limit: 50,
+          sortKey: "updated_at",
+        },
+      });
+
+      state.threads = response.data
+        .filter((thread) => isProjectCodexThread(thread, state.rootPath))
+        .map((thread) => toThreadSummary(thread))
+        .sort((left, right) => {
         if (right.updatedAt !== left.updatedAt) {
           return right.updatedAt - left.updatedAt;
         }
@@ -4035,6 +4147,85 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       state.threads = [];
       state.threadsError = error instanceof Error ? error.message : "Unable to load Codex threads.";
     }
+  }
+
+  async function refreshRateLimits() {
+    try {
+      const response = await sendCodexRequest<GetAccountRateLimitsResponse>({
+        method: "account/rateLimits/read",
+        params: undefined,
+      });
+      setRateLimits(response.rateLimits);
+    } catch {
+      setRateLimits(null);
+    }
+  }
+
+  function normalizeThreadMessageInput(input: UserInput[] | string) {
+    const entries = Array.isArray(input)
+      ? input
+      : input.trim()
+        ? [createTextInput(input)]
+        : [];
+    const normalized: UserInput[] = [];
+
+    for (const entry of entries) {
+      switch (entry.type) {
+        case "text": {
+          const text = entry.text.trim();
+          if (text) {
+            normalized.push(createTextInput(text));
+          }
+          break;
+        }
+        case "image": {
+          const url = entry.url.trim();
+          if (url) {
+            normalized.push({
+              type: "image",
+              url,
+            });
+          }
+          break;
+        }
+        case "localImage": {
+          const path = entry.path.trim();
+          if (path) {
+            normalized.push({
+              type: "localImage",
+              path,
+            });
+          }
+          break;
+        }
+        case "skill": {
+          const name = entry.name.trim();
+          const path = entry.path.trim();
+          if (name && path) {
+            normalized.push({
+              type: "skill",
+              name,
+              path,
+            });
+          }
+          break;
+        }
+        case "mention": {
+          const name = entry.name.trim();
+          const path = entry.path.trim();
+          if (name && path) {
+            normalized.push({
+              type: "mention",
+              name,
+              path,
+            });
+          }
+          break;
+        }
+      }
+    }
+
+    return normalized;
   }
 
   function isCurrentThreadUpToDate(threadId: string) {
@@ -4054,6 +4245,241 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
     return currentThread.updatedAt === threadSummary.updatedAt
       && currentThread.status === threadSummary.status;
+  }
+
+  function mergeTurnMetadata(existingTurn: Turn | undefined, incomingTurn: Turn): Turn {
+    return {
+      ...incomingTurn,
+      items: existingTurn?.items ?? incomingTurn.items,
+    };
+  }
+
+  function upsertTurnMetadata(incomingTurn: Turn) {
+    return updateCurrentThread((thread) => {
+      const turnIndex = thread.turns.findIndex((turn) => turn.id === incomingTurn.id);
+      if (turnIndex === -1) {
+        return {
+          ...thread,
+          turns: [...thread.turns, incomingTurn],
+        };
+      }
+
+      return {
+        ...thread,
+        turns: thread.turns.map((turn, index) => (
+          index === turnIndex ? mergeTurnMetadata(turn, incomingTurn) : turn
+        )),
+      };
+    });
+  }
+
+  function updateTurnItems(
+    turnId: string,
+    updater: (items: ThreadItem[]) => ThreadItem[] | null,
+  ) {
+    return updateCurrentThread((thread) => {
+      let updated = false;
+      const turns = thread.turns.map((turn) => {
+        if (turn.id !== turnId) {
+          return turn;
+        }
+
+        const nextItems = updater(turn.items);
+        if (!nextItems) {
+          return turn;
+        }
+
+        updated = true;
+        return {
+          ...turn,
+          items: nextItems,
+        };
+      });
+
+      return updated ? { ...thread, turns } : null;
+    });
+  }
+
+  function upsertThreadItem(turnId: string, incomingItem: ThreadItem) {
+    return updateTurnItems(turnId, (items) => {
+      const itemIndex = items.findIndex((item) => item.id === incomingItem.id);
+      if (itemIndex === -1) {
+        return [...items, incomingItem];
+      }
+
+      return items.map((item, index) => (
+        index === itemIndex ? incomingItem : item
+      ));
+    });
+  }
+
+  function updateThreadItem(
+    turnId: string,
+    itemId: string,
+    updater: (item: ThreadItem) => ThreadItem | null,
+  ) {
+    return updateTurnItems(turnId, (items) => {
+      let updated = false;
+      const nextItems = items.map((item) => {
+        if (item.id !== itemId) {
+          return item;
+        }
+
+        const nextItem = updater(item);
+        if (!nextItem) {
+          return item;
+        }
+
+        updated = true;
+        return nextItem;
+      });
+
+      return updated ? nextItems : null;
+    });
+  }
+
+  function appendIndexedText(values: string[], index: number, delta: string) {
+    const nextValues = [...values];
+    while (nextValues.length <= index) {
+      nextValues.push("");
+    }
+    nextValues[index] = `${nextValues[index] ?? ""}${delta}`;
+    return nextValues;
+  }
+
+  function ensureIndexedText(values: string[], index: number) {
+    const nextValues = [...values];
+    while (nextValues.length <= index) {
+      nextValues.push("");
+    }
+    return nextValues;
+  }
+
+  function doesNotificationTargetCurrentThread(notification: CodexAppServerNotification) {
+    return "threadId" in notification.params
+      ? notification.params.threadId === state.currentThreadId
+      : "thread" in notification.params
+        ? notification.params.thread.id === state.currentThreadId
+        : false;
+  }
+
+  function applyCodexNotificationToCurrentThread(notification: CodexAppServerNotification) {
+    if (!state.currentThread || !doesNotificationTargetCurrentThread(notification)) {
+      return false;
+    }
+
+    switch (notification.method) {
+      case "thread/started":
+        return updateCurrentThreadFields({
+          ...toThreadSummary(notification.params.thread),
+        });
+      case "thread/status/changed":
+        return updateCurrentThreadFields({
+          status: formatThreadStatus(notification.params.status),
+        });
+      case "thread/name/updated":
+        return updateCurrentThreadFields({
+          name: notification.params.threadName ?? null,
+        });
+      case "turn/started":
+      case "turn/completed":
+        return upsertTurnMetadata(notification.params.turn);
+      case "item/started":
+      case "item/completed":
+        return upsertThreadItem(notification.params.turnId, notification.params.item);
+      case "item/agentMessage/delta":
+        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
+          item.type === "agentMessage"
+            ? { ...item, text: `${item.text}${notification.params.delta}` }
+            : null
+        ));
+      case "item/plan/delta":
+        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
+          item.type === "plan"
+            ? { ...item, text: `${item.text}${notification.params.delta}` }
+            : null
+        ));
+      case "item/commandExecution/outputDelta":
+        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
+          item.type === "commandExecution"
+            ? { ...item, aggregatedOutput: `${item.aggregatedOutput ?? ""}${notification.params.delta}` }
+            : null
+        ));
+      case "item/fileChange/patchUpdated":
+        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
+          item.type === "fileChange"
+            ? { ...item, changes: notification.params.changes }
+            : null
+        ));
+      case "item/reasoning/summaryPartAdded":
+        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
+          item.type === "reasoning"
+            ? { ...item, summary: ensureIndexedText(item.summary, notification.params.summaryIndex) }
+            : null
+        ));
+      case "item/reasoning/summaryTextDelta":
+        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
+          item.type === "reasoning"
+            ? { ...item, summary: appendIndexedText(item.summary, notification.params.summaryIndex, notification.params.delta) }
+            : null
+        ));
+      case "item/reasoning/textDelta":
+        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
+          item.type === "reasoning"
+            ? { ...item, content: appendIndexedText(item.content, notification.params.contentIndex, notification.params.delta) }
+            : null
+        ));
+      case "thread/archived":
+      case "thread/unarchived":
+      case "thread/closed":
+      case "thread/tokenUsage/updated":
+      case "thread/compacted":
+      case "hook/started":
+      case "hook/completed":
+      case "turn/diff/updated":
+      case "turn/plan/updated":
+      case "item/autoApprovalReview/started":
+      case "item/autoApprovalReview/completed":
+      case "rawResponseItem/completed":
+      case "command/exec/outputDelta":
+      case "item/commandExecution/terminalInteraction":
+      case "item/fileChange/outputDelta":
+      case "item/mcpToolCall/progress":
+      case "serverRequest/resolved":
+      case "model/rerouted":
+      case "model/verification":
+      case "thread/realtime/started":
+      case "thread/realtime/itemAdded":
+      case "thread/realtime/transcript/delta":
+      case "thread/realtime/transcript/done":
+      case "thread/realtime/outputAudio/delta":
+      case "thread/realtime/sdp":
+      case "thread/realtime/error":
+      case "thread/realtime/closed":
+        return false;
+      case "error":
+      case "skills/changed":
+      case "mcpServer/oauthLogin/completed":
+      case "mcpServer/startupStatus/updated":
+      case "account/updated":
+      case "account/rateLimits/updated":
+      case "app/list/updated":
+      case "externalAgentConfig/import/completed":
+      case "fs/changed":
+      case "warning":
+      case "guardianWarning":
+      case "deprecationNotice":
+      case "configWarning":
+      case "fuzzyFileSearch/sessionUpdated":
+      case "fuzzyFileSearch/sessionCompleted":
+      case "windows/worldWritableWarning":
+      case "windowsSandbox/setupCompleted":
+      case "account/login/completed":
+        return false;
+    }
+
+    const unhandledNotification: never = notification;
+    return unhandledNotification;
   }
 
   function cloneUserInput(input: UserInput): UserInput {
@@ -4204,38 +4630,90 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     emitExplorerStateChange();
   }
 
+  async function reconcileCurrentThreadFromRead(threadId: string) {
+    const payload = await readThreadPayload(threadId);
+    if (!payload || state.currentThreadId !== threadId) {
+      return;
+    }
+
+    applyThreadPayloadToCurrentView(payload, `Read thread ${new Date(payload.updatedAt * 1000).toLocaleString()}`);
+    syncCurrentSelectionToUrl({ threadId: payload.id });
+    emitExplorerStateChange();
+  }
+
   async function sendThreadMessage(threadId: string, input: UserInput[]) {
     const previousThread = state.currentThread && state.currentThread.id === threadId
       ? state.currentThread
       : null;
     const runtimeInput = input as UserInput[] | string;
-    const textFallback = Array.isArray(runtimeInput)
-      ? runtimeInput.find((entry) => entry.type === "text")?.text ?? ""
-      : typeof runtimeInput === "string"
-        ? runtimeInput
-        : "";
+    const normalizedInput = normalizeThreadMessageInput(runtimeInput);
 
-    const response = await fetch("/api/codex/thread", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        input: runtimeInput,
-        text: textFallback,
-        threadId,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "Unable to send the Codex thread message.", detail: "" }));
-      throw new Error(error.detail ? `${error.error} ${error.detail}` : error.error);
+    if (!threadId.trim()) {
+      throw new Error("Missing thread id.");
     }
 
+    if (!normalizedInput.length) {
+      throw new Error("Message input cannot be empty.");
+    }
+
+    const readableThreadResponse = await sendCodexRequest<ThreadReadResponse>({
+      method: "thread/read",
+      params: {
+        includeTurns: true,
+        threadId,
+      },
+    });
+    const resumedThreadResponse = await sendCodexRequest<ThreadResumeResponse>({
+      method: "thread/resume",
+      params: {
+        persistExtendedHistory: true,
+        threadId,
+      },
+    });
+    const readableThread = toThreadPayload(readableThreadResponse.thread);
+    const resumedThread = toThreadPayload(resumedThreadResponse.thread);
+    const currentInProgressTurn = getCurrentInProgressTurn(resumedThread);
+    const visibleCurrentTurn = getCurrentTurn(readableThread);
+
+    if (
+      visibleCurrentTurn?.status === "completed"
+      && currentInProgressTurn
+      && currentInProgressTurn.id !== visibleCurrentTurn.id
+    ) {
+      throw new Error("This thread is out of sync with the app-server. New messages are disabled here for now.");
+    }
+
+    if (currentInProgressTurn) {
+      await sendCodexRequest<TurnSteerResponse>({
+        method: "turn/steer",
+        params: {
+          expectedTurnId: currentInProgressTurn.id,
+          input: normalizedInput,
+          threadId,
+        },
+      });
+    } else {
+      await sendCodexRequest<TurnStartResponse>({
+        method: "turn/start",
+        params: {
+          input: normalizedInput,
+          summary: DEFAULT_TURN_REASONING_SUMMARY,
+          threadId,
+        },
+      });
+    }
+
+    const refreshedThreadResponse = await sendCodexRequest<ThreadReadResponse>({
+      method: "thread/read",
+      params: {
+        includeTurns: true,
+        threadId,
+      },
+    });
     const payload = applyOptimisticSteerMessage(
-      await response.json() as ThreadPayload,
+      toThreadPayload(refreshedThreadResponse.thread),
       previousThread,
-      Array.isArray(runtimeInput) ? runtimeInput : [{ type: "text", text: textFallback, text_elements: [] }],
+      normalizedInput,
     );
     applyThreadPayloadToCurrentView(payload, "Sent message.");
     syncCurrentSelectionToUrl({ threadId: payload.id });
@@ -7317,6 +7795,45 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     updateCustomCaret();
   }
 
+  function scheduleCodexNotificationRefresh(handling: CodexAppServerNotificationHandling) {
+    if (handling.refreshThread && state.currentThreadId && codexThreadRefreshTimeoutId === null) {
+      codexThreadRefreshTimeoutId = window.setTimeout(() => {
+        codexThreadRefreshTimeoutId = null;
+        if (autoRefreshStopped || !state.currentThreadId) {
+          return;
+        }
+
+        void reconcileCurrentThreadFromRead(state.currentThreadId);
+      }, CODEX_NOTIFICATION_THREAD_REFRESH_DELAY_MS);
+    }
+
+    if (handling.refreshThreads && codexThreadListRefreshTimeoutId === null) {
+      codexThreadListRefreshTimeoutId = window.setTimeout(() => {
+        codexThreadListRefreshTimeoutId = null;
+        if (autoRefreshStopped) {
+          return;
+        }
+
+        void (async () => {
+          await refreshThreads();
+          emitExplorerStateChange();
+        })();
+      }, CODEX_NOTIFICATION_THREAD_LIST_REFRESH_DELAY_MS);
+    }
+  }
+
+  function handleCodexNotification(
+    notification: CodexAppServerNotification,
+    handling: CodexAppServerNotificationHandling,
+  ) {
+    if (notification.method === "account/rateLimits/updated") {
+      setRateLimits(notification.params.rateLimits);
+    }
+
+    applyCodexNotificationToCurrentThread(notification);
+    scheduleCodexNotificationRefresh(handling);
+  }
+
   function scheduleAutoRefresh() {
     if (autoRefreshStopped) {
       return;
@@ -7350,18 +7867,31 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   };
 
   hydrateDraftBuffers(await getPersistedDraftRecords());
+  const unsubscribeCodexNotifications = codexClient.onNotification((notification, handling) => {
+    handleCodexNotification(notification, handling);
+  });
   bindings.onControlsReady?.(controls);
   emitExplorerStateChange();
   emitCurrentThreadChange();
+  emitRateLimitsChange();
   applyEditorFontSize();
   updateSaveButtonState();
   await refreshTree();
+  void refreshRateLimits();
   scheduleAutoRefresh();
   return () => {
     autoRefreshStopped = true;
     if (autoRefreshTimeoutId !== null) {
       window.clearTimeout(autoRefreshTimeoutId);
     }
+    if (codexThreadRefreshTimeoutId !== null) {
+      window.clearTimeout(codexThreadRefreshTimeoutId);
+    }
+    if (codexThreadListRefreshTimeoutId !== null) {
+      window.clearTimeout(codexThreadListRefreshTimeoutId);
+    }
+    unsubscribeCodexNotifications();
+    codexClient.close();
     if (diffRefreshFrameId !== null) {
       window.cancelAnimationFrame(diffRefreshFrameId);
     }

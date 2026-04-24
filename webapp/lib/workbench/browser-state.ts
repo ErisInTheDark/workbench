@@ -17,8 +17,8 @@ export const MIN_EDITOR_FONT_SIZE = 0.84;
 export const MAX_EDITOR_FONT_SIZE = 1.72;
 export const CURRENT_FILE_SEARCH_PARAM = "file";
 export const CURRENT_THREAD_SEARCH_PARAM = "thread";
-export const EXPANDED_DIRECTORIES_STORAGE_KEY = "potters-guide-workbench:expanded-directories";
-export const FONT_SIZE_STORAGE_KEY = "potters-guide-workbench:font-size";
+export const EXPANDED_DIRECTORIES_STORAGE_KEY = "workbench:expanded-directories";
+export const FONT_SIZE_STORAGE_KEY = "workbench:font-size";
 
 export function readStoredExpandedDirectories() {
   try {

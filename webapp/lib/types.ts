@@ -1,5 +1,6 @@
 import type { Turn } from "./codex/generated/app-server/v2/Turn";
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
+import type { RateLimitSnapshot } from "./codex/generated/app-server/v2/RateLimitSnapshot";
 
 export interface ChangeSummary {
   additions: number;
@@ -78,6 +79,7 @@ export interface WorkbenchControls {
 export interface WorkbenchBindings {
   onExplorerStateChange?: (snapshot: ExplorerSnapshot) => void;
   onCurrentThreadChange?: (thread: ThreadPayload | null) => void;
+  onRateLimitsChange?: (rateLimits: RateLimitSnapshot | null) => void;
   onControlsReady?: (controls: WorkbenchControls) => void;
 }
 

@@ -6,6 +6,7 @@ import {
   CODEX_CLIENT_INFO,
   getCodexAppServerUrl,
 } from "../lib/codex/config";
+import { CodexAppServerClient } from "../lib/codex/app-server-client";
 import {
   createBootstrapMessages,
   createTextInput,
@@ -36,17 +37,22 @@ export default function CodexPage() {
 
   useEffect(() => {
     let active = true;
+    const client = new CodexAppServerClient();
 
     async function loadReadyStatus() {
       setLoading(true);
 
       try {
-        const response = await fetch("/api/codex/ready", {
-          cache: "no-store",
-        });
-        const payload = await response.json() as CodexReadyStatus;
+        await client.connect();
         if (active) {
-          setReadyStatus(payload);
+          setReadyStatus({
+            detail: "Connected to the local Codex bridge and completed the app-server handshake.",
+            ok: true,
+            phase: "ready",
+            status: null,
+            statusText: "Ready",
+            url: getCodexAppServerUrl(),
+          });
         }
       } catch (error) {
         if (active) {
@@ -70,6 +76,7 @@ export default function CodexPage() {
 
     return () => {
       active = false;
+      client.close();
     };
   }, []);
 
@@ -88,7 +95,7 @@ export default function CodexPage() {
       <section className="mt-10 grid gap-8 md:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="space-y-8">
           <div className="space-y-3">
-            <h2 className="text-lg font-semibold text-text">Local transport</h2>
+            <h2 className="text-lg font-semibold text-text">Local Codex bridge</h2>
             <p className="font-mono text-xs leading-6 text-muted">{getCodexAppServerUrl()}</p>
           </div>
 

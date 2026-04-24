@@ -3,6 +3,7 @@
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
+import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type {
   ExplorerSnapshot,
   ThreadPayload,
@@ -61,6 +62,7 @@ type SelectionLoadingState =
 export default function Workbench () {
   const [explorer, setExplorer] = useState(INITIAL_EXPLORER_SNAPSHOT);
   const [currentThread, setCurrentThread] = useState<ThreadPayload | null>(null);
+  const [rateLimits, setRateLimits] = useState<RateLimitSnapshot | null>(null);
   const [controls, setControls] = useState<WorkbenchControls | null>(null);
   const [isMobile, setIsMobile] = useState(false);
   const [mobilePane, setMobilePane] = useState<MobilePane>("explorer");
@@ -94,6 +96,15 @@ export default function Workbench () {
 
           startTransition(() => {
             setCurrentThread(thread);
+          });
+        },
+        onRateLimitsChange: (nextRateLimits) => {
+          if (cancelled) {
+            return;
+          }
+
+          startTransition(() => {
+            setRateLimits(nextRateLimits);
           });
         },
         onControlsReady: (nextControls) => {
@@ -429,6 +440,7 @@ export default function Workbench () {
                 onOpenFile={openFileFromExplorer}
                 onSendMessage={sendThreadMessage}
                 projectRootPath={explorer.rootPath}
+                rateLimits={rateLimits}
               />
             ) : null}
             <div

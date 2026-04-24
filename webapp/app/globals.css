@@ -397,4 +397,41 @@
     background: color-mix(in srgb, var(--danger) 24%, transparent);
   }
 
+  .thread-thinking-text {
+    width: max-content;
+    max-width: 100%;
+    background:
+      linear-gradient(
+        90deg,
+        color-mix(in srgb, var(--muted) 78%, transparent) 34%,
+        var(--accent),
+        color-mix(in srgb, var(--text) 86%, var(--accent) 14%),
+        var(--accent),
+        color-mix(in srgb, var(--muted) 78%, transparent) 66%
+      );
+    background-clip: text;
+    background-size: 300% 100%;
+    color: transparent;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: thread-thinking-shimmer 1.45s linear infinite;
+  }
+
+  @keyframes thread-thinking-shimmer {
+    from {
+      background-position: 100% 50%;
+    }
+
+    to {
+      background-position: 0% 50%;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .thread-thinking-text {
+      animation: none;
+      background-position: 50% 50%;
+    }
+  }
+
 }

@@ -3,8 +3,10 @@
 import { memo, useLayoutEffect, useRef } from "react";
 
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
+import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { ThreadPayload } from "../../../lib/types";
 import ThreadComposer from "./ThreadComposer";
+import ThreadRateLimits from "./ThreadRateLimits";
 import { ThreadTurnDetails } from "./thread-view-items";
 import ThreadDisclosure from "./ThreadDisclosure";
 import {
@@ -17,16 +19,20 @@ function ThreadView({
   onOpenFile,
   onSendMessage,
   projectRootPath,
+  rateLimits,
   thread,
 }: {
   fontSizeRem: number;
   onOpenFile: (path: string) => Promise<void>;
   onSendMessage: (threadId: string, input: UserInput[]) => Promise<void>;
   projectRootPath: string;
+  rateLimits: RateLimitSnapshot | null;
   thread: ThreadPayload;
 }) {
   const title = getThreadTitle(thread);
   const bottomSentinelRef = useRef<HTMLDivElement>(null);
+  const currentTurn = thread.turns.at(-1) ?? null;
+  const isThinking = currentTurn?.status === "inProgress";
 
   useLayoutEffect(() => {
     const frameId = window.requestAnimationFrame(() => {
@@ -79,10 +85,18 @@ function ThreadView({
           </p>
         )}
       </div>
+      {isThinking ? (
+        <div className="py-4" aria-live="polite">
+          <p className="thread-thinking-text m-0 text-[0.92em] font-medium leading-[1.6]">
+            Thinking
+          </p>
+        </div>
+      ) : null}
       <ThreadComposer
         onSendMessage={onSendMessage}
         thread={thread}
       />
+      <ThreadRateLimits rateLimits={rateLimits} />
       <div ref={bottomSentinelRef} aria-hidden="true" className="h-px w-full" />
     </div>
   );

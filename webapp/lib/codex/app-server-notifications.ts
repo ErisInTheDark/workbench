@@ -65,6 +65,10 @@ export function classifyCodexAppServerNotification(
     case "thread/closed":
     case "thread/name/updated":
     case "thread/tokenUsage/updated":
+      return createHandling(notification, "thread", {
+        refreshThreads: true,
+      });
+
     case "thread/compacted":
       return createHandling(notification, "thread", {
         refreshThread: true,
@@ -73,7 +77,6 @@ export function classifyCodexAppServerNotification(
 
     case "turn/started":
     case "hook/started":
-    case "turn/completed":
     case "hook/completed":
     case "turn/diff/updated":
     case "turn/plan/updated":
@@ -95,15 +98,16 @@ export function classifyCodexAppServerNotification(
     case "item/reasoning/textDelta":
     case "model/rerouted":
     case "model/verification":
+      return createHandling(notification, "turn");
+
+    case "turn/completed":
       return createHandling(notification, "turn", {
         refreshThread: true,
-        refreshThreads: notification.method === "turn/completed",
+        refreshThreads: true,
       });
 
     case "serverRequest/resolved":
-      return createHandling(notification, "server-request", {
-        refreshThread: true,
-      });
+      return createHandling(notification, "server-request");
 
     case "skills/changed":
     case "mcpServer/oauthLogin/completed":
