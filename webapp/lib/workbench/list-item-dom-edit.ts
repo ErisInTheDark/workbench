@@ -5,11 +5,11 @@
  */
 
 import {
-  getDirectChildDetailsElement,
-  getDirectChildListElements,
-  getDirectChildSummaryElement,
-  isListElement,
-  isSingleBreakParagraph,
+    getDirectChildDetailsElement,
+    getDirectChildListElements,
+    getDirectChildSummaryElement,
+    isListElement,
+    isSingleBreakParagraph,
 } from "./list-dom";
 
 type ListElement = HTMLUListElement | HTMLOListElement;

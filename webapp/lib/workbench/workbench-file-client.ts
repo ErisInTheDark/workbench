@@ -27,7 +27,7 @@ import type { EditorMode, SaveGuardIssue, WorkbenchEditorClient } from "./workbe
 import type { WorkbenchProjectClient } from "./workbench-project-client";
 import type { WorkbenchThreadClient } from "./workbench-thread-client";
 
-const DRAFT_DATABASE_NAME = "potters-guide-workbench";
+const DRAFT_DATABASE_NAME = "workbench";
 const DRAFT_DATABASE_VERSION = 1;
 const DRAFT_STORE_NAME = "drafts";
 

@@ -781,10 +781,10 @@ export class CopilotBridge {
     reasoningEffort: CopilotReasoningEffort | undefined,
   ) {
     const client = await this.ensureClient();
-    const workingDirectory = await mkdtemp(join(tmpdir(), "potters-guide-copilot-title-"));
+    const workingDirectory = await mkdtemp(join(tmpdir(), "copilot-title-"));
     const session = await client.createSession({
       availableTools: [],
-      clientName: "potters-guide-title-summarizer",
+      clientName: "title-summarizer",
       infiniteSessions: { enabled: false },
       model,
       onPermissionRequest: approveAll,

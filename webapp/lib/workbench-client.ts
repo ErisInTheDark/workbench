@@ -26,6 +26,9 @@ import {
     syncCurrentSelectionToUrl
 } from "./workbench/browser-state";
 import {
+    createWorkbenchCodeFormatController,
+} from "./workbench/code-format";
+import {
     cloneHistorySelection,
     countHistoryStatesSinceSnapshot,
     createHistoryPatch,
@@ -66,9 +69,11 @@ import {
     hasDirectBlockLikeChildren,
     mergeAdjacentSiblingLists,
     normalizeNestedListHierarchy,
-    syncStructuredBlockStyles as syncStructuredBlockDomStyles,
+    syncStructuredBlockStyles as syncStructuredBlockDomStyles
 } from "./workbench/structured-block-dom";
-import { formatTimestamp } from "./workbench/tree-utils";
+import {
+    formatTimestamp
+} from "./workbench/tree-utils";
 import { hasRequiredWorkbenchDomElements, type WorkbenchDomElements } from "./workbench/workbench-dom";
 import { createWorkbenchEditorClient, type EditorMode, type SaveGuardIssue } from "./workbench/workbench-editor-client";
 import { createWorkbenchFileClient, type DraftBuffer } from "./workbench/workbench-file-client";
@@ -531,6 +536,11 @@ export async function initWorkbench(
     updateHistorySelection,
     updateInlineToolbars,
   });
+  const codeFormatController = createWorkbenchCodeFormatController({
+    editor,
+    getProtectedEmptyInlineFormatElements,
+    syncEditorAfterStructuralChange,
+  });
 
   const clearPendingInlineFormats = () => {
     inlineFormatController.clearPendingInlineFormats();
@@ -559,6 +569,10 @@ export async function initWorkbench(
     formatKey: "bold" | "italic" | "comment" | "del" | "ins",
   ) => {
     inlineFormatController.toggleInlineFormatSelection(selection, range, formatKey);
+  };
+
+  const toggleCodeSelection = (selection: Selection, range: Range) => {
+    codeFormatController.toggleCodeSelection(selection, range);
   };
 
   const togglePendingInlineFormat = (format: PendingInlineFormatKey) => {
@@ -2092,59 +2106,6 @@ export async function initWorkbench(
     syncEditorAfterStructuralChange();
   }
 
-  function unwrapCodeElements(root: DocumentFragment | Element) {
-    const codeElements = Array.from(root.querySelectorAll("code"));
-
-    for (const codeElement of codeElements) {
-      const parent = codeElement.parentNode;
-      if (!parent) {
-        continue;
-      }
-
-      while (codeElement.firstChild) {
-        parent.insertBefore(codeElement.firstChild, codeElement);
-      }
-      codeElement.remove();
-    }
-  }
-
-  function removeEmptyCodeElements(root: ParentNode = editor) {
-    if (!("querySelectorAll" in root)) {
-      return;
-    }
-
-    const protectedElements = getProtectedEmptyInlineFormatElements(root);
-
-    for (const codeElement of Array.from(root.querySelectorAll("code"))) {
-      if (!(codeElement instanceof HTMLElement)) {
-        continue;
-      }
-
-      if (protectedElements.has(codeElement)) {
-        continue;
-      }
-
-      if ((codeElement.textContent ?? "").replaceAll("\u00a0", "").length > 0) {
-        continue;
-      }
-
-      codeElement.remove();
-    }
-  }
-
-  function getClosestCodeElement(node: Node | null) {
-    let current: Node | null = node;
-
-    while (current && current !== editor) {
-      if (current instanceof HTMLElement && current.tagName === "CODE") {
-        return current;
-      }
-      current = current.parentNode;
-    }
-
-    return null;
-  }
-
   function getExpandedRangeRect(range: Range) {
     const directRect = range.getBoundingClientRect();
     if (directRect.width > 0 || directRect.height > 0) {
@@ -2246,146 +2207,6 @@ export async function initWorkbench(
     }
 
     return null;
-  }
-
-  function createCodeElementFromFragment(source: HTMLElement, fragment: DocumentFragment) {
-    if (!fragment.childNodes.length) {
-      return null;
-    }
-
-    const codeElement = source.cloneNode(false) as HTMLElement;
-    codeElement.append(fragment);
-    return codeElement;
-  }
-
-  function unwrapSelectionFromSingleCodeElement(selection: Selection, range: Range, codeElement: HTMLElement) {
-    const beforeRange = document.createRange();
-    beforeRange.setStart(codeElement, 0);
-    beforeRange.setEnd(range.startContainer, range.startOffset);
-    const beforeFragment = beforeRange.cloneContents();
-
-    const selectedFragment = range.cloneContents();
-    unwrapCodeElements(selectedFragment);
-
-    const afterRange = document.createRange();
-    afterRange.setStart(range.endContainer, range.endOffset);
-    afterRange.setEnd(codeElement, codeElement.childNodes.length);
-    const afterFragment = afterRange.cloneContents();
-
-    const replacement = document.createDocumentFragment();
-    const insertedNodes: Node[] = [];
-    const leadingCode = createCodeElementFromFragment(codeElement, beforeFragment);
-    if (leadingCode) {
-      replacement.append(leadingCode);
-    }
-
-    for (const node of Array.from(selectedFragment.childNodes)) {
-      insertedNodes.push(node);
-      replacement.append(node);
-    }
-
-    const trailingCode = createCodeElementFromFragment(codeElement, afterFragment);
-    if (trailingCode) {
-      replacement.append(trailingCode);
-    }
-
-    const fallbackRange = document.createRange();
-    fallbackRange.setStartBefore(codeElement);
-    fallbackRange.collapse(true);
-    codeElement.replaceWith(replacement);
-    removeEmptyCodeElements();
-    selectInsertedNodes(selection, insertedNodes, fallbackRange);
-    syncEditorAfterStructuralChange();
-  }
-
-  function fragmentContainsOnlyCodeText(fragment: DocumentFragment) {
-    const walker = document.createTreeWalker(fragment, NodeFilter.SHOW_TEXT);
-    const textNodes: Text[] = [];
-    let currentNode = walker.nextNode();
-
-    while (currentNode) {
-      const textNode = currentNode as Text;
-      if ((textNode.textContent ?? "").length > 0) {
-        textNodes.push(textNode);
-      }
-      currentNode = walker.nextNode();
-    }
-
-    if (!textNodes.length) {
-      return false;
-    }
-
-    return textNodes.every((textNode) => {
-      let current: Node | null = textNode.parentNode;
-
-      while (current && current !== fragment) {
-        if (current instanceof HTMLElement && current.tagName === "CODE") {
-          return true;
-        }
-        current = current.parentNode;
-      }
-
-      return false;
-    });
-  }
-
-  function selectInsertedNodes(selection: Selection, insertedNodes: Node[], fallbackRange: Range) {
-    selection.removeAllRanges();
-
-    if (!insertedNodes.length) {
-      selection.addRange(fallbackRange);
-      return;
-    }
-
-    const nextRange = document.createRange();
-    const firstNode = insertedNodes[0];
-    const lastNode = insertedNodes[insertedNodes.length - 1];
-
-    if (insertedNodes.length === 1) {
-      nextRange.selectNodeContents(firstNode);
-    } else {
-      nextRange.setStartBefore(firstNode);
-      nextRange.setEndAfter(lastNode);
-    }
-
-    selection.addRange(nextRange);
-  }
-
-  function toggleCodeSelection(selection: Selection, range: Range) {
-    const startCode = getClosestCodeElement(range.startContainer);
-    const endCode = getClosestCodeElement(range.endContainer);
-    if (startCode && startCode === endCode) {
-      unwrapSelectionFromSingleCodeElement(selection, range, startCode);
-      return;
-    }
-
-    const fragment = range.cloneContents();
-    const shouldUnwrap = fragmentContainsOnlyCodeText(fragment);
-    const extractedFragment = range.extractContents();
-
-    if (shouldUnwrap) {
-      unwrapCodeElements(extractedFragment);
-      const insertedNodes = Array.from(extractedFragment.childNodes);
-      const fallbackRange = document.createRange();
-      fallbackRange.setStart(range.startContainer, range.startOffset);
-      fallbackRange.collapse(true);
-      range.insertNode(extractedFragment);
-      removeEmptyCodeElements();
-      selectInsertedNodes(selection, insertedNodes, fallbackRange);
-      syncEditorAfterStructuralChange();
-      return;
-    }
-
-    unwrapCodeElements(extractedFragment);
-    const wrapper = document.createElement("code");
-    wrapper.append(extractedFragment);
-    range.insertNode(wrapper);
-    removeEmptyCodeElements();
-    selection.removeAllRanges();
-    const nextRange = document.createRange();
-    nextRange.selectNodeContents(wrapper);
-    selection.addRange(nextRange);
-    syncEditorAfterStructuralChange();
   }
 
   function wrapSelection(tagName: keyof HTMLElementTagNameMap | "comment") {

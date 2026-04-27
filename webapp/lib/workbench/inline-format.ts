@@ -15,6 +15,7 @@ import {
     formatInlineCommentMarkdown,
 } from "./comment-markdown";
 import type { EditHistorySelection } from "./edit-history";
+import { selectInsertedNodes } from "./selection-dom";
 
 export interface CaretRenderContext {
   bold: boolean;
@@ -1847,27 +1848,5 @@ function unwrapSelectionFromSingleFormatElement(
   formatElement.replaceWith(replacement);
   removeEmptyInlineFormatElements(tagNames, editor);
   selectInsertedNodes(selection, insertedNodes, fallbackRange);
-}
-
-function selectInsertedNodes(selection: Selection, insertedNodes: Node[], fallbackRange: Range) {
-  selection.removeAllRanges();
-
-  if (!insertedNodes.length) {
-    selection.addRange(fallbackRange);
-    return;
-  }
-
-  const nextRange = document.createRange();
-  const firstNode = insertedNodes[0];
-  const lastNode = insertedNodes[insertedNodes.length - 1];
-
-  if (insertedNodes.length === 1) {
-    nextRange.selectNodeContents(firstNode);
-  } else {
-    nextRange.setStartBefore(firstNode);
-    nextRange.setEndAfter(lastNode);
-  }
-
-  selection.addRange(nextRange);
 }
 

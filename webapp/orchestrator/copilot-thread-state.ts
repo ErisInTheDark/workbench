@@ -33,7 +33,7 @@ export const INITIALIZE_RESULT = {
     experimentalApi: true,
   },
   serverInfo: {
-    name: "potters-guide-copilot-bridge",
+    name: "copilot-bridge",
     version: "0.1.0",
   },
 };

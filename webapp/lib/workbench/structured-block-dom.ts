@@ -17,15 +17,15 @@
  */
 
 import { parseBlockCommentBody } from "./comment-markdown";
-import { getOrCreateDirectChildList } from "./list-item-dom-edit";
 import {
-  getDirectChildDetailsElement,
-  getDirectChildListElements,
-  getDirectChildSummaryElement,
-  isIntentionalListBreakParagraph,
-  isListElement,
-  isSingleBreakParagraph,
+    getDirectChildDetailsElement,
+    getDirectChildListElements,
+    getDirectChildSummaryElement,
+    isIntentionalListBreakParagraph,
+    isListElement,
+    isSingleBreakParagraph,
 } from "./list-dom";
+import { getOrCreateDirectChildList } from "./list-item-dom-edit";
 
 export interface StructuredBlockStyleSyncOptions {
   canonicalizeInlineRunContainers?: (root: ParentNode) => void;

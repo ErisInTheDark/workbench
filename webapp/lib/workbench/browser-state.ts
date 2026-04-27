@@ -26,13 +26,13 @@ export const MIN_EDITOR_FONT_SIZE = 0.84;
 export const MAX_EDITOR_FONT_SIZE = 1.72;
 export const CURRENT_FILE_SEARCH_PARAM = "file";
 export const CURRENT_THREAD_SEARCH_PARAM = "thread";
-export const CURRENT_SELECTION_URL_UPDATED_EVENT = "potters-guide-workbench:selection-url-updated";
-export const EXPANDED_DIRECTORIES_STORAGE_KEY = "potters-guide-workbench:expanded-directories";
-export const FONT_SIZE_STORAGE_KEY = "potters-guide-workbench:font-size";
-export const HARNESS_STORAGE_KEY = "potters-guide-workbench:harness";
-export const HARNESS_MODEL_STORAGE_KEY = "potters-guide-workbench:harness-models";
-export const HARNESS_MODEL_EFFORT_STORAGE_KEY = "potters-guide-workbench:harness-model-efforts";
-export const HARNESS_AGENT_STORAGE_KEY = "potters-guide-workbench:harness-agents";
+export const CURRENT_SELECTION_URL_UPDATED_EVENT = "workbench:selection-url-updated";
+export const EXPANDED_DIRECTORIES_STORAGE_KEY = "workbench:expanded-directories";
+export const FONT_SIZE_STORAGE_KEY = "workbench:font-size";
+export const HARNESS_STORAGE_KEY = "workbench:harness";
+export const HARNESS_MODEL_STORAGE_KEY = "workbench:harness-models";
+export const HARNESS_MODEL_EFFORT_STORAGE_KEY = "workbench:harness-model-efforts";
+export const HARNESS_AGENT_STORAGE_KEY = "workbench:harness-agents";
 
 export interface WorkbenchSelectionSearchParams {
   filePath: string;
