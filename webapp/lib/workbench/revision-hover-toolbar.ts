@@ -9,6 +9,7 @@
  */
 
 import { restoreCaretToMarker } from "./inline-format";
+import type { VisualViewportMetrics } from "./viewport-metrics";
 
 export type RevisionHoverKind = "comment" | "del" | "ins";
 export type RevisionToolbarKind = RevisionHoverKind | "mixed";
@@ -17,13 +18,6 @@ export interface RevisionToolbarContext {
   kind: RevisionToolbarKind;
   nodes: HTMLElement[];
   rect: DOMRect;
-}
-
-interface VisualViewportMetrics {
-  height: number;
-  left: number;
-  top: number;
-  width: number;
 }
 
 export interface RevisionHoverToolbarControllerOptions {

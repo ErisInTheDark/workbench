@@ -29,6 +29,11 @@ import {
     createWorkbenchCodeFormatController,
 } from "./workbench/code-format";
 import {
+    removeEmptyInlineFormatElements,
+    replaceTag,
+    unwrapTransparentSpans,
+} from "./workbench/dom-normalization";
+import {
     cloneHistorySelection,
     countHistoryStatesSinceSnapshot,
     createHistoryPatch,
@@ -37,7 +42,6 @@ import {
     normalizeEditHistory,
     trimEditHistory,
     type EditHistorySelection,
-    type EditHistorySelectionPoint,
     type EditHistoryState,
 } from "./workbench/edit-history";
 import {
@@ -59,12 +63,19 @@ import {
 } from "./workbench/markdown-render";
 import {
     createWorkbenchMarkupSignature,
-    serializeListItemMainText,
     serializeWorkbenchDomToMarkdown,
 } from "./workbench/markdown-serialization";
 import { createRevisionHoverToolbarController } from "./workbench/revision-hover-toolbar";
 import {
-    convertCommentBlockToParagraph,
+    ensureParagraphHasEditableContent,
+} from "./workbench/rich-input-dom";
+import {
+    captureEditorSelection,
+    placeCaretInElement,
+    restoreEditorSelection,
+    restoreListItemSelection,
+} from "./workbench/selection-dom";
+import {
     getDirectChildSummaryTextElement,
     hasDirectBlockLikeChildren,
     mergeAdjacentSiblingLists,
@@ -72,8 +83,17 @@ import {
     syncStructuredBlockStyles as syncStructuredBlockDomStyles
 } from "./workbench/structured-block-dom";
 import {
+    deleteTextImmediatelyBeforeSelection,
+    getTextBeforeSelectionInElement,
+} from "./workbench/text-position-dom";
+import {
     formatTimestamp
 } from "./workbench/tree-utils";
+import {
+    getEditorLineHeight,
+    getExpandedRangeRect,
+    getVisualViewportMetrics,
+} from "./workbench/viewport-metrics";
 import { hasRequiredWorkbenchDomElements, type WorkbenchDomElements } from "./workbench/workbench-dom";
 import { createWorkbenchEditorClient, type EditorMode, type SaveGuardIssue } from "./workbench/workbench-editor-client";
 import { createWorkbenchFileClient, type DraftBuffer } from "./workbench/workbench-file-client";
@@ -339,7 +359,7 @@ export async function initWorkbench(
       }
 
       event.preventDefault();
-      placeCaretInElement(summaryText, event.clientX, event.clientY);
+      placeCaretInElement(editor, summaryText, event.clientX, event.clientY);
     },
     handleEditorFocus: () => {
       editorHasFocus = true;
@@ -347,17 +367,20 @@ export async function initWorkbench(
     },
     handleEditorInput: (event) => {
       const previousContent = state.currentContent;
-      const transformedListItem = maybeTransformParagraphIntoListItem(event);
-      const commentCaretMarker = maybeExpandBlockCommentStarter(event) ?? maybeActivateInlineCommentShortcut(event);
+      const { transformedListItem, commentCaretMarker: richInputCommentCaretMarker } = editorClient.handleRichInput(event);
+      const commentCaretMarker = richInputCommentCaretMarker ?? maybeActivateInlineCommentShortcut(event);
       syncStructuredBlockStyles();
       if (transformedListItem) {
-        restoreListItemSelection([transformedListItem], { collapsed: true });
+        restoreListItemSelection([transformedListItem], {
+          collapsed: true,
+          getListItemTextContainer,
+        });
       }
       if (commentCaretMarker) {
         restoreCaretToMarker(commentCaretMarker);
       }
       inspectCurrentDraft();
-      recordEditHistory(previousContent, state.currentContent, captureEditorSelection());
+      recordEditHistory(previousContent, state.currentContent, captureEditorSelection(editor));
       syncCurrentDraftBuffer();
       editorClient.scheduleDiffGutterRefresh();
       editorClient.refreshStatusMessage();
@@ -370,26 +393,8 @@ export async function initWorkbench(
 
       maybeClearPendingInlineFormatsForKey(event);
 
-      if (event.key === "Tab" && handleListTab(event)) {
+      if (editorClient.handleListStructureKeyDown(event)) {
         return;
-      }
-
-      if (event.key === "Backspace") {
-        if (handleCommentBlockBackspace(event)) {
-          return;
-        }
-        if (handleListItemBackspace(event)) {
-          return;
-        }
-      }
-
-      if (event.key === "Enter") {
-        if (handleCommentBlockEnter(event)) {
-          return;
-        }
-        if (handleEmptyListItemEnter(event)) {
-          return;
-        }
       }
 
       const isPrimaryModifier = event.metaKey || event.ctrlKey;
@@ -491,7 +496,7 @@ export async function initWorkbench(
     handleSelectionChange: () => {
       handlePendingInlineSelectionChange();
 
-      updateHistorySelection(captureEditorSelection());
+      updateHistorySelection(captureEditorSelection(editor));
       scheduleSelectionPersistence();
       refreshInlineToolbars();
     },
@@ -503,6 +508,18 @@ export async function initWorkbench(
       updateFloatingToolbar();
       updateRevisionHoverToolbar();
       updateCustomCaret();
+    },
+    listStructure: {
+      getClosestListItem,
+      getListItemTextContainer,
+      getSelectedListItems,
+      indentListItems,
+      isSelectionAtListItemStart,
+      isTopLevelListItem,
+      outdentListItems,
+      syncEditorAfterStructuralChange,
+      unwrapTopLevelListItemToParagraph,
+      updateFloatingToolbar,
     },
     isSaveButtonInvalid: () => Boolean(state.saveIssue) || Array.from(state.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue)),
     shouldBlockBeforeUnload: () => Boolean(state.saveIssue) || Array.from(state.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue)),
@@ -518,7 +535,7 @@ export async function initWorkbench(
   });
 
   const inlineFormatController = createWorkbenchInlineFormatController({
-    captureEditorSelection,
+    captureEditorSelection: () => captureEditorSelection(editor),
     deleteTextImmediatelyBeforeSelection,
     editor,
     getEditorHasFocus: () => editorHasFocus,
@@ -589,7 +606,7 @@ export async function initWorkbench(
 
   const fileClient = createWorkbenchFileClient({
     applyEditorFontSize,
-    captureEditorSelection,
+    captureEditorSelection: () => captureEditorSelection(editor),
     clearWriteConflict,
     editor,
     editorClient,
@@ -607,7 +624,7 @@ export async function initWorkbench(
     },
     refreshSaveGuardState,
     renderEditorDocument,
-    restoreEditorSelection,
+    restoreEditorSelection: (selection) => restoreEditorSelection(editor, selection),
     showWriteConflict,
     state,
     syncSelectionToUrl: syncCurrentSelectionToUrl,
@@ -704,228 +721,6 @@ export async function initWorkbench(
     state.history = trimEditHistory(nextHistory);
   }
 
-  function getCaretRangeFromPoint(clientX: number, clientY: number) {
-    if (typeof document.caretPositionFromPoint === "function") {
-      const caretPosition = document.caretPositionFromPoint(clientX, clientY);
-      if (!caretPosition) {
-        return null;
-      }
-
-      const range = document.createRange();
-      range.setStart(caretPosition.offsetNode, caretPosition.offset);
-      range.collapse(true);
-      return range;
-    }
-
-    if (typeof document.caretRangeFromPoint === "function") {
-      return document.caretRangeFromPoint(clientX, clientY);
-    }
-
-    return null;
-  }
-
-  function placeCaretInElement(container: HTMLElement, clientX: number, clientY: number) {
-    editor.focus();
-    const selection = window.getSelection();
-    const range = getCaretRangeFromPoint(clientX, clientY);
-
-    if (selection && range && container.contains(range.startContainer)) {
-      selection.removeAllRanges();
-      selection.addRange(range);
-      return;
-    }
-
-    const fallbackRange = document.createRange();
-    fallbackRange.selectNodeContents(container);
-    fallbackRange.collapse(false);
-    selection?.removeAllRanges();
-    selection?.addRange(fallbackRange);
-  }
-
-  function getNodePathFromEditor(node: Node) {
-    const path: number[] = [];
-    let current: Node | null = node;
-
-    while (current && current !== editor) {
-      const parentNode = current.parentNode;
-      if (!parentNode) {
-        return null;
-      }
-
-      const index = Array.prototype.indexOf.call(parentNode.childNodes, current) as number;
-      if (index < 0) {
-        return null;
-      }
-
-      path.unshift(index);
-      current = parentNode;
-    }
-
-    return current === editor ? path : null;
-  }
-
-  function serializeSelectionPoint(node: Node, offset: number): EditHistorySelectionPoint | null {
-    if (node !== editor && !editor.contains(node)) {
-      return null;
-    }
-
-    const path = node === editor ? [] : getNodePathFromEditor(node);
-    if (!path) {
-      return null;
-    }
-
-    return {
-      path,
-      offset,
-    };
-  }
-
-  function captureEditorSelection() {
-    const selection = window.getSelection();
-    const isSelectionWithinEditor = (node: Node | null) => node === editor || (node !== null && editor.contains(node));
-    if (
-      !selection?.rangeCount
-      || !isSelectionWithinEditor(selection.anchorNode)
-      || !isSelectionWithinEditor(selection.focusNode)
-    ) {
-      return null;
-    }
-
-    const range = selection.getRangeAt(0);
-    const start = serializeSelectionPoint(range.startContainer, range.startOffset);
-    const end = serializeSelectionPoint(range.endContainer, range.endOffset);
-    if (!start || !end) {
-      return null;
-    }
-
-    return { start, end } satisfies EditHistorySelection;
-  }
-
-  function resolveSelectionPoint(point: EditHistorySelectionPoint) {
-    let current: Node = editor;
-
-    for (const index of point.path) {
-      if (index < 0 || index >= current.childNodes.length) {
-        return null;
-      }
-
-      current = current.childNodes[index];
-    }
-
-    if (current.nodeType === Node.TEXT_NODE) {
-      return {
-        node: current,
-        offset: Math.max(0, Math.min(point.offset, current.textContent?.length ?? 0)),
-      };
-    }
-
-    return {
-      node: current,
-      offset: Math.max(0, Math.min(point.offset, current.childNodes.length)),
-    };
-  }
-
-  function placeCaretAtEditorEnd() {
-    editor.focus();
-    const selection = window.getSelection();
-    if (!selection) {
-      return;
-    }
-
-    const range = document.createRange();
-    range.selectNodeContents(editor);
-    range.collapse(false);
-    selection.removeAllRanges();
-    selection.addRange(range);
-  }
-
-  function restoreEditorSelection(selectionSnapshot: EditHistorySelection | null) {
-    if (!selectionSnapshot) {
-      placeCaretAtEditorEnd();
-      return;
-    }
-
-    const start = resolveSelectionPoint(selectionSnapshot.start);
-    const end = resolveSelectionPoint(selectionSnapshot.end);
-    if (!start || !end) {
-      placeCaretAtEditorEnd();
-      return;
-    }
-
-    editor.focus();
-    const selection = window.getSelection();
-    if (!selection) {
-      return;
-    }
-
-    const range = document.createRange();
-    range.setStart(start.node, start.offset);
-    range.setEnd(end.node, end.offset);
-    selection.removeAllRanges();
-    selection.addRange(range);
-  }
-
-  function getDirectEditorParagraph(node: Node | null) {
-    let current: Node | null = node;
-
-    while (current && current !== editor) {
-      if (current instanceof HTMLLIElement) {
-        return null;
-      }
-
-      if (
-        current instanceof HTMLElement
-        && current.parentNode === editor
-        && /^(p|div)$/i.test(current.tagName)
-      ) {
-        return current;
-      }
-
-      current = current.parentNode;
-    }
-
-    return null;
-  }
-
-  function getTextBeforeSelectionInElement(selection: Selection, element: HTMLElement) {
-    if (!selection.rangeCount) {
-      return "";
-    }
-
-    const range = selection.getRangeAt(0);
-    if (!element.contains(range.startContainer)) {
-      return "";
-    }
-
-    const beforeRange = document.createRange();
-    beforeRange.selectNodeContents(element);
-    beforeRange.setEnd(range.startContainer, range.startOffset);
-    return beforeRange.toString().replaceAll("\u00a0", " ");
-  }
-
-  function deleteTextImmediatelyBeforeSelection(selection: Selection, element: HTMLElement, characterCount: number) {
-    if (!selection.rangeCount || characterCount <= 0) {
-      return false;
-    }
-
-    const beforeText = getTextBeforeSelectionInElement(selection, element);
-    if (beforeText.length < characterCount) {
-      return false;
-    }
-
-    const startPosition = getTextPositionAtOffset(element, beforeText.length - characterCount);
-    const endPosition = getTextPositionAtOffset(element, beforeText.length);
-    if (!startPosition || !endPosition) {
-      return false;
-    }
-
-    const range = document.createRange();
-    range.setStart(startPosition.node, startPosition.offset);
-    range.setEnd(endPosition.node, endPosition.offset);
-    range.deleteContents();
-    return true;
-  }
-
   function getInlineExpansionContainer(node: Node | null) {
     const listItem = getClosestListItem(node);
     if (listItem) {
@@ -942,178 +737,6 @@ export async function initWorkbench(
     }
 
     return null;
-  }
-
-  function getTextPositionAtOffset(root: Node, offset: number) {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    let remaining = offset;
-    let currentNode = walker.nextNode();
-
-    if (!currentNode) {
-      return offset === 0 ? { node: root, offset: 0 } : null;
-    }
-
-    while (currentNode) {
-      const textNode = currentNode as Text;
-      const textLength = textNode.textContent?.length ?? 0;
-      if (remaining <= textLength) {
-        return { node: textNode, offset: remaining };
-      }
-
-      remaining -= textLength;
-      currentNode = walker.nextNode();
-    }
-
-    return null;
-  }
-
-  function deleteLeadingTextFromElement(element: HTMLElement, characterCount: number) {
-    const endPosition = getTextPositionAtOffset(element, characterCount);
-    if (!endPosition) {
-      return false;
-    }
-
-    const range = document.createRange();
-    range.setStart(element, 0);
-    range.setEnd(endPosition.node, endPosition.offset);
-    range.deleteContents();
-    return true;
-  }
-
-  function ensureListItemHasEditableContent(item: HTMLLIElement) {
-    const hasMeaningfulContent = (item.textContent ?? "").replaceAll("\u00a0", "").length > 0
-      || item.querySelector("br, details, ul, ol, pre, blockquote, hr") !== null;
-
-    if (hasMeaningfulContent) {
-      return;
-    }
-
-    item.replaceChildren(document.createElement("br"));
-  }
-
-  function ensureParagraphHasEditableContent(paragraph: HTMLElement) {
-    if ((paragraph.textContent ?? "").replaceAll("\u00a0", "").length > 0) {
-      return;
-    }
-
-    if (paragraph.querySelector("br, ul, ol, pre, blockquote, hr") !== null) {
-      return;
-    }
-
-    paragraph.replaceChildren(document.createElement("br"));
-  }
-
-  function insertListItemAtParagraphPosition(paragraph: HTMLElement, item: HTMLLIElement) {
-    const previousList = paragraph.previousElementSibling instanceof HTMLUListElement
-      ? paragraph.previousElementSibling
-      : null;
-    const nextList = paragraph.nextElementSibling instanceof HTMLUListElement
-      ? paragraph.nextElementSibling
-      : null;
-
-    if (previousList) {
-      previousList.append(item);
-      paragraph.remove();
-
-      if (nextList) {
-        while (nextList.firstChild) {
-          previousList.append(nextList.firstChild);
-        }
-        nextList.remove();
-      }
-      return;
-    }
-
-    if (nextList) {
-      nextList.prepend(item);
-      paragraph.remove();
-      return;
-    }
-
-    const list = document.createElement("ul");
-    list.append(item);
-    paragraph.replaceWith(list);
-  }
-
-  function maybeTransformParagraphIntoListItem(event: Event) {
-    if (!(event instanceof InputEvent) || state.mode !== "rich") {
-      return null;
-    }
-
-    if (event.inputType !== "insertText" || event.data !== " ") {
-      return null;
-    }
-
-    const selection = window.getSelection();
-    if (!selection?.rangeCount || !selection.isCollapsed) {
-      return null;
-    }
-
-    const paragraph = getDirectEditorParagraph(selection.getRangeAt(0).startContainer);
-    if (!paragraph || paragraph.dataset.blockComment === "true") {
-      return null;
-    }
-
-    const beforeText = getTextBeforeSelectionInElement(selection, paragraph);
-    if (beforeText !== "- ") {
-      return null;
-    }
-
-    if (!deleteLeadingTextFromElement(paragraph, 2)) {
-      return null;
-    }
-
-    const item = document.createElement("li");
-    while (paragraph.firstChild) {
-      item.append(paragraph.firstChild);
-    }
-
-    item.normalize();
-    ensureListItemHasEditableContent(item);
-    insertListItemAtParagraphPosition(paragraph, item);
-    return item;
-  }
-
-  function maybeExpandBlockCommentStarter(event: Event) {
-    if (!(event instanceof InputEvent) || state.mode !== "rich") {
-      return null;
-    }
-
-    if (event.inputType !== "insertText" || event.data !== "!") {
-      return null;
-    }
-
-    const selection = window.getSelection();
-    if (!selection?.rangeCount || !selection.isCollapsed) {
-      return null;
-    }
-
-    const range = selection.getRangeAt(0);
-    const paragraph = getDirectEditorParagraph(range.startContainer);
-    if (!paragraph || paragraph.dataset.blockComment === "true") {
-      return null;
-    }
-
-    const beforeText = getTextBeforeSelectionInElement(selection, paragraph);
-    if (beforeText !== "<!") {
-      return null;
-    }
-
-    const marker = document.createElement("span");
-    marker.dataset.commentCaret = "true";
-
-    if (!deleteLeadingTextFromElement(paragraph, 2)) {
-      return null;
-    }
-
-    paragraph.dataset.blockComment = "true";
-    if (paragraph.firstChild) {
-      paragraph.insertBefore(marker, paragraph.firstChild);
-    } else {
-      paragraph.append(marker, document.createElement("br"));
-    }
-
-    return marker;
   }
 
   function syncStructuredBlockStyles(root: ParentNode = editor) {
@@ -1441,67 +1064,6 @@ export async function initWorkbench(
     return `<li><details open><summary>${content}</summary>${childContent}</details></li>`;
   }
 
-  function replaceTag(root: ParentNode, sourceTag: string, targetTag: string) {
-    for (const node of root.querySelectorAll(sourceTag)) {
-      const replacement = document.createElement(targetTag);
-      for (const attribute of node.getAttributeNames()) {
-        replacement.setAttribute(attribute, node.getAttribute(attribute) ?? "");
-      }
-      replacement.innerHTML = node.innerHTML;
-      node.replaceWith(replacement);
-    }
-  }
-
-  function unwrapTransparentSpans(root: ParentNode) {
-    for (const span of Array.from(root.querySelectorAll("span"))) {
-      if (!(span instanceof HTMLElement)) {
-        continue;
-      }
-
-      if (span.dataset.summaryText === "true") {
-        continue;
-      }
-
-       if (span.dataset.inlineComment === "true") {
-        continue;
-      }
-
-      span.removeAttribute("style");
-
-      if (span.getAttributeNames().length > 0) {
-        continue;
-      }
-
-      while (span.firstChild) {
-        span.parentNode?.insertBefore(span.firstChild, span);
-      }
-      span.remove();
-    }
-  }
-
-  function removeEmptyInlineFormatElements(
-    tagNames: readonly string[],
-    root: ParentNode = editor,
-  ) {
-    if (!("querySelectorAll" in root) || !tagNames.length) {
-      return;
-    }
-
-    const protectedElements = getProtectedEmptyInlineFormatElements(root);
-    const selector = tagNames.map((tagName) => tagName.toLowerCase()).join(", ");
-    for (const element of Array.from(root.querySelectorAll<HTMLElement>(selector))) {
-      if (protectedElements.has(element)) {
-        continue;
-      }
-
-      if ((element.textContent ?? "").replaceAll("\u00a0", "").length > 0) {
-        continue;
-      }
-
-      element.remove();
-    }
-  }
-
   function getProtectedEmptyInlineFormatElements(root: ParentNode) {
     const protectedElements = new Set<HTMLElement>();
     if (root !== editor) {
@@ -1542,13 +1104,13 @@ export async function initWorkbench(
   }
 
   function removeEmptyInlineFormattingArtifacts(root: ParentNode) {
-    removeEmptyInlineFormatElements(["strong", "em", "code", "del", "ins"], root);
+    const protectedElements = getProtectedEmptyInlineFormatElements(root);
+    removeEmptyInlineFormatElements(["strong", "em", "code", "del", "ins"], root, protectedElements);
 
     if (!("querySelectorAll" in root)) {
       return;
     }
 
-    const protectedElements = getProtectedEmptyInlineFormatElements(root);
     for (const commentElement of Array.from(root.querySelectorAll<HTMLElement>('[data-inline-comment="true"]'))) {
       if (protectedElements.has(commentElement)) {
         continue;
@@ -1608,21 +1170,6 @@ export async function initWorkbench(
     syncSaveIssueLogging(inspection.issue, "markup mismatch detected while editing");
     updateSaveButtonState();
     return inspection;
-  }
-
-  function getEditorLineHeight() {
-    const computedStyle = window.getComputedStyle(editor);
-    const parsedLineHeight = Number.parseFloat(computedStyle.lineHeight);
-    if (Number.isFinite(parsedLineHeight)) {
-      return parsedLineHeight;
-    }
-
-    const parsedFontSize = Number.parseFloat(computedStyle.fontSize);
-    if (Number.isFinite(parsedFontSize)) {
-      return parsedFontSize * 1.72;
-    }
-
-    return 24;
   }
 
   function inspectCurrentDraft() {
@@ -1759,8 +1306,8 @@ export async function initWorkbench(
     clearPendingInlineFormats();
     renderEditorDocument(nextContent, state.mode);
     inspectCurrentDraft();
-    restoreEditorSelection(history.frames[clampedIndex]?.selection ?? null);
-    updateHistorySelection(captureEditorSelection());
+    restoreEditorSelection(editor, history.frames[clampedIndex]?.selection ?? null);
+    updateHistorySelection(captureEditorSelection(editor));
     syncCurrentDraftBuffer();
     editorClient.scheduleDiffGutterRefresh();
     editorClient.refreshStatusMessage();
@@ -1871,218 +1418,17 @@ export async function initWorkbench(
     return createdPath;
   }
 
-  function restoreListItemSelection(items: HTMLLIElement[], { collapsed }: { collapsed: boolean }) {
-    if (!items.length) {
-      return;
-    }
-
-    const firstContainer = getListItemTextContainer(items[0]);
-    const lastContainer = getListItemTextContainer(items[items.length - 1]);
-    const selection = window.getSelection();
-    if (!selection) {
-      return;
-    }
-
-    const range = document.createRange();
-    range.setStart(firstContainer, 0);
-
-    if (collapsed) {
-      range.collapse(true);
-    } else {
-      range.setEnd(lastContainer, lastContainer.childNodes.length);
-    }
-
-    selection.removeAllRanges();
-    selection.addRange(range);
-  }
-
-  function restoreParagraphSelection(paragraph: HTMLElement) {
-    const selection = window.getSelection();
-    if (!selection) {
-      return;
-    }
-
-    const range = document.createRange();
-    range.selectNodeContents(paragraph);
-    range.collapse(true);
-    selection.removeAllRanges();
-    selection.addRange(range);
-  }
-
-  function isSelectionAtElementStart(selection: Selection, element: HTMLElement) {
-    if (!selection.rangeCount || !selection.isCollapsed) {
-      return false;
-    }
-
-    const range = selection.getRangeAt(0);
-    if (!element.contains(range.startContainer)) {
-      return false;
-    }
-
-    const beforeRange = document.createRange();
-    beforeRange.selectNodeContents(element);
-    beforeRange.setEnd(range.startContainer, range.startOffset);
-    return beforeRange.toString().replaceAll("\u00a0", " ").trim() === "";
-  }
-
-  function isSelectionAtElementEnd(selection: Selection, element: HTMLElement) {
-    if (!selection.rangeCount || !selection.isCollapsed) {
-      return false;
-    }
-
-    const range = selection.getRangeAt(0);
-    if (!element.contains(range.startContainer)) {
-      return false;
-    }
-
-    const afterRange = document.createRange();
-    afterRange.selectNodeContents(element);
-    afterRange.setStart(range.startContainer, range.startOffset);
-    return afterRange.toString().replaceAll("\u00a0", " ").trim() === "";
-  }
-
-  function breakOutOfListItem(listItem: HTMLLIElement) {
-    if (isTopLevelListItem(listItem)) {
-      const paragraph = unwrapTopLevelListItemToParagraph(listItem);
-      editor.focus();
-      if (paragraph) {
-        syncEditorAfterStructuralChange();
-        restoreParagraphSelection(paragraph);
-        updateFloatingToolbar();
-      }
-      return true;
-    }
-
-    document.execCommand("outdent", false);
-    editor.focus();
-    syncEditorAfterStructuralChange();
-    return true;
-  }
-
   function syncEditorAfterStructuralChange() {
     const previousContent = state.currentContent;
     syncStructuredBlockStyles();
     inspectCurrentDraft();
-    recordEditHistory(previousContent, state.currentContent, captureEditorSelection());
+    recordEditHistory(previousContent, state.currentContent, captureEditorSelection(editor));
     syncCurrentDraftBuffer();
     editorClient.scheduleDiffGutterRefresh();
     editorClient.refreshStatusMessage();
     updateFloatingToolbar();
     updateRevisionHoverToolbar();
     updateCustomCaret();
-  }
-
-  function handleListTab(event: KeyboardEvent) {
-    const selection = window.getSelection();
-    if (!selection) {
-      return false;
-    }
-
-    const selectedItems = getSelectedListItems(selection);
-    if (!selectedItems.length) {
-      return false;
-    }
-
-    if (selection.isCollapsed && !isSelectionAtListItemStart(selection, selectedItems[0])) {
-      return false;
-    }
-
-    const shouldCollapseSelection = selection.isCollapsed;
-    event.preventDefault();
-
-    if (event.shiftKey) {
-      const movedItems = outdentListItems(selectedItems);
-      editor.focus();
-      if (movedItems.length) {
-        syncEditorAfterStructuralChange();
-        restoreListItemSelection(movedItems, { collapsed: shouldCollapseSelection });
-        updateFloatingToolbar();
-      }
-      return true;
-    }
-
-    const movedItems = indentListItems(selectedItems);
-    editor.focus();
-    if (movedItems.length) {
-      syncEditorAfterStructuralChange();
-      restoreListItemSelection(movedItems, { collapsed: shouldCollapseSelection });
-      updateFloatingToolbar();
-    }
-    return true;
-  }
-
-  function handleListItemBackspace(event: KeyboardEvent) {
-    const selection = window.getSelection();
-    if (!selection?.rangeCount || !selection.isCollapsed) {
-      return false;
-    }
-
-    const listItem = getClosestListItem(selection.getRangeAt(0).startContainer);
-    if (!listItem || !isSelectionAtListItemStart(selection, listItem)) {
-      return false;
-    }
-
-    event.preventDefault();
-    return breakOutOfListItem(listItem);
-  }
-
-  function handleCommentBlockBackspace(event: KeyboardEvent) {
-    const selection = window.getSelection();
-    if (!selection?.rangeCount || !selection.isCollapsed) {
-      return false;
-    }
-
-    const paragraph = getDirectEditorParagraph(selection.getRangeAt(0).startContainer);
-    if (!paragraph || paragraph.dataset.blockComment !== "true" || !isSelectionAtElementStart(selection, paragraph)) {
-      return false;
-    }
-
-    event.preventDefault();
-    convertCommentBlockToParagraph(paragraph);
-    syncEditorAfterStructuralChange();
-    restoreParagraphSelection(paragraph);
-    updateFloatingToolbar();
-    return true;
-  }
-
-  function handleCommentBlockEnter(event: KeyboardEvent) {
-    if (event.shiftKey) {
-      return false;
-    }
-
-    const selection = window.getSelection();
-    if (!selection?.rangeCount || !selection.isCollapsed) {
-      return false;
-    }
-
-    const paragraph = getDirectEditorParagraph(selection.getRangeAt(0).startContainer);
-    if (!paragraph || paragraph.dataset.blockComment !== "true" || !isSelectionAtElementEnd(selection, paragraph)) {
-      return false;
-    }
-
-    event.preventDefault();
-    const nextParagraph = document.createElement("p");
-    nextParagraph.append(document.createElement("br"));
-    paragraph.parentNode?.insertBefore(nextParagraph, paragraph.nextSibling);
-    syncEditorAfterStructuralChange();
-    restoreParagraphSelection(nextParagraph);
-    updateFloatingToolbar();
-    return true;
-  }
-
-  function handleEmptyListItemEnter(event: KeyboardEvent) {
-    const selection = window.getSelection();
-    if (!selection?.rangeCount || !selection.isCollapsed) {
-      return false;
-    }
-
-    const listItem = getClosestListItem(selection.getRangeAt(0).startContainer);
-    if (!listItem || serializeListItemMainText(listItem) !== "") {
-      return false;
-    }
-
-    event.preventDefault();
-    return breakOutOfListItem(listItem);
   }
 
   function runEditorCommand(command: string, value: string | null = null) {
@@ -2104,30 +1450,6 @@ export async function initWorkbench(
     document.execCommand(command, false, value);
     editor.focus();
     syncEditorAfterStructuralChange();
-  }
-
-  function getExpandedRangeRect(range: Range) {
-    const directRect = range.getBoundingClientRect();
-    if (directRect.width > 0 || directRect.height > 0) {
-      return directRect;
-    }
-
-    const rects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 || rect.height > 0);
-    if (rects.length > 0) {
-      return rects[0];
-    }
-
-    return directRect;
-  }
-
-  function getVisualViewportMetrics() {
-    const viewport = window.visualViewport;
-    return {
-      height: viewport?.height ?? window.innerHeight,
-      left: viewport?.offsetLeft ?? 0,
-      top: viewport?.offsetTop ?? 0,
-      width: viewport?.width ?? window.innerWidth,
-    };
   }
 
   function hideCustomCaret() {
@@ -2159,7 +1481,7 @@ export async function initWorkbench(
     const shellRect = editorShell.getBoundingClientRect();
     const caretLeft = context.rect.left - shellRect.left;
     const caretTop = context.rect.top - shellRect.top;
-    const caretHeight = Math.max(14, context.rect.height || getEditorLineHeight());
+    const caretHeight = Math.max(14, context.rect.height || getEditorLineHeight(editor));
 
     editor.dataset.customCaretVisible = "true";
     customCaret.hidden = false;

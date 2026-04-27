@@ -5,9 +5,9 @@
  * - WorkbenchEditorState: owned editor shell state for file selection, status, dialogs, and diff gutter rendering. Keywords: workbench, editor, state, dialogs, diff gutter.
  * - WorkbenchEditorSnapshot: readonly projection of the editor shell state. Keywords: workbench, editor, snapshot.
  * - WorkbenchEditorListener: subscriber signature for editor shell changes. Keywords: workbench, editor, subscribe.
- * - WorkbenchEditorClientOptions: callbacks delegated back to the coordinator for editor behavior, project change-summary queries, and current/head content needed for diff gutter rendering. Keywords: workbench, editor, callbacks, status, lifecycle, diff gutter.
- * - WorkbenchEditorClient: public surface for the editor shell client, including diff gutter refresh scheduling. Keywords: workbench, editor, client, diff gutter, dispose.
- * - createWorkbenchEditorClient: create the editor shell client that owns DOM refs, dialogs, diff gutter rendering, event listener cleanup, and deterministic status messages. Keywords: workbench, editor, DOM, status, diff gutter, listeners.
+ * - WorkbenchEditorClientOptions: callbacks and injected structural-edit dependencies delegated back to the coordinator for editor behavior, project change-summary queries, and current/head content needed for diff gutter rendering. Keywords: workbench, editor, callbacks, structure, status, lifecycle, diff gutter.
+ * - WorkbenchEditorClient: public surface for the editor shell client, including diff gutter refresh scheduling and editor-owned structural input handling. Keywords: workbench, editor, client, diff gutter, list structure, rich input, dispose.
+ * - createWorkbenchEditorClient: create the editor shell client that owns DOM refs, dialogs, diff gutter rendering, structural input wiring, event listener cleanup, and deterministic status messages. Keywords: workbench, editor, DOM, status, structure, rich input, diff gutter, listeners.
  */
 
 import type { ChangeSummary, SaveConflictPayload } from "../types";
@@ -18,7 +18,13 @@ import {
     isSingleBreakParagraph,
 } from "./list-dom";
 import { parseBlocks as parseMarkdownBlocks, type ParsedBlock } from "./markdown-render";
+import { getEditorLineHeight } from "./viewport-metrics";
 import type { WorkbenchDomElements } from "./workbench-dom";
+import {
+    createWorkbenchListStructureController,
+    type WorkbenchListStructureControllerOptions,
+} from "./workbench-list-structure-controller";
+import { createWorkbenchRichInputController } from "./workbench-rich-input-controller";
 
 const DEFAULT_STATUS_MESSAGE = "Markdown files open as rich text. Save with Ctrl/Cmd+S.";
 const DIRTY_STATUS_MESSAGE = "Unsaved changes.";
@@ -114,6 +120,7 @@ export interface WorkbenchEditorClientOptions {
   handleToolbarCommand: (command: string | undefined) => void;
   handleViewportChanged: () => void;
   isSaveButtonInvalid?: () => boolean;
+  listStructure: Omit<WorkbenchListStructureControllerOptions, "editor">;
   shouldBlockBeforeUnload: () => boolean;
 }
 
@@ -122,6 +129,8 @@ export interface WorkbenchEditorClient {
   clearSelectionView: () => void;
   dispose: () => void;
   getSnapshot: () => WorkbenchEditorSnapshot;
+  handleRichInput: (event: Event) => { transformedListItem: HTMLLIElement | null; commentCaretMarker: HTMLElement | null };
+  handleListStructureKeyDown: (event: KeyboardEvent) => boolean;
   hideResetDraftDialog: () => void;
   hideSaveConflictDialog: () => void;
   refreshStatusMessage: (message?: string) => void;
@@ -413,21 +422,6 @@ function diffRowsAgainstHead(headRows: DiffRow[], currentRows: DiffRow[]) {
   return { currentMarkers, deletedPlacements };
 }
 
-function getEditorLineHeight(editor: HTMLDivElement) {
-  const computedStyle = window.getComputedStyle(editor);
-  const parsedLineHeight = Number.parseFloat(computedStyle.lineHeight);
-  if (Number.isFinite(parsedLineHeight)) {
-    return parsedLineHeight;
-  }
-
-  const parsedFontSize = Number.parseFloat(computedStyle.fontSize);
-  if (Number.isFinite(parsedFontSize)) {
-    return parsedFontSize * 1.72;
-  }
-
-  return 24;
-}
-
 function getAnchorMetrics(element: HTMLElement, editorShell: HTMLElement) {
   const rect = element.getClientRects()[0];
   if (!rect || rect.height === 0) {
@@ -530,6 +524,14 @@ export function createWorkbenchEditorClient(
   const abortController = new AbortController();
   const { signal } = abortController;
   const dialogs = [elements.saveConflictDialog.dialog, elements.resetDraftDialog.dialog] as const;
+  const listStructureController = createWorkbenchListStructureController({
+    editor: elements.editor,
+    ...options.listStructure,
+  });
+  const richInputController = createWorkbenchRichInputController({
+    editor: elements.editor,
+    getMode: () => state.mode,
+  });
   let diffRefreshFrameId: number | null = null;
 
   function getSnapshot(): WorkbenchEditorSnapshot {
@@ -691,6 +693,25 @@ export function createWorkbenchEditorClient(
       diffRefreshFrameId = null;
       renderDiffGutter();
     });
+  }
+
+  function handleListStructureKeyDown(event: KeyboardEvent) {
+    if (!state.currentPath || state.mode !== "rich") {
+      return false;
+    }
+
+    return listStructureController.handleListStructureKeyDown(event);
+  }
+
+  function handleRichInput(event: Event) {
+    if (!state.currentPath) {
+      return {
+        transformedListItem: null,
+        commentCaretMarker: null,
+      };
+    }
+
+    return richInputController.handleRichInput(event);
   }
 
   function hideDialog(dialog: HTMLDivElement) {
@@ -1037,6 +1058,8 @@ export function createWorkbenchEditorClient(
       abortController.abort();
     },
     getSnapshot,
+    handleRichInput,
+    handleListStructureKeyDown,
     hideResetDraftDialog,
     hideSaveConflictDialog,
     refreshStatusMessage,
