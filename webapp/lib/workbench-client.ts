@@ -2,22 +2,20 @@
  * Exports:
  * - initWorkbench: wire the workbench DOM, polling, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, polling.
  */
-import { CodexAppServerClient } from "./codex/app-server-client";
+
 import type { RateLimitSnapshot } from "./codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
 import { getCurrentTurn } from "./codex/thread-state";
 import type {
     ChangeSummary,
     ExplorerSnapshot,
-    FilePayload,
     SaveConflictPayload,
-    SaveFilePayload,
     ThreadPayload,
     ThreadSummary,
     TreeNode,
     WorkbenchBindings,
     WorkbenchControls,
-    WorkbenchHarness
+    WorkbenchHarness,
 } from "./types";
 import {
     getRequestedPathFromUrl,
@@ -28,18 +26,9 @@ import {
     syncCurrentSelectionToUrl
 } from "./workbench/browser-state";
 import {
-    escapeMarkdownText,
-    formatBlockCommentLine,
-    formatInlineCommentMarkdown,
-    isBlockCommentLine,
-    parseBlockCommentBody,
-} from "./workbench/comment-markdown";
-import {
-    cloneEditHistory,
     cloneHistorySelection,
     countHistoryStatesSinceSnapshot,
     createHistoryPatch,
-    createInitialEditHistory,
     materializeHistoryContent,
     mergeHistoryPatches,
     normalizeEditHistory,
@@ -49,112 +38,42 @@ import {
     type EditHistoryState,
 } from "./workbench/edit-history";
 import {
+    createWorkbenchInlineFormatController,
+    restoreCaretToMarker,
+    type PendingInlineFormatKey,
+} from "./workbench/inline-format";
+import {
+    getDirectChildDetailsElement,
+    getDirectChildListElements,
+} from "./workbench/list-dom";
+import {
+    createListItemDomEditor,
+} from "./workbench/list-item-dom-edit";
+import {
     markdownToHtml as renderMarkdownToHtml,
+    type ParsedBlock,
+    type ParsedListItem,
 } from "./workbench/markdown-render";
 import {
-    formatTimestamp,
-    isMarkdownFile,
-    isTextLikeFile
-} from "./workbench/tree-utils";
+    createWorkbenchMarkupSignature,
+    serializeListItemMainText,
+    serializeWorkbenchDomToMarkdown,
+} from "./workbench/markdown-serialization";
+import { createRevisionHoverToolbarController } from "./workbench/revision-hover-toolbar";
+import {
+    convertCommentBlockToParagraph,
+    getDirectChildSummaryTextElement,
+    hasDirectBlockLikeChildren,
+    mergeAdjacentSiblingLists,
+    normalizeNestedListHierarchy,
+    syncStructuredBlockStyles as syncStructuredBlockDomStyles,
+} from "./workbench/structured-block-dom";
+import { formatTimestamp } from "./workbench/tree-utils";
 import { hasRequiredWorkbenchDomElements, type WorkbenchDomElements } from "./workbench/workbench-dom";
-import { createWorkbenchEditorClient } from "./workbench/workbench-editor-client";
+import { createWorkbenchEditorClient, type EditorMode, type SaveGuardIssue } from "./workbench/workbench-editor-client";
+import { createWorkbenchFileClient, type DraftBuffer } from "./workbench/workbench-file-client";
 import { cloneTreeNodes, createWorkbenchProjectClient } from "./workbench/workbench-project-client";
 import { createWorkbenchThreadClient } from "./workbench/workbench-thread-client";
-
-type EditorMode = "rich" | "plain";
-
-interface ParsedListItem {
-  text: string;
-  children: ParsedBlock[];
-}
-
-type ParsedBlock =
-  | { type: "heading"; level: number; text: string }
-  | { type: "blockquote"; text: string }
-  | { type: "ul"; items: ParsedListItem[] }
-  | { type: "ol"; items: ParsedListItem[] }
-  | { type: "list-break"; count: number }
-  | { type: "break"; count: number }
-  | { type: "hr" }
-  | { type: "code"; language: string; text: string }
-  | { type: "comment"; text: string }
-  | { type: "paragraph"; text: string };
-
-interface SaveGuardIssue {
-  markdown: string;
-  currentMarkup: string;
-  roundTripMarkup: string;
-}
-
-interface DraftBuffer {
-  baselineContent: string;
-  content: string;
-  dirty: boolean;
-  editorState: string;
-  expectedMtimeMs: number | null;
-  headContent: string | null;
-  history: EditHistoryState;
-  mode: EditorMode;
-  pendingWriteConflict: SaveConflictPayload | null;
-  saveIssue: SaveGuardIssue | null;
-}
-
-interface PersistedDraftRecord {
-  path: string;
-  baselineContent: string;
-  content: string;
-  expectedMtimeMs: number | null;
-  headContent: string | null;
-  history?: EditHistoryState | null;
-  mode: EditorMode;
-}
-
-interface SerializedBlock {
-  kind: "block" | "list";
-  isComment: boolean;
-  text: string;
-}
-
-type SerializedMarkdownToken =
-  | { type: "block"; block: SerializedBlock }
-  | { type: "break"; count: number };
-
-type RevisionHoverKind = "comment" | "del" | "ins";
-type RevisionToolbarKind = RevisionHoverKind | "mixed";
-
-interface RevisionToolbarContext {
-  kind: RevisionToolbarKind;
-  nodes: HTMLElement[];
-  rect: DOMRect;
-}
-
-interface CaretRenderContext {
-  bold: boolean;
-  italic: boolean;
-  kind: "comment" | "default" | "code" | "del" | "ins";
-  rect: DOMRect;
-}
-
-type PendingInlineFormatKey = "bold" | "italic" | "code" | "comment" | "del" | "ins";
-
-interface PendingInlineFormats {
-  bold: boolean;
-  code: boolean;
-  comment: boolean;
-  del: boolean;
-  ins: boolean;
-  italic: boolean;
-}
-
-interface InlineMark {
-  href?: string;
-  tag: "a" | "code" | "comment" | "del" | "em" | "ins" | "strong";
-}
-
-type InlineLeaf =
-  | { type: "text"; marks: InlineMark[]; text: string }
-  | { type: "break"; marks: InlineMark[] }
-  | { type: "marker"; role: "caret" | "selection-start" | "selection-end"; marks?: InlineMark[] };
 
 interface WorkbenchState {
   baselineContent: string;
@@ -183,28 +102,7 @@ interface WorkbenchState {
 }
 
 const AUTO_REFRESH_INTERVAL_MS = 1500;
-const DRAFT_DATABASE_NAME = "workbench";
-const DRAFT_DATABASE_VERSION = 1;
-const DRAFT_STORE_NAME = "drafts";
 const HISTORY_KEYFRAME_INTERVAL = 50;
-const REVISION_HOVER_PROXIMITY_PX = 18;
-const INLINE_FORMAT_ORDER: Array<{ key: PendingInlineFormatKey; tagName: keyof HTMLElementTagNameMap }> = [
-  { key: "bold", tagName: "strong" },
-  { key: "italic", tagName: "em" },
-  { key: "code", tagName: "code" },
-  { key: "comment", tagName: "span" },
-  { key: "del", tagName: "del" },
-  { key: "ins", tagName: "ins" },
-];
-const INLINE_MARK_RANK: Record<InlineMark["tag"], number> = {
-  a: 0,
-  comment: 1,
-  del: 2,
-  ins: 3,
-  em: 4,
-  strong: 5,
-  code: 6,
-};
 
 export async function initWorkbench(
   bindings: WorkbenchBindings & { elements?: WorkbenchDomElements | null } = {},
@@ -236,22 +134,6 @@ export async function initWorkbench(
     expandedDirectories: new Set(readStoredExpandedDirectories()),
   };
 
-  const blockTags = new Set([
-    "P",
-    "DIV",
-    "H1",
-    "H2",
-    "H3",
-    "H4",
-    "H5",
-    "H6",
-    "UL",
-    "OL",
-    "PRE",
-    "BLOCKQUOTE",
-    "HR",
-  ]);
-
   if (!hasRequiredWorkbenchDomElements(elements)) {
     return () => {};
   }
@@ -264,23 +146,29 @@ export async function initWorkbench(
   const revisionHoverRejectButton = elements.toolbars.revisionReject;
   const saveConflictDialog = elements.saveConflictDialog.dialog;
   const resetDraftDialog = elements.resetDraftDialog.dialog;
+  const {
+    getClosestListItem,
+    getListItemTextContainer,
+    getSelectedListItems,
+    indentListItems,
+    isSelectionAtListItemStart,
+    isTopLevelListItem,
+    outdentListItems,
+    unwrapTopLevelListItemToParagraph,
+  } = createListItemDomEditor({
+    root: editor,
+    ensureParagraphHasEditableContent,
+    getDirectChildSummaryTextElement,
+  });
 
   const abortController = new AbortController();
-  const codexClient = new CodexAppServerClient();
   let autoRefreshTimeoutId: number | null = null;
   let autoRefreshStopped = false;
   let codexThreadRefreshTimeoutId: number | null = null;
   let codexThreadListRefreshTimeoutId: number | null = null;
   const rateLimitsByHarness = new Map<WorkbenchHarness, RateLimitSnapshot | null>();
-  let selectionPersistenceTimeoutId: number | null = null;
-  let hoveredRevisionNode: HTMLElement | null = null;
-  let activeRevisionNodes = new Set<HTMLElement>();
   let editorHasFocus = false;
   let isComposing = false;
-  let pendingInlineFormats: PendingInlineFormats | null = null;
-  let preservePendingInlineFormatSelectionChanges = 0;
-  const draftDatabasePromise = openDraftDatabase();
-  let draftPersistenceQueue = Promise.resolve();
   const editorShell = elements.diffGutter.parentElement;
   let reportStatusMessage = (_message: string) => {};
   const projectClient = createWorkbenchProjectClient();
@@ -288,6 +176,24 @@ export async function initWorkbench(
     onStatusMessage: (message) => {
       reportStatusMessage(message);
     },
+  });
+  const {
+    applyHoveredRevisionAction,
+    getSelectedRevisionToolbarContext,
+    isPointerNearRevisionHoverUi,
+    setHoveredRevisionNode,
+    updateRevisionHoverToolbar,
+  } = createRevisionHoverToolbarController({
+    editor,
+    getExpandedRangeRect,
+    getMode: () => state.mode,
+    getVisualViewportMetrics,
+    onSyncEditorAfterStructuralChange: () => {
+      syncEditorAfterStructuralChange();
+    },
+    revisionHoverAcceptButton,
+    revisionHoverRejectButton,
+    revisionHoverToolbar,
   });
 
   if (!editorShell) {
@@ -365,10 +271,14 @@ export async function initWorkbench(
     return false;
   }
 
+  function updateInlineToolbars() {
+    updateFloatingToolbar();
+    updateRevisionHoverToolbar();
+  }
+
   const refreshInlineToolbars = () => {
     window.requestAnimationFrame(() => {
-      updateFloatingToolbar();
-      updateRevisionHoverToolbar();
+      updateInlineToolbars();
       updateCustomCaret();
     });
   };
@@ -453,9 +363,7 @@ export async function initWorkbench(
         return;
       }
 
-      if (pendingInlineFormats && shouldClearPendingInlineFormatsForKey(event)) {
-        clearPendingInlineFormats();
-      }
+      maybeClearPendingInlineFormatsForKey(event);
 
       if (event.key === "Tab" && handleListTab(event)) {
         return;
@@ -576,15 +484,7 @@ export async function initWorkbench(
       await saveCurrentFile();
     },
     handleSelectionChange: () => {
-      if (pendingInlineFormats) {
-        if (preservePendingInlineFormatSelectionChanges > 0) {
-          preservePendingInlineFormatSelectionChanges -= 1;
-        } else if (shouldPreservePendingInlineFormatsForSelection()) {
-          updateCustomCaret();
-        } else {
-          clearPendingInlineFormats();
-        }
-      }
+      handlePendingInlineSelectionChange();
 
       updateHistorySelection(captureEditorSelection());
       scheduleSelectionPersistence();
@@ -612,106 +512,126 @@ export async function initWorkbench(
     }
   });
 
-  function wrapIndexedDbRequest<T>(request: IDBRequest<T>) {
-    return new Promise<T>((resolve, reject) => {
-      request.onsuccess = () => {
-        resolve(request.result);
-      };
-      request.onerror = () => {
-        reject(request.error ?? new Error("IndexedDB request failed."));
-      };
-    });
+  const inlineFormatController = createWorkbenchInlineFormatController({
+    captureEditorSelection,
+    deleteTextImmediatelyBeforeSelection,
+    editor,
+    getEditorHasFocus: () => editorHasFocus,
+    getInlineExpansionContainer,
+    getInlineRunContainer,
+    getIsComposing: () => isComposing,
+    getTextBeforeSelectionInElement,
+    isInlineRunContainer,
+    refreshStatusMessage: () => {
+      editorClient.refreshStatusMessage();
+    },
+    syncCurrentDraftBuffer,
+    syncEditorAfterStructuralChange,
+    updateCustomCaret,
+    updateHistorySelection,
+    updateInlineToolbars,
+  });
+
+  const clearPendingInlineFormats = () => {
+    inlineFormatController.clearPendingInlineFormats();
+  };
+
+  const handlePendingInlineBeforeInput = (event: InputEvent) => {
+    return inlineFormatController.handlePendingInlineBeforeInput(event);
+  };
+
+  const handlePendingInlineSelectionChange = () => {
+    inlineFormatController.handleSelectionChange();
+  };
+
+  const maybeActivateInlineCommentShortcut = (event: Event) => {
+    return inlineFormatController.maybeActivateInlineCommentShortcut(event);
+  };
+
+  const maybeClearPendingInlineFormatsForKey = (event: KeyboardEvent) => {
+    inlineFormatController.maybeClearPendingInlineFormatsForKey(event);
+  };
+
+  const toggleInlineFormatSelection = (
+    selection: Selection,
+    range: Range,
+    _tagName: "comment" | "strong" | "em" | "del" | "ins",
+    formatKey: "bold" | "italic" | "comment" | "del" | "ins",
+  ) => {
+    inlineFormatController.toggleInlineFormatSelection(selection, range, formatKey);
+  };
+
+  const togglePendingInlineFormat = (format: PendingInlineFormatKey) => {
+    return inlineFormatController.togglePendingInlineFormat(format);
+  };
+
+  const canonicalizeAllInlineRunContainers = (root: ParentNode) => {
+    inlineFormatController.canonicalizeAllInlineRunContainers(root);
+  };
+
+  const getCaretInlineContext = (range: Range) => {
+    return inlineFormatController.getCaretInlineContext(range);
+  };
+
+  const fileClient = createWorkbenchFileClient({
+    applyEditorFontSize,
+    captureEditorSelection,
+    clearWriteConflict,
+    editor,
+    editorClient,
+    emitExplorerStateChange,
+    hideResetDraftDialog,
+    inspectCurrentDraft,
+    logBlockedSaveIssue: (issue) => {
+      syncSaveIssueLogging(issue, "save attempt blocked by markup mismatch", true);
+    },
+    projectClient,
+    refreshEditorChrome: () => {
+      updateFloatingToolbar();
+      updateRevisionHoverToolbar();
+      updateCustomCaret();
+    },
+    refreshSaveGuardState,
+    renderEditorDocument,
+    restoreEditorSelection,
+    showWriteConflict,
+    state,
+    syncSelectionToUrl: syncCurrentSelectionToUrl,
+    syncStructuredBlockStyles,
+    threadClient,
+    updateHistorySelection,
+    updateSaveButtonState,
+  });
+
+  function scheduleSelectionPersistence() {
+    fileClient.scheduleSelectionPersistence();
   }
 
-  function waitForTransaction(transaction: IDBTransaction) {
-    return new Promise<void>((resolve, reject) => {
-      transaction.oncomplete = () => {
-        resolve();
-      };
-      transaction.onabort = () => {
-        reject(transaction.error ?? new Error("IndexedDB transaction aborted."));
-      };
-      transaction.onerror = () => {
-        reject(transaction.error ?? new Error("IndexedDB transaction failed."));
-      };
-    });
+  function syncCurrentDraftBuffer() {
+    fileClient.syncCurrentDraftBuffer();
   }
 
-  function openDraftDatabase() {
-    if (typeof window.indexedDB === "undefined") {
-      return Promise.resolve<IDBDatabase | null>(null);
-    }
-
-    return new Promise<IDBDatabase | null>((resolve) => {
-      const request = window.indexedDB.open(DRAFT_DATABASE_NAME, DRAFT_DATABASE_VERSION);
-
-      request.onupgradeneeded = () => {
-        const database = request.result;
-        if (!database.objectStoreNames.contains(DRAFT_STORE_NAME)) {
-          database.createObjectStore(DRAFT_STORE_NAME, { keyPath: "path" });
-        }
-      };
-
-      request.onsuccess = () => {
-        resolve(request.result);
-      };
-
-      request.onerror = () => {
-        resolve(null);
-      };
-
-      request.onblocked = () => {
-        resolve(null);
-      };
-    });
+  async function openFile(
+    filePath: string,
+    options?: { ignoreDirty?: boolean; source?: "open" | "reload" },
+  ) {
+    await fileClient.openFile(filePath, options);
   }
 
-  async function getPersistedDraftRecords() {
-    const database = await draftDatabasePromise;
-    if (!database) {
-      return [] as PersistedDraftRecord[];
-    }
-
-    const transaction = database.transaction(DRAFT_STORE_NAME, "readonly");
-    const store = transaction.objectStore(DRAFT_STORE_NAME);
-    const request = store.getAll();
-    const result = await wrapIndexedDbRequest(request as IDBRequest<PersistedDraftRecord[]>);
-    await waitForTransaction(transaction);
-    return result;
+  async function resetCurrentDraftToSaved() {
+    await fileClient.resetCurrentDraftToSaved();
   }
 
-  async function putPersistedDraftRecord(record: PersistedDraftRecord) {
-    const database = await draftDatabasePromise;
-    if (!database) {
-      return;
-    }
-
-    const transaction = database.transaction(DRAFT_STORE_NAME, "readwrite");
-    const store = transaction.objectStore(DRAFT_STORE_NAME);
-    await wrapIndexedDbRequest(store.put(record));
-    await waitForTransaction(transaction);
+  async function resetCurrentFileToHead() {
+    await fileClient.resetCurrentFileToHead();
   }
 
-  async function deletePersistedDraftRecord(filePath: string) {
-    const database = await draftDatabasePromise;
-    if (!database) {
-      return;
-    }
-
-    const transaction = database.transaction(DRAFT_STORE_NAME, "readwrite");
-    const store = transaction.objectStore(DRAFT_STORE_NAME);
-    await wrapIndexedDbRequest(store.delete(filePath));
-    await waitForTransaction(transaction);
+  async function saveCurrentFile(options?: { force?: boolean }) {
+    await fileClient.saveCurrentFile(options);
   }
 
-  function enqueueDraftPersistence(operation: () => Promise<void>) {
-    draftPersistenceQueue = draftPersistenceQueue
-      .catch(() => {
-        // Keep later persistence operations flowing after a transient failure.
-      })
-      .then(operation);
-
-    return draftPersistenceQueue;
+  async function refreshCurrentFileFromDiskIfSafe() {
+    await fileClient.refreshCurrentFileFromDiskIfSafe();
   }
 
   function updateHistorySelection(selection: EditHistorySelection | null) {
@@ -720,21 +640,6 @@ export async function initWorkbench(
     }
 
     state.history.frames[state.history.currentIndex].selection = cloneHistorySelection(selection);
-  }
-
-  function scheduleSelectionPersistence() {
-    if (!state.currentPath || !state.dirty) {
-      return;
-    }
-
-    if (selectionPersistenceTimeoutId !== null) {
-      window.clearTimeout(selectionPersistenceTimeoutId);
-    }
-
-    selectionPersistenceTimeoutId = window.setTimeout(() => {
-      selectionPersistenceTimeoutId = null;
-      syncCurrentDraftBuffer();
-    }, 260);
   }
 
   function recordEditHistory(previousContent: string, nextContent: string, selection: EditHistorySelection | null) {
@@ -783,221 +688,6 @@ export async function initWorkbench(
       });
     nextHistory.currentIndex = nextHistory.frames.length - 1;
     state.history = trimEditHistory(nextHistory);
-  }
-
-  function buildPersistedDraftRecord(filePath: string, buffer: DraftBuffer): PersistedDraftRecord {
-    return {
-      path: filePath,
-      baselineContent: buffer.baselineContent,
-      content: buffer.content,
-      expectedMtimeMs: buffer.expectedMtimeMs,
-      headContent: buffer.headContent,
-      history: cloneEditHistory(buffer.history),
-      mode: buffer.mode,
-    };
-  }
-
-  function createEditorStateFromContent(content: string, mode: EditorMode) {
-    return mode === "rich"
-      ? renderMarkdownToHtml(content)
-      : content;
-  }
-
-  function hydrateDraftBuffers(records: PersistedDraftRecord[]) {
-    state.draftBuffers = new Map(
-      records.map((record) => {
-        const buffer: DraftBuffer = {
-          baselineContent: record.baselineContent,
-          content: record.content,
-          dirty: record.content !== record.baselineContent,
-          editorState: createEditorStateFromContent(record.content, record.mode),
-          expectedMtimeMs: record.expectedMtimeMs,
-          headContent: record.headContent ?? null,
-          history: normalizeEditHistory(record.history ?? null, record.content),
-          mode: record.mode,
-          pendingWriteConflict: null,
-          saveIssue: null,
-        };
-
-        return [record.path, buffer];
-      }),
-    );
-  }
-
-  function persistDraftBuffer(filePath: string, buffer: DraftBuffer | null) {
-    return enqueueDraftPersistence(async () => {
-      if (!buffer || !buffer.dirty) {
-        await deletePersistedDraftRecord(filePath);
-        return;
-      }
-
-      await putPersistedDraftRecord(buildPersistedDraftRecord(filePath, buffer));
-    });
-  }
-
-  function isSingleBreakParagraph(element: HTMLElement) {
-    if (element.tagName !== "P") {
-      return false;
-    }
-
-    let breakCount = 0;
-
-    for (const node of element.childNodes) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        if ((node.textContent ?? "").trim()) {
-          return false;
-        }
-        continue;
-      }
-
-      if (node.nodeType !== Node.ELEMENT_NODE) {
-        return false;
-      }
-
-      const childElement = node as Element;
-      if (childElement.tagName !== "BR") {
-        return false;
-      }
-
-      breakCount += 1;
-    }
-
-    return breakCount === 1;
-  }
-
-  function isListElement(element: Element) {
-    return element.tagName === "UL" || element.tagName === "OL";
-  }
-
-  function getDirectChildListElements(element: Element) {
-    return Array.from(element.children).filter((child): child is HTMLUListElement | HTMLOListElement => isListElement(child));
-  }
-
-  function getDirectChildDetailsElement(element: Element) {
-    return Array.from(element.children).find((child): child is HTMLDetailsElement => child.tagName === "DETAILS");
-  }
-
-  function getDirectChildSummaryElement(element: Element) {
-    return Array.from(element.children).find((child): child is HTMLElement => child.tagName === "SUMMARY");
-  }
-
-  function getDirectChildSummaryTextElement(element: Element) {
-    return Array.from(element.children).find((child): child is HTMLElement => child instanceof HTMLElement && child.dataset.summaryText === "true");
-  }
-
-  function ensureSummaryTextWrapper(summary: HTMLElement) {
-    const existingWrapper = getDirectChildSummaryTextElement(summary);
-    if (existingWrapper) {
-      return existingWrapper;
-    }
-
-    const wrapper = document.createElement("span");
-    wrapper.dataset.summaryText = "true";
-
-    while (summary.firstChild) {
-      wrapper.append(summary.firstChild);
-    }
-
-    if (!wrapper.childNodes.length) {
-      wrapper.append(document.createElement("br"));
-    }
-
-    summary.append(wrapper);
-    return wrapper;
-  }
-
-  function trimBoundaryBreaks(container: HTMLElement) {
-    const hasMeaningfulContent = Array.from(container.childNodes).some((node) => {
-      if (node.nodeType === Node.TEXT_NODE) {
-        return Boolean((node.textContent ?? "").trim());
-      }
-
-      if (node.nodeType !== Node.ELEMENT_NODE) {
-        return false;
-      }
-
-      return (node as Element).tagName !== "BR";
-    });
-
-    if (!hasMeaningfulContent) {
-      return;
-    }
-
-    let firstMeaningfulNode = container.firstChild;
-    while (
-      firstMeaningfulNode?.nodeType === Node.TEXT_NODE
-      && !(firstMeaningfulNode.textContent ?? "").trim()
-    ) {
-      firstMeaningfulNode = firstMeaningfulNode.nextSibling;
-    }
-    while (firstMeaningfulNode instanceof HTMLBRElement) {
-      const nextNode = firstMeaningfulNode.nextSibling;
-      firstMeaningfulNode.remove();
-      firstMeaningfulNode = nextNode;
-      while (
-        firstMeaningfulNode?.nodeType === Node.TEXT_NODE
-        && !(firstMeaningfulNode.textContent ?? "").trim()
-      ) {
-        firstMeaningfulNode = firstMeaningfulNode.nextSibling;
-      }
-    }
-
-    let lastMeaningfulNode = container.lastChild;
-    while (
-      lastMeaningfulNode?.nodeType === Node.TEXT_NODE
-      && !(lastMeaningfulNode.textContent ?? "").trim()
-    ) {
-      lastMeaningfulNode = lastMeaningfulNode.previousSibling;
-    }
-    while (lastMeaningfulNode instanceof HTMLBRElement) {
-      const previousNode = lastMeaningfulNode.previousSibling;
-      lastMeaningfulNode.remove();
-      lastMeaningfulNode = previousNode;
-      while (
-        lastMeaningfulNode?.nodeType === Node.TEXT_NODE
-        && !(lastMeaningfulNode.textContent ?? "").trim()
-      ) {
-        lastMeaningfulNode = lastMeaningfulNode.previousSibling;
-      }
-    }
-  }
-
-  function hasMeaningfulListItemContent(item: HTMLLIElement) {
-    return (item.textContent ?? "").replaceAll("\u00a0", "").length > 0
-      || item.querySelector("br, details, ul, ol, pre, blockquote, hr") !== null;
-  }
-
-  function normalizeSummaryListArtifacts(details: HTMLDetailsElement, summaryText: HTMLElement) {
-    const embeddedLists = Array.from(summaryText.querySelectorAll("ul, ol")).filter((list) => {
-      const ancestorList = list.parentElement?.closest("ul, ol");
-      return !ancestorList || !summaryText.contains(ancestorList);
-    });
-
-    for (const list of embeddedLists) {
-      details.append(list);
-    }
-
-    const strayListItems = Array.from(summaryText.querySelectorAll("li")).filter((item) => !item.closest("ul, ol"));
-    if (!strayListItems.length) {
-      return;
-    }
-
-    const meaningfulItems = strayListItems.filter(hasMeaningfulListItemContent);
-    for (const item of strayListItems) {
-      if (!hasMeaningfulListItemContent(item)) {
-        item.remove();
-      }
-    }
-
-    if (!meaningfulItems.length) {
-      return;
-    }
-
-    const targetList = getOrCreateDirectChildList(details, "UL");
-    const insertionPoint = targetList.firstChild;
-    for (const item of meaningfulItems) {
-      targetList.insertBefore(item, insertionPoint);
-    }
   }
 
   function getCaretRangeFromPoint(clientX: number, clientY: number) {
@@ -1299,41 +989,6 @@ export async function initWorkbench(
     paragraph.replaceChildren(document.createElement("br"));
   }
 
-  function setPlainBlockText(element: HTMLElement, text: string) {
-    element.replaceChildren();
-    if (text) {
-      element.append(document.createTextNode(text));
-      return;
-    }
-
-    element.append(document.createElement("br"));
-  }
-
-  function normalizeCommentBlockElement(element: HTMLElement) {
-    const parsedCommentBody = parseBlockCommentBody(element.textContent ?? "");
-    if (parsedCommentBody !== null) {
-      element.dataset.blockComment = "true";
-      setPlainBlockText(element, parsedCommentBody);
-      return;
-    }
-
-    if (element.dataset.blockComment === "true") {
-      const textContent = element.textContent ?? "";
-      if (!textContent.replaceAll("\u00a0", "").length) {
-        setPlainBlockText(element, "");
-      }
-      return;
-    }
-
-    element.removeAttribute("data-block-comment");
-  }
-
-  function isIntentionalListBreakParagraph(element: Element | null): element is HTMLElement {
-    return element instanceof HTMLElement
-      && element.dataset.listBreak === "true"
-      && isSingleBreakParagraph(element);
-  }
-
   function insertListItemAtParagraphPosition(paragraph: HTMLElement, item: HTMLLIElement) {
     const previousList = paragraph.previousElementSibling instanceof HTMLUListElement
       ? paragraph.previousElementSibling
@@ -1405,62 +1060,6 @@ export async function initWorkbench(
     return item;
   }
 
-  function restoreCaretToMarker(marker: HTMLElement) {
-    const selection = window.getSelection();
-    if (!selection || !marker.parentNode) {
-      marker.remove();
-      return;
-    }
-
-    const range = document.createRange();
-    const parentElement = marker.parentElement;
-    const parentMark = parentElement ? getInlineMarkForElement(parentElement) : null;
-    if (parentElement && parentMark) {
-      const markerIndex = Array.from(parentElement.childNodes).indexOf(marker);
-      range.setStart(parentElement, Math.max(0, markerIndex));
-    } else {
-      range.setStartBefore(marker);
-    }
-    range.collapse(true);
-    marker.remove();
-    selection.removeAllRanges();
-    selection.addRange(range);
-  }
-
-  function createInlineSelectionMarker(role: "caret" | "selection-start" | "selection-end") {
-    const marker = document.createElement("span");
-    marker.hidden = true;
-    marker.dataset.pendingInlineCaret = role === "caret" ? "true" : "false";
-    marker.dataset.inlineSelectionMarker = role;
-    return marker;
-  }
-
-  function restoreSelectionToMarkers(
-    startMarker: HTMLElement,
-    endMarker: HTMLElement | null,
-  ) {
-    const selection = window.getSelection();
-    if (!selection || !startMarker.parentNode) {
-      startMarker.remove();
-      endMarker?.remove();
-      return;
-    }
-
-    const range = document.createRange();
-    range.setStartBefore(startMarker);
-
-    if (endMarker?.parentNode) {
-      range.setEndBefore(endMarker);
-    } else {
-      range.collapse(true);
-    }
-
-    startMarker.remove();
-    endMarker?.remove();
-    selection.removeAllRanges();
-    selection.addRange(range);
-  }
-
   function maybeExpandBlockCommentStarter(event: Event) {
     if (!(event instanceof InputEvent) || state.mode !== "rich") {
       return null;
@@ -1503,340 +1102,11 @@ export async function initWorkbench(
     return marker;
   }
 
-  function maybeActivateInlineCommentShortcut(event: Event) {
-    if (!(event instanceof InputEvent) || state.mode !== "rich") {
-      return null;
-    }
-
-    if (event.inputType !== "insertText" || event.data !== "!") {
-      return null;
-    }
-
-    const selection = window.getSelection();
-    if (!selection?.rangeCount || !selection.isCollapsed) {
-      return null;
-    }
-
-    const container = getInlineExpansionContainer(selection.getRangeAt(0).startContainer);
-    if (!container || !editor.contains(container) || container.dataset.blockComment === "true") {
-      return null;
-    }
-
-    const beforeText = getTextBeforeSelectionInElement(selection, container);
-    if (!beforeText.endsWith("<!")) {
-      return null;
-    }
-
-    if (!deleteTextImmediatelyBeforeSelection(selection, container, 2)) {
-      return null;
-    }
-
-    const baseFormats = pendingInlineFormats ?? getInlineFormatStateFromNode(selection.getRangeAt(0).startContainer);
-    pendingInlineFormats = {
-      ...baseFormats,
-      comment: true,
-    };
-    materializePendingInlineFormatsAtCaret(pendingInlineFormats);
-    updateCustomCaret();
-    return null;
-  }
-
-  function createParagraphFromTopLevelListItem(item: HTMLLIElement, { preserveEmptyListBreak }: { preserveEmptyListBreak: boolean }) {
-    const paragraph = document.createElement("p");
-    const details = getDirectChildDetailsElement(item);
-
-    if (details) {
-      const summary = getDirectChildSummaryElement(details);
-      const summaryText = summary
-        ? getDirectChildSummaryTextElement(summary) ?? summary
-        : null;
-
-      if (summaryText) {
-        while (summaryText.firstChild) {
-          paragraph.append(summaryText.firstChild);
-        }
-      }
-    } else {
-      const contentNodes = Array.from(item.childNodes).filter((node) => {
-        return !(node instanceof Element && isListElement(node));
-      });
-
-      for (const node of contentNodes) {
-        paragraph.append(node);
-      }
-    }
-
-    paragraph.normalize();
-    ensureParagraphHasEditableContent(paragraph);
-
-    if (preserveEmptyListBreak && isSingleBreakParagraph(paragraph)) {
-      paragraph.dataset.listBreak = "true";
-    }
-
-    return paragraph;
-  }
-
-  function getNestedListBreakoutNodes(item: HTMLLIElement) {
-    const details = getDirectChildDetailsElement(item);
-    if (details) {
-      return getDirectChildListElements(details);
-    }
-
-    return getDirectChildListElements(item);
-  }
-
-  function unwrapTopLevelListItemToParagraph(item: HTMLLIElement) {
-    const parentList = getParentListElement(item);
-    if (!parentList) {
-      return null;
-    }
-
-    const previousSibling = item.previousElementSibling instanceof HTMLLIElement
-      ? item.previousElementSibling
-      : null;
-    const nextSibling = item.nextElementSibling instanceof HTMLLIElement
-      ? item.nextElementSibling
-      : null;
-    const preserveEmptyListBreak = Boolean(previousSibling && nextSibling);
-    const paragraph = createParagraphFromTopLevelListItem(item, { preserveEmptyListBreak });
-    const nestedBreakoutNodes = getNestedListBreakoutNodes(item);
-    const trailingItems: HTMLLIElement[] = [];
-    let trailingNode = item.nextElementSibling;
-
-    while (trailingNode) {
-      const nextTrailingNode = trailingNode.nextElementSibling;
-      if (trailingNode instanceof HTMLLIElement) {
-        trailingItems.push(trailingNode);
-      }
-      trailingNode = nextTrailingNode;
-    }
-
-    const trailingList = trailingItems.length
-      ? document.createElement(parentList.tagName.toLowerCase()) as HTMLUListElement | HTMLOListElement
-      : null;
-
-    if (trailingList) {
-      for (const trailingItem of trailingItems) {
-        trailingList.append(trailingItem);
-      }
-    }
-
-    const insertionParent = parentList.parentNode;
-    if (!insertionParent) {
-      return paragraph;
-    }
-
-    const parentListNextSibling = parentList.nextSibling;
-    item.remove();
-    const hasLeadingItems = parentList.children.length > 0;
-    if (!hasLeadingItems) {
-      parentList.remove();
-    }
-
-    const insertionAnchor = hasLeadingItems
-      ? parentList.nextSibling
-      : parentListNextSibling;
-    insertionParent.insertBefore(paragraph, insertionAnchor);
-
-    let nextInsertionPoint = paragraph.nextSibling;
-    for (const breakoutNode of nestedBreakoutNodes) {
-      insertionParent.insertBefore(breakoutNode, nextInsertionPoint);
-      nextInsertionPoint = breakoutNode.nextSibling;
-    }
-
-    if (trailingList) {
-      insertionParent.insertBefore(trailingList, nextInsertionPoint);
-    }
-
-    return paragraph;
-  }
-
-  function normalizeListItemHierarchy(item: HTMLLIElement) {
-    const details = getDirectChildDetailsElement(item);
-    const directLists = getDirectChildListElements(item);
-
-    if (!details && !directLists.length) {
-      return;
-    }
-
-    if (!details) {
-      const nextDetails = document.createElement("details");
-      nextDetails.open = true;
-      const summary = document.createElement("summary");
-      const summaryText = ensureSummaryTextWrapper(summary);
-      const summaryNodes = Array.from(item.childNodes).filter((node) => {
-        return !(node instanceof Element && directLists.some((list) => list === node));
-      });
-
-      for (const node of summaryNodes) {
-        summaryText.append(node);
-      }
-      normalizeSummaryListArtifacts(nextDetails, summaryText);
-      trimBoundaryBreaks(summaryText);
-
-      if (!summaryText.childNodes.length) {
-        summaryText.append(document.createElement("br"));
-      }
-
-      nextDetails.append(summary);
-      for (const list of directLists) {
-        nextDetails.append(list);
-      }
-      item.append(nextDetails);
-      return;
-    }
-
-    const summary = getDirectChildSummaryElement(details) ?? document.createElement("summary");
-    if (summary.parentElement !== details) {
-      details.prepend(summary);
-    }
-    const summaryText = ensureSummaryTextWrapper(summary);
-
-    const externalNodes = Array.from(item.childNodes).filter((node) => node !== details);
-    for (const node of externalNodes) {
-      summaryText.append(node);
-    }
-
-    const strayDetailNodes = Array.from(details.childNodes).filter((node) => {
-      if (node === summary) {
-        return false;
-      }
-
-      return !(node instanceof Element && isListElement(node));
-    });
-    for (const node of strayDetailNodes) {
-      summaryText.append(node);
-    }
-    normalizeSummaryListArtifacts(details, summaryText);
-    trimBoundaryBreaks(summaryText);
-
-    const nestedLists = getDirectChildListElements(details);
-    if (!nestedLists.length) {
-      while (summaryText.firstChild) {
-        item.insertBefore(summaryText.firstChild, details);
-      }
-      details.remove();
-      if (!item.childNodes.length) {
-        item.append(document.createElement("br"));
-      }
-      return;
-    }
-
-    if (!summaryText.childNodes.length) {
-      summaryText.append(document.createElement("br"));
-    }
-  }
-
-  function normalizeNestedListHierarchy(root: ParentNode = editor) {
-    const listItems = root instanceof HTMLLIElement
-      ? [root]
-      : Array.from(root.querySelectorAll("li"));
-
-    for (const item of listItems) {
-      if (item instanceof HTMLLIElement) {
-        normalizeListItemHierarchy(item);
-      }
-    }
-  }
-
-  function isMergeableListElement(node: Node | null): node is HTMLUListElement | HTMLOListElement {
-    return node instanceof HTMLUListElement || node instanceof HTMLOListElement;
-  }
-
-  function isListMergeSeparatorNode(node: Node | null) {
-    if (!node) {
-      return false;
-    }
-
-    if (node instanceof HTMLBRElement) {
-      return true;
-    }
-
-    return node instanceof HTMLElement
-      && isSingleBreakParagraph(node)
-      && !isIntentionalListBreakParagraph(node);
-  }
-
-  function getNextMeaningfulSibling(node: ChildNode | null) {
-    let current = node;
-
-    while (current?.nodeType === Node.TEXT_NODE && !(current.textContent ?? "").trim()) {
-      const nextSibling = current.nextSibling;
-      current.remove();
-      current = nextSibling;
-    }
-
-    return current;
-  }
-
-  function mergeAdjacentSiblingLists(root: ParentNode = editor) {
-    const childElements = root instanceof Element || root instanceof DocumentFragment
-      ? Array.from(root.children)
-      : [];
-
-    for (const childElement of childElements) {
-      mergeAdjacentSiblingLists(childElement);
-    }
-
-    let current = getNextMeaningfulSibling(root.firstChild);
-
-    while (current) {
-      if (!isMergeableListElement(current)) {
-        current = getNextMeaningfulSibling(current.nextSibling);
-        continue;
-      }
-
-      const separator = getNextMeaningfulSibling(current.nextSibling);
-      const nextList = isListMergeSeparatorNode(separator)
-        ? getNextMeaningfulSibling(separator.nextSibling)
-        : separator;
-
-      if (isMergeableListElement(nextList) && nextList.tagName === current.tagName) {
-        while (nextList.firstChild) {
-          current.append(nextList.firstChild);
-        }
-
-        nextList.remove();
-        if (separator && isListMergeSeparatorNode(separator)) {
-          separator.remove();
-        }
-        continue;
-      }
-
-      current = getNextMeaningfulSibling(current.nextSibling);
-    }
-  }
-
   function syncStructuredBlockStyles(root: ParentNode = editor) {
-    normalizeNestedListHierarchy(root);
-    mergeAdjacentSiblingLists(root);
-    canonicalizeAllInlineRunContainers(root);
-    removeEmptyInlineFormattingArtifacts(root);
-
-    const candidates = root instanceof HTMLDivElement && root === editor
-      ? Array.from(root.children)
-      : Array.from(root.querySelectorAll("p, div"));
-
-    for (const element of candidates) {
-      if (!(element instanceof HTMLElement)) {
-        continue;
-      }
-
-      const isCommentCandidate = /^(p|div)$/i.test(element.tagName);
-      if (!isCommentCandidate) {
-        element.removeAttribute("data-block-comment");
-        element.removeAttribute("data-single-break");
-        continue;
-      }
-
-      if (isSingleBreakParagraph(element)) {
-        element.dataset.singleBreak = "true";
-      } else {
-        element.removeAttribute("data-single-break");
-      }
-
-      normalizeCommentBlockElement(element);
-    }
+    syncStructuredBlockDomStyles(root, {
+      canonicalizeInlineRunContainers: canonicalizeAllInlineRunContainers,
+      removeEmptyInlineFormattingArtifacts,
+    });
   }
 
   function updateSaveButtonState() {
@@ -1863,16 +1133,6 @@ export async function initWorkbench(
       expectedUpdatedAt: formatTimestamp(conflict.expectedUpdatedAt),
       actualUpdatedAt: formatTimestamp(conflict.actualUpdatedAt),
     });
-  }
-
-  function getCurrentEditorState() {
-    return state.mode === "rich"
-      ? editor.innerHTML
-      : editor.textContent ?? "";
-  }
-
-  function hasBufferedDraftState(buffer: DraftBuffer) {
-    return buffer.dirty || Boolean(buffer.saveIssue) || Boolean(buffer.pendingWriteConflict);
   }
 
   function getLocallyModifiedPaths() {
@@ -2010,89 +1270,6 @@ export async function initWorkbench(
 
   function toggleDirectory(path: string) {
     projectClient.toggleDirectory(path);
-  }
-
-  function syncCurrentDraftBuffer() {
-    if (!state.currentPath) {
-      return;
-    }
-
-    const previousModified = state.draftBuffers.get(state.currentPath)?.dirty ?? false;
-    const nextBuffer: DraftBuffer = {
-      baselineContent: state.baselineContent,
-      content: state.currentContent,
-      dirty: state.dirty,
-      editorState: getCurrentEditorState(),
-      expectedMtimeMs: state.expectedMtimeMs,
-      headContent: state.headContent,
-      history: cloneEditHistory(state.history) ?? createInitialEditHistory(state.currentContent),
-      mode: state.mode,
-      pendingWriteConflict: state.pendingWriteConflict
-        ? { ...state.pendingWriteConflict }
-        : null,
-      saveIssue: state.saveIssue
-        ? { ...state.saveIssue }
-        : null,
-    };
-
-    if (!hasBufferedDraftState(nextBuffer)) {
-      state.draftBuffers.delete(state.currentPath);
-      void persistDraftBuffer(state.currentPath, null);
-      if (previousModified) {
-        emitExplorerStateChange();
-      }
-      return;
-    }
-
-    state.draftBuffers.set(state.currentPath, nextBuffer);
-    void persistDraftBuffer(state.currentPath, nextBuffer);
-    if (previousModified !== nextBuffer.dirty) {
-      emitExplorerStateChange();
-    }
-  }
-
-  function restoreDraftBuffer(filePath: string, buffer: DraftBuffer) {
-    clearWriteConflict();
-    threadClient.clearThreadSelection();
-    state.currentThread = null;
-    state.currentPath = filePath;
-    state.currentThreadId = "";
-    state.expectedMtimeMs = buffer.expectedMtimeMs;
-    state.mode = buffer.mode;
-    editorClient.setCurrentThreadId("");
-    editorClient.setCurrentFilePath(filePath);
-    editorClient.setMode(buffer.mode);
-
-    if (buffer.mode === "rich") {
-      editor.innerHTML = buffer.editorState;
-    } else {
-      editor.textContent = buffer.editorState;
-    }
-
-    applyEditorFontSize();
-    syncStructuredBlockStyles();
-    editor.scrollTop = 0;
-    state.baselineContent = buffer.baselineContent;
-    state.currentContent = buffer.content;
-    state.headContent = buffer.headContent;
-    state.history = normalizeEditHistory(buffer.history, buffer.content);
-    state.dirty = buffer.dirty;
-    state.pendingWriteConflict = buffer.pendingWriteConflict
-      ? { ...buffer.pendingWriteConflict }
-      : null;
-    state.saveIssue = buffer.saveIssue
-      ? { ...buffer.saveIssue }
-      : null;
-    state.lastLoggedSaveIssue = buffer.saveIssue
-      ? { ...buffer.saveIssue }
-      : null;
-    editorClient.setDirty(buffer.dirty);
-    editorClient.setPendingWriteConflict(state.pendingWriteConflict);
-    editorClient.setSaveIssue(state.saveIssue);
-    updateSaveButtonState();
-    editorClient.refreshStatusMessage();
-    editorClient.scheduleDiffGutterRefresh();
-    restoreEditorSelection(state.history.frames[state.history.currentIndex]?.selection ?? null);
   }
 
   function isSameSaveGuardIssue(left: SaveGuardIssue | null, right: SaveGuardIssue | null) {
@@ -2288,6 +1465,68 @@ export async function initWorkbench(
     }
   }
 
+  function removeEmptyInlineFormatElements(
+    tagNames: readonly string[],
+    root: ParentNode = editor,
+  ) {
+    if (!("querySelectorAll" in root) || !tagNames.length) {
+      return;
+    }
+
+    const protectedElements = getProtectedEmptyInlineFormatElements(root);
+    const selector = tagNames.map((tagName) => tagName.toLowerCase()).join(", ");
+    for (const element of Array.from(root.querySelectorAll<HTMLElement>(selector))) {
+      if (protectedElements.has(element)) {
+        continue;
+      }
+
+      if ((element.textContent ?? "").replaceAll("\u00a0", "").length > 0) {
+        continue;
+      }
+
+      element.remove();
+    }
+  }
+
+  function getProtectedEmptyInlineFormatElements(root: ParentNode) {
+    const protectedElements = new Set<HTMLElement>();
+    if (root !== editor) {
+      return protectedElements;
+    }
+
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) {
+      return protectedElements;
+    }
+
+    const boundaryNodes = [
+      selection.anchorNode,
+      selection.focusNode,
+      selection.getRangeAt(0).startContainer,
+      selection.getRangeAt(0).endContainer,
+    ];
+
+    for (const boundaryNode of boundaryNodes) {
+      let current: Node | null = boundaryNode;
+      while (current && current !== editor) {
+        if (
+          current instanceof HTMLElement
+          && (current.tagName === "STRONG"
+            || current.tagName === "EM"
+            || current.tagName === "CODE"
+            || current.tagName === "DEL"
+            || current.tagName === "INS"
+            || current.dataset.inlineComment === "true")
+        ) {
+          protectedElements.add(current);
+        }
+        current = current.parentNode;
+      }
+    }
+
+    return protectedElements;
+  }
+
   function removeEmptyInlineFormattingArtifacts(root: ParentNode) {
     removeEmptyInlineFormatElements(["strong", "em", "code", "del", "ins"], root);
 
@@ -2322,226 +1561,18 @@ export async function initWorkbench(
     (root as Node).normalize();
   }
 
-  function createMarkupSignature(root: ParentNode) {
-    return Array.from(root.childNodes)
-      .map((node) => serializeMarkupNode(node))
-      .filter(Boolean)
-      .join("");
-  }
-
-  function normalizeInlineLeavesForMarkupSignature(
-    leaves: InlineLeaf[],
-    trimTrailingWhitespace: boolean,
-  ) {
-    const mergedLeaves = normalizeInlineLeavesForSerialization(leaves);
-    let leadingBreakCount = 0;
-    while (mergedLeaves[0]?.type === "break") {
-      mergedLeaves.shift();
-      leadingBreakCount += 1;
-    }
-
-    let trailingBreakCount = 0;
-    while (mergedLeaves.at(-1)?.type === "break") {
-      mergedLeaves.pop();
-      trailingBreakCount += 1;
-    }
-
-    if (!trimTrailingWhitespace) {
-      return {
-        leaves: mergedLeaves,
-        leadingBreakCount,
-        trailingBreakCount,
-      };
-    }
-
-    const lastLeaf = mergedLeaves.at(-1);
-    if (!lastLeaf || lastLeaf.type !== "text") {
-      return {
-        leaves: mergedLeaves,
-        leadingBreakCount,
-        trailingBreakCount,
-      };
-    }
-
-    const trimmedText = lastLeaf.text.replace(/[ \t\u00a0]+$/g, "");
-    if (trimmedText === lastLeaf.text) {
-      return {
-        leaves: mergedLeaves,
-        leadingBreakCount,
-        trailingBreakCount,
-      };
-    }
-
-    if (trimmedText) {
-      lastLeaf.text = trimmedText;
-      return {
-        leaves: mergedLeaves,
-        leadingBreakCount,
-        trailingBreakCount,
-      };
-    }
-
-    mergedLeaves.pop();
-    return {
-      leaves: mergedLeaves,
-      leadingBreakCount,
-      trailingBreakCount,
-    };
-  }
-
-  function wrapMarkupSignatureContent(content: string, mark: InlineMark) {
-    if (!content) {
-      return "";
-    }
-
-    if (mark.tag === "comment") {
-      return `<span data-inline-comment=true>${content}</span>`;
-    }
-
-    if (mark.tag === "a") {
-      const href = mark.href ? ` href=${JSON.stringify(mark.href)}` : "";
-      return `<a${href}>${content}</a>`;
-    }
-
-    return `<${mark.tag}>${content}</${mark.tag}>`;
-  }
-
-  function serializeInlineLeafForMarkupSignature(leaf: InlineLeaf) {
-    if (leaf.type === "marker") {
-      return "";
-    }
-
-    let content = leaf.type === "break"
-      ? "<br>"
-      : `text(${JSON.stringify(leaf.text.replaceAll("\u00a0", " "))})`;
-
-    for (let index = leaf.marks.length - 1; index >= 0; index -= 1) {
-      content = wrapMarkupSignatureContent(content, leaf.marks[index]);
-    }
-
-    return content;
-  }
-
-  function serializeInlineLeafToMarkdown(leaf: InlineLeaf) {
-    if (leaf.type === "marker") {
-      return "";
-    }
-
-    let content = leaf.type === "break"
-      ? "\n"
-      : escapeMarkdownText(leaf.text);
-
-    for (let index = leaf.marks.length - 1; index >= 0; index -= 1) {
-      content = wrapMarkdownWithInlineMark(content, leaf.marks[index]);
-    }
-
-    return content;
-  }
-
-  function serializeInlineRunContainerForMarkupSignature(element: HTMLElement, trimTrailingWhitespace: boolean) {
-    const normalized = normalizeInlineLeavesForMarkupSignature(
-      flattenInlineContent(element.childNodes),
-      trimTrailingWhitespace,
-    );
-
-    return {
-      leadingBreakCount: normalized.leadingBreakCount,
-      content: normalized.leaves
-        .map((leaf) => serializeInlineLeafForMarkupSignature(leaf))
-        .filter(Boolean)
-        .join(""),
-      trailingBreakCount: normalized.trailingBreakCount,
-    };
-  }
-
-  function isTrailingWhitespaceBoundaryTag(tag: string) {
-    return /^(p|div|h1|h2|h3|h4|h5|h6|blockquote|li|summary)$/i.test(tag);
-  }
-
-  function serializeMarkupNode(node: Node, trimTrailingWhitespace = false): string {
-    if (node.nodeType === Node.TEXT_NODE) {
-      const text = (node.textContent ?? "")
-        .replaceAll("\u00a0", " ")
-        .replace(/[ \t]+$/g, trimTrailingWhitespace ? "" : "$&");
-      return text ? `text(${JSON.stringify(text)})` : "";
-    }
-
-    if (node.nodeType !== Node.ELEMENT_NODE) {
-      return "";
-    }
-
-    const element = node as Element;
-    const tag = element.tagName.toLowerCase();
-    const attributes = [];
-
-    if (element instanceof HTMLElement && isSingleBreakParagraph(element)) {
-      return "<br>";
-    }
-
-    if (tag === "a") {
-      const href = element.getAttribute("href");
-      if (href) {
-        attributes.push(`href=${JSON.stringify(href)}`);
-      }
-    }
-
-    if (element instanceof HTMLElement) {
-      if (element.dataset.inlineComment === "true") {
-        attributes.push("data-inline-comment=true");
-      }
-
-      if (element.dataset.blockComment === "true") {
-        attributes.push("data-block-comment=true");
-      }
-    }
-
-    if (tag === "pre") {
-      const language = element instanceof HTMLElement
-        ? element.dataset.language ?? ""
-        : element.getAttribute("data-language") ?? "";
-      if (language) {
-        attributes.push(`data-language=${JSON.stringify(language)}`);
-      }
-    }
-
-    const childNodes = Array.from(element.childNodes);
-    const trimLastChild = trimTrailingWhitespace || isTrailingWhitespaceBoundaryTag(tag);
-    const openingTag = attributes.length > 0
-      ? `<${tag} ${attributes.join(" ")}>`
-      : `<${tag}>`;
-
-    if (tag === "br" || tag === "hr") {
-      return openingTag;
-    }
-
-    if (element instanceof HTMLElement && isInlineRunContainer(element)) {
-      const children = serializeInlineRunContainerForMarkupSignature(
-        element,
-        trimLastChild && tag !== "pre" && tag !== "code",
-      );
-      return `${"<br>".repeat(children.leadingBreakCount)}${openingTag}${children.content}</${tag}>${"<br>".repeat(children.trailingBreakCount)}`;
-    }
-
-    const lastChildIndex = childNodes.length - 1;
-    const children = childNodes
-      .map((childNode, index) => serializeMarkupNode(
-        childNode,
-        trimLastChild && index === lastChildIndex && tag !== "pre" && tag !== "code",
-      ))
-      .join("");
-
-    return `${openingTag}${children}</${tag}>`;
-  }
-
   function inspectSaveGuard() {
     const editorSnapshot = editor.cloneNode(true) as HTMLDivElement;
-    const markdown = editorToMarkdown(editorSnapshot);
-    const currentMarkup = createMarkupSignature(editorSnapshot);
+    const markdown = serializeWorkbenchDomToMarkdown(editorSnapshot, {
+      isInlineRunContainer,
+      normalizeMarkup: normalizeEditorMarkup,
+    });
+    const currentMarkup = createWorkbenchMarkupSignature(editorSnapshot, { isInlineRunContainer });
     const roundTripRoot = document.createElement("div");
     roundTripRoot.innerHTML = renderMarkdownToHtml(markdown);
     normalizeEditorMarkup(roundTripRoot);
 
-    const roundTripMarkup = createMarkupSignature(roundTripRoot);
+    const roundTripMarkup = createWorkbenchMarkupSignature(roundTripRoot, { isInlineRunContainer });
     const issue = currentMarkup === roundTripMarkup
       ? null
       : { markdown, currentMarkup, roundTripMarkup } satisfies SaveGuardIssue;
@@ -2688,286 +1719,6 @@ export async function initWorkbench(
     };
   }
 
-  function wrapMarkdownWithInlineMark(content: string, mark: InlineMark) {
-    switch (mark.tag) {
-      case "strong":
-        return `__${content}__`;
-      case "em":
-        return content.includes("*") ? `_${content}_` : `*${content}*`;
-      case "code":
-        return `\`${content.replaceAll("`", "\\`")}\``;
-      case "comment": {
-        return formatInlineCommentMarkdown(content);
-      }
-      case "a":
-        return `[${content || mark.href || ""}](${mark.href ?? ""})`;
-      case "del":
-        return `<del>${content}</del>`;
-      case "ins":
-        return `<ins>${content}</ins>`;
-      default:
-        return content;
-    }
-  }
-
-  function serializeInlineNodes(nodes: ArrayLike<Node>) {
-    return normalizeInlineLeavesForSerialization(
-      flattenInlineContent(Array.from(nodes)),
-    )
-      .map((leaf) => serializeInlineLeafToMarkdown(leaf))
-      .join("");
-  }
-
-  function serializeParagraph(node: Element) {
-    return serializeInlineNodes(node.childNodes).replace(/\n{3,}/g, "\n\n");
-  }
-
-  function serializeListItemMainText(item: Element) {
-    const details = getDirectChildDetailsElement(item);
-    if (details) {
-      const summary = getDirectChildSummaryElement(details);
-      return summary ? serializeParagraph(summary).trim() : "";
-    }
-
-    const contentNodes = Array.from(item.childNodes).filter((node) => {
-      return !(node instanceof Element && isListElement(node));
-    });
-    return serializeInlineNodes(contentNodes).replace(/\n{3,}/g, "\n\n").trimEnd().trim();
-  }
-
-  function getNestedListElementsForItem(item: Element) {
-    const details = getDirectChildDetailsElement(item);
-    return details
-      ? getDirectChildListElements(details)
-      : getDirectChildListElements(item);
-  }
-
-  function serializeListElement(node: Element, indent = 0) {
-    const listType = node.tagName.toLowerCase();
-    if (listType !== "ul" && listType !== "ol") {
-      return "";
-    }
-
-    return Array.from(node.children)
-      .filter((child): child is HTMLLIElement => child instanceof HTMLLIElement)
-      .map((item, index) => {
-        const prefix = listType === "ol" ? `${index + 1}. ` : "- ";
-        const text = serializeListItemMainText(item);
-        const line = text
-          ? `${" ".repeat(indent)}${prefix}${text}`.trimEnd()
-          : `${" ".repeat(indent)}${prefix}`;
-        const nested = getNestedListElementsForItem(item)
-          .map((childList) => serializeListElement(childList, indent + 2))
-          .filter(Boolean)
-          .join("\n");
-
-        return nested ? `${line}\n${nested}` : line;
-      })
-      .join("\n");
-  }
-
-  function serializeBlockElement(node: Element): SerializedBlock {
-    const tag = node.tagName.toLowerCase();
-    const rawText = node.textContent ?? "";
-    const parsedCommentBody = parseBlockCommentBody(rawText);
-
-    if (node instanceof HTMLElement && (node.dataset.blockComment === "true" || parsedCommentBody !== null)) {
-      const commentBody = parsedCommentBody ?? serializeParagraph(node).replace(/\n+/g, " ").trim();
-      return {
-        kind: "block",
-        isComment: true,
-        text: formatBlockCommentLine(commentBody),
-      };
-    }
-
-    switch (tag) {
-      case "h1":
-      case "h2":
-      case "h3":
-      case "h4":
-      case "h5":
-      case "h6":
-        return {
-          kind: "block",
-          isComment: false,
-          text: `${"#".repeat(Number.parseInt(tag.slice(1), 10))} ${serializeParagraph(node).trim()}`.trimEnd(),
-        };
-      case "ul":
-        return {
-          kind: "list",
-          isComment: false,
-          text: serializeListElement(node),
-        };
-      case "ol":
-        return {
-          kind: "list",
-          isComment: false,
-          text: serializeListElement(node),
-        };
-      case "blockquote":
-        return {
-          kind: "block",
-          isComment: false,
-          text: serializeParagraph(node)
-            .split("\n")
-            .map((line) => `> ${line}`.trimEnd())
-            .join("\n"),
-        };
-      case "pre": {
-        const language = node instanceof HTMLElement ? node.dataset.language ?? "" : "";
-        const code = node.textContent?.replace(/\n$/, "") ?? "";
-        return {
-          kind: "block",
-          isComment: false,
-          text: `\`\`\`${language}\n${code}\n\`\`\``,
-        };
-      }
-      case "hr":
-        return {
-          kind: "block",
-          isComment: false,
-          text: "---",
-        };
-      case "div":
-      case "p":
-      default:
-        return {
-          kind: "block",
-          isComment: false,
-          text: serializeParagraph(node),
-        };
-    }
-  }
-
-  function serializeMarkdownTokens(tokens: SerializedMarkdownToken[]) {
-    let markdown = "";
-    let pendingBreakCount = 0;
-    let previousBlock: SerializedBlock | null = null;
-
-    for (const token of tokens) {
-      if (token.type === "break") {
-        pendingBreakCount += token.count;
-        continue;
-      }
-
-      if (!token.block.text) {
-        pendingBreakCount = 0;
-        continue;
-      }
-
-      if (!previousBlock) {
-        if (pendingBreakCount > 0 && token.block.isComment) {
-          markdown += "\n".repeat(pendingBreakCount);
-        }
-        markdown += token.block.text;
-      } else {
-        const baseSeparator = previousBlock.isComment || token.block.isComment ? "\n" : "\n\n";
-        const extraBreakCount = previousBlock.isComment || token.block.isComment
-          ? pendingBreakCount
-          : previousBlock.kind === "list" && token.block.kind === "list"
-            ? Math.max(0, pendingBreakCount - 1)
-            : pendingBreakCount;
-        markdown += `${baseSeparator}${"\n".repeat(extraBreakCount)}${token.block.text}`;
-      }
-
-      previousBlock = token.block;
-      pendingBreakCount = 0;
-    }
-
-    if (pendingBreakCount > 0 && previousBlock?.isComment) {
-      markdown += "\n".repeat(pendingBreakCount);
-    }
-
-    return markdown.endsWith("\n")
-      ? markdown
-      : `${markdown}\n`;
-  }
-
-  function editorToMarkdown(sourceRoot: ParentNode = editor) {
-    normalizeEditorMarkup(sourceRoot);
-    const tokens: SerializedMarkdownToken[] = [];
-    let inlineNodes: Node[] = [];
-    let pendingBreakCount = 0;
-
-    const flushPendingBreaks = () => {
-      if (!pendingBreakCount) {
-        return;
-      }
-
-      tokens.push({ type: "break", count: pendingBreakCount });
-      pendingBreakCount = 0;
-    };
-
-    const flushInlineNodes = () => {
-      if (!inlineNodes.length) {
-        return;
-      }
-
-      const text = serializeInlineNodes(inlineNodes).replace(/\n{3,}/g, "\n\n").trimEnd();
-      if (text) {
-        flushPendingBreaks();
-        tokens.push({
-          type: "block",
-          block: {
-            kind: "block",
-            isComment: isBlockCommentLine(text),
-            text,
-          },
-        });
-      }
-      inlineNodes = [];
-    };
-
-    for (const node of sourceRoot.childNodes) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        if ((node.textContent ?? "").trim()) {
-          inlineNodes.push(node);
-        }
-        continue;
-      }
-
-      if (node.nodeType !== Node.ELEMENT_NODE) {
-        continue;
-      }
-
-      const element = node as Element;
-
-      if (isIntentionalListBreakParagraph(element)) {
-        flushInlineNodes();
-        pendingBreakCount += 1;
-        continue;
-      }
-
-      if (element.tagName === "BR") {
-        flushInlineNodes();
-        pendingBreakCount += 1;
-        continue;
-      }
-
-      if (element instanceof HTMLElement && isSingleBreakParagraph(element)) {
-        flushInlineNodes();
-        pendingBreakCount += 1;
-        continue;
-      }
-
-      if (blockTags.has(element.tagName)) {
-        flushInlineNodes();
-        flushPendingBreaks();
-        const block = serializeBlockElement(element);
-        if (block.text) {
-          tokens.push({ type: "block", block });
-        }
-        continue;
-      }
-
-      inlineNodes.push(node);
-    }
-
-    flushInlineNodes();
-    flushPendingBreaks();
-    return serializeMarkdownTokens(tokens);
-  }
-
   function renderEditorDocument(content: string, mode: EditorMode) {
     state.mode = mode;
     editor.dataset.placeholder = mode === "rich"
@@ -2983,62 +1734,6 @@ export async function initWorkbench(
     applyEditorFontSize();
     syncStructuredBlockStyles();
     editor.scrollTop = 0;
-  }
-
-  function applyFilePayloadToCurrentFile(
-    payload: FilePayload,
-    {
-      preserveSelection = false,
-      statusMessage,
-    }: {
-      preserveSelection?: boolean;
-      statusMessage?: string;
-    } = {},
-  ) {
-    const mode = isMarkdownFile(payload.path) ? "rich" : "plain";
-    const selectionSnapshot = preserveSelection ? captureEditorSelection() : null;
-
-    clearWriteConflict();
-    threadClient.clearThreadSelection();
-    state.currentThread = null;
-    state.currentPath = payload.path;
-    state.currentThreadId = "";
-    state.expectedMtimeMs = payload.mtimeMs;
-    state.headContent = payload.headContent;
-    editorClient.setCurrentThreadId("");
-    editorClient.setCurrentFilePath(payload.path);
-    editor.setAttribute("contenteditable", isTextLikeFile(payload.path) ? "true" : "false");
-    renderEditorDocument(payload.content, mode);
-    if (mode === "rich") {
-      state.baselineContent = refreshSaveGuardState().markdown;
-      state.currentContent = state.baselineContent;
-    } else {
-      state.baselineContent = payload.content;
-      state.currentContent = payload.content;
-      state.saveIssue = null;
-      updateSaveButtonState();
-    }
-    state.mode = mode;
-    state.dirty = false;
-    state.history = createInitialEditHistory(state.currentContent);
-    state.pendingWriteConflict = null;
-    state.saveIssue = null;
-    state.lastLoggedSaveIssue = null;
-    editorClient.setMode(mode);
-    editorClient.setDirty(false);
-    editorClient.setPendingWriteConflict(null);
-    editorClient.setSaveIssue(null);
-
-    if (selectionSnapshot) {
-      restoreEditorSelection(selectionSnapshot);
-      updateHistorySelection(captureEditorSelection());
-    }
-
-    editorClient.refreshStatusMessage(statusMessage);
-    editorClient.scheduleDiffGutterRefresh();
-    updateFloatingToolbar();
-    updateRevisionHoverToolbar();
-    updateCustomCaret();
   }
 
   function applyHistoryState(history: EditHistoryState, nextIndex: number) {
@@ -3074,17 +1769,6 @@ export async function initWorkbench(
     }
 
     applyHistoryState(normalizeEditHistory(state.history, state.currentContent), state.history.currentIndex + 1);
-  }
-
-  async function fetchFilePayload(filePath: string) {
-    const response = await fetch(`/api/file?path=${encodeURIComponent(filePath)}`, { cache: "no-store" });
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "Unable to open file." }));
-      editorClient.setStatusMessage(error.error);
-      return null;
-    }
-
-    return await response.json() as FilePayload;
   }
 
   async function refreshThreads() {
@@ -3160,94 +1844,6 @@ export async function initWorkbench(
     emitExplorerStateChange();
   }
 
-  async function openFile(filePath: string, { ignoreDirty = false, source = "open" }: { ignoreDirty?: boolean; source?: "open" | "reload" } = {}) {
-    if (source === "open" && filePath === state.currentPath) {
-      return;
-    }
-
-    if (state.currentPath) {
-      syncCurrentDraftBuffer();
-    }
-
-    if (source !== "reload") {
-      const bufferedDraft = state.draftBuffers.get(filePath);
-      if (bufferedDraft) {
-        editor.setAttribute("contenteditable", isTextLikeFile(filePath) ? "true" : "false");
-        restoreDraftBuffer(filePath, bufferedDraft);
-    syncCurrentSelectionToUrl({ filePath });
-        editorClient.refreshStatusMessage("Opened draft");
-        expandPath(filePath);
-        emitExplorerStateChange();
-        return;
-      }
-    }
-
-    const payload = await fetchFilePayload(filePath);
-    if (!payload) {
-      return;
-    }
-
-    if (source === "reload") {
-      state.draftBuffers.delete(filePath);
-      void persistDraftBuffer(filePath, null);
-    }
-
-    applyFilePayloadToCurrentFile(payload, {
-      statusMessage: `${source === "reload" ? "Reloaded" : "Read"} ${formatTimestamp(payload.updatedAt)}`,
-    });
-    syncCurrentSelectionToUrl({ filePath: payload.path });
-    expandPath(payload.path);
-    emitExplorerStateChange();
-  }
-
-  async function resetCurrentDraftToSaved() {
-    hideResetDraftDialog();
-    if (!state.currentPath) {
-      return;
-    }
-
-    await openFile(state.currentPath, { ignoreDirty: true, source: "reload" });
-    editor.focus();
-  }
-
-  async function resetCurrentFileToHead() {
-    hideResetDraftDialog();
-    if (!state.currentPath) {
-      return;
-    }
-
-    const response = await fetch("/api/file", {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        path: state.currentPath,
-        resetToHead: true,
-        expectedMtimeMs: state.expectedMtimeMs,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "Unable to reset file to HEAD." }));
-      if (response.status === 409) {
-        showWriteConflict(error as SaveConflictPayload);
-        syncCurrentDraftBuffer();
-        editorClient.refreshStatusMessage();
-        return;
-      }
-
-      editorClient.setStatusMessage(error.error);
-      return;
-    }
-
-    const payload = (await response.json()) as SaveFilePayload;
-    await projectClient.refreshProject();
-    await openFile(state.currentPath, { ignoreDirty: true, source: "reload" });
-    editorClient.refreshStatusMessage(`Reset to HEAD - ${formatTimestamp(payload.updatedAt)}`);
-    editor.focus();
-  }
-
   async function createEntry(parentPath: string, name: string, type: "directory" | "file") {
     const createdPath = await projectClient.createEntry(parentPath, name, type);
 
@@ -3259,170 +1855,6 @@ export async function initWorkbench(
     }
 
     return createdPath;
-  }
-
-  function expandPath(filePath: string) {
-    projectClient.expandPath(filePath);
-  }
-
-  async function saveCurrentFile({ force = false }: { force?: boolean } = {}) {
-    if (!state.currentPath) {
-      return;
-    }
-
-    const inspection = inspectCurrentDraft();
-
-    if (inspection.issue) {
-      syncSaveIssueLogging(inspection.issue, "save attempt blocked by markup mismatch", true);
-      editorClient.refreshStatusMessage();
-      return;
-    }
-
-    const content = inspection.content;
-    const response = await fetch("/api/file", {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        path: state.currentPath,
-        content,
-        expectedMtimeMs: state.expectedMtimeMs,
-        force,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "Unable to save file." }));
-      if (response.status === 409) {
-        showWriteConflict(error as SaveConflictPayload);
-        syncCurrentDraftBuffer();
-        editorClient.refreshStatusMessage();
-        return;
-      }
-      editorClient.setStatusMessage(error.error);
-      return;
-    }
-
-    const payload = (await response.json()) as SaveFilePayload;
-    state.baselineContent = content;
-    state.currentContent = content;
-    state.dirty = false;
-    state.expectedMtimeMs = payload.mtimeMs;
-    await projectClient.refreshProject();
-    state.lastLoggedSaveIssue = null;
-    clearWriteConflict();
-    state.draftBuffers.delete(state.currentPath);
-    void persistDraftBuffer(state.currentPath, null);
-    state.saveIssue = null;
-    updateSaveButtonState();
-    editorClient.refreshStatusMessage(`Saved - ${formatTimestamp(payload.updatedAt)}`);
-    emitExplorerStateChange();
-    editorClient.scheduleDiffGutterRefresh();
-  }
-
-  function getClosestListItem(node: Node | null) {
-    let current: Node | null = node;
-
-    while (current) {
-      if (current instanceof HTMLLIElement && editor.contains(current)) {
-        return current;
-      }
-      current = current.parentNode;
-    }
-
-    return null;
-  }
-
-  function getSelectedListItems(selection: Selection) {
-    if (!selection.rangeCount) {
-      return [];
-    }
-
-    const range = selection.getRangeAt(0);
-    if (selection.isCollapsed) {
-      const listItem = getClosestListItem(range.startContainer);
-      return listItem ? [listItem] : [];
-    }
-
-    const selectedItems = Array.from(editor.querySelectorAll("li")).filter((item) => range.intersectsNode(item));
-    return selectedItems.filter((item) => {
-      return !selectedItems.some((other) => other !== item && item.contains(other));
-    });
-  }
-
-  function getListItemTextContainer(item: HTMLLIElement) {
-    const details = getDirectChildDetailsElement(item);
-    if (!details) {
-      return item;
-    }
-
-    const summary = getDirectChildSummaryElement(details);
-    if (!summary) {
-      return details;
-    }
-
-    return getDirectChildSummaryTextElement(summary) ?? summary;
-  }
-
-  function getParentListElement(item: HTMLLIElement) {
-    return item.parentElement instanceof HTMLUListElement || item.parentElement instanceof HTMLOListElement
-      ? item.parentElement
-      : null;
-  }
-
-  function getOrCreateDirectChildList(element: Element, listTagName: string) {
-    const existingList = getDirectChildListElements(element).find((list) => list.tagName === listTagName);
-    if (existingList) {
-      return existingList;
-    }
-
-    const nextList = document.createElement(listTagName.toLowerCase());
-    element.append(nextList);
-    return nextList as HTMLUListElement | HTMLOListElement;
-  }
-
-  function getOrCreateNestedListForItem(item: HTMLLIElement, listTagName: string) {
-    const details = getDirectChildDetailsElement(item);
-    if (details) {
-      return getOrCreateDirectChildList(details, listTagName);
-    }
-
-    return getOrCreateDirectChildList(item, listTagName);
-  }
-
-  function splitListItemRunsByParent(selectedItems: HTMLLIElement[]) {
-    const runs: HTMLLIElement[][] = [];
-    let currentRun: HTMLLIElement[] = [];
-
-    for (const item of selectedItems) {
-      const parentList = getParentListElement(item);
-      if (!parentList) {
-        if (currentRun.length) {
-          runs.push(currentRun);
-          currentRun = [];
-        }
-        continue;
-      }
-
-      const previousItem = currentRun[currentRun.length - 1];
-      const previousParentList = previousItem ? getParentListElement(previousItem) : null;
-      const isConsecutiveSibling = previousItem?.nextElementSibling === item;
-
-      if (!currentRun.length || (previousParentList === parentList && isConsecutiveSibling)) {
-        currentRun.push(item);
-        continue;
-      }
-
-      runs.push(currentRun);
-      currentRun = [item];
-    }
-
-    if (currentRun.length) {
-      runs.push(currentRun);
-    }
-
-    return runs;
   }
 
   function restoreListItemSelection(items: HTMLLIElement[], { collapsed }: { collapsed: boolean }) {
@@ -3479,29 +1911,6 @@ export async function initWorkbench(
     return beforeRange.toString().replaceAll("\u00a0", " ").trim() === "";
   }
 
-  async function refreshCurrentFileFromDiskIfSafe() {
-    if (
-      !state.currentPath ||
-      state.dirty ||
-      state.saveIssue ||
-      state.pendingWriteConflict
-    ) {
-      return;
-    }
-
-    const payload = await fetchFilePayload(state.currentPath);
-    if (!payload || payload.mtimeMs === state.expectedMtimeMs) {
-      return;
-    }
-
-    applyFilePayloadToCurrentFile(payload, {
-      preserveSelection: true,
-      statusMessage: `Updated from disk - ${formatTimestamp(payload.updatedAt)}`,
-    });
-    syncCurrentSelectionToUrl({ filePath: payload.path });
-    emitExplorerStateChange();
-  }
-
   function isSelectionAtElementEnd(selection: Selection, element: HTMLElement) {
     if (!selection.rangeCount || !selection.isCollapsed) {
       return false;
@@ -3516,163 +1925,6 @@ export async function initWorkbench(
     afterRange.selectNodeContents(element);
     afterRange.setStart(range.startContainer, range.startOffset);
     return afterRange.toString().replaceAll("\u00a0", " ").trim() === "";
-  }
-
-  function removeAdjacentCommentSpacing(element: HTMLElement) {
-    let previousNode = element.previousSibling;
-    while (previousNode) {
-      const nextPreviousNode = previousNode.previousSibling;
-      if (previousNode.nodeType === Node.TEXT_NODE && !(previousNode.textContent ?? "").trim()) {
-        previousNode.remove();
-        previousNode = nextPreviousNode;
-        continue;
-      }
-
-      if (
-        previousNode instanceof HTMLBRElement
-        || (previousNode instanceof HTMLElement && isSingleBreakParagraph(previousNode))
-      ) {
-        previousNode.remove();
-        previousNode = nextPreviousNode;
-        continue;
-      }
-
-      break;
-    }
-
-    let nextNode = element.nextSibling;
-    while (nextNode) {
-      const nextNextNode = nextNode.nextSibling;
-      if (nextNode.nodeType === Node.TEXT_NODE && !(nextNode.textContent ?? "").trim()) {
-        nextNode.remove();
-        nextNode = nextNextNode;
-        continue;
-      }
-
-      if (
-        nextNode instanceof HTMLBRElement
-        || (nextNode instanceof HTMLElement && isSingleBreakParagraph(nextNode))
-      ) {
-        nextNode.remove();
-        nextNode = nextNextNode;
-        continue;
-      }
-
-      break;
-    }
-  }
-
-  function convertCommentBlockToParagraph(paragraph: HTMLElement) {
-    const commentBody = parseBlockCommentBody(paragraph.textContent ?? "") ?? (paragraph.textContent ?? "");
-    paragraph.removeAttribute("data-block-comment");
-    setPlainBlockText(paragraph, commentBody);
-    removeAdjacentCommentSpacing(paragraph);
-  }
-
-  function outdentListItems(selectedItems: HTMLLIElement[]) {
-    const movedItems: HTMLLIElement[] = [];
-
-    for (const run of splitListItemRunsByParent(selectedItems)) {
-      const firstItem = run[0];
-      const lastItem = run[run.length - 1];
-      const parentList = getParentListElement(firstItem);
-      if (!parentList) {
-        continue;
-      }
-
-      const parentItem = parentList.closest<HTMLLIElement>("li");
-      if (!parentItem || !editor.contains(parentItem)) {
-        continue;
-      }
-
-      const ancestorList = getParentListElement(parentItem);
-      if (!ancestorList) {
-        continue;
-      }
-
-      const insertionPoint = parentItem.nextSibling;
-      const trailingSiblings: HTMLLIElement[] = [];
-      let trailingNode = lastItem.nextElementSibling;
-
-      while (trailingNode) {
-        const nextTrailingNode = trailingNode.nextElementSibling;
-        if (trailingNode instanceof HTMLLIElement) {
-          trailingSiblings.push(trailingNode);
-        }
-        trailingNode = nextTrailingNode;
-      }
-
-      for (const item of run) {
-        ancestorList.insertBefore(item, insertionPoint);
-        movedItems.push(item);
-      }
-
-      if (trailingSiblings.length) {
-        const nestedList = getOrCreateNestedListForItem(lastItem, parentList.tagName);
-        for (const trailingItem of trailingSiblings) {
-          nestedList.append(trailingItem);
-        }
-      }
-
-      if (!parentList.children.length) {
-        parentList.remove();
-      }
-    }
-
-    return movedItems;
-  }
-
-  function indentListItems(selectedItems: HTMLLIElement[]) {
-    const movedItems: HTMLLIElement[] = [];
-
-    for (const run of splitListItemRunsByParent(selectedItems)) {
-      const firstItem = run[0];
-      const parentList = getParentListElement(firstItem);
-      if (!parentList) {
-        continue;
-      }
-
-      const previousSibling = firstItem.previousElementSibling instanceof HTMLLIElement
-        ? firstItem.previousElementSibling
-        : null;
-      if (!previousSibling) {
-        continue;
-      }
-
-      const nestedList = getOrCreateNestedListForItem(previousSibling, parentList.tagName);
-      for (const item of run) {
-        nestedList.append(item);
-        movedItems.push(item);
-      }
-
-      if (!parentList.children.length) {
-        parentList.remove();
-      }
-    }
-
-    return movedItems;
-  }
-
-  function isSelectionAtListItemStart(selection: Selection, item: HTMLLIElement) {
-    if (!selection.rangeCount || !selection.isCollapsed) {
-      return false;
-    }
-
-    const range = selection.getRangeAt(0);
-    const container = getListItemTextContainer(item);
-    if (!container.contains(range.startContainer)) {
-      return false;
-    }
-
-    const beforeRange = document.createRange();
-    beforeRange.selectNodeContents(container);
-    beforeRange.setEnd(range.startContainer, range.startOffset);
-    return beforeRange.toString().replaceAll("\u00a0", " ").trim() === "";
-  }
-
-  function isTopLevelListItem(item: HTMLLIElement) {
-    const parentList = getParentListElement(item);
-    return Boolean(parentList && (!parentList.closest("li") || !editor.contains(parentList.closest("li"))));
   }
 
   function breakOutOfListItem(listItem: HTMLLIElement) {
@@ -3893,475 +2145,6 @@ export async function initWorkbench(
     return null;
   }
 
-  function getClosestInlineFormatElement(
-    node: Node | null,
-    format: PendingInlineFormatKey,
-  ) {
-    let current: Node | null = node;
-
-    while (current && current !== editor) {
-      if (current instanceof HTMLElement && elementMatchesInlineFormat(current, format)) {
-        return current;
-      }
-      current = current.parentNode;
-    }
-
-    return null;
-  }
-
-  function createEmptyPendingInlineFormats(): PendingInlineFormats {
-    return {
-      bold: false,
-      code: false,
-      comment: false,
-      del: false,
-      ins: false,
-      italic: false,
-    };
-  }
-
-  function getInlineFormatStateFromNode(node: Node | null): PendingInlineFormats {
-    const formats = createEmptyPendingInlineFormats();
-
-    for (const format of INLINE_FORMAT_ORDER) {
-      formats[format.key] = Boolean(
-        getClosestInlineFormatElement(node, format.key),
-      );
-    }
-
-    return formats;
-  }
-
-  function getInlineMarksFromPendingFormats(formats: PendingInlineFormats) {
-    return normalizeInlineMarks(
-      INLINE_FORMAT_ORDER
-        .filter((format) => formats[format.key])
-        .map((format) => getInlineMarkForFormat(format.key)),
-    );
-  }
-
-  function arePendingInlineFormatsEqual(
-    left: PendingInlineFormats | null,
-    right: PendingInlineFormats | null,
-  ) {
-    if (!left || !right) {
-      return left === right;
-    }
-
-    return left.bold === right.bold
-      && left.italic === right.italic
-      && left.code === right.code
-      && left.comment === right.comment
-      && left.del === right.del
-      && left.ins === right.ins;
-  }
-
-  function shouldPreservePendingInlineFormatsForSelection() {
-    if (!pendingInlineFormats) {
-      return false;
-    }
-
-    const selection = window.getSelection();
-    if (!selection?.rangeCount || !selection.isCollapsed || !editor.contains(selection.anchorNode)) {
-      return false;
-    }
-
-    const range = selection.getRangeAt(0);
-    const currentFormats = getInlineFormatStateFromNode(range.startContainer);
-    if (arePendingInlineFormatsEqual(currentFormats, pendingInlineFormats)) {
-      return true;
-    }
-
-    return hasAdjacentEmptyPendingInlineWrapper(range, pendingInlineFormats);
-  }
-
-  function hasAdjacentEmptyPendingInlineWrapper(range: Range, formats: PendingInlineFormats) {
-    return findAdjacentInlineWrapper(range, formats, { requireEmpty: true }) !== null;
-  }
-
-  function findAdjacentInlineWrapper(
-    range: Range,
-    formats: PendingInlineFormats,
-    { requireEmpty }: { requireEmpty: boolean },
-  ) {
-    const targetContainer = getInlineRunContainer(range.startContainer);
-    if (!targetContainer) {
-      return null;
-    }
-
-    const pendingMarks = getInlineMarksFromPendingFormats(formats);
-    if (!pendingMarks.length) {
-      return null;
-    }
-
-    const candidateNodes: Node[] = [];
-    if (range.startContainer instanceof Text) {
-      if (range.startOffset === 0 && range.startContainer.previousSibling) {
-        candidateNodes.push(range.startContainer.previousSibling);
-      }
-      if (range.startOffset === (range.startContainer.textContent?.length ?? 0) && range.startContainer.nextSibling) {
-        candidateNodes.push(range.startContainer.nextSibling);
-      }
-    } else if (range.startContainer instanceof HTMLElement) {
-      const beforeNode = range.startContainer.childNodes[range.startOffset - 1];
-      const afterNode = range.startContainer.childNodes[range.startOffset];
-      if (beforeNode) {
-        candidateNodes.push(beforeNode);
-      }
-      if (afterNode) {
-        candidateNodes.push(afterNode);
-      }
-    }
-
-    return candidateNodes.find((node): node is HTMLElement => {
-      if (!(node instanceof HTMLElement)) {
-        return false;
-      }
-
-      const marks = getMarksFromInlineWrapper(node, { requireEmpty });
-      return Boolean(marks && areInlineMarkListsEqual(marks, pendingMarks));
-    }) ?? null;
-  }
-
-  function getMarksFromInlineWrapper(node: HTMLElement, { requireEmpty }: { requireEmpty: boolean }): InlineMark[] | null {
-    const mark = getInlineMarkForElement(node);
-    if (!mark) {
-      return null;
-    }
-
-    const nonWhitespaceText = (node.textContent ?? "").replaceAll("\u00a0", "").trim();
-    if (requireEmpty && nonWhitespaceText.length > 0) {
-      return null;
-    }
-
-    const childElements = Array.from(node.children).filter((child): child is HTMLElement => child instanceof HTMLElement);
-    const nonElementChildren = Array.from(node.childNodes).filter((child) => child.nodeType !== Node.ELEMENT_NODE);
-    if (requireEmpty && nonElementChildren.some((child) => (child.textContent ?? "").replaceAll("\u00a0", "").trim().length > 0)) {
-      return null;
-    }
-
-    if (!childElements.length) {
-      return [mark];
-    }
-
-    if (childElements.length !== 1) {
-      return null;
-    }
-
-    const childMarks = getMarksFromInlineWrapper(childElements[0], { requireEmpty });
-    if (!childMarks) {
-      return null;
-    }
-
-    return normalizeInlineMarks([mark, ...childMarks]);
-  }
-
-  function moveCaretIntoAdjacentPendingInlineWrapper(formats: PendingInlineFormats) {
-    const selection = window.getSelection();
-    if (!selection?.rangeCount || !selection.isCollapsed || !editor.contains(selection.anchorNode)) {
-      return false;
-    }
-
-    const range = selection.getRangeAt(0);
-    const wrapper = findAdjacentInlineWrapper(range, formats, { requireEmpty: false });
-    if (!wrapper) {
-      return false;
-    }
-
-    let deepestWrapper: HTMLElement = wrapper;
-    while (true) {
-      const childElements = Array.from(deepestWrapper.children).filter((child): child is HTMLElement => child instanceof HTMLElement);
-      if (childElements.length !== 1) {
-        break;
-      }
-
-      const childMarks = getMarksFromInlineWrapper(childElements[0], { requireEmpty: false });
-      if (!childMarks) {
-        break;
-      }
-
-      deepestWrapper = childElements[0];
-    }
-
-    const nextRange = document.createRange();
-    const parentContainer = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement;
-    const wrapperBeforeCaret = parentContainer === wrapper.parentElement
-      && range.startContainer instanceof Element
-      && range.startContainer.childNodes[range.startOffset - 1] === wrapper;
-    nextRange.setStart(deepestWrapper, wrapperBeforeCaret ? deepestWrapper.childNodes.length : 0);
-    nextRange.collapse(true);
-    preservePendingInlineFormatSelectionChanges = Math.max(preservePendingInlineFormatSelectionChanges, 2);
-    selection.removeAllRanges();
-    selection.addRange(nextRange);
-    return true;
-  }
-
-  function clearPendingInlineFormats() {
-    if (!pendingInlineFormats) {
-      return;
-    }
-
-    pendingInlineFormats = null;
-    preservePendingInlineFormatSelectionChanges = 0;
-    updateCustomCaret();
-  }
-
-  function togglePendingInlineFormat(format: PendingInlineFormatKey) {
-    const selection = window.getSelection();
-    if (!selection?.rangeCount || !selection.isCollapsed || !editor.contains(selection.anchorNode)) {
-      return false;
-    }
-
-    const baseFormats = pendingInlineFormats ?? getInlineFormatStateFromNode(selection.getRangeAt(0).startContainer);
-    const nextFormats = { ...baseFormats, [format]: !baseFormats[format] } satisfies PendingInlineFormats;
-    const activeFormatElement = getClosestInlineFormatElement(selection.getRangeAt(0).startContainer, format);
-
-    if (!nextFormats[format] && activeFormatElement) {
-      splitInlineFormatElementAtCaret(activeFormatElement);
-      pendingInlineFormats = nextFormats;
-      updateHistorySelection(captureEditorSelection());
-      syncCurrentDraftBuffer();
-      editorClient.refreshStatusMessage();
-      updateFloatingToolbar();
-      updateRevisionHoverToolbar();
-      updateCustomCaret();
-      return true;
-    }
-
-    pendingInlineFormats = nextFormats;
-    materializePendingInlineFormatsAtCaret(nextFormats);
-    updateCustomCaret();
-    return true;
-  }
-
-  function materializePendingInlineFormatsAtCaret(formats: PendingInlineFormats) {
-    const selection = window.getSelection();
-    if (!selection?.rangeCount || !selection.isCollapsed || !editor.contains(selection.anchorNode)) {
-      return false;
-    }
-
-    const targetContainer = getInlineRunContainer(selection.getRangeAt(0).startContainer);
-    if (!targetContainer) {
-      return false;
-    }
-
-    const range = selection.getRangeAt(0);
-    if (!targetContainer.contains(range.startContainer) || !targetContainer.contains(range.endContainer)) {
-      return false;
-    }
-
-    const marker = createInlineSelectionMarker("caret");
-    range.insertNode(marker);
-    const markerMarks = getInlineMarksFromPendingFormats(formats);
-    const rebuiltLeaves = normalizeInlineLeaves(
-      flattenInlineContent(targetContainer.childNodes).map((leaf) => {
-        if (leaf.type === "marker" && leaf.role === "caret") {
-          return {
-            ...leaf,
-            marks: markerMarks,
-          } satisfies InlineLeaf;
-        }
-
-        return leaf;
-      }),
-    );
-
-    rebuildInlineRunContainer(targetContainer, rebuiltLeaves);
-    preservePendingInlineFormatSelectionChanges = Math.max(preservePendingInlineFormatSelectionChanges, 2);
-    restoreCaretToMarker(targetContainer.querySelector<HTMLElement>('[data-inline-selection-marker="caret"]') ?? marker);
-    return true;
-  }
-
-  function shouldClearPendingInlineFormatsForKey(event: KeyboardEvent) {
-    if (event.metaKey || event.ctrlKey || event.altKey) {
-      return false;
-    }
-
-    return [
-      "ArrowLeft",
-      "ArrowRight",
-      "ArrowUp",
-      "ArrowDown",
-      "Home",
-      "End",
-      "PageUp",
-      "PageDown",
-    ].includes(event.key);
-  }
-
-  function createInlineElementFromFragment(source: HTMLElement, fragment: DocumentFragment) {
-    if (!fragment.childNodes.length) {
-      return null;
-    }
-
-    const element = source.cloneNode(false) as HTMLElement;
-    element.append(fragment);
-    return element;
-  }
-
-  function createInlineMarkElement(mark: InlineMark) {
-    if (mark.tag === "comment") {
-      const element = document.createElement("span");
-      element.dataset.inlineComment = "true";
-      return element;
-    }
-
-    const element = document.createElement(mark.tag);
-    if (mark.tag === "a") {
-      element.setAttribute("href", mark.href ?? "");
-    }
-    return element;
-  }
-
-  function splitInlineFormatElementAtCaret(element: HTMLElement) {
-    const selection = window.getSelection();
-    if (!selection?.rangeCount || !selection.isCollapsed) {
-      return false;
-    }
-
-    const range = selection.getRangeAt(0);
-    if (!element.contains(range.startContainer)) {
-      return false;
-    }
-
-    const beforeRange = document.createRange();
-    beforeRange.setStart(element, 0);
-    beforeRange.setEnd(range.startContainer, range.startOffset);
-    const beforeFragment = beforeRange.cloneContents();
-
-    const afterRange = document.createRange();
-    afterRange.setStart(range.startContainer, range.startOffset);
-    afterRange.setEnd(element, element.childNodes.length);
-    const afterFragment = afterRange.cloneContents();
-
-    const replacement = document.createDocumentFragment();
-    const leadingElement = createInlineElementFromFragment(element, beforeFragment);
-    if (leadingElement) {
-      replacement.append(leadingElement);
-    }
-
-    const marker = document.createElement("span");
-    marker.hidden = true;
-    marker.dataset.pendingInlineCaret = "true";
-    replacement.append(marker);
-
-    const trailingElement = createInlineElementFromFragment(element, afterFragment);
-    if (trailingElement) {
-      replacement.append(trailingElement);
-    }
-
-    element.replaceWith(replacement);
-    preservePendingInlineFormatSelectionChanges = 2;
-    restoreCaretToMarker(marker);
-    return true;
-  }
-
-  function insertTextWithPendingInlineFormats(text: string) {
-    const selection = window.getSelection();
-    if (!selection?.rangeCount || !selection.isCollapsed || !pendingInlineFormats) {
-      return false;
-    }
-
-    moveCaretIntoAdjacentPendingInlineWrapper(pendingInlineFormats);
-
-    const insertionSelection = window.getSelection();
-    if (!insertionSelection?.rangeCount || !insertionSelection.isCollapsed) {
-      return false;
-    }
-
-    const insertionRange = insertionSelection.getRangeAt(0);
-    if (!editor.contains(insertionRange.startContainer)) {
-      return false;
-    }
-
-    const activeAncestors: HTMLElement[] = [];
-    let currentNode: Node | null = insertionRange.startContainer;
-    while (currentNode && currentNode !== editor) {
-      if (currentNode instanceof HTMLElement) {
-        const currentElement = currentNode;
-        const formatKey = INLINE_FORMAT_ORDER.find((format) => elementMatchesInlineFormat(currentElement, format.key))?.key;
-
-        if (formatKey) {
-          activeAncestors.push(currentElement);
-        }
-      }
-      currentNode = currentNode.parentNode;
-    }
-
-    for (const ancestor of activeAncestors) {
-      const formatKey = INLINE_FORMAT_ORDER.find((format) => elementMatchesInlineFormat(ancestor, format.key))?.key;
-
-      if (formatKey && !pendingInlineFormats[formatKey]) {
-        splitInlineFormatElementAtCaret(ancestor);
-      }
-    }
-
-    const currentFormats = getInlineFormatStateFromNode(insertionRange.startContainer);
-    const textNode = document.createTextNode(text);
-    let rootNode: Node = textNode;
-
-    for (const format of INLINE_FORMAT_ORDER) {
-      if (pendingInlineFormats[format.key] && !currentFormats[format.key]) {
-        const wrapper = createInlineMarkElement(getInlineMarkForFormat(format.key));
-        wrapper.append(rootNode);
-        rootNode = wrapper;
-      }
-    }
-
-    insertionRange.insertNode(rootNode);
-    const caretMarker = createInlineSelectionMarker("caret");
-    textNode.parentNode?.insertBefore(caretMarker, textNode.nextSibling);
-    rootNode.parentNode?.normalize();
-    preservePendingInlineFormatSelectionChanges = 2;
-    restoreCaretToMarker(caretMarker);
-    syncEditorAfterStructuralChange();
-    return true;
-  }
-
-  function handlePendingInlineBeforeInput(event: InputEvent) {
-    if (
-      !pendingInlineFormats
-      || !["insertText", "insertReplacementText"].includes(event.inputType)
-      || event.data === null
-    ) {
-      return false;
-    }
-
-    event.preventDefault();
-    return insertTextWithPendingInlineFormats(event.data);
-  }
-
-  function getCollapsedRangeRect(range: Range) {
-    const directRect = range.getBoundingClientRect();
-    if (directRect.height > 0) {
-      return directRect;
-    }
-
-    const rects = range.getClientRects();
-    if (rects.length > 0 && rects[0].height > 0) {
-      return rects[0];
-    }
-
-    const marker = document.createElement("span");
-    marker.textContent = "\u200b";
-    marker.dataset.caretMeasure = "true";
-    marker.style.position = "relative";
-    marker.style.display = "inline-block";
-    marker.style.width = "0";
-    marker.style.overflow = "hidden";
-    marker.style.pointerEvents = "none";
-    marker.style.lineHeight = "inherit";
-
-    const measurementRange = range.cloneRange();
-    measurementRange.insertNode(marker);
-    const markerRect = marker.getBoundingClientRect();
-    marker.remove();
-    const selection = window.getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-    return markerRect;
-  }
-
   function getExpandedRangeRect(range: Range) {
     const directRect = range.getBoundingClientRect();
     if (directRect.width > 0 || directRect.height > 0) {
@@ -4383,30 +2166,6 @@ export async function initWorkbench(
       left: viewport?.offsetLeft ?? 0,
       top: viewport?.offsetTop ?? 0,
       width: viewport?.width ?? window.innerWidth,
-    };
-  }
-
-  function getCaretInlineContext(range: Range): CaretRenderContext | null {
-    if (
-      !editorHasFocus ||
-      isComposing ||
-      !editor.contains(range.startContainer)
-    ) {
-      return null;
-    }
-
-    const rect = getCollapsedRangeRect(range);
-    if (!rect.width && !rect.height) {
-      return null;
-    }
-
-    const formats = pendingInlineFormats ?? getInlineFormatStateFromNode(range.startContainer);
-
-    return {
-      bold: formats.bold,
-      italic: formats.italic,
-      kind: formats.del ? "del" : formats.ins ? "ins" : formats.comment ? "comment" : formats.code ? "code" : "default",
-      rect,
     };
   }
 
@@ -4451,57 +2210,6 @@ export async function initWorkbench(
     customCaret.style.height = `${caretHeight}px`;
   }
 
-  function getInlineFormatTagNames(format: string) {
-    switch (format) {
-      case "italic":
-      case "em":
-      case "i":
-        return ["EM", "I"] as const;
-      case "bold":
-      case "strong":
-      case "b":
-        return ["STRONG", "B"] as const;
-      case "code":
-        return ["CODE"] as const;
-      case "comment":
-        return ["SPAN"] as const;
-      case "del":
-      case "s":
-      case "strike":
-        return ["DEL", "S", "STRIKE"] as const;
-      case "ins":
-        return ["INS"] as const;
-      default:
-        return null;
-    }
-  }
-
-  function isInlineCommentElement(element: Element | null): element is HTMLElement {
-    return element instanceof HTMLElement
-      && element.tagName === "SPAN"
-      && element.dataset.inlineComment === "true";
-  }
-
-  function isBlockLikeChildElement(element: HTMLElement) {
-    if (element.dataset.summaryText === "true") {
-      return false;
-    }
-
-    if (/^(ul|ol|li|details|summary|pre|hr)$/i.test(element.tagName)) {
-      return true;
-    }
-
-    if (/^(p|div|h1|h2|h3|h4|h5|h6|blockquote)$/i.test(element.tagName)) {
-      return true;
-    }
-
-    return false;
-  }
-
-  function hasDirectBlockLikeChildren(element: HTMLElement) {
-    return Array.from(element.children).some((child) => child instanceof HTMLElement && isBlockLikeChildElement(child));
-  }
-
   function isInlineRunContainer(element: HTMLElement) {
     if (element === editor) {
       return false;
@@ -4540,518 +2248,6 @@ export async function initWorkbench(
     return null;
   }
 
-  function getInlineMarkForElement(element: Element): InlineMark | null {
-    if (isInlineCommentElement(element)) {
-      return { tag: "comment" };
-    }
-
-    const tag = element.tagName.toLowerCase();
-    switch (tag) {
-      case "strong":
-        return { tag: "strong" };
-      case "em":
-        return { tag: "em" };
-      case "code":
-        return { tag: "code" };
-      case "del":
-        return { tag: "del" };
-      case "ins":
-        return { tag: "ins" };
-      case "a":
-        return { tag: "a", href: element.getAttribute("href") ?? "" };
-      default:
-        return null;
-    }
-  }
-
-  function getInlineMarkForFormat(format: PendingInlineFormatKey): InlineMark {
-    switch (format) {
-      case "bold":
-        return { tag: "strong" };
-      case "italic":
-        return { tag: "em" };
-      case "code":
-        return { tag: "code" };
-      case "comment":
-        return { tag: "comment" };
-      case "del":
-        return { tag: "del" };
-      case "ins":
-        return { tag: "ins" };
-      default:
-        return { tag: "strong" };
-    }
-  }
-
-  function areInlineMarksEqual(left: InlineMark, right: InlineMark) {
-    return left.tag === right.tag && left.href === right.href;
-  }
-
-  function areInlineMarkListsEqual(left: InlineMark[], right: InlineMark[]) {
-    return left.length === right.length
-      && left.every((mark, index) => areInlineMarksEqual(mark, right[index]));
-  }
-
-  function normalizeInlineMarks(marks: InlineMark[]) {
-    const normalized = [...marks].sort((left, right) => {
-      const rankDifference = INLINE_MARK_RANK[left.tag] - INLINE_MARK_RANK[right.tag];
-      if (rankDifference !== 0) {
-        return rankDifference;
-      }
-
-      if (left.tag === "a" && right.tag === "a") {
-        return (left.href ?? "").localeCompare(right.href ?? "");
-      }
-
-      return 0;
-    });
-
-    const deduped: InlineMark[] = [];
-
-    for (const mark of normalized) {
-      const previousMark = deduped.at(-1);
-      if (previousMark && areInlineMarksEqual(previousMark, mark)) {
-        continue;
-      }
-
-      deduped.push(mark);
-    }
-
-    return deduped;
-  }
-
-  function normalizeInlineLeaves(leaves: InlineLeaf[]) {
-    const commentPaddedLeaves = normalizeInlineCommentPadding(leaves);
-    const result: InlineLeaf[] = [];
-
-    for (const leaf of commentPaddedLeaves) {
-      appendInlineLeaf(result, leaf);
-    }
-
-    return result;
-  }
-
-  function normalizeInlineLeavesForSerialization(leaves: InlineLeaf[]) {
-    const boundaryNormalizedLeaves: InlineLeaf[] = [];
-
-    for (const leaf of leaves) {
-      for (const normalizedLeaf of normalizeInlineLeafBoundaries(leaf)) {
-        appendInlineLeaf(boundaryNormalizedLeaves, normalizedLeaf);
-      }
-    }
-
-    const commentPaddedLeaves = normalizeInlineCommentPadding(boundaryNormalizedLeaves);
-    const result: InlineLeaf[] = [];
-
-    for (const leaf of commentPaddedLeaves) {
-      appendInlineLeaf(result, leaf);
-    }
-
-    stripSingularTrailingBreak(result);
-    return result;
-  }
-
-  function stripSingularTrailingBreak(leaves: InlineLeaf[]) {
-    const lastLeaf = leaves.at(-1);
-    if (!lastLeaf || lastLeaf.type !== "break") {
-      return;
-    }
-
-    const previousLeaf = leaves.at(-2);
-    if (previousLeaf?.type === "break") {
-      return;
-    }
-
-    leaves.pop();
-  }
-
-  function normalizeInlineLeafBoundaries(leaf: InlineLeaf) {
-    if (
-      leaf.type !== "text"
-      || leaf.marks.length === 0
-      || leaf.text.length === 0
-      || leaf.marks.some((mark) => mark.tag === "ins" || mark.tag === "del")
-    ) {
-      return [leaf];
-    }
-
-    const parts: InlineLeaf[] = [];
-    const leadingWhitespaceMatch = leaf.text.match(/^[ \t\u00a0]+/);
-    const trailingWhitespaceMatch = leaf.text.match(/[ \t\u00a0]+$/);
-    const leadingWhitespace = leadingWhitespaceMatch?.[0] ?? "";
-    const trailingWhitespace = trailingWhitespaceMatch?.[0] ?? "";
-    const contentStart = leadingWhitespace.length;
-    const contentEnd = leaf.text.length - trailingWhitespace.length;
-    const coreText = leaf.text.slice(contentStart, Math.max(contentStart, contentEnd));
-
-    if (leadingWhitespace) {
-      parts.push({
-        type: "text",
-        marks: [],
-        text: leadingWhitespace,
-      });
-    }
-
-    if (coreText) {
-      parts.push({
-        ...leaf,
-        text: coreText,
-      });
-    }
-
-    if (trailingWhitespace) {
-      parts.push({
-        type: "text",
-        marks: [],
-        text: trailingWhitespace,
-      });
-    }
-
-    return parts.length ? parts : [];
-  }
-
-  function leafHasCommentMark(leaf: InlineLeaf) {
-    const marks = leaf.type === "marker" ? leaf.marks ?? [] : leaf.marks;
-    return marks.some((mark) => mark.tag === "comment");
-  }
-
-  function isTextLeafWithVisibleContent(leaf: InlineLeaf | undefined): leaf is Extract<InlineLeaf, { type: "text" }> {
-    return !!leaf && leaf.type === "text" && /[^\t \u00a0]/.test(leaf.text);
-  }
-
-  function ensureSinglePlainSpaceBeforeComment(result: InlineLeaf[], commentStartIndex: number) {
-    const previousLeaf = result[commentStartIndex - 1];
-    if (!previousLeaf || previousLeaf.type !== "text") {
-      return commentStartIndex;
-    }
-
-    if (previousLeaf.marks.length > 0) {
-      if (/[^\t \u00a0]/.test(previousLeaf.text)) {
-        result.splice(commentStartIndex, 0, {
-          type: "text",
-          marks: [],
-          text: " ",
-        });
-        return commentStartIndex + 1;
-      }
-      return commentStartIndex;
-    }
-
-    previousLeaf.text = previousLeaf.text.replace(/[ \t\u00a0]+$/g, "");
-    if (previousLeaf.text.length === 0) {
-      result.splice(commentStartIndex - 1, 1);
-      commentStartIndex -= 1;
-    }
-
-    const updatedPreviousLeaf = result[commentStartIndex - 1];
-    if (isTextLeafWithVisibleContent(updatedPreviousLeaf)) {
-      result.splice(commentStartIndex, 0, {
-        type: "text",
-          marks: [],
-          text: " ",
-      });
-      return commentStartIndex + 1;
-    }
-
-    return commentStartIndex;
-  }
-
-  function ensureSinglePlainSpaceAfterComment(result: InlineLeaf[], commentEndIndex: number) {
-    const nextLeaf = result[commentEndIndex + 1];
-    if (!nextLeaf || nextLeaf.type !== "text") {
-      return;
-    }
-
-    if (nextLeaf.marks.length > 0) {
-      if (/[^\t \u00a0]/.test(nextLeaf.text)) {
-        result.splice(commentEndIndex + 1, 0, {
-          type: "text",
-          marks: [],
-          text: " ",
-        });
-      }
-      return;
-    }
-
-    nextLeaf.text = nextLeaf.text.replace(/^[ \t\u00a0]+/g, "");
-    if (nextLeaf.text.length === 0) {
-      result.splice(commentEndIndex + 1, 1);
-    }
-
-    const updatedNextLeaf = result[commentEndIndex + 1];
-    if (isTextLeafWithVisibleContent(updatedNextLeaf)) {
-      result.splice(commentEndIndex + 1, 0, {
-        type: "text",
-        marks: [],
-        text: " ",
-      });
-    }
-  }
-
-  function normalizeInlineCommentPadding(leaves: InlineLeaf[]) {
-    const result = [...leaves];
-    let index = 0;
-
-    while (index < result.length) {
-      if (!leafHasCommentMark(result[index])) {
-        index += 1;
-        continue;
-      }
-
-      let segmentStart = index;
-      let segmentEnd = index;
-      while (segmentEnd + 1 < result.length && leafHasCommentMark(result[segmentEnd + 1])) {
-        segmentEnd += 1;
-      }
-
-      segmentStart = ensureSinglePlainSpaceBeforeComment(result, segmentStart);
-      segmentEnd = segmentStart;
-      while (segmentEnd + 1 < result.length && leafHasCommentMark(result[segmentEnd + 1])) {
-        segmentEnd += 1;
-      }
-      ensureSinglePlainSpaceAfterComment(result, segmentEnd);
-
-      index = segmentEnd + 1;
-    }
-
-    return result;
-  }
-
-  function appendInlineLeaf(leaves: InlineLeaf[], nextLeaf: InlineLeaf) {
-    const normalizedLeaf = nextLeaf.type === "marker"
-      ? {
-        ...nextLeaf,
-        marks: nextLeaf.marks ? normalizeInlineMarks(nextLeaf.marks) : undefined,
-      } satisfies InlineLeaf
-      : { ...nextLeaf, marks: normalizeInlineMarks(nextLeaf.marks) } satisfies InlineLeaf;
-
-    if (normalizedLeaf.type !== "text" || !normalizedLeaf.text) {
-      leaves.push(normalizedLeaf);
-      return;
-    }
-
-    const previousLeaf = leaves.at(-1);
-    if (
-      previousLeaf?.type === "text"
-      && areInlineMarkListsEqual(previousLeaf.marks, normalizedLeaf.marks)
-    ) {
-      previousLeaf.text += normalizedLeaf.text;
-      return;
-    }
-
-    leaves.push(normalizedLeaf);
-  }
-
-  function flattenInlineContent(nodes: Iterable<Node>, marks: InlineMark[] = [], leaves: InlineLeaf[] = []) {
-    for (const node of nodes) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        appendInlineLeaf(leaves, {
-          type: "text",
-          marks: [...marks],
-          text: node.textContent ?? "",
-        });
-        continue;
-      }
-
-      if (node.nodeType !== Node.ELEMENT_NODE) {
-        continue;
-      }
-
-      const element = node as HTMLElement;
-      const markerRole = element.dataset.inlineSelectionMarker;
-      if (markerRole === "caret" || markerRole === "selection-start" || markerRole === "selection-end") {
-        leaves.push({ type: "marker", role: markerRole, marks: [...marks] });
-        continue;
-      }
-
-      if (element.tagName === "BR") {
-        leaves.push({ type: "break", marks: [...marks] });
-        continue;
-      }
-
-      const mark = getInlineMarkForElement(element);
-      if (mark) {
-        flattenInlineContent(element.childNodes, [...marks, mark], leaves);
-        continue;
-      }
-
-      flattenInlineContent(element.childNodes, marks, leaves);
-    }
-
-    return leaves;
-  }
-
-  function appendCanonicalInlineLeaf(container: HTMLElement, leaf: InlineLeaf) {
-    const marks = leaf.type === "marker" ? leaf.marks ?? [] : leaf.marks;
-    let contentNode: Node;
-
-    if (leaf.type === "marker") {
-      contentNode = createInlineSelectionMarker(leaf.role);
-    } else if (leaf.type === "break") {
-      contentNode = document.createElement("br");
-    } else {
-      contentNode = document.createTextNode(leaf.text);
-    }
-
-    if (marks.length) {
-      const existingRun = getDeepestMatchingMarkedRun(container.lastChild, marks);
-      if (existingRun) {
-        existingRun.append(contentNode);
-        return;
-      }
-
-      for (let index = marks.length - 1; index >= 0; index -= 1) {
-        const wrapper = createInlineMarkElement(marks[index]);
-        wrapper.append(contentNode);
-        contentNode = wrapper;
-      }
-      container.append(contentNode);
-      return;
-    }
-
-    if (leaf.type === "text") {
-      const wrapper = document.createElement("span");
-      wrapper.append(contentNode);
-      contentNode = wrapper;
-    }
-
-    container.append(contentNode);
-  }
-
-  function getDeepestMatchingMarkedRun(node: Node | null, marks: InlineMark[]) {
-    if (!(node instanceof HTMLElement) || !marks.length) {
-      return null;
-    }
-
-    let current: HTMLElement | null = node;
-    for (let index = 0; index < marks.length; index += 1) {
-      if (!current) {
-        return null;
-      }
-
-      const currentMark = getInlineMarkForElement(current);
-      if (!currentMark || !areInlineMarksEqual(currentMark, marks[index])) {
-        return null;
-      }
-
-      if (index === marks.length - 1) {
-        return current;
-      }
-
-      const childElements = Array.from(current.children).filter((child): child is HTMLElement => child instanceof HTMLElement);
-      if (childElements.length !== 1) {
-        return null;
-      }
-
-      current = childElements[0];
-    }
-
-    return null;
-  }
-
-  function rebuildInlineRunContainer(container: HTMLElement, leaves: InlineLeaf[]) {
-    container.replaceChildren();
-
-    if (!leaves.length) {
-      container.append(document.createElement("br"));
-      return;
-    }
-
-    for (const leaf of leaves) {
-      if (leaf.type === "text" && leaf.text.length === 0) {
-        continue;
-      }
-
-      appendCanonicalInlineLeaf(container, leaf);
-    }
-
-    if (!container.childNodes.length) {
-      container.append(document.createElement("br"));
-    }
-  }
-
-  function canonicalizeInlineRunContainer(container: HTMLElement) {
-    const leaves = normalizeInlineLeaves(flattenInlineContent(container.childNodes));
-    rebuildInlineRunContainer(container, leaves);
-  }
-
-  function canonicalizeInlineRunsForSelectionContainer(container?: HTMLElement | null) {
-    const selection = window.getSelection();
-    if (!selection?.rangeCount || !editor.contains(selection.anchorNode)) {
-      return;
-    }
-
-    const targetContainer = container ?? getInlineRunContainer(selection.getRangeAt(0).startContainer);
-    if (!targetContainer) {
-      return;
-    }
-
-    const range = selection.getRangeAt(0);
-    if (!targetContainer.contains(range.startContainer) || !targetContainer.contains(range.endContainer)) {
-      return;
-    }
-
-    if (selection.isCollapsed) {
-      const marker = createInlineSelectionMarker("caret");
-      range.insertNode(marker);
-      canonicalizeInlineRunContainer(targetContainer);
-      preservePendingInlineFormatSelectionChanges = Math.max(preservePendingInlineFormatSelectionChanges, 2);
-      restoreCaretToMarker(targetContainer.querySelector<HTMLElement>('[data-inline-selection-marker="caret"]') ?? marker);
-      return;
-    }
-
-    const endMarker = createInlineSelectionMarker("selection-end");
-    const endRange = range.cloneRange();
-    endRange.collapse(false);
-    endRange.insertNode(endMarker);
-
-    const startMarker = createInlineSelectionMarker("selection-start");
-    const startRange = range.cloneRange();
-    startRange.collapse(true);
-    startRange.insertNode(startMarker);
-
-    canonicalizeInlineRunContainer(targetContainer);
-    preservePendingInlineFormatSelectionChanges = Math.max(preservePendingInlineFormatSelectionChanges, 2);
-    restoreSelectionToMarkers(
-      targetContainer.querySelector<HTMLElement>('[data-inline-selection-marker="selection-start"]') ?? startMarker,
-      targetContainer.querySelector<HTMLElement>('[data-inline-selection-marker="selection-end"]') ?? endMarker,
-    );
-  }
-
-  function canonicalizeAllInlineRunContainers(root: ParentNode) {
-    const activeSelectionContainer = root === editor
-      ? getInlineRunContainer(window.getSelection()?.rangeCount ? window.getSelection()?.getRangeAt(0).startContainer ?? null : null)
-      : null;
-
-    const containers = root instanceof HTMLElement && root !== editor && isInlineRunContainer(root)
-      ? [root]
-      : "querySelectorAll" in root
-        ? Array.from(root.querySelectorAll<HTMLElement>("p, div, h1, h2, h3, h4, h5, h6, blockquote, li, span[data-summary-text='true']"))
-            .filter((element) => isInlineRunContainer(element))
-        : [];
-
-    for (const candidateContainer of containers) {
-      if (candidateContainer === activeSelectionContainer) {
-        continue;
-      }
-
-      canonicalizeInlineRunContainer(candidateContainer);
-    }
-
-    if (activeSelectionContainer && (root === editor || (root instanceof Node && root.contains(activeSelectionContainer)))) {
-      canonicalizeInlineRunsForSelectionContainer(activeSelectionContainer);
-    }
-  }
-
-  function elementMatchesInlineFormat(element: HTMLElement, format: PendingInlineFormatKey) {
-    if (format === "comment") {
-      return isInlineCommentElement(element);
-    }
-
-    const tagNames = getInlineFormatTagNames(format);
-    return Boolean(tagNames && (tagNames as readonly string[]).includes(element.tagName));
-  }
-
   function createCodeElementFromFragment(source: HTMLElement, fragment: DocumentFragment) {
     if (!fragment.childNodes.length) {
       return null;
@@ -5060,277 +2256,6 @@ export async function initWorkbench(
     const codeElement = source.cloneNode(false) as HTMLElement;
     codeElement.append(fragment);
     return codeElement;
-  }
-
-  function getInlineFormatSelector(format: PendingInlineFormatKey) {
-    switch (format) {
-      case "bold":
-        return "strong, b";
-      case "italic":
-        return "em, i";
-      case "code":
-        return "code";
-      case "comment":
-        return 'span[data-inline-comment="true"]';
-      case "del":
-        return "del, s, strike";
-      case "ins":
-        return "ins";
-      default:
-        return "";
-    }
-  }
-
-  function unwrapElementsByTagNames(root: ParentNode, tagNames: readonly string[]) {
-    if (!("querySelectorAll" in root) || !tagNames.length) {
-      return;
-    }
-
-    const selector = tagNames.map((tagName) => tagName.toLowerCase()).join(", ");
-    for (const element of Array.from(root.querySelectorAll(selector))) {
-      const parent = element.parentNode;
-      if (!parent) {
-        continue;
-      }
-
-      while (element.firstChild) {
-        parent.insertBefore(element.firstChild, element);
-      }
-      element.remove();
-    }
-  }
-
-  function unwrapInlineFormatElements(
-    root: ParentNode,
-    format: PendingInlineFormatKey,
-  ) {
-    if (!("querySelectorAll" in root)) {
-      return;
-    }
-
-    const selector = getInlineFormatSelector(format);
-    if (!selector) {
-      return;
-    }
-
-    for (const element of Array.from(root.querySelectorAll(selector))) {
-      const parent = element.parentNode;
-      if (!parent) {
-        continue;
-      }
-
-      while (element.firstChild) {
-        parent.insertBefore(element.firstChild, element);
-      }
-      element.remove();
-    }
-  }
-
-  function removeEmptyInlineFormatElements(
-    tagNames: readonly string[],
-    root: ParentNode = editor,
-  ) {
-    if (!("querySelectorAll" in root) || !tagNames.length) {
-      return;
-    }
-
-    const protectedElements = getProtectedEmptyInlineFormatElements(root);
-    const selector = tagNames.map((tagName) => tagName.toLowerCase()).join(", ");
-    for (const element of Array.from(root.querySelectorAll<HTMLElement>(selector))) {
-      if (protectedElements.has(element)) {
-        continue;
-      }
-
-      if ((element.textContent ?? "").replaceAll("\u00a0", "").length > 0) {
-        continue;
-      }
-
-      element.remove();
-    }
-  }
-
-  function removeEmptyInlineFormatElementsForFormat(
-    format: PendingInlineFormatKey,
-    root: ParentNode = editor,
-  ) {
-    if (!("querySelectorAll" in root)) {
-      return;
-    }
-
-    const selector = getInlineFormatSelector(format);
-    if (!selector) {
-      return;
-    }
-
-    const protectedElements = getProtectedEmptyInlineFormatElements(root);
-    for (const element of Array.from(root.querySelectorAll<HTMLElement>(selector))) {
-      if (protectedElements.has(element)) {
-        continue;
-      }
-
-      if ((element.textContent ?? "").replaceAll("\u00a0", "").length > 0) {
-        continue;
-      }
-
-      element.remove();
-    }
-  }
-
-  function getProtectedEmptyInlineFormatElements(root: ParentNode) {
-    const protectedElements = new Set<HTMLElement>();
-    if (root !== editor) {
-      return protectedElements;
-    }
-
-    const selection = window.getSelection();
-    if (!selection?.rangeCount) {
-      return protectedElements;
-    }
-
-    const boundaryNodes = [
-      selection.anchorNode,
-      selection.focusNode,
-      selection.getRangeAt(0).startContainer,
-      selection.getRangeAt(0).endContainer,
-    ];
-
-    for (const boundaryNode of boundaryNodes) {
-      let current: Node | null = boundaryNode;
-      while (current && current !== editor) {
-        if (current instanceof HTMLElement && getInlineMarkForElement(current)) {
-          protectedElements.add(current);
-        }
-        current = current.parentNode;
-      }
-    }
-
-    return protectedElements;
-  }
-
-  function rangeIntersectsNodeSafely(range: Range, node: Node) {
-    try {
-      return range.intersectsNode(node);
-    } catch {
-      return false;
-    }
-  }
-
-  function selectionContainsOnlyInlineFormat(range: Range, format: PendingInlineFormatKey) {
-    const root = range.commonAncestorContainer;
-    const selectedNodes: Node[] = [];
-    const maybePushSelectedNode = (node: Node) => {
-      if (!editor.contains(node) || !rangeIntersectsNodeSafely(range, node)) {
-        return;
-      }
-
-      if (node.nodeType === Node.TEXT_NODE) {
-        if ((node.textContent ?? "").length > 0) {
-          selectedNodes.push(node);
-        }
-        return;
-      }
-
-      if (node instanceof HTMLBRElement) {
-        selectedNodes.push(node);
-      }
-    };
-
-    maybePushSelectedNode(root);
-    const walker = document.createTreeWalker(
-      root,
-      NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
-      {
-        acceptNode(node) {
-          if (!editor.contains(node)) {
-            return NodeFilter.FILTER_REJECT;
-          }
-
-          if (!rangeIntersectsNodeSafely(range, node)) {
-            return NodeFilter.FILTER_REJECT;
-          }
-
-          if (node.nodeType === Node.TEXT_NODE) {
-            return (node.textContent ?? "").length > 0
-              ? NodeFilter.FILTER_ACCEPT
-              : NodeFilter.FILTER_REJECT;
-          }
-
-          if (node instanceof HTMLBRElement) {
-            return NodeFilter.FILTER_ACCEPT;
-          }
-
-          return NodeFilter.FILTER_SKIP;
-        },
-      },
-    );
-
-    let currentNode = walker.nextNode();
-    while (currentNode) {
-      selectedNodes.push(currentNode);
-      currentNode = walker.nextNode();
-    }
-
-    if (!selectedNodes.length) {
-      return false;
-    }
-
-    return selectedNodes.every((node) => {
-      let current: Node | null = node.nodeType === Node.TEXT_NODE ? node.parentNode : node.parentNode;
-
-      while (current && current !== editor) {
-        if (current instanceof HTMLElement && elementMatchesInlineFormat(current, format)) {
-          return true;
-        }
-        current = current.parentNode;
-      }
-
-      return false;
-    });
-  }
-
-  function unwrapSelectionFromSingleFormatElement(
-    selection: Selection,
-    range: Range,
-    formatElement: HTMLElement,
-    tagNames: readonly string[],
-  ) {
-    const beforeRange = document.createRange();
-    beforeRange.setStart(formatElement, 0);
-    beforeRange.setEnd(range.startContainer, range.startOffset);
-    const beforeFragment = beforeRange.cloneContents();
-
-    const selectedFragment = range.cloneContents();
-    unwrapElementsByTagNames(selectedFragment, tagNames);
-
-    const afterRange = document.createRange();
-    afterRange.setStart(range.endContainer, range.endOffset);
-    afterRange.setEnd(formatElement, formatElement.childNodes.length);
-    const afterFragment = afterRange.cloneContents();
-
-    const replacement = document.createDocumentFragment();
-    const insertedNodes: Node[] = [];
-    const leadingElement = createInlineElementFromFragment(formatElement, beforeFragment);
-    if (leadingElement) {
-      replacement.append(leadingElement);
-    }
-
-    for (const node of Array.from(selectedFragment.childNodes)) {
-      insertedNodes.push(node);
-      replacement.append(node);
-    }
-
-    const trailingElement = createInlineElementFromFragment(formatElement, afterFragment);
-    if (trailingElement) {
-      replacement.append(trailingElement);
-    }
-
-    const fallbackRange = document.createRange();
-    fallbackRange.setStartBefore(formatElement);
-    fallbackRange.collapse(true);
-    formatElement.replaceWith(replacement);
-    removeEmptyInlineFormatElements(tagNames);
-    selectInsertedNodes(selection, insertedNodes, fallbackRange);
-    syncEditorAfterStructuralChange();
   }
 
   function unwrapSelectionFromSingleCodeElement(selection: Selection, range: Range, codeElement: HTMLElement) {
@@ -5577,415 +2502,6 @@ export async function initWorkbench(
     }
   }
 
-  function toggleInlineFormatSelection(
-    selection: Selection,
-    range: Range,
-    tagName: "comment" | "strong" | "em" | "del" | "ins",
-    formatKey: PendingInlineFormatKey,
-  ) {
-    const container = getInlineRunContainer(range.commonAncestorContainer) ?? getInlineRunContainer(range.startContainer);
-    if (
-      container
-      && container.contains(range.startContainer)
-      && container.contains(range.endContainer)
-    ) {
-      const startMarker = createInlineSelectionMarker("selection-start");
-      const endMarker = createInlineSelectionMarker("selection-end");
-      const endRange = range.cloneRange();
-      endRange.collapse(false);
-      endRange.insertNode(endMarker);
-      const startRange = range.cloneRange();
-      startRange.collapse(true);
-      startRange.insertNode(startMarker);
-
-      const leaves = flattenInlineContent(container.childNodes);
-      const beforeLeaves: InlineLeaf[] = [];
-      const selectedLeaves: InlineLeaf[] = [];
-      const afterLeaves: InlineLeaf[] = [];
-      let phase: "before" | "selected" | "after" = "before";
-
-      for (const leaf of leaves) {
-        if (leaf.type === "marker") {
-          if (leaf.role === "selection-start") {
-            phase = "selected";
-          } else if (leaf.role === "selection-end") {
-            phase = "after";
-          }
-          continue;
-        }
-
-        if (phase === "before") {
-          beforeLeaves.push(leaf);
-        } else if (phase === "selected") {
-          selectedLeaves.push(leaf);
-        } else {
-          afterLeaves.push(leaf);
-        }
-      }
-
-      const selectedSemanticLeaves = selectedLeaves.filter((leaf): leaf is Extract<InlineLeaf, { type: "text" }> => {
-        return leaf.type === "text" && /[^\t \u00a0]/.test(leaf.text);
-      });
-
-      const targetMark = getInlineMarkForFormat(formatKey);
-      const shouldRemove = selectedSemanticLeaves.length > 0 && selectedSemanticLeaves.every((leaf) => {
-        return leaf.marks.some((mark) => areInlineMarksEqual(mark, targetMark));
-      });
-
-      const updatedSelectedLeaves = selectedLeaves.map((leaf) => {
-        if (leaf.type !== "text") {
-          return leaf;
-        }
-
-        const nextMarks = shouldRemove
-          ? leaf.marks.filter((mark) => !areInlineMarksEqual(mark, targetMark))
-          : [...leaf.marks, targetMark];
-
-        return {
-          ...leaf,
-          marks: nextMarks,
-        } satisfies InlineLeaf;
-      });
-
-      const rebuiltLeaves = normalizeInlineLeaves([
-        ...beforeLeaves,
-        { type: "marker", role: "selection-start" } satisfies InlineLeaf,
-        ...updatedSelectedLeaves,
-        { type: "marker", role: "selection-end" } satisfies InlineLeaf,
-        ...afterLeaves,
-      ]);
-
-      rebuildInlineRunContainer(container, rebuiltLeaves);
-      preservePendingInlineFormatSelectionChanges = Math.max(preservePendingInlineFormatSelectionChanges, 2);
-      restoreSelectionToMarkers(
-        container.querySelector<HTMLElement>('[data-inline-selection-marker="selection-start"]') ?? startMarker,
-        container.querySelector<HTMLElement>('[data-inline-selection-marker="selection-end"]') ?? endMarker,
-      );
-      syncEditorAfterStructuralChange();
-      return;
-    }
-
-    const startFormatElement = getClosestInlineFormatElement(range.startContainer, formatKey);
-    const shouldUnwrap = selectionContainsOnlyInlineFormat(range, formatKey);
-
-    if (
-      shouldUnwrap
-      && startFormatElement
-      && startFormatElement.contains(range.commonAncestorContainer)
-    ) {
-      unwrapSelectionFromSingleFormatElement(
-        selection,
-        range,
-        startFormatElement,
-        getInlineFormatTagNames(formatKey) ?? [startFormatElement.tagName],
-      );
-      return;
-    }
-
-    const extractedFragment = range.extractContents();
-    unwrapInlineFormatElements(extractedFragment, formatKey);
-
-    if (shouldUnwrap) {
-      const insertedNodes = Array.from(extractedFragment.childNodes);
-      const fallbackRange = document.createRange();
-      fallbackRange.setStart(range.startContainer, range.startOffset);
-      fallbackRange.collapse(true);
-      range.insertNode(extractedFragment);
-      removeEmptyInlineFormatElementsForFormat(formatKey);
-      selectInsertedNodes(selection, insertedNodes, fallbackRange);
-      syncEditorAfterStructuralChange();
-      return;
-    }
-
-    const wrapper = createInlineMarkElement(getInlineMarkForFormat(formatKey));
-    wrapper.append(extractedFragment);
-    range.insertNode(wrapper);
-    removeEmptyInlineFormatElementsForFormat(formatKey);
-    selection.removeAllRanges();
-    const nextRange = document.createRange();
-    nextRange.selectNodeContents(wrapper);
-    selection.addRange(nextRange);
-    syncEditorAfterStructuralChange();
-  }
-
-  function setHoveredRevisionNode(node: HTMLElement | null) {
-    if (hoveredRevisionNode === node) {
-      updateRevisionHoverToolbar();
-      return;
-    }
-
-    hoveredRevisionNode = node;
-    updateRevisionHoverToolbar();
-  }
-
-  function getHoveredRevisionKind(element: HTMLElement | null): RevisionHoverKind | null {
-    if (!element) {
-      return null;
-    }
-
-    if (element.dataset.inlineComment === "true" || element.dataset.blockComment === "true") {
-      return "comment";
-    }
-
-    const tag = element.tagName.toLowerCase();
-    return tag === "del" || tag === "ins" ? tag : null;
-  }
-
-  function setActiveRevisionNodes(nodes: HTMLElement[]) {
-    for (const element of activeRevisionNodes) {
-      element.removeAttribute("data-revision-hover-active");
-    }
-
-    activeRevisionNodes = new Set(nodes);
-    for (const element of activeRevisionNodes) {
-      element.setAttribute("data-revision-hover-active", "true");
-    }
-  }
-
-  function getRevisionToolbarKind(nodes: HTMLElement[]): RevisionToolbarKind | null {
-    let hasComments = false;
-    let hasInsertions = false;
-    let hasDeletions = false;
-
-    for (const node of nodes) {
-      const kind = getHoveredRevisionKind(node);
-      if (kind === "comment") {
-        hasComments = true;
-      } else if (kind === "ins") {
-        hasInsertions = true;
-      } else if (kind === "del") {
-        hasDeletions = true;
-      }
-    }
-
-    if (hasComments && (hasInsertions || hasDeletions)) {
-      return null;
-    }
-
-    if (hasComments) {
-      return "comment";
-    }
-
-    if (hasInsertions && hasDeletions) {
-      return "mixed";
-    }
-
-    if (hasInsertions) {
-      return "ins";
-    }
-
-    if (hasDeletions) {
-      return "del";
-    }
-
-    return null;
-  }
-
-  function getSelectedRevisionToolbarContext(): RevisionToolbarContext | null {
-    const selection = window.getSelection();
-    if (
-      !selection?.rangeCount
-      || selection.isCollapsed
-      || state.mode !== "rich"
-      || !editor.contains(selection.anchorNode)
-      || !editor.contains(selection.focusNode)
-    ) {
-      return null;
-    }
-
-    const range = selection.getRangeAt(0);
-    const nodes = Array.from(editor.querySelectorAll<HTMLElement>('del, ins, [data-inline-comment="true"], [data-block-comment="true"]'))
-      .filter((element) => range.intersectsNode(element));
-    if (!nodes.length) {
-      return null;
-    }
-
-    const kind = getRevisionToolbarKind(nodes);
-    if (!kind) {
-      return null;
-    }
-
-    const rect = getExpandedRangeRect(range);
-    if (!rect.width && !rect.height) {
-      return null;
-    }
-
-    return { kind, nodes, rect };
-  }
-
-  function getHoveredRevisionToolbarContext(): RevisionToolbarContext | null {
-    const kind = getHoveredRevisionKind(hoveredRevisionNode);
-    if (
-      !kind ||
-      state.mode !== "rich" ||
-      !hoveredRevisionNode?.isConnected ||
-      !editor.contains(hoveredRevisionNode)
-    ) {
-      return null;
-    }
-
-    const rect = hoveredRevisionNode.getBoundingClientRect();
-    if (!rect.width && !rect.height) {
-      return null;
-    }
-
-    return {
-      kind,
-      nodes: [hoveredRevisionNode],
-      rect,
-    };
-  }
-
-  function isPointWithinExpandedRect(rect: DOMRect, clientX: number, clientY: number, padding: number) {
-    return clientX >= rect.left - padding
-      && clientX <= rect.right + padding
-      && clientY >= rect.top - padding
-      && clientY <= rect.bottom + padding;
-  }
-
-  function isPointerNearRevisionHoverUi(clientX: number, clientY: number) {
-    const revisionKind = getHoveredRevisionKind(hoveredRevisionNode);
-    if (!revisionKind || !hoveredRevisionNode?.isConnected || !editor.contains(hoveredRevisionNode)) {
-      return false;
-    }
-
-    const targetRect = hoveredRevisionNode.getBoundingClientRect();
-    if (targetRect.width || targetRect.height) {
-      if (isPointWithinExpandedRect(targetRect, clientX, clientY, REVISION_HOVER_PROXIMITY_PX)) {
-        return true;
-      }
-    }
-
-    if (revisionHoverToolbar.hidden) {
-      return false;
-    }
-
-    const toolbarRect = revisionHoverToolbar.getBoundingClientRect();
-    return isPointWithinExpandedRect(toolbarRect, clientX, clientY, REVISION_HOVER_PROXIMITY_PX);
-  }
-
-  function updateRevisionHoverToolbar() {
-    const context = getSelectedRevisionToolbarContext() ?? getHoveredRevisionToolbarContext();
-    if (!context) {
-      setActiveRevisionNodes([]);
-      revisionHoverToolbar.hidden = true;
-      delete revisionHoverToolbar.dataset.revisionKind;
-      revisionHoverToolbar.style.background = "";
-      revisionHoverAcceptButton.hidden = false;
-      revisionHoverAcceptButton.textContent = "accept";
-      revisionHoverAcceptButton.setAttribute("aria-label", "Accept revision");
-      revisionHoverAcceptButton.title = "Accept revision";
-      revisionHoverRejectButton.hidden = false;
-      revisionHoverRejectButton.textContent = "reject";
-      revisionHoverRejectButton.setAttribute("aria-label", "Reject revision");
-      revisionHoverRejectButton.title = "Reject revision";
-      return;
-    }
-
-    setActiveRevisionNodes(context.nodes);
-    const isBulkSelection = context.nodes.length > 1;
-    const acceptLabel = context.kind === "comment"
-      ? isBulkSelection ? "Resolve selected comments" : "Resolve comment"
-      : context.kind === "del"
-      ? isBulkSelection ? "Accept selected deletions" : "Accept deletion"
-      : context.kind === "ins"
-        ? isBulkSelection ? "Accept selected insertions" : "Accept insertion"
-        : "Accept selected revisions";
-    const rejectLabel = context.kind === "del"
-      ? isBulkSelection ? "Reject selected deletions" : "Reject deletion"
-      : context.kind === "ins"
-        ? isBulkSelection ? "Reject selected insertions" : "Reject insertion"
-        : "Reject selected revisions";
-    revisionHoverToolbar.dataset.revisionKind = context.kind;
-    revisionHoverToolbar.style.background = context.kind === "comment"
-      ? "color-mix(in srgb, var(--text) 10%, var(--bg) 90%)"
-      : context.kind === "del"
-      ? "color-mix(in srgb, var(--danger) 20%, var(--bg) 80%)"
-      : context.kind === "ins"
-        ? "color-mix(in srgb, var(--success) 20%, var(--bg) 80%)"
-        : "color-mix(in srgb, #d0ad12 22%, var(--bg) 78%)";
-    revisionHoverAcceptButton.hidden = false;
-    revisionHoverAcceptButton.textContent = context.kind === "comment" ? "resolve" : "accept";
-    revisionHoverAcceptButton.setAttribute("aria-label", acceptLabel);
-    revisionHoverAcceptButton.title = acceptLabel;
-    revisionHoverRejectButton.hidden = context.kind === "comment";
-    revisionHoverRejectButton.textContent = "reject";
-    revisionHoverRejectButton.setAttribute("aria-label", rejectLabel);
-    revisionHoverRejectButton.title = rejectLabel;
-    revisionHoverToolbar.hidden = false;
-
-    const viewport = getVisualViewportMetrics();
-    const contextTop = viewport.top + context.rect.top;
-    const contextBottom = viewport.top + context.rect.bottom;
-    if (contextBottom < viewport.top + 8 || contextTop > viewport.top + viewport.height - 8) {
-      revisionHoverToolbar.hidden = true;
-      return;
-    }
-
-    const leftEdge = viewport.left + 12;
-    const rightEdge = viewport.left + viewport.width - revisionHoverToolbar.offsetWidth - 12;
-    const x = Math.min(
-      rightEdge,
-      Math.max(leftEdge, viewport.left + context.rect.left + context.rect.width / 2 - revisionHoverToolbar.offsetWidth / 2),
-    );
-    const preferredTop = viewport.top + context.rect.top - revisionHoverToolbar.offsetHeight - 10;
-    const fallbackTop = viewport.top + context.rect.bottom + 10;
-    const maxTop = viewport.top + viewport.height - revisionHoverToolbar.offsetHeight - 12;
-    const y = preferredTop >= viewport.top + 12
-      ? preferredTop
-      : Math.min(maxTop, fallbackTop);
-
-    revisionHoverToolbar.style.left = `${x}px`;
-    revisionHoverToolbar.style.top = `${Math.max(viewport.top + 12, y)}px`;
-  }
-
-  function applyHoveredRevisionAction(action: "accept" | "reject") {
-    const context = getSelectedRevisionToolbarContext() ?? getHoveredRevisionToolbarContext();
-    const targets = context?.nodes.filter((node) => node.parentNode && editor.contains(node)) ?? [];
-    if (!targets.length) {
-      setHoveredRevisionNode(null);
-      return;
-    }
-
-    const firstTarget = targets[0];
-    if (!firstTarget?.parentNode) {
-      setHoveredRevisionNode(null);
-      return;
-    }
-
-    const caretMarker = document.createElement("span");
-    caretMarker.hidden = true;
-    firstTarget.parentNode.insertBefore(caretMarker, firstTarget);
-    setHoveredRevisionNode(null);
-    setActiveRevisionNodes([]);
-
-    for (const target of targets) {
-      const revisionKind = getHoveredRevisionKind(target);
-      const parent = target.parentNode;
-      if (!revisionKind || !parent) {
-        continue;
-      }
-
-      if (revisionKind === "comment") {
-        target.remove();
-        continue;
-      }
-
-      if ((revisionKind === "del" && action === "accept") || (revisionKind === "ins" && action === "reject")) {
-        target.remove();
-        continue;
-      }
-
-      while (target.firstChild) {
-        parent.insertBefore(target.firstChild, target);
-      }
-      target.remove();
-    }
-
-    restoreCaretToMarker(caretMarker);
-    syncEditorAfterStructuralChange();
-  }
-
   function updateFloatingToolbar() {
     const selection = window.getSelection();
     if (
@@ -6189,7 +2705,7 @@ export async function initWorkbench(
     toggleDirectory,
   };
 
-  hydrateDraftBuffers(await getPersistedDraftRecords());
+  await fileClient.hydratePersistedDrafts();
   workbenchBindings.onControlsReady?.(controls);
   emitExplorerStateChange();
   emitCurrentThreadChange();
@@ -6203,6 +2719,7 @@ export async function initWorkbench(
     autoRefreshStopped = true;
     unsubscribeEditorClient();
     editorClient.dispose();
+    fileClient.dispose();
     unsubscribeProjectClient();
     unsubscribeThreadClient();
     projectClient.dispose();
@@ -6215,10 +2732,6 @@ export async function initWorkbench(
     }
     if (codexThreadListRefreshTimeoutId !== null) {
       window.clearTimeout(codexThreadListRefreshTimeoutId);
-    }
-    codexClient.close();
-    if (selectionPersistenceTimeoutId !== null) {
-      window.clearTimeout(selectionPersistenceTimeoutId);
     }
     abortController.abort();
   };

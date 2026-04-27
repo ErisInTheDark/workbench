@@ -12,6 +12,11 @@
 
 import type { ChangeSummary, SaveConflictPayload } from "../types";
 import { MAX_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, persistFontSize, readStoredFontSize } from "./browser-state";
+import {
+    getNestedListElementsForItem,
+    isIntentionalListBreakParagraph,
+    isSingleBreakParagraph,
+} from "./list-dom";
 import { parseBlocks as parseMarkdownBlocks, type ParsedBlock } from "./markdown-render";
 import type { WorkbenchDomElements } from "./workbench-dom";
 
@@ -237,61 +242,6 @@ function flattenMarkdownDiffRows(markdown: string | null) {
 
 function isDiffTrackableBlockElement(element: Element) {
   return /^(p|div|h1|h2|h3|h4|h5|h6|blockquote|pre|hr)$/i.test(element.tagName);
-}
-
-function isSingleBreakParagraph(element: HTMLElement) {
-  if (element.tagName !== "P") {
-    return false;
-  }
-
-  let breakCount = 0;
-
-  for (const node of element.childNodes) {
-    if (node.nodeType === Node.TEXT_NODE) {
-      if ((node.textContent ?? "").trim()) {
-        return false;
-      }
-      continue;
-    }
-
-    if (node.nodeType !== Node.ELEMENT_NODE) {
-      return false;
-    }
-
-    const childElement = node as Element;
-    if (childElement.tagName !== "BR") {
-      return false;
-    }
-
-    breakCount += 1;
-  }
-
-  return breakCount === 1;
-}
-
-function isIntentionalListBreakParagraph(element: Element | null): element is HTMLElement {
-  return element instanceof HTMLElement
-    && element.dataset.listBreak === "true"
-    && isSingleBreakParagraph(element);
-}
-
-function isListElement(element: Element) {
-  return element.tagName === "UL" || element.tagName === "OL";
-}
-
-function getDirectChildListElements(element: Element) {
-  return Array.from(element.children).filter((child): child is HTMLUListElement | HTMLOListElement => isListElement(child));
-}
-
-function getDirectChildDetailsElement(element: Element) {
-  return Array.from(element.children).find((child): child is HTMLDetailsElement => child.tagName === "DETAILS") ?? null;
-}
-
-function getNestedListElementsForItem(item: Element) {
-  const details = getDirectChildDetailsElement(item);
-  return details
-    ? getDirectChildListElements(details)
-    : getDirectChildListElements(item);
 }
 
 function appendLiveListDiffAnchors(
