@@ -8,16 +8,51 @@
  * - createProjectEntry: create a new project file or directory and return its normalized relative path. Keywords: create, file, directory.
  * - buildTree: build the visible explorer tree for the project. Keywords: tree, explorer, filesystem.
  * - getProjectSnapshot: assemble the project tree, root info, and git change summary for the client. Keywords: snapshot, project, explorer.
+ * - listUserInvocableAgents/readUserInvocableAgentDefinition: discover user-invocable agent markdown files and load their metadata/prompt. Keywords: agent, prompt, custom agent, iterator.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { getGitChanges } from "./git";
-import type { ProjectSnapshot, TreeNode } from "./types";
+import type { ProjectSnapshot, TreeNode, WorkbenchAgentOption } from "./types";
 
 export const appRoot = process.cwd();
 export const projectRoot = path.resolve(appRoot, "..");
 const ignoredNames = new Set([".git", ".codex", ".vscode", ".gitignore", "node_modules", ".next", "webapp"]);
+
+function parseFrontmatterBlock(content: string) {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content);
+  if (!match) {
+    return null;
+  }
+
+  const fields = new Map<string, string>();
+  for (const line of match[1].split(/\r?\n/)) {
+    const separatorIndex = line.indexOf(":");
+    if (separatorIndex <= 0) {
+      continue;
+    }
+
+    const key = line.slice(0, separatorIndex).trim();
+    const value = line.slice(separatorIndex + 1).trim().replace(/^"|"$/g, "");
+    fields.set(key, value);
+  }
+
+  return fields;
+}
+
+function getAgentDirectoryPath() {
+  return path.join(projectRoot, ".github", "agents");
+}
+
+function createAgentRelativePath(fileName: string) {
+  return normalizeRelativePath(path.join(".github", "agents", fileName));
+}
+
+async function readAgentFile(relativePath: string) {
+  const absolutePath = safeResolve(relativePath);
+  return await fs.readFile(absolutePath, "utf8");
+}
 
 export function normalizeRelativePath(filePath: string) {
   return filePath.split(path.sep).join("/");
@@ -152,4 +187,59 @@ export async function getProjectSnapshot() {
     tree,
     changes,
   } satisfies ProjectSnapshot;
+}
+
+export async function listUserInvocableAgents() {
+  try {
+    const entries = await fs.readdir(getAgentDirectoryPath(), { withFileTypes: true });
+    const agents: WorkbenchAgentOption[] = [];
+
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".agent.md")) {
+        continue;
+      }
+
+      const relativePath = createAgentRelativePath(entry.name);
+      const content = await readAgentFile(relativePath);
+      const frontmatter = parseFrontmatterBlock(content);
+      if (!frontmatter || frontmatter.get("user-invocable") !== "true") {
+        continue;
+      }
+
+      agents.push({
+        name: frontmatter.get("name") ?? entry.name.replace(/\.agent\.md$/i, ""),
+        description: frontmatter.get("description") ?? "",
+        path: relativePath,
+      });
+    }
+
+    return agents.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
+export async function readUserInvocableAgentDefinition(relativePath: string) {
+  const normalizedPath = normalizeRelativePath(relativePath);
+  if (!normalizedPath.startsWith(".github/agents/") || !normalizedPath.endsWith(".agent.md")) {
+    throw new Error("Agent path is outside the supported agents directory.");
+  }
+
+  const content = await readAgentFile(normalizedPath);
+  const frontmatter = parseFrontmatterBlock(content);
+  if (!frontmatter || frontmatter.get("user-invocable") !== "true") {
+    throw new Error("Agent is not user-invocable.");
+  }
+
+  const prompt = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
+  return {
+    description: frontmatter.get("description") ?? "",
+    name: frontmatter.get("name") ?? path.basename(normalizedPath, ".agent.md"),
+    path: normalizedPath,
+    prompt,
+  };
 }

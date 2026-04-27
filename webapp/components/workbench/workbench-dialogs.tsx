@@ -4,13 +4,14 @@
  * - WorkbenchDialogProps: type the reusable workbench dialog shell props. Keywords: workbench, dialog, props.
  * - WorkbenchDialog: render the shared modal shell for workbench confirmation and create-entry flows. Keywords: workbench, dialog, modal.
  */
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 
 export const dialogButtonClassName = "rounded-xl px-3 py-1.5 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none";
 
 export interface WorkbenchDialogProps {
   actions: ReactNode;
   children: ReactNode;
+  dialogRef?: Ref<HTMLDivElement>;
   eyebrow: string;
   id: string;
   isOpen?: boolean;
@@ -23,6 +24,7 @@ export interface WorkbenchDialogProps {
 export function WorkbenchDialog ({
   actions,
   children,
+  dialogRef,
   eyebrow,
   id,
   isOpen,
@@ -33,6 +35,7 @@ export function WorkbenchDialog ({
 }: WorkbenchDialogProps) {
   return (
     <div
+      ref={dialogRef}
       id={id}
       hidden={typeof isOpen === "boolean" ? !isOpen : true}
       role="dialog"

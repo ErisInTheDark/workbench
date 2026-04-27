@@ -32,6 +32,24 @@
           }
         }
       ]
+    },
+    {
+      "label": "typecheck",
+      "type": "shell",
+      "command": "pnpm run typecheck",
+      "options": {
+        "cwd": "${workspaceFolder}/webapp"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": false,
+        "showReuseMessage": false
+      }
     }
   ]
 }

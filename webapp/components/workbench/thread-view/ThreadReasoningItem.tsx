@@ -18,9 +18,11 @@ export default function ThreadReasoningItem ({
   onOpenFile?: (path: string) => Promise<void>;
   projectRootPath?: string;
 }) {
+  const visibleSections = item.summary.length ? item.summary : item.content;
+
   return (
     <section className={joinClasses("space-y-2", className)}>
-      {...item.summary.map((summaryMarkdown, i) => (
+      {...visibleSections.map((summaryMarkdown, i) => (
         <ThreadMarkdown
           key={i}
           markdown={summaryMarkdown.replaceAll(/\n\n/g, "\n").trim()}

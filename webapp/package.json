@@ -3,16 +3,19 @@
   "private": true,
   "packageManager": "pnpm@10.31.0",
   "scripts": {
-    "dev": "node orchestrator.js",
+    "dev": "tsx orchestrator/index.ts",
     "dev:next": "next dev -p 3002",
-    "codex:generate-types": "codex app-server generate-ts --out lib/codex/generated/app-server"
+    "codex:generate-types": "codex app-server generate-ts --out lib/codex/generated/app-server",
+    "typecheck": "pnpm exec tsc --noEmit & pnpm exec tsc --noEmit -p orchestrator"
   },
   "dependencies": {
-    "@tailwindcss/postcss": "^4.2.2",
+    "@tailwindcss/postcss": "4.2.2",
     "next": "15.3.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "tailwindcss": "^4.2.2"
+    "tailwindcss": "4.2.2",
+    "tsx": "4.21.0",
+    "@github/copilot-sdk": "0.3.0"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

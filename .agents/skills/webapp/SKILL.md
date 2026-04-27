@@ -4,14 +4,14 @@ description: "When the author asks for webapp work, including Next.js page work,
 ---
 
 1. Read `webapp/package.json` FIRST.
-2. Read every in-scope route, rendered component, stylesheet, API handler, and `lib` file BEFORE editing. For workbench or editor tasks, also read `webapp/components/workbench.tsx`, `webapp/lib/workbench-client.ts`, and `webapp/lib/types.ts`. For Codex integration tasks, also read `webapp/orchestrator.js`, `webapp/lib/codex/*`, and the related files under `webapp/app/codex/` and `webapp/app/api/codex/`.
+2. Read every in-scope route, rendered component, stylesheet, API handler, and `lib` file BEFORE editing. For workbench or editor tasks, also read `webapp/components/workbench.tsx`, `webapp/lib/workbench-client.ts`, and `webapp/lib/types.ts`. For Codex integration tasks, also read `webapp/orchestrator/index.ts`, `webapp/orchestrator/copilot-bridge.ts`, `webapp/lib/codex/*`, and the related files under `webapp/app/codex/` and `webapp/app/api/codex/`.
 3. Search `webapp/components/` and `webapp/lib/` for similar components, utilities, and types BEFORE creating new ones.
 4. If the implementation surface is large or unclear, spawn the read-only `explorer` subagent with explicit files and questions BEFORE editing.
 5. Verify with the NARROWEST meaningful command from `webapp/`. Use `tsc --noEmit` when a type check is sufficient. STATE clearly what you did and did not verify.
 
 ## DO
 
-- KEEP changes in the existing architecture: App Router pages and API handlers in `webapp/app/`, reusable UI in `webapp/components/`, shared contracts and helpers in `webapp/lib/`, and local multi-process development flow in `webapp/orchestrator.js`.
+- KEEP changes in the existing architecture: App Router pages and API handlers in `webapp/app/`, reusable UI in `webapp/components/`, shared contracts and helpers in `webapp/lib/`, and local multi-process development flow in `webapp/orchestrator/`.
 - IN `webapp/components/`, give single-component files a DEFAULT export and a matching PascalCase filename such as `ThreadView.tsx`.
 - IN `webapp/components/`, add a top manifest comment when a file contains multiple components or related functions.
 - PREFER smaller components and reusable, testable utilities. EXTRACT coherent pieces instead of growing monolithic files.

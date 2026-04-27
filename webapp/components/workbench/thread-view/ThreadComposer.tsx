@@ -1,13 +1,16 @@
 "use client";
 
-import { useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
 
+import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import { getCurrentInProgressTurn, hasStaleApprovalState, isCurrentTurnWaitingOnApproval } from "../../../lib/codex/thread-state";
-import type { ThreadPayload } from "../../../lib/types";
+import type { ThreadPayload, WorkbenchAgentOption, WorkbenchModelOption } from "../../../lib/types";
+import ThreadAgentPicker from "./ThreadAgentPicker";
 import ThreadLightboxImage from "./ThreadLightboxImage";
+import ThreadModelPicker from "./ThreadModelPicker";
 
-function joinClasses(...values: Array<string | false | null | undefined>) {
+function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
@@ -16,7 +19,7 @@ interface ComposerImageAttachment {
   url: string;
 }
 
-function createAttachmentId() {
+function createAttachmentId () {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
   }
@@ -24,7 +27,7 @@ function createAttachmentId() {
   return `attachment:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 }
 
-function readFileAsDataUrl(file: File) {
+function readFileAsDataUrl (file: File) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => {
@@ -43,27 +46,170 @@ function readFileAsDataUrl(file: File) {
 }
 
 export default function ThreadComposer ({
+  onListModels,
   onSendMessage,
+  onThreadAgentChange,
+  onThreadReasoningEffortChange,
+  onThreadModelChange,
+  rateLimits,
   thread,
 }: {
+  onListModels: (harness: ThreadPayload["harness"]) => Promise<WorkbenchModelOption[]>;
   onSendMessage: (threadId: string, input: UserInput[]) => Promise<void>;
+  onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
+  onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
+  onThreadModelChange: (threadId: string, model: string) => void;
+  rateLimits: RateLimitSnapshot | null;
   thread: ThreadPayload;
 }) {
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<ComposerImageAttachment[]>([]);
+  const [availableModels, setAvailableModels] = useState<WorkbenchModelOption[]>([]);
+  const [availableAgents, setAvailableAgents] = useState<WorkbenchAgentOption[]>([]);
+  const [deprioritizedModelIdsByHarness, setDeprioritizedModelIdsByHarness] = useState<Record<ThreadPayload["harness"], string[]>>({
+    codex: [],
+    copilot: [],
+  });
+  const [activePicker, setActivePicker] = useState<"agent" | "model" | null>(null);
   const [error, setError] = useState("");
   const [isComposing, setIsComposing] = useState(false);
+  const [isLoadingAgents, setIsLoadingAgents] = useState(false);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [agentsError, setAgentsError] = useState("");
+  const [modelsError, setModelsError] = useState("");
   const [pendingAttachmentReads, setPendingAttachmentReads] = useState(0);
   const [isSending, setIsSending] = useState(false);
   const trimmedValue = value.trim();
   const isAttaching = pendingAttachmentReads > 0;
+  const isCopilotAuthRequired = thread.harness === "copilot" && rateLimits?.limitId === "copilot:auth";
   const isThreadStateBroken = hasStaleApprovalState(thread);
   const isApprovalBlocked = isCurrentTurnWaitingOnApproval(thread);
   const isActiveThread = getCurrentInProgressTurn(thread) !== null;
-  const isInputDisabled = isSending || isAttaching || isThreadStateBroken;
+  const isInputDisabled = isSending || isAttaching || isThreadStateBroken || isCopilotAuthRequired;
+  const helperText = isAttaching
+    ? "Attaching pasted image..."
+    : isCopilotAuthRequired
+      ? "Open a terminal, run copilot, then use /login to authenticate Copilot CLI."
+      : isThreadStateBroken
+        ? "Thread state is out of sync. Sending is disabled here."
+        : isApprovalBlocked
+          ? "Current turn is waiting on approval. Sending adds guidance to that in-progress turn."
+          : isActiveThread
+            ? "Message the active turn. Press Enter to send and Shift+Enter for a new line."
+            : thread.isDraft
+              ? ""
+              : "Press Enter to send and Shift+Enter for a new line.";
+  const selectedModel = thread.model;
+  const selectedModelOption = availableModels.find((model) => model.id === selectedModel) ?? null;
+  const defaultModelOption = availableModels.find((model) => model.isDefault) ?? null;
+  const modelButtonLabel = selectedModelOption?.displayName
+    ?? selectedModel
+    ?? defaultModelOption?.displayName
+    ?? "Default model";
+  const supportedReasoningEfforts = selectedModelOption?.supportedReasoningEfforts ?? [];
+  const currentReasoningEffort = thread.reasoningEffort
+    ?? selectedModelOption?.defaultReasoningEffort
+    ?? supportedReasoningEfforts[0]
+    ?? null;
+  const showsReasoningEffortControl = Boolean(selectedModelOption?.supportsReasoningEffort && currentReasoningEffort);
+  const isAgentPickerOpen = activePicker === "agent";
+  const isModelPickerOpen = activePicker === "model";
+  const isPickerOpen = activePicker !== null;
+  const selectedAgent = availableAgents.find((agent) => agent.path === thread.agentPath) ?? null;
+  const agentButtonLabel = selectedAgent?.name
+    ?? thread.agentPath?.split("/").at(-1)?.replace(/\.agent\.md$/i, "")
+    ?? "Agent";
+  const deprioritizedModelIds = deprioritizedModelIdsByHarness[thread.harness] ?? [];
+
+  useEffect(() => {
+    setActivePicker(null);
+    setAgentsError("");
+    setModelsError("");
+  }, [thread.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingAgents(true);
+    void fetch("/api/agents", { cache: "no-store" }).then(async (response) => {
+      if (!response.ok) {
+        throw new Error("Unable to load agents.");
+      }
+
+      const payload = await response.json() as { data?: WorkbenchAgentOption[] };
+      if (cancelled) {
+        return;
+      }
+
+      setAvailableAgents(payload.data ?? []);
+      setAgentsError("");
+    }).catch((agentsLoadError) => {
+      if (cancelled) {
+        return;
+      }
+
+      setAgentsError(agentsLoadError instanceof Error ? agentsLoadError.message : "Unable to load agents.");
+    }).finally(() => {
+      if (!cancelled) {
+        setIsLoadingAgents(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAvailableModels([]);
+    void onListModels(thread.harness).then((models) => {
+      if (cancelled) {
+        return;
+      }
+
+      setAvailableModels(models);
+    }).catch(() => {
+      // Ignore background refresh failures; the picker load path shows a user-facing error.
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [onListModels, thread.harness]);
+
+  useEffect(() => {
+    if (!isModelPickerOpen) {
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingModels(true);
+    setModelsError("");
+    void onListModels(thread.harness).then((models) => {
+      if (cancelled) {
+        return;
+      }
+
+      setAvailableModels(models);
+    }).catch((modelsLoadError) => {
+      if (cancelled) {
+        return;
+      }
+
+      setModelsError(modelsLoadError instanceof Error ? modelsLoadError.message : "Unable to load models.");
+    }).finally(() => {
+      if (!cancelled) {
+        setIsLoadingModels(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isModelPickerOpen, onListModels, thread.harness]);
 
   const submit = async () => {
-    if ((!trimmedValue && !attachments.length) || isInputDisabled) {
+    if ((!trimmedValue && !attachments.length) || isInputDisabled || isPickerOpen) {
       return;
     }
 
@@ -137,6 +283,17 @@ export default function ThreadComposer ({
     })();
   };
 
+  const cycleReasoningEffort = (direction: 1 | -1) => {
+    if (!supportedReasoningEfforts.length || !currentReasoningEffort) {
+      return;
+    }
+
+    const currentIndex = supportedReasoningEfforts.indexOf(currentReasoningEffort);
+    const baseIndex = currentIndex >= 0 ? currentIndex : 0;
+    const nextIndex = (baseIndex + direction + supportedReasoningEfforts.length) % supportedReasoningEfforts.length;
+    onThreadReasoningEffortChange(thread.id, supportedReasoningEfforts[nextIndex] ?? null);
+  };
+
   return (
     <form className="mt-6 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4" onSubmit={handleSubmit}>
       <div className="rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-3">
@@ -175,60 +332,152 @@ export default function ThreadComposer ({
         ) : null}
         <label className="block" htmlFor={`thread-composer:${thread.id}`}>
           <span className="sr-only">Message thread</span>
-          <textarea
-            id={`thread-composer:${thread.id}`}
-            value={value}
-            onChange={(event) => {
-              setValue(event.target.value);
-              if (error) {
-                setError("");
-              }
-            }}
-            onCompositionStart={() => {
-              setIsComposing(true);
-            }}
-            onCompositionEnd={() => {
-              setIsComposing(false);
-            }}
-            onKeyDown={handleKeyDown}
-            onPaste={handlePaste}
-            placeholder={isThreadStateBroken
-              ? "New messages are disabled for this thread."
-              : isActiveThread
-              ? "Message the current turn..."
-              : "Continue this thread..."}
-            className="min-h-[5.75rem] w-full resize-y border-0 bg-transparent px-1 py-1 text-[0.96em] leading-[1.65] text-text outline-none placeholder:text-muted"
-            disabled={isInputDisabled}
-          />
+          <div hidden={isPickerOpen}>
+            <textarea
+              id={`thread-composer:${thread.id}`}
+              value={value}
+              onChange={(event) => {
+                setValue(event.target.value);
+                if (error) {
+                  setError("");
+                }
+              }}
+              onCompositionStart={() => {
+                setIsComposing(true);
+              }}
+              onCompositionEnd={() => {
+                setIsComposing(false);
+              }}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              placeholder={isThreadStateBroken
+                ? "New messages are disabled for this thread."
+                : isCopilotAuthRequired
+                  ? "Sign in to Copilot CLI to send messages."
+                  : isActiveThread
+                    ? "Message the current turn..."
+                    : thread.isDraft
+                      ? "Start a new thread..."
+                      : "Continue this thread..."}
+              className="min-h-[5.75rem] w-full resize-y border-0 bg-transparent px-1 py-1 text-[0.96em] leading-[1.65] text-text outline-none placeholder:text-muted"
+              disabled={isInputDisabled}
+            />
+          </div>
         </label>
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-          <p className={joinClasses(
-            "m-0 text-[0.78em] leading-[1.6]",
-            isThreadStateBroken ? "text-danger" : "text-muted",
+        {isModelPickerOpen ? (
+          <ThreadModelPicker
+            appliesOnNextTurnOnly={thread.harness === "codex" && isActiveThread}
+            deprioritizedModelIds={deprioritizedModelIds}
+            error={modelsError}
+            harness={thread.harness}
+            isLoading={isLoadingModels}
+            models={availableModels}
+            selectedModelId={selectedModel}
+            onClose={() => {
+              setActivePicker(null);
+            }}
+            onSelectModel={(model) => {
+              onThreadModelChange(thread.id, model.id);
+              setModelsError("");
+              setActivePicker(null);
+            }}
+            onToggleModelPriority={(modelId) => {
+              setDeprioritizedModelIdsByHarness((current) => {
+                const currentIds = current[thread.harness] ?? [];
+                const nextIds = currentIds.includes(modelId)
+                  ? currentIds.filter((id) => id !== modelId)
+                  : [...currentIds, modelId];
+
+                return {
+                  ...current,
+                  [thread.harness]: nextIds,
+                };
+              });
+            }}
+          />
+        ) : isAgentPickerOpen ? (
+          <ThreadAgentPicker
+            agents={availableAgents}
+            error={agentsError}
+            isLoading={isLoadingAgents}
+            selectedAgentPath={thread.agentPath}
+            onClose={() => {
+              setActivePicker(null);
+            }}
+            onSelectAgent={(agentPath) => {
+              onThreadAgentChange(thread.id, agentPath);
+              setActivePicker(null);
+            }}
+          />
+        ) : (
+          <div className={joinClasses(
+            "mt-3 flex flex-wrap items-center gap-3",
+            helperText ? "justify-between" : "justify-end",
           )}>
-            {isAttaching
-              ? "Attaching pasted image..."
-              : isThreadStateBroken
-              ? "Thread state is out of sync. Sending is disabled here."
-              : isApprovalBlocked
-              ? "Current turn is waiting on approval. Sending adds guidance to that in-progress turn."
-              : isActiveThread
-              ? "Message the active turn. Press Enter to send and Shift+Enter for a new line."
-              : "Press Enter to send and Shift+Enter for a new line."}
-          </p>
-          <button
-            type="submit"
-            disabled={(!trimmedValue && !attachments.length) || isInputDisabled}
-            className={joinClasses(
-              "rounded-full px-4 py-2 text-[0.84em] font-medium transition",
-              "bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] text-[var(--bg)]",
-              "hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]",
-              ((!trimmedValue && !attachments.length) || isInputDisabled) && "cursor-not-allowed opacity-45",
-            )}
-          >
-            {isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : "Send"}
-          </button>
-        </div>
+            {helperText ? (
+              <p className={joinClasses(
+                "m-0 text-[0.78em] leading-[1.6]",
+                isThreadStateBroken ? "text-danger" : "text-muted",
+              )}>
+                {helperText}
+              </p>
+            ) : null}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex items-stretch overflow-hidden rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-[0.78em] font-medium text-text">
+                <button
+                  type="button"
+                  className="px-3 py-2 transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
+                  onClick={() => {
+                    setActivePicker("model");
+                  }}
+                >
+                  {modelButtonLabel}
+                </button>
+                {showsReasoningEffortControl ? (
+                  <>
+                    <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
+                    <button
+                      type="button"
+                      className="px-2.5 py-2 capitalize transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
+                      title="Left click to increase effort. Right click to decrease effort."
+                      onClick={() => {
+                        cycleReasoningEffort(1);
+                      }}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        cycleReasoningEffort(-1);
+                      }}
+                    >
+                      {currentReasoningEffort}
+                    </button>
+                  </>
+                ) : null}
+                <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
+                <button
+                  type="button"
+                  className="px-3 py-2 transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
+                  onClick={() => {
+                    setActivePicker("agent");
+                  }}
+                >
+                  {agentButtonLabel}
+                </button>
+              </div>
+              <button
+                type="submit"
+                disabled={(!trimmedValue && !attachments.length) || isInputDisabled}
+                className={joinClasses(
+                  "rounded-full px-4 py-2 text-[0.84em] font-medium transition",
+                  "bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] text-[var(--bg)]",
+                  "hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]",
+                  ((!trimmedValue && !attachments.length) || isInputDisabled) && "cursor-not-allowed opacity-45",
+                )}
+              >
+                {isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : "Send"}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
       {error ? (
         <p className="mt-2 mb-0 text-[0.84em] leading-[1.6] text-danger">{error}</p>

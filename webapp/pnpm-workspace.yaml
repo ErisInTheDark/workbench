@@ -1,0 +1,12 @@
+allowBuilds:
+  esbuild: true
+  sharp: true
+minimumReleaseAgeExclude:
+  - "@github/copilot"
+  - "@github/copilot-sdk"
+  - "@github/copilot-linux-x64"
+  - "@github/copilot-win32-x64"
+  - "@github/copilot-darwin-x64"
+  - "@github/copilot-win32-arm64"
+  - "@github/copilot-linux-arm64"
+  - "@github/copilot-darwin-arm64"

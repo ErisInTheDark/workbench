@@ -2,34 +2,45 @@
 
 import { memo, useLayoutEffect, useRef } from "react";
 
-import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
-import type { ThreadPayload } from "../../../lib/types";
+import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
+import type { ThreadPayload, WorkbenchHarness, WorkbenchModelOption } from "../../../lib/types";
 import ThreadComposer from "./ThreadComposer";
+import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadRateLimits from "./ThreadRateLimits";
 import { ThreadTurnDetails } from "./thread-view-items";
-import ThreadDisclosure from "./ThreadDisclosure";
 import {
   formatThreadTimestamp,
   getThreadTitle,
 } from "./thread-view-primitives";
 
-function ThreadView({
+function ThreadView ({
   fontSizeRem,
+  onDraftHarnessChange,
+  onListModels,
   onOpenFile,
   onSendMessage,
+  onThreadAgentChange,
+  onThreadReasoningEffortChange,
+  onThreadModelChange,
   projectRootPath,
   rateLimits,
   thread,
 }: {
   fontSizeRem: number;
+  onDraftHarnessChange: (harness: WorkbenchHarness) => void;
+  onListModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
   onOpenFile: (path: string) => Promise<void>;
   onSendMessage: (threadId: string, input: UserInput[]) => Promise<void>;
+  onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
+  onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
+  onThreadModelChange: (threadId: string, model: string) => void;
   projectRootPath: string;
   rateLimits: RateLimitSnapshot | null;
   thread: ThreadPayload;
 }) {
   const title = getThreadTitle(thread);
+  const isDraftThread = thread.isDraft;
   const bottomSentinelRef = useRef<HTMLDivElement>(null);
   const currentTurn = thread.turns.at(-1) ?? null;
   const isThinking = currentTurn?.status === "inProgress";
@@ -47,28 +58,34 @@ function ThreadView({
   return (
     <div className="mx-auto w-full max-w-[56rem] pb-16" style={{ fontSize: `${fontSizeRem}rem` }}>
       <header className="pb-4">
-        <h2 className="m-0 text-[1.55em] font-semibold leading-[1.1] tracking-tight text-text">{title}</h2>
-        {thread.preview && thread.preview !== title ? (
+        <h2 className="m-0 text-[1.55em] font-semibold leading-[1.1] tracking-tight text-text">
+          {isDraftThread ? "Create new thread" : title}
+        </h2>
+        {!isDraftThread && thread.preview && thread.preview !== title ? (
           <p className="mt-2 mb-0 max-w-3xl text-[0.92em] leading-[1.75] text-muted">{thread.preview}</p>
         ) : null}
-        <p className="mt-2 mb-0 text-[0.78em] leading-[1.6] text-muted">
-          Updated {formatThreadTimestamp(thread.updatedAt)} | Created {formatThreadTimestamp(thread.createdAt)}
-        </p>
-        <ThreadDisclosure
-          className="mt-1 text-[0.78em] leading-[1.6] text-muted"
-          contentClassName="mt-1 space-y-1 pl-6"
-          summary="Thread info"
-          summaryClassName="text-muted"
-        >
+        {!isDraftThread ? (
           <>
-            <p className="m-0">Status: {thread.status}</p>
-            <p className="m-0">Source: {thread.source}</p>
-            <p className="m-0 break-all font-mono text-[0.78em]">{thread.cwd}</p>
-            {thread.path ? (
-              <p className="m-0 break-all font-mono text-[0.78em]">{thread.path}</p>
-            ) : null}
+            <p className="mt-2 mb-0 text-[0.78em] leading-[1.6] text-muted">
+              Updated {formatThreadTimestamp(thread.updatedAt)} | Created {formatThreadTimestamp(thread.createdAt)}
+            </p>
+            <ThreadDisclosure
+              className="mt-1 text-[0.78em] leading-[1.6] text-muted"
+              contentClassName="mt-1 space-y-1 pl-6"
+              summary="Thread info"
+              summaryClassName="text-muted"
+            >
+              <>
+                <p className="m-0">Status: {thread.status}</p>
+                <p className="m-0">Source: {thread.source}</p>
+                <p className="m-0 break-all font-mono text-[0.78em]">{thread.cwd}</p>
+                {thread.path ? (
+                  <p className="m-0 break-all font-mono text-[0.78em]">{thread.path}</p>
+                ) : null}
+              </>
+            </ThreadDisclosure>
           </>
-        </ThreadDisclosure>
+        ) : null}
       </header>
 
       <div>
@@ -80,9 +97,11 @@ function ThreadView({
             turn={turn}
           />
         )) : (
-          <p className="m-0 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-4 text-[0.92em] leading-[1.6] text-muted">
-            No turns were returned for this thread yet.
-          </p>
+          !isDraftThread ? (
+            <p className="m-0 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-4 text-[0.92em] leading-[1.6] text-muted">
+              No turns were returned for this thread yet.
+            </p>
+          ) : null
         )}
       </div>
       {isThinking ? (
@@ -93,10 +112,22 @@ function ThreadView({
         </div>
       ) : null}
       <ThreadComposer
+        onListModels={onListModels}
         onSendMessage={onSendMessage}
+        onThreadAgentChange={onThreadAgentChange}
+        onThreadReasoningEffortChange={onThreadReasoningEffortChange}
+        onThreadModelChange={onThreadModelChange}
+        rateLimits={rateLimits}
         thread={thread}
       />
-      <ThreadRateLimits rateLimits={rateLimits} />
+      <ThreadRateLimits
+        canToggleHarness={thread.isDraft}
+        harness={thread.harness}
+        onHarnessToggle={() => {
+          onDraftHarnessChange(thread.harness === "codex" ? "copilot" : "codex");
+        }}
+        rateLimits={rateLimits}
+      />
       <div ref={bottomSentinelRef} aria-hidden="true" className="h-px w-full" />
     </div>
   );

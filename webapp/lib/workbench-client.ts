@@ -3,32 +3,13 @@
  * - initWorkbench: wire the workbench DOM, polling, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, polling.
  */
 import { CodexAppServerClient } from "./codex/app-server-client";
-import type { CodexAppServerNotification, CodexAppServerNotificationHandling } from "./codex/app-server-notifications";
-import type { GetAccountRateLimitsResponse } from "./codex/generated/app-server/v2/GetAccountRateLimitsResponse";
 import type { RateLimitSnapshot } from "./codex/generated/app-server/v2/RateLimitSnapshot";
-import type { ThreadItem } from "./codex/generated/app-server/v2/ThreadItem";
-import type { ThreadListResponse } from "./codex/generated/app-server/v2/ThreadListResponse";
-import type { ThreadReadResponse } from "./codex/generated/app-server/v2/ThreadReadResponse";
-import type { ThreadResumeResponse } from "./codex/generated/app-server/v2/ThreadResumeResponse";
-import type { Turn } from "./codex/generated/app-server/v2/Turn";
-import type { TurnStartResponse } from "./codex/generated/app-server/v2/TurnStartResponse";
-import type { TurnSteerResponse } from "./codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
-import type { CodexClientRequest } from "./codex/protocol";
-import { createTextInput, isCodexJsonRpcFailure } from "./codex/protocol";
-import {
-    formatThreadStatus,
-    isProjectCodexThread,
-    toThreadPayload,
-    toThreadSummary,
-} from "./codex/thread-adapter";
-import { getCurrentInProgressTurn, getCurrentTurn } from "./codex/thread-state";
+import { getCurrentTurn } from "./codex/thread-state";
 import type {
     ChangeSummary,
-    CreateEntryPayload,
     ExplorerSnapshot,
     FilePayload,
-    ProjectSnapshot,
     SaveConflictPayload,
     SaveFilePayload,
     ThreadPayload,
@@ -36,17 +17,15 @@ import type {
     TreeNode,
     WorkbenchBindings,
     WorkbenchControls,
+    WorkbenchHarness
 } from "./types";
 import {
-    MAX_EDITOR_FONT_SIZE,
-    MIN_EDITOR_FONT_SIZE,
     getRequestedPathFromUrl,
     getRequestedThreadIdFromUrl,
-    persistExpandedDirectories,
-    persistFontSize,
     readStoredExpandedDirectories,
     readStoredFontSize,
-    syncCurrentSelectionToUrl,
+    readStoredHarness,
+    syncCurrentSelectionToUrl
 } from "./workbench/browser-state";
 import {
     escapeMarkdownText,
@@ -70,15 +49,17 @@ import {
     type EditHistoryState,
 } from "./workbench/edit-history";
 import {
-    parseBlocks as parseMarkdownBlocks,
     markdownToHtml as renderMarkdownToHtml,
 } from "./workbench/markdown-render";
 import {
     formatTimestamp,
-    getFirstFile,
     isMarkdownFile,
     isTextLikeFile
 } from "./workbench/tree-utils";
+import { hasRequiredWorkbenchDomElements, type WorkbenchDomElements } from "./workbench/workbench-dom";
+import { createWorkbenchEditorClient } from "./workbench/workbench-editor-client";
+import { cloneTreeNodes, createWorkbenchProjectClient } from "./workbench/workbench-project-client";
+import { createWorkbenchThreadClient } from "./workbench/workbench-thread-client";
 
 type EditorMode = "rich" | "plain";
 
@@ -138,30 +119,8 @@ type SerializedMarkdownToken =
   | { type: "block"; block: SerializedBlock }
   | { type: "break"; count: number };
 
-type DiffMarkerSymbol = "+" | "-" | "*";
 type RevisionHoverKind = "comment" | "del" | "ins";
 type RevisionToolbarKind = RevisionHoverKind | "mixed";
-
-interface DiffRow {
-  path: string;
-  signature: string;
-}
-
-interface DiffRowAnchor {
-  path: string;
-  element: HTMLElement;
-}
-
-interface DeletedMarkerPlacement {
-  afterPath: string | null;
-  beforePath: string | null;
-}
-
-interface DiffAnchorMetrics {
-  bottom: number;
-  center: number;
-  top: number;
-}
 
 interface RevisionToolbarContext {
   kind: RevisionToolbarKind;
@@ -223,11 +182,7 @@ interface WorkbenchState {
   expandedDirectories: Set<string>;
 }
 
-const EDITOR_FONT_STEP = 0.08;
 const AUTO_REFRESH_INTERVAL_MS = 1500;
-const CODEX_NOTIFICATION_THREAD_REFRESH_DELAY_MS = 350;
-const CODEX_NOTIFICATION_THREAD_LIST_REFRESH_DELAY_MS = 750;
-const DEFAULT_TURN_REASONING_SUMMARY = "detailed" as const;
 const DRAFT_DATABASE_NAME = "workbench";
 const DRAFT_DATABASE_VERSION = 1;
 const DRAFT_STORE_NAME = "drafts";
@@ -251,7 +206,10 @@ const INLINE_MARK_RANK: Record<InlineMark["tag"], number> = {
   code: 6,
 };
 
-export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<() => void> {
+export async function initWorkbench(
+  bindings: WorkbenchBindings & { elements?: WorkbenchDomElements | null } = {},
+): Promise<() => void> {
+  const { elements, ...workbenchBindings } = bindings;
   const state: WorkbenchState = {
     baselineContent: "",
     changes: {},
@@ -294,68 +252,26 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     "HR",
   ]);
 
-  const editor = document.querySelector<HTMLDivElement>("#editor");
-  const customCaret = document.querySelector<HTMLDivElement>("#editor-custom-caret");
-  const diffGutter = document.querySelector<HTMLDivElement>("#editor-diff-gutter");
-  const floatingToolbar = document.querySelector<HTMLDivElement>("#floating-toolbar");
-  const revisionHoverToolbar = document.querySelector<HTMLDivElement>("#revision-hover-toolbar");
-  const revisionHoverAcceptButton = document.querySelector<HTMLButtonElement>("#revision-hover-accept");
-  const revisionHoverRejectButton = document.querySelector<HTMLButtonElement>("#revision-hover-reject");
-  const filePathLabel = document.querySelector<HTMLElement>("#file-path");
-  const resetDraftButton = document.querySelector<HTMLButtonElement>("#reset-draft");
-  const saveFileButton = document.querySelector<HTMLButtonElement>("#save-file");
-  const saveConflictDialog = document.querySelector<HTMLDivElement>("#save-conflict-dialog");
-  const saveConflictSummary = document.querySelector<HTMLElement>("#save-conflict-summary");
-  const saveConflictExpected = document.querySelector<HTMLElement>("#save-conflict-expected");
-  const saveConflictActual = document.querySelector<HTMLElement>("#save-conflict-actual");
-  const saveConflictKeepEditingButton = document.querySelector<HTMLButtonElement>("#save-conflict-keep-editing");
-  const saveConflictReloadButton = document.querySelector<HTMLButtonElement>("#save-conflict-reload");
-  const saveConflictOverwriteButton = document.querySelector<HTMLButtonElement>("#save-conflict-overwrite");
-  const resetDraftDialog = document.querySelector<HTMLDivElement>("#reset-draft-dialog");
-  const resetDraftCancelButton = document.querySelector<HTMLButtonElement>("#reset-draft-cancel");
-  const resetDraftHeadButton = document.querySelector<HTMLButtonElement>("#reset-draft-head");
-  const resetDraftSavedButton = document.querySelector<HTMLButtonElement>("#reset-draft-saved");
-  const zoomOutButton = document.querySelector<HTMLButtonElement>("#zoom-out");
-  const zoomInButton = document.querySelector<HTMLButtonElement>("#zoom-in");
-  const statusLine = document.querySelector<HTMLElement>("#status-line");
-
-  if (
-    !editor ||
-    !customCaret ||
-    !diffGutter ||
-    !floatingToolbar ||
-    !revisionHoverToolbar ||
-    !revisionHoverAcceptButton ||
-    !revisionHoverRejectButton ||
-    !filePathLabel ||
-    !resetDraftButton ||
-    !saveFileButton ||
-    !saveConflictDialog ||
-    !saveConflictSummary ||
-    !saveConflictExpected ||
-    !saveConflictActual ||
-    !saveConflictKeepEditingButton ||
-    !saveConflictReloadButton ||
-    !saveConflictOverwriteButton ||
-    !resetDraftDialog ||
-    !resetDraftCancelButton ||
-    !resetDraftHeadButton ||
-    !resetDraftSavedButton ||
-    !zoomOutButton ||
-    !zoomInButton ||
-    !statusLine
-  ) {
+  if (!hasRequiredWorkbenchDomElements(elements)) {
     return () => {};
   }
 
+  const editor = elements.editor;
+  const customCaret = elements.customCaret;
+  const floatingToolbar = elements.toolbars.floating;
+  const revisionHoverToolbar = elements.toolbars.revisionHover;
+  const revisionHoverAcceptButton = elements.toolbars.revisionAccept;
+  const revisionHoverRejectButton = elements.toolbars.revisionReject;
+  const saveConflictDialog = elements.saveConflictDialog.dialog;
+  const resetDraftDialog = elements.resetDraftDialog.dialog;
+
   const abortController = new AbortController();
-  const { signal } = abortController;
   const codexClient = new CodexAppServerClient();
   let autoRefreshTimeoutId: number | null = null;
   let autoRefreshStopped = false;
   let codexThreadRefreshTimeoutId: number | null = null;
   let codexThreadListRefreshTimeoutId: number | null = null;
-  let diffRefreshFrameId: number | null = null;
+  const rateLimitsByHarness = new Map<WorkbenchHarness, RateLimitSnapshot | null>();
   let selectionPersistenceTimeoutId: number | null = null;
   let hoveredRevisionNode: HTMLElement | null = null;
   let activeRevisionNodes = new Set<HTMLElement>();
@@ -365,11 +281,61 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   let preservePendingInlineFormatSelectionChanges = 0;
   const draftDatabasePromise = openDraftDatabase();
   let draftPersistenceQueue = Promise.resolve();
-  const editorShell = diffGutter.parentElement;
+  const editorShell = elements.diffGutter.parentElement;
+  let reportStatusMessage = (_message: string) => {};
+  const projectClient = createWorkbenchProjectClient();
+  const threadClient = createWorkbenchThreadClient({
+    onStatusMessage: (message) => {
+      reportStatusMessage(message);
+    },
+  });
 
   if (!editorShell) {
     return () => {};
   }
+
+  const unsubscribeProjectClient = projectClient.subscribe((snapshot) => {
+    state.root = snapshot.root;
+    state.rootPath = snapshot.rootPath;
+    state.tree = snapshot.tree;
+    state.changes = snapshot.changes;
+    state.expandedDirectories = new Set(snapshot.expandedDirectories);
+    threadClient.setProjectContext({
+      root: snapshot.root,
+      rootPath: snapshot.rootPath,
+    });
+    emitExplorerStateChange();
+  });
+
+  const unsubscribeThreadClient = threadClient.subscribe((snapshot) => {
+    const previousThread = state.currentThread;
+    const previousRateLimits = state.rateLimits;
+    const previousThreadId = state.currentThreadId;
+    const previousThreads = state.threads;
+    const previousThreadsError = state.threadsError;
+
+    state.currentThread = snapshot.currentThread;
+    state.currentThreadId = snapshot.currentThreadId;
+    state.rateLimits = snapshot.rateLimits;
+    state.threads = snapshot.threads;
+    state.threadsError = snapshot.threadsError;
+
+    if (!areThreadPayloadsEquivalent(previousThread, snapshot.currentThread)) {
+      emitCurrentThreadChange();
+    }
+
+    if (previousRateLimits !== snapshot.rateLimits) {
+      emitRateLimitsChange();
+    }
+
+    if (
+      previousThreadId !== snapshot.currentThreadId
+      || previousThreads !== snapshot.threads
+      || previousThreadsError !== snapshot.threadsError
+    ) {
+      emitExplorerStateChange();
+    }
+  });
 
   document.execCommand?.("defaultParagraphSeparator", false, "p");
 
@@ -381,21 +347,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
   function hideDialog(dialog: HTMLDivElement) {
     dialog.hidden = true;
-  }
-
-  function showDialog(dialog: HTMLDivElement, focusTarget?: HTMLElement) {
-    dialogs.forEach((currentDialog) => {
-      if (currentDialog !== dialog) {
-        hideDialog(currentDialog);
-      }
-    });
-
-    dialog.hidden = false;
-    if (focusTarget) {
-      window.requestAnimationFrame(() => {
-        focusTarget.focus();
-      });
-    }
   }
 
   function closeActiveDialog() {
@@ -414,205 +365,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     return false;
   }
 
-  saveFileButton.addEventListener("click", async () => {
-    await saveCurrentFile();
-  }, { signal });
-
-  resetDraftButton.addEventListener("click", () => {
-    if (!state.currentPath) {
-      return;
-    }
-
-    showDialog(resetDraftDialog, resetDraftCancelButton);
-  }, { signal });
-
-  zoomOutButton.addEventListener("click", () => {
-    changeEditorFontSize(-EDITOR_FONT_STEP);
-  }, { signal });
-
-  zoomInButton.addEventListener("click", () => {
-    changeEditorFontSize(EDITOR_FONT_STEP);
-  }, { signal });
-
-  saveConflictKeepEditingButton.addEventListener("click", () => {
-    hideSaveConflictDialog();
-    editor.focus();
-  }, { signal });
-
-  saveConflictReloadButton.addEventListener("click", async () => {
-    hideSaveConflictDialog();
-    if (!state.currentPath) {
-      return;
-    }
-    await openFile(state.currentPath, { ignoreDirty: true, source: "reload" });
-  }, { signal });
-
-  saveConflictOverwriteButton.addEventListener("click", async () => {
-    hideSaveConflictDialog();
-    await saveCurrentFile({ force: true });
-  }, { signal });
-
-  resetDraftCancelButton.addEventListener("click", () => {
-    hideResetDraftDialog();
-    editor.focus();
-  }, { signal });
-
-  resetDraftSavedButton.addEventListener("click", async () => {
-    await resetCurrentDraftToSaved();
-  }, { signal });
-
-  resetDraftHeadButton.addEventListener("click", async () => {
-    await resetCurrentFileToHead();
-  }, { signal });
-
-  document.addEventListener("keydown", async (event) => {
-    if (event.key === "Escape" && closeActiveDialog()) {
-      return;
-    }
-
-    if (event.defaultPrevented) {
-      return;
-    }
-
-    const isPrimaryModifier = event.metaKey || event.ctrlKey;
-    if (!isPrimaryModifier || event.key.toLowerCase() !== "s") {
-      return;
-    }
-
-    event.preventDefault();
-    await saveCurrentFile();
-  }, { signal });
-
-  editor.addEventListener("input", (event) => {
-    const previousContent = state.currentContent;
-    const transformedListItem = maybeTransformParagraphIntoListItem(event);
-    const commentCaretMarker = maybeExpandBlockCommentStarter(event) ?? maybeActivateInlineCommentShortcut(event);
-    syncStructuredBlockStyles();
-    if (transformedListItem) {
-      restoreListItemSelection([transformedListItem], { collapsed: true });
-    }
-    if (commentCaretMarker) {
-      restoreCaretToMarker(commentCaretMarker);
-    }
-    inspectCurrentDraft();
-    recordEditHistory(previousContent, state.currentContent, captureEditorSelection());
-    syncCurrentDraftBuffer();
-    scheduleDiffGutterRefresh();
-    updateStatusLine();
-    window.requestAnimationFrame(() => {
-      updateFloatingToolbar();
-      updateRevisionHoverToolbar();
-      updateCustomCaret();
-    });
-  }, { signal });
-
-  editor.addEventListener("beforeinput", (event) => {
-    if (!(event instanceof InputEvent)) {
-      return;
-    }
-
-    if (handlePendingInlineBeforeInput(event)) {
-      return;
-    }
-
-    if (event.inputType === "historyUndo") {
-      event.preventDefault();
-      undoEditHistory();
-      return;
-    }
-
-    if (event.inputType === "historyRedo") {
-      event.preventDefault();
-      redoEditHistory();
-    }
-  }, { signal });
-
-  editor.addEventListener("keydown", async (event) => {
-    if (!state.currentPath || state.mode !== "rich") {
-      return;
-    }
-
-    if (pendingInlineFormats && shouldClearPendingInlineFormatsForKey(event)) {
-      clearPendingInlineFormats();
-    }
-
-    if (event.key === "Tab") {
-      if (handleListTab(event)) {
-        return;
-      }
-    }
-
-    if (event.key === "Backspace") {
-      if (handleCommentBlockBackspace(event)) {
-        return;
-      }
-
-      if (handleListItemBackspace(event)) {
-        return;
-      }
-    }
-
-    if (event.key === "Enter") {
-      if (handleCommentBlockEnter(event)) {
-        return;
-      }
-
-      if (handleEmptyListItemEnter(event)) {
-        return;
-      }
-    }
-
-    const isPrimaryModifier = event.metaKey || event.ctrlKey;
-    if (!isPrimaryModifier) {
-      return;
-    }
-
-    if (!event.altKey && event.key.toLowerCase() === "z") {
-      event.preventDefault();
-      if (event.shiftKey) {
-        redoEditHistory();
-      } else {
-        undoEditHistory();
-      }
-      return;
-    }
-
-    if (!event.shiftKey && !event.altKey && event.key.toLowerCase() === "y") {
-      event.preventDefault();
-      redoEditHistory();
-      return;
-    }
-
-    if (event.key.toLowerCase() === "b") {
-      event.preventDefault();
-      runEditorCommand("bold");
-      return;
-    }
-
-    if (event.key.toLowerCase() === "i") {
-      event.preventDefault();
-      runEditorCommand("italic");
-      return;
-    }
-
-    if (event.code === "Backquote" && !event.shiftKey && !event.altKey) {
-      event.preventDefault();
-      wrapSelection("code");
-      return;
-    }
-
-    if (event.shiftKey && event.key.toLowerCase() === "x") {
-      event.preventDefault();
-      wrapSelection("del");
-      return;
-    }
-
-    if (event.shiftKey && event.key.toLowerCase() === "a") {
-      event.preventDefault();
-      wrapSelection("ins");
-    }
-  }, { signal });
-
   const refreshInlineToolbars = () => {
     window.requestAnimationFrame(() => {
       updateFloatingToolbar();
@@ -621,155 +373,244 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     });
   };
 
-  document.addEventListener("selectionchange", () => {
-    if (pendingInlineFormats) {
-      if (preservePendingInlineFormatSelectionChanges > 0) {
-        preservePendingInlineFormatSelectionChanges -= 1;
-      } else if (shouldPreservePendingInlineFormatsForSelection()) {
-        updateCustomCaret();
-      } else {
+  const editorClient = createWorkbenchEditorClient(elements, {
+    closeActiveDialog,
+    getDiffGutterContent: () => ({
+      currentContent: state.currentContent,
+      headContent: state.headContent,
+    }),
+    getProjectChangeSummary: (path) => projectClient.getSnapshot().changes[path] ?? null,
+    handleCompositionEnd: () => {
+      isComposing = false;
+      window.requestAnimationFrame(updateCustomCaret);
+    },
+    handleCompositionStart: () => {
+      isComposing = true;
+      clearPendingInlineFormats();
+      updateCustomCaret();
+    },
+    handleEditorBeforeInput: (event) => {
+      if (handlePendingInlineBeforeInput(event)) {
+        return;
+      }
+
+      if (event.inputType === "historyUndo") {
+        event.preventDefault();
+        undoEditHistory();
+        return;
+      }
+
+      if (event.inputType === "historyRedo") {
+        event.preventDefault();
+        redoEditHistory();
+      }
+    },
+    handleEditorBlur: () => {
+      editorHasFocus = false;
+      clearPendingInlineFormats();
+      updateCustomCaret();
+    },
+    handleEditorClick: (event) => {
+      const summaryText = event.target instanceof Element
+        ? event.target.closest<HTMLElement>('[data-summary-text="true"]')
+        : null;
+      if (!summaryText || !editor.contains(summaryText)) {
+        return;
+      }
+
+      const summary = summaryText.closest<HTMLElement>("summary");
+      if (!summary) {
+        return;
+      }
+
+      event.preventDefault();
+      placeCaretInElement(summaryText, event.clientX, event.clientY);
+    },
+    handleEditorFocus: () => {
+      editorHasFocus = true;
+      updateCustomCaret();
+    },
+    handleEditorInput: (event) => {
+      const previousContent = state.currentContent;
+      const transformedListItem = maybeTransformParagraphIntoListItem(event);
+      const commentCaretMarker = maybeExpandBlockCommentStarter(event) ?? maybeActivateInlineCommentShortcut(event);
+      syncStructuredBlockStyles();
+      if (transformedListItem) {
+        restoreListItemSelection([transformedListItem], { collapsed: true });
+      }
+      if (commentCaretMarker) {
+        restoreCaretToMarker(commentCaretMarker);
+      }
+      inspectCurrentDraft();
+      recordEditHistory(previousContent, state.currentContent, captureEditorSelection());
+      syncCurrentDraftBuffer();
+      editorClient.scheduleDiffGutterRefresh();
+      editorClient.refreshStatusMessage();
+      refreshInlineToolbars();
+    },
+    handleEditorKeyDown: (event) => {
+      if (!state.currentPath || state.mode !== "rich") {
+        return;
+      }
+
+      if (pendingInlineFormats && shouldClearPendingInlineFormatsForKey(event)) {
         clearPendingInlineFormats();
       }
-    }
 
-    updateHistorySelection(captureEditorSelection());
-    scheduleSelectionPersistence();
-    refreshInlineToolbars();
-  }, { signal });
-
-  document.addEventListener("touchend", refreshInlineToolbars, { signal, passive: true });
-  document.addEventListener("pointerup", refreshInlineToolbars, { signal });
-
-  editor.addEventListener("focus", () => {
-    editorHasFocus = true;
-    updateCustomCaret();
-  }, { signal });
-
-  editor.addEventListener("blur", () => {
-    editorHasFocus = false;
-    clearPendingInlineFormats();
-    updateCustomCaret();
-  }, { signal });
-
-  editor.addEventListener("compositionstart", () => {
-    isComposing = true;
-    clearPendingInlineFormats();
-    updateCustomCaret();
-  }, { signal });
-
-  editor.addEventListener("compositionend", () => {
-    isComposing = false;
-    window.requestAnimationFrame(updateCustomCaret);
-  }, { signal });
-
-  for (const dialog of dialogs) {
-    dialog.addEventListener("click", (event) => {
-      if (event.target === dialog) {
-        hideDialog(dialog);
+      if (event.key === "Tab" && handleListTab(event)) {
+        return;
       }
-    }, { signal });
-  }
 
-  const preserveToolbarSelection = (event: Event) => {
-    event.preventDefault();
+      if (event.key === "Backspace") {
+        if (handleCommentBlockBackspace(event)) {
+          return;
+        }
+        if (handleListItemBackspace(event)) {
+          return;
+        }
+      }
+
+      if (event.key === "Enter") {
+        if (handleCommentBlockEnter(event)) {
+          return;
+        }
+        if (handleEmptyListItemEnter(event)) {
+          return;
+        }
+      }
+
+      const isPrimaryModifier = event.metaKey || event.ctrlKey;
+      if (!isPrimaryModifier) {
+        return;
+      }
+
+      if (!event.altKey && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          redoEditHistory();
+        } else {
+          undoEditHistory();
+        }
+        return;
+      }
+
+      if (!event.shiftKey && !event.altKey && event.key.toLowerCase() === "y") {
+        event.preventDefault();
+        redoEditHistory();
+        return;
+      }
+
+      if (event.key.toLowerCase() === "b") {
+        event.preventDefault();
+        runEditorCommand("bold");
+        return;
+      }
+
+      if (event.key.toLowerCase() === "i") {
+        event.preventDefault();
+        runEditorCommand("italic");
+        return;
+      }
+
+      if (event.code === "Backquote" && !event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        wrapSelection("code");
+        return;
+      }
+
+      if (event.shiftKey && event.key.toLowerCase() === "x") {
+        event.preventDefault();
+        wrapSelection("del");
+        return;
+      }
+
+      if (event.shiftKey && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        wrapSelection("ins");
+      }
+    },
+    handleEditorPointerDown: () => {
+      clearPendingInlineFormats();
+    },
+    handleEditorToggle: (event) => {
+      if (!(event.target instanceof HTMLDetailsElement)) {
+        return;
+      }
+
+      editorClient.scheduleDiffGutterRefresh();
+    },
+    handleOverwriteConflict: async () => {
+      await saveCurrentFile({ force: true });
+    },
+    handlePointerMove: (event) => {
+      const revisionNode = event.target instanceof Element
+        ? event.target.closest<HTMLElement>('del, ins, [data-inline-comment="true"], [data-block-comment="true"]')
+        : null;
+      if (revisionNode && editor.contains(revisionNode)) {
+        setHoveredRevisionNode(revisionNode);
+        return;
+      }
+
+      if (!isPointerNearRevisionHoverUi(event.clientX, event.clientY)) {
+        setHoveredRevisionNode(null);
+      }
+    },
+    handleRefreshInlineToolbars: refreshInlineToolbars,
+    handleReloadConflict: async () => {
+      if (!state.currentPath) {
+        return;
+      }
+
+      await openFile(state.currentPath, { ignoreDirty: true, source: "reload" });
+    },
+    handleResetCurrentDraftToSaved: async () => {
+      await resetCurrentDraftToSaved();
+    },
+    handleResetCurrentFileToHead: async () => {
+      await resetCurrentFileToHead();
+    },
+    handleRevisionAction: (action) => {
+      applyHoveredRevisionAction(action);
+    },
+    handleSaveCurrentFile: async () => {
+      await saveCurrentFile();
+    },
+    handleSelectionChange: () => {
+      if (pendingInlineFormats) {
+        if (preservePendingInlineFormatSelectionChanges > 0) {
+          preservePendingInlineFormatSelectionChanges -= 1;
+        } else if (shouldPreservePendingInlineFormatsForSelection()) {
+          updateCustomCaret();
+        } else {
+          clearPendingInlineFormats();
+        }
+      }
+
+      updateHistorySelection(captureEditorSelection());
+      scheduleSelectionPersistence();
+      refreshInlineToolbars();
+    },
+    handleToolbarCommand: (command) => {
+      applyToolbarCommand(command);
+    },
+    handleViewportChanged: () => {
+      editorClient.scheduleDiffGutterRefresh();
+      updateFloatingToolbar();
+      updateRevisionHoverToolbar();
+      updateCustomCaret();
+    },
+    isSaveButtonInvalid: () => Boolean(state.saveIssue) || Array.from(state.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue)),
+    shouldBlockBeforeUnload: () => Boolean(state.saveIssue) || Array.from(state.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue)),
+  });
+  reportStatusMessage = (message) => {
+    editorClient.refreshStatusMessage(message);
   };
-
-  floatingToolbar.addEventListener("mousedown", preserveToolbarSelection, { signal });
-  floatingToolbar.addEventListener("pointerdown", preserveToolbarSelection, { signal });
-  floatingToolbar.addEventListener("touchstart", preserveToolbarSelection, { signal, passive: false });
-
-  revisionHoverToolbar.addEventListener("mousedown", preserveToolbarSelection, { signal });
-  revisionHoverToolbar.addEventListener("pointerdown", preserveToolbarSelection, { signal });
-  revisionHoverToolbar.addEventListener("touchstart", preserveToolbarSelection, { signal, passive: false });
-
-  floatingToolbar.addEventListener("click", (event) => {
-    const button = event.target instanceof Element
-      ? event.target.closest<HTMLButtonElement>("button[data-command]")
-      : null;
-    if (!button) {
-      return;
+  const unsubscribeEditorClient = editorClient.subscribe((snapshot) => {
+    if (state.fontSize !== snapshot.fontSize) {
+      state.fontSize = snapshot.fontSize;
+      emitExplorerStateChange();
     }
-
-    editor.focus();
-    applyToolbarCommand(button.dataset.command);
-  }, { signal });
-
-  revisionHoverAcceptButton.addEventListener("click", () => {
-    applyHoveredRevisionAction("accept");
-  }, { signal });
-
-  revisionHoverRejectButton.addEventListener("click", () => {
-    applyHoveredRevisionAction("reject");
-  }, { signal });
-
-  editor.addEventListener("click", (event) => {
-    const summaryText = event.target instanceof Element
-      ? event.target.closest<HTMLElement>('[data-summary-text="true"]')
-      : null;
-    if (!summaryText || !editor.contains(summaryText)) {
-      return;
-    }
-
-    const summary = summaryText.closest<HTMLElement>("summary");
-    if (!summary) {
-      return;
-    }
-
-    event.preventDefault();
-    placeCaretInElement(summaryText, event.clientX, event.clientY);
-  }, { signal });
-
-  editor.addEventListener("pointerdown", () => {
-    clearPendingInlineFormats();
-  }, { signal });
-
-  document.addEventListener("pointermove", (event) => {
-    const revisionNode = event.target instanceof Element
-      ? event.target.closest<HTMLElement>('del, ins, [data-inline-comment="true"], [data-block-comment="true"]')
-      : null;
-    if (revisionNode && editor.contains(revisionNode)) {
-      setHoveredRevisionNode(revisionNode);
-      return;
-    }
-
-    if (!isPointerNearRevisionHoverUi(event.clientX, event.clientY)) {
-      setHoveredRevisionNode(null);
-    }
-  }, { signal });
-
-  editor.addEventListener("toggle", (event) => {
-    if (!(event.target instanceof HTMLDetailsElement)) {
-      return;
-    }
-
-    scheduleDiffGutterRefresh();
-  }, { capture: true, signal });
-
-  window.addEventListener("resize", () => {
-    scheduleDiffGutterRefresh();
-    updateFloatingToolbar();
-    updateRevisionHoverToolbar();
-    updateCustomCaret();
-  }, { signal });
-
-  window.addEventListener("scroll", () => {
-    updateFloatingToolbar();
-    updateRevisionHoverToolbar();
-    updateCustomCaret();
-  }, { signal });
-
-  window.visualViewport?.addEventListener("resize", refreshInlineToolbars, { signal });
-  window.visualViewport?.addEventListener("scroll", refreshInlineToolbars, { signal });
-
-  window.addEventListener("beforeunload", (event) => {
-    const hasMarkupMismatch = Boolean(state.saveIssue) || Array.from(state.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue));
-    if (!hasMarkupMismatch) {
-      return;
-    }
-
-    event.preventDefault();
-    event.returnValue = "";
-  }, { signal });
+  });
 
   function wrapIndexedDbRequest<T>(request: IDBRequest<T>) {
     return new Promise<T>((resolve, reject) => {
@@ -994,22 +835,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     });
   }
 
-  function describeChange(filePath: string) {
-    const entry = state.changes[filePath];
-    if (!entry) {
-      return "";
-    }
-
-    const parts = [];
-    if (entry.additions) {
-      parts.push(`+${entry.additions}`);
-    }
-    if (entry.deletions) {
-      parts.push(`-${entry.deletions}`);
-    }
-    return parts.join(" ");
-  }
-
   function isSingleBreakParagraph(element: HTMLElement) {
     if (element.tagName !== "P") {
       return false;
@@ -1038,50 +863,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     }
 
     return breakCount === 1;
-  }
-
-  function getLastNonBreakBlock(blocks: ParsedBlock[]) {
-    for (let index = blocks.length - 1; index >= 0; index -= 1) {
-      if (blocks[index].type !== "break" && blocks[index].type !== "list-break") {
-        return blocks[index];
-      }
-    }
-
-    return null;
-  }
-
-  function maybePushCommentBreak(blocks: ParsedBlock[], blankLineCount: number, nextBlockType: ParsedBlock["type"]) {
-    if (!blankLineCount) {
-      return;
-    }
-
-    const previousBlock = getLastNonBreakBlock(blocks);
-    if (nextBlockType === "comment" || previousBlock?.type === "comment") {
-      blocks.push({ type: "break", count: blankLineCount });
-    }
-  }
-
-  function maybePushStandardBreak(
-    blocks: ParsedBlock[],
-    blankLineCount: number,
-    nextBlockType: ParsedBlock["type"],
-  ) {
-    if (blankLineCount <= 1) {
-      return;
-    }
-
-    const previousBlock = getLastNonBreakBlock(blocks);
-    if (!previousBlock || previousBlock.type === "comment" || nextBlockType === "comment") {
-      return;
-    }
-
-    const previousIsList = previousBlock.type === "ul" || previousBlock.type === "ol";
-    const nextIsList = nextBlockType === "ul" || nextBlockType === "ol";
-    if (previousIsList && nextIsList) {
-      return;
-    }
-
-    blocks.push({ type: "break", count: blankLineCount - 1 });
   }
 
   function isListElement(element: Element) {
@@ -1378,47 +1159,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     range.setEnd(end.node, end.offset);
     selection.removeAllRanges();
     selection.addRange(range);
-  }
-
-  function placeCaretBeforeSibling(parent: Node, sibling: Node | null) {
-    const selection = window.getSelection();
-    if (!selection) {
-      return;
-    }
-
-    const range = document.createRange();
-    const offset = sibling
-      ? Array.prototype.indexOf.call(parent.childNodes, sibling) as number
-      : parent.childNodes.length;
-    range.setStart(parent, Math.max(0, offset));
-    range.collapse(true);
-    selection.removeAllRanges();
-    selection.addRange(range);
-    editor.focus();
-  }
-
-  function placeCaretAfterNode(node: Node, fallbackParent: Node) {
-    const selection = window.getSelection();
-    if (!selection) {
-      return;
-    }
-
-    const range = document.createRange();
-    if (node.nodeType === Node.TEXT_NODE) {
-      range.setStart(node, node.textContent?.length ?? 0);
-      range.collapse(true);
-    } else if (node instanceof Element) {
-      range.selectNodeContents(node);
-      range.collapse(false);
-    } else {
-      const offset = Array.prototype.indexOf.call(fallbackParent.childNodes, node) as number;
-      range.setStart(fallbackParent, Math.max(0, offset + 1));
-      range.collapse(true);
-    }
-
-    selection.removeAllRanges();
-    selection.addRange(range);
-    editor.focus();
   }
 
   function getDirectEditorParagraph(node: Node | null) {
@@ -2100,17 +1840,15 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   }
 
   function updateSaveButtonState() {
-    saveFileButton.dataset.invalid = state.saveIssue ? "true" : "false";
-    saveFileButton.disabled = !state.currentPath;
-    resetDraftButton.disabled = !state.currentPath;
+    editorClient.setSaveButtonState();
   }
 
   function hideSaveConflictDialog() {
-    hideDialog(saveConflictDialog);
+    editorClient.hideSaveConflictDialog();
   }
 
   function hideResetDraftDialog() {
-    hideDialog(resetDraftDialog);
+    editorClient.hideResetDraftDialog();
   }
 
   function clearWriteConflict() {
@@ -2120,10 +1858,11 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
   function showWriteConflict(conflict: SaveConflictPayload) {
     state.pendingWriteConflict = conflict;
-    saveConflictSummary.textContent = `${conflict.path} changed on disk after you opened it. Reload from disk to discard your unsaved editor state, or overwrite anyway to write what is currently in the editor.`;
-    saveConflictExpected.textContent = `Opened version: ${formatTimestamp(conflict.expectedUpdatedAt)}`;
-    saveConflictActual.textContent = `Current disk version: ${formatTimestamp(conflict.actualUpdatedAt)}`;
-    showDialog(saveConflictDialog, saveConflictKeepEditingButton);
+    editorClient.showSaveConflict({
+      ...conflict,
+      expectedUpdatedAt: formatTimestamp(conflict.expectedUpdatedAt),
+      actualUpdatedAt: formatTimestamp(conflict.actualUpdatedAt),
+    });
   }
 
   function getCurrentEditorState() {
@@ -2156,9 +1895,9 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     return {
       root: state.root,
       rootPath: state.rootPath,
-      tree: state.tree,
+      tree: cloneTreeNodes(state.tree),
       threads: state.threads,
-      changes: state.changes,
+      changes: { ...state.changes },
       currentPath: state.currentPath,
       currentThreadId: state.currentThreadId,
       expandedDirectories: Array.from(state.expandedDirectories).sort((left, right) => left.localeCompare(right)),
@@ -2169,15 +1908,15 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   }
 
   function emitExplorerStateChange() {
-    bindings.onExplorerStateChange?.(getExplorerSnapshot());
+    workbenchBindings.onExplorerStateChange?.(getExplorerSnapshot());
   }
 
   function emitCurrentThreadChange() {
-    bindings.onCurrentThreadChange?.(state.currentThread);
+    workbenchBindings.onCurrentThreadChange?.(state.currentThread);
   }
 
   function emitRateLimitsChange() {
-    bindings.onRateLimitsChange?.(state.rateLimits);
+    workbenchBindings.onRateLimitsChange?.(state.rateLimits);
   }
 
   function setRateLimits(rateLimits: RateLimitSnapshot | null) {
@@ -2210,6 +1949,11 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     }
 
     return left.id === right.id
+      && left.harness === right.harness
+      && left.model === right.model
+      && left.reasoningEffort === right.reasoningEffort
+      && left.agentPath === right.agentPath
+      && left.isDraft === right.isDraft
       && left.name === right.name
       && left.preview === right.preview
       && left.createdAt === right.createdAt
@@ -2227,8 +1971,20 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       return;
     }
 
+    const previousThread = state.currentThread;
     state.currentThread = thread;
     emitCurrentThreadChange();
+
+    if (!thread) {
+      setRateLimits(null);
+      return;
+    }
+
+    if (!previousThread || previousThread.id !== thread.id || previousThread.harness !== thread.harness) {
+      setRateLimits(rateLimitsByHarness.get(thread.harness) ?? null);
+
+      void refreshRateLimits();
+    }
   }
 
   function updateCurrentThread(updater: (thread: ThreadPayload) => ThreadPayload | null) {
@@ -2253,18 +2009,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   }
 
   function toggleDirectory(path: string) {
-    if (!path) {
-      return;
-    }
-
-    if (state.expandedDirectories.has(path)) {
-      state.expandedDirectories.delete(path);
-    } else {
-      state.expandedDirectories.add(path);
-    }
-
-    persistExpandedDirectories(state.expandedDirectories);
-    emitExplorerStateChange();
+    projectClient.toggleDirectory(path);
   }
 
   function syncCurrentDraftBuffer() {
@@ -2308,15 +2053,15 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
   function restoreDraftBuffer(filePath: string, buffer: DraftBuffer) {
     clearWriteConflict();
-    setCurrentThread(null);
+    threadClient.clearThreadSelection();
+    state.currentThread = null;
     state.currentPath = filePath;
     state.currentThreadId = "";
     state.expectedMtimeMs = buffer.expectedMtimeMs;
     state.mode = buffer.mode;
-    editor.dataset.placeholder = buffer.mode === "rich"
-      ? "Select a markdown file to start editing."
-      : "Plain text mode";
-    filePathLabel.textContent = filePath;
+    editorClient.setCurrentThreadId("");
+    editorClient.setCurrentFilePath(filePath);
+    editorClient.setMode(buffer.mode);
 
     if (buffer.mode === "rich") {
       editor.innerHTML = buffer.editorState;
@@ -2341,9 +2086,12 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     state.lastLoggedSaveIssue = buffer.saveIssue
       ? { ...buffer.saveIssue }
       : null;
+    editorClient.setDirty(buffer.dirty);
+    editorClient.setPendingWriteConflict(state.pendingWriteConflict);
+    editorClient.setSaveIssue(state.saveIssue);
     updateSaveButtonState();
-    updateStatusLine();
-    scheduleDiffGutterRefresh();
+    editorClient.refreshStatusMessage();
+    editorClient.scheduleDiffGutterRefresh();
     restoreEditorSelection(state.history.frames[state.history.currentIndex]?.selection ?? null);
   }
 
@@ -2358,24 +2106,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   }
 
   function applyEditorFontSize() {
-    editor.style.fontSize = `${state.fontSize}rem`;
-  }
-
-  function changeEditorFontSize(delta: number) {
-    const nextFontSize = Math.min(
-      MAX_EDITOR_FONT_SIZE,
-      Math.max(MIN_EDITOR_FONT_SIZE, Number((state.fontSize + delta).toFixed(2))),
-    );
-
-    if (nextFontSize === state.fontSize) {
-      return;
-    }
-
-    state.fontSize = nextFontSize;
-    applyEditorFontSize();
-    persistFontSize(state.fontSize);
-    scheduleDiffGutterRefresh();
-    emitExplorerStateChange();
+    state.fontSize = editorClient.getSnapshot().fontSize;
   }
 
   function escapeHtml(value: string) {
@@ -2502,281 +2233,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     return html;
   }
 
-  function parseListLine(line: string) {
-    const expandedLine = line.replaceAll("\t", "  ");
-    const match = expandedLine.match(/^(\s*)([-*+]|\d+[.)])(?:\s+(.*))?$/);
-    if (!match) {
-      return null;
-    }
-
-    return {
-      indent: match[1].length,
-      text: match[3] ?? "",
-      type: /^\d+[.)]$/.test(match[2]) ? "ol" : "ul" as "ol" | "ul",
-    };
-  }
-
-  function parseSpecificListBlock(lines: string[], startIndex: number, indent: number, type: "ul" | "ol") {
-    const items: ParsedListItem[] = [];
-    let index = startIndex;
-
-    while (index < lines.length) {
-      const line = parseListLine(lines[index]);
-      if (!line || line.indent !== indent || line.type !== type) {
-        break;
-      }
-
-      const item: ParsedListItem = {
-        text: line.text,
-        children: [],
-      };
-      index += 1;
-
-      while (index < lines.length) {
-        const nestedLine = parseListLine(lines[index]);
-        if (!nestedLine || nestedLine.indent <= indent) {
-          break;
-        }
-
-        const nestedBlock = parseSpecificListBlock(lines, index, nestedLine.indent, nestedLine.type);
-        item.children.push(nestedBlock.block);
-        index = nestedBlock.nextIndex;
-      }
-
-      items.push(item);
-    }
-
-    return {
-      block: { type, items } satisfies Extract<ParsedBlock, { type: "ul" | "ol" }>,
-      nextIndex: index,
-    };
-  }
-
-  function parseListBlock(lines: string[], startIndex: number) {
-    const firstLine = parseListLine(lines[startIndex]);
-    if (!firstLine) {
-      return null;
-    }
-
-    return parseSpecificListBlock(lines, startIndex, firstLine.indent, firstLine.type);
-  }
-
-  function parseBlocks(markdown: string): ParsedBlock[] {
-    const lines = markdown.replace(/\r\n/g, "\n").split("\n");
-    const blocks: ParsedBlock[] = [];
-    let blankLineCount = 0;
-
-    for (let index = 0; index < lines.length;) {
-      const line = lines[index];
-
-      if (!line.trim()) {
-        blankLineCount += 1;
-        index += 1;
-        continue;
-      }
-
-      if (isBlockCommentLine(line)) {
-        maybePushCommentBreak(blocks, blankLineCount, "comment");
-        blankLineCount = 0;
-        blocks.push({ type: "comment", text: line });
-        index += 1;
-        continue;
-      }
-
-      const fenceMatch = line.match(/^```(.*)$/);
-      if (fenceMatch) {
-        maybePushCommentBreak(blocks, blankLineCount, "code");
-        maybePushStandardBreak(blocks, blankLineCount, "code");
-        blankLineCount = 0;
-        const language = fenceMatch[1].trim();
-        const codeLines = [];
-        index += 1;
-
-        while (index < lines.length && !lines[index].startsWith("```")) {
-          codeLines.push(lines[index]);
-          index += 1;
-        }
-
-        if (index < lines.length) {
-          index += 1;
-        }
-
-        blocks.push({ type: "code", language, text: codeLines.join("\n") });
-        continue;
-      }
-
-      const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
-      if (headingMatch) {
-        maybePushCommentBreak(blocks, blankLineCount, "heading");
-        maybePushStandardBreak(blocks, blankLineCount, "heading");
-        blankLineCount = 0;
-        blocks.push({
-          type: "heading",
-          level: headingMatch[1].length,
-          text: headingMatch[2],
-        });
-        index += 1;
-        continue;
-      }
-
-      if (/^ {0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
-        maybePushCommentBreak(blocks, blankLineCount, "hr");
-        maybePushStandardBreak(blocks, blankLineCount, "hr");
-        blankLineCount = 0;
-        blocks.push({ type: "hr" });
-        index += 1;
-        continue;
-      }
-
-      if (/^>\s?/.test(line)) {
-        maybePushCommentBreak(blocks, blankLineCount, "blockquote");
-        maybePushStandardBreak(blocks, blankLineCount, "blockquote");
-        blankLineCount = 0;
-        const quoteLines = [];
-
-        while (index < lines.length && /^>\s?/.test(lines[index])) {
-          quoteLines.push(lines[index].replace(/^>\s?/, ""));
-          index += 1;
-        }
-
-        blocks.push({ type: "blockquote", text: quoteLines.join("\n") });
-        continue;
-      }
-
-      const listBlock = parseListBlock(lines, index);
-      if (listBlock) {
-        const previousBlock = getLastNonBreakBlock(blocks);
-        const previousIsList = previousBlock?.type === "ul" || previousBlock?.type === "ol";
-        if (
-          blankLineCount > 0
-          && previousIsList
-        ) {
-          blocks.push({ type: "list-break", count: blankLineCount });
-        } else {
-          maybePushCommentBreak(blocks, blankLineCount, listBlock.block.type);
-          maybePushStandardBreak(blocks, blankLineCount, listBlock.block.type);
-        }
-        blankLineCount = 0;
-        blocks.push(listBlock.block);
-        index = listBlock.nextIndex;
-        continue;
-      }
-
-      const paragraphLines = [];
-      maybePushCommentBreak(blocks, blankLineCount, "paragraph");
-      maybePushStandardBreak(blocks, blankLineCount, "paragraph");
-      blankLineCount = 0;
-      while (
-        index < lines.length &&
-        lines[index].trim() &&
-        !isBlockCommentLine(lines[index]) &&
-        !/^```/.test(lines[index]) &&
-        !/^(#{1,6})\s+/.test(lines[index]) &&
-        !/^>\s?/.test(lines[index]) &&
-        !/^[-*+]\s+/.test(lines[index]) &&
-        !/^\d+[.)]\s+/.test(lines[index]) &&
-        !/^ {0,3}([-*_])(?:\s*\1){2,}\s*$/.test(lines[index])
-      ) {
-        paragraphLines.push(lines[index]);
-        index += 1;
-      }
-      blocks.push({ type: "paragraph", text: paragraphLines.join("\n") });
-    }
-
-    if (blankLineCount > 0 && getLastNonBreakBlock(blocks)?.type === "comment") {
-      blocks.push({ type: "break", count: blankLineCount });
-    }
-
-    return blocks;
-  }
-
-  function appendParsedListDiffRows(
-    block: Extract<ParsedBlock, { type: "ul" | "ol" }>,
-    blockPath: string,
-    depth: number,
-    rows: DiffRow[],
-  ) {
-    block.items.forEach((item, index) => {
-      const itemPath = `${blockPath}/item:${index}`;
-      rows.push({
-        path: itemPath,
-        signature: `li|${block.type}|${depth}|${item.text}`,
-      });
-
-      item.children.forEach((child, childIndex) => {
-        if (child.type !== "ul" && child.type !== "ol") {
-          return;
-        }
-
-        appendParsedListDiffRows(child, `${itemPath}/child:${childIndex}`, depth + 1, rows);
-      });
-    });
-  }
-
-  function flattenMarkdownDiffRows(markdown: string | null) {
-    const rows: DiffRow[] = [];
-    let blockIndex = 0;
-
-    for (const block of parseMarkdownBlocks(markdown ?? "")) {
-      switch (block.type) {
-        case "break":
-        case "list-break":
-          continue;
-        case "ul":
-        case "ol":
-          appendParsedListDiffRows(block, `b${blockIndex}`, 0, rows);
-          blockIndex += 1;
-          continue;
-        case "heading":
-          rows.push({
-            path: `b${blockIndex}`,
-            signature: `heading|${block.level}|${block.text}`,
-          });
-          blockIndex += 1;
-          continue;
-        case "blockquote":
-          rows.push({
-            path: `b${blockIndex}`,
-            signature: `blockquote|${block.text}`,
-          });
-          blockIndex += 1;
-          continue;
-        case "comment":
-          rows.push({
-            path: `b${blockIndex}`,
-            signature: `comment|${block.text}`,
-          });
-          blockIndex += 1;
-          continue;
-        case "hr":
-          rows.push({
-            path: `b${blockIndex}`,
-            signature: "hr|",
-          });
-          blockIndex += 1;
-          continue;
-        case "code":
-          rows.push({
-            path: `b${blockIndex}`,
-            signature: `code|${block.language}|${block.text}`,
-          });
-          blockIndex += 1;
-          continue;
-        case "paragraph":
-          rows.push({
-            path: `b${blockIndex}`,
-            signature: `paragraph|${block.text}`,
-          });
-          blockIndex += 1;
-          continue;
-        default:
-          continue;
-      }
-    }
-
-    return rows;
-  }
-
   function renderListBlock(block: Extract<ParsedBlock, { type: "ul" | "ol" }>) {
     return `<${block.type}>${block.items.map((item) => renderListItem(item)).join("")}</${block.type}>`;
   }
@@ -2792,41 +2248,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       .join("");
 
     return `<li><details open><summary>${content}</summary>${childContent}</details></li>`;
-  }
-
-  function markdownToHtml(markdown: string) {
-    const blocks = parseBlocks(markdown);
-    const html = blocks
-      .map((block) => {
-        switch (block.type) {
-          case "list-break":
-            return Array.from(
-              { length: Math.max(1, block.count) },
-              () => '<p data-list-break="true"><br></p>',
-            ).join("");
-          case "break":
-            return "<br>".repeat(block.count);
-          case "heading":
-            return `<h${block.level}>${renderInline(block.text)}</h${block.level}>`;
-          case "blockquote":
-            return `<blockquote>${renderInline(block.text)}</blockquote>`;
-          case "comment":
-            return `<p data-block-comment="true">${escapeHtml(parseBlockCommentBody(block.text) ?? block.text)}</p>`;
-          case "ul":
-          case "ol":
-            return renderListBlock(block);
-          case "hr":
-            return "<hr>";
-          case "code":
-            return `<pre data-language="${escapeHtml(block.language)}"><code>${escapeHtml(block.text)}</code></pre>`;
-          case "paragraph":
-          default:
-            return `<p>${renderInline(block.text)}</p>`;
-        }
-      })
-      .join("");
-
-    return html || "<p><br></p>";
   }
 
   function replaceTag(root: ParentNode, sourceTag: string, targetTag: string) {
@@ -2899,66 +2320,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     canonicalizeAllInlineRunContainers(root);
     removeEmptyInlineFormattingArtifacts(root);
     (root as Node).normalize();
-  }
-
-  function isDiffTrackableBlockElement(element: Element) {
-    return /^(p|div|h1|h2|h3|h4|h5|h6|blockquote|pre|hr)$/i.test(element.tagName);
-  }
-
-  function appendLiveListDiffAnchors(
-    listElement: HTMLUListElement | HTMLOListElement,
-    blockPath: string,
-    anchors: DiffRowAnchor[],
-  ) {
-    Array.from(listElement.children)
-      .filter((child): child is HTMLLIElement => child instanceof HTMLLIElement)
-      .forEach((item, index) => {
-        const itemPath = `${blockPath}/item:${index}`;
-        anchors.push({
-          path: itemPath,
-          element: item,
-        });
-
-        getNestedListElementsForItem(item).forEach((childList, childIndex) => {
-          appendLiveListDiffAnchors(childList, `${itemPath}/child:${childIndex}`, anchors);
-        });
-      });
-  }
-
-  function flattenLiveDiffAnchors(root: ParentNode = editor) {
-    const anchors: DiffRowAnchor[] = [];
-    const childElements = root instanceof Element || root instanceof DocumentFragment
-      ? Array.from(root.children)
-      : [];
-    let blockIndex = 0;
-
-    for (const childElement of childElements) {
-      if (
-        childElement instanceof HTMLBRElement
-        || isIntentionalListBreakParagraph(childElement)
-        || (childElement instanceof HTMLElement && isSingleBreakParagraph(childElement))
-      ) {
-        continue;
-      }
-
-      if (childElement instanceof HTMLUListElement || childElement instanceof HTMLOListElement) {
-        appendLiveListDiffAnchors(childElement, `b${blockIndex}`, anchors);
-        blockIndex += 1;
-        continue;
-      }
-
-      if (!isDiffTrackableBlockElement(childElement)) {
-        continue;
-      }
-
-      anchors.push({
-        path: `b${blockIndex}`,
-        element: childElement as HTMLElement,
-      });
-      blockIndex += 1;
-    }
-
-    return anchors;
   }
 
   function createMarkupSignature(root: ParentNode) {
@@ -3204,119 +2565,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     return inspection;
   }
 
-  function diffRowsAgainstHead(headRows: DiffRow[], currentRows: DiffRow[]) {
-    const rowCount = headRows.length;
-    const columnCount = currentRows.length;
-    const dp = Array.from(
-      { length: rowCount + 1 },
-      () => new Uint32Array(columnCount + 1),
-    );
-
-    for (let rowIndex = rowCount - 1; rowIndex >= 0; rowIndex -= 1) {
-      for (let columnIndex = columnCount - 1; columnIndex >= 0; columnIndex -= 1) {
-        if (headRows[rowIndex].signature === currentRows[columnIndex].signature) {
-          dp[rowIndex][columnIndex] = dp[rowIndex + 1][columnIndex + 1] + 1;
-        } else {
-          dp[rowIndex][columnIndex] = Math.max(
-            dp[rowIndex + 1][columnIndex],
-            dp[rowIndex][columnIndex + 1],
-          );
-        }
-      }
-    }
-
-    const operations: Array<
-      | { type: "equal"; row: DiffRow }
-      | { type: "insert"; row: DiffRow }
-      | { type: "delete"; row: DiffRow }
-    > = [];
-    let rowIndex = 0;
-    let columnIndex = 0;
-
-    while (rowIndex < rowCount || columnIndex < columnCount) {
-      if (
-        rowIndex < rowCount
-        && columnIndex < columnCount
-        && headRows[rowIndex].signature === currentRows[columnIndex].signature
-      ) {
-        operations.push({ type: "equal", row: currentRows[columnIndex] });
-        rowIndex += 1;
-        columnIndex += 1;
-        continue;
-      }
-
-      const canInsert = columnIndex < columnCount;
-      const canDelete = rowIndex < rowCount;
-
-      if (
-        canInsert
-        && (!canDelete || dp[rowIndex][columnIndex + 1] >= dp[rowIndex + 1][columnIndex])
-      ) {
-        operations.push({ type: "insert", row: currentRows[columnIndex] });
-        columnIndex += 1;
-        continue;
-      }
-
-      if (canDelete) {
-        operations.push({ type: "delete", row: headRows[rowIndex] });
-        rowIndex += 1;
-      }
-    }
-
-    const currentMarkers = new Map<string, DiffMarkerSymbol>();
-    const deletedPlacements: DeletedMarkerPlacement[] = [];
-    let previousEqualPath: string | null = null;
-
-    for (let operationIndex = 0; operationIndex < operations.length;) {
-      const operation = operations[operationIndex];
-      if (operation.type === "equal") {
-        previousEqualPath = operation.row.path;
-        operationIndex += 1;
-        continue;
-      }
-
-      const insertedPaths: string[] = [];
-      let deletedCount = 0;
-
-      while (operationIndex < operations.length && operations[operationIndex].type !== "equal") {
-        const currentOperation = operations[operationIndex];
-        if (currentOperation.type === "insert") {
-          insertedPaths.push(currentOperation.row.path);
-        } else {
-          deletedCount += 1;
-        }
-        operationIndex += 1;
-      }
-
-      const nextEqualPath = operationIndex < operations.length
-        ? operations[operationIndex].row.path
-        : null;
-
-      if (insertedPaths.length && deletedCount) {
-        insertedPaths.forEach((path) => {
-          currentMarkers.set(path, "*");
-        });
-        continue;
-      }
-
-      if (insertedPaths.length) {
-        insertedPaths.forEach((path) => {
-          currentMarkers.set(path, "+");
-        });
-        continue;
-      }
-
-      if (deletedCount) {
-        deletedPlacements.push({
-          afterPath: previousEqualPath,
-          beforePath: nextEqualPath,
-        });
-      }
-    }
-
-    return { currentMarkers, deletedPlacements };
-  }
-
   function getEditorLineHeight() {
     const computedStyle = window.getComputedStyle(editor);
     const parsedLineHeight = Number.parseFloat(computedStyle.lineHeight);
@@ -3330,161 +2578,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     }
 
     return 24;
-  }
-
-  function getAnchorMetrics(element: HTMLElement) {
-    const rect = element.getClientRects()[0];
-    if (!rect || rect.height === 0) {
-      return null;
-    }
-
-    const shellRect = editorShell.getBoundingClientRect();
-    const top = rect.top - shellRect.top;
-    const bottom = rect.bottom - shellRect.top;
-
-    return {
-      top,
-      center: top + (bottom - top) / 2,
-      bottom,
-    } satisfies DiffAnchorMetrics;
-  }
-
-  function resolveDeletedMarkerTop(
-    placement: DeletedMarkerPlacement,
-    anchorMetrics: Map<string, DiffAnchorMetrics>,
-    lineHeight: number,
-  ) {
-    const previousMetrics = placement.afterPath
-      ? anchorMetrics.get(placement.afterPath) ?? null
-      : null;
-    const nextMetrics = placement.beforePath
-      ? anchorMetrics.get(placement.beforePath) ?? null
-      : null;
-
-    if (previousMetrics !== null && nextMetrics !== null) {
-      const gapStart = previousMetrics.bottom;
-      const gapEnd = nextMetrics.top;
-
-      if (gapEnd > gapStart) {
-        return gapStart + (gapEnd - gapStart) / 2;
-      }
-
-      return previousMetrics.bottom + (nextMetrics.top - previousMetrics.bottom) / 2;
-    }
-
-    if (nextMetrics !== null) {
-      return Math.max(0, nextMetrics.top - lineHeight * 0.5);
-    }
-
-    if (previousMetrics !== null) {
-      return previousMetrics.bottom + lineHeight * 0.5;
-    }
-
-    return Math.max(0, lineHeight * 0.5);
-  }
-
-  function createDiffMarker(symbol: DiffMarkerSymbol, top: number) {
-    const marker = document.createElement("span");
-    marker.className = "editor-diff-marker";
-    marker.dataset.markerType = symbol === "+" ? "insert" : symbol === "-" ? "delete" : "modify";
-    marker.style.top = `${Math.max(0, top)}px`;
-    marker.append(createDiffMarkerIcon(symbol));
-    return marker;
-  }
-
-  function createDiffMarkerIcon(symbol: DiffMarkerSymbol) {
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("viewBox", "0 0 20 20");
-    svg.setAttribute("fill", "none");
-    svg.setAttribute("aria-hidden", "true");
-    svg.classList.add("editor-diff-marker-icon");
-
-    if (symbol === "*") {
-      const asterisk = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      asterisk.setAttribute("d", "M10 4.35v11.3M5.15 7.15l9.7 5.7M14.85 7.15l-9.7 5.7");
-      asterisk.setAttribute("stroke", "currentColor");
-      asterisk.setAttribute("stroke-width", "2.25");
-      asterisk.setAttribute("stroke-linecap", "round");
-      asterisk.setAttribute("stroke-linejoin", "round");
-      svg.append(asterisk);
-      return svg;
-    }
-
-    const line = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    line.setAttribute("stroke", "currentColor");
-    line.setAttribute("stroke-width", "2.45");
-    line.setAttribute("stroke-linecap", "round");
-
-    if (symbol === "+") {
-      line.setAttribute("d", "M10 5.2v9.6M5.2 10h9.6");
-    } else {
-      line.setAttribute("d", "M5.2 10h9.6");
-    }
-
-    svg.append(line);
-    return svg;
-  }
-
-  function renderDiffGutter() {
-    diffGutter.replaceChildren();
-
-    if (!state.currentPath || state.mode !== "rich") {
-      return;
-    }
-
-    const currentRows = flattenMarkdownDiffRows(state.currentContent);
-    const headRows = flattenMarkdownDiffRows(state.headContent);
-    const { currentMarkers, deletedPlacements } = diffRowsAgainstHead(headRows, currentRows);
-
-    if (!currentMarkers.size && !deletedPlacements.length) {
-      return;
-    }
-
-    const anchorMetrics = new Map<string, DiffAnchorMetrics>();
-    for (const anchor of flattenLiveDiffAnchors(editor)) {
-      const metrics = getAnchorMetrics(anchor.element);
-      if (metrics === null) {
-        continue;
-      }
-
-      anchorMetrics.set(anchor.path, metrics);
-    }
-
-    const markers: Array<{ symbol: DiffMarkerSymbol; top: number }> = [];
-
-    for (const [path, symbol] of currentMarkers) {
-      const metrics = anchorMetrics.get(path);
-      if (!metrics) {
-        continue;
-      }
-
-      markers.push({ symbol, top: metrics.center });
-    }
-
-    const lineHeight = getEditorLineHeight();
-    for (const placement of deletedPlacements) {
-      markers.push({
-        symbol: "-",
-        top: resolveDeletedMarkerTop(placement, anchorMetrics, lineHeight),
-      });
-    }
-
-    markers
-      .sort((left, right) => left.top - right.top)
-      .forEach(({ symbol, top }) => {
-        diffGutter.append(createDiffMarker(symbol, top));
-      });
-  }
-
-  function scheduleDiffGutterRefresh() {
-    if (diffRefreshFrameId !== null) {
-      window.cancelAnimationFrame(diffRefreshFrameId);
-    }
-
-    diffRefreshFrameId = window.requestAnimationFrame(() => {
-      diffRefreshFrameId = null;
-      renderDiffGutter();
-    });
   }
 
   function inspectCurrentDraft() {
@@ -3623,50 +2716,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     )
       .map((leaf) => serializeInlineLeafToMarkdown(leaf))
       .join("");
-  }
-
-  function serializeInlineNode(node: Node) {
-    if (node.nodeType === Node.TEXT_NODE) {
-      return escapeMarkdownText(node.textContent ?? "");
-    }
-
-    if (node.nodeType !== Node.ELEMENT_NODE) {
-      return "";
-    }
-
-    const element = node as Element;
-    const tag = element.tagName.toLowerCase();
-    const inner = serializeInlineNodes(element.childNodes);
-
-    switch (tag) {
-      case "strong":
-      case "b":
-        return `__${inner}__`;
-      case "em":
-      case "i":
-        return inner.includes("*") ? `_${inner}_` : `*${inner}*`;
-      case "code":
-        return `\`${(element.textContent ?? "").replaceAll("`", "\\`")}\``;
-      case "a": {
-        const href = element.getAttribute("href") ?? "";
-        return `[${inner || href}](${href})`;
-      }
-      case "del":
-      case "s":
-      case "strike":
-        return `<del>${inner}</del>`;
-      case "ins":
-        return `<ins>${inner}</ins>`;
-      case "span":
-        if (element instanceof HTMLElement && element.dataset.inlineComment === "true") {
-          return formatInlineCommentMarkdown(inner);
-        }
-        return inner;
-      case "br":
-        return "\n";
-      default:
-        return inner;
-    }
   }
 
   function serializeParagraph(node: Element) {
@@ -3919,12 +2968,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     return serializeMarkdownTokens(tokens);
   }
 
-  function canonicalizeRichMarkdown(content: string) {
-    const root = document.createElement("div");
-    root.innerHTML = renderMarkdownToHtml(content);
-    return editorToMarkdown(root);
-  }
-
   function renderEditorDocument(content: string, mode: EditorMode) {
     state.mode = mode;
     editor.dataset.placeholder = mode === "rich"
@@ -3942,26 +2985,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     editor.scrollTop = 0;
   }
 
-  function setEditorContent(content: string, mode: EditorMode) {
-    renderEditorDocument(content, mode);
-    setHoveredRevisionNode(null);
-    clearPendingInlineFormats();
-    if (mode === "rich") {
-      state.baselineContent = refreshSaveGuardState().markdown;
-      state.currentContent = state.baselineContent;
-    } else {
-      state.baselineContent = content;
-      state.currentContent = content;
-      state.saveIssue = null;
-      updateSaveButtonState();
-    }
-    state.dirty = false;
-    state.history = createInitialEditHistory(state.currentContent);
-    updateStatusLine();
-    scheduleDiffGutterRefresh();
-    updateCustomCaret();
-  }
-
   function applyFilePayloadToCurrentFile(
     payload: FilePayload,
     {
@@ -3976,12 +2999,14 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     const selectionSnapshot = preserveSelection ? captureEditorSelection() : null;
 
     clearWriteConflict();
-    setCurrentThread(null);
+    threadClient.clearThreadSelection();
+    state.currentThread = null;
     state.currentPath = payload.path;
     state.currentThreadId = "";
     state.expectedMtimeMs = payload.mtimeMs;
     state.headContent = payload.headContent;
-    filePathLabel.textContent = payload.path;
+    editorClient.setCurrentThreadId("");
+    editorClient.setCurrentFilePath(payload.path);
     editor.setAttribute("contenteditable", isTextLikeFile(payload.path) ? "true" : "false");
     renderEditorDocument(payload.content, mode);
     if (mode === "rich") {
@@ -3999,14 +3024,18 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     state.pendingWriteConflict = null;
     state.saveIssue = null;
     state.lastLoggedSaveIssue = null;
+    editorClient.setMode(mode);
+    editorClient.setDirty(false);
+    editorClient.setPendingWriteConflict(null);
+    editorClient.setSaveIssue(null);
 
     if (selectionSnapshot) {
       restoreEditorSelection(selectionSnapshot);
       updateHistorySelection(captureEditorSelection());
     }
 
-    updateStatusLine(statusMessage);
-    scheduleDiffGutterRefresh();
+    editorClient.refreshStatusMessage(statusMessage);
+    editorClient.scheduleDiffGutterRefresh();
     updateFloatingToolbar();
     updateRevisionHoverToolbar();
     updateCustomCaret();
@@ -4024,8 +3053,8 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     restoreEditorSelection(history.frames[clampedIndex]?.selection ?? null);
     updateHistorySelection(captureEditorSelection());
     syncCurrentDraftBuffer();
-    scheduleDiffGutterRefresh();
-    updateStatusLine();
+    editorClient.scheduleDiffGutterRefresh();
+    editorClient.refreshStatusMessage();
     updateFloatingToolbar();
     updateRevisionHoverToolbar();
     updateCustomCaret();
@@ -4051,531 +3080,19 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     const response = await fetch(`/api/file?path=${encodeURIComponent(filePath)}`, { cache: "no-store" });
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: "Unable to open file." }));
-      statusLine.textContent = error.error;
+      editorClient.setStatusMessage(error.error);
       return null;
     }
 
     return await response.json() as FilePayload;
   }
 
-  async function sendCodexRequest<TResponse>(
-    request: Omit<CodexClientRequest, "id"> & { id?: number },
-  ) {
-    await codexClient.connect();
-    const response = await codexClient.sendRequest<TResponse>(request);
-    if (isCodexJsonRpcFailure(response)) {
-      const detail = response.error.data ? ` ${JSON.stringify(response.error.data)}` : "";
-      throw new Error(`${response.error.message}${detail}`);
-    }
-
-    return response.result;
-  }
-
-  async function fetchThreadPayload(threadId: string) {
-    try {
-      const response = await sendCodexRequest<ThreadResumeResponse>({
-        method: "thread/resume",
-        params: {
-          persistExtendedHistory: true,
-          threadId,
-        },
-      });
-
-      if (state.rootPath && !isProjectCodexThread(response.thread, state.rootPath)) {
-        statusLine.textContent = "That Codex thread doesn't belong to this project.";
-        return null;
-      }
-
-      return toThreadPayload(response.thread);
-    } catch (error) {
-      statusLine.textContent = error instanceof Error ? error.message : "Unable to open Codex thread.";
-      return null;
-    }
-  }
-
-  async function readThreadPayload(threadId: string) {
-    try {
-      const response = await sendCodexRequest<ThreadReadResponse>({
-        method: "thread/read",
-        params: {
-          includeTurns: true,
-          threadId,
-        },
-      });
-
-      if (state.rootPath && !isProjectCodexThread(response.thread, state.rootPath)) {
-        statusLine.textContent = "That Codex thread doesn't belong to this project.";
-        return null;
-      }
-
-      return toThreadPayload(response.thread);
-    } catch (error) {
-      statusLine.textContent = error instanceof Error ? error.message : "Unable to read Codex thread.";
-      return null;
-    }
-  }
-
   async function refreshThreads() {
-    try {
-      if (!state.rootPath) {
-        state.threads = [];
-        state.threadsError = "";
-        return;
-      }
-
-      const response = await sendCodexRequest<ThreadListResponse>({
-        method: "thread/list",
-        params: {
-          archived: false,
-          limit: 50,
-          sortKey: "updated_at",
-        },
-      });
-
-      state.threads = response.data
-        .filter((thread) => isProjectCodexThread(thread, state.rootPath))
-        .map((thread) => toThreadSummary(thread))
-        .sort((left, right) => {
-        if (right.updatedAt !== left.updatedAt) {
-          return right.updatedAt - left.updatedAt;
-        }
-
-        return left.id.localeCompare(right.id);
-      });
-      state.threadsError = "";
-    } catch (error) {
-      state.threads = [];
-      state.threadsError = error instanceof Error ? error.message : "Unable to load Codex threads.";
-    }
+    await threadClient.refreshThreads();
   }
 
   async function refreshRateLimits() {
-    try {
-      const response = await sendCodexRequest<GetAccountRateLimitsResponse>({
-        method: "account/rateLimits/read",
-        params: undefined,
-      });
-      setRateLimits(response.rateLimits);
-    } catch {
-      setRateLimits(null);
-    }
-  }
-
-  function normalizeThreadMessageInput(input: UserInput[] | string) {
-    const entries = Array.isArray(input)
-      ? input
-      : input.trim()
-        ? [createTextInput(input)]
-        : [];
-    const normalized: UserInput[] = [];
-
-    for (const entry of entries) {
-      switch (entry.type) {
-        case "text": {
-          const text = entry.text.trim();
-          if (text) {
-            normalized.push(createTextInput(text));
-          }
-          break;
-        }
-        case "image": {
-          const url = entry.url.trim();
-          if (url) {
-            normalized.push({
-              type: "image",
-              url,
-            });
-          }
-          break;
-        }
-        case "localImage": {
-          const path = entry.path.trim();
-          if (path) {
-            normalized.push({
-              type: "localImage",
-              path,
-            });
-          }
-          break;
-        }
-        case "skill": {
-          const name = entry.name.trim();
-          const path = entry.path.trim();
-          if (name && path) {
-            normalized.push({
-              type: "skill",
-              name,
-              path,
-            });
-          }
-          break;
-        }
-        case "mention": {
-          const name = entry.name.trim();
-          const path = entry.path.trim();
-          if (name && path) {
-            normalized.push({
-              type: "mention",
-              name,
-              path,
-            });
-          }
-          break;
-        }
-      }
-    }
-
-    return normalized;
-  }
-
-  function isCurrentThreadUpToDate(threadId: string) {
-    const currentThread = state.currentThread;
-    if (!currentThread || currentThread.id !== threadId) {
-      return false;
-    }
-
-    if (getCurrentInProgressTurn(currentThread)) {
-      return false;
-    }
-
-    const threadSummary = state.threads.find((thread) => thread.id === threadId);
-    if (!threadSummary) {
-      return false;
-    }
-
-    return currentThread.updatedAt === threadSummary.updatedAt
-      && currentThread.status === threadSummary.status;
-  }
-
-  function mergeTurnMetadata(existingTurn: Turn | undefined, incomingTurn: Turn): Turn {
-    return {
-      ...incomingTurn,
-      items: existingTurn?.items ?? incomingTurn.items,
-    };
-  }
-
-  function upsertTurnMetadata(incomingTurn: Turn) {
-    return updateCurrentThread((thread) => {
-      const turnIndex = thread.turns.findIndex((turn) => turn.id === incomingTurn.id);
-      if (turnIndex === -1) {
-        return {
-          ...thread,
-          turns: [...thread.turns, incomingTurn],
-        };
-      }
-
-      return {
-        ...thread,
-        turns: thread.turns.map((turn, index) => (
-          index === turnIndex ? mergeTurnMetadata(turn, incomingTurn) : turn
-        )),
-      };
-    });
-  }
-
-  function updateTurnItems(
-    turnId: string,
-    updater: (items: ThreadItem[]) => ThreadItem[] | null,
-  ) {
-    return updateCurrentThread((thread) => {
-      let updated = false;
-      const turns = thread.turns.map((turn) => {
-        if (turn.id !== turnId) {
-          return turn;
-        }
-
-        const nextItems = updater(turn.items);
-        if (!nextItems) {
-          return turn;
-        }
-
-        updated = true;
-        return {
-          ...turn,
-          items: nextItems,
-        };
-      });
-
-      return updated ? { ...thread, turns } : null;
-    });
-  }
-
-  function upsertThreadItem(turnId: string, incomingItem: ThreadItem) {
-    return updateTurnItems(turnId, (items) => {
-      const itemIndex = items.findIndex((item) => item.id === incomingItem.id);
-      if (itemIndex === -1) {
-        return [...items, incomingItem];
-      }
-
-      return items.map((item, index) => (
-        index === itemIndex ? incomingItem : item
-      ));
-    });
-  }
-
-  function updateThreadItem(
-    turnId: string,
-    itemId: string,
-    updater: (item: ThreadItem) => ThreadItem | null,
-  ) {
-    return updateTurnItems(turnId, (items) => {
-      let updated = false;
-      const nextItems = items.map((item) => {
-        if (item.id !== itemId) {
-          return item;
-        }
-
-        const nextItem = updater(item);
-        if (!nextItem) {
-          return item;
-        }
-
-        updated = true;
-        return nextItem;
-      });
-
-      return updated ? nextItems : null;
-    });
-  }
-
-  function appendIndexedText(values: string[], index: number, delta: string) {
-    const nextValues = [...values];
-    while (nextValues.length <= index) {
-      nextValues.push("");
-    }
-    nextValues[index] = `${nextValues[index] ?? ""}${delta}`;
-    return nextValues;
-  }
-
-  function ensureIndexedText(values: string[], index: number) {
-    const nextValues = [...values];
-    while (nextValues.length <= index) {
-      nextValues.push("");
-    }
-    return nextValues;
-  }
-
-  function doesNotificationTargetCurrentThread(notification: CodexAppServerNotification) {
-    return "threadId" in notification.params
-      ? notification.params.threadId === state.currentThreadId
-      : "thread" in notification.params
-        ? notification.params.thread.id === state.currentThreadId
-        : false;
-  }
-
-  function applyCodexNotificationToCurrentThread(notification: CodexAppServerNotification) {
-    if (!state.currentThread || !doesNotificationTargetCurrentThread(notification)) {
-      return false;
-    }
-
-    switch (notification.method) {
-      case "thread/started":
-        return updateCurrentThreadFields({
-          ...toThreadSummary(notification.params.thread),
-        });
-      case "thread/status/changed":
-        return updateCurrentThreadFields({
-          status: formatThreadStatus(notification.params.status),
-        });
-      case "thread/name/updated":
-        return updateCurrentThreadFields({
-          name: notification.params.threadName ?? null,
-        });
-      case "turn/started":
-      case "turn/completed":
-        return upsertTurnMetadata(notification.params.turn);
-      case "item/started":
-      case "item/completed":
-        return upsertThreadItem(notification.params.turnId, notification.params.item);
-      case "item/agentMessage/delta":
-        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
-          item.type === "agentMessage"
-            ? { ...item, text: `${item.text}${notification.params.delta}` }
-            : null
-        ));
-      case "item/plan/delta":
-        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
-          item.type === "plan"
-            ? { ...item, text: `${item.text}${notification.params.delta}` }
-            : null
-        ));
-      case "item/commandExecution/outputDelta":
-        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
-          item.type === "commandExecution"
-            ? { ...item, aggregatedOutput: `${item.aggregatedOutput ?? ""}${notification.params.delta}` }
-            : null
-        ));
-      case "item/fileChange/patchUpdated":
-        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
-          item.type === "fileChange"
-            ? { ...item, changes: notification.params.changes }
-            : null
-        ));
-      case "item/reasoning/summaryPartAdded":
-        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
-          item.type === "reasoning"
-            ? { ...item, summary: ensureIndexedText(item.summary, notification.params.summaryIndex) }
-            : null
-        ));
-      case "item/reasoning/summaryTextDelta":
-        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
-          item.type === "reasoning"
-            ? { ...item, summary: appendIndexedText(item.summary, notification.params.summaryIndex, notification.params.delta) }
-            : null
-        ));
-      case "item/reasoning/textDelta":
-        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
-          item.type === "reasoning"
-            ? { ...item, content: appendIndexedText(item.content, notification.params.contentIndex, notification.params.delta) }
-            : null
-        ));
-      case "thread/archived":
-      case "thread/unarchived":
-      case "thread/closed":
-      case "thread/tokenUsage/updated":
-      case "thread/compacted":
-      case "hook/started":
-      case "hook/completed":
-      case "turn/diff/updated":
-      case "turn/plan/updated":
-      case "item/autoApprovalReview/started":
-      case "item/autoApprovalReview/completed":
-      case "rawResponseItem/completed":
-      case "command/exec/outputDelta":
-      case "item/commandExecution/terminalInteraction":
-      case "item/fileChange/outputDelta":
-      case "item/mcpToolCall/progress":
-      case "serverRequest/resolved":
-      case "model/rerouted":
-      case "model/verification":
-      case "thread/realtime/started":
-      case "thread/realtime/itemAdded":
-      case "thread/realtime/transcript/delta":
-      case "thread/realtime/transcript/done":
-      case "thread/realtime/outputAudio/delta":
-      case "thread/realtime/sdp":
-      case "thread/realtime/error":
-      case "thread/realtime/closed":
-        return false;
-      case "error":
-      case "skills/changed":
-      case "mcpServer/oauthLogin/completed":
-      case "mcpServer/startupStatus/updated":
-      case "account/updated":
-      case "account/rateLimits/updated":
-      case "app/list/updated":
-      case "externalAgentConfig/import/completed":
-      case "fs/changed":
-      case "warning":
-      case "guardianWarning":
-      case "deprecationNotice":
-      case "configWarning":
-      case "fuzzyFileSearch/sessionUpdated":
-      case "fuzzyFileSearch/sessionCompleted":
-      case "windows/worldWritableWarning":
-      case "windowsSandbox/setupCompleted":
-      case "account/login/completed":
-        return false;
-    }
-
-    const unhandledNotification: never = notification;
-    return unhandledNotification;
-  }
-
-  function cloneUserInput(input: UserInput): UserInput {
-    switch (input.type) {
-      case "text":
-        return {
-          ...input,
-          text_elements: [...input.text_elements],
-        };
-      default:
-        return { ...input };
-    }
-  }
-
-  function doesUserMessageMatchInput(
-    item: ThreadPayload["turns"][number]["items"][number],
-    input: UserInput[],
-  ) {
-    if (item.type !== "userMessage" || item.content.length !== input.length) {
-      return false;
-    }
-
-    return item.content.every((content, index) => {
-      const nextInput = input[index];
-      if (!nextInput || content.type !== nextInput.type) {
-        return false;
-      }
-
-      switch (nextInput.type) {
-        case "text":
-          return content.type === "text"
-            && content.text.trim() === nextInput.text.trim();
-        case "image":
-          return content.type === "image"
-            && content.url === nextInput.url;
-        case "localImage":
-          return content.type === "localImage"
-            && content.path === nextInput.path;
-        case "skill":
-          return content.type === "skill"
-            && content.name === nextInput.name
-            && content.path === nextInput.path;
-        case "mention":
-          return content.type === "mention"
-            && content.name === nextInput.name
-            && content.path === nextInput.path;
-        default:
-          return false;
-      }
-    });
-  }
-
-  function createOptimisticUserMessage(input: UserInput[]): Extract<ThreadPayload["turns"][number]["items"][number], { type: "userMessage" }> {
-    return {
-      type: "userMessage",
-      id: `optimistic-user-message:${Date.now()}:${Math.random().toString(36).slice(2)}`,
-      content: input.map((entry) => cloneUserInput(entry)),
-    };
-  }
-
-  function applyOptimisticSteerMessage(
-    payload: ThreadPayload,
-    previousThread: ThreadPayload | null,
-    input: UserInput[],
-  ) {
-    const previousTargetTurn = getCurrentInProgressTurn(previousThread);
-    if (!previousTargetTurn) {
-      return payload;
-    }
-
-    const nextTurnIndex = payload.turns.findIndex((turn) => turn.id === previousTargetTurn.id);
-    if (nextTurnIndex === -1) {
-      return payload;
-    }
-
-    const nextTurn = payload.turns[nextTurnIndex];
-    if (nextTurn.status !== "inProgress") {
-      return payload;
-    }
-
-    const newItems = nextTurn.items.slice(previousTargetTurn.items.length);
-    if (newItems.some((item) => doesUserMessageMatchInput(item, input))) {
-      return payload;
-    }
-
-    return {
-      ...payload,
-      turns: payload.turns.map((turn, index) => (
-        index === nextTurnIndex
-          ? {
-            ...turn,
-            items: [...turn.items, createOptimisticUserMessage(input)],
-          }
-          : turn
-      )),
-    };
+    await threadClient.refreshRateLimits();
   }
 
   function applyThreadPayloadToCurrentView(payload: ThreadPayload, statusMessage?: string) {
@@ -4588,8 +3105,8 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     state.pendingWriteConflict = null;
     state.saveIssue = null;
     state.lastLoggedSaveIssue = null;
-    editor.dataset.placeholder = "Select a markdown file to start editing.";
-    filePathLabel.textContent = payload.name || payload.preview || payload.id;
+    editorClient.setCurrentThreadId(payload.id);
+    editorClient.showThreadPlaceholder(payload.name || payload.preview || payload.id);
     editor.setAttribute("contenteditable", "false");
     editor.textContent = "";
     editor.scrollTop = 0;
@@ -4601,8 +3118,8 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     clearPendingInlineFormats();
     setHoveredRevisionNode(null);
     updateSaveButtonState();
-    updateStatusLine(statusMessage);
-    scheduleDiffGutterRefresh();
+    editorClient.refreshStatusMessage(statusMessage);
+    editorClient.scheduleDiffGutterRefresh();
     updateFloatingToolbar();
     updateRevisionHoverToolbar();
     updateCustomCaret();
@@ -4610,7 +3127,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
   async function openThread(
     threadId: string,
-    { source = "open" }: { source?: "open" | "reload" } = {},
+    { harness, source = "open" }: { harness?: WorkbenchHarness; source?: "open" | "reload" } = {},
   ) {
     if (source === "open" && threadId === state.currentThreadId) {
       return;
@@ -4620,7 +3137,8 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       syncCurrentDraftBuffer();
     }
 
-    const payload = await fetchThreadPayload(threadId);
+    await threadClient.openThread(threadId, { harness, source });
+    const payload = threadClient.getSnapshot().currentThread;
     if (!payload) {
       return;
     }
@@ -4630,94 +3148,15 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     emitExplorerStateChange();
   }
 
-  async function reconcileCurrentThreadFromRead(threadId: string) {
-    const payload = await readThreadPayload(threadId);
-    if (!payload || state.currentThreadId !== threadId) {
+  async function sendThreadMessage(threadId: string, input: UserInput[]) {
+    await threadClient.sendThreadMessage(threadId, input);
+    const payload = threadClient.getSnapshot().currentThread;
+    if (!payload) {
       return;
     }
 
-    applyThreadPayloadToCurrentView(payload, `Read thread ${new Date(payload.updatedAt * 1000).toLocaleString()}`);
-    syncCurrentSelectionToUrl({ threadId: payload.id });
-    emitExplorerStateChange();
-  }
-
-  async function sendThreadMessage(threadId: string, input: UserInput[]) {
-    const previousThread = state.currentThread && state.currentThread.id === threadId
-      ? state.currentThread
-      : null;
-    const runtimeInput = input as UserInput[] | string;
-    const normalizedInput = normalizeThreadMessageInput(runtimeInput);
-
-    if (!threadId.trim()) {
-      throw new Error("Missing thread id.");
-    }
-
-    if (!normalizedInput.length) {
-      throw new Error("Message input cannot be empty.");
-    }
-
-    const readableThreadResponse = await sendCodexRequest<ThreadReadResponse>({
-      method: "thread/read",
-      params: {
-        includeTurns: true,
-        threadId,
-      },
-    });
-    const resumedThreadResponse = await sendCodexRequest<ThreadResumeResponse>({
-      method: "thread/resume",
-      params: {
-        persistExtendedHistory: true,
-        threadId,
-      },
-    });
-    const readableThread = toThreadPayload(readableThreadResponse.thread);
-    const resumedThread = toThreadPayload(resumedThreadResponse.thread);
-    const currentInProgressTurn = getCurrentInProgressTurn(resumedThread);
-    const visibleCurrentTurn = getCurrentTurn(readableThread);
-
-    if (
-      visibleCurrentTurn?.status === "completed"
-      && currentInProgressTurn
-      && currentInProgressTurn.id !== visibleCurrentTurn.id
-    ) {
-      throw new Error("This thread is out of sync with the app-server. New messages are disabled here for now.");
-    }
-
-    if (currentInProgressTurn) {
-      await sendCodexRequest<TurnSteerResponse>({
-        method: "turn/steer",
-        params: {
-          expectedTurnId: currentInProgressTurn.id,
-          input: normalizedInput,
-          threadId,
-        },
-      });
-    } else {
-      await sendCodexRequest<TurnStartResponse>({
-        method: "turn/start",
-        params: {
-          input: normalizedInput,
-          summary: DEFAULT_TURN_REASONING_SUMMARY,
-          threadId,
-        },
-      });
-    }
-
-    const refreshedThreadResponse = await sendCodexRequest<ThreadReadResponse>({
-      method: "thread/read",
-      params: {
-        includeTurns: true,
-        threadId,
-      },
-    });
-    const payload = applyOptimisticSteerMessage(
-      toThreadPayload(refreshedThreadResponse.thread),
-      previousThread,
-      normalizedInput,
-    );
     applyThreadPayloadToCurrentView(payload, "Sent message.");
     syncCurrentSelectionToUrl({ threadId: payload.id });
-    await refreshThreads();
     emitExplorerStateChange();
   }
 
@@ -4736,7 +3175,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
         editor.setAttribute("contenteditable", isTextLikeFile(filePath) ? "true" : "false");
         restoreDraftBuffer(filePath, bufferedDraft);
     syncCurrentSelectionToUrl({ filePath });
-        updateStatusLine(`Opened draft`);
+        editorClient.refreshStatusMessage("Opened draft");
         expandPath(filePath);
         emitExplorerStateChange();
         return;
@@ -4794,125 +3233,36 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       if (response.status === 409) {
         showWriteConflict(error as SaveConflictPayload);
         syncCurrentDraftBuffer();
-        updateStatusLine();
+        editorClient.refreshStatusMessage();
         return;
       }
 
-      statusLine.textContent = error.error;
+      editorClient.setStatusMessage(error.error);
       return;
     }
 
     const payload = (await response.json()) as SaveFilePayload;
-    state.changes = payload.changes;
-    emitExplorerStateChange();
+    await projectClient.refreshProject();
     await openFile(state.currentPath, { ignoreDirty: true, source: "reload" });
-    updateStatusLine(`Reset to HEAD - ${formatTimestamp(payload.updatedAt)}`);
+    editorClient.refreshStatusMessage(`Reset to HEAD - ${formatTimestamp(payload.updatedAt)}`);
     editor.focus();
   }
 
   async function createEntry(parentPath: string, name: string, type: "directory" | "file") {
-    const response = await fetch("/api/tree", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        parentPath,
-        name,
-        type,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "Unable to create entry." }));
-      throw new Error(error.error);
-    }
-
-    const payload = await response.json() as CreateEntryPayload;
-    state.root = payload.root;
-    state.rootPath = payload.rootPath;
-    state.tree = payload.tree;
-    state.changes = payload.changes;
-
-    if (parentPath) {
-      state.expandedDirectories.add(parentPath);
-    }
-    if (type === "directory") {
-      state.expandedDirectories.add(payload.path);
-    }
-
-    persistExpandedDirectories(state.expandedDirectories);
-    emitExplorerStateChange();
+    const createdPath = await projectClient.createEntry(parentPath, name, type);
 
     if (type === "file") {
-      await openFile(payload.path);
-      updateStatusLine(`Created ${payload.path}`);
+      await openFile(createdPath);
+      editorClient.refreshStatusMessage(`Created ${createdPath}`);
     } else {
-      updateStatusLine(`Created ${payload.path}`);
+      editorClient.refreshStatusMessage(`Created ${createdPath}`);
     }
 
-    return payload.path;
+    return createdPath;
   }
 
   function expandPath(filePath: string) {
-    let didExpand = false;
-    const segments = filePath.split("/");
-    let current = "";
-
-    for (const segment of segments.slice(0, -1)) {
-      current = current ? `${current}/${segment}` : segment;
-      if (!state.expandedDirectories.has(current)) {
-        state.expandedDirectories.add(current);
-        didExpand = true;
-      }
-    }
-
-    if (didExpand) {
-      persistExpandedDirectories(state.expandedDirectories);
-    }
-  }
-
-  function updateStatusLine(message = "") {
-    const change = describeChange(state.currentPath);
-
-    if (message) {
-      statusLine.textContent = message;
-      return;
-    }
-
-      if (!state.currentPath) {
-        if (state.currentThreadId) {
-          statusLine.textContent = "Codex thread. Continue below.";
-          return;
-        }
-
-      statusLine.textContent = "Markdown files open as rich text. Save with Ctrl/Cmd+S.";
-      return;
-    }
-
-    if (state.saveIssue) {
-      statusLine.textContent = "Save blocked: markup mismatch. Check the console log.";
-      return;
-    }
-
-    if (state.pendingWriteConflict) {
-      statusLine.textContent = "File changed on disk. Reload or overwrite to save.";
-      return;
-    }
-
-    if (state.dirty) {
-      statusLine.textContent = "Unsaved changes.";
-      return;
-    }
-
-    if (change) {
-      statusLine.textContent = `Pending changes ${change}`;
-      return;
-    }
-
-    statusLine.textContent = state.mode === "rich"
-      ? "Saved."
-      : "Plain text file.";
+    projectClient.expandPath(filePath);
   }
 
   async function saveCurrentFile({ force = false }: { force?: boolean } = {}) {
@@ -4924,7 +3274,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
     if (inspection.issue) {
       syncSaveIssueLogging(inspection.issue, "save attempt blocked by markup mismatch", true);
-      updateStatusLine();
+      editorClient.refreshStatusMessage();
       return;
     }
 
@@ -4947,10 +3297,10 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       if (response.status === 409) {
         showWriteConflict(error as SaveConflictPayload);
         syncCurrentDraftBuffer();
-        updateStatusLine();
+        editorClient.refreshStatusMessage();
         return;
       }
-      statusLine.textContent = error.error;
+      editorClient.setStatusMessage(error.error);
       return;
     }
 
@@ -4959,16 +3309,16 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     state.currentContent = content;
     state.dirty = false;
     state.expectedMtimeMs = payload.mtimeMs;
-    state.changes = payload.changes;
+    await projectClient.refreshProject();
     state.lastLoggedSaveIssue = null;
     clearWriteConflict();
     state.draftBuffers.delete(state.currentPath);
     void persistDraftBuffer(state.currentPath, null);
     state.saveIssue = null;
     updateSaveButtonState();
-    updateStatusLine(`Saved - ${formatTimestamp(payload.updatedAt)}`);
+    editorClient.refreshStatusMessage(`Saved - ${formatTimestamp(payload.updatedAt)}`);
     emitExplorerStateChange();
-    scheduleDiffGutterRefresh();
+    editorClient.scheduleDiffGutterRefresh();
   }
 
   function getClosestListItem(node: Node | null) {
@@ -5349,8 +3699,8 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     inspectCurrentDraft();
     recordEditHistory(previousContent, state.currentContent, captureEditorSelection());
     syncCurrentDraftBuffer();
-    scheduleDiffGutterRefresh();
-    updateStatusLine();
+    editorClient.scheduleDiffGutterRefresh();
+    editorClient.refreshStatusMessage();
     updateFloatingToolbar();
     updateRevisionHoverToolbar();
     updateCustomCaret();
@@ -5771,7 +4121,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       pendingInlineFormats = nextFormats;
       updateHistorySelection(captureEditorSelection());
       syncCurrentDraftBuffer();
-      updateStatusLine();
+      editorClient.refreshStatusMessage();
       updateFloatingToolbar();
       updateRevisionHoverToolbar();
       updateCustomCaret();
@@ -6700,36 +5050,6 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
 
     const tagNames = getInlineFormatTagNames(format);
     return Boolean(tagNames && (tagNames as readonly string[]).includes(element.tagName));
-  }
-
-  function maybeExitInlineFormatAtBoundary(format: string) {
-    const selection = window.getSelection();
-    if (!selection?.rangeCount || !selection.isCollapsed) {
-      return false;
-    }
-
-    if (!INLINE_FORMAT_ORDER.some((inlineFormat) => inlineFormat.key === format)) {
-      return false;
-    }
-
-    const formatElement = getClosestInlineFormatElement(selection.getRangeAt(0).startContainer, format as PendingInlineFormatKey);
-    if (!formatElement || !isSelectionAtElementEnd(selection, formatElement)) {
-      return false;
-    }
-
-    const parent = formatElement.parentNode;
-    if (!parent) {
-      return false;
-    }
-
-    placeCaretAfterNode(formatElement, parent);
-    updateHistorySelection(captureEditorSelection());
-    window.requestAnimationFrame(() => {
-      updateFloatingToolbar();
-      updateRevisionHoverToolbar();
-      updateCustomCaret();
-    });
-    return true;
   }
 
   function createCodeElementFromFragment(source: HTMLElement, fragment: DocumentFragment) {
@@ -7713,27 +6033,63 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     floatingToolbar.style.top = `${y}px`;
   }
 
+  function clearCurrentSelectionView() {
+    state.baselineContent = "";
+    state.currentPath = "";
+    threadClient.clearThreadSelection();
+    state.currentThread = null;
+    state.currentThreadId = "";
+    state.currentContent = "";
+    state.dirty = false;
+    state.expectedMtimeMs = null;
+    state.headContent = null;
+    state.history = null;
+    state.pendingWriteConflict = null;
+    state.saveIssue = null;
+    state.lastLoggedSaveIssue = null;
+    editor.textContent = "";
+    setHoveredRevisionNode(null);
+    clearPendingInlineFormats();
+    editorClient.clearSelectionView();
+    updateSaveButtonState();
+    editorClient.refreshStatusMessage();
+    syncCurrentSelectionToUrl({});
+    editorClient.scheduleDiffGutterRefresh();
+    updateCustomCaret();
+  }
+
   async function refreshTree({ preserveSelection = false }: { preserveSelection?: boolean } = {}) {
-    const response = await fetch("/api/tree", { cache: "no-store" });
-    const payload = (await response.json()) as ProjectSnapshot;
-    state.root = payload.root;
-    state.rootPath = payload.rootPath;
-    state.tree = payload.tree;
-    state.changes = payload.changes;
-    await refreshThreads();
-    emitExplorerStateChange();
+    const payload = await projectClient.refreshProject();
+    const requestedThreadId = getRequestedThreadIdFromUrl();
+    const shouldBlockOnThreads = Boolean(state.currentThreadId || requestedThreadId);
+
+    if (shouldBlockOnThreads) {
+      await refreshThreads();
+      emitExplorerStateChange();
+    } else {
+      emitExplorerStateChange();
+      void (async () => {
+        await refreshThreads();
+        emitExplorerStateChange();
+      })();
+    }
 
     if (preserveSelection && state.currentThreadId) {
       const currentThreadId = state.currentThreadId;
+      if (state.currentThread?.isDraft && state.currentThread.id === currentThreadId) {
+        return;
+      }
+
       if (state.threads.some((thread) => thread.id === currentThreadId)) {
-        if (!isCurrentThreadUpToDate(currentThreadId)) {
+        if (!threadClient.isCurrentThreadUpToDate(currentThreadId)) {
           await openThread(currentThreadId, { source: "reload" });
         }
         if (state.currentThreadId === currentThreadId) {
           return;
         }
       } else {
-        setCurrentThread(null);
+        threadClient.clearThreadSelection();
+        state.currentThread = null;
         state.currentThreadId = "";
         syncCurrentSelectionToUrl({});
         emitExplorerStateChange();
@@ -7748,10 +6104,16 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       }
     }
 
-    const requestedThreadId = getRequestedThreadIdFromUrl();
-    if (requestedThreadId && state.threads.some((thread) => thread.id === requestedThreadId)) {
-      await openThread(requestedThreadId);
-      if (state.currentThreadId === requestedThreadId) {
+    if (requestedThreadId) {
+      if (state.threads.some((thread) => thread.id === requestedThreadId)) {
+        await openThread(requestedThreadId);
+        if (state.currentThreadId === requestedThreadId) {
+          return;
+        }
+      } else if (threadClient.isDraftThreadId(requestedThreadId)) {
+        const draftThread = threadClient.createThread(readStoredHarness(), requestedThreadId);
+        applyThreadPayloadToCurrentView(draftThread);
+        emitExplorerStateChange();
         return;
       }
     }
@@ -7764,74 +6126,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
       }
     }
 
-    const firstMarkdownFile = getFirstFile(state.tree, (filePath) => isMarkdownFile(filePath));
-    const fallbackFile = firstMarkdownFile || getFirstFile(state.tree);
-
-    if (fallbackFile) {
-      await openFile(fallbackFile);
-      return;
-    }
-
-    state.baselineContent = "";
-    state.currentPath = "";
-    setCurrentThread(null);
-    state.currentThreadId = "";
-    state.currentContent = "";
-    state.dirty = false;
-    state.expectedMtimeMs = null;
-    state.headContent = null;
-    state.history = null;
-    state.pendingWriteConflict = null;
-    state.saveIssue = null;
-    state.lastLoggedSaveIssue = null;
-    editor.textContent = "";
-    setHoveredRevisionNode(null);
-    clearPendingInlineFormats();
-    filePathLabel.textContent = "Select a file";
-    updateSaveButtonState();
-    updateStatusLine();
-    syncCurrentSelectionToUrl({});
-    scheduleDiffGutterRefresh();
-    updateCustomCaret();
-  }
-
-  function scheduleCodexNotificationRefresh(handling: CodexAppServerNotificationHandling) {
-    if (handling.refreshThread && state.currentThreadId && codexThreadRefreshTimeoutId === null) {
-      codexThreadRefreshTimeoutId = window.setTimeout(() => {
-        codexThreadRefreshTimeoutId = null;
-        if (autoRefreshStopped || !state.currentThreadId) {
-          return;
-        }
-
-        void reconcileCurrentThreadFromRead(state.currentThreadId);
-      }, CODEX_NOTIFICATION_THREAD_REFRESH_DELAY_MS);
-    }
-
-    if (handling.refreshThreads && codexThreadListRefreshTimeoutId === null) {
-      codexThreadListRefreshTimeoutId = window.setTimeout(() => {
-        codexThreadListRefreshTimeoutId = null;
-        if (autoRefreshStopped) {
-          return;
-        }
-
-        void (async () => {
-          await refreshThreads();
-          emitExplorerStateChange();
-        })();
-      }, CODEX_NOTIFICATION_THREAD_LIST_REFRESH_DELAY_MS);
-    }
-  }
-
-  function handleCodexNotification(
-    notification: CodexAppServerNotification,
-    handling: CodexAppServerNotificationHandling,
-  ) {
-    if (notification.method === "account/rateLimits/updated") {
-      setRateLimits(notification.params.rateLimits);
-    }
-
-    applyCodexNotificationToCurrentThread(notification);
-    scheduleCodexNotificationRefresh(handling);
+    clearCurrentSelectionView();
   }
 
   function scheduleAutoRefresh() {
@@ -7859,18 +6154,43 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   }
 
   const controls: WorkbenchControls = {
+    clearSelection: () => {
+      if (state.currentPath) {
+        syncCurrentDraftBuffer();
+      }
+
+      threadClient.clearThreadSelection();
+      clearCurrentSelectionView();
+      emitExplorerStateChange();
+    },
+    createThread: (harness) => {
+      const draftThread = threadClient.createThread(harness);
+      applyThreadPayloadToCurrentView(draftThread);
+      syncCurrentSelectionToUrl({ threadId: draftThread.id });
+      emitExplorerStateChange();
+    },
     createEntry,
+    listModels: threadClient.listModels,
     openFile,
     openThread,
     sendThreadMessage,
+    setCurrentThreadModel: (threadId, model) => {
+      threadClient.setCurrentThreadModel(threadId, model);
+    },
+    setCurrentThreadAgent: (threadId, agentPath) => {
+      threadClient.setCurrentThreadAgent(threadId, agentPath);
+    },
+    setCurrentThreadReasoningEffort: (threadId, effort) => {
+      threadClient.setCurrentThreadReasoningEffort(threadId, effort);
+    },
+    setDraftThreadHarness: (harness) => {
+      threadClient.setDraftThreadHarness(harness);
+    },
     toggleDirectory,
   };
 
   hydrateDraftBuffers(await getPersistedDraftRecords());
-  const unsubscribeCodexNotifications = codexClient.onNotification((notification, handling) => {
-    handleCodexNotification(notification, handling);
-  });
-  bindings.onControlsReady?.(controls);
+  workbenchBindings.onControlsReady?.(controls);
   emitExplorerStateChange();
   emitCurrentThreadChange();
   emitRateLimitsChange();
@@ -7881,6 +6201,12 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
   scheduleAutoRefresh();
   return () => {
     autoRefreshStopped = true;
+    unsubscribeEditorClient();
+    editorClient.dispose();
+    unsubscribeProjectClient();
+    unsubscribeThreadClient();
+    projectClient.dispose();
+    threadClient.dispose();
     if (autoRefreshTimeoutId !== null) {
       window.clearTimeout(autoRefreshTimeoutId);
     }
@@ -7890,11 +6216,7 @@ export async function initWorkbench(bindings: WorkbenchBindings = {}): Promise<(
     if (codexThreadListRefreshTimeoutId !== null) {
       window.clearTimeout(codexThreadListRefreshTimeoutId);
     }
-    unsubscribeCodexNotifications();
     codexClient.close();
-    if (diffRefreshFrameId !== null) {
-      window.cancelAnimationFrame(diffRefreshFrameId);
-    }
     if (selectionPersistenceTimeoutId !== null) {
       window.clearTimeout(selectionPersistenceTimeoutId);
     }

@@ -7,10 +7,10 @@
  * - toThreadSummary: normalize generated Codex threads for the explorer sidebar. Keywords: summary, thread list.
  * - toThreadPayload: normalize generated Codex threads for the thread detail view. Keywords: payload, turns, thread read.
  */
+import type { ThreadPayload, ThreadSummary, WorkbenchHarness } from "../types";
+import type { SessionSource } from "./generated/app-server/v2/SessionSource";
 import type { Thread } from "./generated/app-server/v2/Thread";
 import type { ThreadStatus } from "./generated/app-server/v2/ThreadStatus";
-import type { SessionSource } from "./generated/app-server/v2/SessionSource";
-import type { ThreadPayload, ThreadSummary } from "../types";
 
 function normalizeAbsolutePathForComparison(filePath: string) {
   const normalized = String(filePath ?? "")
@@ -67,9 +67,10 @@ export function isProjectCodexThread(thread: Pick<Thread, "cwd">, rootPath: stri
   return isCodexThreadWithinRoot(thread.cwd, rootPath);
 }
 
-export function toThreadSummary(thread: Thread): ThreadSummary {
+export function toThreadSummary(thread: Thread, harness: WorkbenchHarness = "codex"): ThreadSummary {
   return {
     id: thread.id,
+    harness,
     name: thread.name,
     preview: thread.preview,
     createdAt: thread.createdAt,
@@ -81,9 +82,19 @@ export function toThreadSummary(thread: Thread): ThreadSummary {
   };
 }
 
-export function toThreadPayload(thread: Thread): ThreadPayload {
+export function toThreadPayload(
+  thread: Thread,
+  harness: WorkbenchHarness = "codex",
+  model: string | null = null,
+  reasoningEffort: string | null = null,
+  agentPath: string | null = null,
+): ThreadPayload {
   return {
-    ...toThreadSummary(thread),
+    ...toThreadSummary(thread, harness),
+    model,
+    reasoningEffort,
+    agentPath,
+    isDraft: false,
     turns: thread.turns,
   };
 }

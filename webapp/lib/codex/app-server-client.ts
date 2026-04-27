@@ -2,27 +2,28 @@
  * Exports:
  * - CodexAppServerClient: persistent typed WebSocket client for the local stdio bridge and app-server notifications. Keywords: codex, websocket, stdio, notifications.
  */
+import type { WorkbenchHarness } from "../types";
+import type {
+    CodexAppServerNotification,
+    CodexAppServerNotificationHandling,
+} from "./app-server-notifications";
+import {
+    classifyCodexAppServerNotification,
+    isCodexAppServerNotification,
+} from "./app-server-notifications";
 import { getCodexAppServerUrl } from "./config";
 import type {
-  CodexAppServerNotification,
-  CodexAppServerNotificationHandling,
-} from "./app-server-notifications";
-import {
-  classifyCodexAppServerNotification,
-  isCodexAppServerNotification,
-} from "./app-server-notifications";
-import type {
-  CodexClientNotification,
-  CodexClientRequest,
-  CodexInitializeResponse,
-  CodexJsonRpcResponse,
+    CodexClientNotification,
+    CodexClientRequest,
+    CodexInitializeResponse,
+    CodexJsonRpcResponse,
 } from "./protocol";
 import {
-  createInitializeCapabilities,
-  createInitializeRequest,
-  createInitializedNotification,
-  createRequestIdGenerator,
-  isCodexJsonRpcFailure,
+    createInitializeCapabilities,
+    createInitializeRequest,
+    createInitializedNotification,
+    createRequestIdGenerator,
+    isCodexJsonRpcFailure,
 } from "./protocol";
 
 type PendingResponseHandler = {
@@ -40,6 +41,7 @@ export class CodexAppServerClient {
   private readonly notificationListeners = new Set<(
     notification: CodexAppServerNotification,
     handling: CodexAppServerNotificationHandling,
+    harness: WorkbenchHarness,
   ) => void>();
   private readonly pendingResponses = new Map<number, PendingResponseHandler>();
   private readonly nextRequestId = createRequestIdGenerator();
@@ -95,8 +97,8 @@ export class CodexAppServerClient {
       }),
     });
     const response = await this.sendRequest<CodexInitializeResponse>({
-      method: initializeRequest.method,
       id: 0,
+      method: initializeRequest.method,
       params: initializeRequest.params,
     });
 
@@ -115,18 +117,12 @@ export class CodexAppServerClient {
   onNotification(listener: (
     notification: CodexAppServerNotification,
     handling: CodexAppServerNotificationHandling,
+    harness: WorkbenchHarness,
   ) => void) {
     this.notificationListeners.add(listener);
     return () => {
       this.notificationListeners.delete(listener);
     };
-  }
-
-  onEvent(listener: (
-    notification: CodexAppServerNotification,
-    handling: CodexAppServerNotificationHandling,
-  ) => void) {
-    return this.onNotification(listener);
   }
 
   send(message: CodexClientRequest | CodexClientNotification) {
@@ -138,7 +134,7 @@ export class CodexAppServerClient {
   }
 
   async sendRequest<TResponse = unknown>(
-    message: Omit<CodexClientRequest, "id"> & { id?: number },
+    message: Omit<CodexClientRequest, "id"> & { id?: number } & Record<string, unknown>,
   ): Promise<CodexJsonRpcResponse<TResponse>> {
     const requestId = message.id ?? this.nextRequestId();
     const request = {
@@ -166,8 +162,11 @@ export class CodexAppServerClient {
 
     if (isCodexAppServerNotification(parsed)) {
       const handling = classifyCodexAppServerNotification(parsed);
+      const harness = (parsed as CodexAppServerNotification & { workbenchHarness?: WorkbenchHarness }).workbenchHarness === "copilot"
+        ? "copilot"
+        : "codex";
       for (const listener of this.notificationListeners) {
-        listener(parsed, handling);
+        listener(parsed, handling, harness);
       }
       return;
     }

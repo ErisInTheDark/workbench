@@ -14,3 +14,4 @@ node_modules
 .next
 *.tsbuildinfo
 webapp/lib/codex/generated/
+webapp/.debug/

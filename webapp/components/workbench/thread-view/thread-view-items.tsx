@@ -124,6 +124,14 @@ function buildRenderableBlocks (items: ThreadItem[]): ThreadRenderableBlock[] {
   };
 
   for (const item of items) {
+    if (item.type === "agentMessage" && !item.text.trim()) {
+      continue;
+    }
+
+    if (item.type === "commandExecution" && isHiddenCommandExecution(item.command)) {
+      continue;
+    }
+
     if (item.type === "commandExecution") {
       flushPendingReasoning();
       flushPendingFileChanges();
@@ -158,6 +166,10 @@ function buildRenderableBlocks (items: ThreadItem[]): ThreadRenderableBlock[] {
   flushPendingReasoning();
   flushPendingFileChanges();
   return blocks;
+}
+
+function isHiddenCommandExecution (command: string) {
+  return /^report_intent(?:\s|$)/i.test(command.trim());
 }
 
 function ThreadUserInputLine ({
@@ -318,7 +330,7 @@ function ThreadReasoningSequence ({
   onOpenFile?: (path: string) => Promise<void>;
   projectRootPath?: string;
 }) {
-  const totalItems = block.items.reduce((sum, item) => sum + item.summary.length, 0);
+  const totalItems = block.items.reduce((sum, item) => sum + (item.summary.length || item.content.length), 0);
   const content = (
     <div className="space-y-4">
       {block.items.map((item, index) => (
@@ -615,20 +627,20 @@ export function ThreadTurnDetails ({
       {isCompleted ? (
         <div className="space-y-2">
           {primaryUserBlock ? renderBlock(primaryUserBlock, 0) : null}
-          {workedBlocks.length ? (
-            <ThreadDisclosure
-              className="py-2"
-              contentClassName="mt-2 space-y-2 pl-6"
-              summary={getWorkedSummary(turn)}
-              summaryClassName="text-[0.92em] leading-[1.6] text-muted"
-            >
-              <div className="space-y-2">
-                {workedBlocks.map(renderBlock)}
-              </div>
-            </ThreadDisclosure>
-          ) : null}
+          <ThreadDisclosure
+            className="py-2"
+            contentClassName="mt-2 space-y-2 pl-6"
+            summary={getWorkedSummary(turn)}
+            summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+          >
+            <div className="space-y-2">
+              {workedBlocks.length ? workedBlocks.map(renderBlock) : (
+                <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No intermediate work captured.</p>
+              )}
+            </div>
+          </ThreadDisclosure>
           {finalAgentBlocks.map(renderBlock)}
-          {!primaryUserBlock && !workedBlocks.length && !finalAgentBlocks.length ? (
+          {!primaryUserBlock && !finalAgentBlocks.length && !blocks.length ? (
             <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No captured items.</p>
           ) : null}
         </div>

@@ -12,39 +12,40 @@
 
 import type { CommandAction } from "../codex/generated/app-server/v2/CommandAction";
 import { CMD_COMMAND_MATCHERS } from "./thread-command-matchers/cmd";
+import { COPILOT_COMMAND_MATCHERS } from "./thread-command-matchers/copilot-tool-calls";
 import { CommandMatcher, runThreadCommandMatchers } from "./thread-command-matchers/core";
 import {
-  buildCommandPathPart,
-  buildDisplayPathPart,
-  countKnownCommandSummaryStats,
-  createEmptyCommandSummaryStats,
-  formatThreadCommandPath,
-  mergeCommandSummaryStats,
-  summarizeDisplayParts,
+    buildCommandPathPart,
+    buildDisplayPathPart,
+    countKnownCommandSummaryStats,
+    createEmptyCommandSummaryStats,
+    formatThreadCommandPath,
+    mergeCommandSummaryStats,
+    summarizeDisplayParts,
 } from "./thread-command-matchers/helpers";
 import { POSIX_COMMAND_MATCHERS } from "./thread-command-matchers/posix";
 import { POWERSHELL_COMMAND_MATCHERS } from "./thread-command-matchers/powershell";
-import {
-  consumeNextCommandStage,
-  getCommandShellGroup,
-  unwrapShellCommand,
-} from "./thread-command-matchers/shells";
 import { COMMON_COMMAND_MATCHERS } from "./thread-command-matchers/shared";
+import {
+    consumeNextCommandStage,
+    getCommandShellGroup,
+    unwrapShellCommand,
+} from "./thread-command-matchers/shells";
 import type {
-  CommandDisplayContext,
-  ParsedCommandDisplayContext,
-  ThreadCommandDisplay,
-  ThreadCommandDisplayPart,
-  ThreadCommandSummaryDisplay,
-  ThreadCommandSummaryStats,
+    CommandDisplayContext,
+    ParsedCommandDisplayContext,
+    ThreadCommandDisplay,
+    ThreadCommandDisplayPart,
+    ThreadCommandSummaryDisplay,
+    ThreadCommandSummaryStats,
 } from "./thread-command-matchers/types";
 
 export { CommandMatcher, formatThreadCommandPath };
 export type {
-  ThreadCommandDisplay,
-  ThreadCommandDisplayPart,
-  ThreadCommandSummaryDisplay,
-  ThreadCommandSummaryStats,
+    ThreadCommandDisplay,
+    ThreadCommandDisplayPart,
+    ThreadCommandSummaryDisplay,
+    ThreadCommandSummaryStats
 };
 
 export function getThreadCommandDisplay({
@@ -65,7 +66,7 @@ export function getThreadCommandDisplay({
     unwrappedCommand: shellResult.command,
   };
   const matchedDisplay = runThreadCommandMatchers(context, {
-    commonMatchers: COMMON_COMMAND_MATCHERS,
+    commonMatchers: [...COPILOT_COMMAND_MATCHERS, ...COMMON_COMMAND_MATCHERS],
     shellMatchers: getShellCommandMatchers(context.shellGroup),
   });
 

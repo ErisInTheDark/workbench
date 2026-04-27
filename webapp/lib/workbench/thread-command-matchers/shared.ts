@@ -3,8 +3,8 @@
  * - COMMON_COMMAND_MATCHERS: shell-agnostic command-summary matchers for builds and git commands. Keywords: thread, command, matcher, git, typescript.
  */
 
-import { buildCommandPathPart } from "./helpers";
 import { CommandMatcher } from "./core";
+import { buildCommandPathPart } from "./helpers";
 import type { CommandMatcherDefinition } from "./types";
 
 export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [

@@ -2,19 +2,27 @@
 
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/RateLimitSnapshot";
+import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type {
-  ExplorerSnapshot,
-  ThreadPayload,
+  ExplorerSnapshot, FilePayload, ThreadPayload,
   WorkbenchControls,
+  WorkbenchHarness
 } from "../lib/types";
+import {
+  CURRENT_SELECTION_URL_UPDATED_EVENT,
+  persistHarness,
+  readCurrentSelectionFromUrl,
+  readStoredHarness,
+  syncCurrentSelectionToUrl,
+  type WorkbenchSelectionSearchParams,
+} from "../lib/workbench/browser-state";
 import {
   getPreferredMobilePane,
   MOBILE_MEDIA_QUERY,
-  syncCurrentSelectionSearchParams,
   type MobilePane,
 } from "../lib/workbench/mobile-pane-url-state";
+import type { WorkbenchDomElements } from "../lib/workbench/workbench-dom";
 import ThreadView from "./workbench/thread-view/ThreadView";
 import {
   workbenchDiffGutterClassName,
@@ -38,7 +46,7 @@ import {
   BinIcon,
   SaveIcon,
   ZoomInIcon,
-  ZoomOutIcon,
+  ZoomOutIcon
 } from "./workbench/workbench-icons";
 
 const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
@@ -55,15 +63,60 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   fontSize: 1.08,
 };
 
-type SelectionLoadingState =
-  | { kind: "file"; requestId: number }
-  | { kind: "thread"; requestId: number };
+const EMPTY_SELECTION: WorkbenchSelectionSearchParams = {
+  filePath: "",
+  threadId: "",
+};
+
+function formatQuickOpenTimestamp (updatedAt: string | null | undefined) {
+  if (!updatedAt) {
+    return "Unknown time";
+  }
+
+  const date = new Date(updatedAt);
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown time";
+  }
+
+  return date.toLocaleString([], {
+    day: "numeric",
+    hour: "2-digit",
+    hour12: false,
+    minute: "2-digit",
+    month: "short",
+  });
+}
+
+function formatQuickOpenChangeSummary (additions: number, deletions: number) {
+  const parts: string[] = [];
+  if (additions) {
+    parts.push(`+${additions}`);
+  }
+  if (deletions) {
+    parts.push(`-${deletions}`);
+  }
+  return parts.join(" ");
+}
 
 export default function Workbench () {
   const [explorer, setExplorer] = useState(INITIAL_EXPLORER_SNAPSHOT);
   const [currentThread, setCurrentThread] = useState<ThreadPayload | null>(null);
+  const [requestedSelection, setRequestedSelection] = useState<WorkbenchSelectionSearchParams>(() => {
+    if (typeof window === "undefined") {
+      return EMPTY_SELECTION;
+    }
+
+    return readCurrentSelectionFromUrl();
+  });
   const [rateLimits, setRateLimits] = useState<RateLimitSnapshot | null>(null);
   const [controls, setControls] = useState<WorkbenchControls | null>(null);
+  const [harness, setHarness] = useState<WorkbenchHarness>(() => {
+    if (typeof window === "undefined") {
+      return "codex";
+    }
+
+    return readStoredHarness();
+  });
   const [isMobile, setIsMobile] = useState(false);
   const [mobilePane, setMobilePane] = useState<MobilePane>("explorer");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -71,61 +124,157 @@ export default function Workbench () {
   const [createEntryName, setCreateEntryName] = useState("");
   const [isCreatingEntry, setIsCreatingEntry] = useState(false);
   const [createDialogError, setCreateDialogError] = useState("");
-  const [selectionLoading, setSelectionLoading] = useState<SelectionLoadingState | null>(null);
-  const selectionLoadRequestIdRef = useRef(0);
+  const [quickOpenUpdatedAtByPath, setQuickOpenUpdatedAtByPath] = useState<Record<string, string>>({});
+  const hasObservedInitialSelectionRef = useRef(false);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const customCaretRef = useRef<HTMLDivElement>(null);
+  const diffGutterRef = useRef<HTMLDivElement>(null);
+  const floatingToolbarRef = useRef<HTMLDivElement>(null);
+  const revisionHoverToolbarRef = useRef<HTMLDivElement>(null);
+  const revisionHoverAcceptButtonRef = useRef<HTMLButtonElement>(null);
+  const revisionHoverRejectButtonRef = useRef<HTMLButtonElement>(null);
+  const filePathLabelRef = useRef<HTMLParagraphElement>(null);
+  const statusLineRef = useRef<HTMLParagraphElement>(null);
+  const resetDraftButtonRef = useRef<HTMLButtonElement>(null);
+  const saveFileButtonRef = useRef<HTMLButtonElement>(null);
+  const zoomOutButtonRef = useRef<HTMLButtonElement>(null);
+  const zoomInButtonRef = useRef<HTMLButtonElement>(null);
+  const saveConflictDialogRef = useRef<HTMLDivElement>(null);
+  const saveConflictSummaryRef = useRef<HTMLParagraphElement>(null);
+  const saveConflictExpectedRef = useRef<HTMLParagraphElement>(null);
+  const saveConflictActualRef = useRef<HTMLParagraphElement>(null);
+  const saveConflictKeepEditingButtonRef = useRef<HTMLButtonElement>(null);
+  const saveConflictReloadButtonRef = useRef<HTMLButtonElement>(null);
+  const saveConflictOverwriteButtonRef = useRef<HTMLButtonElement>(null);
+  const resetDraftDialogRef = useRef<HTMLDivElement>(null);
+  const resetDraftCancelButtonRef = useRef<HTMLButtonElement>(null);
+  const resetDraftHeadButtonRef = useRef<HTMLButtonElement>(null);
+  const resetDraftSavedButtonRef = useRef<HTMLButtonElement>(null);
+
+  function getWorkbenchDomElements (): WorkbenchDomElements | null {
+    if (
+      !editorRef.current
+      || !customCaretRef.current
+      || !diffGutterRef.current
+      || !floatingToolbarRef.current
+      || !revisionHoverToolbarRef.current
+      || !revisionHoverAcceptButtonRef.current
+      || !revisionHoverRejectButtonRef.current
+      || !filePathLabelRef.current
+      || !statusLineRef.current
+      || !resetDraftButtonRef.current
+      || !saveFileButtonRef.current
+      || !zoomOutButtonRef.current
+      || !zoomInButtonRef.current
+      || !saveConflictDialogRef.current
+      || !saveConflictSummaryRef.current
+      || !saveConflictExpectedRef.current
+      || !saveConflictActualRef.current
+      || !saveConflictKeepEditingButtonRef.current
+      || !saveConflictReloadButtonRef.current
+      || !saveConflictOverwriteButtonRef.current
+      || !resetDraftDialogRef.current
+      || !resetDraftCancelButtonRef.current
+      || !resetDraftHeadButtonRef.current
+      || !resetDraftSavedButtonRef.current
+    ) {
+      return null;
+    }
+
+    return {
+      editor: editorRef.current,
+      customCaret: customCaretRef.current,
+      diffGutter: diffGutterRef.current,
+      filePathLabel: filePathLabelRef.current,
+      resetDraftButton: resetDraftButtonRef.current,
+      saveFileButton: saveFileButtonRef.current,
+      statusLine: statusLineRef.current,
+      zoomInButton: zoomInButtonRef.current,
+      zoomOutButton: zoomOutButtonRef.current,
+      saveConflictDialog: {
+        dialog: saveConflictDialogRef.current,
+        summary: saveConflictSummaryRef.current,
+        expected: saveConflictExpectedRef.current,
+        actual: saveConflictActualRef.current,
+        keepEditing: saveConflictKeepEditingButtonRef.current,
+        reload: saveConflictReloadButtonRef.current,
+        overwrite: saveConflictOverwriteButtonRef.current,
+      },
+      resetDraftDialog: {
+        dialog: resetDraftDialogRef.current,
+        cancel: resetDraftCancelButtonRef.current,
+        resetToHead: resetDraftHeadButtonRef.current,
+        resetToSaved: resetDraftSavedButtonRef.current,
+      },
+      toolbars: {
+        floating: floatingToolbarRef.current,
+        revisionHover: revisionHoverToolbarRef.current,
+        revisionAccept: revisionHoverAcceptButtonRef.current,
+        revisionReject: revisionHoverRejectButtonRef.current,
+      },
+    };
+  }
 
   useEffect(() => {
     let cancelled = false;
     let cleanup = () => { };
+    let initTimeoutId: number | null = null;
 
-    import("../lib/workbench-client").then(async ({ initWorkbench }) => {
-      const nextCleanup = await initWorkbench({
-        onExplorerStateChange: (snapshot) => {
-          if (cancelled) {
-            return;
-          }
+    initTimeoutId = window.setTimeout(() => {
+      void import("../lib/workbench-client").then(async ({ initWorkbench }) => {
+        const elements = getWorkbenchDomElements();
+        const nextCleanup = await initWorkbench({
+          elements,
+          onExplorerStateChange: (snapshot) => {
+            if (cancelled) {
+              return;
+            }
 
-          startTransition(() => {
-            setExplorer(snapshot);
-          });
-        },
-        onCurrentThreadChange: (thread) => {
-          if (cancelled) {
-            return;
-          }
+            startTransition(() => {
+              setExplorer(snapshot);
+            });
+          },
+          onCurrentThreadChange: (thread) => {
+            if (cancelled) {
+              return;
+            }
 
-          startTransition(() => {
-            setCurrentThread(thread);
-          });
-        },
-        onRateLimitsChange: (nextRateLimits) => {
-          if (cancelled) {
-            return;
-          }
+            startTransition(() => {
+              setCurrentThread(thread);
+            });
+          },
+          onRateLimitsChange: (nextRateLimits) => {
+            if (cancelled) {
+              return;
+            }
 
-          startTransition(() => {
-            setRateLimits(nextRateLimits);
-          });
-        },
-        onControlsReady: (nextControls) => {
-          if (cancelled) {
-            return;
-          }
+            startTransition(() => {
+              setRateLimits(nextRateLimits);
+            });
+          },
+          onControlsReady: (nextControls) => {
+            if (cancelled) {
+              return;
+            }
 
-          setControls(nextControls);
-        },
+            setControls(nextControls);
+          },
+        });
+
+        if (cancelled) {
+          nextCleanup?.();
+          return;
+        }
+
+        cleanup = nextCleanup ?? (() => { });
       });
-
-      if (cancelled) {
-        nextCleanup?.();
-        return;
-      }
-
-      cleanup = nextCleanup ?? (() => { });
-    });
+    }, 0);
 
     return () => {
       cancelled = true;
+      if (initTimeoutId !== null) {
+        window.clearTimeout(initTimeoutId);
+      }
       cleanup();
     };
   }, []);
@@ -162,15 +311,56 @@ export default function Workbench () {
       return;
     }
 
-    const syncPaneFromUrl = () => {
-      setMobilePane(getPreferredMobilePane(window.matchMedia?.(MOBILE_MEDIA_QUERY).matches ?? false));
+    const syncUrlDrivenState = () => {
+      const isMobileViewport = window.matchMedia?.(MOBILE_MEDIA_QUERY).matches ?? false;
+
+      startTransition(() => {
+        setRequestedSelection(readCurrentSelectionFromUrl());
+        setMobilePane(getPreferredMobilePane(isMobileViewport));
+      });
     };
 
-    window.addEventListener("popstate", syncPaneFromUrl);
+    syncUrlDrivenState();
+    window.addEventListener("popstate", syncUrlDrivenState);
+    window.addEventListener(CURRENT_SELECTION_URL_UPDATED_EVENT, syncUrlDrivenState as EventListener);
     return () => {
-      window.removeEventListener("popstate", syncPaneFromUrl);
+      window.removeEventListener("popstate", syncUrlDrivenState);
+      window.removeEventListener(CURRENT_SELECTION_URL_UPDATED_EVENT, syncUrlDrivenState as EventListener);
     };
   }, []);
+
+  useEffect(() => {
+    if (!controls) {
+      return;
+    }
+
+    if (!hasObservedInitialSelectionRef.current) {
+      hasObservedInitialSelectionRef.current = true;
+      return;
+    }
+
+    if (requestedSelection.threadId) {
+      if (currentThread?.id === requestedSelection.threadId) {
+        return;
+      }
+
+      void controls.openThread(requestedSelection.threadId);
+      return;
+    }
+
+    if (requestedSelection.filePath) {
+      if (!currentThread && explorer.currentPath === requestedSelection.filePath) {
+        return;
+      }
+
+      void controls.openFile(requestedSelection.filePath);
+      return;
+    }
+
+    if (currentThread || explorer.currentPath) {
+      controls.clearSelection();
+    }
+  }, [controls, currentThread, explorer.currentPath, requestedSelection.filePath, requestedSelection.threadId]);
 
   const expandedDirectories = new Set(explorer.expandedDirectories);
   const modifiedPaths = new Set(explorer.locallyModifiedPaths);
@@ -194,54 +384,28 @@ export default function Workbench () {
   };
 
   const openFileFromExplorer = useCallback(async (path: string) => {
-    if (!controls) {
-      return;
-    }
-
     if (isMobile) {
       setMobilePane("editor");
     }
 
-    if (path === explorer.currentPath) {
+    if (!requestedSelection.threadId && path === requestedSelection.filePath) {
       return;
     }
 
-    const requestId = selectionLoadRequestIdRef.current + 1;
-    selectionLoadRequestIdRef.current = requestId;
-    setSelectionLoading({ kind: "file", requestId });
-    try {
-      await controls.openFile(path);
-    } finally {
-      setSelectionLoading((current) => {
-        return current?.requestId === requestId ? null : current;
-      });
-    }
-  }, [controls, explorer.currentPath, isMobile]);
+    syncCurrentSelectionToUrl({ filePath: path });
+  }, [isMobile, requestedSelection.filePath, requestedSelection.threadId]);
 
   const openThreadFromExplorer = useCallback(async (threadId: string) => {
-    if (!controls) {
-      return;
-    }
-
     if (isMobile) {
       setMobilePane("editor");
     }
 
-    if (threadId === explorer.currentThreadId) {
+    if (!requestedSelection.filePath && threadId === requestedSelection.threadId) {
       return;
     }
 
-    const requestId = selectionLoadRequestIdRef.current + 1;
-    selectionLoadRequestIdRef.current = requestId;
-    setSelectionLoading({ kind: "thread", requestId });
-    try {
-      await controls.openThread(threadId);
-    } finally {
-      setSelectionLoading((current) => {
-        return current?.requestId === requestId ? null : current;
-      });
-    }
-  }, [controls, explorer.currentThreadId, isMobile]);
+    syncCurrentSelectionToUrl({ threadId });
+  }, [isMobile, requestedSelection.filePath, requestedSelection.threadId]);
 
   const sendThreadMessage = useCallback(async (threadId: string, input: UserInput[]) => {
     if (!controls) {
@@ -249,6 +413,26 @@ export default function Workbench () {
     }
 
     await controls.sendThreadMessage(threadId, input);
+  }, [controls]);
+
+  const listThreadModels = useCallback(async (nextHarness: WorkbenchHarness) => {
+    if (!controls) {
+      return [];
+    }
+
+    return await controls.listModels(nextHarness);
+  }, [controls]);
+
+  const setThreadModel = useCallback((threadId: string, model: string) => {
+    controls?.setCurrentThreadModel(threadId, model);
+  }, [controls]);
+
+  const setThreadReasoningEffort = useCallback((threadId: string, effort: string | null) => {
+    controls?.setCurrentThreadReasoningEffort(threadId, effort);
+  }, [controls]);
+
+  const setThreadAgent = useCallback((threadId: string, agentPath: string | null) => {
+    controls?.setCurrentThreadAgent(threadId, agentPath);
   }, [controls]);
 
   const workbenchControls = useMemo<WorkbenchControls | null>(() => {
@@ -267,7 +451,84 @@ export default function Workbench () {
     ? { transform: mobilePane === "explorer" ? "translateX(0)" : "translateX(-50%)" }
     : undefined;
   const createDialogParentLabel = createDialogParentPath || "project";
-  const selectionLoadingLabel = selectionLoading?.kind === "thread" ? "Loading thread..." : "Loading file...";
+  const quickOpenPaths = Array.from(new Set([
+    ...explorer.locallyModifiedPaths,
+    ...Object.keys(explorer.changes),
+  ])).slice(0, 8);
+  const showThreadView = Boolean(requestedSelection.threadId);
+  const showFileView = !showThreadView && Boolean(requestedSelection.filePath);
+  const showEmptyState = !showThreadView && !showFileView;
+  const isThreadViewReady = showThreadView && currentThread?.id === requestedSelection.threadId;
+  const isFileViewReady = showFileView && !currentThread && explorer.currentPath === requestedSelection.filePath;
+  const isSelectionPending = (showThreadView && !isThreadViewReady) || (showFileView && !isFileViewReady);
+  const activeThreadId = showThreadView ? requestedSelection.threadId : "";
+  const activeFilePath = showFileView ? requestedSelection.filePath : "";
+
+  useEffect(() => {
+    if (!showEmptyState || !quickOpenPaths.length) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void Promise.all(quickOpenPaths.map(async (path) => {
+      const response = await fetch(`/api/file?path=${encodeURIComponent(path)}`, { cache: "no-store" });
+      if (!response.ok) {
+        return null;
+      }
+
+      const payload = await response.json() as FilePayload;
+      return [path, payload.updatedAt] as const;
+    })).then((entries) => {
+      if (cancelled) {
+        return;
+      }
+
+      setQuickOpenUpdatedAtByPath((current) => {
+        const next = { ...current };
+        for (const entry of entries) {
+          if (!entry) {
+            continue;
+          }
+          next[entry[0]] = entry[1];
+        }
+        return next;
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [quickOpenPaths, showEmptyState]);
+
+  const handleHarnessChange = (nextHarness: WorkbenchHarness) => {
+    if (nextHarness === harness && currentThread?.harness === nextHarness) {
+      return;
+    }
+
+    persistHarness(nextHarness);
+    setHarness(nextHarness);
+    controls?.setDraftThreadHarness(nextHarness);
+  };
+
+  const clearSelectionFromUi = useCallback(() => {
+    syncCurrentSelectionToUrl({});
+    if (!controls) {
+      startTransition(() => {
+        setCurrentThread(null);
+        setRateLimits(null);
+        setExplorer((current) => ({
+          ...current,
+          currentPath: "",
+          currentThreadId: "",
+        }));
+      });
+    }
+
+    if (isMobile) {
+      setMobilePane("editor");
+    }
+  }, [controls, isMobile]);
 
   const handleCreateEntry = async (type: "directory" | "file") => {
     if (!controls || isCreatingEntry) {
@@ -302,17 +563,24 @@ export default function Workbench () {
               <div className="flex items-center justify-between gap-3 pr-2 md:pr-4.5">
                 <p className="m-0 text-base font-semibold leading-tight">Threads</p>
               </div>
-              {explorer.threads.length ? (
-                <nav aria-label="Codex threads">
-                  <ThreadsList
-                    currentThreadId={explorer.currentThreadId}
-                    nodes={explorer.threads}
-                    onOpenThread={(threadId) => {
-                      void openThreadFromExplorer(threadId);
-                    }}
-                  />
-                </nav>
-              ) : explorer.threadsError ? (
+              <nav aria-label="Threads">
+                <ThreadsList
+                  createThreadLabel="Create new thread"
+                  currentThreadId={activeThreadId}
+                  isDraftSelected={Boolean(currentThread?.isDraft)}
+                  nodes={explorer.threads}
+                  onCreateThread={() => {
+                    controls?.createThread(harness);
+                    if (isMobile) {
+                      setMobilePane("editor");
+                    }
+                  }}
+                  onOpenThread={(threadId) => {
+                    void openThreadFromExplorer(threadId);
+                  }}
+                />
+              </nav>
+              {explorer.threadsError ? (
                 <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted">
                   {explorer.threadsError}
                 </p>
@@ -321,7 +589,15 @@ export default function Workbench () {
 
             <section className="space-y-2">
               <div className="group/entry-row flex items-center justify-between gap-3 pr-2 md:pr-4.5">
-                <p className="m-0 text-base font-semibold leading-tight">Project</p>
+                <button
+                  type="button"
+                  className="m-0 rounded-lg px-2 py-1.5 text-base font-semibold leading-tight text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:-ml-2 md:py-0.5"
+                  onClick={() => {
+                    clearSelectionFromUi();
+                  }}
+                >
+                  Project
+                </button>
                 <button
                   type="button"
                   aria-label="Create in project"
@@ -339,7 +615,7 @@ export default function Workbench () {
                 <ExplorerTree
                   changes={explorer.changes}
                   controls={workbenchControls}
-                  currentPath={explorer.currentPath}
+                  currentPath={activeFilePath}
                   expandedDirectories={expandedDirectories}
                   modifiedPaths={modifiedPaths}
                   nodes={explorer.tree}
@@ -354,21 +630,21 @@ export default function Workbench () {
         </aside>
 
         <main className="flex min-h-screen w-screen min-w-0 shrink-0 flex-col px-5 pb-5 md:w-auto md:px-6 md:pb-5">
-          <header className="relative sticky top-0 z-10 py-3">
+          <header className="relative sticky top-0 z-10 py-3" hidden={showEmptyState}>
             <div
               aria-hidden="true"
               className="pointer-events-none absolute inset-0 -z-10 mx-auto hidden w-full max-w-[58rem] bg-[linear-gradient(to_bottom,var(--bg)_50%,transparent)] md:block"
             />
             <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-              <div className="order-2 min-w-0 md:order-1">
-                <p id="file-path" className="truncate text-base font-semibold leading-tight">
+              <div className="order-2 min-w-0 md:order-1" hidden={Boolean(currentThread?.isDraft)}>
+                <p id="file-path" ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
                   Select a file
                 </p>
-                <p id="status-line" className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted">
+                <p id="status-line" ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted">
                   Markdown files open as rich text. Save with Ctrl/Cmd+S.
                 </p>
               </div>
-              <div className="order-1 flex items-center justify-between gap-3 md:order-2 md:flex-none md:justify-end">
+              <div className="order-1 flex items-center justify-between gap-3 md:order-2 md:ml-auto md:flex-none md:justify-end">
                 <button
                   type="button"
                   aria-label="Back to file explorer"
@@ -376,7 +652,7 @@ export default function Workbench () {
                   hidden={!isMobile || mobilePane !== "editor"}
                   className={`${workbenchIconButtonClassName} shrink-0 md:hidden`}
                   onClick={() => {
-                    syncCurrentSelectionSearchParams({});
+                    syncCurrentSelectionToUrl({});
                     setMobilePane("explorer");
                   }}
                 >
@@ -386,6 +662,7 @@ export default function Workbench () {
                 <div className="flex items-center gap-1.5">
                   <button
                     id="zoom-out"
+                    ref={zoomOutButtonRef}
                     type="button"
                     title="Decrease editor text size"
                     aria-label="Decrease editor text size"
@@ -396,6 +673,7 @@ export default function Workbench () {
                   </button>
                   <button
                     id="zoom-in"
+                    ref={zoomInButtonRef}
                     type="button"
                     title="Increase editor text size"
                     aria-label="Increase editor text size"
@@ -405,9 +683,10 @@ export default function Workbench () {
                     <span className="sr-only">Increase editor text size</span>
                   </button>
                 </div>
-                <div className="flex items-center gap-1.5" hidden={Boolean(currentThread)}>
+                <div className="flex items-center gap-1.5" hidden={Boolean(currentThread) || showThreadView}>
                   <button
                     id="save-file"
+                    ref={saveFileButtonRef}
                     type="button"
                     title="Save current file"
                     aria-label="Save current file"
@@ -419,6 +698,7 @@ export default function Workbench () {
                   </button>
                   <button
                     id="reset-draft"
+                    ref={resetDraftButtonRef}
                     type="button"
                     title="Discard the current draft"
                     aria-label="Discard the current draft"
@@ -432,28 +712,100 @@ export default function Workbench () {
             </div>
           </header>
 
-          <section className="relative min-h-0 flex-1" aria-busy={Boolean(selectionLoading)}>
-            {currentThread ? (
-              <ThreadView
-                thread={currentThread}
-                fontSizeRem={explorer.fontSize}
-                onOpenFile={openFileFromExplorer}
-                onSendMessage={sendThreadMessage}
-                projectRootPath={explorer.rootPath}
-                rateLimits={rateLimits}
-              />
+          <section className="relative min-h-0 flex-1" aria-busy={isSelectionPending}>
+            {showThreadView ? (
+              isThreadViewReady && currentThread ? (
+                <ThreadView
+                  thread={currentThread}
+                  fontSizeRem={explorer.fontSize}
+                  onDraftHarnessChange={handleHarnessChange}
+                  onListModels={listThreadModels}
+                  onOpenFile={openFileFromExplorer}
+                  onSendMessage={sendThreadMessage}
+                  onThreadAgentChange={setThreadAgent}
+                  onThreadReasoningEffortChange={setThreadReasoningEffort}
+                  onThreadModelChange={setThreadModel}
+                  projectRootPath={explorer.rootPath}
+                  rateLimits={rateLimits}
+                />
+              ) : (
+                <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
+                  <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
+                    <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">Thread</p>
+                    <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Loading thread...</p>
+                    <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{requestedSelection.threadId}</p>
+                  </div>
+                </div>
+              )
+            ) : null}
+            {showEmptyState ? (
+              <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
+                <div className="flex w-full max-w-[42rem] flex-col gap-8">
+                  <button
+                    type="button"
+                    className="inline-flex w-fit items-center gap-2 rounded-full bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] px-4 py-2 text-[0.84rem] font-medium text-[var(--bg)] transition hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]"
+                    onClick={() => {
+                      controls?.createThread(harness);
+                      if (isMobile) {
+                        setMobilePane("editor");
+                      }
+                    }}
+                  >
+                    <span className="inline-flex size-4 items-center justify-center text-[1.05em] leading-none">+</span>
+                    <span>Create new thread</span>
+                  </button>
+                  {quickOpenPaths.length ? (
+                    <div className="space-y-2">
+                      {quickOpenPaths.map((path) => (
+                        <button
+                          key={path}
+                          type="button"
+                          className="flex w-full items-start justify-between gap-4 rounded-[1.15rem] px-4 py-3 text-left transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
+                          onClick={() => {
+                            void openFileFromExplorer(path);
+                          }}
+                          title={path}
+                        >
+                          <span className="min-w-0 space-y-1">
+                            <span className="inline-flex min-w-0 items-center gap-2">
+                              <span className="block truncate text-[0.95rem] font-medium text-text">{path}</span>
+                              {modifiedPaths.has(path) ? (
+                                <span
+                                  aria-hidden="true"
+                                  className="inline-block h-2 w-2 shrink-0 rounded-full bg-[#d0ad12]"
+                                />
+                              ) : null}
+                            </span>
+                            <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.78rem] text-muted">
+                              <span>{formatQuickOpenTimestamp(quickOpenUpdatedAtByPath[path])}</span>
+                              {explorer.changes[path] ? (
+                                <span>{formatQuickOpenChangeSummary(explorer.changes[path].additions, explorer.changes[path].deletions)}</span>
+                              ) : null}
+                              {modifiedPaths.has(path) ? (
+                                <span>Draft</span>
+                              ) : null}
+                            </span>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
             ) : null}
             <div
               className="editor-shell relative mx-auto grid w-[calc(100%+1.25rem)] md:w-full grid-cols-[0.72rem_minmax(0,1fr)] gap-[0.53rem] md:max-w-[calc(56rem+2.5rem)] md:grid-cols-[1.25rem_minmax(0,56rem)] md:gap-3 -ml-5 md:ml-auto"
-              hidden={Boolean(currentThread)}
+              hidden={!showFileView || !isFileViewReady}
             >
               <div
                 id="editor-diff-gutter"
+                ref={diffGutterRef}
                 className={workbenchDiffGutterClassName}
                 aria-hidden="true"
               />
               <div
                 id="editor"
+                ref={editorRef}
                 className="editor-content min-h-[calc(100vh-6rem)] pb-16 font-serif text-[1.08rem] leading-[1.72] whitespace-normal outline-none"
                 contentEditable
                 suppressContentEditableWarning
@@ -462,23 +814,18 @@ export default function Workbench () {
               />
               <div
                 id="editor-custom-caret"
+                ref={customCaretRef}
                 className="editor-custom-caret"
                 aria-hidden="true"
                 hidden
               />
             </div>
-            {selectionLoading ? (
-              <div
-                role="status"
-                aria-live="polite"
-                className="absolute inset-0 z-20 flex items-start justify-center bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] px-4 pt-20 backdrop-blur-[1.5px] md:pt-24"
-              >
-                <div className="shadow-float flex min-w-[12rem] items-center gap-3 rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] px-4 py-3 text-sm text-muted">
-                  <span
-                    aria-hidden="true"
-                    className="h-5 w-5 animate-spin rounded-full border-2 border-[color-mix(in_srgb,var(--text)_16%,transparent)] border-t-[var(--text)]"
-                  />
-                  <span>{selectionLoadingLabel}</span>
+            {showFileView && !isFileViewReady ? (
+              <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
+                <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
+                  <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">File</p>
+                  <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Loading file...</p>
+                  <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{requestedSelection.filePath}</p>
                 </div>
               </div>
             ) : null}
@@ -486,6 +833,7 @@ export default function Workbench () {
 
           <WorkbenchDialog
             id="save-conflict-dialog"
+            dialogRef={saveConflictDialogRef}
             titleId="save-conflict-title"
             summaryId="save-conflict-summary"
             eyebrow="Write conflict"
@@ -494,6 +842,7 @@ export default function Workbench () {
               <>
                 <button
                   id="save-conflict-keep-editing"
+                  ref={saveConflictKeepEditingButtonRef}
                   type="button"
                   className={dialogButtonClassName}
                 >
@@ -501,6 +850,7 @@ export default function Workbench () {
                 </button>
                 <button
                   id="save-conflict-reload"
+                  ref={saveConflictReloadButtonRef}
                   type="button"
                   className={dialogButtonClassName}
                 >
@@ -508,6 +858,7 @@ export default function Workbench () {
                 </button>
                 <button
                   id="save-conflict-overwrite"
+                  ref={saveConflictOverwriteButtonRef}
                   type="button"
                   className={dialogButtonClassName}
                 >
@@ -517,16 +868,17 @@ export default function Workbench () {
             }
           >
             <>
-              <p id="save-conflict-summary" className="mt-3 text-sm leading-6 text-muted">
+              <p id="save-conflict-summary" ref={saveConflictSummaryRef} className="mt-3 text-sm leading-6 text-muted">
                 Reload from disk to discard your unsaved editor state, or overwrite anyway to write what is currently in the editor.
               </p>
-              <p id="save-conflict-expected" className="mt-3 text-[0.84rem] tracking-[0.02em] text-muted" />
-              <p id="save-conflict-actual" className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted" />
+              <p id="save-conflict-expected" ref={saveConflictExpectedRef} className="mt-3 text-[0.84rem] tracking-[0.02em] text-muted" />
+              <p id="save-conflict-actual" ref={saveConflictActualRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted" />
             </>
           </WorkbenchDialog>
 
           <WorkbenchDialog
             id="reset-draft-dialog"
+            dialogRef={resetDraftDialogRef}
             titleId="reset-draft-title"
             summaryId="reset-draft-summary"
             eyebrow="Discard draft"
@@ -535,6 +887,7 @@ export default function Workbench () {
               <>
                 <button
                   id="reset-draft-cancel"
+                  ref={resetDraftCancelButtonRef}
                   type="button"
                   className={dialogButtonClassName}
                 >
@@ -542,6 +895,7 @@ export default function Workbench () {
                 </button>
                 <button
                   id="reset-draft-head"
+                  ref={resetDraftHeadButtonRef}
                   type="button"
                   className={dialogButtonClassName}
                 >
@@ -549,6 +903,7 @@ export default function Workbench () {
                 </button>
                 <button
                   id="reset-draft-saved"
+                  ref={resetDraftSavedButtonRef}
                   type="button"
                   className={dialogButtonClassName}
                 >
@@ -637,6 +992,7 @@ export default function Workbench () {
 
       <div
         id="floating-toolbar"
+        ref={floatingToolbarRef}
         className={workbenchFloatingToolbarClassName}
         hidden
       >
@@ -736,11 +1092,13 @@ export default function Workbench () {
 
       <div
         id="revision-hover-toolbar"
+        ref={revisionHoverToolbarRef}
         className={workbenchRevisionHoverToolbarClassName}
         hidden
       >
         <button
           id="revision-hover-accept"
+          ref={revisionHoverAcceptButtonRef}
           type="button"
           title="Accept revision"
           className="min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
@@ -749,6 +1107,7 @@ export default function Workbench () {
         </button>
         <button
           id="revision-hover-reject"
+          ref={revisionHoverRejectButtonRef}
           type="button"
           title="Reject revision"
           className="min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"

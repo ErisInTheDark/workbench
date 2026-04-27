@@ -1,11 +1,13 @@
 /*
  * Exports:
  * - NewEntryIcon: render the create-entry glyph used in the explorer. Keywords: workbench, explorer, icon.
- * - ThreadsList: render the thread list in the workbench sidebar. Keywords: workbench, threads, sidebar.
+ * - ThreadsList: render the thread list in the workbench sidebar, including the create-thread row. Keywords: workbench, threads, sidebar, create.
  * - ExplorerTree: render the recursive project tree with current, modified, and create-entry state. Keywords: workbench, explorer, tree.
  * - Local helpers: support modified markers, change summaries, and recursive directory state. Keywords: recursion, tree state, helpers.
  */
 "use client";
+
+import type { ReactNode } from "react";
 
 import type {
   ChangeSummary,
@@ -21,6 +23,7 @@ import {
   workbenchThreadListButtonClassName,
   workbenchThreadListLabelClassName,
 } from "./workbench-class-names";
+import { HarnessIcon } from "./workbench-icons";
 
 const DEFAULT_VISIBLE_THREAD_COUNT = 5;
 
@@ -31,6 +34,29 @@ export function NewEntryIcon () {
       <path d="M11.75 2.75V6.5H15.5" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M10.125 9V14M7.625 11.5H12.625" strokeLinecap="round" />
     </svg>
+  );
+}
+
+function ThreadListRow ({
+  active = false,
+  children,
+  onClick,
+  title,
+}: {
+  active?: boolean;
+  children: ReactNode;
+  onClick: () => void;
+  title: string;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      className={`${workbenchThreadListButtonClassName}${active ? " text-accent" : " text-muted"}`}
+      onClick={onClick}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -57,12 +83,18 @@ function ExplorerFileSpacer () {
 }
 
 export function ThreadsList ({
+  createThreadLabel = "Create new thread",
   currentThreadId,
+  isDraftSelected = false,
   nodes,
+  onCreateThread,
   onOpenThread,
 }: {
+  createThreadLabel?: string;
   currentThreadId: string;
+  isDraftSelected?: boolean;
   nodes: ThreadSummary[];
+  onCreateThread: () => void;
   onOpenThread: (threadId: string) => void;
 }) {
   const recentThreads = nodes.slice(0, DEFAULT_VISIBLE_THREAD_COUNT);
@@ -77,16 +109,18 @@ export function ThreadsList ({
 
         return (
           <li key={thread.id} className="m-0 list-none">
-            <button
-              type="button"
-              title={label}
-              className={`${workbenchThreadListButtonClassName}${isCurrent ? " text-accent" : " text-muted"}`}
+            <ThreadListRow
+              active={isCurrent}
               onClick={() => {
                 onOpenThread(thread.id);
               }}
+              title={label}
             >
-              <span className={`${workbenchThreadListLabelClassName}${isCurrent ? " font-semibold" : ""}`}>{label}</span>
-            </button>
+              <span className="inline-flex min-w-0 items-center gap-2">
+                <HarnessIcon className="size-4 shrink-0" harness={thread.harness} />
+                <span className={`${workbenchThreadListLabelClassName}${isCurrent ? " font-semibold" : ""}`}>{label}</span>
+              </span>
+            </ThreadListRow>
           </li>
         );
       })}
@@ -95,6 +129,17 @@ export function ThreadsList ({
 
   return (
     <div className="space-y-1">
+      <button
+        type="button"
+        title={createThreadLabel}
+        className={`${workbenchThreadListButtonClassName}${isDraftSelected ? " text-accent" : " text-muted"}`}
+        onClick={onCreateThread}
+      >
+        <span className="inline-flex min-w-0 items-center gap-2">
+          <span className="inline-flex size-4 shrink-0 items-center justify-center text-[1.05em] leading-none">+</span>
+          <span className={`${workbenchThreadListLabelClassName}${isDraftSelected ? " font-semibold" : ""}`}>{createThreadLabel}</span>
+        </span>
+      </button>
       {renderThreads(recentThreads)}
       {olderThreads.length ? (
         <ThreadDisclosure

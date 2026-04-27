@@ -1,6 +1,32 @@
+import type { RateLimitSnapshot } from "./codex/generated/app-server/v2/RateLimitSnapshot";
 import type { Turn } from "./codex/generated/app-server/v2/Turn";
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
-import type { RateLimitSnapshot } from "./codex/generated/app-server/v2/RateLimitSnapshot";
+
+export type WorkbenchHarness = "codex" | "copilot";
+
+export interface WorkbenchAgentOption {
+  name: string;
+  description: string;
+  path: string;
+}
+
+export interface WorkbenchModelOption {
+  id: string;
+  displayName: string;
+  description: string;
+  hidden: boolean;
+  isDefault: boolean;
+  supportsPersonality: boolean;
+  supportsReasoningEffort: boolean;
+  supportedReasoningEfforts: string[];
+  defaultReasoningEffort: string | null;
+  supportsVision: boolean;
+  inputModalities: string[];
+  maxContextWindowTokens: number | null;
+  additionalSpeedTiers: string[];
+  policyState: string | null;
+  billingMultiplier: number | null;
+}
 
 export interface ChangeSummary {
   additions: number;
@@ -9,6 +35,7 @@ export interface ChangeSummary {
 
 export interface ThreadSummary {
   id: string;
+  harness: WorkbenchHarness;
   name: string | null;
   preview: string;
   createdAt: number;
@@ -21,6 +48,11 @@ export interface ThreadSummary {
 
 export interface ThreadPayload {
   id: string;
+  harness: WorkbenchHarness;
+  model: string | null;
+  reasoningEffort: string | null;
+  agentPath: string | null;
+  isDraft: boolean;
   name: string | null;
   preview: string;
   createdAt: number;
@@ -69,11 +101,18 @@ export interface ExplorerSnapshot {
 }
 
 export interface WorkbenchControls {
+  clearSelection: () => void;
   openFile: (path: string) => Promise<void>;
   openThread: (threadId: string) => Promise<void>;
+  listModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
   sendThreadMessage: (threadId: string, input: UserInput[]) => Promise<void>;
+  setCurrentThreadModel: (threadId: string, model: string) => void;
+  setCurrentThreadAgent: (threadId: string, agentPath: string | null) => void;
+  setCurrentThreadReasoningEffort: (threadId: string, effort: string | null) => void;
   toggleDirectory: (path: string) => void;
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
+  createThread: (harness: WorkbenchHarness) => void;
+  setDraftThreadHarness: (harness: WorkbenchHarness) => void;
 }
 
 export interface WorkbenchBindings {
