@@ -15,6 +15,7 @@ import {
     type EditHistorySelection,
     type EditHistoryState,
 } from "./edit-history";
+import type { EditorDocumentAdapter } from "./EditorDocumentAdapter";
 import type { DraftBuffer, FileSessionState } from "./FileSessionState";
 import {
     markdownToHtml as renderMarkdownToHtml,
@@ -25,7 +26,7 @@ import {
     isMarkdownFile,
     isTextLikeFile,
 } from "./tree-utils";
-import type { EditorMode, SaveGuardIssue, WorkbenchEditorClient } from "./workbench-editor-client";
+import type { EditorMode, SaveGuardIssue } from "./workbench-editor-client";
 import type { WorkbenchProjectClient } from "./workbench-project-client";
 import type { WorkbenchThreadClient } from "./workbench-thread-client";
 
@@ -48,48 +49,33 @@ interface PersistedDraftRecord {
 type WorkbenchFileOpenSource = "open" | "reload";
 
 export interface WorkbenchFileClientOptions {
-  applyEditorFontSize: () => void;
-  captureEditorSelection: () => EditHistorySelection | null;
-  clearWriteConflict: () => void;
-  editor: HTMLDivElement;
-  editorClient: Pick<WorkbenchEditorClient,
-    | "refreshStatusMessage"
-    | "scheduleDiffGutterRefresh"
-    | "setCurrentFilePath"
-    | "setCurrentThreadId"
-    | "setDirty"
-    | "setMode"
-    | "setPendingWriteConflict"
-    | "setSaveIssue"
-    | "setStatusMessage"
-  >;
+  editorDocument: EditorDocumentAdapter;
   emitExplorerStateChange: () => void;
   fileSessionState: FileSessionState;
   hideResetDraftDialog: () => void;
-  inspectCurrentDraft: () => { content: string; issue: SaveGuardIssue | null };
+  hideWriteConflictDialog: () => void;
   logBlockedSaveIssue: (issue: SaveGuardIssue) => void;
+  presentWriteConflict: (conflict: SaveConflictPayload) => void;
   projectClient: Pick<WorkbenchProjectClient, "expandPath" | "refreshProject">;
   refreshEditorChrome: () => void;
-  refreshSaveGuardState: () => { markdown: string; issue: SaveGuardIssue | null };
-  renderEditorDocument: (content: string, mode: EditorMode) => void;
-  restoreEditorSelection: (selection: EditHistorySelection | null) => void;
   sessionState: SessionState;
   setLastLoggedSaveIssue: (issue: SaveGuardIssue | null) => void;
-  showWriteConflict: (conflict: SaveConflictPayload) => void;
   syncSelectionToUrl: (selection: { filePath?: string }) => void;
-  syncStructuredBlockStyles: () => void;
   threadClient: Pick<WorkbenchThreadClient, "clearThreadSelection">;
   updateHistorySelection: (selection: EditHistorySelection | null) => void;
   updateSaveButtonState: () => void;
 }
 
 export interface WorkbenchFileClient {
+  clearSelection: () => void;
   dispose: () => void;
   hydratePersistedDrafts: () => Promise<void>;
+  inspectCurrentDraft: () => { content: string; issue: SaveGuardIssue | null };
   openFile: (
     filePath: string,
     options?: { ignoreDirty?: boolean; source?: WorkbenchFileOpenSource },
   ) => Promise<void>;
+  selectThread: (threadId: string) => void;
   refreshCurrentFileFromDiskIfSafe: () => Promise<void>;
   resetCurrentDraftToSaved: () => Promise<void>;
   resetCurrentFileToHead: () => Promise<void>;
@@ -178,26 +164,18 @@ export function createWorkbenchFileClient(
   options: WorkbenchFileClientOptions,
 ): WorkbenchFileClient {
   const {
-    applyEditorFontSize,
-    captureEditorSelection,
-    clearWriteConflict,
-    editor,
-    editorClient,
+    editorDocument,
     emitExplorerStateChange,
     fileSessionState: state,
     hideResetDraftDialog,
-    inspectCurrentDraft,
+    hideWriteConflictDialog,
     logBlockedSaveIssue,
+    presentWriteConflict,
     projectClient,
     refreshEditorChrome,
-    refreshSaveGuardState,
-    renderEditorDocument,
-    restoreEditorSelection,
     sessionState,
     setLastLoggedSaveIssue,
-    showWriteConflict,
     syncSelectionToUrl,
-    syncStructuredBlockStyles,
     threadClient,
     updateHistorySelection,
     updateSaveButtonState,
@@ -266,6 +244,54 @@ export function createWorkbenchFileClient(
     });
   }
 
+  function clearWriteConflict() {
+    state.pendingWriteConflict = null;
+    hideWriteConflictDialog();
+  }
+
+  function resetCurrentFileSessionState() {
+    state.baselineContent = "";
+    state.currentContent = "";
+    state.dirty = false;
+    state.expectedMtimeMs = null;
+    state.headContent = null;
+    state.history = null;
+    state.saveIssue = null;
+    clearWriteConflict();
+    setLastLoggedSaveIssue(null);
+  }
+
+  function clearSelection() {
+    sessionState.currentPath = "";
+    resetCurrentFileSessionState();
+  }
+
+  function selectThread(threadId: string) {
+    void threadId;
+    sessionState.currentPath = "";
+    resetCurrentFileSessionState();
+  }
+
+  function inspectCurrentDraft() {
+    if (!sessionState.currentPath) {
+      state.currentContent = "";
+      state.dirty = false;
+      state.expectedMtimeMs = null;
+      state.saveIssue = null;
+      setLastLoggedSaveIssue(null);
+      updateSaveButtonState();
+      return { content: "", issue: null };
+    }
+
+    const inspection = editorDocument.inspectDraft();
+    state.currentContent = inspection.content;
+    state.dirty = inspection.content !== state.baselineContent;
+    state.saveIssue = inspection.issue;
+    setLastLoggedSaveIssue(inspection.issue);
+    updateSaveButtonState();
+    return inspection;
+  }
+
   function applyDraftBuffer(filePath: string, buffer: DraftBuffer) {
     clearWriteConflict();
     threadClient.clearThreadSelection();
@@ -274,19 +300,10 @@ export function createWorkbenchFileClient(
     sessionState.currentThreadId = "";
     state.expectedMtimeMs = buffer.expectedMtimeMs;
     state.mode = buffer.mode;
-    editorClient.setCurrentThreadId("");
-    editorClient.setCurrentFilePath(filePath);
-    editorClient.setMode(buffer.mode);
-
-    if (buffer.mode === "rich") {
-      editor.innerHTML = buffer.editorState;
-    } else {
-      editor.textContent = buffer.editorState;
-    }
-
-    applyEditorFontSize();
-    syncStructuredBlockStyles();
-    editor.scrollTop = 0;
+    editorDocument.setEditable(isTextLikeFile(filePath));
+    editorDocument.renderDocument(buffer.content, buffer.mode, {
+      renderedState: buffer.editorState,
+    });
     state.baselineContent = buffer.baselineContent;
     state.currentContent = buffer.content;
     state.headContent = buffer.headContent;
@@ -301,13 +318,10 @@ export function createWorkbenchFileClient(
     setLastLoggedSaveIssue(buffer.saveIssue
       ? { ...buffer.saveIssue }
       : null);
-    editorClient.setDirty(buffer.dirty);
-    editorClient.setPendingWriteConflict(state.pendingWriteConflict);
-    editorClient.setSaveIssue(state.saveIssue);
     updateSaveButtonState();
-    editorClient.refreshStatusMessage();
-    editorClient.scheduleDiffGutterRefresh();
-    restoreEditorSelection(state.history.frames[state.history.currentIndex]?.selection ?? null);
+    editorDocument.refreshStatusMessage();
+    editorDocument.scheduleDiffGutterRefresh();
+    editorDocument.restoreSelection(state.history.frames[state.history.currentIndex]?.selection ?? null);
   }
 
   function applyFilePayloadToCurrentFile(
@@ -321,7 +335,7 @@ export function createWorkbenchFileClient(
     } = {},
   ) {
     const mode = isMarkdownFile(payload.path) ? "rich" : "plain";
-    const selectionSnapshot = preserveSelection ? captureEditorSelection() : null;
+    const selectionSnapshot = preserveSelection ? editorDocument.captureSelection() : null;
 
     clearWriteConflict();
     threadClient.clearThreadSelection();
@@ -330,12 +344,11 @@ export function createWorkbenchFileClient(
     sessionState.currentThreadId = "";
     state.expectedMtimeMs = payload.mtimeMs;
     state.headContent = payload.headContent;
-    editorClient.setCurrentThreadId("");
-    editorClient.setCurrentFilePath(payload.path);
-    editor.setAttribute("contenteditable", isTextLikeFile(payload.path) ? "true" : "false");
-    renderEditorDocument(payload.content, mode);
+    state.mode = mode;
+    editorDocument.setEditable(isTextLikeFile(payload.path));
+    editorDocument.renderDocument(payload.content, mode);
     if (mode === "rich") {
-      state.baselineContent = refreshSaveGuardState().markdown;
+      state.baselineContent = editorDocument.inspectRichDocument().markdown;
       state.currentContent = state.baselineContent;
     } else {
       state.baselineContent = payload.content;
@@ -343,24 +356,19 @@ export function createWorkbenchFileClient(
       state.saveIssue = null;
       updateSaveButtonState();
     }
-    state.mode = mode;
     state.dirty = false;
     state.history = createInitialEditHistory(state.currentContent);
     state.pendingWriteConflict = null;
     state.saveIssue = null;
     setLastLoggedSaveIssue(null);
-    editorClient.setMode(mode);
-    editorClient.setDirty(false);
-    editorClient.setPendingWriteConflict(null);
-    editorClient.setSaveIssue(null);
 
     if (selectionSnapshot) {
-      restoreEditorSelection(selectionSnapshot);
-      updateHistorySelection(captureEditorSelection());
+      editorDocument.restoreSelection(selectionSnapshot);
+      updateHistorySelection(editorDocument.captureSelection());
     }
 
-    editorClient.refreshStatusMessage(statusMessage);
-    editorClient.scheduleDiffGutterRefresh();
+    editorDocument.refreshStatusMessage(statusMessage);
+    editorDocument.scheduleDiffGutterRefresh();
     refreshEditorChrome();
   }
 
@@ -368,7 +376,7 @@ export function createWorkbenchFileClient(
     const response = await fetch(`/api/file?path=${encodeURIComponent(filePath)}`, { cache: "no-store" });
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: "Unable to open file." }));
-      editorClient.setStatusMessage(error.error);
+      editorDocument.refreshStatusMessage(error.error);
       return null;
     }
 
@@ -385,9 +393,7 @@ export function createWorkbenchFileClient(
       baselineContent: state.baselineContent,
       content: state.currentContent,
       dirty: state.dirty,
-      editorState: state.mode === "rich"
-        ? editor.innerHTML
-        : editor.textContent ?? "",
+      editorState: editorDocument.readRenderedState(state.mode),
       expectedMtimeMs: state.expectedMtimeMs,
       headContent: state.headContent,
       history: cloneEditHistory(state.history) ?? createInitialEditHistory(state.currentContent),
@@ -474,10 +480,9 @@ export function createWorkbenchFileClient(
     if (source !== "reload") {
       const bufferedDraft = state.draftBuffers.get(filePath);
       if (bufferedDraft) {
-        editor.setAttribute("contenteditable", isTextLikeFile(filePath) ? "true" : "false");
         applyDraftBuffer(filePath, bufferedDraft);
         syncSelectionToUrl({ filePath });
-        editorClient.refreshStatusMessage("Opened draft");
+        editorDocument.refreshStatusMessage("Opened draft");
         projectClient.expandPath(filePath);
         emitExplorerStateChange();
         return;
@@ -511,7 +516,6 @@ export function createWorkbenchFileClient(
     }
 
     await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload" });
-    editor.focus();
   }
 
   async function resetCurrentFileToHead() {
@@ -535,21 +539,21 @@ export function createWorkbenchFileClient(
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: "Unable to reset file to HEAD." }));
       if (response.status === 409) {
-        showWriteConflict(error as SaveConflictPayload);
+        state.pendingWriteConflict = error as SaveConflictPayload;
+        presentWriteConflict(error as SaveConflictPayload);
         syncCurrentDraftBuffer();
-        editorClient.refreshStatusMessage();
+        editorDocument.refreshStatusMessage();
         return;
       }
 
-      editorClient.setStatusMessage(error.error);
+      editorDocument.refreshStatusMessage(error.error);
       return;
     }
 
     const payload = (await response.json()) as SaveFilePayload;
     await projectClient.refreshProject();
     await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload" });
-    editorClient.refreshStatusMessage(`Reset to HEAD - ${formatTimestamp(payload.updatedAt)}`);
-    editor.focus();
+    editorDocument.refreshStatusMessage(`Reset to HEAD - ${formatTimestamp(payload.updatedAt)}`);
   }
 
   async function saveCurrentFile({ force = false }: { force?: boolean } = {}) {
@@ -561,7 +565,7 @@ export function createWorkbenchFileClient(
 
     if (inspection.issue) {
       logBlockedSaveIssue(inspection.issue);
-      editorClient.refreshStatusMessage();
+      editorDocument.refreshStatusMessage();
       return;
     }
 
@@ -582,13 +586,14 @@ export function createWorkbenchFileClient(
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: "Unable to save file." }));
       if (response.status === 409) {
-        showWriteConflict(error as SaveConflictPayload);
+        state.pendingWriteConflict = error as SaveConflictPayload;
+        presentWriteConflict(error as SaveConflictPayload);
         syncCurrentDraftBuffer();
-        editorClient.refreshStatusMessage();
+        editorDocument.refreshStatusMessage();
         return;
       }
 
-      editorClient.setStatusMessage(error.error);
+      editorDocument.refreshStatusMessage(error.error);
       return;
     }
 
@@ -606,9 +611,9 @@ export function createWorkbenchFileClient(
     void persistDraftBuffer(sessionState.currentPath, null);
     state.saveIssue = null;
     updateSaveButtonState();
-    editorClient.refreshStatusMessage(`Saved - ${formatTimestamp(payload.updatedAt)}`);
+    editorDocument.refreshStatusMessage(`Saved - ${formatTimestamp(payload.updatedAt)}`);
     emitExplorerStateChange();
-    editorClient.scheduleDiffGutterRefresh();
+    editorDocument.scheduleDiffGutterRefresh();
   }
 
   async function refreshCurrentFileFromDiskIfSafe() {
@@ -641,9 +646,12 @@ export function createWorkbenchFileClient(
   }
 
   return {
+    clearSelection,
     dispose,
     hydratePersistedDrafts,
+    inspectCurrentDraft,
     openFile,
+    selectThread,
     refreshCurrentFileFromDiskIfSafe,
     resetCurrentDraftToSaved,
     resetCurrentFileToHead,

@@ -6,14 +6,13 @@ Keep this file focused on unresolved architecture work for the workbench so futu
 
 ### Implementation Master Order
 
-- [ ] 1. Implement `Subclient Contracts Are Incompletely Defined` next so the file and editor contracts align with the canonical state model and `EditorDocumentAdapter`.
-- [ ] 2. Implement `No Clear Data vs. UI State Separation` after the contract work so the editor shell and coordinator stop mirroring authoritative file and selection state.
-- [ ] 3. Implement `Bidirectional Callback Chains Between Subclients` only after steps 1-2, because it depends on one-way state ownership already existing.
-- [ ] 4. Implement `Unsafe Event Handler Chains with Hidden Dependencies` after the state and contract work so `EditorMutationRunner` can build on `EditHistoryManager` without competing with ownership changes.
-- [ ] 5. Implement `Unclean Disposal and Lifecycle` before the polling item so `LifecycleScope` becomes the shared ownership boundary for timers and subscriptions.
-- [ ] 6. Implement `Polling Loops Have No Centralized Coordination` after lifecycle scopes exist so recurring refresh and debounce work use the same ownership model.
-- [ ] 7. Implement `Too Many DOM Refs Passed Deep into the System` after the client boundaries are stable enough to narrow DOM surfaces with confidence.
-- [ ] 8. Implement `Utility File Proliferation Without Coherent Layering` last, after the earlier ownership and contract work has finalized which files belong to which layer.
+- [ ] 1. Implement `No Clear Data vs. UI State Separation` next so the editor shell and coordinator stop mirroring authoritative file and selection state.
+- [ ] 2. Implement `Bidirectional Callback Chains Between Subclients` after step 1, because it depends on one-way state ownership already existing.
+- [ ] 3. Implement `Unsafe Event Handler Chains with Hidden Dependencies` after the state-separation work so `EditorMutationRunner` can build on `EditHistoryManager` without competing with ownership changes.
+- [ ] 4. Implement `Unclean Disposal and Lifecycle` before the polling item so `LifecycleScope` becomes the shared ownership boundary for timers and subscriptions.
+- [ ] 5. Implement `Polling Loops Have No Centralized Coordination` after lifecycle scopes exist so recurring refresh and debounce work use the same ownership model.
+- [ ] 6. Implement `Too Many DOM Refs Passed Deep into the System` after the client boundaries are stable enough to narrow DOM surfaces with confidence.
+- [ ] 7. Implement `Utility File Proliferation Without Coherent Layering` last, after the earlier ownership and state work has finalized which files belong to which layer.
 
 
 ## Shared Foundations
@@ -64,46 +63,6 @@ interface EditorUIState {
 ## Architecture Critique: Workbench Client System
 The sections below stay in critique order rather than implementation order. Follow `Implementation Master Order` when sequencing work.
 Severity labels describe architectural impact and risk, not the order in which the work should be implemented.
-
-### SEVERITY 1: Subclient Contracts Are Incompletely Defined
-
-Problem: the four subclients have incoherent ownership patterns:
-
-- `workbench-editor-client.ts`: injected with 20+ handlers and a massive `WorkbenchEditorClientOptions` interface. It owns UI state (dirty, mode, statusMessage, fontSize, dialogs) but doesn't own file or thread state.
-- `workbench-file-client.ts`: now receives `SessionState` and `FileSessionState`, but it still depends on wide editor-client setter and render callbacks instead of a narrow document adapter.
-- `workbench-project-client.ts`: self-contained. Clean creation and subscription pattern.
-- `workbench-thread-client.ts`: self-contained. Clean creation and subscription pattern.
-
-The inconsistency means:
-- File client now has authoritative state owners, but it still reaches the editor shell through a broad imperative surface instead of a document-specific bridge.
-- Editor client is a UI shell, but it is still being used as a mirror write target for authoritative file state such as `dirty`, `saveIssue`, and `pendingWriteConflict`.
-- Project and thread clients already demonstrate the target shape: narrow construction, internal owned state, and snapshot-plus-subscribe APIs.
-
-Feasibility verdict:
-- The critique is valid, but the current rewrite proposal is incomplete because it names selection and persistence ownership without naming the document-facing adapter the file client still needs.
-- The main contract bug is not just "large option interfaces"; it is the split between authoritative write-side ownership and UI read-side rendering, with the coordinator and editor both standing in for missing state abstractions.
-- The later implementation should move editor and file contracts toward the project/thread snapshot pattern without forcing those already-clean clients to change shape.
-
-Concrete reshaping: redefine contracts around explicit state and document boundaries:
-1. `SessionState`: use the canonical target state model above and keep it as the single selection authority.
-2. `FileSessionState`: use the canonical target state model above and keep it as the authoritative file-editing state.
-3. `EditorDocumentAdapter`: exposes the narrow document hooks the file lifecycle actually needs: `renderDocument`, `captureSelection`, `restoreSelection`, `setEditable`, `scheduleDiffGutterRefresh`, and `refreshStatusMessage`. The coordinator creates one adapter for the active editor shell, passes it to the file client, and the adapter delegates to the editor client's existing render and scheduling hooks instead of owning separate scheduling state.
-4. `EditorClient`: owns shell and rendering concerns only: font size, dialogs, toolbar and diff-gutter scheduling, status line rendering, DOM event wiring, and visible file or thread labels. It consumes `SessionState` and `FileSessionState` or a derived view model instead of owning authoritative file state itself.
-5. `ProjectClient` and `ThreadClient`: remain the reference contract shape and should stay narrow while the other clients are moved toward the same snapshot-plus-subscribe model.
-
-`EditorDocumentAdapter` does not replace `FileSessionState`. The file client mutates `FileSessionState` first, then uses `EditorDocumentAdapter` only for imperative document and terminal refresh work.
-
-Implementation staging for the later checklist item:
-1. Introduce `SessionState` and stop treating the editor snapshot as the authoritative owner of `currentPath` and `currentThreadId`.
-2. Build on the existing `FileSessionState` and remove the remaining editor-client setter mirror from the write-side contract.
-3. Replace the file client's dependency on editor setters with `EditorDocumentAdapter`, keeping only the document and rendering hooks the file lifecycle truly needs.
-4. Slim `WorkbenchEditorClientOptions` by moving file-lifecycle operations out of the editor shell and leaving only UI event handlers plus rendering queries.
-5. Align the coordinator around subscriptions from `SessionState`, `FileSessionState`, `ProjectClient`, `ThreadClient`, and `EditorClient` instead of manual cross-mutation.
-
-Non-goals for this item:
-- Do not broaden `ProjectClient` or `ThreadClient` just for symmetry
-- Do not introduce an event bus here; that belongs to the later callback-chain item
-- Do not fold history-manager extraction into this item beyond the contract boundaries already defined above
 
 ### SEVERITY 2: Unsafe Event Handler Chains with Hidden Dependencies
 
@@ -205,7 +164,7 @@ Feasibility verdict:
 - The better target is layered re-homing with explicit private editor internals, not a smaller number of larger monoliths.
 
 Prerequisite for this item:
-- Implement the `SEVERITY 1` coordinator and contract work first so editor and coordinator boundaries are final before files move layers. This item is scheduled last despite its severity because it depends on those boundaries being stable.
+- The contract work is now in place. Finish the state-separation item first so editor and coordinator boundaries are stable before files move layers.
 
 Concrete reshaping:
 
@@ -304,14 +263,14 @@ Concrete reshaping:
 This is the item that introduces the coarse event layer deferred by the completed coordinator-ownership refactor.
 
 Implementation staging for the later checklist item:
-1. Prerequisite: complete the `SEVERITY 1` introduction of `SessionState` and `FileSessionState` first so this item builds on one-way state ownership instead of redefining it.
+1. Build on the completed `SessionState` and `FileSessionState` contract work so this item does not redefine ownership.
 2. Remove the file client's dependency on editor setters for `dirty`, conflict, save issue, mode, and current selection display state.
 3. Keep the file client's document interactions behind `EditorDocumentAdapter` instead of a wide editor client dependency.
 4. Make the editor shell subscribe to `FileSessionState` and `SessionState` and derive its rendered status from those snapshots.
 5. Add a small coarse-grained event layer only for cross-client notifications that are not naturally represented as owned state.
 6. Remove direct subclient-to-subclient mutation paths and leave the coordinator as the only place where commands are routed across client boundaries.
 
-This item finishes the setter-removal work that `SEVERITY 1: Subclient Contracts Are Incompletely Defined` starts. That earlier item establishes `EditorDocumentAdapter`; this item removes the remaining cross-client mutation chains once one-way state ownership already exists.
+This item continues the setter-removal work established by the completed contract refactor. `EditorDocumentAdapter` and one-way state ownership already exist; this item removes the remaining cross-client mutation chains.
 
 Non-goals for this item:
 - Do not use a generic event bus as the transport for authoritative file or editor state

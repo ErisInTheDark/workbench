@@ -4,22 +4,24 @@
  * - WorkbenchEditorFormatCommandOptions: delayed formatting-command delegates injected after inline and code controllers exist. Keywords: workbench, editor, format, command, delegates.
  * - EditorMode: current editor rendering mode. Keywords: workbench, editor, mode.
  * - SaveGuardIssue: persisted editor save-guard mismatch details. Keywords: workbench, editor, save guard, mismatch.
- * - WorkbenchEditorState: owned editor shell state for file selection, status, dialogs, and diff gutter rendering. Keywords: workbench, editor, state, dialogs, diff gutter.
- * - WorkbenchEditorSnapshot: readonly projection of the editor shell state. Keywords: workbench, editor, snapshot.
+ * - WorkbenchEditorState: owned editor shell state for UI-only concerns such as font size, transient status, and thread labels. Keywords: workbench, editor, state, UI.
+ * - WorkbenchEditorSnapshot: readonly projection of editor-owned UI state. Keywords: workbench, editor, snapshot, UI.
  * - WorkbenchEditorListener: subscriber signature for editor shell changes. Keywords: workbench, editor, subscribe.
- * - WorkbenchEditorClientOptions: callbacks and injected structural-edit dependencies delegated back to the coordinator for editor behavior, project change-summary queries, and current/head content needed for diff gutter rendering. Keywords: workbench, editor, callbacks, structure, status, lifecycle, diff gutter.
+ * - WorkbenchEditorClientOptions: callbacks, structural-edit dependencies, and state readers delegated from the coordinator for editor behavior and deterministic rendering. Keywords: workbench, editor, callbacks, structure, status, state.
  * - WorkbenchEditorClient: public surface for the editor shell client, including diff gutter refresh scheduling, delayed format-command configuration, and editor-owned structural input handling. Keywords: workbench, editor, client, diff gutter, format, list structure, rich input, dispose.
  * - createWorkbenchEditorClient: create the editor shell client that owns DOM refs, dialogs, diff gutter rendering, structural input wiring, delayed format-command setup, event listener cleanup, and deterministic status messages. Keywords: workbench, editor, DOM, status, structure, format, rich input, diff gutter, listeners.
  */
 
 import type { ChangeSummary, SaveConflictPayload } from "../types";
 import { MAX_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, persistFontSize, readStoredFontSize } from "./browser-state";
+import type { FileSessionState } from "./FileSessionState";
 import {
     getNestedListElementsForItem,
     isIntentionalListBreakParagraph,
     isSingleBreakParagraph,
 } from "./list-dom";
 import { parseBlocks as parseMarkdownBlocks, type ParsedBlock } from "./markdown-render";
+import type { SessionState } from "./SessionState";
 import { getEditorLineHeight } from "./viewport-metrics";
 import type { WorkbenchDomElements } from "./workbench-dom";
 import {
@@ -48,11 +50,6 @@ export interface SaveGuardIssue {
   roundTripMarkup: string;
 }
 
-interface WorkbenchDiffGutterContent {
-  currentContent: string;
-  headContent: string | null;
-}
-
 type DiffMarkerSymbol = "+" | "-" | "*";
 
 interface DiffRow {
@@ -77,24 +74,13 @@ interface DiffAnchorMetrics {
 }
 
 export interface WorkbenchEditorState {
-  currentPath: string;
-  currentThreadId: string;
-  dirty: boolean;
   fontSize: number;
-  mode: EditorMode;
-  pendingWriteConflict: SaveConflictPayload | null;
-  saveIssue: SaveGuardIssue | null;
   statusMessage: string;
+  threadLabel: string;
 }
 
 export interface WorkbenchEditorSnapshot {
-  currentPath: string;
-  currentThreadId: string;
-  dirty: boolean;
   fontSize: number;
-  mode: EditorMode;
-  pendingWriteConflict: SaveConflictPayload | null;
-  saveIssue: SaveGuardIssue | null;
   statusMessage: string;
 }
 
@@ -114,7 +100,7 @@ export interface WorkbenchEditorFormatCommandOptions {
 
 export interface WorkbenchEditorClientOptions {
   closeActiveDialog: () => boolean;
-  getDiffGutterContent: () => WorkbenchDiffGutterContent;
+  fileSessionState: FileSessionState;
   getProjectChangeSummary: (path: string) => ChangeSummary | null | undefined;
   handleCompositionEnd: () => void;
   handleCompositionStart: () => void;
@@ -139,6 +125,7 @@ export interface WorkbenchEditorClientOptions {
   handleViewportChanged: () => void;
   isSaveButtonInvalid?: () => boolean;
   listStructure: Omit<WorkbenchListStructureControllerOptions, "editor">;
+  sessionState: SessionState;
   shouldBlockBeforeUnload: () => boolean;
 }
 
@@ -156,13 +143,7 @@ export interface WorkbenchEditorClient {
   hideSaveConflictDialog: () => void;
   refreshStatusMessage: (message?: string) => void;
   scheduleDiffGutterRefresh: () => void;
-  setCurrentFilePath: (path: string) => void;
-  setCurrentThreadId: (threadId: string) => void;
-  setDirty: (dirty: boolean) => void;
-  setMode: (mode: EditorMode) => void;
-  setPendingWriteConflict: (conflict: SaveConflictPayload | null) => void;
   setSaveButtonState: () => void;
-  setSaveIssue: (issue: SaveGuardIssue | null) => void;
   setStatusMessage: (message: string) => void;
   showResetDraftDialog: () => void;
   showSaveConflict: (conflict: SaveConflictPayload) => void;
@@ -172,19 +153,17 @@ export interface WorkbenchEditorClient {
 
 export function createInitialWorkbenchEditorSnapshot(): WorkbenchEditorSnapshot {
   return {
-    currentPath: "",
-    currentThreadId: "",
-    dirty: false,
     fontSize: readStoredFontSize(),
-    mode: "rich",
-    pendingWriteConflict: null,
-    saveIssue: null,
     statusMessage: DEFAULT_STATUS_MESSAGE,
   };
 }
 
 function createInitialEditorState(): WorkbenchEditorState {
-  return createInitialWorkbenchEditorSnapshot();
+  return {
+    fontSize: readStoredFontSize(),
+    statusMessage: DEFAULT_STATUS_MESSAGE,
+    threadLabel: "",
+  };
 }
 
 function appendParsedListDiffRows(
@@ -555,20 +534,16 @@ export function createWorkbenchEditorClient(
   });
   const richInputController = createWorkbenchRichInputController({
     editor: elements.editor,
-    getMode: () => state.mode,
+    getMode: () => options.fileSessionState.mode,
   });
   let formatCommandController: WorkbenchFormatCommandController | null = null;
   let diffRefreshFrameId: number | null = null;
+  let previousSessionSnapshot = options.sessionState.getSnapshot();
+  let previousFileSnapshot = options.fileSessionState.getSnapshot();
 
   function getSnapshot(): WorkbenchEditorSnapshot {
     return {
-      currentPath: state.currentPath,
-      currentThreadId: state.currentThreadId,
-      dirty: state.dirty,
       fontSize: state.fontSize,
-      mode: state.mode,
-      pendingWriteConflict: state.pendingWriteConflict,
-      saveIssue: state.saveIssue,
       statusMessage: state.statusMessage,
     };
   }
@@ -592,10 +567,10 @@ export function createWorkbenchEditorClient(
   }
 
   function setSaveButtonState() {
-    const isInvalid = options.isSaveButtonInvalid?.() ?? Boolean(state.saveIssue);
+    const isInvalid = options.isSaveButtonInvalid?.() ?? Boolean(options.fileSessionState.saveIssue);
     elements.saveFileButton.dataset.invalid = isInvalid ? "true" : "false";
-    elements.saveFileButton.disabled = !state.currentPath;
-    elements.resetDraftButton.disabled = !state.currentPath;
+    elements.saveFileButton.disabled = !options.sessionState.currentPath;
+    elements.resetDraftButton.disabled = !options.sessionState.currentPath;
   }
 
   function formatChangeSummary(change: ChangeSummary | null | undefined) {
@@ -614,28 +589,48 @@ export function createWorkbenchEditorClient(
   }
 
   function getDeterministicStatusMessage() {
-    if (!state.currentPath) {
-      return state.currentThreadId ? THREAD_STATUS_MESSAGE : DEFAULT_STATUS_MESSAGE;
+    if (!options.sessionState.currentPath) {
+      return options.sessionState.currentThreadId ? THREAD_STATUS_MESSAGE : DEFAULT_STATUS_MESSAGE;
     }
 
-    if (state.saveIssue) {
+    if (options.fileSessionState.saveIssue) {
       return SAVE_GUARD_STATUS_MESSAGE;
     }
 
-    if (state.pendingWriteConflict) {
+    if (options.fileSessionState.pendingWriteConflict) {
       return WRITE_CONFLICT_STATUS_MESSAGE;
     }
 
-    if (state.dirty) {
+    if (options.fileSessionState.dirty) {
       return DIRTY_STATUS_MESSAGE;
     }
 
-    const changeSummary = formatChangeSummary(options.getProjectChangeSummary(state.currentPath));
+    const changeSummary = formatChangeSummary(options.getProjectChangeSummary(options.sessionState.currentPath));
     if (changeSummary) {
       return `Pending changes ${changeSummary}`;
     }
 
-    return state.mode === "rich" ? RICH_TEXT_SAVED_STATUS_MESSAGE : PLAIN_TEXT_STATUS_MESSAGE;
+    return options.fileSessionState.mode === "rich" ? RICH_TEXT_SAVED_STATUS_MESSAGE : PLAIN_TEXT_STATUS_MESSAGE;
+  }
+
+  function syncEditorLabel() {
+    if (options.sessionState.currentPath) {
+      elements.filePathLabel.textContent = options.sessionState.currentPath;
+      return;
+    }
+
+    if (options.sessionState.currentThreadId) {
+      elements.filePathLabel.textContent = state.threadLabel || "Create new thread";
+      return;
+    }
+
+    elements.filePathLabel.textContent = "Select a file";
+  }
+
+  function syncEditorModePresentation() {
+    elements.editor.dataset.placeholder = options.fileSessionState.mode === "rich"
+      ? "Select a markdown file to start editing."
+      : "Plain text mode";
   }
 
   function setStatusMessage(message: string) {
@@ -656,7 +651,7 @@ export function createWorkbenchEditorClient(
   function renderDiffGutter() {
     elements.diffGutter.replaceChildren();
 
-    if (!state.currentPath || state.mode !== "rich") {
+    if (!options.sessionState.currentPath || options.fileSessionState.mode !== "rich") {
       return;
     }
 
@@ -665,9 +660,8 @@ export function createWorkbenchEditorClient(
       return;
     }
 
-    const { currentContent, headContent } = options.getDiffGutterContent();
-    const currentRows = flattenMarkdownDiffRows(currentContent);
-    const headRows = flattenMarkdownDiffRows(headContent);
+    const currentRows = flattenMarkdownDiffRows(options.fileSessionState.currentContent);
+    const headRows = flattenMarkdownDiffRows(options.fileSessionState.headContent);
     const { currentMarkers, deletedPlacements } = diffRowsAgainstHead(headRows, currentRows);
 
     if (!currentMarkers.size && !deletedPlacements.length) {
@@ -722,7 +716,7 @@ export function createWorkbenchEditorClient(
   }
 
   function handleListStructureKeyDown(event: KeyboardEvent) {
-    if (!state.currentPath || state.mode !== "rich") {
+    if (!options.sessionState.currentPath || options.fileSessionState.mode !== "rich") {
       return false;
     }
 
@@ -730,7 +724,7 @@ export function createWorkbenchEditorClient(
   }
 
   function handleRichInput(event: Event) {
-    if (!state.currentPath) {
+    if (!options.sessionState.currentPath) {
       return {
         transformedListItem: null,
         commentCaretMarker: null,
@@ -743,7 +737,7 @@ export function createWorkbenchEditorClient(
   function configureFormatCommands(formatCommandOptions: WorkbenchEditorFormatCommandOptions) {
     formatCommandController = createWorkbenchFormatCommandController({
       editor: elements.editor,
-      getMode: () => state.mode,
+      getMode: () => options.fileSessionState.mode,
       ...formatCommandOptions,
     });
   }
@@ -784,7 +778,6 @@ export function createWorkbenchEditorClient(
   }
 
   function showSaveConflict(conflict: SaveConflictPayload) {
-    state.pendingWriteConflict = conflict;
     if (elements.saveConflictDialog.summary) {
       elements.saveConflictDialog.summary.textContent = "Reload from disk to discard your unsaved editor state, or overwrite anyway to write what is currently in the editor.";
     }
@@ -800,7 +793,7 @@ export function createWorkbenchEditorClient(
   }
 
   function showResetDraftDialog() {
-    if (!state.currentPath) {
+    if (!options.sessionState.currentPath) {
       return;
     }
 
@@ -808,81 +801,25 @@ export function createWorkbenchEditorClient(
   }
 
   function clearSelectionView() {
-    state.currentPath = "";
-    state.currentThreadId = "";
-    state.dirty = false;
-    state.pendingWriteConflict = null;
-    state.saveIssue = null;
-    state.mode = "rich";
+    state.threadLabel = "";
     elements.editor.textContent = "";
     elements.editor.scrollTop = 0;
     elements.editor.dataset.placeholder = "Select a markdown file to start editing.";
     elements.editor.setAttribute("contenteditable", "false");
-    elements.filePathLabel.textContent = "Select a file";
+    syncEditorLabel();
     setSaveButtonState();
     refreshStatusMessage();
   }
 
   function showThreadPlaceholder(label: string) {
-    state.currentPath = "";
-    state.dirty = false;
-    state.pendingWriteConflict = null;
-    state.saveIssue = null;
-    state.mode = "rich";
+    state.threadLabel = label;
     elements.editor.dataset.placeholder = "Select a markdown file to start editing.";
     elements.editor.setAttribute("contenteditable", "false");
     elements.editor.textContent = "";
     elements.editor.scrollTop = 0;
-    elements.filePathLabel.textContent = label || "Create new thread";
+    syncEditorLabel();
     setSaveButtonState();
     refreshStatusMessage();
-  }
-
-  function setCurrentFilePath(path: string) {
-    state.currentPath = path;
-    state.currentThreadId = "";
-    elements.filePathLabel.textContent = path || "Select a file";
-    if (path) {
-      elements.editor.setAttribute("contenteditable", "true");
-    }
-    setSaveButtonState();
-    emit();
-  }
-
-  function setCurrentThreadId(threadId: string) {
-    state.currentThreadId = threadId;
-    if (threadId) {
-      state.currentPath = "";
-    }
-    emit();
-  }
-
-  function setDirty(dirty: boolean) {
-    state.dirty = dirty;
-    emit();
-  }
-
-  function setMode(mode: EditorMode) {
-    state.mode = mode;
-    elements.editor.dataset.placeholder = mode === "rich"
-      ? "Select a markdown file to start editing."
-      : "Plain text mode";
-    emit();
-  }
-
-  function setPendingWriteConflict(conflict: SaveConflictPayload | null) {
-    state.pendingWriteConflict = conflict;
-    if (!conflict) {
-      hideSaveConflictDialog();
-    }
-    setSaveButtonState();
-    emit();
-  }
-
-  function setSaveIssue(issue: SaveGuardIssue | null) {
-    state.saveIssue = issue;
-    setSaveButtonState();
-    emit();
   }
 
   function changeFontSize(delta: number) {
@@ -1085,7 +1022,53 @@ export function createWorkbenchEditorClient(
     event.returnValue = "";
   }, { signal });
 
+  const unsubscribeSessionState = options.sessionState.subscribe((snapshot) => {
+    const previousSnapshot = previousSessionSnapshot;
+    previousSessionSnapshot = snapshot;
+
+    if (
+      previousSnapshot.currentPath === snapshot.currentPath
+      && previousSnapshot.currentThreadId === snapshot.currentThreadId
+    ) {
+      return;
+    }
+
+    syncEditorLabel();
+    setSaveButtonState();
+    refreshStatusMessage();
+    scheduleDiffGutterRefresh();
+  });
+
+  const unsubscribeFileSessionState = options.fileSessionState.subscribe((snapshot) => {
+    const previousSnapshot = previousFileSnapshot;
+    previousFileSnapshot = snapshot;
+
+    if (previousSnapshot.mode !== snapshot.mode) {
+      syncEditorModePresentation();
+    }
+
+    if (
+      previousSnapshot.mode !== snapshot.mode
+      || previousSnapshot.currentContent !== snapshot.currentContent
+      || previousSnapshot.headContent !== snapshot.headContent
+    ) {
+      scheduleDiffGutterRefresh();
+    }
+
+    if (
+      previousSnapshot.dirty !== snapshot.dirty
+      || previousSnapshot.mode !== snapshot.mode
+      || previousSnapshot.pendingWriteConflict !== snapshot.pendingWriteConflict
+      || previousSnapshot.saveIssue !== snapshot.saveIssue
+    ) {
+      setSaveButtonState();
+      refreshStatusMessage();
+    }
+  });
+
   applyEditorFontSize();
+  syncEditorModePresentation();
+  syncEditorLabel();
   setSaveButtonState();
   elements.statusLine.textContent = state.statusMessage;
 
@@ -1098,6 +1081,8 @@ export function createWorkbenchEditorClient(
       if (diffRefreshFrameId !== null) {
         window.cancelAnimationFrame(diffRefreshFrameId);
       }
+      unsubscribeSessionState();
+      unsubscribeFileSessionState();
       listeners.clear();
       abortController.abort();
     },
@@ -1109,13 +1094,7 @@ export function createWorkbenchEditorClient(
     hideSaveConflictDialog,
     refreshStatusMessage,
     scheduleDiffGutterRefresh,
-    setCurrentFilePath,
-    setCurrentThreadId,
-    setDirty,
-    setMode,
-    setPendingWriteConflict,
     setSaveButtonState,
-    setSaveIssue,
     setStatusMessage,
     showResetDraftDialog,
     showSaveConflict,

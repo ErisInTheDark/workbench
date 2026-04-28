@@ -29,6 +29,7 @@ import {
     unwrapTransparentSpans,
 } from "./workbench/dom-normalization";
 import { createEditHistoryManager } from "./workbench/EditHistoryManager";
+import type { EditorDocumentAdapter } from "./workbench/EditorDocumentAdapter";
 import { createFileSessionState } from "./workbench/FileSessionState";
 import {
     createWorkbenchInlineFormatController,
@@ -210,12 +211,11 @@ export async function initWorkbench(
     const previousThreadsError = state.thread.threadsError;
 
     state.thread = snapshot;
-    sessionState.currentThread = snapshot.currentThread;
-    sessionState.currentThreadId = snapshot.currentThreadId;
-
     if (!areThreadPayloadsEquivalent(previousThread, snapshot.currentThread)) {
-      emitCurrentThreadChange();
+      applyCurrentThread(snapshot.currentThread);
     }
+
+    applyCurrentThreadId(snapshot.currentThreadId);
 
     if (previousRateLimits !== snapshot.rateLimits) {
       emitRateLimitsChange();
@@ -269,13 +269,11 @@ export async function initWorkbench(
       updateCustomCaret();
     });
   };
+  let fileClient: ReturnType<typeof createWorkbenchFileClient>;
 
   const editorClient = createWorkbenchEditorClient(elements, {
     closeActiveDialog,
-    getDiffGutterContent: () => ({
-      currentContent: fileSessionState.currentContent,
-      headContent: fileSessionState.headContent,
-    }),
+    fileSessionState,
     getProjectChangeSummary: (path) => projectClient.getSnapshot().changes[path] ?? null,
     handleCompositionEnd: () => {
       isComposing = false;
@@ -341,7 +339,7 @@ export async function initWorkbench(
       if (commentCaretMarker) {
         restoreCaretToMarker(commentCaretMarker);
       }
-      inspectCurrentDraft();
+      fileClient.inspectCurrentDraft();
       editHistoryManager.recordEditHistory(previousContent, fileSessionState.currentContent, captureEditorSelection(editor));
       syncCurrentDraftBuffer();
       editorClient.scheduleDiffGutterRefresh();
@@ -461,10 +459,41 @@ export async function initWorkbench(
       updateFloatingToolbar,
     },
     isSaveButtonInvalid: () => Boolean(fileSessionState.saveIssue) || Array.from(fileSessionState.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue)),
+    sessionState,
     shouldBlockBeforeUnload: () => Boolean(fileSessionState.saveIssue) || Array.from(fileSessionState.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue)),
   });
   reportStatusMessage = (message) => {
     editorClient.refreshStatusMessage(message);
+  };
+  const editorDocument: EditorDocumentAdapter = {
+    captureSelection: () => captureEditorSelection(editor),
+    inspectDraft: () => inspectEditorDraft(),
+    inspectRichDocument: () => inspectRichDocument(),
+    readRenderedState: (mode) => mode === "rich"
+      ? editor.innerHTML
+      : editor.textContent ?? "",
+    refreshStatusMessage: (message) => {
+      editorClient.refreshStatusMessage(message);
+    },
+    renderDocument: (content, mode, options = {}) => {
+      if (mode === "rich") {
+        editor.innerHTML = options.renderedState ?? renderMarkdownToHtml(content);
+      } else {
+        editor.textContent = options.renderedState ?? content;
+      }
+
+      syncStructuredBlockStyles();
+      editor.scrollTop = 0;
+    },
+    restoreSelection: (selection) => {
+      restoreEditorSelection(editor, selection);
+    },
+    scheduleDiffGutterRefresh: () => {
+      editorClient.scheduleDiffGutterRefresh();
+    },
+    setEditable: (editable) => {
+      editor.setAttribute("contenteditable", editable ? "true" : "false");
+    },
   };
   let previousSessionSnapshot = sessionState.getSnapshot();
   const unsubscribeSessionState = sessionState.subscribe((snapshot) => {
@@ -594,21 +623,23 @@ export async function initWorkbench(
     getHistory: () => fileSessionState.history,
     getMode: () => fileSessionState.mode,
     historyKeyframeInterval: HISTORY_KEYFRAME_INTERVAL,
-    inspectCurrentDraft,
+    inspectCurrentDraft: () => fileClient.inspectCurrentDraft(),
     refreshEditorChrome: () => {
       updateFloatingToolbar();
       updateRevisionHoverToolbar();
       updateCustomCaret();
     },
     refreshStatusMessage: () => {
-      editorClient.refreshStatusMessage();
+      editorDocument.refreshStatusMessage();
     },
-    renderEditorDocument,
+    renderEditorDocument: (content, mode) => {
+      editorDocument.renderDocument(content, mode);
+    },
     restoreEditorSelection: (selection) => {
-      restoreEditorSelection(editor, selection);
+      editorDocument.restoreSelection(selection);
     },
     scheduleDiffGutterRefresh: () => {
-      editorClient.scheduleDiffGutterRefresh();
+      editorDocument.scheduleDiffGutterRefresh();
     },
     setHistory: (history) => {
       fileSessionState.history = history;
@@ -618,35 +649,27 @@ export async function initWorkbench(
     },
   });
 
-  const fileClient = createWorkbenchFileClient({
-    applyEditorFontSize,
-    captureEditorSelection: () => captureEditorSelection(editor),
-    clearWriteConflict,
-    editor,
-    editorClient,
+  fileClient = createWorkbenchFileClient({
+    editorDocument,
     emitExplorerStateChange,
     fileSessionState,
     hideResetDraftDialog,
-    inspectCurrentDraft,
+    hideWriteConflictDialog: hideSaveConflictDialog,
     logBlockedSaveIssue: (issue) => {
       syncSaveIssueLogging(issue, "save attempt blocked by markup mismatch", true);
     },
+    presentWriteConflict,
     projectClient,
     refreshEditorChrome: () => {
       updateFloatingToolbar();
       updateRevisionHoverToolbar();
       updateCustomCaret();
     },
-    refreshSaveGuardState,
-    renderEditorDocument,
-    restoreEditorSelection: (selection) => restoreEditorSelection(editor, selection),
     sessionState,
     setLastLoggedSaveIssue: (issue) => {
       state.lastLoggedSaveIssue = issue;
     },
-    showWriteConflict,
     syncSelectionToUrl: syncCurrentSelectionToUrl,
-    syncStructuredBlockStyles,
     threadClient,
     updateHistorySelection: editHistoryManager.updateHistorySelection,
     updateSaveButtonState,
@@ -669,10 +692,12 @@ export async function initWorkbench(
 
   async function resetCurrentDraftToSaved() {
     await fileClient.resetCurrentDraftToSaved();
+    editor.focus();
   }
 
   async function resetCurrentFileToHead() {
     await fileClient.resetCurrentFileToHead();
+    editor.focus();
   }
 
   async function saveCurrentFile(options?: { force?: boolean }) {
@@ -720,12 +745,7 @@ export async function initWorkbench(
     editorClient.hideResetDraftDialog();
   }
 
-  function clearWriteConflict() {
-    fileSessionState.pendingWriteConflict = null;
-    editorClient.setPendingWriteConflict(null);
-  }
-
-  function showWriteConflict(conflict: SaveConflictPayload) {
+  function presentWriteConflict(conflict: SaveConflictPayload) {
     editorClient.showSaveConflict({
       ...conflict,
       expectedUpdatedAt: formatTimestamp(conflict.expectedUpdatedAt),
@@ -782,6 +802,25 @@ export async function initWorkbench(
     emitRateLimitsChange();
   }
 
+  function applyCurrentThread(thread: ThreadPayload | null) {
+    if (areThreadPayloadsEquivalent(sessionState.currentThread, thread)) {
+      return false;
+    }
+
+    sessionState.currentThread = thread;
+    emitCurrentThreadChange();
+    return true;
+  }
+
+  function applyCurrentThreadId(threadId: string) {
+    if (sessionState.currentThreadId === threadId) {
+      return false;
+    }
+
+    sessionState.currentThreadId = threadId;
+    return true;
+  }
+
   function areCurrentTurnsEquivalent(left: ThreadPayload | null, right: ThreadPayload | null) {
     const leftTurn = getCurrentTurn(left);
     const rightTurn = getCurrentTurn(right);
@@ -831,8 +870,7 @@ export async function initWorkbench(
 
     const previousThread = state.thread.currentThread;
     state.thread.currentThread = thread;
-    sessionState.currentThread = thread;
-    emitCurrentThreadChange();
+    applyCurrentThread(thread);
 
     if (!thread) {
       setRateLimits(null);
@@ -862,10 +900,6 @@ export async function initWorkbench(
 
   function toggleDirectory(path: string) {
     projectClient.toggleDirectory(path);
-  }
-
-  function applyEditorFontSize() {
-    state.editor = editorClient.getSnapshot();
   }
 
   function getProtectedEmptyInlineFormatElements(root: ParentNode) {
@@ -941,65 +975,34 @@ export async function initWorkbench(
     (root as Node).normalize();
   }
 
-  function refreshSaveGuardState() {
-    if (!sessionState.currentPath || fileSessionState.mode !== "rich") {
-      fileSessionState.currentContent = "";
-      fileSessionState.saveIssue = null;
-      editorClient.setSaveIssue(null);
-      state.lastLoggedSaveIssue = null;
-      updateSaveButtonState();
-      return { markdown: "", issue: null };
-    }
-
+  function inspectRichDocument() {
     const inspection = inspectSaveGuardMarkup({
       editorRoot: editor,
       isInlineRunContainer,
       normalizeMarkup: normalizeEditorMarkup,
     });
-    fileSessionState.saveIssue = inspection.issue;
-    editorClient.setSaveIssue(inspection.issue);
-    syncSaveIssueLogging(inspection.issue, "markup mismatch detected while editing");
-    updateSaveButtonState();
     return inspection;
   }
 
-  function inspectCurrentDraft() {
+  function inspectEditorDraft() {
     if (!sessionState.currentPath) {
-      editorClient.setDirty(false);
-      fileSessionState.currentContent = "";
-      fileSessionState.dirty = false;
-      fileSessionState.expectedMtimeMs = null;
-      fileSessionState.saveIssue = null;
-      editorClient.setSaveIssue(null);
-      state.lastLoggedSaveIssue = null;
-      updateSaveButtonState();
       return { content: "", issue: null };
     }
 
     if (fileSessionState.mode !== "rich") {
-      fileSessionState.saveIssue = null;
-      editorClient.setSaveIssue(null);
-      state.lastLoggedSaveIssue = null;
-      updateSaveButtonState();
-      const inspection = inspectDraftContent({
+      return inspectDraftContent({
         mode: fileSessionState.mode,
         plainTextContent: editor.textContent ?? "",
       });
-      fileSessionState.currentContent = inspection.content;
-      fileSessionState.dirty = inspection.content !== fileSessionState.baselineContent;
-      editorClient.setDirty(fileSessionState.dirty);
-      return inspection;
     }
 
-    const saveGuardInspection = refreshSaveGuardState();
+    const saveGuardInspection = inspectRichDocument();
+    syncSaveIssueLogging(saveGuardInspection.issue, "markup mismatch detected while editing");
     const inspection = inspectDraftContent({
       mode: fileSessionState.mode,
       plainTextContent: editor.textContent ?? "",
       richInspection: saveGuardInspection,
     });
-    fileSessionState.currentContent = inspection.content;
-    fileSessionState.dirty = inspection.content !== fileSessionState.baselineContent;
-    editorClient.setDirty(fileSessionState.dirty);
     return inspection;
   }
 
@@ -1018,17 +1021,7 @@ export async function initWorkbench(
   }
 
   function renderEditorDocument(content: string, mode: EditorMode) {
-    editorClient.setMode(mode);
-
-    if (mode === "rich") {
-      editor.innerHTML = renderMarkdownToHtml(content);
-    } else {
-      editor.textContent = content;
-    }
-
-    applyEditorFontSize();
-    syncStructuredBlockStyles();
-    editor.scrollTop = 0;
+    editorDocument.renderDocument(content, mode);
   }
 
   async function refreshThreads() {
@@ -1040,21 +1033,10 @@ export async function initWorkbench(
   }
 
   function applyThreadPayloadToCurrentView(payload: ThreadPayload, statusMessage?: string) {
-    clearWriteConflict();
     setCurrentThread(payload);
-    sessionState.currentPath = "";
-    sessionState.currentThreadId = payload.id;
-    fileSessionState.expectedMtimeMs = null;
-    fileSessionState.headContent = null;
-    state.lastLoggedSaveIssue = null;
-    editorClient.setCurrentThreadId(payload.id);
+    applyCurrentThreadId(payload.id);
+    fileClient.selectThread(payload.id);
     editorClient.showThreadPlaceholder(payload.name || payload.preview || payload.id);
-    fileSessionState.baselineContent = "";
-    fileSessionState.currentContent = "";
-    fileSessionState.history = null;
-    fileSessionState.dirty = false;
-    fileSessionState.pendingWriteConflict = null;
-    fileSessionState.saveIssue = null;
     clearPendingInlineFormats();
     setHoveredRevisionNode(null);
     updateSaveButtonState();
@@ -1116,7 +1098,7 @@ export async function initWorkbench(
   function syncEditorAfterStructuralChange() {
     const previousContent = fileSessionState.currentContent;
     syncStructuredBlockStyles();
-    inspectCurrentDraft();
+    fileClient.inspectCurrentDraft();
     editHistoryManager.recordEditHistory(previousContent, fileSessionState.currentContent, captureEditorSelection(editor));
     syncCurrentDraftBuffer();
     editorClient.scheduleDiffGutterRefresh();
@@ -1253,19 +1235,7 @@ export async function initWorkbench(
   }
 
   function clearCurrentSelectionView() {
-    fileSessionState.baselineContent = "";
-    threadClient.clearThreadSelection();
-    sessionState.currentPath = "";
-    sessionState.currentThread = null;
-    sessionState.currentThreadId = "";
-    fileSessionState.currentContent = "";
-    fileSessionState.dirty = false;
-    fileSessionState.expectedMtimeMs = null;
-    fileSessionState.headContent = null;
-    fileSessionState.history = null;
-    fileSessionState.pendingWriteConflict = null;
-    fileSessionState.saveIssue = null;
-    state.lastLoggedSaveIssue = null;
+    fileClient.clearSelection();
     setHoveredRevisionNode(null);
     clearPendingInlineFormats();
     editorClient.clearSelectionView();
@@ -1307,8 +1277,8 @@ export async function initWorkbench(
         }
       } else {
         threadClient.clearThreadSelection();
-        sessionState.currentThread = null;
-        sessionState.currentThreadId = "";
+        applyCurrentThread(null);
+        applyCurrentThreadId("");
         syncCurrentSelectionToUrl({});
         emitExplorerStateChange();
       }
@@ -1412,7 +1382,6 @@ export async function initWorkbench(
   emitExplorerStateChange();
   emitCurrentThreadChange();
   emitRateLimitsChange();
-  applyEditorFontSize();
   updateSaveButtonState();
   await refreshTree();
   void refreshRateLimits();
