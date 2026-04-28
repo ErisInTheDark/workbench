@@ -6,15 +6,14 @@ Keep this file focused on unresolved architecture work for the workbench so futu
 
 ### Implementation Master Order
 
-- [ ] 1. Implement `Monolithic Coordinator with Leaky State Ownership` first to establish `EditHistoryManager`, `SessionState`, `FileSessionState`, and the slimmer coordinator boundary.
-- [ ] 2. Implement `Subclient Contracts Are Incompletely Defined` next so the file and editor contracts align with the canonical state model and `EditorDocumentAdapter`.
-- [ ] 3. Implement `No Clear Data vs. UI State Separation` after the state and contract work so the coordinator can stop owning the master mutable state bag.
-- [ ] 4. Implement `Bidirectional Callback Chains Between Subclients` only after steps 1-3, because it depends on one-way state ownership already existing.
-- [ ] 5. Implement `Unsafe Event Handler Chains with Hidden Dependencies` after `EditHistoryManager` exists so `EditorMutationRunner` can delegate history work instead of duplicating it.
-- [ ] 6. Implement `Unclean Disposal and Lifecycle` before the polling item so `LifecycleScope` becomes the shared ownership boundary for timers and subscriptions.
-- [ ] 7. Implement `Polling Loops Have No Centralized Coordination` after lifecycle scopes exist so recurring refresh and debounce work use the same ownership model.
-- [ ] 8. Implement `Too Many DOM Refs Passed Deep into the System` after the client boundaries are stable enough to narrow DOM surfaces with confidence.
-- [ ] 9. Implement `Utility File Proliferation Without Coherent Layering` last, after the earlier ownership and contract work has finalized which files belong to which layer.
+- [ ] 1. Implement `Subclient Contracts Are Incompletely Defined` next so the file and editor contracts align with the canonical state model and `EditorDocumentAdapter`.
+- [ ] 2. Implement `No Clear Data vs. UI State Separation` after the contract work so the editor shell and coordinator stop mirroring authoritative file and selection state.
+- [ ] 3. Implement `Bidirectional Callback Chains Between Subclients` only after steps 1-2, because it depends on one-way state ownership already existing.
+- [ ] 4. Implement `Unsafe Event Handler Chains with Hidden Dependencies` after the state and contract work so `EditorMutationRunner` can build on `EditHistoryManager` without competing with ownership changes.
+- [ ] 5. Implement `Unclean Disposal and Lifecycle` before the polling item so `LifecycleScope` becomes the shared ownership boundary for timers and subscriptions.
+- [ ] 6. Implement `Polling Loops Have No Centralized Coordination` after lifecycle scopes exist so recurring refresh and debounce work use the same ownership model.
+- [ ] 7. Implement `Too Many DOM Refs Passed Deep into the System` after the client boundaries are stable enough to narrow DOM surfaces with confidence.
+- [ ] 8. Implement `Utility File Proliferation Without Coherent Layering` last, after the earlier ownership and contract work has finalized which files belong to which layer.
 
 
 ## Shared Foundations
@@ -58,7 +57,7 @@ interface EditorUIState {
 - `LifecycleScope` is a client-lifetime resource owner. It does not overlap with `EditOperationContext`, which is a short-lived per-mutation data object.
 - `EditorDocumentAdapter` is created once per workbench runtime by the coordinator and passed to the file client. It wraps the editor client's render and scheduling hooks, while authoritative file state still lives in `FileSessionState`.
 - `FileSessionState` and `EditorDocumentAdapter` solve different problems and are both required: `FileSessionState` is the source of truth for file-editing state, while `EditorDocumentAdapter` is the imperative bridge for document rendering, editability, selection capture or restore, and terminal status or diff refresh requests.
-- `SessionState` and `FileSessionState` are introduced by `SEVERITY 1: Monolithic Coordinator with Leaky State Ownership` and then consumed or refined by later sections. Later sections should not reintroduce them.
+- `SessionState` and `FileSessionState` are now established foundations and later sections should consume or refine them rather than reintroducing them.
 - `LifecycleScope` is the canonical cleanup primitive. Timer scheduling for polling and debounce work uses the owning client's `LifecycleScope` rather than a separate timer manager abstraction.
 - The coarse event layer is a single workbench-scoped event bus created by the coordinator. It carries only non-authoritative notifications such as file opened, thread opened, save completed, save conflict surfaced, and save guard issue surfaced. Authoritative state stays in `SessionState`, `FileSessionState`, project snapshots, thread snapshots, and `EditorUIState`.
 
@@ -66,58 +65,18 @@ interface EditorUIState {
 The sections below stay in critique order rather than implementation order. Follow `Implementation Master Order` when sequencing work.
 Severity labels describe architectural impact and risk, not the order in which the work should be implemented.
 
-### SEVERITY 1: Monolithic Coordinator with Leaky State Ownership
-
-Problem: `workbench-client.ts` at ~1400 lines is a god coordinator that violates single responsibility at every level:
-
-- Owns `WorkbenchState` (main state object) with 8 properties spanning files, threads, editor, and history
-- Runs ~15 callback handlers (`handleEditorInput`, `handleEditorKeyDown`, `handleEditorClick`, etc.) that directly manipulate state
-- Owns all the glue logic between 4 subclients (editor, file, project, thread) with no abstraction
-- Contains business logic: undo/redo, history merging, save guard inspection, draft buffering, polling loops, UI toolbar positioning
-- Owns imperative DOM operations mixed with state coordination (e.g., `updateFloatingToolbar()` at line 1378 calculates viewport metrics and directly manipulates DOM)
-
-The `fileLifecycleState` anti-pattern: the proxy object tunnels state through three owners instead of one clear boundary:
-- Reads file and history data from coordinator-owned fields such as `state.currentContent`, `state.baselineContent`, and `state.history`
-- Reads UI snapshot fields from `state.editor.*`
-- Writes back through `editorClient` setters such as `setCurrentFilePath`, `setDirty`, `setMode`, `setPendingWriteConflict`, and `setSaveIssue`
-- This breaks encapsulation in both directions: the file client already behaves like the owner of file persistence state, but it can only reach that state through a proxy that couples it to the editor client and the main coordinator
-
-Feasibility verdict:
-- The diagnosis is valid: `workbench-client.ts` is carrying too much state and too many responsibilities, and the proxy seam is a real ownership leak rather than just awkward wiring
-- The original split needs refinement: the current code shows that `dirty`, save-guard issues, write conflicts, content baselines, and mtime tracking behave as file persistence state, not as generic editor session state
-- The first implementation pass should therefore separate selection state, file persistence state, and edit history before attempting broader DOM or event-bus refactors
-
-Concrete reshaping:
-1. `SessionState`: use the canonical target state model above and let it own selection plus snapshot and subscription APIs.
-2. `FileSessionState`: use the canonical target state model above and let it replace the proxy-tunneled file persistence fields.
-3. `EditHistoryManager`: owns `updateHistorySelection`, `recordEditHistory`, `applyHistoryState`, `undoEditHistory`, and `redoEditHistory` instead of leaving them inside the top-level coordinator. The later handler-pipeline work consumes this manager rather than replacing it.
-4. `WorkbenchCoordinator`: owns client construction, subscriptions, explorer and thread emissions, high-level open/save orchestration, polling, and the DOM refresh coordination that still spans multiple clients.
-
-Implementation staging for the later checklist item:
-1. Extract `EditHistoryManager` first so undo/redo state stops living directly inside `workbench-client.ts`.
-2. Introduce `SessionState` with snapshot and subscribe semantics, then remove `currentPath` and `currentThreadId` tunneling through `fileLifecycleState`.
-3. Introduce `FileSessionState` and make the file client mutate that state directly instead of mutating editor snapshot fields through proxy setters.
-4. Reduce `WorkbenchCoordinator` to wiring, emissions, and orchestration, leaving DOM-toolbar extraction, contract cleanup, and event-bus work to their later checklist items.
-
-`EditHistoryManager` here is the foundational extraction. The later mutation-runner work consumes it rather than redefining history ownership.
-
-Non-goals for this item:
-- Do not introduce an event bus in this pass; defer coarse event-layer work to `SEVERITY 2: Bidirectional Callback Chains Between Subclients`
-- Do not fold DOM utility consolidation into this change
-- Do not pull polling scheduler work into this pass
-
 ### SEVERITY 1: Subclient Contracts Are Incompletely Defined
 
 Problem: the four subclients have incoherent ownership patterns:
 
 - `workbench-editor-client.ts`: injected with 20+ handlers and a massive `WorkbenchEditorClientOptions` interface. It owns UI state (dirty, mode, statusMessage, fontSize, dialogs) but doesn't own file or thread state.
-- `workbench-file-client.ts`: injected with a proxy object (`fileLifecycleState`) instead of clear, discrete methods. It mutates state through the proxy and through side effects on passed-in callback methods.
+- `workbench-file-client.ts`: now receives `SessionState` and `FileSessionState`, but it still depends on wide editor-client setter and render callbacks instead of a narrow document adapter.
 - `workbench-project-client.ts`: self-contained. Clean creation and subscription pattern.
 - `workbench-thread-client.ts`: self-contained. Clean creation and subscription pattern.
 
 The inconsistency means:
-- File client does not have a real authoritative state contract; it depends on a proxy that mixes coordinator data, editor snapshot state, and file persistence concerns.
-- Editor client is a UI shell, but it is also being used as a write target for authoritative file state such as `dirty`, `saveIssue`, and `pendingWriteConflict`.
+- File client now has authoritative state owners, but it still reaches the editor shell through a broad imperative surface instead of a document-specific bridge.
+- Editor client is a UI shell, but it is still being used as a mirror write target for authoritative file state such as `dirty`, `saveIssue`, and `pendingWriteConflict`.
 - Project and thread clients already demonstrate the target shape: narrow construction, internal owned state, and snapshot-plus-subscribe APIs.
 
 Feasibility verdict:
@@ -136,7 +95,7 @@ Concrete reshaping: redefine contracts around explicit state and document bounda
 
 Implementation staging for the later checklist item:
 1. Introduce `SessionState` and stop treating the editor snapshot as the authoritative owner of `currentPath` and `currentThreadId`.
-2. Introduce `FileSessionState` and replace `fileLifecycleState` with that explicit state object.
+2. Build on the existing `FileSessionState` and remove the remaining editor-client setter mirror from the write-side contract.
 3. Replace the file client's dependency on editor setters with `EditorDocumentAdapter`, keeping only the document and rendering hooks the file lifecycle truly needs.
 4. Slim `WorkbenchEditorClientOptions` by moving file-lifecycle operations out of the editor shell and leaving only UI event handlers plus rendering queries.
 5. Align the coordinator around subscriptions from `SessionState`, `FileSessionState`, `ProjectClient`, `ThreadClient`, and `EditorClient` instead of manual cross-mutation.
@@ -151,7 +110,7 @@ Non-goals for this item:
 Problem: the event handlers are a maze of interdependent operations with no clear sequencing or rollback. Example at lines 310-325 (`handleEditorInput`):
 
 ```ts
-const previousContent = state.currentContent;
+const previousContent = fileSessionState.currentContent;
 const { transformedListItem, commentCaretMarker: richInputCommentCaretMarker } = editorClient.handleRichInput(event);
 const commentCaretMarker = richInputCommentCaretMarker ?? maybeActivateInlineCommentShortcut(event);
 syncStructuredBlockStyles();
@@ -162,7 +121,7 @@ if (commentCaretMarker) {
 	restoreCaretToMarker(commentCaretMarker);
 }
 inspectCurrentDraft();
-recordEditHistory(previousContent, state.currentContent, captureEditorSelection(editor));
+recordEditHistory(previousContent, fileSessionState.currentContent, captureEditorSelection(editor));
 syncCurrentDraftBuffer();
 editorClient.scheduleDiffGutterRefresh();
 editorClient.refreshStatusMessage();
@@ -171,7 +130,7 @@ refreshInlineToolbars();
 
 - No error handling if any step fails
 - Order matters but isn't documented
-- `inspectCurrentDraft()` mutates `state.currentContent`, which is then used in `recordEditHistory()` - hidden dependency
+- `inspectCurrentDraft()` mutates `fileSessionState.currentContent`, which is then used in `recordEditHistory()` - hidden dependency
 - 11 operations with no atomicity guarantee
 
 The same mixed pipeline also appears in `applyHistoryState()` and `syncEditorAfterStructuralChange()`, which means the problem is not a single long handler but a repeated mutation lifecycle with hidden state transitions.
@@ -342,7 +301,7 @@ Concrete reshaping:
 4. Small event layer for coarse notifications only: if an event layer exists, it should be used for events like `fileOpened`, `threadOpened`, `saveCompleted`, `saveConflictSurfaced`, and `saveGuardIssueSurfaced`, not for every state update.
 5. Snapshot subscriptions as the default read path: project, thread, session, and file state layers expose snapshot-plus-subscribe semantics so clients react to owned state instead of tunneling mutations into one another.
 
-This is the item that introduces the coarse event layer deferred by `SEVERITY 1: Monolithic Coordinator with Leaky State Ownership`.
+This is the item that introduces the coarse event layer deferred by the completed coordinator-ownership refactor.
 
 Implementation staging for the later checklist item:
 1. Prerequisite: complete the `SEVERITY 1` introduction of `SessionState` and `FileSessionState` first so this item builds on one-way state ownership instead of redefining it.
@@ -436,27 +395,25 @@ threadLifecycle.scheduleOnce("thread-refresh", 350, () => {
 
 ### SEVERITY 3: No Clear Data vs. UI State Separation
 
-Problem: `WorkbenchState` mixes data state with UI state:
+Problem: the remaining editor-owned snapshot still mixes authoritative-looking data mirrors with UI-only state:
 
 ```ts
-interface WorkbenchState {
-	baselineContent: string;
-	currentContent: string;
-	draftBuffers: Map<...>;
-	editor: WorkbenchEditorSnapshot;
-	expectedMtimeMs: number | null;
-	headContent: string | null;
-	history: EditHistoryState | null;
-	lastLoggedSaveIssue: ... | null;
-	project: WorkbenchProjectSnapshot;
-	thread: WorkbenchThreadSnapshot;
+interface WorkbenchEditorSnapshot {
+	currentPath: string;
+	currentThreadId: string;
+	dirty: boolean;
+	fontSize: number;
+	mode: EditorMode;
+	pendingWriteConflict: SaveConflictPayload | null;
+	saveIssue: SaveGuardIssue | null;
+	statusMessage: string;
 }
 ```
 
 This means:
-- Changes to `dirty` flag (UI) trigger the same subscribers as changes to `baselineContent` (data)
-- Can't easily snapshot or restore just the editor state
-- Hard to test state transitions independently
+- File and selection mirrors still travel inside an editor-owned snapshot alongside font size and status messaging
+- Changes to `dirty`, `mode`, or save-guard state still flow through the same editor subscription channel as UI-only updates such as font size
+- It is still harder than it should be to test data-state transitions independently from editor shell rendering
 
 Feasibility verdict:
 - The critique is valid, but the current two-bucket split is not precise enough.
@@ -476,7 +433,7 @@ Concrete reshaping:
 5. The coordinator becomes a composer of snapshots from `SessionState`, `FileSessionState`, project, thread, and editor UI state instead of the authoritative owner of one master mutable state object.
 
 Implementation staging for the later checklist item:
-1. Use the `SessionState` and `FileSessionState` established by `SEVERITY 1: Monolithic Coordinator with Leaky State Ownership` instead of reintroducing them here.
+1. Use the existing `SessionState` and `FileSessionState` instead of reintroducing them here.
 2. Migrate file lifecycle code to mutate `FileSessionState` directly and stop routing that state through the editor snapshot.
 3. Reduce editor-owned state to UI-only concerns and make rendered status derive from `FileSessionState` plus `SessionState`.
 4. Shrink or delete the top-level `WorkbenchState` bag so the coordinator becomes a composer of owned snapshots rather than the owner of everything.

@@ -1,13 +1,13 @@
 /*
  * Exports:
- * - DraftBuffer: in-memory file draft state including persisted editor markup, conflicts, and save-guard metadata. Keywords: workbench, file, draft, buffer.
- * - WorkbenchFileLifecycleState: mutable file-selection and draft-persistence state shared with the main workbench coordinator. Keywords: workbench, file, state, lifecycle.
+ * - DraftBuffer: re-exported current file draft state including persisted editor markup, conflicts, and save-guard metadata. Keywords: workbench, file, draft, buffer.
+ * - FileSessionState: re-exported owner for current file persistence and history state. Keywords: workbench, file, session, state.
  * - WorkbenchFileClientOptions: callbacks and collaborators needed by the file client to coordinate editor, project, and thread behavior. Keywords: workbench, file, options, callbacks.
  * - WorkbenchFileClient: public surface for persisted draft hydration, file open/save/reset flows, and safe on-disk refreshes. Keywords: workbench, file, client, persistence.
  * - createWorkbenchFileClient: create the workbench file sub-client that owns IndexedDB draft persistence and file lifecycle operations. Keywords: workbench, file, IndexedDB, save, reset.
  */
 
-import type { FilePayload, SaveConflictPayload, SaveFilePayload, ThreadPayload } from "../types";
+import type { FilePayload, SaveConflictPayload, SaveFilePayload } from "../types";
 import {
     cloneEditHistory,
     createInitialEditHistory,
@@ -15,9 +15,11 @@ import {
     type EditHistorySelection,
     type EditHistoryState,
 } from "./edit-history";
+import type { DraftBuffer, FileSessionState } from "./FileSessionState";
 import {
     markdownToHtml as renderMarkdownToHtml,
 } from "./markdown-render";
+import type { SessionState } from "./SessionState";
 import {
     formatTimestamp,
     isMarkdownFile,
@@ -27,39 +29,11 @@ import type { EditorMode, SaveGuardIssue, WorkbenchEditorClient } from "./workbe
 import type { WorkbenchProjectClient } from "./workbench-project-client";
 import type { WorkbenchThreadClient } from "./workbench-thread-client";
 
+export type { DraftBuffer, FileSessionState } from "./FileSessionState";
+
 const DRAFT_DATABASE_NAME = "workbench";
 const DRAFT_DATABASE_VERSION = 1;
 const DRAFT_STORE_NAME = "drafts";
-
-export interface DraftBuffer {
-  baselineContent: string;
-  content: string;
-  dirty: boolean;
-  editorState: string;
-  expectedMtimeMs: number | null;
-  headContent: string | null;
-  history: EditHistoryState;
-  mode: EditorMode;
-  pendingWriteConflict: SaveConflictPayload | null;
-  saveIssue: SaveGuardIssue | null;
-}
-
-export interface WorkbenchFileLifecycleState {
-  baselineContent: string;
-  currentContent: string;
-  currentPath: string;
-  currentThread: ThreadPayload | null;
-  currentThreadId: string;
-  dirty: boolean;
-  draftBuffers: Map<string, DraftBuffer>;
-  expectedMtimeMs: number | null;
-  headContent: string | null;
-  history: EditHistoryState | null;
-  lastLoggedSaveIssue: SaveGuardIssue | null;
-  mode: EditorMode;
-  pendingWriteConflict: SaveConflictPayload | null;
-  saveIssue: SaveGuardIssue | null;
-}
 
 interface PersistedDraftRecord {
   path: string;
@@ -90,6 +64,7 @@ export interface WorkbenchFileClientOptions {
     | "setStatusMessage"
   >;
   emitExplorerStateChange: () => void;
+  fileSessionState: FileSessionState;
   hideResetDraftDialog: () => void;
   inspectCurrentDraft: () => { content: string; issue: SaveGuardIssue | null };
   logBlockedSaveIssue: (issue: SaveGuardIssue) => void;
@@ -98,8 +73,9 @@ export interface WorkbenchFileClientOptions {
   refreshSaveGuardState: () => { markdown: string; issue: SaveGuardIssue | null };
   renderEditorDocument: (content: string, mode: EditorMode) => void;
   restoreEditorSelection: (selection: EditHistorySelection | null) => void;
+  sessionState: SessionState;
+  setLastLoggedSaveIssue: (issue: SaveGuardIssue | null) => void;
   showWriteConflict: (conflict: SaveConflictPayload) => void;
-  state: WorkbenchFileLifecycleState;
   syncSelectionToUrl: (selection: { filePath?: string }) => void;
   syncStructuredBlockStyles: () => void;
   threadClient: Pick<WorkbenchThreadClient, "clearThreadSelection">;
@@ -208,6 +184,7 @@ export function createWorkbenchFileClient(
     editor,
     editorClient,
     emitExplorerStateChange,
+    fileSessionState: state,
     hideResetDraftDialog,
     inspectCurrentDraft,
     logBlockedSaveIssue,
@@ -216,8 +193,9 @@ export function createWorkbenchFileClient(
     refreshSaveGuardState,
     renderEditorDocument,
     restoreEditorSelection,
+    sessionState,
+    setLastLoggedSaveIssue,
     showWriteConflict,
-    state,
     syncSelectionToUrl,
     syncStructuredBlockStyles,
     threadClient,
@@ -291,9 +269,9 @@ export function createWorkbenchFileClient(
   function applyDraftBuffer(filePath: string, buffer: DraftBuffer) {
     clearWriteConflict();
     threadClient.clearThreadSelection();
-    state.currentThread = null;
-    state.currentPath = filePath;
-    state.currentThreadId = "";
+    sessionState.currentThread = null;
+    sessionState.currentPath = filePath;
+    sessionState.currentThreadId = "";
     state.expectedMtimeMs = buffer.expectedMtimeMs;
     state.mode = buffer.mode;
     editorClient.setCurrentThreadId("");
@@ -320,9 +298,9 @@ export function createWorkbenchFileClient(
     state.saveIssue = buffer.saveIssue
       ? { ...buffer.saveIssue }
       : null;
-    state.lastLoggedSaveIssue = buffer.saveIssue
+    setLastLoggedSaveIssue(buffer.saveIssue
       ? { ...buffer.saveIssue }
-      : null;
+      : null);
     editorClient.setDirty(buffer.dirty);
     editorClient.setPendingWriteConflict(state.pendingWriteConflict);
     editorClient.setSaveIssue(state.saveIssue);
@@ -347,9 +325,9 @@ export function createWorkbenchFileClient(
 
     clearWriteConflict();
     threadClient.clearThreadSelection();
-    state.currentThread = null;
-    state.currentPath = payload.path;
-    state.currentThreadId = "";
+    sessionState.currentThread = null;
+    sessionState.currentPath = payload.path;
+    sessionState.currentThreadId = "";
     state.expectedMtimeMs = payload.mtimeMs;
     state.headContent = payload.headContent;
     editorClient.setCurrentThreadId("");
@@ -370,7 +348,7 @@ export function createWorkbenchFileClient(
     state.history = createInitialEditHistory(state.currentContent);
     state.pendingWriteConflict = null;
     state.saveIssue = null;
-    state.lastLoggedSaveIssue = null;
+    setLastLoggedSaveIssue(null);
     editorClient.setMode(mode);
     editorClient.setDirty(false);
     editorClient.setPendingWriteConflict(null);
@@ -398,11 +376,11 @@ export function createWorkbenchFileClient(
   }
 
   function syncCurrentDraftBuffer() {
-    if (!state.currentPath) {
+    if (!sessionState.currentPath) {
       return;
     }
 
-    const previousModified = state.draftBuffers.get(state.currentPath)?.dirty ?? false;
+    const previousModified = state.draftBuffers.get(sessionState.currentPath)?.dirty ?? false;
     const nextBuffer: DraftBuffer = {
       baselineContent: state.baselineContent,
       content: state.currentContent,
@@ -423,23 +401,27 @@ export function createWorkbenchFileClient(
     };
 
     if (!hasBufferedDraftState(nextBuffer)) {
-      state.draftBuffers.delete(state.currentPath);
-      void persistDraftBuffer(state.currentPath, null);
+      const nextDraftBuffers = new Map(state.draftBuffers);
+      nextDraftBuffers.delete(sessionState.currentPath);
+      state.draftBuffers = nextDraftBuffers;
+      void persistDraftBuffer(sessionState.currentPath, null);
       if (previousModified) {
         emitExplorerStateChange();
       }
       return;
     }
 
-    state.draftBuffers.set(state.currentPath, nextBuffer);
-    void persistDraftBuffer(state.currentPath, nextBuffer);
+    const nextDraftBuffers = new Map(state.draftBuffers);
+    nextDraftBuffers.set(sessionState.currentPath, nextBuffer);
+    state.draftBuffers = nextDraftBuffers;
+    void persistDraftBuffer(sessionState.currentPath, nextBuffer);
     if (previousModified !== nextBuffer.dirty) {
       emitExplorerStateChange();
     }
   }
 
   function scheduleSelectionPersistence() {
-    if (!state.currentPath || !state.dirty) {
+    if (!sessionState.currentPath || !state.dirty) {
       return;
     }
 
@@ -481,11 +463,11 @@ export function createWorkbenchFileClient(
   ) {
     void _ignoreDirty;
 
-    if (source === "open" && filePath === state.currentPath) {
+    if (source === "open" && filePath === sessionState.currentPath) {
       return;
     }
 
-    if (state.currentPath) {
+    if (sessionState.currentPath) {
       syncCurrentDraftBuffer();
     }
 
@@ -508,7 +490,9 @@ export function createWorkbenchFileClient(
     }
 
     if (source === "reload") {
-      state.draftBuffers.delete(filePath);
+      const nextDraftBuffers = new Map(state.draftBuffers);
+      nextDraftBuffers.delete(filePath);
+      state.draftBuffers = nextDraftBuffers;
       void persistDraftBuffer(filePath, null);
     }
 
@@ -522,17 +506,17 @@ export function createWorkbenchFileClient(
 
   async function resetCurrentDraftToSaved() {
     hideResetDraftDialog();
-    if (!state.currentPath) {
+    if (!sessionState.currentPath) {
       return;
     }
 
-    await openFile(state.currentPath, { ignoreDirty: true, source: "reload" });
+    await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload" });
     editor.focus();
   }
 
   async function resetCurrentFileToHead() {
     hideResetDraftDialog();
-    if (!state.currentPath) {
+    if (!sessionState.currentPath) {
       return;
     }
 
@@ -542,7 +526,7 @@ export function createWorkbenchFileClient(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        path: state.currentPath,
+        path: sessionState.currentPath,
         resetToHead: true,
         expectedMtimeMs: state.expectedMtimeMs,
       }),
@@ -563,13 +547,13 @@ export function createWorkbenchFileClient(
 
     const payload = (await response.json()) as SaveFilePayload;
     await projectClient.refreshProject();
-    await openFile(state.currentPath, { ignoreDirty: true, source: "reload" });
+    await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload" });
     editorClient.refreshStatusMessage(`Reset to HEAD - ${formatTimestamp(payload.updatedAt)}`);
     editor.focus();
   }
 
   async function saveCurrentFile({ force = false }: { force?: boolean } = {}) {
-    if (!state.currentPath) {
+    if (!sessionState.currentPath) {
       return;
     }
 
@@ -588,7 +572,7 @@ export function createWorkbenchFileClient(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        path: state.currentPath,
+        path: sessionState.currentPath,
         content,
         expectedMtimeMs: state.expectedMtimeMs,
         force,
@@ -614,10 +598,12 @@ export function createWorkbenchFileClient(
     state.dirty = false;
     state.expectedMtimeMs = payload.mtimeMs;
     await projectClient.refreshProject();
-    state.lastLoggedSaveIssue = null;
+    setLastLoggedSaveIssue(null);
     clearWriteConflict();
-    state.draftBuffers.delete(state.currentPath);
-    void persistDraftBuffer(state.currentPath, null);
+    const nextDraftBuffers = new Map(state.draftBuffers);
+    nextDraftBuffers.delete(sessionState.currentPath);
+    state.draftBuffers = nextDraftBuffers;
+    void persistDraftBuffer(sessionState.currentPath, null);
     state.saveIssue = null;
     updateSaveButtonState();
     editorClient.refreshStatusMessage(`Saved - ${formatTimestamp(payload.updatedAt)}`);
@@ -627,7 +613,7 @@ export function createWorkbenchFileClient(
 
   async function refreshCurrentFileFromDiskIfSafe() {
     if (
-      !state.currentPath
+      !sessionState.currentPath
       || state.dirty
       || state.saveIssue
       || state.pendingWriteConflict
@@ -635,7 +621,7 @@ export function createWorkbenchFileClient(
       return;
     }
 
-    const payload = await fetchFilePayload(state.currentPath);
+    const payload = await fetchFilePayload(sessionState.currentPath);
     if (!payload || payload.mtimeMs === state.expectedMtimeMs) {
       return;
     }
