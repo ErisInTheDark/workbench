@@ -7,12 +7,9 @@ import type { RateLimitSnapshot } from "./codex/generated/app-server/v2/RateLimi
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
 import { getCurrentTurn } from "./codex/thread-state";
 import type {
-    ChangeSummary,
     ExplorerSnapshot,
     SaveConflictPayload,
     ThreadPayload,
-    ThreadSummary,
-    TreeNode,
     WorkbenchBindings,
     WorkbenchControls,
     WorkbenchHarness,
@@ -20,8 +17,6 @@ import type {
 import {
     getRequestedPathFromUrl,
     getRequestedThreadIdFromUrl,
-    readStoredExpandedDirectories,
-    readStoredFontSize,
     readStoredHarness,
     syncCurrentSelectionToUrl
 } from "./workbench/browser-state";
@@ -58,17 +53,17 @@ import {
 } from "./workbench/list-item-dom-edit";
 import {
     markdownToHtml as renderMarkdownToHtml,
-    type ParsedBlock,
-    type ParsedListItem,
 } from "./workbench/markdown-render";
-import {
-    createWorkbenchMarkupSignature,
-    serializeWorkbenchDomToMarkdown,
-} from "./workbench/markdown-serialization";
 import { createRevisionHoverToolbarController } from "./workbench/revision-hover-toolbar";
 import {
     ensureParagraphHasEditableContent,
 } from "./workbench/rich-input-dom";
+import {
+    inspectDraftContent,
+    inspectSaveGuardMarkup,
+    isSameSaveGuardIssue,
+    logSaveGuardIssue,
+} from "./workbench/save-guard-inspector";
 import {
     captureEditorSelection,
     placeCaretInElement,
@@ -95,35 +90,39 @@ import {
     getVisualViewportMetrics,
 } from "./workbench/viewport-metrics";
 import { hasRequiredWorkbenchDomElements, type WorkbenchDomElements } from "./workbench/workbench-dom";
-import { createWorkbenchEditorClient, type EditorMode, type SaveGuardIssue } from "./workbench/workbench-editor-client";
-import { createWorkbenchFileClient, type DraftBuffer } from "./workbench/workbench-file-client";
-import { cloneTreeNodes, createWorkbenchProjectClient } from "./workbench/workbench-project-client";
-import { createWorkbenchThreadClient } from "./workbench/workbench-thread-client";
+import {
+    createInitialWorkbenchEditorSnapshot,
+    createWorkbenchEditorClient,
+    type EditorMode,
+    type SaveGuardIssue,
+    type WorkbenchEditorSnapshot,
+} from "./workbench/workbench-editor-client";
+import {
+    createWorkbenchFileClient,
+    type DraftBuffer,
+    type WorkbenchFileLifecycleState,
+} from "./workbench/workbench-file-client";
+import {
+    cloneTreeNodes,
+    createWorkbenchProjectClient,
+    type WorkbenchProjectSnapshot,
+} from "./workbench/workbench-project-client";
+import {
+    createWorkbenchThreadClient,
+    type WorkbenchThreadSnapshot,
+} from "./workbench/workbench-thread-client";
 
 interface WorkbenchState {
   baselineContent: string;
-  changes: Record<string, ChangeSummary>;
   currentContent: string;
-  currentPath: string;
-  currentThread: ThreadPayload | null;
-  currentThreadId: string;
   draftBuffers: Map<string, DraftBuffer>;
-  dirty: boolean;
+  editor: WorkbenchEditorSnapshot;
   expectedMtimeMs: number | null;
   headContent: string | null;
   history: EditHistoryState | null;
-  root: string;
-  rootPath: string;
-  threads: ThreadSummary[];
-  threadsError: string;
-  tree: TreeNode[];
-  mode: EditorMode;
-  fontSize: number;
   lastLoggedSaveIssue: SaveGuardIssue | null;
-  pendingWriteConflict: SaveConflictPayload | null;
-  rateLimits: RateLimitSnapshot | null;
-  saveIssue: SaveGuardIssue | null;
-  expandedDirectories: Set<string>;
+  project: WorkbenchProjectSnapshot;
+  thread: WorkbenchThreadSnapshot;
 }
 
 const AUTO_REFRESH_INTERVAL_MS = 1500;
@@ -133,32 +132,6 @@ export async function initWorkbench(
   bindings: WorkbenchBindings & { elements?: WorkbenchDomElements | null } = {},
 ): Promise<() => void> {
   const { elements, ...workbenchBindings } = bindings;
-  const state: WorkbenchState = {
-    baselineContent: "",
-    changes: {},
-    currentContent: "",
-    currentPath: "",
-    currentThread: null,
-    currentThreadId: "",
-    draftBuffers: new Map(),
-    dirty: false,
-    expectedMtimeMs: null,
-    headContent: null,
-    history: null,
-    root: "Project",
-    rootPath: "",
-    threads: [],
-    threadsError: "",
-    tree: [],
-    mode: "rich",
-    fontSize: readStoredFontSize(),
-    lastLoggedSaveIssue: null,
-    pendingWriteConflict: null,
-    rateLimits: null,
-    saveIssue: null,
-    expandedDirectories: new Set(readStoredExpandedDirectories()),
-  };
-
   if (!hasRequiredWorkbenchDomElements(elements)) {
     return () => {};
   }
@@ -202,6 +175,18 @@ export async function initWorkbench(
       reportStatusMessage(message);
     },
   });
+  const state: WorkbenchState = {
+    baselineContent: "",
+    currentContent: "",
+    draftBuffers: new Map(),
+    editor: createInitialWorkbenchEditorSnapshot(),
+    expectedMtimeMs: null,
+    headContent: null,
+    history: null,
+    lastLoggedSaveIssue: null,
+    project: projectClient.getSnapshot(),
+    thread: threadClient.getSnapshot(),
+  };
   const {
     applyHoveredRevisionAction,
     getSelectedRevisionToolbarContext,
@@ -211,7 +196,7 @@ export async function initWorkbench(
   } = createRevisionHoverToolbarController({
     editor,
     getExpandedRangeRect,
-    getMode: () => state.mode,
+    getMode: () => state.editor.mode,
     getVisualViewportMetrics,
     onSyncEditorAfterStructuralChange: () => {
       syncEditorAfterStructuralChange();
@@ -226,11 +211,7 @@ export async function initWorkbench(
   }
 
   const unsubscribeProjectClient = projectClient.subscribe((snapshot) => {
-    state.root = snapshot.root;
-    state.rootPath = snapshot.rootPath;
-    state.tree = snapshot.tree;
-    state.changes = snapshot.changes;
-    state.expandedDirectories = new Set(snapshot.expandedDirectories);
+    state.project = snapshot;
     threadClient.setProjectContext({
       root: snapshot.root,
       rootPath: snapshot.rootPath,
@@ -239,17 +220,13 @@ export async function initWorkbench(
   });
 
   const unsubscribeThreadClient = threadClient.subscribe((snapshot) => {
-    const previousThread = state.currentThread;
-    const previousRateLimits = state.rateLimits;
-    const previousThreadId = state.currentThreadId;
-    const previousThreads = state.threads;
-    const previousThreadsError = state.threadsError;
+    const previousThread = state.thread.currentThread;
+    const previousRateLimits = state.thread.rateLimits;
+    const previousThreadId = state.thread.currentThreadId;
+    const previousThreads = state.thread.threads;
+    const previousThreadsError = state.thread.threadsError;
 
-    state.currentThread = snapshot.currentThread;
-    state.currentThreadId = snapshot.currentThreadId;
-    state.rateLimits = snapshot.rateLimits;
-    state.threads = snapshot.threads;
-    state.threadsError = snapshot.threadsError;
+    state.thread = snapshot;
 
     if (!areThreadPayloadsEquivalent(previousThread, snapshot.currentThread)) {
       emitCurrentThreadChange();
@@ -387,7 +364,7 @@ export async function initWorkbench(
       refreshInlineToolbars();
     },
     handleEditorKeyDown: (event) => {
-      if (!state.currentPath || state.mode !== "rich") {
+      if (!state.editor.currentPath || state.editor.mode !== "rich") {
         return;
       }
 
@@ -418,33 +395,8 @@ export async function initWorkbench(
         return;
       }
 
-      if (event.key.toLowerCase() === "b") {
-        event.preventDefault();
-        runEditorCommand("bold");
+      if (editorClient.handleFormatKeyDown(event)) {
         return;
-      }
-
-      if (event.key.toLowerCase() === "i") {
-        event.preventDefault();
-        runEditorCommand("italic");
-        return;
-      }
-
-      if (event.code === "Backquote" && !event.shiftKey && !event.altKey) {
-        event.preventDefault();
-        wrapSelection("code");
-        return;
-      }
-
-      if (event.shiftKey && event.key.toLowerCase() === "x") {
-        event.preventDefault();
-        wrapSelection("del");
-        return;
-      }
-
-      if (event.shiftKey && event.key.toLowerCase() === "a") {
-        event.preventDefault();
-        wrapSelection("ins");
       }
     },
     handleEditorPointerDown: () => {
@@ -475,11 +427,11 @@ export async function initWorkbench(
     },
     handleRefreshInlineToolbars: refreshInlineToolbars,
     handleReloadConflict: async () => {
-      if (!state.currentPath) {
+      if (!state.editor.currentPath) {
         return;
       }
 
-      await openFile(state.currentPath, { ignoreDirty: true, source: "reload" });
+      await openFile(state.editor.currentPath, { ignoreDirty: true, source: "reload" });
     },
     handleResetCurrentDraftToSaved: async () => {
       await resetCurrentDraftToSaved();
@@ -501,7 +453,9 @@ export async function initWorkbench(
       refreshInlineToolbars();
     },
     handleToolbarCommand: (command) => {
-      applyToolbarCommand(command);
+      if (command) {
+        editorClient.applyToolbarCommand(command);
+      }
     },
     handleViewportChanged: () => {
       editorClient.scheduleDiffGutterRefresh();
@@ -521,15 +475,21 @@ export async function initWorkbench(
       unwrapTopLevelListItemToParagraph,
       updateFloatingToolbar,
     },
-    isSaveButtonInvalid: () => Boolean(state.saveIssue) || Array.from(state.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue)),
-    shouldBlockBeforeUnload: () => Boolean(state.saveIssue) || Array.from(state.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue)),
+    isSaveButtonInvalid: () => Boolean(state.editor.saveIssue) || Array.from(state.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue)),
+    shouldBlockBeforeUnload: () => Boolean(state.editor.saveIssue) || Array.from(state.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue)),
   });
   reportStatusMessage = (message) => {
     editorClient.refreshStatusMessage(message);
   };
   const unsubscribeEditorClient = editorClient.subscribe((snapshot) => {
-    if (state.fontSize !== snapshot.fontSize) {
-      state.fontSize = snapshot.fontSize;
+    const previousSnapshot = state.editor;
+    state.editor = snapshot;
+
+    if (
+      previousSnapshot.currentPath !== snapshot.currentPath
+      || previousSnapshot.dirty !== snapshot.dirty
+      || previousSnapshot.fontSize !== snapshot.fontSize
+    ) {
       emitExplorerStateChange();
     }
   });
@@ -582,7 +542,6 @@ export async function initWorkbench(
   const toggleInlineFormatSelection = (
     selection: Selection,
     range: Range,
-    _tagName: "comment" | "strong" | "em" | "del" | "ins",
     formatKey: "bold" | "italic" | "comment" | "del" | "ins",
   ) => {
     inlineFormatController.toggleInlineFormatSelection(selection, range, formatKey);
@@ -596,12 +555,107 @@ export async function initWorkbench(
     return inlineFormatController.togglePendingInlineFormat(format);
   };
 
+  editorClient.configureFormatCommands({
+    clearPendingInlineFormats,
+    syncEditorAfterStructuralChange,
+    toggleCodeSelection,
+    toggleInlineFormatSelection,
+    togglePendingInlineFormat,
+  });
+
   const canonicalizeAllInlineRunContainers = (root: ParentNode) => {
     inlineFormatController.canonicalizeAllInlineRunContainers(root);
   };
 
   const getCaretInlineContext = (range: Range) => {
     return inlineFormatController.getCaretInlineContext(range);
+  };
+
+  const fileLifecycleState: WorkbenchFileLifecycleState = {
+    get baselineContent() {
+      return state.baselineContent;
+    },
+    set baselineContent(value) {
+      state.baselineContent = value;
+    },
+    get currentContent() {
+      return state.currentContent;
+    },
+    set currentContent(value) {
+      state.currentContent = value;
+    },
+    get currentPath() {
+      return state.editor.currentPath;
+    },
+    set currentPath(value) {
+      editorClient.setCurrentFilePath(value);
+    },
+    get currentThread() {
+      return state.thread.currentThread;
+    },
+    set currentThread(value) {
+      state.thread.currentThread = value;
+    },
+    get currentThreadId() {
+      return state.thread.currentThreadId;
+    },
+    set currentThreadId(value) {
+      state.thread.currentThreadId = value;
+    },
+    get dirty() {
+      return state.editor.dirty;
+    },
+    set dirty(value) {
+      editorClient.setDirty(value);
+    },
+    get draftBuffers() {
+      return state.draftBuffers;
+    },
+    set draftBuffers(value) {
+      state.draftBuffers = value;
+    },
+    get expectedMtimeMs() {
+      return state.expectedMtimeMs;
+    },
+    set expectedMtimeMs(value) {
+      state.expectedMtimeMs = value;
+    },
+    get headContent() {
+      return state.headContent;
+    },
+    set headContent(value) {
+      state.headContent = value;
+    },
+    get history() {
+      return state.history;
+    },
+    set history(value) {
+      state.history = value;
+    },
+    get lastLoggedSaveIssue() {
+      return state.lastLoggedSaveIssue;
+    },
+    set lastLoggedSaveIssue(value) {
+      state.lastLoggedSaveIssue = value;
+    },
+    get mode() {
+      return state.editor.mode;
+    },
+    set mode(value) {
+      editorClient.setMode(value);
+    },
+    get pendingWriteConflict() {
+      return state.editor.pendingWriteConflict;
+    },
+    set pendingWriteConflict(value) {
+      editorClient.setPendingWriteConflict(value);
+    },
+    get saveIssue() {
+      return state.editor.saveIssue;
+    },
+    set saveIssue(value) {
+      editorClient.setSaveIssue(value);
+    },
   };
 
   const fileClient = createWorkbenchFileClient({
@@ -626,7 +680,7 @@ export async function initWorkbench(
     renderEditorDocument,
     restoreEditorSelection: (selection) => restoreEditorSelection(editor, selection),
     showWriteConflict,
-    state,
+    state: fileLifecycleState,
     syncSelectionToUrl: syncCurrentSelectionToUrl,
     syncStructuredBlockStyles,
     threadClient,
@@ -759,12 +813,10 @@ export async function initWorkbench(
   }
 
   function clearWriteConflict() {
-    state.pendingWriteConflict = null;
-    hideSaveConflictDialog();
+    editorClient.setPendingWriteConflict(null);
   }
 
   function showWriteConflict(conflict: SaveConflictPayload) {
-    state.pendingWriteConflict = conflict;
     editorClient.showSaveConflict({
       ...conflict,
       expectedUpdatedAt: formatTimestamp(conflict.expectedUpdatedAt),
@@ -775,8 +827,8 @@ export async function initWorkbench(
   function getLocallyModifiedPaths() {
     const modifiedPaths = new Set<string>();
 
-    if (state.currentPath && state.dirty) {
-      modifiedPaths.add(state.currentPath);
+    if (state.editor.currentPath && state.editor.dirty) {
+      modifiedPaths.add(state.editor.currentPath);
     }
 
     for (const [filePath, buffer] of state.draftBuffers) {
@@ -790,17 +842,17 @@ export async function initWorkbench(
 
   function getExplorerSnapshot(): ExplorerSnapshot {
     return {
-      root: state.root,
-      rootPath: state.rootPath,
-      tree: cloneTreeNodes(state.tree),
-      threads: state.threads,
-      changes: { ...state.changes },
-      currentPath: state.currentPath,
-      currentThreadId: state.currentThreadId,
-      expandedDirectories: Array.from(state.expandedDirectories).sort((left, right) => left.localeCompare(right)),
+      root: state.project.root,
+      rootPath: state.project.rootPath,
+      tree: cloneTreeNodes(state.project.tree),
+      threads: state.thread.threads,
+      changes: { ...state.project.changes },
+      currentPath: state.editor.currentPath,
+      currentThreadId: state.thread.currentThreadId,
+      expandedDirectories: [...state.project.expandedDirectories],
       locallyModifiedPaths: getLocallyModifiedPaths(),
-      threadsError: state.threadsError,
-      fontSize: state.fontSize,
+      threadsError: state.thread.threadsError,
+      fontSize: state.editor.fontSize,
     };
   }
 
@@ -809,15 +861,15 @@ export async function initWorkbench(
   }
 
   function emitCurrentThreadChange() {
-    workbenchBindings.onCurrentThreadChange?.(state.currentThread);
+    workbenchBindings.onCurrentThreadChange?.(state.thread.currentThread);
   }
 
   function emitRateLimitsChange() {
-    workbenchBindings.onRateLimitsChange?.(state.rateLimits);
+    workbenchBindings.onRateLimitsChange?.(state.thread.rateLimits);
   }
 
   function setRateLimits(rateLimits: RateLimitSnapshot | null) {
-    state.rateLimits = rateLimits;
+    state.thread.rateLimits = rateLimits;
     emitRateLimitsChange();
   }
 
@@ -864,12 +916,12 @@ export async function initWorkbench(
   }
 
   function setCurrentThread(thread: ThreadPayload | null) {
-    if (areThreadPayloadsEquivalent(state.currentThread, thread)) {
+    if (areThreadPayloadsEquivalent(state.thread.currentThread, thread)) {
       return;
     }
 
-    const previousThread = state.currentThread;
-    state.currentThread = thread;
+    const previousThread = state.thread.currentThread;
+    state.thread.currentThread = thread;
     emitCurrentThreadChange();
 
     if (!thread) {
@@ -885,11 +937,11 @@ export async function initWorkbench(
   }
 
   function updateCurrentThread(updater: (thread: ThreadPayload) => ThreadPayload | null) {
-    if (!state.currentThread) {
+    if (!state.thread.currentThread) {
       return false;
     }
 
-    const nextThread = updater(state.currentThread);
+    const nextThread = updater(state.thread.currentThread);
     if (!nextThread) {
       return false;
     }
@@ -898,170 +950,12 @@ export async function initWorkbench(
     return true;
   }
 
-  function updateCurrentThreadFields(fields: Partial<Omit<ThreadPayload, "turns">>) {
-    return updateCurrentThread((thread) => ({
-      ...thread,
-      ...fields,
-    }));
-  }
-
   function toggleDirectory(path: string) {
     projectClient.toggleDirectory(path);
   }
 
-  function isSameSaveGuardIssue(left: SaveGuardIssue | null, right: SaveGuardIssue | null) {
-    if (!left || !right) {
-      return left === right;
-    }
-
-    return left.markdown === right.markdown
-      && left.currentMarkup === right.currentMarkup
-      && left.roundTripMarkup === right.roundTripMarkup;
-  }
-
   function applyEditorFontSize() {
-    state.fontSize = editorClient.getSnapshot().fontSize;
-  }
-
-  function escapeHtml(value: string) {
-    return value
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;");
-  }
-
-  function findClosingToken(source: string, token: string, fromIndex: number) {
-    for (let index = fromIndex; index < source.length; index += 1) {
-      if (source[index - 1] === "\\") {
-        continue;
-      }
-      if (source.startsWith(token, index)) {
-        return index;
-      }
-    }
-    return -1;
-  }
-
-  function renderInline(markdown: string) {
-    let html = "";
-    let index = 0;
-
-    while (index < markdown.length) {
-      if (markdown[index] === "\\") {
-        html += escapeHtml(markdown.slice(index + 1, index + 2));
-        index += 2;
-        continue;
-      }
-
-      if (markdown.startsWith("<del>", index)) {
-        const closeIndex = markdown.indexOf("</del>", index + 5);
-        if (closeIndex !== -1) {
-          html += `<del>${renderInline(markdown.slice(index + 5, closeIndex))}</del>`;
-          index = closeIndex + 6;
-          continue;
-        }
-      }
-
-      if (markdown.startsWith("<ins>", index)) {
-        const closeIndex = markdown.indexOf("</ins>", index + 5);
-        if (closeIndex !== -1) {
-          html += `<ins>${renderInline(markdown.slice(index + 5, closeIndex))}</ins>`;
-          index = closeIndex + 6;
-          continue;
-        }
-      }
-
-      if (markdown.startsWith("<!--", index)) {
-        const closeIndex = markdown.indexOf("-->", index + 4);
-        if (closeIndex !== -1) {
-          const commentBody = markdown.slice(index + 4, closeIndex).trim();
-          html += `<span data-inline-comment="true">${renderInline(commentBody)}</span>`;
-          index = closeIndex + 3;
-          continue;
-        }
-      }
-
-      if (markdown.startsWith("**", index) || markdown.startsWith("__", index)) {
-        const marker = markdown.slice(index, index + 2);
-        const closeIndex = findClosingToken(markdown, marker, index + 2);
-        if (closeIndex !== -1) {
-          html += `<strong>${renderInline(markdown.slice(index + 2, closeIndex))}</strong>`;
-          index = closeIndex + 2;
-          continue;
-        }
-      }
-
-      if (markdown.startsWith("~~", index)) {
-        const closeIndex = findClosingToken(markdown, "~~", index + 2);
-        if (closeIndex !== -1) {
-          html += `<del>${renderInline(markdown.slice(index + 2, closeIndex))}</del>`;
-          index = closeIndex + 2;
-          continue;
-        }
-      }
-
-      if (markdown[index] === "*" || markdown[index] === "_") {
-        const marker = markdown[index];
-        const closeIndex = findClosingToken(markdown, marker, index + 1);
-        if (closeIndex !== -1) {
-          html += `<em>${renderInline(markdown.slice(index + 1, closeIndex))}</em>`;
-          index = closeIndex + 1;
-          continue;
-        }
-      }
-
-      if (markdown[index] === "`") {
-        const closeIndex = findClosingToken(markdown, "`", index + 1);
-        if (closeIndex !== -1) {
-          html += `<code>${escapeHtml(markdown.slice(index + 1, closeIndex))}</code>`;
-          index = closeIndex + 1;
-          continue;
-        }
-      }
-
-      if (markdown[index] === "[") {
-        const labelEnd = findClosingToken(markdown, "]", index + 1);
-        if (labelEnd !== -1 && markdown[labelEnd + 1] === "(") {
-          const urlEnd = findClosingToken(markdown, ")", labelEnd + 2);
-          if (urlEnd !== -1) {
-            const label = markdown.slice(index + 1, labelEnd);
-            const url = markdown.slice(labelEnd + 2, urlEnd);
-            html += `<a href="${escapeHtml(url)}">${renderInline(label)}</a>`;
-            index = urlEnd + 1;
-            continue;
-          }
-        }
-      }
-
-      if (markdown[index] === "\n") {
-        html += "<br>";
-        index += 1;
-        continue;
-      }
-
-      html += escapeHtml(markdown[index]);
-      index += 1;
-    }
-
-    return html;
-  }
-
-  function renderListBlock(block: Extract<ParsedBlock, { type: "ul" | "ol" }>) {
-    return `<${block.type}>${block.items.map((item) => renderListItem(item)).join("")}</${block.type}>`;
-  }
-
-  function renderListItem(item: ParsedListItem) {
-    const content = renderInline(item.text) || "<br>";
-    if (!item.children.length) {
-      return `<li>${content}</li>`;
-    }
-
-    const childContent = item.children
-      .map((child) => child.type === "ul" || child.type === "ol" ? renderListBlock(child) : "")
-      .join("");
-
-    return `<li><details open><summary>${content}</summary>${childContent}</details></li>`;
+    state.editor = editorClient.getSnapshot();
   }
 
   function getProtectedEmptyInlineFormatElements(root: ParentNode) {
@@ -1137,108 +1031,59 @@ export async function initWorkbench(
     (root as Node).normalize();
   }
 
-  function inspectSaveGuard() {
-    const editorSnapshot = editor.cloneNode(true) as HTMLDivElement;
-    const markdown = serializeWorkbenchDomToMarkdown(editorSnapshot, {
-      isInlineRunContainer,
-      normalizeMarkup: normalizeEditorMarkup,
-    });
-    const currentMarkup = createWorkbenchMarkupSignature(editorSnapshot, { isInlineRunContainer });
-    const roundTripRoot = document.createElement("div");
-    roundTripRoot.innerHTML = renderMarkdownToHtml(markdown);
-    normalizeEditorMarkup(roundTripRoot);
-
-    const roundTripMarkup = createWorkbenchMarkupSignature(roundTripRoot, { isInlineRunContainer });
-    const issue = currentMarkup === roundTripMarkup
-      ? null
-      : { markdown, currentMarkup, roundTripMarkup } satisfies SaveGuardIssue;
-
-    return { markdown, issue };
-  }
-
   function refreshSaveGuardState() {
-    if (!state.currentPath || state.mode !== "rich") {
+    if (!state.editor.currentPath || state.editor.mode !== "rich") {
       state.currentContent = "";
-      state.saveIssue = null;
+      editorClient.setSaveIssue(null);
       state.lastLoggedSaveIssue = null;
       updateSaveButtonState();
       return { markdown: "", issue: null };
     }
 
-    const inspection = inspectSaveGuard();
-    state.saveIssue = inspection.issue;
+    const inspection = inspectSaveGuardMarkup({
+      editorRoot: editor,
+      isInlineRunContainer,
+      normalizeMarkup: normalizeEditorMarkup,
+    });
+    editorClient.setSaveIssue(inspection.issue);
     syncSaveIssueLogging(inspection.issue, "markup mismatch detected while editing");
     updateSaveButtonState();
     return inspection;
   }
 
   function inspectCurrentDraft() {
-    if (!state.currentPath) {
+    if (!state.editor.currentPath) {
       state.currentContent = "";
-      state.dirty = false;
+      editorClient.setDirty(false);
       state.expectedMtimeMs = null;
-      state.saveIssue = null;
+      editorClient.setSaveIssue(null);
       state.lastLoggedSaveIssue = null;
       updateSaveButtonState();
       return { content: "", issue: null };
     }
 
-    if (state.mode !== "rich") {
-      state.saveIssue = null;
+    if (state.editor.mode !== "rich") {
+      editorClient.setSaveIssue(null);
       state.lastLoggedSaveIssue = null;
       updateSaveButtonState();
-      const content = editor.textContent ?? "";
-      state.currentContent = content;
-      state.dirty = content !== state.baselineContent;
-      return { content, issue: null };
+      const inspection = inspectDraftContent({
+        mode: state.editor.mode,
+        plainTextContent: editor.textContent ?? "",
+      });
+      state.currentContent = inspection.content;
+      editorClient.setDirty(inspection.content !== state.baselineContent);
+      return inspection;
     }
 
-    const inspection = refreshSaveGuardState();
-    state.currentContent = inspection.markdown;
-    state.dirty = inspection.markdown !== state.baselineContent;
-    return {
-      content: inspection.markdown,
-      issue: inspection.issue,
-    };
-  }
-
-  function createConsolePreview(value: string, maxLength = 320) {
-    if (value.length <= maxLength) {
-      return value || "(empty)";
-    }
-
-    const edgeLength = Math.max(40, Math.floor((maxLength - 5) / 2));
-    return `${value.slice(0, edgeLength)}\n...\n${value.slice(-edgeLength)}`;
-  }
-
-  function logSaveGuardIssue(issue: SaveGuardIssue, trigger: string) {
-    const difference = describeFirstDifference(issue.currentMarkup, issue.roundTripMarkup);
-    const report = [
-      "[workbench] UNSAFE MARKDOWN SAVE BLOCKED",
-      `file: ${state.currentPath}`,
-      `trigger: ${trigger}`,
-      "reason: serializing the current WYSIWYG editor content to markdown and rendering it again would change the editor markup.",
-      `first differing character: ${difference.index}`,
-      "",
-      "current editor markup around the mismatch:",
-      difference.currentExcerpt || "(empty)",
-      "",
-      "round-tripped markup around the mismatch:",
-      difference.roundTripExcerpt || "(empty)",
-    ].join("\n");
-
-    console.warn(report);
-    console.warn("[workbench] Save blocked metadata", {
-      filePath: state.currentPath,
-      trigger,
-      firstDifferenceIndex: difference.index,
-      currentMarkupLength: issue.currentMarkup.length,
-      currentMarkupExcerpt: difference.currentExcerpt || "(empty)",
-      roundTripMarkupLength: issue.roundTripMarkup.length,
-      roundTripMarkupExcerpt: difference.roundTripExcerpt || "(empty)",
-      markdownLength: issue.markdown.length,
-      markdown: issue.markdown,
+    const saveGuardInspection = refreshSaveGuardState();
+    const inspection = inspectDraftContent({
+      mode: state.editor.mode,
+      plainTextContent: editor.textContent ?? "",
+      richInspection: saveGuardInspection,
     });
+    state.currentContent = inspection.content;
+    editorClient.setDirty(inspection.content !== state.baselineContent);
+    return inspection;
   }
 
   function syncSaveIssueLogging(issue: SaveGuardIssue | null, trigger: string, force = false) {
@@ -1251,40 +1096,12 @@ export async function initWorkbench(
       return;
     }
 
-    logSaveGuardIssue(issue, trigger);
+    logSaveGuardIssue(issue, state.editor.currentPath, trigger);
     state.lastLoggedSaveIssue = { ...issue };
   }
 
-  function describeFirstDifference(currentMarkup: string, roundTripMarkup: string) {
-    const limit = Math.min(currentMarkup.length, roundTripMarkup.length);
-    let index = 0;
-
-    while (index < limit && currentMarkup[index] === roundTripMarkup[index]) {
-      index += 1;
-    }
-
-    if (index === limit && currentMarkup.length === roundTripMarkup.length) {
-      index = -1;
-    }
-
-    const excerptStart = Math.max(0, (index === -1 ? limit : index) - 80);
-    const excerptEnd = Math.min(
-      Math.max(currentMarkup.length, roundTripMarkup.length),
-      (index === -1 ? limit : index) + 120,
-    );
-
-    return {
-      index,
-      currentExcerpt: currentMarkup.slice(excerptStart, excerptEnd),
-      roundTripExcerpt: roundTripMarkup.slice(excerptStart, excerptEnd),
-    };
-  }
-
   function renderEditorDocument(content: string, mode: EditorMode) {
-    state.mode = mode;
-    editor.dataset.placeholder = mode === "rich"
-      ? "Select a markdown file to start editing."
-      : "Plain text mode";
+    editorClient.setMode(mode);
 
     if (mode === "rich") {
       editor.innerHTML = renderMarkdownToHtml(content);
@@ -1304,7 +1121,7 @@ export async function initWorkbench(
     state.history = history;
 
     clearPendingInlineFormats();
-    renderEditorDocument(nextContent, state.mode);
+    renderEditorDocument(nextContent, state.editor.mode);
     inspectCurrentDraft();
     restoreEditorSelection(editor, history.frames[clampedIndex]?.selection ?? null);
     updateHistorySelection(captureEditorSelection(editor));
@@ -1343,22 +1160,14 @@ export async function initWorkbench(
   function applyThreadPayloadToCurrentView(payload: ThreadPayload, statusMessage?: string) {
     clearWriteConflict();
     setCurrentThread(payload);
-    state.currentPath = "";
-    state.currentThreadId = payload.id;
+    state.thread.currentThreadId = payload.id;
     state.expectedMtimeMs = null;
     state.headContent = null;
-    state.pendingWriteConflict = null;
-    state.saveIssue = null;
     state.lastLoggedSaveIssue = null;
     editorClient.setCurrentThreadId(payload.id);
     editorClient.showThreadPlaceholder(payload.name || payload.preview || payload.id);
-    editor.setAttribute("contenteditable", "false");
-    editor.textContent = "";
-    editor.scrollTop = 0;
     state.baselineContent = "";
     state.currentContent = "";
-    state.mode = "rich";
-    state.dirty = false;
     state.history = null;
     clearPendingInlineFormats();
     setHoveredRevisionNode(null);
@@ -1374,11 +1183,11 @@ export async function initWorkbench(
     threadId: string,
     { harness, source = "open" }: { harness?: WorkbenchHarness; source?: "open" | "reload" } = {},
   ) {
-    if (source === "open" && threadId === state.currentThreadId) {
+    if (source === "open" && threadId === state.thread.currentThreadId) {
       return;
     }
 
-    if (state.currentPath) {
+    if (state.editor.currentPath) {
       syncCurrentDraftBuffer();
     }
 
@@ -1429,27 +1238,6 @@ export async function initWorkbench(
     updateFloatingToolbar();
     updateRevisionHoverToolbar();
     updateCustomCaret();
-  }
-
-  function runEditorCommand(command: string, value: string | null = null) {
-    if (state.mode !== "rich") {
-      return;
-    }
-
-    if (command === "bold") {
-      wrapSelection("strong");
-      return;
-    }
-
-    if (command === "italic") {
-      wrapSelection("em");
-      return;
-    }
-
-    clearPendingInlineFormats();
-    document.execCommand(command, false, value);
-    editor.focus();
-    syncEditorAfterStructuralChange();
   }
 
   function hideCustomCaret() {
@@ -1531,126 +1319,12 @@ export async function initWorkbench(
     return null;
   }
 
-  function wrapSelection(tagName: keyof HTMLElementTagNameMap | "comment") {
-    if (state.mode !== "rich") {
-      return;
-    }
-
-    const selection = window.getSelection();
-    if (!selection?.rangeCount) {
-      return;
-    }
-
-    if (selection.isCollapsed) {
-      const pendingFormatKey = tagName === "strong"
-        ? "bold"
-        : tagName === "em"
-          ? "italic"
-          : tagName === "code" || tagName === "comment" || tagName === "del" || tagName === "ins"
-            ? tagName
-            : null;
-
-      if (
-        pendingFormatKey
-        && togglePendingInlineFormat(pendingFormatKey)
-      ) {
-        return;
-      }
-      return;
-    }
-
-    const range = selection.getRangeAt(0);
-    if (!editor.contains(range.commonAncestorContainer)) {
-      return;
-    }
-
-    clearPendingInlineFormats();
-    if (tagName === "code") {
-      toggleCodeSelection(selection, range);
-      return;
-    }
-
-    if (tagName === "strong") {
-      toggleInlineFormatSelection(selection, range, "strong", "bold");
-      return;
-    }
-
-    if (tagName === "em") {
-      toggleInlineFormatSelection(selection, range, "em", "italic");
-      return;
-    }
-
-    if (tagName === "del") {
-      toggleInlineFormatSelection(selection, range, "del", "del");
-      return;
-    }
-
-    if (tagName === "ins") {
-      toggleInlineFormatSelection(selection, range, "ins", "ins");
-      return;
-    }
-
-    if (tagName === "comment") {
-      toggleInlineFormatSelection(selection, range, "comment", "comment");
-      return;
-    }
-
-    const wrapper = document.createElement(tagName);
-    wrapper.append(range.extractContents());
-    range.insertNode(wrapper);
-    selection.removeAllRanges();
-    const nextRange = document.createRange();
-    nextRange.selectNodeContents(wrapper);
-    selection.addRange(nextRange);
-    syncEditorAfterStructuralChange();
-  }
-
-  function applyToolbarCommand(command: string) {
-    switch (command) {
-      case "bold":
-        runEditorCommand("bold");
-        break;
-      case "italic":
-        runEditorCommand("italic");
-        break;
-      case "inline-code":
-        wrapSelection("code");
-        break;
-      case "comment":
-        wrapSelection("comment");
-        break;
-      case "del":
-        wrapSelection("del");
-        break;
-      case "ins":
-        wrapSelection("ins");
-        break;
-      case "h1":
-        runEditorCommand("formatBlock", "<h1>");
-        break;
-      case "h2":
-        runEditorCommand("formatBlock", "<h2>");
-        break;
-      case "unordered-list":
-        runEditorCommand("insertUnorderedList");
-        break;
-      case "ordered-list":
-        runEditorCommand("insertOrderedList");
-        break;
-      case "quote":
-        runEditorCommand("formatBlock", "<blockquote>");
-        break;
-      default:
-        break;
-    }
-  }
-
   function updateFloatingToolbar() {
     const selection = window.getSelection();
     if (
       !selection?.rangeCount ||
       selection.isCollapsed ||
-      state.mode !== "rich" ||
+      state.editor.mode !== "rich" ||
       getSelectedRevisionToolbarContext() !== null ||
       !editor.contains(selection.anchorNode) ||
       !editor.contains(selection.focusNode)
@@ -1694,19 +1368,14 @@ export async function initWorkbench(
 
   function clearCurrentSelectionView() {
     state.baselineContent = "";
-    state.currentPath = "";
     threadClient.clearThreadSelection();
-    state.currentThread = null;
-    state.currentThreadId = "";
+    state.thread.currentThread = null;
+    state.thread.currentThreadId = "";
     state.currentContent = "";
-    state.dirty = false;
     state.expectedMtimeMs = null;
     state.headContent = null;
     state.history = null;
-    state.pendingWriteConflict = null;
-    state.saveIssue = null;
     state.lastLoggedSaveIssue = null;
-    editor.textContent = "";
     setHoveredRevisionNode(null);
     clearPendingInlineFormats();
     editorClient.clearSelectionView();
@@ -1720,7 +1389,7 @@ export async function initWorkbench(
   async function refreshTree({ preserveSelection = false }: { preserveSelection?: boolean } = {}) {
     const payload = await projectClient.refreshProject();
     const requestedThreadId = getRequestedThreadIdFromUrl();
-    const shouldBlockOnThreads = Boolean(state.currentThreadId || requestedThreadId);
+    const shouldBlockOnThreads = Boolean(state.thread.currentThreadId || requestedThreadId);
 
     if (shouldBlockOnThreads) {
       await refreshThreads();
@@ -1733,40 +1402,40 @@ export async function initWorkbench(
       })();
     }
 
-    if (preserveSelection && state.currentThreadId) {
-      const currentThreadId = state.currentThreadId;
-      if (state.currentThread?.isDraft && state.currentThread.id === currentThreadId) {
+    if (preserveSelection && state.thread.currentThreadId) {
+      const currentThreadId = state.thread.currentThreadId;
+      if (state.thread.currentThread?.isDraft && state.thread.currentThread.id === currentThreadId) {
         return;
       }
 
-      if (state.threads.some((thread) => thread.id === currentThreadId)) {
+      if (state.thread.threads.some((thread) => thread.id === currentThreadId)) {
         if (!threadClient.isCurrentThreadUpToDate(currentThreadId)) {
           await openThread(currentThreadId, { source: "reload" });
         }
-        if (state.currentThreadId === currentThreadId) {
+        if (state.thread.currentThreadId === currentThreadId) {
           return;
         }
       } else {
         threadClient.clearThreadSelection();
-        state.currentThread = null;
-        state.currentThreadId = "";
+        state.thread.currentThread = null;
+        state.thread.currentThreadId = "";
         syncCurrentSelectionToUrl({});
         emitExplorerStateChange();
       }
     }
 
-    if (preserveSelection && state.currentPath) {
-      const currentPath = state.currentPath;
+    if (preserveSelection && state.editor.currentPath) {
+      const currentPath = state.editor.currentPath;
       await refreshCurrentFileFromDiskIfSafe();
-      if (state.currentPath === currentPath) {
+      if (state.editor.currentPath === currentPath) {
         return;
       }
     }
 
     if (requestedThreadId) {
-      if (state.threads.some((thread) => thread.id === requestedThreadId)) {
+      if (state.thread.threads.some((thread) => thread.id === requestedThreadId)) {
         await openThread(requestedThreadId);
-        if (state.currentThreadId === requestedThreadId) {
+        if (state.thread.currentThreadId === requestedThreadId) {
           return;
         }
       } else if (threadClient.isDraftThreadId(requestedThreadId)) {
@@ -1780,7 +1449,7 @@ export async function initWorkbench(
     const requestedPath = getRequestedPathFromUrl();
     if (requestedPath) {
       await openFile(requestedPath);
-      if (state.currentPath === requestedPath) {
+      if (state.editor.currentPath === requestedPath) {
         return;
       }
     }
@@ -1814,7 +1483,7 @@ export async function initWorkbench(
 
   const controls: WorkbenchControls = {
     clearSelection: () => {
-      if (state.currentPath) {
+      if (state.editor.currentPath) {
         syncCurrentDraftBuffer();
       }
 

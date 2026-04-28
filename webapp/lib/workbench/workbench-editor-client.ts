@@ -1,13 +1,15 @@
 /*
  * Exports:
+ * - createInitialWorkbenchEditorSnapshot: create the default editor snapshot used before the editor client is constructed. Keywords: workbench, editor, snapshot, initial state.
+ * - WorkbenchEditorFormatCommandOptions: delayed formatting-command delegates injected after inline and code controllers exist. Keywords: workbench, editor, format, command, delegates.
  * - EditorMode: current editor rendering mode. Keywords: workbench, editor, mode.
  * - SaveGuardIssue: persisted editor save-guard mismatch details. Keywords: workbench, editor, save guard, mismatch.
  * - WorkbenchEditorState: owned editor shell state for file selection, status, dialogs, and diff gutter rendering. Keywords: workbench, editor, state, dialogs, diff gutter.
  * - WorkbenchEditorSnapshot: readonly projection of the editor shell state. Keywords: workbench, editor, snapshot.
  * - WorkbenchEditorListener: subscriber signature for editor shell changes. Keywords: workbench, editor, subscribe.
  * - WorkbenchEditorClientOptions: callbacks and injected structural-edit dependencies delegated back to the coordinator for editor behavior, project change-summary queries, and current/head content needed for diff gutter rendering. Keywords: workbench, editor, callbacks, structure, status, lifecycle, diff gutter.
- * - WorkbenchEditorClient: public surface for the editor shell client, including diff gutter refresh scheduling and editor-owned structural input handling. Keywords: workbench, editor, client, diff gutter, list structure, rich input, dispose.
- * - createWorkbenchEditorClient: create the editor shell client that owns DOM refs, dialogs, diff gutter rendering, structural input wiring, event listener cleanup, and deterministic status messages. Keywords: workbench, editor, DOM, status, structure, rich input, diff gutter, listeners.
+ * - WorkbenchEditorClient: public surface for the editor shell client, including diff gutter refresh scheduling, delayed format-command configuration, and editor-owned structural input handling. Keywords: workbench, editor, client, diff gutter, format, list structure, rich input, dispose.
+ * - createWorkbenchEditorClient: create the editor shell client that owns DOM refs, dialogs, diff gutter rendering, structural input wiring, delayed format-command setup, event listener cleanup, and deterministic status messages. Keywords: workbench, editor, DOM, status, structure, format, rich input, diff gutter, listeners.
  */
 
 import type { ChangeSummary, SaveConflictPayload } from "../types";
@@ -20,6 +22,10 @@ import {
 import { parseBlocks as parseMarkdownBlocks, type ParsedBlock } from "./markdown-render";
 import { getEditorLineHeight } from "./viewport-metrics";
 import type { WorkbenchDomElements } from "./workbench-dom";
+import {
+    createWorkbenchFormatCommandController,
+    type WorkbenchFormatCommandController,
+} from "./workbench-format-command-controller";
 import {
     createWorkbenchListStructureController,
     type WorkbenchListStructureControllerOptions,
@@ -94,6 +100,18 @@ export interface WorkbenchEditorSnapshot {
 
 export type WorkbenchEditorListener = (snapshot: WorkbenchEditorSnapshot) => void;
 
+export interface WorkbenchEditorFormatCommandOptions {
+  clearPendingInlineFormats: () => void;
+  syncEditorAfterStructuralChange: () => void;
+  toggleCodeSelection: (selection: Selection, range: Range) => void;
+  toggleInlineFormatSelection: (
+    selection: Selection,
+    range: Range,
+    formatKey: "bold" | "italic" | "comment" | "del" | "ins",
+  ) => void;
+  togglePendingInlineFormat: (format: "bold" | "italic" | "code" | "comment" | "del" | "ins") => boolean;
+}
+
 export interface WorkbenchEditorClientOptions {
   closeActiveDialog: () => boolean;
   getDiffGutterContent: () => WorkbenchDiffGutterContent;
@@ -125,10 +143,13 @@ export interface WorkbenchEditorClientOptions {
 }
 
 export interface WorkbenchEditorClient {
+  applyToolbarCommand: (command: string) => void;
   changeFontSize: (delta: number) => void;
   clearSelectionView: () => void;
+  configureFormatCommands: (options: WorkbenchEditorFormatCommandOptions) => void;
   dispose: () => void;
   getSnapshot: () => WorkbenchEditorSnapshot;
+  handleFormatKeyDown: (event: KeyboardEvent) => boolean;
   handleRichInput: (event: Event) => { transformedListItem: HTMLLIElement | null; commentCaretMarker: HTMLElement | null };
   handleListStructureKeyDown: (event: KeyboardEvent) => boolean;
   hideResetDraftDialog: () => void;
@@ -149,7 +170,7 @@ export interface WorkbenchEditorClient {
   subscribe: (listener: WorkbenchEditorListener) => () => void;
 }
 
-function createInitialEditorState(): WorkbenchEditorState {
+export function createInitialWorkbenchEditorSnapshot(): WorkbenchEditorSnapshot {
   return {
     currentPath: "",
     currentThreadId: "",
@@ -160,6 +181,10 @@ function createInitialEditorState(): WorkbenchEditorState {
     saveIssue: null,
     statusMessage: DEFAULT_STATUS_MESSAGE,
   };
+}
+
+function createInitialEditorState(): WorkbenchEditorState {
+  return createInitialWorkbenchEditorSnapshot();
 }
 
 function appendParsedListDiffRows(
@@ -532,6 +557,7 @@ export function createWorkbenchEditorClient(
     editor: elements.editor,
     getMode: () => state.mode,
   });
+  let formatCommandController: WorkbenchFormatCommandController | null = null;
   let diffRefreshFrameId: number | null = null;
 
   function getSnapshot(): WorkbenchEditorSnapshot {
@@ -712,6 +738,22 @@ export function createWorkbenchEditorClient(
     }
 
     return richInputController.handleRichInput(event);
+  }
+
+  function configureFormatCommands(formatCommandOptions: WorkbenchEditorFormatCommandOptions) {
+    formatCommandController = createWorkbenchFormatCommandController({
+      editor: elements.editor,
+      getMode: () => state.mode,
+      ...formatCommandOptions,
+    });
+  }
+
+  function handleFormatKeyDown(event: KeyboardEvent) {
+    return formatCommandController?.handleFormatKeyDown(event) ?? false;
+  }
+
+  function applyToolbarCommand(command: string) {
+    formatCommandController?.applyToolbarCommand(command);
   }
 
   function hideDialog(dialog: HTMLDivElement) {
@@ -1048,8 +1090,10 @@ export function createWorkbenchEditorClient(
   elements.statusLine.textContent = state.statusMessage;
 
   return {
+    applyToolbarCommand,
     changeFontSize,
     clearSelectionView,
+    configureFormatCommands,
     dispose: () => {
       if (diffRefreshFrameId !== null) {
         window.cancelAnimationFrame(diffRefreshFrameId);
@@ -1058,6 +1102,7 @@ export function createWorkbenchEditorClient(
       abortController.abort();
     },
     getSnapshot,
+    handleFormatKeyDown,
     handleRichInput,
     handleListStructureKeyDown,
     hideResetDraftDialog,
