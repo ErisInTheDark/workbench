@@ -6,10 +6,9 @@ Keep this file focused on unresolved architecture work for the workbench so futu
 
 ### Implementation Master Order
 
-- [ ] 1. Implement `Unclean Disposal and Lifecycle` before the polling item so `LifecycleScope` becomes the shared ownership boundary for timers and subscriptions.
-- [ ] 2. Implement `Polling Loops Have No Centralized Coordination` after lifecycle scopes exist so recurring refresh and debounce work use the same ownership model.
-- [ ] 3. Implement `Too Many DOM Refs Passed Deep into the System` after the client boundaries are stable enough to narrow DOM surfaces with confidence.
-- [ ] 4. Implement `Utility File Proliferation Without Coherent Layering` last, after the earlier ownership and state work has finalized which files belong to which layer.
+- [ ] 1. Implement `Polling Loops Have No Centralized Coordination` now that lifecycle scopes exist so recurring refresh and debounce work use the same ownership model.
+- [ ] 2. Implement `Too Many DOM Refs Passed Deep into the System` after the client boundaries are stable enough to narrow DOM surfaces with confidence.
+- [ ] 3. Implement `Utility File Proliferation Without Coherent Layering` last, after the earlier ownership and state work has finalized which files belong to which layer.
 
 
 ## Shared Foundations
@@ -216,7 +215,7 @@ Non-goals for this item:
 - Do not introduce a single global `PollingScheduler` as the main target
 - Do not try to centralize every timer when local ownership is the more coherent architecture
 
-Concrete reshaping: use the lifecycle-backed timer helpers defined in `SEVERITY 3: Unclean Disposal and Lifecycle` with local ownership instead:
+Concrete reshaping: use the established `LifecycleScope` timer helpers with local ownership instead:
 
 ```ts
 const coordinatorLifecycle = new LifecycleScope();
@@ -226,58 +225,6 @@ const threadLifecycle = new LifecycleScope();
 threadLifecycle.scheduleOnce("thread-refresh", 350, () => {
 	void refreshThreads();
 });
-```
-
-### SEVERITY 3: Unclean Disposal and Lifecycle
-
-Problem: `initWorkbench()` returns a cleanup function, but:
-
-- subclients don't have a consistent disposal pattern (some have `dispose()`, some return unsubscribe functions)
-- timeout IDs are tracked manually instead of using `AbortSignal`
-- there's no way to test cleanup without running the full initialization
-- controllers (inline-format, etc.) don't expose dispose methods
-
-Feasibility verdict:
-- The critique is valid, but the current `WorkbenchLifecycle` proposal is too coordinator-centric.
-- The better target is one lifecycle scope per client plus shallow coordinator cleanup.
-- Resource ownership and lifecycle ownership should line up: the code that creates timers, listeners, subscriptions, or abortable work should also own their cleanup.
-
-Concrete reshaping:
-1. `LifecycleScope`: introduce a small reusable helper that owns `AbortController` access, timeout and animation-frame cancellation, timer scheduling helpers, unsubscribe callbacks, and an optional disposed guard.
-2. Client-owned cleanup: editor, file, thread, and project clients each create or receive their own lifecycle scope and register their resources locally.
-3. Shallow coordinator teardown: the coordinator disposes subclients, clears only coordinator-owned resources such as the auto-refresh loop, and aborts only coordinator-owned listeners.
-4. Optional test injection: client creation may accept an optional lifecycle scope or timer helper so disposal behavior can be tested in isolation.
-
-Implementation staging for the later checklist item:
-1. Add a reusable `LifecycleScope` helper under the workbench layer.
-2. Migrate the editor client first so its DOM listeners and animation frames are all owned by that scope.
-3. Migrate file and thread clients so their timers, subscriptions, and disposal guards all live inside their own scope.
-4. Simplify coordinator teardown so it only disposes clients and clears coordinator-owned resources.
-5. Add targeted disposal tests around at least the editor and thread clients once lifecycle ownership is explicit.
-
-Non-goals for this item:
-- Do not make the coordinator the central owner of every disposable resource
-- Do not keep cross-client timer cleanup in the coordinator once client lifecycle scopes exist
-- Do not mix timer policy changes into this item; timer policy belongs to the polling and refresh item
-
-Concrete reshaping: use client-local lifecycle scopes instead of one global manager:
-
-```ts
-class LifecycleScope {
-	getSignal(): AbortSignal;
-	scheduleOnce(id: string, delay: number, fn: () => void): void;
-	scheduleRepeat(id: string, delay: number, fn: () => Promise<void>): void;
-	addAnimationFrame(id: number): void;
-	addUnsubscribe(fn: () => void): void;
-	cancel(id: string): void;
-	dispose(): void;
-}
-
-const editorLifecycle = new LifecycleScope();
-const editorClient = createWorkbenchEditorClient(elements, options, editorLifecycle);
-
-const threadLifecycle = new LifecycleScope();
-const threadClient = createWorkbenchThreadClient(options, threadLifecycle);
 ```
 
 ### SEVERITY 3: Too Many DOM Refs Passed Deep into the System

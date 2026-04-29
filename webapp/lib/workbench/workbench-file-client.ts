@@ -17,6 +17,7 @@ import {
 } from "./edit-history";
 import type { EditorDocumentAdapter } from "./EditorDocumentAdapter";
 import type { DraftBuffer, FileSessionState } from "./FileSessionState";
+import { LifecycleScope } from "./lifecycle-scope";
 import {
     markdownToHtml as renderMarkdownToHtml,
 } from "./markdown-render";
@@ -158,6 +159,7 @@ function hasBufferedDraftState(buffer: DraftBuffer) {
 
 export function createWorkbenchFileClient(
   options: WorkbenchFileClientOptions,
+  lifecycle: LifecycleScope = new LifecycleScope(),
 ): WorkbenchFileClient {
   const {
     clearThreadSelection,
@@ -176,7 +178,6 @@ export function createWorkbenchFileClient(
 
   const draftDatabasePromise = openDraftDatabase();
   let draftPersistenceQueue = Promise.resolve();
-  let selectionPersistenceTimeoutId: number | null = null;
 
   async function getPersistedDraftRecords() {
     const database = await draftDatabasePromise;
@@ -434,14 +435,9 @@ export function createWorkbenchFileClient(
       return;
     }
 
-    if (selectionPersistenceTimeoutId !== null) {
-      window.clearTimeout(selectionPersistenceTimeoutId);
-    }
-
-    selectionPersistenceTimeoutId = window.setTimeout(() => {
-      selectionPersistenceTimeoutId = null;
+    lifecycle.scheduleOnce("file-selection-persistence", 260, () => {
       syncCurrentDraftBuffer();
-    }, 260);
+    });
   }
 
   async function hydratePersistedDrafts() {
@@ -644,9 +640,7 @@ export function createWorkbenchFileClient(
   }
 
   function dispose() {
-    if (selectionPersistenceTimeoutId !== null) {
-      window.clearTimeout(selectionPersistenceTimeoutId);
-    }
+    lifecycle.dispose();
   }
 
   return {

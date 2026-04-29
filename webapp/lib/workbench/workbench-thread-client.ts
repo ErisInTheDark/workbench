@@ -34,6 +34,7 @@ import {
     readStoredHarnessModel,
     readStoredHarnessModelEffort,
 } from "./browser-state";
+import { LifecycleScope } from "./lifecycle-scope";
 
 const CODEX_NOTIFICATION_THREAD_REFRESH_DELAY_MS = 350;
 const CODEX_NOTIFICATION_THREAD_LIST_REFRESH_DELAY_MS = 750;
@@ -105,12 +106,11 @@ function createInitialThreadState(): WorkbenchThreadState {
 
 export function createWorkbenchThreadClient(
   options: WorkbenchThreadClientOptions = {},
+  lifecycle: LifecycleScope = new LifecycleScope(),
 ): WorkbenchThreadClient {
   const codexClient = new CodexAppServerClient();
   const listeners = new Set<WorkbenchThreadListener>();
   const state = createInitialThreadState();
-  let codexThreadRefreshTimeoutId: number | null = null;
-  let codexThreadListRefreshTimeoutId: number | null = null;
   let disposed = false;
   let refreshThreadsPromise: Promise<void> | null = null;
 
@@ -1126,26 +1126,24 @@ export function createWorkbenchThreadClient(
   }
 
   function scheduleCodexNotificationRefresh(handling: CodexAppServerNotificationHandling) {
-    if (handling.refreshThread && state.currentThreadId && codexThreadRefreshTimeoutId === null) {
-      codexThreadRefreshTimeoutId = window.setTimeout(() => {
-        codexThreadRefreshTimeoutId = null;
+    if (handling.refreshThread && state.currentThreadId && !lifecycle.has("thread-refresh")) {
+      lifecycle.scheduleOnce("thread-refresh", CODEX_NOTIFICATION_THREAD_REFRESH_DELAY_MS, () => {
         if (disposed || !state.currentThreadId) {
           return;
         }
 
         void reconcileCurrentThreadFromRead(state.currentThreadId, state.currentThread?.harness ?? "codex");
-      }, CODEX_NOTIFICATION_THREAD_REFRESH_DELAY_MS);
+      });
     }
 
-    if (handling.refreshThreads && codexThreadListRefreshTimeoutId === null) {
-      codexThreadListRefreshTimeoutId = window.setTimeout(() => {
-        codexThreadListRefreshTimeoutId = null;
+    if (handling.refreshThreads && !lifecycle.has("thread-list-refresh")) {
+      lifecycle.scheduleOnce("thread-list-refresh", CODEX_NOTIFICATION_THREAD_LIST_REFRESH_DELAY_MS, () => {
         if (disposed) {
           return;
         }
 
         void refreshThreads();
-      }, CODEX_NOTIFICATION_THREAD_LIST_REFRESH_DELAY_MS);
+      });
     }
   }
 
@@ -1166,6 +1164,10 @@ export function createWorkbenchThreadClient(
 
   const unsubscribeCodexNotifications = codexClient.onNotification((notification, handling, harness) => {
     handleCodexNotification(notification, handling, harness);
+  });
+  lifecycle.addUnsubscribe(unsubscribeCodexNotifications);
+  lifecycle.addUnsubscribe(() => {
+    codexClient.close();
   });
 
   function clearThreadSelection() {
@@ -1238,14 +1240,7 @@ export function createWorkbenchThreadClient(
   function dispose() {
     disposed = true;
     listeners.clear();
-    if (codexThreadRefreshTimeoutId !== null) {
-      window.clearTimeout(codexThreadRefreshTimeoutId);
-    }
-    if (codexThreadListRefreshTimeoutId !== null) {
-      window.clearTimeout(codexThreadListRefreshTimeoutId);
-    }
-    unsubscribeCodexNotifications();
-    codexClient.close();
+    lifecycle.dispose();
   }
 
   return {

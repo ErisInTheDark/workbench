@@ -15,6 +15,7 @@
 import type { ChangeSummary, SaveConflictPayload } from "../types";
 import { MAX_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, persistFontSize, readStoredFontSize } from "./browser-state";
 import type { FileSessionState } from "./FileSessionState";
+import { LifecycleScope } from "./lifecycle-scope";
 import {
     getNestedListElementsForItem,
     isIntentionalListBreakParagraph,
@@ -525,11 +526,11 @@ function createDiffMarkerIcon(symbol: DiffMarkerSymbol) {
 export function createWorkbenchEditorClient(
   elements: WorkbenchDomElements,
   options: WorkbenchEditorClientOptions,
+  lifecycle: LifecycleScope = new LifecycleScope(),
 ): WorkbenchEditorClient {
   const listeners = new Set<EditorUIStateListener>();
   const state = createInitialEditorState();
-  const abortController = new AbortController();
-  const { signal } = abortController;
+  const signal = lifecycle.getSignal();
   const dialogs = [elements.saveConflictDialog.dialog, elements.resetDraftDialog.dialog] as const;
   const listStructureController = createWorkbenchListStructureController({
     editor: elements.editor,
@@ -540,7 +541,6 @@ export function createWorkbenchEditorClient(
     getMode: () => options.fileSessionState.mode,
   });
   let formatCommandController: WorkbenchFormatCommandController | null = null;
-  let diffRefreshFrameId: number | null = null;
   let previousSessionSnapshot = options.sessionState.getSnapshot();
   let previousFileSnapshot = options.fileSessionState.getSnapshot();
 
@@ -708,12 +708,7 @@ export function createWorkbenchEditorClient(
   }
 
   function scheduleDiffGutterRefresh() {
-    if (diffRefreshFrameId !== null) {
-      window.cancelAnimationFrame(diffRefreshFrameId);
-    }
-
-    diffRefreshFrameId = window.requestAnimationFrame(() => {
-      diffRefreshFrameId = null;
+    lifecycle.scheduleAnimationFrame("editor-diff-gutter-refresh", () => {
       renderDiffGutter();
     });
   }
@@ -766,7 +761,7 @@ export function createWorkbenchEditorClient(
 
     dialog.hidden = false;
     if (focusTarget) {
-      window.requestAnimationFrame(() => {
+      lifecycle.scheduleAnimationFrame("editor-dialog-focus", () => {
         focusTarget.focus();
       });
     }
@@ -1041,6 +1036,7 @@ export function createWorkbenchEditorClient(
     refreshStatusMessage();
     scheduleDiffGutterRefresh();
   });
+  lifecycle.addUnsubscribe(unsubscribeSessionState);
 
   const unsubscribeFileSessionState = options.fileSessionState.subscribe((snapshot) => {
     const previousSnapshot = previousFileSnapshot;
@@ -1068,6 +1064,7 @@ export function createWorkbenchEditorClient(
       refreshStatusMessage();
     }
   });
+  lifecycle.addUnsubscribe(unsubscribeFileSessionState);
 
   applyEditorFontSize();
   syncEditorModePresentation();
@@ -1081,13 +1078,8 @@ export function createWorkbenchEditorClient(
     clearSelectionView,
     configureFormatCommands,
     dispose: () => {
-      if (diffRefreshFrameId !== null) {
-        window.cancelAnimationFrame(diffRefreshFrameId);
-      }
-      unsubscribeSessionState();
-      unsubscribeFileSessionState();
       listeners.clear();
-      abortController.abort();
+      lifecycle.dispose();
     },
     getSnapshot,
     handleFormatKeyDown,

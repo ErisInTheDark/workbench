@@ -35,6 +35,7 @@ import {
     restoreCaretToMarker,
     type PendingInlineFormatKey,
 } from "./workbench/inline-format";
+import { LifecycleScope } from "./workbench/lifecycle-scope";
 import {
     getDirectChildDetailsElement,
     getDirectChildListElements,
@@ -153,9 +154,10 @@ export async function initWorkbench(
     getDirectChildSummaryTextElement,
   });
 
-  const abortController = new AbortController();
-  let autoRefreshTimeoutId: number | null = null;
-  let autoRefreshStopped = false;
+  const coordinatorLifecycle = new LifecycleScope();
+  const threadLifecycle = new LifecycleScope();
+  const editorLifecycle = new LifecycleScope();
+  const fileLifecycle = new LifecycleScope();
   let editorHasFocus = false;
   let explorerStateChangeScheduled = false;
   let isComposing = false;
@@ -168,7 +170,7 @@ export async function initWorkbench(
     onStatusMessage: (message) => {
       reportStatusMessage(message);
     },
-  });
+  }, threadLifecycle);
   const initialThreadSnapshot = threadClient.getSnapshot();
   const sessionState = createSessionState({
     currentThread: initialThreadSnapshot.currentThread,
@@ -196,16 +198,16 @@ export async function initWorkbench(
     return () => {};
   }
 
-  const unsubscribeProjectClient = projectClient.subscribe((snapshot) => {
+  coordinatorLifecycle.addUnsubscribe(projectClient.subscribe((snapshot) => {
     threadClient.setProjectContext({
       root: snapshot.root,
       rootPath: snapshot.rootPath,
     });
     emitExplorerStateChange();
-  });
+  }));
 
   let previousThreadSnapshot = initialThreadSnapshot;
-  const unsubscribeThreadClient = threadClient.subscribe((snapshot) => {
+  coordinatorLifecycle.addUnsubscribe(threadClient.subscribe((snapshot) => {
     const lastSnapshot = previousThreadSnapshot;
     previousThreadSnapshot = snapshot;
 
@@ -226,7 +228,7 @@ export async function initWorkbench(
     ) {
       emitExplorerStateChange();
     }
-  });
+  }));
 
   document.execCommand?.("defaultParagraphSeparator", false, "p");
 
@@ -267,7 +269,7 @@ export async function initWorkbench(
   }
 
   const refreshInlineToolbars = () => {
-    window.requestAnimationFrame(() => {
+    coordinatorLifecycle.scheduleAnimationFrame("refresh-inline-toolbars", () => {
       refreshEditorChrome();
     });
   };
@@ -386,7 +388,9 @@ export async function initWorkbench(
     getProjectChangeSummary: (path) => projectClient.getSnapshot().changes[path] ?? null,
     handleCompositionEnd: () => {
       isComposing = false;
-      window.requestAnimationFrame(updateCustomCaret);
+      editorLifecycle.scheduleAnimationFrame("editor-custom-caret-refresh", () => {
+        updateCustomCaret();
+      });
     },
     handleCompositionStart: () => {
       isComposing = true;
@@ -572,7 +576,7 @@ export async function initWorkbench(
     isSaveButtonInvalid: () => Boolean(fileSessionState.saveIssue) || Array.from(fileSessionState.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue)),
     sessionState,
     shouldBlockBeforeUnload: () => Boolean(fileSessionState.saveIssue) || Array.from(fileSessionState.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue)),
-  });
+  }, editorLifecycle);
   let previousEditorUiSnapshot: EditorUIStateSnapshot = editorClient.getSnapshot();
   reportStatusMessage = (message) => {
     editorClient.refreshStatusMessage(message);
@@ -608,7 +612,7 @@ export async function initWorkbench(
     },
   };
   let previousSessionSnapshot = sessionState.getSnapshot();
-  const unsubscribeSessionState = sessionState.subscribe((snapshot) => {
+  coordinatorLifecycle.addUnsubscribe(sessionState.subscribe((snapshot) => {
     const lastSnapshot = previousSessionSnapshot;
     previousSessionSnapshot = snapshot;
 
@@ -622,9 +626,9 @@ export async function initWorkbench(
     if (lastSnapshot.currentThread !== snapshot.currentThread) {
       emitCurrentThreadChange();
     }
-  });
+  }));
   let previousFileSessionSnapshot = fileSessionState.getSnapshot();
-  const unsubscribeFileSessionState = fileSessionState.subscribe((snapshot) => {
+  coordinatorLifecycle.addUnsubscribe(fileSessionState.subscribe((snapshot) => {
     const lastSnapshot = previousFileSessionSnapshot;
     previousFileSessionSnapshot = snapshot;
 
@@ -637,30 +641,30 @@ export async function initWorkbench(
     ) {
       emitExplorerStateChange();
     }
-  });
-  const unsubscribeEditorClient = editorClient.subscribe((snapshot) => {
+  }));
+  coordinatorLifecycle.addUnsubscribe(editorClient.subscribe((snapshot) => {
     const previousSnapshot = previousEditorUiSnapshot;
     previousEditorUiSnapshot = snapshot;
 
     if (previousSnapshot.fontSize !== snapshot.fontSize) {
       emitExplorerStateChange();
     }
-  });
-  const unsubscribeFileOpened = eventBus.subscribe("fileOpened", () => {
+  }));
+  coordinatorLifecycle.addUnsubscribe(eventBus.subscribe("fileOpened", () => {
     updateFloatingToolbar();
     updateRevisionHoverToolbar();
     updateCustomCaret();
-  });
-  const unsubscribeSaveConflictCleared = eventBus.subscribe("saveConflictCleared", () => {
+  }));
+  coordinatorLifecycle.addUnsubscribe(eventBus.subscribe("saveConflictCleared", () => {
     editorClient.hideSaveConflictDialog();
-  });
-  const unsubscribeSaveConflictSurfaced = eventBus.subscribe("saveConflictSurfaced", (conflict) => {
+  }));
+  coordinatorLifecycle.addUnsubscribe(eventBus.subscribe("saveConflictSurfaced", (conflict) => {
     editorClient.showSaveConflict({
       ...conflict,
       expectedUpdatedAt: formatTimestamp(conflict.expectedUpdatedAt),
       actualUpdatedAt: formatTimestamp(conflict.actualUpdatedAt),
     });
-  });
+  }));
 
   const inlineFormatController = createWorkbenchInlineFormatController({
     captureEditorSelection: () => captureEditorSelection(editor),
@@ -776,7 +780,7 @@ export async function initWorkbench(
     },
     syncSelectionToUrl: syncCurrentSelectionToUrl,
     updateHistorySelection: editHistoryManager.updateHistorySelection,
-  });
+  }, fileLifecycle);
 
   function scheduleSelectionPersistence() {
     fileClient.scheduleSelectionPersistence();
@@ -1380,28 +1384,14 @@ export async function initWorkbench(
     clearCurrentSelectionView();
   }
 
-  function scheduleAutoRefresh() {
-    if (autoRefreshStopped) {
-      return;
-    }
-
-    autoRefreshTimeoutId = window.setTimeout(() => {
-      void runAutoRefresh();
-    }, AUTO_REFRESH_INTERVAL_MS);
-  }
-
-  async function runAutoRefresh() {
-    if (autoRefreshStopped) {
-      return;
-    }
-
-    try {
-      await refreshTree({ preserveSelection: true });
-    } catch {
-      // Keep polling even if a transient refresh request fails.
-    } finally {
-      scheduleAutoRefresh();
-    }
+  function startAutoRefresh() {
+    coordinatorLifecycle.scheduleRepeat("workbench-auto-refresh", AUTO_REFRESH_INTERVAL_MS, async () => {
+      try {
+        await refreshTree({ preserveSelection: true });
+      } catch {
+        // Keep polling even if a transient refresh request fails.
+      }
+    });
   }
 
   const controls: WorkbenchControls = {
@@ -1448,24 +1438,12 @@ export async function initWorkbench(
   updateSaveButtonState();
   await refreshTree();
   void refreshRateLimits();
-  scheduleAutoRefresh();
+  startAutoRefresh();
   return () => {
-    autoRefreshStopped = true;
-    unsubscribeSessionState();
-    unsubscribeFileSessionState();
-    unsubscribeEditorClient();
-    unsubscribeFileOpened();
-    unsubscribeSaveConflictCleared();
-    unsubscribeSaveConflictSurfaced();
     editorClient.dispose();
     fileClient.dispose();
-    unsubscribeProjectClient();
-    unsubscribeThreadClient();
     projectClient.dispose();
     threadClient.dispose();
-    if (autoRefreshTimeoutId !== null) {
-      window.clearTimeout(autoRefreshTimeoutId);
-    }
-    abortController.abort();
+    coordinatorLifecycle.dispose();
   };
 }
