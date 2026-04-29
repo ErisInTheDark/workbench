@@ -14,7 +14,7 @@ import type { ReactNode } from "react";
 import type {
   ThreadCommandDisplayPart,
   ThreadCommandSummaryDisplay,
-} from "../../../lib/workbench/thread-command-matchers";
+} from "../../../lib/workbench/thread/thread-command-matchers";
 
 import ProjectFilePath from "../ProjectFilePath";
 import ThreadSummaryText from "./ThreadSummaryText";

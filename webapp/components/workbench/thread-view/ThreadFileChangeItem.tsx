@@ -6,12 +6,12 @@
 "use client";
 
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
-import { toWorkbenchDisplayPath } from "../../../lib/workbench/markdown-links";
+import { toWorkbenchDisplayPath } from "../../../lib/workbench/markdown/markdown-links";
 import {
   parseUnifiedDiff,
   type ParsedUnifiedDiff,
   type UnifiedDiffLine,
-} from "../../../lib/workbench/thread-file-diff";
+} from "../../../lib/workbench/thread/thread-file-diff";
 import ProjectFilePath from "../ProjectFilePath";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadSummaryText from "./ThreadSummaryText";

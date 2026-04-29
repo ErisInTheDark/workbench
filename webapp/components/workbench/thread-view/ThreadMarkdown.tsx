@@ -5,8 +5,8 @@ import type { MouseEvent } from "react";
 import {
   parseCodexFileLinkHref,
   toProjectRelativeFilePath,
-} from "../../../lib/workbench/markdown-links";
-import { markdownToHtml } from "../../../lib/workbench/markdown-render";
+} from "../../../lib/workbench/markdown/markdown-links";
+import { markdownToHtml } from "../../../lib/workbench/markdown/markdown-render";
 
 function joinClasses (...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");

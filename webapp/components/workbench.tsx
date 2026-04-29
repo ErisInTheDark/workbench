@@ -16,13 +16,13 @@ import {
   readStoredHarness,
   syncCurrentSelectionToUrl,
   type WorkbenchSelectionSearchParams,
-} from "../lib/workbench/browser-state";
+} from "../lib/workbench/state/browser-state";
 import {
   getPreferredMobilePane,
   MOBILE_MEDIA_QUERY,
   type MobilePane,
-} from "../lib/workbench/mobile-pane-url-state";
-import type { WorkbenchDomElements } from "../lib/workbench/workbench-dom";
+} from "../lib/workbench/state/mobile-pane-url-state";
+import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
 import ThreadView from "./workbench/thread-view/ThreadView";
 import {
   workbenchDiffGutterClassName,
@@ -151,7 +151,7 @@ export default function Workbench () {
   const resetDraftHeadButtonRef = useRef<HTMLButtonElement>(null);
   const resetDraftSavedButtonRef = useRef<HTMLButtonElement>(null);
 
-  function getWorkbenchDomElements (): WorkbenchDomElements | null {
+  function getWorkbenchDomSurfaces (): WorkbenchDomSurfaces | null {
     if (
       !editorRef.current
       || !customCaretRef.current
@@ -182,29 +182,37 @@ export default function Workbench () {
     }
 
     return {
-      editor: editorRef.current,
-      customCaret: customCaretRef.current,
-      diffGutter: diffGutterRef.current,
-      filePathLabel: filePathLabelRef.current,
-      resetDraftButton: resetDraftButtonRef.current,
-      saveFileButton: saveFileButtonRef.current,
-      statusLine: statusLineRef.current,
-      zoomInButton: zoomInButtonRef.current,
-      zoomOutButton: zoomOutButtonRef.current,
-      saveConflictDialog: {
-        dialog: saveConflictDialogRef.current,
-        summary: saveConflictSummaryRef.current,
-        expected: saveConflictExpectedRef.current,
-        actual: saveConflictActualRef.current,
-        keepEditing: saveConflictKeepEditingButtonRef.current,
-        reload: saveConflictReloadButtonRef.current,
-        overwrite: saveConflictOverwriteButtonRef.current,
+      controls: {
+        resetDraftButton: resetDraftButtonRef.current,
+        saveFileButton: saveFileButtonRef.current,
+        zoomInButton: zoomInButtonRef.current,
+        zoomOutButton: zoomOutButtonRef.current,
       },
-      resetDraftDialog: {
-        dialog: resetDraftDialogRef.current,
-        cancel: resetDraftCancelButtonRef.current,
-        resetToHead: resetDraftHeadButtonRef.current,
-        resetToSaved: resetDraftSavedButtonRef.current,
+      dialogs: {
+        saveConflict: {
+          dialog: saveConflictDialogRef.current,
+          summary: saveConflictSummaryRef.current,
+          expected: saveConflictExpectedRef.current,
+          actual: saveConflictActualRef.current,
+          keepEditing: saveConflictKeepEditingButtonRef.current,
+          reload: saveConflictReloadButtonRef.current,
+          overwrite: saveConflictOverwriteButtonRef.current,
+        },
+        resetDraft: {
+          dialog: resetDraftDialogRef.current,
+          cancel: resetDraftCancelButtonRef.current,
+          resetToHead: resetDraftHeadButtonRef.current,
+          resetToSaved: resetDraftSavedButtonRef.current,
+        },
+      },
+      editor: {
+        editor: editorRef.current,
+        customCaret: customCaretRef.current,
+        diffGutter: diffGutterRef.current,
+      },
+      statusDisplay: {
+        filePathLabel: filePathLabelRef.current,
+        statusLine: statusLineRef.current,
       },
       toolbars: {
         floating: floatingToolbarRef.current,
@@ -221,10 +229,10 @@ export default function Workbench () {
     let initTimeoutId: number | null = null;
 
     initTimeoutId = window.setTimeout(() => {
-      void import("../lib/workbench-client").then(async ({ initWorkbench }) => {
-        const elements = getWorkbenchDomElements();
+      void import("../lib/WorkbenchClient").then(async ({ WorkbenchClient: initWorkbench }) => {
+        const dom = getWorkbenchDomSurfaces();
         const nextCleanup = await initWorkbench({
-          elements,
+          dom,
           onExplorerStateChange: (snapshot) => {
             if (cancelled) {
               return;

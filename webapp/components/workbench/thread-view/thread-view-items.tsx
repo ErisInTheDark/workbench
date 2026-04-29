@@ -11,7 +11,7 @@ import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserI
 import {
   getThreadCommandBlockDisplay,
   getThreadCommandDisplay,
-} from "../../../lib/workbench/thread-command-matchers";
+} from "../../../lib/workbench/thread/thread-command-matchers";
 import {
   formatThreadTimestamp,
   humanizeThreadLabel,

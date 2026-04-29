@@ -7,9 +7,9 @@ import {
   projectFilePathLocationClassName,
   projectFilePathPillClassName,
   type ProjectFilePathDisplayOptions,
-} from "../../lib/workbench/project-file-path";
+} from "../../lib/workbench/project/project-file-path";
 
-function joinClasses(...values: Array<string | false | null | undefined>) {
+function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
@@ -19,7 +19,7 @@ type ProjectFilePathProps = ProjectFilePathDisplayOptions & {
   path: string;
 };
 
-export default function ProjectFilePath({
+export default function ProjectFilePath ({
   className,
   columnNumber,
   interactive = false,
