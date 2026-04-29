@@ -61,7 +61,10 @@ export interface WorkbenchInlineFormatControllerOptions {
   isInlineRunContainer: (element: HTMLElement) => boolean;
   refreshStatusMessage: () => void;
   syncCurrentDraftBuffer: () => void;
-  syncEditorAfterStructuralChange: () => void;
+  syncEditorAfterStructuralChange: (
+    mutate: () => void,
+    options?: { afterDomMutation?: () => void; afterSelectionRestore?: () => void },
+  ) => void;
   updateCustomCaret: () => void;
   updateHistorySelection: (selection: EditHistorySelection | null) => void;
   updateInlineToolbars: () => void;
@@ -512,13 +515,17 @@ export function createWorkbenchInlineFormatController(
       }
     }
 
-    insertionRange.insertNode(rootNode);
     const caretMarker = createInlineSelectionMarker("caret");
-    textNode.parentNode?.insertBefore(caretMarker, textNode.nextSibling);
-    rootNode.parentNode?.normalize();
-    preservePendingInlineFormatSelectionChanges = 2;
-    restoreCaretToMarker(caretMarker);
-    options.syncEditorAfterStructuralChange();
+    options.syncEditorAfterStructuralChange(() => {
+      insertionRange.insertNode(rootNode);
+      textNode.parentNode?.insertBefore(caretMarker, textNode.nextSibling);
+      rootNode.parentNode?.normalize();
+      preservePendingInlineFormatSelectionChanges = 2;
+    }, {
+      afterDomMutation: () => {
+        restoreCaretToMarker(caretMarker);
+      },
+    });
     return true;
   }
 
@@ -802,13 +809,17 @@ export function createWorkbenchInlineFormatController(
         ...afterLeaves,
       ]);
 
-      rebuildInlineRunContainer(container, rebuiltLeaves);
-      preservePendingInlineFormatSelectionChanges = Math.max(preservePendingInlineFormatSelectionChanges, 2);
-      restoreSelectionToMarkers(
-        container.querySelector<HTMLElement>('[data-inline-selection-marker="selection-start"]') ?? startMarker,
-        container.querySelector<HTMLElement>('[data-inline-selection-marker="selection-end"]') ?? endMarker,
-      );
-      options.syncEditorAfterStructuralChange();
+      options.syncEditorAfterStructuralChange(() => {
+        rebuildInlineRunContainer(container, rebuiltLeaves);
+        preservePendingInlineFormatSelectionChanges = Math.max(preservePendingInlineFormatSelectionChanges, 2);
+      }, {
+        afterDomMutation: () => {
+          restoreSelectionToMarkers(
+            container.querySelector<HTMLElement>('[data-inline-selection-marker="selection-start"]') ?? startMarker,
+            container.querySelector<HTMLElement>('[data-inline-selection-marker="selection-end"]') ?? endMarker,
+          );
+        },
+      });
       return;
     }
 
@@ -820,14 +831,15 @@ export function createWorkbenchInlineFormatController(
       && startFormatElement
       && startFormatElement.contains(range.commonAncestorContainer)
     ) {
-      unwrapSelectionFromSingleFormatElement(
-        selection,
-        range,
-        startFormatElement,
-        getInlineFormatTagNames(formatKey) ?? [startFormatElement.tagName],
-        options.editor,
-      );
-      options.syncEditorAfterStructuralChange();
+      options.syncEditorAfterStructuralChange(() => {
+        unwrapSelectionFromSingleFormatElement(
+          selection,
+          range,
+          startFormatElement,
+          getInlineFormatTagNames(formatKey) ?? [startFormatElement.tagName],
+          options.editor,
+        );
+      });
       return;
     }
 
@@ -839,22 +851,30 @@ export function createWorkbenchInlineFormatController(
       const fallbackRange = document.createRange();
       fallbackRange.setStart(range.startContainer, range.startOffset);
       fallbackRange.collapse(true);
-      range.insertNode(extractedFragment);
-      removeEmptyInlineFormatElementsForFormat(formatKey, options.editor);
-      selectInsertedNodes(selection, insertedNodes, fallbackRange);
-      options.syncEditorAfterStructuralChange();
+      options.syncEditorAfterStructuralChange(() => {
+        range.insertNode(extractedFragment);
+        removeEmptyInlineFormatElementsForFormat(formatKey, options.editor);
+      }, {
+        afterDomMutation: () => {
+          selectInsertedNodes(selection, insertedNodes, fallbackRange);
+        },
+      });
       return;
     }
 
     const wrapper = createInlineMarkElement(getInlineMarkForFormat(formatKey));
-    wrapper.append(extractedFragment);
-    range.insertNode(wrapper);
-    removeEmptyInlineFormatElementsForFormat(formatKey, options.editor);
-    selection.removeAllRanges();
-    const nextRange = document.createRange();
-    nextRange.selectNodeContents(wrapper);
-    selection.addRange(nextRange);
-    options.syncEditorAfterStructuralChange();
+    options.syncEditorAfterStructuralChange(() => {
+      wrapper.append(extractedFragment);
+      range.insertNode(wrapper);
+      removeEmptyInlineFormatElementsForFormat(formatKey, options.editor);
+    }, {
+      afterDomMutation: () => {
+        selection.removeAllRanges();
+        const nextRange = document.createRange();
+        nextRange.selectNodeContents(wrapper);
+        selection.addRange(nextRange);
+      },
+    });
   }
 
   return {

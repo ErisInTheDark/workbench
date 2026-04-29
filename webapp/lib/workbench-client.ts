@@ -26,7 +26,8 @@ import {
     replaceTag,
     unwrapTransparentSpans,
 } from "./workbench/dom-normalization";
-import { createEditHistoryManager } from "./workbench/EditHistoryManager";
+import type { EditHistorySelection } from "./workbench/edit-history";
+import { createEditHistoryManager, type EditHistoryReplayRequest } from "./workbench/EditHistoryManager";
 import type { EditorDocumentAdapter } from "./workbench/EditorDocumentAdapter";
 import { createFileSessionState } from "./workbench/FileSessionState";
 import {
@@ -101,6 +102,26 @@ import {
 const AUTO_REFRESH_INTERVAL_MS = 1500;
 const HISTORY_KEYFRAME_INTERVAL = 50;
 
+type EditOperationKind = "input" | "structural" | "replay";
+type EditOperationRefreshMode = "deferred" | "immediate";
+
+interface EditOperationContext {
+  kind: EditOperationKind;
+  nextContent: string | null;
+  nextSelection: EditHistorySelection | null;
+  previousContent: string;
+  previousSelection: EditHistorySelection | null;
+  recordHistory: boolean;
+  refreshMode: EditOperationRefreshMode;
+  syncStructuredStyles: boolean;
+  updateHistorySelection: boolean;
+}
+
+interface EditOperationHooks {
+  afterDomMutation?: () => void;
+  afterSelectionRestore?: () => void;
+}
+
 export async function initWorkbench(
   bindings: WorkbenchBindings & { elements?: WorkbenchDomElements | null } = {},
 ): Promise<() => void> {
@@ -165,9 +186,7 @@ export async function initWorkbench(
     getExpandedRangeRect,
     getMode: () => fileSessionState.mode,
     getVisualViewportMetrics,
-    onSyncEditorAfterStructuralChange: () => {
-      syncEditorAfterStructuralChange();
-    },
+    onSyncEditorAfterStructuralChange: syncEditorAfterStructuralChange,
     revisionHoverAcceptButton,
     revisionHoverRejectButton,
     revisionHoverToolbar,
@@ -242,12 +261,123 @@ export async function initWorkbench(
     updateRevisionHoverToolbar();
   }
 
+  function refreshEditorChrome() {
+    updateInlineToolbars();
+    updateCustomCaret();
+  }
+
   const refreshInlineToolbars = () => {
     window.requestAnimationFrame(() => {
-      updateInlineToolbars();
-      updateCustomCaret();
+      refreshEditorChrome();
     });
   };
+
+  class EditorMutationRunner {
+    private isRunning = false;
+
+    private createContext(
+      kind: EditOperationKind,
+      overrides: Partial<Omit<EditOperationContext, "kind">> = {},
+    ): EditOperationContext {
+      return {
+        kind,
+        nextContent: null,
+        nextSelection: null,
+        previousContent: fileSessionState.currentContent,
+        previousSelection: captureEditorSelection(editor),
+        recordHistory: kind !== "replay",
+        refreshMode: kind === "input" ? "deferred" : "immediate",
+        syncStructuredStyles: kind !== "replay",
+        updateHistorySelection: kind === "replay",
+        ...overrides,
+      };
+    }
+
+    runInputMutation(mutate: () => void, hooks: EditOperationHooks = {}): void {
+      const context = this.createContext("input");
+      this.run(context, mutate, hooks);
+    }
+
+    runStructuralMutation(mutate: () => void, hooks: EditOperationHooks = {}): void {
+      const context = this.createContext("structural");
+      this.run(context, mutate, hooks);
+    }
+
+    runHistoryReplay(request: EditHistoryReplayRequest): void {
+      const context = this.createContext("replay", {
+        nextSelection: request.selection,
+      });
+      this.run(context, () => {
+        clearPendingInlineFormats();
+        editorDocument.renderDocument(request.content, fileSessionState.mode);
+      });
+    }
+
+    run(context: EditOperationContext, mutate: () => void, hooks: EditOperationHooks = {}): void {
+      if (this.isRunning) {
+        throw new Error("Nested editor mutations are not supported.");
+      }
+
+      this.isRunning = true;
+      try {
+        mutate();
+
+        if (context.syncStructuredStyles) {
+          syncStructuredBlockStyles();
+        }
+
+        if (hooks.afterDomMutation) {
+          hooks.afterDomMutation();
+        }
+
+        inspectCurrentDraft();
+        context.nextContent = fileSessionState.currentContent;
+
+        if (context.nextSelection !== null || context.kind === "replay") {
+          editorDocument.restoreSelection(context.nextSelection);
+        }
+
+        if (hooks.afterSelectionRestore) {
+          hooks.afterSelectionRestore();
+        }
+
+        const currentSelection = captureEditorSelection(editor);
+        if (context.recordHistory) {
+          editHistoryManager.recordEditHistory(context.previousContent, context.nextContent, currentSelection);
+        }
+
+        if (context.updateHistorySelection) {
+          editHistoryManager.updateHistorySelection(currentSelection);
+        }
+
+        syncCurrentDraftBuffer();
+        editorClient.scheduleDiffGutterRefresh();
+        editorClient.refreshStatusMessage();
+
+        // Input mutations restore transient markers during the same browser input turn,
+        // so their chrome refresh waits one frame; structural and replay mutations can
+        // refresh immediately after selection restoration and draft inspection.
+        if (context.refreshMode === "deferred") {
+          refreshInlineToolbars();
+          return;
+        }
+
+        refreshEditorChrome();
+      } catch (error) {
+        console.error(`Workbench ${context.kind} mutation failed.`, {
+          nextContent: context.nextContent,
+          nextSelection: context.nextSelection,
+          previousContent: context.previousContent,
+          previousSelection: context.previousSelection,
+        }, error);
+        throw error;
+      } finally {
+        this.isRunning = false;
+      }
+    }
+  }
+
+  const editorMutationRunner = new EditorMutationRunner();
   let fileClient: ReturnType<typeof createWorkbenchFileClient>;
 
   const editorClient = createWorkbenchEditorClient(elements, {
@@ -305,25 +435,27 @@ export async function initWorkbench(
       updateCustomCaret();
     },
     handleEditorInput: (event) => {
-      const previousContent = fileSessionState.currentContent;
-      const { transformedListItem, commentCaretMarker: richInputCommentCaretMarker } = editorClient.handleRichInput(event);
-      const commentCaretMarker = richInputCommentCaretMarker ?? maybeActivateInlineCommentShortcut(event);
-      syncStructuredBlockStyles();
-      if (transformedListItem) {
-        restoreListItemSelection([transformedListItem], {
-          collapsed: true,
-          getListItemTextContainer,
-        });
-      }
-      if (commentCaretMarker) {
-        restoreCaretToMarker(commentCaretMarker);
-      }
-      inspectCurrentDraft();
-      editHistoryManager.recordEditHistory(previousContent, fileSessionState.currentContent, captureEditorSelection(editor));
-      syncCurrentDraftBuffer();
-      editorClient.scheduleDiffGutterRefresh();
-      editorClient.refreshStatusMessage();
-      refreshInlineToolbars();
+      let transformedListItem: HTMLLIElement | null = null;
+      let commentCaretMarker: HTMLElement | null = null;
+
+      editorMutationRunner.runInputMutation(() => {
+        const { transformedListItem: nextTransformedListItem, commentCaretMarker: richInputCommentCaretMarker } = editorClient.handleRichInput(event);
+        transformedListItem = nextTransformedListItem;
+        commentCaretMarker = richInputCommentCaretMarker ?? maybeActivateInlineCommentShortcut(event);
+      }, {
+        afterDomMutation: () => {
+          if (transformedListItem) {
+            restoreListItemSelection([transformedListItem], {
+              collapsed: true,
+              getListItemTextContainer,
+            });
+          }
+
+          if (commentCaretMarker) {
+            restoreCaretToMarker(commentCaretMarker);
+          }
+        },
+      });
     },
     handleEditorKeyDown: (event) => {
       if (!sessionState.currentPath || fileSessionState.mode !== "rich") {
@@ -610,39 +742,14 @@ export async function initWorkbench(
   };
 
   const editHistoryManager = createEditHistoryManager({
-    captureEditorSelection: () => captureEditorSelection(editor),
-    clearPendingInlineFormats: () => {
-      clearPendingInlineFormats();
+    applyHistoryReplay: (request) => {
+      editorMutationRunner.runHistoryReplay(request);
     },
     getCurrentContent: () => fileSessionState.currentContent,
     getHistory: () => fileSessionState.history,
-    getMode: () => fileSessionState.mode,
     historyKeyframeInterval: HISTORY_KEYFRAME_INTERVAL,
-    inspectCurrentDraft: () => {
-      inspectCurrentDraft();
-    },
-    refreshEditorChrome: () => {
-      updateFloatingToolbar();
-      updateRevisionHoverToolbar();
-      updateCustomCaret();
-    },
-    refreshStatusMessage: () => {
-      editorDocument.refreshStatusMessage();
-    },
-    renderEditorDocument: (content, mode) => {
-      editorDocument.renderDocument(content, mode);
-    },
-    restoreEditorSelection: (selection) => {
-      editorDocument.restoreSelection(selection);
-    },
-    scheduleDiffGutterRefresh: () => {
-      editorDocument.scheduleDiffGutterRefresh();
-    },
     setHistory: (history) => {
       fileSessionState.history = history;
-    },
-    syncCurrentDraftBuffer: () => {
-      syncCurrentDraftBuffer();
     },
   });
 
@@ -1060,17 +1167,8 @@ export async function initWorkbench(
     return createdPath;
   }
 
-  function syncEditorAfterStructuralChange() {
-    const previousContent = fileSessionState.currentContent;
-    syncStructuredBlockStyles();
-    inspectCurrentDraft();
-    editHistoryManager.recordEditHistory(previousContent, fileSessionState.currentContent, captureEditorSelection(editor));
-    syncCurrentDraftBuffer();
-    editorClient.scheduleDiffGutterRefresh();
-    editorClient.refreshStatusMessage();
-    updateFloatingToolbar();
-    updateRevisionHoverToolbar();
-    updateCustomCaret();
+  function syncEditorAfterStructuralChange(mutate: () => void, hooks: EditOperationHooks = {}) {
+    editorMutationRunner.runStructuralMutation(mutate, hooks);
   }
 
   function hideCustomCaret() {

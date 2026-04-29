@@ -25,7 +25,10 @@ export interface RevisionHoverToolbarControllerOptions {
   getExpandedRangeRect: (range: Range) => DOMRect;
   getMode: () => "rich" | "plain";
   getVisualViewportMetrics: () => VisualViewportMetrics;
-  onSyncEditorAfterStructuralChange: () => void;
+  onSyncEditorAfterStructuralChange: (
+    mutate: () => void,
+    options?: { afterDomMutation?: () => void; afterSelectionRestore?: () => void },
+  ) => void;
   revisionHoverAcceptButton: HTMLButtonElement;
   revisionHoverRejectButton: HTMLButtonElement;
   revisionHoverToolbar: HTMLElement;
@@ -308,31 +311,34 @@ export function createRevisionHoverToolbarController(
     setHoveredRevisionNode(null);
     setActiveRevisionNodes([]);
 
-    for (const target of targets) {
-      const revisionKind = getHoveredRevisionKind(target);
-      const parent = target.parentNode;
-      if (!revisionKind || !parent) {
-        continue;
-      }
+    onSyncEditorAfterStructuralChange(() => {
+      for (const target of targets) {
+        const revisionKind = getHoveredRevisionKind(target);
+        const parent = target.parentNode;
+        if (!revisionKind || !parent) {
+          continue;
+        }
 
-      if (revisionKind === "comment") {
+        if (revisionKind === "comment") {
+          target.remove();
+          continue;
+        }
+
+        if ((revisionKind === "del" && action === "accept") || (revisionKind === "ins" && action === "reject")) {
+          target.remove();
+          continue;
+        }
+
+        while (target.firstChild) {
+          parent.insertBefore(target.firstChild, target);
+        }
         target.remove();
-        continue;
       }
-
-      if ((revisionKind === "del" && action === "accept") || (revisionKind === "ins" && action === "reject")) {
-        target.remove();
-        continue;
-      }
-
-      while (target.firstChild) {
-        parent.insertBefore(target.firstChild, target);
-      }
-      target.remove();
-    }
-
-    restoreCaretToMarker(caretMarker);
-    onSyncEditorAfterStructuralChange();
+    }, {
+      afterDomMutation: () => {
+        restoreCaretToMarker(caretMarker);
+      },
+    });
   }
 
   return {

@@ -24,7 +24,10 @@ export interface WorkbenchListStructureControllerOptions {
   isSelectionAtListItemStart: (selection: Selection, item: HTMLLIElement) => boolean;
   isTopLevelListItem: (item: HTMLLIElement) => boolean;
   outdentListItems: (items: HTMLLIElement[]) => HTMLLIElement[];
-  syncEditorAfterStructuralChange: () => void;
+  syncEditorAfterStructuralChange: (
+    mutate: () => void,
+    options?: { afterDomMutation?: () => void; afterSelectionRestore?: () => void },
+  ) => void;
   unwrapTopLevelListItemToParagraph: (item: HTMLLIElement) => HTMLElement | null;
   updateFloatingToolbar: () => void;
 }
@@ -52,19 +55,27 @@ export function createWorkbenchListStructureController(
 
   function breakOutOfListItem(listItem: HTMLLIElement) {
     if (isTopLevelListItem(listItem)) {
-      const paragraph = unwrapTopLevelListItemToParagraph(listItem);
-      editor.focus();
-      if (paragraph) {
-        syncEditorAfterStructuralChange();
-        restoreParagraphSelection(paragraph);
-        updateFloatingToolbar();
-      }
+      let paragraph: HTMLElement | null = null;
+      syncEditorAfterStructuralChange(() => {
+        paragraph = unwrapTopLevelListItemToParagraph(listItem);
+        editor.focus();
+      }, {
+        afterDomMutation: () => {
+          if (!paragraph) {
+            return;
+          }
+
+          restoreParagraphSelection(paragraph);
+          updateFloatingToolbar();
+        },
+      });
       return true;
     }
 
-    document.execCommand("outdent", false);
-    editor.focus();
-    syncEditorAfterStructuralChange();
+    syncEditorAfterStructuralChange(() => {
+      document.execCommand("outdent", false);
+      editor.focus();
+    });
     return true;
   }
 
@@ -87,29 +98,43 @@ export function createWorkbenchListStructureController(
     event.preventDefault();
 
     if (event.shiftKey) {
-      const movedItems = outdentListItems(selectedItems);
+      let movedItems: HTMLLIElement[] = [];
+      syncEditorAfterStructuralChange(() => {
+        movedItems = outdentListItems(selectedItems);
+        editor.focus();
+      }, {
+        afterDomMutation: () => {
+          if (!movedItems.length) {
+            return;
+          }
+
+          restoreListItemSelection(movedItems, {
+            collapsed: shouldCollapseSelection,
+            getListItemTextContainer,
+          });
+          updateFloatingToolbar();
+        },
+      });
+      return true;
+    }
+
+    let movedItems: HTMLLIElement[] = [];
+    syncEditorAfterStructuralChange(() => {
+      movedItems = indentListItems(selectedItems);
       editor.focus();
-      if (movedItems.length) {
-        syncEditorAfterStructuralChange();
+    }, {
+      afterDomMutation: () => {
+        if (!movedItems.length) {
+          return;
+        }
+
         restoreListItemSelection(movedItems, {
           collapsed: shouldCollapseSelection,
           getListItemTextContainer,
         });
         updateFloatingToolbar();
-      }
-      return true;
-    }
-
-    const movedItems = indentListItems(selectedItems);
-    editor.focus();
-    if (movedItems.length) {
-      syncEditorAfterStructuralChange();
-      restoreListItemSelection(movedItems, {
-        collapsed: shouldCollapseSelection,
-        getListItemTextContainer,
-      });
-      updateFloatingToolbar();
-    }
+      },
+    });
     return true;
   }
 
@@ -140,10 +165,14 @@ export function createWorkbenchListStructureController(
     }
 
     event.preventDefault();
-    convertCommentBlockToParagraph(paragraph);
-    syncEditorAfterStructuralChange();
-    restoreParagraphSelection(paragraph);
-    updateFloatingToolbar();
+    syncEditorAfterStructuralChange(() => {
+      convertCommentBlockToParagraph(paragraph);
+    }, {
+      afterDomMutation: () => {
+        restoreParagraphSelection(paragraph);
+        updateFloatingToolbar();
+      },
+    });
     return true;
   }
 
@@ -163,12 +192,21 @@ export function createWorkbenchListStructureController(
     }
 
     event.preventDefault();
-    const nextParagraph = document.createElement("p");
-    nextParagraph.append(document.createElement("br"));
-    paragraph.parentNode?.insertBefore(nextParagraph, paragraph.nextSibling);
-    syncEditorAfterStructuralChange();
-    restoreParagraphSelection(nextParagraph);
-    updateFloatingToolbar();
+    let nextParagraph: HTMLParagraphElement | null = null;
+    syncEditorAfterStructuralChange(() => {
+      nextParagraph = document.createElement("p");
+      nextParagraph.append(document.createElement("br"));
+      paragraph.parentNode?.insertBefore(nextParagraph, paragraph.nextSibling);
+    }, {
+      afterDomMutation: () => {
+        if (!nextParagraph) {
+          return;
+        }
+
+        restoreParagraphSelection(nextParagraph);
+        updateFloatingToolbar();
+      },
+    });
     return true;
   }
 

@@ -6,11 +6,10 @@ Keep this file focused on unresolved architecture work for the workbench so futu
 
 ### Implementation Master Order
 
-- [ ] 1. Implement `Unsafe Event Handler Chains with Hidden Dependencies` after the state-separation work so `EditorMutationRunner` can build on `EditHistoryManager` without competing with ownership changes.
-- [ ] 2. Implement `Unclean Disposal and Lifecycle` before the polling item so `LifecycleScope` becomes the shared ownership boundary for timers and subscriptions.
-- [ ] 3. Implement `Polling Loops Have No Centralized Coordination` after lifecycle scopes exist so recurring refresh and debounce work use the same ownership model.
-- [ ] 4. Implement `Too Many DOM Refs Passed Deep into the System` after the client boundaries are stable enough to narrow DOM surfaces with confidence.
-- [ ] 5. Implement `Utility File Proliferation Without Coherent Layering` last, after the earlier ownership and state work has finalized which files belong to which layer.
+- [ ] 1. Implement `Unclean Disposal and Lifecycle` before the polling item so `LifecycleScope` becomes the shared ownership boundary for timers and subscriptions.
+- [ ] 2. Implement `Polling Loops Have No Centralized Coordination` after lifecycle scopes exist so recurring refresh and debounce work use the same ownership model.
+- [ ] 3. Implement `Too Many DOM Refs Passed Deep into the System` after the client boundaries are stable enough to narrow DOM surfaces with confidence.
+- [ ] 4. Implement `Utility File Proliferation Without Coherent Layering` last, after the earlier ownership and state work has finalized which files belong to which layer.
 
 
 ## Shared Foundations
@@ -61,68 +60,6 @@ interface EditorUIState {
 ## Architecture Critique: Workbench Client System
 The sections below stay in critique order rather than implementation order. Follow `Implementation Master Order` when sequencing work.
 Severity labels describe architectural impact and risk, not the order in which the work should be implemented.
-
-### SEVERITY 2: Unsafe Event Handler Chains with Hidden Dependencies
-
-Problem: the event handlers are a maze of interdependent operations with no clear sequencing or rollback. Example at lines 310-325 (`handleEditorInput`):
-
-```ts
-const previousContent = fileSessionState.currentContent;
-const { transformedListItem, commentCaretMarker: richInputCommentCaretMarker } = editorClient.handleRichInput(event);
-const commentCaretMarker = richInputCommentCaretMarker ?? maybeActivateInlineCommentShortcut(event);
-syncStructuredBlockStyles();
-if (transformedListItem) {
-	restoreListItemSelection([transformedListItem], { collapsed: true, getListItemTextContainer });
-}
-if (commentCaretMarker) {
-	restoreCaretToMarker(commentCaretMarker);
-}
-inspectCurrentDraft();
-recordEditHistory(previousContent, fileSessionState.currentContent, captureEditorSelection(editor));
-syncCurrentDraftBuffer();
-editorClient.scheduleDiffGutterRefresh();
-editorClient.refreshStatusMessage();
-refreshInlineToolbars();
-```
-
-- No error handling if any step fails
-- Order matters but isn't documented
-- `inspectCurrentDraft()` mutates `fileSessionState.currentContent`, which is then used in `recordEditHistory()` - hidden dependency
-- 11 operations with no atomicity guarantee
-
-The same mixed pipeline also appears in `applyHistoryState()` and `syncEditorAfterStructuralChange()`, which means the problem is not a single long handler but a repeated mutation lifecycle with hidden state transitions.
-
-Feasibility verdict:
-- The critique is valid and should stay at severity 2.
-- The current proposal is pointed in the right direction, but the exact `EditTransaction` sketch is not the best target because it implies rollback and commit semantics the workbench does not actually have.
-- The better target is a shared operation runner with an explicit operation context and a fixed edit lifecycle that all three flows use.
-
-Concrete reshaping: introduce a shared mutation pipeline:
-1. `EditOperationContext`: owns per-operation data such as `previousContent`, `previousSelection`, `nextContent`, `nextSelection`, mutation artifacts like transformed list items or caret markers, and flags for `recordHistory`, `syncDraftBuffer`, and `refreshUi`.
-2. `EditorMutationRunner`: enforces one ordered execution model: capture baseline, run DOM mutation callback, normalize and inspect draft state, restore selection or markers, delegate history recording or replay to `EditHistoryManager`, sync draft buffer, and run terminal UI refresh.
-3. Operation-specific entry points: `runInputMutation`, `runStructuralMutation`, and `runHistoryReplay` stay behavior-specific but all delegate to the same runner.
-4. Error handling model: do not promise rollback. Centralize logging and failure boundaries at the runner level so partial failures are debuggable instead of silently hidden inside ad-hoc handler chains.
-
-`EditOperationContext` is a data-only object for one logical mutation lifecycle. It does not own timers, subscriptions, or any client-lifetime resources.
-
-Implementation staging for the later checklist item:
-1. Define `EditOperationContext` and `EditorMutationRunner` next to the coordinator code and migrate `handleEditorInput()` first.
-2. Migrate `syncEditorAfterStructuralChange()` onto the same runner so structural edits use the same mutation lifecycle.
-3. Migrate `applyHistoryState()` as a replay-mode operation that skips history recording but keeps the same baseline capture, draft inspection, selection restoration, and terminal refresh lifecycle.
-4. Remove the duplicated tail sequences for draft sync, diff refresh, status refresh, and toolbar or caret updates once all three paths use the runner.
-
-Non-goals for this item:
-- Do not introduce rollback or transactional commit semantics
-- Do not hide errors behind success or error return objects that callers will ignore
-- Do not fold DOM utility extraction or history ownership changes into this item; those belong to later checklist items
-
-Concrete reshaping: replace the current transaction sketch with a shared runner shaped more like:
-
-```ts
-class EditorMutationRunner {
-	run(context: EditOperationContext, mutate: () => void): void;
-}
-```
 
 ### SEVERITY 2: Utility File Proliferation Without Coherent Layering
 

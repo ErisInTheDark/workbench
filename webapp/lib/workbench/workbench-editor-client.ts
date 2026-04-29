@@ -88,7 +88,10 @@ export type EditorUIStateListener = (snapshot: EditorUIStateSnapshot) => void;
 
 export interface WorkbenchEditorFormatCommandOptions {
   clearPendingInlineFormats: () => void;
-  syncEditorAfterStructuralChange: () => void;
+  syncEditorAfterStructuralChange: (
+    mutate: () => void,
+    options?: { afterDomMutation?: () => void; afterSelectionRestore?: () => void },
+  ) => void;
   toggleCodeSelection: (selection: Selection, range: Range) => void;
   toggleInlineFormatSelection: (
     selection: Selection,

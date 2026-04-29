@@ -15,7 +15,10 @@ export interface WorkbenchFormatCommandControllerOptions {
   editor: HTMLDivElement;
   getMode: () => EditorMode;
   clearPendingInlineFormats: () => void;
-  syncEditorAfterStructuralChange: () => void;
+  syncEditorAfterStructuralChange: (
+    mutate: () => void,
+    options?: { afterDomMutation?: () => void; afterSelectionRestore?: () => void },
+  ) => void;
   toggleCodeSelection: (selection: Selection, range: Range) => void;
   toggleInlineFormatSelection: (
     selection: Selection,
@@ -95,13 +98,17 @@ export function createWorkbenchFormatCommandController(
     }
 
     const wrapper = document.createElement(tagName);
-    wrapper.append(range.extractContents());
-    range.insertNode(wrapper);
-    selection.removeAllRanges();
-    const nextRange = document.createRange();
-    nextRange.selectNodeContents(wrapper);
-    selection.addRange(nextRange);
-    options.syncEditorAfterStructuralChange();
+    options.syncEditorAfterStructuralChange(() => {
+      wrapper.append(range.extractContents());
+      range.insertNode(wrapper);
+    }, {
+      afterDomMutation: () => {
+        selection.removeAllRanges();
+        const nextRange = document.createRange();
+        nextRange.selectNodeContents(wrapper);
+        selection.addRange(nextRange);
+      },
+    });
   }
 
   function runEditorCommand(command: string, value: string | null = null) {
@@ -119,10 +126,11 @@ export function createWorkbenchFormatCommandController(
       return;
     }
 
-    options.clearPendingInlineFormats();
-    document.execCommand(command, false, value);
-    options.editor.focus();
-    options.syncEditorAfterStructuralChange();
+    options.syncEditorAfterStructuralChange(() => {
+      options.clearPendingInlineFormats();
+      document.execCommand(command, false, value);
+      options.editor.focus();
+    });
   }
 
   function applyToolbarCommand(command: string) {

@@ -10,7 +10,10 @@ import { selectInsertedNodes } from "./selection-dom";
 export interface WorkbenchCodeFormatControllerOptions {
   editor: HTMLDivElement;
   getProtectedEmptyInlineFormatElements: (root: ParentNode) => Set<HTMLElement>;
-  syncEditorAfterStructuralChange: () => void;
+  syncEditorAfterStructuralChange: (
+    mutate: () => void,
+    options?: { afterDomMutation?: () => void; afterSelectionRestore?: () => void },
+  ) => void;
 }
 
 export interface WorkbenchCodeFormatController {
@@ -117,10 +120,14 @@ export function createWorkbenchCodeFormatController(
     const fallbackRange = document.createRange();
     fallbackRange.setStartBefore(codeElement);
     fallbackRange.collapse(true);
-    codeElement.replaceWith(replacement);
-    removeEmptyCodeElements();
-    selectInsertedNodes(selection, insertedNodes, fallbackRange);
-    options.syncEditorAfterStructuralChange();
+    options.syncEditorAfterStructuralChange(() => {
+      codeElement.replaceWith(replacement);
+      removeEmptyCodeElements();
+    }, {
+      afterDomMutation: () => {
+        selectInsertedNodes(selection, insertedNodes, fallbackRange);
+      },
+    });
   }
 
   function fragmentContainsOnlyCodeText(fragment: DocumentFragment) {
@@ -172,23 +179,31 @@ export function createWorkbenchCodeFormatController(
       const fallbackRange = document.createRange();
       fallbackRange.setStart(range.startContainer, range.startOffset);
       fallbackRange.collapse(true);
-      range.insertNode(extractedFragment);
-      removeEmptyCodeElements();
-      selectInsertedNodes(selection, insertedNodes, fallbackRange);
-      options.syncEditorAfterStructuralChange();
+      options.syncEditorAfterStructuralChange(() => {
+        range.insertNode(extractedFragment);
+        removeEmptyCodeElements();
+      }, {
+        afterDomMutation: () => {
+          selectInsertedNodes(selection, insertedNodes, fallbackRange);
+        },
+      });
       return;
     }
 
     unwrapCodeElements(extractedFragment);
     const wrapper = document.createElement("code");
-    wrapper.append(extractedFragment);
-    range.insertNode(wrapper);
-    removeEmptyCodeElements();
-    selection.removeAllRanges();
-    const nextRange = document.createRange();
-    nextRange.selectNodeContents(wrapper);
-    selection.addRange(nextRange);
-    options.syncEditorAfterStructuralChange();
+    options.syncEditorAfterStructuralChange(() => {
+      wrapper.append(extractedFragment);
+      range.insertNode(wrapper);
+      removeEmptyCodeElements();
+    }, {
+      afterDomMutation: () => {
+        selection.removeAllRanges();
+        const nextRange = document.createRange();
+        nextRange.selectNodeContents(wrapper);
+        selection.addRange(nextRange);
+      },
+    });
   }
 
   return {
