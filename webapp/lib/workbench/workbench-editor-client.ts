@@ -1,12 +1,12 @@
 /*
  * Exports:
- * - createInitialWorkbenchEditorSnapshot: create the default editor snapshot used before the editor client is constructed. Keywords: workbench, editor, snapshot, initial state.
+ * - createInitialEditorUIStateSnapshot: create the default editor UI snapshot used before the editor client is constructed. Keywords: workbench, editor, UI, snapshot, initial state.
  * - WorkbenchEditorFormatCommandOptions: delayed formatting-command delegates injected after inline and code controllers exist. Keywords: workbench, editor, format, command, delegates.
  * - EditorMode: current editor rendering mode. Keywords: workbench, editor, mode.
  * - SaveGuardIssue: persisted editor save-guard mismatch details. Keywords: workbench, editor, save guard, mismatch.
- * - WorkbenchEditorState: owned editor shell state for UI-only concerns such as font size, transient status, and thread labels. Keywords: workbench, editor, state, UI.
- * - WorkbenchEditorSnapshot: readonly projection of editor-owned UI state. Keywords: workbench, editor, snapshot, UI.
- * - WorkbenchEditorListener: subscriber signature for editor shell changes. Keywords: workbench, editor, subscribe.
+ * - EditorUIState: owned editor shell state for UI-only concerns such as font size, transient status, and thread labels. Keywords: workbench, editor, state, UI.
+ * - EditorUIStateSnapshot: readonly projection of editor-owned UI state. Keywords: workbench, editor, snapshot, UI.
+ * - EditorUIStateListener: subscriber signature for editor shell changes. Keywords: workbench, editor, subscribe.
  * - WorkbenchEditorClientOptions: callbacks, structural-edit dependencies, and state readers delegated from the coordinator for editor behavior and deterministic rendering. Keywords: workbench, editor, callbacks, structure, status, state.
  * - WorkbenchEditorClient: public surface for the editor shell client, including diff gutter refresh scheduling, delayed format-command configuration, and editor-owned structural input handling. Keywords: workbench, editor, client, diff gutter, format, list structure, rich input, dispose.
  * - createWorkbenchEditorClient: create the editor shell client that owns DOM refs, dialogs, diff gutter rendering, structural input wiring, delayed format-command setup, event listener cleanup, and deterministic status messages. Keywords: workbench, editor, DOM, status, structure, format, rich input, diff gutter, listeners.
@@ -73,18 +73,18 @@ interface DiffAnchorMetrics {
   top: number;
 }
 
-export interface WorkbenchEditorState {
+export interface EditorUIState {
   fontSize: number;
   statusMessage: string;
   threadLabel: string;
 }
 
-export interface WorkbenchEditorSnapshot {
+export interface EditorUIStateSnapshot {
   fontSize: number;
   statusMessage: string;
 }
 
-export type WorkbenchEditorListener = (snapshot: WorkbenchEditorSnapshot) => void;
+export type EditorUIStateListener = (snapshot: EditorUIStateSnapshot) => void;
 
 export interface WorkbenchEditorFormatCommandOptions {
   clearPendingInlineFormats: () => void;
@@ -135,7 +135,7 @@ export interface WorkbenchEditorClient {
   clearSelectionView: () => void;
   configureFormatCommands: (options: WorkbenchEditorFormatCommandOptions) => void;
   dispose: () => void;
-  getSnapshot: () => WorkbenchEditorSnapshot;
+  getSnapshot: () => EditorUIStateSnapshot;
   handleFormatKeyDown: (event: KeyboardEvent) => boolean;
   handleRichInput: (event: Event) => { transformedListItem: HTMLLIElement | null; commentCaretMarker: HTMLElement | null };
   handleListStructureKeyDown: (event: KeyboardEvent) => boolean;
@@ -148,17 +148,17 @@ export interface WorkbenchEditorClient {
   showResetDraftDialog: () => void;
   showSaveConflict: (conflict: SaveConflictPayload) => void;
   showThreadPlaceholder: (label: string) => void;
-  subscribe: (listener: WorkbenchEditorListener) => () => void;
+  subscribe: (listener: EditorUIStateListener) => () => void;
 }
 
-export function createInitialWorkbenchEditorSnapshot(): WorkbenchEditorSnapshot {
+export function createInitialEditorUIStateSnapshot(): EditorUIStateSnapshot {
   return {
     fontSize: readStoredFontSize(),
     statusMessage: DEFAULT_STATUS_MESSAGE,
   };
 }
 
-function createInitialEditorState(): WorkbenchEditorState {
+function createInitialEditorState(): EditorUIState {
   return {
     fontSize: readStoredFontSize(),
     statusMessage: DEFAULT_STATUS_MESSAGE,
@@ -523,7 +523,7 @@ export function createWorkbenchEditorClient(
   elements: WorkbenchDomElements,
   options: WorkbenchEditorClientOptions,
 ): WorkbenchEditorClient {
-  const listeners = new Set<WorkbenchEditorListener>();
+  const listeners = new Set<EditorUIStateListener>();
   const state = createInitialEditorState();
   const abortController = new AbortController();
   const { signal } = abortController;
@@ -541,7 +541,7 @@ export function createWorkbenchEditorClient(
   let previousSessionSnapshot = options.sessionState.getSnapshot();
   let previousFileSnapshot = options.fileSessionState.getSnapshot();
 
-  function getSnapshot(): WorkbenchEditorSnapshot {
+  function getSnapshot(): EditorUIStateSnapshot {
     return {
       fontSize: state.fontSize,
       statusMessage: state.statusMessage,
@@ -555,7 +555,7 @@ export function createWorkbenchEditorClient(
     }
   }
 
-  function subscribe(listener: WorkbenchEditorListener) {
+  function subscribe(listener: EditorUIStateListener) {
     listeners.add(listener);
     return () => {
       listeners.delete(listener);

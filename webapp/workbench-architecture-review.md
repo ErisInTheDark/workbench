@@ -6,13 +6,12 @@ Keep this file focused on unresolved architecture work for the workbench so futu
 
 ### Implementation Master Order
 
-- [ ] 1. Implement `No Clear Data vs. UI State Separation` next so the editor shell and coordinator stop mirroring authoritative file and selection state.
-- [ ] 2. Implement `Bidirectional Callback Chains Between Subclients` after step 1, because it depends on one-way state ownership already existing.
-- [ ] 3. Implement `Unsafe Event Handler Chains with Hidden Dependencies` after the state-separation work so `EditorMutationRunner` can build on `EditHistoryManager` without competing with ownership changes.
-- [ ] 4. Implement `Unclean Disposal and Lifecycle` before the polling item so `LifecycleScope` becomes the shared ownership boundary for timers and subscriptions.
-- [ ] 5. Implement `Polling Loops Have No Centralized Coordination` after lifecycle scopes exist so recurring refresh and debounce work use the same ownership model.
-- [ ] 6. Implement `Too Many DOM Refs Passed Deep into the System` after the client boundaries are stable enough to narrow DOM surfaces with confidence.
-- [ ] 7. Implement `Utility File Proliferation Without Coherent Layering` last, after the earlier ownership and state work has finalized which files belong to which layer.
+- [ ] 1. Implement `Bidirectional Callback Chains Between Subclients` next, now that one-way state ownership exists.
+- [ ] 2. Implement `Unsafe Event Handler Chains with Hidden Dependencies` after the state-separation work so `EditorMutationRunner` can build on `EditHistoryManager` without competing with ownership changes.
+- [ ] 3. Implement `Unclean Disposal and Lifecycle` before the polling item so `LifecycleScope` becomes the shared ownership boundary for timers and subscriptions.
+- [ ] 4. Implement `Polling Loops Have No Centralized Coordination` after lifecycle scopes exist so recurring refresh and debounce work use the same ownership model.
+- [ ] 5. Implement `Too Many DOM Refs Passed Deep into the System` after the client boundaries are stable enough to narrow DOM surfaces with confidence.
+- [ ] 6. Implement `Utility File Proliferation Without Coherent Layering` last, after the earlier ownership and state work has finalized which files belong to which layer.
 
 
 ## Shared Foundations
@@ -351,59 +350,6 @@ threadLifecycle.scheduleOnce("thread-refresh", 350, () => {
 	void refreshThreads();
 });
 ```
-
-### SEVERITY 3: No Clear Data vs. UI State Separation
-
-Problem: the remaining editor-owned snapshot still mixes authoritative-looking data mirrors with UI-only state:
-
-```ts
-interface WorkbenchEditorSnapshot {
-	currentPath: string;
-	currentThreadId: string;
-	dirty: boolean;
-	fontSize: number;
-	mode: EditorMode;
-	pendingWriteConflict: SaveConflictPayload | null;
-	saveIssue: SaveGuardIssue | null;
-	statusMessage: string;
-}
-```
-
-This means:
-- File and selection mirrors still travel inside an editor-owned snapshot alongside font size and status messaging
-- Changes to `dirty`, `mode`, or save-guard state still flow through the same editor subscription channel as UI-only updates such as font size
-- It is still harder than it should be to test data-state transitions independently from editor shell rendering
-
-Feasibility verdict:
-- The critique is valid, but the current two-bucket split is not precise enough.
-- The better target is not `WorkbenchDataState` plus `WorkbenchUIState` as two large buckets. It is a small set of owned state layers with clear authority.
-- `dirty`, `mode`, `saveIssue`, and `pendingWriteConflict` are not UI-only fields. They belong with authoritative file session state.
-
-Concrete reshaping:
-
-1. `SessionState`: use the canonical target state model above and keep it as the single selection authority.
-
-2. `FileSessionState`: use the canonical target state model above and keep it as the authoritative file editing and persistence state.
-
-3. `EditorUIState`: use the canonical target state model above and keep it limited to UI-only concerns.
-
-4. Project and thread stay in their own owned snapshots instead of being folded into a new generic data bag.
-
-5. The coordinator becomes a composer of snapshots from `SessionState`, `FileSessionState`, project, thread, and editor UI state instead of the authoritative owner of one master mutable state object.
-
-Implementation staging for the later checklist item:
-1. Use the existing `SessionState` and `FileSessionState` instead of reintroducing them here.
-2. Migrate file lifecycle code to mutate `FileSessionState` directly and stop routing that state through the editor snapshot.
-3. Reduce editor-owned state to UI-only concerns and make rendered status derive from `FileSessionState` plus `SessionState`.
-4. Shrink or delete the top-level `WorkbenchState` bag so the coordinator becomes a composer of owned snapshots rather than the owner of everything.
-
-Non-goals for this item:
-- Do not put `dirty`, `mode`, `saveIssue`, or `pendingWriteConflict` into `WorkbenchUIState`
-- Do not create a new generic `WorkbenchDataState` bag that reabsorbs project and thread state
-- Do not solve event-bus or handler-pipeline problems inside this item; this item is about state authority
-
-Canonical state shape:
-- Use the `Canonical Target State Model` in `Shared Foundations` above.
 
 ### SEVERITY 3: Unclean Disposal and Lifecycle
 

@@ -3,7 +3,6 @@
  * - initWorkbench: wire the workbench DOM, polling, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, polling.
  */
 
-import type { RateLimitSnapshot } from "./codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
 import { getCurrentTurn } from "./codex/thread-state";
 import type {
@@ -84,31 +83,20 @@ import {
 } from "./workbench/viewport-metrics";
 import { hasRequiredWorkbenchDomElements, type WorkbenchDomElements } from "./workbench/workbench-dom";
 import {
-    createInitialWorkbenchEditorSnapshot,
     createWorkbenchEditorClient,
     type EditorMode,
+    type EditorUIStateSnapshot,
     type SaveGuardIssue,
-    type WorkbenchEditorSnapshot,
 } from "./workbench/workbench-editor-client";
 import {
     createWorkbenchFileClient,
 } from "./workbench/workbench-file-client";
 import {
-    cloneTreeNodes,
     createWorkbenchProjectClient,
-    type WorkbenchProjectSnapshot,
 } from "./workbench/workbench-project-client";
 import {
     createWorkbenchThreadClient,
-    type WorkbenchThreadSnapshot,
 } from "./workbench/workbench-thread-client";
-
-interface WorkbenchState {
-  editor: WorkbenchEditorSnapshot;
-  lastLoggedSaveIssue: SaveGuardIssue | null;
-  project: WorkbenchProjectSnapshot;
-  thread: WorkbenchThreadSnapshot;
-}
 
 const AUTO_REFRESH_INTERVAL_MS = 1500;
 const HISTORY_KEYFRAME_INTERVAL = 50;
@@ -147,28 +135,22 @@ export async function initWorkbench(
   const abortController = new AbortController();
   let autoRefreshTimeoutId: number | null = null;
   let autoRefreshStopped = false;
-  let codexThreadRefreshTimeoutId: number | null = null;
-  let codexThreadListRefreshTimeoutId: number | null = null;
-  const rateLimitsByHarness = new Map<WorkbenchHarness, RateLimitSnapshot | null>();
   let editorHasFocus = false;
+  let explorerStateChangeScheduled = false;
   let isComposing = false;
   const editorShell = elements.diffGutter.parentElement;
   let reportStatusMessage = (_message: string) => {};
+  let lastLoggedSaveIssue: SaveGuardIssue | null = null;
   const projectClient = createWorkbenchProjectClient();
   const threadClient = createWorkbenchThreadClient({
     onStatusMessage: (message) => {
       reportStatusMessage(message);
     },
   });
-  const state: WorkbenchState = {
-    editor: createInitialWorkbenchEditorSnapshot(),
-    lastLoggedSaveIssue: null,
-    project: projectClient.getSnapshot(),
-    thread: threadClient.getSnapshot(),
-  };
+  const initialThreadSnapshot = threadClient.getSnapshot();
   const sessionState = createSessionState({
-    currentThread: state.thread.currentThread,
-    currentThreadId: state.thread.currentThreadId,
+    currentThread: initialThreadSnapshot.currentThread,
+    currentThreadId: initialThreadSnapshot.currentThreadId,
   });
   const fileSessionState = createFileSessionState();
   const {
@@ -195,7 +177,6 @@ export async function initWorkbench(
   }
 
   const unsubscribeProjectClient = projectClient.subscribe((snapshot) => {
-    state.project = snapshot;
     threadClient.setProjectContext({
       root: snapshot.root,
       rootPath: snapshot.rootPath,
@@ -203,28 +184,25 @@ export async function initWorkbench(
     emitExplorerStateChange();
   });
 
+  let previousThreadSnapshot = initialThreadSnapshot;
   const unsubscribeThreadClient = threadClient.subscribe((snapshot) => {
-    const previousThread = state.thread.currentThread;
-    const previousRateLimits = state.thread.rateLimits;
-    const previousThreadId = state.thread.currentThreadId;
-    const previousThreads = state.thread.threads;
-    const previousThreadsError = state.thread.threadsError;
+    const lastSnapshot = previousThreadSnapshot;
+    previousThreadSnapshot = snapshot;
 
-    state.thread = snapshot;
-    if (!areThreadPayloadsEquivalent(previousThread, snapshot.currentThread)) {
+    if (!areThreadPayloadsEquivalent(lastSnapshot.currentThread, snapshot.currentThread)) {
       applyCurrentThread(snapshot.currentThread);
     }
 
     applyCurrentThreadId(snapshot.currentThreadId);
 
-    if (previousRateLimits !== snapshot.rateLimits) {
+    if (lastSnapshot.rateLimits !== snapshot.rateLimits) {
       emitRateLimitsChange();
     }
 
     if (
-      previousThreadId !== snapshot.currentThreadId
-      || previousThreads !== snapshot.threads
-      || previousThreadsError !== snapshot.threadsError
+      lastSnapshot.currentThreadId !== snapshot.currentThreadId
+      || lastSnapshot.threads !== snapshot.threads
+      || lastSnapshot.threadsError !== snapshot.threadsError
     ) {
       emitExplorerStateChange();
     }
@@ -462,6 +440,7 @@ export async function initWorkbench(
     sessionState,
     shouldBlockBeforeUnload: () => Boolean(fileSessionState.saveIssue) || Array.from(fileSessionState.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue)),
   });
+  let previousEditorUiSnapshot: EditorUIStateSnapshot = editorClient.getSnapshot();
   reportStatusMessage = (message) => {
     editorClient.refreshStatusMessage(message);
   };
@@ -527,8 +506,8 @@ export async function initWorkbench(
     }
   });
   const unsubscribeEditorClient = editorClient.subscribe((snapshot) => {
-    const previousSnapshot = state.editor;
-    state.editor = snapshot;
+    const previousSnapshot = previousEditorUiSnapshot;
+    previousEditorUiSnapshot = snapshot;
 
     if (previousSnapshot.fontSize !== snapshot.fontSize) {
       emitExplorerStateChange();
@@ -667,7 +646,7 @@ export async function initWorkbench(
     },
     sessionState,
     setLastLoggedSaveIssue: (issue) => {
-      state.lastLoggedSaveIssue = issue;
+      lastLoggedSaveIssue = issue;
     },
     syncSelectionToUrl: syncCurrentSelectionToUrl,
     threadClient,
@@ -770,23 +749,39 @@ export async function initWorkbench(
   }
 
   function getExplorerSnapshot(): ExplorerSnapshot {
+    const projectSnapshot = projectClient.getSnapshot();
+    const threadSnapshot = threadClient.getSnapshot();
+    const editorUiSnapshot = editorClient.getSnapshot();
+
     return {
-      root: state.project.root,
-      rootPath: state.project.rootPath,
-      tree: cloneTreeNodes(state.project.tree),
-      threads: state.thread.threads,
-      changes: { ...state.project.changes },
+      root: projectSnapshot.root,
+      rootPath: projectSnapshot.rootPath,
+      tree: projectSnapshot.tree,
+      threads: threadSnapshot.threads,
+      changes: projectSnapshot.changes,
       currentPath: sessionState.currentPath,
       currentThreadId: sessionState.currentThreadId,
-      expandedDirectories: [...state.project.expandedDirectories],
+      expandedDirectories: projectSnapshot.expandedDirectories,
       locallyModifiedPaths: getLocallyModifiedPaths(),
-      threadsError: state.thread.threadsError,
-      fontSize: state.editor.fontSize,
+      threadsError: threadSnapshot.threadsError,
+      fontSize: editorUiSnapshot.fontSize,
     };
   }
 
-  function emitExplorerStateChange() {
+  function flushExplorerStateChange() {
     workbenchBindings.onExplorerStateChange?.(getExplorerSnapshot());
+  }
+
+  function emitExplorerStateChange() {
+    if (explorerStateChangeScheduled) {
+      return;
+    }
+
+    explorerStateChangeScheduled = true;
+    queueMicrotask(() => {
+      explorerStateChangeScheduled = false;
+      flushExplorerStateChange();
+    });
   }
 
   function emitCurrentThreadChange() {
@@ -794,12 +789,7 @@ export async function initWorkbench(
   }
 
   function emitRateLimitsChange() {
-    workbenchBindings.onRateLimitsChange?.(state.thread.rateLimits);
-  }
-
-  function setRateLimits(rateLimits: RateLimitSnapshot | null) {
-    state.thread.rateLimits = rateLimits;
-    emitRateLimitsChange();
+    workbenchBindings.onRateLimitsChange?.(threadClient.getSnapshot().rateLimits);
   }
 
   function applyCurrentThread(thread: ThreadPayload | null) {
@@ -808,7 +798,6 @@ export async function initWorkbench(
     }
 
     sessionState.currentThread = thread;
-    emitCurrentThreadChange();
     return true;
   }
 
@@ -861,41 +850,6 @@ export async function initWorkbench(
       && left.path === right.path
       && left.turns.length === right.turns.length
       && areCurrentTurnsEquivalent(left, right);
-  }
-
-  function setCurrentThread(thread: ThreadPayload | null) {
-    if (areThreadPayloadsEquivalent(state.thread.currentThread, thread)) {
-      return;
-    }
-
-    const previousThread = state.thread.currentThread;
-    state.thread.currentThread = thread;
-    applyCurrentThread(thread);
-
-    if (!thread) {
-      setRateLimits(null);
-      return;
-    }
-
-    if (!previousThread || previousThread.id !== thread.id || previousThread.harness !== thread.harness) {
-      setRateLimits(rateLimitsByHarness.get(thread.harness) ?? null);
-
-      void refreshRateLimits();
-    }
-  }
-
-  function updateCurrentThread(updater: (thread: ThreadPayload) => ThreadPayload | null) {
-    if (!state.thread.currentThread) {
-      return false;
-    }
-
-    const nextThread = updater(state.thread.currentThread);
-    if (!nextThread) {
-      return false;
-    }
-
-    setCurrentThread(nextThread);
-    return true;
   }
 
   function toggleDirectory(path: string) {
@@ -1008,16 +962,16 @@ export async function initWorkbench(
 
   function syncSaveIssueLogging(issue: SaveGuardIssue | null, trigger: string, force = false) {
     if (!issue) {
-      state.lastLoggedSaveIssue = null;
+      lastLoggedSaveIssue = null;
       return;
     }
 
-    if (!force && isSameSaveGuardIssue(state.lastLoggedSaveIssue, issue)) {
+    if (!force && isSameSaveGuardIssue(lastLoggedSaveIssue, issue)) {
       return;
     }
 
     logSaveGuardIssue(issue, sessionState.currentPath, trigger);
-    state.lastLoggedSaveIssue = { ...issue };
+    lastLoggedSaveIssue = { ...issue };
   }
 
   function renderEditorDocument(content: string, mode: EditorMode) {
@@ -1033,7 +987,7 @@ export async function initWorkbench(
   }
 
   function applyThreadPayloadToCurrentView(payload: ThreadPayload, statusMessage?: string) {
-    setCurrentThread(payload);
+    applyCurrentThread(payload);
     applyCurrentThreadId(payload.id);
     fileClient.selectThread(payload.id);
     editorClient.showThreadPlaceholder(payload.name || payload.preview || payload.id);
@@ -1268,7 +1222,7 @@ export async function initWorkbench(
         return;
       }
 
-      if (state.thread.threads.some((thread) => thread.id === currentThreadId)) {
+      if (threadClient.hasThread(currentThreadId)) {
         if (!threadClient.isCurrentThreadUpToDate(currentThreadId)) {
           await openThread(currentThreadId, { source: "reload" });
         }
@@ -1293,7 +1247,7 @@ export async function initWorkbench(
     }
 
     if (requestedThreadId) {
-      if (state.thread.threads.some((thread) => thread.id === requestedThreadId)) {
+      if (threadClient.hasThread(requestedThreadId)) {
         await openThread(requestedThreadId);
         if (sessionState.currentThreadId === requestedThreadId) {
           return;
@@ -1399,12 +1353,6 @@ export async function initWorkbench(
     threadClient.dispose();
     if (autoRefreshTimeoutId !== null) {
       window.clearTimeout(autoRefreshTimeoutId);
-    }
-    if (codexThreadRefreshTimeoutId !== null) {
-      window.clearTimeout(codexThreadRefreshTimeoutId);
-    }
-    if (codexThreadListRefreshTimeoutId !== null) {
-      window.clearTimeout(codexThreadListRefreshTimeoutId);
     }
     abortController.abort();
   };
