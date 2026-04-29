@@ -6,12 +6,11 @@ Keep this file focused on unresolved architecture work for the workbench so futu
 
 ### Implementation Master Order
 
-- [ ] 1. Implement `Bidirectional Callback Chains Between Subclients` next, now that one-way state ownership exists.
-- [ ] 2. Implement `Unsafe Event Handler Chains with Hidden Dependencies` after the state-separation work so `EditorMutationRunner` can build on `EditHistoryManager` without competing with ownership changes.
-- [ ] 3. Implement `Unclean Disposal and Lifecycle` before the polling item so `LifecycleScope` becomes the shared ownership boundary for timers and subscriptions.
-- [ ] 4. Implement `Polling Loops Have No Centralized Coordination` after lifecycle scopes exist so recurring refresh and debounce work use the same ownership model.
-- [ ] 5. Implement `Too Many DOM Refs Passed Deep into the System` after the client boundaries are stable enough to narrow DOM surfaces with confidence.
-- [ ] 6. Implement `Utility File Proliferation Without Coherent Layering` last, after the earlier ownership and state work has finalized which files belong to which layer.
+- [ ] 1. Implement `Unsafe Event Handler Chains with Hidden Dependencies` after the state-separation work so `EditorMutationRunner` can build on `EditHistoryManager` without competing with ownership changes.
+- [ ] 2. Implement `Unclean Disposal and Lifecycle` before the polling item so `LifecycleScope` becomes the shared ownership boundary for timers and subscriptions.
+- [ ] 3. Implement `Polling Loops Have No Centralized Coordination` after lifecycle scopes exist so recurring refresh and debounce work use the same ownership model.
+- [ ] 4. Implement `Too Many DOM Refs Passed Deep into the System` after the client boundaries are stable enough to narrow DOM surfaces with confidence.
+- [ ] 5. Implement `Utility File Proliferation Without Coherent Layering` last, after the earlier ownership and state work has finalized which files belong to which layer.
 
 
 ## Shared Foundations
@@ -237,65 +236,6 @@ webapp/lib/workbench/
 		thread-render.ts
 		thread-file-diff.ts
 		thread-command-matchers.ts
-```
-
-### SEVERITY 2: Bidirectional Callback Chains Between Subclients
-
-Problem: `workbench-editor-client` is given callbacks to refresh the file client, and the file client gets callbacks back into the editor. This creates hidden coupling:
-
-- `workbench-editor-client` implicitly depends on a `fileClient` existing and having state ready
-- `workbench-file-client` directly modifies editor state via callbacks
-- If you want to use either client elsewhere, you need all the callbacks
-
-Feasibility verdict:
-- The critique is valid, but the current event-bus proposal is too broad.
-- The real problem is not just "callbacks in both directions"; it is that the file client mutates both authoritative file state and editor-rendering state in the same hot path.
-- The better target is one-way state ownership with a small event layer reserved for coarse cross-client notifications.
-
-Concrete reshaping:
-1. One-way authoritative state: the file client owns `FileSessionState` and mutates that directly. The editor client renders from `SessionState` and `FileSessionState` snapshots instead of receiving imperative setter chains for `dirty`, `pendingWriteConflict`, `saveIssue`, and `mode`.
-2. `EditorDocumentAdapter` remains the only direct editor-facing bridge for the file client so document rendering, selection capture or restore, and diff or status refresh stay narrow and explicit.
-3. Narrow command surface downward: the coordinator issues commands into clients (`openFile`, `saveCurrentFile`, `openThread`, `clearSelection`) but subclients do not directly mutate each other's state through setter APIs.
-4. Small event layer for coarse notifications only: if an event layer exists, it should be used for events like `fileOpened`, `threadOpened`, `saveCompleted`, `saveConflictSurfaced`, and `saveGuardIssueSurfaced`, not for every state update.
-5. Snapshot subscriptions as the default read path: project, thread, session, and file state layers expose snapshot-plus-subscribe semantics so clients react to owned state instead of tunneling mutations into one another.
-
-This is the item that introduces the coarse event layer deferred by the completed coordinator-ownership refactor.
-
-Implementation staging for the later checklist item:
-1. Build on the completed `SessionState` and `FileSessionState` contract work so this item does not redefine ownership.
-2. Remove the file client's dependency on editor setters for `dirty`, conflict, save issue, mode, and current selection display state.
-3. Keep the file client's document interactions behind `EditorDocumentAdapter` instead of a wide editor client dependency.
-4. Make the editor shell subscribe to `FileSessionState` and `SessionState` and derive its rendered status from those snapshots.
-5. Add a small coarse-grained event layer only for cross-client notifications that are not naturally represented as owned state.
-6. Remove direct subclient-to-subclient mutation paths and leave the coordinator as the only place where commands are routed across client boundaries.
-
-This item continues the setter-removal work established by the completed contract refactor. `EditorDocumentAdapter` and one-way state ownership already exist; this item removes the remaining cross-client mutation chains.
-
-Non-goals for this item:
-- Do not use a generic event bus as the transport for authoritative file or editor state
-- Do not emit events for every `dirty`, `mode`, `saveIssue`, or `pendingWriteConflict` change
-- Do not preserve direct file-client-to-editor-client setter chains as an acceptable steady-state contract
-
-Concrete reshaping: use a hybrid state-plus-event model instead of a bus-first design:
-
-```ts
-const fileSession = createFileSessionState();
-const sessionState = createSessionState();
-const eventBus = createWorkbenchEventBus();
-const editorDocument = createEditorDocumentAdapter();
-
-const editorClient = createWorkbenchEditorClient(elements, {
-	fileSession,
-	sessionState,
-	eventBus,
-});
-
-const fileClient = createWorkbenchFileClient({
-	fileSession,
-	sessionState,
-	editorDocument,
-	eventBus,
-});
 ```
 
 ### SEVERITY 3: Polling Loops Have No Centralized Coordination
