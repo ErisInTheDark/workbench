@@ -74,10 +74,12 @@ interface WorkbenchInlineFormatController {
   canonicalizeAllInlineRunContainers: (root: ParentNode) => void;
   clearPendingInlineFormats: () => void;
   getCaretInlineContext: (range: Range) => CaretRenderContext | null;
+  getProtectedEmptyInlineFormatElements: (root: ParentNode) => Set<HTMLElement>;
   handlePendingInlineBeforeInput: (event: InputEvent) => boolean;
   handleSelectionChange: () => void;
   maybeActivateInlineCommentShortcut: (event: Event) => null;
   maybeClearPendingInlineFormatsForKey: (event: KeyboardEvent) => void;
+  removeEmptyInlineFormattingArtifacts: (root: ParentNode) => void;
   toggleInlineFormatSelection: (
     selection: Selection,
     range: Range,
@@ -108,6 +110,31 @@ const INLINE_MARK_RANK: Record<InlineMark["tag"], number> = {
 function WorkbenchInlineFormatController(
   options: WorkbenchInlineFormatControllerOptions,
 ): WorkbenchInlineFormatController {
+  function getProtectedEmptyInlineFormatElementsForRoot(root: ParentNode) {
+    return getProtectedEmptyInlineFormatElements(options.editor, root);
+  }
+
+  function removeEmptyInlineFormattingArtifacts(root: ParentNode = options.editor) {
+    const protectedElements = getProtectedEmptyInlineFormatElementsForRoot(root);
+    removeEmptyInlineFormatElements(["strong", "em", "code", "del", "ins"], options.editor, root);
+
+    if (!("querySelectorAll" in root)) {
+      return;
+    }
+
+    for (const commentElement of Array.from(root.querySelectorAll<HTMLElement>('[data-inline-comment="true"]'))) {
+      if (protectedElements.has(commentElement)) {
+        continue;
+      }
+
+      if ((commentElement.textContent ?? "").replaceAll("\u00a0", "").length > 0) {
+        continue;
+      }
+
+      commentElement.remove();
+    }
+  }
+
   let pendingInlineFormats: PendingInlineFormats | null = null;
   let preservePendingInlineFormatSelectionChanges = 0;
 
@@ -881,10 +908,12 @@ function WorkbenchInlineFormatController(
     canonicalizeAllInlineRunContainers,
     clearPendingInlineFormats,
     getCaretInlineContext,
+    getProtectedEmptyInlineFormatElements: getProtectedEmptyInlineFormatElementsForRoot,
     handlePendingInlineBeforeInput,
     handleSelectionChange,
     maybeActivateInlineCommentShortcut,
     maybeClearPendingInlineFormatsForKey,
+    removeEmptyInlineFormattingArtifacts,
     toggleInlineFormatSelection,
     togglePendingInlineFormat,
   };

@@ -21,7 +21,6 @@ import {
     getVisualViewportMetrics,
 } from "./dom/layout/viewport-metrics";
 import {
-    removeEmptyInlineFormatElements,
     replaceTag,
     unwrapTransparentSpans,
 } from "./dom/mutation/dom-normalization";
@@ -34,15 +33,16 @@ import {
     isSingleBreakParagraph,
 } from "./dom/query/list-dom";
 import {
+    captureEditorSelection,
+    restoreEditorSelection,
+} from "./dom/selection/selection-dom";
+import {
     isInlineRunContainer,
 } from "./editor/inline-run-containers";
 import RevisionHoverToolbarController, {
-    type RevisionHoverToolbarControllerOptions,
-    type RevisionToolbarContext,
+    type RevisionToolbarContext
 } from "./editor/RevisionHoverToolbarController";
-import WorkbenchCodeFormatController, {
-    type WorkbenchCodeFormatControllerOptions,
-} from "./editor/WorkbenchCodeFormatController";
+import WorkbenchCodeFormatController from "./editor/WorkbenchCodeFormatController";
 import WorkbenchFormatCommandController from "./editor/WorkbenchFormatCommandController";
 import WorkbenchInlineFormatController, {
     type CaretRenderContext,
@@ -123,9 +123,7 @@ export interface EditorUIStateSnapshot {
 export type EditorUIStateListener = (snapshot: EditorUIStateSnapshot) => void;
 
 export interface WorkbenchEditorControllerOptions {
-  codeFormat: Omit<WorkbenchCodeFormatControllerOptions, "editor" | "getProtectedEmptyInlineFormatElements">;
-  inlineFormat: Omit<WorkbenchInlineFormatControllerOptions, "editor" | "refreshStatusMessage" | "updateCustomCaret" | "updateInlineToolbars">;
-  revisionHover: Omit<RevisionHoverToolbarControllerOptions, "editor" | "getMode" | "revisionHoverAcceptButton" | "revisionHoverRejectButton" | "revisionHoverToolbar">;
+  inlineFormat: Omit<WorkbenchInlineFormatControllerOptions, "captureEditorSelection" | "editor" | "getInlineExpansionContainer" | "refreshStatusMessage" | "syncEditorAfterStructuralChange" | "updateCustomCaret" | "updateInlineToolbars">;
 }
 
 type EditOperationKind = "input" | "structural" | "replay";
@@ -149,11 +147,8 @@ export interface EditOperationHooks {
 }
 
 export interface WorkbenchEditorMutationRuntimeOptions {
-  captureSelection: () => EditHistorySelection | null;
   inspectCurrentDraft: () => void;
   recordEditHistory: (previousContent: string, nextContent: string, selection: EditHistorySelection | null) => void;
-  renderReplayDocument: (content: string, mode: EditorMode) => void;
-  restoreSelection: (selection: EditHistorySelection | null) => void;
   syncCurrentDraftBuffer: () => void;
   updateHistorySelection: (selection: EditHistorySelection | null) => void;
 }
@@ -182,7 +177,7 @@ export interface WorkbenchEditorClientOptions {
   handleSelectionChange: () => void;
   handleViewportChanged: () => void;
   isSaveButtonInvalid?: () => boolean;
-  listStructure: Omit<WorkbenchListStructureControllerOptions, "editor" | "updateFloatingToolbar">;
+  listStructure: Omit<WorkbenchListStructureControllerOptions, "editor" | "syncEditorAfterStructuralChange" | "updateFloatingToolbar">;
   mutationRuntime: WorkbenchEditorMutationRuntimeOptions;
   sessionState: SessionState;
   shouldBlockBeforeUnload: () => boolean;
@@ -616,9 +611,41 @@ function WorkbenchEditorClient(
   const toolbars = surfaces.toolbars;
   const dialogs = [dialogSurface.saveConflict.dialog, dialogSurface.resetDraft.dialog] as const;
   let lastLoggedSaveIssue: SaveGuardIssue | null = null;
+
+  function captureCurrentSelection() {
+    return captureEditorSelection(editor);
+  }
+
+  function restoreSelection(selection: EditHistorySelection | null) {
+    restoreEditorSelection(editor, selection);
+  }
+
+  function getInlineExpansionContainer(node: Node | null) {
+    const listItem = options.listStructure.getClosestListItem(node);
+    if (listItem) {
+      return options.listStructure.getListItemTextContainer(listItem);
+    }
+
+    let current: Node | null = node;
+    while (current && current !== editor) {
+      if (current instanceof HTMLElement && current.parentNode === editor) {
+        return current;
+      }
+
+      current = current.parentNode;
+    }
+
+    return null;
+  }
+
+  function syncEditorAfterStructuralChange(mutate: () => void, hooks: EditOperationHooks = {}) {
+    runStructuralMutation(mutate, hooks);
+  }
+
   const listStructureController = WorkbenchListStructureController({
     editor,
     ...options.listStructure,
+    syncEditorAfterStructuralChange,
     updateFloatingToolbar,
   });
   const richInputController = WorkbenchRichInputController({
@@ -737,25 +764,30 @@ function WorkbenchEditorClient(
 
   const revisionHoverController = RevisionHoverToolbarController({
     editor,
+    getExpandedRangeRect,
     getMode: () => options.fileSessionState.mode,
+    getVisualViewportMetrics,
+    onSyncEditorAfterStructuralChange: syncEditorAfterStructuralChange,
     revisionHoverAcceptButton: toolbars.revisionAccept,
     revisionHoverRejectButton: toolbars.revisionReject,
     revisionHoverToolbar: toolbars.revisionHover,
-    ...options.controllerOptions.revisionHover,
   });
   const inlineFormatController = WorkbenchInlineFormatController({
+    captureEditorSelection: captureCurrentSelection,
     editor,
+    getInlineExpansionContainer,
     refreshStatusMessage: () => {
       refreshStatusMessage();
     },
+    syncEditorAfterStructuralChange,
     updateCustomCaret,
     updateInlineToolbars: refreshInlineToolbars,
     ...options.controllerOptions.inlineFormat,
   });
   const codeFormatController = WorkbenchCodeFormatController({
     editor,
-    getProtectedEmptyInlineFormatElements,
-    ...options.controllerOptions.codeFormat,
+    getProtectedEmptyInlineFormatElements: inlineFormatController.getProtectedEmptyInlineFormatElements,
+    syncEditorAfterStructuralChange,
   });
   const formatCommandController = WorkbenchFormatCommandController({
     clearPendingInlineFormats: () => {
@@ -763,7 +795,7 @@ function WorkbenchEditorClient(
     },
     editor,
     getMode: () => options.fileSessionState.mode,
-    syncEditorAfterStructuralChange: options.controllerOptions.inlineFormat.syncEditorAfterStructuralChange,
+    syncEditorAfterStructuralChange,
     toggleCodeSelection: (selection, range) => {
       codeFormatController.toggleCodeSelection(selection, range);
     },
@@ -940,66 +972,6 @@ function WorkbenchEditorClient(
     });
   }
 
-  function getProtectedEmptyInlineFormatElements(root: ParentNode) {
-    const protectedElements = new Set<HTMLElement>();
-    if (root !== editor) {
-      return protectedElements;
-    }
-
-    const selection = window.getSelection();
-    if (!selection?.rangeCount) {
-      return protectedElements;
-    }
-
-    const boundaryNodes = [
-      selection.anchorNode,
-      selection.focusNode,
-      selection.getRangeAt(0).startContainer,
-      selection.getRangeAt(0).endContainer,
-    ];
-
-    for (const boundaryNode of boundaryNodes) {
-      let current: Node | null = boundaryNode;
-      while (current && current !== editor) {
-        if (
-          current instanceof HTMLElement
-          && (current.tagName === "STRONG"
-            || current.tagName === "EM"
-            || current.tagName === "CODE"
-            || current.tagName === "DEL"
-            || current.tagName === "INS"
-            || current.dataset.inlineComment === "true")
-        ) {
-          protectedElements.add(current);
-        }
-        current = current.parentNode;
-      }
-    }
-
-    return protectedElements;
-  }
-
-  function removeEmptyInlineFormattingArtifacts(root: ParentNode) {
-    const protectedElements = getProtectedEmptyInlineFormatElements(root);
-    removeEmptyInlineFormatElements(["strong", "em", "code", "del", "ins"], root, protectedElements);
-
-    if (!("querySelectorAll" in root)) {
-      return;
-    }
-
-    for (const commentElement of Array.from(root.querySelectorAll<HTMLElement>('[data-inline-comment="true"]'))) {
-      if (protectedElements.has(commentElement)) {
-        continue;
-      }
-
-      if ((commentElement.textContent ?? "").replaceAll("\u00a0", "").length > 0) {
-        continue;
-      }
-
-      commentElement.remove();
-    }
-  }
-
   function normalizeEditorMarkup(root: ParentNode = editor) {
     replaceTag(root, "b", "strong");
     replaceTag(root, "i", "em");
@@ -1058,12 +1030,12 @@ function WorkbenchEditorClient(
   function syncStructuredBlockStyles(root: ParentNode = editor) {
     syncStructuredBlockDomStyles(root, {
       canonicalizeInlineRunContainers: canonicalizeAllInlineRunContainers,
-      removeEmptyInlineFormattingArtifacts,
+      removeEmptyInlineFormattingArtifacts: inlineFormatController.removeEmptyInlineFormattingArtifacts,
     });
   }
 
   const documentAdapter: EditorDocumentAdapter = {
-    captureSelection: () => options.mutationRuntime.captureSelection(),
+    captureSelection: captureCurrentSelection,
     inspectDraft,
     inspectRichDocument,
     logBlockedSaveIssue: (issue) => {
@@ -1084,9 +1056,7 @@ function WorkbenchEditorClient(
       syncStructuredBlockStyles();
       editor.scrollTop = 0;
     },
-    restoreSelection: (selection) => {
-      options.mutationRuntime.restoreSelection(selection);
-    },
+    restoreSelection,
     scheduleDiffGutterRefresh,
     setEditable: (editable) => {
       editor.setAttribute("contenteditable", editable ? "true" : "false");
@@ -1147,7 +1117,7 @@ function WorkbenchEditorClient(
       nextContent: null,
       nextSelection: null,
       previousContent: options.fileSessionState.currentContent,
-      previousSelection: options.mutationRuntime.captureSelection(),
+      previousSelection: captureCurrentSelection(),
       recordHistory: kind !== "replay",
       refreshMode: kind === "input" ? "deferred" : "immediate",
       syncStructuredStyles: kind !== "replay",
@@ -1179,12 +1149,12 @@ function WorkbenchEditorClient(
       context.nextContent = options.fileSessionState.currentContent;
 
       if (context.nextSelection !== null || context.kind === "replay") {
-        options.mutationRuntime.restoreSelection(context.nextSelection);
+        restoreSelection(context.nextSelection);
       }
 
       hooks.afterSelectionRestore?.();
 
-      const currentSelection = options.mutationRuntime.captureSelection();
+      const currentSelection = captureCurrentSelection();
       if (context.recordHistory) {
         options.mutationRuntime.recordEditHistory(context.previousContent, context.nextContent, currentSelection);
       }
@@ -1230,7 +1200,13 @@ function WorkbenchEditorClient(
       syncStructuredStyles: true,
     }), () => {
       clearPendingInlineFormats();
-      options.mutationRuntime.renderReplayDocument(request.content, options.fileSessionState.mode);
+      if (options.fileSessionState.mode === "rich") {
+        editor.innerHTML = renderMarkdownToHtml(request.content);
+      } else {
+        editor.textContent = request.content;
+      }
+
+      editor.scrollTop = 0;
     });
   }
 

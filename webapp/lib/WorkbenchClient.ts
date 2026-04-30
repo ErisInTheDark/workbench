@@ -13,10 +13,6 @@ import type {
     WorkbenchHarness,
 } from "./types";
 import {
-    getExpandedRangeRect,
-    getVisualViewportMetrics,
-} from "./workbench/dom/layout/viewport-metrics";
-import {
     createListItemDomEditor,
 } from "./workbench/dom/mutation/list-item-dom-edit";
 import {
@@ -32,7 +28,6 @@ import {
 import {
     captureEditorSelection,
     placeCaretInElement,
-    restoreEditorSelection,
     restoreListItemSelection,
 } from "./workbench/dom/selection/selection-dom";
 import {
@@ -42,9 +37,6 @@ import {
 import {
     restoreCaretToMarker,
 } from "./workbench/editor/WorkbenchInlineFormatController";
-import {
-    markdownToHtml as renderMarkdownToHtml,
-} from "./workbench/markdown/markdown-render";
 import {
     formatTimestamp
 } from "./workbench/project/tree-utils";
@@ -67,7 +59,6 @@ import {
     type WorkbenchDomSurfaces,
 } from "./workbench/workbench-dom";
 import WorkbenchEditorClient, {
-    type EditOperationHooks,
     type EditorUIStateSnapshot
 } from "./workbench/WorkbenchEditorClient";
 import WorkbenchEventBus from "./workbench/WorkbenchEventBus";
@@ -208,28 +199,19 @@ export async function WorkbenchClient(
   }, {
     closeActiveDialog,
     controllerOptions: {
-      codeFormat: {
-        syncEditorAfterStructuralChange,
-      },
       inlineFormat: {
-        captureEditorSelection: () => captureEditorSelection(editor),
         deleteTextImmediatelyBeforeSelection,
         getEditorHasFocus: () => editorHasFocus,
-        getInlineExpansionContainer,
         getInlineRunContainer: (node) => getInlineRunContainer(editor, node),
         getIsComposing: () => isComposing,
         getTextBeforeSelectionInElement,
         isInlineRunContainer: (element) => isInlineRunContainer(editor, element),
-        syncCurrentDraftBuffer,
-        syncEditorAfterStructuralChange,
+        syncCurrentDraftBuffer: () => {
+          fileClient.syncCurrentDraftBuffer();
+        },
         updateHistorySelection: (selection) => {
           editHistoryManager.updateHistorySelection(selection);
         },
-      },
-      revisionHover: {
-        getExpandedRangeRect,
-        getVisualViewportMetrics,
-        onSyncEditorAfterStructuralChange: syncEditorAfterStructuralChange,
       },
     },
     fileSessionState,
@@ -404,32 +386,18 @@ export async function WorkbenchClient(
       isSelectionAtListItemStart,
       isTopLevelListItem,
       outdentListItems,
-      syncEditorAfterStructuralChange,
       unwrapTopLevelListItemToParagraph,
     },
     isSaveButtonInvalid: () => Boolean(fileSessionState.saveIssue) || Array.from(fileSessionState.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue)),
     mutationRuntime: {
-      captureSelection: () => captureEditorSelection(editor),
       inspectCurrentDraft: () => {
-        inspectCurrentDraft();
+        fileClient.inspectCurrentDraft();
       },
       recordEditHistory: (previousContent, nextContent, selection) => {
         editHistoryManager.recordEditHistory(previousContent, nextContent, selection);
       },
-      renderReplayDocument: (content, mode) => {
-        if (mode === "rich") {
-          editor.innerHTML = renderMarkdownToHtml(content);
-        } else {
-          editor.textContent = content;
-        }
-
-        editor.scrollTop = 0;
-      },
-      restoreSelection: (selection) => {
-        restoreEditorSelection(editor, selection);
-      },
       syncCurrentDraftBuffer: () => {
-        syncCurrentDraftBuffer();
+        fileClient.syncCurrentDraftBuffer();
       },
       updateHistorySelection: (selection) => {
         editHistoryManager.updateHistorySelection(selection);
@@ -530,14 +498,6 @@ export async function WorkbenchClient(
     fileClient.scheduleSelectionPersistence();
   }
 
-  function syncCurrentDraftBuffer() {
-    fileClient.syncCurrentDraftBuffer();
-  }
-
-  function inspectCurrentDraft() {
-    return fileClient.inspectCurrentDraft();
-  }
-
   async function openFile(
     filePath: string,
     options?: { ignoreDirty?: boolean; source?: "open" | "reload" },
@@ -563,24 +523,6 @@ export async function WorkbenchClient(
 
   async function refreshCurrentFileFromDiskIfSafe() {
     await fileClient.refreshCurrentFileFromDiskIfSafe();
-  }
-
-  function getInlineExpansionContainer(node: Node | null) {
-    const listItem = getClosestListItem(node);
-    if (listItem) {
-      return getListItemTextContainer(listItem);
-    }
-
-    let current: Node | null = node;
-    while (current && current !== editor) {
-      if (current instanceof HTMLElement && current.parentNode === editor) {
-        return current;
-      }
-
-      current = current.parentNode;
-    }
-
-    return null;
   }
 
   function updateSaveButtonState() {
@@ -745,7 +687,7 @@ export async function WorkbenchClient(
     }
 
     if (sessionState.currentPath) {
-      syncCurrentDraftBuffer();
+      fileClient.syncCurrentDraftBuffer();
     }
 
     await threadClient.openThread(threadId, { harness, source });
@@ -782,10 +724,6 @@ export async function WorkbenchClient(
     }
 
     return createdPath;
-  }
-
-  function syncEditorAfterStructuralChange(mutate: () => void, hooks: EditOperationHooks = {}) {
-    editorClient.runStructuralMutation(mutate, hooks);
   }
 
   function clearCurrentSelectionView() {
@@ -884,7 +822,7 @@ export async function WorkbenchClient(
   const controls: WorkbenchControls = {
     clearSelection: () => {
       if (sessionState.currentPath) {
-        syncCurrentDraftBuffer();
+        fileClient.syncCurrentDraftBuffer();
       }
 
       threadClient.clearThreadSelection();
