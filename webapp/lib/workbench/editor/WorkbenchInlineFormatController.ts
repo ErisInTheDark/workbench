@@ -4,7 +4,7 @@
  * - PendingInlineFormatKey: supported inline format toggles used by toolbar and keyboard flows. Keywords: workbench, inline format, pending, marks.
  * - WorkbenchInlineFormatControllerOptions: minimal DOM and callback dependencies for inline format coordination. Keywords: workbench, inline format, controller, dependencies.
  * - WorkbenchInlineFormatController: public surface for pending inline format state, inline selection toggles, and canonicalization. Keywords: workbench, inline format, controller, canonicalization.
- * - createWorkbenchInlineFormatController: create the inline format controller used by the main workbench coordinator. Keywords: workbench, inline format, pending, selection.
+ * - default WorkbenchInlineFormatController: create the inline format controller used by the main workbench coordinator. Keywords: workbench, inline format, pending, selection, default export.
  * - restoreCaretToMarker: restore a collapsed selection after inline marker rewrites. Keywords: workbench, inline format, caret, marker.
  * - serializeInlineNodes: serialize inline DOM nodes back to markdown using canonical inline leaves. Keywords: workbench, inline format, markdown, serialization.
  * - serializeInlineRunContainerForMarkupSignature: normalize an inline run for rich-text round-trip markup signatures. Keywords: workbench, inline format, markup, save guard.
@@ -70,7 +70,7 @@ export interface WorkbenchInlineFormatControllerOptions {
   updateInlineToolbars: () => void;
 }
 
-export interface WorkbenchInlineFormatController {
+interface WorkbenchInlineFormatController {
   canonicalizeAllInlineRunContainers: (root: ParentNode) => void;
   clearPendingInlineFormats: () => void;
   getCaretInlineContext: (range: Range) => CaretRenderContext | null;
@@ -105,7 +105,7 @@ const INLINE_MARK_RANK: Record<InlineMark["tag"], number> = {
   code: 6,
 };
 
-export function WorkbenchInlineFormatController(
+function WorkbenchInlineFormatController(
   options: WorkbenchInlineFormatControllerOptions,
 ): WorkbenchInlineFormatController {
   let pendingInlineFormats: PendingInlineFormats | null = null;
@@ -1869,4 +1869,6 @@ function unwrapSelectionFromSingleFormatElement(
   removeEmptyInlineFormatElements(tagNames, editor);
   selectInsertedNodes(selection, insertedNodes, fallbackRange);
 }
+
+export default WorkbenchInlineFormatController;
 

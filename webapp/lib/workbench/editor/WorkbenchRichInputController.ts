@@ -3,7 +3,7 @@
  * - WorkbenchRichInputControllerOptions: injected editor element and mode access for rich-input transforms without coordinator ownership. Keywords: workbench, rich input, controller, options, mode.
  * - WorkbenchRichInputResult: structural rich-input transform result for list-item and block-comment interception. Keywords: workbench, rich input, result, list item, comment.
  * - WorkbenchRichInputController: public event handler surface for rich-editor input transforms. Keywords: workbench, rich input, controller, handle.
- * - createWorkbenchRichInputController: bind editor-owned rich-input transforms for list items and block comments. Keywords: workbench, rich input, controller, list item, block comment.
+ * - default WorkbenchRichInputController: bind editor-owned rich-input transforms for list items and block comments. Keywords: workbench, rich input, controller, list item, block comment, default export.
  */
 
 import {
@@ -26,11 +26,11 @@ export interface WorkbenchRichInputResult {
   commentCaretMarker: HTMLElement | null;
 }
 
-export interface WorkbenchRichInputController {
+interface WorkbenchRichInputController {
   handleRichInput: (event: Event) => WorkbenchRichInputResult;
 }
 
-export function WorkbenchRichInputController(
+function WorkbenchRichInputController(
   options: WorkbenchRichInputControllerOptions,
 ): WorkbenchRichInputController {
   const { editor, getMode } = options;
@@ -132,3 +132,5 @@ export function WorkbenchRichInputController(
     handleRichInput,
   };
 }
+
+export default WorkbenchRichInputController;

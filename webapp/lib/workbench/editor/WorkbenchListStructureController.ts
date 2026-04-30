@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchListStructureControllerOptions: injected editor DOM helpers and callbacks needed for list and comment structural key handling. Keywords: workbench, list, comment, keydown, controller, dependency injection.
  * - WorkbenchListStructureController: public structural keydown handler surface for rich-editor list and comment edits. Keywords: workbench, list, comment, keydown, controller.
- * - createWorkbenchListStructureController: bind list and block-comment structural keydown behavior without owning broader editor history or formatting logic. Keywords: workbench, list, comment, structural edit, keydown.
+ * - default WorkbenchListStructureController: bind list and block-comment structural keydown behavior without owning broader editor history or formatting logic. Keywords: workbench, list, comment, structural edit, keydown, default export.
  */
 
 import { convertCommentBlockToParagraph } from "../dom/mutation/structured-block-dom";
@@ -32,11 +32,11 @@ export interface WorkbenchListStructureControllerOptions {
   updateFloatingToolbar: () => void;
 }
 
-export interface WorkbenchListStructureController {
+interface WorkbenchListStructureController {
   handleListStructureKeyDown: (event: KeyboardEvent) => boolean;
 }
 
-export function WorkbenchListStructureController(
+function WorkbenchListStructureController(
   options: WorkbenchListStructureControllerOptions,
 ): WorkbenchListStructureController {
   const {
@@ -255,3 +255,5 @@ export function WorkbenchListStructureController(
     handleListStructureKeyDown,
   };
 }
+
+export default WorkbenchListStructureController;

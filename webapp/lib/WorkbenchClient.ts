@@ -49,12 +49,9 @@ import {
     restoreEditorSelection,
     restoreListItemSelection,
 } from "./workbench/dom/selection/selection-dom";
-import { RevisionHoverToolbarController } from "./workbench/editor/RevisionHoverToolbarController";
-import {
-    WorkbenchCodeFormatController,
-} from "./workbench/editor/WorkbenchCodeFormatController";
-import {
-    WorkbenchInlineFormatController,
+import RevisionHoverToolbarController from "./workbench/editor/RevisionHoverToolbarController";
+import WorkbenchCodeFormatController from "./workbench/editor/WorkbenchCodeFormatController";
+import WorkbenchInlineFormatController, {
     restoreCaretToMarker,
     type PendingInlineFormatKey,
 } from "./workbench/editor/WorkbenchInlineFormatController";
@@ -77,11 +74,11 @@ import {
     syncCurrentSelectionToUrl
 } from "./workbench/state/browser-state";
 import type { EditHistorySelection } from "./workbench/state/edit-history";
-import { EditHistoryManager, type EditHistoryReplayRequest } from "./workbench/state/EditHistoryManager";
-import type { EditorDocumentAdapter } from "./workbench/state/EditorDocumentAdapter";
-import { FileSessionState } from "./workbench/state/FileSessionState";
-import { LifecycleScope } from "./workbench/state/LifecycleScope";
-import { SessionState } from "./workbench/state/SessionState";
+import EditHistoryManager, { type EditHistoryReplayRequest } from "./workbench/state/EditHistoryManager";
+import type EditorDocumentAdapter from "./workbench/state/EditorDocumentAdapter";
+import FileSessionState from "./workbench/state/FileSessionState";
+import LifecycleScope from "./workbench/state/LifecycleScope";
+import SessionState from "./workbench/state/SessionState";
 import {
     hasRequiredControlButtonsDomSurface,
     hasRequiredDialogDomSurface,
@@ -90,22 +87,15 @@ import {
     hasRequiredToolbarDomSurface,
     type WorkbenchDomSurfaces,
 } from "./workbench/workbench-dom";
-import {
-    WorkbenchEditorClient,
+import WorkbenchEditorClient, {
     type EditorMode,
     type EditorUIStateSnapshot,
     type SaveGuardIssue,
 } from "./workbench/WorkbenchEditorClient";
-import { WorkbenchEventBus } from "./workbench/WorkbenchEventBus";
-import {
-    WorkbenchFileClient,
-} from "./workbench/WorkbenchFileClient";
-import {
-    WorkbenchProjectClient,
-} from "./workbench/WorkbenchProjectClient";
-import {
-    WorkbenchThreadClient,
-} from "./workbench/WorkbenchThreadClient";
+import WorkbenchEventBus from "./workbench/WorkbenchEventBus";
+import WorkbenchFileClient from "./workbench/WorkbenchFileClient";
+import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
+import WorkbenchThreadClient from "./workbench/WorkbenchThreadClient";
 
 const AUTO_REFRESH_INTERVAL_MS = 1500;
 const HISTORY_KEYFRAME_INTERVAL = 50;

@@ -9,7 +9,7 @@
  * - EditorUIStateListener: subscriber signature for editor shell changes. Keywords: workbench, editor, subscribe.
  * - WorkbenchEditorClientOptions: callbacks, structural-edit dependencies, and state readers delegated from the coordinator for editor behavior and deterministic rendering. Keywords: workbench, editor, callbacks, structure, status, state.
  * - WorkbenchEditorClient: public surface for the editor shell client, including diff gutter refresh scheduling, delayed format-command configuration, and editor-owned structural input handling. Keywords: workbench, editor, client, diff gutter, format, list structure, rich input, dispose.
- * - createWorkbenchEditorClient: create the editor shell client that owns DOM refs, dialogs, diff gutter rendering, structural input wiring, delayed format-command setup, event listener cleanup, and deterministic status messages. Keywords: workbench, editor, DOM, status, structure, format, rich input, diff gutter, listeners.
+ * - default WorkbenchEditorClient: create the editor shell client that owns DOM refs, dialogs, diff gutter rendering, structural input wiring, delayed format-command setup, event listener cleanup, and deterministic status messages. Keywords: workbench, editor, DOM, status, structure, format, rich input, diff gutter, listeners, default export.
  */
 
 import type { ChangeSummary, SaveConflictPayload } from "../types";
@@ -19,19 +19,14 @@ import {
     isIntentionalListBreakParagraph,
     isSingleBreakParagraph,
 } from "./dom/query/list-dom";
-import {
-    WorkbenchFormatCommandController
-} from "./editor/WorkbenchFormatCommandController";
-import {
-    WorkbenchListStructureController,
-    type WorkbenchListStructureControllerOptions,
-} from "./editor/WorkbenchListStructureController";
-import { WorkbenchRichInputController } from "./editor/WorkbenchRichInputController";
+import WorkbenchFormatCommandController from "./editor/WorkbenchFormatCommandController";
+import WorkbenchListStructureController, { type WorkbenchListStructureControllerOptions } from "./editor/WorkbenchListStructureController";
+import WorkbenchRichInputController from "./editor/WorkbenchRichInputController";
 import { parseBlocks as parseMarkdownBlocks, type ParsedBlock } from "./markdown/markdown-render";
 import { MAX_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, persistFontSize, readStoredFontSize } from "./state/browser-state";
-import type { FileSessionState } from "./state/FileSessionState";
-import { LifecycleScope } from "./state/LifecycleScope";
-import type { SessionState } from "./state/SessionState";
+import type FileSessionState from "./state/FileSessionState";
+import LifecycleScope from "./state/LifecycleScope";
+import type SessionState from "./state/SessionState";
 import type { WorkbenchEditorDomSurfaces } from "./workbench-dom";
 
 const DEFAULT_STATUS_MESSAGE = "Markdown files open as rich text. Save with Ctrl/Cmd+S.";
@@ -132,7 +127,7 @@ export interface WorkbenchEditorClientOptions {
   shouldBlockBeforeUnload: () => boolean;
 }
 
-export interface WorkbenchEditorClient {
+interface WorkbenchEditorClient {
   applyToolbarCommand: (command: string) => void;
   changeFontSize: (delta: number) => void;
   clearSelectionView: () => void;
@@ -523,7 +518,7 @@ function createDiffMarkerIcon(symbol: DiffMarkerSymbol) {
   return svg;
 }
 
-export function WorkbenchEditorClient(
+function WorkbenchEditorClient(
   surfaces: WorkbenchEditorDomSurfaces,
   options: WorkbenchEditorClientOptions,
   lifecycle: LifecycleScope = new LifecycleScope(),
@@ -1111,3 +1106,5 @@ export function WorkbenchEditorClient(
     subscribe,
   };
 }
+
+export default WorkbenchEditorClient;

@@ -4,7 +4,7 @@
  * - FileSessionState: re-exported owner for current file persistence and history state. Keywords: workbench, file, session, state.
  * - WorkbenchFileClientOptions: coordinator-owned collaborators needed by the file client for document rendering, file-state ownership, project refreshes, and coarse events. Keywords: workbench, file, options, coordinator.
  * - WorkbenchFileClient: public surface for persisted draft hydration, file open/save/reset flows, and safe on-disk refreshes. Keywords: workbench, file, client, persistence.
- * - createWorkbenchFileClient: create the workbench file sub-client that owns IndexedDB draft persistence and file lifecycle operations. Keywords: workbench, file, IndexedDB, save, reset.
+ * - default WorkbenchFileClient: create the workbench file sub-client that owns IndexedDB draft persistence and file lifecycle operations. Keywords: workbench, file, IndexedDB, save, reset, default export.
  */
 
 import type { FilePayload, SaveConflictPayload, SaveFilePayload } from "../types";
@@ -23,14 +23,15 @@ import {
     type EditHistorySelection,
     type EditHistoryState,
 } from "./state/edit-history";
-import type { EditorDocumentAdapter } from "./state/EditorDocumentAdapter";
-import type { DraftBuffer, FileSessionState } from "./state/FileSessionState";
-import { LifecycleScope } from "./state/LifecycleScope";
-import type { SessionState } from "./state/SessionState";
+import type EditorDocumentAdapter from "./state/EditorDocumentAdapter";
+import type FileSessionState from "./state/FileSessionState";
+import type { DraftBuffer } from "./state/FileSessionState";
+import LifecycleScope from "./state/LifecycleScope";
+import type SessionState from "./state/SessionState";
 import type { EditorMode, SaveGuardIssue } from "./WorkbenchEditorClient";
-import type { WorkbenchEventBus } from "./WorkbenchEventBus";
+import type WorkbenchEventBus from "./WorkbenchEventBus";
 
-export type { DraftBuffer, FileSessionState } from "./state/FileSessionState";
+export type { DraftBuffer, default as FileSessionState } from "./state/FileSessionState";
 
 const DRAFT_DATABASE_NAME = "workbench";
 const DRAFT_DATABASE_VERSION = 1;
@@ -65,7 +66,7 @@ export interface WorkbenchFileClientOptions {
   updateHistorySelection: (selection: EditHistorySelection | null) => void;
 }
 
-export interface WorkbenchFileClient {
+interface WorkbenchFileClient {
   clearSelection: () => void;
   dispose: () => void;
   hydratePersistedDrafts: () => Promise<void>;
@@ -159,7 +160,7 @@ function hasBufferedDraftState(buffer: DraftBuffer) {
   return buffer.dirty || Boolean(buffer.saveIssue) || Boolean(buffer.pendingWriteConflict);
 }
 
-export function WorkbenchFileClient(
+function WorkbenchFileClient(
   options: WorkbenchFileClientOptions,
   lifecycle: LifecycleScope = new LifecycleScope(),
 ): WorkbenchFileClient {
@@ -661,3 +662,5 @@ export function WorkbenchFileClient(
     syncCurrentDraftBuffer,
   };
 }
+
+export default WorkbenchFileClient;

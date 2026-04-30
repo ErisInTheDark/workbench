@@ -3,7 +3,7 @@
  * - SessionStateSnapshot: readonly projection of the active file or thread selection. Keywords: workbench, session, selection, snapshot.
  * - SessionStateListener: subscriber signature for selection changes. Keywords: workbench, session, selection, subscribe.
  * - SessionState: mutable selection state owner for the active workbench target. Keywords: workbench, session, selection, state.
- * - createSessionState: create the selection state owner used by the coordinator and file workflow. Keywords: workbench, session, selection, create.
+ * - default SessionState: create the selection state owner used by the coordinator and file workflow. Keywords: workbench, session, selection, create, default export.
  */
 
 import type { ThreadPayload } from "../../types";
@@ -16,7 +16,7 @@ export interface SessionStateSnapshot {
 
 export type SessionStateListener = (snapshot: SessionStateSnapshot) => void;
 
-export interface SessionState extends SessionStateSnapshot {
+interface SessionState extends SessionStateSnapshot {
   getSnapshot: () => SessionStateSnapshot;
   subscribe: (listener: SessionStateListener) => () => void;
 }
@@ -31,7 +31,7 @@ function createInitialSessionSnapshot(
   };
 }
 
-export function SessionState(initial: Partial<SessionStateSnapshot> = {}): SessionState {
+function SessionState(initial: Partial<SessionStateSnapshot> = {}): SessionState {
   const listeners = new Set<SessionStateListener>();
   const state = createInitialSessionSnapshot(initial);
 
@@ -95,3 +95,5 @@ export function SessionState(initial: Partial<SessionStateSnapshot> = {}): Sessi
     subscribe,
   };
 }
+
+export default SessionState;

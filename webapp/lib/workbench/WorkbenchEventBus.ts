@@ -4,7 +4,7 @@
  * - WorkbenchEventType: event names emitted on the workbench-scoped event bus. Keywords: workbench, events, types.
  * - WorkbenchEventListener: subscriber signature for one coarse workbench event type. Keywords: workbench, events, subscribe.
  * - WorkbenchEventBus: small workbench-scoped event surface for cross-client notifications that do not own state. Keywords: workbench, event bus, cross-client.
- * - createWorkbenchEventBus: create the coarse event bus used by the coordinator and subclients. Keywords: workbench, event bus, create.
+ * - default WorkbenchEventBus: create the coarse event bus used by the coordinator and subclients. Keywords: workbench, event bus, create, default export.
  */
 
 import type { SaveConflictPayload } from "../types";
@@ -30,7 +30,7 @@ export type WorkbenchEventListener<TEventType extends WorkbenchEventType> = (
   payload: WorkbenchEventMap[TEventType],
 ) => void;
 
-export interface WorkbenchEventBus {
+interface WorkbenchEventBus {
   emit: <TEventType extends WorkbenchEventType>(
     type: TEventType,
     payload: WorkbenchEventMap[TEventType],
@@ -41,7 +41,7 @@ export interface WorkbenchEventBus {
   ) => () => void;
 }
 
-export function WorkbenchEventBus(): WorkbenchEventBus {
+function WorkbenchEventBus(): WorkbenchEventBus {
   const listeners: {
     [TEventType in WorkbenchEventType]: Set<WorkbenchEventListener<TEventType>>;
   } = {
@@ -65,3 +65,5 @@ export function WorkbenchEventBus(): WorkbenchEventBus {
     },
   };
 }
+
+export default WorkbenchEventBus;

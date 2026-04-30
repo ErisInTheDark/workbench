@@ -3,7 +3,7 @@
  * - EditHistoryManagerOptions: coordinator-owned callbacks and state accessors required to manage undo, redo, and history replay. Keywords: workbench, edit history, manager, coordinator.
  * - EditHistoryReplayRequest: replay payload delegated back to the coordinator so history replay can use the shared editor mutation pipeline. Keywords: workbench, edit history, replay, coordinator.
  * - EditHistoryManager: public surface for history selection tracking, recording, replay, undo, and redo. Keywords: workbench, edit history, undo, redo, selection.
- * - createEditHistoryManager: create the history manager that owns edit-history mutations while delegating DOM rendering back to the coordinator. Keywords: workbench, edit history, manager, replay.
+ * - default EditHistoryManager: create the history manager that owns edit-history mutations while delegating DOM rendering back to the coordinator. Keywords: workbench, edit history, manager, replay, default export.
  */
 
 import {
@@ -31,7 +31,7 @@ export interface EditHistoryManagerOptions {
   setHistory: (history: EditHistoryState | null) => void;
 }
 
-export interface EditHistoryManager {
+interface EditHistoryManager {
   applyHistoryState: (history: EditHistoryState, nextIndex: number) => void;
   recordEditHistory: (previousContent: string, nextContent: string, selection: EditHistorySelection | null) => void;
   redoEditHistory: () => void;
@@ -39,7 +39,7 @@ export interface EditHistoryManager {
   updateHistorySelection: (selection: EditHistorySelection | null) => void;
 }
 
-export function EditHistoryManager(options: EditHistoryManagerOptions): EditHistoryManager {
+function EditHistoryManager(options: EditHistoryManagerOptions): EditHistoryManager {
   function updateHistorySelection(selection: EditHistorySelection | null) {
     const history = options.getHistory();
     if (!history?.frames.length) {
@@ -134,3 +134,5 @@ export function EditHistoryManager(options: EditHistoryManagerOptions): EditHist
     updateHistorySelection,
   };
 }
+
+export default EditHistoryManager;

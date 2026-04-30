@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchFormatCommandControllerOptions: injected editor mode and formatting delegates for rich-editor toolbar and key command handling. Keywords: workbench, format, command, toolbar, keydown, controller, dependencies.
  * - WorkbenchFormatCommandController: public surface for rich-editor format shortcuts and toolbar commands. Keywords: workbench, format, command, toolbar, keydown, controller.
- * - createWorkbenchFormatCommandController: create the editor-owned formatting command controller for rich-editor inline and block formatting actions. Keywords: workbench, format, command, toolbar, keydown, rich editor.
+ * - default WorkbenchFormatCommandController: create the editor-owned formatting command controller for rich-editor inline and block formatting actions. Keywords: workbench, format, command, toolbar, keydown, rich editor, default export.
  */
 
 import type { EditorMode } from "../WorkbenchEditorClient";
@@ -28,12 +28,12 @@ export interface WorkbenchFormatCommandControllerOptions {
   togglePendingInlineFormat: (format: PendingInlineFormatKey) => boolean;
 }
 
-export interface WorkbenchFormatCommandController {
+interface WorkbenchFormatCommandController {
   applyToolbarCommand: (command: string) => void;
   handleFormatKeyDown: (event: KeyboardEvent) => boolean;
 }
 
-export function WorkbenchFormatCommandController(
+function WorkbenchFormatCommandController(
   options: WorkbenchFormatCommandControllerOptions,
 ): WorkbenchFormatCommandController {
   function wrapSelection(tagName: WrapSelectionTagName) {
@@ -217,3 +217,5 @@ export function WorkbenchFormatCommandController(
     handleFormatKeyDown,
   };
 }
+
+export default WorkbenchFormatCommandController;

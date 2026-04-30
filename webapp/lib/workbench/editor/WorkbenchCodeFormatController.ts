@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchCodeFormatControllerOptions: injected DOM and cleanup hooks for inline code selection toggles. Keywords: workbench, code format, controller, selection, dependencies.
  * - WorkbenchCodeFormatController: public surface for inline code toggle behavior in the rich editor. Keywords: workbench, code format, controller, selection.
- * - createWorkbenchCodeFormatController: create the inline code formatting controller used by the main workbench coordinator. Keywords: workbench, code format, toggle, selection.
+ * - default WorkbenchCodeFormatController: create the inline code formatting controller used by the main workbench coordinator. Keywords: workbench, code format, toggle, selection, default export.
  */
 
 import { selectInsertedNodes } from "../dom/selection/selection-dom";
@@ -16,11 +16,11 @@ export interface WorkbenchCodeFormatControllerOptions {
   ) => void;
 }
 
-export interface WorkbenchCodeFormatController {
+interface WorkbenchCodeFormatController {
   toggleCodeSelection: (selection: Selection, range: Range) => void;
 }
 
-export function WorkbenchCodeFormatController(
+function WorkbenchCodeFormatController(
   options: WorkbenchCodeFormatControllerOptions,
 ): WorkbenchCodeFormatController {
   function unwrapCodeElements(root: DocumentFragment | Element) {
@@ -210,3 +210,5 @@ export function WorkbenchCodeFormatController(
     toggleCodeSelection,
   };
 }
+
+export default WorkbenchCodeFormatController;

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - LifecycleTaskCallback: callback shape for named lifecycle-owned scheduled work. Keywords: workbench, lifecycle, callback, scheduling.
- * - LifecycleScope: client-local owner for abortable listeners, named timers, named animation frames, and unsubscribe callbacks. Keywords: workbench, lifecycle, cleanup, timers, animation frame, abort, dispose.
+ * - default LifecycleScope: client-local owner for abortable listeners, named timers, named animation frames, and unsubscribe callbacks. Keywords: workbench, lifecycle, cleanup, timers, animation frame, abort, dispose, default export.
  */
 
 export type LifecycleTaskCallback = () => void | Promise<void>;
@@ -23,7 +23,7 @@ type LifecycleScheduledTask =
       timeoutId: number | null;
     };
 
-export class LifecycleScope {
+export default class LifecycleScope {
   private readonly abortController = new AbortController();
   private readonly scheduledTasks = new Map<string, LifecycleScheduledTask>();
   private readonly unsubscribes = new Set<() => void>();

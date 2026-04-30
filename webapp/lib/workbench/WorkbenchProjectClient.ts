@@ -5,7 +5,7 @@
  * - WorkbenchProjectListener: subscriber signature for project client state changes. Keywords: workbench, project, subscribe.
  * - cloneTreeNodes: deep-clone recursive tree node arrays for safe project snapshots. Keywords: workbench, project, tree, clone.
  * - WorkbenchProjectClient: public surface for the workbench project sub-client. Keywords: workbench, project, client, dispose.
- * - createWorkbenchProjectClient: create the project sub-client that owns tree refresh, entry creation, and directory expansion state. Keywords: workbench, project, tree, entries.
+ * - default WorkbenchProjectClient: create the project sub-client that owns tree refresh, entry creation, and directory expansion state. Keywords: workbench, project, tree, entries, default export.
  */
 
 import type { ChangeSummary, CreateEntryPayload, ProjectSnapshot, TreeNode } from "../types";
@@ -42,7 +42,7 @@ export interface WorkbenchProjectSnapshot {
 
 export type WorkbenchProjectListener = (snapshot: WorkbenchProjectSnapshot) => void;
 
-export interface WorkbenchProjectClient {
+interface WorkbenchProjectClient {
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
   dispose: () => void;
   expandPath: (filePath: string) => boolean;
@@ -62,7 +62,7 @@ function createInitialProjectState(): WorkbenchProjectState {
   };
 }
 
-export function WorkbenchProjectClient(): WorkbenchProjectClient {
+function WorkbenchProjectClient(): WorkbenchProjectClient {
   const listeners = new Set<WorkbenchProjectListener>();
   const state = createInitialProjectState();
 
@@ -189,3 +189,5 @@ export function WorkbenchProjectClient(): WorkbenchProjectClient {
     toggleDirectory,
   };
 }
+
+export default WorkbenchProjectClient;

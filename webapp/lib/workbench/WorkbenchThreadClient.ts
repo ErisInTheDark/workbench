@@ -5,7 +5,7 @@
  * - WorkbenchThreadListener: subscriber signature for thread client state changes. Keywords: workbench, thread, subscribe.
  * - WorkbenchThreadClientOptions: creation options for the thread client manager hooks. Keywords: workbench, thread, status, callbacks.
  * - WorkbenchThreadClient: public surface for thread transport, draft threads, and notification handling. Keywords: workbench, thread, client, dispose.
- * - createWorkbenchThreadClient: create the thread sub-client that owns Codex or Copilot thread state and notifications. Keywords: workbench, thread, codex, copilot.
+ * - default WorkbenchThreadClient: create the thread sub-client that owns Codex or Copilot thread state and notifications. Keywords: workbench, thread, codex, copilot, default export.
  */
 
 import { CodexAppServerClient } from "../codex/app-server-client";
@@ -26,7 +26,7 @@ import { createTextInput, createThreadStartRequest, isCodexJsonRpcFailure } from
 import { formatThreadStatus, isProjectCodexThread, toThreadPayload, toThreadSummary } from "../codex/thread-adapter";
 import { getCurrentInProgressTurn, getCurrentTurn } from "../codex/thread-state";
 import type { ThreadPayload, ThreadSummary, WorkbenchHarness, WorkbenchModelOption } from "../types";
-import { LifecycleScope } from "./state/LifecycleScope";
+import LifecycleScope from "./state/LifecycleScope";
 import {
     persistHarnessAgent,
     persistHarnessModel,
@@ -69,7 +69,7 @@ export interface WorkbenchThreadClientOptions {
   onStatusMessage?: (message: string) => void;
 }
 
-export interface WorkbenchThreadClient {
+interface WorkbenchThreadClient {
   clearThreadSelection: () => void;
   createThread: (harness: WorkbenchHarness, threadId?: string) => ThreadPayload;
   dispose: () => void;
@@ -106,7 +106,7 @@ function createInitialThreadState(): WorkbenchThreadState {
   };
 }
 
-export function WorkbenchThreadClient(
+function WorkbenchThreadClient(
   options: WorkbenchThreadClientOptions = {},
   lifecycle: LifecycleScope = new LifecycleScope(),
 ): WorkbenchThreadClient {
@@ -1269,3 +1269,5 @@ export function WorkbenchThreadClient(
     subscribe,
   };
 }
+
+export default WorkbenchThreadClient;

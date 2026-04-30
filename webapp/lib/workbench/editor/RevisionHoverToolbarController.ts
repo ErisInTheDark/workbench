@@ -5,7 +5,7 @@
  * - RevisionToolbarContext: resolved revision target nodes and anchor rect for toolbar positioning. Keywords: revision, toolbar, context, rect.
  * - RevisionHoverToolbarControllerOptions: DOM dependencies and callbacks required to coordinate revision hover behavior. Keywords: revision, hover, controller, options, DOM.
  * - RevisionHoverToolbarController: public revision hover controller surface used by the workbench client. Keywords: revision, hover, controller, toolbar.
- * - createRevisionHoverToolbarController: create the revision hover and selection toolbar controller for the rich-text workbench editor. Keywords: revision, hover, selection, toolbar, controller.
+ * - default RevisionHoverToolbarController: create the revision hover and selection toolbar controller for the rich-text workbench editor. Keywords: revision, hover, selection, toolbar, controller, default export.
  */
 
 import type { VisualViewportMetrics } from "../dom/layout/viewport-metrics";
@@ -34,7 +34,7 @@ export interface RevisionHoverToolbarControllerOptions {
   revisionHoverToolbar: HTMLElement;
 }
 
-export interface RevisionHoverToolbarController {
+interface RevisionHoverToolbarController {
   applyHoveredRevisionAction: (action: "accept" | "reject") => void;
   getSelectedRevisionToolbarContext: () => RevisionToolbarContext | null;
   isPointerNearRevisionHoverUi: (clientX: number, clientY: number) => boolean;
@@ -44,7 +44,7 @@ export interface RevisionHoverToolbarController {
 
 const REVISION_HOVER_PROXIMITY_PX = 18;
 
-export function RevisionHoverToolbarController(
+function RevisionHoverToolbarController(
   options: RevisionHoverToolbarControllerOptions,
 ): RevisionHoverToolbarController {
   const {
@@ -349,3 +349,5 @@ export function RevisionHoverToolbarController(
     updateRevisionHoverToolbar,
   };
 }
+
+export default RevisionHoverToolbarController;

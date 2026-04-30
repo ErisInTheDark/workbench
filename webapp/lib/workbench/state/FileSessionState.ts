@@ -4,7 +4,7 @@
  * - FileSessionStateSnapshot: readonly projection of current file persistence and history state. Keywords: workbench, file, session, snapshot.
  * - FileSessionStateListener: subscriber signature for file-session updates. Keywords: workbench, file, session, subscribe.
  * - FileSessionState: mutable owner of file persistence, history, and save-guard state for the active file. Keywords: workbench, file, session, state.
- * - createFileSessionState: create the file-session state owner consumed by the coordinator and file client. Keywords: workbench, file, session, create.
+ * - default FileSessionState: create the file-session state owner consumed by the coordinator and file client. Keywords: workbench, file, session, create, default export.
  */
 
 import type { SaveConflictPayload } from "../../types";
@@ -39,7 +39,7 @@ export interface FileSessionStateSnapshot {
 
 export type FileSessionStateListener = (snapshot: FileSessionStateSnapshot) => void;
 
-export interface FileSessionState extends FileSessionStateSnapshot {
+interface FileSessionState extends FileSessionStateSnapshot {
   getSnapshot: () => FileSessionStateSnapshot;
   subscribe: (listener: FileSessionStateListener) => () => void;
 }
@@ -80,7 +80,7 @@ function createInitialFileSessionSnapshot(
   };
 }
 
-export function FileSessionState(initial: Partial<FileSessionStateSnapshot> = {}): FileSessionState {
+function FileSessionState(initial: Partial<FileSessionStateSnapshot> = {}): FileSessionState {
   const listeners = new Set<FileSessionStateListener>();
   const state = createInitialFileSessionSnapshot(initial);
 
@@ -218,3 +218,5 @@ export function FileSessionState(initial: Partial<FileSessionStateSnapshot> = {}
     subscribe,
   };
 }
+
+export default FileSessionState;
