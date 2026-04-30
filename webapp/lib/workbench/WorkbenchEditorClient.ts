@@ -6,10 +6,12 @@
  * - EditorUIState: owned editor shell state for UI-only concerns such as font size, transient status, and thread labels. Keywords: workbench, editor, state, UI.
  * - EditorUIStateSnapshot: readonly projection of editor-owned UI state. Keywords: workbench, editor, snapshot, UI.
  * - EditorUIStateListener: subscriber signature for editor shell changes. Keywords: workbench, editor, subscribe.
+ * - EditOperationHooks: optional post-mutation hooks used by the editor mutation runtime to restore selection-sensitive DOM state. Keywords: workbench, editor, mutation, hooks, selection.
  * - WorkbenchEditorControllerOptions: grouped controller dependencies injected from the coordinator so the editor client can own controller composition without owning higher-level orchestration. Keywords: workbench, editor, controller, composition, callbacks.
- * - WorkbenchEditorClientOptions: callbacks, structural-edit dependencies, controller inputs, and state readers delegated from the coordinator for editor behavior and deterministic rendering. Keywords: workbench, editor, callbacks, controller, structure, status, state.
- * - WorkbenchEditorClient: public surface for the editor shell client, including diff gutter refresh scheduling, editor-controller composition, revision toolbar state access, and editor-owned structural input handling. Keywords: workbench, editor, client, diff gutter, format, revision, list structure, rich input, dispose.
- * - default WorkbenchEditorClient: create the editor shell client that owns DOM refs, dialogs, diff gutter rendering, editor controller composition, event listener cleanup, and deterministic status messages. Keywords: workbench, editor, DOM, status, controller, format, revision, rich input, diff gutter, listeners, default export.
+ * - WorkbenchEditorMutationRuntimeOptions: coordinator-owned callbacks the editor runtime still needs for history, draft inspection, and replay while Stage 1 ownership moves behind the editor boundary. Keywords: workbench, editor, mutation, history, draft, replay.
+ * - WorkbenchEditorClientOptions: callbacks, mutation-runtime dependencies, structural-edit dependencies, controller inputs, and state readers delegated from the coordinator for editor behavior and deterministic rendering. Keywords: workbench, editor, callbacks, mutation, controller, structure, status, state.
+ * - WorkbenchEditorClient: public surface for the editor shell client, including diff gutter refresh scheduling, editor-controller composition, revision toolbar state access, editor-owned mutation sequencing, and structural input handling. Keywords: workbench, editor, client, diff gutter, format, revision, list structure, rich input, mutation, dispose.
+ * - default WorkbenchEditorClient: create the editor shell client that owns DOM refs, dialogs, diff gutter rendering, editor controller composition, mutation sequencing, event listener cleanup, and deterministic status messages. Keywords: workbench, editor, DOM, status, controller, format, revision, rich input, mutation, diff gutter, listeners, default export.
  */
 
 import type { ChangeSummary, SaveConflictPayload } from "../types";
@@ -18,6 +20,9 @@ import {
     getExpandedRangeRect,
     getVisualViewportMetrics,
 } from "./dom/layout/viewport-metrics";
+import {
+    syncStructuredBlockStyles as syncStructuredBlockDomStyles,
+} from "./dom/mutation/structured-block-dom";
 import {
     getNestedListElementsForItem,
     isIntentionalListBreakParagraph,
@@ -39,6 +44,8 @@ import WorkbenchListStructureController, { type WorkbenchListStructureController
 import WorkbenchRichInputController from "./editor/WorkbenchRichInputController";
 import { parseBlocks as parseMarkdownBlocks, type ParsedBlock } from "./markdown/markdown-render";
 import { MAX_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, persistFontSize, readStoredFontSize } from "./state/browser-state";
+import type { EditHistorySelection } from "./state/edit-history";
+import type { EditHistoryReplayRequest } from "./state/EditHistoryManager";
 import type FileSessionState from "./state/FileSessionState";
 import LifecycleScope from "./state/LifecycleScope";
 import type SessionState from "./state/SessionState";
@@ -102,6 +109,37 @@ export interface WorkbenchEditorControllerOptions {
   revisionHover: Omit<RevisionHoverToolbarControllerOptions, "editor" | "getMode" | "revisionHoverAcceptButton" | "revisionHoverRejectButton" | "revisionHoverToolbar">;
 }
 
+type EditOperationKind = "input" | "structural" | "replay";
+type EditOperationRefreshMode = "deferred" | "immediate";
+
+interface EditOperationContext {
+  kind: EditOperationKind;
+  nextContent: string | null;
+  nextSelection: EditHistorySelection | null;
+  previousContent: string;
+  previousSelection: EditHistorySelection | null;
+  recordHistory: boolean;
+  refreshMode: EditOperationRefreshMode;
+  syncStructuredStyles: boolean;
+  updateHistorySelection: boolean;
+}
+
+export interface EditOperationHooks {
+  afterDomMutation?: () => void;
+  afterSelectionRestore?: () => void;
+}
+
+export interface WorkbenchEditorMutationRuntimeOptions {
+  captureSelection: () => EditHistorySelection | null;
+  inspectCurrentDraft: () => void;
+  recordEditHistory: (previousContent: string, nextContent: string, selection: EditHistorySelection | null) => void;
+  removeEmptyInlineFormattingArtifacts: (root: ParentNode) => void;
+  renderReplayDocument: (content: string, mode: EditorMode) => void;
+  restoreSelection: (selection: EditHistorySelection | null) => void;
+  syncCurrentDraftBuffer: () => void;
+  updateHistorySelection: (selection: EditHistorySelection | null) => void;
+}
+
 export interface WorkbenchEditorClientOptions {
   closeActiveDialog: () => boolean;
   controllerOptions: WorkbenchEditorControllerOptions;
@@ -127,6 +165,7 @@ export interface WorkbenchEditorClientOptions {
   handleViewportChanged: () => void;
   isSaveButtonInvalid?: () => boolean;
   listStructure: Omit<WorkbenchListStructureControllerOptions, "editor" | "updateFloatingToolbar">;
+  mutationRuntime: WorkbenchEditorMutationRuntimeOptions;
   sessionState: SessionState;
   shouldBlockBeforeUnload: () => boolean;
 }
@@ -154,6 +193,9 @@ interface WorkbenchEditorClient {
   maybeClearPendingInlineFormatsForKey: (event: KeyboardEvent) => void;
   refreshEditorChrome: () => void;
   refreshStatusMessage: (message?: string) => void;
+  runHistoryReplay: (request: EditHistoryReplayRequest) => void;
+  runInputMutation: (mutate: () => void, hooks?: EditOperationHooks) => void;
+  runStructuralMutation: (mutate: () => void, hooks?: EditOperationHooks) => void;
   scheduleEditorChromeRefresh: () => void;
   scheduleDiffGutterRefresh: () => void;
   setHoveredRevisionNode: (node: HTMLElement | null) => void;
@@ -163,6 +205,7 @@ interface WorkbenchEditorClient {
   showSaveConflict: (conflict: SaveConflictPayload) => void;
   showThreadPlaceholder: (label: string) => void;
   subscribe: (listener: EditorUIStateListener) => () => void;
+  syncStructuredBlockStyles: (root?: ParentNode) => void;
   updateCustomCaret: () => void;
   updateRevisionHoverToolbar: () => void;
 }
@@ -876,6 +919,13 @@ function WorkbenchEditorClient(
     });
   }
 
+  function syncStructuredBlockStyles(root: ParentNode = editor) {
+    syncStructuredBlockDomStyles(root, {
+      canonicalizeInlineRunContainers: canonicalizeAllInlineRunContainers,
+      removeEmptyInlineFormattingArtifacts: options.mutationRuntime.removeEmptyInlineFormattingArtifacts,
+    });
+  }
+
   function scheduleEditorChromeRefresh() {
     lifecycle.scheduleAnimationFrame("editor-chrome-refresh", () => {
       refreshEditorChrome();
@@ -917,6 +967,104 @@ function WorkbenchEditorClient(
 
   function clearPendingInlineFormats() {
     inlineFormatController.clearPendingInlineFormats();
+  }
+
+  let mutationIsRunning = false;
+
+  function createEditOperationContext(
+    kind: EditOperationKind,
+    overrides: Partial<Omit<EditOperationContext, "kind">> = {},
+  ): EditOperationContext {
+    return {
+      kind,
+      nextContent: null,
+      nextSelection: null,
+      previousContent: options.fileSessionState.currentContent,
+      previousSelection: options.mutationRuntime.captureSelection(),
+      recordHistory: kind !== "replay",
+      refreshMode: kind === "input" ? "deferred" : "immediate",
+      syncStructuredStyles: kind !== "replay",
+      updateHistorySelection: kind === "replay",
+      ...overrides,
+    };
+  }
+
+  function runEditorMutation(
+    context: EditOperationContext,
+    mutate: () => void,
+    hooks: EditOperationHooks = {},
+  ) {
+    if (mutationIsRunning) {
+      throw new Error("Nested editor mutations are not supported.");
+    }
+
+    mutationIsRunning = true;
+    try {
+      mutate();
+
+      if (context.syncStructuredStyles) {
+        syncStructuredBlockStyles();
+      }
+
+      hooks.afterDomMutation?.();
+
+      options.mutationRuntime.inspectCurrentDraft();
+      context.nextContent = options.fileSessionState.currentContent;
+
+      if (context.nextSelection !== null || context.kind === "replay") {
+        options.mutationRuntime.restoreSelection(context.nextSelection);
+      }
+
+      hooks.afterSelectionRestore?.();
+
+      const currentSelection = options.mutationRuntime.captureSelection();
+      if (context.recordHistory) {
+        options.mutationRuntime.recordEditHistory(context.previousContent, context.nextContent, currentSelection);
+      }
+
+      if (context.updateHistorySelection) {
+        options.mutationRuntime.updateHistorySelection(currentSelection);
+      }
+
+      options.mutationRuntime.syncCurrentDraftBuffer();
+      scheduleDiffGutterRefresh();
+      refreshStatusMessage();
+
+      if (context.refreshMode === "deferred") {
+        scheduleEditorChromeRefresh();
+        return;
+      }
+
+      refreshEditorChrome();
+    } catch (error) {
+      console.error(`Workbench ${context.kind} mutation failed.`, {
+        nextContent: context.nextContent,
+        nextSelection: context.nextSelection,
+        previousContent: context.previousContent,
+        previousSelection: context.previousSelection,
+      }, error);
+      throw error;
+    } finally {
+      mutationIsRunning = false;
+    }
+  }
+
+  function runInputMutation(mutate: () => void, hooks: EditOperationHooks = {}) {
+    runEditorMutation(createEditOperationContext("input"), mutate, hooks);
+  }
+
+  function runStructuralMutation(mutate: () => void, hooks: EditOperationHooks = {}) {
+    runEditorMutation(createEditOperationContext("structural"), mutate, hooks);
+  }
+
+  function runHistoryReplay(request: EditHistoryReplayRequest) {
+    runEditorMutation(createEditOperationContext("replay", {
+      nextSelection: request.selection,
+      syncStructuredStyles: true,
+    }), () => {
+      clearPendingInlineFormats();
+      options.mutationRuntime.renderReplayDocument(request.content, options.fileSessionState.mode);
+    });
   }
 
   function handlePendingInlineBeforeInput(event: InputEvent) {
@@ -1310,6 +1458,9 @@ function WorkbenchEditorClient(
     maybeClearPendingInlineFormatsForKey,
     refreshEditorChrome,
     refreshStatusMessage,
+    runHistoryReplay,
+    runInputMutation,
+    runStructuralMutation,
     scheduleEditorChromeRefresh,
     scheduleDiffGutterRefresh,
     setHoveredRevisionNode,
@@ -1319,6 +1470,7 @@ function WorkbenchEditorClient(
     showSaveConflict,
     showThreadPlaceholder,
     subscribe,
+    syncStructuredBlockStyles,
     updateCustomCaret,
     updateRevisionHoverToolbar,
   };
