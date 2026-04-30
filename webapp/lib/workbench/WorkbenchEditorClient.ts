@@ -1,15 +1,15 @@
 /*
  * Exports:
  * - createInitialEditorUIStateSnapshot: create the default editor UI snapshot used before the editor client is constructed. Keywords: workbench, editor, UI, snapshot, initial state.
- * - WorkbenchEditorFormatCommandOptions: delayed formatting-command delegates injected after inline and code controllers exist. Keywords: workbench, editor, format, command, delegates.
  * - EditorMode: current editor rendering mode. Keywords: workbench, editor, mode.
  * - SaveGuardIssue: persisted editor save-guard mismatch details. Keywords: workbench, editor, save guard, mismatch.
  * - EditorUIState: owned editor shell state for UI-only concerns such as font size, transient status, and thread labels. Keywords: workbench, editor, state, UI.
  * - EditorUIStateSnapshot: readonly projection of editor-owned UI state. Keywords: workbench, editor, snapshot, UI.
  * - EditorUIStateListener: subscriber signature for editor shell changes. Keywords: workbench, editor, subscribe.
- * - WorkbenchEditorClientOptions: callbacks, structural-edit dependencies, and state readers delegated from the coordinator for editor behavior and deterministic rendering. Keywords: workbench, editor, callbacks, structure, status, state.
- * - WorkbenchEditorClient: public surface for the editor shell client, including diff gutter refresh scheduling, delayed format-command configuration, and editor-owned structural input handling. Keywords: workbench, editor, client, diff gutter, format, list structure, rich input, dispose.
- * - default WorkbenchEditorClient: create the editor shell client that owns DOM refs, dialogs, diff gutter rendering, structural input wiring, delayed format-command setup, event listener cleanup, and deterministic status messages. Keywords: workbench, editor, DOM, status, structure, format, rich input, diff gutter, listeners, default export.
+ * - WorkbenchEditorControllerOptions: grouped controller dependencies injected from the coordinator so the editor client can own controller composition without owning higher-level orchestration. Keywords: workbench, editor, controller, composition, callbacks.
+ * - WorkbenchEditorClientOptions: callbacks, structural-edit dependencies, controller inputs, and state readers delegated from the coordinator for editor behavior and deterministic rendering. Keywords: workbench, editor, callbacks, controller, structure, status, state.
+ * - WorkbenchEditorClient: public surface for the editor shell client, including diff gutter refresh scheduling, editor-controller composition, revision toolbar state access, and editor-owned structural input handling. Keywords: workbench, editor, client, diff gutter, format, revision, list structure, rich input, dispose.
+ * - default WorkbenchEditorClient: create the editor shell client that owns DOM refs, dialogs, diff gutter rendering, editor controller composition, event listener cleanup, and deterministic status messages. Keywords: workbench, editor, DOM, status, controller, format, revision, rich input, diff gutter, listeners, default export.
  */
 
 import type { ChangeSummary, SaveConflictPayload } from "../types";
@@ -19,7 +19,18 @@ import {
     isIntentionalListBreakParagraph,
     isSingleBreakParagraph,
 } from "./dom/query/list-dom";
+import RevisionHoverToolbarController, {
+    type RevisionHoverToolbarControllerOptions,
+    type RevisionToolbarContext,
+} from "./editor/RevisionHoverToolbarController";
+import WorkbenchCodeFormatController, {
+    type WorkbenchCodeFormatControllerOptions,
+} from "./editor/WorkbenchCodeFormatController";
 import WorkbenchFormatCommandController from "./editor/WorkbenchFormatCommandController";
+import WorkbenchInlineFormatController, {
+    type CaretRenderContext,
+    type WorkbenchInlineFormatControllerOptions,
+} from "./editor/WorkbenchInlineFormatController";
 import WorkbenchListStructureController, { type WorkbenchListStructureControllerOptions } from "./editor/WorkbenchListStructureController";
 import WorkbenchRichInputController from "./editor/WorkbenchRichInputController";
 import { parseBlocks as parseMarkdownBlocks, type ParsedBlock } from "./markdown/markdown-render";
@@ -81,23 +92,15 @@ export interface EditorUIStateSnapshot {
 
 export type EditorUIStateListener = (snapshot: EditorUIStateSnapshot) => void;
 
-export interface WorkbenchEditorFormatCommandOptions {
-  clearPendingInlineFormats: () => void;
-  syncEditorAfterStructuralChange: (
-    mutate: () => void,
-    options?: { afterDomMutation?: () => void; afterSelectionRestore?: () => void },
-  ) => void;
-  toggleCodeSelection: (selection: Selection, range: Range) => void;
-  toggleInlineFormatSelection: (
-    selection: Selection,
-    range: Range,
-    formatKey: "bold" | "italic" | "comment" | "del" | "ins",
-  ) => void;
-  togglePendingInlineFormat: (format: "bold" | "italic" | "code" | "comment" | "del" | "ins") => boolean;
+export interface WorkbenchEditorControllerOptions {
+  codeFormat: Omit<WorkbenchCodeFormatControllerOptions, "editor">;
+  inlineFormat: Omit<WorkbenchInlineFormatControllerOptions, "editor" | "refreshStatusMessage" | "updateInlineToolbars">;
+  revisionHover: Omit<RevisionHoverToolbarControllerOptions, "editor" | "getMode" | "revisionHoverAcceptButton" | "revisionHoverRejectButton" | "revisionHoverToolbar">;
 }
 
 export interface WorkbenchEditorClientOptions {
   closeActiveDialog: () => boolean;
+  controllerOptions: WorkbenchEditorControllerOptions;
   fileSessionState: FileSessionState;
   getProjectChangeSummary: (path: string) => ChangeSummary | null | undefined;
   handleCompositionEnd: () => void;
@@ -116,10 +119,8 @@ export interface WorkbenchEditorClientOptions {
   handleReloadConflict: () => Promise<void>;
   handleResetCurrentDraftToSaved: () => Promise<void>;
   handleResetCurrentFileToHead: () => Promise<void>;
-  handleRevisionAction: (action: "accept" | "reject") => void;
   handleSaveCurrentFile: () => Promise<void>;
   handleSelectionChange: () => void;
-  handleToolbarCommand: (command: string | undefined) => void;
   handleViewportChanged: () => void;
   isSaveButtonInvalid?: () => boolean;
   listStructure: Omit<WorkbenchListStructureControllerOptions, "editor">;
@@ -128,26 +129,37 @@ export interface WorkbenchEditorClientOptions {
 }
 
 interface WorkbenchEditorClient {
+  applyHoveredRevisionAction: (action: "accept" | "reject") => void;
   applyToolbarCommand: (command: string) => void;
+  canonicalizeAllInlineRunContainers: (root: ParentNode) => void;
   changeFontSize: (delta: number) => void;
   clearSelectionView: () => void;
-  configureFormatCommands: (options: WorkbenchEditorFormatCommandOptions) => void;
+  clearPendingInlineFormats: () => void;
   dispose: () => void;
+  getCaretInlineContext: (range: Range) => CaretRenderContext | null;
+  getSelectedRevisionToolbarContext: () => RevisionToolbarContext | null;
   getSnapshot: () => EditorUIStateSnapshot;
   handleFormatKeyDown: (event: KeyboardEvent) => boolean;
+  handlePendingInlineBeforeInput: (event: InputEvent) => boolean;
+  handlePendingInlineSelectionChange: () => void;
   handleRichInput: (event: Event) => { transformedListItem: HTMLLIElement | null; commentCaretMarker: HTMLElement | null };
   handleListStructureKeyDown: (event: KeyboardEvent) => boolean;
   hideResetDraftDialog: () => void;
   hideSaveConflictDialog: () => void;
+  isPointerNearRevisionHoverUi: (clientX: number, clientY: number) => boolean;
+  maybeActivateInlineCommentShortcut: (event: Event) => null;
+  maybeClearPendingInlineFormatsForKey: (event: KeyboardEvent) => void;
   refreshStatusMessage: (message?: string) => void;
   scheduleEditorChromeRefresh: () => void;
   scheduleDiffGutterRefresh: () => void;
+  setHoveredRevisionNode: (node: HTMLElement | null) => void;
   setSaveButtonState: () => void;
   setStatusMessage: (message: string) => void;
   showResetDraftDialog: () => void;
   showSaveConflict: (conflict: SaveConflictPayload) => void;
   showThreadPlaceholder: (label: string) => void;
   subscribe: (listener: EditorUIStateListener) => () => void;
+  updateRevisionHoverToolbar: () => void;
 }
 
 export function createInitialEditorUIStateSnapshot(): EditorUIStateSnapshot {
@@ -541,7 +553,6 @@ function WorkbenchEditorClient(
     editor,
     getMode: () => options.fileSessionState.mode,
   });
-  let formatCommandController: WorkbenchFormatCommandController | null = null;
   let previousSessionSnapshot = options.sessionState.getSnapshot();
   let previousFileSnapshot = options.fileSessionState.getSnapshot();
 
@@ -652,6 +663,44 @@ function WorkbenchEditorClient(
     setStatusMessage(getDeterministicStatusMessage());
   }
 
+  const revisionHoverController = RevisionHoverToolbarController({
+    editor,
+    getMode: () => options.fileSessionState.mode,
+    revisionHoverAcceptButton: toolbars.revisionAccept,
+    revisionHoverRejectButton: toolbars.revisionReject,
+    revisionHoverToolbar: toolbars.revisionHover,
+    ...options.controllerOptions.revisionHover,
+  });
+  const inlineFormatController = WorkbenchInlineFormatController({
+    editor,
+    refreshStatusMessage: () => {
+      refreshStatusMessage();
+    },
+    updateInlineToolbars: options.handleRefreshInlineToolbars,
+    ...options.controllerOptions.inlineFormat,
+  });
+  const codeFormatController = WorkbenchCodeFormatController({
+    editor,
+    ...options.controllerOptions.codeFormat,
+  });
+  const formatCommandController = WorkbenchFormatCommandController({
+    clearPendingInlineFormats: () => {
+      inlineFormatController.clearPendingInlineFormats();
+    },
+    editor,
+    getMode: () => options.fileSessionState.mode,
+    syncEditorAfterStructuralChange: options.controllerOptions.inlineFormat.syncEditorAfterStructuralChange,
+    toggleCodeSelection: (selection, range) => {
+      codeFormatController.toggleCodeSelection(selection, range);
+    },
+    toggleInlineFormatSelection: (selection, range, formatKey) => {
+      inlineFormatController.toggleInlineFormatSelection(selection, range, formatKey);
+    },
+    togglePendingInlineFormat: (format) => {
+      return inlineFormatController.togglePendingInlineFormat(format);
+    },
+  });
+
   function renderDiffGutter() {
     diffGutter.replaceChildren();
 
@@ -745,20 +794,60 @@ function WorkbenchEditorClient(
     return richInputController.handleRichInput(event);
   }
 
-  function configureFormatCommands(formatCommandOptions: WorkbenchEditorFormatCommandOptions) {
-    formatCommandController = WorkbenchFormatCommandController({
-      editor,
-      getMode: () => options.fileSessionState.mode,
-      ...formatCommandOptions,
-    });
-  }
-
   function handleFormatKeyDown(event: KeyboardEvent) {
-    return formatCommandController?.handleFormatKeyDown(event) ?? false;
+    return formatCommandController.handleFormatKeyDown(event);
   }
 
   function applyToolbarCommand(command: string) {
-    formatCommandController?.applyToolbarCommand(command);
+    formatCommandController.applyToolbarCommand(command);
+  }
+
+  function clearPendingInlineFormats() {
+    inlineFormatController.clearPendingInlineFormats();
+  }
+
+  function handlePendingInlineBeforeInput(event: InputEvent) {
+    return inlineFormatController.handlePendingInlineBeforeInput(event);
+  }
+
+  function handlePendingInlineSelectionChange() {
+    inlineFormatController.handleSelectionChange();
+  }
+
+  function maybeActivateInlineCommentShortcut(event: Event) {
+    return inlineFormatController.maybeActivateInlineCommentShortcut(event);
+  }
+
+  function maybeClearPendingInlineFormatsForKey(event: KeyboardEvent) {
+    inlineFormatController.maybeClearPendingInlineFormatsForKey(event);
+  }
+
+  function canonicalizeAllInlineRunContainers(root: ParentNode) {
+    inlineFormatController.canonicalizeAllInlineRunContainers(root);
+  }
+
+  function getCaretInlineContext(range: Range) {
+    return inlineFormatController.getCaretInlineContext(range);
+  }
+
+  function getSelectedRevisionToolbarContext() {
+    return revisionHoverController.getSelectedRevisionToolbarContext();
+  }
+
+  function isPointerNearRevisionHoverUi(clientX: number, clientY: number) {
+    return revisionHoverController.isPointerNearRevisionHoverUi(clientX, clientY);
+  }
+
+  function setHoveredRevisionNode(node: HTMLElement | null) {
+    revisionHoverController.setHoveredRevisionNode(node);
+  }
+
+  function updateRevisionHoverToolbar() {
+    revisionHoverController.updateRevisionHoverToolbar();
+  }
+
+  function applyHoveredRevisionAction(action: "accept" | "reject") {
+    revisionHoverController.applyHoveredRevisionAction(action);
   }
 
   function hideDialog(dialog: HTMLDivElement) {
@@ -976,15 +1065,17 @@ function WorkbenchEditorClient(
     }
 
     editor.focus();
-    options.handleToolbarCommand(button.dataset.command);
+    if (button.dataset.command) {
+      applyToolbarCommand(button.dataset.command);
+    }
   }, { signal });
 
   toolbars.revisionAccept.addEventListener("click", () => {
-    options.handleRevisionAction("accept");
+    applyHoveredRevisionAction("accept");
   }, { signal });
 
   toolbars.revisionReject.addEventListener("click", () => {
-    options.handleRevisionAction("reject");
+    applyHoveredRevisionAction("reject");
   }, { signal });
 
   editor.addEventListener("click", (event) => {
@@ -1081,29 +1172,40 @@ function WorkbenchEditorClient(
   statusDisplay.statusLine.textContent = state.statusMessage;
 
   return {
+    applyHoveredRevisionAction,
     applyToolbarCommand,
+    canonicalizeAllInlineRunContainers,
     changeFontSize,
     clearSelectionView,
-    configureFormatCommands,
+    clearPendingInlineFormats,
     dispose: () => {
       listeners.clear();
       lifecycle.dispose();
     },
+    getCaretInlineContext,
+    getSelectedRevisionToolbarContext,
     getSnapshot,
     handleFormatKeyDown,
+    handlePendingInlineBeforeInput,
+    handlePendingInlineSelectionChange,
     handleRichInput,
     handleListStructureKeyDown,
     hideResetDraftDialog,
     hideSaveConflictDialog,
+    isPointerNearRevisionHoverUi,
+    maybeActivateInlineCommentShortcut,
+    maybeClearPendingInlineFormatsForKey,
     refreshStatusMessage,
     scheduleEditorChromeRefresh,
     scheduleDiffGutterRefresh,
+    setHoveredRevisionNode,
     setSaveButtonState,
     setStatusMessage,
     showResetDraftDialog,
     showSaveConflict,
     showThreadPlaceholder,
     subscribe,
+    updateRevisionHoverToolbar,
   };
 }
 

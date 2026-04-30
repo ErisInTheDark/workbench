@@ -49,11 +49,8 @@ import {
     restoreEditorSelection,
     restoreListItemSelection,
 } from "./workbench/dom/selection/selection-dom";
-import RevisionHoverToolbarController from "./workbench/editor/RevisionHoverToolbarController";
-import WorkbenchCodeFormatController from "./workbench/editor/WorkbenchCodeFormatController";
-import WorkbenchInlineFormatController, {
+import {
     restoreCaretToMarker,
-    type PendingInlineFormatKey,
 } from "./workbench/editor/WorkbenchInlineFormatController";
 import {
     markdownToHtml as renderMarkdownToHtml,
@@ -142,9 +139,6 @@ export async function WorkbenchClient(
   const editor = editorSurface.editor;
   const customCaret = editorSurface.customCaret;
   const floatingToolbar = toolbarSurface.floating;
-  const revisionHoverToolbar = toolbarSurface.revisionHover;
-  const revisionHoverAcceptButton = toolbarSurface.revisionAccept;
-  const revisionHoverRejectButton = toolbarSurface.revisionReject;
   const saveConflictDialog = dialogSurface.saveConflict.dialog;
   const resetDraftDialog = dialogSurface.resetDraft.dialog;
   const {
@@ -182,22 +176,6 @@ export async function WorkbenchClient(
     currentThreadId: initialThreadSnapshot.currentThreadId,
   });
   const fileSessionState = FileSessionState();
-  const {
-    applyHoveredRevisionAction,
-    getSelectedRevisionToolbarContext,
-    isPointerNearRevisionHoverUi,
-    setHoveredRevisionNode,
-    updateRevisionHoverToolbar,
-  } = RevisionHoverToolbarController({
-    editor,
-    getExpandedRangeRect,
-    getMode: () => fileSessionState.mode,
-    getVisualViewportMetrics,
-    onSyncEditorAfterStructuralChange: syncEditorAfterStructuralChange,
-    revisionHoverAcceptButton,
-    revisionHoverRejectButton,
-    revisionHoverToolbar,
-  });
 
   if (!editorShell) {
     return () => {};
@@ -265,7 +243,7 @@ export async function WorkbenchClient(
 
   function updateInlineToolbars() {
     updateFloatingToolbar();
-    updateRevisionHoverToolbar();
+    editorClient.updateRevisionHoverToolbar();
   }
 
   function refreshEditorChrome() {
@@ -309,7 +287,7 @@ export async function WorkbenchClient(
         nextSelection: request.selection,
       });
       this.run(context, () => {
-        clearPendingInlineFormats();
+        editorClient.clearPendingInlineFormats();
         editorDocument.renderDocument(request.content, fileSessionState.mode);
       });
     }
@@ -392,6 +370,33 @@ export async function WorkbenchClient(
     toolbars: toolbarSurface,
   }, {
     closeActiveDialog,
+    controllerOptions: {
+      codeFormat: {
+        getProtectedEmptyInlineFormatElements,
+        syncEditorAfterStructuralChange,
+      },
+      inlineFormat: {
+        captureEditorSelection: () => captureEditorSelection(editor),
+        deleteTextImmediatelyBeforeSelection,
+        getEditorHasFocus: () => editorHasFocus,
+        getInlineExpansionContainer,
+        getInlineRunContainer,
+        getIsComposing: () => isComposing,
+        getTextBeforeSelectionInElement,
+        isInlineRunContainer,
+        syncCurrentDraftBuffer,
+        syncEditorAfterStructuralChange,
+        updateCustomCaret,
+        updateHistorySelection: (selection) => {
+          editHistoryManager.updateHistorySelection(selection);
+        },
+      },
+      revisionHover: {
+        getExpandedRangeRect,
+        getVisualViewportMetrics,
+        onSyncEditorAfterStructuralChange: syncEditorAfterStructuralChange,
+      },
+    },
     fileSessionState,
     getProjectChangeSummary: (path) => projectClient.getSnapshot().changes[path] ?? null,
     handleCompositionEnd: () => {
@@ -399,11 +404,11 @@ export async function WorkbenchClient(
     },
     handleCompositionStart: () => {
       isComposing = true;
-      clearPendingInlineFormats();
+      editorClient.clearPendingInlineFormats();
       updateCustomCaret();
     },
     handleEditorBeforeInput: (event) => {
-      if (handlePendingInlineBeforeInput(event)) {
+      if (editorClient.handlePendingInlineBeforeInput(event)) {
         return;
       }
 
@@ -420,7 +425,7 @@ export async function WorkbenchClient(
     },
     handleEditorBlur: () => {
       editorHasFocus = false;
-      clearPendingInlineFormats();
+      editorClient.clearPendingInlineFormats();
       updateCustomCaret();
     },
     handleEditorClick: (event) => {
@@ -450,7 +455,7 @@ export async function WorkbenchClient(
       editorMutationRunner.runInputMutation(() => {
         const { transformedListItem: nextTransformedListItem, commentCaretMarker: richInputCommentCaretMarker } = editorClient.handleRichInput(event);
         transformedListItem = nextTransformedListItem;
-        commentCaretMarker = richInputCommentCaretMarker ?? maybeActivateInlineCommentShortcut(event);
+        commentCaretMarker = richInputCommentCaretMarker ?? editorClient.maybeActivateInlineCommentShortcut(event);
       }, {
         afterDomMutation: () => {
           if (transformedListItem) {
@@ -471,7 +476,7 @@ export async function WorkbenchClient(
         return;
       }
 
-      maybeClearPendingInlineFormatsForKey(event);
+      editorClient.maybeClearPendingInlineFormatsForKey(event);
 
       if (editorClient.handleListStructureKeyDown(event)) {
         return;
@@ -503,7 +508,7 @@ export async function WorkbenchClient(
       }
     },
     handleEditorPointerDown: () => {
-      clearPendingInlineFormats();
+      editorClient.clearPendingInlineFormats();
     },
     handleEditorToggle: (event) => {
       if (!(event.target instanceof HTMLDetailsElement)) {
@@ -520,12 +525,12 @@ export async function WorkbenchClient(
         ? event.target.closest<HTMLElement>('del, ins, [data-inline-comment="true"], [data-block-comment="true"]')
         : null;
       if (revisionNode && editor.contains(revisionNode)) {
-        setHoveredRevisionNode(revisionNode);
+        editorClient.setHoveredRevisionNode(revisionNode);
         return;
       }
 
-      if (!isPointerNearRevisionHoverUi(event.clientX, event.clientY)) {
-        setHoveredRevisionNode(null);
+      if (!editorClient.isPointerNearRevisionHoverUi(event.clientX, event.clientY)) {
+        editorClient.setHoveredRevisionNode(null);
       }
     },
     handleRefreshInlineToolbars: refreshEditorChrome,
@@ -542,28 +547,20 @@ export async function WorkbenchClient(
     handleResetCurrentFileToHead: async () => {
       await resetCurrentFileToHead();
     },
-    handleRevisionAction: (action) => {
-      applyHoveredRevisionAction(action);
-    },
     handleSaveCurrentFile: async () => {
       await saveCurrentFile();
     },
     handleSelectionChange: () => {
-      handlePendingInlineSelectionChange();
+      editorClient.handlePendingInlineSelectionChange();
 
       editHistoryManager.updateHistorySelection(captureEditorSelection(editor));
       scheduleSelectionPersistence();
       editorClient.scheduleEditorChromeRefresh();
     },
-    handleToolbarCommand: (command) => {
-      if (command) {
-        editorClient.applyToolbarCommand(command);
-      }
-    },
     handleViewportChanged: () => {
       editorClient.scheduleDiffGutterRefresh();
       updateFloatingToolbar();
-      updateRevisionHoverToolbar();
+      editorClient.updateRevisionHoverToolbar();
       updateCustomCaret();
     },
     listStructure: {
@@ -657,7 +654,7 @@ export async function WorkbenchClient(
   }));
   coordinatorLifecycle.addUnsubscribe(eventBus.subscribe("fileOpened", () => {
     updateFloatingToolbar();
-    updateRevisionHoverToolbar();
+    editorClient.updateRevisionHoverToolbar();
     updateCustomCaret();
   }));
   coordinatorLifecycle.addUnsubscribe(eventBus.subscribe("saveConflictCleared", () => {
@@ -670,85 +667,6 @@ export async function WorkbenchClient(
       actualUpdatedAt: formatTimestamp(conflict.actualUpdatedAt),
     });
   }));
-
-  const inlineFormatController = WorkbenchInlineFormatController({
-    captureEditorSelection: () => captureEditorSelection(editor),
-    deleteTextImmediatelyBeforeSelection,
-    editor,
-    getEditorHasFocus: () => editorHasFocus,
-    getInlineExpansionContainer,
-    getInlineRunContainer,
-    getIsComposing: () => isComposing,
-    getTextBeforeSelectionInElement,
-    isInlineRunContainer,
-    refreshStatusMessage: () => {
-      editorClient.refreshStatusMessage();
-    },
-    syncCurrentDraftBuffer,
-    syncEditorAfterStructuralChange,
-    updateCustomCaret,
-    updateHistorySelection: (selection) => {
-      editHistoryManager.updateHistorySelection(selection);
-    },
-    updateInlineToolbars,
-  });
-  const codeFormatController = WorkbenchCodeFormatController({
-    editor,
-    getProtectedEmptyInlineFormatElements,
-    syncEditorAfterStructuralChange,
-  });
-
-  const clearPendingInlineFormats = () => {
-    inlineFormatController.clearPendingInlineFormats();
-  };
-
-  const handlePendingInlineBeforeInput = (event: InputEvent) => {
-    return inlineFormatController.handlePendingInlineBeforeInput(event);
-  };
-
-  const handlePendingInlineSelectionChange = () => {
-    inlineFormatController.handleSelectionChange();
-  };
-
-  const maybeActivateInlineCommentShortcut = (event: Event) => {
-    return inlineFormatController.maybeActivateInlineCommentShortcut(event);
-  };
-
-  const maybeClearPendingInlineFormatsForKey = (event: KeyboardEvent) => {
-    inlineFormatController.maybeClearPendingInlineFormatsForKey(event);
-  };
-
-  const toggleInlineFormatSelection = (
-    selection: Selection,
-    range: Range,
-    formatKey: "bold" | "italic" | "comment" | "del" | "ins",
-  ) => {
-    inlineFormatController.toggleInlineFormatSelection(selection, range, formatKey);
-  };
-
-  const toggleCodeSelection = (selection: Selection, range: Range) => {
-    codeFormatController.toggleCodeSelection(selection, range);
-  };
-
-  const togglePendingInlineFormat = (format: PendingInlineFormatKey) => {
-    return inlineFormatController.togglePendingInlineFormat(format);
-  };
-
-  editorClient.configureFormatCommands({
-    clearPendingInlineFormats,
-    syncEditorAfterStructuralChange,
-    toggleCodeSelection,
-    toggleInlineFormatSelection,
-    togglePendingInlineFormat,
-  });
-
-  const canonicalizeAllInlineRunContainers = (root: ParentNode) => {
-    inlineFormatController.canonicalizeAllInlineRunContainers(root);
-  };
-
-  const getCaretInlineContext = (range: Range) => {
-    return inlineFormatController.getCaretInlineContext(range);
-  };
 
   const editHistoryManager = EditHistoryManager({
     applyHistoryReplay: (request) => {
@@ -846,7 +764,7 @@ export async function WorkbenchClient(
 
   function syncStructuredBlockStyles(root: ParentNode = editor) {
     syncStructuredBlockDomStyles(root, {
-      canonicalizeInlineRunContainers: canonicalizeAllInlineRunContainers,
+      canonicalizeInlineRunContainers: editorClient.canonicalizeAllInlineRunContainers,
       removeEmptyInlineFormattingArtifacts,
     });
   }
@@ -1051,7 +969,7 @@ export async function WorkbenchClient(
     unwrapTransparentSpans(root);
     normalizeNestedListHierarchy(root);
     mergeAdjacentSiblingLists(root);
-    canonicalizeAllInlineRunContainers(root);
+    editorClient.canonicalizeAllInlineRunContainers(root);
     removeEmptyInlineFormattingArtifacts(root);
     (root as Node).normalize();
   }
@@ -1118,13 +1036,13 @@ export async function WorkbenchClient(
     applyCurrentThreadId(payload.id);
     fileClient.selectThread(payload.id);
     editorClient.showThreadPlaceholder(payload.name || payload.preview || payload.id);
-    clearPendingInlineFormats();
-    setHoveredRevisionNode(null);
+    editorClient.clearPendingInlineFormats();
+    editorClient.setHoveredRevisionNode(null);
     updateSaveButtonState();
     editorClient.refreshStatusMessage(statusMessage);
     editorClient.scheduleDiffGutterRefresh();
     updateFloatingToolbar();
-    updateRevisionHoverToolbar();
+    editorClient.updateRevisionHoverToolbar();
     updateCustomCaret();
   }
 
@@ -1200,7 +1118,7 @@ export async function WorkbenchClient(
       return;
     }
 
-    const context = getCaretInlineContext(selection.getRangeAt(0));
+    const context = editorClient.getCaretInlineContext(selection.getRangeAt(0));
     if (!context) {
       hideCustomCaret();
       return;
@@ -1265,7 +1183,7 @@ export async function WorkbenchClient(
       !selection?.rangeCount ||
       selection.isCollapsed ||
       fileSessionState.mode !== "rich" ||
-      getSelectedRevisionToolbarContext() !== null ||
+      editorClient.getSelectedRevisionToolbarContext() !== null ||
       !editor.contains(selection.anchorNode) ||
       !editor.contains(selection.focusNode)
     ) {
@@ -1308,8 +1226,8 @@ export async function WorkbenchClient(
 
   function clearCurrentSelectionView() {
     fileClient.clearSelection();
-    setHoveredRevisionNode(null);
-    clearPendingInlineFormats();
+    editorClient.setHoveredRevisionNode(null);
+    editorClient.clearPendingInlineFormats();
     editorClient.clearSelectionView();
     updateSaveButtonState();
     editorClient.refreshStatusMessage();
