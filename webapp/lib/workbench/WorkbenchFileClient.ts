@@ -58,10 +58,8 @@ export interface WorkbenchFileClientOptions {
   eventBus: WorkbenchEventBus;
   expandProjectPath: (path: string) => void;
   fileSessionState: FileSessionState;
-  logBlockedSaveIssue: (issue: SaveGuardIssue) => void;
   refreshProject: () => Promise<void>;
   sessionState: SessionState;
-  setLastLoggedSaveIssue: (issue: SaveGuardIssue | null) => void;
   syncSelectionToUrl: (selection: { filePath?: string }) => void;
   updateHistorySelection: (selection: EditHistorySelection | null) => void;
 }
@@ -171,10 +169,8 @@ function WorkbenchFileClient(
     eventBus,
     expandProjectPath,
     fileSessionState: state,
-    logBlockedSaveIssue,
     refreshProject,
     sessionState,
-    setLastLoggedSaveIssue,
     syncSelectionToUrl,
     updateHistorySelection,
   } = options;
@@ -262,7 +258,6 @@ function WorkbenchFileClient(
     state.history = null;
     state.saveIssue = null;
     clearWriteConflict();
-    setLastLoggedSaveIssue(null);
   }
 
   function clearSelection() {
@@ -282,7 +277,6 @@ function WorkbenchFileClient(
       state.dirty = false;
       state.expectedMtimeMs = null;
       state.saveIssue = null;
-      setLastLoggedSaveIssue(null);
       return { content: "", issue: null };
     }
 
@@ -290,7 +284,6 @@ function WorkbenchFileClient(
     state.currentContent = inspection.content;
     state.dirty = inspection.content !== state.baselineContent;
     state.saveIssue = inspection.issue;
-    setLastLoggedSaveIssue(inspection.issue);
     return inspection;
   }
 
@@ -317,9 +310,6 @@ function WorkbenchFileClient(
     state.saveIssue = buffer.saveIssue
       ? { ...buffer.saveIssue }
       : null;
-    setLastLoggedSaveIssue(buffer.saveIssue
-      ? { ...buffer.saveIssue }
-      : null);
     editorDocument.refreshStatusMessage();
     editorDocument.scheduleDiffGutterRefresh();
     editorDocument.restoreSelection(state.history.frames[state.history.currentIndex]?.selection ?? null);
@@ -364,7 +354,6 @@ function WorkbenchFileClient(
     state.history = createInitialEditHistory(state.currentContent);
     state.pendingWriteConflict = null;
     state.saveIssue = null;
-    setLastLoggedSaveIssue(null);
 
     if (selectionSnapshot) {
       editorDocument.restoreSelection(selectionSnapshot);
@@ -565,7 +554,7 @@ function WorkbenchFileClient(
     const inspection = inspectCurrentDraft();
 
     if (inspection.issue) {
-      logBlockedSaveIssue(inspection.issue);
+      editorDocument.logBlockedSaveIssue(inspection.issue);
       editorDocument.refreshStatusMessage();
       return;
     }
@@ -604,7 +593,6 @@ function WorkbenchFileClient(
     state.dirty = false;
     state.expectedMtimeMs = payload.mtimeMs;
     await refreshProject();
-    setLastLoggedSaveIssue(null);
     clearWriteConflict();
     const nextDraftBuffers = new Map(state.draftBuffers);
     nextDraftBuffers.delete(sessionState.currentPath);

@@ -21,6 +21,11 @@ import {
     getVisualViewportMetrics,
 } from "./dom/layout/viewport-metrics";
 import {
+    removeEmptyInlineFormatElements,
+    replaceTag,
+    unwrapTransparentSpans,
+} from "./dom/mutation/dom-normalization";
+import {
     syncStructuredBlockStyles as syncStructuredBlockDomStyles,
 } from "./dom/mutation/structured-block-dom";
 import {
@@ -28,6 +33,9 @@ import {
     isIntentionalListBreakParagraph,
     isSingleBreakParagraph,
 } from "./dom/query/list-dom";
+import {
+    isInlineRunContainer,
+} from "./editor/inline-run-containers";
 import RevisionHoverToolbarController, {
     type RevisionHoverToolbarControllerOptions,
     type RevisionToolbarContext,
@@ -42,10 +50,21 @@ import WorkbenchInlineFormatController, {
 } from "./editor/WorkbenchInlineFormatController";
 import WorkbenchListStructureController, { type WorkbenchListStructureControllerOptions } from "./editor/WorkbenchListStructureController";
 import WorkbenchRichInputController from "./editor/WorkbenchRichInputController";
-import { parseBlocks as parseMarkdownBlocks, type ParsedBlock } from "./markdown/markdown-render";
+import {
+    parseBlocks as parseMarkdownBlocks,
+    markdownToHtml as renderMarkdownToHtml,
+    type ParsedBlock,
+} from "./markdown/markdown-render";
+import {
+    inspectDraftContent,
+    inspectSaveGuardMarkup,
+    isSameSaveGuardIssue,
+    logSaveGuardIssue,
+} from "./markdown/save-guard-inspection";
 import { MAX_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, persistFontSize, readStoredFontSize } from "./state/browser-state";
 import type { EditHistorySelection } from "./state/edit-history";
 import type { EditHistoryReplayRequest } from "./state/EditHistoryManager";
+import type EditorDocumentAdapter from "./state/EditorDocumentAdapter";
 import type FileSessionState from "./state/FileSessionState";
 import LifecycleScope from "./state/LifecycleScope";
 import type SessionState from "./state/SessionState";
@@ -104,7 +123,7 @@ export interface EditorUIStateSnapshot {
 export type EditorUIStateListener = (snapshot: EditorUIStateSnapshot) => void;
 
 export interface WorkbenchEditorControllerOptions {
-  codeFormat: Omit<WorkbenchCodeFormatControllerOptions, "editor">;
+  codeFormat: Omit<WorkbenchCodeFormatControllerOptions, "editor" | "getProtectedEmptyInlineFormatElements">;
   inlineFormat: Omit<WorkbenchInlineFormatControllerOptions, "editor" | "refreshStatusMessage" | "updateCustomCaret" | "updateInlineToolbars">;
   revisionHover: Omit<RevisionHoverToolbarControllerOptions, "editor" | "getMode" | "revisionHoverAcceptButton" | "revisionHoverRejectButton" | "revisionHoverToolbar">;
 }
@@ -133,7 +152,6 @@ export interface WorkbenchEditorMutationRuntimeOptions {
   captureSelection: () => EditHistorySelection | null;
   inspectCurrentDraft: () => void;
   recordEditHistory: (previousContent: string, nextContent: string, selection: EditHistorySelection | null) => void;
-  removeEmptyInlineFormattingArtifacts: (root: ParentNode) => void;
   renderReplayDocument: (content: string, mode: EditorMode) => void;
   restoreSelection: (selection: EditHistorySelection | null) => void;
   syncCurrentDraftBuffer: () => void;
@@ -178,6 +196,7 @@ interface WorkbenchEditorClient {
   clearSelectionView: () => void;
   clearPendingInlineFormats: () => void;
   dispose: () => void;
+  getDocumentAdapter: () => EditorDocumentAdapter;
   getCaretInlineContext: (range: Range) => CaretRenderContext | null;
   getSelectedRevisionToolbarContext: () => RevisionToolbarContext | null;
   getSnapshot: () => EditorUIStateSnapshot;
@@ -596,6 +615,7 @@ function WorkbenchEditorClient(
   const dialogSurface = surfaces.dialogs;
   const toolbars = surfaces.toolbars;
   const dialogs = [dialogSurface.saveConflict.dialog, dialogSurface.resetDraft.dialog] as const;
+  let lastLoggedSaveIssue: SaveGuardIssue | null = null;
   const listStructureController = WorkbenchListStructureController({
     editor,
     ...options.listStructure,
@@ -734,6 +754,7 @@ function WorkbenchEditorClient(
   });
   const codeFormatController = WorkbenchCodeFormatController({
     editor,
+    getProtectedEmptyInlineFormatElements,
     ...options.controllerOptions.codeFormat,
   });
   const formatCommandController = WorkbenchFormatCommandController({
@@ -919,12 +940,158 @@ function WorkbenchEditorClient(
     });
   }
 
+  function getProtectedEmptyInlineFormatElements(root: ParentNode) {
+    const protectedElements = new Set<HTMLElement>();
+    if (root !== editor) {
+      return protectedElements;
+    }
+
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) {
+      return protectedElements;
+    }
+
+    const boundaryNodes = [
+      selection.anchorNode,
+      selection.focusNode,
+      selection.getRangeAt(0).startContainer,
+      selection.getRangeAt(0).endContainer,
+    ];
+
+    for (const boundaryNode of boundaryNodes) {
+      let current: Node | null = boundaryNode;
+      while (current && current !== editor) {
+        if (
+          current instanceof HTMLElement
+          && (current.tagName === "STRONG"
+            || current.tagName === "EM"
+            || current.tagName === "CODE"
+            || current.tagName === "DEL"
+            || current.tagName === "INS"
+            || current.dataset.inlineComment === "true")
+        ) {
+          protectedElements.add(current);
+        }
+        current = current.parentNode;
+      }
+    }
+
+    return protectedElements;
+  }
+
+  function removeEmptyInlineFormattingArtifacts(root: ParentNode) {
+    const protectedElements = getProtectedEmptyInlineFormatElements(root);
+    removeEmptyInlineFormatElements(["strong", "em", "code", "del", "ins"], root, protectedElements);
+
+    if (!("querySelectorAll" in root)) {
+      return;
+    }
+
+    for (const commentElement of Array.from(root.querySelectorAll<HTMLElement>('[data-inline-comment="true"]'))) {
+      if (protectedElements.has(commentElement)) {
+        continue;
+      }
+
+      if ((commentElement.textContent ?? "").replaceAll("\u00a0", "").length > 0) {
+        continue;
+      }
+
+      commentElement.remove();
+    }
+  }
+
+  function normalizeEditorMarkup(root: ParentNode = editor) {
+    replaceTag(root, "b", "strong");
+    replaceTag(root, "i", "em");
+    replaceTag(root, "strike", "del");
+    replaceTag(root, "s", "del");
+    unwrapTransparentSpans(root);
+    syncStructuredBlockStyles(root);
+    (root as Node).normalize();
+  }
+
+  function inspectRichDocument() {
+    return inspectSaveGuardMarkup({
+      editorRoot: editor,
+      isInlineRunContainer: (element) => isInlineRunContainer(editor, element),
+      normalizeMarkup: normalizeEditorMarkup,
+    });
+  }
+
+  function syncSaveIssueLogging(issue: SaveGuardIssue | null, trigger: string, force = false) {
+    if (!issue) {
+      lastLoggedSaveIssue = null;
+      return;
+    }
+
+    if (!force && isSameSaveGuardIssue(lastLoggedSaveIssue, issue)) {
+      return;
+    }
+
+    logSaveGuardIssue(issue, options.sessionState.currentPath, trigger);
+    lastLoggedSaveIssue = { ...issue };
+  }
+
+  function inspectDraft() {
+    if (!options.sessionState.currentPath) {
+      lastLoggedSaveIssue = null;
+      return { content: "", issue: null };
+    }
+
+    if (options.fileSessionState.mode !== "rich") {
+      lastLoggedSaveIssue = null;
+      return inspectDraftContent({
+        mode: options.fileSessionState.mode,
+        plainTextContent: editor.textContent ?? "",
+      });
+    }
+
+    const richInspection = inspectRichDocument();
+    syncSaveIssueLogging(richInspection.issue, "markup mismatch detected while editing");
+    return inspectDraftContent({
+      mode: options.fileSessionState.mode,
+      plainTextContent: editor.textContent ?? "",
+      richInspection,
+    });
+  }
+
   function syncStructuredBlockStyles(root: ParentNode = editor) {
     syncStructuredBlockDomStyles(root, {
       canonicalizeInlineRunContainers: canonicalizeAllInlineRunContainers,
-      removeEmptyInlineFormattingArtifacts: options.mutationRuntime.removeEmptyInlineFormattingArtifacts,
+      removeEmptyInlineFormattingArtifacts,
     });
   }
+
+  const documentAdapter: EditorDocumentAdapter = {
+    captureSelection: () => options.mutationRuntime.captureSelection(),
+    inspectDraft,
+    inspectRichDocument,
+    logBlockedSaveIssue: (issue) => {
+      syncSaveIssueLogging(issue, "save attempt blocked by markup mismatch", true);
+    },
+    readRenderedState: (mode) => mode === "rich"
+      ? editor.innerHTML
+      : editor.textContent ?? "",
+    refreshStatusMessage,
+    renderDocument: (content, mode, renderOptions = {}) => {
+      lastLoggedSaveIssue = null;
+      if (mode === "rich") {
+        editor.innerHTML = renderOptions.renderedState ?? renderMarkdownToHtml(content);
+      } else {
+        editor.textContent = renderOptions.renderedState ?? content;
+      }
+
+      syncStructuredBlockStyles();
+      editor.scrollTop = 0;
+    },
+    restoreSelection: (selection) => {
+      options.mutationRuntime.restoreSelection(selection);
+    },
+    scheduleDiffGutterRefresh,
+    setEditable: (editable) => {
+      editor.setAttribute("contenteditable", editable ? "true" : "false");
+    },
+  };
 
   function scheduleEditorChromeRefresh() {
     lifecycle.scheduleAnimationFrame("editor-chrome-refresh", () => {
@@ -1443,6 +1610,7 @@ function WorkbenchEditorClient(
       listeners.clear();
       lifecycle.dispose();
     },
+    getDocumentAdapter: () => documentAdapter,
     getCaretInlineContext,
     getSelectedRevisionToolbarContext,
     getSnapshot,

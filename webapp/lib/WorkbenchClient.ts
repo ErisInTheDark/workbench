@@ -17,11 +17,6 @@ import {
     getVisualViewportMetrics,
 } from "./workbench/dom/layout/viewport-metrics";
 import {
-    removeEmptyInlineFormatElements,
-    replaceTag,
-    unwrapTransparentSpans,
-} from "./workbench/dom/mutation/dom-normalization";
-import {
     createListItemDomEditor,
 } from "./workbench/dom/mutation/list-item-dom-edit";
 import {
@@ -29,14 +24,7 @@ import {
 } from "./workbench/dom/mutation/rich-input-dom";
 import {
     getDirectChildSummaryTextElement,
-    hasDirectBlockLikeChildren,
-    mergeAdjacentSiblingLists,
-    normalizeNestedListHierarchy
 } from "./workbench/dom/mutation/structured-block-dom";
-import {
-    getDirectChildDetailsElement,
-    getDirectChildListElements,
-} from "./workbench/dom/query/list-dom";
 import {
     deleteTextImmediatelyBeforeSelection,
     getTextBeforeSelectionInElement,
@@ -48,17 +36,15 @@ import {
     restoreListItemSelection,
 } from "./workbench/dom/selection/selection-dom";
 import {
+    getInlineRunContainer,
+    isInlineRunContainer,
+} from "./workbench/editor/inline-run-containers";
+import {
     restoreCaretToMarker,
 } from "./workbench/editor/WorkbenchInlineFormatController";
 import {
     markdownToHtml as renderMarkdownToHtml,
 } from "./workbench/markdown/markdown-render";
-import {
-    inspectDraftContent,
-    inspectSaveGuardMarkup,
-    isSameSaveGuardIssue,
-    logSaveGuardIssue,
-} from "./workbench/markdown/save-guard-inspection";
 import {
     formatTimestamp
 } from "./workbench/project/tree-utils";
@@ -69,7 +55,6 @@ import {
     syncCurrentSelectionToUrl
 } from "./workbench/state/browser-state";
 import EditHistoryManager from "./workbench/state/EditHistoryManager";
-import type EditorDocumentAdapter from "./workbench/state/EditorDocumentAdapter";
 import FileSessionState from "./workbench/state/FileSessionState";
 import LifecycleScope from "./workbench/state/LifecycleScope";
 import SessionState from "./workbench/state/SessionState";
@@ -83,8 +68,7 @@ import {
 } from "./workbench/workbench-dom";
 import WorkbenchEditorClient, {
     type EditOperationHooks,
-    type EditorUIStateSnapshot,
-    type SaveGuardIssue
+    type EditorUIStateSnapshot
 } from "./workbench/WorkbenchEditorClient";
 import WorkbenchEventBus from "./workbench/WorkbenchEventBus";
 import WorkbenchFileClient from "./workbench/WorkbenchFileClient";
@@ -136,7 +120,6 @@ export async function WorkbenchClient(
   let explorerStateChangeScheduled = false;
   let isComposing = false;
   let reportStatusMessage = (_message: string) => {};
-  let lastLoggedSaveIssue: SaveGuardIssue | null = null;
   const eventBus = WorkbenchEventBus();
   const projectClient = WorkbenchProjectClient();
   const threadClient = WorkbenchThreadClient({
@@ -209,7 +192,6 @@ export async function WorkbenchClient(
 
     return false;
   }
-  let editorDocument: EditorDocumentAdapter;
   let editHistoryManager: ReturnType<typeof EditHistoryManager>;
   let fileClient: ReturnType<typeof WorkbenchFileClient>;
 
@@ -227,7 +209,6 @@ export async function WorkbenchClient(
     closeActiveDialog,
     controllerOptions: {
       codeFormat: {
-        getProtectedEmptyInlineFormatElements,
         syncEditorAfterStructuralChange,
       },
       inlineFormat: {
@@ -235,10 +216,10 @@ export async function WorkbenchClient(
         deleteTextImmediatelyBeforeSelection,
         getEditorHasFocus: () => editorHasFocus,
         getInlineExpansionContainer,
-        getInlineRunContainer,
+        getInlineRunContainer: (node) => getInlineRunContainer(editor, node),
         getIsComposing: () => isComposing,
         getTextBeforeSelectionInElement,
-        isInlineRunContainer,
+        isInlineRunContainer: (element) => isInlineRunContainer(editor, element),
         syncCurrentDraftBuffer,
         syncEditorAfterStructuralChange,
         updateHistorySelection: (selection) => {
@@ -435,7 +416,6 @@ export async function WorkbenchClient(
       recordEditHistory: (previousContent, nextContent, selection) => {
         editHistoryManager.recordEditHistory(previousContent, nextContent, selection);
       },
-      removeEmptyInlineFormattingArtifacts,
       renderReplayDocument: (content, mode) => {
         if (mode === "rich") {
           editor.innerHTML = renderMarkdownToHtml(content);
@@ -446,7 +426,7 @@ export async function WorkbenchClient(
         editor.scrollTop = 0;
       },
       restoreSelection: (selection) => {
-        editorDocument.restoreSelection(selection);
+        restoreEditorSelection(editor, selection);
       },
       syncCurrentDraftBuffer: () => {
         syncCurrentDraftBuffer();
@@ -461,36 +441,6 @@ export async function WorkbenchClient(
   let previousEditorUiSnapshot: EditorUIStateSnapshot = editorClient.getSnapshot();
   reportStatusMessage = (message) => {
     editorClient.refreshStatusMessage(message);
-  };
-  editorDocument = {
-    captureSelection: () => captureEditorSelection(editor),
-    inspectDraft: () => inspectEditorDraft(),
-    inspectRichDocument: () => inspectRichDocument(),
-    readRenderedState: (mode) => mode === "rich"
-      ? editor.innerHTML
-      : editor.textContent ?? "",
-    refreshStatusMessage: (message) => {
-      editorClient.refreshStatusMessage(message);
-    },
-    renderDocument: (content, mode, options = {}) => {
-      if (mode === "rich") {
-        editor.innerHTML = options.renderedState ?? renderMarkdownToHtml(content);
-      } else {
-        editor.textContent = options.renderedState ?? content;
-      }
-
-      editorClient.syncStructuredBlockStyles();
-      editor.scrollTop = 0;
-    },
-    restoreSelection: (selection) => {
-      restoreEditorSelection(editor, selection);
-    },
-    scheduleDiffGutterRefresh: () => {
-      editorClient.scheduleDiffGutterRefresh();
-    },
-    setEditable: (editable) => {
-      editor.setAttribute("contenteditable", editable ? "true" : "false");
-    },
   };
   let previousSessionSnapshot = sessionState.getSnapshot();
   coordinatorLifecycle.addUnsubscribe(sessionState.subscribe((snapshot) => {
@@ -561,23 +511,17 @@ export async function WorkbenchClient(
     clearThreadSelection: () => {
       threadClient.clearThreadSelection();
     },
-    editorDocument,
+    editorDocument: editorClient.getDocumentAdapter(),
     emitExplorerStateChange,
     eventBus,
     expandProjectPath: (filePath) => {
       projectClient.expandPath(filePath);
     },
     fileSessionState,
-    logBlockedSaveIssue: (issue) => {
-      syncSaveIssueLogging(issue, "save attempt blocked by markup mismatch", true);
-    },
     refreshProject: async () => {
       await projectClient.refreshProject();
     },
     sessionState,
-    setLastLoggedSaveIssue: (issue) => {
-      lastLoggedSaveIssue = issue;
-    },
     syncSelectionToUrl: syncCurrentSelectionToUrl,
     updateHistorySelection: editHistoryManager.updateHistorySelection,
   });
@@ -771,124 +715,6 @@ export async function WorkbenchClient(
     projectClient.toggleDirectory(path);
   }
 
-  function getProtectedEmptyInlineFormatElements(root: ParentNode) {
-    const protectedElements = new Set<HTMLElement>();
-    if (root !== editor) {
-      return protectedElements;
-    }
-
-    const selection = window.getSelection();
-    if (!selection?.rangeCount) {
-      return protectedElements;
-    }
-
-    const boundaryNodes = [
-      selection.anchorNode,
-      selection.focusNode,
-      selection.getRangeAt(0).startContainer,
-      selection.getRangeAt(0).endContainer,
-    ];
-
-    for (const boundaryNode of boundaryNodes) {
-      let current: Node | null = boundaryNode;
-      while (current && current !== editor) {
-        if (
-          current instanceof HTMLElement
-          && (current.tagName === "STRONG"
-            || current.tagName === "EM"
-            || current.tagName === "CODE"
-            || current.tagName === "DEL"
-            || current.tagName === "INS"
-            || current.dataset.inlineComment === "true")
-        ) {
-          protectedElements.add(current);
-        }
-        current = current.parentNode;
-      }
-    }
-
-    return protectedElements;
-  }
-
-  function removeEmptyInlineFormattingArtifacts(root: ParentNode) {
-    const protectedElements = getProtectedEmptyInlineFormatElements(root);
-    removeEmptyInlineFormatElements(["strong", "em", "code", "del", "ins"], root, protectedElements);
-
-    if (!("querySelectorAll" in root)) {
-      return;
-    }
-
-    for (const commentElement of Array.from(root.querySelectorAll<HTMLElement>('[data-inline-comment="true"]'))) {
-      if (protectedElements.has(commentElement)) {
-        continue;
-      }
-
-      if ((commentElement.textContent ?? "").replaceAll("\u00a0", "").length > 0) {
-        continue;
-      }
-
-      commentElement.remove();
-    }
-  }
-
-  function normalizeEditorMarkup(root: ParentNode = editor) {
-    replaceTag(root, "b", "strong");
-    replaceTag(root, "i", "em");
-    replaceTag(root, "strike", "del");
-    replaceTag(root, "s", "del");
-    unwrapTransparentSpans(root);
-    normalizeNestedListHierarchy(root);
-    mergeAdjacentSiblingLists(root);
-    editorClient.canonicalizeAllInlineRunContainers(root);
-    removeEmptyInlineFormattingArtifacts(root);
-    (root as Node).normalize();
-  }
-
-  function inspectRichDocument() {
-    const inspection = inspectSaveGuardMarkup({
-      editorRoot: editor,
-      isInlineRunContainer,
-      normalizeMarkup: normalizeEditorMarkup,
-    });
-    return inspection;
-  }
-
-  function inspectEditorDraft() {
-    if (!sessionState.currentPath) {
-      return { content: "", issue: null };
-    }
-
-    if (fileSessionState.mode !== "rich") {
-      return inspectDraftContent({
-        mode: fileSessionState.mode,
-        plainTextContent: editor.textContent ?? "",
-      });
-    }
-
-    const saveGuardInspection = inspectRichDocument();
-    syncSaveIssueLogging(saveGuardInspection.issue, "markup mismatch detected while editing");
-    const inspection = inspectDraftContent({
-      mode: fileSessionState.mode,
-      plainTextContent: editor.textContent ?? "",
-      richInspection: saveGuardInspection,
-    });
-    return inspection;
-  }
-
-  function syncSaveIssueLogging(issue: SaveGuardIssue | null, trigger: string, force = false) {
-    if (!issue) {
-      lastLoggedSaveIssue = null;
-      return;
-    }
-
-    if (!force && isSameSaveGuardIssue(lastLoggedSaveIssue, issue)) {
-      return;
-    }
-
-    logSaveGuardIssue(issue, sessionState.currentPath, trigger);
-    lastLoggedSaveIssue = { ...issue };
-  }
-
   async function refreshThreads() {
     await threadClient.refreshThreads();
   }
@@ -960,44 +786,6 @@ export async function WorkbenchClient(
 
   function syncEditorAfterStructuralChange(mutate: () => void, hooks: EditOperationHooks = {}) {
     editorClient.runStructuralMutation(mutate, hooks);
-  }
-
-  function isInlineRunContainer(element: HTMLElement) {
-    if (element === editor) {
-      return false;
-    }
-
-    if (element.dataset.summaryText === "true") {
-      return true;
-    }
-
-    if (/^(p|h1|h2|h3|h4|h5|h6|blockquote)$/i.test(element.tagName)) {
-      return true;
-    }
-
-    if (element.tagName === "DIV") {
-      return !hasDirectBlockLikeChildren(element);
-    }
-
-    if (element.tagName === "LI") {
-      return !getDirectChildDetailsElement(element) && getDirectChildListElements(element).length === 0;
-    }
-
-    return false;
-  }
-
-  function getInlineRunContainer(node: Node | null) {
-    let current: Node | null = node;
-
-    while (current && current !== editor) {
-      if (current instanceof HTMLElement && isInlineRunContainer(current)) {
-        return current;
-      }
-
-      current = current.parentNode;
-    }
-
-    return null;
   }
 
   function clearCurrentSelectionView() {

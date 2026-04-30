@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - EditorDocumentRenderOptions: optional rendered-state override for restoring exact draft markup. Keywords: workbench, editor, document, render, draft.
- * - default EditorDocumentAdapter: narrow imperative bridge for file lifecycle document rendering, selection, editability, and chrome refresh work. Keywords: workbench, editor, document, adapter, selection, default export.
+ * - default EditorDocumentAdapter: narrow imperative bridge for file lifecycle document rendering, selection, save-guard inspection and logging, editability, and chrome refresh work. Keywords: workbench, editor, document, adapter, selection, save guard, default export.
  */
 
 import type { EditorMode, SaveGuardIssue } from "../WorkbenchEditorClient";
@@ -15,6 +15,7 @@ export default interface EditorDocumentAdapter {
   captureSelection: () => EditHistorySelection | null;
   inspectDraft: () => { content: string; issue: SaveGuardIssue | null };
   inspectRichDocument: () => { markdown: string; issue: SaveGuardIssue | null };
+  logBlockedSaveIssue: (issue: SaveGuardIssue) => void;
   readRenderedState: (mode: EditorMode) => string;
   refreshStatusMessage: (message?: string) => void;
   renderDocument: (content: string, mode: EditorMode, options?: EditorDocumentRenderOptions) => void;

@@ -1,124 +1,85 @@
-# WorkbenchEditorClient Ownership Plan
+# WorkbenchEditorClient Stage 2 Plan
 
 ## Goal
 
-Move all editor-related ownership out of `lib/WorkbenchClient.ts` and behind `lib/workbench/WorkbenchEditorClient.ts`, while keeping `WorkbenchClient` as the higher-level workbench orchestrator.
+Finish the ownership cleanup now that the editor document surface already lives behind `lib/workbench/WorkbenchEditorClient.ts`.
 
-This plan describes the remaining migration work from the current codebase.
+The remaining objective is:
 
-The intended end state is:
+- `WorkbenchClient` reads as the workbench assembly root and cross-client coordinator.
+- `WorkbenchEditorClient` reads as the editor boundary, including editor-local wiring that still leaks through the coordinator.
+- `WorkbenchFileClient` continues to own file lifecycle and persistence through the editor-owned document adapter.
 
-- `WorkbenchClient` owns app-level composition, file/thread selection policy, explorer updates, URL sync, polling, and public controls.
-- `WorkbenchEditorClient` owns editor runtime, editor chrome, editor DOM event handling, and the editor-facing document surface consumed by the file client.
-- `WorkbenchFileClient` continues to own file lifecycle and persistence, but it talks to an editor-owned document interface rather than a document adapter assembled in `WorkbenchClient`.
+## Current Codebase State
 
-The current codebase already has the mutation runtime behind `WorkbenchEditorClient`, but the document surface, draft inspection, rich-document inspection, and save-guard ownership are still split across the boundary. The remaining work is about finishing that editor boundary, then trimming `WorkbenchClient` down to orchestration-only responsibilities.
+The current codebase already has these responsibilities in the editor boundary:
 
-## Why This Needs Stages
+- the editor-owned `EditorDocumentAdapter`
+- rich-document inspection and draft inspection
+- save-guard normalization, deduplication, and logging
+- editor render/read state, editability, status refresh, and diff refresh
 
-The remaining migration surface is not one isolated block. It still crosses several concerns:
+`WorkbenchFileClient` already consumes that editor-owned adapter for file open, save, reset, refresh, and draft-buffer flows.
 
-- DOM mutation and selection restoration
-- edit history capture and replay
-- save-guard inspection and logging
-- file draft synchronization and persistence hooks
+What still remains in `WorkbenchClient` is mostly editor-local wiring and callback assembly, including:
 
-Trying to move all of that in one pass would create a high risk of subtle regressions in selection timing, draft buffering, and save-guard behavior.
+- `controllerOptions` assembly for editor controllers
+- `mutationRuntime` callback assembly for selection capture/restore, replay rendering, and draft synchronization hooks
+- editor-local helper wrappers such as `getInlineExpansionContainer()` and `syncEditorAfterStructuralChange()`
+- editor-event-side DOM plumbing that still depends directly on coordinator-owned helper closures
 
-The migration should therefore move ownership in layers, keeping each pass behavior-preserving.
+That is the remaining stage-2 surface.
 
 ## Target Boundary
 
-`WorkbenchClient` should eventually know only:
+`WorkbenchClient` should know only:
 
-- the workbench DOM surfaces
-- the project, thread, file, and editor collaborators
-- high-level file-vs-thread selection behavior
+- workbench DOM surfaces
+- project, thread, file, and editor collaborators
+- file-vs-thread selection policy
 - explorer snapshot emission
-- startup, teardown, and polling lifecycle
-- the public `WorkbenchControls` surface
+- URL sync, startup, teardown, and polling
+- public `WorkbenchControls`
 
-`WorkbenchEditorClient` should eventually know:
+`WorkbenchEditorClient` should know:
 
 - editor DOM event handling
-- inline format behavior
-- code format behavior
-- list/rich input behavior
+- inline format, code format, list structure, and rich-input behavior
 - revision hover behavior
-- custom caret and floating toolbar behavior
-- structural mutation orchestration
-- save-guard inspection for editor content
-- the editor-owned document surface used by the file client
+- custom caret, floating toolbar, and diff gutter behavior
+- structural mutation sequencing
+- the editor-owned document surface used by `WorkbenchFileClient`
+- editor-local helper wiring that does not need coordinator policy knowledge
 
 ## Current Constraints
 
-These constraints should shape the migration:
+1. Selection-sensitive editor behavior still depends on same-turn browser timing, especially for pending inline formats, selection restoration, and revision UI.
+2. `mutationRuntime` still carries callbacks for history capture, replay rendering, selection restore, and draft-buffer sync. Those responsibilities need to be reduced without breaking current sequencing.
+3. Some editor behavior still depends on coordinator-owned DOM helper composition around list editing and selection utilities.
+4. Stage 2 should be behavior-preserving. It should not reopen the already-landed document-surface or save-guard ownership move.
 
-1. The mutation runtime now lives in `WorkbenchEditorClient`, but it still depends on coordinator-owned callbacks for draft inspection, history recording, selection restoration, and draft-buffer sync. That coupling is still real and should be reduced carefully.
-2. The current `EditorDocumentAdapter` is not just render and selection plumbing. It also exposes draft inspection and rich-document inspection used by `WorkbenchFileClient`.
-3. Inline formatting behavior relies on same-turn browser input timing and pending-format marker restoration.
-4. Floating toolbar visibility depends on revision-selection state, so chrome and runtime have an explicit dependency.
-5. Save-guard inspection depends on editor-specific markup normalization and inline-run classification.
-
-## Plan
-
-### Stage 1: Move Save-Guard Inspection and Document Surface Behind WorkbenchEditorClient
+## Stage 2 Scope
 
 Purpose:
 
-- Finish the editor boundary by making the editor own its document inspection and render surface.
+- Remove the remaining editor-domain helpers and callback assembly from `WorkbenchClient`.
 
 Scope:
 
-- Move the current document adapter assembly behind `WorkbenchEditorClient`.
-- Move rich-document inspection and draft inspection there.
-- Move markup normalization and save-guard logging ownership there.
-- Rewire `WorkbenchFileClient` to consume the editor-owned surface.
+- Internalize editor-local helper wiring that still sits in `WorkbenchClient` but only exists to serve `WorkbenchEditorClient`.
+- Reduce `controllerOptions` and `mutationRuntime` to the smallest set of callbacks that genuinely require coordinator ownership.
+- Delete pass-through wrappers in `WorkbenchClient` once the editor client can own them directly.
+- Recheck the public shape of `WorkbenchEditorClient` so it reads as one cohesive editor facade rather than a mostly-internal controller assembler.
+- Update nearby architecture notes if the final ownership line changes materially.
 
-Design note:
+## Exit Criteria
 
-- This is now the most coupled remaining pass.
-- If needed, split internal responsibilities inside the editor boundary so `WorkbenchEditorClient` remains the public facade while private runtime and inspection helpers stay modular.
+- `WorkbenchClient` reads like orchestration and assembly, not editor-domain implementation.
+- `WorkbenchEditorClient` owns the remaining editor-local wiring now injected by the coordinator.
+- `WorkbenchFileClient` continues to talk to the editor-owned document adapter with no contract regression.
+- File open, save, reset, refresh, undo or redo, and revision flows remain behaviorally unchanged.
 
-Exit criteria:
-
-- `WorkbenchClient` no longer assembles the document adapter.
-- `WorkbenchFileClient` talks only to an editor-owned document surface.
-- Save-guard behavior, logging, and persistence interactions remain unchanged.
-
-### Stage 2: Thin WorkbenchClient to Orchestrator-Only Responsibilities
-
-Purpose:
-
-- Remove leftover editor-specific helpers and confirm the final boundary is clean.
-
-Scope:
-
-- Delete editor-domain helpers that no longer belong in `WorkbenchClient`.
-- Confirm `WorkbenchClient` owns only cross-client orchestration.
-- Update nearby architecture notes if the ownership model has materially changed.
-
-Exit criteria:
-
-- `WorkbenchClient` reads like an assembly root and workbench coordinator.
-- `WorkbenchEditorClient` reads like the editor boundary.
-
-## Recommended Public Shape for WorkbenchEditorClient
-
-The exact API can evolve, but the end-state direction should look like this:
-
-- A single public editor client created from editor DOM surfaces and a small set of coordinator callbacks.
-- A cohesive editor behavior surface rather than controller-by-controller callbacks.
-- An editor-owned document surface that can be handed to `WorkbenchFileClient`.
-- Internal editor submodules kept private behind the editor client facade.
-
-In other words, the boundary should move even if the implementation remains internally modular.
-
-## Validation Strategy Per Remaining Pass
-
-Every remaining pass should validate the narrowest behavior it changes.
-
-Minimum validation checklist:
+## Validation Checklist
 
 - selection restore after structural edits
 - toolbar format commands
@@ -127,12 +88,10 @@ Minimum validation checklist:
 - revision accept and reject
 - save-guard mismatch handling
 - file open, save, reset, and refresh interactions after editor changes
-- `pnpm run typecheck`
+- typecheck
 
-## Suggested Next Implementation Pass
+## Suggested Next Pass
 
-Start with moving save-guard inspection and document-surface ownership behind `WorkbenchEditorClient`.
+Start by auditing the remaining `controllerOptions` and `mutationRuntime` assembly in `WorkbenchClient`.
 
-That is the next highest-value shift because mutation sequencing is already behind the editor boundary, but `WorkbenchClient` still assembles the document adapter and still owns editor-specific inspection and normalization responsibilities.
-
-If that lands cleanly, the follow-up is to remove the leftover editor-domain helpers from `WorkbenchClient` and confirm the coordinator reads as orchestration-only code.
+That is now the highest-value cut, because the document surface already moved behind `WorkbenchEditorClient`, and the remaining ownership debt is the coordinator still stitching together editor-local behavior that no longer needs to live there.
