@@ -13,7 +13,11 @@
  */
 
 import type { ChangeSummary, SaveConflictPayload } from "../types";
-import { getEditorLineHeight } from "./dom/layout/viewport-metrics";
+import {
+    getEditorLineHeight,
+    getExpandedRangeRect,
+    getVisualViewportMetrics,
+} from "./dom/layout/viewport-metrics";
 import {
     getNestedListElementsForItem,
     isIntentionalListBreakParagraph,
@@ -94,7 +98,7 @@ export type EditorUIStateListener = (snapshot: EditorUIStateSnapshot) => void;
 
 export interface WorkbenchEditorControllerOptions {
   codeFormat: Omit<WorkbenchCodeFormatControllerOptions, "editor">;
-  inlineFormat: Omit<WorkbenchInlineFormatControllerOptions, "editor" | "refreshStatusMessage" | "updateInlineToolbars">;
+  inlineFormat: Omit<WorkbenchInlineFormatControllerOptions, "editor" | "refreshStatusMessage" | "updateCustomCaret" | "updateInlineToolbars">;
   revisionHover: Omit<RevisionHoverToolbarControllerOptions, "editor" | "getMode" | "revisionHoverAcceptButton" | "revisionHoverRejectButton" | "revisionHoverToolbar">;
 }
 
@@ -115,7 +119,6 @@ export interface WorkbenchEditorClientOptions {
   handleEditorToggle: (event: Event) => void;
   handleOverwriteConflict: () => Promise<void>;
   handlePointerMove: (event: PointerEvent) => void;
-  handleRefreshInlineToolbars: () => void;
   handleReloadConflict: () => Promise<void>;
   handleResetCurrentDraftToSaved: () => Promise<void>;
   handleResetCurrentFileToHead: () => Promise<void>;
@@ -123,7 +126,7 @@ export interface WorkbenchEditorClientOptions {
   handleSelectionChange: () => void;
   handleViewportChanged: () => void;
   isSaveButtonInvalid?: () => boolean;
-  listStructure: Omit<WorkbenchListStructureControllerOptions, "editor">;
+  listStructure: Omit<WorkbenchListStructureControllerOptions, "editor" | "updateFloatingToolbar">;
   sessionState: SessionState;
   shouldBlockBeforeUnload: () => boolean;
 }
@@ -149,6 +152,7 @@ interface WorkbenchEditorClient {
   isPointerNearRevisionHoverUi: (clientX: number, clientY: number) => boolean;
   maybeActivateInlineCommentShortcut: (event: Event) => null;
   maybeClearPendingInlineFormatsForKey: (event: KeyboardEvent) => void;
+  refreshEditorChrome: () => void;
   refreshStatusMessage: (message?: string) => void;
   scheduleEditorChromeRefresh: () => void;
   scheduleDiffGutterRefresh: () => void;
@@ -159,6 +163,7 @@ interface WorkbenchEditorClient {
   showSaveConflict: (conflict: SaveConflictPayload) => void;
   showThreadPlaceholder: (label: string) => void;
   subscribe: (listener: EditorUIStateListener) => () => void;
+  updateCustomCaret: () => void;
   updateRevisionHoverToolbar: () => void;
 }
 
@@ -539,7 +544,10 @@ function WorkbenchEditorClient(
   const state = createInitialEditorState();
   const signal = lifecycle.getSignal();
   const editor = surfaces.editor.editor;
+  const customCaret = surfaces.editor.customCaret;
   const diffGutter = surfaces.editor.diffGutter;
+  const editorShell = diffGutter.parentElement;
+  const floatingToolbar = surfaces.toolbars.floating;
   const statusDisplay = surfaces.statusDisplay;
   const controls = surfaces.controls;
   const dialogSurface = surfaces.dialogs;
@@ -548,6 +556,7 @@ function WorkbenchEditorClient(
   const listStructureController = WorkbenchListStructureController({
     editor,
     ...options.listStructure,
+    updateFloatingToolbar,
   });
   const richInputController = WorkbenchRichInputController({
     editor,
@@ -676,7 +685,8 @@ function WorkbenchEditorClient(
     refreshStatusMessage: () => {
       refreshStatusMessage();
     },
-    updateInlineToolbars: options.handleRefreshInlineToolbars,
+    updateCustomCaret,
+    updateInlineToolbars: refreshInlineToolbars,
     ...options.controllerOptions.inlineFormat,
   });
   const codeFormatController = WorkbenchCodeFormatController({
@@ -700,6 +710,109 @@ function WorkbenchEditorClient(
       return inlineFormatController.togglePendingInlineFormat(format);
     },
   });
+
+  function hideCustomCaret() {
+    editor.removeAttribute("data-custom-caret-visible");
+    customCaret.hidden = true;
+    delete customCaret.dataset.caretKind;
+    delete customCaret.dataset.caretBold;
+    delete customCaret.dataset.caretItalic;
+  }
+
+  function updateCustomCaret() {
+    if (!editorShell) {
+      hideCustomCaret();
+      return;
+    }
+
+    const selection = window.getSelection();
+    if (
+      !selection?.rangeCount
+      || selection.isCollapsed === false
+      || !editor.contains(selection.anchorNode)
+      || !editor.contains(selection.focusNode)
+    ) {
+      hideCustomCaret();
+      return;
+    }
+
+    const context = inlineFormatController.getCaretInlineContext(selection.getRangeAt(0));
+    if (!context) {
+      hideCustomCaret();
+      return;
+    }
+
+    const shellRect = editorShell.getBoundingClientRect();
+    const caretLeft = context.rect.left - shellRect.left;
+    const caretTop = context.rect.top - shellRect.top;
+    const caretHeight = Math.max(14, context.rect.height || getEditorLineHeight(editor));
+
+    editor.dataset.customCaretVisible = "true";
+    customCaret.hidden = false;
+    customCaret.dataset.caretKind = context.kind;
+    customCaret.dataset.caretBold = context.bold ? "true" : "false";
+    customCaret.dataset.caretItalic = context.italic ? "true" : "false";
+    customCaret.style.left = `${caretLeft}px`;
+    customCaret.style.top = `${caretTop}px`;
+    customCaret.style.height = `${caretHeight}px`;
+  }
+
+  function updateFloatingToolbar() {
+    const selection = window.getSelection();
+    if (
+      !selection?.rangeCount
+      || selection.isCollapsed
+      || options.fileSessionState.mode !== "rich"
+      || revisionHoverController.getSelectedRevisionToolbarContext() !== null
+      || !editor.contains(selection.anchorNode)
+      || !editor.contains(selection.focusNode)
+    ) {
+      floatingToolbar.hidden = true;
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    const rect = getExpandedRangeRect(range);
+    if (!rect.width && !rect.height) {
+      floatingToolbar.hidden = true;
+      return;
+    }
+
+    const viewport = getVisualViewportMetrics();
+    const selectionTop = viewport.top + rect.top;
+    const selectionBottom = viewport.top + rect.bottom;
+    if (selectionBottom < viewport.top + 8 || selectionTop > viewport.top + viewport.height - 8) {
+      floatingToolbar.hidden = true;
+      return;
+    }
+
+    floatingToolbar.hidden = false;
+    const leftEdge = viewport.left + 12;
+    const rightEdge = viewport.left + viewport.width - floatingToolbar.offsetWidth - 12;
+    const x = Math.min(
+      rightEdge,
+      Math.max(leftEdge, viewport.left + rect.left + rect.width / 2 - floatingToolbar.offsetWidth / 2),
+    );
+    const preferredTop = viewport.top + rect.top - floatingToolbar.offsetHeight - 10;
+    const fallbackTop = viewport.top + rect.bottom + 10;
+    const maxTop = viewport.top + viewport.height - floatingToolbar.offsetHeight - 12;
+    const y = preferredTop >= viewport.top + 12
+      ? preferredTop
+      : Math.min(maxTop, fallbackTop);
+
+    floatingToolbar.style.left = `${x}px`;
+    floatingToolbar.style.top = `${y}px`;
+  }
+
+  function refreshInlineToolbars() {
+    updateFloatingToolbar();
+    updateRevisionHoverToolbar();
+  }
+
+  function refreshEditorChrome() {
+    refreshInlineToolbars();
+    updateCustomCaret();
+  }
 
   function renderDiffGutter() {
     diffGutter.replaceChildren();
@@ -765,13 +878,13 @@ function WorkbenchEditorClient(
 
   function scheduleEditorChromeRefresh() {
     lifecycle.scheduleAnimationFrame("editor-chrome-refresh", () => {
-      options.handleRefreshInlineToolbars();
+      refreshEditorChrome();
     });
   }
 
   function scheduleCustomCaretRefresh() {
     lifecycle.scheduleAnimationFrame("editor-custom-caret-refresh", () => {
-      options.handleRefreshInlineToolbars();
+      refreshEditorChrome();
     });
   }
 
@@ -1103,11 +1216,11 @@ function WorkbenchEditorClient(
   }, { signal });
 
   window.visualViewport?.addEventListener("resize", () => {
-    scheduleEditorChromeRefresh();
+    options.handleViewportChanged();
   }, { signal });
 
   window.visualViewport?.addEventListener("scroll", () => {
-    scheduleEditorChromeRefresh();
+    options.handleViewportChanged();
   }, { signal });
 
   window.addEventListener("beforeunload", (event) => {
@@ -1195,6 +1308,7 @@ function WorkbenchEditorClient(
     isPointerNearRevisionHoverUi,
     maybeActivateInlineCommentShortcut,
     maybeClearPendingInlineFormatsForKey,
+    refreshEditorChrome,
     refreshStatusMessage,
     scheduleEditorChromeRefresh,
     scheduleDiffGutterRefresh,
@@ -1205,6 +1319,7 @@ function WorkbenchEditorClient(
     showSaveConflict,
     showThreadPlaceholder,
     subscribe,
+    updateCustomCaret,
     updateRevisionHoverToolbar,
   };
 }

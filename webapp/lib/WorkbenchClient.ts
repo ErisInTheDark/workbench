@@ -13,7 +13,6 @@ import type {
     WorkbenchHarness,
 } from "./types";
 import {
-    getEditorLineHeight,
     getExpandedRangeRect,
     getVisualViewportMetrics,
 } from "./workbench/dom/layout/viewport-metrics";
@@ -137,8 +136,6 @@ export async function WorkbenchClient(
   const dialogSurface = dom.dialogs;
   const toolbarSurface = dom.toolbars;
   const editor = editorSurface.editor;
-  const customCaret = editorSurface.customCaret;
-  const floatingToolbar = toolbarSurface.floating;
   const saveConflictDialog = dialogSurface.saveConflict.dialog;
   const resetDraftDialog = dialogSurface.resetDraft.dialog;
   const {
@@ -160,7 +157,6 @@ export async function WorkbenchClient(
   let editorHasFocus = false;
   let explorerStateChangeScheduled = false;
   let isComposing = false;
-  const editorShell = editorSurface.diffGutter.parentElement;
   let reportStatusMessage = (_message: string) => {};
   let lastLoggedSaveIssue: SaveGuardIssue | null = null;
   const eventBus = WorkbenchEventBus();
@@ -176,11 +172,6 @@ export async function WorkbenchClient(
     currentThreadId: initialThreadSnapshot.currentThreadId,
   });
   const fileSessionState = FileSessionState();
-
-  if (!editorShell) {
-    return () => {};
-  }
-
   coordinatorLifecycle.addUnsubscribe(projectClient.subscribe((snapshot) => {
     threadClient.setProjectContext({
       root: snapshot.root,
@@ -239,16 +230,6 @@ export async function WorkbenchClient(
     }
 
     return false;
-  }
-
-  function updateInlineToolbars() {
-    updateFloatingToolbar();
-    editorClient.updateRevisionHoverToolbar();
-  }
-
-  function refreshEditorChrome() {
-    updateInlineToolbars();
-    updateCustomCaret();
   }
 
   class EditorMutationRunner {
@@ -341,7 +322,7 @@ export async function WorkbenchClient(
           return;
         }
 
-        refreshEditorChrome();
+        editorClient.refreshEditorChrome();
       } catch (error) {
         console.error(`Workbench ${context.kind} mutation failed.`, {
           nextContent: context.nextContent,
@@ -363,6 +344,7 @@ export async function WorkbenchClient(
     controls: controlButtons,
     dialogs: dialogSurface,
     editor: {
+      customCaret: editorSurface.customCaret,
       diffGutter: editorSurface.diffGutter,
       editor,
     },
@@ -386,7 +368,6 @@ export async function WorkbenchClient(
         isInlineRunContainer,
         syncCurrentDraftBuffer,
         syncEditorAfterStructuralChange,
-        updateCustomCaret,
         updateHistorySelection: (selection) => {
           editHistoryManager.updateHistorySelection(selection);
         },
@@ -405,7 +386,7 @@ export async function WorkbenchClient(
     handleCompositionStart: () => {
       isComposing = true;
       editorClient.clearPendingInlineFormats();
-      updateCustomCaret();
+      editorClient.refreshEditorChrome();
     },
     handleEditorBeforeInput: (event) => {
       if (editorClient.handlePendingInlineBeforeInput(event)) {
@@ -426,7 +407,7 @@ export async function WorkbenchClient(
     handleEditorBlur: () => {
       editorHasFocus = false;
       editorClient.clearPendingInlineFormats();
-      updateCustomCaret();
+      editorClient.refreshEditorChrome();
     },
     handleEditorClick: (event) => {
       const summaryText = event.target instanceof Element
@@ -446,7 +427,7 @@ export async function WorkbenchClient(
     },
     handleEditorFocus: () => {
       editorHasFocus = true;
-      updateCustomCaret();
+      editorClient.refreshEditorChrome();
     },
     handleEditorInput: (event) => {
       let transformedListItem: HTMLLIElement | null = null;
@@ -516,6 +497,7 @@ export async function WorkbenchClient(
       }
 
       editorClient.scheduleDiffGutterRefresh();
+      editorClient.scheduleEditorChromeRefresh();
     },
     handleOverwriteConflict: async () => {
       await saveCurrentFile({ force: true });
@@ -533,7 +515,6 @@ export async function WorkbenchClient(
         editorClient.setHoveredRevisionNode(null);
       }
     },
-    handleRefreshInlineToolbars: refreshEditorChrome,
     handleReloadConflict: async () => {
       if (!sessionState.currentPath) {
         return;
@@ -559,9 +540,7 @@ export async function WorkbenchClient(
     },
     handleViewportChanged: () => {
       editorClient.scheduleDiffGutterRefresh();
-      updateFloatingToolbar();
-      editorClient.updateRevisionHoverToolbar();
-      updateCustomCaret();
+      editorClient.scheduleEditorChromeRefresh();
     },
     listStructure: {
       getClosestListItem,
@@ -573,7 +552,6 @@ export async function WorkbenchClient(
       outdentListItems,
       syncEditorAfterStructuralChange,
       unwrapTopLevelListItemToParagraph,
-      updateFloatingToolbar,
     },
     isSaveButtonInvalid: () => Boolean(fileSessionState.saveIssue) || Array.from(fileSessionState.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue)),
     sessionState,
@@ -653,9 +631,7 @@ export async function WorkbenchClient(
     }
   }));
   coordinatorLifecycle.addUnsubscribe(eventBus.subscribe("fileOpened", () => {
-    updateFloatingToolbar();
-    editorClient.updateRevisionHoverToolbar();
-    updateCustomCaret();
+    editorClient.refreshEditorChrome();
   }));
   coordinatorLifecycle.addUnsubscribe(eventBus.subscribe("saveConflictCleared", () => {
     editorClient.hideSaveConflictDialog();
@@ -1041,9 +1017,7 @@ export async function WorkbenchClient(
     updateSaveButtonState();
     editorClient.refreshStatusMessage(statusMessage);
     editorClient.scheduleDiffGutterRefresh();
-    updateFloatingToolbar();
-    editorClient.updateRevisionHoverToolbar();
-    updateCustomCaret();
+    editorClient.refreshEditorChrome();
   }
 
   async function openThread(
@@ -1098,47 +1072,6 @@ export async function WorkbenchClient(
     editorMutationRunner.runStructuralMutation(mutate, hooks);
   }
 
-  function hideCustomCaret() {
-    editor.removeAttribute("data-custom-caret-visible");
-    customCaret.hidden = true;
-    delete customCaret.dataset.caretKind;
-    delete customCaret.dataset.caretBold;
-    delete customCaret.dataset.caretItalic;
-  }
-
-  function updateCustomCaret() {
-    const selection = window.getSelection();
-    if (
-      !selection?.rangeCount ||
-      selection.isCollapsed === false ||
-      !editor.contains(selection.anchorNode) ||
-      !editor.contains(selection.focusNode)
-    ) {
-      hideCustomCaret();
-      return;
-    }
-
-    const context = editorClient.getCaretInlineContext(selection.getRangeAt(0));
-    if (!context) {
-      hideCustomCaret();
-      return;
-    }
-
-    const shellRect = editorShell.getBoundingClientRect();
-    const caretLeft = context.rect.left - shellRect.left;
-    const caretTop = context.rect.top - shellRect.top;
-    const caretHeight = Math.max(14, context.rect.height || getEditorLineHeight(editor));
-
-    editor.dataset.customCaretVisible = "true";
-    customCaret.hidden = false;
-    customCaret.dataset.caretKind = context.kind;
-    customCaret.dataset.caretBold = context.bold ? "true" : "false";
-    customCaret.dataset.caretItalic = context.italic ? "true" : "false";
-    customCaret.style.left = `${caretLeft}px`;
-    customCaret.style.top = `${caretTop}px`;
-    customCaret.style.height = `${caretHeight}px`;
-  }
-
   function isInlineRunContainer(element: HTMLElement) {
     if (element === editor) {
       return false;
@@ -1177,53 +1110,6 @@ export async function WorkbenchClient(
     return null;
   }
 
-  function updateFloatingToolbar() {
-    const selection = window.getSelection();
-    if (
-      !selection?.rangeCount ||
-      selection.isCollapsed ||
-      fileSessionState.mode !== "rich" ||
-      editorClient.getSelectedRevisionToolbarContext() !== null ||
-      !editor.contains(selection.anchorNode) ||
-      !editor.contains(selection.focusNode)
-    ) {
-      floatingToolbar.hidden = true;
-      return;
-    }
-
-    const range = selection.getRangeAt(0);
-    const rect = getExpandedRangeRect(range);
-    if (!rect.width && !rect.height) {
-      floatingToolbar.hidden = true;
-      return;
-    }
-
-    const viewport = getVisualViewportMetrics();
-    const selectionTop = viewport.top + rect.top;
-    const selectionBottom = viewport.top + rect.bottom;
-    if (selectionBottom < viewport.top + 8 || selectionTop > viewport.top + viewport.height - 8) {
-      floatingToolbar.hidden = true;
-      return;
-    }
-
-    floatingToolbar.hidden = false;
-    const leftEdge = viewport.left + 12;
-    const rightEdge = viewport.left + viewport.width - floatingToolbar.offsetWidth - 12;
-    const x = Math.min(
-      rightEdge,
-      Math.max(leftEdge, viewport.left + rect.left + rect.width / 2 - floatingToolbar.offsetWidth / 2),
-    );
-    const preferredTop = viewport.top + rect.top - floatingToolbar.offsetHeight - 10;
-    const fallbackTop = viewport.top + rect.bottom + 10;
-    const maxTop = viewport.top + viewport.height - floatingToolbar.offsetHeight - 12;
-    const y = preferredTop >= viewport.top + 12
-      ? preferredTop
-      : Math.min(maxTop, fallbackTop);
-
-    floatingToolbar.style.left = `${x}px`;
-    floatingToolbar.style.top = `${y}px`;
-  }
-
   function clearCurrentSelectionView() {
     fileClient.clearSelection();
     editorClient.setHoveredRevisionNode(null);
@@ -1233,7 +1119,7 @@ export async function WorkbenchClient(
     editorClient.refreshStatusMessage();
     syncCurrentSelectionToUrl({});
     editorClient.scheduleDiffGutterRefresh();
-    updateCustomCaret();
+    editorClient.refreshEditorChrome();
   }
 
   async function refreshTree({ preserveSelection = false }: { preserveSelection?: boolean } = {}) {

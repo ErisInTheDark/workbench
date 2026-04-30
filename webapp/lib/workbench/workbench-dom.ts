@@ -88,7 +88,7 @@ export interface WorkbenchDomSurfaces {
 export interface WorkbenchEditorDomSurfaces {
   controls: ControlButtonsDomSurface;
   dialogs: DialogDomSurface;
-  editor: Pick<EditorDomSurface, "editor" | "diffGutter">;
+  editor: Pick<EditorDomSurface, "editor" | "customCaret" | "diffGutter">;
   statusDisplay: StatusDisplaySurface;
   toolbars: ToolbarDomSurface;
 }

@@ -14,12 +14,11 @@ The intended end state is:
 
 ## Why This Needs Stages
 
-The remaining editor behavior in `lib/WorkbenchClient.ts` is not one isolated block. It still crosses several concerns:
+The remaining migration surface is not one isolated block. It still crosses several concerns:
 
 - DOM mutation and selection restoration
 - edit history capture and replay
 - save-guard inspection and logging
-- custom caret and floating toolbar chrome
 - file draft synchronization and persistence hooks
 
 Trying to move all of that in one pass would create a high risk of subtle regressions in selection timing, draft buffering, and save-guard behavior.
@@ -61,30 +60,7 @@ These constraints should shape the migration:
 
 ## Staged Plan
 
-### Stage 1: Move Editor Chrome Behind WorkbenchEditorClient
-
-Purpose:
-
-- Move pure editor chrome ownership behind the editor boundary.
-
-Scope:
-
-- Move custom caret behavior.
-- Move floating toolbar positioning and visibility.
-- Move the shared chrome refresh fan-out currently triggered after selection, viewport, and mutation events.
-
-Design note:
-
-- Revision hover UI can remain runtime-owned even though it renders toolbar UI, because accept/reject actions mutate document content.
-- The floating toolbar can query runtime state for whether revision-selection UI is currently active.
-
-Exit criteria:
-
-- `WorkbenchClient` stops doing editor chrome layout math.
-- `WorkbenchEditorClient` becomes the only owner of editor chrome refresh behavior.
-- Focus, blur, selection, and viewport changes still produce the same visible chrome behavior.
-
-### Stage 2: Move Mutation Runtime Behind WorkbenchEditorClient
+### Stage 1: Move Mutation Runtime Behind WorkbenchEditorClient
 
 Purpose:
 
@@ -114,7 +90,7 @@ Exit criteria:
 - `WorkbenchClient` no longer owns editor mutation sequencing.
 - Rich input, list structure edits, undo, redo, and toolbar formatting still behave identically.
 
-### Stage 3: Move Save-Guard Inspection and Document Surface Behind WorkbenchEditorClient
+### Stage 2: Move Save-Guard Inspection and Document Surface Behind WorkbenchEditorClient
 
 Purpose:
 
@@ -129,7 +105,7 @@ Scope:
 
 Design note:
 
-- This is the most coupled stage and should only happen after Stage 2 is stable.
+- This is the most coupled stage and should only happen after Stage 1 is stable.
 - If needed, split internal responsibilities inside the editor boundary so `WorkbenchEditorClient` remains the public facade while private runtime and inspection helpers stay modular.
 
 Exit criteria:
@@ -138,7 +114,7 @@ Exit criteria:
 - `WorkbenchFileClient` talks only to an editor-owned document surface.
 - Save-guard behavior, logging, and persistence interactions remain unchanged.
 
-### Stage 4: Thin WorkbenchClient to Orchestrator-Only Responsibilities
+### Stage 3: Thin WorkbenchClient to Orchestrator-Only Responsibilities
 
 Purpose:
 
@@ -181,10 +157,10 @@ Minimum validation checklist:
 - file open, save, reset, and refresh interactions after editor changes
 - `pnpm run typecheck`
 
-## Suggested First Implementation Pass
+## Suggested Next Implementation Pass
 
 Start with Stage 1 only.
 
-That is the next highest-value ownership shift because it removes visible editor chrome behavior from `WorkbenchClient` without yet changing save-guard inspection, document adapter ownership, or mutation sequencing.
+That is the next highest-value ownership shift because it moves editor mutation sequencing behind `WorkbenchEditorClient` while keeping save-guard inspection, document-surface ownership, and the file-client contract stable.
 
-If Stage 1 lands cleanly, the next follow-up is Stage 2, which moves mutation ownership behind the editor boundary while keeping the file-client contract stable.
+If Stage 1 lands cleanly, the next follow-up is Stage 2, which moves save-guard inspection and document-surface ownership behind the editor boundary.
