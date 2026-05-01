@@ -4,7 +4,13 @@ import { memo, useLayoutEffect, useRef } from "react";
 
 import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
-import type { ThreadPayload, WorkbenchHarness, WorkbenchModelOption } from "../../../lib/types";
+import type {
+  ThreadPayload,
+  WorkbenchHarness,
+  WorkbenchModelOption,
+  WorkbenchUserInputRequest,
+  WorkbenchUserInputResponse,
+} from "../../../lib/types";
 import ThreadComposer from "./ThreadComposer";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadRateLimits from "./ThreadRateLimits";
@@ -15,26 +21,36 @@ import {
 } from "./thread-view-primitives";
 
 function ThreadView ({
+  composerInfoMessage,
   fontSizeRem,
+  onClearUserInputRequest,
   onDraftHarnessChange,
   onListModels,
   onOpenFile,
   onSendMessage,
+  onShowExampleQuestion,
+  onSubmitUserInputRequest,
   onThreadAgentChange,
   onThreadReasoningEffortChange,
   onThreadModelChange,
+  pendingUserInputRequest,
   projectRootPath,
   rateLimits,
   thread,
 }: {
+  composerInfoMessage: string;
   fontSizeRem: number;
+  onClearUserInputRequest: (threadId: string) => void;
   onDraftHarnessChange: (harness: WorkbenchHarness) => void;
   onListModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
   onOpenFile: (path: string) => Promise<void>;
   onSendMessage: (threadId: string, input: UserInput[]) => Promise<void>;
+  onShowExampleQuestion: (threadId: string) => void;
+  onSubmitUserInputRequest: (threadId: string, response: WorkbenchUserInputResponse) => Promise<void>;
   onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
   onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
   onThreadModelChange: (threadId: string, model: string) => void;
+  pendingUserInputRequest: WorkbenchUserInputRequest | null;
   projectRootPath: string;
   rateLimits: RateLimitSnapshot | null;
   thread: ThreadPayload;
@@ -112,11 +128,16 @@ function ThreadView ({
         </div>
       ) : null}
       <ThreadComposer
+        composerInfoMessage={composerInfoMessage}
+        onClearUserInputRequest={onClearUserInputRequest}
         onListModels={onListModels}
         onSendMessage={onSendMessage}
+        onShowExampleQuestion={onShowExampleQuestion}
+        onSubmitUserInputRequest={onSubmitUserInputRequest}
         onThreadAgentChange={onThreadAgentChange}
         onThreadReasoningEffortChange={onThreadReasoningEffortChange}
         onThreadModelChange={onThreadModelChange}
+        pendingUserInputRequest={pendingUserInputRequest}
         rateLimits={rateLimits}
         thread={thread}
       />

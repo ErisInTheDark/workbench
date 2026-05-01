@@ -64,6 +64,36 @@ export interface ThreadPayload {
   turns: Turn[];
 }
 
+export interface WorkbenchUserInputOption {
+  label: string;
+  description: string;
+}
+
+export interface WorkbenchUserInputQuestion {
+  id: string;
+  header: string;
+  question: string;
+  allowOther: boolean;
+  isSecret: boolean;
+  options: WorkbenchUserInputOption[];
+}
+
+export interface WorkbenchUserInputRequest {
+  id: string;
+  title: string;
+  summary: string;
+  submitLabel: string;
+  questions: WorkbenchUserInputQuestion[];
+}
+
+export interface WorkbenchUserInputAnswer {
+  answers: string[];
+}
+
+export interface WorkbenchUserInputResponse {
+  answers: Record<string, WorkbenchUserInputAnswer | undefined>;
+}
+
 export interface FileNode {
   type: "file";
   name: string;

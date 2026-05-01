@@ -6,6 +6,8 @@ import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/Rat
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type {
   ExplorerSnapshot, FilePayload, ThreadPayload,
+  WorkbenchUserInputRequest,
+  WorkbenchUserInputResponse,
   WorkbenchControls,
   WorkbenchHarness
 } from "../lib/types";
@@ -98,9 +100,103 @@ function formatQuickOpenChangeSummary (additions: number, deletions: number) {
   return parts.join(" ");
 }
 
+function createDemoUserInputRequest (thread: ThreadPayload): WorkbenchUserInputRequest {
+  const threadLabel = thread.name?.trim() || thread.preview?.trim() || "this thread";
+
+  return {
+    id: `demo:${thread.id}`,
+    submitLabel: "Submit local response",
+    summary: `Imagine the agent working on "${threadLabel}" and pausing before it commits to a direction. This is a local composer preview only, so we can tune spacing, option density, and how the summary sits above the questions.`,
+    title: "Choose the next direction for the reply",
+    questions: [
+      {
+        id: "direction",
+        header: "Direction",
+        question: "Which path should the agent take next?",
+        allowOther: false,
+        isSecret: false,
+        options: [
+          {
+            label: "Tighten the structure",
+            description: "Keep the response lean, reduce wandering, and move briskly toward a recommendation.",
+          },
+          {
+            label: "Lean into emotional clarity",
+            description: "Explain the emotional stakes more explicitly before choosing the next step.",
+          },
+          {
+            label: "Stay exploratory",
+            description: "Keep multiple possibilities alive instead of collapsing to one answer too early.",
+          },
+        ],
+      },
+      {
+        id: "delivery",
+        header: "Delivery",
+        question: "How should the follow-up answer feel?",
+        allowOther: false,
+        isSecret: false,
+        options: [
+          {
+            label: "Short and decisive",
+            description: "One clear recommendation with minimal caveats.",
+          },
+          {
+            label: "Balanced with rationale",
+            description: "Recommendation first, then a compact explanation of why it is the best fit.",
+          },
+          {
+            label: "Detailed and comparative",
+            description: "Walk through the tradeoffs between options before landing the answer.",
+          },
+        ],
+      },
+      {
+        id: "constraint",
+        header: "Constraint",
+        question: "What should the agent preserve while continuing?",
+        allowOther: true,
+        isSecret: false,
+        options: [
+          {
+            label: "Keep the current voice",
+            description: "Do not flatten the tone or make it sound more generic.",
+          },
+          {
+            label: "Keep it under 300 words",
+            description: "Answer tersely and avoid a long essay.",
+          },
+          {
+            label: "Do not rewrite quoted text",
+            description: "Leave any quoted lines intact and work around them.",
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function formatDemoUserInputResponse (
+  request: WorkbenchUserInputRequest,
+  response: WorkbenchUserInputResponse,
+) {
+  const parts = request.questions.map((question) => {
+    const answer = response.answers[question.id]?.answers[0];
+    return answer ? `${question.header}: ${answer}` : null;
+  }).filter((value): value is string => Boolean(value));
+
+  if (!parts.length) {
+    return "Captured a local preview response.";
+  }
+
+  return `Captured local preview response. ${parts.join(" | ")}`;
+}
+
 export default function Workbench () {
   const [explorer, setExplorer] = useState(INITIAL_EXPLORER_SNAPSHOT);
   const [currentThread, setCurrentThread] = useState<ThreadPayload | null>(null);
+  const [composerInfoMessagesByThreadId, setComposerInfoMessagesByThreadId] = useState<Record<string, string>>({});
+  const [pendingUserInputRequestsByThreadId, setPendingUserInputRequestsByThreadId] = useState<Record<string, WorkbenchUserInputRequest>>({});
   const [requestedSelection, setRequestedSelection] = useState<WorkbenchSelectionSearchParams>(() => {
     if (typeof window === "undefined") {
       return EMPTY_SELECTION;
@@ -443,6 +539,56 @@ export default function Workbench () {
     controls?.setCurrentThreadAgent(threadId, agentPath);
   }, [controls]);
 
+  const showExampleQuestion = useCallback((threadId: string) => {
+    if (!currentThread || currentThread.id !== threadId) {
+      return;
+    }
+
+    setComposerInfoMessagesByThreadId((current) => {
+      const next = { ...current };
+      delete next[threadId];
+      return next;
+    });
+    setPendingUserInputRequestsByThreadId((current) => ({
+      ...current,
+      [threadId]: createDemoUserInputRequest(currentThread),
+    }));
+  }, [currentThread]);
+
+  const clearUserInputRequest = useCallback((threadId: string) => {
+    setPendingUserInputRequestsByThreadId((current) => {
+      if (!current[threadId]) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[threadId];
+      return next;
+    });
+    setComposerInfoMessagesByThreadId((current) => {
+      const next = { ...current };
+      delete next[threadId];
+      return next;
+    });
+  }, []);
+
+  const submitUserInputRequest = useCallback(async (threadId: string, response: WorkbenchUserInputResponse) => {
+    const request = pendingUserInputRequestsByThreadId[threadId];
+    if (!request) {
+      return;
+    }
+
+    setPendingUserInputRequestsByThreadId((current) => {
+      const next = { ...current };
+      delete next[threadId];
+      return next;
+    });
+    setComposerInfoMessagesByThreadId((current) => ({
+      ...current,
+      [threadId]: formatDemoUserInputResponse(request, response),
+    }));
+  }, [pendingUserInputRequestsByThreadId]);
+
   const workbenchControls = useMemo<WorkbenchControls | null>(() => {
     if (!controls) {
       return null;
@@ -724,15 +870,20 @@ export default function Workbench () {
             {showThreadView ? (
               isThreadViewReady && currentThread ? (
                 <ThreadView
+                  composerInfoMessage={composerInfoMessagesByThreadId[currentThread.id] ?? ""}
                   thread={currentThread}
                   fontSizeRem={explorer.fontSize}
+                  onClearUserInputRequest={clearUserInputRequest}
                   onDraftHarnessChange={handleHarnessChange}
                   onListModels={listThreadModels}
                   onOpenFile={openFileFromExplorer}
                   onSendMessage={sendThreadMessage}
+                  onShowExampleQuestion={showExampleQuestion}
+                  onSubmitUserInputRequest={submitUserInputRequest}
                   onThreadAgentChange={setThreadAgent}
                   onThreadReasoningEffortChange={setThreadReasoningEffort}
                   onThreadModelChange={setThreadModel}
+                  pendingUserInputRequest={pendingUserInputRequestsByThreadId[currentThread.id] ?? null}
                   projectRootPath={explorer.rootPath}
                   rateLimits={rateLimits}
                 />

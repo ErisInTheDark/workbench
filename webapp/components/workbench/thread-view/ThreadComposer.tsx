@@ -5,10 +5,17 @@ import { useEffect, useState, type ClipboardEvent, type FormEvent, type Keyboard
 import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import { getCurrentInProgressTurn, hasStaleApprovalState, isCurrentTurnWaitingOnApproval } from "../../../lib/codex/thread-state";
-import type { ThreadPayload, WorkbenchAgentOption, WorkbenchModelOption } from "../../../lib/types";
+import type {
+  ThreadPayload,
+  WorkbenchAgentOption,
+  WorkbenchModelOption,
+  WorkbenchUserInputRequest,
+  WorkbenchUserInputResponse,
+} from "../../../lib/types";
 import ThreadAgentPicker from "./ThreadAgentPicker";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 import ThreadModelPicker from "./ThreadModelPicker";
+import ThreadUserInputRequest from "./ThreadUserInputRequest";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -46,19 +53,29 @@ function readFileAsDataUrl (file: File) {
 }
 
 export default function ThreadComposer ({
+  composerInfoMessage,
+  onClearUserInputRequest,
   onListModels,
   onSendMessage,
+  onShowExampleQuestion,
+  onSubmitUserInputRequest,
   onThreadAgentChange,
   onThreadReasoningEffortChange,
   onThreadModelChange,
+  pendingUserInputRequest,
   rateLimits,
   thread,
 }: {
+  composerInfoMessage: string;
+  onClearUserInputRequest: (threadId: string) => void;
   onListModels: (harness: ThreadPayload["harness"]) => Promise<WorkbenchModelOption[]>;
   onSendMessage: (threadId: string, input: UserInput[]) => Promise<void>;
+  onShowExampleQuestion: (threadId: string) => void;
+  onSubmitUserInputRequest: (threadId: string, response: WorkbenchUserInputResponse) => Promise<void>;
   onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
   onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
   onThreadModelChange: (threadId: string, model: string) => void;
+  pendingUserInputRequest: WorkbenchUserInputRequest | null;
   rateLimits: RateLimitSnapshot | null;
   thread: ThreadPayload;
 }) {
@@ -81,13 +98,16 @@ export default function ThreadComposer ({
   const [isSending, setIsSending] = useState(false);
   const trimmedValue = value.trim();
   const isAttaching = pendingAttachmentReads > 0;
+  const hasPendingUserInputRequest = pendingUserInputRequest !== null;
   const isCopilotAuthRequired = thread.harness === "copilot" && rateLimits?.limitId === "copilot:auth";
   const isThreadStateBroken = hasStaleApprovalState(thread);
   const isApprovalBlocked = isCurrentTurnWaitingOnApproval(thread);
   const isActiveThread = getCurrentInProgressTurn(thread) !== null;
-  const isInputDisabled = isSending || isAttaching || isThreadStateBroken || isCopilotAuthRequired;
-  const helperText = isAttaching
-    ? "Attaching pasted image..."
+  const isInputDisabled = hasPendingUserInputRequest || isSending || isAttaching || isThreadStateBroken || isCopilotAuthRequired;
+  const helperText = hasPendingUserInputRequest
+    ? "Answer the question card below to continue this local workbench preview."
+    : isAttaching
+      ? "Attaching pasted image..."
     : isCopilotAuthRequired
       ? "Open a terminal, run copilot, then use /login to authenticate Copilot CLI."
       : isThreadStateBroken
@@ -125,7 +145,7 @@ export default function ThreadComposer ({
     setActivePicker(null);
     setAgentsError("");
     setModelsError("");
-  }, [thread.id]);
+  }, [pendingUserInputRequest?.id, thread.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -297,7 +317,18 @@ export default function ThreadComposer ({
   return (
     <form className="mt-6 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4" onSubmit={handleSubmit}>
       <div className="rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-3">
-        {attachments.length ? (
+        {hasPendingUserInputRequest ? (
+          <ThreadUserInputRequest
+            request={pendingUserInputRequest}
+            onClear={() => {
+              onClearUserInputRequest(thread.id);
+            }}
+            onSubmit={async (response) => {
+              await onSubmitUserInputRequest(thread.id, response);
+            }}
+          />
+        ) : null}
+        {!hasPendingUserInputRequest && attachments.length ? (
           <div className="mb-3 flex flex-wrap gap-3 px-1">
             {attachments.map((attachment, index) => (
               <div key={attachment.id} className="relative h-24 w-24">
@@ -330,7 +361,7 @@ export default function ThreadComposer ({
             ))}
           </div>
         ) : null}
-        <label className="block" htmlFor={`thread-composer:${thread.id}`}>
+        <label className="block" htmlFor={`thread-composer:${thread.id}`} hidden={hasPendingUserInputRequest}>
           <span className="sr-only">Message thread</span>
           <div hidden={isPickerOpen}>
             <textarea
@@ -364,7 +395,7 @@ export default function ThreadComposer ({
             />
           </div>
         </label>
-        {isModelPickerOpen ? (
+        {!hasPendingUserInputRequest && isModelPickerOpen ? (
           <ThreadModelPicker
             appliesOnNextTurnOnly={thread.harness === "codex" && isActiveThread}
             deprioritizedModelIds={deprioritizedModelIds}
@@ -395,7 +426,7 @@ export default function ThreadComposer ({
               });
             }}
           />
-        ) : isAgentPickerOpen ? (
+        ) : !hasPendingUserInputRequest && isAgentPickerOpen ? (
           <ThreadAgentPicker
             agents={availableAgents}
             error={agentsError}
@@ -409,7 +440,7 @@ export default function ThreadComposer ({
               setActivePicker(null);
             }}
           />
-        ) : (
+        ) : !hasPendingUserInputRequest ? (
           <div className={joinClasses(
             "mt-3 flex flex-wrap items-center gap-3",
             helperText ? "justify-between" : "justify-end",
@@ -423,6 +454,16 @@ export default function ThreadComposer ({
               </p>
             ) : null}
             <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3 py-2 text-[0.78em] font-medium text-text transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+                onClick={() => {
+                  setActivePicker(null);
+                  onShowExampleQuestion(thread.id);
+                }}
+              >
+                Show example question
+              </button>
               <div className="inline-flex items-stretch overflow-hidden rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-[0.78em] font-medium text-text">
                 <button
                   type="button"
@@ -477,10 +518,13 @@ export default function ThreadComposer ({
               </button>
             </div>
           </div>
-        )}
+        ) : null}
       </div>
       {error ? (
         <p className="mt-2 mb-0 text-[0.84em] leading-[1.6] text-danger">{error}</p>
+      ) : null}
+      {!error && composerInfoMessage ? (
+        <p className="mt-2 mb-0 text-[0.84em] leading-[1.6] text-muted">{composerInfoMessage}</p>
       ) : null}
     </form>
   );
