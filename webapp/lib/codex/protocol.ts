@@ -5,9 +5,10 @@
  * - CodexJsonRpcResponse helpers: typed JSON-RPC success/failure checks. Keywords: json-rpc, response, error.
  * - createCodexClientInfo/createInitializeCapabilities/createInitializeParams: initialize payload builders. Keywords: app-server, handshake.
  * - createInitializeRequest/createInitializedNotification/createBootstrapMessages: app-server bootstrap messages. Keywords: initialize, initialized.
- * - createTextInput/createThreadStartRequest/createTurnStartRequest: typed Codex request builders. Keywords: thread, turn, user input.
+ * - createQuestionnaireCollaborationMode/createTextInput/createThreadStartRequest/createTurnStartRequest: typed Codex request builders. Keywords: thread, turn, user input, collaboration mode, questionnaire.
  * - createRequestIdGenerator/isCodexEventType: small protocol helpers. Keywords: ids, event type.
  */
+import type { CollaborationMode } from "./generated/app-server/CollaborationMode";
 import type { ClientInfo } from "./generated/app-server/ClientInfo";
 import type { ClientNotification } from "./generated/app-server/ClientNotification";
 import type { ClientRequest } from "./generated/app-server/ClientRequest";
@@ -15,6 +16,7 @@ import type { EventMsg } from "./generated/app-server/EventMsg";
 import type { InitializeCapabilities } from "./generated/app-server/InitializeCapabilities";
 import type { InitializeParams } from "./generated/app-server/InitializeParams";
 import type { InitializeResponse } from "./generated/app-server/InitializeResponse";
+import type { ReasoningEffort } from "./generated/app-server/ReasoningEffort";
 import type { ThreadStartParams } from "./generated/app-server/v2/ThreadStartParams";
 import type { ThreadStartResponse } from "./generated/app-server/v2/ThreadStartResponse";
 import type { TurnStartParams } from "./generated/app-server/v2/TurnStartParams";
@@ -46,6 +48,31 @@ export type CodexJsonRpcResponse<TResult> = CodexJsonRpcSuccess<TResult> | Codex
 export interface CodexBootstrapMessages {
   initialize: Extract<ClientRequest, { method: "initialize" }>;
   initialized: ClientNotification;
+}
+
+const QUESTIONNAIRE_COLLABORATION_INSTRUCTIONS = [
+  "# Collaboration Mode: Workbench Questionnaire",
+  "",
+  "You are in a coding-first workbench mode.",
+  "Use the `request_user_input` tool when you need explicit user clarification or a bounded user choice before continuing.",
+  "Do not claim that `request_user_input` is unavailable in this mode.",
+  "When local context and reasonable assumptions are enough, continue without asking.",
+  "When you do ask, prefer 1 to 3 concise multiple-choice questions and do not ask multiple-choice questions in plain chat.",
+  "Otherwise behave like a normal coding agent: inspect files, edit files, run available tools, and complete the task end to end.",
+].join("\n");
+
+function normalizeReasoningEffort(value: string | null | undefined): ReasoningEffort | null {
+  switch (value) {
+    case "none":
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+      return value;
+    default:
+      return null;
+  }
 }
 
 export function createCodexClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
@@ -103,6 +130,20 @@ export function createTextInput(text: string): Extract<UserInput, { type: "text"
     type: "text",
     text,
     text_elements: [],
+  };
+}
+
+export function createQuestionnaireCollaborationMode(
+  model: string,
+  reasoningEffort: string | null | undefined = null,
+): CollaborationMode {
+  return {
+    mode: "plan",
+    settings: {
+      developer_instructions: QUESTIONNAIRE_COLLABORATION_INSTRUCTIONS,
+      model,
+      reasoning_effort: normalizeReasoningEffort(reasoningEffort),
+    },
   };
 }
 

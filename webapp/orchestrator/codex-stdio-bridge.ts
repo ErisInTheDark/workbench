@@ -4,7 +4,18 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 
+import type { ServerRequest } from "../lib/codex/generated/app-server/ServerRequest";
+import type { ToolRequestUserInputParams } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputParams";
+import type { ToolRequestUserInputQuestion } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputQuestion";
+import type { ToolRequestUserInputResponse } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputResponse";
+import type {
+    WorkbenchQuestionnaireHistoryEntry,
+    WorkbenchUserInputQuestion,
+    WorkbenchUserInputRequest,
+    WorkbenchUserInputResponse,
+} from "../lib/types";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import { CodexQuestionnaireStore } from "./codex-questionnaire-store";
 import {
     createSpawnOptions,
     getSpawnDescriptor,
@@ -39,6 +50,16 @@ type CodexStdioBridgeOptions = {
   onNotification: (notification: JsonRpcNotification) => void;
   projectRoot: string;
   sendToClient: (client: BridgeClient, message: unknown) => void;
+  storageRoot: string;
+};
+
+type PendingCodexQuestionnaire = {
+  itemId: string | null;
+  request: WorkbenchUserInputRequest;
+  requestKey: string;
+  threadId: string;
+  turnId: string;
+  upstreamRequestId: number | string;
 };
 
 function isJsonRpcResponse(message: unknown): message is JsonRpcResponse {
@@ -56,24 +77,135 @@ function isJsonRpcNotification(message: unknown): message is JsonRpcNotification
     && !("id" in message);
 }
 
+function isJsonRpcServerRequest(message: unknown): message is ServerRequest {
+  return !!message
+    && typeof message === "object"
+    && "id" in message
+    && "method" in message
+    && "params" in message
+    && !("result" in message)
+    && !("error" in message);
+}
+
+function asRecord(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function asString(value: unknown) {
+  return typeof value === "string" ? value : null;
+}
+
+function normalizeQuestionId(value: string | null, index: number) {
+  const sanitized = (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return sanitized || `question-${index + 1}`;
+}
+
+function normalizeQuestionOptions(options: ToolRequestUserInputQuestion["options"]) {
+  if (!Array.isArray(options)) {
+    return [];
+  }
+
+  return options.map((option) => {
+    const label = option.label.trim();
+    if (!label) {
+      return null;
+    }
+
+    return {
+      description: option.description.trim(),
+      label,
+    };
+  }).filter((option): option is WorkbenchUserInputQuestion["options"][number] => option !== null);
+}
+
+function normalizeQuestion(
+  question: ToolRequestUserInputQuestion,
+  index: number,
+): WorkbenchUserInputQuestion | null {
+  const header = question.header.trim();
+  const questionText = question.question.trim();
+  const options = normalizeQuestionOptions(question.options);
+  if (!header && !questionText && !options.length) {
+    return null;
+  }
+
+  return {
+    allowOther: false,
+    header,
+    id: normalizeQuestionId(question.id, index),
+    isSecret: question.isSecret,
+    options,
+    question: questionText || header || `Question ${index + 1}`,
+  };
+}
+
+function createFallbackQuestion(): WorkbenchUserInputQuestion {
+  return {
+    allowOther: false,
+    header: "Question 1",
+    id: "question-1",
+    isSecret: false,
+    options: [],
+    question: "How should Codex continue?",
+  };
+}
+
+function normalizeQuestionnaireRequest(
+  params: ToolRequestUserInputParams,
+  requestKey: string,
+): WorkbenchUserInputRequest {
+  const questions = params.questions
+    .map((question, index) => normalizeQuestion(question, index))
+    .filter((question): question is WorkbenchUserInputQuestion => question !== null)
+    .slice(0, 3);
+
+  return {
+    id: `codex:${params.threadId}:${requestKey}`,
+    questions: questions.length ? questions : [createFallbackQuestion()],
+    submitLabel: "Submit response",
+    summary: "Codex needs your input before it can continue.",
+    title: "Follow-up questions",
+  };
+}
+
+function toToolRequestUserInputResponse(response: WorkbenchUserInputResponse): ToolRequestUserInputResponse {
+  return {
+    answers: Object.fromEntries(Object.entries(response.answers).map(([questionId, answer]) => [
+      questionId,
+      {
+        answers: answer?.answers.filter((entry): entry is string => typeof entry === "string") ?? [],
+      },
+    ])),
+  };
+}
+
 export class CodexStdioBridge {
   private readonly bridgeUrl: string;
   private readonly onFatalExit: CodexStdioBridgeOptions["onFatalExit"];
   private readonly onNotification: CodexStdioBridgeOptions["onNotification"];
   private readonly projectRoot: string;
+  private readonly questionnaireStore: CodexQuestionnaireStore;
   private readonly sendToClient: CodexStdioBridgeOptions["sendToClient"];
   private codexProcess: ChildProcess | null = null;
   private initializeResult: unknown = null;
   private nextRequestId = 1;
+  private readonly pendingQuestionnaires = new Map<string, PendingCodexQuestionnaire>();
   private readonly pendingResponses = new Map<number, PendingResponse>();
   private upstreamInitialized = false;
   private upstreamInitializePromise: Promise<void> | null = null;
 
-  constructor({ bridgeUrl, onFatalExit, onNotification, projectRoot, sendToClient }: CodexStdioBridgeOptions) {
+  constructor({ bridgeUrl, onFatalExit, onNotification, projectRoot, sendToClient, storageRoot }: CodexStdioBridgeOptions) {
     this.bridgeUrl = bridgeUrl;
     this.onFatalExit = onFatalExit;
     this.onNotification = onNotification;
     this.projectRoot = projectRoot;
+    this.questionnaireStore = new CodexQuestionnaireStore(storageRoot);
     this.sendToClient = sendToClient;
   }
 
@@ -94,6 +226,7 @@ export class CodexStdioBridge {
   }
 
   stop() {
+    this.pendingQuestionnaires.clear();
     this.pendingResponses.clear();
     this.upstreamInitialized = false;
     this.upstreamInitializePromise = null;
@@ -140,6 +273,50 @@ export class CodexStdioBridge {
     this.send(message);
   }
 
+  async handleBridgeRequest(message: JsonRpcRequest): Promise<JsonRpcResponse | null> {
+    const requestId = message.id ?? null;
+    const method = typeof message.method === "string" ? message.method : null;
+    if (!method) {
+      return {
+        id: requestId,
+        error: {
+          code: -32600,
+          message: "Invalid JSON-RPC request.",
+        },
+      };
+    }
+
+    try {
+      switch (method) {
+        case "questionnaire/list":
+          return {
+            id: requestId,
+            result: this.listPendingQuestionnaires(),
+          };
+        case "questionnaire/history/list":
+          return {
+            id: requestId,
+            result: await this.listQuestionnaireHistory(message.params),
+          };
+        case "questionnaire/respond":
+          return {
+            id: requestId,
+            result: await this.respondToQuestionnaire(message.params),
+          };
+        default:
+          return null;
+      }
+    } catch (error) {
+      return {
+        id: requestId,
+        error: {
+          code: -32000,
+          message: error instanceof Error ? error.message : "Codex questionnaire bridge request failed.",
+        },
+      };
+    }
+  }
+
   private createStdioChild() {
     const spawnDescriptor = getSpawnDescriptor({
       command: "codex",
@@ -164,6 +341,7 @@ export class CodexStdioBridge {
     this.codexProcess = this.createStdioChild();
     this.initializeResult = null;
     this.nextRequestId = 1;
+    this.pendingQuestionnaires.clear();
     this.pendingResponses.clear();
     this.upstreamInitialized = false;
     this.upstreamInitializePromise = null;
@@ -179,6 +357,7 @@ export class CodexStdioBridge {
       log("codex-stdio", `exited (code=${code ?? "null"}, signal=${signal ?? "null"})`);
       this.codexProcess = null;
       this.initializeResult = null;
+      this.pendingQuestionnaires.clear();
       this.pendingResponses.clear();
       this.upstreamInitialized = false;
       this.upstreamInitializePromise = null;
@@ -293,8 +472,164 @@ export class CodexStdioBridge {
       return;
     }
 
+    if (isJsonRpcServerRequest(message)) {
+      if (message.method === "item/tool/requestUserInput") {
+        this.handleUpstreamQuestionnaireRequest(message);
+      }
+      return;
+    }
+
     if (isJsonRpcNotification(message)) {
+      if (message.method === "serverRequest/resolved") {
+        this.handleServerRequestResolved(message.params);
+      }
       this.onNotification(message);
     }
+  }
+
+  private handleServerRequestResolved(params: unknown) {
+    const record = asRecord(params);
+    const threadId = asString(record?.threadId);
+    const requestId = record?.requestId;
+    if (!threadId || (typeof requestId !== "number" && typeof requestId !== "string")) {
+      return;
+    }
+
+    const requestKey = String(requestId);
+    const pendingQuestionnaire = this.pendingQuestionnaires.get(requestKey);
+    if (!pendingQuestionnaire || pendingQuestionnaire.threadId !== threadId) {
+      return;
+    }
+
+    this.pendingQuestionnaires.delete(requestKey);
+    this.onNotification({
+      method: "questionnaire/resolved",
+      params: {
+        requestKey,
+        threadId,
+      },
+    });
+  }
+
+  private handleUpstreamQuestionnaireRequest(
+    request: Extract<ServerRequest, { method: "item/tool/requestUserInput" }>,
+  ) {
+    const requestKey = String(request.id);
+    const normalizedRequest = normalizeQuestionnaireRequest(request.params, requestKey);
+    this.pendingQuestionnaires.set(requestKey, {
+      itemId: request.params.itemId?.trim() || null,
+      request: normalizedRequest,
+      requestKey,
+      threadId: request.params.threadId,
+      turnId: request.params.turnId,
+      upstreamRequestId: request.id,
+    });
+    this.onNotification({
+      method: "questionnaire/requested",
+      params: {
+        itemId: request.params.itemId?.trim() || null,
+        request: normalizedRequest,
+        requestKey,
+        threadId: request.params.threadId,
+        turnId: request.params.turnId,
+      },
+    });
+  }
+
+  private listPendingQuestionnaires() {
+    return {
+      data: Array.from(this.pendingQuestionnaires.values(), (pendingQuestionnaire) => ({
+        itemId: pendingQuestionnaire.itemId,
+        request: pendingQuestionnaire.request,
+        requestKey: pendingQuestionnaire.requestKey,
+        threadId: pendingQuestionnaire.threadId,
+        turnId: pendingQuestionnaire.turnId,
+      })),
+    };
+  }
+
+  private async listQuestionnaireHistory(params: unknown) {
+    const record = asRecord(params);
+    const threadId = asString(record?.threadId)?.trim() ?? "";
+    if (!threadId) {
+      throw new Error("Missing questionnaire/history/list thread id.");
+    }
+
+    return {
+      data: await this.questionnaireStore.listThreadHistory(threadId),
+    };
+  }
+
+  private readQuestionnaireResponse(params: unknown) {
+    const record = asRecord(params);
+    const threadId = asString(record?.threadId);
+    const requestKey = asString(record?.requestKey) ?? asString(record?.toolCallId);
+    const responseRecord = asRecord(record?.response);
+    const answersRecord = asRecord(responseRecord?.answers);
+    if (!threadId || !requestKey || !answersRecord) {
+      return null;
+    }
+
+    const response: WorkbenchUserInputResponse = {
+      answers: Object.fromEntries(Object.entries(answersRecord).map(([questionId, answerValue]) => {
+        const answerRecord = asRecord(answerValue);
+        const answers = Array.isArray(answerRecord?.answers)
+          ? answerRecord.answers.filter((entry): entry is string => typeof entry === "string")
+          : [];
+        return [questionId, { answers }];
+      })),
+    };
+
+    return {
+      requestKey,
+      response,
+      threadId,
+    };
+  }
+
+  private async respondToQuestionnaire(params: unknown) {
+    const resolvedResponse = this.readQuestionnaireResponse(params);
+    if (!resolvedResponse) {
+      throw new Error("Missing questionnaire/respond params.");
+    }
+
+    const pendingQuestionnaire = this.pendingQuestionnaires.get(resolvedResponse.requestKey);
+    if (!pendingQuestionnaire || pendingQuestionnaire.threadId !== resolvedResponse.threadId) {
+      throw new Error("That questionnaire is no longer pending.");
+    }
+
+    const historyEntry: WorkbenchQuestionnaireHistoryEntry = {
+      insertAfterItemId: pendingQuestionnaire.itemId,
+      itemId: pendingQuestionnaire.itemId,
+      request: pendingQuestionnaire.request,
+      requestKey: pendingQuestionnaire.requestKey,
+      resolvedAt: Date.now(),
+      response: resolvedResponse.response,
+      threadId: pendingQuestionnaire.threadId,
+      turnId: pendingQuestionnaire.turnId,
+    };
+
+    await this.questionnaireStore.upsertThreadEntry(historyEntry);
+
+    try {
+      this.send({
+        id: pendingQuestionnaire.upstreamRequestId,
+        result: toToolRequestUserInputResponse(resolvedResponse.response),
+      });
+    } catch (error) {
+      await this.questionnaireStore.removeThreadEntry(historyEntry.threadId, historyEntry.requestKey);
+      throw error;
+    }
+
+    this.pendingQuestionnaires.delete(pendingQuestionnaire.requestKey);
+    this.onNotification({
+      method: "questionnaire/resolved",
+      params: {
+        requestKey: pendingQuestionnaire.requestKey,
+        threadId: pendingQuestionnaire.threadId,
+      },
+    });
+
+    return { ok: true };
   }
 }

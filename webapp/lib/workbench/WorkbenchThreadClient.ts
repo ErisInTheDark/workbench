@@ -21,10 +21,16 @@ import type { Turn } from "../codex/generated/app-server/v2/Turn";
 import type { TurnStartResponse } from "../codex/generated/app-server/v2/TurnStartResponse";
 import type { TurnSteerResponse } from "../codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "../codex/generated/app-server/v2/UserInput";
-import { createTextInput, createThreadStartRequest, isCodexJsonRpcFailure } from "../codex/protocol";
+import {
+    createQuestionnaireCollaborationMode,
+    createTextInput,
+    createThreadStartRequest,
+    isCodexJsonRpcFailure,
+} from "../codex/protocol";
 import { formatThreadStatus, isProjectCodexThread, toThreadPayload, toThreadSummary } from "../codex/thread-adapter";
 import { getCurrentInProgressTurn, getCurrentTurn } from "../codex/thread-state";
 import type {
+    WorkbenchQuestionnaireHistoryEntry,
     ThreadPayload,
     ThreadSummary,
     WorkbenchHarness,
@@ -33,6 +39,7 @@ import type {
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
 } from "../types";
+import { applyQuestionnaireHistoryToThread } from "./thread/thread-questionnaire-history";
 import LifecycleScope from "./state/LifecycleScope";
 import {
     persistHarnessAgent,
@@ -57,6 +64,7 @@ export interface WorkbenchThreadState {
   pendingUserInputRequestsByThreadId: Map<string, WorkbenchPendingUserInputRequest>;
   projectRoot: string;
   projectRootPath: string;
+  questionnaireHistoryByThreadId: Map<string, WorkbenchQuestionnaireHistoryEntry[]>;
   rateLimits: RateLimitSnapshot | null;
   rateLimitsByHarness: Map<WorkbenchHarness, RateLimitSnapshot | null>;
   threads: ThreadSummary[];
@@ -76,6 +84,7 @@ export type WorkbenchThreadListener = (snapshot: WorkbenchThreadSnapshot) => voi
 
 export interface WorkbenchThreadClientOptions {
   onStatusMessage?: (message: string) => void;
+  onThreadStarted?: (thread: ThreadPayload) => void;
 }
 
 interface WorkbenchThreadClient {
@@ -111,6 +120,7 @@ function createInitialThreadState(): WorkbenchThreadState {
     pendingUserInputRequestsByThreadId: new Map(),
     projectRoot: "Project",
     projectRootPath: "",
+    questionnaireHistoryByThreadId: new Map(),
     rateLimits: null,
     rateLimitsByHarness: new Map(),
     threads: [],
@@ -172,6 +182,17 @@ function WorkbenchThreadClient(
     state.projectRootPath = context.rootPath;
   }
 
+  function applyPersistedQuestionnaireHistory(thread: ThreadPayload | null) {
+    if (!thread || thread.harness !== "codex") {
+      return thread;
+    }
+
+    return applyQuestionnaireHistoryToThread(
+      thread,
+      state.questionnaireHistoryByThreadId.get(thread.id) ?? [],
+    );
+  }
+
   function areCurrentTurnsEquivalent(left: ThreadPayload | null, right: ThreadPayload | null) {
     const leftTurn = getCurrentTurn(left);
     const rightTurn = getCurrentTurn(right);
@@ -224,22 +245,23 @@ function WorkbenchThreadClient(
   }
 
   function setCurrentThread(thread: ThreadPayload | null) {
-    if (areThreadPayloadsEquivalent(state.currentThread, thread)) {
+    const nextThread = applyPersistedQuestionnaireHistory(thread);
+    if (areThreadPayloadsEquivalent(state.currentThread, nextThread)) {
       return;
     }
 
     const previousThread = state.currentThread;
-    state.currentThread = thread;
-    state.currentThreadId = thread?.id ?? "";
+    state.currentThread = nextThread;
+    state.currentThreadId = nextThread?.id ?? "";
     emit();
 
-    if (!thread) {
+    if (!nextThread) {
       setRateLimits(null);
       return;
     }
 
-    if (!previousThread || previousThread.id !== thread.id || previousThread.harness !== thread.harness) {
-      setRateLimits(state.rateLimitsByHarness.get(thread.harness) ?? null);
+    if (!previousThread || previousThread.id !== nextThread.id || previousThread.harness !== nextThread.harness) {
+      setRateLimits(state.rateLimitsByHarness.get(nextThread.harness) ?? null);
       void refreshRateLimits();
     }
   }
@@ -285,13 +307,22 @@ function WorkbenchThreadClient(
   function upsertPendingUserInputRequest(
     threadId: string,
     harness: WorkbenchHarness,
-    toolCallId: string,
+    requestKey: string,
     request: WorkbenchUserInputRequest,
+    {
+      itemId = null,
+      turnId = null,
+    }: {
+      itemId?: string | null;
+      turnId?: string | null;
+    } = {},
   ) {
     const existing = state.pendingUserInputRequestsByThreadId.get(threadId);
     if (
-      existing?.toolCallId === toolCallId
+      existing?.requestKey === requestKey
       && existing.harness === harness
+      && existing.turnId === turnId
+      && existing.itemId === itemId
       && JSON.stringify(existing.request) === JSON.stringify(request)
     ) {
       return false;
@@ -299,20 +330,22 @@ function WorkbenchThreadClient(
 
     state.pendingUserInputRequestsByThreadId.set(threadId, {
       harness,
+      itemId,
       request,
+      requestKey,
       threadId,
-      toolCallId,
+      turnId,
     });
     return true;
   }
 
-  function clearPendingUserInputRequest(threadId: string, toolCallId?: string) {
+  function clearPendingUserInputRequest(threadId: string, requestKey?: string) {
     const existing = state.pendingUserInputRequestsByThreadId.get(threadId);
     if (!existing) {
       return false;
     }
 
-    if (toolCallId && existing.toolCallId !== toolCallId) {
+    if (requestKey && existing.requestKey !== requestKey) {
       return false;
     }
 
@@ -337,8 +370,10 @@ function WorkbenchThreadClient(
         const existing = state.pendingUserInputRequestsByThreadId.get(threadId);
         if (
           !existing
-          || existing.toolCallId !== request.toolCallId
+          || existing.requestKey !== request.requestKey
           || existing.harness !== request.harness
+          || existing.turnId !== request.turnId
+          || existing.itemId !== request.itemId
           || JSON.stringify(existing.request) !== JSON.stringify(request.request)
         ) {
           unchanged = false;
@@ -482,8 +517,58 @@ function WorkbenchThreadClient(
       cursor = response.nextCursor;
     } while (cursor);
 
-    state.modelsByHarness.set(harness, models);
+      state.modelsByHarness.set(harness, models);
     return models;
+  }
+
+  function setQuestionnaireHistoryEntries(threadId: string, entries: WorkbenchQuestionnaireHistoryEntry[]) {
+    const nextEntries = entries.filter((entry) => entry.threadId === threadId);
+    const existingEntries = state.questionnaireHistoryByThreadId.get(threadId) ?? [];
+    if (JSON.stringify(existingEntries) === JSON.stringify(nextEntries)) {
+      return false;
+    }
+
+    if (nextEntries.length) {
+      state.questionnaireHistoryByThreadId.set(threadId, nextEntries);
+    } else {
+      state.questionnaireHistoryByThreadId.delete(threadId);
+    }
+    return true;
+  }
+
+  function reapplyCurrentThreadQuestionnaireHistory(threadId: string) {
+    if (state.currentThread?.id !== threadId || state.currentThread.harness !== "codex") {
+      return;
+    }
+
+    setCurrentThread({
+      ...state.currentThread,
+      turns: state.currentThread.turns.map((turn) => ({
+        ...turn,
+        items: [...turn.items],
+      })),
+    });
+  }
+
+  async function readCompletedQuestionnaireHistory(threadId: string) {
+    try {
+      const response = await sendBridgeRequest<{ data?: WorkbenchQuestionnaireHistoryEntry[] }>("codex", {
+        method: "questionnaire/history/list",
+        params: {
+          threadId,
+        },
+      });
+      const entries = response.data ?? [];
+      if (setQuestionnaireHistoryEntries(threadId, entries)) {
+        reapplyCurrentThreadQuestionnaireHistory(threadId);
+      }
+      return entries;
+    } catch {
+      if (setQuestionnaireHistoryEntries(threadId, [])) {
+        reapplyCurrentThreadQuestionnaireHistory(threadId);
+      }
+      return [];
+    }
   }
 
   async function fetchThreadPayload(threadId: string, harness: WorkbenchHarness) {
@@ -502,6 +587,9 @@ function WorkbenchThreadClient(
       }
 
       const nextModel = response.model ?? null;
+      if (harness === "codex") {
+        await readCompletedQuestionnaireHistory(threadId);
+      }
       return toThreadPayload(
         response.thread,
         harness,
@@ -531,6 +619,9 @@ function WorkbenchThreadClient(
       }
 
       const nextModel = getThreadModel(threadId);
+      if (harness === "codex") {
+        await readCompletedQuestionnaireHistory(threadId);
+      }
       return toThreadPayload(
         response.thread,
         harness,
@@ -630,24 +721,38 @@ function WorkbenchThreadClient(
   }
 
   async function refreshPendingUserInputRequests() {
-    try {
-      const response = await sendBridgeRequest<{ data?: Array<{ request: WorkbenchUserInputRequest; threadId: string; toolCallId: string }> }>("copilot", {
+    const questionnaireHarnesses = ["codex", "copilot"] as const;
+    const results = await Promise.allSettled(questionnaireHarnesses.map(async (harness) => {
+      const response = await sendBridgeRequest<{ data?: Array<{ itemId?: string | null; request: WorkbenchUserInputRequest; requestKey: string; threadId: string; turnId?: string | null }> }>(harness, {
         method: "questionnaire/list",
         params: undefined,
       });
-      const pendingRequests = (response.data ?? []).map((entry) => ({
-        harness: "copilot" as const,
-        request: entry.request,
-        threadId: entry.threadId,
-        toolCallId: entry.toolCallId,
-      }));
-      if (replacePendingUserInputRequests("copilot", pendingRequests)) {
-        emit();
+      return {
+        harness,
+        pendingRequests: (response.data ?? []).map((entry) => ({
+          harness,
+          itemId: entry.itemId ?? null,
+          request: entry.request,
+          requestKey: entry.requestKey,
+          threadId: entry.threadId,
+          turnId: entry.turnId ?? null,
+        })),
+      };
+    }));
+
+    let changed = false;
+    for (const [index, result] of results.entries()) {
+      if (result.status === "fulfilled") {
+        changed = replacePendingUserInputRequests(result.value.harness, result.value.pendingRequests) || changed;
+        continue;
       }
-    } catch {
-      if (replacePendingUserInputRequests("copilot", [])) {
-        emit();
-      }
+
+      const rejectedHarness = questionnaireHarnesses[index] ?? "codex";
+      changed = replacePendingUserInputRequests(rejectedHarness, []) || changed;
+    }
+
+    if (changed) {
+      emit();
     }
   }
 
@@ -1122,9 +1227,11 @@ function WorkbenchThreadClient(
       : state.currentThread?.agentPath ?? readStoredHarnessAgent(harness);
     const normalizedInput = normalizeThreadMessageInput(input);
     const isDraftThread = state.currentThread?.isDraft === true && state.currentThread.id === resolvedThreadId;
+    const shouldBypassCodexDraftBootstrap = harness === "codex" && isDraftThread;
     let previousThread = state.currentThread && state.currentThread.id === resolvedThreadId && !state.currentThread.isDraft
       ? state.currentThread
       : null;
+    let bootstrapThread: ThreadPayload | null = null;
 
     if (!normalizedInput.length) {
       throw new Error("Message input cannot be empty.");
@@ -1138,6 +1245,8 @@ function WorkbenchThreadClient(
 
     if (isDraftThread || !resolvedThreadId.trim()) {
       const threadStartRequest = createThreadStartRequest(0, {
+        ...(harness === "codex" && state.projectRootPath ? { cwd: state.projectRootPath } : {}),
+        ...(harness === "codex" ? { ephemeral: false } : {}),
         ...(selectedModel ? { model: selectedModel } : {}),
         persistExtendedHistory: true,
       });
@@ -1158,49 +1267,61 @@ function WorkbenchThreadClient(
         selectedReasoningEffort ?? startedThreadResponse.reasoningEffort ?? null,
         selectedAgentPath,
       );
-      setCurrentThread(startedPayload);
-      resolvedThreadId = startedPayload.id;
+      bootstrapThread = startedPayload;
+      setCurrentThread(bootstrapThread);
+      options.onThreadStarted?.(bootstrapThread);
+      resolvedThreadId = bootstrapThread.id;
       previousThread = null;
-      await refreshThreads();
+      if (!shouldBypassCodexDraftBootstrap) {
+        await refreshThreads();
+      }
     }
 
-    const readableThreadResponse = await sendBridgeRequest<ThreadReadResponse>(harness, {
-      method: "thread/read",
-      params: {
-        includeTurns: true,
-        threadId: resolvedThreadId,
-      },
-    });
-    const resumedThreadResponse = await sendBridgeRequest<{ model?: string | null; modelProvider?: string | null; reasoningEffort?: string | null; thread: ThreadReadResponse["thread"] }>(harness, {
-      method: "thread/resume",
-      params: {
-        ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
-        ...(selectedModel ? { model: selectedModel } : {}),
-        persistExtendedHistory: true,
-        threadId: resolvedThreadId,
-      } as { agentPath?: string; model?: string; persistExtendedHistory: true; threadId: string },
-    });
-    const readableThread = toThreadPayload(readableThreadResponse.thread, harness);
-    const resumedThread = toThreadPayload(
-      resumedThreadResponse.thread,
-      harness,
-      resumedThreadResponse.model ?? selectedModel ?? readableThread.model,
-      selectedReasoningEffort ?? resumedThreadResponse.reasoningEffort ?? readableThread.reasoningEffort,
-      selectedAgentPath,
-    );
+    let resumedThread = bootstrapThread;
+    if (!resumedThread || !shouldBypassCodexDraftBootstrap) {
+      const readableThreadResponse = await sendBridgeRequest<ThreadReadResponse>(harness, {
+        method: "thread/read",
+        params: {
+          includeTurns: true,
+          threadId: resolvedThreadId,
+        },
+      });
+      const resumedThreadResponse = await sendBridgeRequest<{ model?: string | null; modelProvider?: string | null; reasoningEffort?: string | null; thread: ThreadReadResponse["thread"] }>(harness, {
+        method: "thread/resume",
+        params: {
+          ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
+          ...(selectedModel ? { model: selectedModel } : {}),
+          persistExtendedHistory: true,
+          threadId: resolvedThreadId,
+        } as { agentPath?: string; model?: string; persistExtendedHistory: true; threadId: string },
+      });
+      const readableThread = toThreadPayload(readableThreadResponse.thread, harness);
+      resumedThread = toThreadPayload(
+        resumedThreadResponse.thread,
+        harness,
+        resumedThreadResponse.model ?? selectedModel ?? readableThread.model,
+        selectedReasoningEffort ?? resumedThreadResponse.reasoningEffort ?? readableThread.reasoningEffort,
+        selectedAgentPath,
+      );
 
-    const currentInProgressTurn = getCurrentInProgressTurn(resumedThread);
-    const visibleCurrentTurn = getCurrentTurn(readableThread);
+      const currentInProgressTurn = getCurrentInProgressTurn(resumedThread);
+      const visibleCurrentTurn = getCurrentTurn(readableThread);
 
-    if (
-      visibleCurrentTurn?.status === "completed"
-      && currentInProgressTurn
-      && currentInProgressTurn.id !== visibleCurrentTurn.id
-    ) {
-      throw new Error("This thread is out of sync with the app-server. New messages are disabled here for now.");
+      if (
+        visibleCurrentTurn?.status === "completed"
+        && currentInProgressTurn
+        && currentInProgressTurn.id !== visibleCurrentTurn.id
+      ) {
+        throw new Error("This thread is out of sync with the app-server. New messages are disabled here for now.");
+      }
+    }
+
+    if (!resumedThread) {
+      throw new Error("Unable to prepare the new Codex thread for its first turn.");
     }
 
     harness = resumedThread.harness;
+    const currentInProgressTurn = getCurrentInProgressTurn(resumedThread);
 
     if (currentInProgressTurn) {
       await sendBridgeRequest<TurnSteerResponse>(harness, {
@@ -1213,28 +1334,74 @@ function WorkbenchThreadClient(
         } as { agentPath?: string; expectedTurnId: string; input: UserInput[]; threadId: string },
       });
     } else {
+      const codexCollaborationMode = harness === "codex"
+        ? (() => {
+          const collaborationModel = selectedModel ?? resumedThread.model;
+          return collaborationModel
+            ? createQuestionnaireCollaborationMode(collaborationModel, selectedReasoningEffort ?? null)
+            : null;
+        })()
+        : null;
       await sendBridgeRequest<TurnStartResponse>(harness, {
         method: "turn/start",
         params: {
           ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
+          ...(codexCollaborationMode ? { collaborationMode: codexCollaborationMode } : {}),
           input: normalizedInput,
           ...(selectedReasoningEffort ? { effort: selectedReasoningEffort } : {}),
           ...(selectedModel ? { model: selectedModel } : {}),
           summary: DEFAULT_TURN_REASONING_SUMMARY,
           threadId: resolvedThreadId,
-        } as { agentPath?: string; effort?: string; input: UserInput[]; model?: string; summary: typeof DEFAULT_TURN_REASONING_SUMMARY; threadId: string },
+        } as {
+          agentPath?: string;
+          collaborationMode?: ReturnType<typeof createQuestionnaireCollaborationMode>;
+          effort?: string | null;
+          input: UserInput[];
+          model?: string | null;
+          summary: typeof DEFAULT_TURN_REASONING_SUMMARY;
+          threadId: string;
+        },
       });
     }
 
-    const refreshedThreadResponse = await sendBridgeRequest<ThreadReadResponse>(harness, {
-      method: "thread/read",
-      params: {
-        includeTurns: true,
-        threadId: resolvedThreadId,
-      },
-    });
+    let refreshedThread = resumedThread;
+    if (harness === "codex") {
+      const refreshedThreadResponse = await sendBridgeRequest<{ model?: string | null; modelProvider?: string | null; reasoningEffort?: string | null; thread: ThreadReadResponse["thread"] }>(harness, {
+        method: "thread/resume",
+        params: {
+          ...(selectedModel ? { model: selectedModel } : {}),
+          persistExtendedHistory: true,
+          threadId: resolvedThreadId,
+        } as { model?: string; persistExtendedHistory: true; threadId: string },
+      });
+      refreshedThread = toThreadPayload(
+        refreshedThreadResponse.thread,
+        harness,
+        refreshedThreadResponse.model ?? resumedThread.model,
+        refreshedThreadResponse.reasoningEffort ?? resumedThread.reasoningEffort,
+        resumedThread.agentPath,
+      );
+    } else {
+      const refreshedThreadResponse = await sendBridgeRequest<ThreadReadResponse>(harness, {
+        method: "thread/read",
+        params: {
+          includeTurns: true,
+          threadId: resolvedThreadId,
+        },
+      });
+      refreshedThread = toThreadPayload(
+        refreshedThreadResponse.thread,
+        harness,
+        resumedThread.model,
+        resumedThread.reasoningEffort,
+        resumedThread.agentPath,
+      );
+    }
+    if (harness === "codex") {
+      await readCompletedQuestionnaireHistory(resolvedThreadId);
+    }
     const payload = applyOptimisticSteerMessage(
-      toThreadPayload(refreshedThreadResponse.thread, harness, resumedThread.model, resumedThread.reasoningEffort, resumedThread.agentPath),
+      refreshedThread,
       previousThread,
       normalizedInput,
     );
@@ -1252,11 +1419,14 @@ function WorkbenchThreadClient(
       method: "questionnaire/respond",
       params: {
         response,
+        requestKey: pendingRequest.requestKey,
         threadId,
-        toolCallId: pendingRequest.toolCallId,
       },
     });
-    if (clearPendingUserInputRequest(threadId, pendingRequest.toolCallId)) {
+    if (pendingRequest.harness === "codex") {
+      await readCompletedQuestionnaireHistory(threadId);
+    }
+    if (clearPendingUserInputRequest(threadId, pendingRequest.requestKey)) {
       emit();
     }
   }
@@ -1293,8 +1463,12 @@ function WorkbenchThreadClient(
       if (upsertPendingUserInputRequest(
         notification.params.threadId,
         harness,
-        notification.params.toolCallId,
+        notification.params.requestKey,
         notification.params.request,
+        {
+          itemId: notification.params.itemId,
+          turnId: notification.params.turnId,
+        },
       )) {
         emit();
       }
@@ -1302,8 +1476,11 @@ function WorkbenchThreadClient(
     }
 
     if (notification.method === "questionnaire/resolved") {
-      if (clearPendingUserInputRequest(notification.params.threadId, notification.params.toolCallId)) {
+      if (clearPendingUserInputRequest(notification.params.threadId, notification.params.requestKey)) {
         emit();
+      }
+      if (harness === "codex") {
+        void readCompletedQuestionnaireHistory(notification.params.threadId);
       }
       return;
     }

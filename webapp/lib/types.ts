@@ -97,8 +97,21 @@ export interface WorkbenchUserInputResponse {
 export interface WorkbenchPendingUserInputRequest {
   harness: WorkbenchHarness;
   threadId: string;
-  toolCallId: string;
+  requestKey: string;
+  turnId: string | null;
+  itemId: string | null;
   request: WorkbenchUserInputRequest;
+}
+
+export interface WorkbenchQuestionnaireHistoryEntry {
+  requestKey: string;
+  threadId: string;
+  turnId: string;
+  itemId: string | null;
+  insertAfterItemId: string | null;
+  request: WorkbenchUserInputRequest;
+  response: WorkbenchUserInputResponse;
+  resolvedAt: number;
 }
 
 export interface FileNode {

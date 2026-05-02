@@ -118,6 +118,10 @@ export async function WorkbenchClient(
     onStatusMessage: (message) => {
       reportStatusMessage(message);
     },
+    onThreadStarted: (thread) => {
+      syncCurrentSelectionToUrl({ threadId: thread.id });
+      emitExplorerStateChange();
+    },
   });
   const initialThreadSnapshot = threadClient.getSnapshot();
   const sessionState = SessionState({
@@ -805,6 +809,12 @@ export async function WorkbenchClient(
         if (sessionState.currentThreadId === currentThreadId) {
           return;
         }
+      } else if (sessionState.currentThread && !sessionState.currentThread.isDraft) {
+        if (requestedThreadId && threadClient.isDraftThreadId(requestedThreadId)) {
+          syncCurrentSelectionToUrl({ threadId: currentThreadId });
+          emitExplorerStateChange();
+        }
+        return;
       } else {
         threadClient.clearThreadSelection();
         applyCurrentThread(null);

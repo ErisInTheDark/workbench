@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import type { ChangeSummary } from "./types";
 
 const execFileAsync = promisify(execFile);
-const ignoredNames = new Set([".git", ".codex", ".vscode", ".gitignore", "node_modules", ".next", "webapp"]);
+const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", ".gitignore", "node_modules", ".next", "webapp"]);
 
 function normalizeDiffPath(rawPath: string) {
   let normalized = rawPath.trim();

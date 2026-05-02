@@ -12,7 +12,9 @@ export interface WorkbenchQuestionnaireRequestedNotification {
   method: "questionnaire/requested";
   params: {
     threadId: string;
-    toolCallId: string;
+    requestKey: string;
+    turnId: string | null;
+    itemId: string | null;
     request: WorkbenchUserInputRequest;
   };
 }
@@ -21,7 +23,7 @@ export interface WorkbenchQuestionnaireResolvedNotification {
   method: "questionnaire/resolved";
   params: {
     threadId: string;
-    toolCallId: string;
+    requestKey: string;
   };
 }
 

@@ -676,9 +676,11 @@ export class CopilotBridge {
   private listPendingQuestionnaires() {
     return {
       data: Array.from(this.pendingQuestionnaires.values(), (pending) => ({
+        itemId: null,
         request: pending.request,
+        requestKey: pending.toolCallId,
         threadId: pending.threadId,
-        toolCallId: pending.toolCallId,
+        turnId: null,
       })),
     };
   }
@@ -700,9 +702,11 @@ export class CopilotBridge {
       this.onNotification({
         method: "questionnaire/requested",
         params: {
+          itemId: null,
           request,
+          requestKey: invocation.toolCallId,
           threadId,
-          toolCallId: invocation.toolCallId,
+          turnId: null,
         },
       });
     });
@@ -711,7 +715,7 @@ export class CopilotBridge {
   private readQuestionnaireResponse(params: unknown) {
     const record = asRecord(params);
     const threadId = asString(record?.threadId);
-    const toolCallId = asString(record?.toolCallId);
+    const toolCallId = asString(record?.requestKey) ?? asString(record?.toolCallId);
     const responseRecord = asRecord(record?.response);
     const answersRecord = asRecord(responseRecord?.answers);
     if (!threadId || !toolCallId || !answersRecord) {
@@ -751,8 +755,8 @@ export class CopilotBridge {
     this.onNotification({
       method: "questionnaire/resolved",
       params: {
+        requestKey: pending.toolCallId,
         threadId: pending.threadId,
-        toolCallId: pending.toolCallId,
       },
     });
     return { ok: true };

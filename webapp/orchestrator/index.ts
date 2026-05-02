@@ -21,6 +21,7 @@ import {
 
 const ORCHESTRATOR_ROOT = __dirname;
 const WEBAPP_ROOT = path.resolve(ORCHESTRATOR_ROOT, "..");
+const PROJECT_ROOT = path.resolve(WEBAPP_ROOT, "..");
 const CODEX_BRIDGE_URL = process.env.CODEX_APP_SERVER_URL ?? "ws://127.0.0.1:4500";
 const NEXT_PORT = process.env.PORT ?? "3002";
 const RESTART_DELAY_MS = 1000;
@@ -54,6 +55,7 @@ const codexBridge = new CodexStdioBridge({
   sendToClient: (client, message) => {
     sendJsonToClient(client, message);
   },
+  storageRoot: PROJECT_ROOT,
 });
 
 const specs: ProcessSpec[] = [
@@ -249,7 +251,14 @@ async function handleClientMessage(client: BridgeClient, data: Buffer) {
   }
 
   if ("id" in message) {
-    codexBridge.forwardRequest(stripHarnessField(message), client, message.id as number | string);
+    const strippedMessage = stripHarnessField(message);
+    const bridgeResponse = await codexBridge.handleBridgeRequest(strippedMessage);
+    if (bridgeResponse) {
+      sendJsonToClient(client, bridgeResponse);
+      return;
+    }
+
+    codexBridge.forwardRequest(strippedMessage, client, message.id as number | string);
     return;
   }
 
