@@ -11,6 +11,7 @@ import type {
     WorkbenchBindings,
     WorkbenchControls,
     WorkbenchHarness,
+    WorkbenchUserInputRequest,
 } from "./types";
 import {
     createListItemDomEditor,
@@ -145,6 +146,13 @@ export async function WorkbenchClient(
 
     if (lastSnapshot.rateLimits !== snapshot.rateLimits) {
       emitRateLimitsChange();
+    }
+
+    if (!arePendingUserInputRequestsEquivalent(
+      lastSnapshot.pendingUserInputRequestsByThreadId,
+      snapshot.pendingUserInputRequestsByThreadId,
+    )) {
+      emitPendingUserInputRequestsChange();
     }
 
     if (
@@ -593,6 +601,10 @@ export async function WorkbenchClient(
     workbenchBindings.onRateLimitsChange?.(threadClient.getSnapshot().rateLimits);
   }
 
+  function emitPendingUserInputRequestsChange() {
+    workbenchBindings.onPendingUserInputRequestsChange?.(threadClient.getSnapshot().pendingUserInputRequestsByThreadId);
+  }
+
   function applyCurrentThread(thread: ThreadPayload | null) {
     if (areThreadPayloadsEquivalent(sessionState.currentThread, thread)) {
       return false;
@@ -624,6 +636,26 @@ export async function WorkbenchClient(
     }
 
     return JSON.stringify(leftTurn) === JSON.stringify(rightTurn);
+  }
+
+  function arePendingUserInputRequestsEquivalent(
+    left: Record<string, WorkbenchUserInputRequest>,
+    right: Record<string, WorkbenchUserInputRequest>,
+  ) {
+    if (left === right) {
+      return true;
+    }
+
+    const leftEntries = Object.entries(left);
+    const rightEntries = Object.entries(right);
+    if (leftEntries.length !== rightEntries.length) {
+      return false;
+    }
+
+    return leftEntries.every(([threadId, request]) => {
+      const matchingRequest = right[threadId];
+      return Boolean(matchingRequest) && JSON.stringify(request) === JSON.stringify(matchingRequest);
+    });
   }
 
   function areThreadPayloadsEquivalent(left: ThreadPayload | null, right: ThreadPayload | null) {
@@ -744,12 +776,18 @@ export async function WorkbenchClient(
     const shouldBlockOnThreads = Boolean(sessionState.currentThreadId || requestedThreadId);
 
     if (shouldBlockOnThreads) {
-      await refreshThreads();
+      await Promise.all([
+        refreshThreads(),
+        threadClient.refreshPendingUserInputRequests(),
+      ]);
       emitExplorerStateChange();
     } else {
       emitExplorerStateChange();
       void (async () => {
-        await refreshThreads();
+        await Promise.all([
+          refreshThreads(),
+          threadClient.refreshPendingUserInputRequests(),
+        ]);
         emitExplorerStateChange();
       })();
     }
@@ -840,6 +878,7 @@ export async function WorkbenchClient(
     openFile,
     openThread,
     sendThreadMessage,
+    submitPendingUserInputRequest: threadClient.submitPendingUserInputRequest,
     setCurrentThreadModel: (threadId, model) => {
       threadClient.setCurrentThreadModel(threadId, model);
     },
@@ -859,6 +898,7 @@ export async function WorkbenchClient(
   workbenchBindings.onControlsReady?.(controls);
   emitExplorerStateChange();
   emitCurrentThreadChange();
+  emitPendingUserInputRequestsChange();
   emitRateLimitsChange();
   updateSaveButtonState();
   await refreshTree();

@@ -10,6 +10,7 @@ import { join } from "node:path";
 import {
     approveAll,
     CopilotClient,
+    defineTool,
     type CopilotSession,
     type GetAuthStatusResponse,
     type SessionEvent,
@@ -21,7 +22,12 @@ import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/Rat
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import { readUserInvocableAgentDefinition } from "../lib/project";
-import type { WorkbenchModelOption } from "../lib/types";
+import type {
+    WorkbenchModelOption,
+    WorkbenchUserInputQuestion,
+    WorkbenchUserInputRequest,
+    WorkbenchUserInputResponse,
+} from "../lib/types";
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import {
     applyCopilotEvent,
@@ -43,6 +49,22 @@ type CopilotBridgeOptions = {
 };
 
 type CopilotReasoningEffort = "low" | "medium" | "high" | "xhigh";
+type PendingQuestionnaireRequest = {
+  request: WorkbenchUserInputRequest;
+  resolve: (response: WorkbenchUserInputResponse) => void;
+  reject: (reason?: unknown) => void;
+  sessionId: string;
+  threadId: string;
+  toolCallId: string;
+};
+
+const USER_INPUT_TOOL_NAME = "workbench_request_user_input";
+const USER_INPUT_TOOL_SYSTEM_MESSAGE = `
+When you need the user to make a bounded choice or provide structured clarification, call the ${USER_INPUT_TOOL_NAME} tool instead of asking in plain chat.
+Use short titles, optional context summaries, and one to three concise questions.
+Prefer multiple-choice options when they will help the user answer quickly, but keep custom text useful too.
+The tool returns the user's answers as arrays of strings keyed by question id.
+`.trim();
 
 function toCopilotReasoningEffort(value: string | null): CopilotReasoningEffort | undefined {
   switch (value) {
@@ -54,6 +76,113 @@ function toCopilotReasoningEffort(value: string | null): CopilotReasoningEffort 
     default:
       return undefined;
   }
+}
+
+function asRecord(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function asString(value: unknown) {
+  return typeof value === "string" ? value : null;
+}
+
+function asBoolean(value: unknown) {
+  return typeof value === "boolean" ? value : false;
+}
+
+function normalizeQuestionId(value: string | null, index: number) {
+  const sanitized = (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return sanitized || `question-${index + 1}`;
+}
+
+function normalizeQuestionOptions(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((entry) => {
+    const record = asRecord(entry);
+    const label = truncateText(asString(record?.label) ?? "", 240);
+    const description = truncateText(asString(record?.description) ?? "", 1200);
+    if (!label) {
+      return null;
+    }
+
+    return {
+      description,
+      label,
+    };
+  }).filter((entry): entry is WorkbenchUserInputQuestion["options"][number] => entry !== null);
+}
+
+function normalizeQuestion(
+  value: unknown,
+  index: number,
+): WorkbenchUserInputQuestion | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  const header = truncateText(asString(record.header) ?? "", 240);
+  const question = truncateText(asString(record.question) ?? "", 4000);
+  const options = normalizeQuestionOptions(record.options);
+
+  if (!header && !question && !options.length) {
+    return null;
+  }
+
+  return {
+    allowOther: false,
+    header: header || `Question ${index + 1}`,
+    id: normalizeQuestionId(asString(record.id), index),
+    isSecret: asBoolean(record.isSecret),
+    options,
+    question: question || header || `Question ${index + 1}`,
+  };
+}
+
+function createFallbackQuestion(summary: string, title: string): WorkbenchUserInputQuestion {
+  const questionText = truncateText(summary, 4000) || truncateText(title, 4000) || "How should I continue?";
+  return {
+    allowOther: false,
+    header: "Question 1",
+    id: "question-1",
+    isSecret: false,
+    options: [],
+    question: questionText,
+  };
+}
+
+function normalizeQuestionnaireRequest(
+  args: unknown,
+  sessionId: string,
+  toolCallId: string,
+): WorkbenchUserInputRequest {
+  const record = asRecord(args) ?? {};
+  const title = truncateText(asString(record.title) ?? "", 160) || "Choose how to continue";
+  const summary = truncateText(asString(record.summary) ?? "", 4000)
+    || "The assistant needs a bit of direction before it continues.";
+  const submitLabel = truncateText(asString(record.submitLabel) ?? "", 80) || "Submit response";
+  const rawQuestions = Array.isArray(record.questions) ? record.questions : [];
+  const questions = rawQuestions
+    .map((entry, index) => normalizeQuestion(entry, index))
+    .filter((entry): entry is WorkbenchUserInputQuestion => entry !== null)
+    .slice(0, 3);
+
+  return {
+    id: `copilot:${sessionId}:${toolCallId}`,
+    questions: questions.length ? questions : [createFallbackQuestion(summary, title)],
+    submitLabel,
+    summary,
+    title,
+  };
 }
 
 function eventTimestampMs(value: Date | string | number | null | undefined) {
@@ -226,6 +355,7 @@ export class CopilotBridge {
   private readonly sessions = new Map<string, CopilotSession>();
   private readonly threadStates = new Map<string, CopilotThreadState>();
   private readonly unsubscribers = new Map<string, () => void>();
+  private readonly pendingQuestionnaires = new Map<string, PendingQuestionnaireRequest>();
 
   constructor({ onNotification, projectRoot }: CopilotBridgeOptions) {
     this.onNotification = onNotification;
@@ -237,6 +367,10 @@ export class CopilotBridge {
   }
 
   async stop() {
+    for (const pending of this.pendingQuestionnaires.values()) {
+      pending.reject(new Error("Copilot bridge stopped before the questionnaire was answered."));
+    }
+    this.pendingQuestionnaires.clear();
     for (const unsubscribe of this.unsubscribers.values()) {
       unsubscribe();
     }
@@ -330,6 +464,16 @@ export class CopilotBridge {
           return {
             id: requestId,
             result: await this.readRateLimits(),
+          };
+        case "questionnaire/list":
+          return {
+            id: requestId,
+            result: this.listPendingQuestionnaires(),
+          };
+        case "questionnaire/respond":
+          return {
+            id: requestId,
+            result: await this.respondToQuestionnaire(message.params),
           };
         default:
           return this.errorResponse(requestId, -32601, `Unsupported Copilot bridge method: ${method}`);
@@ -468,6 +612,152 @@ export class CopilotBridge {
     }
   }
 
+  private createUserInputTool(threadId: string) {
+    return defineTool(USER_INPUT_TOOL_NAME, {
+      description: "Pause for structured user input. Provide a short title, optional summary, and one to three questions with optional choices. Returns the user's answers as arrays of strings keyed by question id.",
+      parameters: {
+        additionalProperties: false,
+        properties: {
+          questions: {
+            items: {
+              additionalProperties: false,
+              properties: {
+                header: { type: "string" },
+                id: { type: "string" },
+                isSecret: { type: "boolean" },
+                options: {
+                  items: {
+                    additionalProperties: false,
+                    properties: {
+                      description: { type: "string" },
+                      label: { type: "string" },
+                    },
+                    required: ["label"],
+                    type: "object",
+                  },
+                  type: "array",
+                },
+                question: { type: "string" },
+              },
+              required: ["id"],
+              type: "object",
+            },
+            maxItems: 3,
+            minItems: 1,
+            type: "array",
+          },
+          submitLabel: { type: "string" },
+          summary: { type: "string" },
+          title: { type: "string" },
+        },
+        required: ["questions"],
+        type: "object",
+      },
+      handler: async (args, invocation) => {
+        const request = normalizeQuestionnaireRequest(args, invocation.sessionId, invocation.toolCallId);
+        return await this.requestUserInput(threadId, invocation, request);
+      },
+      skipPermission: true,
+    });
+  }
+
+  private createSessionTools(threadId: string) {
+    return [
+      this.createUserInputTool(threadId),
+    ];
+  }
+
+  private createSessionSystemMessage() {
+    return {
+      content: USER_INPUT_TOOL_SYSTEM_MESSAGE,
+    };
+  }
+
+  private listPendingQuestionnaires() {
+    return {
+      data: Array.from(this.pendingQuestionnaires.values(), (pending) => ({
+        request: pending.request,
+        threadId: pending.threadId,
+        toolCallId: pending.toolCallId,
+      })),
+    };
+  }
+
+  private async requestUserInput(
+    threadId: string,
+    invocation: { sessionId: string; toolCallId: string },
+    request: WorkbenchUserInputRequest,
+  ) {
+    return await new Promise<WorkbenchUserInputResponse>((resolve, reject) => {
+      this.pendingQuestionnaires.set(invocation.toolCallId, {
+        request,
+        reject,
+        resolve,
+        sessionId: invocation.sessionId,
+        threadId,
+        toolCallId: invocation.toolCallId,
+      });
+      this.onNotification({
+        method: "questionnaire/requested",
+        params: {
+          request,
+          threadId,
+          toolCallId: invocation.toolCallId,
+        },
+      });
+    });
+  }
+
+  private readQuestionnaireResponse(params: unknown) {
+    const record = asRecord(params);
+    const threadId = asString(record?.threadId);
+    const toolCallId = asString(record?.toolCallId);
+    const responseRecord = asRecord(record?.response);
+    const answersRecord = asRecord(responseRecord?.answers);
+    if (!threadId || !toolCallId || !answersRecord) {
+      return null;
+    }
+
+    const answers = Object.fromEntries(Object.entries(answersRecord).map(([questionId, value]) => {
+      const answerRecord = asRecord(value);
+      const answerValues = Array.isArray(answerRecord?.answers)
+        ? answerRecord.answers.filter((entry): entry is string => typeof entry === "string")
+        : [];
+      return [questionId, { answers: answerValues }];
+    }));
+
+    return {
+      response: {
+        answers,
+      } satisfies WorkbenchUserInputResponse,
+      threadId,
+      toolCallId,
+    };
+  }
+
+  private async respondToQuestionnaire(params: unknown) {
+    const resolvedResponse = this.readQuestionnaireResponse(params);
+    if (!resolvedResponse) {
+      throw new Error("Missing questionnaire/respond params.");
+    }
+
+    const pending = this.pendingQuestionnaires.get(resolvedResponse.toolCallId);
+    if (!pending || pending.threadId !== resolvedResponse.threadId) {
+      throw new Error("That questionnaire is no longer pending.");
+    }
+
+    this.pendingQuestionnaires.delete(resolvedResponse.toolCallId);
+    pending.resolve(resolvedResponse.response);
+    this.onNotification({
+      method: "questionnaire/resolved",
+      params: {
+        threadId: pending.threadId,
+        toolCallId: pending.toolCallId,
+      },
+    });
+    return { ok: true };
+  }
+
   private async startThread(model: string | null, reasoningEffort: string | null, agentPath: string | null) {
     const client = await this.ensureClient();
     const sessionId = randomUUID();
@@ -481,6 +771,8 @@ export class CopilotBridge {
       onPermissionRequest: approveAll,
       sessionId,
       streaming: true,
+      systemMessage: this.createSessionSystemMessage(),
+      tools: this.createSessionTools(sessionId),
       workingDirectory: this.projectRoot,
     });
 
@@ -563,6 +855,8 @@ export class CopilotBridge {
       ...(normalizedReasoningEffort ? { reasoningEffort: normalizedReasoningEffort } : {}),
       onPermissionRequest: approveAll,
       streaming: true,
+      systemMessage: this.createSessionSystemMessage(),
+      tools: this.createSessionTools(threadId),
       workingDirectory: metadata?.context?.cwd ?? this.projectRoot,
     });
 

@@ -20,6 +20,7 @@ import {
 } from "./thread-view-primitives";
 import ThreadContextCompactionItem from "./ThreadContextCompactionItem";
 import ThreadDisclosure from "./ThreadDisclosure";
+import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadFileChangeItem from "./ThreadFileChangeItem";
 import ThreadMarkdown from "./ThreadMarkdown";
@@ -575,6 +576,8 @@ function ThreadRenderableBlockView ({
       return <ThreadContextCompactionItem item={block.item} />;
     case "mcpToolCall":
       return <ThreadMcpToolCallItem item={block.item} />;
+    case "dynamicToolCall":
+      return <ThreadDynamicToolCallItem item={block.item} />;
     default:
       return <ThreadFallbackItem item={block.item} />;
   }

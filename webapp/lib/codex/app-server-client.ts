@@ -134,13 +134,13 @@ export class CodexAppServerClient {
   }
 
   async sendRequest<TResponse = unknown>(
-    message: Omit<CodexClientRequest, "id"> & { id?: number } & Record<string, unknown>,
+    message: { id?: number; method: string; params?: unknown } & Record<string, unknown>,
   ): Promise<CodexJsonRpcResponse<TResponse>> {
     const requestId = message.id ?? this.nextRequestId();
     const request = {
       ...message,
       id: requestId,
-    } as CodexClientRequest;
+    } as CodexClientRequest & Record<string, unknown>;
 
     const responsePromise = new Promise<CodexJsonRpcResponse<TResponse>>((resolve, reject) => {
       this.pendingResponses.set(requestId, {

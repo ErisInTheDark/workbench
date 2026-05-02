@@ -196,6 +196,7 @@ export default function Workbench () {
   const [explorer, setExplorer] = useState(INITIAL_EXPLORER_SNAPSHOT);
   const [currentThread, setCurrentThread] = useState<ThreadPayload | null>(null);
   const [composerInfoMessagesByThreadId, setComposerInfoMessagesByThreadId] = useState<Record<string, string>>({});
+  const [harnessUserInputRequestsByThreadId, setHarnessUserInputRequestsByThreadId] = useState<Record<string, WorkbenchUserInputRequest>>({});
   const [pendingUserInputRequestsByThreadId, setPendingUserInputRequestsByThreadId] = useState<Record<string, WorkbenchUserInputRequest>>({});
   const [requestedSelection, setRequestedSelection] = useState<WorkbenchSelectionSearchParams>(() => {
     if (typeof window === "undefined") {
@@ -345,6 +346,15 @@ export default function Workbench () {
 
             startTransition(() => {
               setCurrentThread(thread);
+            });
+          },
+          onPendingUserInputRequestsChange: (requestsByThreadId) => {
+            if (cancelled) {
+              return;
+            }
+
+            startTransition(() => {
+              setHarnessUserInputRequestsByThreadId(requestsByThreadId);
             });
           },
           onRateLimitsChange: (nextRateLimits) => {
@@ -573,21 +583,22 @@ export default function Workbench () {
   }, []);
 
   const submitUserInputRequest = useCallback(async (threadId: string, response: WorkbenchUserInputResponse) => {
-    const request = pendingUserInputRequestsByThreadId[threadId];
-    if (!request) {
+    const localPreviewRequest = pendingUserInputRequestsByThreadId[threadId];
+    if (localPreviewRequest) {
+      setPendingUserInputRequestsByThreadId((current) => {
+        const next = { ...current };
+        delete next[threadId];
+        return next;
+      });
+      setComposerInfoMessagesByThreadId((current) => ({
+        ...current,
+        [threadId]: formatDemoUserInputResponse(localPreviewRequest, response),
+      }));
       return;
     }
 
-    setPendingUserInputRequestsByThreadId((current) => {
-      const next = { ...current };
-      delete next[threadId];
-      return next;
-    });
-    setComposerInfoMessagesByThreadId((current) => ({
-      ...current,
-      [threadId]: formatDemoUserInputResponse(request, response),
-    }));
-  }, [pendingUserInputRequestsByThreadId]);
+    await controls?.submitPendingUserInputRequest(threadId, response);
+  }, [controls, pendingUserInputRequestsByThreadId]);
 
   const workbenchControls = useMemo<WorkbenchControls | null>(() => {
     if (!controls) {
@@ -617,6 +628,10 @@ export default function Workbench () {
   const isSelectionPending = (showThreadView && !isThreadViewReady) || (showFileView && !isFileViewReady);
   const activeThreadId = showThreadView ? requestedSelection.threadId : "";
   const activeFilePath = showFileView ? requestedSelection.filePath : "";
+  const activeHarnessUserInputRequest = activeThreadId ? harnessUserInputRequestsByThreadId[activeThreadId] ?? null : null;
+  const activePreviewUserInputRequest = activeThreadId ? pendingUserInputRequestsByThreadId[activeThreadId] ?? null : null;
+  const activeUserInputRequest = activeHarnessUserInputRequest ?? activePreviewUserInputRequest;
+  const activeUserInputRequestMode = activeHarnessUserInputRequest ? "live" : activePreviewUserInputRequest ? "preview" : null;
 
   useEffect(() => {
     if (!showEmptyState || !quickOpenPaths.length) {
@@ -870,7 +885,7 @@ export default function Workbench () {
             {showThreadView ? (
               isThreadViewReady && currentThread ? (
                 <ThreadView
-                  composerInfoMessage={composerInfoMessagesByThreadId[currentThread.id] ?? ""}
+                  composerInfoMessage={activeHarnessUserInputRequest ? "" : composerInfoMessagesByThreadId[currentThread.id] ?? ""}
                   thread={currentThread}
                   fontSizeRem={explorer.fontSize}
                   onClearUserInputRequest={clearUserInputRequest}
@@ -883,7 +898,8 @@ export default function Workbench () {
                   onThreadAgentChange={setThreadAgent}
                   onThreadReasoningEffortChange={setThreadReasoningEffort}
                   onThreadModelChange={setThreadModel}
-                  pendingUserInputRequest={pendingUserInputRequestsByThreadId[currentThread.id] ?? null}
+                  pendingUserInputRequest={activeUserInputRequest}
+                  pendingUserInputRequestMode={activeUserInputRequestMode}
                   projectRootPath={explorer.rootPath}
                   rateLimits={rateLimits}
                 />

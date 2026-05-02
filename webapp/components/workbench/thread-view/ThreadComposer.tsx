@@ -63,6 +63,7 @@ export default function ThreadComposer ({
   onThreadReasoningEffortChange,
   onThreadModelChange,
   pendingUserInputRequest,
+  pendingUserInputRequestMode,
   rateLimits,
   thread,
 }: {
@@ -76,6 +77,7 @@ export default function ThreadComposer ({
   onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
   onThreadModelChange: (threadId: string, model: string) => void;
   pendingUserInputRequest: WorkbenchUserInputRequest | null;
+  pendingUserInputRequestMode: "live" | "preview" | null;
   rateLimits: RateLimitSnapshot | null;
   thread: ThreadPayload;
 }) {
@@ -105,7 +107,9 @@ export default function ThreadComposer ({
   const isActiveThread = getCurrentInProgressTurn(thread) !== null;
   const isInputDisabled = hasPendingUserInputRequest || isSending || isAttaching || isThreadStateBroken || isCopilotAuthRequired;
   const helperText = hasPendingUserInputRequest
-    ? "Answer the question card below to continue this local workbench preview."
+    ? pendingUserInputRequestMode === "live"
+      ? "Answer the question card below to continue this thread."
+      : "Answer the question card below to continue this local workbench preview."
     : isAttaching
       ? "Attaching pasted image..."
     : isCopilotAuthRequired
@@ -320,6 +324,7 @@ export default function ThreadComposer ({
         {hasPendingUserInputRequest ? (
           <ThreadUserInputRequest
             request={pendingUserInputRequest}
+            mode={pendingUserInputRequestMode ?? "preview"}
             onClear={() => {
               onClearUserInputRequest(thread.id);
             }}

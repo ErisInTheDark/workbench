@@ -21,11 +21,18 @@ import type { Turn } from "../codex/generated/app-server/v2/Turn";
 import type { TurnStartResponse } from "../codex/generated/app-server/v2/TurnStartResponse";
 import type { TurnSteerResponse } from "../codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "../codex/generated/app-server/v2/UserInput";
-import type { CodexClientRequest } from "../codex/protocol";
 import { createTextInput, createThreadStartRequest, isCodexJsonRpcFailure } from "../codex/protocol";
 import { formatThreadStatus, isProjectCodexThread, toThreadPayload, toThreadSummary } from "../codex/thread-adapter";
 import { getCurrentInProgressTurn, getCurrentTurn } from "../codex/thread-state";
-import type { ThreadPayload, ThreadSummary, WorkbenchHarness, WorkbenchModelOption } from "../types";
+import type {
+    ThreadPayload,
+    ThreadSummary,
+    WorkbenchHarness,
+    WorkbenchModelOption,
+    WorkbenchPendingUserInputRequest,
+    WorkbenchUserInputRequest,
+    WorkbenchUserInputResponse,
+} from "../types";
 import LifecycleScope from "./state/LifecycleScope";
 import {
     persistHarnessAgent,
@@ -47,6 +54,7 @@ export interface WorkbenchThreadState {
   currentThread: ThreadPayload | null;
   currentThreadId: string;
   modelsByHarness: Map<WorkbenchHarness, WorkbenchModelOption[]>;
+  pendingUserInputRequestsByThreadId: Map<string, WorkbenchPendingUserInputRequest>;
   projectRoot: string;
   projectRootPath: string;
   rateLimits: RateLimitSnapshot | null;
@@ -58,6 +66,7 @@ export interface WorkbenchThreadState {
 export interface WorkbenchThreadSnapshot {
   currentThread: ThreadPayload | null;
   currentThreadId: string;
+  pendingUserInputRequestsByThreadId: Record<string, WorkbenchUserInputRequest>;
   rateLimits: RateLimitSnapshot | null;
   threads: ThreadSummary[];
   threadsError: string;
@@ -81,9 +90,11 @@ interface WorkbenchThreadClient {
   openThread: (threadId: string, options?: { harness?: WorkbenchHarness; source?: "open" | "reload" }) => Promise<void>;
   reconcileCurrentThreadFromRead: (threadId: string, harness: WorkbenchHarness) => Promise<void>;
   readCurrentThread: (threadId: string, harness: WorkbenchHarness) => Promise<ThreadPayload | null>;
+  refreshPendingUserInputRequests: () => Promise<void>;
   refreshRateLimits: () => Promise<void>;
   refreshThreads: () => Promise<void>;
   sendThreadMessage: (threadId: string, input: UserInput[]) => Promise<void>;
+  submitPendingUserInputRequest: (threadId: string, response: WorkbenchUserInputResponse) => Promise<void>;
   setCurrentThreadAgent: (threadId: string, agentPath: string | null) => void;
   setCurrentThreadModel: (threadId: string, model: string) => void;
   setCurrentThreadReasoningEffort: (threadId: string, effort: string | null) => void;
@@ -97,6 +108,7 @@ function createInitialThreadState(): WorkbenchThreadState {
     currentThread: null,
     currentThreadId: "",
     modelsByHarness: new Map(),
+    pendingUserInputRequestsByThreadId: new Map(),
     projectRoot: "Project",
     projectRootPath: "",
     rateLimits: null,
@@ -120,10 +132,17 @@ function WorkbenchThreadClient(
     options.onStatusMessage?.(message);
   }
 
+  function serializePendingUserInputRequests() {
+    return Object.fromEntries(
+      Array.from(state.pendingUserInputRequestsByThreadId.entries(), ([threadId, entry]) => [threadId, entry.request]),
+    );
+  }
+
   function getSnapshot(): WorkbenchThreadSnapshot {
     return {
       currentThread: state.currentThread,
       currentThreadId: state.currentThreadId,
+      pendingUserInputRequestsByThreadId: serializePendingUserInputRequests(),
       rateLimits: state.rateLimits,
       threads: state.threads,
       threadsError: state.threadsError,
@@ -248,7 +267,7 @@ function WorkbenchThreadClient(
 
   async function sendBridgeRequest<TResponse>(
     harness: WorkbenchHarness,
-    request: Omit<CodexClientRequest, "id"> & { id?: number },
+    request: { id?: number; method: string; params?: unknown } & Record<string, unknown>,
   ) {
     await codexClient.connect();
     const response = await codexClient.sendRequest<TResponse>({
@@ -261,6 +280,78 @@ function WorkbenchThreadClient(
     }
 
     return response.result;
+  }
+
+  function upsertPendingUserInputRequest(
+    threadId: string,
+    harness: WorkbenchHarness,
+    toolCallId: string,
+    request: WorkbenchUserInputRequest,
+  ) {
+    const existing = state.pendingUserInputRequestsByThreadId.get(threadId);
+    if (
+      existing?.toolCallId === toolCallId
+      && existing.harness === harness
+      && JSON.stringify(existing.request) === JSON.stringify(request)
+    ) {
+      return false;
+    }
+
+    state.pendingUserInputRequestsByThreadId.set(threadId, {
+      harness,
+      request,
+      threadId,
+      toolCallId,
+    });
+    return true;
+  }
+
+  function clearPendingUserInputRequest(threadId: string, toolCallId?: string) {
+    const existing = state.pendingUserInputRequestsByThreadId.get(threadId);
+    if (!existing) {
+      return false;
+    }
+
+    if (toolCallId && existing.toolCallId !== toolCallId) {
+      return false;
+    }
+
+    state.pendingUserInputRequestsByThreadId.delete(threadId);
+    return true;
+  }
+
+  function replacePendingUserInputRequests(
+    harness: WorkbenchHarness,
+    requests: WorkbenchPendingUserInputRequest[],
+  ) {
+    const nextRequests = new Map(
+      Array.from(state.pendingUserInputRequestsByThreadId.entries()).filter(([, entry]) => entry.harness !== harness),
+    );
+    for (const request of requests) {
+      nextRequests.set(request.threadId, request);
+    }
+
+    if (nextRequests.size === state.pendingUserInputRequestsByThreadId.size) {
+      let unchanged = true;
+      for (const [threadId, request] of nextRequests) {
+        const existing = state.pendingUserInputRequestsByThreadId.get(threadId);
+        if (
+          !existing
+          || existing.toolCallId !== request.toolCallId
+          || existing.harness !== request.harness
+          || JSON.stringify(existing.request) !== JSON.stringify(request.request)
+        ) {
+          unchanged = false;
+          break;
+        }
+      }
+      if (unchanged) {
+        return false;
+      }
+    }
+
+    state.pendingUserInputRequestsByThreadId = nextRequests;
+    return true;
   }
 
   function createDraftThreadId() {
@@ -534,6 +625,28 @@ function WorkbenchThreadClient(
     } catch {
       if (!state.rateLimitsByHarness.has(harness) && state.currentThread?.harness === harness) {
         setRateLimits(null);
+      }
+    }
+  }
+
+  async function refreshPendingUserInputRequests() {
+    try {
+      const response = await sendBridgeRequest<{ data?: Array<{ request: WorkbenchUserInputRequest; threadId: string; toolCallId: string }> }>("copilot", {
+        method: "questionnaire/list",
+        params: undefined,
+      });
+      const pendingRequests = (response.data ?? []).map((entry) => ({
+        harness: "copilot" as const,
+        request: entry.request,
+        threadId: entry.threadId,
+        toolCallId: entry.toolCallId,
+      }));
+      if (replacePendingUserInputRequests("copilot", pendingRequests)) {
+        emit();
+      }
+    } catch {
+      if (replacePendingUserInputRequests("copilot", [])) {
+        emit();
       }
     }
   }
@@ -835,6 +948,8 @@ function WorkbenchThreadClient(
       case "item/fileChange/outputDelta":
       case "item/mcpToolCall/progress":
       case "serverRequest/resolved":
+      case "questionnaire/requested":
+      case "questionnaire/resolved":
       case "model/rerouted":
       case "model/verification":
       case "thread/realtime/started":
@@ -1127,6 +1242,25 @@ function WorkbenchThreadClient(
     await refreshThreads();
   }
 
+  async function submitPendingUserInputRequest(threadId: string, response: WorkbenchUserInputResponse) {
+    const pendingRequest = state.pendingUserInputRequestsByThreadId.get(threadId);
+    if (!pendingRequest) {
+      throw new Error("There is no pending question for this thread.");
+    }
+
+    await sendBridgeRequest<{ ok: boolean }>(pendingRequest.harness, {
+      method: "questionnaire/respond",
+      params: {
+        response,
+        threadId,
+        toolCallId: pendingRequest.toolCallId,
+      },
+    });
+    if (clearPendingUserInputRequest(threadId, pendingRequest.toolCallId)) {
+      emit();
+    }
+  }
+
   function scheduleCodexNotificationRefresh(handling: CodexAppServerNotificationHandling) {
     if (handling.refreshThread && state.currentThreadId && !lifecycle.has(THREAD_REFRESH_TASK_ID)) {
       // Notification-triggered refresh stays local to the thread client; the coordinator owns only recurring refresh policy.
@@ -1155,6 +1289,25 @@ function WorkbenchThreadClient(
     handling: CodexAppServerNotificationHandling,
     harness: WorkbenchHarness,
   ) {
+    if (notification.method === "questionnaire/requested") {
+      if (upsertPendingUserInputRequest(
+        notification.params.threadId,
+        harness,
+        notification.params.toolCallId,
+        notification.params.request,
+      )) {
+        emit();
+      }
+      return;
+    }
+
+    if (notification.method === "questionnaire/resolved") {
+      if (clearPendingUserInputRequest(notification.params.threadId, notification.params.toolCallId)) {
+        emit();
+      }
+      return;
+    }
+
     if (notification.method === "account/rateLimits/updated" && state.currentThread?.harness === harness) {
       setRateLimits(notification.params.rateLimits);
     }
@@ -1258,9 +1411,11 @@ function WorkbenchThreadClient(
     openThread,
     reconcileCurrentThreadFromRead,
     readCurrentThread,
+    refreshPendingUserInputRequests,
     refreshRateLimits,
     refreshThreads,
     sendThreadMessage,
+    submitPendingUserInputRequest,
     setCurrentThreadAgent,
     setCurrentThreadModel,
     setCurrentThreadReasoningEffort,

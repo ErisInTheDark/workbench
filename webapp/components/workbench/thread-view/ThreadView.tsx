@@ -34,6 +34,7 @@ function ThreadView ({
   onThreadReasoningEffortChange,
   onThreadModelChange,
   pendingUserInputRequest,
+  pendingUserInputRequestMode,
   projectRootPath,
   rateLimits,
   thread,
@@ -51,6 +52,7 @@ function ThreadView ({
   onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
   onThreadModelChange: (threadId: string, model: string) => void;
   pendingUserInputRequest: WorkbenchUserInputRequest | null;
+  pendingUserInputRequestMode: "live" | "preview" | null;
   projectRootPath: string;
   rateLimits: RateLimitSnapshot | null;
   thread: ThreadPayload;
@@ -138,6 +140,7 @@ function ThreadView ({
         onThreadReasoningEffortChange={onThreadReasoningEffortChange}
         onThreadModelChange={onThreadModelChange}
         pendingUserInputRequest={pendingUserInputRequest}
+        pendingUserInputRequestMode={pendingUserInputRequestMode}
         rateLimits={rateLimits}
         thread={thread}
       />

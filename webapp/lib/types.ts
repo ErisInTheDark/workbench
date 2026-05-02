@@ -94,6 +94,13 @@ export interface WorkbenchUserInputResponse {
   answers: Record<string, WorkbenchUserInputAnswer | undefined>;
 }
 
+export interface WorkbenchPendingUserInputRequest {
+  harness: WorkbenchHarness;
+  threadId: string;
+  toolCallId: string;
+  request: WorkbenchUserInputRequest;
+}
+
 export interface FileNode {
   type: "file";
   name: string;
@@ -136,6 +143,7 @@ export interface WorkbenchControls {
   openThread: (threadId: string) => Promise<void>;
   listModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
   sendThreadMessage: (threadId: string, input: UserInput[]) => Promise<void>;
+  submitPendingUserInputRequest: (threadId: string, response: WorkbenchUserInputResponse) => Promise<void>;
   setCurrentThreadModel: (threadId: string, model: string) => void;
   setCurrentThreadAgent: (threadId: string, agentPath: string | null) => void;
   setCurrentThreadReasoningEffort: (threadId: string, effort: string | null) => void;
@@ -148,6 +156,7 @@ export interface WorkbenchControls {
 export interface WorkbenchBindings {
   onExplorerStateChange?: (snapshot: ExplorerSnapshot) => void;
   onCurrentThreadChange?: (thread: ThreadPayload | null) => void;
+  onPendingUserInputRequestsChange?: (requestsByThreadId: Record<string, WorkbenchUserInputRequest>) => void;
   onRateLimitsChange?: (rateLimits: RateLimitSnapshot | null) => void;
   onControlsReady?: (controls: WorkbenchControls) => void;
 }

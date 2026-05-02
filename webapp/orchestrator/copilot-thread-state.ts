@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 
 import type { SessionEvent, SessionMetadata } from "@github/copilot-sdk";
 
+import type { DynamicToolCallOutputContentItem } from "../lib/codex/generated/app-server/v2/DynamicToolCallOutputContentItem";
 import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { ThreadActiveFlag } from "../lib/codex/generated/app-server/v2/ThreadActiveFlag";
@@ -37,6 +38,8 @@ export const INITIALIZE_RESULT = {
     version: "0.1.0",
   },
 };
+const WORKBENCH_QUESTIONNAIRE_TOOL_NAME = "workbench_request_user_input";
+type DynamicToolCallItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 
 function asRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -245,6 +248,46 @@ function makeCommandExecutionItem(
     status: "inProgress",
     type: "commandExecution",
   };
+}
+
+function makeDynamicToolCallItem(
+  itemId: string,
+  tool: string,
+  argumentsValue: unknown,
+): DynamicToolCallItem {
+  return {
+    arguments: (argumentsValue ?? null) as DynamicToolCallItem["arguments"],
+    contentItems: null,
+    durationMs: null,
+    id: itemId,
+    namespace: null,
+    status: "inProgress",
+    success: null,
+    tool,
+    type: "dynamicToolCall",
+  };
+}
+
+function getDynamicToolCallOutputText(eventData: {
+  error?: { message?: string } | null;
+  result?: { content?: string; detailedContent?: string } | null;
+}) {
+  return eventData.result?.detailedContent
+    ?? eventData.result?.content
+    ?? eventData.error?.message
+    ?? null;
+}
+
+function makeDynamicToolCallContentItems(text: string | null): DynamicToolCallOutputContentItem[] | null {
+  const trimmedText = text?.trim() ?? "";
+  if (!trimmedText) {
+    return null;
+  }
+
+  return [{
+    text: trimmedText,
+    type: "inputText",
+  }];
 }
 
 function createEmptyThread(sessionId: string, projectRoot: string, metadata: SessionMetadata | null = null): Thread {
@@ -664,8 +707,9 @@ export function applyCopilotEvent(
       }
 
       const itemId = `tool:${event.data.toolCallId}`;
-      const command = buildCommandText(event.data.toolName, event.data.arguments);
-      const item = makeCommandExecutionItem(itemId, command, state.thread.cwd);
+      const item = event.data.toolName === WORKBENCH_QUESTIONNAIRE_TOOL_NAME
+        ? makeDynamicToolCallItem(itemId, event.data.toolName, event.data.arguments)
+        : makeCommandExecutionItem(itemId, buildCommandText(event.data.toolName, event.data.arguments), state.thread.cwd);
       turn.items.push(item);
       state.toolCallItems.set(event.data.toolCallId, {
         itemId,
@@ -687,8 +731,8 @@ export function applyCopilotEvent(
     case "tool.execution_partial_result": {
       const target = state.toolCallItems.get(event.data.toolCallId);
       const turn = target ? state.thread.turns.find((entry) => entry.id === target.turnId) ?? null : null;
-      const item = turn?.items.find((entry) => entry.id === target?.itemId && entry.type === "commandExecution") as Extract<ThreadItem, { type: "commandExecution" }> | undefined;
-      if (!target || !turn || !item) {
+      const item = turn?.items.find((entry) => entry.id === target?.itemId) ?? null;
+      if (!target || !turn || item?.type !== "commandExecution") {
         return;
       }
 
@@ -710,23 +754,36 @@ export function applyCopilotEvent(
     case "tool.execution_complete": {
       const target = state.toolCallItems.get(event.data.toolCallId);
       const turn = target ? state.thread.turns.find((entry) => entry.id === target.turnId) ?? null : null;
-      const item = turn?.items.find((entry) => entry.id === target?.itemId && entry.type === "commandExecution") as Extract<ThreadItem, { type: "commandExecution" }> | undefined;
+      const item = turn?.items.find((entry) => entry.id === target?.itemId) ?? null;
       if (!target || !turn || !item) {
         return;
       }
 
-      item.status = event.data.success ? "completed" : "failed";
-      item.exitCode = event.data.success ? 0 : 1;
-      item.durationMs = typeof event.data.toolTelemetry?.durationMs === "number"
-        ? event.data.toolTelemetry.durationMs
-        : item.durationMs;
-      if (event.data.result?.detailedContent) {
-        item.aggregatedOutput = event.data.result.detailedContent;
-      } else if (event.data.result?.content) {
-        item.aggregatedOutput = event.data.result.content;
-      } else if (event.data.error?.message) {
-        item.aggregatedOutput = event.data.error.message;
+      if (item.type === "commandExecution") {
+        item.status = event.data.success ? "completed" : "failed";
+        item.exitCode = event.data.success ? 0 : 1;
+        item.durationMs = typeof event.data.toolTelemetry?.durationMs === "number"
+          ? event.data.toolTelemetry.durationMs
+          : item.durationMs;
+        if (event.data.result?.detailedContent) {
+          item.aggregatedOutput = event.data.result.detailedContent;
+        } else if (event.data.result?.content) {
+          item.aggregatedOutput = event.data.result.content;
+        } else if (event.data.error?.message) {
+          item.aggregatedOutput = event.data.error.message;
+        }
+      } else if (item.type === "dynamicToolCall") {
+        item.status = event.data.success ? "completed" : "failed";
+        item.success = event.data.success;
+        item.durationMs = typeof event.data.toolTelemetry?.durationMs === "number"
+          ? event.data.toolTelemetry.durationMs
+          : item.durationMs;
+        item.contentItems = makeDynamicToolCallContentItems(getDynamicToolCallOutputText(event.data));
+      } else {
+        return;
       }
+
+      state.toolCallItems.delete(event.data.toolCallId);
       state.thread.updatedAt = timestampSeconds;
       if (emitNotifications) {
         onNotification({

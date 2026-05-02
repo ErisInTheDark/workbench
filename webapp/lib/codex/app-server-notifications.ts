@@ -6,8 +6,29 @@
  * - isCodexAppServerNotification: identify JSON-RPC app-server notifications from incoming WebSocket messages. Keywords: websocket, method, params.
  */
 import type { ServerNotification } from "./generated/app-server/ServerNotification";
+import type { WorkbenchUserInputRequest } from "../types";
 
-export type CodexAppServerNotification = ServerNotification;
+export interface WorkbenchQuestionnaireRequestedNotification {
+  method: "questionnaire/requested";
+  params: {
+    threadId: string;
+    toolCallId: string;
+    request: WorkbenchUserInputRequest;
+  };
+}
+
+export interface WorkbenchQuestionnaireResolvedNotification {
+  method: "questionnaire/resolved";
+  params: {
+    threadId: string;
+    toolCallId: string;
+  };
+}
+
+export type CodexAppServerNotification =
+  | ServerNotification
+  | WorkbenchQuestionnaireRequestedNotification
+  | WorkbenchQuestionnaireResolvedNotification;
 
 export type CodexAppServerNotificationScope =
   | "account"
@@ -17,7 +38,8 @@ export type CodexAppServerNotificationScope =
   | "server-request"
   | "thread"
   | "turn"
-  | "warning";
+  | "warning"
+  | "workbench";
 
 export interface CodexAppServerNotificationHandling {
   method: CodexAppServerNotification["method"];
@@ -108,6 +130,10 @@ export function classifyCodexAppServerNotification(
 
     case "serverRequest/resolved":
       return createHandling(notification, "server-request");
+
+    case "questionnaire/requested":
+    case "questionnaire/resolved":
+      return createHandling(notification, "workbench");
 
     case "skills/changed":
     case "mcpServer/oauthLogin/completed":
