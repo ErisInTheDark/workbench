@@ -12,13 +12,8 @@ import type {
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
 import ThreadComposer from "./ThreadComposer";
-import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadRateLimits from "./ThreadRateLimits";
 import { ThreadTurnDetails } from "./thread-view-items";
-import {
-  formatThreadTimestamp,
-  getThreadTitle,
-} from "./thread-view-primitives";
 
 function ThreadView ({
   composerInfoMessage,
@@ -57,7 +52,6 @@ function ThreadView ({
   rateLimits: RateLimitSnapshot | null;
   thread: ThreadPayload;
 }) {
-  const title = getThreadTitle(thread);
   const isDraftThread = thread.isDraft;
   const bottomSentinelRef = useRef<HTMLDivElement>(null);
   const currentTurn = thread.turns.at(-1) ?? null;
@@ -75,36 +69,13 @@ function ThreadView ({
 
   return (
     <div className="mx-auto w-full max-w-[56rem] pb-16" style={{ fontSize: `${fontSizeRem}rem` }}>
-      <header className="pb-4">
-        <h2 className="m-0 text-[1.55em] font-semibold leading-[1.1] tracking-tight text-text">
-          {isDraftThread ? "Create new thread" : title}
-        </h2>
-        {!isDraftThread && thread.preview && thread.preview !== title ? (
-          <p className="mt-2 mb-0 max-w-3xl text-[0.92em] leading-[1.75] text-muted">{thread.preview}</p>
-        ) : null}
-        {!isDraftThread ? (
-          <>
-            <p className="mt-2 mb-0 text-[0.78em] leading-[1.6] text-muted">
-              Updated {formatThreadTimestamp(thread.updatedAt)} | Created {formatThreadTimestamp(thread.createdAt)}
-            </p>
-            <ThreadDisclosure
-              className="mt-1 text-[0.78em] leading-[1.6] text-muted"
-              contentClassName="mt-1 space-y-1 pl-6"
-              summary="Thread info"
-              summaryClassName="text-muted"
-            >
-              <>
-                <p className="m-0">Status: {thread.status}</p>
-                <p className="m-0">Source: {thread.source}</p>
-                <p className="m-0 break-all font-mono text-[0.78em]">{thread.cwd}</p>
-                {thread.path ? (
-                  <p className="m-0 break-all font-mono text-[0.78em]">{thread.path}</p>
-                ) : null}
-              </>
-            </ThreadDisclosure>
-          </>
-        ) : null}
-      </header>
+      {isDraftThread ? (
+        <header className="pb-4">
+          <h2 className="m-0 text-[1.55em] font-semibold leading-[1.1] tracking-tight text-text">
+            Create new thread
+          </h2>
+        </header>
+      ) : null}
 
       <div>
         {thread.turns.length ? thread.turns.map((turn) => (
