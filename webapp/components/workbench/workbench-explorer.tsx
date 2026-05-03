@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - NewEntryIcon: render the create-entry glyph used in the explorer. Keywords: workbench, explorer, icon.
+ * - FileVisibilityIcon: render the eye glyph used by the explorer file-visibility toggle. Keywords: workbench, explorer, icon, visibility.
  * - ThreadsList: render the thread list in the workbench sidebar, including the create-thread row. Keywords: workbench, threads, sidebar, create.
  * - ExplorerTree: render the recursive project tree with current, modified, and create-entry state. Keywords: workbench, explorer, tree.
  * - Local helpers: support modified markers, change summaries, and recursive directory state. Keywords: recursion, tree state, helpers.
@@ -33,6 +34,16 @@ export function NewEntryIcon () {
       <path d="M6 2.75H11.75L15.5 6.5V16.25C15.5 16.94 14.94 17.5 14.25 17.5H6C5.31 17.5 4.75 16.94 4.75 16.25V4C4.75 3.31 5.31 2.75 6 2.75Z" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M11.75 2.75V6.5H15.5" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M10.125 9V14M7.625 11.5H12.625" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function FileVisibilityIcon ({ visible }: { visible: boolean }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
+      <path d="M2.75 10C4.41 6.78 6.98 5.17 10 5.17C13.02 5.17 15.59 6.78 17.25 10C15.59 13.22 13.02 14.83 10 14.83C6.98 14.83 4.41 13.22 2.75 10Z" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="10" cy="10" r="2.2" />
+      {visible ? null : <path d="M4.1 4.1 15.9 15.9" strokeLinecap="round" />}
     </svg>
   );
 }
@@ -79,6 +90,52 @@ function ExplorerFileSpacer () {
       style={{ width: "1.1rem", height: "1.1rem" }}
       aria-hidden="true"
     />
+  );
+}
+
+function getNodeChangeSummary (node: TreeNode, changes: Record<string, ChangeSummary>): ChangeSummary | null {
+  if (node.type === "file") {
+    return changes[node.path] ?? null;
+  }
+
+  let additions = 0;
+  let deletions = 0;
+
+  for (const child of node.children) {
+    const summary = getNodeChangeSummary(child, changes);
+    if (!summary) {
+      continue;
+    }
+
+    additions += summary.additions;
+    deletions += summary.deletions;
+  }
+
+  if (!additions && !deletions) {
+    return null;
+  }
+
+  return { additions, deletions };
+}
+
+function ExplorerChangeSummary ({ summary }: { summary: ChangeSummary | null }) {
+  if (!summary || (!summary.additions && !summary.deletions)) {
+    return null;
+  }
+
+  return (
+    <span data-role="tree-change" className="inline-flex shrink-0 items-center gap-1.5 text-[0.8rem]">
+      {summary.additions ? (
+        <span className="text-[var(--explorer-change-add)]">
+          +{summary.additions}
+        </span>
+      ) : null}
+      {summary.deletions ? (
+        <span className="text-[var(--explorer-change-del)]">
+          -{summary.deletions}
+        </span>
+      ) : null}
+    </span>
   );
 }
 
@@ -156,22 +213,6 @@ export function ThreadsList ({
   );
 }
 
-function describeChange (filePath: string, changes: Record<string, ChangeSummary>) {
-  const entry = changes[filePath];
-  if (!entry) {
-    return "";
-  }
-
-  const parts = [];
-  if (entry.additions) {
-    parts.push(`+${entry.additions}`);
-  }
-  if (entry.deletions) {
-    parts.push(`-${entry.deletions}`);
-  }
-  return parts.join(" ");
-}
-
 function hasModifiedDescendant (node: TreeNode, modifiedPaths: Set<string>): boolean {
   if (node.type === "file") {
     return modifiedPaths.has(node.path);
@@ -185,6 +226,7 @@ interface ExplorerTreeProps {
   controls: WorkbenchControls | null;
   currentPath: string;
   expandedDirectories: Set<string>;
+  isFileOpenable?: (path: string) => boolean;
   modifiedPaths: Set<string>;
   nested?: boolean;
   nodes: TreeNode[];
@@ -197,6 +239,7 @@ export function ExplorerTree ({
   controls,
   currentPath,
   expandedDirectories,
+  isFileOpenable,
   modifiedPaths,
   nested = false,
   nodes,
@@ -210,6 +253,7 @@ export function ExplorerTree ({
     >
       {nodes.map((node) => {
         if (node.type === "directory") {
+          const changeSummary = getNodeChangeSummary(node, changes);
           const isExpanded = expandedDirectories.has(node.path);
           const isModified = hasModifiedDescendant(node, modifiedPaths);
 
@@ -241,6 +285,7 @@ export function ExplorerTree ({
                   />
                   <span data-role="tree-label" className="min-w-0 truncate">{node.name}</span>
                   <ExplorerModifiedDot hidden={!isModified} />
+                  <ExplorerChangeSummary summary={changeSummary} />
                 </button>
                 <button
                   type="button"
@@ -261,6 +306,7 @@ export function ExplorerTree ({
                   controls={controls}
                   currentPath={currentPath}
                   expandedDirectories={expandedDirectories}
+                  isFileOpenable={isFileOpenable}
                   modifiedPaths={modifiedPaths}
                   nested
                   nodes={node.children}
@@ -272,9 +318,11 @@ export function ExplorerTree ({
           );
         }
 
-        const change = describeChange(node.path, changes);
+        const changeSummary = getNodeChangeSummary(node, changes);
+        const isOpenable = isFileOpenable?.(node.path) ?? true;
         const isModified = modifiedPaths.has(node.path);
         const isCurrent = node.path === currentPath;
+        const disabledTitle = `${node.name} can't be opened in the workbench`;
 
         return (
           <li
@@ -288,8 +336,15 @@ export function ExplorerTree ({
               <button
                 data-role="tree-button"
                 type="button"
-                className={`inline-flex max-w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:py-0.5${isCurrent ? " font-semibold text-accent" : ""}`}
+                aria-disabled={!isOpenable}
+                disabled={!isOpenable}
+                title={isOpenable ? node.name : disabledTitle}
+                className={`inline-flex max-w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-muted disabled:focus-visible:bg-transparent disabled:focus-visible:text-muted md:py-0.5${isCurrent ? " font-semibold text-accent" : ""}`}
                 onClick={() => {
+                  if (!isOpenable) {
+                    return;
+                  }
+
                   if (onOpenFile) {
                     onOpenFile(node.path);
                     return;
@@ -297,21 +352,15 @@ export function ExplorerTree ({
 
                   void controls?.openFile(node.path);
                 }}
-              >
-                <ExplorerFileSpacer />
-                <span data-role="tree-label" className="min-w-0 truncate">{node.name}</span>
-                <ExplorerModifiedDot hidden={!isModified} />
-                <span
-                  data-role="tree-change"
-                  hidden={!change}
-                  className="shrink-0 text-[0.8rem] text-muted"
                 >
-                  {change}
-                </span>
-              </button>
-            </div>
-          </li>
-        );
+                  <ExplorerFileSpacer />
+                  <span data-role="tree-label" className="min-w-0 truncate">{node.name}</span>
+                  <ExplorerModifiedDot hidden={!isModified} />
+                  <ExplorerChangeSummary summary={changeSummary} />
+                </button>
+              </div>
+            </li>
+          );
       })}
     </ul>
   );

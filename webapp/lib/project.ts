@@ -18,7 +18,7 @@ import type { ProjectSnapshot, TreeNode, WorkbenchAgentOption } from "./types";
 
 export const appRoot = process.cwd();
 export const projectRoot = path.resolve(appRoot, "..");
-const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", ".gitignore", "node_modules", ".next", "webapp"]);
+const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", "node_modules", ".next"]);
 
 function parseFrontmatterBlock(content: string) {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content);

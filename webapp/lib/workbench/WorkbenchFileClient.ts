@@ -14,6 +14,7 @@ import {
 import {
     formatTimestamp,
     isMarkdownFile,
+    isWorkbenchOpenableFile,
     isTextLikeFile,
 } from "./project/tree-utils";
 import {
@@ -460,6 +461,11 @@ function WorkbenchFileClient(
     { ignoreDirty: _ignoreDirty = false, source = "open" }: { ignoreDirty?: boolean; source?: WorkbenchFileOpenSource } = {},
   ) {
     void _ignoreDirty;
+
+    if (!isWorkbenchOpenableFile(filePath)) {
+      editorDocument.refreshStatusMessage("Only markdown files can be opened in the workbench.");
+      return;
+    }
 
     if (source === "open" && filePath === sessionState.currentPath) {
       return;

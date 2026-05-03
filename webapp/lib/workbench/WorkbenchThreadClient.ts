@@ -56,6 +56,9 @@ const CODEX_NOTIFICATION_THREAD_REFRESH_DELAY_MS = 350;
 const CODEX_NOTIFICATION_THREAD_LIST_REFRESH_DELAY_MS = 750;
 const DEFAULT_TURN_REASONING_SUMMARY = "detailed" as const;
 const DRAFT_THREAD_ID_PREFIX = "draft:";
+const EMPTY_ROLLOUT_ERROR_FRAGMENT = "rollout at";
+const EMPTY_ROLLOUT_ERROR_SUFFIX = "is empty";
+const FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE = "Started the thread. Its saved rollout is still warming up, so the live view will refresh automatically.";
 
 export interface WorkbenchThreadState {
   currentThread: ThreadPayload | null;
@@ -126,6 +129,13 @@ function createInitialThreadState(): WorkbenchThreadState {
     threads: [],
     threadsError: "",
   };
+}
+
+function isEmptyRolloutError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalizedMessage = message.toLowerCase();
+  return normalizedMessage.includes(EMPTY_ROLLOUT_ERROR_FRAGMENT)
+    && normalizedMessage.includes(EMPTY_ROLLOUT_ERROR_SUFFIX);
 }
 
 function WorkbenchThreadClient(
@@ -1365,40 +1375,49 @@ function WorkbenchThreadClient(
     }
 
     let refreshedThread = resumedThread;
-    if (harness === "codex") {
-      const refreshedThreadResponse = await sendBridgeRequest<{ model?: string | null; modelProvider?: string | null; reasoningEffort?: string | null; thread: ThreadReadResponse["thread"] }>(harness, {
-        method: "thread/resume",
-        params: {
-          ...(selectedModel ? { model: selectedModel } : {}),
-          persistExtendedHistory: true,
-          threadId: resolvedThreadId,
-        } as { model?: string; persistExtendedHistory: true; threadId: string },
-      });
-      refreshedThread = toThreadPayload(
-        refreshedThreadResponse.thread,
-        harness,
-        refreshedThreadResponse.model ?? resumedThread.model,
-        refreshedThreadResponse.reasoningEffort ?? resumedThread.reasoningEffort,
-        resumedThread.agentPath,
-      );
-    } else {
-      const refreshedThreadResponse = await sendBridgeRequest<ThreadReadResponse>(harness, {
-        method: "thread/read",
-        params: {
-          includeTurns: true,
-          threadId: resolvedThreadId,
-        },
-      });
-      refreshedThread = toThreadPayload(
-        refreshedThreadResponse.thread,
-        harness,
-        resumedThread.model,
-        resumedThread.reasoningEffort,
-        resumedThread.agentPath,
-      );
-    }
-    if (harness === "codex") {
-      await readCompletedQuestionnaireHistory(resolvedThreadId);
+    try {
+      if (harness === "codex") {
+        const refreshedThreadResponse = await sendBridgeRequest<{ model?: string | null; modelProvider?: string | null; reasoningEffort?: string | null; thread: ThreadReadResponse["thread"] }>(harness, {
+          method: "thread/resume",
+          params: {
+            ...(selectedModel ? { model: selectedModel } : {}),
+            persistExtendedHistory: true,
+            threadId: resolvedThreadId,
+          } as { model?: string; persistExtendedHistory: true; threadId: string },
+        });
+        refreshedThread = toThreadPayload(
+          refreshedThreadResponse.thread,
+          harness,
+          refreshedThreadResponse.model ?? resumedThread.model,
+          refreshedThreadResponse.reasoningEffort ?? resumedThread.reasoningEffort,
+          resumedThread.agentPath,
+        );
+      } else {
+        const refreshedThreadResponse = await sendBridgeRequest<ThreadReadResponse>(harness, {
+          method: "thread/read",
+          params: {
+            includeTurns: true,
+            threadId: resolvedThreadId,
+          },
+        });
+        refreshedThread = toThreadPayload(
+          refreshedThreadResponse.thread,
+          harness,
+          resumedThread.model,
+          resumedThread.reasoningEffort,
+          resumedThread.agentPath,
+        );
+      }
+      if (harness === "codex") {
+        await readCompletedQuestionnaireHistory(resolvedThreadId);
+      }
+    } catch (error) {
+      if (!(shouldBypassCodexDraftBootstrap && harness === "codex" && isEmptyRolloutError(error))) {
+        throw error;
+      }
+
+      // Fresh Codex threads can briefly race the rollout writer after turn/start succeeds.
+      emitStatusMessage(FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE);
     }
     const payload = applyOptimisticSteerMessage(
       refreshedThread,

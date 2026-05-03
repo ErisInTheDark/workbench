@@ -9,6 +9,8 @@
   --accent: #1a42b0;
   --accent-soft: #1a42b044;
   --danger: #8f3d3d;
+  --explorer-change-add: #5a9a73;
+  --explorer-change-del: #ba7871;
   --success: #237254;
   --shadow: rgba(14, 12, 10, 0.12);
   --selection: #1a42b044;
@@ -23,6 +25,8 @@
     --accent: #74a0ff;
     --accent-soft: #74a0ff44;
     --danger: #ff6161;
+    --explorer-change-add: #53ab75;
+    --explorer-change-del: #d88781;
     --success: #61ecae;
     --shadow: rgba(0, 0, 0, 0.35);
     --selection: #74a0ff44;

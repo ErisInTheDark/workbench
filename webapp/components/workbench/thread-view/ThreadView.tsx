@@ -101,6 +101,7 @@ function ThreadView ({
         </div>
       ) : null}
       <ThreadComposer
+        key={thread.id}
         composerInfoMessage={composerInfoMessage}
         onClearUserInputRequest={onClearUserInputRequest}
         onListModels={onListModels}

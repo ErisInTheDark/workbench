@@ -5,7 +5,7 @@ import { startTransition, useCallback, useEffect, useMemo, useRef, useState } fr
 import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type {
-  ExplorerSnapshot, FilePayload, ThreadPayload,
+  ExplorerSnapshot, FilePayload, ThreadPayload, TreeNode,
   WorkbenchUserInputRequest,
   WorkbenchUserInputResponse,
   WorkbenchControls,
@@ -24,6 +24,7 @@ import {
   MOBILE_MEDIA_QUERY,
   type MobilePane,
 } from "../lib/workbench/state/mobile-pane-url-state";
+import { isWorkbenchOpenableFile } from "../lib/workbench/project/tree-utils";
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
 import ThreadView from "./workbench/thread-view/ThreadView";
 import {
@@ -40,6 +41,7 @@ import {
 } from "./workbench/workbench-dialogs";
 import {
   ExplorerTree,
+  FileVisibilityIcon,
   NewEntryIcon,
   ThreadsList,
 } from "./workbench/workbench-explorer";
@@ -98,6 +100,29 @@ function formatQuickOpenChangeSummary (additions: number, deletions: number) {
     parts.push(`-${deletions}`);
   }
   return parts.join(" ");
+}
+
+function filterVisibleTreeNodes (nodes: TreeNode[]): TreeNode[] {
+  const visibleNodes: TreeNode[] = [];
+
+  for (const node of nodes) {
+    if (node.type === "file") {
+      if (isWorkbenchOpenableFile(node.path)) {
+        visibleNodes.push(node);
+      }
+      continue;
+    }
+
+    const children = filterVisibleTreeNodes(node.children);
+    if (children.length) {
+      visibleNodes.push({
+        ...node,
+        children,
+      });
+    }
+  }
+
+  return visibleNodes;
 }
 
 function createDemoUserInputRequest (thread: ThreadPayload): WorkbenchUserInputRequest {
@@ -216,6 +241,7 @@ export default function Workbench () {
   });
   const [isMobile, setIsMobile] = useState(false);
   const [mobilePane, setMobilePane] = useState<MobilePane>("explorer");
+  const [showUnopenableFiles, setShowUnopenableFiles] = useState(false);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [createDialogParentPath, setCreateDialogParentPath] = useState("");
   const [createEntryName, setCreateEntryName] = useState("");
@@ -463,6 +489,11 @@ export default function Workbench () {
     }
 
     if (requestedSelection.filePath) {
+      if (!isWorkbenchOpenableFile(requestedSelection.filePath)) {
+        syncCurrentSelectionToUrl({});
+        return;
+      }
+
       if (!currentThread && explorer.currentPath === requestedSelection.filePath) {
         return;
       }
@@ -478,6 +509,10 @@ export default function Workbench () {
 
   const expandedDirectories = new Set(explorer.expandedDirectories);
   const modifiedPaths = new Set(explorer.locallyModifiedPaths);
+  const visibleTree = useMemo(
+    () => (showUnopenableFiles ? explorer.tree : filterVisibleTreeNodes(explorer.tree)),
+    [explorer.tree, showUnopenableFiles],
+  );
 
   const closeCreateDialog = () => {
     if (isCreatingEntry) {
@@ -498,6 +533,10 @@ export default function Workbench () {
   };
 
   const openFileFromExplorer = useCallback(async (path: string) => {
+    if (!isWorkbenchOpenableFile(path)) {
+      return;
+    }
+
     if (isMobile) {
       setMobilePane("editor");
     }
@@ -619,7 +658,9 @@ export default function Workbench () {
   const quickOpenPaths = Array.from(new Set([
     ...explorer.locallyModifiedPaths,
     ...Object.keys(explorer.changes),
-  ])).slice(0, 8);
+  ]))
+    .filter((path) => isWorkbenchOpenableFile(path))
+    .slice(0, 8);
   const showThreadView = Boolean(requestedSelection.threadId);
   const showFileView = !showThreadView && Boolean(requestedSelection.filePath);
   const showEmptyState = !showThreadView && !showFileView;
@@ -767,18 +808,35 @@ export default function Workbench () {
                 >
                   Project
                 </button>
-                <button
-                  type="button"
-                  aria-label="Create in project"
-                  title="Create in project"
-                  className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}`}
-                  onClick={() => {
-                    openCreateDialog("");
-                  }}
-                >
-                  <NewEntryIcon />
-                  <span className="sr-only">Create in project</span>
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    aria-label={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
+                    aria-pressed={showUnopenableFiles}
+                    title={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
+                    className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName} md:opacity-100${showUnopenableFiles ? " bg-accent-soft text-accent" : ""}`}
+                    onClick={() => {
+                      setShowUnopenableFiles((current) => !current);
+                    }}
+                  >
+                    <FileVisibilityIcon visible={showUnopenableFiles} />
+                    <span className="sr-only">
+                      {showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Create in project"
+                    title="Create in project"
+                    className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}`}
+                    onClick={() => {
+                      openCreateDialog("");
+                    }}
+                  >
+                    <NewEntryIcon />
+                    <span className="sr-only">Create in project</span>
+                  </button>
+                </div>
               </div>
               <nav id="file-tree" aria-label="Project files">
                 <ExplorerTree
@@ -786,8 +844,9 @@ export default function Workbench () {
                   controls={workbenchControls}
                   currentPath={activeFilePath}
                   expandedDirectories={expandedDirectories}
+                  isFileOpenable={isWorkbenchOpenableFile}
                   modifiedPaths={modifiedPaths}
-                  nodes={explorer.tree}
+                  nodes={visibleTree}
                   onCreateInDirectory={openCreateDialog}
                   onOpenFile={(path) => {
                     void openFileFromExplorer(path);

@@ -4,6 +4,7 @@
  * - formatTimestamp: format a timestamp string for workbench display using the current locale. Keywords: dates, time, Intl.DateTimeFormat, UI display.
  * - isMarkdownFile: detect markdown file paths by extension. Keywords: markdown, extension, file type.
  * - isTextLikeFile: detect text-editable file paths by extension or extensionless name. Keywords: text file, editable, extension, workbench.
+ * - isWorkbenchOpenableFile: detect files the workbench should treat as openable markdown content. Keywords: openable, markdown, file type, workbench.
  * - getFirstFile: find the first file path in a nested tree that matches an optional predicate. Keywords: tree traversal, first match, recursion, file selection.
  */
 
@@ -39,6 +40,10 @@ export function isMarkdownFile(filePath: string) {
 
 export function isTextLikeFile(filePath: string) {
   return /\.(?:md|txt|json|js|mjs|cjs|css|html|yml|yaml|toml|gitignore)$/i.test(filePath) || !/\.[a-z0-9]+$/i.test(filePath);
+}
+
+export function isWorkbenchOpenableFile(filePath: string) {
+  return isMarkdownFile(filePath);
 }
 
 export function getFirstFile(nodes: TreeNode[], predicate: (filePath: string) => boolean = () => true) {

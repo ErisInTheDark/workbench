@@ -14,6 +14,7 @@ function joinClasses (...values: Array<string | false | null | undefined>) {
 
 const MAX_HEADER_LENGTH = 36;
 const MAX_HEADER_WORDS = 5;
+const EMPTY_HISTORY_CUSTOM_TEXT_SPACER_CLASS = "w-full min-h-[2.45rem] rounded-lg px-3 py-2";
 
 function normalizeHeaderText (value: string | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
@@ -167,6 +168,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
 
       <div className="space-y-3">
         {request.questions.map((question, index) => {
+          const isLastQuestion = index === request.questions.length - 1;
           const { headerText, questionText } = formatQuestionDisplay(question, index);
           const answerValues = isHistoryMode
             ? deriveAnsweredValues(question, historyProps?.response ?? null)
@@ -281,7 +283,14 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                       spellCheck={false}
                       className="rounded-lg w-full resize-none px-3 py-3 text-[0.84em] leading-[1.5] text-text outline-none placeholder:text-muted bg-[color-mix(in_srgb,var(--text)_4%,transparent)]"
                     />
-                  ) : null
+                  ) : (
+                    !isLastQuestion ? (
+                      <div
+                        aria-hidden="true"
+                        className={EMPTY_HISTORY_CUSTOM_TEXT_SPACER_CLASS}
+                      />
+                    ) : null
+                  )
                 ) : (
                   <textarea
                     id={`${request.id}:${question.id}:custom`}

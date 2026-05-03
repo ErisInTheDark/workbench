@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { getGitChanges, getHeadFileContent } from "../../../lib/git";
 import { normalizeRelativePath, projectRoot, safeResolve } from "../../../lib/project";
+import { isWorkbenchOpenableFile } from "../../../lib/workbench/project/tree-utils";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,6 +19,10 @@ export async function GET(request: NextRequest) {
     const absolutePath = safeResolve(relativePath);
     const stats = await fs.stat(absolutePath);
     const normalizedPath = normalizeRelativePath(relativePath);
+
+    if (!isWorkbenchOpenableFile(normalizedPath)) {
+      return NextResponse.json({ error: "Only markdown files can be opened in the workbench." }, { status: 400 });
+    }
 
     if (!stats.isFile()) {
       return NextResponse.json({ error: "The requested path is not a file." }, { status: 400 });
@@ -62,6 +67,10 @@ export async function PUT(request: NextRequest) {
     const statsBeforeWrite = await fs.stat(absolutePath);
     const actualMtimeMs = Math.trunc(statsBeforeWrite.mtimeMs);
     const normalizedPath = normalizeRelativePath(relativePath);
+
+    if (!isWorkbenchOpenableFile(normalizedPath)) {
+      return NextResponse.json({ error: "Only markdown files can be edited in the workbench." }, { status: 400 });
+    }
 
     if (!statsBeforeWrite.isFile()) {
       return NextResponse.json({ error: "The requested path is not a file." }, { status: 400 });
