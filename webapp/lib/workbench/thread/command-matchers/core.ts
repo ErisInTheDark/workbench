@@ -5,17 +5,17 @@
  */
 
 import {
-  collapseWhitespace,
-  createEmptyCommandSummaryStats,
-  mergeCommandSummaryStats,
-  summarizeDisplayParts,
+    collapseWhitespace,
+    createEmptyCommandSummaryStats,
+    mergeCommandSummaryStats,
+    summarizeDisplayParts,
 } from "./helpers";
 import { consumeNextCommandStage } from "./shells";
 import type {
-  CommandMatcherDefinition,
-  CommandMatcherResult,
-  ParsedCommandDisplayContext,
-  ThreadCommandDisplayPart,
+    CommandMatcherDefinition,
+    CommandMatcherResult,
+    ParsedCommandDisplayContext,
+    ThreadCommandDisplayPart,
 } from "./types";
 
 const MAX_MATCH_STEPS = 12;
@@ -45,7 +45,7 @@ export const CommandMatcher: CommandMatcherBuilder = Object.assign(
     return definition;
   },
   {
-    Code(text: string, { clamp = false }: TextPartInput = {}) {
+    Code(text: string, { clamp = true }: TextPartInput = {}) {
       return { clamp, text, type: "text", variant: "code" } satisfies ThreadCommandDisplayPart;
     },
     Path({

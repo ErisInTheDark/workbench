@@ -60,6 +60,19 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     },
   }),
   CommandMatcher({
+    id: "powershell.hide-trivial-assignment",
+    match: (context) => {
+      if (!isPowerShellTrivialAssignmentStage(context.stage.text)) {
+        return null;
+      }
+
+      return CommandMatcher.Result({
+        hide: true,
+        summaryParts: [],
+      });
+    },
+  }),
+  CommandMatcher({
     id: "powershell.read",
     match: (context) => {
       const parsedStage = parsePowerShellStage(context.stage.text);
@@ -649,76 +662,86 @@ function buildPowerShellSelectObjectReadSummary(
   context: Parameters<CommandMatcherDefinition["match"]>[0],
   pathPart: NonNullable<ReturnType<typeof getPowerShellStagePathPart>>,
 ) {
-  if (!context.stage.remainingCommand) {
-    return null;
-  }
+  let remainingCommand = context.stage.remainingCommand;
 
-  const nextStage = consumeNextCommandStage(context.stage.remainingCommand, "powershell");
-  if (!nextStage) {
-    return null;
-  }
+  while (remainingCommand) {
+    const nextStage = consumeNextCommandStage(remainingCommand, "powershell");
+    if (!nextStage) {
+      return null;
+    }
 
-  const parsedNextStage = parsePowerShellStage(nextStage.text);
-  if (!matchesPowerShellCommand(parsedNextStage, ["select-object", "select"])) {
-    return null;
-  }
+    const parsedNextStage = parsePowerShellStage(nextStage.text);
+    if (!matchesPowerShellCommand(parsedNextStage, ["select-object", "select"])) {
+      if (
+        matchesPowerShellCommand(parsedNextStage, ["foreach-object", "%"])
+        && shouldHidePowerShellForEachFormattingStage(parsedNextStage)
+      ) {
+        remainingCommand = nextStage.remainingCommand ?? null;
+        continue;
+      }
 
-  const skip = readPowerShellNumericValue(parsedNextStage, "-Skip");
-  const first = readPowerShellNumericValue(parsedNextStage, "-First");
-  const last = readPowerShellNumericValue(parsedNextStage, "-Last");
+      return null;
+    }
 
-  if (skip !== null && first !== null) {
-    const nextPathPart = CommandMatcher.Path({
-      ...pathPart,
-      lineNumber: first === 1 ? skip + 1 : null,
-    });
+    const skip = readPowerShellNumericValue(parsedNextStage, "-Skip");
+    const first = readPowerShellNumericValue(parsedNextStage, "-First");
+    const last = readPowerShellNumericValue(parsedNextStage, "-Last");
 
-    return CommandMatcher.Result({
-      remainingCommand: nextStage.remainingCommand,
-      summaryStats: { readFiles: 1 },
-      summaryParts: first === 1
-        ? [
-          CommandMatcher.Text("Read "),
-          nextPathPart,
-        ]
-        : [
-          CommandMatcher.Text(`Read lines ${skip + 1}-${skip + first} of `),
+    if (skip !== null && first !== null) {
+      const nextPathPart = CommandMatcher.Path({
+        ...pathPart,
+        lineNumber: first === 1 ? skip + 1 : null,
+      });
+
+      return CommandMatcher.Result({
+        remainingCommand: nextStage.remainingCommand,
+        summaryStats: { readFiles: 1 },
+        summaryParts: first === 1
+          ? [
+            CommandMatcher.Text("Read "),
+            nextPathPart,
+          ]
+          : [
+            CommandMatcher.Text(`Read lines ${skip + 1}-${skip + first} of `),
+            pathPart,
+          ],
+      });
+    }
+
+    if (first !== null) {
+      return CommandMatcher.Result({
+        remainingCommand: nextStage.remainingCommand,
+        summaryStats: { readFiles: 1 },
+        summaryParts: [
+          CommandMatcher.Text(`Read first ${first} lines of `),
           pathPart,
         ],
-    });
-  }
+      });
+    }
 
-  if (first !== null) {
-    return CommandMatcher.Result({
-      remainingCommand: nextStage.remainingCommand,
-      summaryStats: { readFiles: 1 },
-      summaryParts: [
-        CommandMatcher.Text(`Read first ${first} lines of `),
-        pathPart,
-      ],
-    });
-  }
+    if (last !== null) {
+      return CommandMatcher.Result({
+        remainingCommand: nextStage.remainingCommand,
+        summaryStats: { readFiles: 1 },
+        summaryParts: [
+          CommandMatcher.Text(`Read last ${last} lines of `),
+          pathPart,
+        ],
+      });
+    }
 
-  if (last !== null) {
-    return CommandMatcher.Result({
-      remainingCommand: nextStage.remainingCommand,
-      summaryStats: { readFiles: 1 },
-      summaryParts: [
-        CommandMatcher.Text(`Read last ${last} lines of `),
-        pathPart,
-      ],
-    });
-  }
+    if (skip !== null) {
+      return CommandMatcher.Result({
+        remainingCommand: nextStage.remainingCommand,
+        summaryStats: { readFiles: 1 },
+        summaryParts: [
+          CommandMatcher.Text(`Read from line ${skip + 1} of `),
+          pathPart,
+        ],
+      });
+    }
 
-  if (skip !== null) {
-    return CommandMatcher.Result({
-      remainingCommand: nextStage.remainingCommand,
-      summaryStats: { readFiles: 1 },
-      summaryParts: [
-        CommandMatcher.Text(`Read from line ${skip + 1} of `),
-        pathPart,
-      ],
-    });
+    return null;
   }
 
   return null;
@@ -839,6 +862,10 @@ function shouldHidePowerShellForEachFormattingStage(parsedStage: ParsedPowerShel
     return false;
   }
 
+  if (isPowerShellLineNumberFormattingScript(normalizedScript)) {
+    return true;
+  }
+
   if (/[|;]/.test(normalizedScript)) {
     return false;
   }
@@ -852,6 +879,55 @@ function shouldHidePowerShellForEachFormattingStage(parsedStage: ParsedPowerShel
   }
 
   return !/\b(?:Write-|Out-|Format-|Get-|Set-|Select-|Where-|ForEach-|Sort-|Measure-)[A-Za-z]+\b/i.test(normalizedScript);
+}
+
+function isPowerShellTrivialAssignmentStage(stageText: string) {
+  const assignmentMatch = unwrapPowerShellStageText(stageText).match(/^\$([A-Za-z_][\w]*)\s*=\s*([\s\S]+)$/);
+  if (!assignmentMatch?.[2]) {
+    return false;
+  }
+
+  const assignedValue = assignmentMatch[2].trim();
+  if (!assignedValue) {
+    return false;
+  }
+
+  if (/^[+-]?\d+(?:\.\d+)?$/.test(assignedValue)) {
+    return true;
+  }
+
+  if (/^\$(?:false|null|true)$/i.test(assignedValue)) {
+    return true;
+  }
+
+  return unwrapPowerShellQuotedTextOnce(assignedValue) !== null;
+}
+
+function isPowerShellLineNumberFormattingScript(scriptText: string) {
+  const incrementMatch = scriptText.match(/;\s*['"`]*\$([A-Za-z_][\w]*)\+\+\s*$/i);
+  if (!incrementMatch?.[1] || incrementMatch.index === undefined) {
+    return false;
+  }
+
+  const variableName = incrementMatch[1];
+  const formatStatement = scriptText.slice(0, incrementMatch.index).trim();
+  if (!formatStatement) {
+    return false;
+  }
+
+  if (/[|]/.test(formatStatement)) {
+    return false;
+  }
+
+  if (!/\$_\b/.test(formatStatement) || !/\s-f\s/i.test(formatStatement)) {
+    return false;
+  }
+
+  if (/\b(?:if|foreach|switch|try|catch|throw|return)\b/i.test(formatStatement)) {
+    return false;
+  }
+
+  return new RegExp(`['"\`]*\\$${escapeRegExp(variableName)}(?:\\b|\\s|,)`, "i").test(formatStatement);
 }
 
 function unwrapPowerShellStageText(stageText: string) {

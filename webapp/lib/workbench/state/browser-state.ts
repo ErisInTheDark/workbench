@@ -3,7 +3,7 @@
  * - DEFAULT_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE: editor font size defaults and bounds. Keywords: editor zoom, font size, clamp.
  * - CURRENT_FILE_SEARCH_PARAM, CURRENT_THREAD_SEARCH_PARAM: URL search param names for current workbench selection. Keywords: URL state, file, thread.
  * - CURRENT_SELECTION_URL_UPDATED_EVENT: browser event fired after the workbench updates file/thread selection in the URL. Keywords: URL state, selection event, history.
- * - EXPANDED_DIRECTORIES_STORAGE_KEY, FONT_SIZE_STORAGE_KEY, HARNESS_STORAGE_KEY, HARNESS_MODEL_STORAGE_KEY, HARNESS_MODEL_EFFORT_STORAGE_KEY, HARNESS_AGENT_STORAGE_KEY: localStorage keys for persisted explorer, editor, harness, model, effort, and agent browser state. Keywords: localStorage, explorer, font size, harness, model, effort, agent.
+ * - EXPANDED_DIRECTORIES_STORAGE_KEY, FONT_SIZE_STORAGE_KEY, HARNESS_STORAGE_KEY, HARNESS_MODEL_STORAGE_KEY, HARNESS_MODEL_EFFORT_STORAGE_KEY, HARNESS_AGENT_STORAGE_KEY, THREAD_UNREAD_STATE_STORAGE_KEY: localStorage keys for persisted explorer, editor, harness, model, effort, agent, and thread unread state. Keywords: localStorage, explorer, font size, harness, model, effort, agent, threads.
  * - WorkbenchSelectionSearchParams: normalized file/thread URL selection shape. Keywords: URL state, search params, file, thread.
  * - readStoredExpandedDirectories: read and normalize persisted expanded directory paths. Keywords: localStorage, explorer tree, expanded directories, browser state.
  * - persistExpandedDirectories: persist expanded directory paths from a provided collection. Keywords: localStorage, explorer tree, persistence, directories.
@@ -13,13 +13,14 @@
  * - readStoredHarnessModel/persistHarnessModel: persist the preferred model for each harness. Keywords: localStorage, codex, copilot, harness, model.
  * - readStoredHarnessModelEffort/persistHarnessModelEffort: persist the preferred reasoning effort for each harness/model pair. Keywords: localStorage, codex, copilot, harness, model, effort.
  * - readStoredHarnessAgent/persistHarnessAgent: persist the preferred agent file for each harness. Keywords: localStorage, codex, copilot, harness, agent.
+ * - readStoredThreadUnreadState/persistThreadUnreadState: persist per-thread unread tracking for sidebar badges. Keywords: localStorage, threads, unread, badges.
  * - readCurrentSelectionFromUrl: read the normalized file/thread selection from the current URL. Keywords: URL state, search params, file selection, thread selection.
  * - getRequestedPathFromUrl: read the requested file path from the current URL. Keywords: URL state, search params, file selection.
  * - getRequestedThreadIdFromUrl: read the requested thread id from the current URL. Keywords: URL state, search params, thread selection.
  * - syncCurrentSelectionToUrl: update the current file and thread URL search params without navigation. Keywords: history.replaceState, URL sync, selection state, file, thread.
  */
 
-import type { WorkbenchHarness } from "../../types";
+import type { WorkbenchHarness, WorkbenchStoredThreadUnreadState } from "../../types";
 
 export const DEFAULT_EDITOR_FONT_SIZE = 1.08;
 export const MIN_EDITOR_FONT_SIZE = 0.84;
@@ -33,6 +34,7 @@ export const HARNESS_STORAGE_KEY = "workbench:harness";
 export const HARNESS_MODEL_STORAGE_KEY = "workbench:harness-models";
 export const HARNESS_MODEL_EFFORT_STORAGE_KEY = "workbench:harness-model-efforts";
 export const HARNESS_AGENT_STORAGE_KEY = "workbench:harness-agents";
+export const THREAD_UNREAD_STATE_STORAGE_KEY = "workbench:thread-unread-state";
 
 export interface WorkbenchSelectionSearchParams {
   filePath: string;
@@ -43,6 +45,30 @@ function emptySelection(): WorkbenchSelectionSearchParams {
   return {
     filePath: "",
     threadId: "",
+  };
+}
+
+function normalizeStoredThreadUnreadState(value: unknown): WorkbenchStoredThreadUnreadState | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const candidate = value as Partial<WorkbenchStoredThreadUnreadState>;
+  if (
+    typeof candidate.lastObservedStatus !== "string"
+    || !Number.isFinite(candidate.lastObservedUpdatedAt)
+    || !Number.isFinite(candidate.lastSeenItemCount)
+    || !Number.isFinite(candidate.totalItemCount)
+  ) {
+    return null;
+  }
+
+  const totalItemCount = Math.max(0, Math.trunc(candidate.totalItemCount));
+  return {
+    lastObservedStatus: candidate.lastObservedStatus,
+    lastObservedUpdatedAt: Math.max(0, Math.trunc(candidate.lastObservedUpdatedAt)),
+    lastSeenItemCount: Math.min(totalItemCount, Math.max(0, Math.trunc(candidate.lastSeenItemCount))),
+    totalItemCount,
   };
 }
 
@@ -232,6 +258,37 @@ export function persistHarnessAgent(harness: WorkbenchHarness, agentPath: string
     window.localStorage.setItem(HARNESS_AGENT_STORAGE_KEY, JSON.stringify(nextValue));
   } catch {
     // Ignore storage failures and keep the in-memory agent state working.
+  }
+}
+
+export function readStoredThreadUnreadState() {
+  try {
+    const rawValue = window.localStorage.getItem(THREAD_UNREAD_STATE_STORAGE_KEY);
+    if (!rawValue) {
+      return {};
+    }
+
+    const parsedValue = JSON.parse(rawValue);
+    if (!parsedValue || typeof parsedValue !== "object" || Array.isArray(parsedValue)) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsedValue).flatMap(([key, value]) => {
+        const normalizedValue = normalizeStoredThreadUnreadState(value);
+        return normalizedValue ? [[key, normalizedValue]] : [];
+      }),
+    );
+  } catch {
+    return {};
+  }
+}
+
+export function persistThreadUnreadState(stateByKey: Record<string, WorkbenchStoredThreadUnreadState>) {
+  try {
+    window.localStorage.setItem(THREAD_UNREAD_STATE_STORAGE_KEY, JSON.stringify(stateByKey));
+  } catch {
+    // Ignore storage failures and keep the in-memory unread badge state working.
   }
 }
 

@@ -5,13 +5,21 @@
  */
 "use client";
 
+import type { ReactNode } from "react";
+
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
+import { getCurrentTurn } from "../../../lib/codex/thread-state";
+import type { ThreadPayload } from "../../../lib/types";
 import {
   getThreadCommandBlockDisplay,
   getThreadCommandDisplay,
 } from "../../../lib/workbench/thread/thread-command-matchers";
+import {
+  getPrimaryCollabAgentThreadId,
+  type CollabAgentToolCallItem,
+} from "../../../lib/workbench/thread/thread-collab-agents";
 import {
   formatThreadTimestamp,
   humanizeThreadLabel,
@@ -19,6 +27,7 @@ import {
   ThreadTextBlock,
 } from "./thread-view-primitives";
 import ThreadContextCompactionItem from "./ThreadContextCompactionItem";
+import ThreadAgentName from "./ThreadAgentName";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
 import ThreadDurationText from "./ThreadDurationText";
@@ -39,6 +48,8 @@ type ThreadRenderableBlock =
   | { kind: "fileChangeSequence"; items: FileChangeItem[] }
   | { kind: "reasoningSequence"; items: ReasoningItem[] }
   | { kind: "item"; item: NonGroupedItem };
+
+type RelatedThreadsById = Record<string, ThreadPayload | undefined>;
 
 function getFinalAgentMessageId (turn: Turn) {
   let fallbackId: string | null = null;
@@ -320,6 +331,220 @@ function ThreadPlanItem ({ item }: { item: Extract<ThreadItem, { type: "plan" }>
   );
 }
 
+function ThreadAgentBubble ({
+  label,
+  markdown,
+  onOpenFile,
+  projectRootPath,
+}: {
+  label: ReactNode;
+  markdown: string;
+  onOpenFile?: (path: string) => Promise<void>;
+  projectRootPath?: string;
+}) {
+  return (
+    <section className="py-2">
+      <div className="w-full max-w-[42rem] rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3">
+        <div className="m-0 pb-2 text-[0.74em] font-medium leading-[1.4] text-muted">
+          {label}
+        </div>
+        <ThreadMarkdown
+          markdown={markdown || "No message captured."}
+          onOpenFile={onOpenFile}
+          projectRootPath={projectRootPath}
+        />
+      </div>
+    </section>
+  );
+}
+
+function getCollabAgentStateMessage (item: CollabAgentToolCallItem, receiverThreadId: string) {
+  const preferredMessage = item.agentsStates[receiverThreadId]?.message?.trim();
+  if (preferredMessage) {
+    return preferredMessage;
+  }
+
+  for (const threadId of item.receiverThreadIds) {
+    const message = item.agentsStates[threadId]?.message?.trim();
+    if (message) {
+      return message;
+    }
+  }
+
+  return null;
+}
+
+function ThreadCurrentSubagentItemPreview ({
+  onOpenFile,
+  projectRootPath,
+  relatedThreadsById,
+  thread,
+}: {
+  onOpenFile?: (path: string) => Promise<void>;
+  projectRootPath?: string;
+  relatedThreadsById: RelatedThreadsById;
+  thread: ThreadPayload | undefined;
+}) {
+  const currentTurn = getCurrentTurn(thread);
+  if (!currentTurn) {
+    return (
+      <p className="m-0 text-[0.92em] leading-[1.6] text-muted">
+        No subagent activity was captured yet.
+      </p>
+    );
+  }
+
+  const blocks = buildRenderableBlocks(currentTurn.items);
+  const block = blocks.at(-1) ?? null;
+  if (!block) {
+    return (
+      <p className="m-0 text-[0.92em] leading-[1.6] text-muted">
+        No subagent activity was captured yet.
+      </p>
+    );
+  }
+
+  return (
+    <ThreadRenderableBlockView
+      block={block}
+      finalAgentMessageId={getFinalAgentMessageId(currentTurn)}
+      isMostRecentBlock={true}
+      onOpenFile={onOpenFile}
+      primaryUserBlock={null}
+      projectRootPath={projectRootPath}
+      relatedThreadsById={relatedThreadsById}
+      turnCompletedAt={currentTurn.completedAt}
+      turnStartedAt={currentTurn.startedAt}
+    />
+  );
+}
+
+function ThreadCollabAgentToolCallItem ({
+  isMostRecent,
+  item,
+  onOpenFile,
+  projectRootPath,
+  relatedThreadsById,
+}: {
+  isMostRecent: boolean;
+  item: CollabAgentToolCallItem;
+  onOpenFile?: (path: string) => Promise<void>;
+  projectRootPath?: string;
+  relatedThreadsById: RelatedThreadsById;
+}) {
+  const receiverThreadId = getPrimaryCollabAgentThreadId(item);
+  const receiverThread = relatedThreadsById[receiverThreadId];
+  const prompt = item.prompt?.trim() ?? "";
+  const responseMessage = getCollabAgentStateMessage(item, receiverThreadId);
+  const agentName = (
+    <ThreadAgentName
+      fallbackKey={receiverThreadId}
+      thread={receiverThread}
+    />
+  );
+
+  if (item.tool === "spawnAgent") {
+    return (
+      <ThreadDisclosure
+        className="py-2"
+        contentClassName="mt-2 pl-6"
+        summary={<><span>Spawned </span>{agentName}</>}
+        summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      >
+        <ThreadAgentBubble
+          label="Main agent"
+          markdown={prompt}
+          onOpenFile={onOpenFile}
+          projectRootPath={projectRootPath}
+        />
+      </ThreadDisclosure>
+    );
+  }
+
+  if (item.tool === "wait") {
+    return (
+      <ThreadDisclosure
+        className="py-2"
+        contentClassName="mt-2 pl-6"
+        open={isMostRecent}
+        summary={<><span>{isMostRecent ? "Waiting for " : "Waited for "}</span>{agentName}</>}
+        summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      >
+        {isMostRecent ? (
+          <ThreadCurrentSubagentItemPreview
+            onOpenFile={onOpenFile}
+            projectRootPath={projectRootPath}
+            relatedThreadsById={relatedThreadsById}
+            thread={receiverThread}
+          />
+        ) : null}
+      </ThreadDisclosure>
+    );
+  }
+
+  if ((item.tool === "sendInput" || item.tool === "resumeAgent") && prompt) {
+    return (
+      <ThreadDisclosure
+        className="py-2"
+        contentClassName="mt-2 pl-6"
+        summary={<><span>Messaged </span>{agentName}</>}
+        summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      >
+        <ThreadAgentBubble
+          label="Main agent"
+          markdown={prompt}
+          onOpenFile={onOpenFile}
+          projectRootPath={projectRootPath}
+        />
+      </ThreadDisclosure>
+    );
+  }
+
+  if (responseMessage) {
+    return (
+      <ThreadDisclosure
+        className="py-2"
+        contentClassName="mt-2 pl-6"
+        summary={<><span>Received response from </span>{agentName}</>}
+        summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      >
+        <ThreadAgentBubble
+          label={agentName}
+          markdown={responseMessage}
+          onOpenFile={onOpenFile}
+          projectRootPath={projectRootPath}
+        />
+      </ThreadDisclosure>
+    );
+  }
+
+  if (item.tool === "closeAgent") {
+    return (
+      <ThreadDisclosure
+        className="py-2"
+        contentClassName="mt-2 pl-6"
+        summary={<><span>Closed </span>{agentName}</>}
+        summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      >
+        <></>
+      </ThreadDisclosure>
+    );
+  }
+
+  return (
+    <ThreadDisclosure
+      className="py-2"
+      contentClassName="mt-2 pl-6"
+      summary={`Collaboration: ${humanizeThreadLabel(item.tool)}`}
+      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+    >
+      <pre className="m-0 overflow-x-auto whitespace-pre-wrap break-words rounded-[0.9rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text">
+        {JSON.stringify(item, null, 2)}
+      </pre>
+    </ThreadDisclosure>
+  );
+}
+
 function ThreadReasoningSequence ({
   block,
   isMostRecent,
@@ -425,7 +650,7 @@ function ThreadCommandExecutionDetails ({
           ) : null}
         </>
       )}
-      summaryClassName="text-[0.92em] leading-[1.6] text-text"
+      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
     >
       <>
         {/*commandDisplay.showShell && commandDisplay.shell ? (
@@ -518,6 +743,7 @@ function ThreadRenderableBlockView ({
   onOpenFile,
   primaryUserBlock,
   projectRootPath,
+  relatedThreadsById,
   turnCompletedAt,
   turnStartedAt,
 }: {
@@ -527,6 +753,7 @@ function ThreadRenderableBlockView ({
   onOpenFile?: (path: string) => Promise<void>;
   primaryUserBlock: ThreadRenderableBlock | null;
   projectRootPath?: string;
+  relatedThreadsById: RelatedThreadsById;
   turnCompletedAt: number | null;
   turnStartedAt: number | null;
 }) {
@@ -578,6 +805,16 @@ function ThreadRenderableBlockView ({
       return <ThreadMcpToolCallItem item={block.item} />;
     case "dynamicToolCall":
       return <ThreadDynamicToolCallItem item={block.item} />;
+    case "collabAgentToolCall":
+      return (
+        <ThreadCollabAgentToolCallItem
+          isMostRecent={isMostRecentBlock}
+          item={block.item}
+          onOpenFile={onOpenFile}
+          projectRootPath={projectRootPath}
+          relatedThreadsById={relatedThreadsById}
+        />
+      );
     default:
       return <ThreadFallbackItem item={block.item} />;
   }
@@ -586,10 +823,12 @@ function ThreadRenderableBlockView ({
 export function ThreadTurnDetails ({
   onOpenFile,
   projectRootPath,
+  relatedThreadsById = {},
   turn,
 }: {
   onOpenFile?: (path: string) => Promise<void>;
   projectRootPath?: string;
+  relatedThreadsById?: RelatedThreadsById;
   turn: Turn;
 }) {
   const blocks = buildRenderableBlocks(turn.items);
@@ -620,6 +859,7 @@ export function ThreadTurnDetails ({
       onOpenFile={onOpenFile}
       primaryUserBlock={primaryUserBlock}
       projectRootPath={projectRootPath}
+      relatedThreadsById={relatedThreadsById}
       turnCompletedAt={turn.completedAt}
       turnStartedAt={turn.startedAt}
     />

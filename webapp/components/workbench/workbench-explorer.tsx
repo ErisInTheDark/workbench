@@ -17,6 +17,7 @@ import type {
   WorkbenchControls,
 } from "../../lib/types";
 import ChevronIcon from "./ChevronIcon";
+import { ThreadQuestionBadge, ThreadUnreadBadge } from "./ThreadStatusBadges";
 import ThreadDisclosure from "./thread-view/ThreadDisclosure";
 import {
   workbenchIconButtonClassName,
@@ -144,6 +145,7 @@ export function ThreadsList ({
   currentThreadId,
   isDraftSelected = false,
   nodes,
+  pendingQuestionnaireThreadIds,
   onCreateThread,
   onOpenThread,
 }: {
@@ -151,6 +153,7 @@ export function ThreadsList ({
   currentThreadId: string;
   isDraftSelected?: boolean;
   nodes: ThreadSummary[];
+  pendingQuestionnaireThreadIds: ReadonlySet<string>;
   onCreateThread: () => void;
   onOpenThread: (threadId: string) => void;
 }) {
@@ -163,6 +166,8 @@ export function ThreadsList ({
       {threads.map((thread) => {
         const label = thread.name || thread.preview || thread.id;
         const isCurrent = thread.id === currentThreadId;
+        const hasPendingQuestionnaire = !isCurrent && pendingQuestionnaireThreadIds.has(thread.id);
+        const unreadBadge = isCurrent ? null : thread.unreadBadge;
 
         return (
           <li key={thread.id} className="m-0 list-none">
@@ -173,9 +178,12 @@ export function ThreadsList ({
               }}
               title={label}
             >
-              <span className="inline-flex min-w-0 items-center gap-2">
-                <HarnessIcon className="size-4 shrink-0" harness={thread.harness} />
-                <span className={`${workbenchThreadListLabelClassName}${isCurrent ? " font-semibold" : ""}`}>{label}</span>
+              <span className="flex w-full min-w-0 items-center justify-between gap-3">
+                <span className="inline-flex min-w-0 items-center gap-2">
+                  <HarnessIcon className="size-4 shrink-0" harness={thread.harness} />
+                  <span className={`${workbenchThreadListLabelClassName}${isCurrent ? " font-semibold" : ""}`}>{label}</span>
+                </span>
+                {hasPendingQuestionnaire ? <ThreadQuestionBadge /> : unreadBadge ? <ThreadUnreadBadge badge={unreadBadge} /> : null}
               </span>
             </ThreadListRow>
           </li>

@@ -44,24 +44,34 @@ export interface ThreadSummary {
   cwd: string;
   source: string;
   path: string | null;
+  forkedFromId: string | null;
+  agentNickname: string | null;
+  agentRole: string | null;
+  unreadBadge: ThreadUnreadBadge | null;
 }
 
-export interface ThreadPayload {
-  id: string;
-  harness: WorkbenchHarness;
+export interface ThreadUnreadBadge {
+  unreadCount: number;
+  hasActiveTurn: boolean;
+}
+
+export interface ThreadPayload extends ThreadSummary {
   model: string | null;
   reasoningEffort: string | null;
   agentPath: string | null;
   isDraft: boolean;
-  name: string | null;
-  preview: string;
-  createdAt: number;
-  updatedAt: number;
-  status: string;
-  cwd: string;
-  source: string;
-  path: string | null;
   turns: Turn[];
+}
+
+export interface WorkbenchSendThreadMessageOptions {
+  selectThread?: boolean;
+}
+
+export interface WorkbenchStoredThreadUnreadState {
+  lastObservedStatus: string;
+  lastObservedUpdatedAt: number;
+  lastSeenItemCount: number;
+  totalItemCount: number;
 }
 
 export interface WorkbenchUserInputOption {
@@ -154,8 +164,13 @@ export interface WorkbenchControls {
   clearSelection: () => void;
   openFile: (path: string) => Promise<void>;
   openThread: (threadId: string) => Promise<void>;
+  readThread: (threadId: string, harness?: WorkbenchHarness) => Promise<ThreadPayload | null>;
   listModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
-  sendThreadMessage: (threadId: string, input: UserInput[]) => Promise<void>;
+  sendThreadMessage: (
+    thread: ThreadPayload,
+    input: UserInput[],
+    options?: WorkbenchSendThreadMessageOptions,
+  ) => Promise<ThreadPayload | null>;
   submitPendingUserInputRequest: (threadId: string, response: WorkbenchUserInputResponse) => Promise<void>;
   setCurrentThreadModel: (threadId: string, model: string) => void;
   setCurrentThreadAgent: (threadId: string, agentPath: string | null) => void;

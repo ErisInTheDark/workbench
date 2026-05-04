@@ -32,6 +32,7 @@ const sampleTurnStart = createTurnStartRequest(
 );
 
 export default function CodexPage() {
+  const [bridgeUrl, setBridgeUrl] = useState("");
   const [readyStatus, setReadyStatus] = useState<CodexReadyStatus | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -41,9 +42,11 @@ export default function CodexPage() {
 
     async function loadReadyStatus() {
       setLoading(true);
+      const resolvedBridgeUrl = getCodexAppServerUrl();
+      setBridgeUrl(resolvedBridgeUrl);
 
       try {
-        await client.connect();
+        await client.connect(resolvedBridgeUrl);
         if (active) {
           setReadyStatus({
             detail: "Connected to the local Codex bridge and completed the app-server handshake.",
@@ -51,7 +54,7 @@ export default function CodexPage() {
             phase: "ready",
             status: null,
             statusText: "Ready",
-            url: getCodexAppServerUrl(),
+            url: resolvedBridgeUrl,
           });
         }
       } catch (error) {
@@ -62,7 +65,7 @@ export default function CodexPage() {
             phase: "connect",
             status: null,
             statusText: error instanceof Error ? error.message : "Unknown error",
-            url: getCodexAppServerUrl(),
+            url: resolvedBridgeUrl,
           });
         }
       } finally {
@@ -96,7 +99,7 @@ export default function CodexPage() {
         <div className="space-y-8">
           <div className="space-y-3">
             <h2 className="text-lg font-semibold text-text">Local Codex bridge</h2>
-            <p className="font-mono text-xs leading-6 text-muted">{getCodexAppServerUrl()}</p>
+            <p className="font-mono text-xs leading-6 text-muted">{bridgeUrl || "Resolving browser bridge URL..."}</p>
           </div>
 
           <div className="space-y-3">

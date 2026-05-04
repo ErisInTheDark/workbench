@@ -86,6 +86,11 @@ export function consumeNextCommandStage(command: string, shellGroup: CommandShel
 }
 
 function unwrapShellCommandOnce(command: string) {
+  const stdinWrapperMatch = unwrapPowerShellStdinShellCommandOnce(command);
+  if (stdinWrapperMatch) {
+    return stdinWrapperMatch;
+  }
+
   for (const wrapper of SHELL_WRAPPERS) {
     const match = command.match(wrapper.pattern);
     if (!match) {
@@ -105,6 +110,27 @@ function unwrapShellCommandOnce(command: string) {
   }
 
   return null;
+}
+
+function unwrapPowerShellStdinShellCommandOnce(command: string) {
+  const trimmedCommand = String(command ?? "").trim();
+  const wrapperMatch = trimmedCommand.match(
+    /^([\s\S]+)\|\s*(?:"([^"]*(?:powershell|pwsh)(?:\.exe)?)"|([^\s"]*(?:powershell|pwsh)(?:\.exe)?))\s+[\s\S]*?-(?:Command|c)\s+-\s*$/i,
+  );
+  if (!wrapperMatch) {
+    return null;
+  }
+
+  const launcher = firstDefined(wrapperMatch[2], wrapperMatch[3]) ?? "";
+  const innerCommand = unwrapPowerShellPipelineLiteralInput(wrapperMatch[1] ?? "");
+  if (!innerCommand.trim()) {
+    return null;
+  }
+
+  return {
+    command: innerCommand,
+    shell: /pwsh/i.test(launcher) ? "pwsh" : "powershell" as CommandShell,
+  };
 }
 
 function consumePowerShellStage(command: string) {
@@ -365,4 +391,68 @@ function normalizeShellCommandText(value: string) {
   }
 
   return trimmedValue;
+}
+
+function normalizeNestedShellCommandText(value: string) {
+  let currentValue = String(value ?? "").trim();
+
+  for (let index = 0; index < 4; index += 1) {
+    const hereStringValue = unwrapPowerShellHereStringText(currentValue);
+    if (hereStringValue !== null) {
+      currentValue = hereStringValue.trim();
+      continue;
+    }
+
+    if (!hasRecoverableLiteralWrapping(currentValue)) {
+      break;
+    }
+
+    const nextValue = normalizeShellCommandText(currentValue);
+    if (nextValue === currentValue) {
+      break;
+    }
+    currentValue = nextValue;
+  }
+
+  return currentValue;
+}
+
+function unwrapPowerShellPipelineLiteralInput(value: string) {
+  const trimmedValue = String(value ?? "").trim();
+  if (!hasRecoverableLiteralWrapping(trimmedValue)) {
+    return "";
+  }
+
+  return normalizeNestedShellCommandText(trimmedValue);
+}
+
+function hasRecoverableLiteralWrapping(value: string) {
+  const trimmedValue = String(value ?? "").trim();
+  return trimmedValue.startsWith("@'")
+    || trimmedValue.startsWith("@\"")
+    || (trimmedValue.startsWith("\"") && trimmedValue.endsWith("\""))
+    || (trimmedValue.startsWith("'") && trimmedValue.endsWith("'"));
+}
+
+function unwrapPowerShellHereStringText(value: string) {
+  const trimmedValue = String(value ?? "").trim();
+  if (!(trimmedValue.startsWith("@'") || trimmedValue.startsWith("@\""))) {
+    return null;
+  }
+
+  const quoteCharacter = trimmedValue[1];
+  const terminator = `${quoteCharacter}@`;
+  const terminatorIndex = trimmedValue.lastIndexOf(terminator);
+  if (terminatorIndex <= 1) {
+    return null;
+  }
+
+  let bodyStartIndex = 2;
+  if (trimmedValue[bodyStartIndex] === "\r" && trimmedValue[bodyStartIndex + 1] === "\n") {
+    bodyStartIndex += 2;
+  } else if (trimmedValue[bodyStartIndex] === "\n") {
+    bodyStartIndex += 1;
+  }
+
+  return trimmedValue.slice(bodyStartIndex, terminatorIndex);
 }

@@ -11,6 +11,7 @@ import type {
     WorkbenchBindings,
     WorkbenchControls,
     WorkbenchHarness,
+    WorkbenchSendThreadMessageOptions,
     WorkbenchUserInputRequest,
 } from "./types";
 import {
@@ -685,6 +686,9 @@ export async function WorkbenchClient(
       && left.cwd === right.cwd
       && left.source === right.source
       && left.path === right.path
+      && left.forkedFromId === right.forkedFromId
+      && left.agentNickname === right.agentNickname
+      && left.agentRole === right.agentRole
       && left.turns.length === right.turns.length
       && areCurrentTurnsEquivalent(left, right);
   }
@@ -737,16 +741,29 @@ export async function WorkbenchClient(
     emitExplorerStateChange();
   }
 
-  async function sendThreadMessage(threadId: string, input: UserInput[]) {
-    await threadClient.sendThreadMessage(threadId, input);
-    const payload = threadClient.getSnapshot().currentThread;
+  async function readThread(threadId: string, harness?: WorkbenchHarness) {
+    return await threadClient.readThread(threadId, harness);
+  }
+
+  async function sendThreadMessage(
+    thread: ThreadPayload,
+    input: UserInput[],
+    options: WorkbenchSendThreadMessageOptions = {},
+  ) {
+    const payload = await threadClient.sendThreadMessage(thread, input, options);
     if (!payload) {
-      return;
+      return null;
+    }
+
+    if (options.selectThread === false && payload.id !== sessionState.currentThreadId) {
+      emitExplorerStateChange();
+      return payload;
     }
 
     applyThreadPayloadToCurrentView(payload, "Sent message.");
     syncCurrentSelectionToUrl({ threadId: payload.id });
     emitExplorerStateChange();
+    return payload;
   }
 
   async function createEntry(parentPath: string, name: string, type: "directory" | "file") {
@@ -774,10 +791,42 @@ export async function WorkbenchClient(
     editorClient.refreshEditorChrome();
   }
 
-  async function refreshTree({ preserveSelection = false }: { preserveSelection?: boolean } = {}) {
-    const payload = await projectClient.refreshProject();
+  async function openRequestedSelectionFromUrl() {
     const requestedThreadId = getRequestedThreadIdFromUrl();
+    if (requestedThreadId) {
+      if (threadClient.hasThread(requestedThreadId)) {
+        await openThread(requestedThreadId);
+        return sessionState.currentThreadId === requestedThreadId;
+      }
+
+      if (threadClient.isDraftThreadId(requestedThreadId)) {
+        const draftThread = threadClient.createThread(readStoredHarness(), requestedThreadId);
+        applyThreadPayloadToCurrentView(draftThread);
+        emitExplorerStateChange();
+        return true;
+      }
+
+      return false;
+    }
+
+    const requestedPath = getRequestedPathFromUrl();
+    if (!requestedPath) {
+      return false;
+    }
+
+    await openFile(requestedPath);
+    return sessionState.currentPath === requestedPath;
+  }
+
+  async function refreshTree({ preserveSelection = false }: { preserveSelection?: boolean } = {}) {
+    await projectClient.refreshProject();
+    const requestedThreadId = getRequestedThreadIdFromUrl();
+    const requestedPath = getRequestedPathFromUrl();
     const shouldBlockOnThreads = Boolean(sessionState.currentThreadId || requestedThreadId);
+    const shouldPrioritizeRequestedSelection = Boolean(
+      (requestedThreadId && requestedThreadId !== sessionState.currentThreadId)
+      || (!requestedThreadId && requestedPath && requestedPath !== sessionState.currentPath)
+    );
 
     if (shouldBlockOnThreads) {
       await Promise.all([
@@ -794,6 +843,12 @@ export async function WorkbenchClient(
         ]);
         emitExplorerStateChange();
       })();
+    }
+
+    // When the URL changes, auto-refresh must follow that requested selection instead
+    // of reasserting the previous in-memory file or thread.
+    if (shouldPrioritizeRequestedSelection && await openRequestedSelectionFromUrl()) {
+      return;
     }
 
     if (preserveSelection && sessionState.currentThreadId) {
@@ -832,26 +887,8 @@ export async function WorkbenchClient(
       }
     }
 
-    if (requestedThreadId) {
-      if (threadClient.hasThread(requestedThreadId)) {
-        await openThread(requestedThreadId);
-        if (sessionState.currentThreadId === requestedThreadId) {
-          return;
-        }
-      } else if (threadClient.isDraftThreadId(requestedThreadId)) {
-        const draftThread = threadClient.createThread(readStoredHarness(), requestedThreadId);
-        applyThreadPayloadToCurrentView(draftThread);
-        emitExplorerStateChange();
-        return;
-      }
-    }
-
-    const requestedPath = getRequestedPathFromUrl();
-    if (requestedPath) {
-      await openFile(requestedPath);
-      if (sessionState.currentPath === requestedPath) {
-        return;
-      }
+    if (await openRequestedSelectionFromUrl()) {
+      return;
     }
 
     clearCurrentSelectionView();
@@ -887,6 +924,7 @@ export async function WorkbenchClient(
     listModels: threadClient.listModels,
     openFile,
     openThread,
+    readThread,
     sendThreadMessage,
     submitPendingUserInputRequest: threadClient.submitPendingUserInputRequest,
     setCurrentThreadModel: (threadId, model) => {

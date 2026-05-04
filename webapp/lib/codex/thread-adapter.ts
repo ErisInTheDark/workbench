@@ -31,7 +31,21 @@ export function formatSessionSource(source: SessionSource) {
     return `custom:${source.custom}`;
   }
 
-  return `subAgent:${source.subAgent}`;
+  if (typeof source.subAgent === "string") {
+    return `subAgent:${source.subAgent}`;
+  }
+
+  if ("thread_spawn" in source.subAgent) {
+    const role = source.subAgent.thread_spawn.agent_role?.trim();
+    const nickname = source.subAgent.thread_spawn.agent_nickname?.trim();
+    return `subAgent:${role || nickname || "spawned"}`;
+  }
+
+  if ("other" in source.subAgent) {
+    return `subAgent:${source.subAgent.other}`;
+  }
+
+  return "subAgent";
 }
 
 export function formatThreadStatus(status: ThreadStatus) {
@@ -79,6 +93,10 @@ export function toThreadSummary(thread: Thread, harness: WorkbenchHarness = "cod
     cwd: thread.cwd,
     source: formatSessionSource(thread.source),
     path: thread.path,
+    forkedFromId: thread.forkedFromId,
+    agentNickname: thread.agentNickname,
+    agentRole: thread.agentRole,
+    unreadBadge: null,
   };
 }
 

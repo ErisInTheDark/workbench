@@ -153,7 +153,7 @@ function ThreadCommandStageParts ({ parts }: { parts: ThreadCommandDisplayPart[]
           <span key={`text:${index}`} className="min-w-0 max-w-full">
             {part.variant === "code" ? (
               <code
-                className={`${THREAD_INLINE_CODE_CLASS} ${part.clamp ? "inline-block max-w-full overflow-hidden text-ellipsis whitespace-nowrap align-baseline" : ""}`}
+                className={`${THREAD_INLINE_CODE_CLASS} ${part.clamp ? "inline-block max-w-full overflow-hidden text-ellipsis whitespace-nowrap align-bottom" : ""}`}
                 title={part.clamp ? part.text : undefined}
               >
                 {part.text}

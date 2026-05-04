@@ -23,6 +23,7 @@ export interface RevisionToolbarContext {
 export interface RevisionHoverToolbarControllerOptions {
   editor: HTMLElement;
   getExpandedRangeRect: (range: Range) => DOMRect;
+  getMinimumToolbarTop: (viewport: VisualViewportMetrics) => number;
   getMode: () => "rich" | "plain";
   getVisualViewportMetrics: () => VisualViewportMetrics;
   onSyncEditorAfterStructuralChange: (
@@ -50,6 +51,7 @@ function RevisionHoverToolbarController(
   const {
     editor,
     getExpandedRangeRect,
+    getMinimumToolbarTop,
     getMode,
     getVisualViewportMetrics,
     onSyncEditorAfterStructuralChange,
@@ -283,12 +285,13 @@ function RevisionHoverToolbarController(
     const preferredTop = viewport.top + context.rect.top - revisionHoverToolbar.offsetHeight - 10;
     const fallbackTop = viewport.top + context.rect.bottom + 10;
     const maxTop = viewport.top + viewport.height - revisionHoverToolbar.offsetHeight - 12;
-    const y = preferredTop >= viewport.top + 12
+    const minimumTop = getMinimumToolbarTop(viewport);
+    const y = preferredTop >= minimumTop
       ? preferredTop
-      : Math.min(maxTop, fallbackTop);
+      : Math.min(maxTop, Math.max(minimumTop, fallbackTop));
 
     revisionHoverToolbar.style.left = `${x}px`;
-    revisionHoverToolbar.style.top = `${Math.max(viewport.top + 12, y)}px`;
+    revisionHoverToolbar.style.top = `${Math.max(minimumTop, y)}px`;
   }
 
   function applyHoveredRevisionAction(action: "accept" | "reject") {

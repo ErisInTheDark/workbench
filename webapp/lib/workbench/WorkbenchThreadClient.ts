@@ -36,6 +36,8 @@ import type {
     WorkbenchHarness,
     WorkbenchModelOption,
     WorkbenchPendingUserInputRequest,
+    WorkbenchSendThreadMessageOptions,
+    WorkbenchStoredThreadUnreadState,
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
 } from "../types";
@@ -45,9 +47,11 @@ import {
     persistHarnessAgent,
     persistHarnessModel,
     persistHarnessModelEffort,
+    persistThreadUnreadState,
     readStoredHarnessAgent,
     readStoredHarnessModel,
     readStoredHarnessModelEffort,
+    readStoredThreadUnreadState,
 } from "./state/browser-state";
 
 const THREAD_REFRESH_TASK_ID = "thread-refresh";
@@ -70,6 +74,7 @@ export interface WorkbenchThreadState {
   questionnaireHistoryByThreadId: Map<string, WorkbenchQuestionnaireHistoryEntry[]>;
   rateLimits: RateLimitSnapshot | null;
   rateLimitsByHarness: Map<WorkbenchHarness, RateLimitSnapshot | null>;
+  threadUnreadStateByKey: Map<string, WorkbenchStoredThreadUnreadState>;
   threads: ThreadSummary[];
   threadsError: string;
 }
@@ -100,12 +105,17 @@ interface WorkbenchThreadClient {
   isDraftThreadId: (threadId: string) => boolean;
   listModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
   openThread: (threadId: string, options?: { harness?: WorkbenchHarness; source?: "open" | "reload" }) => Promise<void>;
+  readThread: (threadId: string, harness?: WorkbenchHarness) => Promise<ThreadPayload | null>;
   reconcileCurrentThreadFromRead: (threadId: string, harness: WorkbenchHarness) => Promise<void>;
   readCurrentThread: (threadId: string, harness: WorkbenchHarness) => Promise<ThreadPayload | null>;
   refreshPendingUserInputRequests: () => Promise<void>;
   refreshRateLimits: () => Promise<void>;
   refreshThreads: () => Promise<void>;
-  sendThreadMessage: (threadId: string, input: UserInput[]) => Promise<void>;
+  sendThreadMessage: (
+    thread: ThreadPayload,
+    input: UserInput[],
+    options?: WorkbenchSendThreadMessageOptions,
+  ) => Promise<ThreadPayload | null>;
   submitPendingUserInputRequest: (threadId: string, response: WorkbenchUserInputResponse) => Promise<void>;
   setCurrentThreadAgent: (threadId: string, agentPath: string | null) => void;
   setCurrentThreadModel: (threadId: string, model: string) => void;
@@ -126,9 +136,22 @@ function createInitialThreadState(): WorkbenchThreadState {
     questionnaireHistoryByThreadId: new Map(),
     rateLimits: null,
     rateLimitsByHarness: new Map(),
+    threadUnreadStateByKey: new Map(),
     threads: [],
     threadsError: "",
   };
+}
+
+function getThreadStateKey(harness: WorkbenchHarness, threadId: string) {
+  return `${harness}:${threadId}`;
+}
+
+function isThreadStatusActive(status: string) {
+  return status === "active" || status.startsWith("active:");
+}
+
+function countThreadItems(turns: Turn[]) {
+  return turns.reduce((total, turn) => total + turn.items.length, 0);
 }
 
 function isEmptyRolloutError(error: unknown) {
@@ -145,8 +168,11 @@ function WorkbenchThreadClient(
   const codexClient = new CodexAppServerClient();
   const listeners = new Set<WorkbenchThreadListener>();
   const state = createInitialThreadState();
+  const threadUnreadRefreshInFlightKeys = new Set<string>();
   let disposed = false;
   let refreshThreadsPromise: Promise<void> | null = null;
+
+  state.threadUnreadStateByKey = new Map(Object.entries(readStoredThreadUnreadState()));
 
   function emitStatusMessage(message: string) {
     options.onStatusMessage?.(message);
@@ -158,13 +184,152 @@ function WorkbenchThreadClient(
     );
   }
 
+  function persistUnreadStateSnapshot() {
+    persistThreadUnreadState(Object.fromEntries(state.threadUnreadStateByKey.entries()));
+  }
+
+  function buildThreadSummaryWithUnreadBadge(thread: ThreadSummary): ThreadSummary {
+    const unreadState = state.threadUnreadStateByKey.get(getThreadStateKey(thread.harness, thread.id));
+    const hasActiveTurn = isThreadStatusActive(thread.status);
+    if (!unreadState) {
+      return hasActiveTurn
+        ? {
+          ...thread,
+          unreadBadge: {
+            unreadCount: 0,
+            hasActiveTurn: true,
+          },
+        }
+        : thread;
+    }
+
+    const unreadCount = Math.max(0, unreadState.totalItemCount - unreadState.lastSeenItemCount);
+    if (!hasActiveTurn && unreadCount === 0) {
+      return thread.unreadBadge ? { ...thread, unreadBadge: null } : thread;
+    }
+
+    const unreadBadge = {
+      unreadCount,
+      hasActiveTurn,
+    };
+
+    return thread.unreadBadge?.unreadCount === unreadBadge.unreadCount
+      && thread.unreadBadge.hasActiveTurn === unreadBadge.hasActiveTurn
+      ? thread
+      : {
+        ...thread,
+        unreadBadge,
+      };
+  }
+
+  function updateStoredThreadUnreadState(
+    thread: Pick<ThreadSummary, "id" | "harness" | "status" | "updatedAt">,
+    totalItemCount: number,
+    { markSeen = false, seedSeenIfMissing = false }: { markSeen?: boolean; seedSeenIfMissing?: boolean } = {},
+  ) {
+    const key = getThreadStateKey(thread.harness, thread.id);
+    const previous = state.threadUnreadStateByKey.get(key);
+    const normalizedTotal = Math.max(0, totalItemCount);
+    const lastSeenItemCount = markSeen
+      ? normalizedTotal
+      : previous
+        ? Math.min(previous.lastSeenItemCount, normalizedTotal)
+        : seedSeenIfMissing
+          ? normalizedTotal
+          : 0;
+
+    const nextState: WorkbenchStoredThreadUnreadState = {
+      lastObservedStatus: thread.status,
+      lastObservedUpdatedAt: thread.updatedAt,
+      lastSeenItemCount,
+      totalItemCount: normalizedTotal,
+    };
+
+    if (
+      previous
+      && previous.lastObservedStatus === nextState.lastObservedStatus
+      && previous.lastObservedUpdatedAt === nextState.lastObservedUpdatedAt
+      && previous.lastSeenItemCount === nextState.lastSeenItemCount
+      && previous.totalItemCount === nextState.totalItemCount
+    ) {
+      return false;
+    }
+
+    state.threadUnreadStateByKey.set(key, nextState);
+    persistUnreadStateSnapshot();
+    return true;
+  }
+
+  async function refreshThreadUnreadState(thread: ThreadSummary) {
+    const key = getThreadStateKey(thread.harness, thread.id);
+    if (threadUnreadRefreshInFlightKeys.has(key)) {
+      return false;
+    }
+
+    threadUnreadRefreshInFlightKeys.add(key);
+    try {
+      const response = await sendBridgeRequest<ThreadReadResponse>(thread.harness, {
+        method: "thread/read",
+        params: {
+          includeTurns: true,
+          threadId: thread.id,
+        },
+      });
+
+      if (state.projectRootPath && !isProjectCodexThread(response.thread, state.projectRootPath)) {
+        return false;
+      }
+
+      if (state.currentThread?.id === thread.id && state.currentThread.harness === thread.harness) {
+        return false;
+      }
+
+      return updateStoredThreadUnreadState(
+        toThreadSummary(response.thread, thread.harness),
+        countThreadItems(response.thread.turns),
+        { seedSeenIfMissing: true },
+      );
+    } catch {
+      return false;
+    } finally {
+      threadUnreadRefreshInFlightKeys.delete(key);
+    }
+  }
+
+  function shouldRefreshThreadUnreadState(thread: ThreadSummary) {
+    if (state.currentThread?.id === thread.id && state.currentThread.harness === thread.harness) {
+      return false;
+    }
+
+    const unreadState = state.threadUnreadStateByKey.get(getThreadStateKey(thread.harness, thread.id));
+    if (!unreadState) {
+      return isThreadStatusActive(thread.status);
+    }
+
+    return unreadState.lastObservedUpdatedAt !== thread.updatedAt
+      || unreadState.lastObservedStatus !== thread.status;
+  }
+
+  async function refreshVisibleThreadUnreadStates(threads: ThreadSummary[]) {
+    const threadsToRefresh = threads.filter(shouldRefreshThreadUnreadState);
+    if (!threadsToRefresh.length) {
+      return;
+    }
+
+    const results = await Promise.allSettled(threadsToRefresh.map((thread) => refreshThreadUnreadState(thread)));
+    if (results.some((result) => result.status === "fulfilled" && result.value)) {
+      state.threads = state.threads.map(buildThreadSummaryWithUnreadBadge);
+      emit();
+    }
+  }
+
   function getSnapshot(): WorkbenchThreadSnapshot {
     return {
       currentThread: state.currentThread,
       currentThreadId: state.currentThreadId,
       pendingUserInputRequestsByThreadId: serializePendingUserInputRequests(),
       rateLimits: state.rateLimits,
-      threads: state.threads,
+      threads: state.threads.map(buildThreadSummaryWithUnreadBadge),
       threadsError: state.threadsError,
     };
   }
@@ -241,6 +406,9 @@ function WorkbenchThreadClient(
       && left.cwd === right.cwd
       && left.source === right.source
       && left.path === right.path
+      && left.forkedFromId === right.forkedFromId
+      && left.agentNickname === right.agentNickname
+      && left.agentRole === right.agentRole
       && left.turns.length === right.turns.length
       && areCurrentTurnsEquivalent(left, right);
   }
@@ -258,6 +426,10 @@ function WorkbenchThreadClient(
     const nextThread = applyPersistedQuestionnaireHistory(thread);
     if (areThreadPayloadsEquivalent(state.currentThread, nextThread)) {
       return;
+    }
+
+    if (nextThread) {
+      updateStoredThreadUnreadState(nextThread, countThreadItems(nextThread.turns), { markSeen: true });
     }
 
     const previousThread = state.currentThread;
@@ -426,13 +598,17 @@ function WorkbenchThreadClient(
       preview: "",
       createdAt: timestampSeconds,
       updatedAt: timestampSeconds,
-      status: "idle",
-      cwd: state.projectRootPath || state.projectRoot,
-      source: harness,
-      path: null,
-      turns: [],
-    };
-  }
+    status: "idle",
+    cwd: state.projectRootPath || state.projectRoot,
+    source: harness,
+    path: null,
+    forkedFromId: null,
+    agentNickname: null,
+    agentRole: null,
+    unreadBadge: null,
+    turns: [],
+  };
+}
 
   function getThreadHarness(threadId: string, fallback: WorkbenchHarness = "codex") {
     if (state.currentThread?.id === threadId) {
@@ -637,12 +813,18 @@ function WorkbenchThreadClient(
         harness,
         nextModel,
         getThreadReasoningEffort(threadId) ?? readStoredHarnessModelEffort(harness, nextModel),
-        state.currentThread?.agentPath ?? readStoredHarnessAgent(harness),
+        state.currentThread?.id === threadId
+          ? state.currentThread.agentPath
+          : readStoredHarnessAgent(harness),
       );
     } catch (error) {
       emitStatusMessage(error instanceof Error ? error.message : "Unable to read Codex thread.");
       return null;
     }
+  }
+
+  async function readThread(threadId: string, harness?: WorkbenchHarness) {
+    return await fetchThreadPayload(threadId, harness ?? getThreadHarness(threadId));
   }
 
   async function refreshThreads() {
@@ -698,6 +880,7 @@ function WorkbenchThreadClient(
 
           return left.id.localeCompare(right.id);
         });
+        void refreshVisibleThreadUnreadStates(state.threads);
         state.threadsError = errors.join(" ");
       } catch (error) {
         state.threads = [];
@@ -1221,26 +1404,34 @@ function WorkbenchThreadClient(
     setCurrentThread(payload);
   }
 
-  async function sendThreadMessage(threadId: string, input: UserInput[]) {
-    let resolvedThreadId = threadId;
-    let harness = resolvedThreadId.trim()
-      ? getThreadHarness(resolvedThreadId)
-      : state.currentThread?.harness ?? "codex";
-    const selectedModel = resolvedThreadId.trim()
-      ? getThreadModel(resolvedThreadId)
-      : state.currentThread?.model ?? readStoredHarnessModel(harness);
-    const selectedReasoningEffort = resolvedThreadId.trim()
-      ? getThreadReasoningEffort(resolvedThreadId)
-      : state.currentThread?.reasoningEffort ?? resolvePreferredReasoningEffort(harness, selectedModel);
-    const selectedAgentPath = resolvedThreadId.trim()
-      ? state.currentThread?.id === resolvedThreadId ? state.currentThread.agentPath : null
-      : state.currentThread?.agentPath ?? readStoredHarnessAgent(harness);
+  async function sendThreadMessage(
+    thread: ThreadPayload,
+    input: UserInput[],
+    sendOptions: WorkbenchSendThreadMessageOptions = {},
+  ) {
+    let resolvedThreadId = thread.id;
+    let harness = thread.harness;
+    const selectedModel = thread.model ?? (
+      resolvedThreadId.trim()
+        ? getThreadModel(resolvedThreadId)
+        : state.currentThread?.model ?? readStoredHarnessModel(harness)
+    );
+    const selectedReasoningEffort = thread.reasoningEffort ?? (
+      resolvedThreadId.trim()
+        ? getThreadReasoningEffort(resolvedThreadId)
+        : state.currentThread?.reasoningEffort ?? resolvePreferredReasoningEffort(harness, selectedModel)
+    );
+    const selectedAgentPath = thread.agentPath ?? (
+      resolvedThreadId.trim()
+        ? state.currentThread?.id === resolvedThreadId
+          ? state.currentThread.agentPath
+          : readStoredHarnessAgent(harness)
+        : state.currentThread?.agentPath ?? readStoredHarnessAgent(harness)
+    );
     const normalizedInput = normalizeThreadMessageInput(input);
-    const isDraftThread = state.currentThread?.isDraft === true && state.currentThread.id === resolvedThreadId;
+    const isDraftThread = thread.isDraft;
     const shouldBypassCodexDraftBootstrap = harness === "codex" && isDraftThread;
-    let previousThread = state.currentThread && state.currentThread.id === resolvedThreadId && !state.currentThread.isDraft
-      ? state.currentThread
-      : null;
+    let previousThread = !thread.isDraft ? thread : null;
     let bootstrapThread: ThreadPayload | null = null;
 
     if (!normalizedInput.length) {
@@ -1278,8 +1469,10 @@ function WorkbenchThreadClient(
         selectedAgentPath,
       );
       bootstrapThread = startedPayload;
-      setCurrentThread(bootstrapThread);
-      options.onThreadStarted?.(bootstrapThread);
+      if (sendOptions.selectThread !== false) {
+        setCurrentThread(bootstrapThread);
+        options.onThreadStarted?.(bootstrapThread);
+      }
       resolvedThreadId = bootstrapThread.id;
       previousThread = null;
       if (!shouldBypassCodexDraftBootstrap) {
@@ -1424,8 +1617,11 @@ function WorkbenchThreadClient(
       previousThread,
       normalizedInput,
     );
-    setCurrentThread(payload);
+    if (sendOptions.selectThread !== false) {
+      setCurrentThread(payload);
+    }
     await refreshThreads();
+    return payload;
   }
 
   async function submitPendingUserInputRequest(threadId: string, response: WorkbenchUserInputResponse) {
@@ -1605,6 +1801,7 @@ function WorkbenchThreadClient(
     isDraftThreadId,
     listModels,
     openThread,
+    readThread,
     reconcileCurrentThreadFromRead,
     readCurrentThread,
     refreshPendingUserInputRequests,

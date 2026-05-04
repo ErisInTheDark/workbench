@@ -22,10 +22,40 @@ import {
 const ORCHESTRATOR_ROOT = __dirname;
 const WEBAPP_ROOT = path.resolve(ORCHESTRATOR_ROOT, "..");
 const PROJECT_ROOT = path.resolve(WEBAPP_ROOT, "..");
-const CODEX_BRIDGE_URL = process.env.CODEX_APP_SERVER_URL ?? "ws://127.0.0.1:4500";
+const DEFAULT_CODEX_BRIDGE_URL = "ws://0.0.0.0:4500";
+const CODEX_BRIDGE_URL = process.env.CODEX_APP_SERVER_URL ?? DEFAULT_CODEX_BRIDGE_URL;
 const NEXT_PORT = process.env.PORT ?? "3002";
 const RESTART_DELAY_MS = 1000;
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
+
+function readNonEmptyEnv(value: string | undefined) {
+  const trimmedValue = value?.trim();
+  return trimmedValue ? trimmedValue : null;
+}
+
+function parseWebSocketPort(url: string) {
+  const parsedUrl = new URL(url);
+  if (parsedUrl.protocol !== "ws:" && parsedUrl.protocol !== "wss:") {
+    throw new Error(`Codex bridge URL must use ws:// or wss://, received ${url}`);
+  }
+
+  return parsedUrl.port || (parsedUrl.protocol === "wss:" ? "443" : "80");
+}
+
+const CODEX_PUBLIC_BRIDGE_URL = readNonEmptyEnv(process.env.NEXT_PUBLIC_CODEX_APP_SERVER_URL);
+const CODEX_PUBLIC_BRIDGE_PORT = readNonEmptyEnv(process.env.NEXT_PUBLIC_CODEX_APP_SERVER_PORT)
+  ?? parseWebSocketPort(CODEX_PUBLIC_BRIDGE_URL ?? CODEX_BRIDGE_URL);
+
+const nextDevEnv: NodeJS.ProcessEnv = {
+  ...process.env,
+  CODEX_APP_SERVER_URL: CODEX_BRIDGE_URL,
+  NEXT_PUBLIC_CODEX_APP_SERVER_PORT: CODEX_PUBLIC_BRIDGE_PORT,
+  PORT: NEXT_PORT,
+};
+
+if (CODEX_PUBLIC_BRIDGE_URL) {
+  nextDevEnv.NEXT_PUBLIC_CODEX_APP_SERVER_URL = CODEX_PUBLIC_BRIDGE_URL;
+}
 
 const processes = new Map<string, RunningProcess>();
 const bridgeConnections = new Set<BridgeClient>();
@@ -63,12 +93,7 @@ const specs: ProcessSpec[] = [
     name: "next-dev",
     command: "pnpm",
     args: ["run", "dev:next"],
-    env: {
-      ...process.env,
-      CODEX_APP_SERVER_URL: CODEX_BRIDGE_URL,
-      NEXT_PUBLIC_CODEX_APP_SERVER_URL: CODEX_BRIDGE_URL,
-      PORT: NEXT_PORT,
-    },
+    env: nextDevEnv,
   },
 ];
 

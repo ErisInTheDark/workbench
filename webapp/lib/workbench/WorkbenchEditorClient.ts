@@ -77,6 +77,7 @@ const RICH_TEXT_SAVED_STATUS_MESSAGE = "Saved.";
 const SAVE_GUARD_STATUS_MESSAGE = "Save blocked: markup mismatch. Check the console log.";
 const THREAD_STATUS_MESSAGE = "Codex thread. Continue below.";
 const WRITE_CONFLICT_STATUS_MESSAGE = "File changed on disk. Reload or overwrite to save.";
+const TOOLBAR_TOUCH_MOUSE_COMPAT_WINDOW_MS = 750;
 
 export type EditorMode = "rich" | "plain";
 
@@ -611,6 +612,8 @@ function WorkbenchEditorClient(
   const toolbars = surfaces.toolbars;
   const dialogs = [dialogSurface.saveConflict.dialog, dialogSurface.resetDraft.dialog] as const;
   let lastLoggedSaveIssue: SaveGuardIssue | null = null;
+  let preservedToolbarSelection: EditHistorySelection | null = null;
+  let lastNonMouseToolbarInteractionAt = 0;
 
   function captureCurrentSelection() {
     return captureEditorSelection(editor);
@@ -678,6 +681,33 @@ function WorkbenchEditorClient(
 
   function applyEditorFontSize() {
     editor.style.fontSize = `${state.fontSize}rem`;
+  }
+
+  function getMinimumToolbarTop(viewport = getVisualViewportMetrics()) {
+    let minimumTop = viewport.top + 12;
+    const headerChromeElements: HTMLElement[] = [
+      statusDisplay.filePathLabel,
+      statusDisplay.statusLine,
+      controls.zoomOutButton,
+      controls.zoomInButton,
+      controls.saveFileButton,
+      controls.resetDraftButton,
+    ];
+
+    for (const element of headerChromeElements) {
+      if (!element.isConnected) {
+        continue;
+      }
+
+      const rect = element.getBoundingClientRect();
+      if (!rect.width && !rect.height) {
+        continue;
+      }
+
+      minimumTop = Math.max(minimumTop, viewport.top + rect.bottom + 10);
+    }
+
+    return minimumTop;
   }
 
   function setSaveButtonState() {
@@ -765,6 +795,7 @@ function WorkbenchEditorClient(
   const revisionHoverController = RevisionHoverToolbarController({
     editor,
     getExpandedRangeRect,
+    getMinimumToolbarTop,
     getMode: () => options.fileSessionState.mode,
     getVisualViewportMetrics,
     onSyncEditorAfterStructuralChange: syncEditorAfterStructuralChange,
@@ -892,12 +923,13 @@ function WorkbenchEditorClient(
     const preferredTop = viewport.top + rect.top - floatingToolbar.offsetHeight - 10;
     const fallbackTop = viewport.top + rect.bottom + 10;
     const maxTop = viewport.top + viewport.height - floatingToolbar.offsetHeight - 12;
-    const y = preferredTop >= viewport.top + 12
+    const minimumTop = getMinimumToolbarTop(viewport);
+    const y = preferredTop >= minimumTop
       ? preferredTop
-      : Math.min(maxTop, fallbackTop);
+      : Math.min(maxTop, Math.max(minimumTop, fallbackTop));
 
     floatingToolbar.style.left = `${x}px`;
-    floatingToolbar.style.top = `${y}px`;
+    floatingToolbar.style.top = `${Math.max(minimumTop, y)}px`;
   }
 
   function refreshInlineToolbars() {
@@ -1104,6 +1136,20 @@ function WorkbenchEditorClient(
 
   function clearPendingInlineFormats() {
     inlineFormatController.clearPendingInlineFormats();
+  }
+
+  function captureToolbarSelection() {
+    preservedToolbarSelection = captureCurrentSelection();
+  }
+
+  function prepareEditorForToolbarAction() {
+    if (preservedToolbarSelection) {
+      restoreSelection(preservedToolbarSelection);
+      preservedToolbarSelection = null;
+      return;
+    }
+
+    editor.focus();
   }
 
   let mutationIsRunning = false;
@@ -1336,7 +1382,33 @@ function WorkbenchEditorClient(
   }
 
   const preserveToolbarSelection = (event: Event) => {
-    event.preventDefault();
+    captureToolbarSelection();
+
+    if (typeof PointerEvent !== "undefined" && event instanceof PointerEvent) {
+      if (event.pointerType !== "mouse") {
+        lastNonMouseToolbarInteractionAt = Date.now();
+        return;
+      }
+
+      event.preventDefault();
+      return;
+    }
+
+    if (event.type === "touchstart") {
+      lastNonMouseToolbarInteractionAt = Date.now();
+      return;
+    }
+
+    if (
+      event instanceof MouseEvent
+      && Date.now() - lastNonMouseToolbarInteractionAt < TOOLBAR_TOUCH_MOUSE_COMPAT_WINDOW_MS
+    ) {
+      return;
+    }
+
+    if (event instanceof MouseEvent) {
+      event.preventDefault();
+    }
   };
 
   controls.saveFileButton.addEventListener("click", () => {
@@ -1465,20 +1537,23 @@ function WorkbenchEditorClient(
       ? event.target.closest<HTMLButtonElement>("button[data-command]")
       : null;
     if (!button) {
+      preservedToolbarSelection = null;
       return;
     }
 
-    editor.focus();
+    prepareEditorForToolbarAction();
     if (button.dataset.command) {
       applyToolbarCommand(button.dataset.command);
     }
   }, { signal });
 
   toolbars.revisionAccept.addEventListener("click", () => {
+    prepareEditorForToolbarAction();
     applyHoveredRevisionAction("accept");
   }, { signal });
 
   toolbars.revisionReject.addEventListener("click", () => {
+    prepareEditorForToolbarAction();
     applyHoveredRevisionAction("reject");
   }, { signal });
 
@@ -1487,6 +1562,7 @@ function WorkbenchEditorClient(
   }, { signal });
 
   editor.addEventListener("pointerdown", () => {
+    preservedToolbarSelection = null;
     options.handleEditorPointerDown();
   }, { signal });
 
