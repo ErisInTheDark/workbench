@@ -303,8 +303,11 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                     className={joinClasses(
                       "thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg px-3 py-2 text-[0.84em] leading-[1.5] text-text outline-none transition",
                       customValue
-                        ? "bg-[color-mix(in_srgb,var(--text)_4%,transparent)] py-3"
-                        : "hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:py-3",
+                        ? "bg-[color-mix(in_srgb,var(--text)_4%,transparent)] py-3 mt-1 mb-3"
+                        : `
+                          hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:py-3 hover:mb-3
+                          focus-visible:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:py-3 focus-visible:mt-1 focus-visible:mb-3
+                        `,
                     )}
                     spellCheck={!question.isSecret}
                     value={customValue}
@@ -318,7 +321,6 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                       }
                     }}
                     onKeyDown={isLastQuestion ? handleLastQuestionKeyDown : undefined}
-                    placeholder={question.allowOther ? "Add your own answer..." : "Add context..."}
                   />
                 )}
               </div>

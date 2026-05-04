@@ -150,10 +150,10 @@ function ThreadCommandStageParts ({ parts }: { parts: ThreadCommandDisplayPart[]
             path={part.path}
           />
         ) : (
-          <span key={`text:${index}`} className="min-w-0 max-w-full">
+          <span key={`text:${index}`} className="contents">
             {part.variant === "code" ? (
               <code
-                className={`${THREAD_INLINE_CODE_CLASS} ${part.clamp ? "inline-block max-w-full overflow-hidden text-ellipsis whitespace-nowrap align-bottom" : ""}`}
+                className={`${THREAD_INLINE_CODE_CLASS} ${part.clamp ? "inline-block shrink-1 min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap align-bottom" : ""}`}
                 title={part.clamp ? part.text : undefined}
               >
                 {part.text}
@@ -181,16 +181,16 @@ export function ThreadCommandSummary ({ display }: { display: ThreadCommandSumma
       <span className="inline-flex min-w-0 flex-wrap items-center gap-x-[0.45rem] gap-y-[0.3rem]">
         {stages.map((stage, index) => (
           index === 0 ? (
-            <span key={`stage:${index}`} className="inline-flex min-w-0 max-w-full flex-wrap items-baseline gap-[0.3rem]">
+            <span key={`stage:${index}`} className="inline-flex min-w-0 max-w-full items-baseline gap-[0.3rem]">
               <ThreadCommandStageParts parts={stage} />
             </span>
           ) : (
             <span
               key={`stage:${index}`}
-              className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-[0.3rem]"
+              className="inline-flex min-w-0 max-w-full items-center gap-[0.3rem]"
             >
               <ThreadCommandStageArrowIcon />
-              <span className="inline-flex min-w-0 max-w-full flex-wrap items-baseline gap-[0.3rem]">
+              <span className="inline-flex min-w-0 max-w-full items-baseline gap-[0.3rem]">
                 <ThreadCommandStageParts parts={stage} />
               </span>
             </span>

@@ -4,7 +4,17 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 
+import type { ApplyPatchApprovalParams } from "../lib/codex/generated/app-server/ApplyPatchApprovalParams";
+import type { ExecCommandApprovalParams } from "../lib/codex/generated/app-server/ExecCommandApprovalParams";
+import type { ReviewDecision } from "../lib/codex/generated/app-server/ReviewDecision";
 import type { ServerRequest } from "../lib/codex/generated/app-server/ServerRequest";
+import type { CommandExecutionApprovalDecision } from "../lib/codex/generated/app-server/v2/CommandExecutionApprovalDecision";
+import type { CommandExecutionRequestApprovalParams } from "../lib/codex/generated/app-server/v2/CommandExecutionRequestApprovalParams";
+import type { FileChangeApprovalDecision } from "../lib/codex/generated/app-server/v2/FileChangeApprovalDecision";
+import type { FileChangeRequestApprovalParams } from "../lib/codex/generated/app-server/v2/FileChangeRequestApprovalParams";
+import type { GrantedPermissionProfile } from "../lib/codex/generated/app-server/v2/GrantedPermissionProfile";
+import type { PermissionsRequestApprovalParams } from "../lib/codex/generated/app-server/v2/PermissionsRequestApprovalParams";
+import type { RequestPermissionProfile } from "../lib/codex/generated/app-server/v2/RequestPermissionProfile";
 import type { ToolRequestUserInputParams } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputParams";
 import type { ToolRequestUserInputQuestion } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputQuestion";
 import type { ToolRequestUserInputResponse } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputResponse";
@@ -53,14 +63,58 @@ type CodexStdioBridgeOptions = {
   storageRoot: string;
 };
 
-type PendingCodexQuestionnaire = {
+type PendingCodexUserInputRequestBase = {
   itemId: string | null;
   request: WorkbenchUserInputRequest;
   requestKey: string;
   threadId: string;
-  turnId: string;
+  turnId: string | null;
   upstreamRequestId: number | string;
 };
+
+type PendingCodexQuestionnaire = PendingCodexUserInputRequestBase & {
+  kind: "questionnaire";
+};
+
+type PendingCodexCommandExecutionApproval = PendingCodexUserInputRequestBase & {
+  kind: "commandExecutionApproval";
+  params: CommandExecutionRequestApprovalParams;
+};
+
+type PendingCodexFileChangeApproval = PendingCodexUserInputRequestBase & {
+  kind: "fileChangeApproval";
+  params: FileChangeRequestApprovalParams;
+};
+
+type PendingCodexPermissionsApproval = PendingCodexUserInputRequestBase & {
+  kind: "permissionsApproval";
+  params: PermissionsRequestApprovalParams;
+};
+
+type PendingCodexApplyPatchApproval = PendingCodexUserInputRequestBase & {
+  kind: "applyPatchApproval";
+  params: ApplyPatchApprovalParams;
+};
+
+type PendingCodexExecCommandApproval = PendingCodexUserInputRequestBase & {
+  kind: "execCommandApproval";
+  params: ExecCommandApprovalParams;
+};
+
+type PendingCodexUserInputRequest =
+  | PendingCodexQuestionnaire
+  | PendingCodexCommandExecutionApproval
+  | PendingCodexFileChangeApproval
+  | PendingCodexPermissionsApproval
+  | PendingCodexApplyPatchApproval
+  | PendingCodexExecCommandApproval;
+
+type ApprovalDecisionChoice = "allow-once" | "allow-session" | "decline";
+
+const APPROVAL_DECISION_QUESTION_ID = "decision";
+const APPROVAL_ALLOW_ONCE_LABEL = "Allow once";
+const APPROVAL_ALLOW_SESSION_LABEL = "Allow for session";
+const APPROVAL_DECLINE_LABEL = "Decline";
 
 function isJsonRpcResponse(message: unknown): message is JsonRpcResponse {
   return !!message
@@ -99,6 +153,15 @@ function asString(value: unknown) {
 
 function asNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function truncateText(value: string, maxLength = 400) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
 function normalizeQuestionId(value: string | null, index: number) {
@@ -178,6 +241,209 @@ function normalizeQuestionnaireRequest(
   };
 }
 
+function createApprovalQuestionText(prompt: string, details: Array<string | null>) {
+  return [prompt, ...details.filter((value): value is string => Boolean(value?.trim()))].join("\n\n");
+}
+
+function createApprovalDetail(label: string, value: string | null | undefined) {
+  const normalizedValue = value?.trim();
+  if (!normalizedValue) {
+    return null;
+  }
+
+  return `${label}\n${truncateText(normalizedValue)}`;
+}
+
+function summarizeList(values: string[], maxItems = 5) {
+  const normalizedValues = values.map((value) => value.trim()).filter(Boolean);
+  if (!normalizedValues.length) {
+    return null;
+  }
+
+  const visibleValues = normalizedValues.slice(0, maxItems);
+  const hiddenCount = normalizedValues.length - visibleValues.length;
+  return `${visibleValues.map((value) => truncateText(value)).join("\n")}${hiddenCount > 0 ? `\n+${hiddenCount} more` : ""}`;
+}
+
+function normalizeFileSystemPath(
+  value: string | NonNullable<NonNullable<RequestPermissionProfile["fileSystem"]>["entries"]>[number]["path"],
+) {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  switch (value.type) {
+    case "path":
+      return value.path;
+    case "glob_pattern":
+      return value.pattern;
+    case "special":
+      return `special:${value.value}`;
+  }
+}
+
+function normalizeFileSystemPermissionPaths(permissions: RequestPermissionProfile["fileSystem"]) {
+  if (!permissions) {
+    return [];
+  }
+
+  const entryPaths = permissions.entries?.map((entry) => normalizeFileSystemPath(entry.path)).filter(Boolean) ?? [];
+  return [
+    ...entryPaths,
+    ...(permissions.read ?? []),
+    ...(permissions.write ?? []),
+  ];
+}
+
+function describeRequestedPermissions(permissions: RequestPermissionProfile) {
+  const sections: string[] = [];
+  if (permissions.network?.enabled) {
+    sections.push("Network access\nEnabled");
+  }
+
+  const fileSystemPaths = summarizeList(normalizeFileSystemPermissionPaths(permissions.fileSystem));
+  if (fileSystemPaths) {
+    sections.push(`File system access\n${fileSystemPaths}`);
+  }
+
+  return sections.length ? sections.join("\n\n") : null;
+}
+
+function createApprovalQuestionOptions(actionLabel: string) {
+  return [
+    {
+      description: `Approve this ${actionLabel} just for the current action.`,
+      label: APPROVAL_ALLOW_ONCE_LABEL,
+    },
+    {
+      description: `Approve this ${actionLabel} for the rest of the session.`,
+      label: APPROVAL_ALLOW_SESSION_LABEL,
+    },
+    {
+      description: `Do not approve this ${actionLabel}.`,
+      label: APPROVAL_DECLINE_LABEL,
+    },
+  ] satisfies WorkbenchUserInputQuestion["options"];
+}
+
+function createApprovalRequest(
+  threadId: string,
+  requestKey: string,
+  {
+    actionLabel,
+    details,
+    prompt,
+    title,
+  }: {
+    actionLabel: string;
+    details: Array<string | null>;
+    prompt: string;
+    title: string;
+  },
+): WorkbenchUserInputRequest {
+  return {
+    id: `codex:${threadId}:${requestKey}`,
+    questions: [{
+      allowOther: false,
+      header: "Approval",
+      id: APPROVAL_DECISION_QUESTION_ID,
+      isSecret: false,
+      options: createApprovalQuestionOptions(actionLabel),
+      question: createApprovalQuestionText(prompt, details),
+    }],
+    submitLabel: "Submit response",
+    summary: "Codex cannot continue until you respond to this request.",
+    title,
+  };
+}
+
+function normalizeCommandExecutionApprovalRequest(
+  requestKey: string,
+  params: CommandExecutionRequestApprovalParams,
+): WorkbenchUserInputRequest {
+  const commandActionsText = summarizeList((params.commandActions ?? []).map((action) => action.command));
+  const networkTarget = params.networkApprovalContext
+    ? `${params.networkApprovalContext.protocol}://${params.networkApprovalContext.host}`
+    : null;
+
+  return createApprovalRequest(params.threadId, requestKey, {
+    actionLabel: "command",
+    details: [
+      createApprovalDetail("Command", params.command ?? null),
+      createApprovalDetail("Working directory", params.cwd ?? null),
+      createApprovalDetail("Reason", params.reason ?? null),
+      createApprovalDetail("Parsed actions", commandActionsText),
+      createApprovalDetail("Network target", networkTarget),
+    ],
+    prompt: "Should Codex run this command?",
+    title: "Approve command execution",
+  });
+}
+
+function normalizeFileChangeApprovalRequest(
+  requestKey: string,
+  params: FileChangeRequestApprovalParams,
+): WorkbenchUserInputRequest {
+  return createApprovalRequest(params.threadId, requestKey, {
+    actionLabel: "file change",
+    details: [
+      createApprovalDetail("Reason", params.reason ?? null),
+      createApprovalDetail("Grant root", params.grantRoot ?? null),
+    ],
+    prompt: "Should Codex write these file changes?",
+    title: "Approve file changes",
+  });
+}
+
+function normalizePermissionsApprovalRequest(
+  requestKey: string,
+  params: PermissionsRequestApprovalParams,
+): WorkbenchUserInputRequest {
+  return createApprovalRequest(params.threadId, requestKey, {
+    actionLabel: "permission request",
+    details: [
+      createApprovalDetail("Working directory", params.cwd),
+      createApprovalDetail("Reason", params.reason),
+      createApprovalDetail("Requested permissions", describeRequestedPermissions(params.permissions)),
+    ],
+    prompt: "Should Codex receive these extra permissions?",
+    title: "Grant requested permissions",
+  });
+}
+
+function normalizeApplyPatchApprovalRequest(
+  requestKey: string,
+  params: ApplyPatchApprovalParams,
+): WorkbenchUserInputRequest {
+  return createApprovalRequest(params.conversationId, requestKey, {
+    actionLabel: "patch",
+    details: [
+      createApprovalDetail("Reason", params.reason),
+      createApprovalDetail("Grant root", params.grantRoot),
+      createApprovalDetail("Changed paths", summarizeList(Object.keys(params.fileChanges ?? {}))),
+    ],
+    prompt: "Should Codex apply this patch?",
+    title: "Approve patch application",
+  });
+}
+
+function normalizeExecCommandApprovalRequest(
+  requestKey: string,
+  params: ExecCommandApprovalParams,
+): WorkbenchUserInputRequest {
+  return createApprovalRequest(params.conversationId, requestKey, {
+    actionLabel: "command",
+    details: [
+      createApprovalDetail("Command", params.command.join(" ")),
+      createApprovalDetail("Working directory", params.cwd),
+      createApprovalDetail("Reason", params.reason),
+      createApprovalDetail("Parsed command", summarizeList((params.parsedCmd ?? []).map((entry) => entry.cmd))),
+    ],
+    prompt: "Should Codex run this command?",
+    title: "Approve command execution",
+  });
+}
+
 function toToolRequestUserInputResponse(response: WorkbenchUserInputResponse): ToolRequestUserInputResponse {
   return {
     answers: Object.fromEntries(Object.entries(response.answers).map(([questionId, answer]) => [
@@ -187,6 +453,65 @@ function toToolRequestUserInputResponse(response: WorkbenchUserInputResponse): T
       },
     ])),
   };
+}
+
+function readApprovalDecision(response: WorkbenchUserInputResponse) {
+  const answers = response.answers[APPROVAL_DECISION_QUESTION_ID]?.answers ?? [];
+  if (answers.includes(APPROVAL_ALLOW_ONCE_LABEL)) {
+    return "allow-once" satisfies ApprovalDecisionChoice;
+  }
+  if (answers.includes(APPROVAL_ALLOW_SESSION_LABEL)) {
+    return "allow-session" satisfies ApprovalDecisionChoice;
+  }
+  if (answers.includes(APPROVAL_DECLINE_LABEL)) {
+    return "decline" satisfies ApprovalDecisionChoice;
+  }
+
+  return null;
+}
+
+function toGrantedPermissionProfile(permissions: RequestPermissionProfile): GrantedPermissionProfile {
+  const grantedPermissions: GrantedPermissionProfile = {};
+  if (permissions.fileSystem) {
+    grantedPermissions.fileSystem = permissions.fileSystem;
+  }
+  if (permissions.network) {
+    grantedPermissions.network = permissions.network;
+  }
+  return grantedPermissions;
+}
+
+function toLegacyApprovalDecision(choice: ApprovalDecisionChoice): ReviewDecision {
+  switch (choice) {
+    case "allow-once":
+      return "approved";
+    case "allow-session":
+      return "approved_for_session";
+    case "decline":
+      return "denied";
+  }
+}
+
+function toCommandExecutionApprovalDecision(choice: ApprovalDecisionChoice): CommandExecutionApprovalDecision {
+  switch (choice) {
+    case "allow-once":
+      return "accept";
+    case "allow-session":
+      return "acceptForSession";
+    case "decline":
+      return "decline";
+  }
+}
+
+function toFileChangeApprovalDecision(choice: ApprovalDecisionChoice): FileChangeApprovalDecision {
+  switch (choice) {
+    case "allow-once":
+      return "accept";
+    case "allow-session":
+      return "acceptForSession";
+    case "decline":
+      return "decline";
+  }
 }
 
 export class CodexStdioBridge {
@@ -199,7 +524,7 @@ export class CodexStdioBridge {
   private codexProcess: ChildProcess | null = null;
   private initializeResult: unknown = null;
   private nextRequestId = 1;
-  private readonly pendingQuestionnaires = new Map<string, PendingCodexQuestionnaire>();
+  private readonly pendingUserInputRequests = new Map<string, PendingCodexUserInputRequest>();
   private readonly pendingResponses = new Map<number, PendingResponse>();
   private upstreamInitialized = false;
   private upstreamInitializePromise: Promise<void> | null = null;
@@ -230,7 +555,7 @@ export class CodexStdioBridge {
   }
 
   stop() {
-    this.pendingQuestionnaires.clear();
+    this.pendingUserInputRequests.clear();
     this.pendingResponses.clear();
     this.upstreamInitialized = false;
     this.upstreamInitializePromise = null;
@@ -315,7 +640,7 @@ export class CodexStdioBridge {
         id: requestId,
         error: {
           code: -32000,
-          message: error instanceof Error ? error.message : "Codex questionnaire bridge request failed.",
+          message: error instanceof Error ? error.message : "Codex user-input bridge request failed.",
         },
       };
     }
@@ -345,7 +670,7 @@ export class CodexStdioBridge {
     this.codexProcess = this.createStdioChild();
     this.initializeResult = null;
     this.nextRequestId = 1;
-    this.pendingQuestionnaires.clear();
+    this.pendingUserInputRequests.clear();
     this.pendingResponses.clear();
     this.upstreamInitialized = false;
     this.upstreamInitializePromise = null;
@@ -361,7 +686,7 @@ export class CodexStdioBridge {
       log("codex-stdio", `exited (code=${code ?? "null"}, signal=${signal ?? "null"})`);
       this.codexProcess = null;
       this.initializeResult = null;
-      this.pendingQuestionnaires.clear();
+      this.pendingUserInputRequests.clear();
       this.pendingResponses.clear();
       this.upstreamInitialized = false;
       this.upstreamInitializePromise = null;
@@ -477,8 +802,25 @@ export class CodexStdioBridge {
     }
 
     if (isJsonRpcServerRequest(message)) {
-      if (message.method === "item/tool/requestUserInput") {
-        this.handleUpstreamQuestionnaireRequest(message);
+      switch (message.method) {
+        case "item/tool/requestUserInput":
+          this.handleUpstreamQuestionnaireRequest(message);
+          return;
+        case "item/commandExecution/requestApproval":
+          this.handleUpstreamCommandExecutionApprovalRequest(message);
+          return;
+        case "item/fileChange/requestApproval":
+          this.handleUpstreamFileChangeApprovalRequest(message);
+          return;
+        case "item/permissions/requestApproval":
+          this.handleUpstreamPermissionsApprovalRequest(message);
+          return;
+        case "applyPatchApproval":
+          this.handleUpstreamApplyPatchApprovalRequest(message);
+          return;
+        case "execCommandApproval":
+          this.handleUpstreamExecCommandApprovalRequest(message);
+          return;
       }
       return;
     }
@@ -500,12 +842,12 @@ export class CodexStdioBridge {
     }
 
     const requestKey = String(requestId);
-    const pendingQuestionnaire = this.pendingQuestionnaires.get(requestKey);
-    if (!pendingQuestionnaire || pendingQuestionnaire.threadId !== threadId) {
+    const pendingRequest = this.pendingUserInputRequests.get(requestKey);
+    if (!pendingRequest || pendingRequest.threadId !== threadId) {
       return;
     }
 
-    this.pendingQuestionnaires.delete(requestKey);
+    this.pendingUserInputRequests.delete(requestKey);
     this.onNotification({
       method: "questionnaire/resolved",
       params: {
@@ -520,7 +862,8 @@ export class CodexStdioBridge {
   ) {
     const requestKey = String(request.id);
     const normalizedRequest = normalizeQuestionnaireRequest(request.params, requestKey);
-    this.pendingQuestionnaires.set(requestKey, {
+    this.pendingUserInputRequests.set(requestKey, {
+      kind: "questionnaire",
       itemId: request.params.itemId?.trim() || null,
       request: normalizedRequest,
       requestKey,
@@ -540,14 +883,149 @@ export class CodexStdioBridge {
     });
   }
 
+  private handleUpstreamCommandExecutionApprovalRequest(
+    request: Extract<ServerRequest, { method: "item/commandExecution/requestApproval" }>,
+  ) {
+    const requestKey = String(request.id);
+    const normalizedRequest = normalizeCommandExecutionApprovalRequest(requestKey, request.params);
+    this.pendingUserInputRequests.set(requestKey, {
+      kind: "commandExecutionApproval",
+      itemId: request.params.itemId,
+      params: request.params,
+      request: normalizedRequest,
+      requestKey,
+      threadId: request.params.threadId,
+      turnId: request.params.turnId,
+      upstreamRequestId: request.id,
+    });
+    this.onNotification({
+      method: "questionnaire/requested",
+      params: {
+        itemId: request.params.itemId,
+        request: normalizedRequest,
+        requestKey,
+        threadId: request.params.threadId,
+        turnId: request.params.turnId,
+      },
+    });
+  }
+
+  private handleUpstreamFileChangeApprovalRequest(
+    request: Extract<ServerRequest, { method: "item/fileChange/requestApproval" }>,
+  ) {
+    const requestKey = String(request.id);
+    const normalizedRequest = normalizeFileChangeApprovalRequest(requestKey, request.params);
+    this.pendingUserInputRequests.set(requestKey, {
+      kind: "fileChangeApproval",
+      itemId: request.params.itemId,
+      params: request.params,
+      request: normalizedRequest,
+      requestKey,
+      threadId: request.params.threadId,
+      turnId: request.params.turnId,
+      upstreamRequestId: request.id,
+    });
+    this.onNotification({
+      method: "questionnaire/requested",
+      params: {
+        itemId: request.params.itemId,
+        request: normalizedRequest,
+        requestKey,
+        threadId: request.params.threadId,
+        turnId: request.params.turnId,
+      },
+    });
+  }
+
+  private handleUpstreamPermissionsApprovalRequest(
+    request: Extract<ServerRequest, { method: "item/permissions/requestApproval" }>,
+  ) {
+    const requestKey = String(request.id);
+    const normalizedRequest = normalizePermissionsApprovalRequest(requestKey, request.params);
+    this.pendingUserInputRequests.set(requestKey, {
+      kind: "permissionsApproval",
+      itemId: request.params.itemId,
+      params: request.params,
+      request: normalizedRequest,
+      requestKey,
+      threadId: request.params.threadId,
+      turnId: request.params.turnId,
+      upstreamRequestId: request.id,
+    });
+    this.onNotification({
+      method: "questionnaire/requested",
+      params: {
+        itemId: request.params.itemId,
+        request: normalizedRequest,
+        requestKey,
+        threadId: request.params.threadId,
+        turnId: request.params.turnId,
+      },
+    });
+  }
+
+  private handleUpstreamApplyPatchApprovalRequest(
+    request: Extract<ServerRequest, { method: "applyPatchApproval" }>,
+  ) {
+    const requestKey = String(request.id);
+    const normalizedRequest = normalizeApplyPatchApprovalRequest(requestKey, request.params);
+    this.pendingUserInputRequests.set(requestKey, {
+      kind: "applyPatchApproval",
+      itemId: request.params.callId,
+      params: request.params,
+      request: normalizedRequest,
+      requestKey,
+      threadId: request.params.conversationId,
+      turnId: null,
+      upstreamRequestId: request.id,
+    });
+    this.onNotification({
+      method: "questionnaire/requested",
+      params: {
+        itemId: request.params.callId,
+        request: normalizedRequest,
+        requestKey,
+        threadId: request.params.conversationId,
+        turnId: null,
+      },
+    });
+  }
+
+  private handleUpstreamExecCommandApprovalRequest(
+    request: Extract<ServerRequest, { method: "execCommandApproval" }>,
+  ) {
+    const requestKey = String(request.id);
+    const normalizedRequest = normalizeExecCommandApprovalRequest(requestKey, request.params);
+    this.pendingUserInputRequests.set(requestKey, {
+      kind: "execCommandApproval",
+      itemId: request.params.callId,
+      params: request.params,
+      request: normalizedRequest,
+      requestKey,
+      threadId: request.params.conversationId,
+      turnId: null,
+      upstreamRequestId: request.id,
+    });
+    this.onNotification({
+      method: "questionnaire/requested",
+      params: {
+        itemId: request.params.callId,
+        request: normalizedRequest,
+        requestKey,
+        threadId: request.params.conversationId,
+        turnId: null,
+      },
+    });
+  }
+
   private listPendingQuestionnaires() {
     return {
-      data: Array.from(this.pendingQuestionnaires.values(), (pendingQuestionnaire) => ({
-        itemId: pendingQuestionnaire.itemId,
-        request: pendingQuestionnaire.request,
-        requestKey: pendingQuestionnaire.requestKey,
-        threadId: pendingQuestionnaire.threadId,
-        turnId: pendingQuestionnaire.turnId,
+      data: Array.from(this.pendingUserInputRequests.values(), (pendingRequest) => ({
+        itemId: pendingRequest.itemId,
+        request: pendingRequest.request,
+        requestKey: pendingRequest.requestKey,
+        threadId: pendingRequest.threadId,
+        turnId: pendingRequest.turnId,
       })),
     };
   }
@@ -597,34 +1075,86 @@ export class CodexStdioBridge {
     };
   }
 
+  private buildApprovalResponse(
+    pendingRequest: Exclude<PendingCodexUserInputRequest, PendingCodexQuestionnaire>,
+    response: WorkbenchUserInputResponse,
+  ) {
+    const decision = readApprovalDecision(response);
+    if (!decision) {
+      throw new Error("Choose one of the approval options before submitting.");
+    }
+
+    switch (pendingRequest.kind) {
+      case "commandExecutionApproval":
+        return {
+          decision: toCommandExecutionApprovalDecision(decision),
+        };
+      case "fileChangeApproval":
+        return {
+          decision: toFileChangeApprovalDecision(decision),
+        };
+      case "permissionsApproval":
+        return decision === "decline"
+          ? {
+            permissions: {},
+            scope: "turn",
+          }
+          : {
+            permissions: toGrantedPermissionProfile(pendingRequest.params.permissions),
+            scope: decision === "allow-session" ? "session" : "turn",
+          };
+      case "applyPatchApproval":
+      case "execCommandApproval":
+        return {
+          decision: toLegacyApprovalDecision(decision),
+        };
+    }
+  }
+
   private async respondToQuestionnaire(params: unknown) {
     const resolvedResponse = this.readQuestionnaireResponse(params);
     if (!resolvedResponse) {
       throw new Error("Missing questionnaire/respond params.");
     }
 
-    const pendingQuestionnaire = this.pendingQuestionnaires.get(resolvedResponse.requestKey);
-    if (!pendingQuestionnaire || pendingQuestionnaire.threadId !== resolvedResponse.threadId) {
+    const pendingRequest = this.pendingUserInputRequests.get(resolvedResponse.requestKey);
+    if (!pendingRequest || pendingRequest.threadId !== resolvedResponse.threadId) {
       throw new Error("That questionnaire is no longer pending.");
     }
 
+    if (pendingRequest.kind !== "questionnaire") {
+      this.send({
+        id: pendingRequest.upstreamRequestId,
+        result: this.buildApprovalResponse(pendingRequest, resolvedResponse.response),
+      });
+      this.pendingUserInputRequests.delete(pendingRequest.requestKey);
+      this.onNotification({
+        method: "questionnaire/resolved",
+        params: {
+          requestKey: pendingRequest.requestKey,
+          threadId: pendingRequest.threadId,
+        },
+      });
+      return { ok: true };
+    }
+
     const historyEntry: WorkbenchQuestionnaireHistoryEntry = {
-      insertAfterItemId: resolvedResponse.insertAfterItemId ?? pendingQuestionnaire.itemId,
+      insertAfterItemId: resolvedResponse.insertAfterItemId ?? pendingRequest.itemId,
       insertAfterItemIndex: resolvedResponse.insertAfterItemIndex,
-      itemId: pendingQuestionnaire.itemId,
-      request: pendingQuestionnaire.request,
-      requestKey: pendingQuestionnaire.requestKey,
+      itemId: pendingRequest.itemId,
+      request: pendingRequest.request,
+      requestKey: pendingRequest.requestKey,
       resolvedAt: Date.now(),
       response: resolvedResponse.response,
-      threadId: pendingQuestionnaire.threadId,
-      turnId: resolvedResponse.turnId ?? pendingQuestionnaire.turnId,
+      threadId: pendingRequest.threadId,
+      turnId: resolvedResponse.turnId ?? pendingRequest.turnId ?? "",
     };
 
     await this.questionnaireStore.upsertThreadEntry(historyEntry);
 
     try {
       this.send({
-        id: pendingQuestionnaire.upstreamRequestId,
+        id: pendingRequest.upstreamRequestId,
         result: toToolRequestUserInputResponse(resolvedResponse.response),
       });
     } catch (error) {
@@ -632,12 +1162,12 @@ export class CodexStdioBridge {
       throw error;
     }
 
-    this.pendingQuestionnaires.delete(pendingQuestionnaire.requestKey);
+    this.pendingUserInputRequests.delete(pendingRequest.requestKey);
     this.onNotification({
       method: "questionnaire/resolved",
       params: {
-        requestKey: pendingQuestionnaire.requestKey,
-        threadId: pendingQuestionnaire.threadId,
+        requestKey: pendingRequest.requestKey,
+        threadId: pendingRequest.threadId,
       },
     });
 
