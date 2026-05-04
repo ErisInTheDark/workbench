@@ -831,6 +831,36 @@ export function applyCopilotEvent(
       }
       return;
     }
+    case "abort": {
+      const turn = getActiveTurn(state);
+      if (!turn || turn.status !== "inProgress") {
+        return;
+      }
+
+      turn.completedAt = timestampSeconds;
+      turn.durationMs = toTurnDurationMs(turn);
+      turn.status = "completed";
+      state.currentTurnId = null;
+      setThreadStatus(state.thread, "idle");
+      state.thread.updatedAt = timestampSeconds;
+      if (emitNotifications) {
+        onNotification({
+          method: "turn/completed",
+          params: {
+            threadId: state.thread.id,
+            turn: structuredClone(turn),
+          },
+        });
+        onNotification({
+          method: "thread/status/changed",
+          params: {
+            status: state.thread.status,
+            threadId: state.thread.id,
+          },
+        });
+      }
+      return;
+    }
     case "session.idle": {
       const turn = getActiveTurn(state);
       if (!turn || turn.status !== "inProgress") {

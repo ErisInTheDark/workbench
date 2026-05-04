@@ -7,12 +7,12 @@ import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
 import { getCurrentTurn } from "./codex/thread-state";
 import type {
     ExplorerSnapshot,
+    WorkbenchPendingUserInputRequest,
     ThreadPayload,
     WorkbenchBindings,
     WorkbenchControls,
     WorkbenchHarness,
     WorkbenchSendThreadMessageOptions,
-    WorkbenchUserInputRequest,
 } from "./types";
 import {
     createListItemDomEditor,
@@ -644,8 +644,8 @@ export async function WorkbenchClient(
   }
 
   function arePendingUserInputRequestsEquivalent(
-    left: Record<string, WorkbenchUserInputRequest>,
-    right: Record<string, WorkbenchUserInputRequest>,
+    left: Record<string, WorkbenchPendingUserInputRequest>,
+    right: Record<string, WorkbenchPendingUserInputRequest>,
   ) {
     if (left === right) {
       return true;
@@ -762,6 +762,20 @@ export async function WorkbenchClient(
 
     applyThreadPayloadToCurrentView(payload, "Sent message.");
     syncCurrentSelectionToUrl({ threadId: payload.id });
+    emitExplorerStateChange();
+    return payload;
+  }
+
+  async function stopThread(thread: ThreadPayload) {
+    const payload = await threadClient.stopThread(thread);
+    if (!payload) {
+      return null;
+    }
+
+    if (payload.id === sessionState.currentThreadId) {
+      applyThreadPayloadToCurrentView(payload, "Requested turn stop.");
+    }
+
     emitExplorerStateChange();
     return payload;
   }
@@ -926,6 +940,7 @@ export async function WorkbenchClient(
     openThread,
     readThread,
     sendThreadMessage,
+    stopThread,
     submitPendingUserInputRequest: threadClient.submitPendingUserInputRequest,
     setCurrentThreadModel: (threadId, model) => {
       threadClient.setCurrentThreadModel(threadId, model);

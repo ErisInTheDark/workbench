@@ -10,8 +10,9 @@ import type {
   ThreadUnreadBadge,
   WorkbenchHarness,
   WorkbenchModelOption,
+  WorkbenchPendingUserInputRequest,
   WorkbenchSendThreadMessageOptions,
-  WorkbenchUserInputRequest,
+  WorkbenchSubmitUserInputRequestOptions,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
 import {
@@ -46,30 +47,40 @@ function areThreadPayloadsEquivalent (left: ThreadPayload | null | undefined, ri
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function hasExpandedSelectionWithin (root: HTMLElement | null) {
+  if (!root || typeof window === "undefined" || typeof window.getSelection !== "function") {
+    return false;
+  }
+
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+    return false;
+  }
+
+  const anchorNode = selection.anchorNode;
+  const focusNode = selection.focusNode;
+  return Boolean(anchorNode && focusNode && root.contains(anchorNode) && root.contains(focusNode));
+}
+
 export default memo(function ThreadView ({
-  composerInfoMessagesByThreadId,
   fontSizeRem,
   livePendingUserInputRequestsByThreadId,
-  onClearUserInputRequest,
   onDraftHarnessChange,
   onListModels,
   onOpenFile,
   onReadThread,
   onSendMessage,
-  onShowExampleQuestion,
+  onStopThread,
   onSubmitUserInputRequest,
   onThreadAgentChange,
   onThreadReasoningEffortChange,
   onThreadModelChange,
-  previewPendingUserInputRequestsByThreadId,
   projectRootPath,
   rateLimits,
   thread,
 }: {
-  composerInfoMessagesByThreadId: Record<string, string>;
   fontSizeRem: number;
-  livePendingUserInputRequestsByThreadId: Record<string, WorkbenchUserInputRequest>;
-  onClearUserInputRequest: (threadId: string) => void;
+  livePendingUserInputRequestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>;
   onDraftHarnessChange: (harness: WorkbenchHarness) => void;
   onListModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
   onOpenFile: (path: string) => Promise<void>;
@@ -79,12 +90,15 @@ export default memo(function ThreadView ({
     input: UserInput[],
     options?: WorkbenchSendThreadMessageOptions,
   ) => Promise<ThreadPayload | null>;
-  onShowExampleQuestion: (thread: ThreadPayload) => void;
-  onSubmitUserInputRequest: (threadId: string, response: WorkbenchUserInputResponse) => Promise<void>;
+  onStopThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
+  onSubmitUserInputRequest: (
+    threadId: string,
+    response: WorkbenchUserInputResponse,
+    options?: WorkbenchSubmitUserInputRequestOptions,
+  ) => Promise<void>;
   onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
   onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
   onThreadModelChange: (threadId: string, model: string) => void;
-  previewPendingUserInputRequestsByThreadId: Record<string, WorkbenchUserInputRequest>;
   projectRootPath: string;
   rateLimits: RateLimitSnapshot | null;
   thread: ThreadPayload;
@@ -93,32 +107,16 @@ export default memo(function ThreadView ({
   const [subthreadsById, setSubthreadsById] = useState<Record<string, ThreadPayload>>({});
   const [loadingThreadIds, setLoadingThreadIds] = useState<Record<string, true>>({});
   const [seenItemCountsByThreadId, setSeenItemCountsByThreadId] = useState<Record<string, number>>({});
+  const threadViewRef = useRef<HTMLDivElement>(null);
   const bottomSentinelRef = useRef<HTMLDivElement>(null);
   const subagentThreadIds = useMemo(() => getCollabAgentThreadIds(thread.turns), [thread.turns]);
-  const threadsById = useMemo<Record<string, ThreadPayload>>(() => ({
-    ...subthreadsById,
-    [thread.id]: thread,
-  }), [subthreadsById, thread]);
   const activeThread = activeThreadId === thread.id
     ? thread
     : subthreadsById[activeThreadId] ?? null;
   const activeHarnessUserInputRequest = activeThread
     ? livePendingUserInputRequestsByThreadId[activeThread.id] ?? null
     : null;
-  const activePreviewUserInputRequest = activeThread
-    ? previewPendingUserInputRequestsByThreadId[activeThread.id] ?? null
-    : null;
-  const activePendingUserInputRequest = activeHarnessUserInputRequest ?? activePreviewUserInputRequest;
-  const activePendingUserInputRequestMode = activeHarnessUserInputRequest
-    ? "live"
-    : activePreviewUserInputRequest
-      ? "preview"
-      : null;
-  const activeComposerInfoMessage = activeHarnessUserInputRequest
-    ? ""
-    : activeThread
-      ? composerInfoMessagesByThreadId[activeThread.id] ?? ""
-      : "";
+  const activePendingUserInputRequest = activeHarnessUserInputRequest;
   const currentTurn = activeThread?.turns.at(-1) ?? null;
   const isThinking = currentTurn?.status === "inProgress";
 
@@ -253,6 +251,10 @@ export default memo(function ThreadView ({
   }, [loadSubthread, pollingThreadIds]);
 
   useLayoutEffect(() => {
+    if (hasExpandedSelectionWithin(threadViewRef.current)) {
+      return;
+    }
+
     const frameId = window.requestAnimationFrame(() => {
       bottomSentinelRef.current?.scrollIntoView({ block: "end" });
     });
@@ -293,13 +295,19 @@ export default memo(function ThreadView ({
     }
   }, [activeThread, onSendMessage, thread.id]);
 
-  const handleShowExampleQuestion = useCallback(() => {
+  const handleStopThread = useCallback(async () => {
     if (!activeThread) {
       return;
     }
 
-    onShowExampleQuestion(activeThread);
-  }, [activeThread, onShowExampleQuestion]);
+    const payload = await onStopThread(activeThread);
+    if (payload && activeThread.id !== thread.id) {
+      setSubthreadsById((current) => ({
+        ...current,
+        [activeThread.id]: payload,
+      }));
+    }
+  }, [activeThread, onStopThread, thread.id]);
 
   const handleThreadModelChange = useCallback((threadId: string, model: string) => {
     if (threadId === thread.id) {
@@ -369,10 +377,7 @@ export default memo(function ThreadView ({
   }, [onThreadReasoningEffortChange, thread.id]);
 
   const getTabBadge = useCallback((threadId: string, payload: ThreadPayload | null | undefined): { isQuestion: boolean; unreadBadge: ThreadUnreadBadge | null } => {
-    const hasPendingQuestion = Boolean(
-      livePendingUserInputRequestsByThreadId[threadId]
-      || previewPendingUserInputRequestsByThreadId[threadId],
-    );
+    const hasPendingQuestion = Boolean(livePendingUserInputRequestsByThreadId[threadId]);
     if (hasPendingQuestion) {
       return {
         isQuestion: true,
@@ -416,12 +421,12 @@ export default memo(function ThreadView ({
       isQuestion: false,
       unreadBadge: null,
     };
-  }, [livePendingUserInputRequestsByThreadId, previewPendingUserInputRequestsByThreadId, seenItemCountsByThreadId, thread.id]);
+  }, [livePendingUserInputRequestsByThreadId, seenItemCountsByThreadId, thread.id]);
 
   const mainThreadBadge = getTabBadge(thread.id, thread);
 
   return (
-    <div className="mx-auto w-full max-w-[56rem] pb-16" style={{ fontSize: `${fontSizeRem}rem` }}>
+    <div ref={threadViewRef} className="mx-auto w-full max-w-[56rem] pb-16" style={{ fontSize: `${fontSizeRem}rem` }}>
       {activeThread?.isDraft ? (
         <header className="pb-4">
           <h2 className="m-0 text-[1.55em] font-semibold leading-[1.1] tracking-tight text-text">
@@ -437,7 +442,7 @@ export default memo(function ThreadView ({
               key={turn.id}
               onOpenFile={onOpenFile}
               projectRootPath={projectRootPath}
-              relatedThreadsById={threadsById}
+              relatedThreadsById={subthreadsById}
               turn={turn}
             />
           )) : (
@@ -515,19 +520,16 @@ export default memo(function ThreadView ({
         <>
           <ThreadComposer
             key={activeThread.id}
-            composerInfoMessage={activeComposerInfoMessage}
-            onClearUserInputRequest={onClearUserInputRequest}
             onListModels={onListModels}
             onSendMessage={handleSendMessage}
-            onShowExampleQuestion={() => {
-              handleShowExampleQuestion();
+            onStopThread={() => {
+              void handleStopThread();
             }}
             onSubmitUserInputRequest={onSubmitUserInputRequest}
             onThreadAgentChange={handleThreadAgentChange}
             onThreadReasoningEffortChange={handleThreadReasoningEffortChange}
             onThreadModelChange={handleThreadModelChange}
             pendingUserInputRequest={activePendingUserInputRequest}
-            pendingUserInputRequestMode={activePendingUserInputRequestMode}
             rateLimits={rateLimits}
             thread={activeThread}
           />

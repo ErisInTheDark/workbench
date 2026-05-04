@@ -67,6 +67,44 @@ function findClosingToken(source: string, token: string, fromIndex: number) {
   return -1;
 }
 
+function getBacktickRunLength(source: string, fromIndex: number) {
+  let index = fromIndex;
+  while (source[index] === "`") {
+    index += 1;
+  }
+
+  return index - fromIndex;
+}
+
+function findClosingCodeSpanFence(source: string, fenceLength: number, fromIndex: number) {
+  for (let index = fromIndex; index < source.length; index += 1) {
+    if (source[index] !== "`") {
+      continue;
+    }
+
+    if (source[index - 1] === "\\") {
+      continue;
+    }
+
+    const runLength = getBacktickRunLength(source, index);
+    if (runLength === fenceLength) {
+      return index;
+    }
+
+    index += runLength - 1;
+  }
+
+  return -1;
+}
+
+function trimCodeSpanPadding(content: string) {
+  if (content.length >= 2 && content.startsWith(" ") && content.endsWith(" ")) {
+    return content.slice(1, -1);
+  }
+
+  return content;
+}
+
 function sanitizeMarkdownHref(value: string) {
   const trimmed = normalizeMarkdownHref(value);
   if (!trimmed) {
@@ -175,10 +213,12 @@ function renderInline(markdown: string, options: MarkdownRenderOptions = {}) {
     }
 
     if (markdown[index] === "`") {
-      const closeIndex = findClosingToken(markdown, "`", index + 1);
+      const fenceLength = getBacktickRunLength(markdown, index);
+      const closeIndex = findClosingCodeSpanFence(markdown, fenceLength, index + fenceLength);
       if (closeIndex !== -1) {
-        html += `<code>${escapeHtml(markdown.slice(index + 1, closeIndex))}</code>`;
-        index = closeIndex + 1;
+        const content = markdown.slice(index + fenceLength, closeIndex);
+        html += `<code>${escapeHtml(trimCodeSpanPadding(content))}</code>`;
+        index = closeIndex + fenceLength;
         continue;
       }
     }

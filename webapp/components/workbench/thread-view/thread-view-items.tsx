@@ -5,7 +5,7 @@
  */
 "use client";
 
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
@@ -820,7 +820,7 @@ function ThreadRenderableBlockView ({
   }
 }
 
-export function ThreadTurnDetails ({
+function ThreadTurnDetailsComponent ({
   onOpenFile,
   projectRootPath,
   relatedThreadsById = {},
@@ -900,3 +900,15 @@ export function ThreadTurnDetails ({
     </section>
   );
 }
+
+function areThreadTurnDetailsPropsEqual(
+  left: Readonly<Parameters<typeof ThreadTurnDetailsComponent>[0]>,
+  right: Readonly<Parameters<typeof ThreadTurnDetailsComponent>[0]>,
+) {
+  return left.turn === right.turn
+    && left.onOpenFile === right.onOpenFile
+    && left.projectRootPath === right.projectRootPath
+    && left.relatedThreadsById === right.relatedThreadsById;
+}
+
+export const ThreadTurnDetails = memo(ThreadTurnDetailsComponent, areThreadTurnDetailsPropsEqual);

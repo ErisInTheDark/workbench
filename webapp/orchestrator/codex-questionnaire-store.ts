@@ -131,6 +131,7 @@ function normalizeHistoryEntry(value: unknown): WorkbenchQuestionnaireHistoryEnt
 
   return {
     insertAfterItemId: asString(record.insertAfterItemId)?.trim() ?? null,
+    insertAfterItemIndex: asNumber(record.insertAfterItemIndex),
     itemId: asString(record.itemId)?.trim() ?? null,
     request,
     requestKey,

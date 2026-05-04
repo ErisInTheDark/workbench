@@ -440,4 +440,17 @@
     }
   }
 
+  .thread-plaintext-editable {
+    display: block;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .thread-plaintext-editable[data-empty="true"]::before {
+    content: attr(data-placeholder);
+    color: var(--muted);
+    pointer-events: none;
+  }
+
 }

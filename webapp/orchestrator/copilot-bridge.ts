@@ -226,6 +226,7 @@ function replayEventPriority(event: SessionEvent) {
     case "tool.execution_complete":
       return 6;
     case "assistant.turn_end":
+    case "abort":
     case "session.idle":
     case "session.error":
     case "session.shutdown":
@@ -453,6 +454,16 @@ export class CopilotBridge {
           }
 
           await this.sendToSession(threadId, input, "immediate", model, effort, agentPath);
+          return { id: requestId, result: { ok: true } };
+        }
+        case "turn/interrupt": {
+          const threadId = this.readThreadId(message.params);
+          const turnId = this.readTurnId(message.params);
+          if (!threadId) {
+            return this.errorResponse(requestId, -32602, "Missing turn/interrupt params.");
+          }
+
+          await this.abortTurn(threadId, turnId);
           return { id: requestId, result: { ok: true } };
         }
         case "model/list":
@@ -927,6 +938,28 @@ export class CopilotBridge {
     await session.send({ mode, prompt });
   }
 
+  private async abortTurn(threadId: string, turnId: string | null) {
+    const { session, state } = await this.ensureThreadState(threadId);
+    const candidateTurn = state.currentTurnId
+      ? state.thread.turns.find((entry) => entry.id === state.currentTurnId) ?? null
+      : state.thread.turns.at(-1) ?? null;
+    const activeTurn = candidateTurn?.status === "inProgress"
+      ? candidateTurn
+      : state.thread.turns.at(-1)?.status === "inProgress"
+        ? state.thread.turns.at(-1) ?? null
+        : null;
+
+    if (!activeTurn || activeTurn.status !== "inProgress") {
+      return;
+    }
+
+    if (turnId && activeTurn.id !== turnId) {
+      throw new Error("That turn is no longer active.");
+    }
+
+    await session.abort();
+  }
+
   private async readSessionModel(session: CopilotSession, fallback: string | null) {
     try {
       const response = await session.rpc.model.getCurrent();
@@ -1159,6 +1192,13 @@ export class CopilotBridge {
       ? params as Record<string, unknown>
       : null;
     return record && Array.isArray(record.input) ? record.input as UserInput[] : [];
+  }
+
+  private readTurnId(params: unknown) {
+    const record = params && typeof params === "object" && !Array.isArray(params)
+      ? params as Record<string, unknown>
+      : null;
+    return record && typeof record.turnId === "string" ? record.turnId : null;
   }
 
   private readModel(params: unknown) {

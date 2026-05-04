@@ -9,9 +9,12 @@ import type {
   ThreadPayload,
   WorkbenchAgentOption,
   WorkbenchModelOption,
-  WorkbenchUserInputRequest,
+  WorkbenchPendingUserInputRequest,
+  WorkbenchSubmitUserInputRequestOptions,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
+import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
+import PlaintextEditable from "./PlaintextEditable";
 import ThreadAgentPicker from "./ThreadAgentPicker";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 import ThreadModelPicker from "./ThreadModelPicker";
@@ -52,32 +55,58 @@ function readFileAsDataUrl (file: File) {
   });
 }
 
+function buildPendingUserInputRequestSubmissionOptions (
+  thread: ThreadPayload,
+  pendingUserInputRequest: WorkbenchPendingUserInputRequest,
+): WorkbenchSubmitUserInputRequestOptions {
+  const turn = pendingUserInputRequest.turnId
+    ? thread.turns.find((candidateTurn) => candidateTurn.id === pendingUserInputRequest.turnId) ?? null
+    : getCurrentInProgressTurn(thread) ?? thread.turns.at(-1) ?? null;
+  const insertAfterItemId = pendingUserInputRequest.itemId?.trim() ?? null;
+  if (!turn) {
+    return {
+      insertAfterItemId,
+      insertAfterItemIndex: null,
+      turnId: pendingUserInputRequest.turnId ?? null,
+    };
+  }
+
+  const visibleItems = turn.items.filter((item) => !isSyntheticQuestionnaireHistoryItem(item));
+  const insertAfterItemIndex = insertAfterItemId
+    ? visibleItems.findIndex((item) => item.id === insertAfterItemId)
+    : -1;
+
+  return {
+    insertAfterItemId,
+    insertAfterItemIndex: insertAfterItemIndex >= 0 ? insertAfterItemIndex : null,
+    turnId: pendingUserInputRequest.turnId ?? turn.id,
+  };
+}
+
 export default function ThreadComposer ({
-  composerInfoMessage,
-  onClearUserInputRequest,
   onListModels,
   onSendMessage,
-  onShowExampleQuestion,
+  onStopThread,
   onSubmitUserInputRequest,
   onThreadAgentChange,
   onThreadReasoningEffortChange,
   onThreadModelChange,
   pendingUserInputRequest,
-  pendingUserInputRequestMode,
   rateLimits,
   thread,
 }: {
-  composerInfoMessage: string;
-  onClearUserInputRequest: (threadId: string) => void;
   onListModels: (harness: ThreadPayload["harness"]) => Promise<WorkbenchModelOption[]>;
   onSendMessage: (threadId: string, input: UserInput[]) => Promise<void>;
-  onShowExampleQuestion: (threadId: string) => void;
-  onSubmitUserInputRequest: (threadId: string, response: WorkbenchUserInputResponse) => Promise<void>;
+  onStopThread: (threadId: string) => Promise<void> | void;
+  onSubmitUserInputRequest: (
+    threadId: string,
+    response: WorkbenchUserInputResponse,
+    options?: WorkbenchSubmitUserInputRequestOptions,
+  ) => Promise<void>;
   onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
   onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
   onThreadModelChange: (threadId: string, model: string) => void;
-  pendingUserInputRequest: WorkbenchUserInputRequest | null;
-  pendingUserInputRequestMode: "live" | "preview" | null;
+  pendingUserInputRequest: WorkbenchPendingUserInputRequest | null;
   rateLimits: RateLimitSnapshot | null;
   thread: ThreadPayload;
 }) {
@@ -98,6 +127,7 @@ export default function ThreadComposer ({
   const [modelsError, setModelsError] = useState("");
   const [pendingAttachmentReads, setPendingAttachmentReads] = useState(0);
   const [isSending, setIsSending] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   const trimmedValue = value.trim();
   const isAttaching = pendingAttachmentReads > 0;
   const hasPendingUserInputRequest = pendingUserInputRequest !== null;
@@ -106,10 +136,9 @@ export default function ThreadComposer ({
   const isApprovalBlocked = isCurrentTurnWaitingOnApproval(thread);
   const isActiveThread = getCurrentInProgressTurn(thread) !== null;
   const isInputDisabled = hasPendingUserInputRequest || isSending || isAttaching || isThreadStateBroken || isCopilotAuthRequired;
+  const isStopDisabled = !isActiveThread || isStopping;
   const helperText = hasPendingUserInputRequest
-    ? pendingUserInputRequestMode === "live"
-      ? "Answer the question card below to continue this thread."
-      : "Answer the question card below to continue this local workbench preview."
+    ? "Answer the question card below to continue this thread."
     : isAttaching
       ? "Attaching pasted image..."
     : isCopilotAuthRequired
@@ -139,6 +168,7 @@ export default function ThreadComposer ({
   const isAgentPickerOpen = activePicker === "agent";
   const isModelPickerOpen = activePicker === "model";
   const isPickerOpen = activePicker !== null;
+  const showStopButton = isActiveThread || isStopping;
   const selectedAgent = availableAgents.find((agent) => agent.path === thread.agentPath) ?? null;
   const agentButtonLabel = selectedAgent?.name
     ?? thread.agentPath?.split("/").at(-1)?.replace(/\.agent\.md$/i, "")
@@ -149,7 +179,7 @@ export default function ThreadComposer ({
     setActivePicker(null);
     setAgentsError("");
     setModelsError("");
-  }, [pendingUserInputRequest?.id, thread.id]);
+  }, [pendingUserInputRequest?.request.id, thread.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -265,12 +295,28 @@ export default function ThreadComposer ({
     }
   };
 
+  const stop = async () => {
+    if (isStopDisabled || isPickerOpen) {
+      return;
+    }
+
+    setIsStopping(true);
+    setError("");
+    try {
+      await onStopThread(thread.id);
+    } catch (stopError) {
+      setError(stopError instanceof Error ? stopError.message : "Unable to stop that turn.");
+    } finally {
+      setIsStopping(false);
+    }
+  };
+
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     void submit();
   };
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Enter" || event.shiftKey || isComposing) {
       return;
     }
@@ -279,7 +325,7 @@ export default function ThreadComposer ({
     void submit();
   };
 
-  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+  const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
     const imageFiles = Array.from(event.clipboardData.items)
       .filter((item) => item.type.startsWith("image/"))
       .map((item) => item.getAsFile())
@@ -318,18 +364,42 @@ export default function ThreadComposer ({
     onThreadReasoningEffortChange(thread.id, supportedReasoningEfforts[nextIndex] ?? null);
   };
 
+  const stopButton = showStopButton ? (
+    <button
+      type="button"
+      aria-label={isStopping ? "Stopping current turn" : "Stop current turn"}
+      title={isStopping ? "Stopping current turn" : "Stop current turn"}
+      disabled={isStopDisabled}
+      className={joinClasses(
+        "inline-flex size-10 items-center justify-center rounded-full transition",
+        "bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] text-[var(--bg)]",
+        "hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]",
+        isStopDisabled && "cursor-not-allowed opacity-45",
+      )}
+      onClick={() => {
+        void stop();
+      }}
+    >
+      <svg viewBox="0 0 16 16" className="h-4.5 w-4.5" aria-hidden="true">
+        <rect x="2.5" y="2.5" width="11" height="11" rx="1.9" fill="currentColor" />
+      </svg>
+    </button>
+  ) : null;
+
   return (
     <form className="mt-6 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4" onSubmit={handleSubmit}>
       <div className="rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-3">
         {hasPendingUserInputRequest ? (
           <ThreadUserInputRequest
-            request={pendingUserInputRequest}
-            mode={pendingUserInputRequestMode ?? "preview"}
-            onClear={() => {
-              onClearUserInputRequest(thread.id);
-            }}
+            actions={stopButton}
+            request={pendingUserInputRequest.request}
+            mode="live"
             onSubmit={async (response) => {
-              await onSubmitUserInputRequest(thread.id, response);
+              await onSubmitUserInputRequest(
+                thread.id,
+                response,
+                buildPendingUserInputRequestSubmissionOptions(thread, pendingUserInputRequest),
+              );
             }}
           />
         ) : null}
@@ -366,14 +436,26 @@ export default function ThreadComposer ({
             ))}
           </div>
         ) : null}
-        <label className="block" htmlFor={`thread-composer:${thread.id}`} hidden={hasPendingUserInputRequest}>
+        <div className="block" hidden={hasPendingUserInputRequest}>
           <span className="sr-only">Message thread</span>
           <div hidden={isPickerOpen}>
-            <textarea
+            <PlaintextEditable
               id={`thread-composer:${thread.id}`}
+              ariaLabel="Message thread"
+              className="thread-plaintext-editable min-h-[5.75rem] w-full border-0 bg-transparent px-1 py-1 text-[0.96em] leading-[1.65] text-text outline-none"
+              disabled={isInputDisabled}
+              placeholder={isThreadStateBroken
+                ? "New messages are disabled for this thread."
+                : isCopilotAuthRequired
+                  ? "Sign in to Copilot CLI to send messages."
+                  : isActiveThread
+                    ? "Message the current turn..."
+                    : thread.isDraft
+                      ? "Start a new thread..."
+                      : "Continue this thread..."}
               value={value}
-              onChange={(event) => {
-                setValue(event.target.value);
+              onChange={(nextValue) => {
+                setValue(nextValue);
                 if (error) {
                   setError("");
                 }
@@ -386,20 +468,9 @@ export default function ThreadComposer ({
               }}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              placeholder={isThreadStateBroken
-                ? "New messages are disabled for this thread."
-                : isCopilotAuthRequired
-                  ? "Sign in to Copilot CLI to send messages."
-                  : isActiveThread
-                    ? "Message the current turn..."
-                    : thread.isDraft
-                      ? "Start a new thread..."
-                      : "Continue this thread..."}
-              className="min-h-[5.75rem] w-full resize-y border-0 bg-transparent px-1 py-1 text-[0.96em] leading-[1.65] text-text outline-none placeholder:text-muted"
-              disabled={isInputDisabled}
             />
           </div>
-        </label>
+        </div>
         {!hasPendingUserInputRequest && isModelPickerOpen ? (
           <ThreadModelPicker
             appliesOnNextTurnOnly={thread.harness === "codex" && isActiveThread}
@@ -459,16 +530,6 @@ export default function ThreadComposer ({
               </p>
             ) : null}
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                className="rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3 py-2 text-[0.78em] font-medium text-text transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                onClick={() => {
-                  setActivePicker(null);
-                  onShowExampleQuestion(thread.id);
-                }}
-              >
-                Show example question
-              </button>
               <div className="inline-flex items-stretch overflow-hidden rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-[0.78em] font-medium text-text">
                 <button
                   type="button"
@@ -521,15 +582,13 @@ export default function ThreadComposer ({
               >
                 {isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : "Send"}
               </button>
+              {stopButton}
             </div>
           </div>
         ) : null}
       </div>
       {error ? (
         <p className="mt-2 mb-0 text-[0.84em] leading-[1.6] text-danger">{error}</p>
-      ) : null}
-      {!error && composerInfoMessage ? (
-        <p className="mt-2 mb-0 text-[0.84em] leading-[1.6] text-muted">{composerInfoMessage}</p>
       ) : null}
     </form>
   );

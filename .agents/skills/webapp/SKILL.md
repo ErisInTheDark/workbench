@@ -1,6 +1,8 @@
 ---
+
 name: webapp
 description: "When the author asks for webapp work, including Next.js page work, UI polish, workbench or editor changes, API route changes, Codex app-server integration, or any other task that primarily changes code under `webapp/`, follow this workflow."
+
 ---
 
 ## Scope
@@ -56,7 +58,7 @@ Minimum expectation by task:
 - `webapp/orchestrator/`: local dev entrypoint and bridge helpers that run Next.js together with the Codex and Copilot harnesses.
 
 1. Read `webapp/package.json` FIRST.
-2. Read every in-scope route, rendered component, stylesheet, API handler, and `lib` file BEFORE editing. For workbench or editor tasks, also read `webapp/components/workbench.tsx`, `webapp/lib/WorkbenchClient.ts`, and `webapp/lib/types.ts`. For Codex integration tasks, also read `webapp/orchestrator/index.ts`, `webapp/orchestrator/copilot-bridge.ts`, `webapp/lib/codex/*`, and the related files under `webapp/app/codex/` and `webapp/app/api/codex/`.
+2. Read every in-scope route, rendered component, stylesheet, API handler, and `lib` file BEFORE editing. For workbench or editor tasks, also read `webapp/components/workbench.tsx`, `webapp/lib/WorkbenchClient.ts`, and `webapp/lib/types.ts`. For Codex integration tasks, also read `webapp/orchestrator/index.ts`, `webapp/orchestrator/copilot-bridge.ts`, `webapp/lib/codex/\\\*`, and the related files under `webapp/app/codex/` and `webapp/app/api/codex/`.
 3. Search `webapp/components/` and `webapp/lib/` for similar components, utilities, and types BEFORE creating new ones.
 4. If the implementation surface is large or unclear, spawn the read-only `explorer` subagent with explicit files and questions BEFORE editing.
 5. Verify with the NARROWEST meaningful command from `webapp/`. Use `tsc --noEmit` when a type check is sufficient. STATE clearly what you did and did not verify.
@@ -77,4 +79,5 @@ Minimum expectation by task:
 - DO NOT add file-specific duplicate components, utilities, or types when a shared home already exists.
 - DO NOT leave a single-component file in `webapp/components/` on a mismatched filename or named export.
 - DO NOT leave API contracts or state flow HALF-MIGRATED.
-- DO NOT run any `pnpm` script. This skill currently allows NONE.
+- DO NOT run any `pnpm` script except `typecheck`.
+- DO NOT run `tsx` to test your code.

@@ -97,6 +97,10 @@ function asString(value: unknown) {
   return typeof value === "string" ? value : null;
 }
 
+function asNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function normalizeQuestionId(value: string | null, index: number) {
   const sanitized = (value ?? "")
     .trim()
@@ -564,6 +568,9 @@ export class CodexStdioBridge {
     const record = asRecord(params);
     const threadId = asString(record?.threadId);
     const requestKey = asString(record?.requestKey) ?? asString(record?.toolCallId);
+    const turnId = asString(record?.turnId)?.trim() ?? null;
+    const insertAfterItemId = asString(record?.insertAfterItemId)?.trim() ?? null;
+    const insertAfterItemIndex = asNumber(record?.insertAfterItemIndex);
     const responseRecord = asRecord(record?.response);
     const answersRecord = asRecord(responseRecord?.answers);
     if (!threadId || !requestKey || !answersRecord) {
@@ -581,9 +588,12 @@ export class CodexStdioBridge {
     };
 
     return {
+      insertAfterItemId,
+      insertAfterItemIndex,
       requestKey,
       response,
       threadId,
+      turnId,
     };
   }
 
@@ -599,14 +609,15 @@ export class CodexStdioBridge {
     }
 
     const historyEntry: WorkbenchQuestionnaireHistoryEntry = {
-      insertAfterItemId: pendingQuestionnaire.itemId,
+      insertAfterItemId: resolvedResponse.insertAfterItemId ?? pendingQuestionnaire.itemId,
+      insertAfterItemIndex: resolvedResponse.insertAfterItemIndex,
       itemId: pendingQuestionnaire.itemId,
       request: pendingQuestionnaire.request,
       requestKey: pendingQuestionnaire.requestKey,
       resolvedAt: Date.now(),
       response: resolvedResponse.response,
       threadId: pendingQuestionnaire.threadId,
-      turnId: pendingQuestionnaire.turnId,
+      turnId: resolvedResponse.turnId ?? pendingQuestionnaire.turnId,
     };
 
     await this.questionnaireStore.upsertThreadEntry(historyEntry);

@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import type {
   WorkbenchUserInputQuestion,
   WorkbenchUserInputRequest,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
+import PlaintextEditable from "./PlaintextEditable";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -62,8 +63,8 @@ function deriveAnsweredValues (
 }
 
 type InteractiveThreadUserInputRequestProps = {
-  mode: "live" | "preview";
-  onClear: () => void;
+  actions?: ReactNode;
+  mode: "live";
   onSubmit: (response: WorkbenchUserInputResponse) => Promise<void>;
   request: WorkbenchUserInputRequest;
 };
@@ -131,6 +132,15 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
     }
   };
 
+  const handleLastQuestionKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (isHistoryMode || isSubmitting || event.key !== "Enter" || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) {
+      return;
+    }
+
+    event.preventDefault();
+    void handleSubmit();
+  };
+
   return (
     <div className="space-y-4 px-1 py-1">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -152,16 +162,11 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
           <button
             type="button"
             onClick={() => {
-              if (mode === "preview") {
-                interactiveProps?.onClear();
-                return;
-              }
-
               resetAnswers();
             }}
             className="rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3 py-2 text-[0.76em] font-medium text-text transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
           >
-            {mode === "preview" ? "Clear preview" : "Clear answers"}
+            Clear answers
           </button>
         )}
       </div>
@@ -275,13 +280,13 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                 })}
                 {isHistoryMode ? (
                   customValue ? (
-                    <textarea
+                    <PlaintextEditable
                       id={`${request.id}:${question.id}:custom`}
-                      value={customValue}
+                      ariaLabel={`${headerText} answer`}
+                      className="thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-3 py-3 text-[0.84em] leading-[1.5] text-text outline-none"
                       readOnly
-                      rows={Math.max(1, customValue.split(/\r?\n/u).length)}
                       spellCheck={false}
-                      className="rounded-lg w-full resize-none px-3 py-3 text-[0.84em] leading-[1.5] text-text outline-none placeholder:text-muted bg-[color-mix(in_srgb,var(--text)_4%,transparent)]"
+                      value={customValue}
                     />
                   ) : (
                     !isLastQuestion ? (
@@ -292,25 +297,28 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                     ) : null
                   )
                 ) : (
-                  <textarea
+                  <PlaintextEditable
                     id={`${request.id}:${question.id}:custom`}
+                    ariaLabel={`${headerText} answer`}
+                    className={joinClasses(
+                      "thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg px-3 py-2 text-[0.84em] leading-[1.5] text-text outline-none transition",
+                      customValue
+                        ? "bg-[color-mix(in_srgb,var(--text)_4%,transparent)] py-3"
+                        : "hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:py-3",
+                    )}
+                    spellCheck={!question.isSecret}
                     value={customValue}
-                    onChange={(event) => {
+                    onChange={(nextValue) => {
                       setCustomValues((current) => ({
                         ...current,
-                        [question.id]: event.target.value,
+                        [question.id]: nextValue,
                       }));
                       if (error) {
                         setError("");
                       }
                     }}
-                    rows={1}
-                    spellCheck={!question.isSecret}
-                    className="rounded-lg w-full resize-y px-3 py-2 text-[0.84em] leading-[1.5] text-text outline-none placeholder:text-muted
-                    hover:py-3 hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)]
-                    focus-visible:mt-2 focus-visible:mb-4 focus-visible:py-3 focus-visible:bg-[color-mix(in_srgb,var(--text)_4%,transparent)]
-                    not-empty:mt-2 not-empty:mb-4 not-empty:py-3 not-empty:bg-[color-mix(in_srgb,var(--text)_4%,transparent)]
-                    "
+                    onKeyDown={isLastQuestion ? handleLastQuestionKeyDown : undefined}
+                    placeholder={question.allowOther ? "Add your own answer..." : "Add context..."}
                   />
                 )}
               </div>
@@ -320,7 +328,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
       </div>
 
       {!isHistoryMode ? (
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-end gap-3">
           <button
             type="button"
             onClick={() => {
@@ -337,6 +345,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
           >
             {isSubmitting ? "Submitting..." : request.submitLabel}
           </button>
+          {interactiveProps?.actions}
         </div>
       ) : null}
 

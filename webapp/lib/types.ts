@@ -104,6 +104,12 @@ export interface WorkbenchUserInputResponse {
   answers: Record<string, WorkbenchUserInputAnswer | undefined>;
 }
 
+export interface WorkbenchSubmitUserInputRequestOptions {
+  turnId?: string | null;
+  insertAfterItemId?: string | null;
+  insertAfterItemIndex?: number | null;
+}
+
 export interface WorkbenchPendingUserInputRequest {
   harness: WorkbenchHarness;
   threadId: string;
@@ -119,6 +125,7 @@ export interface WorkbenchQuestionnaireHistoryEntry {
   turnId: string;
   itemId: string | null;
   insertAfterItemId: string | null;
+  insertAfterItemIndex: number | null;
   request: WorkbenchUserInputRequest;
   response: WorkbenchUserInputResponse;
   resolvedAt: number;
@@ -171,7 +178,12 @@ export interface WorkbenchControls {
     input: UserInput[],
     options?: WorkbenchSendThreadMessageOptions,
   ) => Promise<ThreadPayload | null>;
-  submitPendingUserInputRequest: (threadId: string, response: WorkbenchUserInputResponse) => Promise<void>;
+  stopThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
+  submitPendingUserInputRequest: (
+    threadId: string,
+    response: WorkbenchUserInputResponse,
+    options?: WorkbenchSubmitUserInputRequestOptions,
+  ) => Promise<void>;
   setCurrentThreadModel: (threadId: string, model: string) => void;
   setCurrentThreadAgent: (threadId: string, agentPath: string | null) => void;
   setCurrentThreadReasoningEffort: (threadId: string, effort: string | null) => void;
@@ -184,7 +196,7 @@ export interface WorkbenchControls {
 export interface WorkbenchBindings {
   onExplorerStateChange?: (snapshot: ExplorerSnapshot) => void;
   onCurrentThreadChange?: (thread: ThreadPayload | null) => void;
-  onPendingUserInputRequestsChange?: (requestsByThreadId: Record<string, WorkbenchUserInputRequest>) => void;
+  onPendingUserInputRequestsChange?: (requestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>) => void;
   onRateLimitsChange?: (rateLimits: RateLimitSnapshot | null) => void;
   onControlsReady?: (controls: WorkbenchControls) => void;
 }

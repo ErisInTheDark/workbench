@@ -1100,15 +1100,31 @@ function serializeInlineLeafToMarkdown(leaf: InlineLeaf) {
     return "";
   }
 
+  const isCodeLeaf = leaf.type === "text" && leaf.marks.some((mark) => mark.tag === "code");
   let content = leaf.type === "break"
     ? "\n"
-    : escapeMarkdownText(leaf.text);
+    : isCodeLeaf
+      ? leaf.text
+      : escapeMarkdownText(leaf.text);
 
   for (let index = leaf.marks.length - 1; index >= 0; index -= 1) {
     content = wrapMarkdownWithInlineMark(content, leaf.marks[index]);
   }
 
   return content;
+}
+
+function formatInlineCodeSpanMarkdown(content: string) {
+  if (!content) {
+    return "``  ``";
+  }
+
+  const backtickRuns = content.match(/`+/g);
+  const fenceLength = Math.max(0, ...((backtickRuns ?? []).map((run) => run.length))) + 1;
+  const fence = "`".repeat(fenceLength);
+  const needsPadding = /^[ `]|[ `]$/.test(content);
+  const paddedContent = needsPadding ? ` ${content} ` : content;
+  return `${fence}${paddedContent}${fence}`;
 }
 
 function createInlineMarkElement(mark: InlineMark) {
@@ -1132,7 +1148,7 @@ function wrapMarkdownWithInlineMark(content: string, mark: InlineMark) {
     case "em":
       return content.includes("*") ? `_${content}_` : `*${content}*`;
     case "code":
-      return `\`${content.replaceAll("`", "\\`")}\``;
+      return formatInlineCodeSpanMarkdown(content);
     case "comment":
       return formatInlineCommentMarkdown(content);
     case "a":

@@ -30,18 +30,18 @@ import {
 import { formatThreadStatus, isProjectCodexThread, toThreadPayload, toThreadSummary } from "../codex/thread-adapter";
 import { getCurrentInProgressTurn, getCurrentTurn } from "../codex/thread-state";
 import type {
-    WorkbenchQuestionnaireHistoryEntry,
     ThreadPayload,
     ThreadSummary,
     WorkbenchHarness,
     WorkbenchModelOption,
     WorkbenchPendingUserInputRequest,
+    WorkbenchQuestionnaireHistoryEntry,
     WorkbenchSendThreadMessageOptions,
     WorkbenchStoredThreadUnreadState,
+    WorkbenchSubmitUserInputRequestOptions,
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
 } from "../types";
-import { applyQuestionnaireHistoryToThread } from "./thread/thread-questionnaire-history";
 import LifecycleScope from "./state/LifecycleScope";
 import {
     persistHarnessAgent,
@@ -53,6 +53,7 @@ import {
     readStoredHarnessModelEffort,
     readStoredThreadUnreadState,
 } from "./state/browser-state";
+import { applyQuestionnaireHistoryToThread } from "./thread/thread-questionnaire-history";
 
 const THREAD_REFRESH_TASK_ID = "thread-refresh";
 const THREAD_LIST_REFRESH_TASK_ID = "thread-list-refresh";
@@ -82,7 +83,7 @@ export interface WorkbenchThreadState {
 export interface WorkbenchThreadSnapshot {
   currentThread: ThreadPayload | null;
   currentThreadId: string;
-  pendingUserInputRequestsByThreadId: Record<string, WorkbenchUserInputRequest>;
+  pendingUserInputRequestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>;
   rateLimits: RateLimitSnapshot | null;
   threads: ThreadSummary[];
   threadsError: string;
@@ -116,7 +117,12 @@ interface WorkbenchThreadClient {
     input: UserInput[],
     options?: WorkbenchSendThreadMessageOptions,
   ) => Promise<ThreadPayload | null>;
-  submitPendingUserInputRequest: (threadId: string, response: WorkbenchUserInputResponse) => Promise<void>;
+  stopThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
+  submitPendingUserInputRequest: (
+    threadId: string,
+    response: WorkbenchUserInputResponse,
+    options?: WorkbenchSubmitUserInputRequestOptions,
+  ) => Promise<void>;
   setCurrentThreadAgent: (threadId: string, agentPath: string | null) => void;
   setCurrentThreadModel: (threadId: string, model: string) => void;
   setCurrentThreadReasoningEffort: (threadId: string, effort: string | null) => void;
@@ -179,9 +185,7 @@ function WorkbenchThreadClient(
   }
 
   function serializePendingUserInputRequests() {
-    return Object.fromEntries(
-      Array.from(state.pendingUserInputRequestsByThreadId.entries(), ([threadId, entry]) => [threadId, entry.request]),
-    );
+    return Object.fromEntries(state.pendingUserInputRequestsByThreadId.entries());
   }
 
   function persistUnreadStateSnapshot() {
@@ -727,13 +731,7 @@ function WorkbenchThreadClient(
       return;
     }
 
-    setCurrentThread({
-      ...state.currentThread,
-      turns: state.currentThread.turns.map((turn) => ({
-        ...turn,
-        items: [...turn.items],
-      })),
-    });
+    setCurrentThread(state.currentThread);
   }
 
   async function readCompletedQuestionnaireHistory(threadId: string) {
@@ -1440,7 +1438,7 @@ function WorkbenchThreadClient(
 
     if (selectedAgentPath && harness === "codex") {
       normalizedInput.unshift(createTextInput(
-        `For this turn, you are the agent defined in ${selectedAgentPath}. If you do not have this file in your context window, read it. Treat it as CRITICAL rules to follow, only overridden by anything I say below:`,
+        `<agent_type>For this turn, you are the agent defined in ${selectedAgentPath}. If you do not have this file in your context window, read it. Treat it as CRITICAL rules to follow, only overridden by anything I say below:</agent_type>\n\n`,
       ));
     }
 
@@ -1624,7 +1622,42 @@ function WorkbenchThreadClient(
     return payload;
   }
 
-  async function submitPendingUserInputRequest(threadId: string, response: WorkbenchUserInputResponse) {
+  async function stopThread(thread: ThreadPayload) {
+    if (thread.isDraft) {
+      return thread;
+    }
+
+    const activeTurn = getCurrentInProgressTurn(thread);
+    if (!activeTurn) {
+      return thread;
+    }
+
+    await sendBridgeRequest<{ ok?: boolean }>(thread.harness, {
+      method: "turn/interrupt",
+      params: {
+        threadId: thread.id,
+        turnId: activeTurn.id,
+      },
+    });
+
+    const refreshedThread = await readThread(thread.id, thread.harness).catch(() => null);
+    if (refreshedThread) {
+      if (state.currentThread?.id === refreshedThread.id && state.currentThread.harness === refreshedThread.harness) {
+        setCurrentThread(refreshedThread);
+      }
+      await refreshThreads();
+      return refreshedThread;
+    }
+
+    await refreshThreads();
+    return thread;
+  }
+
+  async function submitPendingUserInputRequest(
+    threadId: string,
+    response: WorkbenchUserInputResponse,
+    options: WorkbenchSubmitUserInputRequestOptions = {},
+  ) {
     const pendingRequest = state.pendingUserInputRequestsByThreadId.get(threadId);
     if (!pendingRequest) {
       throw new Error("There is no pending question for this thread.");
@@ -1633,9 +1666,12 @@ function WorkbenchThreadClient(
     await sendBridgeRequest<{ ok: boolean }>(pendingRequest.harness, {
       method: "questionnaire/respond",
       params: {
+        insertAfterItemId: options.insertAfterItemId ?? pendingRequest.itemId,
+        insertAfterItemIndex: options.insertAfterItemIndex ?? null,
         response,
         requestKey: pendingRequest.requestKey,
         threadId,
+        turnId: options.turnId ?? pendingRequest.turnId,
       },
     });
     if (pendingRequest.harness === "codex") {
@@ -1808,6 +1844,7 @@ function WorkbenchThreadClient(
     refreshRateLimits,
     refreshThreads,
     sendThreadMessage,
+    stopThread,
     submitPendingUserInputRequest,
     setCurrentThreadAgent,
     setCurrentThreadModel,

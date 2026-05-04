@@ -1,6 +1,6 @@
 "use client";
 
-import type { MouseEvent } from "react";
+import { memo, useMemo, type MouseEvent } from "react";
 
 import {
   parseCodexFileLinkHref,
@@ -48,7 +48,7 @@ const THREAD_MARKDOWN_CLASS = [
   "[&_del]:-mx-[0.04em] [&_del]:rounded-[0.2em] [&_del]:bg-[color-mix(in_srgb,var(--danger)_16%,transparent)] [&_del]:px-[0.08em] [&_del]:text-inherit [&_del]:decoration-current [&_del]:decoration-[0.08em]",
 ].join(" ");
 
-export default function ThreadMarkdown ({
+export default memo(function ThreadMarkdown ({
   className,
   markdown,
   onOpenFile,
@@ -88,11 +88,16 @@ export default function ThreadMarkdown ({
     void onOpenFile(relativePath);
   };
 
+  const renderedHtml = useMemo(
+    () => markdownToHtml(markdown, { projectRootPath }),
+    [markdown, projectRootPath],
+  );
+
   return (
     <div
       className={joinClasses(THREAD_MARKDOWN_CLASS, className)}
-      dangerouslySetInnerHTML={{ __html: markdownToHtml(markdown, { projectRootPath }) }}
+      dangerouslySetInnerHTML={{ __html: renderedHtml }}
       onClick={handleClick}
     />
   );
-}
+});
