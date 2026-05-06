@@ -93,6 +93,12 @@ export function classifyCodexAppServerNotification(
         refreshThreads: true,
       });
 
+    case "thread/goal/updated":
+    case "thread/goal/cleared":
+      return createHandling(notification, "thread", {
+        refreshThread: true,
+      });
+
     case "thread/compacted":
       return createHandling(notification, "thread", {
         refreshThread: true,
@@ -145,6 +151,7 @@ export function classifyCodexAppServerNotification(
     case "account/login/completed":
       return createHandling(notification, "account");
 
+    case "remoteControl/status/changed":
     case "app/list/updated":
     case "externalAgentConfig/import/completed":
       return createHandling(notification, "app");

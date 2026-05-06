@@ -39,6 +39,9 @@ export const INITIALIZE_RESULT = {
   },
 };
 const WORKBENCH_QUESTIONNAIRE_TOOL_NAME = "workbench_request_user_input";
+const COPILOT_SKILL_TOOL_NAME = "skill";
+const COPILOT_TASK_TOOL_NAME = "task";
+const COPILOT_DYNAMIC_TOOL_METADATA_KEY = "__copilotWorkbench";
 type DynamicToolCallItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 
 function asRecord(value: unknown) {
@@ -268,10 +271,20 @@ function makeDynamicToolCallItem(
   };
 }
 
-function getDynamicToolCallOutputText(eventData: {
+function getDynamicToolCallOutputText(
+  toolName: string,
+  eventData: {
   error?: { message?: string } | null;
   result?: { content?: string; detailedContent?: string } | null;
-}) {
+},
+) {
+  if (toolName === COPILOT_TASK_TOOL_NAME) {
+    return eventData.result?.content
+      ?? eventData.result?.detailedContent
+      ?? eventData.error?.message
+      ?? null;
+  }
+
   return eventData.result?.detailedContent
     ?? eventData.result?.content
     ?? eventData.error?.message
@@ -426,6 +439,72 @@ function eventTimestampSeconds(event: SessionEvent) {
   return toUnixSeconds(event.timestamp);
 }
 
+function getEventAgentId(event: SessionEvent) {
+  return asString(asRecord(event)?.agentId)?.trim() ?? null;
+}
+
+function isSyntheticSkillUserMessage(event: Extract<SessionEvent, { type: "user.message" }>) {
+  return (asString(asRecord(event.data)?.source)?.trim() ?? "").startsWith("skill-");
+}
+
+function isDynamicCopilotTool(toolName: string) {
+  return toolName === WORKBENCH_QUESTIONNAIRE_TOOL_NAME
+    || toolName === COPILOT_SKILL_TOOL_NAME
+    || toolName === COPILOT_TASK_TOOL_NAME;
+}
+
+function ensureDynamicToolArgumentsRecord(item: DynamicToolCallItem) {
+  const record = asRecord(item.arguments);
+  if (record) {
+    return record;
+  }
+
+  const nextRecord: Record<string, unknown> = {};
+  item.arguments = nextRecord as DynamicToolCallItem["arguments"];
+  return nextRecord;
+}
+
+function updateDynamicToolMetadata(
+  item: DynamicToolCallItem,
+  updates: Record<string, unknown>,
+) {
+  const argumentsRecord = ensureDynamicToolArgumentsRecord(item);
+  const currentMetadata = asRecord(argumentsRecord[COPILOT_DYNAMIC_TOOL_METADATA_KEY]) ?? {};
+  argumentsRecord[COPILOT_DYNAMIC_TOOL_METADATA_KEY] = {
+    ...currentMetadata,
+    ...updates,
+  };
+}
+
+function findToolCallTarget(state: CopilotThreadState, toolCallId: string) {
+  const target = state.toolCallItems.get(toolCallId);
+  const turn = target ? state.thread.turns.find((entry) => entry.id === target.turnId) ?? null : null;
+  const item = turn?.items.find((entry) => entry.id === target?.itemId) ?? null;
+  return target && turn && item
+    ? {
+      item,
+      turn,
+    }
+    : null;
+}
+
+function findMostRecentDynamicToolCallItem(
+  state: CopilotThreadState,
+  match: (item: DynamicToolCallItem) => boolean,
+) {
+  for (let turnIndex = state.thread.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
+    const turn = state.thread.turns[turnIndex];
+    for (let itemIndex = turn.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+      const item = turn.items[itemIndex];
+      if (item.type === "dynamicToolCall" && match(item)) {
+        return item;
+      }
+    }
+  }
+
+  return null;
+}
+
 export function createThreadState(threadId: string, metadata: SessionMetadata | null, projectRoot: string): CopilotThreadState {
   return {
     currentTurnId: null,
@@ -494,6 +573,10 @@ export function applyCopilotEvent(
       return;
     }
     case "user.message": {
+      if (isSyntheticSkillUserMessage(event)) {
+        return;
+      }
+
       const content = event.data.content.trim();
       if (!content) {
         return;
@@ -551,6 +634,10 @@ export function applyCopilotEvent(
       return;
     }
     case "assistant.reasoning_delta": {
+      if (getEventAgentId(event)) {
+        return;
+      }
+
       const turn = getActiveTurn(state);
       if (!turn) {
         return;
@@ -593,6 +680,10 @@ export function applyCopilotEvent(
       return;
     }
     case "assistant.reasoning": {
+      if (getEventAgentId(event)) {
+        return;
+      }
+
       const turn = getActiveTurn(state);
       if (!turn) {
         return;
@@ -619,6 +710,23 @@ export function applyCopilotEvent(
       return;
     }
     case "assistant.message_delta": {
+      const parentToolCallId = asString(asRecord(event.data)?.parentToolCallId);
+      if (parentToolCallId) {
+        const target = findToolCallTarget(state, parentToolCallId);
+        if (target?.item.type === "dynamicToolCall" && target.item.tool === COPILOT_TASK_TOOL_NAME) {
+          updateDynamicToolMetadata(target.item, {
+            kind: "task",
+            latestMessage: `${asString(asRecord(ensureDynamicToolArgumentsRecord(target.item)[COPILOT_DYNAMIC_TOOL_METADATA_KEY])?.latestMessage) ?? ""}${event.data.deltaContent}`,
+          });
+          state.thread.updatedAt = timestampSeconds;
+          return;
+        }
+      }
+
+      if (getEventAgentId(event)) {
+        return;
+      }
+
       const turn = getActiveTurn(state);
       if (!turn) {
         return;
@@ -658,6 +766,33 @@ export function applyCopilotEvent(
       return;
     }
     case "assistant.message": {
+      const parentToolCallId = asString(asRecord(event.data)?.parentToolCallId);
+      if (parentToolCallId) {
+        const target = findToolCallTarget(state, parentToolCallId);
+        if (target?.item.type === "dynamicToolCall" && target.item.tool === COPILOT_TASK_TOOL_NAME) {
+          updateDynamicToolMetadata(target.item, {
+            kind: "task",
+            latestMessage: event.data.content,
+          });
+          state.thread.updatedAt = timestampSeconds;
+          if (emitNotifications) {
+            onNotification({
+              method: "item/completed",
+              params: {
+                item: structuredClone(target.item),
+                threadId: state.thread.id,
+                turnId: target.turn.id,
+              },
+            });
+          }
+          return;
+        }
+      }
+
+      if (getEventAgentId(event)) {
+        return;
+      }
+
       const turn = getActiveTurn(state);
       if (!turn) {
         return;
@@ -707,9 +842,16 @@ export function applyCopilotEvent(
       }
 
       const itemId = `tool:${event.data.toolCallId}`;
-      const item = event.data.toolName === WORKBENCH_QUESTIONNAIRE_TOOL_NAME
+      const item = isDynamicCopilotTool(event.data.toolName)
         ? makeDynamicToolCallItem(itemId, event.data.toolName, event.data.arguments)
         : makeCommandExecutionItem(itemId, buildCommandText(event.data.toolName, event.data.arguments), state.thread.cwd);
+      if (item.type === "dynamicToolCall") {
+        if (event.data.toolName === COPILOT_SKILL_TOOL_NAME) {
+          updateDynamicToolMetadata(item, { kind: "skill" });
+        } else if (event.data.toolName === COPILOT_TASK_TOOL_NAME) {
+          updateDynamicToolMetadata(item, { kind: "task" });
+        }
+      }
       turn.items.push(item);
       state.toolCallItems.set(event.data.toolCallId, {
         itemId,
@@ -728,70 +870,152 @@ export function applyCopilotEvent(
       }
       return;
     }
-    case "tool.execution_partial_result": {
-      const target = state.toolCallItems.get(event.data.toolCallId);
-      const turn = target ? state.thread.turns.find((entry) => entry.id === target.turnId) ?? null : null;
-      const item = turn?.items.find((entry) => entry.id === target?.itemId) ?? null;
-      if (!target || !turn || item?.type !== "commandExecution") {
+    case "subagent.started": {
+      const data = asRecord(event.data);
+      const toolCallId = asString(data?.toolCallId);
+      if (!toolCallId) {
         return;
       }
 
-      item.aggregatedOutput = `${item.aggregatedOutput ?? ""}${event.data.partialOutput}`;
+      const target = findToolCallTarget(state, toolCallId);
+      if (!target || target.item.type !== "dynamicToolCall" || target.item.tool !== COPILOT_TASK_TOOL_NAME) {
+        return;
+      }
+
+      updateDynamicToolMetadata(target.item, {
+        agentDescription: asString(data?.agentDescription),
+        agentDisplayName: asString(data?.agentDisplayName),
+        agentId: getEventAgentId(event),
+        agentName: asString(data?.agentName),
+        kind: "task",
+      });
+      state.thread.updatedAt = timestampSeconds;
+      if (emitNotifications) {
+        onNotification({
+          method: "item/completed",
+          params: {
+            item: structuredClone(target.item),
+            threadId: state.thread.id,
+            turnId: target.turn.id,
+          },
+        });
+      }
+      return;
+    }
+    case "subagent.completed": {
+      const data = asRecord(event.data);
+      const toolCallId = asString(data?.toolCallId);
+      if (!toolCallId) {
+        return;
+      }
+
+      const target = findToolCallTarget(state, toolCallId);
+      if (!target || target.item.type !== "dynamicToolCall" || target.item.tool !== COPILOT_TASK_TOOL_NAME) {
+        return;
+      }
+
+      updateDynamicToolMetadata(target.item, {
+        agentDisplayName: asString(data?.agentDisplayName),
+        agentName: asString(data?.agentName),
+        kind: "task",
+      });
+      state.thread.updatedAt = timestampSeconds;
+      if (emitNotifications) {
+        onNotification({
+          method: "item/completed",
+          params: {
+            item: structuredClone(target.item),
+            threadId: state.thread.id,
+            turnId: target.turn.id,
+          },
+        });
+      }
+      return;
+    }
+    case "skill.invoked": {
+      const data = asRecord(event.data);
+      const skillName = asString(data?.name)?.trim() ?? "";
+      if (!skillName) {
+        return;
+      }
+
+      const item = findMostRecentDynamicToolCallItem(state, (candidate) => (
+        candidate.tool === COPILOT_SKILL_TOOL_NAME
+        && (asString(asRecord(candidate.arguments)?.skill)?.trim() ?? "") === skillName
+      ));
+      if (!item) {
+        return;
+      }
+
+      updateDynamicToolMetadata(item, {
+        kind: "skill",
+        skillContent: asString(data?.content),
+        skillDescription: asString(data?.description),
+        skillName,
+        skillPath: asString(data?.path),
+      });
+      state.thread.updatedAt = timestampSeconds;
+      return;
+    }
+    case "tool.execution_partial_result": {
+      const target = findToolCallTarget(state, event.data.toolCallId);
+      if (!target || target.item.type !== "commandExecution") {
+        return;
+      }
+
+      target.item.aggregatedOutput = `${target.item.aggregatedOutput ?? ""}${event.data.partialOutput}`;
       state.thread.updatedAt = timestampSeconds;
       if (emitNotifications) {
         onNotification({
           method: "item/commandExecution/outputDelta",
           params: {
             delta: event.data.partialOutput,
-            itemId: item.id,
+            itemId: target.item.id,
             threadId: state.thread.id,
-            turnId: turn.id,
+            turnId: target.turn.id,
           },
         });
       }
       return;
     }
     case "tool.execution_complete": {
-      const target = state.toolCallItems.get(event.data.toolCallId);
-      const turn = target ? state.thread.turns.find((entry) => entry.id === target.turnId) ?? null : null;
-      const item = turn?.items.find((entry) => entry.id === target?.itemId) ?? null;
-      if (!target || !turn || !item) {
+      const target = findToolCallTarget(state, event.data.toolCallId);
+      if (!target) {
         return;
       }
 
-      if (item.type === "commandExecution") {
-        item.status = event.data.success ? "completed" : "failed";
-        item.exitCode = event.data.success ? 0 : 1;
-        item.durationMs = typeof event.data.toolTelemetry?.durationMs === "number"
+      if (target.item.type === "commandExecution") {
+        target.item.status = event.data.success ? "completed" : "failed";
+        target.item.exitCode = event.data.success ? 0 : 1;
+        target.item.durationMs = typeof event.data.toolTelemetry?.durationMs === "number"
           ? event.data.toolTelemetry.durationMs
-          : item.durationMs;
+          : target.item.durationMs;
         if (event.data.result?.detailedContent) {
-          item.aggregatedOutput = event.data.result.detailedContent;
+          target.item.aggregatedOutput = event.data.result.detailedContent;
         } else if (event.data.result?.content) {
-          item.aggregatedOutput = event.data.result.content;
+          target.item.aggregatedOutput = event.data.result.content;
         } else if (event.data.error?.message) {
-          item.aggregatedOutput = event.data.error.message;
+          target.item.aggregatedOutput = event.data.error.message;
         }
-      } else if (item.type === "dynamicToolCall") {
-        item.status = event.data.success ? "completed" : "failed";
-        item.success = event.data.success;
-        item.durationMs = typeof event.data.toolTelemetry?.durationMs === "number"
+      } else if (target.item.type === "dynamicToolCall") {
+        target.item.status = event.data.success ? "completed" : "failed";
+        target.item.success = event.data.success;
+        target.item.durationMs = typeof event.data.toolTelemetry?.durationMs === "number"
           ? event.data.toolTelemetry.durationMs
-          : item.durationMs;
-        item.contentItems = makeDynamicToolCallContentItems(getDynamicToolCallOutputText(event.data));
+          : target.item.durationMs;
+        target.item.contentItems = makeDynamicToolCallContentItems(getDynamicToolCallOutputText(target.item.tool, event.data));
       } else {
         return;
       }
 
-      state.toolCallItems.delete(event.data.toolCallId);
       state.thread.updatedAt = timestampSeconds;
       if (emitNotifications) {
         onNotification({
           method: "item/completed",
           params: {
-            item: structuredClone(item),
+            item: structuredClone(target.item),
             threadId: state.thread.id,
-            turnId: turn.id,
+            turnId: target.turn.id,
           },
         });
       }
@@ -841,6 +1065,7 @@ export function applyCopilotEvent(
       turn.durationMs = toTurnDurationMs(turn);
       turn.status = "completed";
       state.currentTurnId = null;
+      state.toolCallItems.clear();
       setThreadStatus(state.thread, "idle");
       state.thread.updatedAt = timestampSeconds;
       if (emitNotifications) {
@@ -871,6 +1096,7 @@ export function applyCopilotEvent(
       turn.durationMs = toTurnDurationMs(turn);
       turn.status = "completed";
       state.currentTurnId = null;
+      state.toolCallItems.clear();
       setThreadStatus(state.thread, "idle");
       state.thread.updatedAt = timestampSeconds;
       if (emitNotifications) {

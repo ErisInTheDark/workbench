@@ -13,6 +13,11 @@ If you have not been given a "designation" or a skill workflow to follow, and th
 
 For work under `webapp/`, use the `webapp` skill.
 
+Use questionnaires heavily for material decisions. Treat this as default workflow behavior, not something gated behind a custom agent file.
+
+Before giving a questionnaire, first provide the author with concise commentary that states the current context, the real decision being made, the viable options you have narrowed it to, and your recommendation so you are aligned before asking.
+
+
 ## Update Discipline
 
 - If webapp architecture, startup flow, or core operator workflow changes materially, update `AGENTS.md` or nearby docs in the same pass.

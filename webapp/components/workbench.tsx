@@ -6,13 +6,14 @@ import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/Rat
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type {
   ExplorerSnapshot, FilePayload, ThreadPayload, TreeNode,
+  WorkbenchControls,
+  WorkbenchHarness,
   WorkbenchPendingUserInputRequest,
   WorkbenchSendThreadMessageOptions,
   WorkbenchSubmitUserInputRequestOptions,
-  WorkbenchUserInputResponse,
-  WorkbenchControls,
-  WorkbenchHarness
+  WorkbenchUserInputResponse
 } from "../lib/types";
+import { isWorkbenchOpenableFile } from "../lib/workbench/project/tree-utils";
 import {
   CURRENT_SELECTION_URL_UPDATED_EVENT,
   persistHarness,
@@ -26,7 +27,6 @@ import {
   MOBILE_MEDIA_QUERY,
   type MobilePane,
 } from "../lib/workbench/state/mobile-pane-url-state";
-import { isWorkbenchOpenableFile } from "../lib/workbench/project/tree-utils";
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
 import ThreadView from "./workbench/thread-view/ThreadView";
 import {
@@ -73,6 +73,9 @@ const EMPTY_SELECTION: WorkbenchSelectionSearchParams = {
   filePath: "",
   threadId: "",
 };
+
+const MOBILE_SHELL_HEADER_HIDE_THRESHOLD_PX = 24;
+const MOBILE_SHELL_HEADER_SHOW_THRESHOLD_PX = 8;
 
 function formatQuickOpenTimestamp (updatedAt: string | null | undefined) {
   if (!updatedAt) {
@@ -148,6 +151,8 @@ export default function Workbench () {
     return readStoredHarness();
   });
   const [isMobile, setIsMobile] = useState(false);
+  const [mobileShellHeaderHeight, setMobileShellHeaderHeight] = useState(0);
+  const [isMobileShellHeaderVisible, setIsMobileShellHeaderVisible] = useState(true);
   const [mobilePane, setMobilePane] = useState<MobilePane>("explorer");
   const [showUnopenableFiles, setShowUnopenableFiles] = useState(false);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -168,6 +173,7 @@ export default function Workbench () {
   const statusLineRef = useRef<HTMLParagraphElement>(null);
   const resetDraftButtonRef = useRef<HTMLButtonElement>(null);
   const saveFileButtonRef = useRef<HTMLButtonElement>(null);
+  const shellHeaderRef = useRef<HTMLElement>(null);
   const zoomOutButtonRef = useRef<HTMLButtonElement>(null);
   const zoomInButtonRef = useRef<HTMLButtonElement>(null);
   const saveConflictDialogRef = useRef<HTMLDivElement>(null);
@@ -181,6 +187,11 @@ export default function Workbench () {
   const resetDraftCancelButtonRef = useRef<HTMLButtonElement>(null);
   const resetDraftHeadButtonRef = useRef<HTMLButtonElement>(null);
   const resetDraftSavedButtonRef = useRef<HTMLButtonElement>(null);
+  const mobileShellHeaderAnimationFrameRef = useRef<number | null>(null);
+  const mobileShellHeaderScrollYRef = useRef(0);
+  const mobileShellHeaderDirectionRef = useRef<"up" | "down" | null>(null);
+  const mobileShellHeaderDirectionTravelRef = useRef(0);
+  const mobileShellHeaderVisibleRef = useRef(true);
 
   function getWorkbenchDomSurfaces (): WorkbenchDomSurfaces | null {
     if (
@@ -558,6 +569,131 @@ export default function Workbench () {
     () => new Set(Object.keys(harnessUserInputRequestsByThreadId)),
     [harnessUserInputRequestsByThreadId],
   );
+  const shouldShowShellHeader = !showEmptyState && (!isMobile || mobilePane === "editor");
+
+  useEffect(() => {
+    const header = shellHeaderRef.current;
+    if (!header || typeof window === "undefined") {
+      return;
+    }
+
+    const syncHeaderHeight = () => {
+      setMobileShellHeaderHeight(header.offsetHeight);
+    };
+
+    syncHeaderHeight();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", syncHeaderHeight);
+      return () => {
+        window.removeEventListener("resize", syncHeaderHeight);
+      };
+    }
+
+    const observer = new ResizeObserver(syncHeaderHeight);
+    observer.observe(header);
+    return () => {
+      observer.disconnect();
+    };
+  }, [currentThread?.isDraft, showEmptyState]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const cancelPendingFrame = () => {
+      if (mobileShellHeaderAnimationFrameRef.current === null) {
+        return;
+      }
+
+      window.cancelAnimationFrame(mobileShellHeaderAnimationFrameRef.current);
+      mobileShellHeaderAnimationFrameRef.current = null;
+    };
+
+    const applyHeaderVisibility = (nextVisible: boolean) => {
+      mobileShellHeaderVisibleRef.current = nextVisible;
+      setIsMobileShellHeaderVisible((current) => (current === nextVisible ? current : nextVisible));
+    };
+
+    const resetHeaderVisibility = () => {
+      cancelPendingFrame();
+      mobileShellHeaderScrollYRef.current = Math.max(window.scrollY, 0);
+      mobileShellHeaderDirectionRef.current = null;
+      mobileShellHeaderDirectionTravelRef.current = 0;
+      applyHeaderVisibility(true);
+    };
+
+    if (!isMobile || !shouldShowShellHeader) {
+      resetHeaderVisibility();
+      return cancelPendingFrame;
+    }
+
+    resetHeaderVisibility();
+
+    const updateHeaderVisibility = () => {
+      mobileShellHeaderAnimationFrameRef.current = null;
+
+      const nextScrollY = Math.max(window.scrollY, 0);
+      const delta = nextScrollY - mobileShellHeaderScrollYRef.current;
+      mobileShellHeaderScrollYRef.current = nextScrollY;
+
+      if (nextScrollY <= mobileShellHeaderHeight) {
+        mobileShellHeaderDirectionRef.current = null;
+        mobileShellHeaderDirectionTravelRef.current = 0;
+        applyHeaderVisibility(true);
+        return;
+      }
+
+      if (Math.abs(delta) < 1) {
+        return;
+      }
+
+      const nextDirection = delta > 0 ? "down" : "up";
+      if (mobileShellHeaderDirectionRef.current !== nextDirection) {
+        mobileShellHeaderDirectionRef.current = nextDirection;
+        mobileShellHeaderDirectionTravelRef.current = Math.abs(delta);
+      } else {
+        mobileShellHeaderDirectionTravelRef.current += Math.abs(delta);
+      }
+
+      if (
+        nextDirection === "down"
+        && mobileShellHeaderVisibleRef.current
+        && mobileShellHeaderDirectionTravelRef.current >= MOBILE_SHELL_HEADER_HIDE_THRESHOLD_PX
+      ) {
+        mobileShellHeaderDirectionTravelRef.current = 0;
+        applyHeaderVisibility(false);
+        return;
+      }
+
+      if (
+        nextDirection === "up"
+        && !mobileShellHeaderVisibleRef.current
+        && mobileShellHeaderDirectionTravelRef.current >= MOBILE_SHELL_HEADER_SHOW_THRESHOLD_PX
+      ) {
+        mobileShellHeaderDirectionTravelRef.current = 0;
+        applyHeaderVisibility(true);
+      }
+    };
+
+    const handleScroll = () => {
+      if (mobileShellHeaderAnimationFrameRef.current !== null) {
+        return;
+      }
+
+      mobileShellHeaderAnimationFrameRef.current = window.requestAnimationFrame(updateHeaderVisibility);
+    };
+
+    const viewport = window.visualViewport;
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    viewport?.addEventListener("scroll", handleScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener("scroll", handleScroll);
+      viewport?.removeEventListener("scroll", handleScroll);
+      cancelPendingFrame();
+    };
+  }, [activeFilePath, activeThreadId, isMobile, mobileShellHeaderHeight, shouldShowShellHeader]);
 
   useEffect(() => {
     if (!showEmptyState || !quickOpenPaths.length) {
@@ -647,7 +783,7 @@ export default function Workbench () {
   };
 
   return (
-    <div className="min-h-screen overflow-x-hidden md:grid md:grid-cols-[minmax(16rem,21rem)_1fr] md:items-start md:overflow-visible">
+    <div className="min-h-screen md:grid md:grid-cols-[minmax(16rem,21rem)_1fr] md:items-start">
       <div
         className="mobile-workbench-track flex min-h-screen w-[200vw] transition-transform duration-200 ease-out md:contents md:w-auto md:transform-none"
         style={mobileTrackStyle}
@@ -744,10 +880,21 @@ export default function Workbench () {
         </aside>
 
         <main className="flex min-h-screen w-screen min-w-0 shrink-0 flex-col px-5 pb-5 md:w-auto md:px-6 md:pb-5">
-          <header className="relative sticky top-0 z-10 py-3" hidden={showEmptyState}>
+          <header
+            ref={shellHeaderRef}
+            className={`
+              sticky top-0 z-10 transform-gpu py-3 transition-[translate,opacity] duration-200 ease-out will-change-translate motion-reduce:transition-none -mx-6 px-6
+              md:translate-y-0 md:opacity-100
+              ${isMobileShellHeaderVisible
+                ? "-translate-y-1 opacity-100"
+                : "pointer-events-none -translate-y-[calc(100%+0.75rem)] opacity-0"
+              }
+            `}
+            hidden={!shouldShowShellHeader}
+          >
             <div
               aria-hidden="true"
-              className="pointer-events-none absolute inset-0 -z-10 mx-auto hidden w-full max-w-[58rem] bg-[linear-gradient(to_bottom,var(--bg)_50%,transparent)] md:block"
+              className="pointer-events-none absolute inset-0 -z-10 md:mx-auto md:max-w-[58rem] bg-[linear-gradient(to_bottom,var(--bg)_calc(100%-var(--spacing)*6),transparent)] md:backdrop-blur-none"
             />
             <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
               <div className="order-2 min-w-0 md:order-1" hidden={Boolean(currentThread?.isDraft)}>
@@ -826,7 +973,7 @@ export default function Workbench () {
             </div>
           </header>
 
-          <section className="relative min-h-0 flex-1" aria-busy={isSelectionPending}>
+          <section className="relative md:min-h-0 md:flex-1" aria-busy={isSelectionPending}>
             {showThreadView ? (
               isThreadViewReady && currentThread ? (
                 <ThreadView
@@ -1119,7 +1266,7 @@ export default function Workbench () {
             data-command="bold"
             type="button"
             title="Bold"
-            className="min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
           >
             b
           </button>
@@ -1127,7 +1274,7 @@ export default function Workbench () {
             data-command="italic"
             type="button"
             title="Italic"
-            className="min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
           >
             i
           </button>
@@ -1135,7 +1282,7 @@ export default function Workbench () {
             data-command="inline-code"
             type="button"
             title="Inline code"
-            className="min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
           >
             code
           </button>
@@ -1143,7 +1290,7 @@ export default function Workbench () {
             data-command="comment"
             type="button"
             title="Inline comment"
-            className="min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
           >
             note
           </button>
@@ -1151,7 +1298,7 @@ export default function Workbench () {
             data-command="del"
             type="button"
             title="Deleted text"
-            className="min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
           >
             del
           </button>
@@ -1159,7 +1306,7 @@ export default function Workbench () {
             data-command="ins"
             type="button"
             title="Inserted text"
-            className="min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
           >
             ins
           </button>
@@ -1169,7 +1316,7 @@ export default function Workbench () {
             data-command="h1"
             type="button"
             title="Heading 1"
-            className="min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
           >
             h1
           </button>
@@ -1177,7 +1324,7 @@ export default function Workbench () {
             data-command="h2"
             type="button"
             title="Heading 2"
-            className="min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
           >
             h2
           </button>
@@ -1185,7 +1332,7 @@ export default function Workbench () {
             data-command="unordered-list"
             type="button"
             title="Bullets"
-            className="min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
           >
             ul
           </button>
@@ -1193,7 +1340,7 @@ export default function Workbench () {
             data-command="ordered-list"
             type="button"
             title="Numbers"
-            className="min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
           >
             ol
           </button>
@@ -1201,7 +1348,7 @@ export default function Workbench () {
             data-command="quote"
             type="button"
             title="Quote"
-            className="min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
           >
             &gt;
           </button>
@@ -1219,7 +1366,7 @@ export default function Workbench () {
           ref={revisionHoverAcceptButtonRef}
           type="button"
           title="Accept revision"
-          className="min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+          className="pointer-events-auto min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
         >
           accept
         </button>
@@ -1228,7 +1375,7 @@ export default function Workbench () {
           ref={revisionHoverRejectButtonRef}
           type="button"
           title="Reject revision"
-          className="min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+          className="pointer-events-auto min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
         >
           reject
         </button>

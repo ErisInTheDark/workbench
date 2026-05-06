@@ -22,11 +22,16 @@ import type { TurnStartResponse } from "../codex/generated/app-server/v2/TurnSta
 import type { TurnSteerResponse } from "../codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "../codex/generated/app-server/v2/UserInput";
 import {
+    createQuestionnaireDeveloperInstructions,
     createQuestionnaireCollaborationMode,
     createTextInput,
     createThreadStartRequest,
     isCodexJsonRpcFailure,
 } from "../codex/protocol";
+import {
+    buildCodexThreadBootstrapInstructions,
+    buildThreadTitleRouteUrl,
+} from "../thread-bootstrap";
 import { formatThreadStatus, isProjectCodexThread, toThreadPayload, toThreadSummary } from "../codex/thread-adapter";
 import { getCurrentInProgressTurn, getCurrentTurn } from "../codex/thread-state";
 import type {
@@ -48,6 +53,7 @@ import {
     persistHarnessModel,
     persistHarnessModelEffort,
     persistThreadUnreadState,
+    readLocalWorkbenchOrigin,
     readStoredHarnessAgent,
     readStoredHarnessModel,
     readStoredHarnessModelEffort,
@@ -755,11 +761,42 @@ function WorkbenchThreadClient(
     }
   }
 
+  function buildCurrentThreadTitleRouteUrl() {
+    const workbenchOrigin = readLocalWorkbenchOrigin();
+    return workbenchOrigin ? buildThreadTitleRouteUrl(workbenchOrigin) : null;
+  }
+
+  function buildCodexDeveloperInstructions(
+    threadId: string,
+    agentPath: string | null,
+    routeUrl: string | null,
+  ) {
+    return createQuestionnaireDeveloperInstructions(
+      buildCodexThreadBootstrapInstructions({
+        agentPath,
+        harness: "codex",
+        routeUrl,
+        threadId,
+      }),
+    );
+  }
+
   async function fetchThreadPayload(threadId: string, harness: WorkbenchHarness) {
     try {
+      const selectedAgentPath = state.currentThread?.id === threadId
+        ? state.currentThread.agentPath
+        : readStoredHarnessAgent(harness);
+      const workbenchOrigin = readLocalWorkbenchOrigin();
+      const routeUrl = buildCurrentThreadTitleRouteUrl();
+      const codexDeveloperInstructions = harness === "codex"
+        ? buildCodexDeveloperInstructions(threadId, selectedAgentPath, routeUrl)
+        : null;
       const response = await sendBridgeRequest<{ model?: string | null; modelProvider?: string | null; reasoningEffort?: string | null; thread: ThreadReadResponse["thread"] }>(harness, {
         method: "thread/resume",
         params: {
+          ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
+          ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
+          ...(codexDeveloperInstructions && harness === "codex" ? { developerInstructions: codexDeveloperInstructions } : {}),
           persistExtendedHistory: true,
           threadId,
         },
@@ -779,7 +816,7 @@ function WorkbenchThreadClient(
         harness,
         nextModel,
         readStoredHarnessModelEffort(harness, nextModel) ?? response.reasoningEffort ?? null,
-        readStoredHarnessAgent(harness),
+        selectedAgentPath,
       );
     } catch (error) {
       emitStatusMessage(error instanceof Error ? error.message : "Unable to open Codex thread.");
@@ -1230,6 +1267,8 @@ function WorkbenchThreadClient(
       case "thread/archived":
       case "thread/unarchived":
       case "thread/closed":
+      case "thread/goal/updated":
+      case "thread/goal/cleared":
       case "thread/tokenUsage/updated":
       case "thread/compacted":
       case "hook/started":
@@ -1262,6 +1301,7 @@ function WorkbenchThreadClient(
       case "mcpServer/startupStatus/updated":
       case "account/updated":
       case "account/rateLimits/updated":
+      case "remoteControl/status/changed":
       case "app/list/updated":
       case "externalAgentConfig/import/completed":
       case "fs/changed":
@@ -1427,6 +1467,8 @@ function WorkbenchThreadClient(
         : state.currentThread?.agentPath ?? readStoredHarnessAgent(harness)
     );
     const normalizedInput = normalizeThreadMessageInput(input);
+    const workbenchOrigin = readLocalWorkbenchOrigin();
+    const titleRouteUrl = workbenchOrigin ? buildThreadTitleRouteUrl(workbenchOrigin) : null;
     const isDraftThread = thread.isDraft;
     const shouldBypassCodexDraftBootstrap = harness === "codex" && isDraftThread;
     let previousThread = !thread.isDraft ? thread : null;
@@ -1436,26 +1478,30 @@ function WorkbenchThreadClient(
       throw new Error("Message input cannot be empty.");
     }
 
-    if (selectedAgentPath && harness === "codex") {
-      normalizedInput.unshift(createTextInput(
-        `<agent_type>For this turn, you are the agent defined in ${selectedAgentPath}. If you do not have this file in your context window, read it. Treat it as CRITICAL rules to follow, only overridden by anything I say below:</agent_type>\n\n`,
-      ));
-    }
-
     if (isDraftThread || !resolvedThreadId.trim()) {
       const threadStartRequest = createThreadStartRequest(0, {
         ...(harness === "codex" && state.projectRootPath ? { cwd: state.projectRootPath } : {}),
+        ...(harness === "codex"
+          ? {
+            developerInstructions: buildCodexDeveloperInstructions(
+              resolvedThreadId,
+              selectedAgentPath,
+              null,
+            ),
+          }
+          : {}),
         ...(harness === "codex" ? { ephemeral: false } : {}),
         ...(selectedModel ? { model: selectedModel } : {}),
         persistExtendedHistory: true,
       });
       const startedThreadResponse = await sendBridgeRequest<{ model?: string | null; modelProvider?: string | null; reasoningEffort?: string | null; thread: ThreadReadResponse["thread"] }>(harness, {
         method: threadStartRequest.method,
-        params: selectedAgentPath && harness === "copilot"
+        params: harness === "copilot"
           ? {
             ...threadStartRequest.params,
-            agentPath: selectedAgentPath,
-          } as typeof threadStartRequest.params & { agentPath: string }
+            ...(selectedAgentPath ? { agentPath: selectedAgentPath } : {}),
+            ...(workbenchOrigin ? { workbenchOrigin } : {}),
+          } as typeof threadStartRequest.params & { agentPath?: string; workbenchOrigin?: string }
           : threadStartRequest.params,
       });
 
@@ -1478,6 +1524,9 @@ function WorkbenchThreadClient(
       }
     }
 
+    const codexDeveloperInstructions = harness === "codex"
+      ? buildCodexDeveloperInstructions(resolvedThreadId, selectedAgentPath, titleRouteUrl)
+      : null;
     let resumedThread = bootstrapThread;
     if (!resumedThread || !shouldBypassCodexDraftBootstrap) {
       const readableThreadResponse = await sendBridgeRequest<ThreadReadResponse>(harness, {
@@ -1491,10 +1540,12 @@ function WorkbenchThreadClient(
         method: "thread/resume",
         params: {
           ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
+          ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
+          ...(codexDeveloperInstructions && harness === "codex" ? { developerInstructions: codexDeveloperInstructions } : {}),
           ...(selectedModel ? { model: selectedModel } : {}),
           persistExtendedHistory: true,
           threadId: resolvedThreadId,
-        } as { agentPath?: string; model?: string; persistExtendedHistory: true; threadId: string },
+        } as { agentPath?: string; developerInstructions?: string; model?: string; persistExtendedHistory: true; threadId: string; workbenchOrigin?: string },
       });
       const readableThread = toThreadPayload(readableThreadResponse.thread, harness);
       resumedThread = toThreadPayload(
@@ -1529,17 +1580,27 @@ function WorkbenchThreadClient(
         method: "turn/steer",
         params: {
           ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
+          ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
           expectedTurnId: currentInProgressTurn.id,
           input: normalizedInput,
           threadId: resolvedThreadId,
-        } as { agentPath?: string; expectedTurnId: string; input: UserInput[]; threadId: string },
+        } as { agentPath?: string; expectedTurnId: string; input: UserInput[]; threadId: string; workbenchOrigin?: string },
       });
     } else {
       const codexCollaborationMode = harness === "codex"
         ? (() => {
           const collaborationModel = selectedModel ?? resumedThread.model;
           return collaborationModel
-            ? createQuestionnaireCollaborationMode(collaborationModel, selectedReasoningEffort ?? null)
+            ? createQuestionnaireCollaborationMode(
+              collaborationModel,
+              selectedReasoningEffort ?? null,
+              buildCodexThreadBootstrapInstructions({
+                agentPath: selectedAgentPath,
+                harness: "codex",
+                routeUrl: titleRouteUrl,
+                threadId: resolvedThreadId,
+              }),
+            )
             : null;
         })()
         : null;
@@ -1547,6 +1608,7 @@ function WorkbenchThreadClient(
         method: "turn/start",
         params: {
           ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
+          ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
           ...(codexCollaborationMode ? { collaborationMode: codexCollaborationMode } : {}),
           input: normalizedInput,
           ...(selectedReasoningEffort ? { effort: selectedReasoningEffort } : {}),
@@ -1561,6 +1623,7 @@ function WorkbenchThreadClient(
           model?: string | null;
           summary: typeof DEFAULT_TURN_REASONING_SUMMARY;
           threadId: string;
+          workbenchOrigin?: string;
         },
       });
     }

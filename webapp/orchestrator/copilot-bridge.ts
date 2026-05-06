@@ -3,9 +3,6 @@
  * - CopilotBridge: translate Codex-shaped bridge messages into Copilot SDK sessions and emit Codex-shaped notifications back out. Keywords: copilot sdk, codex adapter, thread bridge.
  */
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 import {
     approveAll,
@@ -22,6 +19,11 @@ import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/Rat
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import { readUserInvocableAgentDefinition } from "../lib/project";
+import {
+    buildThreadTitleBootstrapInstructions,
+    buildThreadTitleRouteUrl,
+    normalizeThreadTitle,
+} from "../lib/thread-bootstrap";
 import type {
     WorkbenchModelOption,
     WorkbenchUserInputQuestion,
@@ -305,38 +307,6 @@ function isRawFirstUserThreadTitle(state: { pendingUserInputs: UserInput[][]; th
     || normalizedCandidate.startsWith(normalizedFirstUser);
 }
 
-function buildThreadTitlePrompt(state: { pendingUserInputs: UserInput[][]; thread: Thread }) {
-  const firstUser = firstUserMessageTextForTitle(state);
-  if (!firstUser) {
-    return null;
-  }
-
-  return `
-Write a very short action-oriented title for the assistant task implied by the user's first message below, within whatever project context you have been given above.
-Your message should include ONLY the title, with no quotes, markdown, trailing punctuation.
-Do NOT provide an explanation for the wording you chose for the title. ONLY the title.
-Prefer task language such as Fixing, Investigating, Adding, Refactoring, Explaining, or Reviewing when it fits.
-Keep it succinct. Do NOT exceed 10 words.
-Do NOT call any tools or run any commands.
-
-<first-message>
-${truncateText(firstUser, 8192)}
-</first-message>
-`.trim();
-}
-
-function normalizeGeneratedThreadTitle(value: string) {
-  const normalized = normalizeWhitespace(value)
-    .replace(/^['"`]+|['"`]+$/g, "")
-    .replace(/[.]+$/g, "");
-
-  if (!normalized) {
-    return null;
-  }
-
-  return truncateText(normalized, 80);
-}
-
 function previewForLog(value: string | null | undefined, maxLength = 120) {
   if (!value) {
     return "<empty>";
@@ -352,7 +322,6 @@ export class CopilotBridge {
   private cachedRateLimits: RateLimitSnapshot | null = null;
   private readonly sessionNameMisses = new Set<string>();
   private readonly sessionNames = new Map<string, string>();
-  private readonly titleSummaryRunning = new Set<string>();
   private readonly sessions = new Map<string, CopilotSession>();
   private readonly threadStates = new Map<string, CopilotThreadState>();
   private readonly unsubscribers = new Map<string, () => void>();
@@ -377,7 +346,6 @@ export class CopilotBridge {
     }
     this.unsubscribers.clear();
     this.sessionNames.clear();
-    this.titleSummaryRunning.clear();
     this.sessionNameMisses.clear();
     this.sessions.clear();
 
@@ -406,13 +374,14 @@ export class CopilotBridge {
           const threadId = this.readThreadId(message.params);
           const effort = this.readReasoningEffort(message.params);
           const model = this.readModel(message.params);
+          const workbenchOrigin = this.readWorkbenchOrigin(message.params);
           if (!threadId) {
             return this.errorResponse(requestId, -32602, "Missing thread id.");
           }
 
           return {
             id: requestId,
-            result: await this.readThread(threadId, model, effort, agentPath),
+            result: await this.readThread(threadId, model, effort, agentPath, workbenchOrigin),
           };
         }
         case "thread/start": {
@@ -420,6 +389,7 @@ export class CopilotBridge {
             this.readModel(message.params),
             this.readReasoningEffort(message.params),
             this.readAgentPath(message.params),
+            this.readWorkbenchOrigin(message.params),
           );
           this.onNotification({
             method: "thread/started",
@@ -430,17 +400,30 @@ export class CopilotBridge {
             result: thread,
           };
         }
+        case "thread/name/set": {
+          const threadId = this.readThreadId(message.params);
+          const name = this.readThreadName(message.params);
+          if (!threadId || !name) {
+            return this.errorResponse(requestId, -32602, "Missing thread/name/set params.");
+          }
+
+          return {
+            id: requestId,
+            result: await this.setThreadName(threadId, name),
+          };
+        }
         case "turn/start": {
           const agentPath = this.readAgentPath(message.params);
           const threadId = this.readThreadId(message.params);
           const effort = this.readReasoningEffort(message.params);
           const input = this.readInput(message.params);
           const model = this.readModel(message.params);
+          const workbenchOrigin = this.readWorkbenchOrigin(message.params);
           if (!threadId || !input.length) {
             return this.errorResponse(requestId, -32602, "Missing turn/start params.");
           }
 
-          await this.sendToSession(threadId, input, "enqueue", model, effort, agentPath);
+          await this.sendToSession(threadId, input, "enqueue", model, effort, agentPath, workbenchOrigin);
           return { id: requestId, result: { ok: true } };
         }
         case "turn/steer": {
@@ -449,11 +432,12 @@ export class CopilotBridge {
           const effort = this.readReasoningEffort(message.params);
           const input = this.readInput(message.params);
           const model = this.readModel(message.params);
+          const workbenchOrigin = this.readWorkbenchOrigin(message.params);
           if (!threadId || !input.length) {
             return this.errorResponse(requestId, -32602, "Missing turn/steer params.");
           }
 
-          await this.sendToSession(threadId, input, "immediate", model, effort, agentPath);
+          await this.sendToSession(threadId, input, "immediate", model, effort, agentPath, workbenchOrigin);
           return { id: requestId, result: { ok: true } };
         }
         case "turn/interrupt": {
@@ -678,9 +662,23 @@ export class CopilotBridge {
     ];
   }
 
-  private createSessionSystemMessage() {
+  private createSessionSystemMessage(threadId: string, workbenchOrigin: string | null) {
+    const routeUrl = workbenchOrigin?.trim()
+      ? buildThreadTitleRouteUrl(workbenchOrigin)
+      : null;
+    const content = [
+      USER_INPUT_TOOL_SYSTEM_MESSAGE,
+      routeUrl
+        ? buildThreadTitleBootstrapInstructions({
+          harness: "copilot",
+          routeUrl,
+          threadId,
+        })
+        : null,
+    ].filter(Boolean).join("\n\n");
+
     return {
-      content: USER_INPUT_TOOL_SYSTEM_MESSAGE,
+      content,
     };
   }
 
@@ -773,7 +771,12 @@ export class CopilotBridge {
     return { ok: true };
   }
 
-  private async startThread(model: string | null, reasoningEffort: string | null, agentPath: string | null) {
+  private async startThread(
+    model: string | null,
+    reasoningEffort: string | null,
+    agentPath: string | null,
+    workbenchOrigin: string | null,
+  ) {
     const client = await this.ensureClient();
     const sessionId = randomUUID();
     const normalizedReasoningEffort = toCopilotReasoningEffort(reasoningEffort);
@@ -786,7 +789,7 @@ export class CopilotBridge {
       onPermissionRequest: approveAll,
       sessionId,
       streaming: true,
-      systemMessage: this.createSessionSystemMessage(),
+      systemMessage: this.createSessionSystemMessage(sessionId, workbenchOrigin),
       tools: this.createSessionTools(sessionId),
       workingDirectory: this.projectRoot,
     });
@@ -827,8 +830,14 @@ export class CopilotBridge {
     return { data };
   }
 
-  private async readThread(threadId: string, model: string | null, reasoningEffort: string | null, agentPath: string | null) {
-    const { session, state } = await this.ensureThreadState(threadId, model, reasoningEffort, agentPath);
+  private async readThread(
+    threadId: string,
+    model: string | null,
+    reasoningEffort: string | null,
+    agentPath: string | null,
+    workbenchOrigin: string | null,
+  ) {
+    const { session, state } = await this.ensureThreadState(threadId, model, reasoningEffort, agentPath, workbenchOrigin);
     return {
       model: await this.readSessionModel(session, model),
       modelProvider: "copilot",
@@ -842,6 +851,7 @@ export class CopilotBridge {
     model: string | null = null,
     reasoningEffort: string | null = null,
     agentPath: string | null = null,
+    workbenchOrigin: string | null = null,
   ) {
     const normalizedReasoningEffort = toCopilotReasoningEffort(reasoningEffort);
     const selectedAgent = await this.resolveAgentSelection(agentPath);
@@ -870,7 +880,7 @@ export class CopilotBridge {
       ...(normalizedReasoningEffort ? { reasoningEffort: normalizedReasoningEffort } : {}),
       onPermissionRequest: approveAll,
       streaming: true,
-      systemMessage: this.createSessionSystemMessage(),
+      systemMessage: this.createSessionSystemMessage(threadId, workbenchOrigin),
       tools: this.createSessionTools(threadId),
       workingDirectory: metadata?.context?.cwd ?? this.projectRoot,
     });
@@ -927,8 +937,9 @@ export class CopilotBridge {
     model: string | null,
     reasoningEffort: string | null,
     agentPath: string | null,
+    workbenchOrigin: string | null,
   ) {
-    const { session } = await this.ensureThreadState(threadId, model, reasoningEffort, agentPath);
+    const { session } = await this.ensureThreadState(threadId, model, reasoningEffort, agentPath, workbenchOrigin);
 
     const prompt = formatPromptFromInput(input);
     if (!prompt) {
@@ -990,10 +1001,6 @@ export class CopilotBridge {
       nextName = null;
     }
     log("copilot-bridge", `thread ${state.thread.id} rpc.name.get => ${previewForLog(nextName)}`);
-    if (!nextName) {
-      log("copilot-bridge", `thread ${state.thread.id} has no session name; trying hidden title summary`);
-      nextName = await this.generateThreadTitle(state, session);
-    }
 
     if (!nextName || nextName === state.thread.name) {
       log("copilot-bridge", `thread ${state.thread.id} title unchanged => ${previewForLog(state.thread.name)}`);
@@ -1033,117 +1040,26 @@ export class CopilotBridge {
       ?? null;
   }
 
-  private async generateThreadTitle(state: CopilotThreadState, targetSession: CopilotSession) {
-    if (this.titleSummaryRunning.has(state.thread.id)) {
-      log("copilot-bridge", `thread ${state.thread.id} hidden title summary skipped (running=true)`);
-      return null;
+  private async setThreadName(threadId: string, name: string) {
+    const normalizedTitle = normalizeThreadTitle(name);
+    if (!normalizedTitle) {
+      throw new Error("A non-empty thread title is required.");
     }
 
-    this.titleSummaryRunning.add(state.thread.id);
-
-    const prompt = buildThreadTitlePrompt(state);
-    if (!prompt) {
-      log("copilot-bridge", `thread ${state.thread.id} hidden title summary skipped (no prompt could be built yet; turns=${state.thread.turns.length}, pending=${state.pendingUserInputs.length})`);
-      return null;
-    }
-
-    const selectedModel = await this.readZeroMultiplierTitleModel();
-    if (!selectedModel) {
-      log("copilot-bridge", `thread ${state.thread.id} hidden title summary skipped (no zero-multiplier model)`);
-      return null;
-    }
-
-    try {
-      log("copilot-bridge", `thread ${state.thread.id} hidden title summary starting with model ${selectedModel.id} (effort=${selectedModel.reasoningEffort ?? "default"}, prompt length ${prompt.length})`);
-      const title = await this.generateDetachedThreadTitle(prompt, selectedModel.id, selectedModel.reasoningEffort);
-      if (!title) {
-        log("copilot-bridge", `thread ${state.thread.id} hidden title summary returned no usable title`);
-        return null;
-      }
-
-      await targetSession.rpc.name.set({ name: title });
-      state.thread.name = title;
-      this.cacheSessionName(state.thread.id, title);
-      this.onNotification({
-        method: "thread/name/updated",
-        params: {
-          threadId: state.thread.id,
-          threadName: title,
-        },
-      });
-      log("copilot-bridge", `thread ${state.thread.id} persisted generated title via name.set => ${previewForLog(title)}`);
-      return title;
-    } catch (error) {
-      logError("copilot-bridge", error instanceof Error ? error.message : String(error));
-      return null;
-    } finally {
-      this.titleSummaryRunning.delete(state.thread.id);
-    }
-  }
-
-  private async readZeroMultiplierTitleModel(): Promise<{ id: string; reasoningEffort: CopilotReasoningEffort | undefined } | null> {
-    const client = await this.ensureClient();
-    const models = await client.listModels();
-    const zeroMultiplierModels = models.filter((model) => model.billing?.multiplier === 0);
-    log("copilot-bridge", `zero-multiplier models => ${zeroMultiplierModels.map((model) => model.id).join(", ") || "<none>"}`);
-    if (!zeroMultiplierModels.length) {
-      return null;
-    }
-
-    const selectedModel = zeroMultiplierModels.find((model) => model.id === "gpt-5-mini")
-      ?? zeroMultiplierModels[0]
-      ?? null;
-    const reasoningEffort = selectedModel?.capabilities.supports.reasoningEffort
-      && selectedModel.supportedReasoningEfforts?.includes("low")
-      ? "low"
-      : undefined;
-    log("copilot-bridge", `selected hidden title model => ${selectedModel?.id ?? "<none>"} (effort=${reasoningEffort ?? "default"})`);
-    return selectedModel
-      ? {
-        id: selectedModel.id,
-        reasoningEffort,
-      }
-      : null;
-  }
-
-  private async generateDetachedThreadTitle(
-    prompt: string,
-    model: string,
-    reasoningEffort: CopilotReasoningEffort | undefined,
-  ) {
-    const client = await this.ensureClient();
-    const workingDirectory = await mkdtemp(join(tmpdir(), "copilot-title-"));
-    const session = await client.createSession({
-      availableTools: [],
-      clientName: "title-summarizer",
-      infiniteSessions: { enabled: false },
-      model,
-      onPermissionRequest: approveAll,
-      ...(reasoningEffort ? { reasoningEffort } : {}),
-      streaming: false,
-      workingDirectory,
+    const { session, state } = await this.ensureThreadState(threadId);
+    await session.rpc.name.set({ name: normalizedTitle });
+    state.thread.name = normalizedTitle;
+    state.thread.updatedAt = Math.floor(Date.now() / 1000);
+    this.cacheSessionName(threadId, normalizedTitle);
+    this.onNotification({
+      method: "thread/name/updated",
+      params: {
+        threadId,
+        threadName: normalizedTitle,
+      },
     });
-    log("copilot-bridge", `started hidden title session ${session.sessionId} in ${workingDirectory}`);
 
-    try {
-      const response = await session.sendAndWait({ prompt }, 30000);
-      const rawTitle = response?.data.content ?? "";
-      const normalizedTitle = normalizeGeneratedThreadTitle(rawTitle);
-      log("copilot-bridge", `hidden title session ${session.sessionId} raw => ${previewForLog(rawTitle)}`);
-      log("copilot-bridge", `hidden title session ${session.sessionId} normalized => ${previewForLog(normalizedTitle)}`);
-      return normalizedTitle;
-    } finally {
-      await session.disconnect().catch((error) => {
-        logError("copilot-bridge", `hidden title session disconnect failed for ${session.sessionId}: ${error instanceof Error ? error.message : String(error)}`);
-      });
-      await client.deleteSession(session.sessionId).catch((error) => {
-        logError("copilot-bridge", `hidden title session delete failed for ${session.sessionId}: ${error instanceof Error ? error.message : String(error)}`);
-      });
-      await rm(workingDirectory, { force: true, recursive: true }).catch((error) => {
-        logError("copilot-bridge", `hidden title temp cleanup failed for ${workingDirectory}: ${error instanceof Error ? error.message : String(error)}`);
-      });
-      log("copilot-bridge", `hidden title session ${session.sessionId} cleaned up`);
-    }
+    return {};
   }
 
   private async hydrateListedThreadNames(sessions: SessionMetadata[]) {
@@ -1220,6 +1136,22 @@ export class CopilotBridge {
       ? params as Record<string, unknown>
       : null;
     return record && typeof record.agentPath === "string" && record.agentPath.trim() ? record.agentPath : null;
+  }
+
+  private readThreadName(params: unknown) {
+    const record = params && typeof params === "object" && !Array.isArray(params)
+      ? params as Record<string, unknown>
+      : null;
+    return record && typeof record.name === "string" && record.name.trim() ? record.name : null;
+  }
+
+  private readWorkbenchOrigin(params: unknown) {
+    const record = params && typeof params === "object" && !Array.isArray(params)
+      ? params as Record<string, unknown>
+      : null;
+    return record && typeof record.workbenchOrigin === "string" && record.workbenchOrigin.trim()
+      ? record.workbenchOrigin
+      : null;
   }
 
   private async resolveAgentSelection(agentPath: string | null) {

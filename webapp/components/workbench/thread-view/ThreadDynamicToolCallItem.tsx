@@ -16,6 +16,7 @@ import type {
 } from "../../../lib/types";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
+import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
 import { humanizeThreadLabel } from "./thread-view-primitives";
@@ -23,6 +24,9 @@ import { humanizeThreadLabel } from "./thread-view-primitives";
 type DynamicToolCallItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 
 const WORKBENCH_QUESTIONNAIRE_TOOL_NAME = "workbench_request_user_input";
+const COPILOT_SKILL_TOOL_NAME = "skill";
+const COPILOT_TASK_TOOL_NAME = "task";
+const COPILOT_DYNAMIC_TOOL_METADATA_KEY = "__copilotWorkbench";
 const JSON_BLOCK_CLASS = "m-0 overflow-x-auto whitespace-pre-wrap break-words rounded-[0.9rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text";
 const INLINE_CODE_CLASS = "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-[0.34em] py-[0.08em] font-mono text-[0.78em] leading-[1.6] text-text";
 
@@ -165,6 +169,25 @@ function parseQuestionnaireResponse (item: DynamicToolCallItem) {
       response: null,
     };
   }
+}
+
+function readTextContentItems(item: DynamicToolCallItem) {
+  return (item.contentItems ?? []).filter((entry): entry is Extract<NonNullable<DynamicToolCallItem["contentItems"]>[number], { type: "inputText" }> => entry.type === "inputText")
+    .map((entry) => entry.text.trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function getCopilotDynamicToolMetadata(item: DynamicToolCallItem) {
+  return asRecord(asRecord(item.arguments)?.[COPILOT_DYNAMIC_TOOL_METADATA_KEY]);
+}
+
+function getToolLabelText(item: DynamicToolCallItem, fallback = "tool") {
+  const metadata = getCopilotDynamicToolMetadata(item);
+  return asString(metadata?.agentDisplayName)?.trim()
+    || asString(metadata?.agentName)?.trim()
+    || asString(asRecord(item.arguments)?.name)?.trim()
+    || humanizeThreadLabel(asString(asRecord(item.arguments)?.agent_type)?.trim() || fallback);
 }
 
 function ThreadJsonSection ({
@@ -326,6 +349,143 @@ function ThreadGenericDynamicToolCallItem ({
   );
 }
 
+function ThreadToolBubble ({
+  children,
+  label,
+}: {
+  children: ReactNode;
+  label: ReactNode;
+}) {
+  return (
+    <div className="w-full max-w-[42rem] rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3">
+      <div className="m-0 pb-2 text-[0.74em] font-medium leading-[1.4] text-muted">
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function ThreadSkillToolCallItem ({
+  item,
+}: {
+  item: DynamicToolCallItem;
+}) {
+  const argumentsRecord = asRecord(item.arguments);
+  const metadata = getCopilotDynamicToolMetadata(item);
+  const skillName = asString(metadata?.skillName)?.trim()
+    || asString(argumentsRecord?.skill)?.trim()
+    || "skill";
+  const skillPath = asString(metadata?.skillPath)?.trim() ?? "";
+  const skillDescription = asString(metadata?.skillDescription)?.trim() ?? "";
+  const skillContent = asString(metadata?.skillContent)?.trim() || readTextContentItems(item);
+  const metaParts = buildMetaParts(item);
+
+  return (
+    <ThreadDisclosure
+      className="py-2"
+      contentClassName="mt-2 space-y-3 pl-6"
+      open={item.status !== "completed" || item.success === false}
+      summary={(
+        <>
+          <span>Loaded skill: </span>
+          <code className={INLINE_CODE_CLASS}>{skillName}</code>
+          {metaParts.length ? (
+            <span className="ml-2 text-[0.78em] text-muted">
+              {metaParts.map((part, index) => (
+                <span key={`${item.id}:meta:${index}`}>
+                  {index ? <span className="text-muted"> | </span> : null}
+                  {part}
+                </span>
+              ))}
+            </span>
+          ) : null}
+        </>
+      )}
+      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+    >
+      <>
+        {skillPath ? <ThreadMetaLine label="Path:" value={<code className={INLINE_CODE_CLASS}>{skillPath}</code>} /> : null}
+        {skillDescription ? (
+          <div className="rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3">
+            <p className="m-0 text-[0.84em] leading-[1.65] text-text">{skillDescription}</p>
+          </div>
+        ) : null}
+        {skillContent ? (
+          <ThreadDisclosure
+            contentClassName="mt-2 pl-6"
+            summary={<ThreadSummaryText text="Skill context" />}
+            summaryClassName="text-[0.84em] leading-[1.6] text-muted"
+          >
+            <pre className={`${JSON_BLOCK_CLASS} mt-2`}>{skillContent}</pre>
+          </ThreadDisclosure>
+        ) : null}
+      </>
+    </ThreadDisclosure>
+  );
+}
+
+function ThreadTaskToolCallItem ({
+  item,
+}: {
+  item: DynamicToolCallItem;
+}) {
+  const argumentsRecord = asRecord(item.arguments);
+  const metadata = getCopilotDynamicToolMetadata(item);
+  const metaParts = buildMetaParts(item);
+  const prompt = asString(argumentsRecord?.prompt)?.trim() ?? "";
+  const description = asString(argumentsRecord?.description)?.trim() ?? "";
+  const agentDescription = asString(metadata?.agentDescription)?.trim() ?? "";
+  const responseMarkdown = asString(metadata?.latestMessage)?.trim() || readTextContentItems(item);
+  const labelText = getToolLabelText(item, "subagent");
+
+  return (
+    <ThreadDisclosure
+      className="py-2"
+      contentClassName="mt-2 space-y-3 pl-6"
+      open={item.status !== "completed" || item.success === false}
+      summary={(
+        <>
+          <span>{item.status === "completed" ? "Ran " : "Running "}</span>
+          <span className="font-medium text-text">{labelText}</span>
+          {metaParts.length ? (
+            <span className="ml-2 text-[0.78em] text-muted">
+              {metaParts.map((part, index) => (
+                <span key={`${item.id}:meta:${index}`}>
+                  {index ? <span className="text-muted"> | </span> : null}
+                  {part}
+                </span>
+              ))}
+            </span>
+          ) : null}
+        </>
+      )}
+      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+    >
+      <>
+        {description ? <ThreadMetaLine label="Task:" value={description} /> : null}
+        {agentDescription ? <ThreadMetaLine label="Agent:" value={agentDescription} /> : null}
+        {prompt ? (
+          <ThreadToolBubble label="Main agent">
+            <ThreadMarkdown markdown={prompt} />
+          </ThreadToolBubble>
+        ) : null}
+        {responseMarkdown ? (
+          <ThreadToolBubble label={labelText}>
+            <ThreadMarkdown markdown={responseMarkdown} />
+          </ThreadToolBubble>
+        ) : (
+          item.status !== "completed" ? (
+            <p className="m-0 text-[0.84em] leading-[1.6] text-muted">
+              Waiting for the subagent response.
+            </p>
+          ) : null
+        )}
+      </>
+    </ThreadDisclosure>
+  );
+}
+
 export default function ThreadDynamicToolCallItem ({
   item,
 }: {
@@ -333,6 +493,14 @@ export default function ThreadDynamicToolCallItem ({
 }) {
   if (item.tool === WORKBENCH_QUESTIONNAIRE_TOOL_NAME) {
     return <ThreadQuestionnaireToolCallItem item={item} />;
+  }
+
+  if (item.tool === COPILOT_SKILL_TOOL_NAME) {
+    return <ThreadSkillToolCallItem item={item} />;
+  }
+
+  if (item.tool === COPILOT_TASK_TOOL_NAME) {
+    return <ThreadTaskToolCallItem item={item} />;
   }
 
   return <ThreadGenericDynamicToolCallItem item={item} />;

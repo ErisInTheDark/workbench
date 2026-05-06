@@ -228,6 +228,7 @@ export async function WorkbenchClient(
       },
     },
     fileSessionState,
+    getEditorHasFocus: () => editorHasFocus,
     getProjectChangeSummary: (path) => projectClient.getSnapshot().changes[path] ?? null,
     handleCompositionEnd: () => {
       isComposing = false;

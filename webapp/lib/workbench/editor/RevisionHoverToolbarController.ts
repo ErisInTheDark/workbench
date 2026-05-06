@@ -21,6 +21,7 @@ export interface RevisionToolbarContext {
 }
 
 export interface RevisionHoverToolbarControllerOptions {
+  canShowToolbar: () => boolean;
   editor: HTMLElement;
   getExpandedRangeRect: (range: Range) => DOMRect;
   getMinimumToolbarTop: (viewport: VisualViewportMetrics) => number;
@@ -49,6 +50,7 @@ function RevisionHoverToolbarController(
   options: RevisionHoverToolbarControllerOptions,
 ): RevisionHoverToolbarController {
   const {
+    canShowToolbar,
     editor,
     getExpandedRangeRect,
     getMinimumToolbarTop,
@@ -135,11 +137,24 @@ function RevisionHoverToolbarController(
     return null;
   }
 
+  function getRevisionNodeFromSelectionNode(node: Node | null) {
+    if (!node) {
+      return null;
+    }
+
+    const element = node instanceof HTMLElement ? node : node.parentElement;
+    if (!element) {
+      return null;
+    }
+
+    const revisionNode = element.closest<HTMLElement>('del, ins, [data-inline-comment="true"], [data-block-comment="true"]');
+    return revisionNode && editor.contains(revisionNode) ? revisionNode : null;
+  }
+
   function getSelectedRevisionToolbarContext(): RevisionToolbarContext | null {
     const selection = window.getSelection();
     if (
       !selection?.rangeCount
-      || selection.isCollapsed
       || getMode() !== "rich"
       || !editor.contains(selection.anchorNode)
       || !editor.contains(selection.focusNode)
@@ -148,6 +163,25 @@ function RevisionHoverToolbarController(
     }
 
     const range = selection.getRangeAt(0);
+    if (selection.isCollapsed) {
+      const node = getRevisionNodeFromSelectionNode(range.startContainer);
+      const kind = getHoveredRevisionKind(node);
+      if (!node || !kind || kind === "comment") {
+        return null;
+      }
+
+      const rect = node.getBoundingClientRect();
+      if (!rect.width && !rect.height) {
+        return null;
+      }
+
+      return {
+        kind,
+        nodes: [node],
+        rect,
+      };
+    }
+
     const nodes = Array.from(editor.querySelectorAll<HTMLElement>('del, ins, [data-inline-comment="true"], [data-block-comment="true"]'))
       .filter((element) => range.intersectsNode(element));
     if (!nodes.length) {
@@ -219,6 +253,14 @@ function RevisionHoverToolbarController(
   }
 
   function updateRevisionHoverToolbar() {
+    if (!canShowToolbar()) {
+      setActiveRevisionNodes([]);
+      revisionHoverToolbar.hidden = true;
+      delete revisionHoverToolbar.dataset.revisionKind;
+      revisionHoverToolbar.style.background = "";
+      return;
+    }
+
     const context = getSelectedRevisionToolbarContext() ?? getHoveredRevisionToolbarContext();
     if (!context) {
       setActiveRevisionNodes([]);

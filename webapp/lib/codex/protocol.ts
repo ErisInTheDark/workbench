@@ -5,7 +5,7 @@
  * - CodexJsonRpcResponse helpers: typed JSON-RPC success/failure checks. Keywords: json-rpc, response, error.
  * - createCodexClientInfo/createInitializeCapabilities/createInitializeParams: initialize payload builders. Keywords: app-server, handshake.
  * - createInitializeRequest/createInitializedNotification/createBootstrapMessages: app-server bootstrap messages. Keywords: initialize, initialized.
- * - createQuestionnaireCollaborationMode/createTextInput/createThreadStartRequest/createTurnStartRequest: typed Codex request builders. Keywords: thread, turn, user input, collaboration mode, questionnaire.
+ * - createQuestionnaireDeveloperInstructions/createTextInput/createQuestionnaireCollaborationMode/createThreadStartRequest/createTurnStartRequest: typed Codex instruction and request builders. Keywords: thread, turn, user input, collaboration mode, questionnaire, developer instructions.
  * - createRequestIdGenerator/isCodexEventType: small protocol helpers. Keywords: ids, event type.
  */
 import type { CollaborationMode } from "./generated/app-server/CollaborationMode";
@@ -50,6 +50,15 @@ export interface CodexBootstrapMessages {
   initialized: ClientNotification;
 }
 
+type ThreadStartBridgeParams = ThreadStartParams & {
+  experimentalRawEvents?: boolean;
+  persistExtendedHistory?: boolean;
+};
+
+type ThreadStartBridgeRequest = Omit<Extract<ClientRequest, { method: "thread/start" }>, "params"> & {
+  params: ThreadStartBridgeParams;
+};
+
 const QUESTIONNAIRE_COLLABORATION_INSTRUCTIONS = [
   "# Collaboration Mode: Workbench Questionnaire",
   "",
@@ -60,6 +69,13 @@ const QUESTIONNAIRE_COLLABORATION_INSTRUCTIONS = [
   "When you do ask, prefer 1 to 3 concise multiple-choice questions and do not ask multiple-choice questions in plain chat.",
   "Otherwise behave like a normal coding agent: inspect files, edit files, run available tools, and complete the task end to end.",
 ].join("\n");
+
+function joinInstructionSections(sections: Array<string | null | undefined>) {
+  return sections
+    .map((section) => section?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n\n");
+}
 
 function normalizeReasoningEffort(value: string | null | undefined): ReasoningEffort | null {
   switch (value) {
@@ -125,6 +141,15 @@ export function createBootstrapMessages(
   };
 }
 
+export function createQuestionnaireDeveloperInstructions(
+  additionalInstructions: string | null | undefined = null,
+) {
+  return joinInstructionSections([
+    QUESTIONNAIRE_COLLABORATION_INSTRUCTIONS,
+    additionalInstructions,
+  ]);
+}
+
 export function createTextInput(text: string): Extract<UserInput, { type: "text" }> {
   return {
     type: "text",
@@ -136,11 +161,12 @@ export function createTextInput(text: string): Extract<UserInput, { type: "text"
 export function createQuestionnaireCollaborationMode(
   model: string,
   reasoningEffort: string | null | undefined = null,
+  additionalInstructions: string | null | undefined = null,
 ): CollaborationMode {
   return {
     mode: "plan",
     settings: {
-      developer_instructions: QUESTIONNAIRE_COLLABORATION_INSTRUCTIONS,
+      developer_instructions: createQuestionnaireDeveloperInstructions(additionalInstructions),
       model,
       reasoning_effort: normalizeReasoningEffort(reasoningEffort),
     },
@@ -149,8 +175,8 @@ export function createQuestionnaireCollaborationMode(
 
 export function createThreadStartRequest(
   id: number,
-  overrides: Partial<ThreadStartParams> = {},
-): Extract<ClientRequest, { method: "thread/start" }> {
+  overrides: Partial<ThreadStartBridgeParams> = {},
+): ThreadStartBridgeRequest {
   return {
     method: "thread/start",
     id,

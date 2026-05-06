@@ -78,6 +78,7 @@ const SAVE_GUARD_STATUS_MESSAGE = "Save blocked: markup mismatch. Check the cons
 const THREAD_STATUS_MESSAGE = "Codex thread. Continue below.";
 const WRITE_CONFLICT_STATUS_MESSAGE = "File changed on disk. Reload or overwrite to save.";
 const TOOLBAR_TOUCH_MOUSE_COMPAT_WINDOW_MS = 750;
+const TOOLBAR_INTERACTION_GRACE_MS = 220;
 
 export type EditorMode = "rich" | "plain";
 
@@ -158,6 +159,7 @@ export interface WorkbenchEditorClientOptions {
   closeActiveDialog: () => boolean;
   controllerOptions: WorkbenchEditorControllerOptions;
   fileSessionState: FileSessionState;
+  getEditorHasFocus: () => boolean;
   getProjectChangeSummary: (path: string) => ChangeSummary | null | undefined;
   handleCompositionEnd: () => void;
   handleCompositionStart: () => void;
@@ -614,6 +616,7 @@ function WorkbenchEditorClient(
   let lastLoggedSaveIssue: SaveGuardIssue | null = null;
   let preservedToolbarSelection: EditHistorySelection | null = null;
   let lastNonMouseToolbarInteractionAt = 0;
+  let toolbarInteractionActive = false;
 
   function captureCurrentSelection() {
     return captureEditorSelection(editor);
@@ -792,7 +795,25 @@ function WorkbenchEditorClient(
     setStatusMessage(getDeterministicStatusMessage());
   }
 
+  function clearToolbarInteraction() {
+    lifecycle.cancel("editor-toolbar-interaction");
+    toolbarInteractionActive = false;
+  }
+
+  function scheduleToolbarInteractionReset() {
+    toolbarInteractionActive = true;
+    lifecycle.scheduleOnce("editor-toolbar-interaction", TOOLBAR_INTERACTION_GRACE_MS, () => {
+      toolbarInteractionActive = false;
+      refreshEditorChrome();
+    });
+  }
+
+  function canShowToolbarOverlays() {
+    return options.getEditorHasFocus() || toolbarInteractionActive;
+  }
+
   const revisionHoverController = RevisionHoverToolbarController({
+    canShowToolbar: canShowToolbarOverlays,
     editor,
     getExpandedRangeRect,
     getMinimumToolbarTop,
@@ -885,6 +906,11 @@ function WorkbenchEditorClient(
   }
 
   function updateFloatingToolbar() {
+    if (!canShowToolbarOverlays()) {
+      floatingToolbar.hidden = true;
+      return;
+    }
+
     const selection = window.getSelection();
     if (
       !selection?.rangeCount
@@ -1382,6 +1408,7 @@ function WorkbenchEditorClient(
   }
 
   const preserveToolbarSelection = (event: Event) => {
+    scheduleToolbarInteractionReset();
     captureToolbarSelection();
 
     if (typeof PointerEvent !== "undefined" && event instanceof PointerEvent) {
@@ -1410,6 +1437,14 @@ function WorkbenchEditorClient(
       event.preventDefault();
     }
   };
+
+  function getEventTargetElement(target: EventTarget | null) {
+    if (target instanceof Element) {
+      return target;
+    }
+
+    return target instanceof Node ? target.parentElement : null;
+  }
 
   controls.saveFileButton.addEventListener("click", () => {
     void options.handleSaveCurrentFile();
@@ -1533,11 +1568,11 @@ function WorkbenchEditorClient(
   toolbars.revisionHover.addEventListener("touchstart", preserveToolbarSelection, { signal, passive: false });
 
   toolbars.floating.addEventListener("click", (event) => {
-    const button = event.target instanceof Element
-      ? event.target.closest<HTMLButtonElement>("button[data-command]")
-      : null;
+    const button = getEventTargetElement(event.target)?.closest<HTMLButtonElement>("button[data-command]") ?? null;
     if (!button) {
       preservedToolbarSelection = null;
+      clearToolbarInteraction();
+      scheduleEditorChromeRefresh();
       return;
     }
 
@@ -1545,16 +1580,19 @@ function WorkbenchEditorClient(
     if (button.dataset.command) {
       applyToolbarCommand(button.dataset.command);
     }
+    clearToolbarInteraction();
   }, { signal });
 
   toolbars.revisionAccept.addEventListener("click", () => {
     prepareEditorForToolbarAction();
     applyHoveredRevisionAction("accept");
+    clearToolbarInteraction();
   }, { signal });
 
   toolbars.revisionReject.addEventListener("click", () => {
     prepareEditorForToolbarAction();
     applyHoveredRevisionAction("reject");
+    clearToolbarInteraction();
   }, { signal });
 
   editor.addEventListener("click", (event) => {

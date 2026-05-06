@@ -262,7 +262,7 @@ export default memo(function ThreadView ({
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [activeThread?.id, activeThread?.updatedAt]);
+  }, [activeThread?.id]);
 
   useEffect(() => {
     if (!activeThread) {

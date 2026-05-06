@@ -57,6 +57,12 @@ Minimum expectation by task:
 - `webapp/lib/workbench/`: layered workbench runtime modules split across root client surfaces plus `editor/`, `dom/`, `state/`, `markdown/`, `project/`, and `thread/` sublayers.
 - `webapp/orchestrator/`: local dev entrypoint and bridge helpers that run Next.js together with the Codex and Copilot harnesses.
 
+## Webapp Harness Notes
+
+- Workbench thread titles are set through`POST /api/thread-title`, which forwards to the native harness thread naming APIs rather than storing a separate overlay title.
+- For Codex workbench threads, agent bootstrap instructions such as project agent-file loading should live in hidden developer or collaboration instructions, not injected fake user`<agent_type>`messages.
+- For Copilot workbench threads, equivalent bootstrap behavior should be carried by the session system message so both harnesses stay aligned.
+
 1. Read `webapp/package.json` FIRST.
 2. Read every in-scope route, rendered component, stylesheet, API handler, and `lib` file BEFORE editing. For workbench or editor tasks, also read `webapp/components/workbench.tsx`, `webapp/lib/WorkbenchClient.ts`, and `webapp/lib/types.ts`. For Codex integration tasks, also read `webapp/orchestrator/index.ts`, `webapp/orchestrator/copilot-bridge.ts`, `webapp/lib/codex/\\\*`, and the related files under `webapp/app/codex/` and `webapp/app/api/codex/`.
 3. Search `webapp/components/` and `webapp/lib/` for similar components, utilities, and types BEFORE creating new ones.

@@ -14,6 +14,7 @@
  * - readStoredHarnessModelEffort/persistHarnessModelEffort: persist the preferred reasoning effort for each harness/model pair. Keywords: localStorage, codex, copilot, harness, model, effort.
  * - readStoredHarnessAgent/persistHarnessAgent: persist the preferred agent file for each harness. Keywords: localStorage, codex, copilot, harness, agent.
  * - readStoredThreadUnreadState/persistThreadUnreadState: persist per-thread unread tracking for sidebar badges. Keywords: localStorage, threads, unread, badges.
+ * - readLocalWorkbenchOrigin: read the local loopback workbench origin for agent bootstrap URLs. Keywords: localhost, loopback, URL, workbench, bootstrap.
  * - readCurrentSelectionFromUrl: read the normalized file/thread selection from the current URL. Keywords: URL state, search params, file selection, thread selection.
  * - getRequestedPathFromUrl: read the requested file path from the current URL. Keywords: URL state, search params, file selection.
  * - getRequestedThreadIdFromUrl: read the requested thread id from the current URL. Keywords: URL state, search params, thread selection.
@@ -301,6 +302,21 @@ export function readCurrentSelectionFromUrl(): WorkbenchSelectionSearchParams {
     };
   } catch {
     return emptySelection();
+  }
+}
+
+export function readLocalWorkbenchOrigin() {
+  const explicitOrigin = process.env.NEXT_PUBLIC_LOCAL_WORKBENCH_ORIGIN?.trim();
+  if (explicitOrigin) {
+    return explicitOrigin.replace(/\/$/, "");
+  }
+
+  try {
+    const currentUrl = new URL(window.location.href);
+    const port = currentUrl.port || (currentUrl.protocol === "https:" ? "443" : "80");
+    return `http://127.0.0.1:${port}`;
+  } catch {
+    return null;
   }
 }
 
