@@ -3,6 +3,23 @@ import type { Turn } from "./codex/generated/app-server/v2/Turn";
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
 
 export type WorkbenchHarness = "codex" | "copilot";
+export type OrchestratorReloadScope = "next-dev" | "orchestrator-logic";
+export type OrchestratorReloadState = "idle" | "running" | "succeeded" | "failed";
+
+export interface OrchestratorReloadRequest {
+  scopes: OrchestratorReloadScope[];
+}
+
+export interface OrchestratorReloadResponse {
+  ok: true;
+  state: OrchestratorReloadState;
+  requestedScopes: OrchestratorReloadScope[];
+  appliedScopes: OrchestratorReloadScope[];
+  queuedScopes: OrchestratorReloadScope[];
+  startedAt: number | null;
+  completedAt: number | null;
+  error: string | null;
+}
 
 export interface WorkbenchAgentOption {
   name: string;

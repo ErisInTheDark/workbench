@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - getServerCodexBridgeUrls: resolve candidate websocket bridge URLs for server-side callers, preferring the current request host and then falling back to loopback-safe local defaults. Keywords: codex, websocket, server, bridge, host, fallback.
+ * - getServerCodexBridgeHttpOrigins: resolve candidate HTTP bridge origins for server-side callers, matching the websocket fallback order. Keywords: codex, http, server, bridge, origin.
  * - sendServerWorkbenchBridgeRequest: connect to the local bridge from a server context and send a harness-scoped JSON-RPC request with host-first fallback. Keywords: codex, websocket, bridge, server, request, harness.
  */
 import type { NextRequest } from "next/server";
@@ -22,6 +23,12 @@ function normalizeWebSocketUrl(url: string) {
   return parsedUrl.toString().replace(/\/$/, "");
 }
 
+function websocketUrlToHttpOrigin(url: string) {
+  const parsedUrl = new URL(normalizeWebSocketUrl(url));
+  parsedUrl.protocol = parsedUrl.protocol === "wss:" ? "https:" : "http:";
+  return parsedUrl.toString().replace(/\/$/, "");
+}
+
 function tryBuildRequestHostBridgeUrl(request: NextRequest) {
   const hostname = request.nextUrl.hostname?.trim();
   if (!hostname) {
@@ -39,6 +46,10 @@ export function getServerCodexBridgeUrls(request: NextRequest) {
   ].filter((value): value is string => Boolean(value));
 
   return Array.from(new Set(candidates.map(normalizeWebSocketUrl)));
+}
+
+export function getServerCodexBridgeHttpOrigins(request: NextRequest) {
+  return Array.from(new Set(getServerCodexBridgeUrls(request).map(websocketUrlToHttpOrigin)));
 }
 
 export async function sendServerWorkbenchBridgeRequest<TResponse>(

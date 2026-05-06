@@ -5,7 +5,7 @@ import { startTransition, useCallback, useEffect, useMemo, useRef, useState } fr
 import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type {
-  ExplorerSnapshot, FilePayload, ThreadPayload, TreeNode,
+  ExplorerSnapshot, FilePayload, OrchestratorReloadRequest, OrchestratorReloadResponse, ThreadPayload, TreeNode,
   WorkbenchControls,
   WorkbenchHarness,
   WorkbenchPendingUserInputRequest,
@@ -36,6 +36,8 @@ import {
   workbenchIconButtonClassName,
   workbenchNewEntryButtonClassName,
   workbenchRevisionHoverToolbarClassName,
+  workbenchThreadListButtonClassName,
+  workbenchThreadListLabelClassName,
 } from "./workbench/workbench-class-names";
 import {
   dialogButtonClassName,
@@ -76,6 +78,16 @@ const EMPTY_SELECTION: WorkbenchSelectionSearchParams = {
 
 const MOBILE_SHELL_HEADER_HIDE_THRESHOLD_PX = 24;
 const MOBILE_SHELL_HEADER_SHOW_THRESHOLD_PX = 8;
+const DEFAULT_RELOAD_REQUEST: OrchestratorReloadRequest = {
+  scopes: ["orchestrator-logic", "next-dev"],
+};
+
+function isReloadResponse (value: unknown): value is OrchestratorReloadResponse {
+  return !!value
+    && typeof value === "object"
+    && "ok" in value
+    && "state" in value;
+}
 
 function formatQuickOpenTimestamp (updatedAt: string | null | undefined) {
   if (!updatedAt) {
@@ -160,7 +172,10 @@ export default function Workbench () {
   const [createEntryName, setCreateEntryName] = useState("");
   const [isCreatingEntry, setIsCreatingEntry] = useState(false);
   const [createDialogError, setCreateDialogError] = useState("");
+  const [isReloadingRuntime, setIsReloadingRuntime] = useState(false);
   const [quickOpenUpdatedAtByPath, setQuickOpenUpdatedAtByPath] = useState<Record<string, string>>({});
+  const [reloadError, setReloadError] = useState("");
+  const [reloadMessage, setReloadMessage] = useState("");
   const hasObservedInitialSelectionRef = useRef(false);
   const editorRef = useRef<HTMLDivElement>(null);
   const customCaretRef = useRef<HTMLDivElement>(null);
@@ -535,6 +550,62 @@ export default function Workbench () {
     await controls?.submitPendingUserInputRequest(threadId, response, options);
   }, [controls]);
 
+  const reloadLocalRuntime = useCallback(async () => {
+    setReloadError("");
+    setReloadMessage("Requesting orchestrator logic reload and Next.js dev restart...");
+    setIsReloadingRuntime(true);
+
+    try {
+      const response = await fetch("/api/orchestrator/reload", {
+        body: JSON.stringify(DEFAULT_RELOAD_REQUEST),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+      const payload = await response.json() as OrchestratorReloadResponse | { error?: string };
+      if (!response.ok || !isReloadResponse(payload) || !payload.ok) {
+        throw new Error(
+          "error" in payload && typeof payload.error === "string"
+            ? payload.error
+            : "Unable to reload the local runtime.",
+        );
+      }
+
+      let settledPayload: OrchestratorReloadResponse | null = payload;
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        if (settledPayload.state !== "running") {
+          break;
+        }
+
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, 250);
+        });
+        const statusResponse = await fetch("/api/orchestrator/reload", { cache: "no-store" });
+        const statusPayload = await statusResponse.json() as OrchestratorReloadResponse | { error?: string };
+        if (!statusResponse.ok || !isReloadResponse(statusPayload) || !statusPayload.ok) {
+          settledPayload = null;
+          break;
+        }
+        settledPayload = statusPayload;
+      }
+
+      if (settledPayload?.state === "failed") {
+        throw new Error(settledPayload.error ?? "The orchestrator reported that reload failed.");
+      }
+
+      const finalPayload = settledPayload ?? payload;
+      const appliedLabel = finalPayload.appliedScopes.length ? finalPayload.appliedScopes.join(", ") : "no immediate scopes";
+      const queuedLabel = finalPayload.queuedScopes.length ? finalPayload.queuedScopes.join(", ") : "nothing queued";
+      setReloadMessage(`Reload ${finalPayload.state === "succeeded" ? "completed" : "requested"}. Applied: ${appliedLabel}. Queued: ${queuedLabel}.`);
+    } catch (error) {
+      setReloadMessage("");
+      setReloadError(error instanceof Error ? error.message : "Unable to reload the local runtime.");
+    } finally {
+      setIsReloadingRuntime(false);
+    }
+  }, []);
+
   const workbenchControls = useMemo<WorkbenchControls | null>(() => {
     if (!controls) {
       return null;
@@ -875,6 +946,26 @@ export default function Workbench () {
                   }}
                 />
               </nav>
+              <div className="pr-2 pt-4 md:pr-4.5">
+                <button
+                  type="button"
+                  className={`${workbenchThreadListButtonClassName}${isReloadingRuntime ? " text-accent" : " text-muted"}`}
+                  disabled={isReloadingRuntime}
+                  onClick={() => {
+                    void reloadLocalRuntime();
+                  }}
+                >
+                  <span className={`${workbenchThreadListLabelClassName}${isReloadingRuntime ? " font-semibold" : ""}`}>
+                    {isReloadingRuntime ? "Reloading local runtime..." : "Reload local runtime"}
+                  </span>
+                </button>
+                {reloadMessage ? (
+                  <p className="mt-2 text-[0.84rem] leading-6 text-muted">{reloadMessage}</p>
+                ) : null}
+                {reloadError ? (
+                  <p className="mt-2 text-[0.84rem] leading-6 text-danger">{reloadError}</p>
+                ) : null}
+              </div>
             </section>
           </div>
         </aside>

@@ -18,12 +18,6 @@ import type { GetAccountRateLimitsResponse } from "../lib/codex/generated/app-se
 import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
-import { readUserInvocableAgentDefinition } from "../lib/project";
-import {
-    buildThreadTitleBootstrapInstructions,
-    buildThreadTitleRouteUrl,
-    normalizeThreadTitle,
-} from "../lib/thread-bootstrap";
 import type {
     WorkbenchModelOption,
     WorkbenchUserInputQuestion,
@@ -31,21 +25,15 @@ import type {
     WorkbenchUserInputResponse,
 } from "../lib/types";
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import {
-    applyCopilotEvent,
-    cloneThread,
-    createThreadState,
-    formatPromptFromInput,
-    INITIALIZE_RESULT,
-    metadataToThread,
-    type CopilotThreadState,
-} from "./copilot-thread-state";
+import type { CopilotThreadState } from "./copilot-thread-state";
 import { appendCopilotEventLog, log, logError } from "./process-helpers";
+import type { OrchestratorReloadableModules } from "./reloadable-modules";
 
 type CopilotAccountGetQuotaResult = Awaited<ReturnType<CopilotClient["rpc"]["account"]["getQuota"]>>;
 type CopilotAccountQuotaSnapshot = NonNullable<CopilotAccountGetQuotaResult["quotaSnapshots"]>[string];
 
 type CopilotBridgeOptions = {
+  getReloadableModules: () => OrchestratorReloadableModules;
   onNotification: (notification: JsonRpcNotification) => void;
   projectRoot: string;
 };
@@ -316,6 +304,7 @@ function previewForLog(value: string | null | undefined, maxLength = 120) {
 }
 
 export class CopilotBridge {
+  private readonly getReloadableModules: CopilotBridgeOptions["getReloadableModules"];
   private readonly onNotification: CopilotBridgeOptions["onNotification"];
   private readonly projectRoot: string;
   private client: CopilotClient | null = null;
@@ -327,13 +316,14 @@ export class CopilotBridge {
   private readonly unsubscribers = new Map<string, () => void>();
   private readonly pendingQuestionnaires = new Map<string, PendingQuestionnaireRequest>();
 
-  constructor({ onNotification, projectRoot }: CopilotBridgeOptions) {
+  constructor({ getReloadableModules, onNotification, projectRoot }: CopilotBridgeOptions) {
+    this.getReloadableModules = getReloadableModules;
     this.onNotification = onNotification;
     this.projectRoot = projectRoot;
   }
 
   getInitializeResult() {
-    return INITIALIZE_RESULT;
+    return this.getReloadableModules().copilotThreadState.INITIALIZE_RESULT;
   }
 
   async stop() {
@@ -393,7 +383,7 @@ export class CopilotBridge {
           );
           this.onNotification({
             method: "thread/started",
-            params: { thread: cloneThread(thread.thread) },
+            params: { thread: this.getReloadableModules().copilotThreadState.cloneThread(thread.thread) },
           });
           return {
             id: requestId,
@@ -496,6 +486,7 @@ export class CopilotBridge {
     const client = await this.ensureClient();
     const sessions = await client.listSessions();
     await this.hydrateListedThreadNames(sessions);
+    const { cloneThread, metadataToThread } = this.getReloadableModules().copilotThreadState;
     return {
       data: sessions
         .map((metadata) => {
@@ -663,6 +654,7 @@ export class CopilotBridge {
   }
 
   private createSessionSystemMessage(threadId: string, workbenchOrigin: string | null) {
+    const { buildThreadTitleBootstrapInstructions, buildThreadTitleRouteUrl } = this.getReloadableModules().threadBootstrap;
     const routeUrl = workbenchOrigin?.trim()
       ? buildThreadTitleRouteUrl(workbenchOrigin)
       : null;
@@ -794,6 +786,7 @@ export class CopilotBridge {
       workingDirectory: this.projectRoot,
     });
 
+    const { createThreadState } = this.getReloadableModules().copilotThreadState;
     const state = createThreadState(sessionId, null, this.projectRoot);
     this.threadStates.set(sessionId, state);
     this.sessions.set(sessionId, session);
@@ -838,6 +831,7 @@ export class CopilotBridge {
     workbenchOrigin: string | null,
   ) {
     const { session, state } = await this.ensureThreadState(threadId, model, reasoningEffort, agentPath, workbenchOrigin);
+    const { cloneThread } = this.getReloadableModules().copilotThreadState;
     return {
       model: await this.readSessionModel(session, model),
       modelProvider: "copilot",
@@ -869,6 +863,7 @@ export class CopilotBridge {
 
     const client = await this.ensureClient();
     const metadata = await client.getSessionMetadata(threadId);
+    const { applyCopilotEvent, createThreadState, metadataToThread } = this.getReloadableModules().copilotThreadState;
     const state = existingState ?? createThreadState(threadId, metadata ?? null, this.projectRoot);
     state.metadata = metadata ?? null;
     state.thread = metadataToThread(metadata ?? null, state.thread, this.projectRoot);
@@ -922,7 +917,7 @@ export class CopilotBridge {
     this.unsubscribers.get(threadId)?.();
     const unsubscribe = session.on((event: SessionEvent) => {
       void appendCopilotEventLog(this.projectRoot, threadId, "live", event);
-      applyCopilotEvent(state, event, true, this.onNotification);
+      this.getReloadableModules().copilotThreadState.applyCopilotEvent(state, event, true, this.onNotification);
       if (event.type === "user.message" || event.type === "assistant.turn_end" || event.type === "session.idle") {
         void this.syncThreadNameFromSession(state, session, true);
       }
@@ -941,7 +936,7 @@ export class CopilotBridge {
   ) {
     const { session } = await this.ensureThreadState(threadId, model, reasoningEffort, agentPath, workbenchOrigin);
 
-    const prompt = formatPromptFromInput(input);
+    const prompt = this.getReloadableModules().copilotThreadState.formatPromptFromInput(input);
     if (!prompt) {
       throw new Error("Message input cannot be empty.");
     }
@@ -1041,6 +1036,7 @@ export class CopilotBridge {
   }
 
   private async setThreadName(threadId: string, name: string) {
+    const { normalizeThreadTitle } = this.getReloadableModules().threadBootstrap;
     const normalizedTitle = normalizeThreadTitle(name);
     if (!normalizedTitle) {
       throw new Error("A non-empty thread title is required.");
@@ -1159,6 +1155,7 @@ export class CopilotBridge {
       return null;
     }
 
+    const { readUserInvocableAgentDefinition } = this.getReloadableModules().project;
     const definition = await readUserInvocableAgentDefinition(agentPath);
     return {
       description: definition.description || undefined,

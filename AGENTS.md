@@ -24,6 +24,12 @@ Before giving a questionnaire, first provide the author with concise commentary 
 - For webapp work, prefer extracting reusable components and testable utilities instead of adding more logic to monolithic files, and prefer existing shared helpers over file-local reinventions.
 - For webapp utility files, keep a top-of-file export manifest current. Put it above imports and update it whenever exported functions are added, removed, renamed, or repurposed.
 
+## Webapp Runtime Notes
+
+- The local webapp orchestrator now exposes a scoped reload endpoint at `POST /orchestrator/reload` for local operator workflows.
+- Current supported scopes are `orchestrator-logic` for hot-reloading targeted helper modules and `next-dev` for restarting the Next.js dev child process.
+- Preserve bridge-owned session state when extending reload behavior; do not broaden reload scope to live Copilot session ownership without an explicit preservation design.
+
 ## Project Structure
 
 - `.agents/skills/`: project-specific workflows.

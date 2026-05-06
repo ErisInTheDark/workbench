@@ -5,6 +5,11 @@ import path from "node:path";
 import { WebSocketServer } from "next/dist/compiled/ws";
 
 import { createInitializeCapabilities, createInitializeRequest } from "../lib/codex/protocol";
+import type {
+  OrchestratorReloadRequest,
+  OrchestratorReloadResponse,
+  OrchestratorReloadScope,
+} from "../lib/types";
 import type { BridgeClient, HarnessKind, JsonRpcNotification, JsonRpcRequest } from "./bridge-types";
 import { CodexStdioBridge } from "./codex-stdio-bridge";
 import { CopilotBridge } from "./copilot-bridge";
@@ -18,6 +23,10 @@ import {
     type ProcessSpec,
     type RunningProcess,
 } from "./process-helpers";
+import {
+  loadOrchestratorReloadableModules,
+  reloadOrchestratorReloadableModules,
+} from "./reloadable-modules";
 
 const ORCHESTRATOR_ROOT = __dirname;
 const WEBAPP_ROOT = path.resolve(ORCHESTRATOR_ROOT, "..");
@@ -26,6 +35,11 @@ const DEFAULT_CODEX_BRIDGE_URL = "ws://0.0.0.0:4500";
 const CODEX_BRIDGE_URL = process.env.CODEX_APP_SERVER_URL ?? DEFAULT_CODEX_BRIDGE_URL;
 const NEXT_PORT = process.env.PORT ?? "3002";
 const RESTART_DELAY_MS = 1000;
+const ORCHESTRATOR_RELOAD_PATH = "/orchestrator/reload";
+const ORCHESTRATOR_RELOAD_SCOPE_VALUES = new Set<OrchestratorReloadScope>([
+  "next-dev",
+  "orchestrator-logic",
+]);
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
 
 function readNonEmptyEnv(value: string | undefined) {
@@ -65,9 +79,21 @@ const bridgeConnections = new Set<BridgeClient>();
 let bridgeServer: http.Server | null = null;
 let bridgeWebSocketServer: WebSocketServer | null = null;
 let codexReadyPromise: Promise<void> | null = null;
+let lastReloadResponse: OrchestratorReloadResponse = {
+  appliedScopes: [],
+  completedAt: null,
+  error: null,
+  ok: true,
+  queuedScopes: [],
+  requestedScopes: [],
+  startedAt: null,
+  state: "idle",
+};
+let reloadableModules = loadOrchestratorReloadableModules();
 let shuttingDown = false;
 
 const copilotBridge = new CopilotBridge({
+  getReloadableModules: () => reloadableModules,
   onNotification: (notification) => {
     broadcastToClients("copilot", notification);
   },
@@ -125,6 +151,12 @@ function stripHarnessField(message: JsonRpcRequest) {
   return nextMessage;
 }
 
+function asRecord(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
 function getBridgeInitializeMessage() {
   return createInitializeRequest(0, {
     capabilities: createInitializeCapabilities({
@@ -145,6 +177,66 @@ function ensureCodexReady() {
     });
 
   return codexReadyPromise;
+}
+
+function sendHttpJson(response: http.ServerResponse, statusCode: number, payload: unknown) {
+  response.writeHead(statusCode, {
+    "Cache-Control": "no-store",
+    "Content-Type": "application/json",
+  });
+  response.end(JSON.stringify(payload));
+}
+
+function readRequestBody(request: http.IncomingMessage) {
+  return new Promise<string>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer | string) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    request.once("end", () => {
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+    request.once("error", reject);
+  });
+}
+
+function normalizeReloadScopes(value: unknown): OrchestratorReloadScope[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(new Set(
+    value.filter((scope): scope is OrchestratorReloadScope => (
+      typeof scope === "string" && ORCHESTRATOR_RELOAD_SCOPE_VALUES.has(scope as OrchestratorReloadScope)
+    )),
+  ));
+}
+
+function createReloadResponse(scopes: OrchestratorReloadScope[]): OrchestratorReloadResponse {
+  return {
+    appliedScopes: scopes.filter((scope) => scope !== "next-dev"),
+    completedAt: null,
+    error: null,
+    ok: true,
+    queuedScopes: scopes.filter((scope) => scope === "next-dev"),
+    requestedScopes: scopes,
+    startedAt: Date.now(),
+    state: "running",
+  };
+}
+
+function finalizeReloadResponse(
+  startedAt: number | null,
+  updates: Partial<Pick<OrchestratorReloadResponse, "completedAt" | "error" | "state">>,
+) {
+  if (startedAt === null || lastReloadResponse.startedAt !== startedAt) {
+    return;
+  }
+
+  lastReloadResponse = {
+    ...lastReloadResponse,
+    ...updates,
+  };
 }
 
 function stopAllChildren() {
@@ -170,6 +262,93 @@ function stopAllChildren() {
     bridgeServer.close();
     bridgeServer = null;
   }
+}
+
+function findProcessSpec(name: string) {
+  return specs.find((spec) => spec.name === name) ?? null;
+}
+
+function restartChild(spec: ProcessSpec) {
+  const existing = processes.get(spec.name);
+  if (existing?.restartTimer) {
+    clearTimeout(existing.restartTimer);
+    existing.restartTimer = null;
+  }
+
+  if (existing?.child && !existing.child.killed) {
+    killProcessTree(existing.child.pid);
+    return "scheduled";
+  }
+
+  startChild(spec);
+  return "started";
+}
+
+function reloadOrchestratorLogic() {
+  reloadableModules = reloadOrchestratorReloadableModules();
+  log("orchestrator", "reloaded orchestrator helper modules");
+}
+
+function queueReload(scopes: OrchestratorReloadScope[]) {
+  const startedAt = lastReloadResponse.startedAt;
+  setImmediate(() => {
+    try {
+      if (scopes.includes("orchestrator-logic")) {
+        reloadOrchestratorLogic();
+      }
+
+      if (scopes.includes("next-dev")) {
+        const nextSpec = findProcessSpec("next-dev");
+        if (!nextSpec) {
+          throw new Error("Next.js dev process is not registered with the orchestrator.");
+        }
+
+        restartChild(nextSpec);
+        log("orchestrator", "queued Next.js dev restart");
+      }
+      finalizeReloadResponse(startedAt, {
+        completedAt: Date.now(),
+        error: null,
+        state: "succeeded",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      finalizeReloadResponse(startedAt, {
+        completedAt: Date.now(),
+        error: message,
+        state: "failed",
+      });
+      logError("orchestrator", error instanceof Error ? error.stack ?? error.message : message);
+    }
+  });
+}
+
+async function handleReloadHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
+  let payload: OrchestratorReloadRequest | null = null;
+  try {
+    const rawBody = await readRequestBody(request);
+    const parsedBody = rawBody.trim() ? JSON.parse(rawBody) as unknown : {};
+    const record = asRecord(parsedBody);
+    payload = {
+      scopes: normalizeReloadScopes(record?.scopes),
+    };
+  } catch (error) {
+    sendHttpJson(response, 400, {
+      error: error instanceof Error ? error.message : "Invalid reload request body.",
+    });
+    return;
+  }
+
+  if (!payload.scopes.length) {
+    sendHttpJson(response, 400, {
+      error: "At least one supported reload scope is required.",
+    });
+    return;
+  }
+
+  lastReloadResponse = createReloadResponse(payload.scopes);
+  sendHttpJson(response, 202, lastReloadResponse);
+  queueReload(payload.scopes);
 }
 
 function scheduleRestart(spec: ProcessSpec) {
@@ -297,18 +476,22 @@ function startBridgeServer() {
   const { host, port } = codexBridge.getListenDescriptor();
   bridgeWebSocketServer = new WebSocketServer({ noServer: true });
   bridgeServer = http.createServer((request, response) => {
-    if (request.url === "/readyz" || request.url === "/healthz") {
-      response.writeHead(200, {
-        "Content-Type": "application/json",
-      });
-      response.end("{}");
+    if (request.url === ORCHESTRATOR_RELOAD_PATH && request.method === "GET") {
+      sendHttpJson(response, 200, lastReloadResponse);
       return;
     }
 
-    response.writeHead(404, {
-      "Content-Type": "application/json",
-    });
-    response.end(JSON.stringify({ error: "Not found" }));
+    if (request.url === ORCHESTRATOR_RELOAD_PATH && request.method === "POST") {
+      void handleReloadHttpRequest(request, response);
+      return;
+    }
+
+    if (request.url === "/readyz" || request.url === "/healthz") {
+      sendHttpJson(response, 200, {});
+      return;
+    }
+
+    sendHttpJson(response, 404, { error: "Not found" });
   });
 
   bridgeServer.on("upgrade", (request, socket, head) => {
