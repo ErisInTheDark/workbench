@@ -29,6 +29,7 @@ export interface WorkbenchAgentOption {
 
 export interface WorkbenchProjectOption {
   id: string;
+  lastCommitTimeMs: number | null;
   name: string;
   rootPath: string;
   relativePath: string;

@@ -6,7 +6,7 @@
  * - normalizeRelativePath: normalize project paths to forward-slash form for client transport. Keywords: path, normalize, relative.
  * - safeResolve/safeResolveProjectPath: resolve and validate project-relative paths inside a selected project root. Keywords: path, resolve, safety.
  * - isPathWithinRoot: test whether an absolute path belongs to a project root. Keywords: path, root, thread filter.
- * - discoverProjects/resolveProjectRoot/getDefaultProjectId: find and resolve selectable git projects. Keywords: project, discovery, id.
+ * - discoverProjects/resolveProjectRoot/getDefaultProjectId: find and resolve selectable git projects, newest HEAD activity first. Keywords: project, discovery, id, last commit.
  * - createProjectEntry: create a new project file or directory and return its normalized relative path. Keywords: create, file, directory.
  * - buildTree/buildProjectTree: build the visible explorer tree for a project. Keywords: tree, explorer, filesystem.
  * - getProjectSnapshot: assemble the project tree, root info, and git change summary for the client. Keywords: snapshot, project, explorer.
@@ -109,11 +109,94 @@ async function hasGitMarker(rootDir: string) {
   }
 }
 
-function createProjectOption(rootDir: string): WorkbenchProjectOption {
+async function statMtimeMs(filePath: string) {
+  try {
+    return (await fs.stat(filePath)).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+async function readTextFile(filePath: string) {
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+async function resolveGitDirectory(rootDir: string) {
+  const gitMarkerPath = path.join(rootDir, ".git");
+
+  try {
+    const stats = await fs.lstat(gitMarkerPath);
+    if (stats.isDirectory()) {
+      return gitMarkerPath;
+    }
+    if (!stats.isFile()) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+
+  const marker = await readTextFile(gitMarkerPath);
+  const gitDirMatch = /^gitdir:\s*(.+)\s*$/im.exec(marker ?? "");
+  if (!gitDirMatch) {
+    return null;
+  }
+
+  const gitDirPath = gitDirMatch[1].trim();
+  return path.resolve(rootDir, gitDirPath);
+}
+
+function parseHeadRef(headContent: string | null) {
+  const match = /^ref:\s*(.+)\s*$/m.exec(headContent ?? "");
+  return match?.[1]?.trim() || null;
+}
+
+async function getPackedRefMtimeMs(gitDir: string, refName: string) {
+  const packedRefsPath = path.join(gitDir, "packed-refs");
+  const packedRefs = await readTextFile(packedRefsPath);
+  if (!packedRefs || !new RegExp(`^[0-9a-f]{40}\\s+${refName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "im").test(packedRefs)) {
+    return null;
+  }
+
+  return await statMtimeMs(packedRefsPath);
+}
+
+async function getGitHeadActivityTimeMs(rootDir: string) {
+  const gitDir = await resolveGitDirectory(rootDir);
+  if (!gitDir) {
+    return null;
+  }
+
+  const headPath = path.join(gitDir, "HEAD");
+  const headContent = await readTextFile(headPath);
+  const refName = parseHeadRef(headContent);
+  const candidates = [await statMtimeMs(path.join(gitDir, "logs", "HEAD"))];
+
+  if (refName) {
+    candidates.push(await statMtimeMs(path.join(gitDir, ...refName.split("/"))));
+    candidates.push(await getPackedRefMtimeMs(gitDir, refName));
+  } else {
+    candidates.push(await statMtimeMs(headPath));
+  }
+
+  return candidates.reduce<number | null>((latest, candidate) => {
+    if (candidate === null) {
+      return latest;
+    }
+    return latest === null ? candidate : Math.max(latest, candidate);
+  }, null);
+}
+
+async function createProjectOption(rootDir: string): Promise<WorkbenchProjectOption> {
   const relativePath = normalizeRelativePath(path.relative(projectsRoot, rootDir)) || ".";
   const id = normalizeProjectId(relativePath) || ".";
   return {
     id,
+    lastCommitTimeMs: await getGitHeadActivityTimeMs(rootDir),
     name: path.basename(rootDir) || id,
     relativePath: id,
     rootPath: normalizeRelativePath(rootDir),
@@ -122,7 +205,7 @@ function createProjectOption(rootDir: string): WorkbenchProjectOption {
 
 async function walkProjects(currentDir: string, projects: WorkbenchProjectOption[]) {
   if (await hasGitMarker(currentDir)) {
-    projects.push(createProjectOption(currentDir));
+    projects.push(await createProjectOption(currentDir));
     return;
   }
 
@@ -147,7 +230,15 @@ export async function discoverProjects({ refresh = false }: { refresh?: boolean 
     discoveredProjectsCache = (async () => {
       const projects: WorkbenchProjectOption[] = [];
       await walkProjects(projectsRoot, projects);
-      return projects.sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true, sensitivity: "base" }));
+      return projects.sort((left, right) => {
+        const leftTime = left.lastCommitTimeMs ?? Number.NEGATIVE_INFINITY;
+        const rightTime = right.lastCommitTimeMs ?? Number.NEGATIVE_INFINITY;
+        if (leftTime !== rightTime) {
+          return rightTime - leftTime;
+        }
+
+        return left.id.localeCompare(right.id, undefined, { numeric: true, sensitivity: "base" });
+      });
     })();
   }
 
