@@ -144,6 +144,10 @@ function buildRenderableBlocks (items: ThreadItem[]): ThreadRenderableBlock[] {
       continue;
     }
 
+    if (item.type === "reasoning" && !hasReasoningSteps(item)) {
+      continue;
+    }
+
     if (item.type === "commandExecution") {
       flushPendingReasoning();
       flushPendingFileChanges();
@@ -182,6 +186,11 @@ function buildRenderableBlocks (items: ThreadItem[]): ThreadRenderableBlock[] {
 
 function isHiddenCommandExecution (command: string) {
   return /^report_intent(?:\s|$)/i.test(command.trim());
+}
+
+function hasReasoningSteps(item: ReasoningItem) {
+  return item.summary.some((section) => section.trim())
+    || item.content.some((section) => section.trim());
 }
 
 function ThreadUserInputLine ({
@@ -556,10 +565,17 @@ function ThreadReasoningSequence ({
   onOpenFile?: (path: string) => Promise<void>;
   projectRootPath?: string;
 }) {
-  const totalItems = block.items.reduce((sum, item) => sum + (item.summary.length || item.content.length), 0);
+  const visibleItems = block.items.filter(hasReasoningSteps);
+  const totalItems = visibleItems.reduce((sum, item) => (
+    sum + (item.summary.filter((section) => section.trim()).length || item.content.filter((section) => section.trim()).length)
+  ), 0);
+  if (!totalItems) {
+    return null;
+  }
+
   const content = (
     <div className="space-y-4">
-      {block.items.map((item, index) => (
+      {visibleItems.map((item, index) => (
         <ThreadReasoningItem
           key={item.id}
           className={index ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4" : undefined}

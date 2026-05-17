@@ -64,6 +64,60 @@ function hasExpandedSelectionWithin (root: HTMLElement | null) {
   return Boolean(anchorNode && focusNode && root.contains(anchorNode) && root.contains(focusNode));
 }
 
+function formatReasoningTitle(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean)
+    ?.replace(/^#{1,6}\s+/, "")
+    .replace(/^\*\*(.+)\*\*$/, "$1")
+    .replace(/^\[(.+)\]$/, "$1")
+    .replace(/:$/, "")
+    .trim() || null;
+}
+
+function getCurrentReasoningTitle(turn: ThreadPayload["turns"][number] | null) {
+  if (!turn || turn.status !== "inProgress") {
+    return null;
+  }
+
+  const latestItem = turn.items.at(-1);
+  if (latestItem?.type !== "reasoning") {
+    return null;
+  }
+
+  const visibleSections = latestItem.summary.length ? latestItem.summary : latestItem.content;
+  for (const section of [...visibleSections].reverse()) {
+    const title = formatReasoningTitle(section);
+    if (title) {
+      return title;
+    }
+  }
+
+  return null;
+}
+
+function hasInProgressSubagentWait(turn: ThreadPayload["turns"][number] | null) {
+  return Boolean(turn?.items.some((item) => (
+    (item.type === "collabAgentToolCall" && item.status === "inProgress")
+    || (item.type === "dynamicToolCall" && item.tool === "task" && item.status === "inProgress")
+  )));
+}
+
+function getThinkingLabel({
+  pendingUserInputRequest,
+  turn,
+}: {
+  pendingUserInputRequest: WorkbenchPendingUserInputRequest | null;
+  turn: ThreadPayload["turns"][number] | null;
+}) {
+  if (!turn || turn.status !== "inProgress" || pendingUserInputRequest || hasInProgressSubagentWait(turn)) {
+    return null;
+  }
+
+  return getCurrentReasoningTitle(turn) ?? "Thinking";
+}
+
 export default memo(function ThreadView ({
   fontSizeRem,
   livePendingUserInputRequestsByThreadId,
@@ -134,7 +188,10 @@ export default memo(function ThreadView ({
     : null;
   const activePendingUserInputRequest = activeHarnessUserInputRequest;
   const currentTurn = activeThread?.turns.at(-1) ?? null;
-  const isThinking = currentTurn?.status === "inProgress";
+  const thinkingLabel = getThinkingLabel({
+    pendingUserInputRequest: activePendingUserInputRequest,
+    turn: currentTurn,
+  });
 
   const tabDefinitions = useMemo(() => {
     const baseLabelCounts = new Map<string, number>();
@@ -474,10 +531,10 @@ export default memo(function ThreadView ({
           </div>
         )}
       </div>
-      {isThinking ? (
+      {thinkingLabel ? (
         <div className="py-4" aria-live="polite">
           <p className="thread-thinking-text m-0 text-[0.92em] font-medium leading-[1.6]">
-            Thinking
+            {thinkingLabel}
           </p>
         </div>
       ) : null}
