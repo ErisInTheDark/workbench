@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 
 import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
@@ -145,6 +145,16 @@ function filterVisibleTreeNodes (nodes: TreeNode[]): TreeNode[] {
   return visibleNodes;
 }
 
+function createProjectHref (projectId: string) {
+  const path = projectId
+    .split("/")
+    .filter((segment) => segment.length > 0)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+
+  return `/${path}`;
+}
+
 export default function Workbench () {
   const [explorer, setExplorer] = useState(INITIAL_EXPLORER_SNAPSHOT);
   const [currentThread, setCurrentThread] = useState<ThreadPayload | null>(null);
@@ -171,6 +181,7 @@ export default function Workbench () {
   const [mobilePane, setMobilePane] = useState<MobilePane>("explorer");
   const [showUnopenableFiles, setShowUnopenableFiles] = useState(false);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [sidebarMode, setSidebarMode] = useState<"main" | "projects">("main");
   const [createDialogParentPath, setCreateDialogParentPath] = useState("");
   const [createEntryName, setCreateEntryName] = useState("");
   const [isCreatingEntry, setIsCreatingEntry] = useState(false);
@@ -475,13 +486,35 @@ export default function Workbench () {
     setCreateDialogError("");
   };
 
-  const selectProjectFromExplorer = useCallback(async (projectId: string) => {
-    if (!controls || !projectId || projectId === explorer.currentProjectId) {
+  const openProjectPicker = useCallback(() => {
+    setSidebarMode("projects");
+  }, []);
+
+  const closeProjectPicker = useCallback(() => {
+    setSidebarMode("main");
+  }, []);
+
+  const selectProjectFromLink = useCallback(async (event: MouseEvent<HTMLAnchorElement>, projectId: string) => {
+    if (
+      event.button !== 0
+      || event.metaKey
+      || event.ctrlKey
+      || event.shiftKey
+      || event.altKey
+    ) {
       return;
     }
 
+    if (!controls || !projectId) {
+      return;
+    }
+
+    event.preventDefault();
     setCurrentThread(null);
-    await controls.selectProject(projectId);
+    if (projectId !== explorer.currentProjectId) {
+      await controls.selectProject(projectId);
+    }
+    setSidebarMode("main");
     if (isMobile) {
       setMobilePane("explorer");
     }
@@ -881,131 +914,179 @@ export default function Workbench () {
         style={mobileTrackStyle}
       >
         <aside className="flex min-h-screen w-screen min-w-0 shrink-0 flex-col overflow-hidden px-5 pb-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:px-6 md:py-5">
-          <div className="explorer-scrollbar -ml-3 min-h-0 flex-1 overflow-y-auto pb-8 pl-2 pr-2 text-[0.95rem] leading-6">
-            <section className="space-y-2 pb-6">
-              <div className="flex items-center justify-between gap-3 pr-2 md:pr-4.5">
-                <p className="m-0 text-base font-semibold leading-tight">Threads</p>
-              </div>
-              <nav aria-label="Threads">
-                <ThreadsList
-                  createThreadLabel="Create new thread"
-                  currentThreadId={activeThreadId}
-                  isDraftSelected={Boolean(currentThread?.isDraft)}
-                  nodes={explorer.threads}
-                  pendingQuestionnaireThreadIds={pendingQuestionnaireThreadIds}
-                  onCreateThread={() => {
-                    controls?.createThread(harness);
-                    if (isMobile) {
-                      setMobilePane("editor");
-                    }
-                  }}
-                  onOpenThread={(threadId) => {
-                    void openThreadFromExplorer(threadId);
-                  }}
-                />
-              </nav>
-              {explorer.threadsError ? (
-                <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted">
-                  {explorer.threadsError}
-                </p>
-              ) : null}
-            </section>
-
-            <section className="space-y-2">
-              <div className="group/entry-row flex items-center justify-between gap-3 pr-2 md:pr-4.5">
-                <div className="min-w-0 md:-ml-2">
-                  <label className="sr-only" htmlFor="project-picker">Project</label>
-                  <select
-                    id="project-picker"
-                    className="m-0 max-w-full rounded-lg bg-transparent px-2 py-1.5 text-base font-semibold leading-tight text-text outline-none transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent md:py-0.5"
-                    value={explorer.currentProjectId}
-                    disabled={!explorer.projects.length}
+          <div className="-ml-3 min-h-0 flex-1 overflow-hidden text-[0.95rem] leading-6">
+            <div
+              className="flex h-full w-[200%] transition-transform duration-200 ease-out"
+              style={{ transform: sidebarMode === "projects" ? "translateX(-50%)" : "translateX(0)" }}
+            >
+              <div className="explorer-scrollbar min-h-0 w-1/2 overflow-y-auto pb-8 pl-2 pr-2">
+                <section className="space-y-2 pb-6">
+                  <button
+                    type="button"
+                    className="flex w-full min-w-0 items-center justify-between gap-3 rounded-lg px-2 py-2 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:-ml-2"
                     title={currentProject?.rootPath ?? explorer.rootPath}
-                    onChange={(event) => {
-                      void selectProjectFromExplorer(event.target.value);
-                    }}
+                    onClick={openProjectPicker}
                   >
-                    {explorer.projects.length ? explorer.projects.map((project) => (
-                      <option key={project.id} value={project.id}>
-                        {project.id}
-                      </option>
-                    )) : (
-                      <option value="">No projects found</option>
-                    )}
-                  </select>
-                </div>
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    aria-label={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
-                    aria-pressed={showUnopenableFiles}
-                    title={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
-                    className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName} md:opacity-100${showUnopenableFiles ? " bg-accent-soft text-accent" : ""}`}
-                    onClick={() => {
-                      setShowUnopenableFiles((current) => !current);
-                    }}
-                  >
-                    <FileVisibilityIcon visible={showUnopenableFiles} />
-                    <span className="sr-only">
-                      {showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
+                    <span className="min-w-0 relative -top-0.5">
+                      <span className="block truncate text-xl font-semibold leading-tight text-text">{explorer.currentProjectId || "No project"}</span>
                     </span>
+                    <span className="shrink-0 relative -top-0.5 text-muted" aria-hidden="true">›</span>
                   </button>
-                  <button
-                    type="button"
-                    aria-label="Create in project"
-                    title="Create in project"
-                    className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}`}
-                    disabled={!explorer.currentProjectId}
-                    onClick={() => {
-                      openCreateDialog("");
-                    }}
-                  >
-                    <NewEntryIcon />
-                    <span className="sr-only">Create in project</span>
-                  </button>
-                </div>
+                </section>
+
+                <section className="space-y-2 pb-6">
+                  <div className="flex items-center justify-between gap-3 pr-2 md:pr-4.5">
+                    <p className="m-0 text-base font-semibold leading-tight">Threads</p>
+                  </div>
+                  <nav aria-label="Threads">
+                    <ThreadsList
+                      createThreadLabel="Create new thread"
+                      currentThreadId={activeThreadId}
+                      isDraftSelected={Boolean(currentThread?.isDraft)}
+                      nodes={explorer.threads}
+                      pendingQuestionnaireThreadIds={pendingQuestionnaireThreadIds}
+                      onCreateThread={() => {
+                        controls?.createThread(harness);
+                        if (isMobile) {
+                          setMobilePane("editor");
+                        }
+                      }}
+                      onOpenThread={(threadId) => {
+                        void openThreadFromExplorer(threadId);
+                      }}
+                    />
+                  </nav>
+                  {explorer.threadsError ? (
+                    <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted">
+                      {explorer.threadsError}
+                    </p>
+                  ) : null}
+                </section>
+
+                <section className="space-y-2">
+                  <div className="group/entry-row flex items-center justify-between gap-3 pr-2 md:pr-4.5">
+                    <button
+                      type="button"
+                      className="m-0 rounded-lg px-2 py-1.5 text-left text-base font-semibold leading-tight transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:-ml-2 md:py-0.5"
+                      onClick={() => {
+                        clearSelectionFromUi();
+                      }}
+                    >
+                      Project
+                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        aria-label={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
+                        aria-pressed={showUnopenableFiles}
+                        title={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
+                        className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName} md:opacity-100${showUnopenableFiles ? " bg-accent-soft text-accent" : ""}`}
+                        onClick={() => {
+                          setShowUnopenableFiles((current) => !current);
+                        }}
+                      >
+                        <FileVisibilityIcon visible={showUnopenableFiles} />
+                        <span className="sr-only">
+                          {showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Create in project"
+                        title="Create in project"
+                        className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}`}
+                        disabled={!explorer.currentProjectId}
+                        onClick={() => {
+                          openCreateDialog("");
+                        }}
+                      >
+                        <NewEntryIcon />
+                        <span className="sr-only">Create in project</span>
+                      </button>
+                    </div>
+                  </div>
+                  {!explorer.projects.length ? (
+                    <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted md:pr-4.5">
+                      No git projects were found under the configured projects root.
+                    </p>
+                  ) : null}
+                  <nav id="file-tree" aria-label="Project files">
+                    <ExplorerTree
+                      changes={explorer.changes}
+                      controls={workbenchControls}
+                      currentPath={activeFilePath}
+                      expandedDirectories={expandedDirectories}
+                      isFileOpenable={isWorkbenchOpenableFile}
+                      modifiedPaths={modifiedPaths}
+                      nodes={visibleTree}
+                      onCreateInDirectory={openCreateDialog}
+                      onOpenFile={(path) => {
+                        void openFileFromExplorer(path);
+                      }}
+                    />
+                  </nav>
+                  <div className="pr-2 pt-4 md:pr-4.5">
+                    <button
+                      type="button"
+                      className={`${workbenchThreadListButtonClassName}${isReloadingRuntime ? " text-accent" : " text-muted"}`}
+                      disabled={isReloadingRuntime}
+                      onClick={() => {
+                        void reloadLocalRuntime();
+                      }}
+                    >
+                      <span className={`${workbenchThreadListLabelClassName}${isReloadingRuntime ? " font-semibold" : ""}`}>
+                        {isReloadingRuntime ? "Reloading local runtime..." : "Reload local runtime"}
+                      </span>
+                    </button>
+                    {reloadMessage ? (
+                      <p className="mt-2 text-[0.84rem] leading-6 text-muted">{reloadMessage}</p>
+                    ) : null}
+                    {reloadError ? (
+                      <p className="mt-2 text-[0.84rem] leading-6 text-danger">{reloadError}</p>
+                    ) : null}
+                  </div>
+                </section>
               </div>
-              {!explorer.projects.length ? (
-                <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted md:pr-4.5">
-                  No git projects were found under the configured projects root.
-                </p>
-              ) : null}
-              <nav id="file-tree" aria-label="Project files">
-                <ExplorerTree
-                  changes={explorer.changes}
-                  controls={workbenchControls}
-                  currentPath={activeFilePath}
-                  expandedDirectories={expandedDirectories}
-                  isFileOpenable={isWorkbenchOpenableFile}
-                  modifiedPaths={modifiedPaths}
-                  nodes={visibleTree}
-                  onCreateInDirectory={openCreateDialog}
-                  onOpenFile={(path) => {
-                    void openFileFromExplorer(path);
-                  }}
-                />
-              </nav>
-              <div className="pr-2 pt-4 md:pr-4.5">
-                <button
-                  type="button"
-                  className={`${workbenchThreadListButtonClassName}${isReloadingRuntime ? " text-accent" : " text-muted"}`}
-                  disabled={isReloadingRuntime}
-                  onClick={() => {
-                    void reloadLocalRuntime();
-                  }}
-                >
-                  <span className={`${workbenchThreadListLabelClassName}${isReloadingRuntime ? " font-semibold" : ""}`}>
-                    {isReloadingRuntime ? "Reloading local runtime..." : "Reload local runtime"}
-                  </span>
-                </button>
-                {reloadMessage ? (
-                  <p className="mt-2 text-[0.84rem] leading-6 text-muted">{reloadMessage}</p>
-                ) : null}
-                {reloadError ? (
-                  <p className="mt-2 text-[0.84rem] leading-6 text-danger">{reloadError}</p>
-                ) : null}
+
+              <div className="explorer-scrollbar min-h-0 w-1/2 overflow-y-auto pb-8 pl-5 pr-2">
+                <section className="space-y-3 pr-2 md:pr-4.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <button
+                      type="button"
+                      className="inline-flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-base font-semibold leading-tight transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:-ml-2 md:py-0.5"
+                      onClick={closeProjectPicker}
+                    >
+                      <span aria-hidden="true">‹</span>
+                      <span>Projects</span>
+                    </button>
+                  </div>
+                  <nav aria-label="Projects" className="space-y-1">
+                    {explorer.projects.map((project) => {
+                      const isCurrentProject = project.id === explorer.currentProjectId;
+                      return (
+                        <a
+                          key={project.id}
+                          href={createProjectHref(project.id)}
+                          title={project.rootPath}
+                          className={`block min-w-0 rounded-lg px-2 py-1.5 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:py-1${isCurrentProject ? " bg-accent-soft text-accent" : " text-muted"}`}
+                          onClick={(event) => {
+                            void selectProjectFromLink(event, project.id);
+                          }}
+                        >
+                          <span className={`block truncate text-[0.94rem] leading-tight${isCurrentProject ? " font-semibold" : ""}`}>{project.id}</span>
+                          <span className="mt-1 block truncate text-[0.74rem] leading-tight text-muted">{project.rootPath}</span>
+                        </a>
+                      );
+                    })}
+                    {!explorer.projects.length ? (
+                      <p className="m-0 text-[0.84rem] leading-6 text-muted">
+                        No git projects were found under the configured projects root.
+                      </p>
+                    ) : null}
+                  </nav>
+                </section>
               </div>
-            </section>
+            </div>
           </div>
         </aside>
 

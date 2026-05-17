@@ -258,13 +258,23 @@ selected project.
 
 ## UI
 
-The explorer header includes a compact project picker.
+The sidebar has two modes:
+
+- Main mode: the normal thread list and project file tree.
+- Projects mode: a full-sidebar project picker that replaces the main sidebar
+  content with a slide transition.
 
 Expected behavior:
 
-- Show the current project name or id.
-- List projects from `/api/projects`.
-- Selecting a project navigates to `/<projectId>`.
+- Main mode shows the current project at the top of the sidebar.
+- The file-tree section keeps the `Project` header/link; clicking it clears the
+  current file or thread selection.
+- Opening the project picker slides the sidebar content to a scrollable list of
+  projects from `/api/projects`.
+- Project rows are real links to `/<projectId>` so browser link actions such as
+  middle-click still work.
+- Left-clicking a project switches in-place, closes the picker, and navigates to
+  that project route.
 - File and thread selections route under the selected project.
 - If no projects are found, show an empty state with the configured projects
   root.
