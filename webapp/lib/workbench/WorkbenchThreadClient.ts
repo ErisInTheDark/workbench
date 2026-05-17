@@ -63,8 +63,10 @@ import { applyQuestionnaireHistoryToThread } from "./thread/thread-questionnaire
 
 const THREAD_REFRESH_TASK_ID = "thread-refresh";
 const THREAD_LIST_REFRESH_TASK_ID = "thread-list-refresh";
+const RATE_LIMIT_REFRESH_TASK_ID = "rate-limit-refresh";
 const CODEX_NOTIFICATION_THREAD_REFRESH_DELAY_MS = 350;
 const CODEX_NOTIFICATION_THREAD_LIST_REFRESH_DELAY_MS = 750;
+const ACTIVE_TURN_RATE_LIMIT_REFRESH_INTERVAL_MS = 15_000;
 const DEFAULT_TURN_REASONING_SUMMARY = "detailed" as const;
 const DRAFT_THREAD_ID = "new";
 const DRAFT_THREAD_ID_PREFIX = "draft:";
@@ -185,6 +187,7 @@ function WorkbenchThreadClient(
   const state = createInitialThreadState();
   const threadUnreadRefreshInFlightKeys = new Set<string>();
   let disposed = false;
+  const refreshRateLimitsPromisesByHarness = new Map<WorkbenchHarness, Promise<void>>();
   let refreshThreadsPromise: Promise<void> | null = null;
 
   state.threadUnreadStateByKey = new Map(Object.entries(readStoredThreadUnreadState()));
@@ -436,6 +439,36 @@ function WorkbenchThreadClient(
     emit();
   }
 
+  function setHarnessRateLimits(harness: WorkbenchHarness, rateLimits: RateLimitSnapshot | null) {
+    state.rateLimitsByHarness.set(harness, rateLimits);
+    if (state.currentThread?.harness === harness) {
+      setRateLimits(rateLimits);
+    }
+  }
+
+  function scheduleActiveTurnRateLimitRefresh() {
+    const harness = state.currentThread?.harness;
+    if (!harness || !getCurrentInProgressTurn(state.currentThread)) {
+      lifecycle.cancel(RATE_LIMIT_REFRESH_TASK_ID);
+      return;
+    }
+
+    if (lifecycle.has(RATE_LIMIT_REFRESH_TASK_ID)) {
+      return;
+    }
+
+    void refreshRateLimits(harness);
+
+    lifecycle.scheduleRepeat(RATE_LIMIT_REFRESH_TASK_ID, ACTIVE_TURN_RATE_LIMIT_REFRESH_INTERVAL_MS, () => {
+      if (disposed || state.currentThread?.harness !== harness || !getCurrentInProgressTurn(state.currentThread)) {
+        lifecycle.cancel(RATE_LIMIT_REFRESH_TASK_ID);
+        return;
+      }
+
+      return refreshRateLimits(harness);
+    });
+  }
+
   function setCurrentThread(thread: ThreadPayload | null) {
     const nextThread = applyPersistedQuestionnaireHistory(thread);
     if (areThreadPayloadsEquivalent(state.currentThread, nextThread)) {
@@ -450,6 +483,7 @@ function WorkbenchThreadClient(
     state.currentThread = nextThread;
     state.currentThreadId = nextThread?.id ?? "";
     emit();
+    scheduleActiveTurnRateLimitRefresh();
 
     if (!nextThread) {
       setRateLimits(null);
@@ -931,23 +965,31 @@ function WorkbenchThreadClient(
     await refreshThreadsPromise;
   }
 
-  async function refreshRateLimits() {
-    const harness = state.currentThread?.harness ?? "codex";
-
-    try {
-      const response = await sendBridgeRequest<GetAccountRateLimitsResponse>(harness, {
-        method: "account/rateLimits/read",
-        params: undefined,
-      });
-      state.rateLimitsByHarness.set(harness, response.rateLimits);
-      if (state.currentThread?.harness === harness) {
-        setRateLimits(response.rateLimits);
-      }
-    } catch {
-      if (!state.rateLimitsByHarness.has(harness) && state.currentThread?.harness === harness) {
-        setRateLimits(null);
-      }
+  async function refreshRateLimits(harness = state.currentThread?.harness ?? "codex") {
+    const existingRefresh = refreshRateLimitsPromisesByHarness.get(harness);
+    if (existingRefresh) {
+      await existingRefresh;
+      return;
     }
+
+    const refreshPromise = (async () => {
+      try {
+        const response = await sendBridgeRequest<GetAccountRateLimitsResponse>(harness, {
+          method: "account/rateLimits/read",
+          params: undefined,
+        });
+        setHarnessRateLimits(harness, response.rateLimits);
+      } catch {
+        if (!state.rateLimitsByHarness.has(harness) && state.currentThread?.harness === harness) {
+          setRateLimits(null);
+        }
+      } finally {
+        refreshRateLimitsPromisesByHarness.delete(harness);
+      }
+    })();
+
+    refreshRateLimitsPromisesByHarness.set(harness, refreshPromise);
+    await refreshPromise;
   }
 
   async function refreshPendingUserInputRequests() {
@@ -1807,8 +1849,8 @@ function WorkbenchThreadClient(
       return;
     }
 
-    if (notification.method === "account/rateLimits/updated" && state.currentThread?.harness === harness) {
-      setRateLimits(notification.params.rateLimits);
+    if (notification.method === "account/rateLimits/updated") {
+      setHarnessRateLimits(harness, notification.params.rateLimits);
     }
 
     if (applyCodexNotificationToCurrentThread(notification, harness)) {

@@ -13,7 +13,7 @@ Before doing anything, you ALWAYS make sure you have read`.github/agents/iterato
 Your workflow is as follows, in order, NEVER skipping any steps unless explicitly instructed to do so by the user:
   
 1. If any part of the task is unclear, use the ask_questions tool to verify your understanding.
-2. If the task seems large in scope, use the "explore" subagent to get a list of all relevant code paths, or the "reviewer" agent when the task fits that role better. If you have returned to this step due to re-iteration from a later step, you can skip subagents if you already have most of the context.
+2. If the task seems VERY large in scope, use the "explore" subagent to get a list of all relevant code paths instead of filling up your context window with unnecessary details. You can also use the "reviewer" agent when the task fits that role better. If you have returned to this step due to re-iteration from a later step, you can skip subagents if you already have most of the context.
 3. Once the subagent comes back with this initial pass of information, you will then familiarise yourself with all of this context by reading files yourself. Anything you don't think you understand fully should be further explored by you.
 4. You will plan out the task in detail, both in terms of technical implementation and the steps you will take to execute it. Any decisions should be given to the user via the ask_questions tool. When possible, try to always do a little bit of related code cleanup rather than just always hackily bolting on new code. Any cleanup should be included in the plan.
 5. You will then present this plan to the user, and then use the ask_questions tool one more time to get a confirmation to continue.
