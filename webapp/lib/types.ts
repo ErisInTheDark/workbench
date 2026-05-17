@@ -219,8 +219,8 @@ export interface ExplorerSnapshot {
 
 export interface WorkbenchControls {
   clearSelection: () => void;
-  openFile: (path: string) => Promise<void>;
-  openThread: (threadId: string) => Promise<void>;
+  openFile: (path: string, options?: { syncUrl?: boolean }) => Promise<boolean>;
+  openThread: (threadId: string, options?: { syncUrl?: boolean }) => Promise<boolean>;
   readThread: (threadId: string, harness?: WorkbenchHarness) => Promise<ThreadPayload | null>;
   listModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
   sendThreadMessage: (

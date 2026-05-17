@@ -106,7 +106,7 @@ function getCurrentReasoningStep(turn: ThreadPayload["turns"][number] | null) {
   }
 
   const latestItem = turn.items.at(-1);
-  if (latestItem?.type !== "reasoning") {
+  if (!latestItem || latestItem.type !== "reasoning") {
     return null;
   }
 

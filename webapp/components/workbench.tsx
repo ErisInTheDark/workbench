@@ -176,6 +176,7 @@ export default function Workbench () {
 
     return readCurrentSelectionFromUrl();
   });
+  const [selectionError, setSelectionError] = useState("");
   const [rateLimits, setRateLimits] = useState<RateLimitSnapshot | null>(null);
   const [controls, setControls] = useState<WorkbenchControls | null>(null);
   const [harness, setHarness] = useState<WorkbenchHarness>(() => {
@@ -483,27 +484,42 @@ export default function Workbench () {
 
     if (requestedSelection.threadId) {
       if (currentThread?.id === requestedSelection.threadId) {
+        setSelectionError("");
         return;
       }
 
-      void controls.openThread(requestedSelection.threadId);
+      const requestedThreadId = requestedSelection.threadId;
+      setSelectionError("");
+      void controls.openThread(requestedThreadId, { syncUrl: false }).then((didOpen) => {
+        if (!didOpen && readCurrentSelectionFromUrl().threadId === requestedThreadId) {
+          setSelectionError(`Thread not found: ${requestedThreadId}`);
+        }
+      });
       return;
     }
 
     if (requestedSelection.filePath) {
       if (!isWorkbenchOpenableFile(requestedSelection.filePath)) {
-        syncCurrentSelectionToUrl({});
+        setSelectionError(`This file cannot be opened here: ${requestedSelection.filePath}`);
         return;
       }
 
       if (!currentThread && explorer.currentPath === requestedSelection.filePath) {
+        setSelectionError("");
         return;
       }
 
-      void controls.openFile(requestedSelection.filePath);
+      const requestedFilePath = requestedSelection.filePath;
+      setSelectionError("");
+      void controls.openFile(requestedFilePath, { syncUrl: false }).then((didOpen) => {
+        if (!didOpen && readCurrentSelectionFromUrl().filePath === requestedFilePath) {
+          setSelectionError(`File not found: ${requestedFilePath}`);
+        }
+      });
       return;
     }
 
+    setSelectionError("");
     if (currentThread || explorer.currentPath) {
       controls.clearSelection();
     }
@@ -571,7 +587,7 @@ export default function Workbench () {
 
   const openFileFromExplorer = useCallback(async (path: string) => {
     if (!isWorkbenchOpenableFile(path)) {
-      return;
+      return false;
     }
 
     if (isMobile) {
@@ -579,10 +595,11 @@ export default function Workbench () {
     }
 
     if (!requestedSelection.threadId && path === requestedSelection.filePath) {
-      return;
+      return true;
     }
 
     syncCurrentSelectionToUrl({ filePath: path });
+    return true;
   }, [isMobile, requestedSelection.filePath, requestedSelection.threadId]);
 
   const openThreadFromExplorer = useCallback(async (threadId: string) => {
@@ -591,10 +608,11 @@ export default function Workbench () {
     }
 
     if (!requestedSelection.filePath && threadId === requestedSelection.threadId) {
-      return;
+      return true;
     }
 
     syncCurrentSelectionToUrl({ threadId });
+    return true;
   }, [isMobile, requestedSelection.filePath, requestedSelection.threadId]);
 
   const readThread = useCallback(async (threadId: string, nextHarness?: WorkbenchHarness) => {
@@ -821,7 +839,7 @@ export default function Workbench () {
   const showEmptyState = !showThreadView && !showFileView;
   const isThreadViewReady = showThreadView && currentThread?.id === requestedSelection.threadId;
   const isFileViewReady = showFileView && !currentThread && explorer.currentPath === requestedSelection.filePath;
-  const isSelectionPending = (showThreadView && !isThreadViewReady) || (showFileView && !isFileViewReady);
+  const isSelectionPending = !selectionError && ((showThreadView && !isThreadViewReady) || (showFileView && !isFileViewReady));
   const activeThreadId = showThreadView ? requestedSelection.threadId : "";
   const activeFilePath = showFileView ? requestedSelection.filePath : "";
   const pendingQuestionnaireThreadIds = useMemo(
@@ -1327,7 +1345,9 @@ export default function Workbench () {
                   livePendingUserInputRequestsByThreadId={harnessUserInputRequestsByThreadId}
                   onDraftHarnessChange={handleHarnessChange}
                   onListModels={listThreadModels}
-                  onOpenFile={openFileFromExplorer}
+                  onOpenFile={async (path) => {
+                    void await openFileFromExplorer(path);
+                  }}
                   onReadThread={readThread}
                   onSendMessage={sendThreadMessage}
                   onStopThread={stopThread}
@@ -1345,6 +1365,14 @@ export default function Workbench () {
                   threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
                   threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
                 />
+              ) : selectionError ? (
+                <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
+                  <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
+                    <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">Thread</p>
+                    <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open thread</p>
+                    <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{selectionError}</p>
+                  </div>
+                </div>
               ) : (
                 <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
                   <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
@@ -1437,7 +1465,16 @@ export default function Workbench () {
                 hidden
               />
             </div>
-            {showFileView && !isFileViewReady ? (
+            {showFileView && selectionError ? (
+              <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
+                <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
+                  <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">File</p>
+                  <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open file</p>
+                  <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{selectionError}</p>
+                </div>
+              </div>
+            ) : null}
+            {showFileView && !selectionError && !isFileViewReady ? (
               <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
                 <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
                   <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">File</p>

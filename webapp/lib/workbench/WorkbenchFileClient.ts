@@ -55,6 +55,11 @@ interface PersistedDraftRecord {
 }
 
 type WorkbenchFileOpenSource = "open" | "reload";
+type WorkbenchFileOpenOptions = {
+  ignoreDirty?: boolean;
+  source?: WorkbenchFileOpenSource;
+  syncUrl?: boolean;
+};
 
 export interface WorkbenchFileClientOptions {
   clearThreadSelection: () => void;
@@ -77,8 +82,8 @@ interface WorkbenchFileClient {
   inspectCurrentDraft: () => { content: string; issue: SaveGuardIssue | null };
   openFile: (
     filePath: string,
-    options?: { ignoreDirty?: boolean; source?: WorkbenchFileOpenSource },
-  ) => Promise<void>;
+    options?: WorkbenchFileOpenOptions,
+  ) => Promise<boolean>;
   selectThread: (threadId: string) => void;
   refreshCurrentFileFromDiskIfSafe: () => Promise<void>;
   resetCurrentDraftToSaved: () => Promise<void>;
@@ -489,17 +494,17 @@ function WorkbenchFileClient(
 
   async function openFile(
     filePath: string,
-    { ignoreDirty: _ignoreDirty = false, source = "open" }: { ignoreDirty?: boolean; source?: WorkbenchFileOpenSource } = {},
+    { ignoreDirty: _ignoreDirty = false, source = "open", syncUrl = true }: WorkbenchFileOpenOptions = {},
   ) {
     void _ignoreDirty;
 
     if (!isWorkbenchOpenableFile(filePath)) {
       editorDocument.refreshStatusMessage("Only markdown files can be opened in the workbench.");
-      return;
+      return false;
     }
 
     if (source === "open" && filePath === sessionState.currentPath) {
-      return;
+      return true;
     }
 
     if (sessionState.currentPath) {
@@ -510,17 +515,19 @@ function WorkbenchFileClient(
       const bufferedDraft = state.draftBuffers.get(filePath);
       if (bufferedDraft) {
         applyDraftBuffer(filePath, bufferedDraft);
-        syncSelectionToUrl({ filePath });
+        if (syncUrl) {
+          syncSelectionToUrl({ filePath });
+        }
         editorDocument.refreshStatusMessage("Opened draft");
         expandProjectPath(filePath);
         emitExplorerStateChange();
-        return;
+        return true;
       }
     }
 
     const payload = await fetchFilePayload(filePath);
     if (!payload) {
-      return;
+      return false;
     }
 
     if (source === "reload") {
@@ -533,9 +540,12 @@ function WorkbenchFileClient(
     applyFilePayloadToCurrentFile(payload, {
       statusMessage: `${source === "reload" ? "Reloaded" : "Read"} ${formatTimestamp(payload.updatedAt)}`,
     });
-    syncSelectionToUrl({ filePath: payload.path });
+    if (syncUrl) {
+      syncSelectionToUrl({ filePath: payload.path });
+    }
     expandProjectPath(payload.path);
     emitExplorerStateChange();
+    return true;
   }
 
   async function resetCurrentDraftToSaved() {
@@ -543,7 +553,7 @@ function WorkbenchFileClient(
       return;
     }
 
-    await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload" });
+    await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload", syncUrl: false });
   }
 
   async function resetCurrentFileToHead() {
@@ -580,7 +590,7 @@ function WorkbenchFileClient(
 
     const payload = (await response.json()) as SaveFilePayload;
     await refreshProject();
-    await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload" });
+    await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload", syncUrl: false });
     editorDocument.refreshStatusMessage(`Reset to HEAD - ${formatTimestamp(payload.updatedAt)}`);
   }
 
@@ -666,7 +676,6 @@ function WorkbenchFileClient(
       preserveSelection: true,
       statusMessage: `Updated from disk - ${formatTimestamp(payload.updatedAt)}`,
     });
-    syncSelectionToUrl({ filePath: payload.path });
     emitExplorerStateChange();
   }
 

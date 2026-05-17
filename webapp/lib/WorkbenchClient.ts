@@ -133,6 +133,7 @@ export async function WorkbenchClient(
   const fileSessionState = FileSessionState();
   let fileClient: ReturnType<typeof WorkbenchFileClient>;
   let activeProjectId = projectClient.getSnapshot().currentProjectId;
+  let routeDrivenOpenGeneration = 0;
   coordinatorLifecycle.addUnsubscribe(projectClient.subscribe((snapshot) => {
     const previousProjectId = activeProjectId;
     activeProjectId = snapshot.currentProjectId;
@@ -378,7 +379,7 @@ export async function WorkbenchClient(
         return;
       }
 
-      await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload" });
+      await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload", syncUrl: false });
     },
     handleResetCurrentDraftToSaved: async () => {
       await resetCurrentDraftToSaved();
@@ -523,9 +524,24 @@ export async function WorkbenchClient(
 
   async function openFile(
     filePath: string,
-    options?: { ignoreDirty?: boolean; source?: "open" | "reload" },
+    options?: { ignoreDirty?: boolean; source?: "open" | "reload"; syncUrl?: boolean },
   ) {
-    await fileClient.openFile(filePath, options);
+    const isRouteDrivenOpen = options?.syncUrl === false && options?.source !== "reload";
+    const openGeneration = isRouteDrivenOpen ? ++routeDrivenOpenGeneration : routeDrivenOpenGeneration;
+    if (isRouteDrivenOpen && getRequestedPathFromUrl() !== filePath) {
+      return false;
+    }
+
+    const didOpen = await fileClient.openFile(filePath, options);
+    if (
+      isRouteDrivenOpen
+      && (openGeneration !== routeDrivenOpenGeneration || getRequestedPathFromUrl() !== filePath)
+    ) {
+      emitExplorerStateChange();
+      return false;
+    }
+
+    return didOpen;
   }
 
   async function resetCurrentDraftToSaved() {
@@ -732,25 +748,42 @@ export async function WorkbenchClient(
 
   async function openThread(
     threadId: string,
-    { harness, source = "open" }: { harness?: WorkbenchHarness; source?: "open" | "reload" } = {},
+    { harness, source = "open", syncUrl = true }: { harness?: WorkbenchHarness; source?: "open" | "reload"; syncUrl?: boolean } = {},
   ) {
+    const isRouteDrivenOpen = syncUrl === false && source !== "reload";
+    const openGeneration = isRouteDrivenOpen ? ++routeDrivenOpenGeneration : routeDrivenOpenGeneration;
+    if (isRouteDrivenOpen && getRequestedThreadIdFromUrl() !== threadId) {
+      return false;
+    }
+
     if (source === "open" && threadId === sessionState.currentThreadId) {
-      return;
+      return true;
     }
 
     if (sessionState.currentPath) {
       fileClient.syncCurrentDraftBuffer();
     }
 
-    await threadClient.openThread(threadId, { harness, source });
-    const payload = threadClient.getSnapshot().currentThread;
+    const payload = isRouteDrivenOpen
+      ? await threadClient.readThread(threadId, harness)
+      : (await threadClient.openThread(threadId, { harness, source }), threadClient.getSnapshot().currentThread);
     if (!payload) {
-      return;
+      return false;
+    }
+
+    if (
+      isRouteDrivenOpen
+      && (openGeneration !== routeDrivenOpenGeneration || getRequestedThreadIdFromUrl() !== threadId)
+    ) {
+      return false;
     }
 
     applyThreadPayloadToCurrentView(payload, `Read thread ${new Date(payload.updatedAt * 1000).toLocaleString()}`);
-    syncCurrentSelectionToUrl({ threadId: payload.id });
+    if (syncUrl) {
+      syncCurrentSelectionToUrl({ threadId: payload.id });
+    }
     emitExplorerStateChange();
+    return true;
   }
 
   async function readThread(threadId: string, harness?: WorkbenchHarness) {
@@ -805,14 +838,16 @@ export async function WorkbenchClient(
     return createdPath;
   }
 
-  function clearCurrentSelectionView() {
+  function clearCurrentSelectionView({ syncUrl = true }: { syncUrl?: boolean } = {}) {
     fileClient.clearSelection();
     editorClient.setHoveredRevisionNode(null);
     editorClient.clearPendingInlineFormats();
     editorClient.clearSelectionView();
     updateSaveButtonState();
     editorClient.refreshStatusMessage();
-    syncCurrentSelectionToUrl({});
+    if (syncUrl) {
+      syncCurrentSelectionToUrl({});
+    }
     editorClient.scheduleDiffGutterRefresh();
     editorClient.refreshEditorChrome();
   }
@@ -821,7 +856,7 @@ export async function WorkbenchClient(
     const requestedThreadId = getRequestedThreadIdFromUrl();
     if (requestedThreadId) {
       if (threadClient.hasThread(requestedThreadId)) {
-        await openThread(requestedThreadId);
+        await openThread(requestedThreadId, { syncUrl: false });
         return sessionState.currentThreadId === requestedThreadId;
       }
 
@@ -840,7 +875,7 @@ export async function WorkbenchClient(
       return false;
     }
 
-    await openFile(requestedPath);
+    await openFile(requestedPath, { syncUrl: false });
     return sessionState.currentPath === requestedPath;
   }
 
@@ -859,18 +894,10 @@ export async function WorkbenchClient(
 
     await projectClient.refreshProject();
     const refreshedProjectId = projectClient.getSnapshot().currentProjectId;
-    if (refreshedProjectId && !getRequestedProjectIdFromUrl()) {
-      syncCurrentSelectionToUrl({ projectId: refreshedProjectId });
-    } else if (refreshedProjectId && getRequestedProjectIdFromUrl() !== refreshedProjectId) {
-      syncCurrentSelectionToUrl({ projectId: refreshedProjectId });
-    }
     const requestedThreadId = getRequestedThreadIdFromUrl();
     const requestedPath = getRequestedPathFromUrl();
+    const hasRequestedSelection = Boolean(requestedThreadId || requestedPath);
     const shouldBlockOnThreads = Boolean(sessionState.currentThreadId || requestedThreadId);
-    const shouldPrioritizeRequestedSelection = Boolean(
-      (requestedThreadId && requestedThreadId !== sessionState.currentThreadId)
-      || (!requestedThreadId && requestedPath && requestedPath !== sessionState.currentPath)
-    );
 
     if (shouldBlockOnThreads) {
       await Promise.all([
@@ -889,9 +916,15 @@ export async function WorkbenchClient(
       })();
     }
 
-    // When the URL changes, auto-refresh must follow that requested selection instead
-    // of reasserting the previous in-memory file or thread.
-    if (shouldPrioritizeRequestedSelection && await openRequestedSelectionFromUrl()) {
+    // When the URL requests a file or thread, refresh must never reassert a
+    // previous in-memory selection. Invalid requested selections stay on the URL
+    // and render as errors in the React shell.
+    if (hasRequestedSelection && await openRequestedSelectionFromUrl()) {
+      return;
+    }
+
+    if (hasRequestedSelection) {
+      clearCurrentSelectionView({ syncUrl: false });
       return;
     }
 
@@ -903,22 +936,17 @@ export async function WorkbenchClient(
 
       if (threadClient.hasThread(currentThreadId)) {
         if (!threadClient.isCurrentThreadUpToDate(currentThreadId)) {
-          await openThread(currentThreadId, { source: "reload" });
+          await openThread(currentThreadId, { source: "reload", syncUrl: false });
         }
         if (sessionState.currentThreadId === currentThreadId) {
           return;
         }
       } else if (sessionState.currentThread && !sessionState.currentThread.isDraft) {
-        if (requestedThreadId && threadClient.isDraftThreadId(requestedThreadId)) {
-          syncCurrentSelectionToUrl({ threadId: currentThreadId });
-          emitExplorerStateChange();
-        }
         return;
       } else {
         threadClient.clearThreadSelection();
         applyCurrentThread(null);
         applyCurrentThreadId("");
-        syncCurrentSelectionToUrl({});
         emitExplorerStateChange();
       }
     }
@@ -935,7 +963,7 @@ export async function WorkbenchClient(
       return;
     }
 
-    clearCurrentSelectionView();
+    clearCurrentSelectionView({ syncUrl: false });
   }
 
   function startAutoRefresh() {
@@ -966,8 +994,8 @@ export async function WorkbenchClient(
     },
     createEntry,
     listModels: threadClient.listModels,
-    openFile,
-    openThread,
+    openFile: (path, options) => openFile(path, { syncUrl: options?.syncUrl }),
+    openThread: (threadId, options) => openThread(threadId, { syncUrl: options?.syncUrl }),
     readThread,
     sendThreadMessage,
     stopThread,

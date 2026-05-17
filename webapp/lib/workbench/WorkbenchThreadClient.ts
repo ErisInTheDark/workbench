@@ -70,6 +70,7 @@ const ACTIVE_TURN_RATE_LIMIT_REFRESH_INTERVAL_MS = 15_000;
 const DEFAULT_TURN_REASONING_SUMMARY = "detailed" as const;
 const DRAFT_THREAD_ID = "new";
 const DRAFT_THREAD_ID_PREFIX = "draft:";
+const STABLE_VISIBLE_THREAD_COUNT = 5;
 const EMPTY_ROLLOUT_ERROR_FRAGMENT = "rollout at";
 const EMPTY_ROLLOUT_ERROR_SUFFIX = "is empty";
 const FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE = "Started the thread. Its saved rollout is still warming up, so the live view will refresh automatically.";
@@ -150,6 +151,12 @@ type RateLimitSnapshotEntry = {
   source: RateLimitSnapshotSource;
 };
 
+interface OptimisticUserMessageEntry {
+  createdAt: number;
+  input: UserInput[];
+  item: Extract<ThreadItem, { type: "userMessage" }>;
+}
+
 function createInitialThreadState(): WorkbenchThreadState {
   return {
     currentThread: null,
@@ -182,6 +189,17 @@ function isThreadStatusActive(status: string) {
 
 function countThreadItems(turns: Turn[]) {
   return turns.reduce((total, turn) => total + turn.items.length, 0);
+}
+
+function getLatestTurnStartedAt(turns: Turn[]) {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const startedAt = turns[index].startedAt;
+    if (typeof startedAt === "number") {
+      return startedAt;
+    }
+  }
+
+  return null;
 }
 
 function getWindowRemainingPercent(window: RateLimitSnapshot["primary"]) {
@@ -250,11 +268,27 @@ function isTextPrefix(prefix: string, value: string) {
 }
 
 function mergeLongerStreamingText(incomingText: string, liveText: string) {
+  if (!incomingText) {
+    return liveText;
+  }
+
+  if (!liveText) {
+    return incomingText;
+  }
+
   if (isTextPrefix(incomingText, liveText)) {
     return liveText;
   }
 
-  return incomingText;
+  if (isTextPrefix(liveText, incomingText)) {
+    return incomingText;
+  }
+
+  if (liveText.includes(incomingText) && liveText.length > incomingText.length) {
+    return liveText;
+  }
+
+  return incomingText.length >= liveText.length ? incomingText : liveText;
 }
 
 function mergeStreamingTextArray(incomingValues: string[], liveValues: string[]) {
@@ -312,7 +346,9 @@ function WorkbenchThreadClient(
   const rateLimitSnapshotEntriesByHarness = new Map<WorkbenchHarness, RateLimitSnapshotEntry>();
   const state = createInitialThreadState();
   const clientCreatedStreamingItemKeys = new Set<string>();
+  const optimisticUserMessagesByTurnKey = new Map<string, OptimisticUserMessageEntry[]>();
   const threadUnreadRefreshInFlightKeys = new Set<string>();
+  const latestTurnStartedAtByThreadKey = new Map<string, number>();
   let disposed = false;
   let rateLimitGeneration = 0;
   const refreshRateLimitsPromisesByHarness = new Map<WorkbenchHarness, Promise<void>>();
@@ -627,13 +663,71 @@ function WorkbenchThreadClient(
     });
   }
 
-  function setCurrentThread(thread: ThreadPayload | null) {
-    const nextThread = pruneThreadStreamingDuplicates(applyPersistedQuestionnaireHistory(thread));
+  function rememberLatestTurnStartedAt(thread: ThreadPayload) {
+    const latestStartedAt = getLatestTurnStartedAt(thread.turns);
+    const key = getThreadStateKey(thread.harness, thread.id);
+    if (latestStartedAt === null) {
+      latestTurnStartedAtByThreadKey.delete(key);
+      return;
+    }
+
+    latestTurnStartedAtByThreadKey.set(key, latestStartedAt);
+  }
+
+  function getThreadStableVisibleSortTimestamp(thread: ThreadSummary) {
+    return latestTurnStartedAtByThreadKey.get(getThreadStateKey(thread.harness, thread.id))
+      ?? thread.createdAt
+      ?? thread.updatedAt;
+  }
+
+  async function refreshLatestTurnStartedAt(thread: ThreadSummary) {
+    try {
+      const response = await sendBridgeRequest<ThreadReadResponse>(thread.harness, {
+        method: "thread/read",
+        params: {
+          includeTurns: true,
+          threadId: thread.id,
+        },
+      });
+
+      if (state.projectRootPath && !isProjectCodexThread(response.thread, state.projectRootPath)) {
+        return;
+      }
+
+      const latestStartedAt = getLatestTurnStartedAt(response.thread.turns);
+      const key = getThreadStateKey(thread.harness, thread.id);
+      if (latestStartedAt === null) {
+        latestTurnStartedAtByThreadKey.delete(key);
+        return;
+      }
+
+      latestTurnStartedAtByThreadKey.set(key, latestStartedAt);
+    } catch {
+      // Keep the previous stable ordering key if a best-effort metadata read fails.
+    }
+  }
+
+  async function hydrateVisibleThreadStableSortKeys(threads: ThreadSummary[]) {
+    await Promise.all(threads.map((thread) => refreshLatestTurnStartedAt(thread)));
+  }
+
+  function setCurrentThread(
+    thread: ThreadPayload | null,
+    {
+      pruneStreamingDuplicates = true,
+    }: {
+      pruneStreamingDuplicates?: boolean;
+    } = {},
+  ) {
+    const nextThread = pruneStreamingDuplicates
+      ? pruneThreadStreamingDuplicates(applyOptimisticUserMessageOverlay(applyPersistedQuestionnaireHistory(thread)))
+      : applyOptimisticUserMessageOverlay(applyPersistedQuestionnaireHistory(thread));
     if (areThreadPayloadsEquivalent(state.currentThread, nextThread)) {
       return;
     }
 
     if (nextThread) {
+      rememberLatestTurnStartedAt(nextThread);
       updateStoredThreadUnreadState(nextThread, countThreadItems(nextThread.turns), { markSeen: true });
     }
 
@@ -657,7 +751,12 @@ function WorkbenchThreadClient(
     }
   }
 
-  function updateCurrentThread(updater: (thread: ThreadPayload) => ThreadPayload | null) {
+  function updateCurrentThread(
+    updater: (thread: ThreadPayload) => ThreadPayload | null,
+    options: {
+      pruneStreamingDuplicates?: boolean;
+    } = {},
+  ) {
     if (!state.currentThread) {
       return false;
     }
@@ -667,7 +766,7 @@ function WorkbenchThreadClient(
       return false;
     }
 
-    setCurrentThread(nextThread);
+    setCurrentThread(nextThread, options);
     return true;
   }
 
@@ -836,6 +935,87 @@ function WorkbenchThreadClient(
     return changed ? { ...thread, turns } : thread;
   }
 
+  function getOptimisticTurnKey(harness: WorkbenchHarness, threadId: string, turnId: string) {
+    return `${harness}:${threadId}:${turnId}`;
+  }
+
+  function isOptimisticUserMessageItem(item: ThreadItem) {
+    return item.type === "userMessage" && item.id.startsWith("optimistic-user-message:");
+  }
+
+  function enqueueOptimisticUserMessage(
+    harness: WorkbenchHarness,
+    threadId: string,
+    turnId: string,
+    input: UserInput[],
+  ) {
+    const turnKey = getOptimisticTurnKey(harness, threadId, turnId);
+    const entry: OptimisticUserMessageEntry = {
+      createdAt: Date.now(),
+      input: input.map((item) => cloneUserInput(item)),
+      item: createOptimisticUserMessage(input),
+    };
+    optimisticUserMessagesByTurnKey.set(turnKey, [
+      ...(optimisticUserMessagesByTurnKey.get(turnKey) ?? []),
+      entry,
+    ]);
+    return entry.item;
+  }
+
+  function countCanonicalUserMessageMatches(items: ThreadItem[], input: UserInput[]) {
+    return items.filter((item) => !isOptimisticUserMessageItem(item) && doesUserMessageMatchInput(item, input)).length;
+  }
+
+  function applyOptimisticUserMessagesToTurn(
+    thread: Pick<ThreadPayload, "harness" | "id">,
+    turn: Turn,
+  ): Turn {
+    const entries = optimisticUserMessagesByTurnKey.get(getOptimisticTurnKey(thread.harness, thread.id, turn.id));
+    if (!entries?.length) {
+      return turn;
+    }
+
+    const canonicalItems = turn.items.filter((item) => !isOptimisticUserMessageItem(item));
+    const visibleEntries: OptimisticUserMessageEntry[] = [];
+    for (const [index, entry] of entries.entries()) {
+      const matchingEntriesThroughCurrent = entries
+        .slice(0, index + 1)
+        .filter((candidate) => JSON.stringify(candidate.input) === JSON.stringify(entry.input))
+        .length;
+      if (countCanonicalUserMessageMatches(canonicalItems, entry.input) < matchingEntriesThroughCurrent) {
+        visibleEntries.push(entry);
+      }
+    }
+
+    if (!visibleEntries.length) {
+      return turn.items.length === canonicalItems.length
+        ? turn
+        : { ...turn, items: canonicalItems };
+    }
+
+    return {
+      ...turn,
+      items: [...canonicalItems, ...visibleEntries.map((entry) => entry.item)],
+    };
+  }
+
+  function applyOptimisticUserMessageOverlay(thread: ThreadPayload | null) {
+    if (!thread) {
+      return null;
+    }
+
+    let changed = false;
+    const turns = thread.turns.map((turn) => {
+      const nextTurn = applyOptimisticUserMessagesToTurn(thread, turn);
+      if (nextTurn !== turn) {
+        changed = true;
+      }
+      return nextTurn;
+    });
+
+    return changed ? { ...thread, turns } : thread;
+  }
+
   function mergeLiveStreamingTurn(incomingTurn: Turn, liveTurn: Turn | undefined) {
     if (!liveTurn || incomingTurn.status !== "inProgress" || liveTurn.status !== "inProgress") {
       return incomingTurn;
@@ -844,18 +1024,20 @@ function WorkbenchThreadClient(
     const liveItemsById = new Map(liveTurn.items.map((item) => [item.id, item]));
     const nextItems = incomingTurn.items.map((item) => {
       const liveItem = liveItemsById.get(item.id);
+      let matchedLiveItem: ThreadItem | null = null;
       if (!liveItem) {
         for (const [liveItemId, candidateLiveItem] of liveItemsById) {
           if (
             clientCreatedStreamingItemKeys.has(getThreadItemKey(incomingTurn.id, liveItemId))
             && isStructurallyMatchingStreamingItem(item, candidateLiveItem)
           ) {
+            matchedLiveItem = candidateLiveItem;
             liveItemsById.delete(liveItemId);
             forgetReplacedStreamingItem(incomingTurn.id, liveItemId, item.id);
             break;
           }
         }
-        return item;
+        return matchedLiveItem ? mergeLiveStreamingItem(item, matchedLiveItem) : item;
       }
 
       liveItemsById.delete(item.id);
@@ -1311,7 +1493,7 @@ function WorkbenchThreadClient(
           errors.push(result.reason instanceof Error ? result.reason.message : "Unable to load some threads.");
         }
 
-        state.threads = threads.sort((left, right) => {
+        const threadsByRecentItem = threads.sort((left, right) => {
           if (right.updatedAt !== left.updatedAt) {
             return right.updatedAt - left.updatedAt;
           }
@@ -1322,6 +1504,29 @@ function WorkbenchThreadClient(
 
           return left.id.localeCompare(right.id);
         });
+        const visibleThreads = threadsByRecentItem.slice(0, STABLE_VISIBLE_THREAD_COUNT);
+        await hydrateVisibleThreadStableSortKeys(visibleThreads);
+        const stableVisibleThreads = visibleThreads.sort((left, right) => {
+          const rightStableTimestamp = getThreadStableVisibleSortTimestamp(right);
+          const leftStableTimestamp = getThreadStableVisibleSortTimestamp(left);
+          if (rightStableTimestamp !== leftStableTimestamp) {
+            return rightStableTimestamp - leftStableTimestamp;
+          }
+
+          if (right.updatedAt !== left.updatedAt) {
+            return right.updatedAt - left.updatedAt;
+          }
+
+          if (left.harness !== right.harness) {
+            return left.harness.localeCompare(right.harness);
+          }
+
+          return left.id.localeCompare(right.id);
+        });
+        state.threads = [
+          ...stableVisibleThreads,
+          ...threadsByRecentItem.slice(STABLE_VISIBLE_THREAD_COUNT),
+        ];
         void refreshVisibleThreadUnreadStates(state.threads);
         state.threadsError = errors.join(" ");
       } catch (error) {
@@ -1520,6 +1725,11 @@ function WorkbenchThreadClient(
   function updateTurnItems(
     turnId: string,
     updater: (items: ThreadItem[]) => ThreadItem[] | null,
+    {
+      pruneStreamingDuplicates = true,
+    }: {
+      pruneStreamingDuplicates?: boolean;
+    } = {},
   ) {
     return updateCurrentThread((thread) => {
       let updated = false;
@@ -1533,7 +1743,9 @@ function WorkbenchThreadClient(
           return turn;
         }
 
-        const prunedItems = pruneDuplicateStreamingItems(turn.id, nextItems);
+        const prunedItems = pruneStreamingDuplicates
+          ? pruneDuplicateStreamingItems(turn.id, nextItems)
+          : nextItems;
         updated = true;
         return {
           ...turn,
@@ -1542,23 +1754,25 @@ function WorkbenchThreadClient(
       });
 
       return updated ? { ...thread, turns } : null;
-    });
+    }, { pruneStreamingDuplicates });
   }
 
   function upsertThreadItem(turnId: string, incomingItem: ThreadItem) {
     return updateTurnItems(turnId, (items) => {
       const itemIndex = items.findIndex((item) => item.id === incomingItem.id);
       if (itemIndex === -1) {
+        let matchedClientItem: ThreadItem | null = null;
         const nextItems = items.filter((item) => {
           const itemKey = getThreadItemKey(turnId, item.id);
           if (!clientCreatedStreamingItemKeys.has(itemKey) || !isStructurallyMatchingStreamingItem(incomingItem, item)) {
             return true;
           }
 
+          matchedClientItem = item;
           forgetReplacedStreamingItem(turnId, item.id, incomingItem.id);
           return false;
         });
-        return [...nextItems, incomingItem];
+        return [...nextItems, matchedClientItem ? mergeLiveStreamingItem(incomingItem, matchedClientItem) : incomingItem];
       }
 
       forgetStreamingItemKey(turnId, incomingItem.id);
@@ -1655,7 +1869,7 @@ function WorkbenchThreadClient(
       });
 
       return updated ? nextItems : null;
-    });
+    }, { pruneStreamingDuplicates: false });
   }
 
   function updateThreadItem(
@@ -2038,7 +2252,6 @@ function WorkbenchThreadClient(
       bootstrapThread = startedPayload;
       if (sendOptions.selectThread !== false) {
         setCurrentThread(bootstrapThread);
-        options.onThreadStarted?.(bootstrapThread);
       }
       resolvedThreadId = bootstrapThread.id;
       previousThread = null;
@@ -2099,9 +2312,10 @@ function WorkbenchThreadClient(
 
     harness = resumedThread.harness;
     const currentInProgressTurn = getCurrentInProgressTurn(resumedThread);
+    let optimisticTurnId: string | null = null;
 
     if (currentInProgressTurn) {
-      await sendBridgeRequest<TurnSteerResponse>(harness, {
+      const steerResponse = await sendBridgeRequest<TurnSteerResponse>(harness, {
         method: "turn/steer",
           params: {
             ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
@@ -2113,6 +2327,8 @@ function WorkbenchThreadClient(
           threadId: resolvedThreadId,
         } as { agentPath?: string; expectedTurnId: string; input: UserInput[]; threadId: string; workbenchOrigin?: string },
       });
+      optimisticTurnId = steerResponse.turnId || currentInProgressTurn.id;
+      enqueueOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, normalizedInput);
     } else {
       const codexCollaborationMode = harness === "codex"
         ? (() => {
@@ -2131,7 +2347,7 @@ function WorkbenchThreadClient(
             : null;
         })()
         : null;
-      await sendBridgeRequest<TurnStartResponse>(harness, {
+      const turnStartResponse = await sendBridgeRequest<TurnStartResponse>(harness, {
         method: "turn/start",
         params: {
           ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
@@ -2153,6 +2369,19 @@ function WorkbenchThreadClient(
           workbenchOrigin?: string;
         },
       });
+      optimisticTurnId = turnStartResponse.turn.id;
+      enqueueOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, normalizedInput);
+      resumedThread = applyOptimisticUserMessageOverlay({
+        ...resumedThread,
+        status: isThreadStatusActive(resumedThread.status) ? resumedThread.status : "active",
+        turns: resumedThread.turns.some((turn) => turn.id === turnStartResponse.turn.id)
+          ? resumedThread.turns.map((turn) => turn.id === turnStartResponse.turn.id ? turnStartResponse.turn : turn)
+          : [...resumedThread.turns, turnStartResponse.turn],
+      }) ?? resumedThread;
+      if (sendOptions.selectThread !== false) {
+        setCurrentThread(resumedThread);
+        options.onThreadStarted?.(resumedThread);
+      }
     }
 
     let refreshedThread = resumedThread;
@@ -2166,13 +2395,13 @@ function WorkbenchThreadClient(
             threadId: resolvedThreadId,
           } as { model?: string; persistExtendedHistory: true; threadId: string },
         });
-        refreshedThread = toThreadPayload(
+        refreshedThread = mergeLiveStreamingThreadSnapshot(toThreadPayload(
           refreshedThreadResponse.thread,
           harness,
           refreshedThreadResponse.model ?? resumedThread.model,
           refreshedThreadResponse.reasoningEffort ?? resumedThread.reasoningEffort,
           resumedThread.agentPath,
-        );
+        ));
       } else {
         const refreshedThreadResponse = await sendBridgeRequest<ThreadReadResponse>(harness, {
           method: "thread/read",
@@ -2181,13 +2410,13 @@ function WorkbenchThreadClient(
             threadId: resolvedThreadId,
           },
         });
-        refreshedThread = toThreadPayload(
+        refreshedThread = mergeLiveStreamingThreadSnapshot(toThreadPayload(
           refreshedThreadResponse.thread,
           harness,
           resumedThread.model,
           resumedThread.reasoningEffort,
           resumedThread.agentPath,
-        );
+        ));
       }
       if (harness === "codex") {
         await readCompletedQuestionnaireHistory(resolvedThreadId);
@@ -2201,7 +2430,7 @@ function WorkbenchThreadClient(
       emitStatusMessage(FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE);
     }
     const payload = applyOptimisticSteerMessage(
-      refreshedThread,
+      applyOptimisticUserMessageOverlay(refreshedThread) ?? refreshedThread,
       previousThread,
       normalizedInput,
     );

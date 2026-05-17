@@ -13,24 +13,24 @@ import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserI
 import { getCurrentTurn } from "../../../lib/codex/thread-state";
 import type { ThreadPayload } from "../../../lib/types";
 import {
-  getThreadCommandBlockDisplay,
-  getThreadCommandDisplay,
-} from "../../../lib/workbench/thread/thread-command-matchers";
-import {
   getPrimaryCollabAgentThreadId,
   type CollabAgentToolCallItem,
 } from "../../../lib/workbench/thread/thread-collab-agents";
+import {
+  getThreadCommandBlockDisplay,
+  getThreadCommandDisplay,
+} from "../../../lib/workbench/thread/thread-command-matchers";
 import {
   formatThreadTimestamp,
   humanizeThreadLabel,
   ThreadCommandSummary,
   ThreadTextBlock,
 } from "./thread-view-primitives";
-import ThreadContextCompactionItem from "./ThreadContextCompactionItem";
 import ThreadAgentName from "./ThreadAgentName";
+import ThreadContextCompactionItem from "./ThreadContextCompactionItem";
 import ThreadDisclosure from "./ThreadDisclosure";
-import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
 import ThreadDurationText from "./ThreadDurationText";
+import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
 import ThreadFileChangeItem from "./ThreadFileChangeItem";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
@@ -196,12 +196,12 @@ function isHiddenCommandExecution (command: string) {
   }).omitFromDisplay;
 }
 
-function hasReasoningSteps(item: ReasoningItem) {
+function hasReasoningSteps (item: ReasoningItem) {
   return item.summary.some((section) => section.trim())
     || item.content.some((section) => section.trim());
 }
 
-function formatReasoningStepTitle(value: string) {
+function formatReasoningStepTitle (value: string) {
   return value
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -213,7 +213,7 @@ function formatReasoningStepTitle(value: string) {
     .trim() || null;
 }
 
-function getReasoningStepTitle(item: ReasoningItem) {
+function getReasoningStepTitle (item: ReasoningItem) {
   const visibleSections = item.summary.length ? item.summary : item.content;
   for (const section of visibleSections) {
     const title = formatReasoningStepTitle(section);
@@ -936,17 +936,17 @@ function ThreadTurnDetailsComponent ({
             </div>
           </ThreadDisclosure>
           {finalAgentBlocks.map(renderBlock)}
-          {!primaryUserBlock && !finalAgentBlocks.length && !blocks.length ? (
+          {/* {!primaryUserBlock && !finalAgentBlocks.length && !blocks.length ? (
             <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No captured items.</p>
-          ) : null}
+          ) : null} */}
         </div>
       ) : (
         <div className="space-y-2">
-          <p className="m-0 text-[0.67em] uppercase tracking-[0.18em] text-muted">
+          {/* <p className="m-0 text-[0.67em] uppercase tracking-[0.18em] text-muted">
             {humanizeThreadLabel(turn.status)}
-          </p>
+          </p> */}
           {workedBlocks.length ? workedBlocks.map(renderBlock) : (
-            <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No captured items.</p>
+            <></> // <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No captured items.</p>
           )}
         </div>
       )}
@@ -954,7 +954,7 @@ function ThreadTurnDetailsComponent ({
   );
 }
 
-function areThreadTurnDetailsPropsEqual(
+function areThreadTurnDetailsPropsEqual (
   left: Readonly<Parameters<typeof ThreadTurnDetailsComponent>[0]>,
   right: Readonly<Parameters<typeof ThreadTurnDetailsComponent>[0]>,
 ) {
