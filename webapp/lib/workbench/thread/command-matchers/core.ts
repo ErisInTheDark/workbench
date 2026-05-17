@@ -64,6 +64,7 @@ export const CommandMatcher: CommandMatcherBuilder = Object.assign(
     },
     Result({
       hide = false,
+      omitFromDisplay = false,
       remainingCommand,
       stop = false,
       summaryParts,
@@ -71,6 +72,7 @@ export const CommandMatcher: CommandMatcherBuilder = Object.assign(
     }: CommandMatcherResult) {
       return {
         hide,
+        omitFromDisplay,
         remainingCommand,
         stop,
         summaryParts,
@@ -104,6 +106,7 @@ export function runThreadCommandMatchers(
   const summaryParts: ThreadCommandDisplayPart[] = [];
   const summaryStats = createEmptyCommandSummaryStats();
   let hadUnmatchedRemainder = false;
+  let omitFromDisplay = false;
   let remainingCommand: string | null = context.unwrappedCommand;
 
   for (let index = 0; index < MAX_MATCH_STEPS && remainingCommand; index += 1) {
@@ -144,6 +147,7 @@ export function runThreadCommandMatchers(
     }
 
     const shouldRenderSummaryParts = !matchedResult.hide && matchedResult.summaryParts.length > 0;
+    omitFromDisplay ||= matchedResult.omitFromDisplay === true;
 
     if (shouldRenderSummaryParts && summaryParts.length) {
       summaryParts.push(CommandMatcher.Separator());
@@ -167,12 +171,13 @@ export function runThreadCommandMatchers(
     remainingCommand = matchedResult.stop ? null : nextRemainingCommand ?? null;
   }
 
-  if (!summaryParts.length) {
+  if (!summaryParts.length && !omitFromDisplay) {
     return null;
   }
 
   return {
     claimedBy: claimedMatcherIds.join(",") || null,
+    omitFromDisplay,
     showShell: hadUnmatchedRemainder,
     summaryParts,
     summaryKind: "matched" as const,

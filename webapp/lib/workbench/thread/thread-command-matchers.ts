@@ -4,7 +4,7 @@
  * - ThreadCommandSummaryDisplay: shared summary-display shape for single-command and grouped command labels. Keywords: thread, command, summary, aggregate.
  * - ThreadCommandDisplayPart: structured text/path part for rendering command summaries with file pills. Keywords: thread, command, summary, path.
  * - ThreadCommandSummaryStats: aggregate command-summary counts for grouped command labels. Keywords: thread, command, summary, aggregate.
- * - ThreadCommandDisplay: parsed command-summary metadata for thread command rendering. Keywords: thread, command, summary, shell.
+ * - ThreadCommandDisplay: parsed command-summary metadata for thread command rendering. Keywords: thread, command, summary, shell, omit.
  * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text. Keywords: path, command, relative, display.
  * - getThreadCommandDisplay: unwrap shell launchers and describe common command patterns with staged shell matchers. Keywords: thread, command, matcher, shell.
  * - getThreadCommandBlockDisplay: aggregate multiple command displays into one grouped summary label. Keywords: thread, command, summary, aggregate.
@@ -86,6 +86,7 @@ export function getThreadCommandDisplay({
       claimedBy: "command-action",
       cwdDisplay: context.cwdDisplay,
       fullCommand: command,
+      omitFromDisplay: false,
       shell: context.shell,
       showShell: false,
       summaryKind: "matched",
@@ -101,6 +102,7 @@ export function getThreadCommandDisplay({
     claimedBy: null,
     cwdDisplay: context.cwdDisplay,
     fullCommand: command,
+    omitFromDisplay: false,
     shell: context.shell,
     showShell: Boolean(context.shell),
     summaryKind: "raw",
@@ -136,6 +138,7 @@ export function getThreadCommandBlockDisplay({
   const summaryText = formatCommandBlockSummaryText(summaryStats, items.length);
   return {
     claimedBy: "command-block",
+    omitFromDisplay: false,
     shell: null,
     showShell: false,
     summaryKind: "matched",

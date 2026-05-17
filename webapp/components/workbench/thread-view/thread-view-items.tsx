@@ -93,7 +93,7 @@ function getWorkedSummary (turn: Turn) {
     );
 }
 
-function buildRenderableBlocks (items: ThreadItem[]): ThreadRenderableBlock[] {
+function buildRenderableBlocks (items: ThreadItem[], hiddenReasoningItemId: string | null = null): ThreadRenderableBlock[] {
   const blocks: ThreadRenderableBlock[] = [];
   let pendingCommands: CommandItem[] = [];
   let pendingFileChanges: FileChangeItem[] = [];
@@ -144,10 +144,6 @@ function buildRenderableBlocks (items: ThreadItem[]): ThreadRenderableBlock[] {
       continue;
     }
 
-    if (item.type === "reasoning" && !hasReasoningSteps(item)) {
-      continue;
-    }
-
     if (item.type === "commandExecution") {
       flushPendingReasoning();
       flushPendingFileChanges();
@@ -156,6 +152,10 @@ function buildRenderableBlocks (items: ThreadItem[]): ThreadRenderableBlock[] {
     }
 
     if (item.type === "reasoning") {
+      if (item.id === hiddenReasoningItemId || !hasReasoningSteps(item)) {
+        continue;
+      }
+
       flushPendingCommands();
       flushPendingFileChanges();
       pendingReasoning.push(item);
@@ -185,7 +185,15 @@ function buildRenderableBlocks (items: ThreadItem[]): ThreadRenderableBlock[] {
 }
 
 function isHiddenCommandExecution (command: string) {
-  return /^report_intent(?:\s|$)/i.test(command.trim());
+  if (/^report_intent(?:\s|$)/i.test(command.trim())) {
+    return true;
+  }
+
+  return getThreadCommandDisplay({
+    command,
+    commandActions: [],
+    cwd: "",
+  }).omitFromDisplay;
 }
 
 function hasReasoningSteps(item: ReasoningItem) {
@@ -864,17 +872,19 @@ function ThreadRenderableBlockView ({
 }
 
 function ThreadTurnDetailsComponent ({
+  hiddenReasoningItemId = null,
   onOpenFile,
   projectRootPath,
   relatedThreadsById = {},
   turn,
 }: {
+  hiddenReasoningItemId?: string | null;
   onOpenFile?: (path: string) => Promise<void>;
   projectRootPath?: string;
   relatedThreadsById?: RelatedThreadsById;
   turn: Turn;
 }) {
-  const blocks = buildRenderableBlocks(turn.items);
+  const blocks = buildRenderableBlocks(turn.items, hiddenReasoningItemId);
   const finalAgentMessageId = getFinalAgentMessageId(turn);
   const isCompleted = turn.status === "completed";
   const primaryUserBlock = isCompleted
@@ -949,6 +959,7 @@ function areThreadTurnDetailsPropsEqual(
   right: Readonly<Parameters<typeof ThreadTurnDetailsComponent>[0]>,
 ) {
   return left.turn === right.turn
+    && left.hiddenReasoningItemId === right.hiddenReasoningItemId
     && left.onOpenFile === right.onOpenFile
     && left.projectRootPath === right.projectRootPath
     && left.relatedThreadsById === right.relatedThreadsById;

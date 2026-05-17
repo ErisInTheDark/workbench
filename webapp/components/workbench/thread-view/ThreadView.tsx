@@ -24,6 +24,7 @@ import {
 import { ThreadQuestionBadge, ThreadUnreadBadge as ThreadUnreadBadgeView } from "../ThreadStatusBadges";
 import ThreadAgentName from "./ThreadAgentName";
 import ThreadComposer from "./ThreadComposer";
+import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadRateLimits from "./ThreadRateLimits";
 import { ThreadTurnDetails } from "./thread-view-items";
 
@@ -64,7 +65,7 @@ function hasExpandedSelectionWithin (root: HTMLElement | null) {
   return Boolean(anchorNode && focusNode && root.contains(anchorNode) && root.contains(focusNode));
 }
 
-function formatReasoningTitle(value: string) {
+function cleanReasoningTitleLine(value: string) {
   return value
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -76,7 +77,30 @@ function formatReasoningTitle(value: string) {
     .trim() || null;
 }
 
-function getCurrentReasoningTitle(turn: ThreadPayload["turns"][number] | null) {
+function getReasoningStepBody(sections: string[]) {
+  const bodySections: string[] = [];
+  let removedTitle = false;
+
+  for (const section of sections) {
+    const lines = section.split(/\r?\n/);
+    if (!removedTitle) {
+      const firstTextLineIndex = lines.findIndex((line) => line.trim());
+      if (firstTextLineIndex !== -1) {
+        lines.splice(firstTextLineIndex, 1);
+        removedTitle = true;
+      }
+    }
+
+    const bodySection = lines.join("\n").trim();
+    if (bodySection) {
+      bodySections.push(bodySection);
+    }
+  }
+
+  return bodySections.join("\n\n").trim() || null;
+}
+
+function getCurrentReasoningStep(turn: ThreadPayload["turns"][number] | null) {
   if (!turn || turn.status !== "inProgress") {
     return null;
   }
@@ -87,14 +111,22 @@ function getCurrentReasoningTitle(turn: ThreadPayload["turns"][number] | null) {
   }
 
   const visibleSections = latestItem.summary.length ? latestItem.summary : latestItem.content;
-  for (const section of [...visibleSections].reverse()) {
-    const title = formatReasoningTitle(section);
+  for (const section of visibleSections) {
+    const title = cleanReasoningTitleLine(section);
     if (title) {
-      return title;
+      return {
+        body: getReasoningStepBody(visibleSections),
+        id: latestItem.id,
+        title,
+      };
     }
   }
 
-  return null;
+  return {
+    body: getReasoningStepBody(visibleSections),
+    id: latestItem.id,
+    title: "Thinking",
+  };
 }
 
 function hasInProgressSubagentWait(turn: ThreadPayload["turns"][number] | null) {
@@ -115,7 +147,11 @@ function getThinkingLabel({
     return null;
   }
 
-  return getCurrentReasoningTitle(turn) ?? "Thinking";
+  return getCurrentReasoningStep(turn) ?? {
+    body: null,
+    id: null,
+    title: "Thinking",
+  };
 }
 
 export default memo(function ThreadView ({
@@ -188,7 +224,7 @@ export default memo(function ThreadView ({
     : null;
   const activePendingUserInputRequest = activeHarnessUserInputRequest;
   const currentTurn = activeThread?.turns.at(-1) ?? null;
-  const thinkingLabel = getThinkingLabel({
+  const thinkingStep = getThinkingLabel({
     pendingUserInputRequest: activePendingUserInputRequest,
     turn: currentTurn,
   });
@@ -517,6 +553,7 @@ export default memo(function ThreadView ({
               projectRootPath={projectRootPath}
               relatedThreadsById={subthreadsById}
               turn={turn}
+              hiddenReasoningItemId={turn.id === currentTurn?.id ? thinkingStep?.id ?? null : null}
             />
           )) : (
             !activeThread.isDraft ? (
@@ -531,11 +568,19 @@ export default memo(function ThreadView ({
           </div>
         )}
       </div>
-      {thinkingLabel ? (
+      {thinkingStep ? (
         <div className="py-4" aria-live="polite">
           <p className="thread-thinking-text m-0 text-[0.92em] font-medium leading-[1.6]">
-            {thinkingLabel}
+            {thinkingStep.title}
           </p>
+          {thinkingStep.body ? (
+            <ThreadMarkdown
+              className="mt-1 text-[0.8em] text-muted"
+              markdown={thinkingStep.body}
+              onOpenFile={onOpenFile}
+              projectRootPath={projectRootPath}
+            />
+          ) : null}
         </div>
       ) : null}
       {tabDefinitions.length ? (

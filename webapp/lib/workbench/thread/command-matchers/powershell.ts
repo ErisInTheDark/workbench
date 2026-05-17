@@ -18,6 +18,21 @@ interface ParsedPowerShellStage {
 
 export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
+    id: "powershell.hide-thread-title-setting",
+    match: (context) => {
+      if (context.summaryParts.length || !isPowerShellThreadTitleSettingCommand(context.unwrappedCommand)) {
+        return null;
+      }
+
+      return CommandMatcher.Result({
+        hide: true,
+        omitFromDisplay: true,
+        remainingCommand: null,
+        summaryParts: [],
+      });
+    },
+  }),
+  CommandMatcher({
     id: "powershell.read-numbered-lines",
     match: (context) => {
       const assignedRead = readPowerShellAssignedReadStage(context.stage.text, context);
@@ -918,6 +933,18 @@ function isPowerShellTrivialAssignmentStage(stageText: string) {
   }
 
   return unwrapPowerShellQuotedTextOnce(assignedValue) !== null;
+}
+
+function isPowerShellThreadTitleSettingCommand(commandText: string) {
+  const normalizedCommandText = unwrapPowerShellStageText(commandText)
+    .replace(/\r\n/g, "\n")
+    .replace(/(?:'")|(?:"')/g, "'")
+    .trim();
+  const titleSettingMatch = normalizedCommandText.match(
+    /^\$title\s*=\s*['"]+[^'\r\n]*(?:''[^'\r\n]*)*['"]+\s*\n+\s*['"]*\$body\s*=\s*@\{\s*harness\s*=\s*['"]+codex'\s*;\s*threadId\s*=\s*'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'\s*;\s*title\s*=\s*['"]*\$title\s*\}\s*\|\s*ConvertTo-Json\s+-Compress\s*\n+\s*Invoke-RestMethod\s+-Method\s+Post\s+-Uri\s*['"]+http:\/\/127\.0\.0\.1:3002\/api\/thread-title'\s+-ContentType\s*'application\/json'\s+-Body\s+['"]*\$body\s*\|\s*Out-Null\s*$/i,
+  );
+
+  return Boolean(titleSettingMatch);
 }
 
 function isPowerShellLineNumberFormattingScript(scriptText: string) {

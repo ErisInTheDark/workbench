@@ -150,11 +150,6 @@ type RateLimitSnapshotEntry = {
   source: RateLimitSnapshotSource;
 };
 
-type StreamingItemAlias = {
-  canonicalKey: string;
-  text: string;
-};
-
 function createInitialThreadState(): WorkbenchThreadState {
   return {
     currentThread: null,
@@ -316,7 +311,6 @@ function WorkbenchThreadClient(
   const listeners = new Set<WorkbenchThreadListener>();
   const rateLimitSnapshotEntriesByHarness = new Map<WorkbenchHarness, RateLimitSnapshotEntry>();
   const state = createInitialThreadState();
-  const streamingItemAliasByClientKey = new Map<string, StreamingItemAlias>();
   const clientCreatedStreamingItemKeys = new Set<string>();
   const threadUnreadRefreshInFlightKeys = new Set<string>();
   let disposed = false;
@@ -646,7 +640,6 @@ function WorkbenchThreadClient(
     const previousThread = state.currentThread;
     if (!previousThread || !nextThread || previousThread.id !== nextThread.id || previousThread.harness !== nextThread.harness) {
       clientCreatedStreamingItemKeys.clear();
-      streamingItemAliasByClientKey.clear();
     }
     state.currentThread = nextThread;
     state.currentThreadId = nextThread?.id ?? "";
@@ -758,39 +751,20 @@ function WorkbenchThreadClient(
     }
   }
 
-  function rememberStreamingItemAlias(turnId: string, clientItemId: string, canonicalItemId: string) {
+  function forgetReplacedStreamingItem(turnId: string, clientItemId: string, canonicalItemId: string) {
     const clientKey = getThreadItemKey(turnId, clientItemId);
     const canonicalKey = getThreadItemKey(turnId, canonicalItemId);
     if (clientKey === canonicalKey) {
       clientCreatedStreamingItemKeys.delete(clientKey);
-      streamingItemAliasByClientKey.delete(clientKey);
       return;
     }
 
-    const clientItem = state.currentThread?.turns
-      .find((turn) => turn.id === turnId)
-      ?.items.find((item) => item.id === clientItemId);
     clientCreatedStreamingItemKeys.delete(clientKey);
-    streamingItemAliasByClientKey.set(clientKey, {
-      canonicalKey,
-      text: clientItem ? getStreamingItemText(clientItem) : "",
-    });
   }
 
   function forgetStreamingItemKey(turnId: string, itemId: string) {
     const itemKey = getThreadItemKey(turnId, itemId);
     clientCreatedStreamingItemKeys.delete(itemKey);
-    streamingItemAliasByClientKey.delete(itemKey);
-  }
-
-  function splitThreadItemKey(itemKey: string) {
-    const separatorIndex = itemKey.indexOf(":");
-    return separatorIndex === -1
-      ? null
-      : {
-        itemId: itemKey.slice(separatorIndex + 1),
-        turnId: itemKey.slice(0, separatorIndex),
-      };
   }
 
   function shouldPreferIncomingStreamingItem(turnId: string, incomingItem: ThreadItem, existingItem: ThreadItem) {
@@ -830,10 +804,10 @@ function WorkbenchThreadClient(
       changed = true;
       const existingItem = nextItems[existingIndex];
       if (shouldPreferIncomingStreamingItem(turnId, item, existingItem)) {
-        rememberStreamingItemAlias(turnId, existingItem.id, item.id);
+        forgetReplacedStreamingItem(turnId, existingItem.id, item.id);
         nextItems[existingIndex] = mergeLiveStreamingItem(item, existingItem);
       } else {
-        rememberStreamingItemAlias(turnId, item.id, existingItem.id);
+        forgetReplacedStreamingItem(turnId, item.id, existingItem.id);
       }
     }
 
@@ -877,7 +851,7 @@ function WorkbenchThreadClient(
             && isStructurallyMatchingStreamingItem(item, candidateLiveItem)
           ) {
             liveItemsById.delete(liveItemId);
-            rememberStreamingItemAlias(incomingTurn.id, liveItemId, item.id);
+            forgetReplacedStreamingItem(incomingTurn.id, liveItemId, item.id);
             break;
           }
         }
@@ -1581,7 +1555,7 @@ function WorkbenchThreadClient(
             return true;
           }
 
-          rememberStreamingItemAlias(turnId, item.id, incomingItem.id);
+          forgetReplacedStreamingItem(turnId, item.id, incomingItem.id);
           return false;
         });
         return [...nextItems, incomingItem];
@@ -1650,33 +1624,10 @@ function WorkbenchThreadClient(
     itemId: string,
     createItem: () => ThreadItem,
     updater: (item: ThreadItem) => ThreadItem | null,
-    getNextAliasText?: (previousText: string) => string,
   ) {
     const itemKey = getThreadItemKey(turnId, itemId);
-    const alias = streamingItemAliasByClientKey.get(itemKey);
-    const aliasTarget = alias ? splitThreadItemKey(alias.canonicalKey) : null;
     ensureTurnForStreamingDelta(turnId);
     return updateTurnItems(turnId, (items) => {
-      if (aliasTarget?.turnId === turnId) {
-        const canonicalIndex = items.findIndex((item) => item.id === aliasTarget.itemId);
-        if (canonicalIndex !== -1) {
-          const canonicalItem = items[canonicalIndex];
-          const nextCanonicalItem = updater(canonicalItem);
-          const nextAliasText = getNextAliasText?.(alias?.text ?? "") ?? alias?.text ?? "";
-          if (nextCanonicalItem && nextAliasText && areStreamingTextsCompatible(nextAliasText, getStreamingItemText(nextCanonicalItem))) {
-            streamingItemAliasByClientKey.set(itemKey, {
-              canonicalKey: aliasTarget ? getThreadItemKey(aliasTarget.turnId, aliasTarget.itemId) : itemKey,
-              text: nextAliasText,
-            });
-            return items.map((item, index) => (
-              index === canonicalIndex ? nextCanonicalItem : item
-            ));
-          }
-        }
-
-        streamingItemAliasByClientKey.delete(itemKey);
-      }
-
       const itemIndex = items.findIndex((item) => item.id === itemId);
       if (itemIndex === -1) {
         const nextItem = updater(createItem());
@@ -1797,13 +1748,13 @@ function WorkbenchThreadClient(
           item.type === "agentMessage"
             ? { ...item, text: `${item.text}${notification.params.delta}` }
             : null
-        ), (text) => normalizeStreamingText(`${text}${notification.params.delta}`));
+        ));
       case "item/plan/delta":
         return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingPlanItem(notification.params.itemId), (item) => (
           item.type === "plan"
             ? { ...item, text: `${item.text}${notification.params.delta}` }
             : null
-        ), (text) => normalizeStreamingText(`${text}${notification.params.delta}`));
+        ));
       case "item/commandExecution/outputDelta":
         return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
           item.type === "commandExecution"
@@ -1827,13 +1778,13 @@ function WorkbenchThreadClient(
           item.type === "reasoning"
             ? { ...item, summary: appendIndexedText(item.summary, notification.params.summaryIndex, notification.params.delta) }
             : null
-        ), (text) => normalizeStreamingText(`${text}${notification.params.delta}`));
+        ));
       case "item/reasoning/textDelta":
         return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingReasoningItem(notification.params.itemId), (item) => (
           item.type === "reasoning"
             ? { ...item, content: appendIndexedText(item.content, notification.params.contentIndex, notification.params.delta) }
             : null
-        ), (text) => normalizeStreamingText(`${text}${notification.params.delta}`));
+        ));
       case "thread/archived":
       case "thread/unarchived":
       case "thread/closed":

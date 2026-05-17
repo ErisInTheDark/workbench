@@ -7,7 +7,7 @@
  * - ThreadCommandDisplayPart: structured text/path part for rendering command summaries with file pills. Keywords: thread, command, summary, path.
  * - ThreadCommandSummaryStats: aggregate command-summary counts for grouped command labels. Keywords: thread, command, summary, aggregate.
  * - ThreadCommandSummaryDisplay: shared summary-display metadata for single-command and grouped command labels. Keywords: thread, command, summary, shell.
- * - ThreadCommandDisplay: parsed command-summary metadata for single thread command rendering. Keywords: thread, command, summary, shell.
+ * - ThreadCommandDisplay: parsed command-summary metadata for single thread command rendering. Keywords: thread, command, summary, shell, omit.
  * - CommandDisplayContext: public input for thread command display parsing. Keywords: thread, command, context.
  * - ParsedCommandDisplayContext: unwrapped command context shared by matcher helpers. Keywords: thread, command, context.
  * - CommandStage: next consumable command stage plus trailing remainder. Keywords: thread, command, stage.
@@ -69,6 +69,7 @@ export interface ThreadCommandSummaryStats {
 
 export interface ThreadCommandSummaryDisplay {
   claimedBy: string | null;
+  omitFromDisplay: boolean;
   shell: CommandShell;
   showShell: boolean;
   summaryParts: ThreadCommandDisplayPart[];
@@ -109,6 +110,7 @@ export interface CommandMatcherContext extends ParsedCommandDisplayContext {
 
 export interface CommandMatcherResult {
   hide?: boolean;
+  omitFromDisplay?: boolean;
   remainingCommand?: string | null;
   stop?: boolean;
   summaryParts: ThreadCommandDisplayPart[];
