@@ -145,8 +145,14 @@ type RateLimitSnapshotSource = "cache" | "notification" | "read";
 
 type RateLimitSnapshotEntry = {
   generation: number;
+  receivedAt: number;
   snapshot: RateLimitSnapshot | null;
   source: RateLimitSnapshotSource;
+};
+
+type StreamingItemAlias = {
+  canonicalKey: string;
+  text: string;
 };
 
 function createInitialThreadState(): WorkbenchThreadState {
@@ -171,6 +177,10 @@ function getThreadStateKey(harness: WorkbenchHarness, threadId: string) {
   return `${harness}:${threadId}`;
 }
 
+function getThreadItemKey(turnId: string, itemId: string) {
+  return `${turnId}:${itemId}`;
+}
+
 function isThreadStatusActive(status: string) {
   return status === "active" || status.startsWith("active:");
 }
@@ -183,13 +193,26 @@ function getWindowRemainingPercent(window: RateLimitSnapshot["primary"]) {
   return window ? 100 - window.usedPercent : null;
 }
 
-function areRateLimitWindowsEquivalent(left: RateLimitSnapshot["primary"], right: RateLimitSnapshot["primary"]) {
-  return left?.windowDurationMins === right?.windowDurationMins
-    && left?.resetsAt === right?.resetsAt;
+function hasRateLimitWindowRolledOver(previous: RateLimitSnapshot["primary"], next: RateLimitSnapshot["primary"]) {
+  if (!previous || !next) {
+    return false;
+  }
+
+  const previousResetMs = previous.resetsAt === null ? null : previous.resetsAt * 1000;
+  const nextResetMs = next.resetsAt === null ? null : next.resetsAt * 1000;
+  if (previousResetMs !== null && previousResetMs <= Date.now()) {
+    return true;
+  }
+
+  return previousResetMs !== null
+    && nextResetMs !== null
+    && nextResetMs > previousResetMs
+    && getWindowRemainingPercent(previous) !== null
+    && getWindowRemainingPercent(previous)! <= 1;
 }
 
 function isRegressiveRateLimitWindow(previous: RateLimitSnapshot["primary"], next: RateLimitSnapshot["primary"]) {
-  if (!previous || !next || !areRateLimitWindowsEquivalent(previous, next)) {
+  if (!previous || !next || previous.windowDurationMins !== next.windowDurationMins) {
     return false;
   }
 
@@ -197,16 +220,34 @@ function isRegressiveRateLimitWindow(previous: RateLimitSnapshot["primary"], nex
   const nextRemaining = getWindowRemainingPercent(next);
   return previousRemaining !== null
     && nextRemaining !== null
-    && nextRemaining > previousRemaining;
+    && nextRemaining > previousRemaining
+    && !hasRateLimitWindowRolledOver(previous, next);
 }
 
 function isRegressiveRateLimitSnapshot(previous: RateLimitSnapshot | null, next: RateLimitSnapshot | null) {
-  if (!previous || !next || previous.limitId !== next.limitId) {
+  if (!previous || !next) {
     return false;
   }
 
-  return isRegressiveRateLimitWindow(previous.primary, next.primary)
-    || isRegressiveRateLimitWindow(previous.secondary, next.secondary);
+  return isRegressiveRateLimitWindow(previous.primary, next.primary);
+}
+
+function selectRateLimitSnapshot(
+  response: GetAccountRateLimitsResponse,
+  harness: WorkbenchHarness,
+  previousSnapshot: RateLimitSnapshot | null,
+) {
+  const legacySnapshot = response.rateLimits as RateLimitSnapshot | null;
+  const snapshotsByLimitId = response.rateLimitsByLimitId ?? {};
+  if (harness === "codex") {
+    return snapshotsByLimitId.codex
+      ?? (previousSnapshot?.limitId ? snapshotsByLimitId[previousSnapshot.limitId] : undefined)
+      ?? (legacySnapshot?.limitId ? snapshotsByLimitId[legacySnapshot.limitId] : undefined)
+      ?? Object.values(snapshotsByLimitId)[0]
+      ?? legacySnapshot;
+  }
+
+  return legacySnapshot;
 }
 
 function isTextPrefix(prefix: string, value: string) {
@@ -229,6 +270,37 @@ function mergeStreamingTextArray(incomingValues: string[], liveValues: string[])
   return nextValues;
 }
 
+function areStreamingTextsCompatible(left: string, right: string) {
+  const normalizedLeft = normalizeStreamingText(left);
+  const normalizedRight = normalizeStreamingText(right);
+  return normalizedLeft === normalizedRight
+    || normalizedLeft.startsWith(normalizedRight)
+    || normalizedRight.startsWith(normalizedLeft);
+}
+
+function areStreamingTextArraysCompatible(left: string[], right: string[]) {
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftValue = left[index] ?? "";
+    const rightValue = right[index] ?? "";
+    if (leftValue || rightValue) {
+      if (!areStreamingTextsCompatible(leftValue, rightValue)) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+function joinStreamingText(values: string[]) {
+  return values.join("\n").trim();
+}
+
+function normalizeStreamingText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
 function isEmptyRolloutError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   const normalizedMessage = message.toLowerCase();
@@ -244,6 +316,8 @@ function WorkbenchThreadClient(
   const listeners = new Set<WorkbenchThreadListener>();
   const rateLimitSnapshotEntriesByHarness = new Map<WorkbenchHarness, RateLimitSnapshotEntry>();
   const state = createInitialThreadState();
+  const streamingItemAliasByClientKey = new Map<string, StreamingItemAlias>();
+  const clientCreatedStreamingItemKeys = new Set<string>();
   const threadUnreadRefreshInFlightKeys = new Set<string>();
   let disposed = false;
   let rateLimitGeneration = 0;
@@ -519,12 +593,13 @@ function WorkbenchThreadClient(
       return false;
     }
 
-    if (source === "read" && isRegressiveRateLimitSnapshot(previousEntry?.snapshot ?? null, rateLimits)) {
+    if (isRegressiveRateLimitSnapshot(previousEntry?.snapshot ?? null, rateLimits)) {
       return false;
     }
 
     rateLimitSnapshotEntriesByHarness.set(harness, {
       generation,
+      receivedAt: Date.now(),
       snapshot: rateLimits,
       source,
     });
@@ -559,7 +634,7 @@ function WorkbenchThreadClient(
   }
 
   function setCurrentThread(thread: ThreadPayload | null) {
-    const nextThread = applyPersistedQuestionnaireHistory(thread);
+    const nextThread = pruneThreadStreamingDuplicates(applyPersistedQuestionnaireHistory(thread));
     if (areThreadPayloadsEquivalent(state.currentThread, nextThread)) {
       return;
     }
@@ -569,6 +644,10 @@ function WorkbenchThreadClient(
     }
 
     const previousThread = state.currentThread;
+    if (!previousThread || !nextThread || previousThread.id !== nextThread.id || previousThread.harness !== nextThread.harness) {
+      clientCreatedStreamingItemKeys.clear();
+      streamingItemAliasByClientKey.clear();
+    }
     state.currentThread = nextThread;
     state.currentThreadId = nextThread?.id ?? "";
     emit();
@@ -580,13 +659,8 @@ function WorkbenchThreadClient(
     }
 
     if (!previousThread || previousThread.id !== nextThread.id || previousThread.harness !== nextThread.harness) {
-      const cachedRateLimits = state.rateLimitsByHarness.get(nextThread.harness) ?? null;
-      if (!rateLimitSnapshotEntriesByHarness.has(nextThread.harness) && state.rateLimitsByHarness.has(nextThread.harness)) {
-        setHarnessRateLimits(nextThread.harness, cachedRateLimits, { source: "cache" });
-      } else {
-        setRateLimits(cachedRateLimits);
-      }
-      void refreshRateLimits();
+      setRateLimits(null);
+      void refreshRateLimits(nextThread.harness);
     }
   }
 
@@ -637,6 +711,157 @@ function WorkbenchThreadClient(
     return incomingItem;
   }
 
+  function isStructurallyMatchingStreamingItem(incomingItem: ThreadItem, liveItem: ThreadItem) {
+    if (incomingItem.type === "agentMessage" && liveItem.type === "agentMessage") {
+      return areStreamingTextsCompatible(incomingItem.text, liveItem.text);
+    }
+
+    if (incomingItem.type === "reasoning" && liveItem.type === "reasoning") {
+      const incomingText = joinStreamingText([...incomingItem.content, ...incomingItem.summary]);
+      const liveText = joinStreamingText([...liveItem.content, ...liveItem.summary]);
+      if (incomingText || liveText) {
+        return areStreamingTextsCompatible(incomingText, liveText);
+      }
+
+      return areStreamingTextArraysCompatible(incomingItem.content, liveItem.content)
+        && areStreamingTextArraysCompatible(incomingItem.summary, liveItem.summary);
+    }
+
+    if (incomingItem.type === "plan" && liveItem.type === "plan") {
+      return areStreamingTextsCompatible(incomingItem.text, liveItem.text);
+    }
+
+    return false;
+  }
+
+  function getStreamingItemText(item: ThreadItem) {
+    switch (item.type) {
+      case "agentMessage":
+        return normalizeStreamingText(item.text);
+      case "reasoning":
+        return normalizeStreamingText(joinStreamingText([...item.content, ...item.summary]));
+      case "plan":
+        return normalizeStreamingText(item.text);
+      default:
+        return "";
+    }
+  }
+
+  function getStreamingItemDedupeKind(item: ThreadItem) {
+    switch (item.type) {
+      case "agentMessage":
+      case "reasoning":
+      case "plan":
+        return item.type;
+      default:
+        return null;
+    }
+  }
+
+  function rememberStreamingItemAlias(turnId: string, clientItemId: string, canonicalItemId: string) {
+    const clientKey = getThreadItemKey(turnId, clientItemId);
+    const canonicalKey = getThreadItemKey(turnId, canonicalItemId);
+    if (clientKey === canonicalKey) {
+      clientCreatedStreamingItemKeys.delete(clientKey);
+      streamingItemAliasByClientKey.delete(clientKey);
+      return;
+    }
+
+    const clientItem = state.currentThread?.turns
+      .find((turn) => turn.id === turnId)
+      ?.items.find((item) => item.id === clientItemId);
+    clientCreatedStreamingItemKeys.delete(clientKey);
+    streamingItemAliasByClientKey.set(clientKey, {
+      canonicalKey,
+      text: clientItem ? getStreamingItemText(clientItem) : "",
+    });
+  }
+
+  function forgetStreamingItemKey(turnId: string, itemId: string) {
+    const itemKey = getThreadItemKey(turnId, itemId);
+    clientCreatedStreamingItemKeys.delete(itemKey);
+    streamingItemAliasByClientKey.delete(itemKey);
+  }
+
+  function splitThreadItemKey(itemKey: string) {
+    const separatorIndex = itemKey.indexOf(":");
+    return separatorIndex === -1
+      ? null
+      : {
+        itemId: itemKey.slice(separatorIndex + 1),
+        turnId: itemKey.slice(0, separatorIndex),
+      };
+  }
+
+  function shouldPreferIncomingStreamingItem(turnId: string, incomingItem: ThreadItem, existingItem: ThreadItem) {
+    const incomingKey = getThreadItemKey(turnId, incomingItem.id);
+    const existingKey = getThreadItemKey(turnId, existingItem.id);
+    const incomingIsClientCreated = clientCreatedStreamingItemKeys.has(incomingKey);
+    const existingIsClientCreated = clientCreatedStreamingItemKeys.has(existingKey);
+    if (incomingIsClientCreated !== existingIsClientCreated) {
+      return existingIsClientCreated;
+    }
+
+    return getStreamingItemText(incomingItem).length >= getStreamingItemText(existingItem).length;
+  }
+
+  function pruneDuplicateStreamingItems(turnId: string, items: ThreadItem[]) {
+    const nextItems: ThreadItem[] = [];
+    let changed = false;
+
+    for (const item of items) {
+      const kind = getStreamingItemDedupeKind(item);
+      const text = getStreamingItemText(item);
+      if (!kind || !text) {
+        nextItems.push(item);
+        continue;
+      }
+
+      const existingIndex = nextItems.findIndex((candidate) => (
+        getStreamingItemDedupeKind(candidate) === kind
+        && isStructurallyMatchingStreamingItem(item, candidate)
+      ));
+
+      if (existingIndex === -1) {
+        nextItems.push(item);
+        continue;
+      }
+
+      changed = true;
+      const existingItem = nextItems[existingIndex];
+      if (shouldPreferIncomingStreamingItem(turnId, item, existingItem)) {
+        rememberStreamingItemAlias(turnId, existingItem.id, item.id);
+        nextItems[existingIndex] = mergeLiveStreamingItem(item, existingItem);
+      } else {
+        rememberStreamingItemAlias(turnId, item.id, existingItem.id);
+      }
+    }
+
+    return changed ? nextItems : items;
+  }
+
+  function pruneThreadStreamingDuplicates(thread: ThreadPayload | null) {
+    if (!thread) {
+      return null;
+    }
+
+    let changed = false;
+    const turns = thread.turns.map((turn) => {
+      const nextItems = pruneDuplicateStreamingItems(turn.id, turn.items);
+      if (nextItems === turn.items) {
+        return turn;
+      }
+
+      changed = true;
+      return {
+        ...turn,
+        items: nextItems,
+      };
+    });
+
+    return changed ? { ...thread, turns } : thread;
+  }
+
   function mergeLiveStreamingTurn(incomingTurn: Turn, liveTurn: Turn | undefined) {
     if (!liveTurn || incomingTurn.status !== "inProgress" || liveTurn.status !== "inProgress") {
       return incomingTurn;
@@ -646,10 +871,21 @@ function WorkbenchThreadClient(
     const nextItems = incomingTurn.items.map((item) => {
       const liveItem = liveItemsById.get(item.id);
       if (!liveItem) {
+        for (const [liveItemId, candidateLiveItem] of liveItemsById) {
+          if (
+            clientCreatedStreamingItemKeys.has(getThreadItemKey(incomingTurn.id, liveItemId))
+            && isStructurallyMatchingStreamingItem(item, candidateLiveItem)
+          ) {
+            liveItemsById.delete(liveItemId);
+            rememberStreamingItemAlias(incomingTurn.id, liveItemId, item.id);
+            break;
+          }
+        }
         return item;
       }
 
       liveItemsById.delete(item.id);
+      forgetStreamingItemKey(incomingTurn.id, item.id);
       return mergeLiveStreamingItem(item, liveItem);
     });
 
@@ -661,7 +897,7 @@ function WorkbenchThreadClient(
 
     return {
       ...incomingTurn,
-      items: nextItems,
+      items: pruneDuplicateStreamingItems(incomingTurn.id, nextItems),
     };
   }
 
@@ -1140,7 +1376,8 @@ function WorkbenchThreadClient(
           method: "account/rateLimits/read",
           params: undefined,
         });
-        setHarnessRateLimits(harness, response.rateLimits, {
+        const previousSnapshot = rateLimitSnapshotEntriesByHarness.get(harness)?.snapshot ?? null;
+        setHarnessRateLimits(harness, selectRateLimitSnapshot(response, harness, previousSnapshot), {
           generation: readGeneration,
           source: "read",
         });
@@ -1322,10 +1559,11 @@ function WorkbenchThreadClient(
           return turn;
         }
 
+        const prunedItems = pruneDuplicateStreamingItems(turn.id, nextItems);
         updated = true;
         return {
           ...turn,
-          items: nextItems,
+          items: prunedItems,
         };
       });
 
@@ -1337,11 +1575,21 @@ function WorkbenchThreadClient(
     return updateTurnItems(turnId, (items) => {
       const itemIndex = items.findIndex((item) => item.id === incomingItem.id);
       if (itemIndex === -1) {
-        return [...items, incomingItem];
+        const nextItems = items.filter((item) => {
+          const itemKey = getThreadItemKey(turnId, item.id);
+          if (!clientCreatedStreamingItemKeys.has(itemKey) || !isStructurallyMatchingStreamingItem(incomingItem, item)) {
+            return true;
+          }
+
+          rememberStreamingItemAlias(turnId, item.id, incomingItem.id);
+          return false;
+        });
+        return [...nextItems, incomingItem];
       }
 
+      forgetStreamingItemKey(turnId, incomingItem.id);
       return items.map((item, index) => (
-        index === itemIndex ? incomingItem : item
+        index === itemIndex ? mergeLiveStreamingItem(incomingItem, item) : item
       ));
     });
   }
@@ -1402,13 +1650,42 @@ function WorkbenchThreadClient(
     itemId: string,
     createItem: () => ThreadItem,
     updater: (item: ThreadItem) => ThreadItem | null,
+    getNextAliasText?: (previousText: string) => string,
   ) {
+    const itemKey = getThreadItemKey(turnId, itemId);
+    const alias = streamingItemAliasByClientKey.get(itemKey);
+    const aliasTarget = alias ? splitThreadItemKey(alias.canonicalKey) : null;
     ensureTurnForStreamingDelta(turnId);
     return updateTurnItems(turnId, (items) => {
+      if (aliasTarget?.turnId === turnId) {
+        const canonicalIndex = items.findIndex((item) => item.id === aliasTarget.itemId);
+        if (canonicalIndex !== -1) {
+          const canonicalItem = items[canonicalIndex];
+          const nextCanonicalItem = updater(canonicalItem);
+          const nextAliasText = getNextAliasText?.(alias?.text ?? "") ?? alias?.text ?? "";
+          if (nextCanonicalItem && nextAliasText && areStreamingTextsCompatible(nextAliasText, getStreamingItemText(nextCanonicalItem))) {
+            streamingItemAliasByClientKey.set(itemKey, {
+              canonicalKey: aliasTarget ? getThreadItemKey(aliasTarget.turnId, aliasTarget.itemId) : itemKey,
+              text: nextAliasText,
+            });
+            return items.map((item, index) => (
+              index === canonicalIndex ? nextCanonicalItem : item
+            ));
+          }
+        }
+
+        streamingItemAliasByClientKey.delete(itemKey);
+      }
+
       const itemIndex = items.findIndex((item) => item.id === itemId);
       if (itemIndex === -1) {
         const nextItem = updater(createItem());
-        return nextItem ? [...items, nextItem] : null;
+        if (!nextItem) {
+          return null;
+        }
+
+        clientCreatedStreamingItemKeys.add(itemKey);
+        return [...items, nextItem];
       }
 
       let updated = false;
@@ -1520,13 +1797,13 @@ function WorkbenchThreadClient(
           item.type === "agentMessage"
             ? { ...item, text: `${item.text}${notification.params.delta}` }
             : null
-        ));
+        ), (text) => normalizeStreamingText(`${text}${notification.params.delta}`));
       case "item/plan/delta":
         return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingPlanItem(notification.params.itemId), (item) => (
           item.type === "plan"
             ? { ...item, text: `${item.text}${notification.params.delta}` }
             : null
-        ));
+        ), (text) => normalizeStreamingText(`${text}${notification.params.delta}`));
       case "item/commandExecution/outputDelta":
         return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
           item.type === "commandExecution"
@@ -1550,13 +1827,13 @@ function WorkbenchThreadClient(
           item.type === "reasoning"
             ? { ...item, summary: appendIndexedText(item.summary, notification.params.summaryIndex, notification.params.delta) }
             : null
-        ));
+        ), (text) => normalizeStreamingText(`${text}${notification.params.delta}`));
       case "item/reasoning/textDelta":
         return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingReasoningItem(notification.params.itemId), (item) => (
           item.type === "reasoning"
             ? { ...item, content: appendIndexedText(item.content, notification.params.contentIndex, notification.params.delta) }
             : null
-        ));
+        ), (text) => normalizeStreamingText(`${text}${notification.params.delta}`));
       case "thread/archived":
       case "thread/unarchived":
       case "thread/closed":
@@ -2099,7 +2376,8 @@ function WorkbenchThreadClient(
     }
 
     if (notification.method === "account/rateLimits/updated") {
-      setHarnessRateLimits(harness, notification.params.rateLimits, { source: "notification" });
+      void refreshRateLimits(harness);
+      return;
     }
 
     if (applyCodexNotificationToCurrentThread(notification, harness)) {

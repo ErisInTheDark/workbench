@@ -193,6 +193,30 @@ function hasReasoningSteps(item: ReasoningItem) {
     || item.content.some((section) => section.trim());
 }
 
+function formatReasoningStepTitle(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean)
+    ?.replace(/^#{1,6}\s+/, "")
+    .replace(/^\*\*(.+)\*\*$/, "$1")
+    .replace(/^\[(.+)\]$/, "$1")
+    .replace(/:$/, "")
+    .trim() || null;
+}
+
+function getReasoningStepTitle(item: ReasoningItem) {
+  const visibleSections = item.summary.length ? item.summary : item.content;
+  for (const section of visibleSections) {
+    const title = formatReasoningStepTitle(section);
+    if (title) {
+      return title;
+    }
+  }
+
+  return "Step";
+}
+
 function ThreadUserInputLine ({
   input,
   onOpenFile,
@@ -592,9 +616,12 @@ function ThreadReasoningSequence ({
       className="py-2"
       contentClassName="mt-2 space-y-4 pl-6"
       open={isMostRecent}
-      summary={totalItems === 1 ? "Reasoned" : (<>
+      summary={totalItems === 1 ? (<>
+        <span>Reasoned: </span>
+        <span className="thread-item-disclosure-prominent-text-portion font-medium text-text">{getReasoningStepTitle(visibleItems[0])}</span>
+      </>) : (<>
         <span>Reasoned over </span>
-        <span className="text-text">{totalItems}</span>
+        <span className="thread-item-disclosure-prominent-text-portion text-text">{totalItems}</span>
         <span> steps</span>
       </>)}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"

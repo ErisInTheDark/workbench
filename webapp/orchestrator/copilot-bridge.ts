@@ -538,9 +538,6 @@ export class CopilotBridge {
       return null;
     }
 
-    const remainingRequests = quota.isUnlimitedEntitlement
-      ? null
-      : Math.max(0, quota.entitlementRequests - quota.usedRequests);
     const resetsAt = quota.resetDate ? Math.floor(Date.parse(quota.resetDate) / 1000) : null;
 
     return {
@@ -554,11 +551,7 @@ export class CopilotBridge {
         windowDurationMins: null,
       },
       rateLimitReachedType: null,
-      secondary: {
-        resetsAt: null,
-        usedPercent: quota.isUnlimitedEntitlement ? null : remainingRequests,
-        windowDurationMins: null,
-      },
+      secondary: null,
     };
   }
 
@@ -597,7 +590,7 @@ export class CopilotBridge {
       }
 
       return {
-        rateLimits: this.cachedRateLimits,
+        rateLimits: null,
         rateLimitsByLimitId: null,
       };
     }
