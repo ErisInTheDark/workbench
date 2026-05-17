@@ -141,6 +141,14 @@ interface WorkbenchThreadClient {
   subscribe: (listener: WorkbenchThreadListener) => () => void;
 }
 
+type RateLimitSnapshotSource = "cache" | "notification" | "read";
+
+type RateLimitSnapshotEntry = {
+  generation: number;
+  snapshot: RateLimitSnapshot | null;
+  source: RateLimitSnapshotSource;
+};
+
 function createInitialThreadState(): WorkbenchThreadState {
   return {
     currentThread: null,
@@ -171,6 +179,56 @@ function countThreadItems(turns: Turn[]) {
   return turns.reduce((total, turn) => total + turn.items.length, 0);
 }
 
+function getWindowRemainingPercent(window: RateLimitSnapshot["primary"]) {
+  return window ? 100 - window.usedPercent : null;
+}
+
+function areRateLimitWindowsEquivalent(left: RateLimitSnapshot["primary"], right: RateLimitSnapshot["primary"]) {
+  return left?.windowDurationMins === right?.windowDurationMins
+    && left?.resetsAt === right?.resetsAt;
+}
+
+function isRegressiveRateLimitWindow(previous: RateLimitSnapshot["primary"], next: RateLimitSnapshot["primary"]) {
+  if (!previous || !next || !areRateLimitWindowsEquivalent(previous, next)) {
+    return false;
+  }
+
+  const previousRemaining = getWindowRemainingPercent(previous);
+  const nextRemaining = getWindowRemainingPercent(next);
+  return previousRemaining !== null
+    && nextRemaining !== null
+    && nextRemaining > previousRemaining;
+}
+
+function isRegressiveRateLimitSnapshot(previous: RateLimitSnapshot | null, next: RateLimitSnapshot | null) {
+  if (!previous || !next || previous.limitId !== next.limitId) {
+    return false;
+  }
+
+  return isRegressiveRateLimitWindow(previous.primary, next.primary)
+    || isRegressiveRateLimitWindow(previous.secondary, next.secondary);
+}
+
+function isTextPrefix(prefix: string, value: string) {
+  return value.startsWith(prefix);
+}
+
+function mergeLongerStreamingText(incomingText: string, liveText: string) {
+  if (isTextPrefix(incomingText, liveText)) {
+    return liveText;
+  }
+
+  return incomingText;
+}
+
+function mergeStreamingTextArray(incomingValues: string[], liveValues: string[]) {
+  const nextValues = [...incomingValues];
+  for (const [index, liveValue] of liveValues.entries()) {
+    nextValues[index] = mergeLongerStreamingText(nextValues[index] ?? "", liveValue);
+  }
+  return nextValues;
+}
+
 function isEmptyRolloutError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   const normalizedMessage = message.toLowerCase();
@@ -184,9 +242,11 @@ function WorkbenchThreadClient(
 ): WorkbenchThreadClient {
   const codexClient = new CodexAppServerClient();
   const listeners = new Set<WorkbenchThreadListener>();
+  const rateLimitSnapshotEntriesByHarness = new Map<WorkbenchHarness, RateLimitSnapshotEntry>();
   const state = createInitialThreadState();
   const threadUnreadRefreshInFlightKeys = new Set<string>();
   let disposed = false;
+  let rateLimitGeneration = 0;
   const refreshRateLimitsPromisesByHarness = new Map<WorkbenchHarness, Promise<void>>();
   let refreshThreadsPromise: Promise<void> | null = null;
 
@@ -439,11 +499,40 @@ function WorkbenchThreadClient(
     emit();
   }
 
-  function setHarnessRateLimits(harness: WorkbenchHarness, rateLimits: RateLimitSnapshot | null) {
+  function setHarnessRateLimits(
+    harness: WorkbenchHarness,
+    rateLimits: RateLimitSnapshot | null,
+    {
+      generation = ++rateLimitGeneration,
+      source,
+    }: {
+      generation?: number;
+      source: RateLimitSnapshotSource;
+    },
+  ) {
+    const previousEntry = rateLimitSnapshotEntriesByHarness.get(harness);
+    if (previousEntry && generation < previousEntry.generation) {
+      return false;
+    }
+
+    if (source === "read" && previousEntry && generation === previousEntry.generation && previousEntry.source === "notification") {
+      return false;
+    }
+
+    if (source === "read" && isRegressiveRateLimitSnapshot(previousEntry?.snapshot ?? null, rateLimits)) {
+      return false;
+    }
+
+    rateLimitSnapshotEntriesByHarness.set(harness, {
+      generation,
+      snapshot: rateLimits,
+      source,
+    });
     state.rateLimitsByHarness.set(harness, rateLimits);
     if (state.currentThread?.harness === harness) {
       setRateLimits(rateLimits);
     }
+    return true;
   }
 
   function scheduleActiveTurnRateLimitRefresh() {
@@ -491,7 +580,12 @@ function WorkbenchThreadClient(
     }
 
     if (!previousThread || previousThread.id !== nextThread.id || previousThread.harness !== nextThread.harness) {
-      setRateLimits(state.rateLimitsByHarness.get(nextThread.harness) ?? null);
+      const cachedRateLimits = state.rateLimitsByHarness.get(nextThread.harness) ?? null;
+      if (!rateLimitSnapshotEntriesByHarness.has(nextThread.harness) && state.rateLimitsByHarness.has(nextThread.harness)) {
+        setHarnessRateLimits(nextThread.harness, cachedRateLimits, { source: "cache" });
+      } else {
+        setRateLimits(cachedRateLimits);
+      }
       void refreshRateLimits();
     }
   }
@@ -515,6 +609,73 @@ function WorkbenchThreadClient(
       ...thread,
       ...fields,
     }));
+  }
+
+  function mergeLiveStreamingItem(incomingItem: ThreadItem, liveItem: ThreadItem) {
+    if (incomingItem.type === "agentMessage" && liveItem.type === "agentMessage") {
+      return {
+        ...incomingItem,
+        text: mergeLongerStreamingText(incomingItem.text, liveItem.text),
+      };
+    }
+
+    if (incomingItem.type === "reasoning" && liveItem.type === "reasoning") {
+      return {
+        ...incomingItem,
+        content: mergeStreamingTextArray(incomingItem.content, liveItem.content),
+        summary: mergeStreamingTextArray(incomingItem.summary, liveItem.summary),
+      };
+    }
+
+    if (incomingItem.type === "plan" && liveItem.type === "plan") {
+      return {
+        ...incomingItem,
+        text: mergeLongerStreamingText(incomingItem.text, liveItem.text),
+      };
+    }
+
+    return incomingItem;
+  }
+
+  function mergeLiveStreamingTurn(incomingTurn: Turn, liveTurn: Turn | undefined) {
+    if (!liveTurn || incomingTurn.status !== "inProgress" || liveTurn.status !== "inProgress") {
+      return incomingTurn;
+    }
+
+    const liveItemsById = new Map(liveTurn.items.map((item) => [item.id, item]));
+    const nextItems = incomingTurn.items.map((item) => {
+      const liveItem = liveItemsById.get(item.id);
+      if (!liveItem) {
+        return item;
+      }
+
+      liveItemsById.delete(item.id);
+      return mergeLiveStreamingItem(item, liveItem);
+    });
+
+    for (const liveItem of liveItemsById.values()) {
+      if (liveItem.type === "agentMessage" || liveItem.type === "reasoning" || liveItem.type === "plan") {
+        nextItems.push(liveItem);
+      }
+    }
+
+    return {
+      ...incomingTurn,
+      items: nextItems,
+    };
+  }
+
+  function mergeLiveStreamingThreadSnapshot(incomingThread: ThreadPayload) {
+    const liveThread = state.currentThread;
+    if (!liveThread || liveThread.id !== incomingThread.id || liveThread.harness !== incomingThread.harness) {
+      return incomingThread;
+    }
+
+    const liveTurnsById = new Map(liveThread.turns.map((turn) => [turn.id, turn]));
+    return {
+      ...incomingThread,
+      turns: incomingThread.turns.map((turn) => mergeLiveStreamingTurn(turn, liveTurnsById.get(turn.id))),
+    };
   }
 
   async function sendBridgeRequest<TResponse>(
@@ -847,13 +1008,13 @@ function WorkbenchThreadClient(
       if (harness === "codex") {
         await readCompletedQuestionnaireHistory(threadId);
       }
-      return toThreadPayload(
+      return mergeLiveStreamingThreadSnapshot(toThreadPayload(
         response.thread,
         harness,
         nextModel,
         readStoredHarnessModelEffort(harness, nextModel) ?? response.reasoningEffort ?? null,
         selectedAgentPath,
-      );
+      ));
     } catch (error) {
       emitStatusMessage(error instanceof Error ? error.message : "Unable to open Codex thread.");
       return null;
@@ -879,7 +1040,7 @@ function WorkbenchThreadClient(
       if (harness === "codex") {
         await readCompletedQuestionnaireHistory(threadId);
       }
-      return toThreadPayload(
+      return mergeLiveStreamingThreadSnapshot(toThreadPayload(
         response.thread,
         harness,
         nextModel,
@@ -887,7 +1048,7 @@ function WorkbenchThreadClient(
         state.currentThread?.id === threadId
           ? state.currentThread.agentPath
           : readStoredHarnessAgent(harness),
-      );
+      ));
     } catch (error) {
       emitStatusMessage(error instanceof Error ? error.message : "Unable to read Codex thread.");
       return null;
@@ -972,13 +1133,17 @@ function WorkbenchThreadClient(
       return;
     }
 
+    const readGeneration = ++rateLimitGeneration;
     const refreshPromise = (async () => {
       try {
         const response = await sendBridgeRequest<GetAccountRateLimitsResponse>(harness, {
           method: "account/rateLimits/read",
           params: undefined,
         });
-        setHarnessRateLimits(harness, response.rateLimits);
+        setHarnessRateLimits(harness, response.rateLimits, {
+          generation: readGeneration,
+          source: "read",
+        });
       } catch {
         if (!state.rateLimitsByHarness.has(harness) && state.currentThread?.harness === harness) {
           setRateLimits(null);
@@ -1181,6 +1346,90 @@ function WorkbenchThreadClient(
     });
   }
 
+  function createStreamingAgentMessageItem(itemId: string): Extract<ThreadItem, { type: "agentMessage" }> {
+    return {
+      type: "agentMessage",
+      id: itemId,
+      text: "",
+      phase: "commentary",
+      memoryCitation: null,
+    };
+  }
+
+  function createStreamingReasoningItem(itemId: string): Extract<ThreadItem, { type: "reasoning" }> {
+    return {
+      type: "reasoning",
+      id: itemId,
+      summary: [],
+      content: [],
+    };
+  }
+
+  function createStreamingPlanItem(itemId: string): Extract<ThreadItem, { type: "plan" }> {
+    return {
+      type: "plan",
+      id: itemId,
+      text: "",
+    };
+  }
+
+  function createStreamingTurn(turnId: string): Turn {
+    return {
+      id: turnId,
+      items: [],
+      status: "inProgress",
+      error: null,
+      startedAt: Math.floor(Date.now() / 1000),
+      completedAt: null,
+      durationMs: null,
+    };
+  }
+
+  function ensureTurnForStreamingDelta(turnId: string) {
+    if (!state.currentThread || state.currentThread.turns.some((turn) => turn.id === turnId)) {
+      return false;
+    }
+
+    return updateCurrentThread((thread) => ({
+      ...thread,
+      turns: [...thread.turns, createStreamingTurn(turnId)],
+      status: isThreadStatusActive(thread.status) ? thread.status : "active",
+    }));
+  }
+
+  function updateOrCreateThreadItem(
+    turnId: string,
+    itemId: string,
+    createItem: () => ThreadItem,
+    updater: (item: ThreadItem) => ThreadItem | null,
+  ) {
+    ensureTurnForStreamingDelta(turnId);
+    return updateTurnItems(turnId, (items) => {
+      const itemIndex = items.findIndex((item) => item.id === itemId);
+      if (itemIndex === -1) {
+        const nextItem = updater(createItem());
+        return nextItem ? [...items, nextItem] : null;
+      }
+
+      let updated = false;
+      const nextItems = items.map((item, index) => {
+        if (index !== itemIndex) {
+          return item;
+        }
+
+        const nextItem = updater(item);
+        if (!nextItem) {
+          return item;
+        }
+
+        updated = true;
+        return nextItem;
+      });
+
+      return updated ? nextItems : null;
+    });
+  }
+
   function updateThreadItem(
     turnId: string,
     itemId: string,
@@ -1267,13 +1516,13 @@ function WorkbenchThreadClient(
       case "item/completed":
         return upsertThreadItem(notification.params.turnId, notification.params.item);
       case "item/agentMessage/delta":
-        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
+        return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingAgentMessageItem(notification.params.itemId), (item) => (
           item.type === "agentMessage"
             ? { ...item, text: `${item.text}${notification.params.delta}` }
             : null
         ));
       case "item/plan/delta":
-        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
+        return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingPlanItem(notification.params.itemId), (item) => (
           item.type === "plan"
             ? { ...item, text: `${item.text}${notification.params.delta}` }
             : null
@@ -1291,19 +1540,19 @@ function WorkbenchThreadClient(
             : null
         ));
       case "item/reasoning/summaryPartAdded":
-        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
+        return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingReasoningItem(notification.params.itemId), (item) => (
           item.type === "reasoning"
             ? { ...item, summary: ensureIndexedText(item.summary, notification.params.summaryIndex) }
             : null
         ));
       case "item/reasoning/summaryTextDelta":
-        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
+        return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingReasoningItem(notification.params.itemId), (item) => (
           item.type === "reasoning"
             ? { ...item, summary: appendIndexedText(item.summary, notification.params.summaryIndex, notification.params.delta) }
             : null
         ));
       case "item/reasoning/textDelta":
-        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
+        return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingReasoningItem(notification.params.itemId), (item) => (
           item.type === "reasoning"
             ? { ...item, content: appendIndexedText(item.content, notification.params.contentIndex, notification.params.delta) }
             : null
@@ -1850,7 +2099,7 @@ function WorkbenchThreadClient(
     }
 
     if (notification.method === "account/rateLimits/updated") {
-      setHarnessRateLimits(harness, notification.params.rateLimits);
+      setHarnessRateLimits(harness, notification.params.rateLimits, { source: "notification" });
     }
 
     if (applyCodexNotificationToCurrentThread(notification, harness)) {
