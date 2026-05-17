@@ -64,10 +64,9 @@ Minimum expectation by task:
 - For Copilot workbench threads, equivalent bootstrap behavior should be carried by the session system message so both harnesses stay aligned.
 
 1. Read `webapp/package.json` FIRST.
-2. Read every in-scope route, rendered component, stylesheet, API handler, and `lib` file BEFORE editing. For workbench or editor tasks, also read `webapp/components/workbench.tsx`, `webapp/lib/WorkbenchClient.ts`, and `webapp/lib/types.ts`. For Codex integration tasks, also read `webapp/orchestrator/index.ts`, `webapp/orchestrator/copilot-bridge.ts`, `webapp/lib/codex/\\\*`, and the related files under `webapp/app/codex/` and `webapp/app/api/codex/`.
+2. Read every in-scope route, rendered component, stylesheet, API handler, and `lib` file BEFORE editing. For workbench or editor tasks, also read `webapp/components/workbench.tsx`, `webapp/lib/WorkbenchClient.ts`, and `webapp/lib/types.ts`. For Codex integration tasks, also read `webapp/orchestrator/index.ts`, `webapp/orchestrator/copilot-bridge.ts`, `webapp/lib/codex/*`, and the related files under `webapp/app/codex/` and `webapp/app/api/codex/`.
 3. Search `webapp/components/` and `webapp/lib/` for similar components, utilities, and types BEFORE creating new ones.
-4. If the implementation surface is large or unclear, spawn the read-only `explorer` subagent with explicit files and questions BEFORE editing.
-5. Verify with the NARROWEST meaningful command from `webapp/`. Use `tsc --noEmit` when a type check is sufficient. STATE clearly what you did and did not verify.
+4. Verify with the NARROWEST meaningful command from `webapp/`. Use `tsc --noEmit` when a type check is sufficient. STATE clearly what you did and did not verify.
 
 ## DO
 
