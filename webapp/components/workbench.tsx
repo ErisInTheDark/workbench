@@ -1104,7 +1104,7 @@ export default function Workbench () {
                         aria-label={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
                         aria-pressed={showUnopenableFiles}
                         title={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
-                        className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName} md:opacity-100${showUnopenableFiles ? " bg-accent-soft text-accent" : ""}`}
+                        className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}${showUnopenableFiles ? " bg-accent-soft text-accent" : ""}`}
                         onClick={() => {
                           setShowUnopenableFiles((current) => !current);
                         }}
