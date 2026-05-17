@@ -345,14 +345,19 @@ export default function ThreadComposer ({
       });
     }
 
+    const submittedValue = value;
+    const submittedAttachments = attachments;
     setIsSending(true);
     setError("");
+    setValue("");
+    setAttachments([]);
+    onThreadComposerDraftClear(thread.id);
     try {
       await onSendMessage(thread.id, input);
-      setValue("");
-      setAttachments([]);
       onThreadComposerDraftClear(thread.id);
     } catch (submissionError) {
+      setValue(submittedValue);
+      setAttachments(submittedAttachments);
       setError(submissionError instanceof Error ? submissionError.message : "Unable to send that message.");
     } finally {
       setIsSending(false);

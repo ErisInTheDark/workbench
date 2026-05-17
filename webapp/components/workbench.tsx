@@ -616,16 +616,26 @@ export default function Workbench () {
 
     const payload = await controls.sendThreadMessage(thread, input, options);
     if (payload) {
+      const draftThreadIdsToClear = Array.from(new Set([
+        thread.id,
+        payload.id,
+        ...(thread.isDraft ? ["new"] : []),
+      ]));
+
       setThreadComposerDraftsByThreadId((current) => {
-        if (!current[thread.id]) {
+        if (!draftThreadIdsToClear.some((threadId) => current[threadId])) {
           return current;
         }
 
         const next = { ...current };
-        delete next[thread.id];
+        for (const threadId of draftThreadIdsToClear) {
+          delete next[threadId];
+        }
         return next;
       });
-      void deletePersistedThreadComposerDraft(explorer.currentProjectId, thread.id);
+      for (const threadId of draftThreadIdsToClear) {
+        void deletePersistedThreadComposerDraft(explorer.currentProjectId, threadId);
+      }
     }
 
     return payload;
