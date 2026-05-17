@@ -75,6 +75,7 @@ export default memo(function ThreadView ({
   onThreadAgentChange,
   onThreadReasoningEffortChange,
   onThreadModelChange,
+  projectId,
   projectRootPath,
   rateLimits,
   thread,
@@ -99,6 +100,7 @@ export default memo(function ThreadView ({
   onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
   onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
   onThreadModelChange: (threadId: string, model: string) => void;
+  projectId: string;
   projectRootPath: string;
   rateLimits: RateLimitSnapshot | null;
   thread: ThreadPayload;
@@ -530,6 +532,7 @@ export default memo(function ThreadView ({
             onThreadReasoningEffortChange={handleThreadReasoningEffortChange}
             onThreadModelChange={handleThreadModelChange}
             pendingUserInputRequest={activePendingUserInputRequest}
+            projectId={projectId}
             rateLimits={rateLimits}
             thread={activeThread}
           />

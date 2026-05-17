@@ -92,6 +92,7 @@ export default function ThreadComposer ({
   onThreadReasoningEffortChange,
   onThreadModelChange,
   pendingUserInputRequest,
+  projectId,
   rateLimits,
   thread,
 }: {
@@ -107,6 +108,7 @@ export default function ThreadComposer ({
   onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
   onThreadModelChange: (threadId: string, model: string) => void;
   pendingUserInputRequest: WorkbenchPendingUserInputRequest | null;
+  projectId: string;
   rateLimits: RateLimitSnapshot | null;
   thread: ThreadPayload;
 }) {
@@ -184,7 +186,7 @@ export default function ThreadComposer ({
   useEffect(() => {
     let cancelled = false;
     setIsLoadingAgents(true);
-    void fetch("/api/agents", { cache: "no-store" }).then(async (response) => {
+    void fetch(`/api/agents?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" }).then(async (response) => {
       if (!response.ok) {
         throw new Error("Unable to load agents.");
       }
@@ -211,7 +213,7 @@ export default function ThreadComposer ({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [projectId]);
 
   useEffect(() => {
     let cancelled = false;

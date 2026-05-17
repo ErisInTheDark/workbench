@@ -58,6 +58,8 @@ import {
 } from "./workbench/workbench-icons";
 
 const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
+  currentProjectId: "",
+  projects: [],
   root: "Project",
   rootPath: "",
   tree: [],
@@ -73,6 +75,7 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
 
 const EMPTY_SELECTION: WorkbenchSelectionSearchParams = {
   filePath: "",
+  projectId: "",
   threadId: "",
 };
 
@@ -413,6 +416,11 @@ export default function Workbench () {
       return;
     }
 
+    if (requestedSelection.projectId && requestedSelection.projectId !== explorer.currentProjectId) {
+      void controls.selectProject(requestedSelection.projectId);
+      return;
+    }
+
     if (requestedSelection.threadId) {
       if (currentThread?.id === requestedSelection.threadId) {
         return;
@@ -439,7 +447,7 @@ export default function Workbench () {
     if (currentThread || explorer.currentPath) {
       controls.clearSelection();
     }
-  }, [controls, currentThread, explorer.currentPath, requestedSelection.filePath, requestedSelection.threadId]);
+  }, [controls, currentThread, explorer.currentPath, explorer.currentProjectId, requestedSelection.filePath, requestedSelection.projectId, requestedSelection.threadId]);
 
   const expandedDirectories = new Set(explorer.expandedDirectories);
   const modifiedPaths = new Set(explorer.locallyModifiedPaths);
@@ -447,6 +455,7 @@ export default function Workbench () {
     () => (showUnopenableFiles ? explorer.tree : filterVisibleTreeNodes(explorer.tree)),
     [explorer.tree, showUnopenableFiles],
   );
+  const currentProject = explorer.projects.find((project) => project.id === explorer.currentProjectId) ?? null;
 
   const closeCreateDialog = () => {
     if (isCreatingEntry) {
@@ -465,6 +474,18 @@ export default function Workbench () {
     setCreateEntryName("");
     setCreateDialogError("");
   };
+
+  const selectProjectFromExplorer = useCallback(async (projectId: string) => {
+    if (!controls || !projectId || projectId === explorer.currentProjectId) {
+      return;
+    }
+
+    setCurrentThread(null);
+    await controls.selectProject(projectId);
+    if (isMobile) {
+      setMobilePane("explorer");
+    }
+  }, [controls, explorer.currentProjectId, isMobile]);
 
   const openFileFromExplorer = useCallback(async (path: string) => {
     if (!isWorkbenchOpenableFile(path)) {
@@ -892,15 +913,27 @@ export default function Workbench () {
 
             <section className="space-y-2">
               <div className="group/entry-row flex items-center justify-between gap-3 pr-2 md:pr-4.5">
-                <button
-                  type="button"
-                  className="m-0 rounded-lg px-2 py-1.5 text-base font-semibold leading-tight text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:-ml-2 md:py-0.5"
-                  onClick={() => {
-                    clearSelectionFromUi();
-                  }}
-                >
-                  Project
-                </button>
+                <div className="min-w-0 md:-ml-2">
+                  <label className="sr-only" htmlFor="project-picker">Project</label>
+                  <select
+                    id="project-picker"
+                    className="m-0 max-w-full rounded-lg bg-transparent px-2 py-1.5 text-base font-semibold leading-tight text-text outline-none transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent md:py-0.5"
+                    value={explorer.currentProjectId}
+                    disabled={!explorer.projects.length}
+                    title={currentProject?.rootPath ?? explorer.rootPath}
+                    onChange={(event) => {
+                      void selectProjectFromExplorer(event.target.value);
+                    }}
+                  >
+                    {explorer.projects.length ? explorer.projects.map((project) => (
+                      <option key={project.id} value={project.id}>
+                        {project.id}
+                      </option>
+                    )) : (
+                      <option value="">No projects found</option>
+                    )}
+                  </select>
+                </div>
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
@@ -922,6 +955,7 @@ export default function Workbench () {
                     aria-label="Create in project"
                     title="Create in project"
                     className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}`}
+                    disabled={!explorer.currentProjectId}
                     onClick={() => {
                       openCreateDialog("");
                     }}
@@ -931,6 +965,11 @@ export default function Workbench () {
                   </button>
                 </div>
               </div>
+              {!explorer.projects.length ? (
+                <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted md:pr-4.5">
+                  No git projects were found under the configured projects root.
+                </p>
+              ) : null}
               <nav id="file-tree" aria-label="Project files">
                 <ExplorerTree
                   changes={explorer.changes}
@@ -1081,6 +1120,7 @@ export default function Workbench () {
                   onThreadAgentChange={setThreadAgent}
                   onThreadReasoningEffortChange={setThreadReasoningEffort}
                   onThreadModelChange={setThreadModel}
+                  projectId={explorer.currentProjectId}
                   projectRootPath={explorer.rootPath}
                   rateLimits={rateLimits}
                 />

@@ -76,6 +76,7 @@ export interface WorkbenchThreadState {
   currentThreadId: string;
   modelsByHarness: Map<WorkbenchHarness, WorkbenchModelOption[]>;
   pendingUserInputRequestsByThreadId: Map<string, WorkbenchPendingUserInputRequest>;
+  projectId: string;
   projectRoot: string;
   projectRootPath: string;
   questionnaireHistoryByThreadId: Map<string, WorkbenchQuestionnaireHistoryEntry[]>;
@@ -133,7 +134,7 @@ interface WorkbenchThreadClient {
   setCurrentThreadModel: (threadId: string, model: string) => void;
   setCurrentThreadReasoningEffort: (threadId: string, effort: string | null) => void;
   setDraftThreadHarness: (harness: WorkbenchHarness) => void;
-  setProjectContext: (context: { root: string; rootPath: string }) => void;
+  setProjectContext: (context: { projectId?: string; root: string; rootPath: string }) => void;
   subscribe: (listener: WorkbenchThreadListener) => () => void;
 }
 
@@ -143,6 +144,7 @@ function createInitialThreadState(): WorkbenchThreadState {
     currentThreadId: "",
     modelsByHarness: new Map(),
     pendingUserInputRequestsByThreadId: new Map(),
+    projectId: "",
     projectRoot: "Project",
     projectRootPath: "",
     questionnaireHistoryByThreadId: new Map(),
@@ -358,11 +360,12 @@ function WorkbenchThreadClient(
     };
   }
 
-  function setProjectContext(context: { root: string; rootPath: string }) {
-    if (state.projectRoot === context.root && state.projectRootPath === context.rootPath) {
+  function setProjectContext(context: { projectId?: string; root: string; rootPath: string }) {
+    if (state.projectId === (context.projectId ?? "") && state.projectRoot === context.root && state.projectRootPath === context.rootPath) {
       return;
     }
 
+    state.projectId = context.projectId ?? "";
     state.projectRoot = context.root;
     state.projectRootPath = context.rootPath;
   }
@@ -792,10 +795,12 @@ function WorkbenchThreadClient(
         ? buildCodexDeveloperInstructions(threadId, selectedAgentPath, routeUrl)
         : null;
       const response = await sendBridgeRequest<{ model?: string | null; modelProvider?: string | null; reasoningEffort?: string | null; thread: ThreadReadResponse["thread"] }>(harness, {
-        method: "thread/resume",
-        params: {
-          ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
-          ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
+            method: "thread/resume",
+            params: {
+              ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
+              ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
+              ...(state.projectRootPath && harness === "copilot" ? { cwd: state.projectRootPath } : {}),
+              ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
           ...(codexDeveloperInstructions && harness === "codex" ? { developerInstructions: codexDeveloperInstructions } : {}),
           persistExtendedHistory: true,
           threadId,
@@ -1500,8 +1505,10 @@ function WorkbenchThreadClient(
           ? {
             ...threadStartRequest.params,
             ...(selectedAgentPath ? { agentPath: selectedAgentPath } : {}),
+            ...(state.projectId ? { projectId: state.projectId } : {}),
+            ...(state.projectRootPath ? { cwd: state.projectRootPath } : {}),
             ...(workbenchOrigin ? { workbenchOrigin } : {}),
-          } as typeof threadStartRequest.params & { agentPath?: string; workbenchOrigin?: string }
+          } as typeof threadStartRequest.params & { agentPath?: string; cwd?: string; projectId?: string; workbenchOrigin?: string }
           : threadStartRequest.params,
       });
 
@@ -1538,9 +1545,11 @@ function WorkbenchThreadClient(
       });
       const resumedThreadResponse = await sendBridgeRequest<{ model?: string | null; modelProvider?: string | null; reasoningEffort?: string | null; thread: ThreadReadResponse["thread"] }>(harness, {
         method: "thread/resume",
-        params: {
-          ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
-          ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
+          params: {
+            ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
+            ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
+            ...(state.projectRootPath && harness === "copilot" ? { cwd: state.projectRootPath } : {}),
+            ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
           ...(codexDeveloperInstructions && harness === "codex" ? { developerInstructions: codexDeveloperInstructions } : {}),
           ...(selectedModel ? { model: selectedModel } : {}),
           persistExtendedHistory: true,
@@ -1578,9 +1587,11 @@ function WorkbenchThreadClient(
     if (currentInProgressTurn) {
       await sendBridgeRequest<TurnSteerResponse>(harness, {
         method: "turn/steer",
-        params: {
-          ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
-          ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
+          params: {
+            ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
+            ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
+            ...(state.projectRootPath && harness === "copilot" ? { cwd: state.projectRootPath } : {}),
+            ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
           expectedTurnId: currentInProgressTurn.id,
           input: normalizedInput,
           threadId: resolvedThreadId,

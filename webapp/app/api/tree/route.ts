@@ -1,24 +1,29 @@
 import { NextResponse } from "next/server";
 import { NextRequest } from "next/server";
 
-import { getProjectSnapshot, createProjectEntry } from "../../../lib/project";
+import { getProjectSnapshot, createProjectEntry, resolveProjectRoot } from "../../../lib/project";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  const snapshot = await getProjectSnapshot();
-  return NextResponse.json(snapshot, {
-    headers: {
-      "Cache-Control": "no-store",
-    },
-  });
+export async function GET(request: NextRequest) {
+  try {
+    const snapshot = await getProjectSnapshot(request.nextUrl.searchParams.get("projectId"));
+    return NextResponse.json(snapshot, {
+      headers: {
+        "Cache-Control": "no-store",
+      },
+    });
+  } catch (error) {
+    return NextResponse.json({ error: (error as Error).message }, { status: 400 });
+  }
 }
 
 export async function POST(request: NextRequest) {
   try {
     const {
       parentPath = "",
+      projectId,
       name,
       type,
     } = await request.json();
@@ -27,8 +32,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "A valid entry type is required." }, { status: 400 });
     }
 
-    const createdPath = await createProjectEntry(parentPath, name, type);
-    const snapshot = await getProjectSnapshot();
+    const resolvedProject = await resolveProjectRoot(projectId);
+    const createdPath = await createProjectEntry(parentPath, name, type, resolvedProject.root);
+    const snapshot = await getProjectSnapshot(resolvedProject.id);
     return NextResponse.json({
       ...snapshot,
       path: createdPath,

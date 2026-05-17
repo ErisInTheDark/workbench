@@ -16,9 +16,18 @@ describe the current design and next steps, not historical repo state.
 - Keep all file, tree, git, agent, and thread behavior scoped to the selected
   project.
 
+## Current Architecture
+
+The workbench is project-aware across discovery, file IO, tree IO, agent lookup,
+draft persistence, browser routes, and thread startup context.
+
+The selected project is represented by a normalized `projectId`. The browser may
+display that id in the route, but the server always resolves it against the
+configured projects root before doing filesystem work.
+
 ## Project Discovery
 
-Use a server-only configured root, tentatively `WORKBENCH_PROJECTS_ROOT`.
+Use a server-only configured root, `WORKBENCH_PROJECTS_ROOT`.
 
 Project ids are normalized relative paths from that root:
 
@@ -43,7 +52,7 @@ The scanner should ignore generated or tool-owned directories such as:
 - `build`
 - `coverage`
 
-The project list endpoint should return stable metadata:
+The project list endpoint returns stable metadata:
 
 ```ts
 interface WorkbenchProjectOption {
@@ -60,7 +69,7 @@ projects root.
 
 ## API Surface
 
-Add:
+Project discovery is exposed through:
 
 ```text
 GET /api/projects
@@ -75,7 +84,7 @@ interface WorkbenchProjectsPayload {
 }
 ```
 
-Make project IO APIs project-aware:
+Project IO APIs are project-aware:
 
 ```text
 GET /api/tree?projectId=web/workbench
@@ -94,7 +103,7 @@ const projectRoot = resolveProjectRoot(projectId);
 const absolutePath = safeResolveProjectPath(projectRoot, relativePath);
 ```
 
-Server helpers should be root-parameterized:
+Server helpers are root-parameterized:
 
 ```ts
 resolveProjectRoot(projectId)
@@ -105,14 +114,13 @@ listUserInvocableAgents(projectId)
 readUserInvocableAgentDefinition(projectId, agentPath)
 ```
 
-During migration, routes may default to the current project when `projectId` is
-absent. Once the routed client is stable, explicit project ids should be the
-normal contract.
+Routes may default to the current project when `projectId` is absent, but
+explicit project ids are the normal contract.
 
 ## Workbench Routes
 
-Use catch-all app route handling so the same workbench shell can render for
-project, file, and thread URLs. Parsing and navigation should be owned by
+Use catch-all app route handling so the same workbench shell renders for
+project, file, and thread URLs. Parsing and navigation are owned by
 client-side route helpers.
 
 Supported URL forms:
@@ -132,7 +140,7 @@ Parsing rules:
 - Unsupported modes should clear the active selection or redirect to the project
   root.
 
-Shared helpers should expose a normalized selection:
+Shared helpers expose a normalized selection:
 
 ```ts
 interface WorkbenchRouteSelection {
@@ -152,12 +160,12 @@ syncWorkbenchRoute({
 });
 ```
 
-API routes can continue using query strings and JSON bodies. The clean route
+API routes use query strings and JSON bodies. The clean route
 shape is for browser navigation and workbench state.
 
 ## Client State
 
-The workbench project client should own:
+The workbench project client owns:
 
 - discovered projects
 - selected project id
@@ -176,7 +184,7 @@ Startup flow:
 5. Fetch the selected project snapshot.
 6. Apply any routed file or thread selection.
 
-Shared state contracts should include project identity:
+Shared state contracts include project identity:
 
 ```ts
 interface ProjectSnapshot {
@@ -204,7 +212,7 @@ interface ExplorerSnapshot {
 }
 ```
 
-Controls should include:
+Controls include:
 
 ```ts
 selectProject(projectId: string): Promise<void>;
@@ -212,7 +220,7 @@ selectProject(projectId: string): Promise<void>;
 
 ## Persistence
 
-Persist browser state by project id so equal relative paths in different
+Browser state is persisted by project id so equal relative paths in different
 projects do not collide.
 
 Recommended scoping:
@@ -235,22 +243,22 @@ No blocking prompt is needed if draft persistence is reliable.
 
 ## Threads
 
-Codex thread creation should use the selected project root as `cwd`.
+Codex thread creation uses the selected project root as `cwd`.
 
 Thread filtering should match the selected project root exactly unless a future
 workflow explicitly supports subdirectory-owned threads. Since project discovery
 does not descend into discovered projects, nested project ownership should not
 be inferred from parent containment.
 
-Copilot should accept selected cwd through the bridge contract when starting a
-new session. The bridge must validate the requested cwd against known project
-roots before passing it to the SDK. Resumed sessions can continue using metadata
-cwd, but the workbench should only show/open sessions that match the selected
-project.
+Copilot accepts selected cwd through the bridge contract when starting or
+resuming a session. The bridge validates the requested cwd against the selected
+project before passing it to the SDK. Resumed sessions continue using metadata
+cwd when available, and the workbench only shows/opens sessions matching the
+selected project.
 
 ## UI
 
-Add a compact project picker in the explorer header.
+The explorer header includes a compact project picker.
 
 Expected behavior:
 
@@ -262,18 +270,15 @@ Expected behavior:
   root.
 - If discovery fails, show a concise error in the explorer.
 
-## Implementation Order
+## Remaining Work
 
-1. Add project discovery helpers and `GET /api/projects`.
-2. Refactor project helpers to accept selected project roots.
-3. Make tree, file, and agents APIs project-aware.
-4. Add catch-all workbench route parsing and writing.
-5. Add selected-project state to the workbench project client.
-6. Scope expanded directories and drafts by project id.
-7. Add the project picker UI.
-8. Update Codex thread cwd and filtering.
-9. Update Copilot bridge cwd handling.
-10. Verify with typecheck and manual route/API checks.
+1. Manually test project discovery and routed navigation in the browser.
+2. Verify project switching with dirty drafts, file reloads, and create-entry
+   flows.
+3. Verify Codex and Copilot new-thread startup cwd against multiple discovered
+   projects.
+4. Revisit empty/error states after manual testing if operator feedback shows
+   confusing transitions.
 
 ## Verification
 

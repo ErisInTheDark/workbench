@@ -2,8 +2,8 @@
  * Exports:
  * - formatSessionSource: flatten generated Codex session sources for sidebar display. Keywords: thread, source, sidebar.
  * - formatThreadStatus: flatten generated Codex thread statuses for workbench state comparisons. Keywords: thread, status, active.
- * - isCodexThreadWithinRoot: browser-safe absolute path containment check for project thread filtering. Keywords: cwd, root, filter.
- * - isProjectCodexThread: test whether a generated Codex thread belongs to the current project. Keywords: thread, cwd, project.
+ * - isCodexThreadWithinRoot/isCodexThreadAtRoot: browser-safe absolute path checks for project thread filtering. Keywords: cwd, root, filter.
+ * - isProjectCodexThread: test whether a generated Codex thread belongs to the current project root. Keywords: thread, cwd, project.
  * - toThreadSummary: normalize generated Codex threads for the explorer sidebar. Keywords: summary, thread list.
  * - toThreadPayload: normalize generated Codex threads for the thread detail view. Keywords: payload, turns, thread read.
  */
@@ -77,8 +77,16 @@ export function isCodexThreadWithinRoot(candidatePath: string, rootPath: string)
     || normalizedCandidatePath.startsWith(`${normalizedRootPath}/`);
 }
 
+export function isCodexThreadAtRoot(candidatePath: string, rootPath: string) {
+  if (!candidatePath.trim() || !rootPath.trim()) {
+    return false;
+  }
+
+  return normalizeAbsolutePathForComparison(candidatePath) === normalizeAbsolutePathForComparison(rootPath);
+}
+
 export function isProjectCodexThread(thread: Pick<Thread, "cwd">, rootPath: string) {
-  return isCodexThreadWithinRoot(thread.cwd, rootPath);
+  return isCodexThreadAtRoot(thread.cwd, rootPath);
 }
 
 export function toThreadSummary(thread: Thread, harness: WorkbenchHarness = "codex"): ThreadSummary {

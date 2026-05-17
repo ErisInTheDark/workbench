@@ -35,12 +35,14 @@ import type WorkbenchEventBus from "./WorkbenchEventBus";
 export type { DraftBuffer, default as FileSessionState } from "./state/FileSessionState";
 
 const DRAFT_DATABASE_NAME = "workbench";
-const DRAFT_DATABASE_VERSION = 1;
+const DRAFT_DATABASE_VERSION = 2;
 const DRAFT_STORE_NAME = "drafts";
 const FILE_SELECTION_PERSISTENCE_TASK_ID = "file-selection-persistence";
 const FILE_SELECTION_PERSISTENCE_DELAY_MS = 260;
 
 interface PersistedDraftRecord {
+  key: string;
+  projectId: string;
   path: string;
   baselineContent: string;
   content: string;
@@ -59,6 +61,7 @@ export interface WorkbenchFileClientOptions {
   eventBus: WorkbenchEventBus;
   expandProjectPath: (path: string) => void;
   fileSessionState: FileSessionState;
+  getProjectId: () => string;
   refreshProject: () => Promise<void>;
   sessionState: SessionState;
   syncSelectionToUrl: (selection: { filePath?: string }) => void;
@@ -116,10 +119,14 @@ function openDraftDatabase() {
   return new Promise<IDBDatabase | null>((resolve) => {
     const request = window.indexedDB.open(DRAFT_DATABASE_NAME, DRAFT_DATABASE_VERSION);
 
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const database = request.result;
+      if (event.oldVersion > 0 && event.oldVersion < 2 && database.objectStoreNames.contains(DRAFT_STORE_NAME)) {
+        database.deleteObjectStore(DRAFT_STORE_NAME);
+      }
+
       if (!database.objectStoreNames.contains(DRAFT_STORE_NAME)) {
-        database.createObjectStore(DRAFT_STORE_NAME, { keyPath: "path" });
+        database.createObjectStore(DRAFT_STORE_NAME, { keyPath: "key" });
       }
     };
 
@@ -137,8 +144,14 @@ function openDraftDatabase() {
   });
 }
 
-function buildPersistedDraftRecord(filePath: string, buffer: DraftBuffer): PersistedDraftRecord {
+function createDraftRecordKey(projectId: string, filePath: string) {
+  return `${projectId}:${filePath}`;
+}
+
+function buildPersistedDraftRecord(projectId: string, filePath: string, buffer: DraftBuffer): PersistedDraftRecord {
   return {
+    key: createDraftRecordKey(projectId, filePath),
+    projectId,
     path: filePath,
     baselineContent: buffer.baselineContent,
     content: buffer.content,
@@ -170,6 +183,7 @@ function WorkbenchFileClient(
     eventBus,
     expandProjectPath,
     fileSessionState: state,
+    getProjectId,
     refreshProject,
     sessionState,
     syncSelectionToUrl,
@@ -190,7 +204,8 @@ function WorkbenchFileClient(
     const request = store.getAll();
     const result = await wrapIndexedDbRequest(request as IDBRequest<PersistedDraftRecord[]>);
     await waitForTransaction(transaction);
-    return result;
+    const projectId = getProjectId();
+    return result.filter((record) => record.projectId === projectId);
   }
 
   async function putPersistedDraftRecord(record: PersistedDraftRecord) {
@@ -205,7 +220,7 @@ function WorkbenchFileClient(
     await waitForTransaction(transaction);
   }
 
-  async function deletePersistedDraftRecord(filePath: string) {
+  async function deletePersistedDraftRecord(projectId: string, filePath: string) {
     const database = await draftDatabasePromise;
     if (!database) {
       return;
@@ -213,7 +228,7 @@ function WorkbenchFileClient(
 
     const transaction = database.transaction(DRAFT_STORE_NAME, "readwrite");
     const store = transaction.objectStore(DRAFT_STORE_NAME);
-    await wrapIndexedDbRequest(store.delete(filePath));
+    await wrapIndexedDbRequest(store.delete(createDraftRecordKey(projectId, filePath)));
     await waitForTransaction(transaction);
   }
 
@@ -229,12 +244,13 @@ function WorkbenchFileClient(
 
   function persistDraftBuffer(filePath: string, buffer: DraftBuffer | null) {
     return enqueueDraftPersistence(async () => {
+      const projectId = getProjectId();
       if (!buffer || !buffer.dirty) {
-        await deletePersistedDraftRecord(filePath);
+        await deletePersistedDraftRecord(projectId, filePath);
         return;
       }
 
-      await putPersistedDraftRecord(buildPersistedDraftRecord(filePath, buffer));
+      await putPersistedDraftRecord(buildPersistedDraftRecord(projectId, filePath, buffer));
     });
   }
 
@@ -370,7 +386,8 @@ function WorkbenchFileClient(
   }
 
   async function fetchFilePayload(filePath: string) {
-    const response = await fetch(`/api/file?path=${encodeURIComponent(filePath)}`, { cache: "no-store" });
+    const projectId = getProjectId();
+    const response = await fetch(`/api/file?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(filePath)}`, { cache: "no-store" });
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: "Unable to open file." }));
       editorDocument.refreshStatusMessage(error.error);
@@ -526,6 +543,7 @@ function WorkbenchFileClient(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        projectId: getProjectId(),
         path: sessionState.currentPath,
         resetToHead: true,
         expectedMtimeMs: state.expectedMtimeMs,
@@ -572,6 +590,7 @@ function WorkbenchFileClient(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        projectId: getProjectId(),
         path: sessionState.currentPath,
         content,
         expectedMtimeMs: state.expectedMtimeMs,

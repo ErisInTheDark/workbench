@@ -364,6 +364,7 @@ export class CopilotBridge {
           const threadId = this.readThreadId(message.params);
           const effort = this.readReasoningEffort(message.params);
           const model = this.readModel(message.params);
+          const projectId = this.readProjectId(message.params);
           const workbenchOrigin = this.readWorkbenchOrigin(message.params);
           if (!threadId) {
             return this.errorResponse(requestId, -32602, "Missing thread id.");
@@ -371,7 +372,7 @@ export class CopilotBridge {
 
           return {
             id: requestId,
-            result: await this.readThread(threadId, model, effort, agentPath, workbenchOrigin),
+            result: await this.readThread(threadId, model, effort, agentPath, workbenchOrigin, projectId),
           };
         }
         case "thread/start": {
@@ -380,6 +381,8 @@ export class CopilotBridge {
             this.readReasoningEffort(message.params),
             this.readAgentPath(message.params),
             this.readWorkbenchOrigin(message.params),
+            this.readProjectId(message.params),
+            this.readCwd(message.params),
           );
           this.onNotification({
             method: "thread/started",
@@ -408,12 +411,13 @@ export class CopilotBridge {
           const effort = this.readReasoningEffort(message.params);
           const input = this.readInput(message.params);
           const model = this.readModel(message.params);
+          const projectId = this.readProjectId(message.params);
           const workbenchOrigin = this.readWorkbenchOrigin(message.params);
           if (!threadId || !input.length) {
             return this.errorResponse(requestId, -32602, "Missing turn/start params.");
           }
 
-          await this.sendToSession(threadId, input, "enqueue", model, effort, agentPath, workbenchOrigin);
+          await this.sendToSession(threadId, input, "enqueue", model, effort, agentPath, workbenchOrigin, projectId, this.readCwd(message.params));
           return { id: requestId, result: { ok: true } };
         }
         case "turn/steer": {
@@ -422,12 +426,13 @@ export class CopilotBridge {
           const effort = this.readReasoningEffort(message.params);
           const input = this.readInput(message.params);
           const model = this.readModel(message.params);
+          const projectId = this.readProjectId(message.params);
           const workbenchOrigin = this.readWorkbenchOrigin(message.params);
           if (!threadId || !input.length) {
             return this.errorResponse(requestId, -32602, "Missing turn/steer params.");
           }
 
-          await this.sendToSession(threadId, input, "immediate", model, effort, agentPath, workbenchOrigin);
+          await this.sendToSession(threadId, input, "immediate", model, effort, agentPath, workbenchOrigin, projectId, this.readCwd(message.params));
           return { id: requestId, result: { ok: true } };
         }
         case "turn/interrupt": {
@@ -768,11 +773,14 @@ export class CopilotBridge {
     reasoningEffort: string | null,
     agentPath: string | null,
     workbenchOrigin: string | null,
+    projectId: string | null,
+    cwd: string | null,
   ) {
     const client = await this.ensureClient();
     const sessionId = randomUUID();
     const normalizedReasoningEffort = toCopilotReasoningEffort(reasoningEffort);
-    const selectedAgent = await this.resolveAgentSelection(agentPath);
+    const selectedCwd = await this.resolveSelectedCwd(projectId, cwd);
+    const selectedAgent = await this.resolveAgentSelection(agentPath, projectId);
     const session = await client.createSession({
       ...(selectedAgent ? { agent: selectedAgent.name, customAgents: [selectedAgent] } : {}),
       includeSubAgentStreamingEvents: true,
@@ -783,11 +791,11 @@ export class CopilotBridge {
       streaming: true,
       systemMessage: this.createSessionSystemMessage(sessionId, workbenchOrigin),
       tools: this.createSessionTools(sessionId),
-      workingDirectory: this.projectRoot,
+      workingDirectory: selectedCwd,
     });
 
     const { createThreadState } = this.getReloadableModules().copilotThreadState;
-    const state = createThreadState(sessionId, null, this.projectRoot);
+    const state = createThreadState(sessionId, null, selectedCwd);
     this.threadStates.set(sessionId, state);
     this.sessions.set(sessionId, session);
     this.bindSessionEvents(sessionId, session, state);
@@ -829,8 +837,9 @@ export class CopilotBridge {
     reasoningEffort: string | null,
     agentPath: string | null,
     workbenchOrigin: string | null,
+    projectId: string | null,
   ) {
-    const { session, state } = await this.ensureThreadState(threadId, model, reasoningEffort, agentPath, workbenchOrigin);
+    const { session, state } = await this.ensureThreadState(threadId, model, reasoningEffort, agentPath, workbenchOrigin, projectId);
     const { cloneThread } = this.getReloadableModules().copilotThreadState;
     return {
       model: await this.readSessionModel(session, model),
@@ -846,9 +855,11 @@ export class CopilotBridge {
     reasoningEffort: string | null = null,
     agentPath: string | null = null,
     workbenchOrigin: string | null = null,
+    projectId: string | null = null,
+    cwd: string | null = null,
   ) {
     const normalizedReasoningEffort = toCopilotReasoningEffort(reasoningEffort);
-    const selectedAgent = await this.resolveAgentSelection(agentPath);
+    const selectedAgent = await this.resolveAgentSelection(agentPath, projectId);
     const existingState = this.threadStates.get(threadId);
     const existingSession = this.sessions.get(threadId);
     if (existingState && existingSession) {
@@ -868,6 +879,7 @@ export class CopilotBridge {
     state.metadata = metadata ?? null;
     state.thread = metadataToThread(metadata ?? null, state.thread, this.projectRoot);
 
+    const selectedCwd = metadata?.context?.cwd ?? await this.resolveSelectedCwd(projectId, cwd);
     const session = await client.resumeSession(threadId, {
       ...(selectedAgent ? { agent: selectedAgent.name, customAgents: [selectedAgent] } : {}),
       includeSubAgentStreamingEvents: true,
@@ -877,7 +889,7 @@ export class CopilotBridge {
       streaming: true,
       systemMessage: this.createSessionSystemMessage(threadId, workbenchOrigin),
       tools: this.createSessionTools(threadId),
-      workingDirectory: metadata?.context?.cwd ?? this.projectRoot,
+      workingDirectory: selectedCwd,
     });
 
     this.threadStates.set(threadId, state);
@@ -933,8 +945,10 @@ export class CopilotBridge {
     reasoningEffort: string | null,
     agentPath: string | null,
     workbenchOrigin: string | null,
+    projectId: string | null,
+    cwd: string | null,
   ) {
-    const { session } = await this.ensureThreadState(threadId, model, reasoningEffort, agentPath, workbenchOrigin);
+    const { session } = await this.ensureThreadState(threadId, model, reasoningEffort, agentPath, workbenchOrigin, projectId, cwd);
 
     const prompt = this.getReloadableModules().copilotThreadState.formatPromptFromInput(input);
     if (!prompt) {
@@ -1134,6 +1148,20 @@ export class CopilotBridge {
     return record && typeof record.agentPath === "string" && record.agentPath.trim() ? record.agentPath : null;
   }
 
+  private readProjectId(params: unknown) {
+    const record = params && typeof params === "object" && !Array.isArray(params)
+      ? params as Record<string, unknown>
+      : null;
+    return record && typeof record.projectId === "string" && record.projectId.trim() ? record.projectId : null;
+  }
+
+  private readCwd(params: unknown) {
+    const record = params && typeof params === "object" && !Array.isArray(params)
+      ? params as Record<string, unknown>
+      : null;
+    return record && typeof record.cwd === "string" && record.cwd.trim() ? record.cwd : null;
+  }
+
   private readThreadName(params: unknown) {
     const record = params && typeof params === "object" && !Array.isArray(params)
       ? params as Record<string, unknown>
@@ -1150,13 +1178,27 @@ export class CopilotBridge {
       : null;
   }
 
-  private async resolveAgentSelection(agentPath: string | null) {
+  private async resolveSelectedCwd(projectId: string | null, cwd: string | null) {
+    if (!projectId) {
+      return this.projectRoot;
+    }
+
+    const { isPathWithinRoot, resolveProjectRoot } = this.getReloadableModules().project;
+    const resolvedProject = await resolveProjectRoot(projectId);
+    if (cwd && !isPathWithinRoot(cwd, resolvedProject.root)) {
+      throw new Error("Requested working directory is outside the selected project.");
+    }
+
+    return cwd || resolvedProject.root;
+  }
+
+  private async resolveAgentSelection(agentPath: string | null, projectId: string | null) {
     if (!agentPath) {
       return null;
     }
 
     const { readUserInvocableAgentDefinition } = this.getReloadableModules().project;
-    const definition = await readUserInvocableAgentDefinition(agentPath);
+    const definition = await readUserInvocableAgentDefinition(agentPath, projectId);
     return {
       description: definition.description || undefined,
       displayName: definition.name,

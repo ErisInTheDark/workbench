@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getGitChanges, getHeadFileContent } from "../../../lib/git";
-import { normalizeRelativePath, projectRoot, safeResolve } from "../../../lib/project";
+import { normalizeRelativePath, resolveProjectRoot, safeResolveProjectPath } from "../../../lib/project";
 import { isWorkbenchOpenableFile } from "../../../lib/workbench/project/tree-utils";
 
 export const runtime = "nodejs";
@@ -11,12 +11,14 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   const relativePath = request.nextUrl.searchParams.get("path");
+  const projectId = request.nextUrl.searchParams.get("projectId");
   if (!relativePath) {
     return NextResponse.json({ error: "A file path is required." }, { status: 400 });
   }
 
   try {
-    const absolutePath = safeResolve(relativePath);
+    const resolvedProject = await resolveProjectRoot(projectId);
+    const absolutePath = safeResolveProjectPath(resolvedProject.root, relativePath);
     const stats = await fs.stat(absolutePath);
     const normalizedPath = normalizeRelativePath(relativePath);
 
@@ -30,11 +32,12 @@ export async function GET(request: NextRequest) {
 
     const [content, headContent] = await Promise.all([
       fs.readFile(absolutePath, "utf8"),
-      getHeadFileContent(projectRoot, normalizedPath),
+      getHeadFileContent(resolvedProject.root, normalizedPath),
     ]);
 
     return NextResponse.json({
       path: normalizedPath,
+      projectId: resolvedProject.id,
       content,
       headContent,
       updatedAt: stats.mtime.toISOString(),
@@ -53,6 +56,7 @@ export async function PUT(request: NextRequest) {
   try {
     const {
       path: relativePath,
+      projectId,
       content,
       expectedMtimeMs,
       force = false,
@@ -63,7 +67,8 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: "A file path is required." }, { status: 400 });
     }
 
-    const absolutePath = safeResolve(relativePath);
+    const resolvedProject = await resolveProjectRoot(projectId);
+    const absolutePath = safeResolveProjectPath(resolvedProject.root, relativePath);
     const statsBeforeWrite = await fs.stat(absolutePath);
     const actualMtimeMs = Math.trunc(statsBeforeWrite.mtimeMs);
     const normalizedPath = normalizeRelativePath(relativePath);
@@ -101,7 +106,7 @@ export async function PUT(request: NextRequest) {
     }
 
     const nextContent = resetToHead
-      ? await getHeadFileContent(projectRoot, normalizedPath)
+      ? await getHeadFileContent(resolvedProject.root, normalizedPath)
       : content;
 
     if (resetToHead && nextContent === null) {
@@ -118,12 +123,13 @@ export async function PUT(request: NextRequest) {
     await fs.writeFile(absolutePath, nextContent, "utf8");
 
     const [changes, stats] = await Promise.all([
-      getGitChanges(projectRoot),
+      getGitChanges(resolvedProject.root),
       fs.stat(absolutePath),
     ]);
 
     return NextResponse.json({
       path: normalizedPath,
+      projectId: resolvedProject.id,
       updatedAt: stats.mtime.toISOString(),
       mtimeMs: Math.trunc(stats.mtimeMs),
       changes,

@@ -12,7 +12,6 @@ import type { CollaborationMode } from "./generated/app-server/CollaborationMode
 import type { ClientInfo } from "./generated/app-server/ClientInfo";
 import type { ClientNotification } from "./generated/app-server/ClientNotification";
 import type { ClientRequest } from "./generated/app-server/ClientRequest";
-import type { EventMsg } from "./generated/app-server/EventMsg";
 import type { InitializeCapabilities } from "./generated/app-server/InitializeCapabilities";
 import type { InitializeParams } from "./generated/app-server/InitializeParams";
 import type { InitializeResponse } from "./generated/app-server/InitializeResponse";
@@ -23,6 +22,8 @@ import type { TurnStartParams } from "./generated/app-server/v2/TurnStartParams"
 import type { TurnStartResponse } from "./generated/app-server/v2/TurnStartResponse";
 import type { UserInput } from "./generated/app-server/v2/UserInput";
 import { CODEX_CLIENT_INFO } from "./config";
+
+type EventMsg = { type: string } & Record<string, unknown>;
 
 export type CodexClientRequest = ClientRequest;
 export type CodexClientNotification = ClientNotification;

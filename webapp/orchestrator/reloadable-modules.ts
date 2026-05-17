@@ -13,7 +13,7 @@ export type OrchestratorReloadableModules = {
     | "formatPromptFromInput"
     | "INITIALIZE_RESULT"
     | "metadataToThread">;
-  project: Pick<typeof import("../lib/project"), "readUserInvocableAgentDefinition">;
+  project: Pick<typeof import("../lib/project"), "isPathWithinRoot" | "readUserInvocableAgentDefinition" | "resolveProjectRoot">;
   threadBootstrap: Pick<typeof import("../lib/thread-bootstrap"),
     "buildThreadTitleBootstrapInstructions"
     | "buildThreadTitleRouteUrl"

@@ -21,12 +21,14 @@ export function getCurrentSelectionSearchParams (): WorkbenchSelectionSearchPara
 
 export function syncCurrentSelectionSearchParams ({
   filePath = "",
+  projectId,
   threadId = "",
 }: {
   filePath?: string;
+  projectId?: string;
   threadId?: string;
 }) {
-  syncCurrentSelectionToUrl({ filePath, threadId });
+  syncCurrentSelectionToUrl({ filePath, projectId, threadId });
 }
 
 export function getPreferredMobilePane (isMobileViewport: boolean): MobilePane {

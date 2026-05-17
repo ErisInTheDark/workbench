@@ -44,6 +44,7 @@ import {
 } from "./workbench/project/tree-utils";
 import {
     getRequestedPathFromUrl,
+    getRequestedProjectIdFromUrl,
     getRequestedThreadIdFromUrl,
     readStoredHarness,
     syncCurrentSelectionToUrl
@@ -130,11 +131,20 @@ export async function WorkbenchClient(
     currentThreadId: initialThreadSnapshot.currentThreadId,
   });
   const fileSessionState = FileSessionState();
+  let fileClient: ReturnType<typeof WorkbenchFileClient>;
+  let activeProjectId = projectClient.getSnapshot().currentProjectId;
   coordinatorLifecycle.addUnsubscribe(projectClient.subscribe((snapshot) => {
+    const previousProjectId = activeProjectId;
+    activeProjectId = snapshot.currentProjectId;
     threadClient.setProjectContext({
+      projectId: snapshot.currentProjectId,
       root: snapshot.root,
       rootPath: snapshot.rootPath,
     });
+    if (previousProjectId && previousProjectId !== snapshot.currentProjectId && fileClient) {
+      fileClient.clearSelection();
+      void fileClient.hydratePersistedDrafts();
+    }
     emitExplorerStateChange();
   }));
 
@@ -197,8 +207,6 @@ export async function WorkbenchClient(
     return false;
   }
   let editHistoryManager: ReturnType<typeof EditHistoryManager>;
-  let fileClient: ReturnType<typeof WorkbenchFileClient>;
-
   const editorClient = WorkbenchEditorClient({
     controls: controlButtons,
     dialogs: dialogSurface,
@@ -500,6 +508,7 @@ export async function WorkbenchClient(
       projectClient.expandPath(filePath);
     },
     fileSessionState,
+    getProjectId: () => projectClient.getSnapshot().currentProjectId,
     refreshProject: async () => {
       await projectClient.refreshProject();
     },
@@ -570,6 +579,8 @@ export async function WorkbenchClient(
 
     return {
       root: projectSnapshot.root,
+      currentProjectId: projectSnapshot.currentProjectId,
+      projects: projectSnapshot.projects,
       rootPath: projectSnapshot.rootPath,
       tree: projectSnapshot.tree,
       threads: threadSnapshot.threads,
@@ -834,7 +845,25 @@ export async function WorkbenchClient(
   }
 
   async function refreshTree({ preserveSelection = false }: { preserveSelection?: boolean } = {}) {
+    const requestedProjectId = getRequestedProjectIdFromUrl();
+    const currentProjectId = projectClient.getSnapshot().currentProjectId;
+    if (requestedProjectId && requestedProjectId !== currentProjectId) {
+      if (sessionState.currentPath) {
+        fileClient.syncCurrentDraftBuffer();
+      }
+      threadClient.clearThreadSelection();
+      fileClient.clearSelection();
+      await projectClient.selectProject(requestedProjectId);
+      await fileClient.hydratePersistedDrafts();
+    }
+
     await projectClient.refreshProject();
+    const refreshedProjectId = projectClient.getSnapshot().currentProjectId;
+    if (refreshedProjectId && !getRequestedProjectIdFromUrl()) {
+      syncCurrentSelectionToUrl({ projectId: refreshedProjectId });
+    } else if (refreshedProjectId && getRequestedProjectIdFromUrl() !== refreshedProjectId) {
+      syncCurrentSelectionToUrl({ projectId: refreshedProjectId });
+    }
     const requestedThreadId = getRequestedThreadIdFromUrl();
     const requestedPath = getRequestedPathFromUrl();
     const shouldBlockOnThreads = Boolean(sessionState.currentThreadId || requestedThreadId);
@@ -954,6 +983,23 @@ export async function WorkbenchClient(
     },
     setDraftThreadHarness: (harness) => {
       threadClient.setDraftThreadHarness(harness);
+    },
+    selectProject: async (projectId) => {
+      const isRouteDrivenProjectSelection = getRequestedProjectIdFromUrl() === projectId
+        && Boolean(getRequestedPathFromUrl() || getRequestedThreadIdFromUrl());
+      if (sessionState.currentPath) {
+        fileClient.syncCurrentDraftBuffer();
+      }
+      threadClient.clearThreadSelection();
+      fileClient.clearSelection();
+      await projectClient.selectProject(projectId);
+      await fileClient.hydratePersistedDrafts();
+      if (!isRouteDrivenProjectSelection) {
+        syncCurrentSelectionToUrl({ projectId: projectClient.getSnapshot().currentProjectId });
+        clearCurrentSelectionView();
+      }
+      await refreshThreads();
+      emitExplorerStateChange();
     },
     toggleDirectory,
   };

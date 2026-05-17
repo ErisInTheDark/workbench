@@ -27,6 +27,18 @@ export interface WorkbenchAgentOption {
   path: string;
 }
 
+export interface WorkbenchProjectOption {
+  id: string;
+  name: string;
+  rootPath: string;
+  relativePath: string;
+}
+
+export interface WorkbenchProjectsPayload {
+  data: WorkbenchProjectOption[];
+  rootPath: string;
+}
+
 export interface WorkbenchModelOption {
   id: string;
   displayName: string;
@@ -164,6 +176,7 @@ export interface DirectoryNode {
 export type TreeNode = DirectoryNode | FileNode;
 
 export interface ProjectSnapshot {
+  projectId: string;
   root: string;
   rootPath: string;
   tree: TreeNode[];
@@ -171,6 +184,8 @@ export interface ProjectSnapshot {
 }
 
 export interface ExplorerSnapshot {
+  currentProjectId: string;
+  projects: WorkbenchProjectOption[];
   root: string;
   rootPath: string;
   tree: TreeNode[];
@@ -204,6 +219,7 @@ export interface WorkbenchControls {
   setCurrentThreadModel: (threadId: string, model: string) => void;
   setCurrentThreadAgent: (threadId: string, agentPath: string | null) => void;
   setCurrentThreadReasoningEffort: (threadId: string, effort: string | null) => void;
+  selectProject: (projectId: string) => Promise<void>;
   toggleDirectory: (path: string) => void;
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
   createThread: (harness: WorkbenchHarness) => void;
@@ -219,6 +235,7 @@ export interface WorkbenchBindings {
 }
 
 export interface FilePayload {
+  projectId: string;
   path: string;
   content: string;
   headContent: string | null;
@@ -232,6 +249,7 @@ export interface CreateEntryPayload extends ProjectSnapshot {
 }
 
 export interface SaveFilePayload {
+  projectId: string;
   path: string;
   updatedAt: string;
   mtimeMs: number;
