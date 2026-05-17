@@ -35,8 +35,10 @@ import type WorkbenchEventBus from "./WorkbenchEventBus";
 export type { DraftBuffer, default as FileSessionState } from "./state/FileSessionState";
 
 const DRAFT_DATABASE_NAME = "workbench";
-const DRAFT_DATABASE_VERSION = 2;
+const DRAFT_DATABASE_VERSION = 3;
 const DRAFT_STORE_NAME = "drafts";
+const THREAD_COMPOSER_DRAFT_STORE_NAME = "threadComposerDrafts";
+const THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME = "threadQuestionnaireDrafts";
 const FILE_SELECTION_PERSISTENCE_TASK_ID = "file-selection-persistence";
 const FILE_SELECTION_PERSISTENCE_DELAY_MS = 260;
 
@@ -128,10 +130,22 @@ function openDraftDatabase() {
       if (!database.objectStoreNames.contains(DRAFT_STORE_NAME)) {
         database.createObjectStore(DRAFT_STORE_NAME, { keyPath: "key" });
       }
+
+      if (!database.objectStoreNames.contains(THREAD_COMPOSER_DRAFT_STORE_NAME)) {
+        database.createObjectStore(THREAD_COMPOSER_DRAFT_STORE_NAME, { keyPath: "key" });
+      }
+
+      if (!database.objectStoreNames.contains(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME)) {
+        database.createObjectStore(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME, { keyPath: "key" });
+      }
     };
 
     request.onsuccess = () => {
-      resolve(request.result);
+      const database = request.result;
+      database.onversionchange = () => {
+        database.close();
+      };
+      resolve(database);
     };
 
     request.onerror = () => {

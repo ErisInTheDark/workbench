@@ -96,6 +96,23 @@ export interface WorkbenchSendThreadMessageOptions {
   selectThread?: boolean;
 }
 
+export interface WorkbenchThreadComposerAttachmentDraft {
+  id: string;
+  url: string;
+}
+
+export interface WorkbenchThreadComposerDraft {
+  attachments: WorkbenchThreadComposerAttachmentDraft[];
+  text: string;
+  updatedAt: number;
+}
+
+export interface WorkbenchQuestionnaireDraft {
+  customValues: Record<string, string>;
+  selectedValues: Record<string, string>;
+  updatedAt: number;
+}
+
 export interface WorkbenchStoredThreadUnreadState {
   lastObservedStatus: string;
   lastObservedUpdatedAt: number;

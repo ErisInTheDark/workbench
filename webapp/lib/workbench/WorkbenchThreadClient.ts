@@ -66,6 +66,7 @@ const THREAD_LIST_REFRESH_TASK_ID = "thread-list-refresh";
 const CODEX_NOTIFICATION_THREAD_REFRESH_DELAY_MS = 350;
 const CODEX_NOTIFICATION_THREAD_LIST_REFRESH_DELAY_MS = 750;
 const DEFAULT_TURN_REASONING_SUMMARY = "detailed" as const;
+const DRAFT_THREAD_ID = "new";
 const DRAFT_THREAD_ID_PREFIX = "draft:";
 const EMPTY_ROLLOUT_ERROR_FRAGMENT = "rollout at";
 const EMPTY_ROLLOUT_ERROR_SUFFIX = "is empty";
@@ -585,15 +586,11 @@ function WorkbenchThreadClient(
   }
 
   function createDraftThreadId() {
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-      return `${DRAFT_THREAD_ID_PREFIX}${crypto.randomUUID()}`;
-    }
-
-    return `${DRAFT_THREAD_ID_PREFIX}${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    return DRAFT_THREAD_ID;
   }
 
   function isDraftThreadId(threadId: string) {
-    return threadId.startsWith(DRAFT_THREAD_ID_PREFIX);
+    return threadId === DRAFT_THREAD_ID || threadId.startsWith(DRAFT_THREAD_ID_PREFIX);
   }
 
   function createDraftThread(harness: WorkbenchHarness, threadId = createDraftThreadId()): ThreadPayload {

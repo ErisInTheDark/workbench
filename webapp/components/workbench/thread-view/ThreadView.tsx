@@ -11,8 +11,10 @@ import type {
   WorkbenchHarness,
   WorkbenchModelOption,
   WorkbenchPendingUserInputRequest,
+  WorkbenchQuestionnaireDraft,
   WorkbenchSendThreadMessageOptions,
   WorkbenchSubmitUserInputRequestOptions,
+  WorkbenchThreadComposerDraft,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
 import {
@@ -72,12 +74,18 @@ export default memo(function ThreadView ({
   onSendMessage,
   onStopThread,
   onSubmitUserInputRequest,
+  onThreadComposerDraftChange,
+  onThreadComposerDraftClear,
+  onThreadQuestionnaireDraftChange,
+  onThreadQuestionnaireDraftClear,
   onThreadAgentChange,
   onThreadReasoningEffortChange,
   onThreadModelChange,
   projectId,
   projectRootPath,
   rateLimits,
+  threadComposerDraftsByThreadId,
+  threadQuestionnaireDraftsByKey,
   thread,
 }: {
   fontSizeRem: number;
@@ -97,12 +105,18 @@ export default memo(function ThreadView ({
     response: WorkbenchUserInputResponse,
     options?: WorkbenchSubmitUserInputRequestOptions,
   ) => Promise<void>;
+  onThreadComposerDraftChange: (threadId: string, draft: WorkbenchThreadComposerDraft) => void;
+  onThreadComposerDraftClear: (threadId: string) => void;
+  onThreadQuestionnaireDraftChange: (threadId: string, requestKey: string, draft: WorkbenchQuestionnaireDraft) => void;
+  onThreadQuestionnaireDraftClear: (threadId: string, requestKey: string) => void;
   onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
   onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
   onThreadModelChange: (threadId: string, model: string) => void;
   projectId: string;
   projectRootPath: string;
   rateLimits: RateLimitSnapshot | null;
+  threadComposerDraftsByThreadId: Record<string, WorkbenchThreadComposerDraft | undefined>;
+  threadQuestionnaireDraftsByKey: Record<string, WorkbenchQuestionnaireDraft | undefined>;
   thread: ThreadPayload;
 }) {
   const [activeThreadId, setActiveThreadId] = useState(thread.id);
@@ -527,6 +541,10 @@ export default memo(function ThreadView ({
             onStopThread={() => {
               void handleStopThread();
             }}
+            onThreadComposerDraftChange={onThreadComposerDraftChange}
+            onThreadComposerDraftClear={onThreadComposerDraftClear}
+            onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
+            onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
             onSubmitUserInputRequest={onSubmitUserInputRequest}
             onThreadAgentChange={handleThreadAgentChange}
             onThreadReasoningEffortChange={handleThreadReasoningEffortChange}
@@ -534,6 +552,10 @@ export default memo(function ThreadView ({
             pendingUserInputRequest={activePendingUserInputRequest}
             projectId={projectId}
             rateLimits={rateLimits}
+            threadComposerDraft={threadComposerDraftsByThreadId[activeThread.id] ?? null}
+            threadQuestionnaireDraft={activePendingUserInputRequest
+              ? threadQuestionnaireDraftsByKey[`${activeThread.id}:${activePendingUserInputRequest.requestKey}`] ?? null
+              : null}
             thread={activeThread}
           />
           <ThreadRateLimits

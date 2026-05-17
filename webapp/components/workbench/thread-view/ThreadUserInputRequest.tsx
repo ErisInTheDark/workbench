@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import type {
   WorkbenchUserInputQuestion,
+  WorkbenchQuestionnaireDraft,
   WorkbenchUserInputRequest,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
@@ -64,7 +65,11 @@ function deriveAnsweredValues (
 
 type InteractiveThreadUserInputRequestProps = {
   actions?: ReactNode;
+  draft: WorkbenchQuestionnaireDraft | null;
+  leadingActions?: ReactNode;
   mode: "live";
+  onDraftChange: (draft: WorkbenchQuestionnaireDraft) => void;
+  onDraftClear: () => void;
   onSubmit: (response: WorkbenchUserInputResponse) => Promise<void>;
   request: WorkbenchUserInputRequest;
 };
@@ -81,27 +86,65 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
   const isHistoryMode = mode === "history";
   const historyProps = mode === "history" ? props : null;
   const interactiveProps = mode === "history" ? null : props;
-  const [selectedValues, setSelectedValues] = useState<Record<string, string>>({});
-  const [customValues, setCustomValues] = useState<Record<string, string>>({});
+  const interactiveDraft = interactiveProps?.draft ?? null;
+  const onInteractiveDraftChange = interactiveProps?.onDraftChange;
+  const onInteractiveDraftClear = interactiveProps?.onDraftClear;
+  const [selectedValues, setSelectedValues] = useState<Record<string, string>>(interactiveDraft?.selectedValues ?? {});
+  const [customValues, setCustomValues] = useState<Record<string, string>>(interactiveDraft?.customValues ?? {});
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const hydratedDraftKeyRef = useRef("");
 
   useEffect(() => {
     if (isHistoryMode) {
       return;
     }
 
-    setSelectedValues({});
-    setCustomValues({});
+    const draftKey = `${request.id}:${interactiveDraft?.updatedAt ?? 0}`;
+    if (hydratedDraftKeyRef.current !== draftKey) {
+      hydratedDraftKeyRef.current = draftKey;
+      const hasLocalDraft = Object.values(selectedValues).some((value) => value.trim())
+        || Object.values(customValues).some((value) => value.trim());
+      if (!hasLocalDraft || interactiveDraft) {
+        setSelectedValues(interactiveDraft?.selectedValues ?? {});
+        setCustomValues(interactiveDraft?.customValues ?? {});
+      }
+    }
     setError("");
     setIsSubmitting(false);
-  }, [isHistoryMode, request.id]);
+  }, [customValues, interactiveDraft, isHistoryMode, request.id, selectedValues]);
+
+  useEffect(() => {
+    if (isHistoryMode) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      const hasSelectedValues = Object.values(selectedValues).some((value) => value.trim());
+      const hasCustomValues = Object.values(customValues).some((value) => value.trim());
+      if (!hasSelectedValues && !hasCustomValues) {
+        onInteractiveDraftClear?.();
+        return;
+      }
+
+      onInteractiveDraftChange?.({
+        customValues,
+        selectedValues,
+        updatedAt: Date.now(),
+      });
+    }, 260);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [customValues, isHistoryMode, onInteractiveDraftChange, onInteractiveDraftClear, selectedValues]);
 
   const resetAnswers = () => {
     setSelectedValues({});
     setCustomValues({});
     setError("");
     setIsSubmitting(false);
+    onInteractiveDraftClear?.();
   };
 
   const handleSubmit = async () => {
@@ -126,6 +169,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
     setError("");
     try {
       await interactiveProps?.onSubmit({ answers });
+      onInteractiveDraftClear?.();
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : "Unable to submit that response.");
       setIsSubmitting(false);
@@ -330,24 +374,29 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
       </div>
 
       {!isHistoryMode ? (
-        <div className="flex flex-wrap items-center justify-end gap-3">
-          <button
-            type="button"
-            onClick={() => {
-              void handleSubmit();
-            }}
-            disabled={isSubmitting}
-            className={joinClasses(
-              "justify-self-end",
-              "rounded-full px-4 py-2 text-[0.84em] font-medium transition",
-              "bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] text-[var(--bg)]",
-              "hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]",
-              isSubmitting && "cursor-not-allowed opacity-45",
-            )}
-          >
-            {isSubmitting ? "Submitting..." : request.submitLabel}
-          </button>
-          {interactiveProps?.actions}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            {interactiveProps?.leadingActions}
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                void handleSubmit();
+              }}
+              disabled={isSubmitting}
+              className={joinClasses(
+                "justify-self-end",
+                "rounded-full px-4 py-2 text-[0.84em] font-medium transition",
+                "bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] text-[var(--bg)]",
+                "hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]",
+                isSubmitting && "cursor-not-allowed opacity-45",
+              )}
+            >
+              {isSubmitting ? "Submitting..." : request.submitLabel}
+            </button>
+            {interactiveProps?.actions}
+          </div>
         </div>
       ) : null}
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
 
 import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
@@ -10,7 +10,9 @@ import type {
   WorkbenchAgentOption,
   WorkbenchModelOption,
   WorkbenchPendingUserInputRequest,
+  WorkbenchQuestionnaireDraft,
   WorkbenchSubmitUserInputRequestOptions,
+  WorkbenchThreadComposerDraft,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
 import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
@@ -72,13 +74,16 @@ function buildPendingUserInputRequestSubmissionOptions (
   }
 
   const visibleItems = turn.items.filter((item) => !isSyntheticQuestionnaireHistoryItem(item));
-  const insertAfterItemIndex = insertAfterItemId
+  const requestedAnchorIndex = insertAfterItemId
     ? visibleItems.findIndex((item) => item.id === insertAfterItemId)
     : -1;
+  const fallbackAnchorIndex = visibleItems.length - 1;
+  const resolvedAnchorIndex = requestedAnchorIndex >= 0 ? requestedAnchorIndex : fallbackAnchorIndex;
+  const resolvedAnchorItem = resolvedAnchorIndex >= 0 ? visibleItems[resolvedAnchorIndex] : null;
 
   return {
-    insertAfterItemId,
-    insertAfterItemIndex: insertAfterItemIndex >= 0 ? insertAfterItemIndex : null,
+    insertAfterItemId: resolvedAnchorItem?.id ?? insertAfterItemId,
+    insertAfterItemIndex: resolvedAnchorIndex >= 0 ? resolvedAnchorIndex : null,
     turnId: pendingUserInputRequest.turnId ?? turn.id,
   };
 }
@@ -87,6 +92,10 @@ export default function ThreadComposer ({
   onListModels,
   onSendMessage,
   onStopThread,
+  onThreadComposerDraftChange,
+  onThreadComposerDraftClear,
+  onThreadQuestionnaireDraftChange,
+  onThreadQuestionnaireDraftClear,
   onSubmitUserInputRequest,
   onThreadAgentChange,
   onThreadReasoningEffortChange,
@@ -94,11 +103,17 @@ export default function ThreadComposer ({
   pendingUserInputRequest,
   projectId,
   rateLimits,
+  threadQuestionnaireDraft,
+  threadComposerDraft,
   thread,
 }: {
   onListModels: (harness: ThreadPayload["harness"]) => Promise<WorkbenchModelOption[]>;
   onSendMessage: (threadId: string, input: UserInput[]) => Promise<void>;
   onStopThread: (threadId: string) => Promise<void> | void;
+  onThreadComposerDraftChange: (threadId: string, draft: WorkbenchThreadComposerDraft) => void;
+  onThreadComposerDraftClear: (threadId: string) => void;
+  onThreadQuestionnaireDraftChange: (threadId: string, requestKey: string, draft: WorkbenchQuestionnaireDraft) => void;
+  onThreadQuestionnaireDraftClear: (threadId: string, requestKey: string) => void;
   onSubmitUserInputRequest: (
     threadId: string,
     response: WorkbenchUserInputResponse,
@@ -110,10 +125,12 @@ export default function ThreadComposer ({
   pendingUserInputRequest: WorkbenchPendingUserInputRequest | null;
   projectId: string;
   rateLimits: RateLimitSnapshot | null;
+  threadQuestionnaireDraft: WorkbenchQuestionnaireDraft | null;
+  threadComposerDraft: WorkbenchThreadComposerDraft | null;
   thread: ThreadPayload;
 }) {
-  const [value, setValue] = useState("");
-  const [attachments, setAttachments] = useState<ComposerImageAttachment[]>([]);
+  const [value, setValue] = useState(threadComposerDraft?.text ?? "");
+  const [attachments, setAttachments] = useState<ComposerImageAttachment[]>(threadComposerDraft?.attachments ?? []);
   const [availableModels, setAvailableModels] = useState<WorkbenchModelOption[]>([]);
   const [availableAgents, setAvailableAgents] = useState<WorkbenchAgentOption[]>([]);
   const [deprioritizedModelIdsByHarness, setDeprioritizedModelIdsByHarness] = useState<Record<ThreadPayload["harness"], string[]>>({
@@ -127,20 +144,25 @@ export default function ThreadComposer ({
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [agentsError, setAgentsError] = useState("");
   const [modelsError, setModelsError] = useState("");
+  const [isQuestionnaireVisible, setIsQuestionnaireVisible] = useState(Boolean(pendingUserInputRequest));
   const [pendingAttachmentReads, setPendingAttachmentReads] = useState(0);
   const [isSending, setIsSending] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const hydratedDraftKeyRef = useRef("");
   const trimmedValue = value.trim();
   const isAttaching = pendingAttachmentReads > 0;
   const hasPendingUserInputRequest = pendingUserInputRequest !== null;
+  const questionnaireRequestKey = pendingUserInputRequest?.requestKey ?? "";
+  const showQuestionnairePanel = hasPendingUserInputRequest && isQuestionnaireVisible;
   const isCopilotAuthRequired = thread.harness === "copilot" && rateLimits?.limitId === "copilot:auth";
   const isThreadStateBroken = hasStaleApprovalState(thread);
   const isApprovalBlocked = isCurrentTurnWaitingOnApproval(thread);
   const isActiveThread = getCurrentInProgressTurn(thread) !== null;
-  const isInputDisabled = hasPendingUserInputRequest || isSending || isAttaching || isThreadStateBroken || isCopilotAuthRequired;
+  const isInputDisabled = isSending || isAttaching || isThreadStateBroken || isCopilotAuthRequired;
+  const isSendDisabled = hasPendingUserInputRequest || isInputDisabled;
   const isStopDisabled = !isActiveThread || isStopping;
   const helperText = hasPendingUserInputRequest
-    ? "Answer the question card below to continue this thread."
+    ? "Answer the question card before sending."
     : isAttaching
       ? "Attaching pasted image..."
     : isCopilotAuthRequired
@@ -178,9 +200,48 @@ export default function ThreadComposer ({
   const deprioritizedModelIds = deprioritizedModelIdsByHarness[thread.harness] ?? [];
 
   useEffect(() => {
+    const draftKey = `${thread.id}:${threadComposerDraft?.updatedAt ?? 0}`;
+    if (hydratedDraftKeyRef.current === draftKey) {
+      return;
+    }
+
+    hydratedDraftKeyRef.current = draftKey;
+    if ((value.trim() || attachments.length) && threadComposerDraft) {
+      return;
+    }
+
+    setValue(threadComposerDraft?.text ?? "");
+    setAttachments(threadComposerDraft?.attachments ?? []);
+  }, [attachments.length, thread.id, threadComposerDraft, value]);
+
+  useEffect(() => {
+    if (hasPendingUserInputRequest) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      if (!value.trim() && attachments.length === 0) {
+        onThreadComposerDraftClear(thread.id);
+        return;
+      }
+
+      onThreadComposerDraftChange(thread.id, {
+        attachments,
+        text: value,
+        updatedAt: Date.now(),
+      });
+    }, 260);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [attachments, hasPendingUserInputRequest, onThreadComposerDraftChange, onThreadComposerDraftClear, thread.id, value]);
+
+  useEffect(() => {
     setActivePicker(null);
     setAgentsError("");
     setModelsError("");
+    setIsQuestionnaireVisible(Boolean(pendingUserInputRequest));
   }, [pendingUserInputRequest?.request.id, thread.id]);
 
   useEffect(() => {
@@ -265,7 +326,7 @@ export default function ThreadComposer ({
   }, [isModelPickerOpen, onListModels, thread.harness]);
 
   const submit = async () => {
-    if ((!trimmedValue && !attachments.length) || isInputDisabled || isPickerOpen) {
+    if ((!trimmedValue && !attachments.length) || isSendDisabled || isPickerOpen) {
       return;
     }
 
@@ -290,6 +351,7 @@ export default function ThreadComposer ({
       await onSendMessage(thread.id, input);
       setValue("");
       setAttachments([]);
+      onThreadComposerDraftClear(thread.id);
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : "Unable to send that message.");
     } finally {
@@ -387,13 +449,42 @@ export default function ThreadComposer ({
       </svg>
     </button>
   ) : null;
+  const questionnaireToggleButton = hasPendingUserInputRequest ? (
+    <button
+      type="button"
+      aria-label={showQuestionnairePanel ? "Show composer" : "Show questionnaire"}
+      title={showQuestionnairePanel ? "Show composer" : "Show questionnaire"}
+      className={joinClasses(
+        "inline-flex size-10 items-center justify-center rounded-full border transition",
+        showQuestionnairePanel
+          ? "border-[color-mix(in_srgb,var(--text)_18%,transparent)] bg-[color-mix(in_srgb,var(--text)_8%,transparent)] text-text"
+          : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-muted hover:text-text",
+      )}
+      onClick={() => {
+        setIsQuestionnaireVisible((current) => !current);
+      }}
+    >
+      <svg viewBox="0 0 20 20" className="h-5 w-5" aria-hidden="true">
+        <path d="M5.25 5.5h9.5M5.25 10h9.5M5.25 14.5h5.2" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" />
+        <path d="M3.2 5.5h.1M3.2 10h.1M3.2 14.5h.1" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="2.4" />
+      </svg>
+    </button>
+  ) : null;
 
   return (
     <form className="mt-6 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4" onSubmit={handleSubmit}>
       <div className="rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-3">
-        {hasPendingUserInputRequest ? (
+        {showQuestionnairePanel && pendingUserInputRequest ? (
           <ThreadUserInputRequest
             actions={stopButton}
+            draft={threadQuestionnaireDraft}
+            leadingActions={questionnaireToggleButton}
+            onDraftChange={(draft) => {
+              onThreadQuestionnaireDraftChange(thread.id, questionnaireRequestKey, draft);
+            }}
+            onDraftClear={() => {
+              onThreadQuestionnaireDraftClear(thread.id, questionnaireRequestKey);
+            }}
             request={pendingUserInputRequest.request}
             mode="live"
             onSubmit={async (response) => {
@@ -405,7 +496,7 @@ export default function ThreadComposer ({
             }}
           />
         ) : null}
-        {!hasPendingUserInputRequest && attachments.length ? (
+        {!showQuestionnairePanel && attachments.length ? (
           <div className="mb-3 flex flex-wrap gap-3 px-1">
             {attachments.map((attachment, index) => (
               <div key={attachment.id} className="relative h-24 w-24">
@@ -438,7 +529,7 @@ export default function ThreadComposer ({
             ))}
           </div>
         ) : null}
-        <div className="block" hidden={hasPendingUserInputRequest}>
+        <div className="block" hidden={showQuestionnairePanel}>
           <span className="sr-only">Message thread</span>
           <div hidden={isPickerOpen}>
             <PlaintextEditable
@@ -473,7 +564,7 @@ export default function ThreadComposer ({
             />
           </div>
         </div>
-        {!hasPendingUserInputRequest && isModelPickerOpen ? (
+        {!showQuestionnairePanel && isModelPickerOpen ? (
           <ThreadModelPicker
             appliesOnNextTurnOnly={thread.harness === "codex" && isActiveThread}
             deprioritizedModelIds={deprioritizedModelIds}
@@ -504,7 +595,7 @@ export default function ThreadComposer ({
               });
             }}
           />
-        ) : !hasPendingUserInputRequest && isAgentPickerOpen ? (
+        ) : !showQuestionnairePanel && isAgentPickerOpen ? (
           <ThreadAgentPicker
             agents={availableAgents}
             error={agentsError}
@@ -518,19 +609,22 @@ export default function ThreadComposer ({
               setActivePicker(null);
             }}
           />
-        ) : !hasPendingUserInputRequest ? (
+        ) : !showQuestionnairePanel ? (
           <div className={joinClasses(
             "mt-3 flex flex-wrap items-center gap-3",
             helperText ? "justify-between" : "justify-end",
           )}>
-            {helperText ? (
-              <p className={joinClasses(
-                "m-0 text-[0.78em] leading-[1.6]",
-                isThreadStateBroken ? "text-danger" : "text-muted",
-              )}>
-                {helperText}
-              </p>
-            ) : null}
+            <div className="flex items-center gap-2">
+              {questionnaireToggleButton}
+              {helperText ? (
+                <p className={joinClasses(
+                  "m-0 text-[0.78em] leading-[1.6]",
+                  isThreadStateBroken ? "text-danger" : "text-muted",
+                )}>
+                  {helperText}
+                </p>
+              ) : null}
+            </div>
             <div className="flex flex-wrap items-center gap-2">
               <div className="inline-flex items-stretch overflow-hidden rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-[0.78em] font-medium text-text">
                 <button
@@ -574,12 +668,12 @@ export default function ThreadComposer ({
               </div>
               <button
                 type="submit"
-                disabled={(!trimmedValue && !attachments.length) || isInputDisabled}
+                disabled={(!trimmedValue && !attachments.length) || isSendDisabled}
                 className={joinClasses(
                   "rounded-full px-4 py-2 text-[0.84em] font-medium transition",
                   "bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] text-[var(--bg)]",
                   "hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]",
-                  ((!trimmedValue && !attachments.length) || isInputDisabled) && "cursor-not-allowed opacity-45",
+                  ((!trimmedValue && !attachments.length) || isSendDisabled) && "cursor-not-allowed opacity-45",
                 )}
               >
                 {isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : "Send"}

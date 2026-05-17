@@ -9,8 +9,10 @@ import type {
   WorkbenchControls,
   WorkbenchHarness,
   WorkbenchPendingUserInputRequest,
+  WorkbenchQuestionnaireDraft,
   WorkbenchSendThreadMessageOptions,
   WorkbenchSubmitUserInputRequestOptions,
+  WorkbenchThreadComposerDraft,
   WorkbenchUserInputResponse
 } from "../lib/types";
 import { isWorkbenchOpenableFile } from "../lib/workbench/project/tree-utils";
@@ -27,6 +29,14 @@ import {
   MOBILE_MEDIA_QUERY,
   type MobilePane,
 } from "../lib/workbench/state/mobile-pane-url-state";
+import {
+  deletePersistedThreadComposerDraft,
+  deletePersistedThreadQuestionnaireDraft,
+  getPersistedThreadComposerDraftRecords,
+  getPersistedThreadQuestionnaireDraftRecords,
+  putPersistedThreadComposerDraft,
+  putPersistedThreadQuestionnaireDraft,
+} from "../lib/workbench/thread/thread-composer-drafts";
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
 import ThreadView from "./workbench/thread-view/ThreadView";
 import {
@@ -190,6 +200,8 @@ export default function Workbench () {
   const [quickOpenUpdatedAtByPath, setQuickOpenUpdatedAtByPath] = useState<Record<string, string>>({});
   const [reloadError, setReloadError] = useState("");
   const [reloadMessage, setReloadMessage] = useState("");
+  const [threadComposerDraftsByThreadId, setThreadComposerDraftsByThreadId] = useState<Record<string, WorkbenchThreadComposerDraft | undefined>>({});
+  const [threadQuestionnaireDraftsByKey, setThreadQuestionnaireDraftsByKey] = useState<Record<string, WorkbenchQuestionnaireDraft | undefined>>({});
   const hasObservedInitialSelectionRef = useRef(false);
   const editorRef = useRef<HTMLDivElement>(null);
   const customCaretRef = useRef<HTMLDivElement>(null);
@@ -366,6 +378,43 @@ export default function Workbench () {
       cleanup();
     };
   }, []);
+
+  useEffect(() => {
+    if (!explorer.currentProjectId) {
+      setThreadComposerDraftsByThreadId({});
+      setThreadQuestionnaireDraftsByKey({});
+      return;
+    }
+
+    let cancelled = false;
+    void Promise.all([
+      getPersistedThreadComposerDraftRecords(explorer.currentProjectId),
+      getPersistedThreadQuestionnaireDraftRecords(explorer.currentProjectId),
+    ]).then(([composerRecords, questionnaireRecords]) => {
+      if (cancelled) {
+        return;
+      }
+
+      setThreadComposerDraftsByThreadId(Object.fromEntries(
+        composerRecords.map((record) => [record.threadId, {
+          attachments: record.attachments,
+          text: record.text,
+          updatedAt: record.updatedAt,
+        }]),
+      ));
+      setThreadQuestionnaireDraftsByKey(Object.fromEntries(
+        questionnaireRecords.map((record) => [`${record.threadId}:${record.requestKey}`, {
+          customValues: record.customValues,
+          selectedValues: record.selectedValues,
+          updatedAt: record.updatedAt,
+        }]),
+      ));
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [explorer.currentProjectId]);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
@@ -565,8 +614,83 @@ export default function Workbench () {
       return null;
     }
 
-    return await controls.sendThreadMessage(thread, input, options);
-  }, [controls]);
+    const payload = await controls.sendThreadMessage(thread, input, options);
+    if (payload) {
+      setThreadComposerDraftsByThreadId((current) => {
+        if (!current[thread.id]) {
+          return current;
+        }
+
+        const next = { ...current };
+        delete next[thread.id];
+        return next;
+      });
+      void deletePersistedThreadComposerDraft(explorer.currentProjectId, thread.id);
+    }
+
+    return payload;
+  }, [controls, explorer.currentProjectId]);
+
+  const handleThreadComposerDraftChange = useCallback((threadId: string, draft: WorkbenchThreadComposerDraft) => {
+    if (!explorer.currentProjectId) {
+      return;
+    }
+
+    setThreadComposerDraftsByThreadId((current) => ({
+      ...current,
+      [threadId]: draft,
+    }));
+    void putPersistedThreadComposerDraft(explorer.currentProjectId, threadId, draft);
+  }, [explorer.currentProjectId]);
+
+  const handleThreadComposerDraftClear = useCallback((threadId: string) => {
+    setThreadComposerDraftsByThreadId((current) => {
+      if (!current[threadId]) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[threadId];
+      return next;
+    });
+
+    if (explorer.currentProjectId) {
+      void deletePersistedThreadComposerDraft(explorer.currentProjectId, threadId);
+    }
+  }, [explorer.currentProjectId]);
+
+  const handleThreadQuestionnaireDraftChange = useCallback((threadId: string, requestKey: string, draft: WorkbenchQuestionnaireDraft) => {
+    if (!explorer.currentProjectId || !requestKey) {
+      return;
+    }
+
+    setThreadQuestionnaireDraftsByKey((current) => ({
+      ...current,
+      [`${threadId}:${requestKey}`]: draft,
+    }));
+    void putPersistedThreadQuestionnaireDraft(explorer.currentProjectId, threadId, requestKey, draft);
+  }, [explorer.currentProjectId]);
+
+  const handleThreadQuestionnaireDraftClear = useCallback((threadId: string, requestKey: string) => {
+    if (!requestKey) {
+      return;
+    }
+
+    setThreadQuestionnaireDraftsByKey((current) => {
+      const key = `${threadId}:${requestKey}`;
+      if (!current[key]) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+
+    if (explorer.currentProjectId) {
+      void deletePersistedThreadQuestionnaireDraft(explorer.currentProjectId, threadId, requestKey);
+    }
+  }, [explorer.currentProjectId]);
 
   const stopThread = useCallback(async (thread: ThreadPayload) => {
     if (!controls) {
@@ -1198,12 +1322,18 @@ export default function Workbench () {
                   onSendMessage={sendThreadMessage}
                   onStopThread={stopThread}
                   onSubmitUserInputRequest={submitUserInputRequest}
+                  onThreadComposerDraftChange={handleThreadComposerDraftChange}
+                  onThreadComposerDraftClear={handleThreadComposerDraftClear}
+                  onThreadQuestionnaireDraftChange={handleThreadQuestionnaireDraftChange}
+                  onThreadQuestionnaireDraftClear={handleThreadQuestionnaireDraftClear}
                   onThreadAgentChange={setThreadAgent}
                   onThreadReasoningEffortChange={setThreadReasoningEffort}
                   onThreadModelChange={setThreadModel}
                   projectId={explorer.currentProjectId}
                   projectRootPath={explorer.rootPath}
                   rateLimits={rateLimits}
+                  threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
+                  threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
                 />
               ) : (
                 <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
