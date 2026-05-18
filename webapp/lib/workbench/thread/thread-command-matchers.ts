@@ -293,6 +293,12 @@ function formatCommandBlockSummaryText(
       : `built TypeScript ${summaryStats.typescriptBuilds} times`);
   }
 
+  if (summaryStats.webRequests) {
+    segments.push(summaryStats.webRequests === 1
+      ? "made a web request"
+      : `made ${summaryStats.webRequests} web requests`);
+  }
+
   if (countKnownCommandSummaryStats(summaryStats) && summaryStats.otherCommands) {
     segments.push(`ran ${summaryStats.otherCommands} other ${pluralize(summaryStats.otherCommands, "command")}`);
   }

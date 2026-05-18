@@ -65,6 +65,7 @@ export interface ThreadCommandSummaryStats {
   searchedFiles: number;
   typescriptBuilds: number;
   typescriptValidations: number;
+  webRequests: number;
 }
 
 export interface ThreadCommandSummaryDisplay {

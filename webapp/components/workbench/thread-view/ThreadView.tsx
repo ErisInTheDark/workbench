@@ -653,13 +653,15 @@ export default memo(function ThreadView ({
                   />
                 ) : null
               ) : (
-                <div className="explorer-scrollbar h-[22rem] overflow-y-auto border-y border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-2">
-                  <ThreadThreadContent
-                    onOpenFile={onOpenFile}
-                    projectRootPath={projectRootPath}
-                    relatedThreadsById={subthreadsById}
-                    thread={liveSubagentThread}
-                  />
+                <div className="relative before:absolute before:inset-0 before:-z-1 before:block before:bg-linear-to-r before:from-transparent before:from-0% before:via-[#0008] before:via-[10%_90%] before:to-transparent before:to-100% before:content-['']">
+                  <div className="explorer-scrollbar my-[calc(22rem*-0.1*0.5)] h-[22rem] scale-[0.9] overflow-y-auto border-y border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-2">
+                    <ThreadThreadContent
+                      onOpenFile={onOpenFile}
+                      projectRootPath={projectRootPath}
+                      relatedThreadsById={subthreadsById}
+                      thread={liveSubagentThread}
+                    />
+                  </div>
                 </div>
               )}
             </ThreadDisclosure>

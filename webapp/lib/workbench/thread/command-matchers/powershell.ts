@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - POWERSHELL_COMMAND_MATCHERS: PowerShell stage matchers for reads, listings, filters, and searches. Keywords: thread, command, matcher, powershell.
+ * - POWERSHELL_COMMAND_MATCHERS: PowerShell stage matchers for reads, listings, filters, searches, and web requests. Keywords: thread, command, matcher, powershell, web, request.
  */
 
 import {
@@ -68,6 +68,42 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       return CommandMatcher.Result({
         hide: true,
         summaryParts: [],
+      });
+    },
+  }),
+  CommandMatcher({
+    id: "powershell.web-request",
+    match: (context) => {
+      const parsedStage = parsePowerShellStage(context.stage.text);
+      if (!matchesPowerShellCommand(parsedStage, ["invoke-restmethod", "irm", "invoke-webrequest", "iwr", "curl", "wget"])) {
+        return null;
+      }
+
+      const requestUrl = readPowerShellNamedValue(parsedStage, ["-Uri", "-Url"])
+        ?? getPowerShellPositionalArguments(parsedStage)[0];
+      const urlDisplay = formatWebRequestUrl(requestUrl);
+      if (!urlDisplay) {
+        return null;
+      }
+
+      const method = (readPowerShellNamedValue(parsedStage, ["-Method"]) ?? "GET").toUpperCase();
+      const bodySummary = readPowerShellWebRequestBodySummary(parsedStage, context.unwrappedCommand);
+      const summaryParts = [
+        CommandMatcher.Text(`${method} `),
+        CommandMatcher.Code(urlDisplay),
+      ];
+
+      if (bodySummary) {
+        summaryParts.push(CommandMatcher.Text(" with JSON "));
+        summaryParts.push(CommandMatcher.Code(bodySummary));
+      }
+
+      return CommandMatcher.Result({
+        remainingCommand: shouldHidePowerShellWebRequestRemainder(context.stage.remainingCommand)
+          ? null
+          : context.stage.remainingCommand,
+        summaryParts,
+        summaryStats: { webRequests: 1 },
       });
     },
   }),
@@ -883,6 +919,88 @@ function shouldHidePowerShellForEachFormattingStage(parsedStage: ParsedPowerShel
   return !/\b(?:Write-|Out-|Format-|Get-|Set-|Select-|Where-|ForEach-|Sort-|Measure-)[A-Za-z]+\b/i.test(normalizedScript);
 }
 
+function formatWebRequestUrl(value: string | null) {
+  const url = String(value ?? "").trim();
+  if (!url || url.startsWith("$")) {
+    return null;
+  }
+
+  const protocolMatch = url.match(/^[A-Za-z][A-Za-z0-9+.-]*:\/\/(.+)$/);
+  if (protocolMatch?.[1]) {
+    return protocolMatch[1].replace(/\/$/, "") || null;
+  }
+
+  return url.replace(/\/$/, "") || null;
+}
+
+function readPowerShellWebRequestBodySummary(parsedStage: ParsedPowerShellStage, commandText: string) {
+  const bodyValue = readPowerShellNamedValue(parsedStage, ["-Body"]);
+  if (!bodyValue) {
+    return null;
+  }
+
+  const resolvedBody = bodyValue.startsWith("$")
+    ? readPowerShellAssignedJsonBody(commandText, bodyValue.slice(1))
+    : bodyValue;
+  if (!resolvedBody) {
+    return null;
+  }
+
+  return formatJsonBodyForDisplay(resolvedBody);
+}
+
+function readPowerShellAssignedJsonBody(commandText: string, variableName: string) {
+  const variablePattern = escapeRegExp(variableName);
+  const assignmentMatch = unwrapPowerShellStageText(commandText).match(
+    new RegExp(`\\$${variablePattern}\\s*=\\s*(['"])([\\s\\S]*?)\\1`, "i"),
+  );
+
+  return assignmentMatch?.[2] ?? null;
+}
+
+function formatJsonBodyForDisplay(value: string) {
+  const normalizedValue = value
+    .replace(/\\"/g, "\"")
+    .replace(/\\\\/g, "\\")
+    .trim();
+  if (!normalizedValue) {
+    return null;
+  }
+
+  try {
+    return JSON.stringify(JSON.parse(normalizedValue));
+  } catch {
+    if (/^[\[{]/.test(normalizedValue)) {
+      return normalizedValue.replace(/\s+/g, " ");
+    }
+  }
+
+  return null;
+}
+
+function shouldHidePowerShellWebRequestRemainder(remainingCommand: string | null) {
+  let nextCommand = remainingCommand;
+
+  while (nextCommand) {
+    const nextStage = consumeNextCommandStage(nextCommand, "powershell");
+    if (!nextStage) {
+      return false;
+    }
+
+    const parsedStage = parsePowerShellStage(nextStage.text);
+    if (
+      !matchesPowerShellCommand(parsedStage, ["convertto-json", "out-null"])
+      && !isPowerShellTrivialAssignmentStage(nextStage.text)
+    ) {
+      return false;
+    }
+
+    nextCommand = nextStage.remainingCommand;
+  }
+
+  return true;
+}
+
 function readPowerShellForEachNumberedLineRange(parsedStage: ParsedPowerShellStage) {
   const normalizedScript = getNormalizedPowerShellScriptBlock(parsedStage);
   if (!normalizedScript) {
@@ -1177,6 +1295,21 @@ function getPowerShellValueFlags(commandName: string | null) {
     case "select-string":
     case "sls":
       return new Set(["-exclude", "-include", "-literalpath", "-path", "-pattern"]);
+    case "invoke-restmethod":
+    case "irm":
+    case "invoke-webrequest":
+    case "iwr":
+    case "curl":
+    case "wget":
+      return new Set([
+        "-body",
+        "-contenttype",
+        "-headers",
+        "-method",
+        "-timeoutsec",
+        "-uri",
+        "-url",
+      ]);
     case "rg":
     case "rg.exe":
       return new Set([

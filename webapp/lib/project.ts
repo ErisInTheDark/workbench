@@ -258,7 +258,11 @@ export async function resolveProjectRoot(projectId?: string | null) {
   }
 
   const projects = await discoverProjects();
-  const project = projects.find((candidate) => candidate.id === requestedProjectId);
+  let project = projects.find((candidate) => candidate.id === requestedProjectId);
+  if (!project) {
+    const refreshedProjects = await discoverProjects({ refresh: true });
+    project = refreshedProjects.find((candidate) => candidate.id === requestedProjectId);
+  }
   if (!project) {
     throw new Error("Unknown project.");
   }

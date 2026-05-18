@@ -72,6 +72,7 @@ export function createEmptyCommandSummaryStats(): ThreadCommandSummaryStats {
     searchedFiles: 0,
     typescriptBuilds: 0,
     typescriptValidations: 0,
+    webRequests: 0,
   };
 }
 
@@ -102,7 +103,8 @@ export function countKnownCommandSummaryStats(stats: ThreadCommandSummaryStats) 
     + stats.gitDiffChecks
     + stats.gitStatusChecks
     + stats.typescriptBuilds
-    + stats.typescriptValidations;
+    + stats.typescriptValidations
+    + stats.webRequests;
 }
 
 export function summarizeDisplayParts(parts: ThreadCommandDisplayPart[]) {
