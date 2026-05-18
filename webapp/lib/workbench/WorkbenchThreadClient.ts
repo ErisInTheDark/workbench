@@ -594,6 +594,23 @@ function WorkbenchThreadClient(
       && areCurrentTurnsEquivalent(left, right);
   }
 
+  function mergeStableThreadMetadata(thread: ThreadPayload | null) {
+    if (!thread || state.currentThread?.id !== thread.id || state.currentThread.harness !== thread.harness) {
+      return thread;
+    }
+
+    const currentThread = state.currentThread;
+    return {
+      ...thread,
+      agentNickname: thread.agentNickname ?? currentThread.agentNickname,
+      agentPath: thread.agentPath ?? currentThread.agentPath,
+      agentRole: thread.agentRole ?? currentThread.agentRole,
+      model: thread.model ?? currentThread.model,
+      name: thread.name ?? currentThread.name,
+      reasoningEffort: thread.reasoningEffort ?? currentThread.reasoningEffort,
+    };
+  }
+
   function setRateLimits(rateLimits: RateLimitSnapshot | null) {
     if (state.rateLimits === rateLimits) {
       return;
@@ -719,9 +736,10 @@ function WorkbenchThreadClient(
       pruneStreamingDuplicates?: boolean;
     } = {},
   ) {
+    const stableThread = mergeStableThreadMetadata(thread);
     const nextThread = pruneStreamingDuplicates
-      ? pruneThreadStreamingDuplicates(applyOptimisticUserMessageOverlay(applyPersistedQuestionnaireHistory(thread)))
-      : applyOptimisticUserMessageOverlay(applyPersistedQuestionnaireHistory(thread));
+      ? pruneThreadStreamingDuplicates(applyOptimisticUserMessageOverlay(applyPersistedQuestionnaireHistory(stableThread)))
+      : applyOptimisticUserMessageOverlay(applyPersistedQuestionnaireHistory(stableThread));
     if (areThreadPayloadsEquivalent(state.currentThread, nextThread)) {
       return;
     }
@@ -774,6 +792,12 @@ function WorkbenchThreadClient(
     return updateCurrentThread((thread) => ({
       ...thread,
       ...fields,
+      agentNickname: fields.agentNickname ?? thread.agentNickname,
+      agentPath: fields.agentPath ?? thread.agentPath,
+      agentRole: fields.agentRole ?? thread.agentRole,
+      model: fields.model ?? thread.model,
+      name: fields.name ?? thread.name,
+      reasoningEffort: fields.reasoningEffort ?? thread.reasoningEffort,
     }));
   }
 
@@ -1682,13 +1706,14 @@ function WorkbenchThreadClient(
       return false;
     }
 
-    if (getCurrentInProgressTurn(currentThread)) {
-      return false;
-    }
-
     const threadSummary = state.threads.find((thread) => thread.id === threadId);
     if (!threadSummary) {
       return false;
+    }
+
+    if (getCurrentInProgressTurn(currentThread)) {
+      return currentThread.harness === threadSummary.harness
+        && currentThread.status === threadSummary.status;
     }
 
     return currentThread.updatedAt === threadSummary.updatedAt

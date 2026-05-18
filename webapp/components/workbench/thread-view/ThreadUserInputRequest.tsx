@@ -94,6 +94,11 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const hydratedDraftKeyRef = useRef("");
+  const onInteractiveDraftChangeRef = useRef(onInteractiveDraftChange);
+  const onInteractiveDraftClearRef = useRef(onInteractiveDraftClear);
+
+  onInteractiveDraftChangeRef.current = onInteractiveDraftChange;
+  onInteractiveDraftClearRef.current = onInteractiveDraftClear;
 
   useEffect(() => {
     if (isHistoryMode) {
@@ -123,11 +128,11 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
       const hasSelectedValues = Object.values(selectedValues).some((value) => value.trim());
       const hasCustomValues = Object.values(customValues).some((value) => value.trim());
       if (!hasSelectedValues && !hasCustomValues) {
-        onInteractiveDraftClear?.();
+        onInteractiveDraftClearRef.current?.();
         return;
       }
 
-      onInteractiveDraftChange?.({
+      onInteractiveDraftChangeRef.current?.({
         customValues,
         selectedValues,
         updatedAt: Date.now(),
@@ -137,14 +142,14 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [customValues, isHistoryMode, onInteractiveDraftChange, onInteractiveDraftClear, selectedValues]);
+  }, [customValues, isHistoryMode, selectedValues]);
 
   const resetAnswers = () => {
     setSelectedValues({});
     setCustomValues({});
     setError("");
     setIsSubmitting(false);
-    onInteractiveDraftClear?.();
+    onInteractiveDraftClearRef.current?.();
   };
 
   const handleSubmit = async () => {
@@ -169,7 +174,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
     setError("");
     try {
       await interactiveProps?.onSubmit({ answers });
-      onInteractiveDraftClear?.();
+      onInteractiveDraftClearRef.current?.();
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : "Unable to submit that response.");
       setIsSubmitting(false);

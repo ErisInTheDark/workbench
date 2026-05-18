@@ -215,6 +215,7 @@ export default memo(function ThreadView ({
   const [seenItemCountsByThreadId, setSeenItemCountsByThreadId] = useState<Record<string, number>>({});
   const threadViewRef = useRef<HTMLDivElement>(null);
   const bottomSentinelRef = useRef<HTMLDivElement>(null);
+  const hasMountedActiveThreadScrollRef = useRef(false);
   const subagentThreadIds = useMemo(() => getCollabAgentThreadIds(thread.turns), [thread.turns]);
   const activeThread = activeThreadId === thread.id
     ? thread
@@ -360,6 +361,11 @@ export default memo(function ThreadView ({
   }, [loadSubthread, pollingThreadIds]);
 
   useLayoutEffect(() => {
+    if (!hasMountedActiveThreadScrollRef.current) {
+      hasMountedActiveThreadScrollRef.current = true;
+      return;
+    }
+
     if (hasExpandedSelectionWithin(threadViewRef.current)) {
       return;
     }

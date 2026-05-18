@@ -35,7 +35,7 @@ import type WorkbenchEventBus from "./WorkbenchEventBus";
 export type { DraftBuffer, default as FileSessionState } from "./state/FileSessionState";
 
 const DRAFT_DATABASE_NAME = "workbench";
-const DRAFT_DATABASE_VERSION = 3;
+const DRAFT_DATABASE_VERSION = 4;
 const DRAFT_STORE_NAME = "drafts";
 const THREAD_COMPOSER_DRAFT_STORE_NAME = "threadComposerDrafts";
 const THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME = "threadQuestionnaireDrafts";

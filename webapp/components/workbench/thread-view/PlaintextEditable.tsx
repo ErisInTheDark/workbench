@@ -2,6 +2,46 @@
 
 import { useLayoutEffect, useRef, type ClipboardEvent, type CompositionEvent, type KeyboardEvent } from "react";
 
+function normalizePlaintextEditableValue(value: string) {
+  return value.replace(/\r\n/g, "\n");
+}
+
+function getEditableCaretOffset(element: HTMLElement) {
+  const selection = window.getSelection?.();
+  if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) {
+    return null;
+  }
+
+  const range = selection.getRangeAt(0);
+  if (!element.contains(range.startContainer)) {
+    return null;
+  }
+
+  const prefixRange = range.cloneRange();
+  prefixRange.selectNodeContents(element);
+  prefixRange.setEnd(range.startContainer, range.startOffset);
+  return prefixRange.toString().length;
+}
+
+function restoreEditableCaretOffset(element: HTMLElement, offset: number | null) {
+  if (offset === null) {
+    return;
+  }
+
+  const selection = window.getSelection?.();
+  if (!selection) {
+    return;
+  }
+
+  const textNode = element.firstChild ?? element;
+  const textLength = textNode.textContent?.length ?? 0;
+  const range = document.createRange();
+  range.setStart(textNode, Math.min(offset, textLength));
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
 export default function PlaintextEditable ({
   ariaLabel,
   className,
@@ -34,12 +74,20 @@ export default function PlaintextEditable ({
   const elementRef = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
-    if (!elementRef.current) {
+    const element = elementRef.current;
+    if (!element) {
       return;
     }
 
-    if (elementRef.current.textContent !== value) {
-      elementRef.current.textContent = value;
+    const currentValue = normalizePlaintextEditableValue(element.innerText);
+    if (currentValue === value) {
+      return;
+    }
+
+    if (element.textContent !== value) {
+      const caretOffset = document.activeElement === element ? getEditableCaretOffset(element) : null;
+      element.textContent = value;
+      restoreEditableCaretOffset(element, caretOffset);
     }
   }, [value]);
 
@@ -62,7 +110,7 @@ export default function PlaintextEditable ({
       onCompositionEnd={onCompositionEnd}
       onCompositionStart={onCompositionStart}
       onInput={(event) => {
-        onChange?.(event.currentTarget.innerText.replace(/\r\n/g, "\n"));
+        onChange?.(normalizePlaintextEditableValue(event.currentTarget.innerText));
       }}
       onKeyDown={onKeyDown}
       onPaste={onPaste}

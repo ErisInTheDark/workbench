@@ -234,6 +234,7 @@ export default function Workbench () {
   const mobileShellHeaderDirectionRef = useRef<"up" | "down" | null>(null);
   const mobileShellHeaderDirectionTravelRef = useRef(0);
   const mobileShellHeaderVisibleRef = useRef(true);
+  const retainedThreadRef = useRef<ThreadPayload | null>(null);
 
   function getWorkbenchDomSurfaces (): WorkbenchDomSurfaces | null {
     if (
@@ -614,6 +615,9 @@ export default function Workbench () {
     syncCurrentSelectionToUrl({ threadId });
     return true;
   }, [isMobile, requestedSelection.filePath, requestedSelection.threadId]);
+  const openFileFromThreadView = useCallback(async (path: string) => {
+    void await openFileFromExplorer(path);
+  }, [openFileFromExplorer]);
 
   const readThread = useCallback(async (threadId: string, nextHarness?: WorkbenchHarness) => {
     if (!controls) {
@@ -837,7 +841,16 @@ export default function Workbench () {
   const showThreadView = Boolean(requestedSelection.threadId);
   const showFileView = !showThreadView && Boolean(requestedSelection.filePath);
   const showEmptyState = !showThreadView && !showFileView;
-  const isThreadViewReady = showThreadView && currentThread?.id === requestedSelection.threadId;
+  if (currentThread) {
+    retainedThreadRef.current = currentThread;
+  }
+  const retainedThread = retainedThreadRef.current;
+  const threadForThreadView = showThreadView && currentThread?.id === requestedSelection.threadId
+    ? currentThread
+    : showThreadView && retainedThread?.id === requestedSelection.threadId
+      ? retainedThread
+      : null;
+  const isThreadViewReady = showThreadView && Boolean(threadForThreadView);
   const isFileViewReady = showFileView && !currentThread && explorer.currentPath === requestedSelection.filePath;
   const isSelectionPending = !selectionError && ((showThreadView && !isThreadViewReady) || (showFileView && !isFileViewReady));
   const activeThreadId = showThreadView ? requestedSelection.threadId : "";
@@ -1338,16 +1351,14 @@ export default function Workbench () {
 
           <section className="relative md:min-h-0 md:flex-1" aria-busy={isSelectionPending}>
             {showThreadView ? (
-              isThreadViewReady && currentThread ? (
+              isThreadViewReady && threadForThreadView ? (
                 <ThreadView
-                  thread={currentThread}
+                  thread={threadForThreadView}
                   fontSizeRem={explorer.fontSize}
                   livePendingUserInputRequestsByThreadId={harnessUserInputRequestsByThreadId}
                   onDraftHarnessChange={handleHarnessChange}
                   onListModels={listThreadModels}
-                  onOpenFile={async (path) => {
-                    void await openFileFromExplorer(path);
-                  }}
+                  onOpenFile={openFileFromThreadView}
                   onReadThread={readThread}
                   onSendMessage={sendThreadMessage}
                   onStopThread={stopThread}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
 
 import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
@@ -149,6 +149,11 @@ export default function ThreadComposer ({
   const [isSending, setIsSending] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const hydratedDraftKeyRef = useRef("");
+  const onThreadComposerDraftChangeRef = useRef(onThreadComposerDraftChange);
+  const onThreadComposerDraftClearRef = useRef(onThreadComposerDraftClear);
+
+  onThreadComposerDraftChangeRef.current = onThreadComposerDraftChange;
+  onThreadComposerDraftClearRef.current = onThreadComposerDraftClear;
   const trimmedValue = value.trim();
   const isAttaching = pendingAttachmentReads > 0;
   const hasPendingUserInputRequest = pendingUserInputRequest !== null;
@@ -198,6 +203,12 @@ export default function ThreadComposer ({
     ?? thread.agentPath?.split("/").at(-1)?.replace(/\.agent\.md$/i, "")
     ?? "Agent";
   const deprioritizedModelIds = deprioritizedModelIdsByHarness[thread.harness] ?? [];
+  const handleQuestionnaireDraftChange = useCallback((draft: WorkbenchQuestionnaireDraft) => {
+    onThreadQuestionnaireDraftChange(thread.id, questionnaireRequestKey, draft);
+  }, [onThreadQuestionnaireDraftChange, questionnaireRequestKey, thread.id]);
+  const handleQuestionnaireDraftClear = useCallback(() => {
+    onThreadQuestionnaireDraftClear(thread.id, questionnaireRequestKey);
+  }, [onThreadQuestionnaireDraftClear, questionnaireRequestKey, thread.id]);
 
   useEffect(() => {
     const draftKey = `${thread.id}:${threadComposerDraft?.updatedAt ?? 0}`;
@@ -221,11 +232,11 @@ export default function ThreadComposer ({
 
     const timeoutId = window.setTimeout(() => {
       if (!value.trim() && attachments.length === 0) {
-        onThreadComposerDraftClear(thread.id);
+        onThreadComposerDraftClearRef.current(thread.id);
         return;
       }
 
-      onThreadComposerDraftChange(thread.id, {
+      onThreadComposerDraftChangeRef.current(thread.id, {
         attachments,
         text: value,
         updatedAt: Date.now(),
@@ -235,7 +246,7 @@ export default function ThreadComposer ({
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [attachments, hasPendingUserInputRequest, onThreadComposerDraftChange, onThreadComposerDraftClear, thread.id, value]);
+  }, [attachments, hasPendingUserInputRequest, thread.id, value]);
 
   useEffect(() => {
     setActivePicker(null);
@@ -351,10 +362,10 @@ export default function ThreadComposer ({
     setError("");
     setValue("");
     setAttachments([]);
-    onThreadComposerDraftClear(thread.id);
+    onThreadComposerDraftClearRef.current(thread.id);
     try {
       await onSendMessage(thread.id, input);
-      onThreadComposerDraftClear(thread.id);
+      onThreadComposerDraftClearRef.current(thread.id);
     } catch (submissionError) {
       setValue(submittedValue);
       setAttachments(submittedAttachments);
@@ -484,12 +495,8 @@ export default function ThreadComposer ({
             actions={stopButton}
             draft={threadQuestionnaireDraft}
             leadingActions={questionnaireToggleButton}
-            onDraftChange={(draft) => {
-              onThreadQuestionnaireDraftChange(thread.id, questionnaireRequestKey, draft);
-            }}
-            onDraftClear={() => {
-              onThreadQuestionnaireDraftClear(thread.id, questionnaireRequestKey);
-            }}
+            onDraftChange={handleQuestionnaireDraftChange}
+            onDraftClear={handleQuestionnaireDraftClear}
             request={pendingUserInputRequest.request}
             mode="live"
             onSubmit={async (response) => {

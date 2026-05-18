@@ -154,11 +154,12 @@ export async function WorkbenchClient(
     const lastSnapshot = previousThreadSnapshot;
     previousThreadSnapshot = snapshot;
 
-    if (!areThreadPayloadsEquivalent(lastSnapshot.currentThread, snapshot.currentThread)) {
-      applyCurrentThread(snapshot.currentThread);
+    if (
+      !areThreadPayloadsEquivalent(lastSnapshot.currentThread, snapshot.currentThread)
+      || lastSnapshot.currentThreadId !== snapshot.currentThreadId
+    ) {
+      applyCurrentThreadSelection(snapshot.currentThread);
     }
-
-    applyCurrentThreadId(snapshot.currentThreadId);
 
     if (lastSnapshot.rateLimits !== snapshot.rateLimits) {
       emitRateLimitsChange();
@@ -638,22 +639,15 @@ export async function WorkbenchClient(
     workbenchBindings.onPendingUserInputRequestsChange?.(threadClient.getSnapshot().pendingUserInputRequestsByThreadId);
   }
 
-  function applyCurrentThread(thread: ThreadPayload | null) {
-    if (areThreadPayloadsEquivalent(sessionState.currentThread, thread)) {
+  function applyCurrentThreadSelection(thread: ThreadPayload | null) {
+    if (
+      areThreadPayloadsEquivalent(sessionState.currentThread, thread)
+      && sessionState.currentThreadId === (thread?.id ?? "")
+    ) {
       return false;
     }
 
-    sessionState.currentThread = thread;
-    return true;
-  }
-
-  function applyCurrentThreadId(threadId: string) {
-    if (sessionState.currentThreadId === threadId) {
-      return false;
-    }
-
-    sessionState.currentThreadId = threadId;
-    return true;
+    return sessionState.setCurrentThreadSelection(thread);
   }
 
   function areCurrentTurnsEquivalent(left: ThreadPayload | null, right: ThreadPayload | null) {
@@ -734,8 +728,7 @@ export async function WorkbenchClient(
   }
 
   function applyThreadPayloadToCurrentView(payload: ThreadPayload, statusMessage?: string) {
-    applyCurrentThread(payload);
-    applyCurrentThreadId(payload.id);
+    applyCurrentThreadSelection(payload);
     fileClient.selectThread(payload.id);
     editorClient.showThreadPlaceholder(payload.name || payload.preview || payload.id);
     editorClient.clearPendingInlineFormats();
@@ -945,8 +938,7 @@ export async function WorkbenchClient(
         return;
       } else {
         threadClient.clearThreadSelection();
-        applyCurrentThread(null);
-        applyCurrentThreadId("");
+        applyCurrentThreadSelection(null);
         emitExplorerStateChange();
       }
     }

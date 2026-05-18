@@ -3,6 +3,7 @@
  * - SessionStateSnapshot: readonly projection of the active file or thread selection. Keywords: workbench, session, selection, snapshot.
  * - SessionStateListener: subscriber signature for selection changes. Keywords: workbench, session, selection, subscribe.
  * - SessionState: mutable selection state owner for the active workbench target. Keywords: workbench, session, selection, state.
+ * - setCurrentThreadSelection: atomically update selected thread payload and id. Keywords: workbench, session, thread, atomic.
  * - default SessionState: create the selection state owner used by the coordinator and file workflow. Keywords: workbench, session, selection, create, default export.
  */
 
@@ -18,6 +19,7 @@ export type SessionStateListener = (snapshot: SessionStateSnapshot) => void;
 
 interface SessionState extends SessionStateSnapshot {
   getSnapshot: () => SessionStateSnapshot;
+  setCurrentThreadSelection: (thread: ThreadPayload | null) => boolean;
   subscribe: (listener: SessionStateListener) => () => void;
 }
 
@@ -92,6 +94,17 @@ function SessionState(initial: Partial<SessionStateSnapshot> = {}): SessionState
       emit();
     },
     getSnapshot,
+    setCurrentThreadSelection(thread: ThreadPayload | null) {
+      const threadId = thread?.id ?? "";
+      if (state.currentThread === thread && state.currentThreadId === threadId) {
+        return false;
+      }
+
+      state.currentThread = thread;
+      state.currentThreadId = threadId;
+      emit();
+      return true;
+    },
     subscribe,
   };
 }

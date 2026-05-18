@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - DRAFT_DATABASE_VERSION: shared IndexedDB schema version for workbench draft stores. Keywords: IndexedDB, schema, migration.
  * - THREAD_COMPOSER_DRAFT_RETENTION_MS: one-month browser retention for unsent thread composer drafts. Keywords: thread, composer, draft, IndexedDB, retention.
  * - createThreadComposerDraftRecordKey: create the project and thread scoped draft key. Keywords: thread, draft, key, project.
  * - createThreadQuestionnaireDraftRecordKey: create the project, thread, and request scoped questionnaire draft key. Keywords: questionnaire, draft, key.
@@ -14,7 +15,7 @@
 import type { WorkbenchQuestionnaireDraft, WorkbenchThreadComposerDraft } from "../../types";
 
 const DRAFT_DATABASE_NAME = "workbench";
-export const DRAFT_DATABASE_VERSION = 3;
+export const DRAFT_DATABASE_VERSION = 4;
 const FILE_DRAFT_STORE_NAME = "drafts";
 const THREAD_COMPOSER_DRAFT_STORE_NAME = "threadComposerDrafts";
 const THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME = "threadQuestionnaireDrafts";
@@ -105,6 +106,10 @@ function openDraftDatabase() {
 
 const draftDatabasePromise = openDraftDatabase();
 let draftPersistenceQueue = Promise.resolve();
+
+function hasObjectStore(database: IDBDatabase, storeName: string) {
+  return database.objectStoreNames.contains(storeName);
+}
 
 export function createThreadComposerDraftRecordKey(projectId: string, threadId: string) {
   return `${projectId}/@/thread/${threadId}`;
@@ -203,7 +208,7 @@ function enqueueDraftPersistence(operation: () => Promise<void>) {
 
 export async function getPersistedThreadComposerDraftRecords(projectId: string) {
   const database = await draftDatabasePromise;
-  if (!database) {
+  if (!database || !hasObjectStore(database, THREAD_COMPOSER_DRAFT_STORE_NAME)) {
     return [] as PersistedThreadComposerDraftRecord[];
   }
 
@@ -222,7 +227,7 @@ export async function getPersistedThreadComposerDraftRecords(projectId: string) 
   if (expiredRecords.length) {
     void enqueueDraftPersistence(async () => {
       const writeDatabase = await draftDatabasePromise;
-      if (!writeDatabase) {
+      if (!writeDatabase || !hasObjectStore(writeDatabase, THREAD_COMPOSER_DRAFT_STORE_NAME)) {
         return;
       }
 
@@ -240,7 +245,7 @@ export async function getPersistedThreadComposerDraftRecords(projectId: string) 
 
 export async function getPersistedThreadQuestionnaireDraftRecords(projectId: string) {
   const database = await draftDatabasePromise;
-  if (!database) {
+  if (!database || !hasObjectStore(database, THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME)) {
     return [] as PersistedThreadQuestionnaireDraftRecord[];
   }
 
@@ -259,7 +264,7 @@ export async function getPersistedThreadQuestionnaireDraftRecords(projectId: str
   if (expiredRecords.length) {
     void enqueueDraftPersistence(async () => {
       const writeDatabase = await draftDatabasePromise;
-      if (!writeDatabase) {
+      if (!writeDatabase || !hasObjectStore(writeDatabase, THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME)) {
         return;
       }
 
@@ -278,7 +283,7 @@ export async function getPersistedThreadQuestionnaireDraftRecords(projectId: str
 export function putPersistedThreadComposerDraft(projectId: string, threadId: string, draft: WorkbenchThreadComposerDraft) {
   return enqueueDraftPersistence(async () => {
     const database = await draftDatabasePromise;
-    if (!database) {
+    if (!database || !hasObjectStore(database, THREAD_COMPOSER_DRAFT_STORE_NAME)) {
       return;
     }
 
@@ -299,7 +304,7 @@ export function putPersistedThreadComposerDraft(projectId: string, threadId: str
 export function deletePersistedThreadComposerDraft(projectId: string, threadId: string) {
   return enqueueDraftPersistence(async () => {
     const database = await draftDatabasePromise;
-    if (!database) {
+    if (!database || !hasObjectStore(database, THREAD_COMPOSER_DRAFT_STORE_NAME)) {
       return;
     }
 
@@ -318,7 +323,7 @@ export function putPersistedThreadQuestionnaireDraft(
 ) {
   return enqueueDraftPersistence(async () => {
     const database = await draftDatabasePromise;
-    if (!database) {
+    if (!database || !hasObjectStore(database, THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME)) {
       return;
     }
 
@@ -340,7 +345,7 @@ export function putPersistedThreadQuestionnaireDraft(
 export function deletePersistedThreadQuestionnaireDraft(projectId: string, threadId: string, requestKey: string) {
   return enqueueDraftPersistence(async () => {
     const database = await draftDatabasePromise;
-    if (!database) {
+    if (!database || !hasObjectStore(database, THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME)) {
       return;
     }
 
