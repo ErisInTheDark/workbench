@@ -118,6 +118,7 @@ interface WorkbenchThreadClient {
   listModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
   openThread: (threadId: string, options?: { harness?: WorkbenchHarness; source?: "open" | "reload" }) => Promise<void>;
   readThread: (threadId: string, harness?: WorkbenchHarness) => Promise<ThreadPayload | null>;
+  selectThreadPayload: (thread: ThreadPayload) => void;
   reconcileCurrentThreadFromRead: (threadId: string, harness: WorkbenchHarness) => Promise<void>;
   readCurrentThread: (threadId: string, harness: WorkbenchHarness) => Promise<ThreadPayload | null>;
   refreshPendingUserInputRequests: () => Promise<void>;
@@ -657,6 +658,11 @@ function WorkbenchThreadClient(
     return true;
   }
 
+  function markThreadPayloadSeen(thread: ThreadPayload) {
+    rememberLatestTurnStartedAt(thread);
+    return updateStoredThreadUnreadState(thread, countThreadItems(thread.turns), { markSeen: true });
+  }
+
   function scheduleActiveTurnRateLimitRefresh() {
     const harness = state.currentThread?.harness;
     if (!harness || !getCurrentInProgressTurn(state.currentThread)) {
@@ -740,13 +746,13 @@ function WorkbenchThreadClient(
     const nextThread = pruneStreamingDuplicates
       ? pruneThreadStreamingDuplicates(applyOptimisticUserMessageOverlay(applyPersistedQuestionnaireHistory(stableThread)))
       : applyOptimisticUserMessageOverlay(applyPersistedQuestionnaireHistory(stableThread));
+    const unreadStateChanged = nextThread ? markThreadPayloadSeen(nextThread) : false;
     if (areThreadPayloadsEquivalent(state.currentThread, nextThread)) {
+      if (unreadStateChanged) {
+        state.threads = state.threads.map(buildThreadSummaryWithUnreadBadge);
+        emit();
+      }
       return;
-    }
-
-    if (nextThread) {
-      rememberLatestTurnStartedAt(nextThread);
-      updateStoredThreadUnreadState(nextThread, countThreadItems(nextThread.turns), { markSeen: true });
     }
 
     const previousThread = state.currentThread;
@@ -2193,6 +2199,10 @@ function WorkbenchThreadClient(
     setCurrentThread(payload);
   }
 
+  function selectThreadPayload(thread: ThreadPayload) {
+    setCurrentThread(thread);
+  }
+
   async function reconcileCurrentThreadFromRead(threadId: string, harness: WorkbenchHarness) {
     const payload = await readCurrentThread(threadId, harness);
     if (!payload || state.currentThreadId !== threadId) {
@@ -2683,6 +2693,7 @@ function WorkbenchThreadClient(
     listModels,
     openThread,
     readThread,
+    selectThreadPayload,
     reconcileCurrentThreadFromRead,
     readCurrentThread,
     refreshPendingUserInputRequests,

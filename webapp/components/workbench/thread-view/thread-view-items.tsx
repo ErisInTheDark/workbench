@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - ThreadTurnDetails: render one thread turn with grouped commands and typed item sections. Keywords: workbench, thread, turn.
+ * - ThreadThreadContent: render all turns for one thread payload without composer chrome. Keywords: workbench, thread, subagent, preview.
  * - Local helpers: summarize inputs, group command and reasoning sequences, and render the supported thread item variants. Keywords: thread items, command sequence, reasoning, rendering.
  */
 "use client";
@@ -51,6 +52,11 @@ type ThreadRenderableBlock =
 
 type RelatedThreadsById = Record<string, ThreadPayload | undefined>;
 
+interface HiddenThreadItemIds {
+  collabAgentToolCallId?: string | null;
+  reasoningItemId?: string | null;
+}
+
 function getFinalAgentMessageId (turn: Turn) {
   let fallbackId: string | null = null;
 
@@ -93,7 +99,7 @@ function getWorkedSummary (turn: Turn) {
     );
 }
 
-function buildRenderableBlocks (items: ThreadItem[], hiddenReasoningItemId: string | null = null): ThreadRenderableBlock[] {
+function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThreadItemIds = {}): ThreadRenderableBlock[] {
   const blocks: ThreadRenderableBlock[] = [];
   let pendingCommands: CommandItem[] = [];
   let pendingFileChanges: FileChangeItem[] = [];
@@ -152,7 +158,7 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenReasoningItemId: stri
     }
 
     if (item.type === "reasoning") {
-      if (item.id === hiddenReasoningItemId || !hasReasoningSteps(item)) {
+      if (item.id === hiddenItemIds.reasoningItemId || !hasReasoningSteps(item)) {
         continue;
       }
 
@@ -166,6 +172,13 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenReasoningItemId: stri
       flushPendingCommands();
       flushPendingReasoning();
       pendingFileChanges.push(item);
+      continue;
+    }
+
+    if (item.type === "collabAgentToolCall" && item.id === hiddenItemIds.collabAgentToolCallId) {
+      flushPendingCommands();
+      flushPendingReasoning();
+      flushPendingFileChanges();
       continue;
     }
 
@@ -872,19 +885,24 @@ function ThreadRenderableBlockView ({
 }
 
 function ThreadTurnDetailsComponent ({
+  hiddenCollabAgentToolCallItemId = null,
   hiddenReasoningItemId = null,
   onOpenFile,
   projectRootPath,
   relatedThreadsById = {},
   turn,
 }: {
+  hiddenCollabAgentToolCallItemId?: string | null;
   hiddenReasoningItemId?: string | null;
   onOpenFile?: (path: string) => Promise<void>;
   projectRootPath?: string;
   relatedThreadsById?: RelatedThreadsById;
   turn: Turn;
 }) {
-  const blocks = buildRenderableBlocks(turn.items, hiddenReasoningItemId);
+  const blocks = buildRenderableBlocks(turn.items, {
+    collabAgentToolCallId: hiddenCollabAgentToolCallItemId,
+    reasoningItemId: hiddenReasoningItemId,
+  });
   const finalAgentMessageId = getFinalAgentMessageId(turn);
   const isCompleted = turn.status === "completed";
   const primaryUserBlock = isCompleted
@@ -959,6 +977,7 @@ function areThreadTurnDetailsPropsEqual (
   right: Readonly<Parameters<typeof ThreadTurnDetailsComponent>[0]>,
 ) {
   return left.turn === right.turn
+    && left.hiddenCollabAgentToolCallItemId === right.hiddenCollabAgentToolCallItemId
     && left.hiddenReasoningItemId === right.hiddenReasoningItemId
     && left.onOpenFile === right.onOpenFile
     && left.projectRootPath === right.projectRootPath
@@ -966,3 +985,53 @@ function areThreadTurnDetailsPropsEqual (
 }
 
 export const ThreadTurnDetails = memo(ThreadTurnDetailsComponent, areThreadTurnDetailsPropsEqual);
+
+export function ThreadThreadContent ({
+  emptyMessage = "No subagent activity was captured yet.",
+  hiddenCollabAgentToolCallItemId = null,
+  hiddenReasoningItemId = null,
+  onOpenFile,
+  projectRootPath,
+  relatedThreadsById = {},
+  thread,
+}: {
+  emptyMessage?: string;
+  hiddenCollabAgentToolCallItemId?: string | null;
+  hiddenReasoningItemId?: string | null;
+  onOpenFile?: (path: string) => Promise<void>;
+  projectRootPath?: string;
+  relatedThreadsById?: RelatedThreadsById;
+  thread: ThreadPayload | null | undefined;
+}) {
+  if (!thread) {
+    return (
+      <p className="m-0 text-[0.92em] leading-[1.6] text-muted">
+        Loading subagent thread...
+      </p>
+    );
+  }
+
+  if (!thread.turns.length) {
+    return (
+      <p className="m-0 text-[0.92em] leading-[1.6] text-muted">
+        {emptyMessage}
+      </p>
+    );
+  }
+
+  return (
+    <>
+      {thread.turns.map((turn) => (
+        <ThreadTurnDetails
+          key={turn.id}
+          hiddenCollabAgentToolCallItemId={hiddenCollabAgentToolCallItemId}
+          hiddenReasoningItemId={hiddenReasoningItemId}
+          onOpenFile={onOpenFile}
+          projectRootPath={projectRootPath}
+          relatedThreadsById={relatedThreadsById}
+          turn={turn}
+        />
+      ))}
+    </>
+  );
+}

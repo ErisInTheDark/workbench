@@ -753,6 +753,13 @@ export async function WorkbenchClient(
       return true;
     }
 
+    if (isRouteDrivenOpen && threadClient.isDraftThreadId(threadId)) {
+      const draftThread = threadClient.createThread(harness ?? readStoredHarness(), threadId);
+      applyThreadPayloadToCurrentView(draftThread);
+      emitExplorerStateChange();
+      return true;
+    }
+
     if (sessionState.currentPath) {
       fileClient.syncCurrentDraftBuffer();
     }
@@ -771,6 +778,9 @@ export async function WorkbenchClient(
       return false;
     }
 
+    if (isRouteDrivenOpen) {
+      threadClient.selectThreadPayload(payload);
+    }
     applyThreadPayloadToCurrentView(payload, `Read thread ${new Date(payload.updatedAt * 1000).toLocaleString()}`);
     if (syncUrl) {
       syncCurrentSelectionToUrl({ threadId: payload.id });
@@ -848,16 +858,16 @@ export async function WorkbenchClient(
   async function openRequestedSelectionFromUrl() {
     const requestedThreadId = getRequestedThreadIdFromUrl();
     if (requestedThreadId) {
-      if (threadClient.hasThread(requestedThreadId)) {
-        await openThread(requestedThreadId, { syncUrl: false });
-        return sessionState.currentThreadId === requestedThreadId;
-      }
-
       if (threadClient.isDraftThreadId(requestedThreadId)) {
         const draftThread = threadClient.createThread(readStoredHarness(), requestedThreadId);
         applyThreadPayloadToCurrentView(draftThread);
         emitExplorerStateChange();
         return true;
+      }
+
+      if (threadClient.hasThread(requestedThreadId)) {
+        await openThread(requestedThreadId, { syncUrl: false });
+        return sessionState.currentThreadId === requestedThreadId;
       }
 
       return false;

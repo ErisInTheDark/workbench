@@ -3,7 +3,7 @@
  * - DEFAULT_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE: editor font size defaults and bounds. Keywords: editor zoom, font size, clamp.
  * - WORKBENCH_ROUTE_MARKER, CURRENT_FILE_SEARCH_PARAM, CURRENT_THREAD_SEARCH_PARAM: URL markers and legacy search param names for current workbench selection. Keywords: URL state, file, thread, project.
  * - CURRENT_SELECTION_URL_UPDATED_EVENT: browser event fired after the workbench updates project/file/thread selection in the URL. Keywords: URL state, selection event, history.
- * - EXPANDED_DIRECTORIES_STORAGE_KEY, FONT_SIZE_STORAGE_KEY, HARNESS_STORAGE_KEY, HARNESS_MODEL_STORAGE_KEY, HARNESS_MODEL_EFFORT_STORAGE_KEY, HARNESS_AGENT_STORAGE_KEY, THREAD_UNREAD_STATE_STORAGE_KEY: localStorage keys for persisted explorer, editor, harness, model, effort, agent, and thread unread state. Keywords: localStorage, explorer, font size, harness, model, effort, agent, threads.
+ * - EXPANDED_DIRECTORIES_STORAGE_KEY, FONT_SIZE_STORAGE_KEY, HARNESS_STORAGE_KEY, HARNESS_MODEL_STORAGE_KEY, HARNESS_MODEL_EFFORT_STORAGE_KEY, HARNESS_AGENT_STORAGE_KEY, THREAD_UNREAD_STATE_STORAGE_KEY, THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY: localStorage keys for persisted explorer, editor, harness, model, effort, agent, thread unread state, and live activity disclosure state. Keywords: localStorage, explorer, font size, harness, model, effort, agent, threads, live activity.
  * - WorkbenchSelectionSearchParams: normalized project/file/thread URL selection shape. Keywords: URL state, search params, file, thread.
  * - readStoredExpandedDirectories: read and normalize persisted expanded directory paths for a project. Keywords: localStorage, explorer tree, expanded directories, browser state.
  * - persistExpandedDirectories: persist expanded directory paths for a project from a provided collection. Keywords: localStorage, explorer tree, persistence, directories.
@@ -14,6 +14,7 @@
  * - readStoredHarnessModelEffort/persistHarnessModelEffort: persist the preferred reasoning effort for each harness/model pair. Keywords: localStorage, codex, copilot, harness, model, effort.
  * - readStoredHarnessAgent/persistHarnessAgent: persist the preferred agent file for each harness. Keywords: localStorage, codex, copilot, harness, agent.
  * - readStoredThreadUnreadState/persistThreadUnreadState: persist per-thread unread tracking for sidebar badges. Keywords: localStorage, threads, unread, badges.
+ * - readStoredThreadLiveActivityOpen/persistThreadLiveActivityOpen: persist the shared thread live activity disclosure state. Keywords: localStorage, thread, reasoning, subagent, disclosure.
  * - readLocalWorkbenchOrigin: read the local loopback workbench origin for agent bootstrap URLs. Keywords: localhost, loopback, URL, workbench, bootstrap.
  * - readCurrentSelectionFromUrl: read the normalized file/thread selection from the current URL. Keywords: URL state, search params, file selection, thread selection.
  * - getRequestedPathFromUrl/getRequestedProjectIdFromUrl: read the requested project/file path from the current URL. Keywords: URL state, route params, file selection, project.
@@ -37,6 +38,7 @@ export const HARNESS_MODEL_STORAGE_KEY = "workbench:harness-models";
 export const HARNESS_MODEL_EFFORT_STORAGE_KEY = "workbench:harness-model-efforts";
 export const HARNESS_AGENT_STORAGE_KEY = "workbench:harness-agents";
 export const THREAD_UNREAD_STATE_STORAGE_KEY = "workbench:thread-unread-state";
+export const THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY = "workbench:thread-live-activity-open";
 
 export interface WorkbenchSelectionSearchParams {
   projectId: string;
@@ -316,6 +318,22 @@ export function persistThreadUnreadState(stateByKey: Record<string, WorkbenchSto
     window.localStorage.setItem(THREAD_UNREAD_STATE_STORAGE_KEY, JSON.stringify(stateByKey));
   } catch {
     // Ignore storage failures and keep the in-memory unread badge state working.
+  }
+}
+
+export function readStoredThreadLiveActivityOpen() {
+  try {
+    return window.localStorage.getItem(THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+export function persistThreadLiveActivityOpen(isOpen: boolean) {
+  try {
+    window.localStorage.setItem(THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY, isOpen ? "true" : "false");
+  } catch {
+    // Ignore storage failures and keep the in-memory disclosure state working.
   }
 }
 

@@ -19,16 +19,35 @@ import type {
 } from "../../../lib/types";
 import {
   getCollabAgentThreadIds,
+  getPrimaryCollabAgentThreadId,
   getThreadAgentTabLabel,
 } from "../../../lib/workbench/thread/thread-collab-agents";
+import {
+  persistThreadLiveActivityOpen,
+  readStoredThreadLiveActivityOpen,
+} from "../../../lib/workbench/state/browser-state";
 import { ThreadQuestionBadge, ThreadUnreadBadge as ThreadUnreadBadgeView } from "../ThreadStatusBadges";
 import ThreadAgentName from "./ThreadAgentName";
 import ThreadComposer from "./ThreadComposer";
+import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadRateLimits from "./ThreadRateLimits";
-import { ThreadTurnDetails } from "./thread-view-items";
+import { ThreadThreadContent, ThreadTurnDetails } from "./thread-view-items";
 
 const SUBTHREAD_POLL_INTERVAL_MS = 1500;
+
+type LiveThreadActivity =
+  | {
+    body: string | null;
+    hiddenItemId: string | null;
+    kind: "reasoning";
+    title: string;
+  }
+  | {
+    hiddenItemId: string;
+    kind: "subagentWait";
+    receiverThreadId: string;
+  };
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -129,27 +148,45 @@ function getCurrentReasoningStep(turn: ThreadPayload["turns"][number] | null) {
   };
 }
 
-function hasInProgressSubagentWait(turn: ThreadPayload["turns"][number] | null) {
-  return Boolean(turn?.items.some((item) => (
-    (item.type === "collabAgentToolCall" && item.status === "inProgress")
-    || (item.type === "dynamicToolCall" && item.tool === "task" && item.status === "inProgress")
-  )));
-}
-
-function getThinkingLabel({
+function getLiveThreadActivity({
   pendingUserInputRequest,
   turn,
 }: {
   pendingUserInputRequest: WorkbenchPendingUserInputRequest | null;
   turn: ThreadPayload["turns"][number] | null;
-}) {
-  if (!turn || turn.status !== "inProgress" || pendingUserInputRequest || hasInProgressSubagentWait(turn)) {
+}): LiveThreadActivity | null {
+  if (!turn || turn.status !== "inProgress" || pendingUserInputRequest) {
     return null;
   }
 
-  return getCurrentReasoningStep(turn) ?? {
+  const latestItem = turn.items.at(-1);
+  if (latestItem?.type === "collabAgentToolCall" && latestItem.tool === "wait" && latestItem.status === "inProgress") {
+    const receiverThreadId = getPrimaryCollabAgentThreadId(latestItem);
+    if (!receiverThreadId) {
+      return null;
+    }
+
+    return {
+      hiddenItemId: latestItem.id,
+      kind: "subagentWait",
+      receiverThreadId,
+    };
+  }
+
+  const reasoningStep = getCurrentReasoningStep(turn);
+  if (reasoningStep) {
+    return {
+      body: reasoningStep.body,
+      hiddenItemId: reasoningStep.id,
+      kind: "reasoning",
+      title: reasoningStep.title,
+    };
+  }
+
+  return {
     body: null,
-    id: null,
+    hiddenItemId: null,
+    kind: "reasoning",
     title: "Thinking",
   };
 }
@@ -213,6 +250,7 @@ export default memo(function ThreadView ({
   const [subthreadsById, setSubthreadsById] = useState<Record<string, ThreadPayload>>({});
   const [loadingThreadIds, setLoadingThreadIds] = useState<Record<string, true>>({});
   const [seenItemCountsByThreadId, setSeenItemCountsByThreadId] = useState<Record<string, number>>({});
+  const [isLiveActivityOpen, setIsLiveActivityOpen] = useState(readStoredThreadLiveActivityOpen);
   const threadViewRef = useRef<HTMLDivElement>(null);
   const bottomSentinelRef = useRef<HTMLDivElement>(null);
   const hasMountedActiveThreadScrollRef = useRef(false);
@@ -225,10 +263,16 @@ export default memo(function ThreadView ({
     : null;
   const activePendingUserInputRequest = activeHarnessUserInputRequest;
   const currentTurn = activeThread?.turns.at(-1) ?? null;
-  const thinkingStep = getThinkingLabel({
+  const liveActivity = getLiveThreadActivity({
     pendingUserInputRequest: activePendingUserInputRequest,
     turn: currentTurn,
   });
+  const liveSubagentThread = liveActivity?.kind === "subagentWait"
+    ? subthreadsById[liveActivity.receiverThreadId] ?? null
+    : null;
+  const liveActivityHasDisclosureContent = liveActivity?.kind === "reasoning"
+    ? Boolean(liveActivity.body)
+    : Boolean(liveSubagentThread?.turns.length);
 
   const tabDefinitions = useMemo(() => {
     const baseLabelCounts = new Map<string, number>();
@@ -555,11 +599,12 @@ export default memo(function ThreadView ({
           activeThread.turns.length ? activeThread.turns.map((turn) => (
             <ThreadTurnDetails
               key={turn.id}
+              hiddenCollabAgentToolCallItemId={turn.id === currentTurn?.id && liveActivity?.kind === "subagentWait" ? liveActivity.hiddenItemId : null}
               onOpenFile={onOpenFile}
               projectRootPath={projectRootPath}
               relatedThreadsById={subthreadsById}
               turn={turn}
-              hiddenReasoningItemId={turn.id === currentTurn?.id ? thinkingStep?.id ?? null : null}
+              hiddenReasoningItemId={turn.id === currentTurn?.id && liveActivity?.kind === "reasoning" ? liveActivity.hiddenItemId : null}
             />
           )) : (
             !activeThread.isDraft ? (
@@ -574,19 +619,63 @@ export default memo(function ThreadView ({
           </div>
         )}
       </div>
-      {thinkingStep ? (
+      {liveActivity ? (
         <div className="py-4" aria-live="polite">
-          <p className="thread-thinking-text m-0 text-[0.92em] font-medium leading-[1.6]">
-            {thinkingStep.title}
-          </p>
-          {thinkingStep.body ? (
-            <ThreadMarkdown
-              className="mt-1 text-[0.8em] text-muted"
-              markdown={thinkingStep.body}
-              onOpenFile={onOpenFile}
-              projectRootPath={projectRootPath}
-            />
-          ) : null}
+          {liveActivityHasDisclosureContent ? (
+            <ThreadDisclosure
+              contentClassName="mt-2"
+              open={isLiveActivityOpen}
+              onToggle={(event) => {
+                const nextIsOpen = event.currentTarget.open;
+                setIsLiveActivityOpen(nextIsOpen);
+                persistThreadLiveActivityOpen(nextIsOpen);
+              }}
+              summaryClassName="text-[0.92em] font-medium leading-[1.6]"
+              summary={liveActivity.kind === "reasoning" ? (
+                <span className="thread-thinking-text">{liveActivity.title}</span>
+              ) : (
+                <span>
+                  <span className="thread-thinking-text">waiting for</span>{" "}
+                  <ThreadAgentName
+                    fallbackKey={liveActivity.receiverThreadId}
+                    thread={liveSubagentThread}
+                  />
+                </span>
+              )}
+            >
+              {liveActivity.kind === "reasoning" ? (
+                liveActivity.body ? (
+                  <ThreadMarkdown
+                    className="text-[0.8em] text-muted"
+                    markdown={liveActivity.body}
+                    onOpenFile={onOpenFile}
+                    projectRootPath={projectRootPath}
+                  />
+                ) : null
+              ) : (
+                <div className="explorer-scrollbar h-[22rem] overflow-y-auto border-y border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-2">
+                  <ThreadThreadContent
+                    onOpenFile={onOpenFile}
+                    projectRootPath={projectRootPath}
+                    relatedThreadsById={subthreadsById}
+                    thread={liveSubagentThread}
+                  />
+                </div>
+              )}
+            </ThreadDisclosure>
+          ) : liveActivity.kind === "reasoning" ? (
+            <p className="thread-thinking-text m-0 text-[0.92em] font-medium leading-[1.6]">
+              {liveActivity.title}
+            </p>
+          ) : (
+            <p className="m-0 text-[0.92em] font-medium leading-[1.6]">
+              <span className="thread-thinking-text">waiting for</span>{" "}
+              <ThreadAgentName
+                fallbackKey={liveActivity.receiverThreadId}
+                thread={liveSubagentThread}
+              />
+            </p>
+          )}
         </div>
       ) : null}
       {tabDefinitions.length ? (
