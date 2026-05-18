@@ -1,10 +1,7 @@
 /**
  * Exports:
  * - DEFAULT_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE: editor font size defaults and bounds. Keywords: editor zoom, font size, clamp.
- * - WORKBENCH_ROUTE_MARKER, CURRENT_FILE_SEARCH_PARAM, CURRENT_THREAD_SEARCH_PARAM: URL markers and legacy search param names for current workbench selection. Keywords: URL state, file, thread, project.
- * - CURRENT_SELECTION_URL_UPDATED_EVENT: browser event fired after the workbench updates project/file/thread selection in the URL. Keywords: URL state, selection event, history.
  * - EXPANDED_DIRECTORIES_STORAGE_KEY, FONT_SIZE_STORAGE_KEY, HARNESS_STORAGE_KEY, HARNESS_MODEL_STORAGE_KEY, HARNESS_MODEL_EFFORT_STORAGE_KEY, HARNESS_AGENT_STORAGE_KEY, THREAD_UNREAD_STATE_STORAGE_KEY, THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY: localStorage keys for persisted explorer, editor, harness, model, effort, agent, thread unread state, and live activity disclosure state. Keywords: localStorage, explorer, font size, harness, model, effort, agent, threads, live activity.
- * - WorkbenchSelectionSearchParams: normalized project/file/thread URL selection shape. Keywords: URL state, search params, file, thread.
  * - readStoredExpandedDirectories: read and normalize persisted expanded directory paths for a project. Keywords: localStorage, explorer tree, expanded directories, browser state.
  * - persistExpandedDirectories: persist expanded directory paths for a project from a provided collection. Keywords: localStorage, explorer tree, persistence, directories.
  * - readStoredFontSize: read and clamp the persisted editor font size. Keywords: localStorage, editor zoom, font size, clamp.
@@ -16,10 +13,6 @@
  * - readStoredThreadUnreadState/persistThreadUnreadState: persist per-thread unread tracking for sidebar badges. Keywords: localStorage, threads, unread, badges.
  * - readStoredThreadLiveActivityOpen/persistThreadLiveActivityOpen: persist the shared thread live activity disclosure state. Keywords: localStorage, thread, reasoning, subagent, disclosure.
  * - readLocalWorkbenchOrigin: read the local loopback workbench origin for agent bootstrap URLs. Keywords: localhost, loopback, URL, workbench, bootstrap.
- * - readCurrentSelectionFromUrl: read the normalized file/thread selection from the current URL. Keywords: URL state, search params, file selection, thread selection.
- * - getRequestedPathFromUrl/getRequestedProjectIdFromUrl: read the requested project/file path from the current URL. Keywords: URL state, route params, file selection, project.
- * - getRequestedThreadIdFromUrl: read the requested thread id from the current URL. Keywords: URL state, search params, thread selection.
- * - syncCurrentSelectionToUrl: update the current file and thread URL search params without navigation. Keywords: history.replaceState, URL sync, selection state, file, thread.
  */
 
 import type { WorkbenchHarness, WorkbenchStoredThreadUnreadState } from "../../types";
@@ -27,10 +20,6 @@ import type { WorkbenchHarness, WorkbenchStoredThreadUnreadState } from "../../t
 export const DEFAULT_EDITOR_FONT_SIZE = 1.08;
 export const MIN_EDITOR_FONT_SIZE = 0.84;
 export const MAX_EDITOR_FONT_SIZE = 1.72;
-export const CURRENT_FILE_SEARCH_PARAM = "file";
-export const CURRENT_THREAD_SEARCH_PARAM = "thread";
-export const WORKBENCH_ROUTE_MARKER = "@";
-export const CURRENT_SELECTION_URL_UPDATED_EVENT = "workbench:selection-url-updated";
 export const EXPANDED_DIRECTORIES_STORAGE_KEY = "workbench:expanded-directories";
 export const FONT_SIZE_STORAGE_KEY = "workbench:font-size";
 export const HARNESS_STORAGE_KEY = "workbench:harness";
@@ -39,41 +28,6 @@ export const HARNESS_MODEL_EFFORT_STORAGE_KEY = "workbench:harness-model-efforts
 export const HARNESS_AGENT_STORAGE_KEY = "workbench:harness-agents";
 export const THREAD_UNREAD_STATE_STORAGE_KEY = "workbench:thread-unread-state";
 export const THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY = "workbench:thread-live-activity-open";
-
-export interface WorkbenchSelectionSearchParams {
-  projectId: string;
-  filePath: string;
-  threadId: string;
-}
-
-function emptySelection(): WorkbenchSelectionSearchParams {
-  return {
-    filePath: "",
-    projectId: "",
-    threadId: "",
-  };
-}
-
-function encodeWorkbenchRoutePath(path: string) {
-  return path
-    .split("/")
-    .filter((segment) => segment.length > 0)
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
-}
-
-function decodeWorkbenchRouteSegments(segments: string[]) {
-  return segments
-    .map((segment) => {
-      try {
-        return decodeURIComponent(segment);
-      } catch {
-        return segment;
-      }
-    })
-    .filter((segment) => segment.length > 0)
-    .join("/");
-}
 
 function normalizeStoredThreadUnreadState(value: unknown): WorkbenchStoredThreadUnreadState | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -337,33 +291,6 @@ export function persistThreadLiveActivityOpen(isOpen: boolean) {
   }
 }
 
-export function readCurrentSelectionFromUrl(): WorkbenchSelectionSearchParams {
-  try {
-    const url = new URL(window.location.href);
-    const routeSegments = url.pathname.split("/").filter((segment) => segment.length > 0);
-    const markerIndex = routeSegments.indexOf(WORKBENCH_ROUTE_MARKER);
-    if (markerIndex >= 0) {
-      const projectId = decodeWorkbenchRouteSegments(routeSegments.slice(0, markerIndex));
-      const mode = routeSegments[markerIndex + 1] ?? "";
-      const value = decodeWorkbenchRouteSegments(routeSegments.slice(markerIndex + 2));
-      return {
-        filePath: mode === "file" ? value : "",
-        projectId,
-        threadId: mode === "thread" ? value : "",
-      };
-    }
-
-    const projectId = decodeWorkbenchRouteSegments(routeSegments);
-    return {
-      filePath: url.searchParams.get(CURRENT_FILE_SEARCH_PARAM) ?? "",
-      projectId,
-      threadId: url.searchParams.get(CURRENT_THREAD_SEARCH_PARAM) ?? "",
-    };
-  } catch {
-    return emptySelection();
-  }
-}
-
 export function readLocalWorkbenchOrigin() {
   const explicitOrigin = process.env.NEXT_PUBLIC_LOCAL_WORKBENCH_ORIGIN?.trim();
   if (explicitOrigin) {
@@ -376,60 +303,5 @@ export function readLocalWorkbenchOrigin() {
     return `http://127.0.0.1:${port}`;
   } catch {
     return null;
-  }
-}
-
-export function getRequestedPathFromUrl() {
-  return readCurrentSelectionFromUrl().filePath;
-}
-
-export function getRequestedProjectIdFromUrl() {
-  return readCurrentSelectionFromUrl().projectId;
-}
-
-export function getRequestedThreadIdFromUrl() {
-  return readCurrentSelectionFromUrl().threadId;
-}
-
-export function syncCurrentSelectionToUrl({
-  filePath = "",
-  projectId,
-  threadId = "",
-}: {
-  filePath?: string;
-  projectId?: string;
-  threadId?: string;
-}) {
-  try {
-    const url = new URL(window.location.href);
-    const currentUrl = `${url.pathname}${url.search}${url.hash}`;
-    const currentSelection = readCurrentSelectionFromUrl();
-    const nextProjectId = projectId ?? currentSelection.projectId;
-    const projectPath = encodeWorkbenchRoutePath(nextProjectId);
-    const selectionPath = threadId
-      ? `${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/${encodeWorkbenchRoutePath(threadId)}`
-      : filePath
-        ? `${projectPath}/${WORKBENCH_ROUTE_MARKER}/file/${encodeWorkbenchRoutePath(filePath)}`
-        : projectPath;
-
-    url.pathname = `/${selectionPath}`;
-    url.searchParams.delete(CURRENT_FILE_SEARCH_PARAM);
-    url.searchParams.delete(CURRENT_THREAD_SEARCH_PARAM);
-
-    const nextUrl = `${url.pathname}${url.search}${url.hash}`;
-    if (nextUrl === currentUrl) {
-      return;
-    }
-
-    window.history.replaceState(window.history.state, "", nextUrl);
-    window.dispatchEvent(new CustomEvent<WorkbenchSelectionSearchParams>(CURRENT_SELECTION_URL_UPDATED_EVENT, {
-      detail: {
-        filePath,
-        projectId: nextProjectId,
-        threadId,
-      },
-    }));
-  } catch {
-    // Ignore URL update failures and keep the editor working.
   }
 }

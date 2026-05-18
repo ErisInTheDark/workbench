@@ -1,6 +1,7 @@
 import type { RateLimitSnapshot } from "./codex/generated/app-server/v2/RateLimitSnapshot";
 import type { Turn } from "./codex/generated/app-server/v2/Turn";
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
+import type { WorkbenchRoute } from "./workbench/navigation/workbench-route";
 
 export type WorkbenchHarness = "codex" | "copilot";
 export type OrchestratorReloadScope = "next-dev" | "orchestrator-logic";
@@ -217,10 +218,14 @@ export interface ExplorerSnapshot {
   fontSize: number;
 }
 
+export interface WorkbenchRouteLoadResult {
+  error?: string;
+  ok: boolean;
+}
+
 export interface WorkbenchControls {
-  clearSelection: () => void;
-  openFile: (path: string, options?: { syncUrl?: boolean }) => Promise<boolean>;
-  openThread: (threadId: string, options?: { syncUrl?: boolean }) => Promise<boolean>;
+  applyRoute: (route: WorkbenchRoute) => Promise<WorkbenchRouteLoadResult>;
+  createThreadDraft: (harness: WorkbenchHarness) => ThreadPayload;
   readThread: (threadId: string, harness?: WorkbenchHarness) => Promise<ThreadPayload | null>;
   listModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
   sendThreadMessage: (
@@ -237,10 +242,8 @@ export interface WorkbenchControls {
   setCurrentThreadModel: (threadId: string, model: string) => void;
   setCurrentThreadAgent: (threadId: string, agentPath: string | null) => void;
   setCurrentThreadReasoningEffort: (threadId: string, effort: string | null) => void;
-  selectProject: (projectId: string) => Promise<void>;
   toggleDirectory: (path: string) => void;
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
-  createThread: (harness: WorkbenchHarness) => void;
   setDraftThreadHarness: (harness: WorkbenchHarness) => void;
 }
 

@@ -12,8 +12,13 @@ import type {
     WorkbenchBindings,
     WorkbenchControls,
     WorkbenchHarness,
+    WorkbenchRouteLoadResult,
     WorkbenchSendThreadMessageOptions,
 } from "./types";
+import {
+    createProjectRoute,
+    type WorkbenchRoute,
+} from "./workbench/navigation/workbench-route";
 import {
     createListItemDomEditor,
 } from "./workbench/dom/mutation/list-item-dom-edit";
@@ -43,11 +48,7 @@ import {
     formatTimestamp
 } from "./workbench/project/tree-utils";
 import {
-    getRequestedPathFromUrl,
-    getRequestedProjectIdFromUrl,
-    getRequestedThreadIdFromUrl,
     readStoredHarness,
-    syncCurrentSelectionToUrl
 } from "./workbench/state/browser-state";
 import EditHistoryManager from "./workbench/state/EditHistoryManager";
 import FileSessionState from "./workbench/state/FileSessionState";
@@ -114,6 +115,8 @@ export async function WorkbenchClient(
   let explorerStateChangeScheduled = false;
   let isComposing = false;
   let reportStatusMessage = (_message: string) => {};
+  let activeRoute: WorkbenchRoute = createProjectRoute("");
+  let activeRouteGeneration = 0;
   const eventBus = WorkbenchEventBus();
   const projectClient = WorkbenchProjectClient();
   const threadClient = WorkbenchThreadClient({
@@ -121,7 +124,9 @@ export async function WorkbenchClient(
       reportStatusMessage(message);
     },
     onThreadStarted: (thread) => {
-      syncCurrentSelectionToUrl({ threadId: thread.id });
+      if (activeRoute.view !== "thread" || activeRoute.threadId !== thread.id) {
+        return;
+      }
       emitExplorerStateChange();
     },
   });
@@ -133,7 +138,6 @@ export async function WorkbenchClient(
   const fileSessionState = FileSessionState();
   let fileClient: ReturnType<typeof WorkbenchFileClient>;
   let activeProjectId = projectClient.getSnapshot().currentProjectId;
-  let routeDrivenOpenGeneration = 0;
   coordinatorLifecycle.addUnsubscribe(projectClient.subscribe((snapshot) => {
     const previousProjectId = activeProjectId;
     activeProjectId = snapshot.currentProjectId;
@@ -158,7 +162,10 @@ export async function WorkbenchClient(
       !areThreadPayloadsEquivalent(lastSnapshot.currentThread, snapshot.currentThread)
       || lastSnapshot.currentThreadId !== snapshot.currentThreadId
     ) {
-      applyCurrentThreadSelection(snapshot.currentThread);
+      const nextThreadId = snapshot.currentThread?.id ?? snapshot.currentThreadId;
+      if (activeRoute.view === "thread" && nextThreadId === activeRoute.threadId) {
+        applyCurrentThreadSelection(snapshot.currentThread);
+      }
     }
 
     if (lastSnapshot.rateLimits !== snapshot.rateLimits) {
@@ -380,7 +387,7 @@ export async function WorkbenchClient(
         return;
       }
 
-      await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload", syncUrl: false });
+      await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload" });
     },
     handleResetCurrentDraftToSaved: async () => {
       await resetCurrentDraftToSaved();
@@ -515,7 +522,6 @@ export async function WorkbenchClient(
       await projectClient.refreshProject();
     },
     sessionState,
-    syncSelectionToUrl: syncCurrentSelectionToUrl,
     updateHistorySelection: editHistoryManager.updateHistorySelection,
   });
 
@@ -525,23 +531,9 @@ export async function WorkbenchClient(
 
   async function openFile(
     filePath: string,
-    options?: { ignoreDirty?: boolean; source?: "open" | "reload"; syncUrl?: boolean },
+    options?: { ignoreDirty?: boolean; source?: "open" | "reload" },
   ) {
-    const isRouteDrivenOpen = options?.syncUrl === false && options?.source !== "reload";
-    const openGeneration = isRouteDrivenOpen ? ++routeDrivenOpenGeneration : routeDrivenOpenGeneration;
-    if (isRouteDrivenOpen && getRequestedPathFromUrl() !== filePath) {
-      return false;
-    }
-
     const didOpen = await fileClient.openFile(filePath, options);
-    if (
-      isRouteDrivenOpen
-      && (openGeneration !== routeDrivenOpenGeneration || getRequestedPathFromUrl() !== filePath)
-    ) {
-      emitExplorerStateChange();
-      return false;
-    }
-
     return didOpen;
   }
 
@@ -741,19 +733,13 @@ export async function WorkbenchClient(
 
   async function openThread(
     threadId: string,
-    { harness, source = "open", syncUrl = true }: { harness?: WorkbenchHarness; source?: "open" | "reload"; syncUrl?: boolean } = {},
+    { harness, source = "open" }: { harness?: WorkbenchHarness; source?: "open" | "reload" } = {},
   ) {
-    const isRouteDrivenOpen = syncUrl === false && source !== "reload";
-    const openGeneration = isRouteDrivenOpen ? ++routeDrivenOpenGeneration : routeDrivenOpenGeneration;
-    if (isRouteDrivenOpen && getRequestedThreadIdFromUrl() !== threadId) {
-      return false;
-    }
-
     if (source === "open" && threadId === sessionState.currentThreadId) {
       return true;
     }
 
-    if (isRouteDrivenOpen && threadClient.isDraftThreadId(threadId)) {
+    if (threadClient.isDraftThreadId(threadId)) {
       const draftThread = threadClient.createThread(harness ?? readStoredHarness(), threadId);
       applyThreadPayloadToCurrentView(draftThread);
       emitExplorerStateChange();
@@ -764,27 +750,13 @@ export async function WorkbenchClient(
       fileClient.syncCurrentDraftBuffer();
     }
 
-    const payload = isRouteDrivenOpen
-      ? await threadClient.readThread(threadId, harness)
-      : (await threadClient.openThread(threadId, { harness, source }), threadClient.getSnapshot().currentThread);
+    await threadClient.openThread(threadId, { harness, source });
+    const payload = threadClient.getSnapshot().currentThread;
     if (!payload) {
       return false;
     }
 
-    if (
-      isRouteDrivenOpen
-      && (openGeneration !== routeDrivenOpenGeneration || getRequestedThreadIdFromUrl() !== threadId)
-    ) {
-      return false;
-    }
-
-    if (isRouteDrivenOpen) {
-      threadClient.selectThreadPayload(payload);
-    }
     applyThreadPayloadToCurrentView(payload, `Read thread ${new Date(payload.updatedAt * 1000).toLocaleString()}`);
-    if (syncUrl) {
-      syncCurrentSelectionToUrl({ threadId: payload.id });
-    }
     emitExplorerStateChange();
     return true;
   }
@@ -809,7 +781,6 @@ export async function WorkbenchClient(
     }
 
     applyThreadPayloadToCurrentView(payload, "Sent message.");
-    syncCurrentSelectionToUrl({ threadId: payload.id });
     emitExplorerStateChange();
     return payload;
   }
@@ -831,76 +802,123 @@ export async function WorkbenchClient(
   async function createEntry(parentPath: string, name: string, type: "directory" | "file") {
     const createdPath = await projectClient.createEntry(parentPath, name, type);
 
-    if (type === "file") {
-      await openFile(createdPath);
-      editorClient.refreshStatusMessage(`Created ${createdPath}`);
-    } else {
-      editorClient.refreshStatusMessage(`Created ${createdPath}`);
-    }
+    editorClient.refreshStatusMessage(`Created ${createdPath}`);
 
     return createdPath;
   }
 
-  function clearCurrentSelectionView({ syncUrl = true }: { syncUrl?: boolean } = {}) {
+  function clearCurrentSelectionView() {
     fileClient.clearSelection();
     editorClient.setHoveredRevisionNode(null);
     editorClient.clearPendingInlineFormats();
     editorClient.clearSelectionView();
     updateSaveButtonState();
     editorClient.refreshStatusMessage();
-    if (syncUrl) {
-      syncCurrentSelectionToUrl({});
-    }
     editorClient.scheduleDiffGutterRefresh();
     editorClient.refreshEditorChrome();
   }
 
-  async function openRequestedSelectionFromUrl() {
-    const requestedThreadId = getRequestedThreadIdFromUrl();
-    if (requestedThreadId) {
-      if (threadClient.isDraftThreadId(requestedThreadId)) {
-        const draftThread = threadClient.createThread(readStoredHarness(), requestedThreadId);
-        applyThreadPayloadToCurrentView(draftThread);
-        emitExplorerStateChange();
-        return true;
-      }
-
-      if (threadClient.hasThread(requestedThreadId)) {
-        await openThread(requestedThreadId, { syncUrl: false });
-        return sessionState.currentThreadId === requestedThreadId;
-      }
-
-      return false;
-    }
-
-    const requestedPath = getRequestedPathFromUrl();
-    if (!requestedPath) {
-      return false;
-    }
-
-    await openFile(requestedPath, { syncUrl: false });
-    return sessionState.currentPath === requestedPath;
+  function isRouteGenerationActive(route: WorkbenchRoute, generation: number) {
+    return activeRouteGeneration === generation
+      && activeRoute.view === route.view
+      && activeRoute.projectId === route.projectId
+      && activeRoute.filePath === route.filePath
+      && activeRoute.threadId === route.threadId;
   }
 
-  async function refreshTree({ preserveSelection = false }: { preserveSelection?: boolean } = {}) {
-    const requestedProjectId = getRequestedProjectIdFromUrl();
-    const currentProjectId = projectClient.getSnapshot().currentProjectId;
-    if (requestedProjectId && requestedProjectId !== currentProjectId) {
+  function reapplyActiveRouteAfterStaleLoad(route: WorkbenchRoute, generation: number) {
+    if (isRouteGenerationActive(route, generation)) {
+      return;
+    }
+
+    void applyRoute(activeRoute);
+  }
+
+  async function ensureRouteProject(route: WorkbenchRoute) {
+    const previousProjectId = projectClient.getSnapshot().currentProjectId;
+    if (!route.projectId) {
+      await projectClient.selectInitialProject();
+    } else if (!await projectClient.selectProjectStrict(route.projectId)) {
+      return `Project not found: ${route.projectId}`;
+    }
+
+    const nextProjectId = projectClient.getSnapshot().currentProjectId;
+    if (nextProjectId && previousProjectId !== nextProjectId) {
+      await fileClient.hydratePersistedDrafts();
+    }
+
+    return "";
+  }
+
+  async function applyRoute(route: WorkbenchRoute): Promise<WorkbenchRouteLoadResult> {
+    activeRoute = route;
+    const routeGeneration = ++activeRouteGeneration;
+
+    if (route.view === "invalid") {
+      clearCurrentSelectionView();
+      threadClient.clearThreadSelection();
+      emitExplorerStateChange();
+      return { error: route.error || "Invalid route.", ok: false };
+    }
+
+    const projectError = await ensureRouteProject(route);
+    if (projectError) {
+      clearCurrentSelectionView();
+      threadClient.clearThreadSelection();
+      emitExplorerStateChange();
+      return { error: projectError, ok: false };
+    }
+
+    if (!isRouteGenerationActive(route, routeGeneration)) {
+      return { ok: false };
+    }
+
+    if (route.view === "project") {
       if (sessionState.currentPath) {
         fileClient.syncCurrentDraftBuffer();
       }
       threadClient.clearThreadSelection();
-      fileClient.clearSelection();
-      await projectClient.selectProject(requestedProjectId);
-      await fileClient.hydratePersistedDrafts();
+      clearCurrentSelectionView();
+      emitExplorerStateChange();
+      return { ok: true };
     }
 
-    await projectClient.refreshProject();
-    const refreshedProjectId = projectClient.getSnapshot().currentProjectId;
-    const requestedThreadId = getRequestedThreadIdFromUrl();
-    const requestedPath = getRequestedPathFromUrl();
-    const hasRequestedSelection = Boolean(requestedThreadId || requestedPath);
-    const shouldBlockOnThreads = Boolean(sessionState.currentThreadId || requestedThreadId);
+    if (route.view === "file") {
+      if (sessionState.currentPath && sessionState.currentPath !== route.filePath) {
+        fileClient.syncCurrentDraftBuffer();
+      }
+      threadClient.clearThreadSelection();
+      const didOpen = await openFile(route.filePath);
+      reapplyActiveRouteAfterStaleLoad(route, routeGeneration);
+      if (!isRouteGenerationActive(route, routeGeneration)) {
+        return { ok: false };
+      }
+      return didOpen ? { ok: true } : { error: `File not found: ${route.filePath}`, ok: false };
+    }
+
+    if (route.view === "thread") {
+      if (sessionState.currentPath) {
+        fileClient.syncCurrentDraftBuffer();
+      }
+      const didOpen = await openThread(route.threadId);
+      reapplyActiveRouteAfterStaleLoad(route, routeGeneration);
+      if (!isRouteGenerationActive(route, routeGeneration)) {
+        return { ok: false };
+      }
+      return didOpen ? { ok: true } : { error: `Thread not found: ${route.threadId}`, ok: false };
+    }
+
+    return { error: "Unknown route.", ok: false };
+  }
+
+  async function refreshTree({ preserveSelection = false }: { preserveSelection?: boolean } = {}) {
+    if (projectClient.getSnapshot().currentProjectId) {
+      await projectClient.refreshProject();
+    } else {
+      await projectClient.selectInitialProject();
+    }
+
+    const shouldBlockOnThreads = Boolean(sessionState.currentThreadId || activeRoute.view === "thread");
 
     if (shouldBlockOnThreads) {
       await Promise.all([
@@ -919,19 +937,7 @@ export async function WorkbenchClient(
       })();
     }
 
-    // When the URL requests a file or thread, refresh must never reassert a
-    // previous in-memory selection. Invalid requested selections stay on the URL
-    // and render as errors in the React shell.
-    if (hasRequestedSelection && await openRequestedSelectionFromUrl()) {
-      return;
-    }
-
-    if (hasRequestedSelection) {
-      clearCurrentSelectionView({ syncUrl: false });
-      return;
-    }
-
-    if (preserveSelection && sessionState.currentThreadId) {
+    if (preserveSelection && activeRoute.view === "thread" && sessionState.currentThreadId === activeRoute.threadId) {
       const currentThreadId = sessionState.currentThreadId;
       if (sessionState.currentThread?.isDraft && sessionState.currentThread.id === currentThreadId) {
         return;
@@ -939,7 +945,7 @@ export async function WorkbenchClient(
 
       if (threadClient.hasThread(currentThreadId)) {
         if (!threadClient.isCurrentThreadUpToDate(currentThreadId)) {
-          await openThread(currentThreadId, { source: "reload", syncUrl: false });
+          await openThread(currentThreadId, { source: "reload" });
         }
         if (sessionState.currentThreadId === currentThreadId) {
           return;
@@ -953,19 +959,13 @@ export async function WorkbenchClient(
       }
     }
 
-    if (preserveSelection && sessionState.currentPath) {
+    if (preserveSelection && activeRoute.view === "file" && sessionState.currentPath === activeRoute.filePath) {
       const currentPath = sessionState.currentPath;
       await refreshCurrentFileFromDiskIfSafe();
       if (sessionState.currentPath === currentPath) {
         return;
       }
     }
-
-    if (await openRequestedSelectionFromUrl()) {
-      return;
-    }
-
-    clearCurrentSelectionView({ syncUrl: false });
   }
 
   function startAutoRefresh() {
@@ -979,25 +979,15 @@ export async function WorkbenchClient(
   }
 
   const controls: WorkbenchControls = {
-    clearSelection: () => {
-      if (sessionState.currentPath) {
-        fileClient.syncCurrentDraftBuffer();
-      }
-
-      threadClient.clearThreadSelection();
-      clearCurrentSelectionView();
-      emitExplorerStateChange();
-    },
-    createThread: (harness) => {
+    applyRoute,
+    createThreadDraft: (harness) => {
       const draftThread = threadClient.createThread(harness);
       applyThreadPayloadToCurrentView(draftThread);
-      syncCurrentSelectionToUrl({ threadId: draftThread.id });
       emitExplorerStateChange();
+      return draftThread;
     },
     createEntry,
     listModels: threadClient.listModels,
-    openFile: (path, options) => openFile(path, { syncUrl: options?.syncUrl }),
-    openThread: (threadId, options) => openThread(threadId, { syncUrl: options?.syncUrl }),
     readThread,
     sendThreadMessage,
     stopThread,
@@ -1013,23 +1003,6 @@ export async function WorkbenchClient(
     },
     setDraftThreadHarness: (harness) => {
       threadClient.setDraftThreadHarness(harness);
-    },
-    selectProject: async (projectId) => {
-      const isRouteDrivenProjectSelection = getRequestedProjectIdFromUrl() === projectId
-        && Boolean(getRequestedPathFromUrl() || getRequestedThreadIdFromUrl());
-      if (sessionState.currentPath) {
-        fileClient.syncCurrentDraftBuffer();
-      }
-      threadClient.clearThreadSelection();
-      fileClient.clearSelection();
-      await projectClient.selectProject(projectId);
-      await fileClient.hydratePersistedDrafts();
-      if (!isRouteDrivenProjectSelection) {
-        syncCurrentSelectionToUrl({ projectId: projectClient.getSnapshot().currentProjectId });
-        clearCurrentSelectionView();
-      }
-      await refreshThreads();
-      emitExplorerStateChange();
     },
     toggleDirectory,
   };

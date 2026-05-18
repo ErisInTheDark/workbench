@@ -353,12 +353,7 @@ export function ExplorerTree ({
                     return;
                   }
 
-                  if (onOpenFile) {
-                    onOpenFile(node.path);
-                    return;
-                  }
-
-                  void controls?.openFile(node.path);
+                  onOpenFile?.(node.path);
                 }}
                 >
                   <ExplorerFileSpacer />

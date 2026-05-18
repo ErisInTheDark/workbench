@@ -60,6 +60,16 @@ export default memo(function ThreadMarkdown ({
   projectRootPath?: string;
 }) {
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (
+      event.button !== 0
+      || event.metaKey
+      || event.ctrlKey
+      || event.shiftKey
+      || event.altKey
+    ) {
+      return;
+    }
+
     if (!(event.target instanceof Element)) {
       return;
     }

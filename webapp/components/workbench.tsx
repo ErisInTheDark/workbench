@@ -15,14 +15,17 @@ import type {
   WorkbenchThreadComposerDraft,
   WorkbenchUserInputResponse
 } from "../lib/types";
+import {
+  createFileRoute,
+  createProjectHref,
+  createProjectRoute,
+  createThreadRoute,
+} from "../lib/workbench/navigation/workbench-route";
+import { useWorkbenchRoute } from "../lib/workbench/navigation/use-workbench-route";
 import { isWorkbenchOpenableFile } from "../lib/workbench/project/tree-utils";
 import {
-  CURRENT_SELECTION_URL_UPDATED_EVENT,
   persistHarness,
-  readCurrentSelectionFromUrl,
   readStoredHarness,
-  syncCurrentSelectionToUrl,
-  type WorkbenchSelectionSearchParams,
 } from "../lib/workbench/state/browser-state";
 import {
   getPreferredMobilePane,
@@ -81,12 +84,6 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   locallyModifiedPaths: [],
   threadsError: "",
   fontSize: 1.08,
-};
-
-const EMPTY_SELECTION: WorkbenchSelectionSearchParams = {
-  filePath: "",
-  projectId: "",
-  threadId: "",
 };
 
 const MOBILE_SHELL_HEADER_HIDE_THRESHOLD_PX = 24;
@@ -155,27 +152,11 @@ function filterVisibleTreeNodes (nodes: TreeNode[]): TreeNode[] {
   return visibleNodes;
 }
 
-function createProjectHref (projectId: string) {
-  const path = projectId
-    .split("/")
-    .filter((segment) => segment.length > 0)
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
-
-  return `/${path}`;
-}
-
 export default function Workbench () {
+  const { navigateToRoute, route } = useWorkbenchRoute();
   const [explorer, setExplorer] = useState(INITIAL_EXPLORER_SNAPSHOT);
   const [currentThread, setCurrentThread] = useState<ThreadPayload | null>(null);
   const [harnessUserInputRequestsByThreadId, setHarnessUserInputRequestsByThreadId] = useState<Record<string, WorkbenchPendingUserInputRequest>>({});
-  const [requestedSelection, setRequestedSelection] = useState<WorkbenchSelectionSearchParams>(() => {
-    if (typeof window === "undefined") {
-      return EMPTY_SELECTION;
-    }
-
-    return readCurrentSelectionFromUrl();
-  });
   const [selectionError, setSelectionError] = useState("");
   const [rateLimits, setRateLimits] = useState<RateLimitSnapshot | null>(null);
   const [controls, setControls] = useState<WorkbenchControls | null>(null);
@@ -203,7 +184,6 @@ export default function Workbench () {
   const [reloadMessage, setReloadMessage] = useState("");
   const [threadComposerDraftsByThreadId, setThreadComposerDraftsByThreadId] = useState<Record<string, WorkbenchThreadComposerDraft | undefined>>({});
   const [threadQuestionnaireDraftsByKey, setThreadQuestionnaireDraftsByKey] = useState<Record<string, WorkbenchQuestionnaireDraft | undefined>>({});
-  const hasObservedInitialSelectionRef = useRef(false);
   const editorRef = useRef<HTMLDivElement>(null);
   const customCaretRef = useRef<HTMLDivElement>(null);
   const diffGutterRef = useRef<HTMLDivElement>(null);
@@ -426,7 +406,7 @@ export default function Workbench () {
     const mediaQuery = window.matchMedia(MOBILE_MEDIA_QUERY);
     const applyMatch = () => {
       setIsMobile(mediaQuery.matches);
-      setMobilePane(getPreferredMobilePane(mediaQuery.matches));
+      setMobilePane(getPreferredMobilePane(mediaQuery.matches, route));
     };
 
     applyMatch();
@@ -443,88 +423,33 @@ export default function Workbench () {
         mediaQuery.removeListener(applyMatch);
       }
     };
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const syncUrlDrivenState = () => {
-      const isMobileViewport = window.matchMedia?.(MOBILE_MEDIA_QUERY).matches ?? false;
-
-      startTransition(() => {
-        setRequestedSelection(readCurrentSelectionFromUrl());
-        setMobilePane(getPreferredMobilePane(isMobileViewport));
-      });
-    };
-
-    syncUrlDrivenState();
-    window.addEventListener("popstate", syncUrlDrivenState);
-    window.addEventListener(CURRENT_SELECTION_URL_UPDATED_EVENT, syncUrlDrivenState as EventListener);
-    return () => {
-      window.removeEventListener("popstate", syncUrlDrivenState);
-      window.removeEventListener(CURRENT_SELECTION_URL_UPDATED_EVENT, syncUrlDrivenState as EventListener);
-    };
-  }, []);
+  }, [route]);
 
   useEffect(() => {
     if (!controls) {
       return;
     }
 
-    if (!hasObservedInitialSelectionRef.current) {
-      hasObservedInitialSelectionRef.current = true;
-      return;
-    }
-
-    if (requestedSelection.projectId && requestedSelection.projectId !== explorer.currentProjectId) {
-      void controls.selectProject(requestedSelection.projectId);
-      return;
-    }
-
-    if (requestedSelection.threadId) {
-      if (currentThread?.id === requestedSelection.threadId) {
-        setSelectionError("");
-        return;
-      }
-
-      const requestedThreadId = requestedSelection.threadId;
-      setSelectionError("");
-      void controls.openThread(requestedThreadId, { syncUrl: false }).then((didOpen) => {
-        if (!didOpen && readCurrentSelectionFromUrl().threadId === requestedThreadId) {
-          setSelectionError(`Thread not found: ${requestedThreadId}`);
-        }
-      });
-      return;
-    }
-
-    if (requestedSelection.filePath) {
-      if (!isWorkbenchOpenableFile(requestedSelection.filePath)) {
-        setSelectionError(`This file cannot be opened here: ${requestedSelection.filePath}`);
-        return;
-      }
-
-      if (!currentThread && explorer.currentPath === requestedSelection.filePath) {
-        setSelectionError("");
-        return;
-      }
-
-      const requestedFilePath = requestedSelection.filePath;
-      setSelectionError("");
-      void controls.openFile(requestedFilePath, { syncUrl: false }).then((didOpen) => {
-        if (!didOpen && readCurrentSelectionFromUrl().filePath === requestedFilePath) {
-          setSelectionError(`File not found: ${requestedFilePath}`);
-        }
-      });
+    if (route.view === "file" && !isWorkbenchOpenableFile(route.filePath)) {
+      setSelectionError(`This file cannot be opened here: ${route.filePath}`);
       return;
     }
 
     setSelectionError("");
-    if (currentThread || explorer.currentPath) {
-      controls.clearSelection();
-    }
-  }, [controls, currentThread, explorer.currentPath, explorer.currentProjectId, requestedSelection.filePath, requestedSelection.projectId, requestedSelection.threadId]);
+    let cancelled = false;
+    void controls.applyRoute(route).then((result) => {
+      if (cancelled) {
+        return;
+      }
+      if (!result.ok && result.error) {
+        setSelectionError(result.error);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [controls, route]);
 
   const expandedDirectories = new Set(explorer.expandedDirectories);
   const modifiedPaths = new Set(explorer.locallyModifiedPaths);
@@ -560,7 +485,7 @@ export default function Workbench () {
     setSidebarMode("main");
   }, []);
 
-  const selectProjectFromLink = useCallback(async (event: MouseEvent<HTMLAnchorElement>, projectId: string) => {
+  const selectProjectFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, projectId: string) => {
     if (
       event.button !== 0
       || event.metaKey
@@ -571,50 +496,37 @@ export default function Workbench () {
       return;
     }
 
-    if (!controls || !projectId) {
+    if (!projectId) {
       return;
     }
 
     event.preventDefault();
     setCurrentThread(null);
-    if (projectId !== explorer.currentProjectId) {
-      await controls.selectProject(projectId);
-    }
+    navigateToRoute(createProjectRoute(projectId));
     setSidebarMode("main");
-    if (isMobile) {
-      setMobilePane("explorer");
-    }
-  }, [controls, explorer.currentProjectId, isMobile]);
+  }, [navigateToRoute]);
 
   const openFileFromExplorer = useCallback(async (path: string) => {
     if (!isWorkbenchOpenableFile(path)) {
       return false;
     }
 
-    if (isMobile) {
-      setMobilePane("editor");
-    }
-
-    if (!requestedSelection.threadId && path === requestedSelection.filePath) {
+    if (route.view === "file" && path === route.filePath) {
       return true;
     }
 
-    syncCurrentSelectionToUrl({ filePath: path });
+    navigateToRoute(createFileRoute(explorer.currentProjectId || route.projectId, path));
     return true;
-  }, [isMobile, requestedSelection.filePath, requestedSelection.threadId]);
+  }, [explorer.currentProjectId, navigateToRoute, route]);
 
   const openThreadFromExplorer = useCallback(async (threadId: string) => {
-    if (isMobile) {
-      setMobilePane("editor");
-    }
-
-    if (!requestedSelection.filePath && threadId === requestedSelection.threadId) {
+    if (route.view === "thread" && threadId === route.threadId) {
       return true;
     }
 
-    syncCurrentSelectionToUrl({ threadId });
+    navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, threadId));
     return true;
-  }, [isMobile, requestedSelection.filePath, requestedSelection.threadId]);
+  }, [explorer.currentProjectId, navigateToRoute, route]);
   const openFileFromThreadView = useCallback(async (path: string) => {
     void await openFileFromExplorer(path);
   }, [openFileFromExplorer]);
@@ -638,6 +550,10 @@ export default function Workbench () {
 
     const payload = await controls.sendThreadMessage(thread, input, options);
     if (payload) {
+      if (thread.isDraft && payload.id !== thread.id) {
+        navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, payload.id), { replace: true });
+      }
+
       const draftThreadIdsToClear = Array.from(new Set([
         thread.id,
         payload.id,
@@ -661,7 +577,7 @@ export default function Workbench () {
     }
 
     return payload;
-  }, [controls, explorer.currentProjectId]);
+  }, [controls, explorer.currentProjectId, navigateToRoute, route.projectId]);
 
   const handleThreadComposerDraftChange = useCallback((threadId: string, draft: WorkbenchThreadComposerDraft) => {
     if (!explorer.currentProjectId) {
@@ -838,23 +754,24 @@ export default function Workbench () {
   ]))
     .filter((path) => isWorkbenchOpenableFile(path))
     .slice(0, 8);
-  const showThreadView = Boolean(requestedSelection.threadId);
-  const showFileView = !showThreadView && Boolean(requestedSelection.filePath);
+  const showThreadView = route.view === "thread";
+  const showFileView = route.view === "file";
   const showEmptyState = !showThreadView && !showFileView;
+  const showRouteError = Boolean(selectionError) && !showThreadView && !showFileView;
   if (currentThread) {
     retainedThreadRef.current = currentThread;
   }
   const retainedThread = retainedThreadRef.current;
-  const threadForThreadView = showThreadView && currentThread?.id === requestedSelection.threadId
+  const threadForThreadView = showThreadView && currentThread?.id === route.threadId
     ? currentThread
-    : showThreadView && retainedThread?.id === requestedSelection.threadId
+    : showThreadView && retainedThread?.id === route.threadId
       ? retainedThread
       : null;
   const isThreadViewReady = showThreadView && Boolean(threadForThreadView);
-  const isFileViewReady = showFileView && !currentThread && explorer.currentPath === requestedSelection.filePath;
+  const isFileViewReady = showFileView && !currentThread && explorer.currentPath === route.filePath;
   const isSelectionPending = !selectionError && ((showThreadView && !isThreadViewReady) || (showFileView && !isFileViewReady));
-  const activeThreadId = showThreadView ? requestedSelection.threadId : "";
-  const activeFilePath = showFileView ? requestedSelection.filePath : "";
+  const activeThreadId = showThreadView ? route.threadId : "";
+  const activeFilePath = showFileView ? route.filePath : "";
   const pendingQuestionnaireThreadIds = useMemo(
     () => new Set(Object.keys(harnessUserInputRequestsByThreadId)),
     [harnessUserInputRequestsByThreadId],
@@ -1033,7 +950,7 @@ export default function Workbench () {
   };
 
   const clearSelectionFromUi = useCallback(() => {
-    syncCurrentSelectionToUrl({});
+    navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId));
     if (!controls) {
       startTransition(() => {
         setCurrentThread(null);
@@ -1045,11 +962,7 @@ export default function Workbench () {
         }));
       });
     }
-
-    if (isMobile) {
-      setMobilePane("editor");
-    }
-  }, [controls, isMobile]);
+  }, [controls, explorer.currentProjectId, navigateToRoute, route.projectId]);
 
   const handleCreateEntry = async (type: "directory" | "file") => {
     if (!controls || isCreatingEntry) {
@@ -1059,12 +972,12 @@ export default function Workbench () {
     setIsCreatingEntry(true);
     setCreateDialogError("");
     try {
-      await controls.createEntry(createDialogParentPath, createEntryName, type);
+      const createdPath = await controls.createEntry(createDialogParentPath, createEntryName, type);
       setIsCreatingEntry(false);
 
       closeCreateDialog();
-      if (isMobile && type === "file") {
-        setMobilePane("editor");
+      if (type === "file") {
+        navigateToRoute(createFileRoute(explorer.currentProjectId || route.projectId, createdPath));
       }
     } catch (error) {
       setIsCreatingEntry(false);
@@ -1111,10 +1024,11 @@ export default function Workbench () {
                       nodes={explorer.threads}
                       pendingQuestionnaireThreadIds={pendingQuestionnaireThreadIds}
                       onCreateThread={() => {
-                        controls?.createThread(harness);
-                        if (isMobile) {
-                          setMobilePane("editor");
+                        if (!controls) {
+                          return;
                         }
+                        const draftThread = controls.createThreadDraft(harness);
+                        navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, draftThread.id));
                       }}
                       onOpenThread={(threadId) => {
                         void openThreadFromExplorer(threadId);
@@ -1289,8 +1203,7 @@ export default function Workbench () {
                   hidden={!isMobile || mobilePane !== "editor"}
                   className={`${workbenchIconButtonClassName} shrink-0 md:hidden`}
                   onClick={() => {
-                    syncCurrentSelectionToUrl({});
-                    setMobilePane("explorer");
+                    navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId));
                   }}
                 >
                   <BackArrowIcon />
@@ -1389,22 +1302,31 @@ export default function Workbench () {
                   <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
                     <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">Thread</p>
                     <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Loading thread...</p>
-                    <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{requestedSelection.threadId}</p>
+                    <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{route.threadId}</p>
                   </div>
                 </div>
               )
             ) : null}
-            {showEmptyState ? (
+            {showRouteError ? (
+              <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
+                <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
+                  <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">Route</p>
+                  <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open route</p>
+                  <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{selectionError}</p>
+                </div>
+              </div>
+            ) : showEmptyState ? (
               <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
                 <div className="flex w-full max-w-[42rem] flex-col gap-8">
                   <button
                     type="button"
                     className="inline-flex w-fit items-center gap-2 rounded-full bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] px-4 py-2 text-[0.84rem] font-medium text-[var(--bg)] transition hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]"
                     onClick={() => {
-                      controls?.createThread(harness);
-                      if (isMobile) {
-                        setMobilePane("editor");
+                      if (!controls) {
+                        return;
                       }
+                      const draftThread = controls.createThreadDraft(harness);
+                      navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, draftThread.id));
                     }}
                   >
                     <span className="inline-flex size-4 items-center justify-center text-[1.05em] leading-none">+</span>
@@ -1490,7 +1412,7 @@ export default function Workbench () {
                 <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
                   <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">File</p>
                   <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Loading file...</p>
-                  <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{requestedSelection.filePath}</p>
+                  <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{route.filePath}</p>
                 </div>
               </div>
             ) : null}

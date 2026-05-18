@@ -29,6 +29,7 @@ Before giving a questionnaire, first provide the author with concise commentary 
 - The local webapp orchestrator now exposes a scoped reload endpoint at `POST /orchestrator/reload` for local operator workflows.
 - Current supported scopes are `orchestrator-logic` for hot-reloading targeted helper modules and `next-dev` for restarting the Next.js dev child process.
 - Preserve bridge-owned session state when extending reload behavior; do not broaden reload scope to live Copilot session ownership without an explicit preservation design.
+- Webapp navigation is URL-source-of-truth. User interaction handlers may push or replace workbench routes; data loaders, auto-refresh, thread notifications, project refreshes, and editor clients must not read browser location to choose a view or write browser history.
 
 ## Project Structure
 

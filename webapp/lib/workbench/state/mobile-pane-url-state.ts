@@ -1,41 +1,18 @@
 /**
  * Exports:
- * - getCurrentSelectionSearchParams: read the current file and thread URL search params. Keywords: mobile pane, URL state, search params, file, thread.
- * - syncCurrentSelectionSearchParams: update the current file and thread URL search params without navigation. Keywords: history.replaceState, URL sync, selection state, file, thread.
- * - getPreferredMobilePane: choose the preferred mobile pane from viewport state and current URL selection. Keywords: responsive, mobile, explorer, editor, selection.
+ * - getPreferredMobilePane: choose the preferred mobile pane from viewport state and route state. Keywords: responsive, mobile, explorer, editor, route.
  */
 
-import {
-    readCurrentSelectionFromUrl,
-    syncCurrentSelectionToUrl,
-    type WorkbenchSelectionSearchParams,
-} from "./browser-state";
+import type { WorkbenchRoute } from "../navigation/workbench-route";
 
 export const MOBILE_MEDIA_QUERY = "(max-width: 767px)";
 
 export type MobilePane = "editor" | "explorer";
 
-export function getCurrentSelectionSearchParams (): WorkbenchSelectionSearchParams {
-  return readCurrentSelectionFromUrl();
-}
-
-export function syncCurrentSelectionSearchParams ({
-  filePath = "",
-  projectId,
-  threadId = "",
-}: {
-  filePath?: string;
-  projectId?: string;
-  threadId?: string;
-}) {
-  syncCurrentSelectionToUrl({ filePath, projectId, threadId });
-}
-
-export function getPreferredMobilePane (isMobileViewport: boolean): MobilePane {
+export function getPreferredMobilePane (isMobileViewport: boolean, route: WorkbenchRoute): MobilePane {
   if (!isMobileViewport) {
     return "editor";
   }
 
-  const { filePath, threadId } = readCurrentSelectionFromUrl();
-  return filePath || threadId ? "editor" : "explorer";
+  return route.view === "file" || route.view === "thread" ? "editor" : "explorer";
 }

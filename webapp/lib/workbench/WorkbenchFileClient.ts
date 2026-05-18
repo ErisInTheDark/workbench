@@ -58,7 +58,6 @@ type WorkbenchFileOpenSource = "open" | "reload";
 type WorkbenchFileOpenOptions = {
   ignoreDirty?: boolean;
   source?: WorkbenchFileOpenSource;
-  syncUrl?: boolean;
 };
 
 export interface WorkbenchFileClientOptions {
@@ -71,7 +70,6 @@ export interface WorkbenchFileClientOptions {
   getProjectId: () => string;
   refreshProject: () => Promise<void>;
   sessionState: SessionState;
-  syncSelectionToUrl: (selection: { filePath?: string }) => void;
   updateHistorySelection: (selection: EditHistorySelection | null) => void;
 }
 
@@ -205,7 +203,6 @@ function WorkbenchFileClient(
     getProjectId,
     refreshProject,
     sessionState,
-    syncSelectionToUrl,
     updateHistorySelection,
   } = options;
 
@@ -494,7 +491,7 @@ function WorkbenchFileClient(
 
   async function openFile(
     filePath: string,
-    { ignoreDirty: _ignoreDirty = false, source = "open", syncUrl = true }: WorkbenchFileOpenOptions = {},
+    { ignoreDirty: _ignoreDirty = false, source = "open" }: WorkbenchFileOpenOptions = {},
   ) {
     void _ignoreDirty;
 
@@ -515,9 +512,6 @@ function WorkbenchFileClient(
       const bufferedDraft = state.draftBuffers.get(filePath);
       if (bufferedDraft) {
         applyDraftBuffer(filePath, bufferedDraft);
-        if (syncUrl) {
-          syncSelectionToUrl({ filePath });
-        }
         editorDocument.refreshStatusMessage("Opened draft");
         expandProjectPath(filePath);
         emitExplorerStateChange();
@@ -540,9 +534,6 @@ function WorkbenchFileClient(
     applyFilePayloadToCurrentFile(payload, {
       statusMessage: `${source === "reload" ? "Reloaded" : "Read"} ${formatTimestamp(payload.updatedAt)}`,
     });
-    if (syncUrl) {
-      syncSelectionToUrl({ filePath: payload.path });
-    }
     expandProjectPath(payload.path);
     emitExplorerStateChange();
     return true;
@@ -553,7 +544,7 @@ function WorkbenchFileClient(
       return;
     }
 
-    await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload", syncUrl: false });
+    await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload" });
   }
 
   async function resetCurrentFileToHead() {
@@ -590,7 +581,7 @@ function WorkbenchFileClient(
 
     const payload = (await response.json()) as SaveFilePayload;
     await refreshProject();
-    await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload", syncUrl: false });
+    await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload" });
     editorDocument.refreshStatusMessage(`Reset to HEAD - ${formatTimestamp(payload.updatedAt)}`);
   }
 

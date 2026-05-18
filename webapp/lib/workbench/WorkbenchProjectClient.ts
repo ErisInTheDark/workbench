@@ -9,7 +9,7 @@
  */
 
 import type { ChangeSummary, CreateEntryPayload, ProjectSnapshot, TreeNode, WorkbenchProjectOption, WorkbenchProjectsPayload } from "../types";
-import { getRequestedProjectIdFromUrl, persistExpandedDirectories, readStoredExpandedDirectories } from "./state/browser-state";
+import { persistExpandedDirectories, readStoredExpandedDirectories } from "./state/browser-state";
 
 export function cloneTreeNodes(nodes: TreeNode[]): TreeNode[] {
   return nodes.map((node) => {
@@ -51,7 +51,8 @@ interface WorkbenchProjectClient {
   dispose: () => void;
   expandPath: (filePath: string) => boolean;
   getSnapshot: () => WorkbenchProjectSnapshot;
-  selectProject: (projectId: string) => Promise<void>;
+  selectInitialProject: () => Promise<void>;
+  selectProjectStrict: (projectId: string) => Promise<boolean>;
   refreshProject: () => Promise<ProjectSnapshot>;
   subscribe: (listener: WorkbenchProjectListener) => () => void;
   toggleDirectory: (path: string) => boolean;
@@ -109,13 +110,6 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
 
     const payload = await response.json() as WorkbenchProjectsPayload;
     state.projects = payload.data;
-    if (!state.currentProjectId) {
-      const requestedProjectId = getRequestedProjectIdFromUrl();
-      state.currentProjectId = state.projects.some((project) => project.id === requestedProjectId)
-        ? requestedProjectId
-        : state.projects[0]?.id ?? "";
-      state.expandedDirectories = new Set(readStoredExpandedDirectories(state.currentProjectId));
-    }
   }
 
   async function refreshProject() {
@@ -185,22 +179,31 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
     return payload.path;
   }
 
-  async function selectProject(projectId: string) {
+  async function selectProjectStrict(projectId: string) {
     await refreshProjects();
-    const selectedProjectId = state.projects.some((project) => project.id === projectId)
-      ? projectId
-      : state.projects[0]?.id ?? "";
-    if (!selectedProjectId) {
-      throw new Error("Unknown project.");
+    if (!state.projects.some((project) => project.id === projectId)) {
+      return false;
     }
 
-    if (state.currentProjectId === selectedProjectId) {
-      return;
+    if (state.currentProjectId === projectId) {
+      return true;
     }
 
-    state.currentProjectId = selectedProjectId;
-    state.expandedDirectories = new Set(readStoredExpandedDirectories(selectedProjectId));
+    state.currentProjectId = projectId;
+    state.expandedDirectories = new Set(readStoredExpandedDirectories(projectId));
     await refreshProject();
+    return true;
+  }
+
+  async function selectInitialProject() {
+    await refreshProjects();
+    if (!state.currentProjectId && state.projects[0]) {
+      state.currentProjectId = state.projects[0].id;
+      state.expandedDirectories = new Set(readStoredExpandedDirectories(state.currentProjectId));
+    }
+    if (state.currentProjectId) {
+      await refreshProject();
+    }
   }
 
   function toggleDirectory(path: string) {
@@ -256,7 +259,8 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
     dispose,
     expandPath,
     getSnapshot,
-    selectProject,
+    selectInitialProject,
+    selectProjectStrict,
     refreshProject,
     subscribe,
     toggleDirectory,
