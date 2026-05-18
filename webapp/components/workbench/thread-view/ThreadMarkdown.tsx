@@ -33,6 +33,8 @@ const THREAD_MARKDOWN_CLASS = [
   "[&_h4]:font-sans [&_h4]:text-[1em] [&_h4]:font-semibold [&_h4]:leading-[1.2]",
   "[&_h5]:font-sans [&_h5]:text-[1em] [&_h5]:font-semibold [&_h5]:leading-[1.2]",
   "[&_h6]:font-sans [&_h6]:text-[1em] [&_h6]:font-semibold [&_h6]:leading-[1.2]",
+  "[&_[data-thread-step-line='true']]:mb-[0.55em] [&_[data-thread-step-line='true']]:font-sans [&_[data-thread-step-line='true']]:text-[1em] [&_[data-thread-step-line='true']]:font-semibold [&_[data-thread-step-line='true']]:leading-[1.25]",
+  "[&_[data-thread-step-marker='true']]:mr-[0.22em] [&_[data-thread-step-marker='true']]:text-muted",
   "[&_ul]:list-disc [&_ul]:pl-[1.3rem]",
   "[&_ol]:list-decimal [&_ol]:pl-[1.3rem]",
   "[&_li+li]:mt-1",
@@ -99,7 +101,7 @@ export default memo(function ThreadMarkdown ({
   };
 
   const renderedHtml = useMemo(
-    () => markdownToHtml(markdown, { projectRootPath }),
+    () => markdownToHtml(markdown, { profile: "thread", projectRootPath }),
     [markdown, projectRootPath],
   );
 

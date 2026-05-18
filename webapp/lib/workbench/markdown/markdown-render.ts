@@ -2,6 +2,7 @@
  * Exports:
  * - ParsedListItem: list item node used by the markdown block parser. Keywords: markdown, list, parser.
  * - ParsedBlock: block node union used by markdown parsing and rendering. Keywords: markdown, block, parser.
+ * - MarkdownRenderProfile: rendering behavior profile for editor-stable markdown vs display-only thread markdown. Keywords: markdown, profile, thread, editor.
  * - MarkdownRenderOptions: optional project-root context for richer local file-link rendering. Keywords: markdown, file link, project root.
  * - parseBlocks: parse markdown into block nodes for rendering and diffing. Keywords: markdown, parser, blocks.
  * - markdownToHtml: render project markdown into sanitized HTML for the editor and thread view. Keywords: markdown, html, renderer.
@@ -25,6 +26,7 @@ import {
 } from "./markdown-links";
 
 export interface ParsedListItem {
+  marker: string;
   text: string;
   children: ParsedBlock[];
 }
@@ -41,7 +43,10 @@ export type ParsedBlock =
   | { type: "comment"; text: string }
   | { type: "paragraph"; text: string };
 
+export type MarkdownRenderProfile = "editor" | "thread";
+
 export interface MarkdownRenderOptions {
+  profile?: MarkdownRenderProfile;
   projectRootPath?: string;
 }
 
@@ -105,6 +110,27 @@ function trimCodeSpanPadding(content: string) {
   return content;
 }
 
+function stripInlineCodeSpans(markdown: string) {
+  let text = "";
+  let index = 0;
+
+  while (index < markdown.length) {
+    if (markdown[index] === "`") {
+      const fenceLength = getBacktickRunLength(markdown, index);
+      const closeIndex = findClosingCodeSpanFence(markdown, fenceLength, index + fenceLength);
+      if (closeIndex !== -1) {
+        index = closeIndex + fenceLength;
+        continue;
+      }
+    }
+
+    text += markdown[index];
+    index += 1;
+  }
+
+  return text;
+}
+
 function sanitizeMarkdownHref(value: string) {
   const trimmed = normalizeMarkdownHref(value);
   if (!trimmed) {
@@ -124,6 +150,81 @@ function sanitizeMarkdownHref(value: string) {
 
 function isExternalMarkdownHref(value: string) {
   return /^(https?:|mailto:|ws:|wss:)/i.test(value);
+}
+
+function isWordCharacter(value: string | undefined) {
+  return !!value && /[A-Za-z0-9_]/.test(value);
+}
+
+function isWhitespace(value: string | undefined) {
+  return !value || /\s/.test(value);
+}
+
+function isGlobLikeAsterisk(source: string, index: number) {
+  const previous = source[index - 1];
+  const next = source[index + 1];
+
+  return next === "."
+    || next === "/"
+    || previous === "/"
+    || previous === "."
+    || (previous === "*" && next === "/")
+    || (previous === "/" && next === "*");
+}
+
+function canOpenThreadSingleEmphasis(source: string, index: number, marker: string) {
+  const previous = source[index - 1];
+  const next = source[index + 1];
+  if (isWhitespace(next)) {
+    return false;
+  }
+
+  if (marker === "_" && isWordCharacter(previous) && isWordCharacter(next)) {
+    return false;
+  }
+
+  if (marker === "*" && isGlobLikeAsterisk(source, index)) {
+    return false;
+  }
+
+  return true;
+}
+
+function canCloseThreadSingleEmphasis(source: string, index: number, marker: string) {
+  const previous = source[index - 1];
+  const next = source[index + 1];
+  if (isWhitespace(previous)) {
+    return false;
+  }
+
+  if (marker === "_" && isWordCharacter(previous) && isWordCharacter(next)) {
+    return false;
+  }
+
+  if (marker === "*" && isGlobLikeAsterisk(source, index)) {
+    return false;
+  }
+
+  return true;
+}
+
+function findClosingSingleEmphasisToken(source: string, token: string, fromIndex: number, options: MarkdownRenderOptions) {
+  const profile = options.profile ?? "editor";
+  if (profile !== "thread") {
+    return findClosingToken(source, token, fromIndex);
+  }
+
+  for (let index = fromIndex; index < source.length; index += 1) {
+    if (source[index - 1] === "\\") {
+      continue;
+    }
+
+    if (source.startsWith(token, index) && canCloseThreadSingleEmphasis(source, index, token)) {
+      return index;
+    }
+  }
+
+  return -1;
 }
 
 function renderProjectFileLink(url: string, relativePath: string, {
@@ -204,7 +305,13 @@ function renderInline(markdown: string, options: MarkdownRenderOptions = {}) {
 
     if (markdown[index] === "*" || markdown[index] === "_") {
       const marker = markdown[index];
-      const closeIndex = findClosingToken(markdown, marker, index + 1);
+      if ((options.profile ?? "editor") === "thread" && !canOpenThreadSingleEmphasis(markdown, index, marker)) {
+        html += escapeHtml(markdown[index]);
+        index += 1;
+        continue;
+      }
+
+      const closeIndex = findClosingSingleEmphasisToken(markdown, marker, index + 1, options);
       if (closeIndex !== -1) {
         html += `<em>${renderInline(markdown.slice(index + 1, closeIndex), options)}</em>`;
         index = closeIndex + 1;
@@ -278,8 +385,9 @@ function parseListLine(line: string) {
 
   return {
     indent: match[1].length,
+    marker: match[2],
     text: match[3] ?? "",
-    type: /^\d+[.)]$/.test(match[2]) ? "ol" : "ul" as "ol" | "ul",
+    type: (/^\d+[.)]$/.test(match[2]) ? "ol" : "ul") as "ol" | "ul",
   };
 }
 
@@ -294,6 +402,7 @@ function parseSpecificListBlock(lines: string[], startIndex: number, indent: num
     }
 
     const item: ParsedListItem = {
+      marker: line.marker,
       text: line.text,
       children: [],
     };
@@ -502,6 +611,28 @@ function renderListBlock(block: Extract<ParsedBlock, { type: "ul" | "ol" }>, opt
   return `<${block.type}>${block.items.map((item) => renderListItem(item, options)).join("")}</${block.type}>`;
 }
 
+function isThreadSingleItemOrderedStep(block: Extract<ParsedBlock, { type: "ol" }>, options: MarkdownRenderOptions = {}) {
+  return (options.profile ?? "editor") === "thread"
+    && block.items.length === 1
+    && /^\d+[.)]$/.test(block.items[0].marker);
+}
+
+function renderThreadSingleItemOrderedStep(block: Extract<ParsedBlock, { type: "ol" }>, options: MarkdownRenderOptions = {}) {
+  const item = block.items[0];
+  const content = renderInline(item.text, options);
+  const childContent = item.children
+    .map((child) => child.type === "ul" || child.type === "ol" ? renderListBlock(child, options) : "")
+    .join("");
+
+  if (stripInlineCodeSpans(item.text).includes(".")) {
+    return `<p>${escapeHtml(item.marker)}${content ? ` ${content}` : ""}</p>${childContent}`;
+  }
+
+  const marker = `<span data-thread-step-marker="true">${escapeHtml(item.marker)}</span>`;
+
+  return `<p data-thread-step-line="true">${marker}${content ? ` ${content}` : ""}</p>${childContent}`;
+}
+
 function renderListItem(item: ParsedListItem, options: MarkdownRenderOptions = {}) {
   const content = renderInline(item.text, options) || "<br>";
   if (!item.children.length) {
@@ -535,6 +666,10 @@ export function markdownToHtml(markdown: string, options: MarkdownRenderOptions 
           return `<p data-block-comment="true">${escapeHtml(parseBlockCommentBody(block.text) ?? block.text)}</p>`;
         case "ul":
         case "ol":
+          if (block.type === "ol" && isThreadSingleItemOrderedStep(block, options)) {
+            return renderThreadSingleItemOrderedStep(block, options);
+          }
+
           return renderListBlock(block, options);
         case "hr":
           return "<hr>";

@@ -52,33 +52,30 @@ Exports:
 - `isSameWorkbenchRoute(left: WorkbenchRoute, right: WorkbenchRoute): boolean`
 - `routeHasSelection(route: WorkbenchRoute): boolean`
 
-Implemented canonical route shape:
+Canonical route shape:
 
-- `/-/project/:encodedProjectId`
-- `/-/project/:encodedProjectId/file/:encodedFilePath`
-- `/-/project/:encodedProjectId/thread/:encodedThreadId`
+- `/:projectId`
+- `/:projectId/@/file/:filePath`
+- `/:projectId/@/thread/:threadId`
 
-The project id, file path, and thread id are each encoded as one path segment with `encodeURIComponent`, so slash-delimited project ids and slash-delimited file paths do not compete with route marker segments.
+Project ids and file paths remain slash-delimited and user-readable. Each path segment is encoded with `encodeURIComponent`.
 
 Legacy route shape:
 
 - `/:projectId?file=:filePath`
 - `/:projectId?thread=:threadId`
-- `/:projectId/@/file/:filePath`
-- `/:projectId/@/thread/:threadId`
 
-The legacy shape is read only. The next user navigation writes the canonical path shape.
+The query-param legacy shape is read only. The next user navigation writes the canonical path shape.
 
 ### Route Grammar Requirements
 
-The parser must not use the legacy `@` route marker for canonical URLs.
+The `@` marker is the intentional route boundary between the project path and the selected page type.
 
 Implementation requirement:
 
 - Define a strict grammar before migrating callers.
-- Treat `/-/project/...` as the canonical workbench route prefix.
-- Keep `@` parsing only for legacy read compatibility.
-- Preserve `file` and `thread` as mode segments only in the canonical positions after the encoded project segment.
+- Treat `@` as the canonical workbench route marker.
+- Preserve `file` and `thread` as mode segments only immediately after the `@` marker.
 - Decode each segment defensively; malformed percent encodings must produce an invalid route state rather than throwing during render.
 - Add parser tests for project ids and file paths containing `@`, `file`, `thread`, spaces, encoded characters, malformed encodings, and slash-delimited project ids.
 

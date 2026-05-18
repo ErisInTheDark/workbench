@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WORKBENCH_ROUTE_PREFIX, LEGACY_WORKBENCH_ROUTE_MARKER: route markers for canonical and legacy workbench URLs. Keywords: URL, route, navigation.
+ * - WORKBENCH_ROUTE_MARKER: route marker for canonical workbench URLs. Keywords: URL, route, navigation.
  * - WorkbenchRouteView, WorkbenchRoute, WorkbenchRouteParseResult: normalized route contracts. Keywords: URL source of truth, project, file, thread.
  * - createProjectRoute/createFileRoute/createThreadRoute/createInvalidWorkbenchRoute: construct route objects. Keywords: navigation, route builder.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse browser URL state without mutating history. Keywords: route parser, legacy query, malformed URL.
@@ -8,8 +8,7 @@
  * - isSameWorkbenchRoute/routeHasSelection: compare and classify routes. Keywords: route equality, active selection.
  */
 
-export const WORKBENCH_ROUTE_PREFIX = "-";
-export const LEGACY_WORKBENCH_ROUTE_MARKER = "@";
+export const WORKBENCH_ROUTE_MARKER = "@";
 
 const LEGACY_FILE_SEARCH_PARAM = "file";
 const LEGACY_THREAD_SEARCH_PARAM = "thread";
@@ -80,6 +79,14 @@ function encodeRouteSegment(value: string) {
   return encodeURIComponent(value);
 }
 
+function encodeRoutePath(value: string) {
+  return value
+    .split("/")
+    .filter((segment) => segment.length > 0)
+    .map((segment) => encodeRouteSegment(segment))
+    .join("/");
+}
+
 function decodeRouteSegment(value: string): DecodedRouteSegment {
   try {
     return {
@@ -124,7 +131,7 @@ function parseSearch(search = "") {
 }
 
 function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearchParams): WorkbenchRoute {
-  const markerIndex = segments.indexOf(LEGACY_WORKBENCH_ROUTE_MARKER);
+  const markerIndex = segments.indexOf(WORKBENCH_ROUTE_MARKER);
   if (markerIndex >= 0) {
     const projectSegments = decodeRouteSegments(segments.slice(0, markerIndex));
     if (projectSegments.ok === false) {
@@ -182,44 +189,7 @@ export function parseWorkbenchRouteFromPath(pathname: string, search = ""): Work
     return emptyProjectRoute();
   }
 
-  if (segments[0] !== WORKBENCH_ROUTE_PREFIX) {
-    return parseLegacyRouteFromSegments(segments, searchParams);
-  }
-
-  if (segments[1] !== "project") {
-    return createInvalidWorkbenchRoute(`Unknown workbench route prefix: ${segments.slice(0, 2).join("/")}`);
-  }
-
-  const projectIdSegment = segments[2] ?? "";
-  const decodedProjectId = decodeRouteSegment(projectIdSegment);
-  if (decodedProjectId.ok === false) {
-    return createInvalidWorkbenchRoute(decodedProjectId.error);
-  }
-
-  const projectId = decodedProjectId.value;
-  const mode = segments[3] ?? "";
-  if (!mode) {
-    return createProjectRoute(projectId);
-  }
-
-  const encodedValue = segments[4] ?? "";
-  const decodedValue = decodeRouteSegment(encodedValue);
-  if (decodedValue.ok === false) {
-    return createInvalidWorkbenchRoute(decodedValue.error, projectId);
-  }
-
-  if (segments.length > 5) {
-    return createInvalidWorkbenchRoute("Unexpected extra route segments.", projectId);
-  }
-
-  if (mode === "file") {
-    return createFileRoute(projectId, decodedValue.value);
-  }
-  if (mode === "thread") {
-    return createThreadRoute(projectId, decodedValue.value);
-  }
-
-  return createInvalidWorkbenchRoute(`Unknown workbench route mode: ${mode}`, projectId);
+  return parseLegacyRouteFromSegments(segments, searchParams);
 }
 
 export function parseWorkbenchRouteFromLocation(location: WorkbenchLocationLike | string): WorkbenchRouteParseResult {
@@ -236,15 +206,15 @@ export function parseWorkbenchRouteFromLocation(location: WorkbenchLocationLike 
 }
 
 export function createWorkbenchHref(route: WorkbenchRoute) {
-  const projectSegment = encodeRouteSegment(route.projectId);
+  const projectPath = encodeRoutePath(route.projectId);
   if (route.view === "file") {
-    return `/${WORKBENCH_ROUTE_PREFIX}/project/${projectSegment}/file/${encodeRouteSegment(route.filePath)}`;
+    return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/file/${encodeRoutePath(route.filePath)}`;
   }
   if (route.view === "thread") {
-    return `/${WORKBENCH_ROUTE_PREFIX}/project/${projectSegment}/thread/${encodeRouteSegment(route.threadId)}`;
+    return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/${encodeRoutePath(route.threadId)}`;
   }
 
-  return `/${WORKBENCH_ROUTE_PREFIX}/project/${projectSegment}`;
+  return projectPath ? `/${projectPath}` : "/";
 }
 
 export function createProjectHref(projectId: string) {
