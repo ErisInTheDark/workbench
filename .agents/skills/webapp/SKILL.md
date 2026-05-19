@@ -37,10 +37,11 @@ description: "When the author asks for webapp work, including Next.js page work,
 - DO NOT run any `pnpm` script except `typecheck`.
 - DO NOT call the webapp endpoints yourself without EXPLICIT permission from the user.
 - DO NOT run `tsx` to test your code.
+- DO NOT end your turn until the user gives EXPLICIT confirmation via a questionnaire response that it's time to close out.
 
 # Workflow
 
-- Research the task at hand.
+1. Research the task at hand.
   - Cross-reference with `GLOSSARY.md` to ensure you and the user are on the same page.
   - When a feature seems particularly large or like in an ideal scenario it wants to touch a lot of the codebase, ask the user for permission to spawn one or more explorer subagents focused on specific slices of code or classes of issues, to make sure your understanding is exhaustive.
   - For bugs, produce a list of theories. For features, a list of edges. Present these to the user as commentary, ranked by importance.
@@ -50,8 +51,8 @@ description: "When the author asks for webapp work, including Next.js page work,
     - Discuss concrete scenarios — When domain relationships are being discussed, stress-test them with specific scenarios. Invent scenarios that probe edge cases and force the user to be precise about the boundaries between concepts.
     - Cross-reference with code — When the user states how something works, check whether the code agrees. If you find a contradiction, surface it: "Your code cancels entire Orders, but you just said partial cancellation is possible — which is right?"
     - Update `GLOSSARY.md` inline —When a term is resolved, update `GLOSSARY.md` right there. Don't batch these up — capture them as they happen. The glossary should be totally devoid of implementation details. It is a glossary and nothing else.
-- Produce a CONCRETE plan for the changes you're going to make, and present it to the user. This plan should include concrete existing symbol names and hypothetical symbol names, where applicable. NO vaguely gesturing at the codebase and rephrasing the user's request. The user MUST be presented with something concrete for approval.
-- Once the user has been presented with the plan, ask them for confirmation on it using your questionnaire tool. If the user gives follow-up notes, replan, or even re-research if it looks like their notes widen the task.
-- Once the user has given approval for implementation, implement the plan.
-- Run a typecheck to verify everything still works.
-- Present a "Does this look good? What's next?" or similar questionnaire with the user to verify that everything is working as intended. In this questionnaire prompt, provide a list of suggested follow-ups that could be done as addendums to this changeset. The user may give new information here that changes the scope of the task. STRONGLY consider jumping back to the initial research step for round 2 in the case that this occurs.
+2. Produce a CONCRETE plan for the changes you're going to make, and present it to the user. This plan should include concrete existing symbol names and hypothetical symbol names, where applicable. NO vaguely gesturing at the codebase and rephrasing the user's request. The user MUST be presented with something concrete for approval.
+3. Once the user has been presented with the plan, ask them for confirmation on it using your questionnaire tool. If the user gives follow-up notes, replan, or even re-research if it looks like their notes widen the task.
+4. Once the user has given approval for implementation, implement the plan.
+5. Run a typecheck to verify everything still works.
+6. Present a "Does this look good? What's next?" or similar questionnaire with the user to verify that everything is working as intended. In this questionnaire prompt, provide a list of suggested follow-ups that could be done as addendums to this changeset. The user may give new information here that changes the scope of the task. STRONGLY consider jumping back to the initial research step for round 2 in the case that this occurs.

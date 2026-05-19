@@ -17,23 +17,26 @@ import type { RateLimitSnapshot } from "../codex/generated/app-server/v2/RateLim
 import type { ThreadItem } from "../codex/generated/app-server/v2/ThreadItem";
 import type { ThreadListResponse } from "../codex/generated/app-server/v2/ThreadListResponse";
 import type { ThreadReadResponse } from "../codex/generated/app-server/v2/ThreadReadResponse";
+import type { ThreadResumeParams } from "../codex/generated/app-server/v2/ThreadResumeParams";
+import type { ThreadResumeResponse } from "../codex/generated/app-server/v2/ThreadResumeResponse";
 import type { Turn } from "../codex/generated/app-server/v2/Turn";
+import type { TurnStartParams } from "../codex/generated/app-server/v2/TurnStartParams";
 import type { TurnStartResponse } from "../codex/generated/app-server/v2/TurnStartResponse";
 import type { TurnSteerResponse } from "../codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "../codex/generated/app-server/v2/UserInput";
 import {
-    createQuestionnaireDeveloperInstructions,
     createQuestionnaireCollaborationMode,
+    createQuestionnaireDeveloperInstructions,
     createTextInput,
     createThreadStartRequest,
     isCodexJsonRpcFailure,
 } from "../codex/protocol";
+import { formatThreadStatus, isProjectCodexThread, toThreadPayload, toThreadSummary } from "../codex/thread-adapter";
+import { getCurrentInProgressTurn, getCurrentTurn } from "../codex/thread-state";
 import {
     buildCodexThreadBootstrapInstructions,
     buildThreadTitleRouteUrl,
 } from "../thread-bootstrap";
-import { formatThreadStatus, isProjectCodexThread, toThreadPayload, toThreadSummary } from "../codex/thread-adapter";
-import { getCurrentInProgressTurn, getCurrentTurn } from "../codex/thread-state";
 import type {
     ThreadPayload,
     ThreadSummary,
@@ -73,6 +76,7 @@ const DRAFT_THREAD_ID_PREFIX = "draft:";
 const STABLE_VISIBLE_THREAD_COUNT = 5;
 const EMPTY_ROLLOUT_ERROR_FRAGMENT = "rollout at";
 const EMPTY_ROLLOUT_ERROR_SUFFIX = "is empty";
+const MISSING_ROLLOUT_ERROR_FRAGMENT = "no rollout found by id";
 const FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE = "Started the thread. Its saved rollout is still warming up, so the live view will refresh automatically.";
 
 export interface WorkbenchThreadState {
@@ -336,6 +340,15 @@ function isEmptyRolloutError(error: unknown) {
   const normalizedMessage = message.toLowerCase();
   return normalizedMessage.includes(EMPTY_ROLLOUT_ERROR_FRAGMENT)
     && normalizedMessage.includes(EMPTY_ROLLOUT_ERROR_SUFFIX);
+}
+
+function isMissingRolloutError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.toLowerCase().includes(MISSING_ROLLOUT_ERROR_FRAGMENT);
+}
+
+function isTransientRolloutReadError(error: unknown) {
+  return isEmptyRolloutError(error) || isMissingRolloutError(error);
 }
 
 function WorkbenchThreadClient(
@@ -1099,13 +1112,26 @@ function WorkbenchThreadClient(
       && incomingTurn.items.length < liveTurn.items.length;
   }
 
+  function isToolLikeThreadItem(item: ThreadItem) {
+    return item.type === "commandExecution"
+      || item.type === "dynamicToolCall"
+      || item.type === "mcpToolCall"
+      || item.type === "fileChange"
+      || item.type === "collabAgentToolCall";
+  }
+
   function shouldPreserveUnmatchedLiveItem(
     incomingTurn: Turn,
     liveTurn: Turn,
     liveItem: ThreadItem,
     preserveAllUnmatchedLiveItems: boolean,
+    preserveToolItemsFromThinnerTurn: boolean,
   ) {
     if (preserveAllUnmatchedLiveItems) {
+      return true;
+    }
+
+    if (preserveToolItemsFromThinnerTurn && isToolLikeThreadItem(liveItem)) {
       return true;
     }
 
@@ -1121,6 +1147,8 @@ function WorkbenchThreadClient(
 
     const liveItemsById = new Map(liveTurn.items.map((item) => [item.id, item]));
     const preserveAllUnmatchedLiveItems = shouldPreserveUnmatchedLiveTurnItems(incomingTurn, liveTurn);
+    const preserveToolItemsFromThinnerTurn = incomingTurn.itemsView === "full"
+      && incomingTurn.items.length < liveTurn.items.length;
     const nextItems = incomingTurn.items.map((item) => {
       const liveItem = liveItemsById.get(item.id);
       let matchedLiveItem: ThreadItem | null = null;
@@ -1145,7 +1173,7 @@ function WorkbenchThreadClient(
     });
 
     for (const liveItem of liveItemsById.values()) {
-      if (shouldPreserveUnmatchedLiveItem(incomingTurn, liveTurn, liveItem, preserveAllUnmatchedLiveItems)) {
+      if (shouldPreserveUnmatchedLiveItem(incomingTurn, liveTurn, liveItem, preserveAllUnmatchedLiveItems, preserveToolItemsFromThinnerTurn)) {
         nextItems.push(liveItem);
       }
     }
@@ -1473,19 +1501,28 @@ function WorkbenchThreadClient(
         ? state.currentThread.agentPath
         : readStoredHarnessAgent(harness);
       const workbenchOrigin = readLocalWorkbenchOrigin();
-      const routeUrl = buildCurrentThreadTitleRouteUrl();
-      const codexDeveloperInstructions = harness === "codex"
-        ? buildCodexDeveloperInstructions(threadId, selectedAgentPath, routeUrl)
-        : null;
-      const response = await sendBridgeRequest<{ model?: string | null; modelProvider?: string | null; reasoningEffort?: string | null; thread: ThreadReadResponse["thread"] }>(harness, {
-            method: "thread/resume",
-            params: {
-              ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
-              ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
-              ...(state.projectRootPath && harness === "copilot" ? { cwd: state.projectRootPath } : {}),
-              ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
-          ...(codexDeveloperInstructions && harness === "codex" ? { developerInstructions: codexDeveloperInstructions } : {}),
-          persistExtendedHistory: true,
+      let resumedThread: ThreadResumeResponse | null = null;
+
+      if (harness === "codex") {
+        const routeUrl = buildCurrentThreadTitleRouteUrl();
+        const codexDeveloperInstructions = buildCodexDeveloperInstructions(threadId, selectedAgentPath, routeUrl);
+        resumedThread = await sendBridgeRequest<ThreadResumeResponse>(harness, {
+          method: "thread/resume",
+          params: {
+            developerInstructions: codexDeveloperInstructions,
+            threadId,
+          } satisfies ThreadResumeParams,
+        });
+      }
+
+      const response = await sendBridgeRequest<ThreadReadResponse>(harness, {
+        method: "thread/read",
+        params: {
+          includeTurns: true,
+          ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
+          ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
+          ...(state.projectRootPath && harness === "copilot" ? { cwd: state.projectRootPath } : {}),
+          ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
           threadId,
         },
       });
@@ -1495,7 +1532,9 @@ function WorkbenchThreadClient(
         return null;
       }
 
-      const nextModel = response.model ?? null;
+      const nextModel = state.currentThread?.id === threadId
+        ? getThreadModel(threadId)
+        : resumedThread?.model ?? readStoredHarnessModel(harness);
       if (harness === "codex") {
         await readCompletedQuestionnaireHistory(threadId);
       }
@@ -1503,10 +1542,17 @@ function WorkbenchThreadClient(
         response.thread,
         harness,
         nextModel,
-        readStoredHarnessModelEffort(harness, nextModel) ?? response.reasoningEffort ?? null,
+        state.currentThread?.id === threadId
+          ? getThreadReasoningEffort(threadId) ?? readStoredHarnessModelEffort(harness, nextModel) ?? resumedThread?.reasoningEffort ?? null
+          : readStoredHarnessModelEffort(harness, nextModel) ?? resumedThread?.reasoningEffort ?? null,
         selectedAgentPath,
       ));
     } catch (error) {
+      if (harness === "codex" && isTransientRolloutReadError(error)) {
+        emitStatusMessage(FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE);
+        return null;
+      }
+
       emitStatusMessage(error instanceof Error ? error.message : "Unable to open Codex thread.");
       return null;
     }
@@ -1541,6 +1587,11 @@ function WorkbenchThreadClient(
           : readStoredHarnessAgent(harness),
       ));
     } catch (error) {
+      if (harness === "codex" && isTransientRolloutReadError(error)) {
+        emitStatusMessage(FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE);
+        return null;
+      }
+
       emitStatusMessage(error instanceof Error ? error.message : "Unable to read Codex thread.");
       return null;
     }
@@ -1918,6 +1969,7 @@ function WorkbenchThreadClient(
       startedAt: Math.floor(Date.now() / 1000),
       completedAt: null,
       durationMs: null,
+      itemsView: "full",
     };
   }
 
@@ -2331,7 +2383,6 @@ function WorkbenchThreadClient(
           : {}),
         ...(harness === "codex" ? { ephemeral: false } : {}),
         ...(selectedModel ? { model: selectedModel } : {}),
-        persistExtendedHistory: true,
       });
       const startedThreadResponse = await sendBridgeRequest<{ model?: string | null; modelProvider?: string | null; reasoningEffort?: string | null; thread: ThreadReadResponse["thread"] }>(harness, {
         method: threadStartRequest.method,
@@ -2359,6 +2410,9 @@ function WorkbenchThreadClient(
       }
       resolvedThreadId = bootstrapThread.id;
       previousThread = null;
+      if (isDraftThread) {
+        sendOptions.onThreadMaterialized?.(bootstrapThread);
+      }
       if (!shouldBypassCodexDraftBootstrap) {
         await refreshThreads();
       }
@@ -2382,12 +2436,11 @@ function WorkbenchThreadClient(
             ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
             ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
             ...(state.projectRootPath && harness === "copilot" ? { cwd: state.projectRootPath } : {}),
-            ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
+          ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
           ...(codexDeveloperInstructions && harness === "codex" ? { developerInstructions: codexDeveloperInstructions } : {}),
           ...(selectedModel ? { model: selectedModel } : {}),
-          persistExtendedHistory: true,
           threadId: resolvedThreadId,
-        } as { agentPath?: string; developerInstructions?: string; model?: string; persistExtendedHistory: true; threadId: string; workbenchOrigin?: string },
+        } as ThreadResumeParams & { agentPath?: string; developerInstructions?: string; model?: string; threadId: string; workbenchOrigin?: string },
       });
       const readableThread = toThreadPayload(readableThreadResponse.thread, harness);
       resumedThread = toThreadPayload(
@@ -2462,14 +2515,9 @@ function WorkbenchThreadClient(
           ...(selectedModel ? { model: selectedModel } : {}),
           summary: DEFAULT_TURN_REASONING_SUMMARY,
           threadId: resolvedThreadId,
-        } as {
+        } as TurnStartParams & {
           agentPath?: string;
           collaborationMode?: ReturnType<typeof createQuestionnaireCollaborationMode>;
-          effort?: string | null;
-          input: UserInput[];
-          model?: string | null;
-          summary: typeof DEFAULT_TURN_REASONING_SUMMARY;
-          threadId: string;
           workbenchOrigin?: string;
         },
       });
@@ -2495,9 +2543,8 @@ function WorkbenchThreadClient(
           method: "thread/resume",
           params: {
             ...(selectedModel ? { model: selectedModel } : {}),
-            persistExtendedHistory: true,
             threadId: resolvedThreadId,
-          } as { model?: string; persistExtendedHistory: true; threadId: string },
+          } as ThreadResumeParams & { model?: string; threadId: string },
         });
         refreshedThread = mergeLiveStreamingThreadSnapshot(toThreadPayload(
           refreshedThreadResponse.thread,
@@ -2526,7 +2573,7 @@ function WorkbenchThreadClient(
         await readCompletedQuestionnaireHistory(resolvedThreadId);
       }
     } catch (error) {
-      if (!(shouldBypassCodexDraftBootstrap && harness === "codex" && isEmptyRolloutError(error))) {
+      if (!(shouldBypassCodexDraftBootstrap && harness === "codex" && isTransientRolloutReadError(error))) {
         throw error;
       }
 

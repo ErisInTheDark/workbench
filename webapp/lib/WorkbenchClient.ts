@@ -750,15 +750,15 @@ export async function WorkbenchClient(
       return true;
     }
 
+    if (sessionState.currentPath) {
+      fileClient.syncCurrentDraftBuffer();
+    }
+
     if (threadClient.isDraftThreadId(threadId)) {
       const draftThread = threadClient.createThread(harness ?? readStoredHarness(), threadId);
       applyThreadPayloadToCurrentView(draftThread);
       emitExplorerStateChange();
       return true;
-    }
-
-    if (sessionState.currentPath) {
-      fileClient.syncCurrentDraftBuffer();
     }
 
     await threadClient.openThread(threadId, { harness, source });
@@ -895,9 +895,6 @@ export async function WorkbenchClient(
     }
 
     if (route.view === "file") {
-      if (sessionState.currentPath && sessionState.currentPath !== route.filePath) {
-        fileClient.syncCurrentDraftBuffer();
-      }
       threadClient.clearThreadSelection();
       const didOpen = await openFile(route.filePath);
       reapplyActiveRouteAfterStaleLoad(route, routeGeneration);
@@ -908,9 +905,6 @@ export async function WorkbenchClient(
     }
 
     if (route.view === "thread") {
-      if (sessionState.currentPath) {
-        fileClient.syncCurrentDraftBuffer();
-      }
       const didOpen = await openThread(route.threadId);
       reapplyActiveRouteAfterStaleLoad(route, routeGeneration);
       if (!isRouteGenerationActive(route, routeGeneration)) {

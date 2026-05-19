@@ -95,6 +95,7 @@ export interface ThreadPayload extends ThreadSummary {
 }
 
 export interface WorkbenchSendThreadMessageOptions {
+  onThreadMaterialized?: (thread: ThreadPayload) => void;
   selectThread?: boolean;
 }
 

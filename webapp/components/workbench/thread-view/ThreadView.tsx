@@ -1,10 +1,14 @@
+/*
+ * Exports:
+ * - default ThreadView: render the main thread, subthread tabs, live activity, and polled turn history. Keywords: thread view, subthread, polling, workbench.
+ */
 "use client";
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
-import { getCurrentInProgressTurn } from "../../../lib/codex/thread-state";
+import { getCurrentInProgressTurn, mergeTurnsPreservingLiveItems } from "../../../lib/codex/thread-state";
 import type {
   ThreadPayload,
   ThreadUnreadBadge,
@@ -67,6 +71,50 @@ function areThreadPayloadsEquivalent (left: ThreadPayload | null | undefined, ri
   }
 
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function mergeSubthreadTurnSnapshots (
+  incomingThread: ThreadPayload,
+  existingThread: ThreadPayload | undefined,
+) {
+  if (!existingThread || existingThread.id !== incomingThread.id || existingThread.harness !== incomingThread.harness) {
+    return incomingThread;
+  }
+
+  const existingTurnsById = new Map(existingThread.turns.map((turn) => [turn.id, turn]));
+  let changed = false;
+  const mergedTurns = mergeTurnsPreservingLiveItems(incomingThread.turns, existingThread.turns);
+  if (mergedTurns !== incomingThread.turns) {
+    changed = true;
+  }
+
+  const turns = mergedTurns.map((incomingTurn) => {
+    const existingTurn = existingTurnsById.get(incomingTurn.id);
+    if (!existingTurn || incomingTurn.status !== "inProgress" || existingTurn.status !== "inProgress") {
+      return incomingTurn;
+    }
+
+    const incomingItemIds = new Set(incomingTurn.items.map((item) => item.id));
+    const missingActiveCommandItems = existingTurn.items.filter((item) => (
+      item.type === "commandExecution"
+      && item.status === "inProgress"
+      && !incomingItemIds.has(item.id)
+    ));
+    if (!missingActiveCommandItems.length) {
+      return incomingTurn;
+    }
+
+    changed = true;
+    return {
+      ...incomingTurn,
+      items: [
+        ...incomingTurn.items,
+        ...missingActiveCommandItems,
+      ],
+    };
+  });
+
+  return changed ? { ...incomingThread, turns } : incomingThread;
 }
 
 function hasExpandedSelectionWithin (root: HTMLElement | null) {
@@ -333,13 +381,14 @@ export default memo(function ThreadView ({
 
       setSubthreadsById((current) => {
         const existing = current[threadId];
-        if (areThreadPayloadsEquivalent(existing, payload)) {
+        const mergedPayload = mergeSubthreadTurnSnapshots(payload, existing);
+        if (areThreadPayloadsEquivalent(existing, mergedPayload)) {
           return current;
         }
 
         return {
           ...current,
-          [threadId]: payload,
+          [threadId]: mergedPayload,
         };
       });
       setSeenItemCountsByThreadId((current) => (

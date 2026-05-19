@@ -10,7 +10,7 @@
 
 If you have not been given a "designation" or a skill workflow to follow, and the user hasn't specified, confirm with the user that you should proceed without one.
 
-For work under `webapp/`, use the `webapp` skill.
+For work under `webapp/`, use the `webapp` skill. Follow the EXACT workflow as described in the skill. Every part of it is CRITICAL.
 
 Use questionnaires heavily for material decisions. Treat this as default workflow behavior, not something gated behind a custom agent file.
 

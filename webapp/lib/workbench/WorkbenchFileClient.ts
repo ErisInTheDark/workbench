@@ -39,6 +39,8 @@ const DRAFT_DATABASE_VERSION = 4;
 const DRAFT_STORE_NAME = "drafts";
 const THREAD_COMPOSER_DRAFT_STORE_NAME = "threadComposerDrafts";
 const THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME = "threadQuestionnaireDrafts";
+const DRAFT_DISCARD_TOMBSTONE_STORAGE_KEY = "workbench:file-draft-discard-tombstones:v1";
+const DRAFT_DISCARD_TOMBSTONE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const FILE_SELECTION_PERSISTENCE_TASK_ID = "file-selection-persistence";
 const FILE_SELECTION_PERSISTENCE_DELAY_MS = 260;
 
@@ -52,6 +54,13 @@ interface PersistedDraftRecord {
   headContent: string | null;
   history?: EditHistoryState | null;
   mode: EditorMode;
+}
+
+interface DraftDiscardTombstone {
+  discardedAt: number;
+  key: string;
+  path: string;
+  projectId: string;
 }
 
 type WorkbenchFileOpenSource = "open" | "reload";
@@ -165,6 +174,73 @@ function createDraftRecordKey(projectId: string, filePath: string) {
   return `${projectId}:${filePath}`;
 }
 
+function readDraftDiscardTombstones() {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
+    return new Map<string, DraftDiscardTombstone>();
+  }
+
+  const records = new Map<string, DraftDiscardTombstone>();
+  const now = Date.now();
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(DRAFT_DISCARD_TOMBSTONE_STORAGE_KEY) ?? "[]") as DraftDiscardTombstone[];
+    for (const record of parsed) {
+      if (
+        !record
+        || typeof record.key !== "string"
+        || typeof record.projectId !== "string"
+        || typeof record.path !== "string"
+        || !Number.isFinite(record.discardedAt)
+      ) {
+        continue;
+      }
+
+      if (now - record.discardedAt > DRAFT_DISCARD_TOMBSTONE_RETENTION_MS) {
+        continue;
+      }
+
+      records.set(record.key, record);
+    }
+  } catch {
+    return records;
+  }
+
+  return records;
+}
+
+function writeDraftDiscardTombstones(records: Map<string, DraftDiscardTombstone>) {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(DRAFT_DISCARD_TOMBSTONE_STORAGE_KEY, JSON.stringify(Array.from(records.values())));
+  } catch {
+    // Draft tombstones are a best-effort guard around IndexedDB cleanup.
+  }
+}
+
+function markDraftDiscardTombstone(projectId: string, filePath: string) {
+  const records = readDraftDiscardTombstones();
+  const key = createDraftRecordKey(projectId, filePath);
+  records.set(key, {
+    discardedAt: Date.now(),
+    key,
+    path: filePath,
+    projectId,
+  });
+  writeDraftDiscardTombstones(records);
+}
+
+function clearDraftDiscardTombstone(projectId: string, filePath: string) {
+  const records = readDraftDiscardTombstones();
+  const key = createDraftRecordKey(projectId, filePath);
+  if (!records.delete(key)) {
+    return;
+  }
+
+  writeDraftDiscardTombstones(records);
+}
+
 function buildPersistedDraftRecord(projectId: string, filePath: string, buffer: DraftBuffer): PersistedDraftRecord {
   return {
     key: createDraftRecordKey(projectId, filePath),
@@ -208,6 +284,7 @@ function WorkbenchFileClient(
 
   const draftDatabasePromise = openDraftDatabase();
   let draftPersistenceQueue = Promise.resolve();
+  const discardingDraftPaths = new Set<string>();
 
   async function getPersistedDraftRecords() {
     const database = await draftDatabasePromise;
@@ -259,15 +336,37 @@ function WorkbenchFileClient(
   }
 
   function persistDraftBuffer(filePath: string, buffer: DraftBuffer | null) {
+    const projectId = getProjectId();
     return enqueueDraftPersistence(async () => {
-      const projectId = getProjectId();
       if (!buffer || !buffer.dirty) {
+        markDraftDiscardTombstone(projectId, filePath);
         await deletePersistedDraftRecord(projectId, filePath);
         return;
       }
 
+      clearDraftDiscardTombstone(projectId, filePath);
       await putPersistedDraftRecord(buildPersistedDraftRecord(projectId, filePath, buffer));
     });
+  }
+
+  async function clearDraftBuffer(filePath: string) {
+    const previousModified = state.draftBuffers.get(filePath)?.dirty ?? false;
+    const nextDraftBuffers = new Map(state.draftBuffers);
+    nextDraftBuffers.delete(filePath);
+    state.draftBuffers = nextDraftBuffers;
+    await persistDraftBuffer(filePath, null);
+    if (previousModified) {
+      emitExplorerStateChange();
+    }
+  }
+
+  function beginDraftDiscard(filePath: string) {
+    discardingDraftPaths.add(filePath);
+    lifecycle.cancel(FILE_SELECTION_PERSISTENCE_TASK_ID);
+  }
+
+  function finishDraftDiscard(filePath: string) {
+    discardingDraftPaths.delete(filePath);
   }
 
   function clearWriteConflict() {
@@ -418,7 +517,12 @@ function WorkbenchFileClient(
       return;
     }
 
-    const previousModified = state.draftBuffers.get(sessionState.currentPath)?.dirty ?? false;
+    const filePath = sessionState.currentPath;
+    if (discardingDraftPaths.has(filePath)) {
+      return;
+    }
+
+    const previousModified = state.draftBuffers.get(filePath)?.dirty ?? false;
     const nextBuffer: DraftBuffer = {
       baselineContent: state.baselineContent,
       content: state.currentContent,
@@ -437,20 +541,14 @@ function WorkbenchFileClient(
     };
 
     if (!hasBufferedDraftState(nextBuffer)) {
-      const nextDraftBuffers = new Map(state.draftBuffers);
-      nextDraftBuffers.delete(sessionState.currentPath);
-      state.draftBuffers = nextDraftBuffers;
-      void persistDraftBuffer(sessionState.currentPath, null);
-      if (previousModified) {
-        emitExplorerStateChange();
-      }
+      void clearDraftBuffer(filePath);
       return;
     }
 
     const nextDraftBuffers = new Map(state.draftBuffers);
-    nextDraftBuffers.set(sessionState.currentPath, nextBuffer);
+    nextDraftBuffers.set(filePath, nextBuffer);
     state.draftBuffers = nextDraftBuffers;
-    void persistDraftBuffer(sessionState.currentPath, nextBuffer);
+    void persistDraftBuffer(filePath, nextBuffer);
     if (previousModified !== nextBuffer.dirty) {
       emitExplorerStateChange();
     }
@@ -469,8 +567,18 @@ function WorkbenchFileClient(
 
   async function hydratePersistedDrafts() {
     const records = await getPersistedDraftRecords();
-    state.draftBuffers = new Map(
-      records.map((record) => {
+    const tombstones = readDraftDiscardTombstones();
+    const staleDiscardedRecords: PersistedDraftRecord[] = [];
+    const draftEntries = records
+      .filter((record) => {
+        const isDiscarded = tombstones.has(createDraftRecordKey(record.projectId, record.path));
+        if (isDiscarded) {
+          staleDiscardedRecords.push(record);
+        }
+
+        return !isDiscarded;
+      })
+      .map((record) => {
         const buffer: DraftBuffer = {
           baselineContent: record.baselineContent,
           content: record.content,
@@ -484,9 +592,14 @@ function WorkbenchFileClient(
           saveIssue: null,
         };
 
-        return [record.path, buffer];
-      }),
-    );
+        return [record.path, buffer] satisfies [string, DraftBuffer];
+      });
+
+    state.draftBuffers = new Map(draftEntries);
+
+    for (const record of staleDiscardedRecords) {
+      void persistDraftBuffer(record.path, null);
+    }
   }
 
   async function openFile(
@@ -504,39 +617,47 @@ function WorkbenchFileClient(
       return true;
     }
 
-    if (sessionState.currentPath) {
+    const isReloadingCurrentFile = source === "reload" && filePath === sessionState.currentPath;
+    if (source === "reload") {
+      beginDraftDiscard(filePath);
+    }
+
+    if (sessionState.currentPath && !isReloadingCurrentFile) {
       syncCurrentDraftBuffer();
     }
 
-    if (source !== "reload") {
-      const bufferedDraft = state.draftBuffers.get(filePath);
-      if (bufferedDraft) {
-        applyDraftBuffer(filePath, bufferedDraft);
-        editorDocument.refreshStatusMessage("Opened draft");
-        expandProjectPath(filePath);
-        emitExplorerStateChange();
-        return true;
+    try {
+      if (source !== "reload") {
+        const bufferedDraft = state.draftBuffers.get(filePath);
+        if (bufferedDraft) {
+          applyDraftBuffer(filePath, bufferedDraft);
+          editorDocument.refreshStatusMessage("Opened draft");
+          expandProjectPath(filePath);
+          emitExplorerStateChange();
+          return true;
+        }
+      }
+
+      const payload = await fetchFilePayload(filePath);
+      if (!payload) {
+        return false;
+      }
+
+      if (source === "reload") {
+        await clearDraftBuffer(filePath);
+      }
+
+      applyFilePayloadToCurrentFile(payload, {
+        statusMessage: `${source === "reload" ? "Reloaded" : "Read"} ${formatTimestamp(payload.updatedAt)}`,
+      });
+      expandProjectPath(payload.path);
+      emitExplorerStateChange();
+      return true;
+    } finally {
+      if (source === "reload") {
+        finishDraftDiscard(filePath);
       }
     }
-
-    const payload = await fetchFilePayload(filePath);
-    if (!payload) {
-      return false;
-    }
-
-    if (source === "reload") {
-      const nextDraftBuffers = new Map(state.draftBuffers);
-      nextDraftBuffers.delete(filePath);
-      state.draftBuffers = nextDraftBuffers;
-      void persistDraftBuffer(filePath, null);
-    }
-
-    applyFilePayloadToCurrentFile(payload, {
-      statusMessage: `${source === "reload" ? "Reloaded" : "Read"} ${formatTimestamp(payload.updatedAt)}`,
-    });
-    expandProjectPath(payload.path);
-    emitExplorerStateChange();
-    return true;
   }
 
   async function resetCurrentDraftToSaved() {
@@ -552,6 +673,8 @@ function WorkbenchFileClient(
       return;
     }
 
+    const filePath = sessionState.currentPath;
+    const expectedMtimeMs = state.expectedMtimeMs;
     const response = await fetch("/api/file", {
       method: "PUT",
       headers: {
@@ -559,30 +682,39 @@ function WorkbenchFileClient(
       },
       body: JSON.stringify({
         projectId: getProjectId(),
-        path: sessionState.currentPath,
+        path: filePath,
         resetToHead: true,
-        expectedMtimeMs: state.expectedMtimeMs,
+        expectedMtimeMs,
       }),
     });
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: "Unable to reset file to HEAD." }));
       if (response.status === 409) {
-        state.pendingWriteConflict = error as SaveConflictPayload;
-        eventBus.emit("saveConflictSurfaced", error as SaveConflictPayload);
-        syncCurrentDraftBuffer();
-        editorDocument.refreshStatusMessage();
+        if (sessionState.currentPath === filePath) {
+          state.pendingWriteConflict = error as SaveConflictPayload;
+          eventBus.emit("saveConflictSurfaced", error as SaveConflictPayload);
+          syncCurrentDraftBuffer();
+          editorDocument.refreshStatusMessage();
+        }
         return;
       }
 
-      editorDocument.refreshStatusMessage(error.error);
+      if (sessionState.currentPath === filePath) {
+        editorDocument.refreshStatusMessage(error.error);
+      }
       return;
     }
 
     const payload = (await response.json()) as SaveFilePayload;
     await refreshProject();
-    await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload" });
-    editorDocument.refreshStatusMessage(`Reset to HEAD - ${formatTimestamp(payload.updatedAt)}`);
+    if (sessionState.currentPath === filePath) {
+      await openFile(filePath, { ignoreDirty: true, source: "reload" });
+      editorDocument.refreshStatusMessage(`Reset to HEAD - ${formatTimestamp(payload.updatedAt)}`);
+      return;
+    }
+
+    await clearDraftBuffer(filePath);
   }
 
   async function saveCurrentFile({ force = false }: { force?: boolean } = {}) {
@@ -598,6 +730,8 @@ function WorkbenchFileClient(
       return;
     }
 
+    const filePath = sessionState.currentPath;
+    const expectedMtimeMs = state.expectedMtimeMs;
     const content = inspection.content;
     const response = await fetch("/api/file", {
       method: "PUT",
@@ -606,9 +740,9 @@ function WorkbenchFileClient(
       },
       body: JSON.stringify({
         projectId: getProjectId(),
-        path: sessionState.currentPath,
+        path: filePath,
         content,
-        expectedMtimeMs: state.expectedMtimeMs,
+        expectedMtimeMs,
         force,
       }),
     });
@@ -616,36 +750,52 @@ function WorkbenchFileClient(
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: "Unable to save file." }));
       if (response.status === 409) {
-        state.pendingWriteConflict = error as SaveConflictPayload;
-        eventBus.emit("saveConflictSurfaced", error as SaveConflictPayload);
-        syncCurrentDraftBuffer();
-        editorDocument.refreshStatusMessage();
+        if (sessionState.currentPath === filePath) {
+          state.pendingWriteConflict = error as SaveConflictPayload;
+          eventBus.emit("saveConflictSurfaced", error as SaveConflictPayload);
+          syncCurrentDraftBuffer();
+          editorDocument.refreshStatusMessage();
+        }
         return;
       }
 
-      editorDocument.refreshStatusMessage(error.error);
+      if (sessionState.currentPath === filePath) {
+        editorDocument.refreshStatusMessage(error.error);
+      }
       return;
     }
 
     const payload = (await response.json()) as SaveFilePayload;
-    state.baselineContent = content;
-    state.currentContent = content;
-    state.dirty = false;
-    state.expectedMtimeMs = payload.mtimeMs;
     await refreshProject();
-    clearWriteConflict();
-    const nextDraftBuffers = new Map(state.draftBuffers);
-    nextDraftBuffers.delete(sessionState.currentPath);
-    state.draftBuffers = nextDraftBuffers;
-    void persistDraftBuffer(sessionState.currentPath, null);
-    state.saveIssue = null;
+    if (sessionState.currentPath === filePath) {
+      state.baselineContent = content;
+      state.expectedMtimeMs = payload.mtimeMs;
+      clearWriteConflict();
+      state.saveIssue = null;
+
+      if (state.currentContent === content) {
+        state.dirty = false;
+        await clearDraftBuffer(filePath);
+      } else {
+        state.dirty = true;
+        syncCurrentDraftBuffer();
+      }
+    } else {
+      const bufferedDraft = state.draftBuffers.get(filePath);
+      if (!bufferedDraft || bufferedDraft.content === content) {
+        await clearDraftBuffer(filePath);
+      }
+    }
+
     eventBus.emit("saveCompleted", {
-      path: sessionState.currentPath,
+      path: filePath,
       updatedAt: payload.updatedAt,
     });
-    editorDocument.refreshStatusMessage(`Saved - ${formatTimestamp(payload.updatedAt)}`);
+    if (sessionState.currentPath === filePath) {
+      editorDocument.refreshStatusMessage(`Saved - ${formatTimestamp(payload.updatedAt)}`);
+      editorDocument.scheduleDiffGutterRefresh();
+    }
     emitExplorerStateChange();
-    editorDocument.scheduleDiffGutterRefresh();
   }
 
   async function refreshCurrentFileFromDiskIfSafe() {

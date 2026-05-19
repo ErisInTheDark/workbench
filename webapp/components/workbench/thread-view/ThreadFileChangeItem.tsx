@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ThreadFileChangeItem: render one or more adjacent fileChange items with per-file counts and expandable unified diffs. Keywords: workbench, thread, file change, diff.
- * - Local helpers: format paths, totals, and unified-diff rows for thread file changes. Keywords: unified diff, additions, deletions, path display.
+ * - Local helpers: format paths, summary labels, and change totals for thread file changes. Keywords: additions, deletions, path display.
  */
 "use client";
 
@@ -10,9 +10,9 @@ import { toWorkbenchDisplayPath } from "../../../lib/workbench/markdown/markdown
 import {
   parseUnifiedDiff,
   type ParsedUnifiedDiff,
-  type UnifiedDiffLine,
 } from "../../../lib/workbench/thread/thread-file-diff";
 import ProjectFilePath from "../ProjectFilePath";
+import ThreadCodeDisplay from "./ThreadCodeDisplay";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadSummaryText from "./ThreadSummaryText";
 
@@ -31,12 +31,27 @@ interface ParsedFileChange {
 function DiffChangeTotals ({
   additions,
   deletions,
+  isCreated,
 }: {
   additions: number;
   deletions: number;
+  isCreated: boolean;
 }) {
   if (!additions && !deletions) {
     return null;
+  }
+
+  if (isCreated) {
+    return (
+      <span className="inline-flex items-baseline gap-2 font-mono text-[0.78em] leading-[1.6]">
+        <span className="text-[color:color-mix(in_srgb,var(--success)_78%,var(--text)_22%)]">
+          +{additions}
+        </span>
+        <span className="text-muted">
+          {additions === 1 ? "1 added line" : `${additions} added lines`}
+        </span>
+      </span>
+    );
   }
 
   return (
@@ -55,10 +70,10 @@ function DiffChangeTotals ({
   );
 }
 
-function getChangeKindLabel (change: FileUpdateChange) {
+function getChangeDetailsLabel (change: FileUpdateChange) {
   switch (change.kind.type) {
     case "add":
-      return "Added";
+      return "Created";
     case "delete":
       return "Deleted";
     case "update":
@@ -68,122 +83,36 @@ function getChangeKindLabel (change: FileUpdateChange) {
   }
 }
 
-function ThreadUnifiedDiff ({
-  diff,
-}: {
-  diff: ParsedUnifiedDiff;
-}) {
-  const lineNumberWidth = Math.max(
-    2,
-    ...diff.hunks.flatMap((hunk) => hunk.lines.flatMap((line) => [
-      line.oldLineNumber ? String(line.oldLineNumber).length : 0,
-      line.newLineNumber ? String(line.newLineNumber).length : 0,
-    ])),
-  );
+function parseAddedFileTextDiff (diffText: string): ParsedUnifiedDiff {
+  const normalizedText = String(diffText ?? "").replace(/\r\n/g, "\n");
+  const lines = normalizedText.endsWith("\n")
+    ? normalizedText.slice(0, -1).split("\n")
+    : normalizedText.split("\n");
+  const additionLines = lines.length === 1 && lines[0] === "" ? [] : lines;
 
-  return (
-    <div className="overflow-x-auto -ml-12 -mr-4">
-      {diff.headers.length ? (
-        <div className="px-0 py-2 font-mono text-[0.78em] leading-[1.65] text-muted">
-          {diff.headers.map((line, index) => (
-            <div key={`header:${index}`} className="whitespace-pre-wrap break-words">
-              {line || " "}
-            </div>
-          ))}
-        </div>
-      ) : null}
-      <div>
-        {diff.hunks.map((hunk, hunkIndex) => (
-          <div key={`hunk:${hunkIndex}`} className={hunkIndex ? "pt-3" : ""}>
-            <div className="whitespace-pre-wrap break-words px-0 py-1 ml-12 font-mono text-[0.78em] leading-[1.65] text-accent">
-              {hunk.header}
-            </div>
-            <div>
-              {hunk.lines.map((line, lineIndex) => (
-                <ThreadUnifiedDiffLine
-                  key={`line:${hunkIndex}:${lineIndex}`}
-                  line={line}
-                  lineNumberWidth={lineNumberWidth}
-                />
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+  return {
+    additions: additionLines.length,
+    deletions: 0,
+    headers: [],
+    hunks: additionLines.length ? [{
+      header: `@@ -0,0 +1,${additionLines.length} @@`,
+      lines: additionLines.map((line, index) => ({
+        newLineNumber: index + 1,
+        oldLineNumber: null,
+        text: line,
+        type: "addition",
+      })),
+    }] : [],
+  };
 }
 
-function ThreadUnifiedDiffLine ({
-  line,
-  lineNumberWidth,
-}: {
-  line: UnifiedDiffLine;
-  lineNumberWidth: number;
-}) {
-  if (line.type === "note") {
-    return (
-      <div className="whitespace-pre-wrap break-words px-4 py-1.5 ml-12 font-mono text-[0.78em] leading-[1.65] text-muted italic">
-        {line.text}
-      </div>
-    );
+function parseFileChangeDiff (change: FileUpdateChange) {
+  const parsedDiff = parseUnifiedDiff(change.diff);
+  if (change.kind.type !== "add" || parsedDiff.hunks.length || !change.diff.trim()) {
+    return parsedDiff;
   }
 
-  const lineStyle = getDiffLineStyle(line.type);
-
-  return (
-    <div
-      className={`
-        px-12 grid font-mono tabular-nums text-[0.78em] leading-[1.65] ${lineStyle.rowClassName} relative 
-        before:block before:absolute before:inset-0 before:w-20 before:bg-linear-to-r before:from-[var(--bg)] before:to-transparent
-        after:block after:absolute after:inset-0 after:left-auto after:w-20 after:bg-linear-to-l after:from-[var(--bg)] after:to-transparent
-      `}
-      style={{ gridTemplateColumns: `${lineNumberWidth + 4}ch ${lineNumberWidth + 4}ch 3rem minmax(0,1fr)` }}
-    >
-      <span className={`px-3 py-1 text-right ${lineStyle.gutterTextClassName}`}>
-        {line.oldLineNumber ?? ""}
-      </span>
-      <span className={`px-3 py-1 text-right ${lineStyle.gutterTextClassName}`}>
-        {line.newLineNumber ?? ""}
-      </span>
-      <span className={`px-3 py-1 text-center ${lineStyle.prefixClassName}`}>
-        {lineStyle.prefix}
-      </span>
-      <span className={`whitespace-pre-wrap break-words px-3 py-1 ${lineStyle.contentClassName}`}>
-        {line.text || " "}
-      </span>
-    </div>
-  );
-}
-
-function getDiffLineStyle (type: UnifiedDiffLine["type"]) {
-  switch (type) {
-    case "addition":
-      return {
-        contentClassName: "text-text",
-        gutterTextClassName: "text-[color:color-mix(in_srgb,var(--success)_70%,var(--text)_30%)]",
-        prefix: "+",
-        prefixClassName: "text-[color:color-mix(in_srgb,var(--success)_82%,var(--text)_18%)]",
-        rowClassName: "bg-[color-mix(in_srgb,var(--success)_10%,transparent)]",
-      };
-    case "deletion":
-      return {
-        contentClassName: "text-text",
-        gutterTextClassName: "text-[color:color-mix(in_srgb,var(--danger)_70%,var(--text)_30%)]",
-        prefix: "-",
-        prefixClassName: "text-[color:color-mix(in_srgb,var(--danger)_82%,var(--text)_18%)]",
-        rowClassName: "bg-[color-mix(in_srgb,var(--danger)_10%,transparent)]",
-      };
-    case "context":
-    default:
-      return {
-        contentClassName: "text-text",
-        gutterTextClassName: "text-muted",
-        prefix: "\u00a0",
-        prefixClassName: "text-muted",
-        rowClassName: "bg-[color-mix(in_srgb,var(--muted)_5%,transparent)]",
-      };
-  }
+  return parseAddedFileTextDiff(change.diff);
 }
 
 function ThreadFileChangeDetails ({
@@ -195,7 +124,7 @@ function ThreadFileChangeDetails ({
     <div className="space-y-3">
       <div className="space-y-1">
         <p className="m-0 text-[0.78em] leading-[1.6] text-muted">
-          {getChangeKindLabel(parsedChange.change)} file
+          {getChangeDetailsLabel(parsedChange.change)} file
         </p>
         {parsedChange.movePathDisplay ? (
           <p className="m-0 flex flex-wrap items-baseline gap-2 text-[0.78em] leading-[1.6] text-muted">
@@ -205,7 +134,7 @@ function ThreadFileChangeDetails ({
         ) : null}
       </div>
       {parsedChange.change.diff.trim() ? (
-        <ThreadUnifiedDiff diff={parsedChange.diff} />
+        <ThreadCodeDisplay diff={parsedChange.diff} variant="diff" />
       ) : (
         <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No diff captured.</p>
       )}
@@ -222,7 +151,7 @@ export default function ThreadFileChangeItem ({
 }) {
   const parsedChanges: ParsedFileChange[] = items.flatMap((item) => item.changes.map((change, sourceChangeIndex) => ({
     change,
-    diff: parseUnifiedDiff(change.diff),
+    diff: parseFileChangeDiff(change),
     displayPath: toWorkbenchDisplayPath(change.path, projectRootPath ?? "") ?? change.path,
     movePathDisplay: change.kind.type === "update" && change.kind.move_path
       ? toWorkbenchDisplayPath(change.kind.move_path, projectRootPath ?? "") ?? change.kind.move_path
@@ -240,9 +169,13 @@ export default function ThreadFileChangeItem ({
           contentClassName="mt-2 pl-6"
           summary={(
             <span className="inline-flex min-w-0 max-w-full items-baseline gap-3">
-              <ThreadSummaryText text="Changed" />
+              <ThreadSummaryText text={change.change.kind.type === "add" ? "Created" : "Changed"} />
               <ProjectFilePath className="max-w-full shrink min-w-0 align-baseline text-[0.82em]" path={change.displayPath} />
-              <DiffChangeTotals additions={change.diff.additions} deletions={change.diff.deletions} />
+              <DiffChangeTotals
+                additions={change.diff.additions}
+                deletions={change.diff.deletions}
+                isCreated={change.change.kind.type === "add"}
+              />
             </span>
           )}
           summaryClassName="text-[0.92em] leading-[1.6] text-muted"

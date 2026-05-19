@@ -51,15 +51,6 @@ export interface CodexBootstrapMessages {
   initialized: ClientNotification;
 }
 
-type ThreadStartBridgeParams = ThreadStartParams & {
-  experimentalRawEvents?: boolean;
-  persistExtendedHistory?: boolean;
-};
-
-type ThreadStartBridgeRequest = Omit<Extract<ClientRequest, { method: "thread/start" }>, "params"> & {
-  params: ThreadStartBridgeParams;
-};
-
 const QUESTIONNAIRE_COLLABORATION_INSTRUCTIONS = [
   "# Collaboration Mode: Workbench Questionnaire",
   "",
@@ -176,14 +167,12 @@ export function createQuestionnaireCollaborationMode(
 
 export function createThreadStartRequest(
   id: number,
-  overrides: Partial<ThreadStartBridgeParams> = {},
-): ThreadStartBridgeRequest {
+  overrides: Partial<ThreadStartParams> = {},
+): Extract<ClientRequest, { method: "thread/start" }> {
   return {
     method: "thread/start",
     id,
     params: {
-      experimentalRawEvents: overrides.experimentalRawEvents ?? false,
-      persistExtendedHistory: overrides.persistExtendedHistory ?? true,
       ...overrides,
     },
   };

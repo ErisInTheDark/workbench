@@ -548,7 +548,18 @@ export default function Workbench () {
       return null;
     }
 
-    const payload = await controls.sendThreadMessage(thread, input, options);
+    const materializedOptions: WorkbenchSendThreadMessageOptions | undefined = thread.isDraft
+      ? {
+        ...options,
+        onThreadMaterialized: (materializedThread) => {
+          options?.onThreadMaterialized?.(materializedThread);
+          if (materializedThread.id !== thread.id) {
+            navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, materializedThread.id), { replace: true });
+          }
+        },
+      }
+      : options;
+    const payload = await controls.sendThreadMessage(thread, input, materializedOptions);
     if (payload) {
       if (thread.isDraft && payload.id !== thread.id) {
         navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, payload.id), { replace: true });

@@ -28,6 +28,7 @@ import {
   ThreadTextBlock,
 } from "./thread-view-primitives";
 import ThreadAgentName from "./ThreadAgentName";
+import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
 import ThreadContextCompactionItem from "./ThreadContextCompactionItem";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
@@ -727,22 +728,18 @@ function ThreadCommandExecutionDetails ({
             Working dir: <span className="break-all font-mono text-text">{commandDisplay.cwdDisplay}</span>
           </p>
         ) : null}
-        <div>
-          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded-[0.9rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text">
-            {item.command}
-          </pre>
-        </div>
         {item.aggregatedOutput?.trim() ? (
-          <ThreadDisclosure
-            contentClassName="pl-6"
-            summary={<ThreadSummaryText text="Output" />}
-            summaryClassName="text-[0.92em] leading-[1.6] text-muted"
-          >
-            <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words font-mono text-[0.78em] leading-[1.6] text-text">
-              {item.aggregatedOutput.trim()}
-            </pre>
-          </ThreadDisclosure>
-        ) : null}
+          <ThreadCodeDisplay
+            header={<ThreadCommandHeader command={item.command} />}
+            output={item.aggregatedOutput.trim()}
+            variant="plain"
+          />
+        ) : (
+          <ThreadCodeDisplay
+            header={<ThreadCommandHeader command={item.command} />}
+            variant="plain"
+          />
+        )}
       </>
     </ThreadDisclosure>
   );
