@@ -35,6 +35,7 @@ import {
 import {
     captureEditorSelection,
     placeCaretInElement,
+    restoreParagraphSelection,
     restoreListItemSelection,
 } from "./workbench/dom/selection/selection-dom";
 import {
@@ -298,11 +299,17 @@ export async function WorkbenchClient(
     },
     handleEditorInput: (event) => {
       let transformedListItem: HTMLLIElement | null = null;
+      let transformedBlock: HTMLElement | null = null;
       let commentCaretMarker: HTMLElement | null = null;
 
       editorClient.runInputMutation(() => {
-        const { transformedListItem: nextTransformedListItem, commentCaretMarker: richInputCommentCaretMarker } = editorClient.handleRichInput(event);
+        const {
+          transformedListItem: nextTransformedListItem,
+          transformedBlock: nextTransformedBlock,
+          commentCaretMarker: richInputCommentCaretMarker,
+        } = editorClient.handleRichInput(event);
         transformedListItem = nextTransformedListItem;
+        transformedBlock = nextTransformedBlock;
         commentCaretMarker = richInputCommentCaretMarker ?? editorClient.maybeActivateInlineCommentShortcut(event);
       }, {
         afterDomMutation: () => {
@@ -311,6 +318,10 @@ export async function WorkbenchClient(
               collapsed: true,
               getListItemTextContainer,
             });
+          }
+
+          if (transformedBlock) {
+            restoreParagraphSelection(transformedBlock);
           }
 
           if (commentCaretMarker) {

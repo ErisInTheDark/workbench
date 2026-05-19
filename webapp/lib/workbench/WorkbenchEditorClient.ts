@@ -201,7 +201,7 @@ interface WorkbenchEditorClient {
   handleFormatKeyDown: (event: KeyboardEvent) => boolean;
   handlePendingInlineBeforeInput: (event: InputEvent) => boolean;
   handlePendingInlineSelectionChange: () => void;
-  handleRichInput: (event: Event) => { transformedListItem: HTMLLIElement | null; commentCaretMarker: HTMLElement | null };
+  handleRichInput: (event: Event) => { transformedListItem: HTMLLIElement | null; transformedBlock: HTMLElement | null; commentCaretMarker: HTMLElement | null };
   handleListStructureKeyDown: (event: KeyboardEvent) => boolean;
   hideResetDraftDialog: () => void;
   hideSaveConflictDialog: () => void;

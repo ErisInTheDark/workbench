@@ -2,6 +2,7 @@
  * Exports:
  * - ensureListItemHasEditableContent: preserve an editable placeholder inside empty list items after structural transforms. Keywords: workbench, rich input, list item, editable, placeholder.
  * - ensureParagraphHasEditableContent: preserve an editable placeholder inside empty paragraphs after structural transforms. Keywords: workbench, rich input, paragraph, editable, placeholder.
+ * - replaceParagraphWithHeading: replace a paragraph-like block with an h1-h6 while preserving editable content. Keywords: workbench, rich input, heading, paragraph, markdown shortcut.
  * - insertListItemAtParagraphPosition: replace a paragraph with a list item while merging adjacent unordered lists. Keywords: workbench, rich input, list item, paragraph, merge.
  */
 
@@ -26,6 +27,18 @@ export function ensureParagraphHasEditableContent(paragraph: HTMLElement) {
   }
 
   paragraph.replaceChildren(document.createElement("br"));
+}
+
+export function replaceParagraphWithHeading(paragraph: HTMLElement, level: number) {
+  const heading = document.createElement(`h${level}`) as HTMLHeadingElement;
+  while (paragraph.firstChild) {
+    heading.append(paragraph.firstChild);
+  }
+
+  heading.normalize();
+  ensureParagraphHasEditableContent(heading);
+  paragraph.replaceWith(heading);
+  return heading;
 }
 
 export function insertListItemAtParagraphPosition(paragraph: HTMLElement, item: HTMLLIElement) {
