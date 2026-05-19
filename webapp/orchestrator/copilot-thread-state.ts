@@ -320,8 +320,10 @@ function createEmptyThread(sessionId: string, projectRoot: string, metadata: Ses
     name: metadata?.summary ?? null,
     path: null,
     preview: metadata?.summary ?? sessionId,
+    sessionId,
     source: { custom: "copilot-sdk" },
     status: { type: "idle" },
+    threadSource: null,
     turns: [],
     updatedAt,
   };
@@ -372,6 +374,7 @@ function ensureTurn(thread: Thread, turnId: string, timestampSeconds: number) {
     error: null,
     id: turnId,
     items: [],
+    itemsView: "full",
     startedAt: timestampSeconds,
     status: "inProgress",
   };

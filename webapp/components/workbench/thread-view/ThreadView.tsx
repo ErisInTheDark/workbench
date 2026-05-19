@@ -18,14 +18,14 @@ import type {
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
 import {
+  persistThreadLiveActivityOpen,
+  readStoredThreadLiveActivityOpen,
+} from "../../../lib/workbench/state/browser-state";
+import {
   getCollabAgentThreadIds,
   getPrimaryCollabAgentThreadId,
   getThreadAgentTabLabel,
 } from "../../../lib/workbench/thread/thread-collab-agents";
-import {
-  persistThreadLiveActivityOpen,
-  readStoredThreadLiveActivityOpen,
-} from "../../../lib/workbench/state/browser-state";
 import { ThreadQuestionBadge, ThreadUnreadBadge as ThreadUnreadBadgeView } from "../ThreadStatusBadges";
 import ThreadAgentName from "./ThreadAgentName";
 import ThreadComposer from "./ThreadComposer";
@@ -53,7 +53,7 @@ function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
-function countThreadItems(thread: Pick<ThreadPayload, "turns">) {
+function countThreadItems (thread: Pick<ThreadPayload, "turns">) {
   return thread.turns.reduce((total, turn) => total + turn.items.length, 0);
 }
 
@@ -84,7 +84,7 @@ function hasExpandedSelectionWithin (root: HTMLElement | null) {
   return Boolean(anchorNode && focusNode && root.contains(anchorNode) && root.contains(focusNode));
 }
 
-function cleanReasoningTitleLine(value: string) {
+function cleanReasoningTitleLine (value: string) {
   return value
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -96,7 +96,7 @@ function cleanReasoningTitleLine(value: string) {
     .trim() || null;
 }
 
-function getReasoningStepBody(sections: string[]) {
+function getReasoningStepBody (sections: string[]) {
   const bodySections: string[] = [];
   let removedTitle = false;
 
@@ -119,7 +119,7 @@ function getReasoningStepBody(sections: string[]) {
   return bodySections.join("\n\n").trim() || null;
 }
 
-function getCurrentReasoningStep(turn: ThreadPayload["turns"][number] | null) {
+function getCurrentReasoningStep (turn: ThreadPayload["turns"][number] | null) {
   if (!turn || turn.status !== "inProgress") {
     return null;
   }
@@ -148,7 +148,7 @@ function getCurrentReasoningStep(turn: ThreadPayload["turns"][number] | null) {
   };
 }
 
-function getLiveThreadActivity({
+function getLiveThreadActivity ({
   pendingUserInputRequest,
   turn,
 }: {
@@ -653,8 +653,8 @@ export default memo(function ThreadView ({
                   />
                 ) : null
               ) : (
-                <div className="relative before:absolute before:inset-0 before:-z-1 before:block before:bg-linear-to-r before:from-transparent before:from-0% before:via-[#0008] before:via-[10%_90%] before:to-transparent before:to-100% before:content-['']">
-                  <div className="explorer-scrollbar my-[calc(22rem*-0.1*0.5)] h-[22rem] scale-[0.9] overflow-y-auto border-y border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-2">
+                <div className="flex relative h-[calc(22rem*0.9)] before:absolute before:inset-0 before:-z-1 before:block before:bg-[linear-gradient(to_right,transparent,#0008_10%,#0008_90%,transparent)] before:content-[''] before:border-y before:border-[color-mix(in_srgb,var(--text)_10%,transparent)]">
+                  <div className="explorer-scrollbar my-[calc(22rem*-0.1*0.5)] h-[22rem] scale-[0.9] overflow-y-auto py-2">
                     <ThreadThreadContent
                       onOpenFile={onOpenFile}
                       projectRootPath={projectRootPath}
@@ -718,16 +718,16 @@ export default memo(function ThreadView ({
                   onClick={() => {
                     handleSubthreadSelection(tab.id);
                   }}
-                  >
-                    <ThreadAgentName
-                      fallbackKey={tab.id}
-                      thread={tabThread}
-                    />
-                    {tab.suffix ? <span className="text-muted">{tab.suffix}</span> : null}
-                    {badge.isQuestion ? <ThreadQuestionBadge /> : badge.unreadBadge ? <ThreadUnreadBadgeView badge={badge.unreadBadge} /> : null}
-                  </button>
-                );
-              })}
+                >
+                  <ThreadAgentName
+                    fallbackKey={tab.id}
+                    thread={tabThread}
+                  />
+                  {tab.suffix ? <span className="text-muted">{tab.suffix}</span> : null}
+                  {badge.isQuestion ? <ThreadQuestionBadge /> : badge.unreadBadge ? <ThreadUnreadBadgeView badge={badge.unreadBadge} /> : null}
+                </button>
+              );
+            })}
           </div>
         </div>
       ) : null}

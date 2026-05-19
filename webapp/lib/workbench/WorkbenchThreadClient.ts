@@ -565,6 +565,21 @@ function WorkbenchThreadClient(
     return JSON.stringify(leftTurn) === JSON.stringify(rightTurn);
   }
 
+  function areTurnListsEquivalent(leftTurns: Turn[], rightTurns: Turn[]) {
+    if (leftTurns.length !== rightTurns.length) {
+      return false;
+    }
+
+    return leftTurns.every((leftTurn, index) => {
+      const rightTurn = rightTurns[index];
+      return !!rightTurn
+        && leftTurn.id === rightTurn.id
+        && leftTurn.status === rightTurn.status
+        && leftTurn.itemsView === rightTurn.itemsView
+        && leftTurn.items.length === rightTurn.items.length;
+    });
+  }
+
   function areThreadPayloadsEquivalent(left: ThreadPayload | null, right: ThreadPayload | null) {
     if (left === right) {
       return true;
@@ -591,7 +606,7 @@ function WorkbenchThreadClient(
       && left.forkedFromId === right.forkedFromId
       && left.agentNickname === right.agentNickname
       && left.agentRole === right.agentRole
-      && left.turns.length === right.turns.length
+      && areTurnListsEquivalent(left.turns, right.turns)
       && areCurrentTurnsEquivalent(left, right);
   }
 
@@ -996,6 +1011,30 @@ function WorkbenchThreadClient(
     return items.filter((item) => !isOptimisticUserMessageItem(item) && doesUserMessageMatchInput(item, input)).length;
   }
 
+  function getOptimisticUserMessageInsertIndex(items: ThreadItem[]) {
+    let insertIndex = 0;
+    while (items[insertIndex]?.type === "userMessage") {
+      insertIndex += 1;
+    }
+    return insertIndex;
+  }
+
+  function insertOptimisticUserMessageItems(
+    items: ThreadItem[],
+    optimisticItems: Array<Extract<ThreadItem, { type: "userMessage" }>>,
+  ) {
+    if (!optimisticItems.length) {
+      return items;
+    }
+
+    const insertIndex = getOptimisticUserMessageInsertIndex(items);
+    return [
+      ...items.slice(0, insertIndex),
+      ...optimisticItems,
+      ...items.slice(insertIndex),
+    ];
+  }
+
   function applyOptimisticUserMessagesToTurn(
     thread: Pick<ThreadPayload, "harness" | "id">,
     turn: Turn,
@@ -1025,7 +1064,7 @@ function WorkbenchThreadClient(
 
     return {
       ...turn,
-      items: [...canonicalItems, ...visibleEntries.map((entry) => entry.item)],
+      items: insertOptimisticUserMessageItems(canonicalItems, visibleEntries.map((entry) => entry.item)),
     };
   }
 
@@ -1046,12 +1085,42 @@ function WorkbenchThreadClient(
     return changed ? { ...thread, turns } : thread;
   }
 
+  function shouldPreserveUnmatchedLiveTurnItems(incomingTurn: Turn, liveTurn: Turn) {
+    if (!liveTurn.items.length) {
+      return false;
+    }
+
+    if (incomingTurn.itemsView !== "full") {
+      return true;
+    }
+
+    return incomingTurn.status === "inProgress"
+      && liveTurn.status === "inProgress"
+      && incomingTurn.items.length < liveTurn.items.length;
+  }
+
+  function shouldPreserveUnmatchedLiveItem(
+    incomingTurn: Turn,
+    liveTurn: Turn,
+    liveItem: ThreadItem,
+    preserveAllUnmatchedLiveItems: boolean,
+  ) {
+    if (preserveAllUnmatchedLiveItems) {
+      return true;
+    }
+
+    return incomingTurn.status === "inProgress"
+      && liveTurn.status === "inProgress"
+      && (liveItem.type === "agentMessage" || liveItem.type === "reasoning" || liveItem.type === "plan");
+  }
+
   function mergeLiveStreamingTurn(incomingTurn: Turn, liveTurn: Turn | undefined) {
-    if (!liveTurn || incomingTurn.status !== "inProgress" || liveTurn.status !== "inProgress") {
+    if (!liveTurn) {
       return incomingTurn;
     }
 
     const liveItemsById = new Map(liveTurn.items.map((item) => [item.id, item]));
+    const preserveAllUnmatchedLiveItems = shouldPreserveUnmatchedLiveTurnItems(incomingTurn, liveTurn);
     const nextItems = incomingTurn.items.map((item) => {
       const liveItem = liveItemsById.get(item.id);
       let matchedLiveItem: ThreadItem | null = null;
@@ -1076,7 +1145,7 @@ function WorkbenchThreadClient(
     });
 
     for (const liveItem of liveItemsById.values()) {
-      if (liveItem.type === "agentMessage" || liveItem.type === "reasoning" || liveItem.type === "plan") {
+      if (shouldPreserveUnmatchedLiveItem(incomingTurn, liveTurn, liveItem, preserveAllUnmatchedLiveItems)) {
         nextItems.push(liveItem);
       }
     }
@@ -2176,7 +2245,7 @@ function WorkbenchThreadClient(
         index === nextTurnIndex
           ? {
             ...turn,
-            items: [...turn.items, createOptimisticUserMessage(input)],
+            items: insertOptimisticUserMessageItems(turn.items, [createOptimisticUserMessage(input)]),
           }
           : turn
       )),
