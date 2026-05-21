@@ -1,9 +1,7 @@
 /*
  * Exports:
- * - CodexStdioBridge: manage the shared Codex app-server stdio child and translate websocket requests and notifications against it. Keywords: codex, stdio, websocket, bridge.
+ * - CodexStdioBridge: translate websocket requests and Codex app-server messages around a stable app-server process. Keywords: codex, stdio, websocket, bridge.
  */
-import { spawn, type ChildProcess } from "node:child_process";
-
 import type { ApplyPatchApprovalParams } from "../lib/codex/generated/app-server/ApplyPatchApprovalParams";
 import type { ExecCommandApprovalParams } from "../lib/codex/generated/app-server/ExecCommandApprovalParams";
 import type { ReviewDecision } from "../lib/codex/generated/app-server/ReviewDecision";
@@ -25,27 +23,28 @@ import type {
     WorkbenchUserInputResponse,
 } from "../lib/types";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import { CodexQuestionnaireStore } from "./codex-questionnaire-store";
-import {
-    createSpawnOptions,
-    getSpawnDescriptor,
-    killProcessTree,
-    log,
-    logError,
-    pipeChildStream,
-} from "./process-helpers";
+import type CodexAppServer from "./CodexAppServer";
+import { logError } from "./process-helpers";
+
+type CodexTranscriptStoreInstance = import("./CodexTranscriptStore").default;
+type CodexTranscriptStoreConstructor = new (
+  projectRoot: string,
+  getProtectedThreadIds?: () => Iterable<string>,
+) => CodexTranscriptStoreInstance;
 
 type PendingClientResponse = {
   client: BridgeClient;
   clientRequestId: number | string;
   internal: false;
   method: string | null;
+  upstreamRequest: JsonRpcRequest;
 };
 
 type PendingInternalResponse = {
   internal: true;
   reject: (reason?: unknown) => void;
   resolve: (value: JsonRpcResponse) => void;
+  upstreamRequest: JsonRpcRequest;
 };
 
 type PendingResponse = PendingClientResponse | PendingInternalResponse;
@@ -55,12 +54,24 @@ function isPendingInternalResponse(pending: PendingResponse): pending is Pending
 }
 
 type CodexStdioBridgeOptions = {
+  appServer: CodexAppServer;
   bridgeUrl: string;
-  onFatalExit: (reason: string) => void;
+  initialState?: CodexStdioBridgeReloadState;
   onNotification: (notification: JsonRpcNotification) => void;
-  projectRoot: string;
   sendToClient: (client: BridgeClient, message: unknown) => void;
   storageRoot: string;
+};
+
+type RequestIdAllocator = {
+  next: number;
+};
+
+export type CodexStdioBridgeReloadState = {
+  initializeResult: unknown;
+  pendingResponses: Map<number, PendingResponse>;
+  pendingUserInputRequests: Map<string, PendingCodexUserInputRequest>;
+  requestIdAllocator: RequestIdAllocator;
+  upstreamInitialized: boolean;
 };
 
 type PendingCodexUserInputRequestBase = {
@@ -514,28 +525,69 @@ function toFileChangeApprovalDecision(choice: ApprovalDecisionChoice): FileChang
   }
 }
 
-export class CodexStdioBridge {
+function collectCacheSubtree(moduleId: string, visited = new Set<string>()) {
+  if (visited.has(moduleId)) {
+    return visited;
+  }
+
+  const cachedModule = require.cache[moduleId];
+  if (!cachedModule) {
+    return visited;
+  }
+
+  visited.add(moduleId);
+  for (const child of cachedModule.children) {
+    if (!child?.id || /[\\/]node_modules[\\/]/u.test(child.id)) {
+      continue;
+    }
+
+    collectCacheSubtree(child.id, visited);
+  }
+
+  return visited;
+}
+
+function loadCodexTranscriptStore({ reload = false }: { reload?: boolean } = {}) {
+  const resolvedPath = require.resolve("./CodexTranscriptStore");
+  if (reload) {
+    for (const moduleId of collectCacheSubtree(resolvedPath)) {
+      delete require.cache[moduleId];
+    }
+  }
+
+  return (require("./CodexTranscriptStore") as { default: CodexTranscriptStoreConstructor }).default;
+}
+
+export default class CodexStdioBridge {
+  private readonly appServer: CodexAppServer;
   private readonly bridgeUrl: string;
-  private readonly onFatalExit: CodexStdioBridgeOptions["onFatalExit"];
   private readonly onNotification: CodexStdioBridgeOptions["onNotification"];
-  private readonly projectRoot: string;
-  private readonly questionnaireStore: CodexQuestionnaireStore;
   private readonly sendToClient: CodexStdioBridgeOptions["sendToClient"];
-  private codexProcess: ChildProcess | null = null;
-  private initializeResult: unknown = null;
-  private nextRequestId = 1;
-  private readonly pendingUserInputRequests = new Map<string, PendingCodexUserInputRequest>();
-  private readonly pendingResponses = new Map<number, PendingResponse>();
-  private upstreamInitialized = false;
+  private readonly storageRoot: string;
+  private transcriptStore: CodexTranscriptStoreInstance;
+  private initializeResult: unknown;
+  private acceptingWork = true;
+  private operationQueue: Promise<unknown> = Promise.resolve();
+  private readonly pendingUserInputRequests: Map<string, PendingCodexUserInputRequest>;
+  private readonly pendingResponses: Map<number, PendingResponse>;
+  private readonly requestIdAllocator: RequestIdAllocator;
+  private transcriptQueue: Promise<void> = Promise.resolve();
+  private readonly transcriptTasks = new Set<Promise<void>>();
+  private upstreamInitialized: boolean;
   private upstreamInitializePromise: Promise<void> | null = null;
 
-  constructor({ bridgeUrl, onFatalExit, onNotification, projectRoot, sendToClient, storageRoot }: CodexStdioBridgeOptions) {
+  constructor({ appServer, bridgeUrl, initialState, onNotification, sendToClient, storageRoot }: CodexStdioBridgeOptions) {
+    this.appServer = appServer;
     this.bridgeUrl = bridgeUrl;
-    this.onFatalExit = onFatalExit;
     this.onNotification = onNotification;
-    this.projectRoot = projectRoot;
-    this.questionnaireStore = new CodexQuestionnaireStore(storageRoot);
     this.sendToClient = sendToClient;
+    this.storageRoot = storageRoot;
+    this.initializeResult = initialState?.initializeResult ?? null;
+    this.pendingResponses = initialState?.pendingResponses ?? new Map();
+    this.pendingUserInputRequests = initialState?.pendingUserInputRequests ?? new Map();
+    this.requestIdAllocator = initialState?.requestIdAllocator ?? { next: 1 };
+    this.upstreamInitialized = initialState?.upstreamInitialized ?? false;
+    this.transcriptStore = this.createTranscriptStore();
   }
 
   getInitializeResult() {
@@ -556,17 +608,45 @@ export class CodexStdioBridge {
 
   stop() {
     this.pendingUserInputRequests.clear();
+    for (const pending of this.pendingResponses.values()) {
+      if (isPendingInternalResponse(pending)) {
+        pending.reject(new Error("Codex bridge stopped before the upstream response arrived."));
+      }
+    }
     this.pendingResponses.clear();
     this.upstreamInitialized = false;
-    this.upstreamInitializePromise = null;
-
-    if (this.codexProcess && !this.codexProcess.killed) {
-      killProcessTree(this.codexProcess.pid);
-      this.codexProcess = null;
+    if (this.upstreamInitializePromise) {
+      this.upstreamInitializePromise.catch(() => undefined);
     }
+    this.upstreamInitializePromise = null;
+    this.acceptingWork = false;
+  }
+
+  async dispose() {
+    this.stop();
+    await this.transcriptStore.dispose();
+  }
+
+  async detachForReload(): Promise<CodexStdioBridgeReloadState> {
+    await this.waitForIdle();
+    this.acceptingWork = false;
+    await this.transcriptStore.dispose();
+    return {
+      initializeResult: this.initializeResult,
+      pendingResponses: this.pendingResponses,
+      pendingUserInputRequests: this.pendingUserInputRequests,
+      requestIdAllocator: this.requestIdAllocator,
+      upstreamInitialized: this.upstreamInitialized,
+    };
+  }
+
+  async reloadTranscriptStore() {
+    await this.transcriptStore.dispose();
+    this.transcriptStore = this.createTranscriptStore({ reload: true });
   }
 
   async ensureInitialized(initializeMessage: JsonRpcRequest) {
+    this.assertAcceptingWork();
     if (this.upstreamInitialized) {
       return;
     }
@@ -594,15 +674,25 @@ export class CodexStdioBridge {
     }
   }
 
-  forwardRequest(message: JsonRpcRequest, client: BridgeClient, clientRequestId: number | string) {
-    void this.request(message, { client, clientRequestId });
+  async forwardRequest(message: JsonRpcRequest, client: BridgeClient, clientRequestId: number | string) {
+    await this.enqueueOperation(() => {
+      this.assertAcceptingWork();
+      this.request(message, { client, clientRequestId });
+    });
   }
 
-  forwardNotification(message: JsonRpcRequest) {
-    this.send(message);
+  async forwardNotification(message: JsonRpcRequest) {
+    await this.enqueueOperation(() => {
+      this.assertAcceptingWork();
+      this.send(message);
+    });
   }
 
   async handleBridgeRequest(message: JsonRpcRequest): Promise<JsonRpcResponse | null> {
+    return await this.enqueueOperation(() => this.handleBridgeRequestImmediately(message));
+  }
+
+  private async handleBridgeRequestImmediately(message: JsonRpcRequest): Promise<JsonRpcResponse | null> {
     const requestId = message.id ?? null;
     const method = typeof message.method === "string" ? message.method : null;
     if (!method) {
@@ -616,6 +706,7 @@ export class CodexStdioBridge {
     }
 
     try {
+      this.assertAcceptingWork();
       switch (method) {
         case "questionnaire/list":
           return {
@@ -646,70 +737,20 @@ export class CodexStdioBridge {
     }
   }
 
-  private createStdioChild() {
-    const spawnDescriptor = getSpawnDescriptor({
-      command: "codex",
-      args: ["app-server", "--listen", "stdio://"],
-    });
-
-    return spawn(spawnDescriptor.command, spawnDescriptor.args, {
-      ...createSpawnOptions(this.projectRoot, {
-        ...process.env,
-        FORCE_COLOR: "0",
-        NO_COLOR: "1",
-      }, true),
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-  }
-
-  private ensureProcess() {
-    if (this.codexProcess && !this.codexProcess.killed) {
-      return this.codexProcess;
-    }
-
-    this.codexProcess = this.createStdioChild();
-    this.initializeResult = null;
-    this.nextRequestId = 1;
-    this.pendingUserInputRequests.clear();
-    this.pendingResponses.clear();
-    this.upstreamInitialized = false;
-    this.upstreamInitializePromise = null;
-    this.bindStdout(this.codexProcess);
-    pipeChildStream("codex-stdio", this.codexProcess.stderr, (chunk) => process.stderr.write(chunk));
-
-    this.codexProcess.once("error", (error) => {
-      logError("codex-stdio", `failed to start: ${error instanceof Error ? error.message : String(error)}`);
-      this.onFatalExit("Codex app-server failed to start.");
-    });
-
-    this.codexProcess.once("exit", (code, signal) => {
-      log("codex-stdio", `exited (code=${code ?? "null"}, signal=${signal ?? "null"})`);
-      this.codexProcess = null;
-      this.initializeResult = null;
-      this.pendingUserInputRequests.clear();
-      this.pendingResponses.clear();
-      this.upstreamInitialized = false;
-      this.upstreamInitializePromise = null;
-      this.onFatalExit("Codex app-server exited.");
-    });
-
-    log("codex-bridge", "started shared stdio app-server");
-    return this.codexProcess;
-  }
-
   private nextUpstreamRequestId() {
-    const requestId = this.nextRequestId;
-    this.nextRequestId += 1;
+    const requestId = this.requestIdAllocator.next;
+    this.requestIdAllocator.next += 1;
     return requestId;
   }
 
-  private send(message: unknown) {
-    this.ensureProcess();
-    if (!this.codexProcess?.stdin.writable) {
-      throw new Error("Codex app-server bridge is not running.");
+  private assertAcceptingWork() {
+    if (!this.acceptingWork) {
+      throw new Error("Codex bridge is reloading.");
     }
+  }
 
-    this.codexProcess.stdin.write(`${JSON.stringify(message)}\n`);
+  private send(message: unknown) {
+    this.appServer.send(message);
   }
 
   private request(
@@ -724,8 +765,6 @@ export class CodexStdioBridge {
       internal?: boolean;
     },
   ) {
-    this.ensureProcess();
-
     const upstreamRequestId = this.nextUpstreamRequestId();
     const upstreamMessage = {
       ...message,
@@ -738,8 +777,10 @@ export class CodexStdioBridge {
           internal: true,
           reject,
           resolve,
+          upstreamRequest: upstreamMessage,
         });
       });
+      void this.captureTranscript(() => this.transcriptStore.recordClientRequest(upstreamMessage));
       this.send(upstreamMessage);
       return responsePromise;
     }
@@ -753,55 +794,80 @@ export class CodexStdioBridge {
       clientRequestId,
       internal: false,
       method: typeof message.method === "string" ? message.method : null,
+      upstreamRequest: upstreamMessage,
     });
+    void this.captureTranscript(() => this.transcriptStore.recordClientRequest(upstreamMessage));
     this.send(upstreamMessage);
     return null;
   }
 
-  private bindStdout(codexProcess: ChildProcess) {
-    let bufferedOutput = "";
-
-    codexProcess.stdout?.on("data", (chunk: Buffer) => {
-      bufferedOutput += chunk.toString("utf8");
-      const lines = bufferedOutput.split(/\r?\n/u);
-      bufferedOutput = lines.pop() ?? "";
-
-      for (const line of lines) {
-        const trimmedLine = line.trim();
-        if (!trimmedLine) {
-          continue;
-        }
-
-        try {
-          this.handleUpstreamMessage(JSON.parse(trimmedLine) as unknown);
-        } catch (error) {
-          logError("codex-bridge", `invalid upstream JSON: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-    });
+  private async enqueueOperation<TValue>(task: () => TValue | Promise<TValue>) {
+    const nextOperation = this.operationQueue
+      .catch(() => undefined)
+      .then(task);
+    this.operationQueue = nextOperation.catch(() => undefined);
+    return await nextOperation;
   }
 
-  private handleUpstreamMessage(message: unknown) {
+  async waitForIdle() {
+    while (true) {
+      const currentQueue = this.operationQueue;
+      await currentQueue.catch(() => undefined);
+      if (this.operationQueue === currentQueue) {
+        break;
+      }
+    }
+    await Promise.allSettled(Array.from(this.transcriptTasks));
+    await this.transcriptQueue.catch(() => undefined);
+  }
+
+  private createTranscriptStore({ reload = false }: { reload?: boolean } = {}) {
+    const TranscriptStore = loadCodexTranscriptStore({ reload });
+    return new TranscriptStore(this.storageRoot, () => (
+      Array.from(this.pendingUserInputRequests.values(), (request) => request.threadId)
+    ));
+  }
+
+  async handleUpstreamMessage(message: unknown) {
     if (isJsonRpcResponse(message)) {
-      const pending = this.pendingResponses.get(Number(message.id));
-      if (!pending) {
-        return;
-      }
-
-      this.pendingResponses.delete(Number(message.id));
-      if (isPendingInternalResponse(pending)) {
-        pending.resolve(message);
-        return;
-      }
-
-      this.sendToClient(pending.client, {
-        ...message,
-        id: pending.clientRequestId,
-      });
+      await this.handleUpstreamResponse(message);
       return;
     }
 
+    await this.enqueueOperation(() => this.handleUpstreamNonResponseMessage(message));
+  }
+
+  private async handleUpstreamResponse(message: JsonRpcResponse) {
+    const pending = this.pendingResponses.get(Number(message.id));
+    if (!pending) {
+      return;
+    }
+
+    this.pendingResponses.delete(Number(message.id));
+    let hydratedMessage = message;
+    try {
+      hydratedMessage = await this.transcriptStore.hydrateThreadResponse(pending.upstreamRequest, message);
+    } catch (error) {
+      logError("codex-transcript", `failed to hydrate thread response: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    void this.captureTranscript(async () => {
+      await this.transcriptStore.recordUpstreamResponse(pending.upstreamRequest, message);
+      await this.transcriptStore.recordHydratedThreadSnapshot(hydratedMessage);
+    });
+    if (isPendingInternalResponse(pending)) {
+      pending.resolve(hydratedMessage);
+      return;
+    }
+
+    this.sendToClient(pending.client, {
+      ...hydratedMessage,
+      id: pending.clientRequestId,
+    });
+  }
+
+  private async handleUpstreamNonResponseMessage(message: unknown) {
     if (isJsonRpcServerRequest(message)) {
+      void this.captureTranscript(() => this.transcriptStore.recordUpstreamServerRequest(message));
       switch (message.method) {
         case "item/tool/requestUserInput":
           this.handleUpstreamQuestionnaireRequest(message);
@@ -830,6 +896,7 @@ export class CodexStdioBridge {
         this.handleServerRequestResolved(message.params);
       }
       this.onNotification(message);
+      void this.captureTranscript(() => this.transcriptStore.recordUpstreamNotification(message));
     }
   }
 
@@ -855,6 +922,25 @@ export class CodexStdioBridge {
         threadId,
       },
     });
+  }
+
+  private async captureTranscript(task: () => Promise<unknown>) {
+    const transcriptTask = this.transcriptQueue
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await task();
+        } catch (error) {
+          logError("codex-transcript", error instanceof Error ? error.message : String(error));
+        }
+      });
+    this.transcriptQueue = transcriptTask.catch(() => undefined);
+    this.transcriptTasks.add(transcriptTask);
+    try {
+      await transcriptTask;
+    } finally {
+      this.transcriptTasks.delete(transcriptTask);
+    }
   }
 
   private handleUpstreamQuestionnaireRequest(
@@ -1038,7 +1124,7 @@ export class CodexStdioBridge {
     }
 
     return {
-      data: await this.questionnaireStore.listThreadHistory(threadId),
+      data: await this.transcriptStore.listQuestionnaireHistory(threadId),
     };
   }
 
@@ -1150,17 +1236,15 @@ export class CodexStdioBridge {
       turnId: resolvedResponse.turnId ?? pendingRequest.turnId ?? "",
     };
 
-    await this.questionnaireStore.upsertThreadEntry(historyEntry);
-
-    try {
-      this.send({
-        id: pendingRequest.upstreamRequestId,
-        result: toToolRequestUserInputResponse(resolvedResponse.response),
-      });
-    } catch (error) {
-      await this.questionnaireStore.removeThreadEntry(historyEntry.threadId, historyEntry.requestKey);
-      throw error;
-    }
+    this.send({
+      id: pendingRequest.upstreamRequestId,
+      result: toToolRequestUserInputResponse(resolvedResponse.response),
+    });
+    let warning: string | null = null;
+    await this.transcriptStore.recordQuestionnaireResolved(historyEntry).catch((error) => {
+      warning = "Your response was sent, but Workbench could not save it to local transcript history.";
+      logError("codex-transcript", `failed to persist questionnaire response: ${error instanceof Error ? error.message : String(error)}`);
+    });
 
     this.pendingUserInputRequests.delete(pendingRequest.requestKey);
     this.onNotification({
@@ -1171,6 +1255,6 @@ export class CodexStdioBridge {
       },
     });
 
-    return { ok: true };
+    return warning ? { ok: true, warning } : { ok: true };
   }
 }

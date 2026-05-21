@@ -89,7 +89,7 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
 const MOBILE_SHELL_HEADER_HIDE_THRESHOLD_PX = 24;
 const MOBILE_SHELL_HEADER_SHOW_THRESHOLD_PX = 8;
 const DEFAULT_RELOAD_REQUEST: OrchestratorReloadRequest = {
-  scopes: ["orchestrator-logic", "next-dev"],
+  scopes: ["orchestrator-logic", "codex-bridge", "next-dev"],
 };
 
 function isReloadResponse (value: unknown): value is OrchestratorReloadResponse {
@@ -689,7 +689,7 @@ export default function Workbench () {
 
   const reloadLocalRuntime = useCallback(async () => {
     setReloadError("");
-    setReloadMessage("Requesting orchestrator logic reload and Next.js dev restart...");
+    setReloadMessage("Requesting orchestrator logic reload, Codex bridge restart, and Next.js dev restart...");
     setIsReloadingRuntime(true);
 
     try {

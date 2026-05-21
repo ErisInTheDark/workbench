@@ -11,6 +11,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const VALID_RELOAD_SCOPES = new Set<OrchestratorReloadScope>([
+  "codex-bridge",
   "next-dev",
   "orchestrator-logic",
 ]);

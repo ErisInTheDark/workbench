@@ -63,6 +63,7 @@ import {
     readStoredThreadUnreadState,
 } from "./state/browser-state";
 import { applyQuestionnaireHistoryToThread } from "./thread/thread-questionnaire-history";
+import { getTurnRenderSignature } from "./thread/thread-item-signature";
 
 const THREAD_REFRESH_TASK_ID = "thread-refresh";
 const THREAD_LIST_REFRESH_TASK_ID = "thread-list-refresh";
@@ -589,7 +590,7 @@ function WorkbenchThreadClient(
         && leftTurn.id === rightTurn.id
         && leftTurn.status === rightTurn.status
         && leftTurn.itemsView === rightTurn.itemsView
-        && leftTurn.items.length === rightTurn.items.length;
+        && getTurnRenderSignature(leftTurn) === getTurnRenderSignature(rightTurn);
     });
   }
 
@@ -1506,13 +1507,17 @@ function WorkbenchThreadClient(
       if (harness === "codex") {
         const routeUrl = buildCurrentThreadTitleRouteUrl();
         const codexDeveloperInstructions = buildCodexDeveloperInstructions(threadId, selectedAgentPath, routeUrl);
-        resumedThread = await sendBridgeRequest<ThreadResumeResponse>(harness, {
-          method: "thread/resume",
-          params: {
-            developerInstructions: codexDeveloperInstructions,
-            threadId,
-          } satisfies ThreadResumeParams,
-        });
+        try {
+          resumedThread = await sendBridgeRequest<ThreadResumeResponse>(harness, {
+            method: "thread/resume",
+            params: {
+              developerInstructions: codexDeveloperInstructions,
+              threadId,
+            } satisfies ThreadResumeParams,
+          });
+        } catch {
+          resumedThread = null;
+        }
       }
 
       const response = await sendBridgeRequest<ThreadReadResponse>(harness, {
@@ -1536,7 +1541,7 @@ function WorkbenchThreadClient(
         ? getThreadModel(threadId)
         : resumedThread?.model ?? readStoredHarnessModel(harness);
       if (harness === "codex") {
-        await readCompletedQuestionnaireHistory(threadId);
+        void readCompletedQuestionnaireHistory(threadId);
       }
       return mergeLiveStreamingThreadSnapshot(toThreadPayload(
         response.thread,
@@ -1575,7 +1580,7 @@ function WorkbenchThreadClient(
 
       const nextModel = getThreadModel(threadId);
       if (harness === "codex") {
-        await readCompletedQuestionnaireHistory(threadId);
+        void readCompletedQuestionnaireHistory(threadId);
       }
       return mergeLiveStreamingThreadSnapshot(toThreadPayload(
         response.thread,
@@ -2633,7 +2638,7 @@ function WorkbenchThreadClient(
       throw new Error("There is no pending question for this thread.");
     }
 
-    await sendBridgeRequest<{ ok: boolean }>(pendingRequest.harness, {
+    const submitResult = await sendBridgeRequest<{ ok: boolean; warning?: string }>(pendingRequest.harness, {
       method: "questionnaire/respond",
       params: {
         insertAfterItemId: options.insertAfterItemId ?? pendingRequest.itemId,
@@ -2644,6 +2649,9 @@ function WorkbenchThreadClient(
         turnId: options.turnId ?? pendingRequest.turnId,
       },
     });
+    if (submitResult.warning) {
+      emitStatusMessage(submitResult.warning);
+    }
     if (pendingRequest.harness === "codex") {
       await readCompletedQuestionnaireHistory(threadId);
     }

@@ -11,7 +11,8 @@ import type {
   OrchestratorReloadScope,
 } from "../lib/types";
 import type { BridgeClient, HarnessKind, JsonRpcNotification, JsonRpcRequest } from "./bridge-types";
-import { CodexStdioBridge } from "./codex-stdio-bridge";
+import CodexAppServer from "./CodexAppServer";
+import CodexStdioBridge from "./CodexStdioBridge";
 import { CopilotBridge } from "./copilot-bridge";
 import {
     createSpawnOptions,
@@ -37,6 +38,7 @@ const NEXT_PORT = process.env.PORT ?? "3002";
 const RESTART_DELAY_MS = 1000;
 const ORCHESTRATOR_RELOAD_PATH = "/orchestrator/reload";
 const ORCHESTRATOR_RELOAD_SCOPE_VALUES = new Set<OrchestratorReloadScope>([
+  "codex-bridge",
   "next-dev",
   "orchestrator-logic",
 ]);
@@ -91,6 +93,9 @@ let lastReloadResponse: OrchestratorReloadResponse = {
 };
 let reloadableModules = loadOrchestratorReloadableModules();
 let shuttingDown = false;
+let codexBridge: CodexStdioBridge;
+let upstreamMessageQueue: Promise<void> = Promise.resolve();
+let codexBridgeReloadPromise: Promise<void> | null = null;
 
 const copilotBridge = new CopilotBridge({
   getReloadableModules: () => reloadableModules,
@@ -100,22 +105,27 @@ const copilotBridge = new CopilotBridge({
   projectRoot: WEBAPP_ROOT,
 });
 
-const codexBridge = new CodexStdioBridge({
-  bridgeUrl: CODEX_BRIDGE_URL,
+const codexAppServer = new CodexAppServer({
   onFatalExit: (reason) => {
+    codexBridge.stop();
+    codexReadyPromise = null;
     for (const client of bridgeConnections) {
       client.close(1011, reason);
     }
   },
-  onNotification: (notification) => {
-    broadcastToClients("codex", notification);
+  onMessage: (message) => {
+    upstreamMessageQueue = upstreamMessageQueue
+      .catch(() => undefined)
+      .then(() => waitForCodexBridgeReload())
+      .then(() => codexBridge.handleUpstreamMessage(message))
+      .catch((error) => {
+        logError("codex-bridge", `failed to handle upstream message: ${error instanceof Error ? error.message : String(error)}`);
+      });
   },
   projectRoot: WEBAPP_ROOT,
-  sendToClient: (client, message) => {
-    sendJsonToClient(client, message);
-  },
-  storageRoot: PROJECT_ROOT,
 });
+
+codexBridge = createCodexBridge();
 
 const specs: ProcessSpec[] = [
   {
@@ -239,7 +249,7 @@ function finalizeReloadResponse(
   };
 }
 
-function stopAllChildren() {
+async function stopAllChildren() {
   for (const entry of processes.values()) {
     if (entry.child && !entry.child.killed) {
       killProcessTree(entry.child.pid);
@@ -251,7 +261,8 @@ function stopAllChildren() {
   }
   bridgeConnections.clear();
 
-  codexBridge.stop();
+  await codexBridge.dispose();
+  codexAppServer.stop();
 
   if (bridgeWebSocketServer) {
     bridgeWebSocketServer.close();
@@ -289,37 +300,140 @@ function reloadOrchestratorLogic() {
   log("orchestrator", "reloaded orchestrator helper modules");
 }
 
+async function waitForCodexBridgeReload() {
+  while (codexBridgeReloadPromise) {
+    await codexBridgeReloadPromise.catch(() => undefined);
+  }
+}
+
+async function runAfterCodexBridgeReload<TValue>(task: () => TValue | Promise<TValue>) {
+  await waitForCodexBridgeReload();
+  return await task();
+}
+
+function collectCacheSubtree(moduleId: string, visited = new Set<string>()) {
+  if (visited.has(moduleId)) {
+    return visited;
+  }
+
+  const cachedModule = require.cache[moduleId];
+  if (!cachedModule) {
+    return visited;
+  }
+
+  visited.add(moduleId);
+  for (const child of cachedModule.children) {
+    if (!child?.id || /[\\/]node_modules[\\/]/u.test(child.id)) {
+      continue;
+    }
+
+    collectCacheSubtree(child.id, visited);
+  }
+
+  return visited;
+}
+
+function reloadCodexBridgeModule() {
+  const resolvedPath = require.resolve("./CodexStdioBridge");
+  for (const moduleId of collectCacheSubtree(resolvedPath)) {
+    delete require.cache[moduleId];
+  }
+
+  return require("./CodexStdioBridge") as typeof import("./CodexStdioBridge");
+}
+
+function createCodexBridge() {
+  return new CodexStdioBridge({
+    appServer: codexAppServer,
+    bridgeUrl: CODEX_BRIDGE_URL,
+    onNotification: (notification) => {
+      broadcastToClients("codex", notification);
+    },
+    sendToClient: (client, message) => {
+      sendJsonToClient(client, message);
+    },
+    storageRoot: PROJECT_ROOT,
+  });
+}
+
+async function reloadCodexBridge() {
+  if (codexBridgeReloadPromise) {
+    await codexBridgeReloadPromise;
+    return;
+  }
+
+  if (codexReadyPromise) {
+    await codexReadyPromise.catch(() => undefined);
+  }
+  codexReadyPromise = null;
+
+  const upstreamQueueBeforeReload = upstreamMessageQueue;
+  const reloadPromise = (async () => {
+    await upstreamQueueBeforeReload.catch(() => undefined);
+    const state = await codexBridge.detachForReload();
+    const { default: ReloadedCodexStdioBridge } = reloadCodexBridgeModule();
+    codexBridge = new ReloadedCodexStdioBridge({
+      appServer: codexAppServer,
+      bridgeUrl: CODEX_BRIDGE_URL,
+      initialState: state,
+      onNotification: (notification) => {
+        broadcastToClients("codex", notification);
+      },
+      sendToClient: (client, message) => {
+        sendJsonToClient(client, message);
+      },
+      storageRoot: PROJECT_ROOT,
+    });
+    log("codex-bridge", "reloaded bridge code without restarting app-server");
+  })();
+
+  codexBridgeReloadPromise = reloadPromise;
+  try {
+    await reloadPromise;
+  } finally {
+    if (codexBridgeReloadPromise === reloadPromise) {
+      codexBridgeReloadPromise = null;
+    }
+  }
+}
+
 function queueReload(scopes: OrchestratorReloadScope[]) {
   const startedAt = lastReloadResponse.startedAt;
   setImmediate(() => {
-    try {
-      if (scopes.includes("orchestrator-logic")) {
-        reloadOrchestratorLogic();
-      }
-
-      if (scopes.includes("next-dev")) {
-        const nextSpec = findProcessSpec("next-dev");
-        if (!nextSpec) {
-          throw new Error("Next.js dev process is not registered with the orchestrator.");
+    void (async () => {
+      try {
+        if (scopes.includes("orchestrator-logic")) {
+          reloadOrchestratorLogic();
         }
 
-        restartChild(nextSpec);
-        log("orchestrator", "queued Next.js dev restart");
+        if (scopes.includes("codex-bridge")) {
+          await reloadCodexBridge();
+        }
+
+        if (scopes.includes("next-dev")) {
+          const nextSpec = findProcessSpec("next-dev");
+          if (!nextSpec) {
+            throw new Error("Next.js dev process is not registered with the orchestrator.");
+          }
+
+          restartChild(nextSpec);
+          log("orchestrator", "queued Next.js dev restart");
+        }
+        finalizeReloadResponse(startedAt, {
+          completedAt: Date.now(),
+          error: null,
+          state: "succeeded",
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        finalizeReloadResponse(startedAt, {
+          completedAt: Date.now(),
+          error: message,
+          state: "failed",
+        });
+        logError("orchestrator", error instanceof Error ? error.stack ?? error.message : message);
       }
-      finalizeReloadResponse(startedAt, {
-        completedAt: Date.now(),
-        error: null,
-        state: "succeeded",
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      finalizeReloadResponse(startedAt, {
-        completedAt: Date.now(),
-        error: message,
-        state: "failed",
-      });
-      logError("orchestrator", error instanceof Error ? error.stack ?? error.message : message);
-    }
+    })();
   });
 }
 
@@ -424,10 +538,12 @@ async function handleClientMessage(client: BridgeClient, data: Buffer) {
 
   if (message.method === "initialize" && "id" in message) {
     try {
-      await ensureCodexReady();
-      sendJsonToClient(client, {
-        id: message.id,
-        result: codexBridge.getInitializeResult(),
+      await runAfterCodexBridgeReload(async () => {
+        await ensureCodexReady();
+        sendJsonToClient(client, {
+          id: message.id,
+          result: codexBridge.getInitializeResult(),
+        });
       });
     } catch (error) {
       sendJsonToClient(client, {
@@ -459,17 +575,29 @@ async function handleClientMessage(client: BridgeClient, data: Buffer) {
 
   if ("id" in message) {
     const strippedMessage = stripHarnessField(message);
-    const bridgeResponse = await codexBridge.handleBridgeRequest(strippedMessage);
-    if (bridgeResponse) {
-      sendJsonToClient(client, bridgeResponse);
-      return;
-    }
+    try {
+      const bridgeResponse = await runAfterCodexBridgeReload(() => codexBridge.handleBridgeRequest(strippedMessage));
+      if (bridgeResponse) {
+        sendJsonToClient(client, bridgeResponse);
+        return;
+      }
 
-    codexBridge.forwardRequest(strippedMessage, client, message.id as number | string);
+      await runAfterCodexBridgeReload(() => codexBridge.forwardRequest(strippedMessage, client, message.id as number | string));
+    } catch (error) {
+      sendJsonToClient(client, {
+        id: message.id,
+        error: {
+          code: -32000,
+          message: error instanceof Error ? error.message : "Codex bridge request failed.",
+        },
+      });
+    }
     return;
   }
 
-  codexBridge.forwardNotification(stripHarnessField(message));
+  await runAfterCodexBridgeReload(() => codexBridge.forwardNotification(stripHarnessField(message))).catch((error) => {
+    logError("codex-bridge", error instanceof Error ? error.message : String(error));
+  });
 }
 
 function startBridgeServer() {
@@ -506,7 +634,9 @@ function startBridgeServer() {
     log("codex-bridge", `client connected (${bridgeConnections.size} active)`);
 
     bridgeClient.on("message", (payload) => {
-      void handleClientMessage(bridgeClient, payload);
+      void handleClientMessage(bridgeClient, payload).catch((error) => {
+        logError("codex-bridge", error instanceof Error ? error.message : String(error));
+      });
     });
 
     bridgeClient.once("close", () => {
@@ -545,8 +675,7 @@ function shutdownAndExit(exitCode: number, error?: unknown) {
     logError("orchestrator", error instanceof Error ? error.stack ?? error.message : String(error));
   }
 
-  stopAllChildren();
-  void copilotBridge.stop().finally(() => {
+  void stopAllChildren().finally(() => copilotBridge.stop()).finally(() => {
     process.exit(exitCode);
   });
 }
@@ -559,7 +688,6 @@ process.on("uncaughtException", (error) => shutdownAndExit(1, error));
 process.on("unhandledRejection", (reason) => shutdownAndExit(1, reason));
 process.on("exit", () => {
   shuttingDown = true;
-  stopAllChildren();
 });
 
 log("orchestrator", `starting bridge at ${CODEX_BRIDGE_URL} and Next.js on port ${NEXT_PORT}`);

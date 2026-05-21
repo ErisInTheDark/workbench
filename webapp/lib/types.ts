@@ -4,7 +4,7 @@ import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
 import type { WorkbenchRoute } from "./workbench/navigation/workbench-route";
 
 export type WorkbenchHarness = "codex" | "copilot";
-export type OrchestratorReloadScope = "next-dev" | "orchestrator-logic";
+export type OrchestratorReloadScope = "codex-bridge" | "next-dev" | "orchestrator-logic";
 export type OrchestratorReloadState = "idle" | "running" | "succeeded" | "failed";
 
 export interface OrchestratorReloadRequest {

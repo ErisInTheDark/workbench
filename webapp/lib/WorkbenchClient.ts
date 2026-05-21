@@ -70,6 +70,7 @@ import WorkbenchEventBus from "./workbench/WorkbenchEventBus";
 import WorkbenchFileClient from "./workbench/WorkbenchFileClient";
 import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
 import WorkbenchThreadClient from "./workbench/WorkbenchThreadClient";
+import { getTurnRenderSignature } from "./workbench/thread/thread-item-signature";
 
 const AUTO_REFRESH_INTERVAL_MS = 1500;
 const HISTORY_KEYFRAME_INTERVAL = 50;
@@ -688,6 +689,21 @@ export async function WorkbenchClient(
     });
   }
 
+  function areTurnListsEquivalent(leftTurns: ThreadPayload["turns"], rightTurns: ThreadPayload["turns"]) {
+    if (leftTurns.length !== rightTurns.length) {
+      return false;
+    }
+
+    return leftTurns.every((leftTurn, index) => {
+      const rightTurn = rightTurns[index];
+      return !!rightTurn
+        && leftTurn.id === rightTurn.id
+        && leftTurn.status === rightTurn.status
+        && leftTurn.itemsView === rightTurn.itemsView
+        && getTurnRenderSignature(leftTurn) === getTurnRenderSignature(rightTurn);
+    });
+  }
+
   function areThreadPayloadsEquivalent(left: ThreadPayload | null, right: ThreadPayload | null) {
     if (left === right) {
       return true;
@@ -714,7 +730,7 @@ export async function WorkbenchClient(
       && left.forkedFromId === right.forkedFromId
       && left.agentNickname === right.agentNickname
       && left.agentRole === right.agentRole
-      && left.turns.length === right.turns.length
+      && areTurnListsEquivalent(left.turns, right.turns)
       && areCurrentTurnsEquivalent(left, right);
   }
 
