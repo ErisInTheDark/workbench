@@ -39,6 +39,7 @@ import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
 import ThreadReasoningItem from "./ThreadReasoningItem";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadUserImage from "./ThreadUserImage";
+import ThreadWebSearchItem from "./ThreadWebSearchItem";
 
 type CommandItem = Extract<ThreadItem, { type: "commandExecution" }>;
 type FileChangeItem = Extract<ThreadItem, { type: "fileChange" }>;
@@ -859,6 +860,8 @@ function ThreadRenderableBlockView ({
       return <ThreadMcpToolCallItem item={block.item} />;
     case "dynamicToolCall":
       return <ThreadDynamicToolCallItem item={block.item} />;
+    case "webSearch":
+      return <ThreadWebSearchItem item={block.item} />;
     case "collabAgentToolCall":
       return (
         <ThreadCollabAgentToolCallItem

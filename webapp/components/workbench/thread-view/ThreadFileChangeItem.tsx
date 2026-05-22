@@ -41,19 +41,6 @@ function DiffChangeTotals ({
     return null;
   }
 
-  if (isCreated) {
-    return (
-      <span className="inline-flex items-baseline gap-2 font-mono text-[0.78em] leading-[1.6]">
-        <span className="text-[color:color-mix(in_srgb,var(--success)_78%,var(--text)_22%)]">
-          +{additions}
-        </span>
-        <span className="text-muted">
-          {additions === 1 ? "1 added line" : `${additions} added lines`}
-        </span>
-      </span>
-    );
-  }
-
   return (
     <span className="inline-flex items-baseline gap-2 font-mono text-[0.78em] leading-[1.6]">
       {additions ? (

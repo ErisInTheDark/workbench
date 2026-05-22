@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 
 import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
@@ -196,6 +196,7 @@ export default function Workbench () {
   const resetDraftButtonRef = useRef<HTMLButtonElement>(null);
   const saveFileButtonRef = useRef<HTMLButtonElement>(null);
   const shellHeaderRef = useRef<HTMLElement>(null);
+  const projectsPaneRef = useRef<HTMLDivElement>(null);
   const zoomOutButtonRef = useRef<HTMLButtonElement>(null);
   const zoomInButtonRef = useRef<HTMLButtonElement>(null);
   const saveConflictDialogRef = useRef<HTMLDivElement>(null);
@@ -485,6 +486,23 @@ export default function Workbench () {
     setSidebarMode("main");
   }, []);
 
+  const handleProjectsPaneKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Escape") {
+      return;
+    }
+
+    event.preventDefault();
+    closeProjectPicker();
+  }, [closeProjectPicker]);
+
+  useEffect(() => {
+    if (sidebarMode !== "projects") {
+      return;
+    }
+
+    projectsPaneRef.current?.focus();
+  }, [sidebarMode]);
+
   const selectProjectFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, projectId: string) => {
     if (
       event.button !== 0
@@ -501,10 +519,15 @@ export default function Workbench () {
     }
 
     event.preventDefault();
+    if (projectId === explorer.currentProjectId) {
+      closeProjectPicker();
+      return;
+    }
+
     setCurrentThread(null);
     navigateToRoute(createProjectRoute(projectId));
     setSidebarMode("main");
-  }, [navigateToRoute]);
+  }, [closeProjectPicker, explorer.currentProjectId, navigateToRoute]);
 
   const openFileFromExplorer = useCallback(async (path: string) => {
     if (!isWorkbenchOpenableFile(path)) {
@@ -1009,8 +1032,8 @@ export default function Workbench () {
         <aside className="flex min-h-screen w-screen min-w-0 shrink-0 flex-col overflow-hidden px-5 pb-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:px-6 md:py-5">
           <div className="-ml-3 min-h-0 flex-1 overflow-hidden text-[0.95rem] leading-6">
             <div
-              className="flex h-full w-[200%] transition-transform duration-200 ease-out"
-              style={{ transform: sidebarMode === "projects" ? "translateX(-50%)" : "translateX(0)" }}
+              className="flex h-full w-[200%] flex-row-reverse transition-transform duration-200 ease-out"
+              style={{ transform: sidebarMode === "projects" ? "translateX(0)" : "translateX(-50%)" }}
             >
               <div className="explorer-scrollbar min-h-0 w-1/2 overflow-y-auto pb-8 pl-2 pr-2">
                 <section className="space-y-2 pb-6">
@@ -1023,7 +1046,7 @@ export default function Workbench () {
                     <span className="min-w-0 relative -top-0.5">
                       <span className="block truncate text-xl font-semibold leading-tight text-text">{explorer.currentProjectId || "No project"}</span>
                     </span>
-                    <span className="shrink-0 relative -top-0.5 text-muted" aria-hidden="true">›</span>
+                    <span className="shrink-0 relative -top-0.5 text-muted" aria-hidden="true">‹</span>
                   </button>
                 </section>
 
@@ -1142,18 +1165,14 @@ export default function Workbench () {
                 </section>
               </div>
 
-              <div className="explorer-scrollbar min-h-0 w-1/2 overflow-y-auto pb-8 pl-5 pr-2">
+              <div
+                ref={projectsPaneRef}
+                tabIndex={-1}
+                className="explorer-scrollbar min-h-0 w-1/2 overflow-y-auto pb-8 pl-5 pr-2 focus:outline-none"
+                onKeyDown={handleProjectsPaneKeyDown}
+              >
                 <section className="space-y-3 pr-2 md:pr-4.5">
-                  <div className="flex items-center justify-between gap-3">
-                    <button
-                      type="button"
-                      className="inline-flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-base font-semibold leading-tight transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:-ml-2 md:py-0.5"
-                      onClick={closeProjectPicker}
-                    >
-                      <span aria-hidden="true">‹</span>
-                      <span>Projects</span>
-                    </button>
-                  </div>
+                  <p className="m-0 px-2 text-base font-semibold leading-tight">Projects</p>
                   <nav aria-label="Projects" className="space-y-1">
                     {explorer.projects.map((project) => {
                       const isCurrentProject = project.id === explorer.currentProjectId;
@@ -1162,7 +1181,7 @@ export default function Workbench () {
                           key={project.id}
                           href={createProjectHref(project.id)}
                           title={project.rootPath}
-                          className={`block min-w-0 rounded-lg px-2 py-1.5 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:py-1${isCurrentProject ? " bg-accent-soft text-accent" : " text-muted"}`}
+                          className={`relative block min-w-0 rounded-lg px-2 py-1.5 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:py-1${isCurrentProject ? " text-accent after:absolute after:bottom-1 after:right-0 after:top-1 after:w-px after:bg-accent" : " text-muted"}`}
                           onClick={(event) => {
                             void selectProjectFromLink(event, project.id);
                           }}
