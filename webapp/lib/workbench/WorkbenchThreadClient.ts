@@ -121,6 +121,7 @@ interface WorkbenchThreadClient {
   isCurrentThreadUpToDate: (threadId: string) => boolean;
   isDraftThreadId: (threadId: string) => boolean;
   listModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
+  markThreadSeen: (thread: ThreadPayload) => void;
   openThread: (threadId: string, options?: { harness?: WorkbenchHarness; source?: "open" | "reload" }) => Promise<void>;
   readThread: (threadId: string, harness?: WorkbenchHarness) => Promise<ThreadPayload | null>;
   selectThreadPayload: (thread: ThreadPayload) => void;
@@ -193,8 +194,19 @@ function isThreadStatusActive(status: string) {
   return status === "active" || status.startsWith("active:");
 }
 
-function countThreadItems(turns: Turn[]) {
-  return turns.reduce((total, turn) => total + turn.items.length, 0);
+function getThreadItemIds(turns: Turn[]) {
+  return turns.flatMap((turn) => turn.items.map((item) => item.id));
+}
+
+function countUnreadThreadItems(state: WorkbenchStoredThreadUnreadState) {
+  if (!state.lastSeenItemId) {
+    return state.observedItemIds.length;
+  }
+
+  const lastSeenIndex = state.observedItemIds.lastIndexOf(state.lastSeenItemId);
+  return lastSeenIndex >= 0
+    ? Math.max(0, state.observedItemIds.length - lastSeenIndex - 1)
+    : 0;
 }
 
 function getLatestTurnStartedAt(turns: Turn[]) {
@@ -398,7 +410,7 @@ function WorkbenchThreadClient(
         : thread;
     }
 
-    const unreadCount = Math.max(0, unreadState.totalItemCount - unreadState.lastSeenItemCount);
+    const unreadCount = countUnreadThreadItems(unreadState);
     if (!hasActiveTurn && unreadCount === 0) {
       return thread.unreadBadge ? { ...thread, unreadBadge: null } : thread;
     }
@@ -419,33 +431,34 @@ function WorkbenchThreadClient(
 
   function updateStoredThreadUnreadState(
     thread: Pick<ThreadSummary, "id" | "harness" | "status" | "updatedAt">,
-    totalItemCount: number,
+    observedItemIds: string[],
     { markSeen = false, seedSeenIfMissing = false }: { markSeen?: boolean; seedSeenIfMissing?: boolean } = {},
   ) {
     const key = getThreadStateKey(thread.harness, thread.id);
     const previous = state.threadUnreadStateByKey.get(key);
-    const normalizedTotal = Math.max(0, totalItemCount);
-    const lastSeenItemCount = markSeen
-      ? normalizedTotal
+    const lastObservedItemId = observedItemIds.at(-1) ?? null;
+    const lastSeenItemId = markSeen
+      ? lastObservedItemId
       : previous
-        ? Math.min(previous.lastSeenItemCount, normalizedTotal)
+        ? previous.lastSeenItemId
         : seedSeenIfMissing
-          ? normalizedTotal
-          : 0;
+          ? lastObservedItemId
+          : null;
 
     const nextState: WorkbenchStoredThreadUnreadState = {
       lastObservedStatus: thread.status,
       lastObservedUpdatedAt: thread.updatedAt,
-      lastSeenItemCount,
-      totalItemCount: normalizedTotal,
+      lastSeenItemId,
+      observedItemIds,
     };
 
     if (
       previous
       && previous.lastObservedStatus === nextState.lastObservedStatus
       && previous.lastObservedUpdatedAt === nextState.lastObservedUpdatedAt
-      && previous.lastSeenItemCount === nextState.lastSeenItemCount
-      && previous.totalItemCount === nextState.totalItemCount
+      && previous.lastSeenItemId === nextState.lastSeenItemId
+      && previous.observedItemIds.length === nextState.observedItemIds.length
+      && previous.observedItemIds.every((itemId, index) => itemId === nextState.observedItemIds[index])
     ) {
       return false;
     }
@@ -481,7 +494,7 @@ function WorkbenchThreadClient(
 
       return updateStoredThreadUnreadState(
         toThreadSummary(response.thread, thread.harness),
-        countThreadItems(response.thread.turns),
+        getThreadItemIds(response.thread.turns),
         { seedSeenIfMissing: true },
       );
     } catch {
@@ -689,7 +702,16 @@ function WorkbenchThreadClient(
 
   function markThreadPayloadSeen(thread: ThreadPayload) {
     rememberLatestTurnStartedAt(thread);
-    return updateStoredThreadUnreadState(thread, countThreadItems(thread.turns), { markSeen: true });
+    return updateStoredThreadUnreadState(thread, getThreadItemIds(thread.turns), { markSeen: true });
+  }
+
+  function markThreadSeen(thread: ThreadPayload) {
+    if (!markThreadPayloadSeen(thread)) {
+      return;
+    }
+
+    state.threads = state.threads.map(buildThreadSummaryWithUnreadBadge);
+    emit();
   }
 
   function scheduleActiveTurnRateLimitRefresh() {
@@ -2815,6 +2837,7 @@ function WorkbenchThreadClient(
     isCurrentThreadUpToDate,
     isDraftThreadId,
     listModels,
+    markThreadSeen,
     openThread,
     readThread,
     selectThreadPayload,

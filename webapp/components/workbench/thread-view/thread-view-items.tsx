@@ -59,9 +59,6 @@ interface HiddenThreadItemIds {
 }
 
 function getFinalAgentMessageId (turn: Turn) {
-  let fallbackId: string | null = null;
-
-  // Prefer the explicit final-answer phase, but keep legacy turns readable when phase is absent.
   for (let index = turn.items.length - 1; index >= 0; index -= 1) {
     const item = turn.items[index];
     if (item.type !== "agentMessage" || !item.text.trim()) {
@@ -71,13 +68,9 @@ function getFinalAgentMessageId (turn: Turn) {
     if (item.phase === "final_answer") {
       return item.id;
     }
-
-    if (fallbackId === null) {
-      fallbackId = item.id;
-    }
   }
 
-  return fallbackId;
+  return null;
 }
 
 function isUserMessageBlock (block: ThreadRenderableBlock) {

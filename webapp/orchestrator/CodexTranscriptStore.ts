@@ -195,28 +195,14 @@ function rememberTurnTimelineItem(file: CodexTranscriptTurnFile, itemId: string,
   return rememberTimelineItem(file, itemId, classifyTimelineEvent(method, item));
 }
 
-function orderTurnItems(items: ThreadItem[], itemOrder: string[]) {
-  if (!itemOrder.length) {
-    return normalizeMergedTurnItems(items);
-  }
-
-  const indexesById = new Map(itemOrder.map((itemId, index) => [itemId, index]));
-  return normalizeMergedTurnItems(items
-    .map((item, index) => ({
-      index,
-      item,
-      order: indexesById.get(item.id) ?? Number.MAX_SAFE_INTEGER,
-    }))
-    .sort((left, right) => (left.order - right.order) || (left.index - right.index))
-    .map(({ item }) => item));
+function getTurnOrderingUpdate(file: CodexTranscriptTurnFile, itemId: string, item: ThreadItem | null, method: string | null) {
+  const itemOrder = rememberTurnItemIds(file, [itemId]);
+  const itemTimeline = rememberTurnTimelineItem({ ...file, itemOrder }, itemId, item, method);
+  return { itemOrder, itemTimeline };
 }
 
 function applyTurnTimeline(turn: Turn | null, file: Pick<CodexTranscriptTurnFile, "itemOrder" | "itemTimeline" | "turn">) {
   return turn ? { ...turn, items: orderMergedItemsByTimeline(turn.items, normalizeTurnTimeline({ ...file, turn })) } : turn;
-}
-
-function applyTurnItemOrder(turn: Turn | null, itemOrder: string[]) {
-  return turn ? { ...turn, items: orderTurnItems(turn.items, itemOrder) } : turn;
 }
 
 function mergeTurnItems(currentTurn: Turn | null, incomingTurn: Turn) {
@@ -483,19 +469,22 @@ export default class CodexTranscriptStore {
     switch (notification.method) {
       case "item/agentMessage/delta":
         if (delta !== null) {
-          await this.updateAgentMessageDelta(threadId, turnId, itemId, delta);
+          await this.updateAgentMessageDelta(threadId, turnId, itemId, notification.method, delta);
+          return;
         }
-        return;
+        break;
       case "item/plan/delta":
         if (delta !== null) {
-          await this.updatePlanDelta(threadId, turnId, itemId, delta);
+          await this.updatePlanDelta(threadId, turnId, itemId, notification.method, delta);
+          return;
         }
-        return;
+        break;
       case "item/commandExecution/outputDelta":
         if (delta !== null) {
-          await this.updateCommandOutputDelta(threadId, turnId, itemId, delta);
+          await this.updateCommandOutputDelta(threadId, turnId, itemId, notification.method, delta);
+          return;
         }
-        return;
+        break;
       case "item/fileChange/patchUpdated":
         await this.updateFileChangePatch(threadId, turnId, itemId, notification);
         return;
@@ -505,13 +494,19 @@ export default class CodexTranscriptStore {
       case "item/reasoning/summaryTextDelta":
         if (delta !== null) {
           await this.updateReasoningSummaryDelta(threadId, turnId, itemId, notification, delta);
+          return;
         }
-        return;
+        break;
       case "item/reasoning/textDelta":
         if (delta !== null) {
           await this.updateReasoningTextDelta(threadId, turnId, itemId, notification, delta);
+          return;
         }
-        return;
+        break;
+    }
+
+    if (classifyTimelineEvent(notification.method, null)) {
+      await this.updateItemTimelineOnly(threadId, turnId, itemId, notification.method);
     }
   }
 
@@ -736,37 +731,43 @@ export default class CodexTranscriptStore {
     const itemOrder = turn.items.map((item) => item.id);
     await this.updateTurnFile(threadId, turn.id, (file) => {
       const nextItemOrder = mergeItemOrder(itemOrder, file.itemOrder ?? []);
+      const nextItemTimeline = turn.items.reduce(
+        (timeline, item) => rememberTimelineItem({ ...file, itemOrder: nextItemOrder, itemTimeline: timeline }, item.id, classifyTimelineEvent(null, item)),
+        normalizeTurnTimeline(file),
+      );
       return {
         ...file,
         itemOrder: nextItemOrder,
-        itemTimeline: turn.items.reduce(
-          (timeline, item) => rememberTimelineItem({ ...file, itemTimeline: timeline }, item.id, classifyTimelineEvent(null, item)),
-          normalizeTurnTimeline(file),
-        ),
+        itemTimeline: nextItemTimeline,
         lastTouchedAt: now(),
         turn: applyTurnTimeline(mergeTurnItems(file.turn, turn), {
           ...file,
           itemOrder: nextItemOrder,
-          itemTimeline: turn.items.reduce(
-            (timeline, item) => rememberTimelineItem({ ...file, itemTimeline: timeline }, item.id, classifyTimelineEvent(null, item)),
-            normalizeTurnTimeline(file),
-          ),
+          itemTimeline: nextItemTimeline,
         }),
       };
     });
   }
 
   private async recordTurnSnapshot(threadId: string, turn: Turn, event: CodexTranscriptRawEvent) {
-    await this.updateTurnFile(threadId, turn.id, (file) => ({
-      ...file,
-      itemOrder: mergeItemOrder(turn.items.map((item) => item.id), file.itemOrder ?? []),
-      itemTimeline: turn.items.reduce(
-        (timeline, item) => rememberTimelineItem({ ...file, itemTimeline: timeline }, item.id, classifyTimelineEvent(event.method, item)),
+    await this.updateTurnFile(threadId, turn.id, (file) => {
+      const nextItemOrder = mergeItemOrder(turn.items.map((item) => item.id), file.itemOrder ?? []);
+      const nextItemTimeline = turn.items.reduce(
+        (timeline, item) => rememberTimelineItem({ ...file, itemOrder: nextItemOrder, itemTimeline: timeline }, item.id, classifyTimelineEvent(event.method, item)),
         normalizeTurnTimeline(file),
-      ),
-      lastTouchedAt: now(),
-      turn: applyTurnItemOrder(mergeTurnItems(file.turn, turn), mergeItemOrder(turn.items.map((item) => item.id), file.itemOrder ?? [])),
-    }));
+      );
+      return {
+        ...file,
+        itemOrder: nextItemOrder,
+        itemTimeline: nextItemTimeline,
+        lastTouchedAt: now(),
+        turn: applyTurnTimeline(mergeTurnItems(file.turn, turn), {
+          ...file,
+          itemOrder: nextItemOrder,
+          itemTimeline: nextItemTimeline,
+        }),
+      };
+    });
     await this.appendTurnEvent(threadId, turn.id, event);
     if (isTurnTerminalEvent(event)) {
       await this.compactTurnJournal(threadId, turn.id);
@@ -775,52 +776,97 @@ export default class CodexTranscriptStore {
   }
 
   private async recordTurnItem(threadId: string, turnId: string, item: ThreadItem, event: CodexTranscriptRawEvent) {
-    await this.updateTurnFile(threadId, turnId, (file) => ({
-      ...file,
-      itemOrder: rememberTurnItemIds(file, [item.id]),
-      itemTimeline: rememberTurnTimelineItem(file, item.id, item, event.method),
-      lastTouchedAt: now(),
-      turn: applyTurnTimeline(upsertItem(file.turn, item, turnId), {
+    await this.updateTurnFile(threadId, turnId, (file) => {
+      const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, item.id, item, event.method);
+      return {
         ...file,
-        itemOrder: rememberTurnItemIds(file, [item.id]),
-        itemTimeline: rememberTurnTimelineItem(file, item.id, item, event.method),
-      }),
-    }));
+        itemOrder,
+        itemTimeline,
+        lastTouchedAt: now(),
+        turn: applyTurnTimeline(upsertItem(file.turn, item, turnId), {
+          ...file,
+          itemOrder,
+          itemTimeline,
+        }),
+      };
+    });
     await this.appendTurnEvent(threadId, turnId, event);
     await this.touchThread(threadId, null);
   }
 
-  private async updateCommandOutputDelta(threadId: string, turnId: string, itemId: string, delta: string) {
-    await this.updateTurnFile(threadId, turnId, (file) => ({
-      ...file,
-      itemOrder: rememberTurnItemIds(file, [itemId]),
-      lastTouchedAt: now(),
-      turn: applyTurnItemOrder(updateCommandOutput(file.turn, itemId, delta), rememberTurnItemIds(file, [itemId])),
-    }));
+  private async updateItemTimelineOnly(threadId: string, turnId: string, itemId: string, method: string | null) {
+    await this.updateTurnFile(threadId, turnId, (file) => {
+      const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, itemId, null, method);
+      return {
+        ...file,
+        itemOrder,
+        itemTimeline,
+        lastTouchedAt: now(),
+        turn: applyTurnTimeline(file.turn, {
+          ...file,
+          itemOrder,
+          itemTimeline,
+        }),
+      };
+    });
     await this.touchThread(threadId, null);
   }
 
-  private async updateAgentMessageDelta(threadId: string, turnId: string, itemId: string, delta: string) {
-    await this.updateTurnFile(threadId, turnId, (file) => ({
-      ...file,
-      itemOrder: rememberTurnItemIds(file, [itemId]),
-      lastTouchedAt: now(),
-      turn: applyTurnItemOrder(updateOrCreateItem(file.turn, turnId, itemId, () => createStreamingAgentMessageItem(itemId), (item) => (
-        item.type === "agentMessage" ? { ...item, text: `${item.text}${delta}` } : null
-      )), rememberTurnItemIds(file, [itemId])),
-    }));
+  private async updateCommandOutputDelta(threadId: string, turnId: string, itemId: string, method: string | null, delta: string) {
+    await this.updateTurnFile(threadId, turnId, (file) => {
+      const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, itemId, null, method);
+      return {
+        ...file,
+        itemOrder,
+        itemTimeline,
+        lastTouchedAt: now(),
+        turn: applyTurnTimeline(updateCommandOutput(file.turn, itemId, delta), {
+          ...file,
+          itemOrder,
+          itemTimeline,
+        }),
+      };
+    });
     await this.touchThread(threadId, null);
   }
 
-  private async updatePlanDelta(threadId: string, turnId: string, itemId: string, delta: string) {
-    await this.updateTurnFile(threadId, turnId, (file) => ({
-      ...file,
-      itemOrder: rememberTurnItemIds(file, [itemId]),
-      lastTouchedAt: now(),
-      turn: applyTurnItemOrder(updateOrCreateItem(file.turn, turnId, itemId, () => createStreamingPlanItem(itemId), (item) => (
-        item.type === "plan" ? { ...item, text: `${item.text}${delta}` } : null
-      )), rememberTurnItemIds(file, [itemId])),
-    }));
+  private async updateAgentMessageDelta(threadId: string, turnId: string, itemId: string, method: string | null, delta: string) {
+    await this.updateTurnFile(threadId, turnId, (file) => {
+      const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, itemId, createStreamingAgentMessageItem(itemId), method);
+      return {
+        ...file,
+        itemOrder,
+        itemTimeline,
+        lastTouchedAt: now(),
+        turn: applyTurnTimeline(updateOrCreateItem(file.turn, turnId, itemId, () => createStreamingAgentMessageItem(itemId), (item) => (
+          item.type === "agentMessage" ? { ...item, text: `${item.text}${delta}` } : null
+        )), {
+          ...file,
+          itemOrder,
+          itemTimeline,
+        }),
+      };
+    });
+    await this.touchThread(threadId, null);
+  }
+
+  private async updatePlanDelta(threadId: string, turnId: string, itemId: string, method: string | null, delta: string) {
+    await this.updateTurnFile(threadId, turnId, (file) => {
+      const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, itemId, createStreamingPlanItem(itemId), method);
+      return {
+        ...file,
+        itemOrder,
+        itemTimeline,
+        lastTouchedAt: now(),
+        turn: applyTurnTimeline(updateOrCreateItem(file.turn, turnId, itemId, () => createStreamingPlanItem(itemId), (item) => (
+          item.type === "plan" ? { ...item, text: `${item.text}${delta}` } : null
+        )), {
+          ...file,
+          itemOrder,
+          itemTimeline,
+        }),
+      };
+    });
     await this.touchThread(threadId, null);
   }
 
@@ -830,14 +876,22 @@ export default class CodexTranscriptStore {
       return;
     }
 
-    await this.updateTurnFile(threadId, turnId, (file) => ({
-      ...file,
-      itemOrder: rememberTurnItemIds(file, [itemId]),
-      lastTouchedAt: now(),
-      turn: applyTurnItemOrder(updateOrCreateItem(file.turn, turnId, itemId, () => createStreamingReasoningItem(itemId), (item) => (
-        item.type === "reasoning" ? { ...item, summary: ensureIndexedText(item.summary, summaryIndex) } : null
-      )), rememberTurnItemIds(file, [itemId])),
-    }));
+    await this.updateTurnFile(threadId, turnId, (file) => {
+      const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, itemId, createStreamingReasoningItem(itemId), notification.method);
+      return {
+        ...file,
+        itemOrder,
+        itemTimeline,
+        lastTouchedAt: now(),
+        turn: applyTurnTimeline(updateOrCreateItem(file.turn, turnId, itemId, () => createStreamingReasoningItem(itemId), (item) => (
+          item.type === "reasoning" ? { ...item, summary: ensureIndexedText(item.summary, summaryIndex) } : null
+        )), {
+          ...file,
+          itemOrder,
+          itemTimeline,
+        }),
+      };
+    });
     await this.touchThread(threadId, null);
   }
 
@@ -853,16 +907,24 @@ export default class CodexTranscriptStore {
       return;
     }
 
-    await this.updateTurnFile(threadId, turnId, (file) => ({
-      ...file,
-      itemOrder: rememberTurnItemIds(file, [itemId]),
-      lastTouchedAt: now(),
-      turn: applyTurnItemOrder(updateOrCreateItem(file.turn, turnId, itemId, () => createStreamingReasoningItem(itemId), (item) => (
-        item.type === "reasoning"
-          ? { ...item, summary: appendIndexedText(item.summary, summaryIndex, delta) }
-          : null
-      )), rememberTurnItemIds(file, [itemId])),
-    }));
+    await this.updateTurnFile(threadId, turnId, (file) => {
+      const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, itemId, createStreamingReasoningItem(itemId), notification.method);
+      return {
+        ...file,
+        itemOrder,
+        itemTimeline,
+        lastTouchedAt: now(),
+        turn: applyTurnTimeline(updateOrCreateItem(file.turn, turnId, itemId, () => createStreamingReasoningItem(itemId), (item) => (
+          item.type === "reasoning"
+            ? { ...item, summary: appendIndexedText(item.summary, summaryIndex, delta) }
+            : null
+        )), {
+          ...file,
+          itemOrder,
+          itemTimeline,
+        }),
+      };
+    });
     await this.touchThread(threadId, null);
   }
 
@@ -878,16 +940,24 @@ export default class CodexTranscriptStore {
       return;
     }
 
-    await this.updateTurnFile(threadId, turnId, (file) => ({
-      ...file,
-      itemOrder: rememberTurnItemIds(file, [itemId]),
-      lastTouchedAt: now(),
-      turn: applyTurnItemOrder(updateOrCreateItem(file.turn, turnId, itemId, () => createStreamingReasoningItem(itemId), (item) => (
-        item.type === "reasoning"
-          ? { ...item, content: appendIndexedText(item.content, contentIndex, delta) }
-          : null
-      )), rememberTurnItemIds(file, [itemId])),
-    }));
+    await this.updateTurnFile(threadId, turnId, (file) => {
+      const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, itemId, createStreamingReasoningItem(itemId), notification.method);
+      return {
+        ...file,
+        itemOrder,
+        itemTimeline,
+        lastTouchedAt: now(),
+        turn: applyTurnTimeline(updateOrCreateItem(file.turn, turnId, itemId, () => createStreamingReasoningItem(itemId), (item) => (
+          item.type === "reasoning"
+            ? { ...item, content: appendIndexedText(item.content, contentIndex, delta) }
+            : null
+        )), {
+          ...file,
+          itemOrder,
+          itemTimeline,
+        }),
+      };
+    });
     await this.touchThread(threadId, null);
   }
 
@@ -897,16 +967,24 @@ export default class CodexTranscriptStore {
       return;
     }
 
-    await this.updateTurnFile(threadId, turnId, (file) => ({
-      ...file,
-      itemOrder: rememberTurnItemIds(file, [itemId]),
-      lastTouchedAt: now(),
-      turn: applyTurnItemOrder(updateExistingItem(file.turn, itemId, (item) => (
-        item.type === "fileChange"
-          ? { ...item, changes: changes as Extract<ThreadItem, { type: "fileChange" }>["changes"] }
-          : null
-      )), rememberTurnItemIds(file, [itemId])),
-    }));
+    await this.updateTurnFile(threadId, turnId, (file) => {
+      const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, itemId, null, notification.method);
+      return {
+        ...file,
+        itemOrder,
+        itemTimeline,
+        lastTouchedAt: now(),
+        turn: applyTurnTimeline(updateExistingItem(file.turn, itemId, (item) => (
+          item.type === "fileChange"
+            ? { ...item, changes: changes as Extract<ThreadItem, { type: "fileChange" }>["changes"] }
+            : null
+        )), {
+          ...file,
+          itemOrder,
+          itemTimeline,
+        }),
+      };
+    });
     await this.touchThread(threadId, null);
   }
 

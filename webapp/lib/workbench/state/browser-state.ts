@@ -38,18 +38,18 @@ function normalizeStoredThreadUnreadState(value: unknown): WorkbenchStoredThread
   if (
     typeof candidate.lastObservedStatus !== "string"
     || !Number.isFinite(candidate.lastObservedUpdatedAt)
-    || !Number.isFinite(candidate.lastSeenItemCount)
-    || !Number.isFinite(candidate.totalItemCount)
+    || !("lastSeenItemId" in candidate)
+    || (candidate.lastSeenItemId !== null && typeof candidate.lastSeenItemId !== "string")
+    || !Array.isArray(candidate.observedItemIds)
   ) {
     return null;
   }
 
-  const totalItemCount = Math.max(0, Math.trunc(candidate.totalItemCount));
   return {
     lastObservedStatus: candidate.lastObservedStatus,
     lastObservedUpdatedAt: Math.max(0, Math.trunc(candidate.lastObservedUpdatedAt)),
-    lastSeenItemCount: Math.min(totalItemCount, Math.max(0, Math.trunc(candidate.lastSeenItemCount))),
-    totalItemCount,
+    lastSeenItemId: candidate.lastSeenItemId,
+    observedItemIds: candidate.observedItemIds.filter((itemId): itemId is string => typeof itemId === "string"),
   };
 }
 

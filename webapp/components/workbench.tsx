@@ -539,6 +539,10 @@ export default function Workbench () {
     return await controls.readThread(threadId, nextHarness);
   }, [controls]);
 
+  const markThreadSeen = useCallback((thread: ThreadPayload) => {
+    controls?.markThreadSeen(thread);
+  }, [controls]);
+
   const sendThreadMessage = useCallback(async (
     thread: ThreadPayload,
     input: UserInput[],
@@ -1284,6 +1288,7 @@ export default function Workbench () {
                   onListModels={listThreadModels}
                   onOpenFile={openFileFromThreadView}
                   onReadThread={readThread}
+                  onThreadSeen={markThreadSeen}
                   onSendMessage={sendThreadMessage}
                   onStopThread={stopThread}
                   onSubmitUserInputRequest={submitUserInputRequest}

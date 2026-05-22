@@ -246,6 +246,7 @@ export default memo(function ThreadView ({
   onListModels,
   onOpenFile,
   onReadThread,
+  onThreadSeen,
   onSendMessage,
   onStopThread,
   onSubmitUserInputRequest,
@@ -269,6 +270,7 @@ export default memo(function ThreadView ({
   onListModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
   onOpenFile: (path: string) => Promise<void>;
   onReadThread: (threadId: string, harness?: WorkbenchHarness) => Promise<ThreadPayload | null>;
+  onThreadSeen: (thread: ThreadPayload) => void;
   onSendMessage: (
     thread: ThreadPayload,
     input: UserInput[],
@@ -471,6 +473,10 @@ export default memo(function ThreadView ({
       window.cancelAnimationFrame(frameId);
     };
   }, [activeThread?.id]);
+
+  useEffect(() => {
+    onThreadSeen(thread);
+  }, [onThreadSeen, thread]);
 
   useEffect(() => {
     if (!activeThread) {

@@ -119,8 +119,8 @@ export interface WorkbenchQuestionnaireDraft {
 export interface WorkbenchStoredThreadUnreadState {
   lastObservedStatus: string;
   lastObservedUpdatedAt: number;
-  lastSeenItemCount: number;
-  totalItemCount: number;
+  lastSeenItemId: string | null;
+  observedItemIds: string[];
 }
 
 export interface WorkbenchUserInputOption {
@@ -228,6 +228,7 @@ export interface WorkbenchControls {
   applyRoute: (route: WorkbenchRoute) => Promise<WorkbenchRouteLoadResult>;
   createThreadDraft: (harness: WorkbenchHarness) => ThreadPayload;
   readThread: (threadId: string, harness?: WorkbenchHarness) => Promise<ThreadPayload | null>;
+  markThreadSeen: (thread: ThreadPayload) => void;
   listModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
   sendThreadMessage: (
     thread: ThreadPayload,

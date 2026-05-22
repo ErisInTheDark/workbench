@@ -792,6 +792,10 @@ export async function WorkbenchClient(
     return await threadClient.readThread(threadId, harness);
   }
 
+  function markThreadSeen(thread: ThreadPayload) {
+    threadClient.markThreadSeen(thread);
+  }
+
   async function sendThreadMessage(
     thread: ThreadPayload,
     input: UserInput[],
@@ -1009,6 +1013,7 @@ export async function WorkbenchClient(
     },
     createEntry,
     listModels: threadClient.listModels,
+    markThreadSeen,
     readThread,
     sendThreadMessage,
     stopThread,
