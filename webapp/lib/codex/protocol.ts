@@ -8,10 +8,11 @@
  * - createQuestionnaireDeveloperInstructions/createTextInput/createQuestionnaireCollaborationMode/createThreadStartRequest/createTurnStartRequest: typed Codex instruction and request builders. Keywords: thread, turn, user input, collaboration mode, questionnaire, developer instructions.
  * - createRequestIdGenerator/isCodexEventType: small protocol helpers. Keywords: ids, event type.
  */
-import type { CollaborationMode } from "./generated/app-server/CollaborationMode";
+import { CODEX_CLIENT_INFO } from "./config";
 import type { ClientInfo } from "./generated/app-server/ClientInfo";
 import type { ClientNotification } from "./generated/app-server/ClientNotification";
 import type { ClientRequest } from "./generated/app-server/ClientRequest";
+import type { CollaborationMode } from "./generated/app-server/CollaborationMode";
 import type { InitializeCapabilities } from "./generated/app-server/InitializeCapabilities";
 import type { InitializeParams } from "./generated/app-server/InitializeParams";
 import type { InitializeResponse } from "./generated/app-server/InitializeResponse";
@@ -21,7 +22,6 @@ import type { ThreadStartResponse } from "./generated/app-server/v2/ThreadStartR
 import type { TurnStartParams } from "./generated/app-server/v2/TurnStartParams";
 import type { TurnStartResponse } from "./generated/app-server/v2/TurnStartResponse";
 import type { UserInput } from "./generated/app-server/v2/UserInput";
-import { CODEX_CLIENT_INFO } from "./config";
 
 type EventMsg = { type: string } & Record<string, unknown>;
 
@@ -53,12 +53,9 @@ export interface CodexBootstrapMessages {
 
 const QUESTIONNAIRE_COLLABORATION_INSTRUCTIONS = [
   "# Collaboration Mode: Workbench Questionnaire",
-  "",
-  "You are in a coding-first workbench mode.",
-  "Use the `request_user_input` tool when you need explicit user clarification or a bounded user choice before continuing.",
-  "Do not claim that `request_user_input` is unavailable in this mode.",
-  "When local context and reasonable assumptions are enough, continue without asking.",
-  "When you do ask, prefer 1 to 3 concise multiple-choice questions and do not ask multiple-choice questions in plain chat.",
+  "Use the `request_user_input` tool whenever you have questions for the user or need to know what's next.",
+  "If the user ever mentions questionnaires, 'ask me', 'interview', or similar, that's a strong signal to use `request_user_input`.",
+  "When you use the tool, prefer 1 to 3 concise multiple-choice questions and do not ask multiple-choice questions in plain chat.",
   "Otherwise behave like a normal coding agent: inspect files, edit files, run available tools, and complete the task end to end.",
 ].join("\n");
 
