@@ -651,13 +651,16 @@ export class CopilotBridge {
     ];
   }
 
-  private createSessionSystemMessage(threadId: string, workbenchOrigin: string | null) {
+  private async createSessionSystemMessage(threadId: string, workbenchOrigin: string | null) {
     const { buildThreadTitleBootstrapInstructions, buildThreadTitleRouteUrl } = this.getReloadableModules().threadBootstrap;
+    const { buildWorkbenchLibraryBootstrapInstructions } = this.getReloadableModules().workbenchLibrary;
     const routeUrl = workbenchOrigin?.trim()
       ? buildThreadTitleRouteUrl(workbenchOrigin)
       : null;
+    const workbenchLibraryInstructions = await buildWorkbenchLibraryBootstrapInstructions();
     const content = [
       USER_INPUT_TOOL_SYSTEM_MESSAGE,
+      workbenchLibraryInstructions,
       routeUrl
         ? buildThreadTitleBootstrapInstructions({
           harness: "copilot",
@@ -782,7 +785,7 @@ export class CopilotBridge {
       onPermissionRequest: approveAll,
       sessionId,
       streaming: true,
-      systemMessage: this.createSessionSystemMessage(sessionId, workbenchOrigin),
+      systemMessage: await this.createSessionSystemMessage(sessionId, workbenchOrigin),
       tools: this.createSessionTools(sessionId),
       workingDirectory: selectedCwd,
     });
@@ -880,7 +883,7 @@ export class CopilotBridge {
       ...(normalizedReasoningEffort ? { reasoningEffort: normalizedReasoningEffort } : {}),
       onPermissionRequest: approveAll,
       streaming: true,
-      systemMessage: this.createSessionSystemMessage(threadId, workbenchOrigin),
+      systemMessage: await this.createSessionSystemMessage(threadId, workbenchOrigin),
       tools: this.createSessionTools(threadId),
       workingDirectory: selectedCwd,
     });

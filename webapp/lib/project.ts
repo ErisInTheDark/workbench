@@ -17,6 +17,14 @@ import path from "node:path";
 
 import { getGitChanges } from "./git";
 import type { ProjectSnapshot, TreeNode, WorkbenchAgentOption, WorkbenchProjectOption } from "./types";
+import {
+  ensureWorkbenchLibrary,
+  listWorkbenchLibraryAgents,
+  parseFrontmatterBlock,
+  readWorkbenchLibraryAgentDefinition,
+  WORKBENCH_LIBRARY_PROJECT_ID,
+  workbenchLibraryRoot,
+} from "./workbench-library";
 
 export const appRoot = process.cwd();
 export const projectRoot = path.resolve(appRoot, "..");
@@ -24,27 +32,6 @@ export const projectsRoot = path.resolve(process.env.WORKBENCH_PROJECTS_ROOT?.tr
 const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", "node_modules", ".next"]);
 const discoveryIgnoredNames = new Set([...ignoredNames, "dist", "build", "coverage"]);
 let discoveredProjectsCache: Promise<WorkbenchProjectOption[]> | null = null;
-
-function parseFrontmatterBlock(content: string) {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content);
-  if (!match) {
-    return null;
-  }
-
-  const fields = new Map<string, string>();
-  for (const line of match[1].split(/\r?\n/)) {
-    const separatorIndex = line.indexOf(":");
-    if (separatorIndex <= 0) {
-      continue;
-    }
-
-    const key = line.slice(0, separatorIndex).trim();
-    const value = line.slice(separatorIndex + 1).trim().replace(/^"|"$/g, "");
-    fields.set(key, value);
-  }
-
-  return fields;
-}
 
 function normalizeProjectId(projectId: string) {
   return normalizeRelativePath(projectId).replace(/^\/+|\/+$/g, "");
@@ -196,10 +183,23 @@ async function createProjectOption(rootDir: string): Promise<WorkbenchProjectOpt
   const id = normalizeProjectId(relativePath) || ".";
   return {
     id,
+    kind: "git",
     lastCommitTimeMs: await getGitHeadActivityTimeMs(rootDir),
     name: path.basename(rootDir) || id,
     relativePath: id,
     rootPath: normalizeRelativePath(rootDir),
+  };
+}
+
+async function createWorkbenchLibraryProjectOption(): Promise<WorkbenchProjectOption> {
+  await ensureWorkbenchLibrary();
+  return {
+    id: WORKBENCH_LIBRARY_PROJECT_ID,
+    kind: "workbench-library",
+    lastCommitTimeMs: null,
+    name: "Workbench Library",
+    relativePath: WORKBENCH_LIBRARY_PROJECT_ID,
+    rootPath: normalizeRelativePath(workbenchLibraryRoot),
   };
 }
 
@@ -230,7 +230,11 @@ export async function discoverProjects({ refresh = false }: { refresh?: boolean 
     discoveredProjectsCache = (async () => {
       const projects: WorkbenchProjectOption[] = [];
       await walkProjects(projectsRoot, projects);
-      return projects.sort((left, right) => {
+      const libraryProject = await createWorkbenchLibraryProjectOption();
+      const normalizedLibraryRoot = normalizePathForComparison(workbenchLibraryRoot);
+      const gitProjects = projects
+        .filter((project) => normalizePathForComparison(project.rootPath) !== normalizedLibraryRoot)
+        .sort((left, right) => {
         const leftTime = left.lastCommitTimeMs ?? Number.NEGATIVE_INFINITY;
         const rightTime = right.lastCommitTimeMs ?? Number.NEGATIVE_INFINITY;
         if (leftTime !== rightTime) {
@@ -239,6 +243,7 @@ export async function discoverProjects({ refresh = false }: { refresh?: boolean 
 
         return left.id.localeCompare(right.id, undefined, { numeric: true, sensitivity: "base" });
       });
+      return [libraryProject, ...gitProjects];
     })();
   }
 
@@ -247,7 +252,7 @@ export async function discoverProjects({ refresh = false }: { refresh?: boolean 
 
 export async function getDefaultProjectId() {
   const projects = await discoverProjects();
-  const currentProjectOption = projects.find((project) => normalizePathForComparison(project.rootPath) === normalizePathForComparison(projectRoot));
+  const currentProjectOption = projects.find((project) => project.kind === "git" && normalizePathForComparison(project.rootPath) === normalizePathForComparison(projectRoot));
   return currentProjectOption?.id ?? projects[0]?.id ?? "";
 }
 
@@ -267,12 +272,20 @@ export async function resolveProjectRoot(projectId?: string | null) {
     throw new Error("Unknown project.");
   }
 
-  const absolutePath = path.resolve(projectsRoot, project.relativePath === "." ? "" : project.relativePath);
+  if (project.kind === "workbench-library") {
+    await ensureWorkbenchLibrary();
+    return {
+      id: project.id,
+      root: workbenchLibraryRoot,
+    };
+  }
+
+  const absolutePath = path.resolve(project.rootPath);
   if (!isPathWithinRoot(absolutePath, projectsRoot)) {
     throw new Error("Project is outside the configured projects root.");
   }
 
-  if (!await hasGitMarker(absolutePath)) {
+  if (project.kind !== "git" || !await hasGitMarker(absolutePath)) {
     throw new Error("Project is missing a .git marker.");
   }
 
@@ -429,9 +442,14 @@ export async function getProjectSnapshot(projectId?: string | null) {
 
 export async function listUserInvocableAgents(projectId?: string | null) {
   const resolvedProject = await resolveProjectRoot(projectId);
+  const libraryAgents = await listWorkbenchLibraryAgents();
+  if (resolvedProject.id === WORKBENCH_LIBRARY_PROJECT_ID) {
+    return libraryAgents;
+  }
+
+  const projectAgents: WorkbenchAgentOption[] = [];
   try {
     const entries = await fs.readdir(getAgentDirectoryPath(resolvedProject.root), { withFileTypes: true });
-    const agents: WorkbenchAgentOption[] = [];
 
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".agent.md")) {
@@ -445,24 +463,30 @@ export async function listUserInvocableAgents(projectId?: string | null) {
         continue;
       }
 
-      agents.push({
+      projectAgents.push({
         name: frontmatter.get("name") ?? entry.name.replace(/\.agent\.md$/i, ""),
         description: frontmatter.get("description") ?? "",
         path: relativePath,
+        source: "project",
+        sourceLabel: "Project",
       });
     }
-
-    return agents.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
+      return libraryAgents;
     }
 
     throw error;
   }
+
+  return [...libraryAgents, ...projectAgents.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }))];
 }
 
 export async function readUserInvocableAgentDefinition(relativePath: string, projectId?: string | null) {
+  if (relativePath.startsWith("library:")) {
+    return await readWorkbenchLibraryAgentDefinition(relativePath);
+  }
+
   const resolvedProject = await resolveProjectRoot(projectId);
   const normalizedPath = normalizeRelativePath(relativePath);
   if (!normalizedPath.startsWith(".github/agents/") || !normalizedPath.endsWith(".agent.md")) {
@@ -481,5 +505,7 @@ export async function readUserInvocableAgentDefinition(relativePath: string, pro
     name: frontmatter.get("name") ?? path.basename(normalizedPath, ".agent.md"),
     path: normalizedPath,
     prompt,
+    source: "project",
+    sourceLabel: "Project",
   };
 }

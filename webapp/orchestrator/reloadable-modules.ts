@@ -18,12 +18,14 @@ export type OrchestratorReloadableModules = {
     "buildThreadTitleBootstrapInstructions"
     | "buildThreadTitleRouteUrl"
     | "normalizeThreadTitle">;
+  workbenchLibrary: Pick<typeof import("../lib/workbench-library"), "buildWorkbenchLibraryBootstrapInstructions">;
 };
 
 const RELOADABLE_MODULE_SPECIFIERS = [
   "./copilot-thread-state",
   "../lib/project",
   "../lib/thread-bootstrap",
+  "../lib/workbench-library",
 ] as const;
 
 function requireTyped<TModule>(specifier: string) {
@@ -57,6 +59,7 @@ export function loadOrchestratorReloadableModules(): OrchestratorReloadableModul
     copilotThreadState: requireTyped<OrchestratorReloadableModules["copilotThreadState"]>("./copilot-thread-state"),
     project: requireTyped<OrchestratorReloadableModules["project"]>("../lib/project"),
     threadBootstrap: requireTyped<OrchestratorReloadableModules["threadBootstrap"]>("../lib/thread-bootstrap"),
+    workbenchLibrary: requireTyped<OrchestratorReloadableModules["workbenchLibrary"]>("../lib/workbench-library"),
   };
 }
 

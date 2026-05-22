@@ -26,10 +26,13 @@ export interface WorkbenchAgentOption {
   name: string;
   description: string;
   path: string;
+  source?: "project" | "library";
+  sourceLabel?: string;
 }
 
 export interface WorkbenchProjectOption {
   id: string;
+  kind: "git" | "workbench-library";
   lastCommitTimeMs: number | null;
   name: string;
   rootPath: string;

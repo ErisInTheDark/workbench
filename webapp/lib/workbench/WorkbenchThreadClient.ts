@@ -380,6 +380,7 @@ function WorkbenchThreadClient(
   let rateLimitGeneration = 0;
   const refreshRateLimitsPromisesByHarness = new Map<WorkbenchHarness, Promise<void>>();
   let refreshThreadsPromise: Promise<void> | null = null;
+  let workbenchLibraryInstructionsPromise: Promise<string | null> | null = null;
 
   state.threadUnreadStateByKey = new Map(Object.entries(readStoredThreadUnreadState()));
 
@@ -1503,17 +1504,36 @@ function WorkbenchThreadClient(
     return workbenchOrigin ? buildThreadTitleRouteUrl(workbenchOrigin) : null;
   }
 
-  function buildCodexDeveloperInstructions(
+  async function readWorkbenchLibraryInstructions() {
+    if (!workbenchLibraryInstructionsPromise) {
+      workbenchLibraryInstructionsPromise = fetch("/api/workbench-library/skills", { cache: "no-store" })
+        .then(async (response) => {
+          if (!response.ok) {
+            return null;
+          }
+
+          const payload = await response.json() as { instructions?: string | null };
+          return payload.instructions?.trim() ? payload.instructions : null;
+        })
+        .catch(() => null);
+    }
+
+    return await workbenchLibraryInstructionsPromise;
+  }
+
+  async function buildCodexDeveloperInstructions(
     threadId: string,
     agentPath: string | null,
     routeUrl: string | null,
   ) {
+    const workbenchLibraryInstructions = await readWorkbenchLibraryInstructions();
     return createQuestionnaireDeveloperInstructions(
       buildCodexThreadBootstrapInstructions({
         agentPath,
         harness: "codex",
         routeUrl,
         threadId,
+        workbenchLibraryInstructions,
       }),
     );
   }
@@ -1528,7 +1548,7 @@ function WorkbenchThreadClient(
 
       if (harness === "codex") {
         const routeUrl = buildCurrentThreadTitleRouteUrl();
-        const codexDeveloperInstructions = buildCodexDeveloperInstructions(threadId, selectedAgentPath, routeUrl);
+        const codexDeveloperInstructions = await buildCodexDeveloperInstructions(threadId, selectedAgentPath, routeUrl);
         try {
           resumedThread = await sendBridgeRequest<ThreadResumeResponse>(harness, {
             method: "thread/resume",
@@ -2401,7 +2421,7 @@ function WorkbenchThreadClient(
         ...(harness === "codex" && state.projectRootPath ? { cwd: state.projectRootPath } : {}),
         ...(harness === "codex"
           ? {
-            developerInstructions: buildCodexDeveloperInstructions(
+            developerInstructions: await buildCodexDeveloperInstructions(
               resolvedThreadId,
               selectedAgentPath,
               null,
@@ -2446,7 +2466,7 @@ function WorkbenchThreadClient(
     }
 
     const codexDeveloperInstructions = harness === "codex"
-      ? buildCodexDeveloperInstructions(resolvedThreadId, selectedAgentPath, titleRouteUrl)
+      ? await buildCodexDeveloperInstructions(resolvedThreadId, selectedAgentPath, titleRouteUrl)
       : null;
     let resumedThread = bootstrapThread;
     if (!resumedThread || !shouldBypassCodexDraftBootstrap) {
@@ -2514,6 +2534,9 @@ function WorkbenchThreadClient(
       optimisticTurnId = steerResponse.turnId || currentInProgressTurn.id;
       enqueueOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, normalizedInput);
     } else {
+      const workbenchLibraryInstructions = harness === "codex"
+        ? await readWorkbenchLibraryInstructions()
+        : null;
       const codexCollaborationMode = harness === "codex"
         ? (() => {
           const collaborationModel = selectedModel ?? resumedThread.model;
@@ -2526,6 +2549,7 @@ function WorkbenchThreadClient(
                 harness: "codex",
                 routeUrl: titleRouteUrl,
                 threadId: resolvedThreadId,
+                workbenchLibraryInstructions,
               }),
             )
             : null;

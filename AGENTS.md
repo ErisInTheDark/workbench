@@ -24,3 +24,9 @@ Before giving a questionnaire, first provide the user with concise commentary th
 - Changes to code between the Codex app-server stdio connection and the browser websocket must be covered by the `codex-bridge` reload scope or a newer equivalent reload scope that does not restart the Codex app-server child.
 - `codex-bridge` reload must reload the bridge module or a delegated middleware module and preserve the live app-server process, pending bridge state, and websocket clients.
 - If adding a new orchestrator subsystem, document its reload boundary in code: either add it to the reloadable helper bundle or wire it into an explicit non-destructive reload scope.
+
+## Workbench Library
+
+- Treat the Workbench Library as the user-owned external home for Workbench-wide skills, agents, and instructions.
+- The default library root is `~/.workbench`; `WORKBENCH_LIBRARY_ROOT` can override it.
+- Workbench Library behavior should remain harness-neutral. Prefer compact manifests and explicit file paths over copying library material into project repositories.

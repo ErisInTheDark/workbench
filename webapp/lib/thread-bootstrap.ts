@@ -84,13 +84,19 @@ export function buildCodexThreadBootstrapInstructions({
   harness,
   routeUrl,
   threadId,
+  workbenchLibraryInstructions,
 }: {
   agentPath?: string | null;
   harness: WorkbenchHarness;
   routeUrl?: string | null;
   threadId: string;
+  workbenchLibraryInstructions?: string | null;
 }) {
   const sections: string[] = [];
+
+  if (workbenchLibraryInstructions?.trim()) {
+    sections.push(workbenchLibraryInstructions);
+  }
 
   if (agentPath?.trim()) {
     sections.push(

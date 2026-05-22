@@ -947,8 +947,9 @@ export default function Workbench () {
 
     let cancelled = false;
 
+    const projectId = explorer.currentProjectId || route.projectId;
     void Promise.all(quickOpenPaths.map(async (path) => {
-      const response = await fetch(`/api/file?path=${encodeURIComponent(path)}`, { cache: "no-store" });
+      const response = await fetch(`/api/file?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(path)}`, { cache: "no-store" });
       if (!response.ok) {
         return null;
       }
@@ -975,7 +976,7 @@ export default function Workbench () {
     return () => {
       cancelled = true;
     };
-  }, [quickOpenPaths, showEmptyState]);
+  }, [explorer.currentProjectId, quickOpenPaths, route.projectId, showEmptyState]);
 
   const handleHarnessChange = (nextHarness: WorkbenchHarness) => {
     if (nextHarness === harness && currentThread?.harness === nextHarness) {
@@ -1044,7 +1045,7 @@ export default function Workbench () {
                     onClick={openProjectPicker}
                   >
                     <span className="min-w-0 relative -top-0.5">
-                      <span className="block truncate text-xl font-semibold leading-tight text-text">{explorer.currentProjectId || "No project"}</span>
+                      <span className="block truncate text-xl font-semibold leading-tight text-text">{currentProject?.name ?? (explorer.currentProjectId || "No project")}</span>
                     </span>
                     <span className="shrink-0 relative -top-0.5 text-muted" aria-hidden="true">‹</span>
                   </button>
@@ -1124,7 +1125,7 @@ export default function Workbench () {
                   </div>
                   {!explorer.projects.length ? (
                     <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted md:pr-4.5">
-                      No git projects were found under the configured projects root.
+                      No projects were found.
                     </p>
                   ) : null}
                   <nav id="file-tree" aria-label="Project files">
@@ -1186,14 +1187,14 @@ export default function Workbench () {
                             void selectProjectFromLink(event, project.id);
                           }}
                         >
-                          <span className={`block truncate text-[0.94rem] leading-tight${isCurrentProject ? " font-semibold" : ""}`}>{project.id}</span>
+                          <span className={`block truncate text-[0.94rem] leading-tight${isCurrentProject ? " font-semibold" : ""}`}>{project.name || project.id}</span>
                           <span className="mt-1 block truncate text-[0.74rem] leading-tight text-muted">{project.rootPath}</span>
                         </a>
                       );
                     })}
                     {!explorer.projects.length ? (
                       <p className="m-0 text-[0.84rem] leading-6 text-muted">
-                        No git projects were found under the configured projects root.
+                        No projects were found.
                       </p>
                     ) : null}
                   </nav>

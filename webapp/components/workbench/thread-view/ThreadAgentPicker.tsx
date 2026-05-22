@@ -23,7 +23,7 @@ export default function ThreadAgentPicker ({
 				<div className="shrink-1">
 					<p className="m-0 text-[0.82em] font-semibold uppercase tracking-[0.16em] text-muted">Agents</p>
 					<p className="mt-1 mb-0 text-[0.86em] leading-[1.6] text-muted">
-						Select a user-invocable agent file for this harness. Codex injects the file as turn instructions; Copilot selects the matching custom agent.
+						Select a user-invocable agent for this harness. Workbench Library agents are available across projects.
 					</p>
 				</div>
 				<button
@@ -71,7 +71,9 @@ export default function ThreadAgentPicker ({
 							}}
 						>
 							<p className="m-0 text-[0.96em] font-semibold text-text">{agent.name}</p>
-							<p className="mt-1 mb-0 break-all text-[0.78em] leading-[1.6] text-muted">{agent.path}</p>
+							<p className="mt-1 mb-0 break-all text-[0.78em] leading-[1.6] text-muted">
+								{agent.sourceLabel ? `${agent.sourceLabel} - ` : ""}{agent.path}
+							</p>
 							{agent.description ? (
 								<p className="mt-2 mb-0 text-[0.82em] leading-[1.7] text-muted">{agent.description}</p>
 							) : null}
