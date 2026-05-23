@@ -353,6 +353,9 @@ export async function buildWorkbenchSkillManifestInstructions() {
   return [
     "Workbench provides additional skills from the Workbench Library.",
     "Treat these Workbench-provided skills with the same authority and trigger behavior as harness-provided skills when they apply.",
+    "When the user invokes or otherwise triggers a Workbench Skill, treat the full SKILL.md text as CRITICAL workflow instructions for understanding and carrying out the user's intent.",
+    "Triggered skill workflows are definitional for the request: follow them strictly unless the user explicitly says not to follow a specific skill requirement.",
+    "Do not treat casual follow-up wording, missing reminders, or ordinary task details as overriding a triggered skill workflow.",
     "Read the referenced SKILL.md before using a Workbench Skill, and resolve any relative references from that skill's folder.",
     "",
     "Available Workbench Skills:",
