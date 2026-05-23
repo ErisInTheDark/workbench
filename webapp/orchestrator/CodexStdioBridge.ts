@@ -24,7 +24,7 @@ import type {
 } from "../lib/types";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type CodexAppServer from "./CodexAppServer";
-import { logError } from "./process-helpers";
+import { log, logError } from "./process-helpers";
 
 type CodexTranscriptStoreInstance = import("./CodexTranscriptStore").default;
 type CodexTranscriptStoreConstructor = new (
@@ -126,6 +126,8 @@ const APPROVAL_DECISION_QUESTION_ID = "decision";
 const APPROVAL_ALLOW_ONCE_LABEL = "Allow once";
 const APPROVAL_ALLOW_SESSION_LABEL = "Allow for session";
 const APPROVAL_DECLINE_LABEL = "Decline";
+const TRANSCRIPT_INSTRUMENTATION_INTERVAL_MS = 5000;
+const TRANSCRIPT_INSTRUMENTATION_BACKLOG_THRESHOLD = 25;
 
 function isJsonRpcResponse(message: unknown): message is JsonRpcResponse {
   return !!message
@@ -173,6 +175,21 @@ function truncateText(value: string, maxLength = 400) {
   }
 
   return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+function formatBytes(value: number) {
+  return `${Math.round(value / 1024 / 1024)}MB`;
+}
+
+function shouldRecordHydratedThreadSnapshot(
+  originalRequest: JsonRpcRequest,
+  originalResponse: JsonRpcResponse,
+  hydratedResponse: JsonRpcResponse,
+) {
+  return hydratedResponse !== originalResponse
+    && asString(originalRequest.method) === "thread/read"
+    && Boolean(originalResponse.error)
+    && !hydratedResponse.error;
 }
 
 function normalizeQuestionId(value: string | null, index: number) {
@@ -573,6 +590,15 @@ export default class CodexStdioBridge {
   private readonly requestIdAllocator: RequestIdAllocator;
   private transcriptQueue: Promise<void> = Promise.resolve();
   private readonly transcriptTasks = new Set<Promise<void>>();
+  private readonly transcriptPendingTaskStartedAt = new Map<number, number>();
+  private readonly transcriptLabelCounts = new Map<string, number>();
+  private readonly transcriptInstrumentationTimer: NodeJS.Timeout;
+  private nextTranscriptTaskId = 1;
+  private transcriptCompletedCount = 0;
+  private transcriptEnqueuedCount = 0;
+  private transcriptFailedCount = 0;
+  private transcriptLastLabel = "";
+  private transcriptLastLogAt = 0;
   private upstreamInitialized: boolean;
   private upstreamInitializePromise: Promise<void> | null = null;
 
@@ -588,6 +614,10 @@ export default class CodexStdioBridge {
     this.requestIdAllocator = initialState?.requestIdAllocator ?? { next: 1 };
     this.upstreamInitialized = initialState?.upstreamInitialized ?? false;
     this.transcriptStore = this.createTranscriptStore();
+    this.transcriptInstrumentationTimer = setInterval(() => {
+      this.logTranscriptInstrumentation("interval");
+    }, TRANSCRIPT_INSTRUMENTATION_INTERVAL_MS);
+    this.transcriptInstrumentationTimer.unref();
   }
 
   getInitializeResult() {
@@ -607,6 +637,7 @@ export default class CodexStdioBridge {
   }
 
   stop() {
+    clearInterval(this.transcriptInstrumentationTimer);
     this.pendingUserInputRequests.clear();
     for (const pending of this.pendingResponses.values()) {
       if (isPendingInternalResponse(pending)) {
@@ -630,6 +661,7 @@ export default class CodexStdioBridge {
   async detachForReload(): Promise<CodexStdioBridgeReloadState> {
     await this.waitForIdle();
     this.acceptingWork = false;
+    clearInterval(this.transcriptInstrumentationTimer);
     await this.transcriptStore.dispose();
     return {
       initializeResult: this.initializeResult,
@@ -780,7 +812,7 @@ export default class CodexStdioBridge {
           upstreamRequest: upstreamMessage,
         });
       });
-      void this.captureTranscript(() => this.transcriptStore.recordClientRequest(upstreamMessage));
+      void this.captureTranscript("client-request", () => this.transcriptStore.recordClientRequest(upstreamMessage));
       this.send(upstreamMessage);
       return responsePromise;
     }
@@ -796,7 +828,7 @@ export default class CodexStdioBridge {
       method: typeof message.method === "string" ? message.method : null,
       upstreamRequest: upstreamMessage,
     });
-    void this.captureTranscript(() => this.transcriptStore.recordClientRequest(upstreamMessage));
+    void this.captureTranscript("client-request", () => this.transcriptStore.recordClientRequest(upstreamMessage));
     this.send(upstreamMessage);
     return null;
   }
@@ -850,9 +882,11 @@ export default class CodexStdioBridge {
     } catch (error) {
       logError("codex-transcript", `failed to hydrate thread response: ${error instanceof Error ? error.message : String(error)}`);
     }
-    void this.captureTranscript(async () => {
+    void this.captureTranscript(`upstream-response:${pending.upstreamRequest.method ?? "unknown"}`, async () => {
       await this.transcriptStore.recordUpstreamResponse(pending.upstreamRequest, message);
-      await this.transcriptStore.recordHydratedThreadSnapshot(hydratedMessage);
+      if (shouldRecordHydratedThreadSnapshot(pending.upstreamRequest, message, hydratedMessage)) {
+        await this.transcriptStore.recordHydratedThreadSnapshot(hydratedMessage);
+      }
     });
     if (isPendingInternalResponse(pending)) {
       pending.resolve(hydratedMessage);
@@ -867,7 +901,7 @@ export default class CodexStdioBridge {
 
   private async handleUpstreamNonResponseMessage(message: unknown) {
     if (isJsonRpcServerRequest(message)) {
-      void this.captureTranscript(() => this.transcriptStore.recordUpstreamServerRequest(message));
+      void this.captureTranscript(`upstream-server-request:${message.method}`, () => this.transcriptStore.recordUpstreamServerRequest(message));
       switch (message.method) {
         case "item/tool/requestUserInput":
           this.handleUpstreamQuestionnaireRequest(message);
@@ -896,7 +930,7 @@ export default class CodexStdioBridge {
         this.handleServerRequestResolved(message.params);
       }
       this.onNotification(message);
-      void this.captureTranscript(() => this.transcriptStore.recordUpstreamNotification(message));
+      void this.captureTranscript(`upstream-notification:${message.method}`, () => this.transcriptStore.recordUpstreamNotification(message));
     }
   }
 
@@ -924,22 +958,77 @@ export default class CodexStdioBridge {
     });
   }
 
-  private async captureTranscript(task: () => Promise<unknown>) {
+  private logTranscriptInstrumentation(reason: "backlog" | "interval") {
+    const pendingCount = this.transcriptTasks.size;
+    const shouldLog = pendingCount > 0
+      || reason === "backlog"
+      || this.transcriptEnqueuedCount !== this.transcriptCompletedCount;
+    if (!shouldLog) {
+      return;
+    }
+
+    const timestamp = Date.now();
+    if (reason === "backlog" && timestamp - this.transcriptLastLogAt < TRANSCRIPT_INSTRUMENTATION_INTERVAL_MS) {
+      return;
+    }
+
+    this.transcriptLastLogAt = timestamp;
+    const memory = process.memoryUsage();
+    let oldestPendingAgeMs = 0;
+    for (const startedAt of this.transcriptPendingTaskStartedAt.values()) {
+      oldestPendingAgeMs = Math.max(oldestPendingAgeMs, timestamp - startedAt);
+    }
+
+    const topLabels = Array.from(this.transcriptLabelCounts.entries())
+      .sort((left, right) => right[1] - left[1])
+      .slice(0, 5)
+      .map(([label, count]) => `${label}=${count}`)
+      .join(", ");
+
+    log("codex-transcript-memory", [
+      `reason=${reason}`,
+      `rss=${formatBytes(memory.rss)}`,
+      `heapUsed=${formatBytes(memory.heapUsed)}`,
+      `heapTotal=${formatBytes(memory.heapTotal)}`,
+      `external=${formatBytes(memory.external)}`,
+      `pending=${pendingCount}`,
+      `enqueued=${this.transcriptEnqueuedCount}`,
+      `completed=${this.transcriptCompletedCount}`,
+      `failed=${this.transcriptFailedCount}`,
+      `oldestPendingMs=${oldestPendingAgeMs}`,
+      `last=${this.transcriptLastLabel || "none"}`,
+      `top=[${topLabels}]`,
+    ].join(" "));
+  }
+
+  private async captureTranscript(label: string, task: () => Promise<unknown>) {
+    const taskId = this.nextTranscriptTaskId;
+    this.nextTranscriptTaskId += 1;
+    this.transcriptEnqueuedCount += 1;
+    this.transcriptLastLabel = label;
+    this.transcriptPendingTaskStartedAt.set(taskId, Date.now());
+    this.transcriptLabelCounts.set(label, (this.transcriptLabelCounts.get(label) ?? 0) + 1);
     const transcriptTask = this.transcriptQueue
       .catch(() => undefined)
       .then(async () => {
         try {
           await task();
         } catch (error) {
+          this.transcriptFailedCount += 1;
           logError("codex-transcript", error instanceof Error ? error.message : String(error));
         }
       });
     this.transcriptQueue = transcriptTask.catch(() => undefined);
     this.transcriptTasks.add(transcriptTask);
+    if (this.transcriptTasks.size >= TRANSCRIPT_INSTRUMENTATION_BACKLOG_THRESHOLD) {
+      this.logTranscriptInstrumentation("backlog");
+    }
     try {
       await transcriptTask;
     } finally {
+      this.transcriptCompletedCount += 1;
       this.transcriptTasks.delete(transcriptTask);
+      this.transcriptPendingTaskStartedAt.delete(taskId);
     }
   }
 

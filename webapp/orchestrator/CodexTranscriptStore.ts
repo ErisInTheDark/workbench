@@ -96,6 +96,13 @@ function createThreadFile(threadId: string): CodexTranscriptThreadFile {
   };
 }
 
+function createCompactThreadSnapshot(thread: Thread): Thread {
+  return {
+    ...thread,
+    turns: [],
+  };
+}
+
 function createTurnFile(threadId: string, turnId: string): CodexTranscriptTurnFile {
   return {
     itemOrder: [],
@@ -203,6 +210,19 @@ function getTurnOrderingUpdate(file: CodexTranscriptTurnFile, itemId: string, it
 
 function applyTurnTimeline(turn: Turn | null, file: Pick<CodexTranscriptTurnFile, "itemOrder" | "itemTimeline" | "turn">) {
   return turn ? { ...turn, items: orderMergedItemsByTimeline(turn.items, normalizeTurnTimeline({ ...file, turn })) } : turn;
+}
+
+function orderTurnFilesByThreadIndex(threadFile: CodexTranscriptThreadFile, turnFiles: CodexTranscriptTurnFile[]) {
+  const turnIndexesById = new Map(threadFile.turnIndex.map((entry, index) => [entry.turnId, index]));
+  return [...turnFiles].sort((left, right) => {
+    const leftIndex = turnIndexesById.get(left.turnId) ?? Number.MAX_SAFE_INTEGER;
+    const rightIndex = turnIndexesById.get(right.turnId) ?? Number.MAX_SAFE_INTEGER;
+    if (leftIndex !== rightIndex) {
+      return leftIndex - rightIndex;
+    }
+
+    return left.turnId.localeCompare(right.turnId);
+  });
 }
 
 function mergeTurnItems(currentTurn: Turn | null, incomingTurn: Turn) {
@@ -569,7 +589,8 @@ export default class CodexTranscriptStore {
       return response;
     }
 
-    const storedTurns = (await this.readTurnFiles(thread.id))
+    const upstreamTurnIds = new Set(thread.turns.map((turn) => turn.id));
+    const storedTurns = (await this.readTurnFiles(thread.id, { turnIds: upstreamTurnIds }))
       .filter((file) => file.turn !== null)
       .map((file) => ({
         itemTimeline: file.itemTimeline,
@@ -599,7 +620,7 @@ export default class CodexTranscriptStore {
       return response;
     }
 
-    const storedTurns = (await this.readTurnFiles(threadId))
+    const storedTurns = orderTurnFilesByThreadIndex(threadFile, await this.readTurnFiles(threadId))
       .filter((file) => file.turn !== null)
       .map((file) => ({
         itemTimeline: file.itemTimeline,
@@ -991,22 +1012,23 @@ export default class CodexTranscriptStore {
   private async touchThread(threadId: string, thread: Thread | null) {
     await this.updateThreadFile(threadId, (file) => {
       const nextThread = thread ?? file.thread;
-      const turnIndex = nextThread
-        ? nextThread.turns.map((turn) => ({
+      const turnIndex = thread
+        ? thread.turns.map((turn) => ({
           completedAt: turn.completedAt,
           itemCount: turn.items.length,
           startedAt: turn.startedAt,
           status: turn.status,
           turnId: turn.id,
-          updatedAt: getThreadTimestamp(nextThread),
+          updatedAt: getThreadTimestamp(thread),
         }))
         : file.turnIndex;
+      const nextStoredThread = nextThread ? createCompactThreadSnapshot(nextThread) : null;
       return {
         ...file,
         cliVersion: nextThread?.cliVersion ?? file.cliVersion,
         lastTouchedAt: now(),
         sourceThreadIds: Array.from(new Set([...file.sourceThreadIds, threadId])),
-        thread: nextThread,
+        thread: nextStoredThread,
         turnIndex,
       };
     });
@@ -1089,7 +1111,7 @@ export default class CodexTranscriptStore {
     await this.readyPromise;
   }
 
-  private async readTurnFiles(threadId: string) {
+  private async readTurnFiles(threadId: string, options: { turnIds?: Iterable<string> } = {}) {
     const turnsDirectoryPath = path.join(this.threadDirectoryPath(threadId), "turns");
     let entries: string[] = [];
     try {
@@ -1101,8 +1123,12 @@ export default class CodexTranscriptStore {
       return [];
     }
 
+    const allowedEntries = options.turnIds
+      ? new Set(Array.from(options.turnIds, (turnId) => `${encodeTranscriptPathSegment(turnId)}.json`))
+      : null;
     const files = await Promise.all(entries
       .filter((entry) => entry.endsWith(".json"))
+      .filter((entry) => !allowedEntries || allowedEntries.has(entry))
       .map((entry) => this.json.read<CodexTranscriptTurnFile | null>(path.join(turnsDirectoryPath, entry), null)));
     return files
       .filter((file): file is CodexTranscriptTurnFile => file !== null && file.schemaVersion === CODEX_TRANSCRIPT_SCHEMA_VERSION)
