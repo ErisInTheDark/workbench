@@ -55,7 +55,7 @@ type ThreadRenderableBlock =
 type RelatedThreadsById = Record<string, ThreadPayload | undefined>;
 
 interface HiddenThreadItemIds {
-  collabAgentToolCallId?: string | null;
+  collabAgentToolCallIds?: ReadonlySet<string> | null;
   reasoningItemId?: string | null;
 }
 
@@ -170,7 +170,7 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
       continue;
     }
 
-    if (item.type === "collabAgentToolCall" && item.id === hiddenItemIds.collabAgentToolCallId) {
+    if (item.type === "collabAgentToolCall" && hiddenItemIds.collabAgentToolCallIds?.has(item.id)) {
       flushPendingCommands();
       flushPendingReasoning();
       flushPendingFileChanges();
@@ -485,6 +485,7 @@ function ThreadCollabAgentToolCallItem ({
   const receiverThread = relatedThreadsById[receiverThreadId];
   const prompt = item.prompt?.trim() ?? "";
   const responseMessage = getCollabAgentStateMessage(item, receiverThreadId);
+  const isActiveWait = item.status === "inProgress" && isMostRecent;
   const agentName = (
     <ThreadAgentName
       fallbackKey={receiverThreadId}
@@ -515,11 +516,11 @@ function ThreadCollabAgentToolCallItem ({
       <ThreadDisclosure
         className="py-2"
         contentClassName="mt-2 pl-6"
-        open={isMostRecent}
-        summary={<><span>{isMostRecent ? "Waiting for " : "Waited for "}</span>{agentName}</>}
+        open={isActiveWait}
+        summary={<><span>{isActiveWait ? "Waiting for " : "Waited for "}</span>{agentName}</>}
         summaryClassName="text-[0.92em] leading-[1.6] text-muted"
       >
-        {isMostRecent ? (
+        {isActiveWait ? (
           <ThreadCurrentSubagentItemPreview
             onOpenFile={onOpenFile}
             projectRootPath={projectRootPath}
@@ -878,22 +879,25 @@ function ThreadRenderableBlockView ({
 }
 
 function ThreadTurnDetailsComponent ({
-  hiddenCollabAgentToolCallItemId = null,
+  hiddenCollabAgentToolCallItemIds = [],
   hiddenReasoningItemId = null,
   onOpenFile,
   projectRootPath,
   relatedThreadsById = {},
   turn,
 }: {
-  hiddenCollabAgentToolCallItemId?: string | null;
+  hiddenCollabAgentToolCallItemIds?: readonly string[];
   hiddenReasoningItemId?: string | null;
   onOpenFile?: (path: string) => Promise<void>;
   projectRootPath?: string;
   relatedThreadsById?: RelatedThreadsById;
   turn: Turn;
 }) {
+  const hiddenCollabAgentToolCallIds = hiddenCollabAgentToolCallItemIds.length
+    ? new Set(hiddenCollabAgentToolCallItemIds)
+    : null;
   const blocks = buildRenderableBlocks(turn.items, {
-    collabAgentToolCallId: hiddenCollabAgentToolCallItemId,
+    collabAgentToolCallIds: hiddenCollabAgentToolCallIds,
     reasoningItemId: hiddenReasoningItemId,
   });
   const finalAgentMessageId = getFinalAgentMessageId(turn);
@@ -970,7 +974,7 @@ function areThreadTurnDetailsPropsEqual (
   right: Readonly<Parameters<typeof ThreadTurnDetailsComponent>[0]>,
 ) {
   return left.turn === right.turn
-    && left.hiddenCollabAgentToolCallItemId === right.hiddenCollabAgentToolCallItemId
+    && left.hiddenCollabAgentToolCallItemIds === right.hiddenCollabAgentToolCallItemIds
     && left.hiddenReasoningItemId === right.hiddenReasoningItemId
     && left.onOpenFile === right.onOpenFile
     && left.projectRootPath === right.projectRootPath
@@ -981,7 +985,7 @@ export const ThreadTurnDetails = memo(ThreadTurnDetailsComponent, areThreadTurnD
 
 export function ThreadThreadContent ({
   emptyMessage = "No subagent activity was captured yet.",
-  hiddenCollabAgentToolCallItemId = null,
+  hiddenCollabAgentToolCallItemIds = [],
   hiddenReasoningItemId = null,
   onOpenFile,
   projectRootPath,
@@ -989,7 +993,7 @@ export function ThreadThreadContent ({
   thread,
 }: {
   emptyMessage?: string;
-  hiddenCollabAgentToolCallItemId?: string | null;
+  hiddenCollabAgentToolCallItemIds?: readonly string[];
   hiddenReasoningItemId?: string | null;
   onOpenFile?: (path: string) => Promise<void>;
   projectRootPath?: string;
@@ -1017,7 +1021,7 @@ export function ThreadThreadContent ({
       {thread.turns.map((turn) => (
         <ThreadTurnDetails
           key={turn.id}
-          hiddenCollabAgentToolCallItemId={hiddenCollabAgentToolCallItemId}
+          hiddenCollabAgentToolCallItemIds={hiddenCollabAgentToolCallItemIds}
           hiddenReasoningItemId={hiddenReasoningItemId}
           onOpenFile={onOpenFile}
           projectRootPath={projectRootPath}

@@ -27,7 +27,6 @@ import {
 } from "../../../lib/workbench/state/browser-state";
 import {
   getCollabAgentThreadIds,
-  getPrimaryCollabAgentThreadId,
   getThreadAgentTabLabel,
 } from "../../../lib/workbench/thread/thread-collab-agents";
 import { ThreadQuestionBadge, ThreadUnreadBadge as ThreadUnreadBadgeView } from "../ThreadStatusBadges";
@@ -39,6 +38,7 @@ import ThreadRateLimits from "./ThreadRateLimits";
 import { ThreadThreadContent, ThreadTurnDetails } from "./thread-view-items";
 
 const SUBTHREAD_POLL_INTERVAL_MS = 1500;
+const EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS: readonly string[] = [];
 
 type LiveThreadActivity =
   | {
@@ -48,9 +48,11 @@ type LiveThreadActivity =
     title: string;
   }
   | {
-    hiddenItemId: string;
-    kind: "subagentWait";
-    receiverThreadId: string;
+    kind: "subagentWaits";
+    waits: Array<{
+      hiddenItemId: string;
+      receiverThreadId: string;
+    }>;
   };
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
@@ -207,17 +209,37 @@ function getLiveThreadActivity ({
     return null;
   }
 
-  const latestItem = turn.items.at(-1);
-  if (latestItem?.type === "collabAgentToolCall" && latestItem.tool === "wait" && latestItem.status === "inProgress") {
-    const receiverThreadId = getPrimaryCollabAgentThreadId(latestItem);
-    if (!receiverThreadId) {
-      return null;
+  const waits: Array<{ hiddenItemId: string; receiverThreadId: string }> = [];
+  const seenWaitKeys = new Set<string>();
+  for (let index = turn.items.length - 1; index >= 0; index -= 1) {
+    const item = turn.items[index];
+    if (item.type !== "collabAgentToolCall" || item.tool !== "wait" || item.status !== "inProgress") {
+      break;
     }
 
+    for (const receiverThreadId of item.receiverThreadIds) {
+      const trimmedReceiverThreadId = receiverThreadId.trim();
+      if (!trimmedReceiverThreadId) {
+        continue;
+      }
+
+      const waitKey = `${item.id}:${trimmedReceiverThreadId}`;
+      if (seenWaitKeys.has(waitKey)) {
+        continue;
+      }
+
+      seenWaitKeys.add(waitKey);
+      waits.unshift({
+        hiddenItemId: item.id,
+        receiverThreadId: trimmedReceiverThreadId,
+      });
+    }
+  }
+
+  if (waits.length) {
     return {
-      hiddenItemId: latestItem.id,
-      kind: "subagentWait",
-      receiverThreadId,
+      kind: "subagentWaits",
+      waits,
     };
   }
 
@@ -313,16 +335,17 @@ export default memo(function ThreadView ({
     : null;
   const activePendingUserInputRequest = activeHarnessUserInputRequest;
   const currentTurn = activeThread?.turns.at(-1) ?? null;
-  const liveActivity = getLiveThreadActivity({
+  const liveActivity = useMemo(() => getLiveThreadActivity({
     pendingUserInputRequest: activePendingUserInputRequest,
     turn: currentTurn,
-  });
-  const liveSubagentThread = liveActivity?.kind === "subagentWait"
-    ? subthreadsById[liveActivity.receiverThreadId] ?? null
-    : null;
-  const liveActivityHasDisclosureContent = liveActivity?.kind === "reasoning"
-    ? Boolean(liveActivity.body)
-    : Boolean(liveSubagentThread?.turns.length);
+  }), [activePendingUserInputRequest, currentTurn]);
+  const hiddenCollabAgentToolCallItemIds = useMemo(() => {
+    if (liveActivity?.kind !== "subagentWaits") {
+      return EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS;
+    }
+
+    return Array.from(new Set(liveActivity.waits.map((wait) => wait.hiddenItemId)));
+  }, [liveActivity]);
 
   const tabDefinitions = useMemo(() => {
     const baseLabelCounts = new Map<string, number>();
@@ -654,7 +677,7 @@ export default memo(function ThreadView ({
           activeThread.turns.length ? activeThread.turns.map((turn) => (
             <ThreadTurnDetails
               key={turn.id}
-              hiddenCollabAgentToolCallItemId={turn.id === currentTurn?.id && liveActivity?.kind === "subagentWait" ? liveActivity.hiddenItemId : null}
+              hiddenCollabAgentToolCallItemIds={turn.id === currentTurn?.id ? hiddenCollabAgentToolCallItemIds : EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS}
               onOpenFile={onOpenFile}
               projectRootPath={projectRootPath}
               relatedThreadsById={subthreadsById}
@@ -676,7 +699,7 @@ export default memo(function ThreadView ({
       </div>
       {liveActivity ? (
         <div className="py-4" aria-live="polite">
-          {liveActivityHasDisclosureContent ? (
+          {liveActivity.kind === "reasoning" && liveActivity.body ? (
             <ThreadDisclosure
               contentClassName="mt-2"
               open={isLiveActivityOpen}
@@ -686,52 +709,67 @@ export default memo(function ThreadView ({
                 persistThreadLiveActivityOpen(nextIsOpen);
               }}
               summaryClassName="text-[0.92em] font-medium leading-[1.6]"
-              summary={liveActivity.kind === "reasoning" ? (
-                <span className="thread-thinking-text">{liveActivity.title}</span>
-              ) : (
-                <span>
-                  <span className="thread-thinking-text">waiting for</span>{" "}
-                  <ThreadAgentName
-                    fallbackKey={liveActivity.receiverThreadId}
-                    thread={liveSubagentThread}
-                  />
-                </span>
-              )}
+              summary={<span className="thread-thinking-text">{liveActivity.title}</span>}
             >
-              {liveActivity.kind === "reasoning" ? (
-                liveActivity.body ? (
-                  <ThreadMarkdown
-                    className="text-[0.8em] text-muted"
-                    markdown={liveActivity.body}
-                    onOpenFile={onOpenFile}
-                    projectRootPath={projectRootPath}
-                  />
-                ) : null
-              ) : (
-                <div className="flex relative h-[calc(22rem*0.9)] before:absolute before:inset-0 before:-z-1 before:block before:bg-[linear-gradient(to_right,transparent,#0008_10%,#0008_90%,transparent)] before:content-[''] before:border-y before:border-[color-mix(in_srgb,var(--text)_10%,transparent)]">
-                  <div className="explorer-scrollbar my-[calc(22rem*-0.1*0.5)] h-[22rem] scale-[0.9] overflow-y-auto py-2">
-                    <ThreadThreadContent
-                      onOpenFile={onOpenFile}
-                      projectRootPath={projectRootPath}
-                      relatedThreadsById={subthreadsById}
-                      thread={liveSubagentThread}
-                    />
-                  </div>
-                </div>
-              )}
+              <ThreadMarkdown
+                className="text-[0.8em] text-muted"
+                markdown={liveActivity.body}
+                onOpenFile={onOpenFile}
+                projectRootPath={projectRootPath}
+              />
             </ThreadDisclosure>
           ) : liveActivity.kind === "reasoning" ? (
             <p className="thread-thinking-text m-0 text-[0.92em] font-medium leading-[1.6]">
               {liveActivity.title}
             </p>
           ) : (
-            <p className="m-0 text-[0.92em] font-medium leading-[1.6]">
-              <span className="thread-thinking-text">waiting for</span>{" "}
-              <ThreadAgentName
-                fallbackKey={liveActivity.receiverThreadId}
-                thread={liveSubagentThread}
-              />
-            </p>
+            <div className="space-y-3">
+              {liveActivity.waits.map((wait) => {
+                const liveSubagentThread = subthreadsById[wait.receiverThreadId] ?? null;
+                const summary = (
+                  <span>
+                    <span className="thread-thinking-text">waiting for</span>{" "}
+                    <ThreadAgentName
+                      fallbackKey={wait.receiverThreadId}
+                      thread={liveSubagentThread}
+                    />
+                  </span>
+                );
+                if (!liveSubagentThread?.turns.length) {
+                  return (
+                    <p key={`${wait.hiddenItemId}:${wait.receiverThreadId}`} className="m-0 text-[0.92em] font-medium leading-[1.6]">
+                      {summary}
+                    </p>
+                  );
+                }
+
+                return (
+                  <ThreadDisclosure
+                    key={`${wait.hiddenItemId}:${wait.receiverThreadId}`}
+                    contentClassName="mt-2"
+                    open={isLiveActivityOpen}
+                    onToggle={(event) => {
+                      const nextIsOpen = event.currentTarget.open;
+                      setIsLiveActivityOpen(nextIsOpen);
+                      persistThreadLiveActivityOpen(nextIsOpen);
+                    }}
+                    summary={summary}
+                    summaryClassName="text-[0.92em] font-medium leading-[1.6]"
+                  >
+                    <div className="flex relative h-[calc(22rem*0.9)] before:absolute before:inset-0 before:-z-1 before:block before:bg-[linear-gradient(to_right,transparent,#0008_10%,#0008_90%,transparent)] before:content-[''] before:border-y before:border-[color-mix(in_srgb,var(--text)_10%,transparent)]">
+                      <div className="explorer-scrollbar my-[calc(22rem*-0.1*0.5)] h-[22rem] scale-[0.9] overflow-y-auto py-2">
+                        <ThreadThreadContent
+                          onOpenFile={onOpenFile}
+                          projectRootPath={projectRootPath}
+                          relatedThreadsById={subthreadsById}
+                          thread={liveSubagentThread}
+                        />
+                      </div>
+                    </div>
+                  </ThreadDisclosure>
+                );
+              })}
+            </div>
           )}
         </div>
       ) : null}
