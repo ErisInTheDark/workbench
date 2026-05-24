@@ -14,6 +14,7 @@ import type { GetAccountRateLimitsResponse } from "../codex/generated/app-server
 import type { Model as CodexModel } from "../codex/generated/app-server/v2/Model";
 import type { ModelListResponse } from "../codex/generated/app-server/v2/ModelListResponse";
 import type { RateLimitSnapshot } from "../codex/generated/app-server/v2/RateLimitSnapshot";
+import type { ThreadActiveFlag } from "../codex/generated/app-server/v2/ThreadActiveFlag";
 import type { ThreadItem } from "../codex/generated/app-server/v2/ThreadItem";
 import type { ThreadListResponse } from "../codex/generated/app-server/v2/ThreadListResponse";
 import type { ThreadReadResponse } from "../codex/generated/app-server/v2/ThreadReadResponse";
@@ -192,6 +193,16 @@ function getThreadItemKey(turnId: string, itemId: string) {
 
 function isThreadStatusActive(status: string) {
   return status === "active" || status.startsWith("active:");
+}
+
+function removeThreadActiveFlag(status: string, flag: ThreadActiveFlag) {
+  if (!status.startsWith("active:")) {
+    return status;
+  }
+
+  const [, activeFlags = ""] = status.split(":", 2);
+  const nextFlags = activeFlags.split(",").filter((activeFlag) => activeFlag && activeFlag !== flag);
+  return nextFlags.length ? `active:${nextFlags.join(",")}` : "active";
 }
 
 function getThreadItemIds(turns: Turn[]) {
@@ -1285,6 +1296,39 @@ function WorkbenchThreadClient(
 
     state.pendingUserInputRequestsByThreadId.delete(threadId);
     return true;
+  }
+
+  function clearThreadWaitingOnUserInputFlag(threadId: string) {
+    let changed = false;
+    if (state.currentThread?.id === threadId) {
+      const nextStatus = removeThreadActiveFlag(state.currentThread.status, "waitingOnUserInput");
+      if (nextStatus !== state.currentThread.status) {
+        state.currentThread = {
+          ...state.currentThread,
+          status: nextStatus,
+        };
+        changed = true;
+      }
+    }
+
+    state.threads = state.threads.map((thread) => {
+      if (thread.id !== threadId) {
+        return thread;
+      }
+
+      const nextStatus = removeThreadActiveFlag(thread.status, "waitingOnUserInput");
+      if (nextStatus === thread.status) {
+        return thread;
+      }
+
+      changed = true;
+      return buildThreadSummaryWithUnreadBadge({
+        ...thread,
+        status: nextStatus,
+      });
+    });
+
+    return changed;
   }
 
   function replacePendingUserInputRequests(
@@ -2639,6 +2683,12 @@ function WorkbenchThreadClient(
       return thread;
     }
 
+    const clearedPendingRequest = clearPendingUserInputRequest(thread.id);
+    const clearedWaitingFlag = clearThreadWaitingOnUserInputFlag(thread.id);
+    if (clearedPendingRequest || clearedWaitingFlag) {
+      emit();
+    }
+
     const activeTurn = getCurrentInProgressTurn(thread);
     if (!activeTurn) {
       return thread;
@@ -2692,7 +2742,9 @@ function WorkbenchThreadClient(
     if (pendingRequest.harness === "codex") {
       await readCompletedQuestionnaireHistory(threadId);
     }
-    if (clearPendingUserInputRequest(threadId, pendingRequest.requestKey)) {
+    const clearedPendingRequest = clearPendingUserInputRequest(threadId, pendingRequest.requestKey);
+    const clearedWaitingFlag = clearThreadWaitingOnUserInputFlag(threadId);
+    if (clearedPendingRequest || clearedWaitingFlag) {
       emit();
     }
   }
@@ -2742,7 +2794,9 @@ function WorkbenchThreadClient(
     }
 
     if (notification.method === "questionnaire/resolved") {
-      if (clearPendingUserInputRequest(notification.params.threadId, notification.params.requestKey)) {
+      const clearedPendingRequest = clearPendingUserInputRequest(notification.params.threadId, notification.params.requestKey);
+      const clearedWaitingFlag = clearThreadWaitingOnUserInputFlag(notification.params.threadId);
+      if (clearedPendingRequest || clearedWaitingFlag) {
         emit();
       }
       if (harness === "codex") {

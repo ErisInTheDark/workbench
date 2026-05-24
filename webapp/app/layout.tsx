@@ -6,6 +6,10 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Workbench",
   description: "Minimal project file explorer and WYSIWYG markdown editor.",
+  icons: {
+    icon: "/tab-icons/default.png",
+    shortcut: "/tab-icons/default.png",
+  },
   formatDetection: {
     address: false,
     date: false,

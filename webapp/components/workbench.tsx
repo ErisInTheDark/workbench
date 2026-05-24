@@ -46,6 +46,7 @@ import {
 } from "../lib/workbench/thread/thread-composer-drafts";
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
 import ThreadView from "./workbench/thread-view/ThreadView";
+import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/WorkbenchTabIcon";
 import {
   workbenchDiffGutterClassName,
   workbenchFloatingToolbarClassName,
@@ -136,6 +137,19 @@ function formatQuickOpenChangeSummary (additions: number, deletions: number) {
 function formatWorkbenchPageTitle (projectName: string | null | undefined) {
   const normalizedProjectName = projectName?.trim();
   return normalizedProjectName ? `${normalizedProjectName} / Workbench` : "Workbench";
+}
+
+function isThreadStatusActive(status: string) {
+  return status === "active" || status.startsWith("active:");
+}
+
+function isThreadStatusWaitingOnUserInput(status: string) {
+  if (!status.startsWith("active:")) {
+    return false;
+  }
+
+  const [, activeFlags = ""] = status.split(":", 2);
+  return activeFlags.split(",").includes("waitingOnUserInput");
 }
 
 function filterVisibleTreeNodes (nodes: TreeNode[]): TreeNode[] {
@@ -828,6 +842,20 @@ export default function Workbench () {
     () => new Set(Object.keys(harnessUserInputRequestsByThreadId)),
     [harnessUserInputRequestsByThreadId],
   );
+  const hasPendingQuestionnaire = Boolean(currentThread
+    && pendingQuestionnaireThreadIds.has(currentThread.id)
+    && isThreadStatusWaitingOnUserInput(currentThread.status))
+    || explorer.threads.some((thread) => (
+      pendingQuestionnaireThreadIds.has(thread.id)
+      && isThreadStatusWaitingOnUserInput(thread.status)
+    ));
+  const hasActiveThread = Boolean(currentThread && isThreadStatusActive(currentThread.status))
+    || explorer.threads.some((thread) => Boolean(thread.unreadBadge?.hasActiveTurn));
+  const tabIconState: WorkbenchTabIconState = hasPendingQuestionnaire
+    ? "questionnaire"
+    : hasActiveThread
+      ? "active"
+      : "default";
   const shouldShowShellHeader = !showEmptyState && (!isMobile || mobilePane === "editor");
 
   useEffect(() => {
@@ -1040,6 +1068,7 @@ export default function Workbench () {
 
   return (
     <div className="min-h-screen md:grid md:grid-cols-[minmax(16rem,21rem)_1fr] md:items-start">
+      <WorkbenchTabIcon state={tabIconState} />
       <div
         className="mobile-workbench-track flex min-h-screen w-[200vw] transition-transform duration-200 ease-out md:contents md:w-auto md:transform-none"
         style={mobileTrackStyle}
