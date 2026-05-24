@@ -2,27 +2,22 @@
  * Exports:
  * - ParsedListItem: list item node used by the markdown block parser. Keywords: markdown, list, parser.
  * - ParsedBlock: block node union used by markdown parsing and rendering. Keywords: markdown, block, parser.
- * - MarkdownRenderProfile: rendering behavior profile for editor-stable markdown vs display-only thread markdown. Keywords: markdown, profile, thread, editor.
- * - MarkdownRenderOptions: optional project-root and mention context for richer thread rendering. Keywords: markdown, file link, skills, mentions.
+ * - ParsedInlineNode: inline node union shared by HTML and React markdown render targets. Keywords: markdown, inline, parser, AST.
+ * - MarkdownParseProfile: parser behavior profile for editor-stable markdown vs display-only thread markdown. Keywords: markdown, profile, thread, editor.
+ * - MarkdownParseOptions: optional project-root and mention context for richer thread parsing. Keywords: markdown, file link, skills, mentions.
  * - parseBlocks: parse markdown into block nodes for rendering and diffing. Keywords: markdown, parser, blocks.
- * - markdownToHtml: render project markdown into sanitized HTML for the editor and thread view. Keywords: markdown, html, renderer.
+ * - parseInlineMarkdown: parse inline markdown into renderer-neutral nodes. Keywords: markdown, inline, parser.
+ * - parseThreadStateChangeMode: detect display-only thread mode change tags. Keywords: thread, mode, state, parser.
+ * - formatThreadStateChangeMode: format thread mode identifiers for display. Keywords: thread, mode, label.
+ * - stripInlineCodeSpans: remove inline code spans for thread ordered-step detection. Keywords: thread, code, step.
  */
 
 import {
-    getProjectFilePathDisplay,
-    projectFilePathInteractiveClassName,
-    projectFilePathLabelClassName,
-    projectFilePathLocationClassName,
-    projectFilePathPillClassName,
-} from "../project/project-file-path";
-import {
     buildInlineMentionHighlights,
-    type InlineMentionHighlight,
     type InlineMentionHighlightSources,
 } from "../thread/inline-mention-highlights";
 import {
     isBlockCommentLine,
-    parseBlockCommentBody,
 } from "./comment-markdown";
 import {
     normalizeMarkdownHref,
@@ -48,20 +43,31 @@ export type ParsedBlock =
   | { type: "comment"; text: string }
   | { type: "paragraph"; text: string };
 
-export type MarkdownRenderProfile = "editor" | "thread";
+export type MarkdownParseProfile = "editor" | "thread";
 
-export interface MarkdownRenderOptions {
+export type ParsedInlineNode =
+  | { type: "text"; text: string }
+  | { type: "strong"; children: ParsedInlineNode[] }
+  | { type: "em"; children: ParsedInlineNode[] }
+  | { type: "delete"; children: ParsedInlineNode[] }
+  | { type: "insert"; children: ParsedInlineNode[] }
+  | { type: "code"; text: string }
+  | { type: "break" }
+  | { type: "link"; children: ParsedInlineNode[]; external: boolean; href: string }
+  | { type: "inlineComment"; children: ParsedInlineNode[] }
+  | { type: "knownSkillMention"; text: string; title: string }
+  | {
+    type: "projectFileLink";
+    columnNumber: number | null;
+    href: string;
+    lineNumber: number | null;
+    relativePath: string;
+  };
+
+export interface MarkdownParseOptions {
   inlineMentionSources?: InlineMentionHighlightSources | null;
-  profile?: MarkdownRenderProfile;
+  profile?: MarkdownParseProfile;
   projectRootPath?: string;
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
 }
 
 function findClosingToken(source: string, token: string, fromIndex: number) {
@@ -116,7 +122,7 @@ function trimCodeSpanPadding(content: string) {
   return content;
 }
 
-function stripInlineCodeSpans(markdown: string) {
+export function stripInlineCodeSpans(markdown: string) {
   let text = "";
   let index = 0;
 
@@ -137,7 +143,7 @@ function stripInlineCodeSpans(markdown: string) {
   return text;
 }
 
-function parseThreadStateChangeTag(markdown: string, options: MarkdownRenderOptions) {
+export function parseThreadStateChangeMode(markdown: string, options: MarkdownParseOptions) {
   if ((options.profile ?? "editor") !== "thread") {
     return null;
   }
@@ -146,7 +152,7 @@ function parseThreadStateChangeTag(markdown: string, options: MarkdownRenderOpti
   return match?.[2].toLowerCase() ?? null;
 }
 
-function formatThreadStateChangeMode(mode: string) {
+export function formatThreadStateChangeMode(mode: string) {
   return mode
     .split(/[-_]+/)
     .filter(Boolean)
@@ -231,7 +237,7 @@ function canCloseThreadSingleEmphasis(source: string, index: number, marker: str
   return true;
 }
 
-function findClosingSingleEmphasisToken(source: string, token: string, fromIndex: number, options: MarkdownRenderOptions) {
+function findClosingSingleEmphasisToken(source: string, token: string, fromIndex: number, options: MarkdownParseOptions) {
   const profile = options.profile ?? "editor";
   if (profile !== "thread") {
     return findClosingToken(source, token, fromIndex);
@@ -250,29 +256,7 @@ function findClosingSingleEmphasisToken(source: string, token: string, fromIndex
   return -1;
 }
 
-function renderProjectFileLink(url: string, relativePath: string, {
-  columnNumber = null,
-  lineNumber = null,
-}: {
-  columnNumber?: number | null;
-  lineNumber?: number | null;
-} = {}) {
-  const display = getProjectFilePathDisplay(relativePath, { columnNumber, lineNumber });
-  const className = `${projectFilePathPillClassName} ${projectFilePathInteractiveClassName}`;
-
-  return `<a href="${escapeHtml(url)}" class="${escapeHtml(className)}" data-project-file-path="true" data-project-file-relative-path="${escapeHtml(relativePath)}" title="${escapeHtml(display.title)}">`
-    + `<span class="${escapeHtml(projectFilePathLabelClassName)}">${escapeHtml(display.fileName)}</span>`
-    + (display.locationSuffix
-      ? `<span class="${escapeHtml(projectFilePathLocationClassName)}">${escapeHtml(display.locationSuffix)}</span>`
-      : "")
-    + "</a>";
-}
-
-function renderKnownSkillMention(highlight: InlineMentionHighlight) {
-  return `<span data-known-skill-mention="true" title="${escapeHtml(highlight.title)}">${escapeHtml(highlight.text)}</span>`;
-}
-
-function getInlineMentionHighlights(markdown: string, options: MarkdownRenderOptions) {
+function getInlineMentionHighlights(markdown: string, options: MarkdownParseOptions) {
   const sources = options.inlineMentionSources;
   if (!sources || (options.profile ?? "editor") !== "thread") {
     return [];
@@ -281,15 +265,45 @@ function getInlineMentionHighlights(markdown: string, options: MarkdownRenderOpt
   return buildInlineMentionHighlights(markdown, sources);
 }
 
-function renderInline(markdown: string, options: MarkdownRenderOptions = {}) {
-  let html = "";
+function pushTextNode(nodes: ParsedInlineNode[], text: string) {
+  if (!text) {
+    return;
+  }
+
+  const previous = nodes[nodes.length - 1];
+  if (previous?.type === "text") {
+    previous.text += text;
+    return;
+  }
+
+  nodes.push({ type: "text", text });
+}
+
+function createProjectFileLinkNode(url: string, relativePath: string, {
+  columnNumber = null,
+  lineNumber = null,
+}: {
+  columnNumber?: number | null;
+  lineNumber?: number | null;
+} = {}): Extract<ParsedInlineNode, { type: "projectFileLink" }> {
+  return {
+    columnNumber,
+    href: url,
+    lineNumber,
+    relativePath,
+    type: "projectFileLink",
+  };
+}
+
+export function parseInlineMarkdown(markdown: string, options: MarkdownParseOptions = {}) {
+  const nodes: ParsedInlineNode[] = [];
   let index = 0;
   const inlineMentionHighlights = getInlineMentionHighlights(markdown, options);
   let inlineMentionIndex = 0;
 
   while (index < markdown.length) {
     if (markdown[index] === "\\") {
-      html += escapeHtml(markdown.slice(index + 1, index + 2));
+      pushTextNode(nodes, markdown.slice(index + 1, index + 2));
       index += 2;
       continue;
     }
@@ -297,7 +311,10 @@ function renderInline(markdown: string, options: MarkdownRenderOptions = {}) {
     if (markdown.startsWith("<del>", index)) {
       const closeIndex = markdown.indexOf("</del>", index + 5);
       if (closeIndex !== -1) {
-        html += `<del>${renderInline(markdown.slice(index + 5, closeIndex), options)}</del>`;
+        nodes.push({
+          children: parseInlineMarkdown(markdown.slice(index + 5, closeIndex), options),
+          type: "delete",
+        });
         index = closeIndex + 6;
         continue;
       }
@@ -306,7 +323,10 @@ function renderInline(markdown: string, options: MarkdownRenderOptions = {}) {
     if (markdown.startsWith("<ins>", index)) {
       const closeIndex = markdown.indexOf("</ins>", index + 5);
       if (closeIndex !== -1) {
-        html += `<ins>${renderInline(markdown.slice(index + 5, closeIndex), options)}</ins>`;
+        nodes.push({
+          children: parseInlineMarkdown(markdown.slice(index + 5, closeIndex), options),
+          type: "insert",
+        });
         index = closeIndex + 6;
         continue;
       }
@@ -316,7 +336,10 @@ function renderInline(markdown: string, options: MarkdownRenderOptions = {}) {
       const closeIndex = markdown.indexOf("-->", index + 4);
       if (closeIndex !== -1) {
         const commentBody = markdown.slice(index + 4, closeIndex).trim();
-        html += `<span data-inline-comment="true">${renderInline(commentBody, options)}</span>`;
+        nodes.push({
+          children: parseInlineMarkdown(commentBody, options),
+          type: "inlineComment",
+        });
         index = closeIndex + 3;
         continue;
       }
@@ -326,7 +349,10 @@ function renderInline(markdown: string, options: MarkdownRenderOptions = {}) {
       const marker = markdown.slice(index, index + 2);
       const closeIndex = findClosingToken(markdown, marker, index + 2);
       if (closeIndex !== -1) {
-        html += `<strong>${renderInline(markdown.slice(index + 2, closeIndex), options)}</strong>`;
+        nodes.push({
+          children: parseInlineMarkdown(markdown.slice(index + 2, closeIndex), options),
+          type: "strong",
+        });
         index = closeIndex + 2;
         continue;
       }
@@ -335,7 +361,10 @@ function renderInline(markdown: string, options: MarkdownRenderOptions = {}) {
     if (markdown.startsWith("~~", index)) {
       const closeIndex = findClosingToken(markdown, "~~", index + 2);
       if (closeIndex !== -1) {
-        html += `<del>${renderInline(markdown.slice(index + 2, closeIndex), options)}</del>`;
+        nodes.push({
+          children: parseInlineMarkdown(markdown.slice(index + 2, closeIndex), options),
+          type: "delete",
+        });
         index = closeIndex + 2;
         continue;
       }
@@ -344,14 +373,17 @@ function renderInline(markdown: string, options: MarkdownRenderOptions = {}) {
     if (markdown[index] === "*" || markdown[index] === "_") {
       const marker = markdown[index];
       if ((options.profile ?? "editor") === "thread" && !canOpenThreadSingleEmphasis(markdown, index, marker)) {
-        html += escapeHtml(markdown[index]);
+        pushTextNode(nodes, markdown[index]);
         index += 1;
         continue;
       }
 
       const closeIndex = findClosingSingleEmphasisToken(markdown, marker, index + 1, options);
       if (closeIndex !== -1) {
-        html += `<em>${renderInline(markdown.slice(index + 1, closeIndex), options)}</em>`;
+        nodes.push({
+          children: parseInlineMarkdown(markdown.slice(index + 1, closeIndex), options),
+          type: "em",
+        });
         index = closeIndex + 1;
         continue;
       }
@@ -362,7 +394,7 @@ function renderInline(markdown: string, options: MarkdownRenderOptions = {}) {
       const closeIndex = findClosingCodeSpanFence(markdown, fenceLength, index + fenceLength);
       if (closeIndex !== -1) {
         const content = markdown.slice(index + fenceLength, closeIndex);
-        html += `<code>${escapeHtml(trimCodeSpanPadding(content))}</code>`;
+        nodes.push({ text: trimCodeSpanPadding(content), type: "code" });
         index = closeIndex + fenceLength;
         continue;
       }
@@ -379,12 +411,16 @@ function renderInline(markdown: string, options: MarkdownRenderOptions = {}) {
       : null;
     if (inlineMention) {
       if (inlineMention.kind === "skill") {
-        html += renderKnownSkillMention(inlineMention);
+        nodes.push({
+          text: inlineMention.text,
+          title: inlineMention.title,
+          type: "knownSkillMention",
+        });
       } else {
-        html += renderProjectFileLink(`#${inlineMention.path}`, inlineMention.path, {
+        nodes.push(createProjectFileLinkNode(`#${inlineMention.path}`, inlineMention.path, {
           columnNumber: inlineMention.columnNumber ?? null,
           lineNumber: inlineMention.lineNumber ?? null,
-        });
+        }));
       }
       index = inlineMention.end;
       continue;
@@ -404,18 +440,20 @@ function renderInline(markdown: string, options: MarkdownRenderOptions = {}) {
               : null;
 
             if (relativePath) {
-              html += renderProjectFileLink(url, relativePath, {
+              nodes.push(createProjectFileLinkNode(url, relativePath, {
                 columnNumber: parsedFileLink?.columnNumber ?? null,
                 lineNumber: parsedFileLink?.lineNumber ?? null,
-              });
+              }));
               index = urlEnd + 1;
               continue;
             }
 
-            const externalAttributes = isExternalMarkdownHref(url)
-              ? ' target="_blank" rel="noreferrer"'
-              : "";
-            html += `<a href="${escapeHtml(url)}"${externalAttributes}>${renderInline(label, options)}</a>`;
+            nodes.push({
+              children: parseInlineMarkdown(label, options),
+              external: isExternalMarkdownHref(url),
+              href: url,
+              type: "link",
+            });
             index = urlEnd + 1;
             continue;
           }
@@ -424,16 +462,16 @@ function renderInline(markdown: string, options: MarkdownRenderOptions = {}) {
     }
 
     if (markdown[index] === "\n") {
-      html += "<br>";
+      nodes.push({ type: "break" });
       index += 1;
       continue;
     }
 
-    html += escapeHtml(markdown[index]);
+    pushTextNode(nodes, markdown[index]);
     index += 1;
   }
 
-  return html;
+  return nodes;
 }
 
 function parseListLine(line: string) {
@@ -667,97 +705,3 @@ export function parseBlocks(markdown: string): ParsedBlock[] {
   return blocks;
 }
 
-function renderListBlock(block: Extract<ParsedBlock, { type: "ul" | "ol" }>, options: MarkdownRenderOptions = {}) {
-  return `<${block.type}>${block.items.map((item) => renderListItem(item, options)).join("")}</${block.type}>`;
-}
-
-function isThreadSingleItemOrderedStep(block: Extract<ParsedBlock, { type: "ol" }>, options: MarkdownRenderOptions = {}) {
-  return (options.profile ?? "editor") === "thread"
-    && block.items.length === 1
-    && /^\d+[.)]$/.test(block.items[0].marker);
-}
-
-function renderThreadSingleItemOrderedStep(block: Extract<ParsedBlock, { type: "ol" }>, options: MarkdownRenderOptions = {}) {
-  const item = block.items[0];
-  const content = renderInline(item.text, options);
-  const childContent = item.children
-    .map((child) => child.type === "ul" || child.type === "ol" ? renderListBlock(child, options) : "")
-    .join("");
-
-  if (stripInlineCodeSpans(item.text).includes(".")) {
-    return `<p>${escapeHtml(item.marker)}${content ? ` ${content}` : ""}</p>${childContent}`;
-  }
-
-  const marker = `<span data-thread-step-marker="true">${escapeHtml(item.marker)}</span>`;
-
-  return `<p data-thread-step-line="true">${marker}${content ? ` ${content}` : ""}</p>${childContent}`;
-}
-
-function renderThreadStateChange(mode: string) {
-  const label = formatThreadStateChangeMode(mode);
-  const escapedMode = escapeHtml(mode);
-  const escapedLabel = escapeHtml(label);
-
-  return `<div data-thread-state-change="true" data-thread-state-mode="${escapedMode}">`
-    + '<span data-thread-state-change-kicker="true">Mode</span>'
-    + `<span data-thread-state-change-label="true">${escapedLabel}</span>`
-    + "</div>";
-}
-
-function renderListItem(item: ParsedListItem, options: MarkdownRenderOptions = {}) {
-  const content = renderInline(item.text, options) || "<br>";
-  if (!item.children.length) {
-    return `<li>${content}</li>`;
-  }
-
-  const childContent = item.children
-    .map((child) => child.type === "ul" || child.type === "ol" ? renderListBlock(child, options) : "")
-    .join("");
-
-  return `<li><details open><summary>${content}</summary>${childContent}</details></li>`;
-}
-
-export function markdownToHtml(markdown: string, options: MarkdownRenderOptions = {}) {
-  const blocks = parseBlocks(markdown);
-  const html = blocks
-    .map((block) => {
-      switch (block.type) {
-        case "list-break":
-          return Array.from(
-            { length: Math.max(1, block.count) },
-            () => '<p data-list-break="true"><br></p>',
-          ).join("");
-        case "break":
-          return "<br>".repeat(block.count);
-        case "heading":
-          return `<h${block.level}>${renderInline(block.text, options)}</h${block.level}>`;
-        case "blockquote":
-          return `<blockquote>${renderInline(block.text, options)}</blockquote>`;
-        case "comment":
-          return `<p data-block-comment="true">${escapeHtml(parseBlockCommentBody(block.text) ?? block.text)}</p>`;
-        case "ul":
-        case "ol":
-          if (block.type === "ol" && isThreadSingleItemOrderedStep(block, options)) {
-            return renderThreadSingleItemOrderedStep(block, options);
-          }
-
-          return renderListBlock(block, options);
-        case "hr":
-          return "<hr>";
-        case "code":
-          return `<pre data-language="${escapeHtml(block.language)}"><code>${escapeHtml(block.text)}</code></pre>`;
-        case "paragraph":
-        default: {
-          const stateChangeMode = parseThreadStateChangeTag(block.text, options);
-          if (stateChangeMode) {
-            return renderThreadStateChange(stateChangeMode);
-          }
-
-          return `<p>${renderInline(block.text, options)}</p>`;
-        }
-      }
-    })
-    .join("");
-
-  return html || "<p><br></p>";
-}

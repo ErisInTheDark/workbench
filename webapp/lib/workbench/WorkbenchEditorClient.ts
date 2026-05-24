@@ -51,10 +51,12 @@ import WorkbenchInlineFormatController, {
 import WorkbenchListStructureController, { type WorkbenchListStructureControllerOptions } from "./editor/WorkbenchListStructureController";
 import WorkbenchRichInputController from "./editor/WorkbenchRichInputController";
 import {
-    parseBlocks as parseMarkdownBlocks,
     markdownToHtml as renderMarkdownToHtml,
+} from "./markdown/markdown-html-render";
+import {
+    parseBlocks as parseMarkdownBlocks,
     type ParsedBlock,
-} from "./markdown/markdown-render";
+} from "./markdown/markdown-parse";
 import {
     inspectDraftContent,
     inspectSaveGuardMarkup,

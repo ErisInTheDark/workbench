@@ -11,7 +11,7 @@
 import type { EditorMode, SaveGuardIssue } from "../WorkbenchEditorClient";
 import {
     markdownToHtml as renderMarkdownToHtml,
-} from "./markdown-render";
+} from "./markdown-html-render";
 import {
     createWorkbenchMarkupSignature,
     serializeWorkbenchDomToMarkdown,

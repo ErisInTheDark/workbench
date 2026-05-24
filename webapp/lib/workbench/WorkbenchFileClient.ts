@@ -10,7 +10,7 @@
 import type { FilePayload, SaveConflictPayload, SaveFilePayload } from "../types";
 import {
     markdownToHtml as renderMarkdownToHtml,
-} from "./markdown/markdown-render";
+} from "./markdown/markdown-html-render";
 import {
     formatTimestamp,
     isMarkdownFile,
