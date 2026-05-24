@@ -137,6 +137,23 @@ function stripInlineCodeSpans(markdown: string) {
   return text;
 }
 
+function parseThreadStateChangeTag(markdown: string, options: MarkdownRenderOptions) {
+  if ((options.profile ?? "editor") !== "thread") {
+    return null;
+  }
+
+  const match = markdown.trim().match(/^<set-state\s+mode=(["'])([A-Za-z][A-Za-z0-9_-]*)\1\s*\/>$/);
+  return match?.[2].toLowerCase() ?? null;
+}
+
+function formatThreadStateChangeMode(mode: string) {
+  return mode
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
+
 function sanitizeMarkdownHref(value: string) {
   const trimmed = normalizeMarkdownHref(value);
   if (!trimmed) {
@@ -676,6 +693,17 @@ function renderThreadSingleItemOrderedStep(block: Extract<ParsedBlock, { type: "
   return `<p data-thread-step-line="true">${marker}${content ? ` ${content}` : ""}</p>${childContent}`;
 }
 
+function renderThreadStateChange(mode: string) {
+  const label = formatThreadStateChangeMode(mode);
+  const escapedMode = escapeHtml(mode);
+  const escapedLabel = escapeHtml(label);
+
+  return `<div data-thread-state-change="true" data-thread-state-mode="${escapedMode}">`
+    + '<span data-thread-state-change-kicker="true">Mode</span>'
+    + `<span data-thread-state-change-label="true">${escapedLabel}</span>`
+    + "</div>";
+}
+
 function renderListItem(item: ParsedListItem, options: MarkdownRenderOptions = {}) {
   const content = renderInline(item.text, options) || "<br>";
   if (!item.children.length) {
@@ -719,8 +747,14 @@ export function markdownToHtml(markdown: string, options: MarkdownRenderOptions 
         case "code":
           return `<pre data-language="${escapeHtml(block.language)}"><code>${escapeHtml(block.text)}</code></pre>`;
         case "paragraph":
-        default:
+        default: {
+          const stateChangeMode = parseThreadStateChangeTag(block.text, options);
+          if (stateChangeMode) {
+            return renderThreadStateChange(stateChangeMode);
+          }
+
           return `<p>${renderInline(block.text, options)}</p>`;
+        }
       }
     })
     .join("");

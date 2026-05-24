@@ -3,6 +3,7 @@
  * - DEFAULT_THREAD_TITLE_ROUTE_PATH: stable local HTTP endpoint path used for thread-title bootstrap calls. Keywords: thread title, route, workbench, bootstrap.
  * - normalizeThreadTitle: trim and normalize candidate thread titles into a short UI-safe value. Keywords: thread title, normalize, truncate.
  * - buildThreadTitleRouteUrl: compose the absolute thread-title route URL from a known workbench origin. Keywords: thread title, URL, origin.
+ * - MODE_STATE_TAG_INSTRUCTIONS: shared injected guidance for agent-visible operating mode changes. Keywords: mode, state tag, thread markdown.
  * - buildThreadTitleBootstrapInstructions: create the hidden PowerShell bootstrap instructions that tell a harness how to set a thread title through the local workbench route. Keywords: thread title, instructions, PowerShell, bootstrap.
  * - buildCodexThreadBootstrapInstructions: compose optional Codex agent-file guidance together with the shared title bootstrap instructions. Keywords: codex, agent, developer instructions, bootstrap.
  */
@@ -10,6 +11,10 @@ import type { WorkbenchHarness } from "./types";
 
 const MAX_THREAD_TITLE_LENGTH = 80;
 export const DEFAULT_THREAD_TITLE_ROUTE_PATH = "/api/thread-title";
+export const MODE_STATE_TAG_INSTRUCTIONS = [
+  "If your instructions indicate that you can change operating modes, present each mode change to the user with exactly one standalone tag line in this format: `<set-state mode=\"explore\" />`",
+  "Unless a workflow explicitly requires additional user-facing text about the mode change, the tag line must be the only user-facing text about that mode change.",
+].join("\n");
 
 function normalizeWhitespace(value: string) {
   return value.replace(/\s+/g, " ").trim();
@@ -103,6 +108,8 @@ export function buildCodexThreadBootstrapInstructions({
       `For this thread, you are the agent defined in ${agentPath}. If you do not already have that file in your context window, read it before taking other actions. Treat it as CRITICAL rules to follow, only overridden by later user instructions.`,
     );
   }
+
+  sections.push(MODE_STATE_TAG_INSTRUCTIONS);
 
   if (routeUrl?.trim()) {
     sections.push(buildThreadTitleBootstrapInstructions({

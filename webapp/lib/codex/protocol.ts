@@ -22,6 +22,7 @@ import type { ThreadStartResponse } from "./generated/app-server/v2/ThreadStartR
 import type { TurnStartParams } from "./generated/app-server/v2/TurnStartParams";
 import type { TurnStartResponse } from "./generated/app-server/v2/TurnStartResponse";
 import type { UserInput } from "./generated/app-server/v2/UserInput";
+import { MODE_STATE_TAG_INSTRUCTIONS } from "../thread-bootstrap";
 
 type EventMsg = { type: string } & Record<string, unknown>;
 
@@ -135,6 +136,7 @@ export function createQuestionnaireDeveloperInstructions(
 ) {
   return joinInstructionSections([
     QUESTIONNAIRE_COLLABORATION_INSTRUCTIONS,
+    MODE_STATE_TAG_INSTRUCTIONS,
     additionalInstructions,
   ]);
 }
