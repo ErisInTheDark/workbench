@@ -10,13 +10,14 @@
  * - createProjectEntry: create a new project file or directory and return its normalized relative path. Keywords: create, file, directory.
  * - buildTree/buildProjectTree: build the visible explorer tree for a project. Keywords: tree, explorer, filesystem.
  * - getProjectSnapshot: assemble the project tree, root info, and git change summary for the client. Keywords: snapshot, project, explorer.
+ * - listProjectSkills: discover project-level Workbench Skill metadata from `.agents/skills`. Keywords: project, skills, manifest.
  * - listUserInvocableAgents/readUserInvocableAgentDefinition: discover user-invocable agent markdown files and load their metadata/prompt. Keywords: agent, prompt, custom agent, iterator.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { getGitChanges } from "./git";
-import type { ProjectSnapshot, TreeNode, WorkbenchAgentOption, WorkbenchProjectOption } from "./types";
+import type { ProjectSnapshot, TreeNode, WorkbenchAgentOption, WorkbenchProjectOption, WorkbenchSkillSummary } from "./types";
 import {
   ensureWorkbenchLibrary,
   listWorkbenchLibraryAgents,
@@ -41,8 +42,16 @@ function getAgentDirectoryPath(rootDir = projectRoot) {
   return path.join(rootDir, ".github", "agents");
 }
 
+function getProjectSkillDirectoryPath(rootDir = projectRoot) {
+  return path.join(rootDir, ".agents", "skills");
+}
+
 function createAgentRelativePath(fileName: string) {
   return normalizeRelativePath(path.join(".github", "agents", fileName));
+}
+
+function createProjectSkillRelativePath(directoryName: string) {
+  return normalizeRelativePath(path.join(".agents", "skills", directoryName, "SKILL.md"));
 }
 
 async function readAgentFile(rootDir: string, relativePath: string) {
@@ -438,6 +447,48 @@ export async function getProjectSnapshot(projectId?: string | null) {
     tree,
     changes,
   } satisfies ProjectSnapshot;
+}
+
+export async function listProjectSkills(projectId?: string | null): Promise<WorkbenchSkillSummary[]> {
+  const resolvedProject = await resolveProjectRoot(projectId);
+  if (resolvedProject.id === WORKBENCH_LIBRARY_PROJECT_ID) {
+    return [];
+  }
+
+  let entries;
+  try {
+    entries = await fs.readdir(getProjectSkillDirectoryPath(resolvedProject.root), { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+
+    throw error;
+  }
+
+  const skills: WorkbenchSkillSummary[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const relativePath = createProjectSkillRelativePath(entry.name);
+    const absolutePath = safeResolveProjectPath(resolvedProject.root, relativePath);
+    const content = await readTextFile(absolutePath);
+    if (!content) {
+      continue;
+    }
+
+    const frontmatter = parseFrontmatterBlock(content);
+    skills.push({
+      description: frontmatter?.get("description") ?? "",
+      name: frontmatter?.get("name") ?? entry.name,
+      path: normalizeRelativePath(absolutePath),
+      relativePath,
+    });
+  }
+
+  return skills.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
 }
 
 export async function listUserInvocableAgents(projectId?: string | null) {

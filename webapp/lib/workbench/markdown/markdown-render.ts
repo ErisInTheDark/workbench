@@ -3,7 +3,7 @@
  * - ParsedListItem: list item node used by the markdown block parser. Keywords: markdown, list, parser.
  * - ParsedBlock: block node union used by markdown parsing and rendering. Keywords: markdown, block, parser.
  * - MarkdownRenderProfile: rendering behavior profile for editor-stable markdown vs display-only thread markdown. Keywords: markdown, profile, thread, editor.
- * - MarkdownRenderOptions: optional project-root context for richer local file-link rendering. Keywords: markdown, file link, project root.
+ * - MarkdownRenderOptions: optional project-root and mention context for richer thread rendering. Keywords: markdown, file link, skills, mentions.
  * - parseBlocks: parse markdown into block nodes for rendering and diffing. Keywords: markdown, parser, blocks.
  * - markdownToHtml: render project markdown into sanitized HTML for the editor and thread view. Keywords: markdown, html, renderer.
  */
@@ -15,6 +15,11 @@ import {
     projectFilePathLocationClassName,
     projectFilePathPillClassName,
 } from "../project/project-file-path";
+import {
+    buildInlineMentionHighlights,
+    type InlineMentionHighlight,
+    type InlineMentionHighlightSources,
+} from "../thread/inline-mention-highlights";
 import {
     isBlockCommentLine,
     parseBlockCommentBody,
@@ -46,6 +51,7 @@ export type ParsedBlock =
 export type MarkdownRenderProfile = "editor" | "thread";
 
 export interface MarkdownRenderOptions {
+  inlineMentionSources?: InlineMentionHighlightSources | null;
   profile?: MarkdownRenderProfile;
   projectRootPath?: string;
 }
@@ -237,7 +243,7 @@ function renderProjectFileLink(url: string, relativePath: string, {
   const display = getProjectFilePathDisplay(relativePath, { columnNumber, lineNumber });
   const className = `${projectFilePathPillClassName} ${projectFilePathInteractiveClassName}`;
 
-  return `<a href="${escapeHtml(url)}" class="${escapeHtml(className)}" data-project-file-path="true" title="${escapeHtml(display.title)}">`
+  return `<a href="${escapeHtml(url)}" class="${escapeHtml(className)}" data-project-file-path="true" data-project-file-relative-path="${escapeHtml(relativePath)}" title="${escapeHtml(display.title)}">`
     + `<span class="${escapeHtml(projectFilePathLabelClassName)}">${escapeHtml(display.fileName)}</span>`
     + (display.locationSuffix
       ? `<span class="${escapeHtml(projectFilePathLocationClassName)}">${escapeHtml(display.locationSuffix)}</span>`
@@ -245,9 +251,24 @@ function renderProjectFileLink(url: string, relativePath: string, {
     + "</a>";
 }
 
+function renderKnownSkillMention(highlight: InlineMentionHighlight) {
+  return `<span data-known-skill-mention="true" title="${escapeHtml(highlight.title)}">${escapeHtml(highlight.text)}</span>`;
+}
+
+function getInlineMentionHighlights(markdown: string, options: MarkdownRenderOptions) {
+  const sources = options.inlineMentionSources;
+  if (!sources || (options.profile ?? "editor") !== "thread") {
+    return [];
+  }
+
+  return buildInlineMentionHighlights(markdown, sources);
+}
+
 function renderInline(markdown: string, options: MarkdownRenderOptions = {}) {
   let html = "";
   let index = 0;
+  const inlineMentionHighlights = getInlineMentionHighlights(markdown, options);
+  let inlineMentionIndex = 0;
 
   while (index < markdown.length) {
     if (markdown[index] === "\\") {
@@ -328,6 +349,28 @@ function renderInline(markdown: string, options: MarkdownRenderOptions = {}) {
         index = closeIndex + fenceLength;
         continue;
       }
+    }
+
+    while (
+      inlineMentionIndex < inlineMentionHighlights.length
+      && inlineMentionHighlights[inlineMentionIndex].end <= index
+    ) {
+      inlineMentionIndex += 1;
+    }
+    const inlineMention = inlineMentionHighlights[inlineMentionIndex]?.start === index
+      ? inlineMentionHighlights[inlineMentionIndex]
+      : null;
+    if (inlineMention) {
+      if (inlineMention.kind === "skill") {
+        html += renderKnownSkillMention(inlineMention);
+      } else {
+        html += renderProjectFileLink(`#${inlineMention.path}`, inlineMention.path, {
+          columnNumber: inlineMention.columnNumber ?? null,
+          lineNumber: inlineMention.lineNumber ?? null,
+        });
+      }
+      index = inlineMention.end;
+      continue;
     }
 
     if (markdown[index] === "[") {

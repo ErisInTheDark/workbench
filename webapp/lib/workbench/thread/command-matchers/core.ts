@@ -37,6 +37,7 @@ interface CommandMatcherBuilder {
   Path: (input: PathPartInput) => ThreadCommandDisplayPart;
   Result: (result: CommandMatcherResult) => CommandMatcherResult;
   Separator: () => ThreadCommandDisplayPart;
+  Skill: (input: { name: string; path: string }) => ThreadCommandDisplayPart;
   Text: (text: string, options?: TextPartInput) => ThreadCommandDisplayPart;
 }
 
@@ -83,6 +84,13 @@ export const CommandMatcher: CommandMatcherBuilder = Object.assign(
       return {
         kind: "stage",
         type: "separator",
+      } satisfies ThreadCommandDisplayPart;
+    },
+    Skill({ name, path }: { name: string; path: string }) {
+      return {
+        name,
+        path,
+        type: "skill",
       } satisfies ThreadCommandDisplayPart;
     },
     Text(text: string, { clamp = false }: TextPartInput = {}) {

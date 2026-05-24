@@ -352,6 +352,7 @@ export async function buildWorkbenchSkillManifestInstructions() {
     "Triggered skill workflows are definitional for the request: follow them strictly unless the user explicitly says not to follow a specific skill requirement.",
     "Do not treat casual follow-up wording, missing reminders, or ordinary task details as overriding a triggered skill workflow.",
     "Read the referenced SKILL.md before using a Workbench Skill, and resolve any relative references from that skill's folder.",
+    "When you mention a Workbench Skill in user-visible thread text, use the slash form that Workbench can highlight, such as `/skill-name` or the directory alias from `skills/<alias>/SKILL.md`.",
     "",
     "Available Workbench Skills:",
     ...skills.map((skill) => {

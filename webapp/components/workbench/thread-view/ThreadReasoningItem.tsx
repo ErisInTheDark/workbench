@@ -1,6 +1,7 @@
 "use client";
 
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
+import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
 import ThreadMarkdown from "./ThreadMarkdown";
 
 function joinClasses (...values: Array<string | undefined>) {
@@ -9,11 +10,13 @@ function joinClasses (...values: Array<string | undefined>) {
 
 export default function ThreadReasoningItem ({
   className,
+  inlineMentionSources,
   item,
   onOpenFile,
   projectRootPath,
 }: {
   className?: string;
+  inlineMentionSources?: InlineMentionHighlightSources | null;
   item: Extract<ThreadItem, { type: "reasoning" }>;
   onOpenFile?: (path: string) => Promise<void>;
   projectRootPath?: string;
@@ -25,6 +28,7 @@ export default function ThreadReasoningItem ({
       {...visibleSections.map((summaryMarkdown, i) => (
         <ThreadMarkdown
           key={i}
+          inlineMentionSources={inlineMentionSources}
           markdown={summaryMarkdown.replaceAll(/\n\n/g, "\n").trim()}
           onOpenFile={onOpenFile}
           projectRootPath={projectRootPath}

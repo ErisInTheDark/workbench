@@ -24,6 +24,12 @@ const THREAD_INLINE_CODE_CLASS = [
   "px-[0.34em] py-[0.08em] font-mono text-[0.94em]",
 ].join(" ");
 
+const THREAD_SKILL_MENTION_CLASS = [
+  "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--accent)_14%,transparent)]",
+  "px-[0.34em] py-[0.08em] font-mono text-[0.94em]",
+  "ring-1 ring-inset ring-[color-mix(in_srgb,var(--accent)_24%,transparent)]",
+].join(" ");
+
 export function formatThreadTimestamp (timestampSeconds: number) {
   return new Date(timestampSeconds * 1000).toLocaleString();
 }
@@ -140,7 +146,15 @@ function ThreadCommandStageParts ({ parts }: { parts: ThreadCommandDisplayPart[]
   return (
     <>
       {parts.map((part, index) => (
-        part.type === "separator" ? null : part.type === "path" ? (
+        part.type === "separator" ? null : part.type === "skill" ? (
+          <span
+            key={`skill:${part.path}:${index}`}
+            className={THREAD_SKILL_MENTION_CLASS}
+            title={part.path}
+          >
+            /{part.name}
+          </span>
+        ) : part.type === "path" ? (
           <ProjectFilePath
             key={`path:${part.path}:${part.lineNumber ?? ""}:${part.columnNumber ?? ""}:${index}`}
             className="max-w-full shrink min-w-0 align-baseline"

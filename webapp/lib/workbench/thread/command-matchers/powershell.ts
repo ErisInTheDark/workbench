@@ -6,6 +6,8 @@
 import {
   buildCommandPathPart,
   buildDisplayPathPart,
+  buildReadCommandSummary,
+  getCommandPathKnownSkill,
 } from "./helpers";
 import { CommandMatcher } from "./core";
 import { consumeNextCommandStage } from "./shells";
@@ -54,6 +56,7 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         assignedRead.pathPart,
         lineRange.startLine,
         lineRange.endLine,
+        context,
         nextStage.remainingCommand,
       );
     },
@@ -115,7 +118,8 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         return null;
       }
 
-      const pathPart = getPowerShellStagePathPart(parsedStage, context);
+      const path = getPowerShellStagePath(parsedStage);
+      const pathPart = path ? buildCommandPathPart(path, context) : null;
       if (!pathPart) {
         return null;
       }
@@ -132,35 +136,49 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       if (skip !== null && first !== null) {
-        return buildPowerShellLineRangeReadSummary(pathPart, skip + 1, skip + first);
+        const readSummary = buildReadCommandSummary(path, context);
+        if (readSummary?.summaryStats.skillLoads) {
+          return CommandMatcher.Result({
+            summaryStats: readSummary.summaryStats,
+            summaryParts: readSummary.summaryParts,
+          });
+        }
+
+        return buildPowerShellLineRangeReadSummary(pathPart, skip + 1, skip + first, context);
       }
 
       if (first !== null) {
+        const readSummary = buildReadCommandSummary(path, context, `Read first ${first} lines of `);
+        if (!readSummary) {
+          return null;
+        }
+
         return CommandMatcher.Result({
-          summaryStats: { readFiles: 1 },
-          summaryParts: [
-            CommandMatcher.Text(`Read first ${first} lines of `),
-            pathPart,
-          ],
+          summaryStats: readSummary.summaryStats,
+          summaryParts: readSummary.summaryParts,
         });
       }
 
       if (totalCount !== null) {
+        const readSummary = buildReadCommandSummary(path, context, `Read first ${totalCount} lines of `);
+        if (!readSummary) {
+          return null;
+        }
+
         return CommandMatcher.Result({
-          summaryStats: { readFiles: 1 },
-          summaryParts: [
-            CommandMatcher.Text(`Read first ${totalCount} lines of `),
-            pathPart,
-          ],
+          summaryStats: readSummary.summaryStats,
+          summaryParts: readSummary.summaryParts,
         });
       }
 
+      const readSummary = buildReadCommandSummary(path, context);
+      if (!readSummary) {
+        return null;
+      }
+
       return CommandMatcher.Result({
-        summaryStats: { readFiles: 1 },
-        summaryParts: [
-          CommandMatcher.Text("Read "),
-          pathPart,
-        ],
+        summaryStats: readSummary.summaryStats,
+        summaryParts: readSummary.summaryParts,
       });
     },
   }),
@@ -614,8 +632,12 @@ function getPowerShellPositionalArguments(parsedStage: ParsedPowerShellStage) {
   return argumentsList;
 }
 
+function getPowerShellStagePath(parsedStage: ParsedPowerShellStage) {
+  return readPowerShellNamedValue(parsedStage, ["-LiteralPath", "-Path"]) ?? getPowerShellPositionalPathArgument(parsedStage);
+}
+
 function getPowerShellStagePathPart(parsedStage: ParsedPowerShellStage, context: Parameters<typeof buildCommandPathPart>[1]) {
-  const path = readPowerShellNamedValue(parsedStage, ["-LiteralPath", "-Path"]) ?? getPowerShellPositionalPathArgument(parsedStage);
+  const path = getPowerShellStagePath(parsedStage);
   return path ? buildCommandPathPart(path, context) : null;
 }
 
@@ -695,6 +717,7 @@ function buildPowerShellSelectObjectReadSummary(
             pathPart,
             lineRange.startLine,
             lineRange.endLine,
+            context,
             nextStage.remainingCommand,
           );
         }
@@ -713,10 +736,15 @@ function buildPowerShellSelectObjectReadSummary(
     const last = readPowerShellNumericValue(parsedNextStage, "-Last");
 
     if (skip !== null && first !== null) {
-      return buildPowerShellLineRangeReadSummary(pathPart, skip + 1, skip + first, nextStage.remainingCommand);
+      return buildPowerShellLineRangeReadSummary(pathPart, skip + 1, skip + first, context, nextStage.remainingCommand);
     }
 
     if (first !== null) {
+      const skillLoadSummary = buildPowerShellSkillLoadSummaryFromPathPart(pathPart, context, nextStage.remainingCommand);
+      if (skillLoadSummary) {
+        return skillLoadSummary;
+      }
+
       return CommandMatcher.Result({
         remainingCommand: nextStage.remainingCommand,
         summaryStats: { readFiles: 1 },
@@ -728,6 +756,11 @@ function buildPowerShellSelectObjectReadSummary(
     }
 
     if (last !== null) {
+      const skillLoadSummary = buildPowerShellSkillLoadSummaryFromPathPart(pathPart, context, nextStage.remainingCommand);
+      if (skillLoadSummary) {
+        return skillLoadSummary;
+      }
+
       return CommandMatcher.Result({
         remainingCommand: nextStage.remainingCommand,
         summaryStats: { readFiles: 1 },
@@ -739,6 +772,11 @@ function buildPowerShellSelectObjectReadSummary(
     }
 
     if (skip !== null) {
+      const skillLoadSummary = buildPowerShellSkillLoadSummaryFromPathPart(pathPart, context, nextStage.remainingCommand);
+      if (skillLoadSummary) {
+        return skillLoadSummary;
+      }
+
       return CommandMatcher.Result({
         remainingCommand: nextStage.remainingCommand,
         summaryStats: { readFiles: 1 },
@@ -759,8 +797,14 @@ function buildPowerShellLineRangeReadSummary(
   pathPart: NonNullable<ReturnType<typeof getPowerShellStagePathPart>>,
   startLine: number,
   endLine: number,
+  context: Parameters<CommandMatcherDefinition["match"]>[0],
   remainingCommand?: string | null,
 ) {
+  const skillLoadSummary = buildPowerShellSkillLoadSummaryFromPathPart(pathPart, context, remainingCommand);
+  if (skillLoadSummary) {
+    return skillLoadSummary;
+  }
+
   if (startLine === endLine) {
     return CommandMatcher.Result({
       remainingCommand,
@@ -783,6 +827,26 @@ function buildPowerShellLineRangeReadSummary(
       pathPart,
     ],
   });
+}
+
+function buildPowerShellSkillLoadSummaryFromPathPart(
+  pathPart: NonNullable<ReturnType<typeof getPowerShellStagePathPart>>,
+  context: Parameters<CommandMatcherDefinition["match"]>[0],
+  remainingCommand?: string | null,
+) {
+  const knownSkill = getCommandPathKnownSkill(pathPart.path, context);
+  if (knownSkill) {
+    return CommandMatcher.Result({
+      remainingCommand,
+      summaryStats: { skillLoads: 1 },
+      summaryParts: [
+        CommandMatcher.Text("Load "),
+        CommandMatcher.Skill({ name: knownSkill.name, path: knownSkill.path }),
+      ],
+    });
+  }
+
+  return null;
 }
 
 function splitPowerShellList(value: string | null) {

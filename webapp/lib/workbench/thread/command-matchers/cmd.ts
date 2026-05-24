@@ -6,6 +6,7 @@
 import {
   buildCommandPathPart,
   buildDisplayPathPart,
+  buildReadCommandSummary,
 } from "./helpers";
 import { CommandMatcher } from "./core";
 import type { CommandMatcherDefinition } from "./types";
@@ -50,17 +51,14 @@ export const CMD_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       const path = getCmdPositionalArguments(parsedStage)[0];
-      const pathPart = path ? buildCommandPathPart(path, context) : null;
-      if (!pathPart) {
+      const readSummary = buildReadCommandSummary(path, context);
+      if (!readSummary) {
         return null;
       }
 
       return CommandMatcher.Result({
-        summaryStats: { readFiles: 1 },
-        summaryParts: [
-          CommandMatcher.Text("Read "),
-          pathPart,
-        ],
+        summaryStats: readSummary.summaryStats,
+        summaryParts: readSummary.summaryParts,
       });
     },
   }),

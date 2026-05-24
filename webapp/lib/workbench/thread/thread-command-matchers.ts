@@ -17,6 +17,7 @@ import { CommandMatcher, runThreadCommandMatchers } from "./command-matchers/cor
 import {
     buildCommandPathPart,
     buildDisplayPathPart,
+    buildReadCommandSummary,
     countKnownCommandSummaryStats,
     createEmptyCommandSummaryStats,
     formatThreadCommandPath,
@@ -52,6 +53,7 @@ export function getThreadCommandDisplay({
   command,
   commandActions,
   cwd,
+  knownSkills,
   projectRootPath,
 }: CommandDisplayContext): ThreadCommandDisplay {
   const shellResult = unwrapShellCommand(command);
@@ -60,6 +62,7 @@ export function getThreadCommandDisplay({
     commandActions,
     cwd,
     cwdDisplay: formatThreadCommandPath(cwd, { projectRootPath }),
+    knownSkills,
     projectRootPath,
     shell: shellResult.shell,
     shellGroup: getCommandShellGroup(shellResult.shell),
@@ -118,9 +121,11 @@ export function getThreadCommandDisplay({
 
 export function getThreadCommandBlockDisplay({
   items,
+  knownSkills,
   projectRootPath,
 }: {
   items: Array<Pick<CommandDisplayContext, "command" | "commandActions" | "cwd">>;
+  knownSkills?: CommandDisplayContext["knownSkills"];
   projectRootPath?: string;
 }): ThreadCommandSummaryDisplay {
   const summaryStats = createEmptyCommandSummaryStats();
@@ -130,6 +135,7 @@ export function getThreadCommandBlockDisplay({
       command: item.command,
       commandActions: item.commandActions,
       cwd: item.cwd,
+      knownSkills,
       projectRootPath,
     });
     mergeCommandSummaryStats(summaryStats, display.summaryStats);
@@ -199,15 +205,10 @@ function summarizeCommandAction(
 } | null {
   switch (action.type) {
     case "read": {
-      const pathPart = buildCommandPathPart(action.path, context);
+      const readSummary = buildReadCommandSummary(action.path, context);
       return {
-        summaryParts: pathPart
-          ? [
-            CommandMatcher.Text("Read "),
-            pathPart,
-          ]
-          : [CommandMatcher.Text("Read file")],
-        summaryStats: { readFiles: 1 },
+        summaryParts: readSummary?.summaryParts ?? [CommandMatcher.Text("Read file")],
+        summaryStats: readSummary?.summaryStats ?? { readFiles: 1 },
       };
     }
     case "listFiles": {
@@ -254,6 +255,10 @@ function formatCommandBlockSummaryText(
   fallbackCommandCount: number,
 ) {
   const segments: string[] = [];
+
+  if (summaryStats.skillLoads) {
+    segments.push(`loaded ${summaryStats.skillLoads} ${pluralize(summaryStats.skillLoads, "skill")}`);
+  }
 
   if (summaryStats.readFiles) {
     segments.push(`read ${summaryStats.readFiles} ${pluralize(summaryStats.readFiles, "file")}`);

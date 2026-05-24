@@ -7,20 +7,17 @@ import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserI
 import { getCurrentInProgressTurn, hasStaleApprovalState, isCurrentTurnWaitingOnApproval } from "../../../lib/codex/thread-state";
 import type {
   ThreadPayload,
-  TreeNode,
   WorkbenchAgentOption,
   WorkbenchModelOption,
   WorkbenchPendingUserInputRequest,
   WorkbenchQuestionnaireDraft,
-  WorkbenchSkillSummary,
   WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadComposerDraft,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
-import { flattenProjectTreeFiles } from "../../../lib/workbench/project/tree-utils";
 import {
-  buildInlineMentionCandidates,
   buildInlineMentionHighlights,
+  type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
 import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
 import PlaintextEditable from "./PlaintextEditable";
@@ -109,10 +106,10 @@ export default function ThreadComposer ({
   onThreadModelChange,
   pendingUserInputRequest,
   projectId,
-  projectTree,
   rateLimits,
   threadQuestionnaireDraft,
   threadComposerDraft,
+  highlightSources,
   thread,
 }: {
   onListModels: (harness: ThreadPayload["harness"]) => Promise<WorkbenchModelOption[]>;
@@ -132,17 +129,16 @@ export default function ThreadComposer ({
   onThreadModelChange: (threadId: string, model: string) => void;
   pendingUserInputRequest: WorkbenchPendingUserInputRequest | null;
   projectId: string;
-  projectTree: TreeNode[];
   rateLimits: RateLimitSnapshot | null;
   threadQuestionnaireDraft: WorkbenchQuestionnaireDraft | null;
   threadComposerDraft: WorkbenchThreadComposerDraft | null;
+  highlightSources: InlineMentionHighlightSources;
   thread: ThreadPayload;
 }) {
   const [value, setValue] = useState(threadComposerDraft?.text ?? "");
   const [attachments, setAttachments] = useState<ComposerImageAttachment[]>(threadComposerDraft?.attachments ?? []);
   const [availableModels, setAvailableModels] = useState<WorkbenchModelOption[]>([]);
   const [availableAgents, setAvailableAgents] = useState<WorkbenchAgentOption[]>([]);
-  const [workbenchSkills, setWorkbenchSkills] = useState<WorkbenchSkillSummary[]>([]);
   const [deprioritizedModelIdsByHarness, setDeprioritizedModelIdsByHarness] = useState<Record<ThreadPayload["harness"], string[]>>({
     codex: [],
     copilot: [],
@@ -219,11 +215,6 @@ export default function ThreadComposer ({
   const handleQuestionnaireDraftClear = useCallback(() => {
     onThreadQuestionnaireDraftClear(thread.id, questionnaireRequestKey);
   }, [onThreadQuestionnaireDraftClear, questionnaireRequestKey, thread.id]);
-  const projectFiles = useMemo(() => flattenProjectTreeFiles(projectTree), [projectTree]);
-  const highlightSources = useMemo(() => buildInlineMentionCandidates({
-    files: projectFiles,
-    skills: workbenchSkills,
-  }), [projectFiles, workbenchSkills]);
   const composerHighlights = useMemo(() => (
     buildInlineMentionHighlights(value, highlightSources)
   ), [highlightSources, value]);
@@ -304,28 +295,6 @@ export default function ThreadComposer ({
       cancelled = true;
     };
   }, [projectId]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void fetch("/api/workbench-library/skills", { cache: "no-store" }).then(async (response) => {
-      if (!response.ok) {
-        throw new Error("Unable to load Workbench skills.");
-      }
-
-      const payload = await response.json() as { data?: WorkbenchSkillSummary[] };
-      if (!cancelled) {
-        setWorkbenchSkills(payload.data ?? []);
-      }
-    }).catch(() => {
-      if (!cancelled) {
-        setWorkbenchSkills([]);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     let cancelled = false;

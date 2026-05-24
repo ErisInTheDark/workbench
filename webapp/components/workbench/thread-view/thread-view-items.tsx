@@ -12,7 +12,8 @@ import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/Thre
 import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import { getCurrentTurn } from "../../../lib/codex/thread-state";
-import type { ThreadPayload } from "../../../lib/types";
+import type { ThreadPayload, WorkbenchSkillSummary } from "../../../lib/types";
+import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
 import {
   getPrimaryCollabAgentThreadId,
   type CollabAgentToolCallItem,
@@ -234,10 +235,12 @@ function getReasoningStepTitle (item: ReasoningItem) {
 }
 
 function ThreadUserInputLine ({
+  inlineMentionSources,
   input,
   onOpenFile,
   projectRootPath,
 }: {
+  inlineMentionSources?: InlineMentionHighlightSources | null;
   input: UserInput;
   onOpenFile?: (path: string) => Promise<void>;
   projectRootPath?: string;
@@ -247,6 +250,7 @@ function ThreadUserInputLine ({
       const text = input.text.trim();
       return (
         <ThreadMarkdown
+          inlineMentionSources={inlineMentionSources}
           markdown={text || "No text captured."}
           onOpenFile={onOpenFile}
           projectRootPath={projectRootPath}
@@ -307,12 +311,14 @@ function ThreadMessageTimestamp ({
 }
 
 function ThreadUserMessageItem ({
+  inlineMentionSources,
   item,
   onOpenFile,
   projectRootPath,
   showStartedAt,
   startedAt,
 }: {
+  inlineMentionSources?: InlineMentionHighlightSources | null;
   item: Extract<ThreadItem, { type: "userMessage" }>;
   onOpenFile?: (path: string) => Promise<void>;
   projectRootPath?: string;
@@ -327,6 +333,7 @@ function ThreadUserMessageItem ({
             <ThreadUserInputLine
               key={`${item.id}:content:${index}:${content.type}`}
               input={content}
+              inlineMentionSources={inlineMentionSources}
               onOpenFile={onOpenFile}
               projectRootPath={projectRootPath}
             />
@@ -342,12 +349,14 @@ function ThreadUserMessageItem ({
 
 function ThreadAgentMessageItem ({
   completedAt,
+  inlineMentionSources,
   isFinal,
   item,
   onOpenFile,
   projectRootPath,
 }: {
   completedAt: number | null;
+  inlineMentionSources?: InlineMentionHighlightSources | null;
   isFinal: boolean;
   item: Extract<ThreadItem, { type: "agentMessage" }>;
   onOpenFile?: (path: string) => Promise<void>;
@@ -356,6 +365,7 @@ function ThreadAgentMessageItem ({
   return (
     <section className="py-2">
       <ThreadMarkdown
+        inlineMentionSources={inlineMentionSources}
         markdown={item.text || "No assistant text captured."}
         onOpenFile={onOpenFile}
         projectRootPath={projectRootPath}
@@ -381,11 +391,13 @@ function ThreadPlanItem ({ item }: { item: Extract<ThreadItem, { type: "plan" }>
 }
 
 function ThreadAgentBubble ({
+  inlineMentionSources,
   label,
   markdown,
   onOpenFile,
   projectRootPath,
 }: {
+  inlineMentionSources?: InlineMentionHighlightSources | null;
   label: ReactNode;
   markdown: string;
   onOpenFile?: (path: string) => Promise<void>;
@@ -398,6 +410,7 @@ function ThreadAgentBubble ({
           {label}
         </div>
         <ThreadMarkdown
+          inlineMentionSources={inlineMentionSources}
           markdown={markdown || "No message captured."}
           onOpenFile={onOpenFile}
           projectRootPath={projectRootPath}
@@ -424,11 +437,15 @@ function getCollabAgentStateMessage (item: CollabAgentToolCallItem, receiverThre
 }
 
 function ThreadCurrentSubagentItemPreview ({
+  inlineMentionSources,
+  knownSkills,
   onOpenFile,
   projectRootPath,
   relatedThreadsById,
   thread,
 }: {
+  inlineMentionSources?: InlineMentionHighlightSources | null;
+  knownSkills?: WorkbenchSkillSummary[];
   onOpenFile?: (path: string) => Promise<void>;
   projectRootPath?: string;
   relatedThreadsById: RelatedThreadsById;
@@ -458,6 +475,8 @@ function ThreadCurrentSubagentItemPreview ({
       block={block}
       finalAgentMessageId={getFinalAgentMessageId(currentTurn)}
       isMostRecentBlock={true}
+      inlineMentionSources={inlineMentionSources}
+      knownSkills={knownSkills}
       onOpenFile={onOpenFile}
       primaryUserBlock={null}
       projectRootPath={projectRootPath}
@@ -469,14 +488,18 @@ function ThreadCurrentSubagentItemPreview ({
 }
 
 function ThreadCollabAgentToolCallItem ({
+  inlineMentionSources,
   isMostRecent,
   item,
+  knownSkills,
   onOpenFile,
   projectRootPath,
   relatedThreadsById,
 }: {
+  inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecent: boolean;
   item: CollabAgentToolCallItem;
+  knownSkills?: WorkbenchSkillSummary[];
   onOpenFile?: (path: string) => Promise<void>;
   projectRootPath?: string;
   relatedThreadsById: RelatedThreadsById;
@@ -503,6 +526,7 @@ function ThreadCollabAgentToolCallItem ({
       >
         <ThreadAgentBubble
           label="Main agent"
+          inlineMentionSources={inlineMentionSources}
           markdown={prompt}
           onOpenFile={onOpenFile}
           projectRootPath={projectRootPath}
@@ -523,6 +547,8 @@ function ThreadCollabAgentToolCallItem ({
         {isActiveWait ? (
           <ThreadCurrentSubagentItemPreview
             onOpenFile={onOpenFile}
+            inlineMentionSources={inlineMentionSources}
+            knownSkills={knownSkills}
             projectRootPath={projectRootPath}
             relatedThreadsById={relatedThreadsById}
             thread={receiverThread}
@@ -542,6 +568,7 @@ function ThreadCollabAgentToolCallItem ({
       >
         <ThreadAgentBubble
           label="Main agent"
+          inlineMentionSources={inlineMentionSources}
           markdown={prompt}
           onOpenFile={onOpenFile}
           projectRootPath={projectRootPath}
@@ -560,6 +587,7 @@ function ThreadCollabAgentToolCallItem ({
       >
         <ThreadAgentBubble
           label={agentName}
+          inlineMentionSources={inlineMentionSources}
           markdown={responseMessage}
           onOpenFile={onOpenFile}
           projectRootPath={projectRootPath}
@@ -597,11 +625,13 @@ function ThreadCollabAgentToolCallItem ({
 
 function ThreadReasoningSequence ({
   block,
+  inlineMentionSources,
   isMostRecent,
   onOpenFile,
   projectRootPath,
 }: {
   block: Extract<ThreadRenderableBlock, { kind: "reasoningSequence" }>;
+  inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecent: boolean;
   onOpenFile?: (path: string) => Promise<void>;
   projectRootPath?: string;
@@ -621,6 +651,7 @@ function ThreadReasoningSequence ({
           key={item.id}
           className={index ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4" : undefined}
           item={item}
+          inlineMentionSources={inlineMentionSources}
           onOpenFile={onOpenFile}
           projectRootPath={projectRootPath}
         />
@@ -650,15 +681,18 @@ function ThreadReasoningSequence ({
 
 function ThreadCommandExecutionDetails ({
   item,
+  knownSkills,
   projectRootPath,
 }: {
   item: CommandItem;
+  knownSkills?: WorkbenchSkillSummary[];
   projectRootPath?: string;
 }) {
   const commandDisplay = getThreadCommandDisplay({
     command: item.command,
     commandActions: item.commandActions,
     cwd: item.cwd,
+    knownSkills,
     projectRootPath,
   });
   const metaParts = [];
@@ -742,13 +776,15 @@ function ThreadCommandExecutionDetails ({
 
 function ThreadCommandSequence ({
   items,
+  knownSkills,
   projectRootPath,
 }: {
   items: CommandItem[];
+  knownSkills?: WorkbenchSkillSummary[];
   projectRootPath?: string;
 }) {
   if (items.length === 1) {
-    return <ThreadCommandExecutionDetails item={items[0]} projectRootPath={projectRootPath} />;
+    return <ThreadCommandExecutionDetails item={items[0]} knownSkills={knownSkills} projectRootPath={projectRootPath} />;
   }
 
   const commandBlockDisplay = getThreadCommandBlockDisplay({
@@ -757,6 +793,7 @@ function ThreadCommandSequence ({
       commandActions: item.commandActions,
       cwd: item.cwd,
     })),
+    knownSkills,
     projectRootPath,
   });
 
@@ -770,7 +807,7 @@ function ThreadCommandSequence ({
     >
       <>
         {items.map((item) => (
-          <ThreadCommandExecutionDetails key={item.id} item={item} projectRootPath={projectRootPath} />
+          <ThreadCommandExecutionDetails key={item.id} item={item} knownSkills={knownSkills} projectRootPath={projectRootPath} />
         ))}
       </>
     </ThreadDisclosure>
@@ -795,7 +832,9 @@ function ThreadFallbackItem ({ item }: { item: NonGroupedItem }) {
 function ThreadRenderableBlockView ({
   block,
   finalAgentMessageId,
+  inlineMentionSources,
   isMostRecentBlock,
+  knownSkills,
   onOpenFile,
   primaryUserBlock,
   projectRootPath,
@@ -805,7 +844,9 @@ function ThreadRenderableBlockView ({
 }: {
   block: ThreadRenderableBlock;
   finalAgentMessageId: string | null;
+  inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecentBlock: boolean;
+  knownSkills?: WorkbenchSkillSummary[];
   onOpenFile?: (path: string) => Promise<void>;
   primaryUserBlock: ThreadRenderableBlock | null;
   projectRootPath?: string;
@@ -814,7 +855,7 @@ function ThreadRenderableBlockView ({
   turnStartedAt: number | null;
 }) {
   if (block.kind === "commandSequence") {
-    return <ThreadCommandSequence items={block.items} projectRootPath={projectRootPath} />;
+    return <ThreadCommandSequence items={block.items} knownSkills={knownSkills} projectRootPath={projectRootPath} />;
   }
 
   if (block.kind === "fileChangeSequence") {
@@ -825,6 +866,7 @@ function ThreadRenderableBlockView ({
     return (
       <ThreadReasoningSequence
         block={block}
+        inlineMentionSources={inlineMentionSources}
         isMostRecent={isMostRecentBlock}
         onOpenFile={onOpenFile}
         projectRootPath={projectRootPath}
@@ -837,6 +879,7 @@ function ThreadRenderableBlockView ({
       return (
         <ThreadUserMessageItem
           item={block.item}
+          inlineMentionSources={inlineMentionSources}
           onOpenFile={onOpenFile}
           projectRootPath={projectRootPath}
           showStartedAt={block === primaryUserBlock}
@@ -849,6 +892,7 @@ function ThreadRenderableBlockView ({
           completedAt={turnCompletedAt}
           isFinal={block.item.id === finalAgentMessageId}
           item={block.item}
+          inlineMentionSources={inlineMentionSources}
           onOpenFile={onOpenFile}
           projectRootPath={projectRootPath}
         />
@@ -867,7 +911,9 @@ function ThreadRenderableBlockView ({
       return (
         <ThreadCollabAgentToolCallItem
           isMostRecent={isMostRecentBlock}
+          inlineMentionSources={inlineMentionSources}
           item={block.item}
+          knownSkills={knownSkills}
           onOpenFile={onOpenFile}
           projectRootPath={projectRootPath}
           relatedThreadsById={relatedThreadsById}
@@ -881,6 +927,8 @@ function ThreadRenderableBlockView ({
 function ThreadTurnDetailsComponent ({
   hiddenCollabAgentToolCallItemIds = [],
   hiddenReasoningItemId = null,
+  inlineMentionSources = null,
+  knownSkills = [],
   onOpenFile,
   projectRootPath,
   relatedThreadsById = {},
@@ -888,6 +936,8 @@ function ThreadTurnDetailsComponent ({
 }: {
   hiddenCollabAgentToolCallItemIds?: readonly string[];
   hiddenReasoningItemId?: string | null;
+  inlineMentionSources?: InlineMentionHighlightSources | null;
+  knownSkills?: WorkbenchSkillSummary[];
   onOpenFile?: (path: string) => Promise<void>;
   projectRootPath?: string;
   relatedThreadsById?: RelatedThreadsById;
@@ -923,7 +973,9 @@ function ThreadTurnDetailsComponent ({
             : `item:${block.item.id}`}
       block={block}
       finalAgentMessageId={finalAgentMessageId}
+      inlineMentionSources={inlineMentionSources}
       isMostRecentBlock={block === blocks[blocks.length - 1]}
+      knownSkills={knownSkills}
       onOpenFile={onOpenFile}
       primaryUserBlock={primaryUserBlock}
       projectRootPath={projectRootPath}
@@ -976,6 +1028,8 @@ function areThreadTurnDetailsPropsEqual (
   return left.turn === right.turn
     && left.hiddenCollabAgentToolCallItemIds === right.hiddenCollabAgentToolCallItemIds
     && left.hiddenReasoningItemId === right.hiddenReasoningItemId
+    && left.inlineMentionSources === right.inlineMentionSources
+    && left.knownSkills === right.knownSkills
     && left.onOpenFile === right.onOpenFile
     && left.projectRootPath === right.projectRootPath
     && left.relatedThreadsById === right.relatedThreadsById;
@@ -987,6 +1041,8 @@ export function ThreadThreadContent ({
   emptyMessage = "No subagent activity was captured yet.",
   hiddenCollabAgentToolCallItemIds = [],
   hiddenReasoningItemId = null,
+  inlineMentionSources = null,
+  knownSkills = [],
   onOpenFile,
   projectRootPath,
   relatedThreadsById = {},
@@ -995,6 +1051,8 @@ export function ThreadThreadContent ({
   emptyMessage?: string;
   hiddenCollabAgentToolCallItemIds?: readonly string[];
   hiddenReasoningItemId?: string | null;
+  inlineMentionSources?: InlineMentionHighlightSources | null;
+  knownSkills?: WorkbenchSkillSummary[];
   onOpenFile?: (path: string) => Promise<void>;
   projectRootPath?: string;
   relatedThreadsById?: RelatedThreadsById;
@@ -1023,6 +1081,8 @@ export function ThreadThreadContent ({
           key={turn.id}
           hiddenCollabAgentToolCallItemIds={hiddenCollabAgentToolCallItemIds}
           hiddenReasoningItemId={hiddenReasoningItemId}
+          inlineMentionSources={inlineMentionSources}
+          knownSkills={knownSkills}
           onOpenFile={onOpenFile}
           projectRootPath={projectRootPath}
           relatedThreadsById={relatedThreadsById}

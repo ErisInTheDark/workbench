@@ -18,14 +18,17 @@ import type {
   WorkbenchPendingUserInputRequest,
   WorkbenchQuestionnaireDraft,
   WorkbenchSendThreadMessageOptions,
+  WorkbenchSkillSummary,
   WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadComposerDraft,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
+import { flattenProjectTreeFiles } from "../../../lib/workbench/project/tree-utils";
 import {
   persistThreadLiveActivityOpen,
   readStoredThreadLiveActivityOpen,
 } from "../../../lib/workbench/state/browser-state";
+import { buildInlineMentionCandidates } from "../../../lib/workbench/thread/inline-mention-highlights";
 import {
   getCollabAgentThreadIds,
   getThreadAgentTabLabel,
@@ -326,6 +329,7 @@ export default memo(function ThreadView ({
   const [loadingThreadIds, setLoadingThreadIds] = useState<Record<string, true>>({});
   const [seenItemCountsByThreadId, setSeenItemCountsByThreadId] = useState<Record<string, number>>({});
   const [isLiveActivityOpen, setIsLiveActivityOpen] = useState(readStoredThreadLiveActivityOpen);
+  const [workbenchSkills, setWorkbenchSkills] = useState<WorkbenchSkillSummary[]>([]);
   const threadViewRef = useRef<HTMLDivElement>(null);
   const bottomSentinelRef = useRef<HTMLDivElement>(null);
   const hasMountedActiveThreadScrollRef = useRef(false);
@@ -349,6 +353,11 @@ export default memo(function ThreadView ({
 
     return Array.from(new Set(liveActivity.waits.map((wait) => wait.hiddenItemId)));
   }, [liveActivity]);
+  const projectFiles = useMemo(() => flattenProjectTreeFiles(projectTree), [projectTree]);
+  const inlineMentionSources = useMemo(() => buildInlineMentionCandidates({
+    files: projectFiles,
+    skills: workbenchSkills,
+  }), [projectFiles, workbenchSkills]);
 
   const tabDefinitions = useMemo(() => {
     const baseLabelCounts = new Map<string, number>();
@@ -449,6 +458,31 @@ export default memo(function ThreadView ({
       [thread.id]: countThreadItems(thread),
     });
   }, [thread.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const url = projectId
+      ? `/api/workbench-library/skills?projectId=${encodeURIComponent(projectId)}`
+      : "/api/workbench-library/skills";
+    void fetch(url, { cache: "no-store" }).then(async (response) => {
+      if (!response.ok) {
+        throw new Error("Unable to load skills.");
+      }
+
+      const payload = await response.json() as { data?: WorkbenchSkillSummary[] };
+      if (!cancelled) {
+        setWorkbenchSkills(payload.data ?? []);
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        setWorkbenchSkills([]);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
 
   useEffect(() => {
     for (const threadId of subagentThreadIds) {
@@ -681,6 +715,8 @@ export default memo(function ThreadView ({
             <ThreadTurnDetails
               key={turn.id}
               hiddenCollabAgentToolCallItemIds={turn.id === currentTurn?.id ? hiddenCollabAgentToolCallItemIds : EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS}
+              inlineMentionSources={inlineMentionSources}
+              knownSkills={workbenchSkills}
               onOpenFile={onOpenFile}
               projectRootPath={projectRootPath}
               relatedThreadsById={subthreadsById}
@@ -716,6 +752,7 @@ export default memo(function ThreadView ({
             >
               <ThreadMarkdown
                 className="text-[0.8em] text-muted"
+                inlineMentionSources={inlineMentionSources}
                 markdown={liveActivity.body}
                 onOpenFile={onOpenFile}
                 projectRootPath={projectRootPath}
@@ -763,6 +800,8 @@ export default memo(function ThreadView ({
                       <div className="explorer-scrollbar my-[calc(22rem*-0.1*0.5)] h-[22rem] scale-[0.9] overflow-y-auto py-2">
                         <ThreadThreadContent
                           onOpenFile={onOpenFile}
+                          inlineMentionSources={inlineMentionSources}
+                          knownSkills={workbenchSkills}
                           projectRootPath={projectRootPath}
                           relatedThreadsById={subthreadsById}
                           thread={liveSubagentThread}
@@ -832,6 +871,7 @@ export default memo(function ThreadView ({
           <ThreadComposer
             key={activeThread.id}
             onListModels={onListModels}
+            highlightSources={inlineMentionSources}
             onSendMessage={handleSendMessage}
             onStopThread={() => {
               void handleStopThread();
@@ -846,7 +886,6 @@ export default memo(function ThreadView ({
             onThreadModelChange={handleThreadModelChange}
             pendingUserInputRequest={activePendingUserInputRequest}
             projectId={projectId}
-            projectTree={projectTree}
             rateLimits={rateLimits}
             threadComposerDraft={threadComposerDraftsByThreadId[activeThread.id] ?? null}
             threadQuestionnaireDraft={activePendingUserInputRequest

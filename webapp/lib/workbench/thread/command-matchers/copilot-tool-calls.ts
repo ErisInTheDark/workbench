@@ -3,7 +3,7 @@
  * - COPILOT_COMMAND_MATCHERS: shell-agnostic command-summary matchers for Copilot synthetic tool calls such as view. Keywords: thread, command, matcher, copilot, tool.
  */
 
-import { buildCommandPathPart } from "./helpers";
+import { buildReadCommandSummary } from "./helpers";
 import { CommandMatcher } from "./core";
 import type { CommandMatcherDefinition } from "./types";
 
@@ -17,17 +17,14 @@ export const COPILOT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         return null;
       }
 
-      const pathPart = buildCommandPathPart(path, context);
-      if (!pathPart) {
+      const readSummary = buildReadCommandSummary(path, context);
+      if (!readSummary) {
         return null;
       }
 
       return CommandMatcher.Result({
-        summaryStats: { readFiles: 1 },
-        summaryParts: [
-          CommandMatcher.Text("Read "),
-          pathPart,
-        ],
+        summaryStats: readSummary.summaryStats,
+        summaryParts: readSummary.summaryParts,
       });
     },
   }),

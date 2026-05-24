@@ -7,6 +7,7 @@ import {
   toProjectRelativeFilePath,
 } from "../../../lib/workbench/markdown/markdown-links";
 import { markdownToHtml } from "../../../lib/workbench/markdown/markdown-render";
+import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
 
 function joinClasses (...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -41,6 +42,7 @@ const THREAD_MARKDOWN_CLASS = [
   "[&_blockquote]:border-l-[0.18rem] [&_blockquote]:[border-left-color:color-mix(in_srgb,var(--text)_14%,transparent)] [&_blockquote]:pl-[0.9rem] [&_blockquote]:text-muted",
   "[&_a]:text-accent [&_a]:underline [&_a]:decoration-accent-soft [&_a]:decoration-[0.08em] [&_a]:underline-offset-[0.16em]",
   "[&_a[data-project-file-path='true']]:text-text [&_a[data-project-file-path='true']]:no-underline [&_a[data-project-file-path='true']]:decoration-transparent",
+  "[&_[data-known-skill-mention='true']]:rounded-[0.35rem] [&_[data-known-skill-mention='true']]:bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] [&_[data-known-skill-mention='true']]:px-[0.34em] [&_[data-known-skill-mention='true']]:py-[0.08em] [&_[data-known-skill-mention='true']]:ring-1 [&_[data-known-skill-mention='true']]:ring-inset [&_[data-known-skill-mention='true']]:ring-[color-mix(in_srgb,var(--accent)_24%,transparent)]",
   "[&_code]:rounded-[0.35rem] [&_code]:bg-[color-mix(in_srgb,var(--text)_7%,transparent)] [&_code]:px-[0.34em] [&_code]:py-[0.08em] [&_code]:font-mono [&_code]:text-[0.94em]",
   "[&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_pre]:break-words [&_pre]:rounded-[0.9rem] [&_pre]:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [&_pre]:px-[0.95rem] [&_pre]:py-[0.8rem]",
   "[&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:rounded-none",
@@ -52,11 +54,13 @@ const THREAD_MARKDOWN_CLASS = [
 
 export default memo(function ThreadMarkdown ({
   className,
+  inlineMentionSources,
   markdown,
   onOpenFile,
   projectRootPath,
 }: {
   className?: string;
+  inlineMentionSources?: InlineMentionHighlightSources | null;
   markdown: string;
   onOpenFile?: (path: string) => Promise<void>;
   projectRootPath?: string;
@@ -82,6 +86,13 @@ export default memo(function ThreadMarkdown ({
     }
 
     const rawHref = anchor.getAttribute("href");
+    const inlineRelativePath = anchor.dataset.projectFileRelativePath?.trim();
+    if (inlineRelativePath && onOpenFile) {
+      event.preventDefault();
+      void onOpenFile(inlineRelativePath);
+      return;
+    }
+
     if (!rawHref) {
       return;
     }
@@ -101,8 +112,8 @@ export default memo(function ThreadMarkdown ({
   };
 
   const renderedHtml = useMemo(
-    () => markdownToHtml(markdown, { profile: "thread", projectRootPath }),
-    [markdown, projectRootPath],
+    () => markdownToHtml(markdown, { inlineMentionSources, profile: "thread", projectRootPath }),
+    [inlineMentionSources, markdown, projectRootPath],
   );
 
   return (

@@ -6,6 +6,7 @@
 import {
   buildCommandPathPart,
   buildDisplayPathPart,
+  buildReadCommandSummary,
 } from "./helpers";
 import { CommandMatcher } from "./core";
 import type { CommandMatcherDefinition } from "./types";
@@ -25,17 +26,14 @@ export const POSIX_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       const path = getPosixPositionalArguments(parsedStage)[0];
-      const pathPart = path ? buildCommandPathPart(path, context) : null;
-      if (!pathPart) {
+      const readSummary = buildReadCommandSummary(path, context);
+      if (!readSummary) {
         return null;
       }
 
       return CommandMatcher.Result({
-        summaryStats: { readFiles: 1 },
-        summaryParts: [
-          CommandMatcher.Text("Read "),
-          pathPart,
-        ],
+        summaryStats: readSummary.summaryStats,
+        summaryParts: readSummary.summaryParts,
       });
     },
   }),
@@ -61,6 +59,14 @@ export const POSIX_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
 
       const startLine = Number(lineMatch[1]);
       const endLine = Number(lineMatch[2] ?? lineMatch[1]);
+      const readSummary = buildReadCommandSummary(path, context);
+      if (readSummary?.summaryStats.skillLoads) {
+        return CommandMatcher.Result({
+          summaryStats: readSummary.summaryStats,
+          summaryParts: readSummary.summaryParts,
+        });
+      }
+
       const pathPart = buildCommandPathPart(path, context);
       if (!pathPart) {
         return null;
@@ -286,17 +292,14 @@ function matchHeadOrTail(
     return null;
   }
 
-  const pathPart = buildCommandPathPart(path, context);
-  if (!pathPart) {
+  const readSummary = buildReadCommandSummary(path, context, `Read ${kind === "head" ? "first" : "last"} ${lineCount} lines of `);
+  if (!readSummary) {
     return null;
   }
 
   return CommandMatcher.Result({
-    summaryStats: { readFiles: 1 },
-    summaryParts: [
-      CommandMatcher.Text(`Read ${kind === "head" ? "first" : "last"} ${lineCount} lines of `),
-      pathPart,
-    ],
+    summaryStats: readSummary.summaryStats,
+    summaryParts: readSummary.summaryParts,
   });
 }
 

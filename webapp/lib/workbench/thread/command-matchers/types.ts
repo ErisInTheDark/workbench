@@ -17,6 +17,7 @@
  */
 
 import type { CommandAction } from "../../../codex/generated/app-server/v2/CommandAction";
+import type { WorkbenchSkillSummary } from "../../../types";
 
 export type CommandShell =
   | "bash"
@@ -51,8 +52,15 @@ export interface CommandTextDisplayPart {
   variant?: "code" | "plain";
 }
 
+export interface CommandSkillDisplayPart {
+  name: string;
+  path: string;
+  type: "skill";
+}
+
 export type ThreadCommandDisplayPart =
   | CommandTextDisplayPart
+  | CommandSkillDisplayPart
   | CommandPathDisplayPart
   | CommandSeparatorDisplayPart;
 
@@ -63,6 +71,7 @@ export interface ThreadCommandSummaryStats {
   otherCommands: number;
   readFiles: number;
   searchedFiles: number;
+  skillLoads: number;
   typescriptBuilds: number;
   typescriptValidations: number;
   webRequests: number;
@@ -89,6 +98,7 @@ export interface CommandDisplayContext {
   command: string;
   commandActions: CommandAction[];
   cwd: string;
+  knownSkills?: WorkbenchSkillSummary[];
   projectRootPath?: string;
 }
 

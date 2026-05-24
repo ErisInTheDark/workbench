@@ -20,9 +20,11 @@ export interface InlineMentionCandidate {
 }
 
 export interface InlineMentionHighlight {
+  columnNumber?: number | null;
   end: number;
   kind: InlineMentionCandidateKind;
   label: string;
+  lineNumber?: number | null;
   path: string;
   start: number;
   text: string;
@@ -52,7 +54,7 @@ function normalizeComparableValue(value: string) {
 }
 
 function getSkillDirectoryAlias(skill: WorkbenchSkillSummary) {
-  const match = /^skills\/([^/]+)\/SKILL\.md$/i.exec(normalizeMentionPath(skill.relativePath));
+  const match = /^(?:\.agents\/)?skills\/([^/]+)\/SKILL\.md$/i.exec(normalizeMentionPath(skill.relativePath));
   return match?.[1] ?? "";
 }
 
@@ -136,18 +138,46 @@ function getFileMatches(value: string, candidates: InlineMentionCandidate[]) {
   });
 }
 
+function parseFileMentionLocation(value: string) {
+  const match = value.match(/^(.*):(\d+)(?::(\d+))?$/);
+  if (!match) {
+    return {
+      columnNumber: null,
+      lineNumber: null,
+      path: value,
+    };
+  }
+
+  return {
+    columnNumber: match[3] ? Number(match[3]) : null,
+    lineNumber: Number(match[2]),
+    path: match[1],
+  };
+}
+
 function resolveFileMention(value: string, candidates: InlineMentionCandidate[]) {
-  const exactMatches = getFileMatches(value, candidates).filter((candidate) => (
-    normalizeComparableValue(candidate.path) === normalizeComparableValue(value)
+  const parsedValue = parseFileMentionLocation(value);
+  const exactMatches = getFileMatches(parsedValue.path, candidates).filter((candidate) => (
+    normalizeComparableValue(candidate.path) === normalizeComparableValue(parsedValue.path)
   ));
   const exactPaths = new Set(exactMatches.map((match) => normalizeComparableValue(match.path)));
   if (exactPaths.size === 1 && exactMatches.length === 1) {
-    return exactMatches[0];
+    return {
+      candidate: exactMatches[0],
+      columnNumber: parsedValue.columnNumber,
+      lineNumber: parsedValue.lineNumber,
+    };
   }
 
-  const suffixMatches = getFileMatches(value, candidates);
+  const suffixMatches = getFileMatches(parsedValue.path, candidates);
   const suffixPaths = new Set(suffixMatches.map((match) => normalizeComparableValue(match.path)));
-  return suffixPaths.size === 1 && suffixMatches.length === 1 ? suffixMatches[0] : null;
+  return suffixPaths.size === 1 && suffixMatches.length === 1
+    ? {
+      candidate: suffixMatches[0],
+      columnNumber: parsedValue.columnNumber,
+      lineNumber: parsedValue.lineNumber,
+    }
+    : null;
 }
 
 function resolveToken(token: ParsedInlineMentionToken, sources: InlineMentionHighlightSources) {
@@ -161,7 +191,9 @@ function resolveToken(token: ParsedInlineMentionToken, sources: InlineMentionHig
       : resolveFileMention(value, sources.candidates);
     if (match) {
       return {
-        candidate: match,
+        candidate: token.kind === "skill" ? match : match.candidate,
+        columnNumber: token.kind === "skill" ? null : match.columnNumber,
+        lineNumber: token.kind === "skill" ? null : match.lineNumber,
         value,
       };
     }
@@ -183,9 +215,11 @@ export function buildInlineMentionHighlights(
 
     const end = token.start + token.marker.length + resolution.value.length;
     highlights.push({
+      columnNumber: resolution.columnNumber,
       end,
       kind: resolution.candidate.kind,
       label: resolution.candidate.label,
+      lineNumber: resolution.lineNumber,
       path: resolution.candidate.path,
       start: token.start,
       text: text.slice(token.start, end),

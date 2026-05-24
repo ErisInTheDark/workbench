@@ -6,4 +6,12 @@ An external user-owned folder, defaulting to `~/.workbench`, that stores Workben
 
 ## Workbench Skill
 
-A harness-neutral skill package stored in the Workbench Library and surfaced to supported harnesses through a compact manifest that tells the harness when and where to read the full skill instructions.
+A harness-neutral skill package surfaced to supported harnesses through a compact manifest that tells the harness when and where to read the full skill instructions. Workbench Skills can come from the Workbench Library or the selected project.
+
+## Project Skill
+
+A skill package stored inside the selected project and surfaced to supported harnesses for that project.
+
+## Skill Load
+
+The act of reading a skill's instruction file so the agent can apply that skill's workflow to the current task.

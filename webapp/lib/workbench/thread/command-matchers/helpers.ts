@@ -6,6 +6,7 @@
  * - createEmptyCommandSummaryStats: build a zeroed aggregate-summary counter object. Keywords: thread, command, summary, aggregate.
  * - mergeCommandSummaryStats: add aggregate command-summary counters together. Keywords: thread, command, summary, aggregate.
  * - countKnownCommandSummaryStats: total the categorized command-summary counters without the other bucket. Keywords: thread, command, summary, aggregate.
+ * - getCommandPathKnownSkill: resolve a command path to a known Workbench Skill when it targets SKILL.md. Keywords: command, skill, path.
  * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text. Keywords: path, command, relative, display.
  * - summarizeDisplayParts: flatten structured command-summary parts into plain text. Keywords: thread, command, summary, text.
  */
@@ -70,6 +71,7 @@ export function createEmptyCommandSummaryStats(): ThreadCommandSummaryStats {
     otherCommands: 0,
     readFiles: 0,
     searchedFiles: 0,
+    skillLoads: 0,
     typescriptBuilds: 0,
     typescriptValidations: 0,
     webRequests: 0,
@@ -98,6 +100,7 @@ export function mergeCommandSummaryStats(
 
 export function countKnownCommandSummaryStats(stats: ThreadCommandSummaryStats) {
   return stats.readFiles
+    + stats.skillLoads
     + stats.searchedFiles
     + stats.listedFiles
     + stats.gitDiffChecks
@@ -118,8 +121,65 @@ export function summarizeDisplayParts(parts: ThreadCommandDisplayPart[]) {
       return `${pathLabel}${part.lineNumber !== null && part.lineNumber !== undefined ? `:${part.lineNumber}` : ""}${part.columnNumber !== null && part.columnNumber !== undefined ? `:${part.columnNumber}` : ""}`;
     }
 
+    if (part.type === "skill") {
+      return `/${part.name}`;
+    }
+
     return part.text;
   }).join("");
+}
+
+export function getCommandPathKnownSkill(
+  value: string | null | undefined,
+  {
+    cwd,
+    knownSkills,
+  }: Pick<ParsedCommandDisplayContext, "cwd" | "knownSkills">,
+) {
+  const normalizedValue = normalizeWorkbenchPath(String(value ?? "").trim());
+  if (!normalizedValue || !knownSkills?.length) {
+    return null;
+  }
+
+  const resolvedValue = isAbsoluteLocalPath(normalizedValue)
+    ? collapseLocalPath(normalizedValue)
+    : cwd
+      ? collapseLocalPath(joinLocalPath(cwd, normalizedValue))
+      : collapseLocalPath(normalizedValue);
+  const comparableResolvedValue = normalizeComparablePath(resolvedValue);
+
+  return knownSkills.find((skill) => normalizeComparablePath(skill.path) === comparableResolvedValue) ?? null;
+}
+
+export function buildReadCommandSummary(
+  value: string | null | undefined,
+  context: Pick<ParsedCommandDisplayContext, "cwd" | "knownSkills" | "projectRootPath">,
+  readPrefix = "Read ",
+) {
+  const knownSkill = getCommandPathKnownSkill(value, context);
+  if (knownSkill) {
+    return {
+      summaryParts: [
+        { text: "Load ", type: "text", variant: "plain" },
+        { name: knownSkill.name, path: knownSkill.path, type: "skill" },
+      ] satisfies ThreadCommandDisplayPart[],
+      summaryStats: { skillLoads: 1 },
+    };
+  }
+
+  const pathPart = buildCommandPathPart(value, context);
+  if (!pathPart) {
+    return null;
+  }
+
+  return {
+    pathPart,
+    summaryParts: [
+      { text: readPrefix, type: "text", variant: "plain" },
+      pathPart,
+    ] satisfies ThreadCommandDisplayPart[],
+    summaryStats: { readFiles: 1 },
+  };
 }
 
 export function formatThreadCommandPath(
@@ -176,6 +236,13 @@ function pathsEqual(left: string, right: string) {
   }
 
   return normalizedLeft === normalizedRight;
+}
+
+function normalizeComparablePath(value: string) {
+  const normalizedValue = normalizeWorkbenchPath(value);
+  return /^[A-Za-z]:\//.test(normalizedValue)
+    ? normalizedValue.toLowerCase()
+    : normalizedValue;
 }
 
 function collapseLocalPath(value: string) {
