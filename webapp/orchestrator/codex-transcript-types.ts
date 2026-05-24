@@ -4,7 +4,6 @@
  * - CodexTranscriptRawEvent: raw bridge/app-server event persisted in thread transcript files. Keywords: codex, transcript, raw event.
  * - CodexTranscriptThreadFile/CodexTranscriptTurnFile/CodexTranscriptRequestFile: disk schema records for thread transcript storage. Keywords: disk schema, thread, turn, request.
  */
-import type { CODEX_TRANSCRIPT_SCHEMA_VERSION } from "./codex-transcript-version";
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
 import type { WorkbenchQuestionnaireHistoryEntry } from "../lib/types";
@@ -40,7 +39,7 @@ export interface CodexTranscriptThreadFile {
   createdAt: number;
   encodedThreadId: string;
   lastTouchedAt: number;
-  schemaVersion: typeof CODEX_TRANSCRIPT_SCHEMA_VERSION;
+  schemaVersion: number;
   sourceThreadIds: string[];
   thread: Thread | null;
   threadId: string;
@@ -58,7 +57,7 @@ export interface CodexTranscriptTurnFile {
   itemTimeline: CodexTranscriptTurnTimelineEntry[];
   lastTouchedAt: number;
   questionnaireEntries: WorkbenchQuestionnaireHistoryEntry[];
-  schemaVersion: typeof CODEX_TRANSCRIPT_SCHEMA_VERSION;
+  schemaVersion: number;
   threadId: string;
   turn: Turn | null;
   turnId: string;
@@ -67,13 +66,13 @@ export interface CodexTranscriptTurnFile {
 export interface CodexTranscriptRequestFile {
   lastTouchedAt: number;
   requestKey: string;
-  schemaVersion: typeof CODEX_TRANSCRIPT_SCHEMA_VERSION;
+  schemaVersion: number;
   threadId: string;
   turnId: string | null;
 }
 
 export interface CodexTranscriptOrphanEventsFile {
   lastTouchedAt: number;
-  schemaVersion: typeof CODEX_TRANSCRIPT_SCHEMA_VERSION;
+  schemaVersion: number;
   threadId: string;
 }

@@ -8,9 +8,11 @@ import path from "node:path";
 import type AtomicJsonStore from "../AtomicJsonStore";
 import { CODEX_TRANSCRIPT_SCHEMA_VERSION } from "../codex-transcript-version";
 import migrateV0 from "./v0";
+import migrateV1 from "./v1";
 
 const MIGRATIONS = [
   migrateV0,
+  migrateV1,
 ] as const;
 
 type MigrationState = {
@@ -47,7 +49,7 @@ export async function runCodexTranscriptMigrations(rootDirectoryPath: string, js
       throw new Error(`Missing Codex transcript migration v${version}.`);
     }
 
-    await migration();
+    await migration(rootDirectoryPath, jsonStore);
   }
 
   await jsonStore.write(stateFilePath, {

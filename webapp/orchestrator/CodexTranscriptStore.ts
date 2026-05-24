@@ -12,7 +12,10 @@ import type { JsonValue } from "../lib/codex/generated/app-server/serde_json/Jso
 import type { WorkbenchQuestionnaireHistoryEntry } from "../lib/types";
 import AtomicJsonStore from "./AtomicJsonStore";
 import { hydrateThreadWithStoredTurns } from "./codex-transcript-hydration";
-import { shouldRouteRawResponseToRequestJournal } from "./codex-transcript-event-routing";
+import {
+  shouldPersistRawNotificationToJournal,
+  shouldRouteRawResponseToRequestJournal,
+} from "./codex-transcript-event-routing";
 import { mergeThreadItem } from "./codex-transcript-item-merge";
 import {
   asRecord,
@@ -46,6 +49,7 @@ import { CODEX_TRANSCRIPT_SCHEMA_VERSION } from "./codex-transcript-version";
 
 const PRUNE_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
 const PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const SUPPORTED_CODEX_TRANSCRIPT_SCHEMA_VERSIONS = new Set([1, CODEX_TRANSCRIPT_SCHEMA_VERSION]);
 
 function now() {
   return Date.now();
@@ -476,7 +480,9 @@ export default class CodexTranscriptStore {
 
   async recordUpstreamNotification(notification: JsonRpcNotification) {
     await this.ready();
-    await this.recordRawTraffic("upstream-notification", notification);
+    if (shouldPersistRawNotificationToJournal(notification.method)) {
+      await this.recordRawTraffic("upstream-notification", notification);
+    }
 
     const threadId = extractThreadId(notification);
     const turnId = extractTurnId(notification);
@@ -1131,7 +1137,9 @@ export default class CodexTranscriptStore {
       .filter((entry) => !allowedEntries || allowedEntries.has(entry))
       .map((entry) => this.json.read<CodexTranscriptTurnFile | null>(path.join(turnsDirectoryPath, entry), null)));
     return files
-      .filter((file): file is CodexTranscriptTurnFile => file !== null && file.schemaVersion === CODEX_TRANSCRIPT_SCHEMA_VERSION)
+      .filter((file): file is CodexTranscriptTurnFile => (
+        file !== null && SUPPORTED_CODEX_TRANSCRIPT_SCHEMA_VERSIONS.has(file.schemaVersion)
+      ))
       .map((file) => {
         const normalizedFile = {
           ...file,

@@ -6,6 +6,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
+const STALE_TEMP_FILE_MS = 60 * 60 * 1000;
+
 export default class AtomicJsonStore {
   private readonly queues = new Map<string, Promise<void>>();
 
@@ -36,8 +38,14 @@ export default class AtomicJsonStore {
   async write(filePath: string, value: unknown) {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     const tempPath = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
-    await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-    await fs.rename(tempPath, filePath);
+    try {
+      await fs.writeFile(tempPath, `${JSON.stringify(value)}\n`, "utf8");
+      await fs.rename(tempPath, filePath);
+      await this.cleanupStaleTempFiles(filePath);
+    } catch (error) {
+      await fs.rm(tempPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
   }
 
   async appendLine(filePath: string, value: unknown) {
@@ -84,6 +92,32 @@ export default class AtomicJsonStore {
 
   private recoveringJsonLinesPath(filePath: string) {
     return filePath.replace(/\.ndjson$/u, ".new.ndjson");
+  }
+
+  private async cleanupStaleTempFiles(filePath: string) {
+    const directoryPath = path.dirname(filePath);
+    const tempFilePrefix = `${path.basename(filePath)}.tmp-`;
+    const cutoff = Date.now() - STALE_TEMP_FILE_MS;
+    let entries: string[] = [];
+    try {
+      entries = await fs.readdir(directoryPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+        return;
+      }
+
+      throw error;
+    }
+
+    await Promise.all(entries
+      .filter((entry) => entry.startsWith(tempFilePrefix))
+      .map(async (entry) => {
+        const tempPath = path.join(directoryPath, entry);
+        const stats = await fs.stat(tempPath).catch(() => null);
+        if (stats?.isFile() && stats.mtimeMs < cutoff) {
+          await fs.rm(tempPath, { force: true });
+        }
+      }));
   }
 
   async readJsonLines<TValue>(filePath: string) {

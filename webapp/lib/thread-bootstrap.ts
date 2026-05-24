@@ -12,8 +12,9 @@ import type { WorkbenchHarness } from "./types";
 const MAX_THREAD_TITLE_LENGTH = 80;
 export const DEFAULT_THREAD_TITLE_ROUTE_PATH = "/api/thread-title";
 export const MODE_STATE_TAG_INSTRUCTIONS = [
-  "If your instructions indicate that you can change operating modes, present each mode change to the user with exactly one standalone tag line in this format: `<set-state mode=\"explore\" />`",
-  "Unless a workflow explicitly requires additional user-facing text about the mode change, the tag line must be the only user-facing text about that mode change.",
+  "## Workbench Harness Display Contract:",
+  "ALWAYS represent workflow-or-skill-provided mode changes with exactly one standalone tag line in this format: `<set-state mode=\"explore\" />`",
+  "Do not include additional user-facing text about the mode change unless EXPLICITLY required by the workflow.",
 ].join("\n");
 
 function normalizeWhitespace(value: string) {
