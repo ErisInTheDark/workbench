@@ -1,20 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
 
 import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import { getCurrentInProgressTurn, hasStaleApprovalState, isCurrentTurnWaitingOnApproval } from "../../../lib/codex/thread-state";
 import type {
   ThreadPayload,
+  TreeNode,
   WorkbenchAgentOption,
   WorkbenchModelOption,
   WorkbenchPendingUserInputRequest,
   WorkbenchQuestionnaireDraft,
+  WorkbenchSkillSummary,
   WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadComposerDraft,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
+import { flattenProjectTreeFiles } from "../../../lib/workbench/project/tree-utils";
+import {
+  buildInlineMentionCandidates,
+  buildInlineMentionHighlights,
+} from "../../../lib/workbench/thread/inline-mention-highlights";
 import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
 import PlaintextEditable from "./PlaintextEditable";
 import ThreadAgentPicker from "./ThreadAgentPicker";
@@ -102,6 +109,7 @@ export default function ThreadComposer ({
   onThreadModelChange,
   pendingUserInputRequest,
   projectId,
+  projectTree,
   rateLimits,
   threadQuestionnaireDraft,
   threadComposerDraft,
@@ -124,6 +132,7 @@ export default function ThreadComposer ({
   onThreadModelChange: (threadId: string, model: string) => void;
   pendingUserInputRequest: WorkbenchPendingUserInputRequest | null;
   projectId: string;
+  projectTree: TreeNode[];
   rateLimits: RateLimitSnapshot | null;
   threadQuestionnaireDraft: WorkbenchQuestionnaireDraft | null;
   threadComposerDraft: WorkbenchThreadComposerDraft | null;
@@ -133,6 +142,7 @@ export default function ThreadComposer ({
   const [attachments, setAttachments] = useState<ComposerImageAttachment[]>(threadComposerDraft?.attachments ?? []);
   const [availableModels, setAvailableModels] = useState<WorkbenchModelOption[]>([]);
   const [availableAgents, setAvailableAgents] = useState<WorkbenchAgentOption[]>([]);
+  const [workbenchSkills, setWorkbenchSkills] = useState<WorkbenchSkillSummary[]>([]);
   const [deprioritizedModelIdsByHarness, setDeprioritizedModelIdsByHarness] = useState<Record<ThreadPayload["harness"], string[]>>({
     codex: [],
     copilot: [],
@@ -209,6 +219,14 @@ export default function ThreadComposer ({
   const handleQuestionnaireDraftClear = useCallback(() => {
     onThreadQuestionnaireDraftClear(thread.id, questionnaireRequestKey);
   }, [onThreadQuestionnaireDraftClear, questionnaireRequestKey, thread.id]);
+  const projectFiles = useMemo(() => flattenProjectTreeFiles(projectTree), [projectTree]);
+  const highlightSources = useMemo(() => buildInlineMentionCandidates({
+    files: projectFiles,
+    skills: workbenchSkills,
+  }), [projectFiles, workbenchSkills]);
+  const composerHighlights = useMemo(() => (
+    buildInlineMentionHighlights(value, highlightSources)
+  ), [highlightSources, value]);
 
   useEffect(() => {
     const draftKey = `${thread.id}:${threadComposerDraft?.updatedAt ?? 0}`;
@@ -286,6 +304,28 @@ export default function ThreadComposer ({
       cancelled = true;
     };
   }, [projectId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/workbench-library/skills", { cache: "no-store" }).then(async (response) => {
+      if (!response.ok) {
+        throw new Error("Unable to load Workbench skills.");
+      }
+
+      const payload = await response.json() as { data?: WorkbenchSkillSummary[] };
+      if (!cancelled) {
+        setWorkbenchSkills(payload.data ?? []);
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        setWorkbenchSkills([]);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -494,6 +534,7 @@ export default function ThreadComposer ({
           <ThreadUserInputRequest
             actions={stopButton}
             draft={threadQuestionnaireDraft}
+            highlightSources={highlightSources}
             leadingActions={questionnaireToggleButton}
             onDraftChange={handleQuestionnaireDraftChange}
             onDraftClear={handleQuestionnaireDraftClear}
@@ -557,7 +598,8 @@ export default function ThreadComposer ({
                     ? "Message the current turn..."
                     : thread.isDraft
                       ? "Start a new thread..."
-                      : "Continue this thread..."}
+                  : "Continue this thread..."}
+              highlights={composerHighlights}
               value={value}
               onChange={(nextValue) => {
                 setValue(nextValue);

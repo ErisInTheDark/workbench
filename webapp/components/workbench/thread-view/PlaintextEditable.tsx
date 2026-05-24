@@ -1,6 +1,12 @@
 "use client";
 
-import { useLayoutEffect, useRef, type ClipboardEvent, type CompositionEvent, type KeyboardEvent } from "react";
+import { useLayoutEffect, useRef, type ClipboardEvent, type CompositionEvent, type KeyboardEvent, type ReactNode } from "react";
+
+import type { InlineMentionHighlight } from "../../../lib/workbench/thread/inline-mention-highlights";
+
+function joinClasses (...values: Array<string | false | null | undefined>) {
+  return values.filter(Boolean).join(" ");
+}
 
 function normalizePlaintextEditableValue(value: string) {
   return value.replace(/\r\n/g, "\n");
@@ -42,6 +48,38 @@ function restoreEditableCaretOffset(element: HTMLElement, offset: number | null)
   selection.addRange(range);
 }
 
+function renderHighlightContent(value: string, highlights: InlineMentionHighlight[]) {
+  const content: ReactNode[] = [];
+  let cursor = 0;
+  highlights.forEach((highlight, index) => {
+    if (highlight.start > cursor) {
+      content.push(value.slice(cursor, highlight.start));
+    }
+
+    content.push(
+      <span
+        key={`${highlight.kind}:${highlight.start}:${highlight.end}:${index}`}
+        className={joinClasses(
+          "relative isolate",
+          "before:absolute before:inset-x-[-0.12em] before:inset-y-[-0.04em] before:rounded-[0.28em] before:ring-1 before:ring-inset before:content-['']",
+          highlight.kind === "skill"
+            ? "before:bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] before:ring-[color-mix(in_srgb,var(--accent)_24%,transparent)]"
+            : "before:bg-[color-mix(in_srgb,var(--success)_14%,transparent)] before:ring-[color-mix(in_srgb,var(--success)_24%,transparent)]",
+        )}
+      >
+        {value.slice(highlight.start, highlight.end)}
+      </span>,
+    );
+    cursor = highlight.end;
+  });
+
+  if (cursor < value.length) {
+    content.push(value.slice(cursor));
+  }
+
+  return content.length ? content : "\u00a0";
+}
+
 export default function PlaintextEditable ({
   ariaLabel,
   className,
@@ -53,6 +91,7 @@ export default function PlaintextEditable ({
   onKeyDown,
   onPaste,
   placeholder,
+  highlights = [],
   readOnly = false,
   spellCheck = true,
   value,
@@ -67,15 +106,17 @@ export default function PlaintextEditable ({
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
   onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void;
   placeholder?: string;
+  highlights?: InlineMentionHighlight[];
   readOnly?: boolean;
   spellCheck?: boolean;
   value: string;
 }) {
   const elementRef = useRef<HTMLDivElement>(null);
+  const isComposingRef = useRef(false);
 
   useLayoutEffect(() => {
     const element = elementRef.current;
-    if (!element) {
+    if (!element || isComposingRef.current) {
       return;
     }
 
@@ -92,28 +133,49 @@ export default function PlaintextEditable ({
   }, [value]);
 
   return (
-    <div
-      id={id}
-      ref={elementRef}
-      aria-disabled={disabled || undefined}
-      aria-label={ariaLabel}
-      aria-multiline="true"
-      aria-readonly={readOnly || undefined}
-      className={className}
-      contentEditable={readOnly || disabled ? false : "plaintext-only"}
-      data-empty={value ? "false" : "true"}
-      data-placeholder={placeholder ?? ""}
-      role="textbox"
-      spellCheck={spellCheck}
-      suppressContentEditableWarning
-      tabIndex={readOnly || disabled ? -1 : 0}
-      onCompositionEnd={onCompositionEnd}
-      onCompositionStart={onCompositionStart}
-      onInput={(event) => {
-        onChange?.(normalizePlaintextEditableValue(event.currentTarget.innerText));
-      }}
-      onKeyDown={onKeyDown}
-      onPaste={onPaste}
-    />
+    <div className="relative">
+      <div
+        aria-hidden="true"
+        className={joinClasses(
+          className,
+          "pointer-events-none absolute inset-0 z-20 !text-transparent",
+          "!m-0",
+          "whitespace-pre-wrap break-words [overflow-wrap:anywhere]",
+          "[&_*]:!text-transparent",
+          highlights.length === 0 && "hidden",
+        )}
+      >
+        {renderHighlightContent(value, highlights)}
+      </div>
+      <div
+        id={id}
+        ref={elementRef}
+        aria-disabled={disabled || undefined}
+        aria-label={ariaLabel}
+        aria-multiline="true"
+        aria-readonly={readOnly || undefined}
+        className={joinClasses(className, "relative z-10")}
+        contentEditable={readOnly || disabled ? false : "plaintext-only"}
+        data-empty={value ? "false" : "true"}
+        data-placeholder={placeholder ?? ""}
+        role="textbox"
+        spellCheck={spellCheck}
+        suppressContentEditableWarning
+        tabIndex={readOnly || disabled ? -1 : 0}
+        onCompositionEnd={(event) => {
+          isComposingRef.current = false;
+          onCompositionEnd?.(event);
+        }}
+        onCompositionStart={(event) => {
+          isComposingRef.current = true;
+          onCompositionStart?.(event);
+        }}
+        onInput={(event) => {
+          onChange?.(normalizePlaintextEditableValue(event.currentTarget.innerText));
+        }}
+        onKeyDown={onKeyDown}
+        onPaste={onPaste}
+      />
+    </div>
   );
 }

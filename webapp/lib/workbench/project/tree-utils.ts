@@ -5,6 +5,7 @@
  * - isMarkdownFile: detect markdown file paths by extension. Keywords: markdown, extension, file type.
  * - isTextLikeFile: detect text-editable file paths by extension or extensionless name. Keywords: text file, editable, extension, workbench.
  * - isWorkbenchOpenableFile: detect files the workbench should treat as openable markdown content. Keywords: openable, markdown, file type, workbench.
+ * - flattenProjectTreeFiles: list every project-relative file path in a nested tree. Keywords: tree traversal, file mention, flatten.
  * - getFirstFile: find the first file path in a nested tree that matches an optional predicate. Keywords: tree traversal, first match, recursion, file selection.
  */
 
@@ -44,6 +45,20 @@ export function isTextLikeFile(filePath: string) {
 
 export function isWorkbenchOpenableFile(filePath: string) {
   return isMarkdownFile(filePath);
+}
+
+export function flattenProjectTreeFiles(nodes: TreeNode[]): string[] {
+  const filePaths: string[] = [];
+  for (const node of nodes) {
+    if (node.type === "file") {
+      filePaths.push(node.path);
+      continue;
+    }
+
+    filePaths.push(...flattenProjectTreeFiles(node.children));
+  }
+
+  return filePaths;
 }
 
 export function getFirstFile(nodes: TreeNode[], predicate: (filePath: string) => boolean = () => true) {

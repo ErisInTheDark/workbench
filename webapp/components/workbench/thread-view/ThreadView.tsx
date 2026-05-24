@@ -12,6 +12,7 @@ import { getCurrentInProgressTurn, mergeTurnsPreservingLiveItems } from "../../.
 import type {
   ThreadPayload,
   ThreadUnreadBadge,
+  TreeNode,
   WorkbenchHarness,
   WorkbenchModelOption,
   WorkbenchPendingUserInputRequest,
@@ -281,6 +282,7 @@ export default memo(function ThreadView ({
   onThreadModelChange,
   projectId,
   projectRootPath,
+  projectTree,
   rateLimits,
   threadComposerDraftsByThreadId,
   threadQuestionnaireDraftsByKey,
@@ -313,6 +315,7 @@ export default memo(function ThreadView ({
   onThreadModelChange: (threadId: string, model: string) => void;
   projectId: string;
   projectRootPath: string;
+  projectTree: TreeNode[];
   rateLimits: RateLimitSnapshot | null;
   threadComposerDraftsByThreadId: Record<string, WorkbenchThreadComposerDraft | undefined>;
   threadQuestionnaireDraftsByKey: Record<string, WorkbenchQuestionnaireDraft | undefined>;
@@ -843,6 +846,7 @@ export default memo(function ThreadView ({
             onThreadModelChange={handleThreadModelChange}
             pendingUserInputRequest={activePendingUserInputRequest}
             projectId={projectId}
+            projectTree={projectTree}
             rateLimits={rateLimits}
             threadComposerDraft={threadComposerDraftsByThreadId[activeThread.id] ?? null}
             threadQuestionnaireDraft={activePendingUserInputRequest

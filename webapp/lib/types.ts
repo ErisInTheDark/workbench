@@ -30,6 +30,13 @@ export interface WorkbenchAgentOption {
   sourceLabel?: string;
 }
 
+export interface WorkbenchSkillSummary {
+  name: string;
+  description: string;
+  path: string;
+  relativePath: string;
+}
+
 export interface WorkbenchProjectOption {
   id: string;
   kind: "git" | "workbench-library";

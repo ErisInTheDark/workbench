@@ -8,6 +8,10 @@ import type {
   WorkbenchUserInputRequest,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
+import {
+  buildInlineMentionHighlights,
+  type InlineMentionHighlightSources,
+} from "../../../lib/workbench/thread/inline-mention-highlights";
 import PlaintextEditable from "./PlaintextEditable";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
@@ -66,6 +70,7 @@ function deriveAnsweredValues (
 type InteractiveThreadUserInputRequestProps = {
   actions?: ReactNode;
   draft: WorkbenchQuestionnaireDraft | null;
+  highlightSources?: InlineMentionHighlightSources;
   leadingActions?: ReactNode;
   mode: "live";
   onDraftChange: (draft: WorkbenchQuestionnaireDraft) => void;
@@ -75,6 +80,7 @@ type InteractiveThreadUserInputRequestProps = {
 };
 
 type HistoryThreadUserInputRequestProps = {
+  highlightSources?: InlineMentionHighlightSources;
   mode: "history";
   request: WorkbenchUserInputRequest;
   response: WorkbenchUserInputResponse | null;
@@ -86,6 +92,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
   const isHistoryMode = mode === "history";
   const historyProps = mode === "history" ? props : null;
   const interactiveProps = mode === "history" ? null : props;
+  const highlightSources = props.highlightSources;
   const interactiveDraft = interactiveProps?.draft ?? null;
   const onInteractiveDraftChange = interactiveProps?.onDraftChange;
   const onInteractiveDraftClear = interactiveProps?.onDraftClear;
@@ -232,6 +239,9 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
             };
           const selectedValue = answerValues.selectedValue;
           const customValue = answerValues.customValue;
+          const customValueHighlights = highlightSources
+            ? buildInlineMentionHighlights(customValue, highlightSources)
+            : [];
 
           return (
             <section
@@ -335,6 +345,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                       className="thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-3 py-3 text-[0.84em] leading-[1.5] text-text outline-none"
                       readOnly
                       spellCheck={false}
+                      highlights={customValueHighlights}
                       value={customValue}
                     />
                   ) : (
@@ -359,6 +370,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                         `,
                     )}
                     spellCheck={!question.isSecret}
+                    highlights={customValueHighlights}
                     value={customValue}
                     onChange={(nextValue) => {
                       setCustomValues((current) => ({

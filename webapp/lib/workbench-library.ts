@@ -14,7 +14,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import type { WorkbenchAgentOption } from "./types";
+import type { WorkbenchAgentOption, WorkbenchSkillSummary } from "./types";
 
 export const WORKBENCH_LIBRARY_PROJECT_ID = "workbench-library";
 export const workbenchLibraryRoot = path.resolve(process.env.WORKBENCH_LIBRARY_ROOT?.trim() || path.join(os.homedir(), ".workbench"));
@@ -84,12 +84,6 @@ Apply these instructions whenever this file is active.
 - Use project-local conventions before inventing new ones.
 - When a decision affects future work, name the tradeoff and the chosen default.
 `;
-
-interface WorkbenchSkillSummary {
-  description: string;
-  name: string;
-  path: string;
-}
 
 interface WorkbenchInstructionPack {
   content: string;
@@ -242,6 +236,7 @@ export async function listWorkbenchLibrarySkills(): Promise<WorkbenchSkillSummar
       description: frontmatter?.get("description") ?? "",
       name: frontmatter?.get("name") ?? entry.name,
       path: normalizeRelativePath(safeResolveLibraryPath(relativePath)),
+      relativePath,
     });
   }
 

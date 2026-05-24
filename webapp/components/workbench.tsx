@@ -1321,6 +1321,7 @@ export default function Workbench () {
                   onThreadModelChange={setThreadModel}
                   projectId={explorer.currentProjectId}
                   projectRootPath={explorer.rootPath}
+                  projectTree={explorer.tree}
                   rateLimits={rateLimits}
                   threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
                   threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
