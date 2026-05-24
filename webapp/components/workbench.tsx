@@ -1,5 +1,9 @@
 "use client";
 
+/*
+ * Exports:
+ * - default Workbench: client shell for project browsing, editing, and thread interaction. Keywords: workbench, project, editor, thread.
+ */
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 
 import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/RateLimitSnapshot";
@@ -127,6 +131,11 @@ function formatQuickOpenChangeSummary (additions: number, deletions: number) {
     parts.push(`-${deletions}`);
   }
   return parts.join(" ");
+}
+
+function formatWorkbenchPageTitle (projectName: string | null | undefined) {
+  const normalizedProjectName = projectName?.trim();
+  return normalizedProjectName ? `${normalizedProjectName} / Workbench` : "Workbench";
 }
 
 function filterVisibleTreeNodes (nodes: TreeNode[]): TreeNode[] {
@@ -459,6 +468,11 @@ export default function Workbench () {
     [explorer.tree, showUnopenableFiles],
   );
   const currentProject = explorer.projects.find((project) => project.id === explorer.currentProjectId) ?? null;
+  const pageTitle = formatWorkbenchPageTitle(currentProject?.name ?? explorer.root ?? explorer.currentProjectId);
+
+  useEffect(() => {
+    document.title = pageTitle;
+  }, [pageTitle]);
 
   const closeCreateDialog = () => {
     if (isCreatingEntry) {

@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Project Markdown Workbench",
+  title: "Workbench",
   description: "Minimal project file explorer and WYSIWYG markdown editor.",
   formatDetection: {
     address: false,
