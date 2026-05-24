@@ -14,6 +14,7 @@ export const DEFAULT_THREAD_TITLE_ROUTE_PATH = "/api/thread-title";
 export const MODE_STATE_TAG_INSTRUCTIONS = [
   "## Workbench Harness Display Contract:",
   "ALWAYS represent workflow-or-skill-provided mode changes with exactly one standalone tag line in this format: `<set-state mode=\"explore\" />`",
+  'Example: "Switching to Inspect mode." should instead be `<set-state mode="Inspect" />` on its own line.',
   "Do not include additional user-facing text about the mode change unless EXPLICITLY required by the workflow.",
 ].join("\n");
 
