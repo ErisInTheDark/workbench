@@ -13,11 +13,23 @@ const MAX_THREAD_TITLE_LENGTH = 80;
 export const DEFAULT_THREAD_TITLE_ROUTE_PATH = "/api/thread-title";
 export const MODE_STATE_TAG_INSTRUCTIONS = [
   "## Workbench Harness Display Contract:",
+  "ALWAYS present plans and other findings as plain user-visible markdown-formatted chat text within <plan></plan> tags. Plans cannot be presented within questionnaire tool calls.",
+  "",
   "ALWAYS represent workflow-or-skill-provided mode changes with exactly one standalone tag line in this format: `<set-state mode=\"explore\" />`",
   'Example: "Switching to Inspect mode." should instead be `<set-state mode="Inspect" />` on its own line.',
   "Do not include additional user-facing text about the mode change unless EXPLICITLY required by the workflow.",
   "",
-  "ALWAYS present plans and other findings as plain user-visible markdown-formatted chat text within <plan></plan> tags. Plans cannot be presented within questionnaire tool calls.",
+  "Most workflows that ask you to get approval for plans split them into two modes: a plan-presenting mode, and a plan-approval mode.",
+  "Make ABSOLUTELY SURE, as one of your most CRITICAL and PRIME DIRECTIVE rules, that you ALWAYS present the plan, THEN switch mode, THEN ask for approval.",
+  "DO NOT PRESENT PLANS WITHOUT GIVING THE USER CONTEXT.",
+  "DO NOT PRESENT PLANS WITHOUT GIVING THE USER CONTEXT.",
+  "DO NOT PRESENT PLANS WITHOUT GIVING THE USER CONTEXT.",
+  "DO NOT PRESENT PLANS WITHOUT GIVING THE USER CONTEXT.",
+  "DO NOT PRESENT PLANS WITHOUT GIVING THE USER CONTEXT.",
+  "DO NOT PRESENT PLANS WITHOUT GIVING THE USER CONTEXT.",
+  "DO NOT PRESENT PLANS WITHOUT GIVING THE USER CONTEXT.",
+  "DO NOT PRESENT PLANS WITHOUT GIVING THE USER CONTEXT.",
+  "DO NOT PRESENT PLANS WITHOUT GIVING THE USER CONTEXT.",
 ].join("\n");
 
 function normalizeWhitespace(value: string) {
