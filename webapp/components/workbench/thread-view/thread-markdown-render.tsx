@@ -207,7 +207,8 @@ function renderThreadSingleItemOrderedStep (
         : null
     ));
 
-  if (stripInlineCodeSpans(item.text).includes(".")) {
+  // multiple periods = probably not top level step marker, render as normal list item with marker in content
+  if (stripInlineCodeSpans(item.text).match(/\..*?\./)) {
     return (
       <Fragment key={keyPrefix}>
         <p className={BLOCK_SPACING_CLASS}>
