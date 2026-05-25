@@ -34,6 +34,7 @@ export interface ParsedListItem {
 export type ParsedBlock =
   | { type: "heading"; level: number; text: string }
   | { type: "blockquote"; text: string }
+  | { type: "plan"; text: string }
   | { type: "ul"; items: ParsedListItem[] }
   | { type: "ol"; items: ParsedListItem[] }
   | { type: "list-break"; count: number }
@@ -579,7 +580,16 @@ function maybePushStandardBreak(
   blocks.push({ type: "break", count: blankLineCount - 1 });
 }
 
-export function parseBlocks(markdown: string): ParsedBlock[] {
+function isThreadPlanOpenLine(line: string, options: MarkdownParseOptions) {
+  return (options.profile ?? "editor") === "thread"
+    && /^<plan>\s*$/i.test(line.trim());
+}
+
+function isThreadPlanCloseLine(line: string) {
+  return /^<\/plan>\s*$/i.test(line.trim());
+}
+
+export function parseBlocks(markdown: string, options: MarkdownParseOptions = {}): ParsedBlock[] {
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
   const blocks: ParsedBlock[] = [];
   let blankLineCount = 0;
@@ -590,6 +600,26 @@ export function parseBlocks(markdown: string): ParsedBlock[] {
     if (!line.trim()) {
       blankLineCount += 1;
       index += 1;
+      continue;
+    }
+
+    if (isThreadPlanOpenLine(line, options)) {
+      maybePushCommentBreak(blocks, blankLineCount, "plan");
+      maybePushStandardBreak(blocks, blankLineCount, "plan");
+      blankLineCount = 0;
+      const planLines: string[] = [];
+      index += 1;
+
+      while (index < lines.length && !isThreadPlanCloseLine(lines[index])) {
+        planLines.push(lines[index]);
+        index += 1;
+      }
+
+      if (index < lines.length) {
+        index += 1;
+      }
+
+      blocks.push({ type: "plan", text: planLines.join("\n").trim() });
       continue;
     }
 

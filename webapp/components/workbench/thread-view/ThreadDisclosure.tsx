@@ -11,6 +11,7 @@ function joinClasses (...values: Array<string | undefined>) {
 type ThreadDisclosureProps = Omit<ComponentPropsWithoutRef<"details">, "children"> & {
   children: ReactNode;
   contentClassName?: string;
+  initialOpen?: boolean;
   summary: ReactNode;
   summaryClassName?: string;
 };
@@ -19,26 +20,31 @@ export default function ThreadDisclosure ({
   children,
   className,
   contentClassName,
+  initialOpen = false,
   onToggle,
   open,
   summary,
   summaryClassName,
   ...props
 }: ThreadDisclosureProps) {
-  const [isOpen, setIsOpen] = useState(Boolean(open));
+  const isControlled = typeof open === "boolean";
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(Boolean(open ?? initialOpen));
+  const isOpen = isControlled ? Boolean(open) : uncontrolledOpen;
 
   useEffect(() => {
-    if (typeof open === "boolean") {
-      setIsOpen(open);
+    if (isControlled) {
+      setUncontrolledOpen(Boolean(open));
     }
-  }, [open]);
+  }, [isControlled, open]);
 
   return (
     <details
       className={joinClasses("[&>summary::-webkit-details-marker]:hidden", className)}
-      open={open}
+      open={isControlled || initialOpen ? isOpen : undefined}
       onToggle={(event) => {
-        setIsOpen(event.currentTarget.open);
+        if (!isControlled) {
+          setUncontrolledOpen(event.currentTarget.open);
+        }
         onToggle?.(event);
       }}
       {...props}

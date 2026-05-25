@@ -26,7 +26,9 @@ import {
   projectFilePathLocationClassName,
   projectFilePathPillClassName,
 } from "../../../lib/workbench/project/project-file-path";
+import ThreadDisclosure from "./ThreadDisclosure";
 
+// reusable classes only
 const BLOCK_SPACING_CLASS = "mb-[0.9em] last:mb-0";
 const HEADING_CLASSES = {
   1: `${BLOCK_SPACING_CLASS} font-sans text-[1.16em] font-semibold leading-[1.2]`,
@@ -37,7 +39,7 @@ const HEADING_CLASSES = {
   6: `${BLOCK_SPACING_CLASS} font-sans text-[1em] font-semibold leading-[1.2]`,
 } satisfies Record<1 | 2 | 3 | 4 | 5 | 6, string>;
 
-function renderThreadInlineNodes(nodes: ParsedInlineNode[], keyPrefix: string): ReactNode[] {
+function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string): ReactNode[] {
   return nodes.map((node, index) => {
     const key = `${keyPrefix}-${index}`;
 
@@ -137,11 +139,11 @@ function renderThreadInlineNodes(nodes: ParsedInlineNode[], keyPrefix: string): 
   });
 }
 
-function renderThreadInlineMarkdown(markdown: string, options: MarkdownParseOptions, keyPrefix: string) {
+function renderThreadInlineMarkdown (markdown: string, options: MarkdownParseOptions, keyPrefix: string) {
   return renderThreadInlineNodes(parseInlineMarkdown(markdown, options), keyPrefix);
 }
 
-function renderThreadListBlock(
+function renderThreadListBlock (
   block: Extract<ParsedBlock, { type: "ul" | "ol" }>,
   options: MarkdownParseOptions,
   keyPrefix: string,
@@ -155,7 +157,7 @@ function renderThreadListBlock(
   );
 }
 
-function renderThreadListItem(
+function renderThreadListItem (
   item: ParsedListItem,
   options: MarkdownParseOptions,
   keyPrefix: string,
@@ -182,7 +184,7 @@ function renderThreadListItem(
   );
 }
 
-function isThreadSingleItemOrderedStep(
+function isThreadSingleItemOrderedStep (
   block: Extract<ParsedBlock, { type: "ol" }>,
   options: MarkdownParseOptions,
 ) {
@@ -191,7 +193,7 @@ function isThreadSingleItemOrderedStep(
     && /^\d+[.)]$/.test(block.items[0].marker);
 }
 
-function renderThreadSingleItemOrderedStep(
+function renderThreadSingleItemOrderedStep (
   block: Extract<ParsedBlock, { type: "ol" }>,
   options: MarkdownParseOptions,
   keyPrefix: string,
@@ -231,7 +233,7 @@ function renderThreadSingleItemOrderedStep(
   );
 }
 
-function renderThreadStateChange(mode: string, keyPrefix: string) {
+function renderThreadStateChange (mode: string, keyPrefix: string) {
   return (
     <div
       className="my-[0.85em] flex items-center gap-2 font-sans leading-none text-muted last:mb-0 before:block before:h-px before:flex-1 before:bg-[color-mix(in_srgb,var(--text)_10%,transparent)] before:content-[''] after:block after:h-px after:flex-1 after:bg-[color-mix(in_srgb,var(--text)_10%,transparent)] after:content-['']"
@@ -245,7 +247,33 @@ function renderThreadStateChange(mode: string, keyPrefix: string) {
   );
 }
 
-function renderThreadBlock(block: ParsedBlock, options: MarkdownParseOptions, keyPrefix: string) {
+function renderThreadMarkdownBlocks (markdown: string, options: MarkdownParseOptions, keyPrefix: string) {
+  return parseBlocks(markdown, options)
+    .map((block, index) => renderThreadBlock(block, options, `${keyPrefix}-${index}`));
+}
+
+function renderThreadPlanBlock (block: Extract<ParsedBlock, { type: "plan" }>, options: MarkdownParseOptions, keyPrefix: string) {
+  const content = renderThreadMarkdownBlocks(block.text, options, `${keyPrefix}-content`);
+
+  return (
+    <ThreadDisclosure
+      className={BLOCK_SPACING_CLASS}
+      contentClassName="mt-2"
+      initialOpen
+      key={keyPrefix}
+      summary="Plan"
+      summaryClassName="text-[0.92em] font-medium leading-[1.6]"
+    >
+      <div className="relative before:absolute before:inset-0 before:-z-1 before:block before:-mx-8 before:bg-[linear-gradient(to_right,transparent,#8882_10%,#8882_90%,transparent)] before:content-[''] before:border-y before:border-[color-mix(in_srgb,var(--text)_10%,transparent)]">
+        <div className="px-4 py-3">
+          {content.length ? content : <p className={BLOCK_SPACING_CLASS}><br /></p>}
+        </div>
+      </div>
+    </ThreadDisclosure>
+  );
+}
+
+function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, keyPrefix: string) {
   switch (block.type) {
     case "list-break":
       return Array.from(
@@ -267,6 +295,8 @@ function renderThreadBlock(block: ParsedBlock, options: MarkdownParseOptions, ke
           {renderThreadInlineMarkdown(block.text, options, keyPrefix)}
         </blockquote>
       );
+    case "plan":
+      return renderThreadPlanBlock(block, options, keyPrefix);
     case "comment":
       return (
         <p
@@ -306,13 +336,12 @@ function renderThreadBlock(block: ParsedBlock, options: MarkdownParseOptions, ke
   }
 }
 
-export function renderThreadMarkdown(markdown: string, options: MarkdownParseOptions = {}) {
+export function renderThreadMarkdown (markdown: string, options: MarkdownParseOptions = {}) {
   const threadOptions = {
     ...options,
     profile: "thread",
   } satisfies MarkdownParseOptions;
-  const renderedBlocks = parseBlocks(markdown)
-    .map((block, index) => renderThreadBlock(block, threadOptions, `thread-markdown-${index}`));
+  const renderedBlocks = renderThreadMarkdownBlocks(markdown, threadOptions, "thread-markdown");
 
   return renderedBlocks.length ? renderedBlocks : <p className={BLOCK_SPACING_CLASS}><br /></p>;
 }
