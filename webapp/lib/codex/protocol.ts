@@ -8,6 +8,7 @@
  * - createQuestionnaireDeveloperInstructions/createTextInput/createQuestionnaireCollaborationMode/createThreadStartRequest/createTurnStartRequest: typed Codex instruction and request builders. Keywords: thread, turn, user input, collaboration mode, questionnaire, developer instructions.
  * - createRequestIdGenerator/isCodexEventType: small protocol helpers. Keywords: ids, event type.
  */
+import { MODE_STATE_TAG_INSTRUCTIONS } from "../thread-bootstrap";
 import { CODEX_CLIENT_INFO } from "./config";
 import type { ClientInfo } from "./generated/app-server/ClientInfo";
 import type { ClientNotification } from "./generated/app-server/ClientNotification";
@@ -22,7 +23,6 @@ import type { ThreadStartResponse } from "./generated/app-server/v2/ThreadStartR
 import type { TurnStartParams } from "./generated/app-server/v2/TurnStartParams";
 import type { TurnStartResponse } from "./generated/app-server/v2/TurnStartResponse";
 import type { UserInput } from "./generated/app-server/v2/UserInput";
-import { MODE_STATE_TAG_INSTRUCTIONS } from "../thread-bootstrap";
 
 type EventMsg = { type: string } & Record<string, unknown>;
 
@@ -53,11 +53,10 @@ export interface CodexBootstrapMessages {
 }
 
 const QUESTIONNAIRE_COLLABORATION_INSTRUCTIONS = [
-  "# Collaboration Mode: Workbench Questionnaire",
-  "Use the `request_user_input` tool whenever you have questions for the user or need to know what's next.",
-  "If the user ever mentions questionnaires, 'ask me', 'interview', or similar, that's a strong signal to use `request_user_input`.",
+  "# Workbench Tools",
+  "`request_user_input` — Use to show a questionnaire to the user, AFTER you have already given the user any required context.",
   "When you use the tool, prefer 1 to 3 concise multiple-choice questions and do not ask multiple-choice questions in plain chat.",
-  "Otherwise behave like a normal coding agent: inspect files, edit files, run available tools, and complete the task end to end.",
+  "Keep the options simple, do not try to stuff context or planning into the questionnaire.",
 ].join("\n");
 
 function joinInstructionSections(sections: Array<string | null | undefined>) {

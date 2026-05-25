@@ -282,6 +282,7 @@ export default memo(function ThreadView ({
   onThreadQuestionnaireDraftClear,
   onThreadAgentChange,
   onThreadReasoningEffortChange,
+  onThreadServiceTierChange,
   onThreadModelChange,
   projectId,
   projectRootPath,
@@ -315,6 +316,7 @@ export default memo(function ThreadView ({
   onThreadQuestionnaireDraftClear: (threadId: string, requestKey: string) => void;
   onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
   onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
+  onThreadServiceTierChange: (threadId: string, serviceTier: string | null) => void;
   onThreadModelChange: (threadId: string, model: string) => void;
   projectId: string;
   projectRootPath: string;
@@ -601,6 +603,7 @@ export default memo(function ThreadView ({
           ...existing,
           model,
           reasoningEffort: null,
+          serviceTier: null,
         },
       };
     });
@@ -649,6 +652,28 @@ export default memo(function ThreadView ({
       };
     });
   }, [onThreadReasoningEffortChange, thread.id]);
+
+  const handleThreadServiceTierChange = useCallback((threadId: string, serviceTier: string | null) => {
+    if (threadId === thread.id) {
+      onThreadServiceTierChange(threadId, serviceTier);
+      return;
+    }
+
+    setSubthreadsById((current) => {
+      const existing = current[threadId];
+      if (!existing || existing.harness !== "codex") {
+        return current;
+      }
+
+      return {
+        ...current,
+        [threadId]: {
+          ...existing,
+          serviceTier,
+        },
+      };
+    });
+  }, [onThreadServiceTierChange, thread.id]);
 
   const getTabBadge = useCallback((threadId: string, payload: ThreadPayload | null | undefined): { isQuestion: boolean; unreadBadge: ThreadUnreadBadge | null } => {
     const hasPendingQuestion = Boolean(livePendingUserInputRequestsByThreadId[threadId]);
@@ -883,6 +908,7 @@ export default memo(function ThreadView ({
             onSubmitUserInputRequest={onSubmitUserInputRequest}
             onThreadAgentChange={handleThreadAgentChange}
             onThreadReasoningEffortChange={handleThreadReasoningEffortChange}
+            onThreadServiceTierChange={handleThreadServiceTierChange}
             onThreadModelChange={handleThreadModelChange}
             pendingUserInputRequest={activePendingUserInputRequest}
             projectId={projectId}

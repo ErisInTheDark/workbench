@@ -30,6 +30,17 @@ function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
+function LightningBoltIcon () {
+  return (
+    <svg viewBox="0 0 20 20" className="h-4.5 w-4.5" aria-hidden="true">
+      <path
+        d="M11.25 1.9L4.75 10.7h4.55l-.75 7.4 6.7-9h-4.65l.65-7.2z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
 interface ComposerImageAttachment {
   id: string;
   url: string;
@@ -103,6 +114,7 @@ export default function ThreadComposer ({
   onSubmitUserInputRequest,
   onThreadAgentChange,
   onThreadReasoningEffortChange,
+  onThreadServiceTierChange,
   onThreadModelChange,
   pendingUserInputRequest,
   projectId,
@@ -126,6 +138,7 @@ export default function ThreadComposer ({
   ) => Promise<void>;
   onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
   onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
+  onThreadServiceTierChange: (threadId: string, serviceTier: string | null) => void;
   onThreadModelChange: (threadId: string, model: string) => void;
   pendingUserInputRequest: WorkbenchPendingUserInputRequest | null;
   projectId: string;
@@ -190,16 +203,19 @@ export default function ThreadComposer ({
   const selectedModel = thread.model;
   const selectedModelOption = availableModels.find((model) => model.id === selectedModel) ?? null;
   const defaultModelOption = availableModels.find((model) => model.isDefault) ?? null;
+  const modelOptionForControls = selectedModelOption ?? defaultModelOption;
   const modelButtonLabel = selectedModelOption?.displayName
     ?? selectedModel
     ?? defaultModelOption?.displayName
     ?? "Default model";
-  const supportedReasoningEfforts = selectedModelOption?.supportedReasoningEfforts ?? [];
+  const supportedReasoningEfforts = modelOptionForControls?.supportedReasoningEfforts ?? [];
   const currentReasoningEffort = thread.reasoningEffort
-    ?? selectedModelOption?.defaultReasoningEffort
+    ?? modelOptionForControls?.defaultReasoningEffort
     ?? supportedReasoningEfforts[0]
     ?? null;
-  const showsReasoningEffortControl = Boolean(selectedModelOption?.supportsReasoningEffort && currentReasoningEffort);
+  const showsReasoningEffortControl = Boolean(modelOptionForControls?.supportsReasoningEffort && currentReasoningEffort);
+  const showsFastModeControl = thread.harness === "codex" && Boolean(modelOptionForControls?.supportsFastMode);
+  const isFastModeEnabled = thread.serviceTier === "fast";
   const isAgentPickerOpen = activePicker === "agent";
   const isModelPickerOpen = activePicker === "model";
   const isPickerOpen = activePicker !== null;
@@ -601,6 +617,9 @@ export default function ThreadComposer ({
             }}
             onSelectModel={(model) => {
               onThreadModelChange(thread.id, model.id);
+              if (!model.supportsFastMode && isFastModeEnabled) {
+                onThreadServiceTierChange(thread.id, null);
+              }
               setModelsError("");
               setActivePicker(null);
             }}
@@ -675,6 +694,28 @@ export default function ThreadComposer ({
                       }}
                     >
                       {currentReasoningEffort}
+                    </button>
+                  </>
+                ) : null}
+                {showsFastModeControl ? (
+                  <>
+                    <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
+                    <button
+                      type="button"
+                      aria-label={isFastModeEnabled ? "Turn fast mode off" : "Turn fast mode on"}
+                      aria-pressed={isFastModeEnabled}
+                      className={joinClasses(
+                        "inline-flex items-center justify-center px-2.5 py-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft",
+                        isFastModeEnabled
+                          ? "text-text hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)]"
+                          : "text-muted opacity-40 hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:opacity-65",
+                      )}
+                      title={isFastModeEnabled ? "Fast mode is on" : "Fast mode is off"}
+                      onClick={() => {
+                        onThreadServiceTierChange(thread.id, isFastModeEnabled ? null : "fast");
+                      }}
+                    >
+                      <LightningBoltIcon />
                     </button>
                   </>
                 ) : null}

@@ -818,6 +818,7 @@ export class CopilotBridge {
       supportedReasoningEfforts: model.supportedReasoningEfforts ? [...model.supportedReasoningEfforts] : [],
       defaultReasoningEffort: model.defaultReasoningEffort ?? null,
       supportsVision: Boolean(model.capabilities.supports.vision),
+      supportsFastMode: false,
       inputModalities: model.capabilities.supports.vision ? ["text", "image"] : ["text"],
       maxContextWindowTokens: model.capabilities.limits.max_context_window_tokens ?? null,
       additionalSpeedTiers: [],

@@ -1,7 +1,7 @@
 /**
  * Exports:
  * - DEFAULT_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE: editor font size defaults and bounds. Keywords: editor zoom, font size, clamp.
- * - EXPANDED_DIRECTORIES_STORAGE_KEY, FONT_SIZE_STORAGE_KEY, HARNESS_STORAGE_KEY, HARNESS_MODEL_STORAGE_KEY, HARNESS_MODEL_EFFORT_STORAGE_KEY, HARNESS_AGENT_STORAGE_KEY, THREAD_UNREAD_STATE_STORAGE_KEY, THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY: localStorage keys for persisted explorer, editor, harness, model, effort, agent, thread unread state, and live activity disclosure state. Keywords: localStorage, explorer, font size, harness, model, effort, agent, threads, live activity.
+ * - EXPANDED_DIRECTORIES_STORAGE_KEY, FONT_SIZE_STORAGE_KEY, HARNESS_STORAGE_KEY, HARNESS_MODEL_STORAGE_KEY, HARNESS_MODEL_EFFORT_STORAGE_KEY, HARNESS_SERVICE_TIER_STORAGE_KEY, HARNESS_AGENT_STORAGE_KEY, THREAD_UNREAD_STATE_STORAGE_KEY, THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY: localStorage keys for persisted explorer, editor, harness, model, effort, service tier, agent, thread unread state, and live activity disclosure state. Keywords: localStorage, explorer, font size, harness, model, effort, service tier, agent, threads, live activity.
  * - readStoredExpandedDirectories: read and normalize persisted expanded directory paths for a project. Keywords: localStorage, explorer tree, expanded directories, browser state.
  * - persistExpandedDirectories: persist expanded directory paths for a project from a provided collection. Keywords: localStorage, explorer tree, persistence, directories.
  * - readStoredFontSize: read and clamp the persisted editor font size. Keywords: localStorage, editor zoom, font size, clamp.
@@ -9,6 +9,7 @@
  * - readStoredHarness/persistHarness: persist the selected bridge harness. Keywords: localStorage, codex, copilot, harness.
  * - readStoredHarnessModel/persistHarnessModel: persist the preferred model for each harness. Keywords: localStorage, codex, copilot, harness, model.
  * - readStoredHarnessModelEffort/persistHarnessModelEffort: persist the preferred reasoning effort for each harness/model pair. Keywords: localStorage, codex, copilot, harness, model, effort.
+ * - readStoredHarnessServiceTier/persistHarnessServiceTier: persist the preferred service tier for each harness. Keywords: localStorage, codex, harness, service tier, fast.
  * - readStoredHarnessAgent/persistHarnessAgent: persist the preferred agent file for each harness. Keywords: localStorage, codex, copilot, harness, agent.
  * - readStoredThreadUnreadState/persistThreadUnreadState: persist per-thread unread tracking for sidebar badges. Keywords: localStorage, threads, unread, badges.
  * - readStoredThreadLiveActivityOpen/persistThreadLiveActivityOpen: persist the shared thread live activity disclosure state. Keywords: localStorage, thread, reasoning, subagent, disclosure.
@@ -25,6 +26,7 @@ export const FONT_SIZE_STORAGE_KEY = "workbench:font-size";
 export const HARNESS_STORAGE_KEY = "workbench:harness";
 export const HARNESS_MODEL_STORAGE_KEY = "workbench:harness-models";
 export const HARNESS_MODEL_EFFORT_STORAGE_KEY = "workbench:harness-model-efforts";
+export const HARNESS_SERVICE_TIER_STORAGE_KEY = "workbench:harness-service-tiers";
 export const HARNESS_AGENT_STORAGE_KEY = "workbench:harness-agents";
 export const THREAD_UNREAD_STATE_STORAGE_KEY = "workbench:thread-unread-state";
 export const THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY = "workbench:thread-live-activity-open";
@@ -207,6 +209,40 @@ export function persistHarnessModelEffort(harness: WorkbenchHarness, model: stri
     window.localStorage.setItem(HARNESS_MODEL_EFFORT_STORAGE_KEY, JSON.stringify(nextValue));
   } catch {
     // Ignore storage failures and keep the in-memory effort state working.
+  }
+}
+
+export function readStoredHarnessServiceTier(harness: WorkbenchHarness) {
+  try {
+    const rawValue = window.localStorage.getItem(HARNESS_SERVICE_TIER_STORAGE_KEY);
+    if (!rawValue) {
+      return null;
+    }
+
+    const parsedValue = JSON.parse(rawValue);
+    if (!parsedValue || typeof parsedValue !== "object" || Array.isArray(parsedValue)) {
+      return null;
+    }
+
+    const selectedTier = parsedValue[harness];
+    return typeof selectedTier === "string" && selectedTier.trim() ? selectedTier : null;
+  } catch {
+    return null;
+  }
+}
+
+export function persistHarnessServiceTier(harness: WorkbenchHarness, serviceTier: string | null) {
+  try {
+    const rawValue = window.localStorage.getItem(HARNESS_SERVICE_TIER_STORAGE_KEY);
+    const parsedValue = rawValue ? JSON.parse(rawValue) : {};
+    const nextValue = parsedValue && typeof parsedValue === "object" && !Array.isArray(parsedValue)
+      ? parsedValue as Record<string, string | null>
+      : {};
+
+    nextValue[harness] = serviceTier;
+    window.localStorage.setItem(HARNESS_SERVICE_TIER_STORAGE_KEY, JSON.stringify(nextValue));
+  } catch {
+    // Ignore storage failures and keep the in-memory service tier state working.
   }
 }
 

@@ -113,12 +113,14 @@ export function toThreadPayload(
   harness: WorkbenchHarness = "codex",
   model: string | null = null,
   reasoningEffort: string | null = null,
+  serviceTier: string | null = null,
   agentPath: string | null = null,
 ): ThreadPayload {
   return {
     ...toThreadSummary(thread, harness),
     model,
     reasoningEffort,
+    serviceTier,
     agentPath,
     isDraft: false,
     turns: thread.turns,

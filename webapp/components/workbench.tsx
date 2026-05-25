@@ -730,6 +730,10 @@ export default function Workbench () {
     controls?.setCurrentThreadReasoningEffort(threadId, effort);
   }, [controls]);
 
+  const setThreadServiceTier = useCallback((threadId: string, serviceTier: string | null) => {
+    controls?.setCurrentThreadServiceTier(threadId, serviceTier);
+  }, [controls]);
+
   const setThreadAgent = useCallback((threadId: string, agentPath: string | null) => {
     controls?.setCurrentThreadAgent(threadId, agentPath);
   }, [controls]);
@@ -1361,6 +1365,7 @@ export default function Workbench () {
                   onThreadQuestionnaireDraftClear={handleThreadQuestionnaireDraftClear}
                   onThreadAgentChange={setThreadAgent}
                   onThreadReasoningEffortChange={setThreadReasoningEffort}
+                  onThreadServiceTierChange={setThreadServiceTier}
                   onThreadModelChange={setThreadModel}
                   projectId={explorer.currentProjectId}
                   projectRootPath={explorer.rootPath}

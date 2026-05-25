@@ -62,6 +62,7 @@ export interface WorkbenchModelOption {
   supportedReasoningEfforts: string[];
   defaultReasoningEffort: string | null;
   supportsVision: boolean;
+  supportsFastMode: boolean;
   inputModalities: string[];
   maxContextWindowTokens: number | null;
   additionalSpeedTiers: string[];
@@ -99,6 +100,7 @@ export interface ThreadUnreadBadge {
 export interface ThreadPayload extends ThreadSummary {
   model: string | null;
   reasoningEffort: string | null;
+  serviceTier: string | null;
   agentPath: string | null;
   isDraft: boolean;
   turns: Turn[];
@@ -254,6 +256,7 @@ export interface WorkbenchControls {
   setCurrentThreadModel: (threadId: string, model: string) => void;
   setCurrentThreadAgent: (threadId: string, agentPath: string | null) => void;
   setCurrentThreadReasoningEffort: (threadId: string, effort: string | null) => void;
+  setCurrentThreadServiceTier: (threadId: string, serviceTier: string | null) => void;
   toggleDirectory: (path: string) => void;
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
   setDraftThreadHarness: (harness: WorkbenchHarness) => void;

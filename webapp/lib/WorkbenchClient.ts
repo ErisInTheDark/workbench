@@ -717,6 +717,7 @@ export async function WorkbenchClient(
       && left.harness === right.harness
       && left.model === right.model
       && left.reasoningEffort === right.reasoningEffort
+      && left.serviceTier === right.serviceTier
       && left.agentPath === right.agentPath
       && left.isDraft === right.isDraft
       && left.name === right.name
@@ -1026,6 +1027,9 @@ export async function WorkbenchClient(
     },
     setCurrentThreadReasoningEffort: (threadId, effort) => {
       threadClient.setCurrentThreadReasoningEffort(threadId, effort);
+    },
+    setCurrentThreadServiceTier: (threadId, serviceTier) => {
+      threadClient.setCurrentThreadServiceTier(threadId, serviceTier);
     },
     setDraftThreadHarness: (harness) => {
       threadClient.setDraftThreadHarness(harness);

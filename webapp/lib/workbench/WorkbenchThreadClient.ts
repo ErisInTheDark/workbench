@@ -56,11 +56,13 @@ import {
     persistHarnessAgent,
     persistHarnessModel,
     persistHarnessModelEffort,
+    persistHarnessServiceTier,
     persistThreadUnreadState,
     readLocalWorkbenchOrigin,
     readStoredHarnessAgent,
     readStoredHarnessModel,
     readStoredHarnessModelEffort,
+    readStoredHarnessServiceTier,
     readStoredThreadUnreadState,
 } from "./state/browser-state";
 import { applyQuestionnaireHistoryToThread } from "./thread/thread-questionnaire-history";
@@ -146,6 +148,7 @@ interface WorkbenchThreadClient {
   setCurrentThreadAgent: (threadId: string, agentPath: string | null) => void;
   setCurrentThreadModel: (threadId: string, model: string) => void;
   setCurrentThreadReasoningEffort: (threadId: string, effort: string | null) => void;
+  setCurrentThreadServiceTier: (threadId: string, serviceTier: string | null) => void;
   setDraftThreadHarness: (harness: WorkbenchHarness) => void;
   setProjectContext: (context: { projectId?: string; root: string; rootPath: string }) => void;
   subscribe: (listener: WorkbenchThreadListener) => () => void;
@@ -165,6 +168,14 @@ interface OptimisticUserMessageEntry {
   input: UserInput[];
   item: Extract<ThreadItem, { type: "userMessage" }>;
 }
+
+type CodexThreadSessionResponse = {
+  model?: string | null;
+  modelProvider?: string | null;
+  reasoningEffort?: string | null;
+  serviceTier?: string | null;
+  thread: ThreadReadResponse["thread"];
+};
 
 function createInitialThreadState(): WorkbenchThreadState {
   return {
@@ -633,6 +644,7 @@ function WorkbenchThreadClient(
       && left.harness === right.harness
       && left.model === right.model
       && left.reasoningEffort === right.reasoningEffort
+      && left.serviceTier === right.serviceTier
       && left.agentPath === right.agentPath
       && left.isDraft === right.isDraft
       && left.name === right.name
@@ -664,6 +676,7 @@ function WorkbenchThreadClient(
       model: thread.model ?? currentThread.model,
       name: thread.name ?? currentThread.name,
       reasoningEffort: thread.reasoningEffort ?? currentThread.reasoningEffort,
+      serviceTier: thread.serviceTier,
     };
   }
 
@@ -868,6 +881,7 @@ function WorkbenchThreadClient(
       model: fields.model ?? thread.model,
       name: fields.name ?? thread.name,
       reasoningEffort: fields.reasoningEffort ?? thread.reasoningEffort,
+      serviceTier: fields.serviceTier ?? thread.serviceTier,
     }));
   }
 
@@ -1420,6 +1434,7 @@ function WorkbenchThreadClient(
       harness,
       model,
       reasoningEffort: readStoredHarnessModelEffort(harness, model),
+      serviceTier: harness === "codex" ? readStoredHarnessServiceTier(harness) : null,
       agentPath: readStoredHarnessAgent(harness),
       isDraft: true,
       name: "Create new thread",
@@ -1462,6 +1477,14 @@ function WorkbenchThreadClient(
     return null;
   }
 
+  function getThreadServiceTier(threadId: string) {
+    if (state.currentThread?.id === threadId) {
+      return state.currentThread.serviceTier;
+    }
+
+    return null;
+  }
+
   function resolvePreferredReasoningEffort(harness: WorkbenchHarness, modelId: string | null) {
     if (!modelId) {
       return null;
@@ -1481,6 +1504,11 @@ function WorkbenchThreadClient(
   }
 
   function mapCodexModelToWorkbenchOption(model: CodexModel): WorkbenchModelOption {
+    const serviceTierIds = new Set([
+      ...model.additionalSpeedTiers,
+      ...model.serviceTiers.map((tier) => tier.id),
+    ]);
+
     return {
       id: model.id,
       displayName: model.displayName,
@@ -1492,6 +1520,7 @@ function WorkbenchThreadClient(
       supportedReasoningEfforts: model.supportedReasoningEfforts.map((effort) => effort.reasoningEffort),
       defaultReasoningEffort: model.defaultReasoningEffort,
       supportsVision: model.inputModalities.includes("image"),
+      supportsFastMode: serviceTierIds.has("fast"),
       inputModalities: [...model.inputModalities],
       maxContextWindowTokens: null,
       additionalSpeedTiers: [...model.additionalSpeedTiers],
@@ -1663,6 +1692,11 @@ function WorkbenchThreadClient(
       const nextModel = state.currentThread?.id === threadId
         ? getThreadModel(threadId)
         : resumedThread?.model ?? readStoredHarnessModel(harness);
+      const nextServiceTier = harness === "codex"
+        ? state.currentThread?.id === threadId
+          ? getThreadServiceTier(threadId) ?? resumedThread?.serviceTier ?? readStoredHarnessServiceTier(harness)
+          : resumedThread?.serviceTier ?? readStoredHarnessServiceTier(harness)
+        : null;
       if (harness === "codex") {
         void readCompletedQuestionnaireHistory(threadId);
       }
@@ -1673,6 +1707,7 @@ function WorkbenchThreadClient(
         state.currentThread?.id === threadId
           ? getThreadReasoningEffort(threadId) ?? readStoredHarnessModelEffort(harness, nextModel) ?? resumedThread?.reasoningEffort ?? null
           : readStoredHarnessModelEffort(harness, nextModel) ?? resumedThread?.reasoningEffort ?? null,
+        nextServiceTier,
         selectedAgentPath,
       ));
     } catch (error) {
@@ -1710,6 +1745,9 @@ function WorkbenchThreadClient(
         harness,
         nextModel,
         getThreadReasoningEffort(threadId) ?? readStoredHarnessModelEffort(harness, nextModel),
+        harness === "codex"
+          ? getThreadServiceTier(threadId) ?? readStoredHarnessServiceTier(harness)
+          : null,
         state.currentThread?.id === threadId
           ? state.currentThread.agentPath
           : readStoredHarnessAgent(harness),
@@ -2478,6 +2516,13 @@ function WorkbenchThreadClient(
         ? getThreadReasoningEffort(resolvedThreadId)
         : state.currentThread?.reasoningEffort ?? resolvePreferredReasoningEffort(harness, selectedModel)
     );
+    const selectedServiceTier = harness === "codex"
+      ? thread.serviceTier ?? (
+        resolvedThreadId.trim()
+          ? getThreadServiceTier(resolvedThreadId)
+          : state.currentThread?.serviceTier ?? readStoredHarnessServiceTier(harness)
+      )
+      : null;
     const selectedAgentPath = thread.agentPath ?? (
       resolvedThreadId.trim()
         ? state.currentThread?.id === resolvedThreadId
@@ -2510,8 +2555,9 @@ function WorkbenchThreadClient(
           : {}),
         ...(harness === "codex" ? { ephemeral: false } : {}),
         ...(selectedModel ? { model: selectedModel } : {}),
+        ...(harness === "codex" ? { serviceTier: selectedServiceTier } : {}),
       });
-      const startedThreadResponse = await sendBridgeRequest<{ model?: string | null; modelProvider?: string | null; reasoningEffort?: string | null; thread: ThreadReadResponse["thread"] }>(harness, {
+      const startedThreadResponse = await sendBridgeRequest<CodexThreadSessionResponse>(harness, {
         method: threadStartRequest.method,
         params: harness === "copilot"
           ? {
@@ -2529,6 +2575,7 @@ function WorkbenchThreadClient(
         harness,
         startedThreadResponse.model ?? selectedModel ?? null,
         selectedReasoningEffort ?? startedThreadResponse.reasoningEffort ?? null,
+        selectedServiceTier ?? startedThreadResponse.serviceTier ?? null,
         selectedAgentPath,
       );
       bootstrapThread = startedPayload;
@@ -2557,7 +2604,7 @@ function WorkbenchThreadClient(
           threadId: resolvedThreadId,
         },
       });
-      const resumedThreadResponse = await sendBridgeRequest<{ model?: string | null; modelProvider?: string | null; reasoningEffort?: string | null; thread: ThreadReadResponse["thread"] }>(harness, {
+      const resumedThreadResponse = await sendBridgeRequest<CodexThreadSessionResponse>(harness, {
         method: "thread/resume",
           params: {
             ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
@@ -2566,8 +2613,9 @@ function WorkbenchThreadClient(
           ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
           ...(codexDeveloperInstructions && harness === "codex" ? { developerInstructions: codexDeveloperInstructions } : {}),
           ...(selectedModel ? { model: selectedModel } : {}),
+          ...(harness === "codex" ? { serviceTier: selectedServiceTier } : {}),
           threadId: resolvedThreadId,
-        } as ThreadResumeParams & { agentPath?: string; developerInstructions?: string; model?: string; threadId: string; workbenchOrigin?: string },
+        } as ThreadResumeParams & { agentPath?: string; developerInstructions?: string; model?: string; serviceTier?: string | null; threadId: string; workbenchOrigin?: string },
       });
       const readableThread = toThreadPayload(readableThreadResponse.thread, harness);
       resumedThread = toThreadPayload(
@@ -2575,6 +2623,7 @@ function WorkbenchThreadClient(
         harness,
         resumedThreadResponse.model ?? selectedModel ?? readableThread.model,
         selectedReasoningEffort ?? resumedThreadResponse.reasoningEffort ?? readableThread.reasoningEffort,
+        selectedServiceTier ?? resumedThreadResponse.serviceTier ?? readableThread.serviceTier,
         selectedAgentPath,
       );
 
@@ -2635,6 +2684,7 @@ function WorkbenchThreadClient(
           input: normalizedInput,
           ...(selectedReasoningEffort ? { effort: selectedReasoningEffort } : {}),
           ...(selectedModel ? { model: selectedModel } : {}),
+          ...(harness === "codex" ? { serviceTier: selectedServiceTier } : {}),
           summary: DEFAULT_TURN_REASONING_SUMMARY,
           threadId: resolvedThreadId,
         } as TurnStartParams & {
@@ -2661,18 +2711,20 @@ function WorkbenchThreadClient(
     let refreshedThread = resumedThread;
     try {
       if (harness === "codex") {
-        const refreshedThreadResponse = await sendBridgeRequest<{ model?: string | null; modelProvider?: string | null; reasoningEffort?: string | null; thread: ThreadReadResponse["thread"] }>(harness, {
+        const refreshedThreadResponse = await sendBridgeRequest<CodexThreadSessionResponse>(harness, {
           method: "thread/resume",
           params: {
             ...(selectedModel ? { model: selectedModel } : {}),
+            serviceTier: selectedServiceTier,
             threadId: resolvedThreadId,
-          } as ThreadResumeParams & { model?: string; threadId: string },
+          } as ThreadResumeParams & { model?: string; serviceTier?: string | null; threadId: string },
         });
         refreshedThread = mergeLiveStreamingThreadSnapshot(toThreadPayload(
           refreshedThreadResponse.thread,
           harness,
           refreshedThreadResponse.model ?? resumedThread.model,
           refreshedThreadResponse.reasoningEffort ?? resumedThread.reasoningEffort,
+          refreshedThreadResponse.serviceTier ?? resumedThread.serviceTier,
           resumedThread.agentPath,
         ));
       } else {
@@ -2688,6 +2740,7 @@ function WorkbenchThreadClient(
           harness,
           resumedThread.model,
           resumedThread.reasoningEffort,
+          resumedThread.serviceTier,
           resumedThread.agentPath,
         ));
       }
@@ -2905,6 +2958,19 @@ function WorkbenchThreadClient(
     updateCurrentThreadFields({ reasoningEffort: effort });
   }
 
+  function setCurrentThreadServiceTier(threadId: string, serviceTier: string | null) {
+    if (!state.currentThread || state.currentThread.id !== threadId || state.currentThread.harness !== "codex") {
+      return;
+    }
+
+    const nextServiceTier = serviceTier === "fast" ? "fast" : null;
+    persistHarnessServiceTier(state.currentThread.harness, nextServiceTier);
+    updateCurrentThread((thread) => ({
+      ...thread,
+      serviceTier: nextServiceTier,
+    }));
+  }
+
   function setDraftThreadHarness(harness: WorkbenchHarness) {
     if (!state.currentThread?.isDraft) {
       return;
@@ -2912,13 +2978,15 @@ function WorkbenchThreadClient(
 
     const model = readStoredHarnessModel(harness);
 
-    updateCurrentThreadFields({
+    updateCurrentThread((thread) => ({
+      ...thread,
       harness,
       model,
       reasoningEffort: readStoredHarnessModelEffort(harness, model),
+      serviceTier: harness === "codex" ? readStoredHarnessServiceTier(harness) : null,
       agentPath: readStoredHarnessAgent(harness),
       source: harness,
-    });
+    }));
   }
 
   function createThread(harness: WorkbenchHarness, threadId?: string) {
@@ -2957,6 +3025,7 @@ function WorkbenchThreadClient(
     setCurrentThreadAgent,
     setCurrentThreadModel,
     setCurrentThreadReasoningEffort,
+    setCurrentThreadServiceTier,
     setDraftThreadHarness,
     setProjectContext,
     subscribe,
