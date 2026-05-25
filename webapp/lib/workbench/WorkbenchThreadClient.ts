@@ -38,6 +38,9 @@ import {
     buildThreadTitleBootstrapInstructions,
     buildThreadTitleRouteUrl,
 } from "../thread-bootstrap";
+import {
+    getThreadStateChangeTagText as getNormalizedThreadStateChangeTagText,
+} from "./markdown/markdown-parse";
 import type {
     ThreadPayload,
     ThreadSummary,
@@ -82,7 +85,6 @@ const EMPTY_ROLLOUT_ERROR_FRAGMENT = "rollout at";
 const EMPTY_ROLLOUT_ERROR_SUFFIX = "is empty";
 const MISSING_ROLLOUT_ERROR_FRAGMENT = "no rollout found by id";
 const FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE = "Started the thread. Its saved rollout is still warming up, so the live view will refresh automatically.";
-const THREAD_STATE_CHANGE_TAG_PATTERN = /^<set-state\s+mode=(["'])[A-Za-z][A-Za-z0-9_-]*\1\s*\/>$/;
 
 export interface WorkbenchThreadState {
   currentThread: ThreadPayload | null;
@@ -916,8 +918,7 @@ function WorkbenchThreadClient(
       return null;
     }
 
-    const normalizedText = normalizeStreamingText(item.text);
-    return THREAD_STATE_CHANGE_TAG_PATTERN.test(normalizedText) ? normalizedText : null;
+    return getNormalizedThreadStateChangeTagText(normalizeStreamingText(item.text));
   }
 
   function isThreadStateChangeLikeAgentMessage(item: ThreadItem) {

@@ -8,6 +8,8 @@
  * - parseBlocks: parse markdown into block nodes for rendering and diffing. Keywords: markdown, parser, blocks.
  * - parseInlineMarkdown: parse inline markdown into renderer-neutral nodes. Keywords: markdown, inline, parser.
  * - parseThreadStateChangeMode: detect display-only thread mode change tags. Keywords: thread, mode, state, parser.
+ * - normalizeThreadWorkflowTagBoundaries: isolate thread workflow tags before line-oriented block parsing. Keywords: thread, mode, plan, parser.
+ * - getThreadStateChangeTagText: normalize display-only thread mode change tags. Keywords: thread, mode, state, parser.
  * - formatThreadStateChangeMode: format thread mode identifiers for display. Keywords: thread, mode, label.
  * - stripInlineCodeSpans: remove inline code spans for thread ordered-step detection. Keywords: thread, code, step.
  */
@@ -70,6 +72,13 @@ export interface MarkdownParseOptions {
   profile?: MarkdownParseProfile;
   projectRootPath?: string;
 }
+
+const THREAD_STATE_CHANGE_TAG_PATTERN = /^<set-state\s+mode=(["'])([A-Za-z][A-Za-z0-9_-]*)\1\s*\/>$/;
+const THREAD_STATE_CHANGE_BOUNDARY_PATTERN = /<set-state\s+mode=(["'])[A-Za-z][A-Za-z0-9_-]*\1\s*\/>/g;
+const THREAD_WORKFLOW_TAG_BOUNDARY_PATTERN = new RegExp(
+  `${THREAD_STATE_CHANGE_BOUNDARY_PATTERN.source}|<\\/?[Pp][Ll][Aa][Nn]>`,
+  "g",
+);
 
 function findClosingToken(source: string, token: string, fromIndex: number) {
   for (let index = fromIndex; index < source.length; index += 1) {
@@ -149,8 +158,76 @@ export function parseThreadStateChangeMode(markdown: string, options: MarkdownPa
     return null;
   }
 
-  const match = markdown.trim().match(/^<set-state\s+mode=(["'])([A-Za-z][A-Za-z0-9_-]*)\1\s*\/>$/);
+  const match = markdown.trim().match(THREAD_STATE_CHANGE_TAG_PATTERN);
   return match?.[2].toLowerCase() ?? null;
+}
+
+export function getThreadStateChangeTagText(markdown: string) {
+  const match = markdown.trim().match(THREAD_STATE_CHANGE_TAG_PATTERN);
+  return match ? match[0] : null;
+}
+
+function isolateThreadWorkflowTagsInPlainText(line: string, startIndex: number, endIndex: number) {
+  return line.slice(startIndex, endIndex).replace(THREAD_WORKFLOW_TAG_BOUNDARY_PATTERN, (match, _quote, offset: number) => {
+    const matchStart = startIndex + offset;
+    const matchEnd = matchStart + match.length;
+    const prefix = matchStart === 0 || line[matchStart - 1] === "\n" ? "" : "\n";
+    const suffix = matchEnd >= line.length || line[matchEnd] === "\n" ? "" : "\n";
+
+    return `${prefix}${match}${suffix}`;
+  });
+}
+
+function normalizeThreadWorkflowTagLineBoundaries(line: string) {
+  let normalizedLine = "";
+  let plainTextStartIndex = 0;
+  let index = 0;
+
+  while (index < line.length) {
+    if (line[index] !== "`") {
+      index += 1;
+      continue;
+    }
+
+    const fenceLength = getBacktickRunLength(line, index);
+    const closeIndex = findClosingCodeSpanFence(line, fenceLength, index + fenceLength);
+    if (closeIndex === -1) {
+      index += fenceLength;
+      continue;
+    }
+
+    normalizedLine += isolateThreadWorkflowTagsInPlainText(line, plainTextStartIndex, index);
+    normalizedLine += line.slice(index, closeIndex + fenceLength);
+    index = closeIndex + fenceLength;
+    plainTextStartIndex = index;
+  }
+
+  normalizedLine += isolateThreadWorkflowTagsInPlainText(line, plainTextStartIndex, line.length);
+  return normalizedLine;
+}
+
+export function normalizeThreadWorkflowTagBoundaries(markdown: string, options: MarkdownParseOptions = {}) {
+  if ((options.profile ?? "editor") !== "thread") {
+    return markdown;
+  }
+
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  let insideCodeFence = false;
+
+  return lines
+    .map((line) => {
+      if (/^```/.test(line)) {
+        insideCodeFence = !insideCodeFence;
+        return line;
+      }
+
+      if (insideCodeFence) {
+        return line;
+      }
+
+      return normalizeThreadWorkflowTagLineBoundaries(line);
+    })
+    .join("\n");
 }
 
 export function formatThreadStateChangeMode(mode: string) {
@@ -590,7 +667,8 @@ function isThreadPlanCloseLine(line: string) {
 }
 
 export function parseBlocks(markdown: string, options: MarkdownParseOptions = {}): ParsedBlock[] {
-  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const normalizedMarkdown = normalizeThreadWorkflowTagBoundaries(markdown, options);
+  const lines = normalizedMarkdown.replace(/\r\n/g, "\n").split("\n");
   const blocks: ParsedBlock[] = [];
   let blankLineCount = 0;
 

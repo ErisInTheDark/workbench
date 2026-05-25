@@ -157,7 +157,7 @@ function renderListItem(item: ParsedListItem, options: MarkdownParseOptions = {}
 }
 
 export function markdownToHtml(markdown: string, options: MarkdownParseOptions = {}) {
-  const blocks = parseBlocks(markdown);
+  const blocks = parseBlocks(markdown, options);
   const html = blocks
     .map((block) => {
       switch (block.type) {
