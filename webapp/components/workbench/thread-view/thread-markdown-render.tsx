@@ -278,7 +278,7 @@ function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, k
     case "list-break":
       return Array.from(
         { length: Math.max(1, block.count) },
-        (_, index) => <p className={BLOCK_SPACING_CLASS} data-list-break="true" key={`${keyPrefix}-${index}`}><br /></p>,
+        (_, index) => <p className="-my-2" data-list-break="true" key={`${keyPrefix}-${index}`}><br /></p>,
       );
     case "break":
       return Array.from({ length: block.count }, (_, index) => <br key={`${keyPrefix}-${index}`} />);
