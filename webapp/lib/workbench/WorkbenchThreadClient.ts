@@ -80,6 +80,7 @@ const EMPTY_ROLLOUT_ERROR_FRAGMENT = "rollout at";
 const EMPTY_ROLLOUT_ERROR_SUFFIX = "is empty";
 const MISSING_ROLLOUT_ERROR_FRAGMENT = "no rollout found by id";
 const FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE = "Started the thread. Its saved rollout is still warming up, so the live view will refresh automatically.";
+const THREAD_STATE_CHANGE_TAG_PATTERN = /^<set-state\s+mode=(["'])[A-Za-z][A-Za-z0-9_-]*\1\s*\/>$/;
 
 export interface WorkbenchThreadState {
   currentThread: ThreadPayload | null;
@@ -896,8 +897,32 @@ function WorkbenchThreadClient(
     return incomingItem;
   }
 
+  function getThreadStateChangeTagText(item: ThreadItem) {
+    if (item.type !== "agentMessage") {
+      return null;
+    }
+
+    const normalizedText = normalizeStreamingText(item.text);
+    return THREAD_STATE_CHANGE_TAG_PATTERN.test(normalizedText) ? normalizedText : null;
+  }
+
+  function isThreadStateChangeLikeAgentMessage(item: ThreadItem) {
+    return item.type === "agentMessage"
+      && normalizeStreamingText(item.text).startsWith("<set-state");
+  }
+
+  function areThreadStateChangeItemsCompatible(left: ThreadItem, right: ThreadItem) {
+    const leftTag = getThreadStateChangeTagText(left);
+    const rightTag = getThreadStateChangeTagText(right);
+    return leftTag !== null && rightTag !== null && leftTag === rightTag;
+  }
+
   function isStructurallyMatchingStreamingItem(incomingItem: ThreadItem, liveItem: ThreadItem) {
     if (incomingItem.type === "agentMessage" && liveItem.type === "agentMessage") {
+      if (isThreadStateChangeLikeAgentMessage(incomingItem) || isThreadStateChangeLikeAgentMessage(liveItem)) {
+        return areThreadStateChangeItemsCompatible(incomingItem, liveItem);
+      }
+
       return areStreamingTextsCompatible(incomingItem.text, liveItem.text);
     }
 
@@ -971,6 +996,17 @@ function WorkbenchThreadClient(
     return getStreamingItemText(incomingItem).length >= getStreamingItemText(existingItem).length;
   }
 
+  function canPruneDuplicateStreamingItems(turnId: string, item: ThreadItem, candidate: ThreadItem) {
+    if (isThreadStateChangeLikeAgentMessage(item) || isThreadStateChangeLikeAgentMessage(candidate)) {
+      const itemKey = getThreadItemKey(turnId, item.id);
+      const candidateKey = getThreadItemKey(turnId, candidate.id);
+      return clientCreatedStreamingItemKeys.has(itemKey) !== clientCreatedStreamingItemKeys.has(candidateKey)
+        && isStructurallyMatchingStreamingItem(item, candidate);
+    }
+
+    return isStructurallyMatchingStreamingItem(item, candidate);
+  }
+
   function pruneDuplicateStreamingItems(turnId: string, items: ThreadItem[]) {
     const nextItems: ThreadItem[] = [];
     let changed = false;
@@ -985,7 +1021,7 @@ function WorkbenchThreadClient(
 
       const existingIndex = nextItems.findIndex((candidate) => (
         getStreamingItemDedupeKind(candidate) === kind
-        && isStructurallyMatchingStreamingItem(item, candidate)
+        && canPruneDuplicateStreamingItems(turnId, item, candidate)
       ));
 
       if (existingIndex === -1) {

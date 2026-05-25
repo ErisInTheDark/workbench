@@ -16,6 +16,8 @@ export const MODE_STATE_TAG_INSTRUCTIONS = [
   "ALWAYS represent workflow-or-skill-provided mode changes with exactly one standalone tag line in this format: `<set-state mode=\"explore\" />`",
   'Example: "Switching to Inspect mode." should instead be `<set-state mode="Inspect" />` on its own line.',
   "Do not include additional user-facing text about the mode change unless EXPLICITLY required by the workflow.",
+  "",
+  "ALWAYS present plans and other findings as plain user-visible markdown-formatted chat text within <plan></plan> tags. Plans cannot be presented within questionnaire tool calls.",
 ].join("\n");
 
 function normalizeWhitespace(value: string) {
@@ -74,7 +76,7 @@ export function buildThreadTitleBootstrapInstructions({
   const escapedThreadId = escapePowerShellSingleQuotedString(threadId);
 
   return [
-    "Before your first substantive reply, if this thread does not already have a concise title, set one by running exactly one PowerShell call.",
+    "CRITICAL: Before starting any work, if this thread does not already have a concise title, set one by running exactly one command.",
     "Use a short action-oriented title in plain ASCII words. Avoid quotes and apostrophes in the title text.",
     "",
     "$title = '<short action title>'",

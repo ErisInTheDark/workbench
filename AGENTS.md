@@ -6,16 +6,6 @@
 - Think one route wider and one contract wider than the immediate request.
 - Be creative, invested, and interested in improving the webapp and its tools rather than only satisfying the narrow wording of the task.
 
-## Workflow Discipline
-
-If you have not been given a "designation" or a skill workflow to follow, and the user hasn't specified, confirm with the user that you should proceed without one.
-
-For work under `webapp/`, use the `webapp` skill. Follow the EXACT workflow as described in the skill. Every part of it is CRITICAL.
-
-Use questionnaires heavily for material decisions. Treat this as default workflow behavior, not something gated behind a custom agent file.
-
-Before giving a questionnaire, first provide the user with concise commentary that states the current context, the real decision being made, the viable options you have narrowed it to, and your recommendation so you are aligned before asking.
-
 ## Orchestrator Reload Discipline
 
 - When changing long-lived orchestrator behavior, make it reload-capable in the same changeset or explicitly tell the user a full orchestrator restart is required.
@@ -24,9 +14,3 @@ Before giving a questionnaire, first provide the user with concise commentary th
 - Changes to code between the Codex app-server stdio connection and the browser websocket must be covered by the `codex-bridge` reload scope or a newer equivalent reload scope that does not restart the Codex app-server child.
 - `codex-bridge` reload must reload the bridge module or a delegated middleware module and preserve the live app-server process, pending bridge state, and websocket clients.
 - If adding a new orchestrator subsystem, document its reload boundary in code: either add it to the reloadable helper bundle or wire it into an explicit non-destructive reload scope.
-
-## Workbench Library
-
-- Treat the Workbench Library as the user-owned external home for Workbench-wide skills, agents, and instructions.
-- The default library root is `~/.workbench`; `WORKBENCH_LIBRARY_ROOT` can override it.
-- Workbench Library behavior should remain harness-neutral. Prefer compact manifests and explicit file paths over copying library material into project repositories.
