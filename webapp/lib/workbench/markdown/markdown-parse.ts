@@ -666,6 +666,10 @@ function isThreadPlanCloseLine(line: string) {
   return /^<\/plan>\s*$/i.test(line.trim());
 }
 
+function isThreadStateChangeLine(line: string, options: MarkdownParseOptions) {
+  return parseThreadStateChangeMode(line, options) !== null;
+}
+
 export function parseBlocks(markdown: string, options: MarkdownParseOptions = {}): ParsedBlock[] {
   const normalizedMarkdown = normalizeThreadWorkflowTagBoundaries(markdown, options);
   const lines = normalizedMarkdown.replace(/\r\n/g, "\n").split("\n");
@@ -677,6 +681,15 @@ export function parseBlocks(markdown: string, options: MarkdownParseOptions = {}
 
     if (!line.trim()) {
       blankLineCount += 1;
+      index += 1;
+      continue;
+    }
+
+    if (isThreadStateChangeLine(line, options)) {
+      maybePushCommentBreak(blocks, blankLineCount, "paragraph");
+      maybePushStandardBreak(blocks, blankLineCount, "paragraph");
+      blankLineCount = 0;
+      blocks.push({ type: "paragraph", text: line });
       index += 1;
       continue;
     }
@@ -793,6 +806,9 @@ export function parseBlocks(markdown: string, options: MarkdownParseOptions = {}
       index < lines.length
       && lines[index].trim()
       && !isBlockCommentLine(lines[index])
+      && !isThreadStateChangeLine(lines[index], options)
+      && !isThreadPlanOpenLine(lines[index], options)
+      && !isThreadPlanCloseLine(lines[index])
       && !/^```/.test(lines[index])
       && !/^(#{1,6})\s+/.test(lines[index])
       && !/^>\s?/.test(lines[index])
