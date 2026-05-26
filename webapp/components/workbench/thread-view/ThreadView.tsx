@@ -23,7 +23,7 @@ import type {
   WorkbenchThreadComposerDraft,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
-import { flattenProjectTreeFiles } from "../../../lib/workbench/project/tree-utils";
+import { flattenProjectTreeFileCandidates } from "../../../lib/workbench/project/tree-utils";
 import {
   persistThreadLiveActivityOpen,
   readStoredThreadLiveActivityOpen,
@@ -361,7 +361,7 @@ export default memo(function ThreadView ({
 
     return Array.from(new Set(liveActivity.waits.map((wait) => wait.hiddenItemId)));
   }, [liveActivity]);
-  const projectFiles = useMemo(() => flattenProjectTreeFiles(projectTree), [projectTree]);
+  const projectFiles = useMemo(() => flattenProjectTreeFileCandidates(projectTree), [projectTree]);
   const inlineMentionSources = useMemo(() => buildInlineMentionCandidates({
     files: projectFiles,
     skills: workbenchSkills,

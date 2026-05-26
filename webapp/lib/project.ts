@@ -34,6 +34,11 @@ const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", "node_m
 const discoveryIgnoredNames = new Set([...ignoredNames, "dist", "build", "coverage"]);
 let discoveredProjectsCache: Promise<WorkbenchProjectOption[]> | null = null;
 
+interface GitignoreMatcherGroup {
+  ignored: boolean;
+  pattern: RegExp;
+}
+
 function normalizeProjectId(projectId: string) {
   return normalizeRelativePath(projectId).replace(/^\/+|\/+$/g, "");
 }
@@ -61,6 +66,120 @@ async function readAgentFile(rootDir: string, relativePath: string) {
 
 export function normalizeRelativePath(filePath: string) {
   return String(filePath ?? "").replace(/\\/g, "/");
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[\\^$+?.()|[\]{}]/g, "\\$&");
+}
+
+function globPatternToRegExpSource(pattern: string) {
+  let source = "";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index];
+    const nextCharacter = pattern[index + 1];
+    if (character === "*" && nextCharacter === "*") {
+      source += ".*";
+      index += 1;
+      continue;
+    }
+    if (character === "*") {
+      source += "[^/]*";
+      continue;
+    }
+    if (character === "?") {
+      source += "[^/]";
+      continue;
+    }
+    source += escapeRegExp(character);
+  }
+  return source;
+}
+
+function compileGitignorePattern(rawPattern: string) {
+  const trimmedPattern = rawPattern.trim();
+  if (!trimmedPattern || trimmedPattern.startsWith("#")) {
+    return null;
+  }
+
+  const ignored = !trimmedPattern.startsWith("!");
+  const patternWithoutPolarity = ignored ? trimmedPattern : trimmedPattern.slice(1).trim();
+  if (!patternWithoutPolarity) {
+    return null;
+  }
+
+  const directoryPattern = patternWithoutPolarity.endsWith("/");
+  const anchoredPattern = patternWithoutPolarity.startsWith("/");
+  const normalizedPattern = normalizeRelativePath(patternWithoutPolarity)
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
+  if (!normalizedPattern) {
+    return null;
+  }
+
+  const hasPathSeparator = normalizedPattern.includes("/");
+  const body = globPatternToRegExpSource(normalizedPattern);
+  const source = anchoredPattern
+    ? directoryPattern ? `^${body}(?:/|$)` : `^${body}$`
+    : hasPathSeparator
+      ? directoryPattern ? `(^|/)${body}(?:/|$)` : `(^|/)${body}$`
+      : `(^|/)${body}(?:/|$)`;
+
+  return {
+    ignored,
+    source,
+  };
+}
+
+async function createGitignoreMatcher(rootDir: string) {
+  let contents = "";
+  try {
+    contents = await fs.readFile(path.join(rootDir, ".gitignore"), "utf8");
+  } catch {
+    return () => false;
+  }
+
+  const groups: GitignoreMatcherGroup[] = [];
+  let currentGroup: { ignored: boolean; sources: string[] } | null = null;
+  for (const line of contents.split(/\r?\n/)) {
+    const compiledPattern = compileGitignorePattern(line);
+    if (!compiledPattern) {
+      continue;
+    }
+
+    if (!currentGroup || currentGroup.ignored !== compiledPattern.ignored) {
+      if (currentGroup?.sources.length) {
+        groups.push({
+          ignored: currentGroup.ignored,
+          pattern: new RegExp(currentGroup.sources.join("|"), "i"),
+        });
+      }
+      currentGroup = {
+        ignored: compiledPattern.ignored,
+        sources: [compiledPattern.source],
+      };
+      continue;
+    }
+
+    currentGroup.sources.push(compiledPattern.source);
+  }
+
+  if (currentGroup?.sources.length) {
+    groups.push({
+      ignored: currentGroup.ignored,
+      pattern: new RegExp(currentGroup.sources.join("|"), "i"),
+    });
+  }
+
+  return (relativePath: string) => {
+    const normalizedPath = normalizeRelativePath(relativePath).replace(/^\/+/, "");
+    let ignored = false;
+    for (const group of groups) {
+      if (group.pattern.test(normalizedPath)) {
+        ignored = group.ignored;
+      }
+    }
+    return ignored;
+  };
 }
 
 export function safeResolveProjectPath(rootDir: string, requestPath: string) {
@@ -355,7 +474,11 @@ export async function createProjectEntry(parentPath: string, name: string, type:
   return relativeEntryPath;
 }
 
-export async function buildTree(currentDir = projectRoot): Promise<TreeNode[]> {
+export async function buildTree(
+  currentDir = projectRoot,
+  gitignoreMatcher?: (relativePath: string) => boolean,
+): Promise<TreeNode[]> {
+  const shouldIgnorePath = gitignoreMatcher ?? (await createGitignoreMatcher(projectRoot));
   const entries = await fs.readdir(currentDir, { withFileTypes: true });
   const visibleEntries = entries
     .filter((entry) => !ignoredNames.has(entry.name))
@@ -381,12 +504,13 @@ export async function buildTree(currentDir = projectRoot): Promise<TreeNode[]> {
         type: "directory",
         name: entry.name,
         path: relativePath,
-        children: await buildTree(absolutePath),
+        children: await buildTree(absolutePath, shouldIgnorePath),
       });
       continue;
     }
 
     children.push({
+      ...(shouldIgnorePath(relativePath) ? { isIgnored: true } : {}),
       type: "file",
       name: entry.name,
       path: relativePath,
@@ -396,7 +520,12 @@ export async function buildTree(currentDir = projectRoot): Promise<TreeNode[]> {
   return children;
 }
 
-export async function buildProjectTree(rootDir: string, currentDir = rootDir): Promise<TreeNode[]> {
+export async function buildProjectTree(
+  rootDir: string,
+  currentDir = rootDir,
+  gitignoreMatcher?: (relativePath: string) => boolean,
+): Promise<TreeNode[]> {
+  const shouldIgnorePath = gitignoreMatcher ?? (await createGitignoreMatcher(rootDir));
   const entries = await fs.readdir(currentDir, { withFileTypes: true });
   const visibleEntries = entries
     .filter((entry) => !ignoredNames.has(entry.name))
@@ -422,12 +551,13 @@ export async function buildProjectTree(rootDir: string, currentDir = rootDir): P
         type: "directory",
         name: entry.name,
         path: relativePath,
-        children: await buildProjectTree(rootDir, absolutePath),
+        children: await buildProjectTree(rootDir, absolutePath, shouldIgnorePath),
       });
       continue;
     }
 
     children.push({
+      ...(shouldIgnorePath(relativePath) ? { isIgnored: true } : {}),
       type: "file",
       name: entry.name,
       path: relativePath,

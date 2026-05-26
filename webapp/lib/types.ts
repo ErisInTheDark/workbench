@@ -193,6 +193,7 @@ export interface WorkbenchQuestionnaireHistoryEntry {
 }
 
 export interface FileNode {
+  isIgnored?: boolean;
   type: "file";
   name: string;
   path: string;

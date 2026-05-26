@@ -11,6 +11,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { getInlineMentionMarkClassName } from "../../../lib/workbench/thread/inline-mention-styles";
 import type {
   ThreadCommandDisplayPart,
   ThreadCommandSummaryDisplay,
@@ -24,11 +25,11 @@ const THREAD_INLINE_CODE_CLASS = [
   "px-[0.34em] py-[0.08em] font-mono text-[0.94em]",
 ].join(" ");
 
-const THREAD_SKILL_MENTION_CLASS = [
-  "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--accent)_14%,transparent)]",
-  "px-[0.34em] py-[0.08em] font-mono text-[0.94em]",
-  "ring-1 ring-inset ring-[color-mix(in_srgb,var(--accent)_24%,transparent)]",
-].join(" ");
+const THREAD_SKILL_MENTION_CLASS = `
+${getInlineMentionMarkClassName("skill")}
+rounded-[0.35rem] px-[0.34em] py-[0.08em]
+font-mono text-[0.94em]
+`;
 
 export function formatThreadTimestamp (timestampSeconds: number) {
   return new Date(timestampSeconds * 1000).toLocaleString();

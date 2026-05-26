@@ -1,3 +1,8 @@
+/*
+ * Exports:
+ * - default ThreadUserInputRequest: render live and historical questionnaire requests. Keywords: questionnaire, custom input, thread.
+ * - Local helpers: question display normalization, answered value derivation, and submit handling. Keywords: options, answers, drafts.
+ */
 "use client";
 
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
@@ -371,6 +376,8 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                     )}
                     spellCheck={!question.isSecret}
                     highlights={customValueHighlights}
+                    mentionSources={highlightSources}
+                    mentionSuggestionsPlacement="below"
                     value={customValue}
                     onChange={(nextValue) => {
                       setCustomValues((current) => ({

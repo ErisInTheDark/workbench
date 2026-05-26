@@ -26,6 +26,7 @@ import {
   projectFilePathLocationClassName,
   projectFilePathPillClassName,
 } from "../../../lib/workbench/project/project-file-path";
+import { getInlineMentionMarkClassName } from "../../../lib/workbench/thread/inline-mention-styles";
 import ThreadDisclosure from "./ThreadDisclosure";
 
 // reusable classes only
@@ -104,7 +105,10 @@ function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string):
       case "knownSkillMention":
         return (
           <span
-            className="rounded-[0.35rem] bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] px-[0.34em] py-[0.08em] ring-1 ring-inset ring-[color-mix(in_srgb,var(--accent)_24%,transparent)]"
+            className={`
+              ${getInlineMentionMarkClassName("skill")}
+              rounded-[0.35rem] px-[0.34em] py-[0.08em]
+            `}
             data-known-skill-mention="true"
             key={key}
             title={node.title}

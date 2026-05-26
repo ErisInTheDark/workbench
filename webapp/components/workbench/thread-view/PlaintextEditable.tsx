@@ -1,18 +1,29 @@
+/*
+ * Exports:
+ * - default PlaintextEditable: contenteditable plaintext input with overlays and optional mention suggestions. Keywords: composer, questionnaire, mentions, autocomplete.
+ * - Local helpers: caret measurement/restoration, highlight rendering, and mention popup rendering. Keywords: contenteditable, caret, highlights.
+ */
 "use client";
 
-import { useLayoutEffect, useRef, type ClipboardEvent, type CompositionEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CompositionEvent, type KeyboardEvent, type ReactNode } from "react";
 
-import type { InlineMentionHighlight } from "../../../lib/workbench/thread/inline-mention-highlights";
+import {
+  buildInlineMentionSuggestions,
+  type InlineMentionHighlight,
+  type InlineMentionHighlightSources,
+  type InlineMentionSuggestion,
+} from "../../../lib/workbench/thread/inline-mention-highlights";
+import { getInlineMentionMarkClassName, getInlineMentionOverlayClassName } from "../../../lib/workbench/thread/inline-mention-styles";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
-function normalizePlaintextEditableValue(value: string) {
+function normalizePlaintextEditableValue (value: string) {
   return value.replace(/\r\n/g, "\n");
 }
 
-function getEditableCaretOffset(element: HTMLElement) {
+function getEditableCaretOffset (element: HTMLElement) {
   const selection = window.getSelection?.();
   if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) {
     return null;
@@ -29,7 +40,7 @@ function getEditableCaretOffset(element: HTMLElement) {
   return prefixRange.toString().length;
 }
 
-function restoreEditableCaretOffset(element: HTMLElement, offset: number | null) {
+function restoreEditableCaretOffset (element: HTMLElement, offset: number | null) {
   if (offset === null) {
     return;
   }
@@ -48,7 +59,12 @@ function restoreEditableCaretOffset(element: HTMLElement, offset: number | null)
   selection.addRange(range);
 }
 
-function renderHighlightContent(value: string, highlights: InlineMentionHighlight[]) {
+function setEditableValueAndCaret (element: HTMLElement, value: string, caretOffset: number) {
+  element.textContent = value;
+  restoreEditableCaretOffset(element, caretOffset);
+}
+
+function renderHighlightContent (value: string, highlights: InlineMentionHighlight[]) {
   const content: ReactNode[] = [];
   let cursor = 0;
   highlights.forEach((highlight, index) => {
@@ -59,13 +75,7 @@ function renderHighlightContent(value: string, highlights: InlineMentionHighligh
     content.push(
       <span
         key={`${highlight.kind}:${highlight.start}:${highlight.end}:${index}`}
-        className={joinClasses(
-          "relative isolate",
-          "before:absolute before:inset-x-[-0.12em] before:inset-y-[-0.04em] before:rounded-[0.28em] before:ring-1 before:ring-inset before:content-['']",
-          highlight.kind === "skill"
-            ? "before:bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] before:ring-[color-mix(in_srgb,var(--accent)_24%,transparent)]"
-            : "before:bg-[color-mix(in_srgb,var(--success)_14%,transparent)] before:ring-[color-mix(in_srgb,var(--success)_24%,transparent)]",
-        )}
+        className={getInlineMentionOverlayClassName(highlight.kind)}
       >
         {value.slice(highlight.start, highlight.end)}
       </span>,
@@ -80,6 +90,66 @@ function renderHighlightContent(value: string, highlights: InlineMentionHighligh
   return content.length ? content : "\u00a0";
 }
 
+function InlineMentionSuggestionsPopup ({
+  activeIndex,
+  onSelect,
+  suggestions,
+}: {
+  activeIndex: number;
+  onSelect: (suggestion: InlineMentionSuggestion) => void;
+  suggestions: InlineMentionSuggestion[];
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const activeElement = containerRef.current?.querySelector("[data-inline-mention-suggestion-active='true']");
+    activeElement?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
+
+  if (!suggestions.length) {
+    return null;
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="explorer-scrollbar grid grid-cols-[auto_1fr] max-h-56 overflow-y-auto rounded-[0.85rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] p-1.5 shadow-lg backdrop-blur"
+      role="listbox"
+    >
+      {suggestions.map((suggestion, index) => {
+        const isActive = index === activeIndex;
+        return (
+          <div
+            key={`${suggestion.candidate.kind}:${suggestion.candidate.path}`}
+            aria-selected={isActive}
+            className={joinClasses(
+              "col-span-2 grid grid-cols-subgrid min-w-0 items-center justify-between gap-3 rounded-[0.65rem] px-2.5 py-2 text-[0.82em] leading-[1.35]",
+              isActive
+                ? getInlineMentionMarkClassName(suggestion.candidate.kind)
+                : "text-text",
+            )}
+            data-inline-mention-suggestion-active={isActive ? "true" : undefined}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              onSelect(suggestion);
+            }}
+            role="option"
+          >
+            <span className="min-w-0 truncate font-mono">
+              {suggestion.replacementText}
+            </span>
+            {suggestion.candidate.description ? (
+              <span className="truncate text-[0.92em] text-muted">
+                {suggestion.candidate.description}
+              </span>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function PlaintextEditable ({
   ariaLabel,
   className,
@@ -92,6 +162,8 @@ export default function PlaintextEditable ({
   onPaste,
   placeholder,
   highlights = [],
+  mentionSources = null,
+  mentionSuggestionsPlacement = "above",
   readOnly = false,
   spellCheck = true,
   value,
@@ -107,12 +179,26 @@ export default function PlaintextEditable ({
   onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void;
   placeholder?: string;
   highlights?: InlineMentionHighlight[];
+  mentionSources?: InlineMentionHighlightSources | null;
+  mentionSuggestionsPlacement?: "above" | "below";
   readOnly?: boolean;
   spellCheck?: boolean;
   value: string;
 }) {
   const elementRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
+  const [caretOffset, setCaretOffset] = useState<number | null>(null);
+  const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
+  const suggestions = useMemo(() => (
+    mentionSources && !readOnly && !disabled
+      ? buildInlineMentionSuggestions(value, caretOffset, mentionSources)
+      : []
+  ), [caretOffset, disabled, mentionSources, readOnly, value]);
+  const activeSuggestion = suggestions[activeSuggestionIndex] ?? suggestions[0] ?? null;
+
+  useLayoutEffect(() => {
+    setActiveSuggestionIndex(0);
+  }, [suggestions.length, suggestions[0]?.replacementText]);
 
   useLayoutEffect(() => {
     const element = elementRef.current;
@@ -132,8 +218,40 @@ export default function PlaintextEditable ({
     }
   }, [value]);
 
+  const updateCaretOffset = () => {
+    const element = elementRef.current;
+    setCaretOffset(element ? getEditableCaretOffset(element) : null);
+  };
+
+  const acceptSuggestion = (suggestion: InlineMentionSuggestion) => {
+    const nextValue = `${value.slice(0, suggestion.start)}${suggestion.replacementText}${value.slice(suggestion.end)}`;
+    const nextCaretOffset = suggestion.start + suggestion.replacementText.length;
+    const element = elementRef.current;
+    if (element) {
+      setEditableValueAndCaret(element, nextValue, nextCaretOffset);
+    }
+    setCaretOffset(nextCaretOffset);
+    onChange?.(nextValue);
+  };
+
+  const suggestionsPopup = suggestions.length ? (
+    <div
+      className={joinClasses(
+        "absolute right-0 left-0 z-30",
+        mentionSuggestionsPlacement === "above" ? "bottom-full mb-2" : "top-full mt-2",
+      )}
+    >
+      <InlineMentionSuggestionsPopup
+        activeIndex={activeSuggestionIndex}
+        onSelect={acceptSuggestion}
+        suggestions={suggestions}
+      />
+    </div>
+  ) : null;
+
   return (
     <div className="relative">
+      {mentionSuggestionsPlacement === "above" ? suggestionsPopup : null}
       <div
         aria-hidden="true"
         className={joinClasses(
@@ -164,6 +282,7 @@ export default function PlaintextEditable ({
         tabIndex={readOnly || disabled ? -1 : 0}
         onCompositionEnd={(event) => {
           isComposingRef.current = false;
+          updateCaretOffset();
           onCompositionEnd?.(event);
         }}
         onCompositionStart={(event) => {
@@ -171,11 +290,40 @@ export default function PlaintextEditable ({
           onCompositionStart?.(event);
         }}
         onInput={(event) => {
+          setCaretOffset(getEditableCaretOffset(event.currentTarget));
           onChange?.(normalizePlaintextEditableValue(event.currentTarget.innerText));
         }}
-        onKeyDown={onKeyDown}
+        onKeyDown={(event) => {
+          if (activeSuggestion && !event.nativeEvent.isComposing) {
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              const direction = event.key === "ArrowDown" ? 1 : -1;
+              setActiveSuggestionIndex((current) => (
+                (current + direction + suggestions.length) % suggestions.length
+              ));
+              return;
+            }
+
+            if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
+              event.preventDefault();
+              acceptSuggestion(activeSuggestion);
+              return;
+            }
+
+            if (event.key === "Escape") {
+              event.preventDefault();
+              setCaretOffset(null);
+              return;
+            }
+          }
+
+          onKeyDown?.(event);
+        }}
         onPaste={onPaste}
+        onClick={updateCaretOffset}
+        onKeyUp={updateCaretOffset}
       />
+      {mentionSuggestionsPlacement === "below" ? suggestionsPopup : null}
     </div>
   );
 }

@@ -1,3 +1,8 @@
+/*
+ * Exports:
+ * - default ThreadComposer: render thread composer controls, message input, attachments, and questionnaire handoff. Keywords: composer, thread, questionnaire, model, agent.
+ * - Local helpers: attachment reading, pending questionnaire submission options, and compact composer icons. Keywords: attachments, user input, controls.
+ */
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
@@ -585,6 +590,8 @@ export default function ThreadComposer ({
                       ? "Start a new thread..."
                   : "Continue this thread..."}
               highlights={composerHighlights}
+              mentionSources={highlightSources}
+              mentionSuggestionsPlacement="above"
               value={value}
               onChange={(nextValue) => {
                 setValue(nextValue);
