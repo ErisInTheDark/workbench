@@ -266,7 +266,7 @@ function renderThreadPlanBlock (block: Extract<ParsedBlock, { type: "plan" }>, o
       summaryClassName="text-[0.92em] font-medium leading-[1.6]"
     >
       <div className="relative before:absolute before:inset-0 before:-z-1 before:block before:-mx-8 before:bg-[linear-gradient(to_right,transparent,#8882_10%,#8882_90%,transparent)] before:content-[''] before:border-y before:border-[color-mix(in_srgb,var(--text)_10%,transparent)]">
-        <div className="px-4 py-8">
+        <div className="px-4 py-8 mb-8">
           {content.length ? content : <p className={BLOCK_SPACING_CLASS}><br /></p>}
         </div>
       </div>
