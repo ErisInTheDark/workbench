@@ -668,6 +668,11 @@ function readPowerShellAssignedReadStage(
 
 function readPowerShellNumberedLineRange(stageText: string, variableName: string) {
   const normalizedStageText = unwrapPowerShellStageText(stageText);
+  const directRange = readPowerShellVariableLineRange(normalizedStageText, variableName);
+  if (directRange) {
+    return directRange;
+  }
+
   const loopMatch = normalizedStageText.match(
     /^for\s*\(\s*\$([A-Za-z_][\w]*)\s*=\s*(\d+)\s*;\s*\$\1\s*-le\s*(\d+)\s*;\s*\$\1\s*\+\+\s*\)\s*\{([\s\S]+)\}$/i,
   );
@@ -693,6 +698,27 @@ function readPowerShellNumberedLineRange(stageText: string, variableName: string
   return {
     endLine: endIndex + lineOffset,
     startLine: startIndex + lineOffset,
+  };
+}
+
+function readPowerShellVariableLineRange(stageText: string, variableName: string) {
+  const variablePattern = escapeRegExp(variableName);
+  const rangeMatch = stageText.match(
+    new RegExp(`^\\$${variablePattern}\\s*\\[\\s*(\\d+)\\s*\\.\\.\\s*(\\d+)\\s*\\]\\s*$`, "i"),
+  );
+  if (!rangeMatch?.[1] || !rangeMatch[2]) {
+    return null;
+  }
+
+  const startIndex = Number(rangeMatch[1]);
+  const endIndex = Number(rangeMatch[2]);
+  if (!Number.isFinite(startIndex) || !Number.isFinite(endIndex) || endIndex < startIndex) {
+    return null;
+  }
+
+  return {
+    endLine: endIndex + 1,
+    startLine: startIndex + 1,
   };
 }
 
