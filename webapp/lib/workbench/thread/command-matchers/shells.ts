@@ -381,6 +381,11 @@ function stripOuterQuotes(value: string) {
 
 function normalizeShellCommandText(value: string) {
   const trimmedValue = String(value ?? "").trim();
+  const fragmentUnwrappedValue = unwrapAdjacentQuotedCommandFragments(trimmedValue);
+  if (fragmentUnwrappedValue !== null) {
+    return fragmentUnwrappedValue.trim();
+  }
+
   const unwrappedValue = stripOuterQuotes(trimmedValue);
   if (unwrappedValue !== trimmedValue) {
     return unwrappedValue.trim();
@@ -391,6 +396,69 @@ function normalizeShellCommandText(value: string) {
   }
 
   return trimmedValue;
+}
+
+function unwrapAdjacentQuotedCommandFragments(value: string) {
+  const trimmedValue = String(value ?? "").trim();
+  if (!(trimmedValue.startsWith("\"") || trimmedValue.startsWith("'"))) {
+    return null;
+  }
+
+  let index = 0;
+  let unwrappedValue = "";
+  let fragmentCount = 0;
+
+  while (index < trimmedValue.length) {
+    const quoteCharacter = trimmedValue[index];
+    if (quoteCharacter !== "\"" && quoteCharacter !== "'") {
+      return null;
+    }
+
+    const fragment = readQuotedCommandFragment(trimmedValue, index, quoteCharacter);
+    if (!fragment) {
+      return null;
+    }
+
+    unwrappedValue += fragment.value;
+    fragmentCount += 1;
+    index = fragment.nextIndex;
+  }
+
+  return fragmentCount > 1 ? unwrappedValue : null;
+}
+
+function readQuotedCommandFragment(value: string, startIndex: number, quoteCharacter: "\"" | "'") {
+  let index = startIndex + 1;
+  let fragmentValue = "";
+
+  while (index < value.length) {
+    const character = value[index];
+    const nextCharacter = value[index + 1] ?? "";
+
+    if (quoteCharacter === "\"" && character === "\\" && nextCharacter === quoteCharacter) {
+      fragmentValue += nextCharacter;
+      index += 2;
+      continue;
+    }
+
+    if (quoteCharacter === "'" && character === "'" && nextCharacter === "'") {
+      fragmentValue += "'";
+      index += 2;
+      continue;
+    }
+
+    if (character === quoteCharacter) {
+      return {
+        nextIndex: index + 1,
+        value: fragmentValue,
+      };
+    }
+
+    fragmentValue += character;
+    index += 1;
+  }
+
+  return null;
 }
 
 function normalizeNestedShellCommandText(value: string) {
