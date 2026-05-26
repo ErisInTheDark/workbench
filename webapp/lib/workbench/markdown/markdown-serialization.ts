@@ -9,7 +9,7 @@
 import {
     getDirectChildDetailsElement,
     getDirectChildSummaryElement,
-    getNestedListElementsForItem,
+    getNestedBlockElementsForItem,
     isIntentionalListBreakParagraph,
     isListElement,
     isSingleBreakParagraph
@@ -269,14 +269,37 @@ function serializeListElement(node: Element, indent = 0) {
       const line = text
         ? `${" ".repeat(indent)}${prefix}${text}`.trimEnd()
         : `${" ".repeat(indent)}${prefix}`;
-      const nested = getNestedListElementsForItem(item)
-        .map((childList) => serializeListElement(childList, indent + 2))
+      const nested = getNestedBlockElementsForItem(item)
+        .map((childBlock) => serializeNestedListChildBlock(childBlock, indent + 2))
         .filter(Boolean)
         .join("\n");
 
       return nested ? `${line}\n${nested}` : line;
     })
     .join("\n");
+}
+
+function indentMarkdownLines(markdown: string, indent: number) {
+  const prefix = " ".repeat(indent);
+  return markdown
+    .replace(/\n$/, "")
+    .split("\n")
+    .map((line) => line ? `${prefix}${line}` : line)
+    .join("\n");
+}
+
+function serializeNestedListChildBlock(element: Element, indent: number) {
+  const markdown = isListElement(element)
+    ? serializeListElement(element)
+    : serializeBlockElement(element).text;
+
+  return indentMarkdownLines(markdown, indent);
+}
+
+function getCodeBlockFence(code: string) {
+  const backtickRuns = code.match(/`+/g) ?? [];
+  const fenceLength = Math.max(3, ...backtickRuns.map((run) => run.length + 1));
+  return "`".repeat(fenceLength);
 }
 
 function serializeBlockElement(node: Element): SerializedBlock {
@@ -329,10 +352,11 @@ function serializeBlockElement(node: Element): SerializedBlock {
     case "pre": {
       const language = node instanceof HTMLElement ? node.dataset.language ?? "" : "";
       const code = node.textContent?.replace(/\n$/, "") ?? "";
+      const fence = getCodeBlockFence(code);
       return {
         kind: "block",
         isComment: false,
-        text: `\`\`\`${language}\n${code}\n\`\`\``,
+        text: `${fence}${language}\n${code}\n${fence}`,
       };
     }
     case "hr":

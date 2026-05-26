@@ -7,6 +7,7 @@
  * - getDirectChildDetailsElement: find the direct details child used by structured list items. Keywords: workbench, list, details, dom.
  * - getDirectChildSummaryElement: find the direct summary child inside a details wrapper. Keywords: workbench, list, summary, dom.
  * - getNestedListElementsForItem: collect nested child lists for a list item, including details-wrapped children. Keywords: workbench, list, nesting, dom.
+ * - getNestedBlockElementsForItem: collect nested child block elements for a list item, including details-wrapped children. Keywords: workbench, list, blocks, nesting, dom.
  */
 
 export function isSingleBreakParagraph(element: HTMLElement) {
@@ -66,4 +67,18 @@ export function getNestedListElementsForItem(item: Element) {
   return details
     ? getDirectChildListElements(details)
     : getDirectChildListElements(item);
+}
+
+export function getNestedBlockElementsForItem(item: Element) {
+  const details = getDirectChildDetailsElement(item);
+  const container = details ?? item;
+  const summary = details ? getDirectChildSummaryElement(details) : null;
+
+  return Array.from(container.children).filter((child): child is HTMLElement => {
+    if (!(child instanceof HTMLElement) || child === summary) {
+      return false;
+    }
+
+    return /^(p|div|h1|h2|h3|h4|h5|h6|blockquote|pre|hr|ul|ol)$/i.test(child.tagName);
+  });
 }

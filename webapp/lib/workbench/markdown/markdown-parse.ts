@@ -28,6 +28,7 @@ import {
 } from "./markdown-links";
 
 export interface ParsedListItem {
+  contentIndent: number;
   marker: string;
   text: string;
   children: ParsedBlock[];
@@ -73,8 +74,8 @@ export interface MarkdownParseOptions {
   projectRootPath?: string;
 }
 
-const THREAD_STATE_CHANGE_TAG_PATTERN = /^<set-state\s+mode=(["'])([A-Za-z][A-Za-z0-9_-]*)\1\s*\/>$/;
-const THREAD_STATE_CHANGE_BOUNDARY_PATTERN = /<set-state\s+mode=(["'])[A-Za-z][A-Za-z0-9_-]*\1\s*\/>/g;
+const THREAD_STATE_CHANGE_TAG_PATTERN = /^<set-state\s+mode=(["'])((?:(?!\1).)*)\1\s*\/>$/;
+const THREAD_STATE_CHANGE_BOUNDARY_PATTERN = /<set-state\s+mode=(["'])((?:(?!\1).)*)\1\s*\/>/g;
 const THREAD_WORKFLOW_TAG_BOUNDARY_PATTERN = new RegExp(
   `${THREAD_STATE_CHANGE_BOUNDARY_PATTERN.source}|<\\/?[Pp][Ll][Aa][Nn]>`,
   "g",
@@ -168,7 +169,8 @@ export function getThreadStateChangeTagText(markdown: string) {
 }
 
 function isolateThreadWorkflowTagsInPlainText(line: string, startIndex: number, endIndex: number) {
-  return line.slice(startIndex, endIndex).replace(THREAD_WORKFLOW_TAG_BOUNDARY_PATTERN, (match, _quote, offset: number) => {
+  return line.slice(startIndex, endIndex).replace(THREAD_WORKFLOW_TAG_BOUNDARY_PATTERN, (match, ...args: unknown[]) => {
+    const offset = typeof args[args.length - 2] === "number" ? args[args.length - 2] as number : 0;
     const matchStart = startIndex + offset;
     const matchEnd = matchStart + match.length;
     const prefix = matchStart === 0 || line[matchStart - 1] === "\n" ? "" : "\n";
@@ -212,16 +214,22 @@ export function normalizeThreadWorkflowTagBoundaries(markdown: string, options: 
   }
 
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
-  let insideCodeFence = false;
+  let codeFenceOpener: ParsedCodeFenceOpenLine | null = null;
 
   return lines
     .map((line) => {
-      if (/^```/.test(line)) {
-        insideCodeFence = !insideCodeFence;
+      if (codeFenceOpener && isCodeFenceCloseLine(line, codeFenceOpener)) {
+        codeFenceOpener = null;
         return line;
       }
 
-      if (insideCodeFence) {
+      if (codeFenceOpener) {
+        return line;
+      }
+
+      const fenceOpener = parseCodeFenceOpenLine(line);
+      if (fenceOpener) {
+        codeFenceOpener = fenceOpener;
         return line;
       }
 
@@ -552,22 +560,163 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
   return nodes;
 }
 
-function parseListLine(line: string) {
-  const expandedLine = line.replaceAll("\t", "  ");
-  const match = expandedLine.match(/^(\s*)([-*+]|\d+[.)])(?:\s+(.*))?$/);
+function getIndentWidth(line: string) {
+  let indent = 0;
+  for (const character of line) {
+    if (character === " ") {
+      indent += 1;
+      continue;
+    }
+
+    if (character === "\t") {
+      indent += 2;
+      continue;
+    }
+
+    break;
+  }
+
+  return indent;
+}
+
+function stripIndent(line: string, indent: number) {
+  let remainingIndent = indent;
+  let index = 0;
+
+  while (index < line.length && remainingIndent > 0) {
+    const character = line[index];
+    if (character === " ") {
+      remainingIndent -= 1;
+      index += 1;
+      continue;
+    }
+
+    if (character === "\t") {
+      remainingIndent -= 2;
+      index += 1;
+      continue;
+    }
+
+    break;
+  }
+
+  return line.slice(index);
+}
+
+interface ParsedCodeFenceOpenLine {
+  fenceLength: number;
+  indent: string;
+  language: string;
+}
+
+function parseCodeFenceOpenLine(line: string): ParsedCodeFenceOpenLine | null {
+  const match = line.match(/^( {0,3})(`{3,})(.*)$/);
   if (!match) {
     return null;
   }
 
   return {
-    indent: match[1].length,
-    marker: match[2],
-    text: match[3] ?? "",
-    type: (/^\d+[.)]$/.test(match[2]) ? "ol" : "ul") as "ol" | "ul",
+    fenceLength: match[2].length,
+    indent: match[1],
+    language: match[3].trim().toLowerCase(),
   };
 }
 
-function parseSpecificListBlock(lines: string[], startIndex: number, indent: number, type: "ul" | "ol") {
+function isCodeFenceCloseLine(line: string, opener: ParsedCodeFenceOpenLine) {
+  const match = line.match(/^( {0,3})(`{3,})[ \t]*$/);
+  return !!match && match[1] === opener.indent && match[2].length >= opener.fenceLength;
+}
+
+function parseListLine(line: string) {
+  const expandedLine = line.replaceAll("\t", "  ");
+  const match = expandedLine.match(/^(\s*)([-*+]|\d+[.)])(?:(\s+)(.*))?$/);
+  if (!match) {
+    return null;
+  }
+
+  const markerIndent = match[1].length;
+  const marker = match[2];
+  const markerSpacing = match[3] ?? " ";
+
+  return {
+    contentIndent: markerIndent + marker.length + markerSpacing.length,
+    indent: markerIndent,
+    marker,
+    text: match[4] ?? "",
+    type: (/^\d+[.)]$/.test(marker) ? "ol" : "ul") as "ol" | "ul",
+  };
+}
+
+function isSiblingListLine(line: string, indent: number, type: "ul" | "ol") {
+  const parsedLine = parseListLine(line);
+  return parsedLine?.indent === indent && parsedLine.type === type;
+}
+
+function isOutdentedListLine(line: string, indent: number) {
+  const parsedLine = parseListLine(line);
+  return !!parsedLine && parsedLine.indent <= indent;
+}
+
+function findNextNonBlankLine(lines: string[], startIndex: number) {
+  for (let index = startIndex; index < lines.length; index += 1) {
+    if (lines[index].trim()) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function parseListItemChildren(
+  lines: string[],
+  startIndex: number,
+  itemIndent: number,
+  contentIndent: number,
+  options: MarkdownParseOptions,
+) {
+  const childLines: string[] = [];
+  let index = startIndex;
+
+  while (index < lines.length) {
+    const line = lines[index];
+
+    if (!line.trim()) {
+      const nextNonBlankIndex = findNextNonBlankLine(lines, index + 1);
+      if (nextNonBlankIndex === -1) {
+        break;
+      }
+
+      const nextLine = lines[nextNonBlankIndex];
+      if (isOutdentedListLine(nextLine, itemIndent) || getIndentWidth(nextLine) <= itemIndent) {
+        break;
+      }
+
+      childLines.push("");
+      index += 1;
+      continue;
+    }
+
+    if (isOutdentedListLine(line, itemIndent) || getIndentWidth(line) <= itemIndent) {
+      break;
+    }
+
+    childLines.push(stripIndent(line, contentIndent));
+    index += 1;
+  }
+
+  return {
+    blocks: childLines.length ? parseBlocksFromLines(childLines, options) : [],
+    nextIndex: index,
+  };
+}
+
+function parseSpecificListBlock(
+  lines: string[],
+  startIndex: number,
+  indent: number,
+  type: "ul" | "ol",
+  options: MarkdownParseOptions,
+) {
   const items: ParsedListItem[] = [];
   let index = startIndex;
 
@@ -578,24 +727,22 @@ function parseSpecificListBlock(lines: string[], startIndex: number, indent: num
     }
 
     const item: ParsedListItem = {
+      contentIndent: line.contentIndent,
       marker: line.marker,
       text: line.text,
       children: [],
     };
     index += 1;
 
-    while (index < lines.length) {
-      const nestedLine = parseListLine(lines[index]);
-      if (!nestedLine || nestedLine.indent <= indent) {
-        break;
-      }
-
-      const nestedBlock = parseSpecificListBlock(lines, index, nestedLine.indent, nestedLine.type);
-      item.children.push(nestedBlock.block);
-      index = nestedBlock.nextIndex;
-    }
+    const children = parseListItemChildren(lines, index, indent, line.contentIndent, options);
+    item.children = children.blocks;
+    index = children.nextIndex;
 
     items.push(item);
+
+    if (!isSiblingListLine(lines[index] ?? "", indent, type)) {
+      break;
+    }
   }
 
   return {
@@ -604,13 +751,13 @@ function parseSpecificListBlock(lines: string[], startIndex: number, indent: num
   };
 }
 
-function parseListBlock(lines: string[], startIndex: number) {
+function parseListBlock(lines: string[], startIndex: number, options: MarkdownParseOptions) {
   const firstLine = parseListLine(lines[startIndex]);
   if (!firstLine) {
     return null;
   }
 
-  return parseSpecificListBlock(lines, startIndex, firstLine.indent, firstLine.type);
+  return parseSpecificListBlock(lines, startIndex, firstLine.indent, firstLine.type, options);
 }
 
 function getLastNonBreakBlock(blocks: ParsedBlock[]) {
@@ -670,9 +817,7 @@ function isThreadStateChangeLine(line: string, options: MarkdownParseOptions) {
   return parseThreadStateChangeMode(line, options) !== null;
 }
 
-export function parseBlocks(markdown: string, options: MarkdownParseOptions = {}): ParsedBlock[] {
-  const normalizedMarkdown = normalizeThreadWorkflowTagBoundaries(markdown, options);
-  const lines = normalizedMarkdown.replace(/\r\n/g, "\n").split("\n");
+function parseBlocksFromLines(lines: string[], options: MarkdownParseOptions = {}): ParsedBlock[] {
   const blocks: ParsedBlock[] = [];
   let blankLineCount = 0;
 
@@ -722,16 +867,15 @@ export function parseBlocks(markdown: string, options: MarkdownParseOptions = {}
       continue;
     }
 
-    const fenceMatch = line.match(/^```(.*)$/);
-    if (fenceMatch) {
+    const fence = parseCodeFenceOpenLine(line);
+    if (fence) {
       maybePushCommentBreak(blocks, blankLineCount, "code");
       maybePushStandardBreak(blocks, blankLineCount, "code");
       blankLineCount = 0;
-      const language = fenceMatch[1].trim();
       const codeLines = [];
       index += 1;
 
-      while (index < lines.length && !lines[index].startsWith("```")) {
+      while (index < lines.length && !isCodeFenceCloseLine(lines[index], fence)) {
         codeLines.push(lines[index]);
         index += 1;
       }
@@ -740,7 +884,7 @@ export function parseBlocks(markdown: string, options: MarkdownParseOptions = {}
         index += 1;
       }
 
-      blocks.push({ type: "code", language, text: codeLines.join("\n") });
+      blocks.push({ type: "code", language: fence.language, text: codeLines.join("\n") });
       continue;
     }
 
@@ -782,7 +926,7 @@ export function parseBlocks(markdown: string, options: MarkdownParseOptions = {}
       continue;
     }
 
-    const listBlock = parseListBlock(lines, index);
+    const listBlock = parseListBlock(lines, index, options);
     if (listBlock) {
       const previousBlock = getLastNonBreakBlock(blocks);
       const previousIsList = previousBlock?.type === "ul" || previousBlock?.type === "ol";
@@ -809,11 +953,10 @@ export function parseBlocks(markdown: string, options: MarkdownParseOptions = {}
       && !isThreadStateChangeLine(lines[index], options)
       && !isThreadPlanOpenLine(lines[index], options)
       && !isThreadPlanCloseLine(lines[index])
-      && !/^```/.test(lines[index])
+      && !parseCodeFenceOpenLine(lines[index])
       && !/^(#{1,6})\s+/.test(lines[index])
       && !/^>\s?/.test(lines[index])
-      && !/^[-*+]\s+/.test(lines[index])
-      && !/^\d+[.)]\s+/.test(lines[index])
+      && !parseListLine(lines[index])
       && !/^ {0,3}([-*_])(?:\s*\1){2,}\s*$/.test(lines[index])
     ) {
       paragraphLines.push(lines[index]);
@@ -827,5 +970,11 @@ export function parseBlocks(markdown: string, options: MarkdownParseOptions = {}
   }
 
   return blocks;
+}
+
+export function parseBlocks(markdown: string, options: MarkdownParseOptions = {}): ParsedBlock[] {
+  const normalizedMarkdown = normalizeThreadWorkflowTagBoundaries(markdown, options);
+  const lines = normalizedMarkdown.replace(/\r\n/g, "\n").split("\n");
+  return parseBlocksFromLines(lines, options);
 }
 

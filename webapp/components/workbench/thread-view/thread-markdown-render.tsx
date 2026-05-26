@@ -147,6 +147,14 @@ function renderThreadInlineMarkdown (markdown: string, options: MarkdownParseOpt
   return renderThreadInlineNodes(parseInlineMarkdown(markdown, options), keyPrefix);
 }
 
+function renderThreadChildBlocks (
+  children: ParsedBlock[],
+  options: MarkdownParseOptions,
+  keyPrefix: string,
+) {
+  return children.map((child, index) => renderThreadBlock(child, options, `${keyPrefix}-child-${index}`));
+}
+
 function renderThreadListBlock (
   block: Extract<ParsedBlock, { type: "ul" | "ol" }>,
   options: MarkdownParseOptions,
@@ -171,12 +179,7 @@ function renderThreadListItem (
     return <li className="[&+li]:mt-1" key={keyPrefix}>{content.length ? content : <br />}</li>;
   }
 
-  const childContent = item.children
-    .map((child, index) => (
-      child.type === "ul" || child.type === "ol"
-        ? renderThreadListBlock(child, options, `${keyPrefix}-child-${index}`)
-        : null
-    ));
+  const childContent = renderThreadChildBlocks(item.children, options, keyPrefix);
 
   return (
     <li className="[&+li]:mt-1" key={keyPrefix}>
@@ -204,12 +207,7 @@ function renderThreadSingleItemOrderedStep (
 ) {
   const item = block.items[0];
   const content = renderThreadInlineMarkdown(item.text, options, `${keyPrefix}-content`);
-  const childContent = item.children
-    .map((child, index) => (
-      child.type === "ul" || child.type === "ol"
-        ? renderThreadListBlock(child, options, `${keyPrefix}-child-${index}`)
-        : null
-    ));
+  const childContent = renderThreadChildBlocks(item.children, options, keyPrefix);
 
   // multiple periods = probably not top level step marker, render as normal list item with marker in content
   if (stripInlineCodeSpans(item.text).match(/\..*?\./)) {
@@ -322,13 +320,19 @@ function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, k
       return <hr className={BLOCK_SPACING_CLASS} key={keyPrefix} />;
     case "code":
       return (
-        <pre
-          className={`${BLOCK_SPACING_CLASS} overflow-x-auto whitespace-pre-wrap break-words rounded-[0.9rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-[0.95rem] py-[0.8rem]`}
-          data-language={block.language}
-          key={keyPrefix}
-        >
-          <code className="rounded-none bg-transparent p-0 font-mono text-[0.94em]">{block.text}</code>
-        </pre>
+        <div className={`${BLOCK_SPACING_CLASS} overflow-hidden rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)]`} key={keyPrefix}>
+          {block.language ? (
+            <div className="border-b border-[color-mix(in_srgb,var(--text)_8%,transparent)] px-[0.8rem] py-[0.36rem] font-mono text-[0.72em] leading-none text-muted">
+              {block.language}
+            </div>
+          ) : null}
+          <pre
+            className="overflow-x-auto whitespace-pre-wrap break-words px-[0.95rem] py-[0.8rem]"
+            data-language={block.language}
+          >
+            <code className="rounded-none bg-transparent p-0 font-mono text-[0.94em]">{block.text}</code>
+          </pre>
+        </div>
       );
     case "paragraph": {
       const stateChangeMode = parseThreadStateChangeMode(block.text, options);

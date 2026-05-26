@@ -332,7 +332,20 @@
     white-space: pre-wrap;
   }
 
+  .editor-content pre[data-language]:not([data-language=""])::before {
+    content: attr(data-language);
+    display: block;
+    margin: -0.2rem -0.15rem 0.65rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+    padding: 0 0 0.45rem;
+    font-family: var(--font-mono);
+    font-size: 0.72em;
+    line-height: 1;
+    color: var(--muted);
+  }
+
   .editor-content pre code {
+    display: block;
     background: transparent;
     border-radius: 0;
     padding: 0;

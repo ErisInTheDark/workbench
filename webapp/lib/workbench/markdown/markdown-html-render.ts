@@ -110,6 +110,10 @@ function renderListBlock(block: Extract<ParsedBlock, { type: "ul" | "ol" }>, opt
   return `<${block.type}>${block.items.map((item) => renderListItem(item, options)).join("")}</${block.type}>`;
 }
 
+function renderChildBlocks(blocks: ParsedBlock[], options: MarkdownParseOptions = {}) {
+  return blocks.map((block) => renderBlockHtml(block, options)).join("");
+}
+
 function isThreadSingleItemOrderedStep(block: Extract<ParsedBlock, { type: "ol" }>, options: MarkdownParseOptions = {}) {
   return (options.profile ?? "editor") === "thread"
     && block.items.length === 1
@@ -119,9 +123,7 @@ function isThreadSingleItemOrderedStep(block: Extract<ParsedBlock, { type: "ol" 
 function renderThreadSingleItemOrderedStep(block: Extract<ParsedBlock, { type: "ol" }>, options: MarkdownParseOptions = {}) {
   const item = block.items[0];
   const content = renderInline(item.text, options);
-  const childContent = item.children
-    .map((child) => child.type === "ul" || child.type === "ol" ? renderListBlock(child, options) : "")
-    .join("");
+  const childContent = renderChildBlocks(item.children, options);
 
   if (stripInlineCodeSpans(item.text).includes(".")) {
     return `<p>${escapeHtml(item.marker)}${content ? ` ${content}` : ""}</p>${childContent}`;
@@ -150,52 +152,56 @@ function renderListItem(item: ParsedListItem, options: MarkdownParseOptions = {}
   }
 
   const childContent = item.children
-    .map((child) => child.type === "ul" || child.type === "ol" ? renderListBlock(child, options) : "")
-    .join("");
+    ? renderChildBlocks(item.children, options)
+    : "";
 
   return `<li><details open><summary>${content}</summary>${childContent}</details></li>`;
+}
+
+function renderBlockHtml(block: ParsedBlock, options: MarkdownParseOptions = {}) {
+  switch (block.type) {
+    case "list-break":
+      return Array.from(
+        { length: Math.max(1, block.count) },
+        () => '<p data-list-break="true"><br></p>',
+      ).join("");
+    case "break":
+      return "<br>".repeat(block.count);
+    case "heading":
+      return `<h${block.level}>${renderInline(block.text, options)}</h${block.level}>`;
+    case "blockquote":
+      return `<blockquote>${renderInline(block.text, options)}</blockquote>`;
+    case "comment":
+      return `<p data-block-comment="true">${escapeHtml(parseBlockCommentBody(block.text) ?? block.text)}</p>`;
+    case "ul":
+    case "ol":
+      if (block.type === "ol" && isThreadSingleItemOrderedStep(block, options)) {
+        return renderThreadSingleItemOrderedStep(block, options);
+      }
+
+      return renderListBlock(block, options);
+    case "hr":
+      return "<hr>";
+    case "code":
+      return `<pre data-language="${escapeHtml(block.language)}"><code>${escapeHtml(block.text)}</code></pre>`;
+    case "plan":
+      return renderChildBlocks(parseBlocks(block.text, options), options);
+    case "paragraph":
+    default: {
+      const stateChangeMode = parseThreadStateChangeMode(block.text, options);
+      if (stateChangeMode) {
+        return renderThreadStateChange(stateChangeMode);
+      }
+
+      return `<p>${renderInline(block.text, options)}</p>`;
+    }
+  }
 }
 
 export function markdownToHtml(markdown: string, options: MarkdownParseOptions = {}) {
   const blocks = parseBlocks(markdown, options);
   const html = blocks
-    .map((block) => {
-      switch (block.type) {
-        case "list-break":
-          return Array.from(
-            { length: Math.max(1, block.count) },
-            () => '<p data-list-break="true"><br></p>',
-          ).join("");
-        case "break":
-          return "<br>".repeat(block.count);
-        case "heading":
-          return `<h${block.level}>${renderInline(block.text, options)}</h${block.level}>`;
-        case "blockquote":
-          return `<blockquote>${renderInline(block.text, options)}</blockquote>`;
-        case "comment":
-          return `<p data-block-comment="true">${escapeHtml(parseBlockCommentBody(block.text) ?? block.text)}</p>`;
-        case "ul":
-        case "ol":
-          if (block.type === "ol" && isThreadSingleItemOrderedStep(block, options)) {
-            return renderThreadSingleItemOrderedStep(block, options);
-          }
-
-          return renderListBlock(block, options);
-        case "hr":
-          return "<hr>";
-        case "code":
-          return `<pre data-language="${escapeHtml(block.language)}"><code>${escapeHtml(block.text)}</code></pre>`;
-        case "paragraph":
-        default: {
-          const stateChangeMode = parseThreadStateChangeMode(block.text, options);
-          if (stateChangeMode) {
-            return renderThreadStateChange(stateChangeMode);
-          }
-
-          return `<p>${renderInline(block.text, options)}</p>`;
-        }
-      }
-    })
+    .map((block) => renderBlockHtml(block, options))
     .join("");
 
   return html || "<p><br></p>";

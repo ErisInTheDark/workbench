@@ -28,7 +28,7 @@ import {
     syncStructuredBlockStyles as syncStructuredBlockDomStyles,
 } from "./dom/mutation/structured-block-dom";
 import {
-    getNestedListElementsForItem,
+    getNestedBlockElementsForItem,
     isIntentionalListBreakParagraph,
     isSingleBreakParagraph,
 } from "./dom/query/list-dom";
@@ -257,14 +257,75 @@ function appendParsedListDiffRows(
       signature: `li|${block.type}|${depth}|${item.text}`,
     });
 
-    item.children.forEach((child, childIndex) => {
-      if (child.type !== "ul" && child.type !== "ol") {
+    let childRowIndex = 0;
+    item.children.forEach((child) => {
+      if (child.type === "break" || child.type === "list-break") {
         return;
       }
 
-      appendParsedListDiffRows(child, `${itemPath}/child:${childIndex}`, depth + 1, rows);
+      appendParsedBlockDiffRows(child, `${itemPath}/child:${childRowIndex}`, depth + 1, rows);
+      childRowIndex += 1;
     });
   });
+}
+
+function appendParsedBlockDiffRows(
+  block: ParsedBlock,
+  blockPath: string,
+  depth: number,
+  rows: DiffRow[],
+) {
+  switch (block.type) {
+    case "break":
+    case "list-break":
+      return;
+    case "ul":
+    case "ol":
+      appendParsedListDiffRows(block, blockPath, depth, rows);
+      return;
+    case "heading":
+      rows.push({
+        path: blockPath,
+        signature: `heading|${block.level}|${block.text}`,
+      });
+      return;
+    case "blockquote":
+      rows.push({
+        path: blockPath,
+        signature: `blockquote|${block.text}`,
+      });
+      return;
+    case "comment":
+      rows.push({
+        path: blockPath,
+        signature: `comment|${block.text}`,
+      });
+      return;
+    case "hr":
+      rows.push({
+        path: blockPath,
+        signature: "hr|",
+      });
+      return;
+    case "code":
+      rows.push({
+        path: blockPath,
+        signature: `code|${block.language}|${block.text}`,
+      });
+      return;
+    case "plan":
+      rows.push({
+        path: blockPath,
+        signature: `plan|${block.text}`,
+      });
+      return;
+    case "paragraph":
+      rows.push({
+        path: blockPath,
+        signature: `paragraph|${block.text}`,
+      });
+      return;
+  }
 }
 
 function flattenMarkdownDiffRows(markdown: string | null) {
@@ -272,60 +333,12 @@ function flattenMarkdownDiffRows(markdown: string | null) {
   let blockIndex = 0;
 
   for (const block of parseMarkdownBlocks(markdown ?? "")) {
-    switch (block.type) {
-      case "break":
-      case "list-break":
-        continue;
-      case "ul":
-      case "ol":
-        appendParsedListDiffRows(block, `b${blockIndex}`, 0, rows);
-        blockIndex += 1;
-        continue;
-      case "heading":
-        rows.push({
-          path: `b${blockIndex}`,
-          signature: `heading|${block.level}|${block.text}`,
-        });
-        blockIndex += 1;
-        continue;
-      case "blockquote":
-        rows.push({
-          path: `b${blockIndex}`,
-          signature: `blockquote|${block.text}`,
-        });
-        blockIndex += 1;
-        continue;
-      case "comment":
-        rows.push({
-          path: `b${blockIndex}`,
-          signature: `comment|${block.text}`,
-        });
-        blockIndex += 1;
-        continue;
-      case "hr":
-        rows.push({
-          path: `b${blockIndex}`,
-          signature: "hr|",
-        });
-        blockIndex += 1;
-        continue;
-      case "code":
-        rows.push({
-          path: `b${blockIndex}`,
-          signature: `code|${block.language}|${block.text}`,
-        });
-        blockIndex += 1;
-        continue;
-      case "paragraph":
-        rows.push({
-          path: `b${blockIndex}`,
-          signature: `paragraph|${block.text}`,
-        });
-        blockIndex += 1;
-        continue;
-      default:
-        continue;
+    if (block.type === "break" || block.type === "list-break") {
+      continue;
     }
+
+    appendParsedBlockDiffRows(block, `b${blockIndex}`, 0, rows);
+    blockIndex += 1;
   }
 
   return rows;
@@ -349,8 +362,30 @@ function appendLiveListDiffAnchors(
         element: item,
       });
 
-      getNestedListElementsForItem(item).forEach((childList, childIndex) => {
-        appendLiveListDiffAnchors(childList, `${itemPath}/child:${childIndex}`, anchors);
+      let childAnchorIndex = 0;
+      getNestedBlockElementsForItem(item).forEach((childBlock) => {
+        if (
+          childBlock instanceof HTMLBRElement
+          || isIntentionalListBreakParagraph(childBlock)
+          || isSingleBreakParagraph(childBlock)
+        ) {
+          return;
+        }
+
+        const childPath = `${itemPath}/child:${childAnchorIndex}`;
+        childAnchorIndex += 1;
+
+        if (childBlock instanceof HTMLUListElement || childBlock instanceof HTMLOListElement) {
+          appendLiveListDiffAnchors(childBlock, childPath, anchors);
+          return;
+        }
+
+        if (isDiffTrackableBlockElement(childBlock)) {
+          anchors.push({
+            path: childPath,
+            element: childBlock,
+          });
+        }
       });
     });
 }
