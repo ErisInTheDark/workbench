@@ -1044,6 +1044,7 @@ function WorkbenchEditorClient(
 
   function inspectRichDocument() {
     return inspectSaveGuardMarkup({
+      canonicalizeMarkup: syncStructuredBlockStyles,
       editorRoot: editor,
       isInlineRunContainer: (element) => isInlineRunContainer(editor, element),
       normalizeMarkup: normalizeEditorMarkup,

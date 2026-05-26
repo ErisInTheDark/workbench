@@ -137,6 +137,8 @@ function WorkbenchInlineFormatController(
 
   let pendingInlineFormats: PendingInlineFormats | null = null;
   let preservePendingInlineFormatSelectionChanges = 0;
+  let lastSelectionInlineRunContainer: HTMLElement | null = null;
+  let selectionLeaveCanonicalizationIsRunning = false;
 
   function getClosestInlineFormatElement(
     node: Node | null,
@@ -663,6 +665,9 @@ function WorkbenchInlineFormatController(
   }
 
   function handleSelectionChange() {
+    const selectionContainer = getSelectionInlineRunContainer();
+    maybeCanonicalizePreviousSelectionContainer(selectionContainer);
+
     if (!pendingInlineFormats) {
       return;
     }
@@ -680,14 +685,51 @@ function WorkbenchInlineFormatController(
     clearPendingInlineFormats();
   }
 
+  function getSelectionInlineRunContainer() {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !options.editor.contains(selection.anchorNode)) {
+      return null;
+    }
+
+    return options.getInlineRunContainer(selection.getRangeAt(0).startContainer);
+  }
+
+  function maybeCanonicalizePreviousSelectionContainer(selectionContainer: HTMLElement | null) {
+    const previousContainer = lastSelectionInlineRunContainer;
+    lastSelectionInlineRunContainer = selectionContainer;
+
+    if (
+      selectionLeaveCanonicalizationIsRunning
+      || !previousContainer
+      || previousContainer === selectionContainer
+      || !options.editor.contains(previousContainer)
+    ) {
+      return;
+    }
+
+    selectionLeaveCanonicalizationIsRunning = true;
+    try {
+      options.syncEditorAfterStructuralChange(() => {
+        canonicalizeInlineRunContainer(previousContainer);
+      });
+    } finally {
+      selectionLeaveCanonicalizationIsRunning = false;
+    }
+  }
+
   function maybeClearPendingInlineFormatsForKey(event: KeyboardEvent) {
     if (pendingInlineFormats && shouldClearPendingInlineFormatsForKey(event)) {
       clearPendingInlineFormats();
     }
   }
 
-  function canonicalizeInlineRunContainer(container: HTMLElement) {
-    const leaves = normalizeInlineLeaves(flattenInlineContent(container.childNodes));
+  function canonicalizeInlineRunContainer(
+    container: HTMLElement,
+    { preserveBoundaryWhitespace = false }: { preserveBoundaryWhitespace?: boolean } = {},
+  ) {
+    const leaves = preserveBoundaryWhitespace
+      ? normalizeInlineLeaves(flattenInlineContent(container.childNodes))
+      : normalizeInlineLeavesForCanonicalRuns(flattenInlineContent(container.childNodes));
     rebuildInlineRunContainer(container, leaves);
   }
 
@@ -710,7 +752,7 @@ function WorkbenchInlineFormatController(
     if (selection.isCollapsed) {
       const marker = createInlineSelectionMarker("caret");
       range.insertNode(marker);
-      canonicalizeInlineRunContainer(targetContainer);
+      canonicalizeInlineRunContainer(targetContainer, { preserveBoundaryWhitespace: true });
       preservePendingInlineFormatSelectionChanges = Math.max(preservePendingInlineFormatSelectionChanges, 2);
       restoreCaretToMarker(targetContainer.querySelector<HTMLElement>('[data-inline-selection-marker="caret"]') ?? marker);
       return;
@@ -726,7 +768,7 @@ function WorkbenchInlineFormatController(
     startRange.collapse(true);
     startRange.insertNode(startMarker);
 
-    canonicalizeInlineRunContainer(targetContainer);
+    canonicalizeInlineRunContainer(targetContainer, { preserveBoundaryWhitespace: true });
     preservePendingInlineFormatSelectionChanges = Math.max(preservePendingInlineFormatSelectionChanges, 2);
     restoreSelectionToMarkers(
       targetContainer.querySelector<HTMLElement>('[data-inline-selection-marker="selection-start"]') ?? startMarker,
@@ -1304,6 +1346,25 @@ function normalizeInlineLeavesForSerialization(leaves: InlineLeaf[]) {
   return result;
 }
 
+function normalizeInlineLeavesForCanonicalRuns(leaves: InlineLeaf[]) {
+  const boundaryNormalizedLeaves: InlineLeaf[] = [];
+
+  for (const leaf of leaves) {
+    for (const normalizedLeaf of normalizeInlineLeafBoundaries(leaf)) {
+      appendInlineLeaf(boundaryNormalizedLeaves, normalizedLeaf);
+    }
+  }
+
+  const commentPaddedLeaves = normalizeInlineCommentPadding(boundaryNormalizedLeaves);
+  const result: InlineLeaf[] = [];
+
+  for (const leaf of commentPaddedLeaves) {
+    appendInlineLeaf(result, leaf);
+  }
+
+  return result;
+}
+
 function stripSingularTrailingBreak(leaves: InlineLeaf[]) {
   const lastLeaf = leaves.at(-1);
   if (!lastLeaf || lastLeaf.type !== "break") {
@@ -1588,6 +1649,10 @@ function getDeepestMatchingMarkedRun(node: Node | null, marks: InlineMark[]) {
     }
 
     if (index === marks.length - 1) {
+      if (Array.from(current.children).some((child) => getInlineMarkForElement(child))) {
+        return null;
+      }
+
       return current;
     }
 

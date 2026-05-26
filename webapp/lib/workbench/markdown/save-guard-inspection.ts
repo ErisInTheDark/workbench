@@ -23,6 +23,7 @@ interface SaveGuardMarkupInspection {
 }
 
 interface InspectSaveGuardMarkupOptions {
+  canonicalizeMarkup?: ((root: ParentNode) => void) | null;
   editorRoot: HTMLDivElement;
   isInlineRunContainer: (element: HTMLElement) => boolean;
   normalizeMarkup: (root: ParentNode) => void;
@@ -35,16 +36,21 @@ interface InspectDraftContentOptions {
 }
 
 export function inspectSaveGuardMarkup(options: InspectSaveGuardMarkupOptions): SaveGuardMarkupInspection {
-  const { editorRoot, isInlineRunContainer, normalizeMarkup } = options;
+  const { canonicalizeMarkup, editorRoot, isInlineRunContainer, normalizeMarkup } = options;
+  const normalizeForSaveGuard = (root: ParentNode) => {
+    normalizeMarkup(root);
+    canonicalizeMarkup?.(root);
+    normalizeMarkup(root);
+  };
   const editorSnapshot = editorRoot.cloneNode(true) as HTMLDivElement;
   const markdown = serializeWorkbenchDomToMarkdown(editorSnapshot, {
     isInlineRunContainer,
-    normalizeMarkup,
+    normalizeMarkup: normalizeForSaveGuard,
   });
   const currentMarkup = createWorkbenchMarkupSignature(editorSnapshot, { isInlineRunContainer });
   const roundTripRoot = editorRoot.ownerDocument.createElement("div");
   roundTripRoot.innerHTML = renderMarkdownToHtml(markdown);
-  normalizeMarkup(roundTripRoot);
+  normalizeForSaveGuard(roundTripRoot);
 
   const roundTripMarkup = createWorkbenchMarkupSignature(roundTripRoot, { isInlineRunContainer });
   const issue = currentMarkup === roundTripMarkup
