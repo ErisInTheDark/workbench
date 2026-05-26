@@ -678,7 +678,7 @@ function WorkbenchThreadClient(
       model: thread.model ?? currentThread.model,
       name: thread.name ?? currentThread.name,
       reasoningEffort: thread.reasoningEffort ?? currentThread.reasoningEffort,
-      serviceTier: thread.serviceTier,
+      serviceTier: thread.serviceTier ?? currentThread.serviceTier,
     };
   }
 
@@ -816,12 +816,14 @@ function WorkbenchThreadClient(
   function setCurrentThread(
     thread: ThreadPayload | null,
     {
+      preserveStableServiceTier = true,
       pruneStreamingDuplicates = true,
     }: {
+      preserveStableServiceTier?: boolean;
       pruneStreamingDuplicates?: boolean;
     } = {},
   ) {
-    const stableThread = mergeStableThreadMetadata(thread);
+    const stableThread = preserveStableServiceTier ? mergeStableThreadMetadata(thread) : thread;
     const nextThread = pruneStreamingDuplicates
       ? pruneThreadStreamingDuplicates(applyOptimisticUserMessageOverlay(applyPersistedQuestionnaireHistory(stableThread)))
       : applyOptimisticUserMessageOverlay(applyPersistedQuestionnaireHistory(stableThread));
@@ -857,6 +859,7 @@ function WorkbenchThreadClient(
   function updateCurrentThread(
     updater: (thread: ThreadPayload) => ThreadPayload | null,
     options: {
+      preserveStableServiceTier?: boolean;
       pruneStreamingDuplicates?: boolean;
     } = {},
   ) {
@@ -2969,7 +2972,7 @@ function WorkbenchThreadClient(
     updateCurrentThread((thread) => ({
       ...thread,
       serviceTier: nextServiceTier,
-    }));
+    }), { preserveStableServiceTier: false });
   }
 
   function setDraftThreadHarness(harness: WorkbenchHarness) {

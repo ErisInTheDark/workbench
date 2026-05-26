@@ -120,7 +120,13 @@ function mergeSubthreadTurnSnapshots (
     };
   });
 
-  return changed ? { ...incomingThread, turns } : incomingThread;
+  const serviceTier = incomingThread.serviceTier ?? existingThread.serviceTier;
+
+  if (changed || serviceTier !== incomingThread.serviceTier) {
+    return { ...incomingThread, serviceTier, turns };
+  }
+
+  return incomingThread;
 }
 
 function hasExpandedSelectionWithin (root: HTMLElement | null) {
