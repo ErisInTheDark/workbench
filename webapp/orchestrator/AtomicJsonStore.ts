@@ -1,12 +1,13 @@
 /*
  * Exports:
- * - AtomicJsonStore: queue atomic JSON file mutations through temp-file rename writes. Keywords: orchestrator, disk, json, atomic writes.
+ * - AtomicJsonStore: queue atomic JSON file mutations through temp-file rename writes and bounded journal compaction. Keywords: orchestrator, disk, json, atomic writes.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 const STALE_TEMP_FILE_MS = 60 * 60 * 1000;
+const MAX_IN_MEMORY_JSON_LINES_COMPACT_BYTES = 8 * 1024 * 1024;
 
 export default class AtomicJsonStore {
   private readonly queues = new Map<string, Promise<void>>();
@@ -57,6 +58,17 @@ export default class AtomicJsonStore {
 
   async compactJsonLines<TValue extends { id?: unknown; receivedAt?: unknown }>(filePath: string) {
     await this.enqueue(filePath, async () => {
+      const stats = await fs.stat(filePath).catch((error) => {
+        if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+          return null;
+        }
+
+        throw error;
+      });
+      if (stats && stats.size > MAX_IN_MEMORY_JSON_LINES_COMPACT_BYTES) {
+        return;
+      }
+
       const events = await this.readJsonLines<TValue>(filePath);
       if (!events.length) {
         const recoveringFilePath = this.recoveringJsonLinesPath(filePath);

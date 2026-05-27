@@ -9,10 +9,12 @@ import type AtomicJsonStore from "../AtomicJsonStore";
 import { CODEX_TRANSCRIPT_SCHEMA_VERSION } from "../codex-transcript-version";
 import migrateV0 from "./v0";
 import migrateV1 from "./v1";
+import migrateV2 from "./v2";
 
 const MIGRATIONS = [
   migrateV0,
   migrateV1,
+  migrateV2,
 ] as const;
 
 type MigrationState = {

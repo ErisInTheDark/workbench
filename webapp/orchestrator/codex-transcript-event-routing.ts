@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - shouldRouteRawResponseToRequestJournal: keep full thread responses out of per-turn journals. Keywords: codex, transcript, journal routing.
+ * - shouldRouteRawResponseToRequestJournal: route full thread session responses to bounded request journals instead of per-turn journals. Keywords: codex, transcript, journal routing.
  * - shouldPersistRawNotificationToJournal: skip high-volume streaming notifications that compact sidecars already capture. Keywords: codex, transcript, storage, delta.
  */
 export function shouldRouteRawResponseToRequestJournal(method: string | null) {

@@ -42,14 +42,17 @@ import type {
   CodexTranscriptRequestFile,
   CodexTranscriptThreadFile,
   CodexTranscriptTurnFile,
+  SerializableJson,
 } from "./codex-transcript-types";
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import { runCodexTranscriptMigrations } from "./codex-transcript-migrations";
 import { CODEX_TRANSCRIPT_SCHEMA_VERSION } from "./codex-transcript-version";
+import { log } from "./process-helpers";
 
 const PRUNE_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
 const PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
-const SUPPORTED_CODEX_TRANSCRIPT_SCHEMA_VERSIONS = new Set([1, CODEX_TRANSCRIPT_SCHEMA_VERSION]);
+const COMPACT_THREAD_RESPONSE_JOURNAL_LOG_INTERVAL_MS = 30_000;
+const SUPPORTED_CODEX_TRANSCRIPT_SCHEMA_VERSIONS = new Set([1, 2, CODEX_TRANSCRIPT_SCHEMA_VERSION]);
 
 function now() {
   return Date.now();
@@ -70,6 +73,71 @@ function createRawEvent(
     requestId,
     source,
   } satisfies CodexTranscriptRawEvent;
+}
+
+function createRawEventWithSerializablePayload(
+  source: CodexTranscriptRawEvent["source"],
+  payload: SerializableJson,
+  method: string | null,
+  requestId: number | string | null,
+) {
+  const receivedAt = now();
+  return {
+    id: `${receivedAt}:${Math.random().toString(36).slice(2)}`,
+    method,
+    payload,
+    receivedAt,
+    requestId,
+    source,
+  } satisfies CodexTranscriptRawEvent;
+}
+
+function countThreadItems(thread: Thread) {
+  return thread.turns.reduce((total, turn) => total + turn.items.length, 0);
+}
+
+function summarizeThreadForJournal(thread: Thread): SerializableJson {
+  return {
+    agentNickname: thread.agentNickname,
+    agentRole: thread.agentRole,
+    cliVersion: thread.cliVersion,
+    createdAt: thread.createdAt,
+    cwd: toSerializableJson(thread.cwd),
+    ephemeral: thread.ephemeral,
+    forkedFromId: thread.forkedFromId,
+    id: thread.id,
+    itemCount: countThreadItems(thread),
+    modelProvider: thread.modelProvider,
+    name: thread.name,
+    path: thread.path,
+    preview: thread.preview,
+    sessionId: thread.sessionId,
+    source: toSerializableJson(thread.source),
+    status: thread.status,
+    threadSource: toSerializableJson(thread.threadSource),
+    turnCount: thread.turns.length,
+    updatedAt: thread.updatedAt,
+  };
+}
+
+function summarizeThreadResponsePayloadForJournal(payload: unknown, thread: Thread): SerializableJson {
+  const record = asRecord(payload);
+  const result = asRecord(record?.result);
+  const responseId = record?.id;
+  return {
+    id: typeof responseId === "number" || typeof responseId === "string" ? responseId : null,
+    result: {
+      model: toSerializableJson(result?.model),
+      reasoningEffort: toSerializableJson(result?.reasoningEffort),
+      serviceTier: toSerializableJson(result?.serviceTier),
+      thread: summarizeThreadForJournal(thread),
+    },
+    workbenchTranscript: {
+      compactedPayload: true,
+      omitted: "result.thread.turns",
+      reason: "full-thread-session-response",
+    },
+  };
 }
 
 function sortQuestionnaireEntries(entries: WorkbenchQuestionnaireHistoryEntry[]) {
@@ -437,6 +505,8 @@ function isTurnTerminalEvent(event: CodexTranscriptRawEvent) {
 
 export default class CodexTranscriptStore {
   private readonly getProtectedThreadIds: () => Iterable<string>;
+  private compactedThreadResponseJournalCount = 0;
+  private compactedThreadResponseJournalLastLogAt = 0;
   private lastPrunedAt = 0;
   private readonly json = new AtomicJsonStore();
   private readonly pruneTimer: NodeJS.Timeout;
@@ -684,23 +754,30 @@ export default class CodexTranscriptStore {
   ) {
     const method = asString(asRecord(payload)?.method) ?? fallbackMethod;
     const requestId = asRecord(payload)?.id;
-    const event = createRawEvent(source, payload, method, typeof requestId === "number" || typeof requestId === "string" ? requestId : null);
+    const normalizedRequestId = typeof requestId === "number" || typeof requestId === "string" ? requestId : null;
     const thread = extractThread(payload);
     if (thread) {
       await this.recordThreadSnapshot(thread);
       if (shouldRouteRawResponseToRequestJournal(method)) {
-        const requestKey = typeof requestId === "number" || typeof requestId === "string" ? String(requestId) : null;
+        const requestKey = normalizedRequestId !== null ? String(normalizedRequestId) : null;
         if (requestKey) {
           await this.updateRequestFile(thread.id, requestKey, null, (file) => ({
             ...file,
             lastTouchedAt: now(),
           }));
-          await this.appendRequestEvent(thread.id, requestKey, event);
+          await this.appendRequestEvent(thread.id, requestKey, createRawEventWithSerializablePayload(
+            source,
+            summarizeThreadResponsePayloadForJournal(payload, thread),
+            method,
+            normalizedRequestId,
+          ));
+          this.rememberCompactedThreadResponseJournal(method, thread);
         }
       }
       return;
     }
 
+    const event = createRawEvent(source, payload, method, normalizedRequestId);
     const originalParams = asRecord(originalRequest?.params);
     const threadId = extractThreadId(payload) ?? asString(originalParams?.threadId);
     if (!threadId) {
@@ -752,6 +829,24 @@ export default class CodexTranscriptStore {
   private async recordThreadSnapshot(thread: Thread) {
     await this.touchThread(thread.id, thread);
     await Promise.all(thread.turns.map((turn) => this.recordThreadSnapshotTurn(thread.id, turn)));
+  }
+
+  private rememberCompactedThreadResponseJournal(method: string | null, thread: Thread) {
+    this.compactedThreadResponseJournalCount += 1;
+    const timestamp = now();
+    if (timestamp - this.compactedThreadResponseJournalLastLogAt < COMPACT_THREAD_RESPONSE_JOURNAL_LOG_INTERVAL_MS) {
+      return;
+    }
+
+    this.compactedThreadResponseJournalLastLogAt = timestamp;
+    log("codex-transcript-journal", [
+      "compactedFullThreadResponse=true",
+      `count=${this.compactedThreadResponseJournalCount}`,
+      `method=${method ?? "unknown"}`,
+      `threadId=${thread.id}`,
+      `turnCount=${thread.turns.length}`,
+      `itemCount=${countThreadItems(thread)}`,
+    ].join(" "));
   }
 
   private async recordThreadSnapshotTurn(threadId: string, turn: Turn) {
