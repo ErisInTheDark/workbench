@@ -372,21 +372,21 @@ export default function ThreadComposer ({
     ? "Answer the question card before sending."
     : isAttaching
       ? "Attaching pasted image..."
-    : isCopilotAuthRequired
-      ? "Open a terminal, run copilot, then use /login to authenticate Copilot CLI."
-      : isThreadStateBroken
-        ? "Thread state is out of sync. Sending is disabled here."
-        : isApprovalBlocked
-          ? "Current turn is waiting on approval. Sending adds guidance to that in-progress turn."
-          : isActiveThread
-            ? isMobileTextInput
-              ? "Message the active turn. Use the send button when ready."
-              : "Message the active turn. Press Enter to send and Shift+Enter for a new line."
-            : thread.isDraft
-              ? ""
-              : isMobileTextInput
-                ? "Use the send button when ready."
-                : "Press Enter to send and Shift+Enter for a new line.";
+      : isCopilotAuthRequired
+        ? "Open a terminal, run copilot, then use /login to authenticate Copilot CLI."
+        : isThreadStateBroken
+          ? "Thread state is out of sync. Sending is disabled here."
+          : isApprovalBlocked
+            ? ""
+            : isActiveThread
+              ? isMobileTextInput
+                ? ""
+                : ""
+              : thread.isDraft
+                ? ""
+                : isMobileTextInput
+                  ? ""
+                  : "";
   const selectedModel = thread.model;
   const selectedModelOption = availableModels.find((model) => model.id === selectedModel) ?? null;
   const defaultModelOption = availableModels.find((model) => model.isDefault) ?? null;
@@ -774,271 +774,271 @@ export default function ThreadComposer ({
 
   return (
     <>
-    <form className="mt-6 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4" onSubmit={handleSubmit}>
-      <div className="rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-3">
-        {showQuestionnairePanel && pendingUserInputRequest ? (
-          <ThreadUserInputRequest
-            actions={stopButton}
-            draft={threadQuestionnaireDraft}
-            highlightSources={highlightSources}
-            leadingActions={questionnaireToggleButton}
-            onDraftChange={handleQuestionnaireDraftChange}
-            onDraftClear={handleQuestionnaireDraftClear}
-            request={pendingUserInputRequest.request}
-            mode="live"
-            onSubmit={async (response) => {
-              await onSubmitUserInputRequest(
-                thread.id,
-                response,
-                buildPendingUserInputRequestSubmissionOptions(thread, pendingUserInputRequest),
-              );
-            }}
-          />
-        ) : null}
-        {!showQuestionnairePanel && attachments.length ? (
-          <div className="mb-3 flex flex-wrap gap-3 px-1">
-            {attachments.map((attachment, index) => (
-              <div key={attachment.id} className="relative h-24 w-24">
-                <ThreadLightboxImage
-                  alt={`Attached image ${index + 1}`}
-                  buttonClassName="h-full w-full rounded-[0.95rem]"
-                  imageClassName="h-full w-full object-cover"
-                  src={attachment.url}
-                />
-                <button
-                  type="button"
-                  aria-label={`Remove attached image ${index + 1}`}
-                  title="Remove attached image"
-                  className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text shadow-sm transition hover:bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                  onClick={() => {
-                    setAttachments((current) => current.filter((currentAttachment) => currentAttachment.id !== attachment.id));
-                  }}
-                >
-                  <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
-                    <path
-                      d="M4 4l8 8M12 4l-8 8"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeLinecap="round"
-                      strokeWidth="1.8"
-                    />
-                  </svg>
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : null}
-        <div className="block" hidden={showQuestionnairePanel}>
-          <span className="sr-only">Message thread</span>
-          <div hidden={isPickerOpen}>
-            <PlaintextEditable
-              id={`thread-composer:${thread.id}`}
-              ariaLabel="Message thread"
-              className="thread-plaintext-editable min-h-[5.75rem] w-full border-0 bg-transparent px-1 py-1 text-[0.96em] leading-[1.65] text-text outline-none"
-              disabled={isInputDisabled}
-              placeholder={isThreadStateBroken
-                ? "New messages are disabled for this thread."
-                : isCopilotAuthRequired
-                  ? "Sign in to Copilot CLI to send messages."
-                  : isActiveThread
-                    ? "Message the current turn..."
-                    : thread.isDraft
-                      ? "Start a new thread..."
-                  : "Continue this thread..."}
-              highlights={composerHighlights}
-              mentionSources={highlightSources}
-              mentionSuggestionsPlacement="above"
-              value={value}
-              onChange={(nextValue) => {
-                setValue(nextValue);
-                if (error) {
-                  setError("");
-                }
+      <form className="mt-6 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4" onSubmit={handleSubmit}>
+        <div className="rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-3">
+          {showQuestionnairePanel && pendingUserInputRequest ? (
+            <ThreadUserInputRequest
+              actions={stopButton}
+              draft={threadQuestionnaireDraft}
+              highlightSources={highlightSources}
+              leadingActions={questionnaireToggleButton}
+              onDraftChange={handleQuestionnaireDraftChange}
+              onDraftClear={handleQuestionnaireDraftClear}
+              request={pendingUserInputRequest.request}
+              mode="live"
+              onSubmit={async (response) => {
+                await onSubmitUserInputRequest(
+                  thread.id,
+                  response,
+                  buildPendingUserInputRequestSubmissionOptions(thread, pendingUserInputRequest),
+                );
               }}
-              onCompositionStart={() => {
-                setIsComposing(true);
-              }}
-              onCompositionEnd={() => {
-                setIsComposing(false);
-              }}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
             />
+          ) : null}
+          {!showQuestionnairePanel && attachments.length ? (
+            <div className="mb-3 flex flex-wrap gap-3 px-1">
+              {attachments.map((attachment, index) => (
+                <div key={attachment.id} className="relative h-24 w-24">
+                  <ThreadLightboxImage
+                    alt={`Attached image ${index + 1}`}
+                    buttonClassName="h-full w-full rounded-[0.95rem]"
+                    imageClassName="h-full w-full object-cover"
+                    src={attachment.url}
+                  />
+                  <button
+                    type="button"
+                    aria-label={`Remove attached image ${index + 1}`}
+                    title="Remove attached image"
+                    className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text shadow-sm transition hover:bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+                    onClick={() => {
+                      setAttachments((current) => current.filter((currentAttachment) => currentAttachment.id !== attachment.id));
+                    }}
+                  >
+                    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
+                      <path
+                        d="M4 4l8 8M12 4l-8 8"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeWidth="1.8"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <div className="block" hidden={showQuestionnairePanel}>
+            <span className="sr-only">Message thread</span>
+            <div hidden={isPickerOpen}>
+              <PlaintextEditable
+                id={`thread-composer:${thread.id}`}
+                ariaLabel="Message thread"
+                className="thread-plaintext-editable min-h-[5.75rem] w-full border-0 bg-transparent px-1 py-1 text-[0.96em] leading-[1.65] text-text outline-none"
+                disabled={isInputDisabled}
+                placeholder={isThreadStateBroken
+                  ? "New messages are disabled for this thread."
+                  : isCopilotAuthRequired
+                    ? "Sign in to Copilot CLI to send messages."
+                    : isActiveThread
+                      ? "Message the current turn..."
+                      : thread.isDraft
+                        ? "Start a new thread..."
+                        : "Continue this thread..."}
+                highlights={composerHighlights}
+                mentionSources={highlightSources}
+                mentionSuggestionsPlacement="above"
+                value={value}
+                onChange={(nextValue) => {
+                  setValue(nextValue);
+                  if (error) {
+                    setError("");
+                  }
+                }}
+                onCompositionStart={() => {
+                  setIsComposing(true);
+                }}
+                onCompositionEnd={() => {
+                  setIsComposing(false);
+                }}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+              />
+            </div>
           </div>
-        </div>
-        {!showQuestionnairePanel && isModelPickerOpen ? (
-          <ThreadModelPicker
-            appliesOnNextTurnOnly={thread.harness === "codex" && isActiveThread}
-            deprioritizedModelIds={deprioritizedModelIds}
-            error={modelsError}
-            harness={thread.harness}
-            isLoading={isLoadingModels}
-            models={availableModels}
-            selectedModelId={selectedModel}
-            onClose={() => {
-              setActivePicker(null);
-            }}
-            onSelectModel={(model) => {
-              onThreadModelChange(thread.id, model.id);
-              if (!model.supportsFastMode && isFastModeEnabled) {
-                onThreadServiceTierChange(thread.id, null);
-              }
-              setModelsError("");
-              setActivePicker(null);
-            }}
-            onToggleModelPriority={(modelId) => {
-              setDeprioritizedModelIdsByHarness((current) => {
-                const currentIds = current[thread.harness] ?? [];
-                const nextIds = currentIds.includes(modelId)
-                  ? currentIds.filter((id) => id !== modelId)
-                  : [...currentIds, modelId];
+          {!showQuestionnairePanel && isModelPickerOpen ? (
+            <ThreadModelPicker
+              appliesOnNextTurnOnly={thread.harness === "codex" && isActiveThread}
+              deprioritizedModelIds={deprioritizedModelIds}
+              error={modelsError}
+              harness={thread.harness}
+              isLoading={isLoadingModels}
+              models={availableModels}
+              selectedModelId={selectedModel}
+              onClose={() => {
+                setActivePicker(null);
+              }}
+              onSelectModel={(model) => {
+                onThreadModelChange(thread.id, model.id);
+                if (!model.supportsFastMode && isFastModeEnabled) {
+                  onThreadServiceTierChange(thread.id, null);
+                }
+                setModelsError("");
+                setActivePicker(null);
+              }}
+              onToggleModelPriority={(modelId) => {
+                setDeprioritizedModelIdsByHarness((current) => {
+                  const currentIds = current[thread.harness] ?? [];
+                  const nextIds = currentIds.includes(modelId)
+                    ? currentIds.filter((id) => id !== modelId)
+                    : [...currentIds, modelId];
 
-                return {
-                  ...current,
-                  [thread.harness]: nextIds,
-                };
-              });
-            }}
-          />
-        ) : !showQuestionnairePanel && isAgentPickerOpen ? (
-          <ThreadAgentPicker
-            agents={availableAgents}
-            error={agentsError}
-            isLoading={isLoadingAgents}
-            selectedAgentPath={thread.agentPath}
-            onClose={() => {
-              setActivePicker(null);
-            }}
-            onSelectAgent={(agentPath) => {
-              onThreadAgentChange(thread.id, agentPath);
-              setActivePicker(null);
-            }}
-          />
-        ) : !showQuestionnairePanel ? (
-          <div className={joinClasses(
-            "mt-3 flex flex-wrap items-center gap-3",
-            helperText ? "justify-between" : "justify-end",
-          )}>
-            <div className="flex items-center gap-2">
-              {questionnaireToggleButton}
-              {helperText ? (
-                <p className={joinClasses(
-                  "m-0 text-[0.78em] leading-[1.6]",
-                  isThreadStateBroken ? "text-danger" : "text-muted",
-                )}>
-                  {helperText}
-                </p>
-              ) : null}
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                aria-label="Save message draft for later"
-                title="Save message draft for later"
-                disabled={isSaveDraftDisabled}
-                className={joinClasses(
-                  "inline-flex size-10 items-center justify-center rounded-full border transition",
-                  "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-muted hover:text-text",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
-                  isSaveDraftDisabled && "cursor-not-allowed opacity-45",
-                )}
-                onClick={saveCurrentComposerForLater}
-              >
-                <ArchiveTrayIcon />
-              </button>
-              <div className="inline-flex items-stretch overflow-hidden rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-[0.78em] font-medium text-text">
-                <button
-                  type="button"
-                  className="px-3 py-2 transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
-                  onClick={() => {
-                    setActivePicker("model");
-                  }}
-                >
-                  {modelButtonLabel}
-                </button>
-                {showsReasoningEffortControl ? (
-                  <>
-                    <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
-                    <button
-                      type="button"
-                      className="px-2.5 py-2 capitalize transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
-                      title="Left click to increase effort. Right click to decrease effort."
-                      onClick={() => {
-                        cycleReasoningEffort(1);
-                      }}
-                      onContextMenu={(event) => {
-                        event.preventDefault();
-                        cycleReasoningEffort(-1);
-                      }}
-                    >
-                      {currentReasoningEffort}
-                    </button>
-                  </>
+                  return {
+                    ...current,
+                    [thread.harness]: nextIds,
+                  };
+                });
+              }}
+            />
+          ) : !showQuestionnairePanel && isAgentPickerOpen ? (
+            <ThreadAgentPicker
+              agents={availableAgents}
+              error={agentsError}
+              isLoading={isLoadingAgents}
+              selectedAgentPath={thread.agentPath}
+              onClose={() => {
+                setActivePicker(null);
+              }}
+              onSelectAgent={(agentPath) => {
+                onThreadAgentChange(thread.id, agentPath);
+                setActivePicker(null);
+              }}
+            />
+          ) : !showQuestionnairePanel ? (
+            <div className={joinClasses(
+              "mt-3 flex flex-wrap items-center gap-3",
+              helperText ? "justify-between" : "justify-end",
+            )}>
+              <div className="flex items-center gap-2">
+                {questionnaireToggleButton}
+                {helperText ? (
+                  <p className={joinClasses(
+                    "m-0 text-[0.78em] leading-[1.6]",
+                    isThreadStateBroken ? "text-danger" : "text-muted",
+                  )}>
+                    {helperText}
+                  </p>
                 ) : null}
-                {showsFastModeControl ? (
-                  <>
-                    <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
-                    <button
-                      type="button"
-                      aria-label={isFastModeEnabled ? "Turn fast mode off" : "Turn fast mode on"}
-                      aria-pressed={isFastModeEnabled}
-                      className={joinClasses(
-                        "inline-flex items-center justify-center px-2.5 py-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft",
-                        isFastModeEnabled
-                          ? "text-text hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)]"
-                          : "text-muted opacity-40 hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:opacity-65",
-                      )}
-                      title={isFastModeEnabled ? "Fast mode is on" : "Fast mode is off"}
-                      onClick={() => {
-                        onThreadServiceTierChange(thread.id, isFastModeEnabled ? null : "fast");
-                      }}
-                    >
-                      <LightningBoltIcon />
-                    </button>
-                  </>
-                ) : null}
-                <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
-                <button
-                  type="button"
-                  className="px-3 py-2 transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
-                  onClick={() => {
-                    setActivePicker("agent");
-                  }}
-                >
-                  {agentButtonLabel}
-                </button>
               </div>
-              <button
-                type="submit"
-                disabled={(!trimmedValue && !attachments.length) || isSendDisabled}
-                className={joinClasses(
-                  "rounded-full px-4 py-2 text-[0.84em] font-medium transition",
-                  "bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] text-[var(--bg)]",
-                  "hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]",
-                  ((!trimmedValue && !attachments.length) || isSendDisabled) && "cursor-not-allowed opacity-45",
-                )}
-              >
-                {isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : "Send"}
-              </button>
-              {stopButton}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  aria-label="Save message draft for later"
+                  title="Save message draft for later"
+                  disabled={isSaveDraftDisabled}
+                  className={joinClasses(
+                    "inline-flex size-10 items-center justify-center rounded-full border transition",
+                    "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-muted hover:text-text",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
+                    isSaveDraftDisabled && "cursor-not-allowed opacity-45",
+                  )}
+                  onClick={saveCurrentComposerForLater}
+                >
+                  <ArchiveTrayIcon />
+                </button>
+                <div className="inline-flex items-stretch overflow-hidden rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-[0.78em] font-medium text-text">
+                  <button
+                    type="button"
+                    className="px-3 py-2 transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
+                    onClick={() => {
+                      setActivePicker("model");
+                    }}
+                  >
+                    {modelButtonLabel}
+                  </button>
+                  {showsReasoningEffortControl ? (
+                    <>
+                      <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
+                      <button
+                        type="button"
+                        className="px-2.5 py-2 capitalize transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
+                        title="Left click to increase effort. Right click to decrease effort."
+                        onClick={() => {
+                          cycleReasoningEffort(1);
+                        }}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          cycleReasoningEffort(-1);
+                        }}
+                      >
+                        {currentReasoningEffort}
+                      </button>
+                    </>
+                  ) : null}
+                  {showsFastModeControl ? (
+                    <>
+                      <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
+                      <button
+                        type="button"
+                        aria-label={isFastModeEnabled ? "Turn fast mode off" : "Turn fast mode on"}
+                        aria-pressed={isFastModeEnabled}
+                        className={joinClasses(
+                          "inline-flex items-center justify-center px-2.5 py-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft",
+                          isFastModeEnabled
+                            ? "text-text hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)]"
+                            : "text-muted opacity-40 hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:opacity-65",
+                        )}
+                        title={isFastModeEnabled ? "Fast mode is on" : "Fast mode is off"}
+                        onClick={() => {
+                          onThreadServiceTierChange(thread.id, isFastModeEnabled ? null : "fast");
+                        }}
+                      >
+                        <LightningBoltIcon />
+                      </button>
+                    </>
+                  ) : null}
+                  <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
+                  <button
+                    type="button"
+                    className="px-3 py-2 transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
+                    onClick={() => {
+                      setActivePicker("agent");
+                    }}
+                  >
+                    {agentButtonLabel}
+                  </button>
+                </div>
+                <button
+                  type="submit"
+                  disabled={(!trimmedValue && !attachments.length) || isSendDisabled}
+                  className={joinClasses(
+                    "rounded-full px-4 py-2 text-[0.84em] font-medium transition",
+                    "bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] text-[var(--bg)]",
+                    "hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]",
+                    ((!trimmedValue && !attachments.length) || isSendDisabled) && "cursor-not-allowed opacity-45",
+                  )}
+                >
+                  {isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : "Send"}
+                </button>
+                {stopButton}
+              </div>
             </div>
-          </div>
+          ) : null}
+        </div>
+        {error ? (
+          <p className="mt-2 mb-0 text-[0.84em] leading-[1.6] text-danger">{error}</p>
         ) : null}
-      </div>
-      {error ? (
-        <p className="mt-2 mb-0 text-[0.84em] leading-[1.6] text-danger">{error}</p>
-      ) : null}
-    </form>
-    {children}
-    <ThreadSavedDraftShelf
-      drafts={threadSavedComposerDrafts}
-      isExpanded={isSavedDraftShelfExpanded}
-      isRestoreDisabled={hasPendingUserInputRequest || isInputDisabled}
-      onDelete={onThreadSavedComposerDraftDelete}
-      onExpandChange={setIsSavedDraftShelfExpanded}
-      onRestore={restoreSavedDraft}
-      shelfRef={savedDraftShelfRef}
-    />
+      </form>
+      {children}
+      <ThreadSavedDraftShelf
+        drafts={threadSavedComposerDrafts}
+        isExpanded={isSavedDraftShelfExpanded}
+        isRestoreDisabled={hasPendingUserInputRequest || isInputDisabled}
+        onDelete={onThreadSavedComposerDraftDelete}
+        onExpandChange={setIsSavedDraftShelfExpanded}
+        onRestore={restoreSavedDraft}
+        shelfRef={savedDraftShelfRef}
+      />
     </>
   );
 }
