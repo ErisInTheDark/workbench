@@ -17,7 +17,7 @@ import {
   buildInlineMentionHighlights,
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
-import PlaintextEditable from "./PlaintextEditable";
+import PlaintextEditable, { isMobileTextInputEnvironment } from "./PlaintextEditable";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -195,6 +195,10 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
 
   const handleLastQuestionKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (isHistoryMode || isSubmitting || event.key !== "Enter" || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) {
+      return;
+    }
+
+    if (isMobileTextInputEnvironment()) {
       return;
     }
 

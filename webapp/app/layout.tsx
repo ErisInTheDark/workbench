@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
 import "./globals.css";
@@ -16,6 +16,11 @@ export const metadata: Metadata = {
     email: false,
     telephone: false,
   },
+};
+
+export const viewport: Viewport = {
+  initialScale: 1,
+  width: "device-width",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

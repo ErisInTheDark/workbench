@@ -1071,7 +1071,7 @@ export default function Workbench () {
   };
 
   return (
-    <div className="min-h-screen md:grid md:grid-cols-[minmax(16rem,21rem)_1fr] md:items-start">
+    <div className="min-h-screen overflow-x-hidden md:grid md:grid-cols-[minmax(16rem,21rem)_1fr] md:items-start">
       <WorkbenchTabIcon state={tabIconState} />
       <div
         className="mobile-workbench-track flex min-h-screen w-[200vw] transition-transform duration-200 ease-out md:contents md:w-auto md:transform-none"

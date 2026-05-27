@@ -616,7 +616,7 @@ function ThreadCollabAgentToolCallItem ({
       summary={`Collaboration: ${humanizeThreadLabel(item.tool)}`}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"
     >
-      <pre className="m-0 overflow-x-auto whitespace-pre-wrap break-words rounded-[0.9rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text">
+      <pre className="m-0 overflow-x-auto whitespace-pre rounded-[0.9rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text">
         {JSON.stringify(item, null, 2)}
       </pre>
     </ThreadDisclosure>
@@ -822,7 +822,7 @@ function ThreadFallbackItem ({ item }: { item: NonGroupedItem }) {
       summary={<ThreadSummaryText text={item.type} />}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"
     >
-      <pre className="m-0 overflow-x-auto whitespace-pre-wrap break-words rounded-[0.9rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text">
+      <pre className="m-0 overflow-x-auto whitespace-pre rounded-[0.9rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text">
         {JSON.stringify(item, null, 2)}
       </pre>
     </ThreadDisclosure>

@@ -58,12 +58,15 @@
   html,
   body {
     min-height: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
   }
 
   body {
     margin: 0;
     color: var(--text);
     font-family: var(--font-sans);
+    overflow-x: clip;
   }
   
   body::before {
@@ -458,6 +461,12 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     word-break: break-word;
+  }
+
+  @media (hover: none) and (pointer: coarse) {
+    .thread-plaintext-editable {
+      font-size: max(1rem, 1em);
+    }
   }
 
   .thread-plaintext-editable[data-empty="true"]::before {

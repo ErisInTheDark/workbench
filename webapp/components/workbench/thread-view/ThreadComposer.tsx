@@ -25,7 +25,7 @@ import {
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
 import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
-import PlaintextEditable from "./PlaintextEditable";
+import PlaintextEditable, { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./PlaintextEditable";
 import ThreadAgentPicker from "./ThreadAgentPicker";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 import ThreadModelPicker from "./ThreadModelPicker";
@@ -190,6 +190,7 @@ export default function ThreadComposer ({
   const isInputDisabled = isSending || isAttaching || isThreadStateBroken || isCopilotAuthRequired;
   const isSendDisabled = hasPendingUserInputRequest || isInputDisabled;
   const isStopDisabled = !isActiveThread || isStopping;
+  const isMobileTextInput = useMobileTextInputEnvironment();
   const helperText = hasPendingUserInputRequest
     ? "Answer the question card before sending."
     : isAttaching
@@ -201,10 +202,14 @@ export default function ThreadComposer ({
         : isApprovalBlocked
           ? "Current turn is waiting on approval. Sending adds guidance to that in-progress turn."
           : isActiveThread
-            ? "Message the active turn. Press Enter to send and Shift+Enter for a new line."
+            ? isMobileTextInput
+              ? "Message the active turn. Use the send button when ready."
+              : "Message the active turn. Press Enter to send and Shift+Enter for a new line."
             : thread.isDraft
               ? ""
-              : "Press Enter to send and Shift+Enter for a new line.";
+              : isMobileTextInput
+                ? "Use the send button when ready."
+                : "Press Enter to send and Shift+Enter for a new line.";
   const selectedModel = thread.model;
   const selectedModelOption = availableModels.find((model) => model.id === selectedModel) ?? null;
   const defaultModelOption = availableModels.find((model) => model.isDefault) ?? null;
@@ -428,6 +433,10 @@ export default function ThreadComposer ({
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Enter" || event.shiftKey || isComposing) {
+      return;
+    }
+
+    if (isMobileTextInputEnvironment()) {
       return;
     }
 

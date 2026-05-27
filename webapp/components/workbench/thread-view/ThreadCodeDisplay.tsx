@@ -71,7 +71,7 @@ function ThreadUnifiedDiff ({
       {diff.headers.length ? (
         <div className="px-0 py-2 font-mono text-[0.78em] leading-[1.65] text-muted">
           {diff.headers.map((line, index) => (
-            <div key={`header:${index}`} className="whitespace-pre-wrap break-words">
+            <div key={`header:${index}`} className="whitespace-pre">
               {line || " "}
             </div>
           ))}
@@ -80,7 +80,7 @@ function ThreadUnifiedDiff ({
       <div>
         {diff.hunks.map((hunk, hunkIndex) => (
           <div key={`hunk:${hunkIndex}`} className={hunkIndex ? "pt-3" : ""}>
-            <div className="ml-12 whitespace-pre-wrap break-words px-0 py-1 font-mono text-[0.78em] leading-[1.65] text-accent">
+            <div className="ml-12 whitespace-pre px-0 py-1 font-mono text-[0.78em] leading-[1.65] text-accent">
               {hunk.header}
             </div>
             <div>
@@ -108,7 +108,7 @@ function ThreadUnifiedDiffLine ({
 }) {
   if (line.type === "note") {
     return (
-      <div className="ml-12 whitespace-pre-wrap break-words px-4 py-1.5 font-mono text-[0.78em] leading-[1.65] text-muted italic">
+      <div className="ml-12 whitespace-pre px-4 py-1.5 font-mono text-[0.78em] leading-[1.65] text-muted italic">
         {line.text}
       </div>
     );
@@ -119,9 +119,9 @@ function ThreadUnifiedDiffLine ({
   return (
     <div
       className={`
-        ${EDGE_FADE_CLASS} grid px-12 font-mono tabular-nums text-[0.78em] leading-[1.65] ${lineStyle.rowClassName}
+        ${EDGE_FADE_CLASS} grid w-max min-w-full px-12 font-mono tabular-nums text-[0.78em] leading-[1.65] ${lineStyle.rowClassName}
       `}
-      style={{ gridTemplateColumns: `${lineNumberWidth + 4}ch ${lineNumberWidth + 4}ch 3rem minmax(0,1fr)` }}
+      style={{ gridTemplateColumns: `${lineNumberWidth + 4}ch ${lineNumberWidth + 4}ch 3rem max-content` }}
     >
       <span className={`px-3 py-1 text-right ${lineStyle.gutterTextClassName}`}>
         {line.oldLineNumber ?? ""}
@@ -132,7 +132,7 @@ function ThreadUnifiedDiffLine ({
       <span className={`px-3 py-1 text-center ${lineStyle.prefixClassName}`}>
         {lineStyle.prefix}
       </span>
-      <span className={`whitespace-pre-wrap break-words px-3 py-1 ${lineStyle.contentClassName}`}>
+      <span className={`whitespace-pre px-3 py-1 ${lineStyle.contentClassName}`}>
         {line.text || " "}
       </span>
     </div>
@@ -173,7 +173,7 @@ function ThreadPlainOutput ({ output }: { output: string }) {
   return (
     <pre
       className={`
-        ${EDGE_FADE_CLASS} m-0 overflow-x-auto whitespace-pre-wrap break-words bg-[color-mix(in_srgb,var(--muted)_5%,transparent)]
+        ${EDGE_FADE_CLASS} m-0 overflow-x-auto whitespace-pre bg-[color-mix(in_srgb,var(--muted)_5%,transparent)]
         px-12 py-3 font-mono text-[0.78em] leading-[1.6] text-text
       `}
     >
