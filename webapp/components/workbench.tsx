@@ -1314,11 +1314,11 @@ export default function Workbench () {
           </div>
         </aside>
 
-        <main ref={mainPaneRef} className="explorer-scrollbar flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-y-auto px-5 pb-5 md:h-auto md:min-h-screen md:w-auto md:overflow-visible md:px-6 md:pb-5">
+        <main ref={mainPaneRef} className="explorer-scrollbar flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden overflow-y-auto px-5 pb-5 md:h-auto md:min-h-screen md:w-auto md:overflow-visible md:px-6 md:pb-5">
           <header
             ref={shellHeaderRef}
             className={`
-              sticky top-0 z-10 transform-gpu py-3 transition-[translate,opacity] duration-200 ease-out will-change-translate motion-reduce:transition-none -mx-6 px-6
+              sticky top-0 z-10 transform-gpu py-3 transition-[translate,opacity] duration-200 ease-out will-change-translate motion-reduce:transition-none -mx-5 px-5 md:-mx-6 md:px-6
               md:translate-y-0 md:opacity-100
               ${isMobileShellHeaderVisible
                 ? "-translate-y-1 opacity-100"

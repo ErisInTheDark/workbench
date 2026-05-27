@@ -25,8 +25,8 @@ type ThreadCodeDisplayProps =
 
 const EDGE_FADE_CLASS = `
   relative
-  before:block before:absolute before:inset-0 before:w-20 before:bg-linear-to-r before:from-[var(--bg)] before:to-transparent
-  after:block after:absolute after:inset-0 after:left-auto after:w-20 after:bg-linear-to-l after:from-[var(--bg)] after:to-transparent
+  before:hidden before:absolute before:inset-0 before:w-20 before:bg-linear-to-r before:from-[var(--bg)] before:to-transparent md:before:block
+  after:hidden after:absolute after:inset-0 after:left-auto after:w-20 after:bg-linear-to-l after:from-[var(--bg)] after:to-transparent md:after:block
 `;
 
 export function ThreadCommandHeader ({ command }: { command: string }) {
@@ -36,7 +36,7 @@ export function ThreadCommandHeader ({ command }: { command: string }) {
     <button
       aria-expanded={isExpanded}
       className={`
-        ${EDGE_FADE_CLASS} block w-full cursor-pointer border-0 bg-[color-mix(in_srgb,var(--muted)_5%,transparent)] px-12 py-2
+        ${EDGE_FADE_CLASS} block w-full cursor-pointer border-0 bg-[color-mix(in_srgb,var(--muted)_5%,transparent)] px-4 py-2 md:px-12
         text-left font-mono text-[0.78em] leading-[1.6] text-text hover:bg-[color-mix(in_srgb,var(--text)_6%,transparent)]
         focus-visible:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] focus-visible:outline-none
       `}
@@ -80,7 +80,7 @@ function ThreadUnifiedDiff ({
       <div>
         {diff.hunks.map((hunk, hunkIndex) => (
           <div key={`hunk:${hunkIndex}`} className={hunkIndex ? "pt-3" : ""}>
-            <div className="ml-12 whitespace-pre px-0 py-1 font-mono text-[0.78em] leading-[1.65] text-accent">
+            <div className="ml-4 whitespace-pre px-0 py-1 font-mono text-[0.78em] leading-[1.65] text-accent md:ml-12">
               {hunk.header}
             </div>
             <div>
@@ -108,7 +108,7 @@ function ThreadUnifiedDiffLine ({
 }) {
   if (line.type === "note") {
     return (
-      <div className="ml-12 whitespace-pre px-4 py-1.5 font-mono text-[0.78em] leading-[1.65] text-muted italic">
+      <div className="ml-4 whitespace-pre px-4 py-1.5 font-mono text-[0.78em] leading-[1.65] text-muted italic md:ml-12">
         {line.text}
       </div>
     );
@@ -119,7 +119,7 @@ function ThreadUnifiedDiffLine ({
   return (
     <div
       className={`
-        ${EDGE_FADE_CLASS} grid w-max min-w-full px-12 font-mono tabular-nums text-[0.78em] leading-[1.65] ${lineStyle.rowClassName}
+        ${EDGE_FADE_CLASS} grid w-max min-w-full px-4 font-mono tabular-nums text-[0.78em] leading-[1.65] md:px-12 ${lineStyle.rowClassName}
       `}
       style={{ gridTemplateColumns: `${lineNumberWidth + 4}ch ${lineNumberWidth + 4}ch 3rem max-content` }}
     >
@@ -174,7 +174,7 @@ function ThreadPlainOutput ({ output }: { output: string }) {
     <pre
       className={`
         ${EDGE_FADE_CLASS} m-0 overflow-x-auto whitespace-pre bg-[color-mix(in_srgb,var(--muted)_5%,transparent)]
-        px-12 py-3 font-mono text-[0.78em] leading-[1.6] text-text
+        px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text md:px-12
       `}
     >
       {output}
@@ -184,7 +184,7 @@ function ThreadPlainOutput ({ output }: { output: string }) {
 
 export default function ThreadCodeDisplay (props: ThreadCodeDisplayProps) {
   return (
-    <div className="overflow-x-auto -ml-12 -mr-4">
+    <div className="max-w-full overflow-x-auto md:-ml-12 md:-mr-4">
       {props.header}
       {props.variant === "diff" ? (
         <ThreadUnifiedDiff diff={props.diff} />

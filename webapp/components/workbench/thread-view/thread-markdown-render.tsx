@@ -267,7 +267,7 @@ function renderThreadPlanBlock (block: Extract<ParsedBlock, { type: "plan" }>, o
       summary="Plan"
       summaryClassName="text-[0.92em] font-medium leading-[1.6]"
     >
-      <div className="relative before:absolute before:inset-0 before:-z-1 before:block before:-mx-8 before:bg-[linear-gradient(to_right,transparent,#8882_10%,#8882_90%,transparent)] before:content-[''] before:border-y before:border-[color-mix(in_srgb,var(--text)_10%,transparent)]">
+      <div className="relative before:absolute before:inset-0 before:-z-1 before:hidden before:-mx-8 before:bg-[linear-gradient(to_right,transparent,#8882_10%,#8882_90%,transparent)] before:content-[''] before:border-y before:border-[color-mix(in_srgb,var(--text)_10%,transparent)] md:before:block">
         <div className="px-4 py-8 mb-8">
           {content.length ? content : <p className={BLOCK_SPACING_CLASS}><br /></p>}
         </div>
@@ -327,7 +327,7 @@ function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, k
             </div>
           ) : null}
           <pre
-            className="overflow-x-auto whitespace-pre px-[0.95rem] py-[0.8rem]"
+            className="max-w-full overflow-x-auto whitespace-pre px-[0.95rem] py-[0.8rem]"
             data-language={block.language}
           >
             <code className="block w-max min-w-full rounded-none bg-transparent p-0 font-mono text-[0.94em]">{block.text}</code>

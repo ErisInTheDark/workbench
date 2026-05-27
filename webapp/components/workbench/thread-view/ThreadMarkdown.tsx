@@ -14,6 +14,8 @@ function joinClasses (...values: Array<string | undefined>) {
 }
 
 const THREAD_MARKDOWN_CLASS = [
+  "min-w-0",
+  "max-w-full",
   "leading-[1.72]",
   "[&:not(:first-child)]:mt-[0.2rem]",
 ].join(" ");

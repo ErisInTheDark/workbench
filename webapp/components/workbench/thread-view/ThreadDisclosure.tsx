@@ -39,7 +39,7 @@ export default function ThreadDisclosure ({
 
   return (
     <details
-      className={joinClasses("[&>summary::-webkit-details-marker]:hidden", className)}
+      className={joinClasses("min-w-0 max-w-full [&>summary::-webkit-details-marker]:hidden", className)}
       open={isControlled || initialOpen ? isOpen : undefined}
       onToggle={(event) => {
         if (!isControlled) {
@@ -51,7 +51,7 @@ export default function ThreadDisclosure ({
     >
       <summary
         className={joinClasses(
-          "flex items-center cursor-pointer list-none gap-2 text-muted transition-colors hover:text-text focus-visible:text-text focus-visible:outline-none",
+          "flex min-w-0 max-w-full items-center cursor-pointer list-none gap-2 text-muted transition-colors hover:text-text focus-visible:text-text focus-visible:outline-none",
           summaryClassName,
         )}
       >
@@ -64,7 +64,7 @@ export default function ThreadDisclosure ({
         />
         <span className="min-w-0 flex-1">{summary}</span>
       </summary>
-      <div className={contentClassName}>{children}</div>
+      <div className={joinClasses("min-w-0 max-w-full", contentClassName)}>{children}</div>
     </details>
   );
 }

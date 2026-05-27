@@ -738,7 +738,7 @@ export default memo(function ThreadView ({
   const mainThreadBadge = getTabBadge(thread.id, thread);
 
   return (
-    <div ref={threadViewRef} className="mx-auto w-full max-w-[56rem] pb-16" style={{ fontSize: `${fontSizeRem}rem` }}>
+    <div ref={threadViewRef} className="mx-auto w-full min-w-0 max-w-[56rem] overflow-x-hidden pb-16 md:overflow-x-visible" style={{ fontSize: `${fontSizeRem}rem` }}>
       {activeThread?.isDraft ? (
         <header className="pb-4">
           <h2 className="m-0 text-[1.55em] font-semibold leading-[1.1] tracking-tight text-text">
@@ -834,7 +834,7 @@ export default memo(function ThreadView ({
                     summary={summary}
                     summaryClassName="text-[0.92em] font-medium leading-[1.6]"
                   >
-                    <div className="flex relative h-[calc(22rem*0.9)] before:absolute before:inset-0 before:-z-1 before:block before:bg-[linear-gradient(to_right,transparent,#0008_10%,#0008_90%,transparent)] before:content-[''] before:border-y before:border-[color-mix(in_srgb,var(--text)_10%,transparent)]">
+                    <div className="flex relative h-[calc(22rem*0.9)] before:absolute before:inset-0 before:-z-1 before:hidden before:bg-[linear-gradient(to_right,transparent,#0008_10%,#0008_90%,transparent)] before:content-[''] before:border-y before:border-[color-mix(in_srgb,var(--text)_10%,transparent)] md:before:block">
                       <div className="explorer-scrollbar my-[calc(22rem*-0.1*0.5)] h-[22rem] scale-[0.9] overflow-y-auto py-2">
                         <ThreadThreadContent
                           onOpenFile={onOpenFile}
