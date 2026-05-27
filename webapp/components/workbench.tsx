@@ -213,6 +213,7 @@ export default function Workbench () {
   const [threadQuestionnaireDraftsByKey, setThreadQuestionnaireDraftsByKey] = useState<Record<string, WorkbenchQuestionnaireDraft | undefined>>({});
   const [threadSavedComposerDrafts, setThreadSavedComposerDrafts] = useState<WorkbenchThreadSavedComposerDraft[]>([]);
   const editorRef = useRef<HTMLDivElement>(null);
+  const mainPaneRef = useRef<HTMLElement>(null);
   const customCaretRef = useRef<HTMLDivElement>(null);
   const diffGutterRef = useRef<HTMLDivElement>(null);
   const floatingToolbarRef = useRef<HTMLDivElement>(null);
@@ -895,6 +896,27 @@ export default function Workbench () {
       ? "active"
       : "default";
   const shouldShowShellHeader = !showEmptyState && (!isMobile || mobilePane === "editor");
+  const mainPaneScrollKey = showThreadView
+    ? `thread:${activeThreadId}`
+    : showFileView
+      ? `file:${activeFilePath}`
+      : "";
+
+  useEffect(() => {
+    if (!isMobile || mobilePane !== "editor" || !mainPaneScrollKey) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      if (mainPaneRef.current) {
+        mainPaneRef.current.scrollTop = 0;
+      }
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [isMobile, mainPaneScrollKey, mobilePane]);
 
   useEffect(() => {
     const header = shellHeaderRef.current;
@@ -940,9 +962,15 @@ export default function Workbench () {
       setIsMobileShellHeaderVisible((current) => (current === nextVisible ? current : nextVisible));
     };
 
+    const getCurrentScrollY = () => (
+      isMobile
+        ? mainPaneRef.current?.scrollTop ?? 0
+        : Math.max(window.scrollY, 0)
+    );
+
     const resetHeaderVisibility = () => {
       cancelPendingFrame();
-      mobileShellHeaderScrollYRef.current = Math.max(window.scrollY, 0);
+      mobileShellHeaderScrollYRef.current = getCurrentScrollY();
       mobileShellHeaderDirectionRef.current = null;
       mobileShellHeaderDirectionTravelRef.current = 0;
       applyHeaderVisibility(true);
@@ -958,7 +986,7 @@ export default function Workbench () {
     const updateHeaderVisibility = () => {
       mobileShellHeaderAnimationFrameRef.current = null;
 
-      const nextScrollY = Math.max(window.scrollY, 0);
+      const nextScrollY = getCurrentScrollY();
       const delta = nextScrollY - mobileShellHeaderScrollYRef.current;
       mobileShellHeaderScrollYRef.current = nextScrollY;
 
@@ -1010,11 +1038,12 @@ export default function Workbench () {
     };
 
     const viewport = window.visualViewport;
-    window.addEventListener("scroll", handleScroll, { passive: true });
+    const scrollTarget = isMobile ? mainPaneRef.current : window;
+    scrollTarget?.addEventListener("scroll", handleScroll, { passive: true });
     viewport?.addEventListener("scroll", handleScroll, { passive: true });
 
     return () => {
-      window.removeEventListener("scroll", handleScroll);
+      scrollTarget?.removeEventListener("scroll", handleScroll);
       viewport?.removeEventListener("scroll", handleScroll);
       cancelPendingFrame();
     };
@@ -1105,13 +1134,13 @@ export default function Workbench () {
   };
 
   return (
-    <div className="min-h-screen md:grid md:grid-cols-[minmax(16rem,21rem)_1fr] md:items-start">
+    <div className="h-dvh overflow-hidden md:grid md:min-h-screen md:h-auto md:overflow-visible md:grid-cols-[minmax(16rem,21rem)_1fr] md:items-start">
       <WorkbenchTabIcon state={tabIconState} />
       <div
-        className="mobile-workbench-track flex min-h-screen w-[200vw] transition-transform duration-200 ease-out md:contents md:w-auto md:transform-none"
+        className="mobile-workbench-track flex h-dvh w-[200vw] overflow-hidden transition-transform duration-200 ease-out md:contents md:h-auto md:w-auto md:overflow-visible md:transform-none"
         style={mobileTrackStyle}
       >
-        <aside className="flex min-h-screen w-screen min-w-0 shrink-0 flex-col overflow-hidden px-5 pb-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:px-6 md:py-5">
+        <aside className="flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-hidden px-5 pb-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:px-6 md:py-5">
           <div className="-ml-3 min-h-0 flex-1 overflow-hidden text-[0.95rem] leading-6">
             <div
               className="flex h-full w-[200%] flex-row-reverse transition-transform duration-200 ease-out"
@@ -1285,7 +1314,7 @@ export default function Workbench () {
           </div>
         </aside>
 
-        <main className="flex min-h-screen w-screen min-w-0 shrink-0 flex-col px-5 pb-5 md:w-auto md:px-6 md:pb-5">
+        <main ref={mainPaneRef} className="explorer-scrollbar flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-y-auto px-5 pb-5 md:h-auto md:min-h-screen md:w-auto md:overflow-visible md:px-6 md:pb-5">
           <header
             ref={shellHeaderRef}
             className={`
