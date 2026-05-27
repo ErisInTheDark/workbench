@@ -4,21 +4,26 @@
  * - THREAD_COMPOSER_DRAFT_RETENTION_MS: one-month browser retention for unsent thread composer drafts. Keywords: thread, composer, draft, IndexedDB, retention.
  * - createThreadComposerDraftRecordKey: create the project and thread scoped draft key. Keywords: thread, draft, key, project.
  * - createThreadQuestionnaireDraftRecordKey: create the project, thread, and request scoped questionnaire draft key. Keywords: questionnaire, draft, key.
+ * - createThreadSavedComposerDraftRecordKey: create the project scoped saved draft key. Keywords: thread, saved draft, key, project.
  * - deletePersistedThreadComposerDraft: remove one persisted composer draft after send or explicit clearing. Keywords: thread, composer, draft, delete.
  * - deletePersistedThreadQuestionnaireDraft: remove one persisted questionnaire draft after submit or explicit clearing. Keywords: thread, questionnaire, draft, delete.
+ * - deletePersistedThreadSavedComposerDraft: remove one project saved composer draft. Keywords: thread, saved draft, delete.
  * - getPersistedThreadComposerDraftRecords: read project-scoped composer drafts and prune expired records. Keywords: thread, composer, draft, hydrate, prune.
  * - getPersistedThreadQuestionnaireDraftRecords: read project-scoped questionnaire drafts and prune expired records. Keywords: thread, questionnaire, draft, hydrate, prune.
+ * - getPersistedThreadSavedComposerDraftRecords: read project-scoped saved composer drafts. Keywords: thread, saved draft, hydrate.
  * - putPersistedThreadComposerDraft: upsert one composer draft with an updated timestamp. Keywords: thread, composer, draft, persist.
  * - putPersistedThreadQuestionnaireDraft: upsert one questionnaire draft with an updated timestamp. Keywords: thread, questionnaire, draft, persist.
+ * - putPersistedThreadSavedComposerDraft: upsert one project saved composer draft. Keywords: thread, saved draft, persist.
  */
 
-import type { WorkbenchQuestionnaireDraft, WorkbenchThreadComposerDraft } from "../../types";
+import type { WorkbenchQuestionnaireDraft, WorkbenchThreadComposerDraft, WorkbenchThreadSavedComposerDraft } from "../../types";
 
 const DRAFT_DATABASE_NAME = "workbench";
-export const DRAFT_DATABASE_VERSION = 4;
+export const DRAFT_DATABASE_VERSION = 5;
 const FILE_DRAFT_STORE_NAME = "drafts";
 const THREAD_COMPOSER_DRAFT_STORE_NAME = "threadComposerDrafts";
 const THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME = "threadQuestionnaireDrafts";
+const THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME = "threadSavedComposerDrafts";
 export const THREAD_COMPOSER_DRAFT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export interface PersistedThreadComposerDraftRecord extends WorkbenchThreadComposerDraft {
@@ -32,6 +37,11 @@ export interface PersistedThreadQuestionnaireDraftRecord extends WorkbenchQuesti
   projectId: string;
   requestKey: string;
   threadId: string;
+}
+
+export interface PersistedThreadSavedComposerDraftRecord extends WorkbenchThreadSavedComposerDraft {
+  key: string;
+  projectId: string;
 }
 
 function wrapIndexedDbRequest<T>(request: IDBRequest<T>) {
@@ -84,6 +94,10 @@ function openDraftDatabase() {
       if (!database.objectStoreNames.contains(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME)) {
         database.createObjectStore(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME, { keyPath: "key" });
       }
+
+      if (!database.objectStoreNames.contains(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME)) {
+        database.createObjectStore(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME, { keyPath: "key" });
+      }
     };
 
     request.onsuccess = () => {
@@ -117,6 +131,10 @@ export function createThreadComposerDraftRecordKey(projectId: string, threadId: 
 
 export function createThreadQuestionnaireDraftRecordKey(projectId: string, threadId: string, requestKey: string) {
   return `${projectId}/@/thread/${threadId}/questionnaire/${requestKey}`;
+}
+
+export function createThreadSavedComposerDraftRecordKey(projectId: string, draftId: string) {
+  return `${projectId}/@/saved-thread-draft/${draftId}`;
 }
 
 function normalizePersistedRecord(record: unknown): PersistedThreadComposerDraftRecord | null {
@@ -153,6 +171,46 @@ function normalizePersistedRecord(record: unknown): PersistedThreadComposerDraft
     projectId: candidate.projectId,
     text: candidate.text,
     threadId: candidate.threadId,
+    updatedAt: Math.trunc(candidate.updatedAt),
+  };
+}
+
+function normalizeSavedComposerRecord(record: unknown): PersistedThreadSavedComposerDraftRecord | null {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return null;
+  }
+
+  const candidate = record as Partial<PersistedThreadSavedComposerDraftRecord>;
+  if (
+    typeof candidate.key !== "string"
+    || typeof candidate.projectId !== "string"
+    || typeof candidate.id !== "string"
+    || typeof candidate.text !== "string"
+    || !Array.isArray(candidate.attachments)
+    || !Number.isFinite(candidate.createdAt)
+    || !Number.isFinite(candidate.updatedAt)
+  ) {
+    return null;
+  }
+
+  const attachments = candidate.attachments.flatMap((attachment) => {
+    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
+      return [];
+    }
+
+    const attachmentCandidate = attachment as { id?: unknown; url?: unknown };
+    return typeof attachmentCandidate.id === "string" && typeof attachmentCandidate.url === "string"
+      ? [{ id: attachmentCandidate.id, url: attachmentCandidate.url }]
+      : [];
+  });
+
+  return {
+    attachments,
+    createdAt: Math.trunc(candidate.createdAt),
+    id: candidate.id,
+    key: candidate.key,
+    projectId: candidate.projectId,
+    text: candidate.text,
     updatedAt: Math.trunc(candidate.updatedAt),
   };
 }
@@ -280,6 +338,26 @@ export async function getPersistedThreadQuestionnaireDraftRecords(projectId: str
   return records.filter((record) => record.updatedAt >= expirationCutoff);
 }
 
+export async function getPersistedThreadSavedComposerDraftRecords(projectId: string) {
+  const database = await draftDatabasePromise;
+  if (!database || !hasObjectStore(database, THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME)) {
+    return [] as PersistedThreadSavedComposerDraftRecord[];
+  }
+
+  const transaction = database.transaction(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME, "readonly");
+  const store = transaction.objectStore(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME);
+  const request = store.getAll();
+  const rawRecords = await wrapIndexedDbRequest(request as IDBRequest<unknown[]>);
+  await waitForTransaction(transaction);
+
+  return rawRecords
+    .flatMap((record) => {
+      const normalized = normalizeSavedComposerRecord(record);
+      return normalized && normalized.projectId === projectId ? [normalized] : [];
+    })
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+}
+
 export function putPersistedThreadComposerDraft(projectId: string, threadId: string, draft: WorkbenchThreadComposerDraft) {
   return enqueueDraftPersistence(async () => {
     const database = await draftDatabasePromise;
@@ -301,6 +379,26 @@ export function putPersistedThreadComposerDraft(projectId: string, threadId: str
   });
 }
 
+export function putPersistedThreadSavedComposerDraft(projectId: string, draft: WorkbenchThreadSavedComposerDraft) {
+  return enqueueDraftPersistence(async () => {
+    const database = await draftDatabasePromise;
+    if (!database || !hasObjectStore(database, THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME)) {
+      return;
+    }
+
+    const record: PersistedThreadSavedComposerDraftRecord = {
+      ...draft,
+      key: createThreadSavedComposerDraftRecordKey(projectId, draft.id),
+      projectId,
+      updatedAt: Date.now(),
+    };
+    const transaction = database.transaction(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME);
+    await wrapIndexedDbRequest(store.put(record));
+    await waitForTransaction(transaction);
+  });
+}
+
 export function deletePersistedThreadComposerDraft(projectId: string, threadId: string) {
   return enqueueDraftPersistence(async () => {
     const database = await draftDatabasePromise;
@@ -311,6 +409,20 @@ export function deletePersistedThreadComposerDraft(projectId: string, threadId: 
     const transaction = database.transaction(THREAD_COMPOSER_DRAFT_STORE_NAME, "readwrite");
     const store = transaction.objectStore(THREAD_COMPOSER_DRAFT_STORE_NAME);
     await wrapIndexedDbRequest(store.delete(createThreadComposerDraftRecordKey(projectId, threadId)));
+    await waitForTransaction(transaction);
+  });
+}
+
+export function deletePersistedThreadSavedComposerDraft(projectId: string, draftId: string) {
+  return enqueueDraftPersistence(async () => {
+    const database = await draftDatabasePromise;
+    if (!database || !hasObjectStore(database, THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME)) {
+      return;
+    }
+
+    const transaction = database.transaction(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME);
+    await wrapIndexedDbRequest(store.delete(createThreadSavedComposerDraftRecordKey(projectId, draftId)));
     await waitForTransaction(transaction);
   });
 }

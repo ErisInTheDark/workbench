@@ -21,6 +21,7 @@ import type {
   WorkbenchSkillSummary,
   WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadComposerDraft,
+  WorkbenchThreadSavedComposerDraft,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
 import { flattenProjectTreeFileCandidates } from "../../../lib/workbench/project/tree-utils";
@@ -286,6 +287,8 @@ export default memo(function ThreadView ({
   onThreadComposerDraftClear,
   onThreadQuestionnaireDraftChange,
   onThreadQuestionnaireDraftClear,
+  onThreadSavedComposerDraftDelete,
+  onThreadSavedComposerDraftSave,
   onThreadAgentChange,
   onThreadReasoningEffortChange,
   onThreadServiceTierChange,
@@ -296,6 +299,7 @@ export default memo(function ThreadView ({
   rateLimits,
   threadComposerDraftsByThreadId,
   threadQuestionnaireDraftsByKey,
+  threadSavedComposerDrafts,
   thread,
 }: {
   fontSizeRem: number;
@@ -320,6 +324,8 @@ export default memo(function ThreadView ({
   onThreadComposerDraftClear: (threadId: string) => void;
   onThreadQuestionnaireDraftChange: (threadId: string, requestKey: string, draft: WorkbenchQuestionnaireDraft) => void;
   onThreadQuestionnaireDraftClear: (threadId: string, requestKey: string) => void;
+  onThreadSavedComposerDraftDelete: (draftId: string) => void;
+  onThreadSavedComposerDraftSave: (draft: WorkbenchThreadSavedComposerDraft) => void;
   onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
   onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
   onThreadServiceTierChange: (threadId: string, serviceTier: string | null) => void;
@@ -330,6 +336,7 @@ export default memo(function ThreadView ({
   rateLimits: RateLimitSnapshot | null;
   threadComposerDraftsByThreadId: Record<string, WorkbenchThreadComposerDraft | undefined>;
   threadQuestionnaireDraftsByKey: Record<string, WorkbenchQuestionnaireDraft | undefined>;
+  threadSavedComposerDrafts: WorkbenchThreadSavedComposerDraft[];
   thread: ThreadPayload;
 }) {
   const [activeThreadId, setActiveThreadId] = useState(thread.id);
@@ -911,6 +918,8 @@ export default memo(function ThreadView ({
             onThreadComposerDraftClear={onThreadComposerDraftClear}
             onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
             onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
+            onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
+            onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
             onSubmitUserInputRequest={onSubmitUserInputRequest}
             onThreadAgentChange={handleThreadAgentChange}
             onThreadReasoningEffortChange={handleThreadReasoningEffortChange}
@@ -923,16 +932,18 @@ export default memo(function ThreadView ({
             threadQuestionnaireDraft={activePendingUserInputRequest
               ? threadQuestionnaireDraftsByKey[`${activeThread.id}:${activePendingUserInputRequest.requestKey}`] ?? null
               : null}
+            threadSavedComposerDrafts={threadSavedComposerDrafts}
             thread={activeThread}
-          />
-          <ThreadRateLimits
-            canToggleHarness={activeThread.isDraft}
-            harness={activeThread.harness}
-            onHarnessToggle={() => {
-              onDraftHarnessChange(activeThread.harness === "codex" ? "copilot" : "codex");
-            }}
-            rateLimits={rateLimits}
-          />
+          >
+            <ThreadRateLimits
+              canToggleHarness={activeThread.isDraft}
+              harness={activeThread.harness}
+              onHarnessToggle={() => {
+                onDraftHarnessChange(activeThread.harness === "codex" ? "copilot" : "codex");
+              }}
+              rateLimits={rateLimits}
+            />
+          </ThreadComposer>
         </>
       ) : null}
       <div ref={bottomSentinelRef} aria-hidden="true" className="h-px w-full" />

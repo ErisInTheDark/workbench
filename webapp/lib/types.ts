@@ -122,6 +122,11 @@ export interface WorkbenchThreadComposerDraft {
   updatedAt: number;
 }
 
+export interface WorkbenchThreadSavedComposerDraft extends WorkbenchThreadComposerDraft {
+  createdAt: number;
+  id: string;
+}
+
 export interface WorkbenchQuestionnaireDraft {
   customValues: Record<string, string>;
   selectedValues: Record<string, string>;

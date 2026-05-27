@@ -17,6 +17,7 @@ import type {
   WorkbenchSendThreadMessageOptions,
   WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadComposerDraft,
+  WorkbenchThreadSavedComposerDraft,
   WorkbenchUserInputResponse
 } from "../lib/types";
 import {
@@ -39,10 +40,13 @@ import {
 import {
   deletePersistedThreadComposerDraft,
   deletePersistedThreadQuestionnaireDraft,
+  deletePersistedThreadSavedComposerDraft,
   getPersistedThreadComposerDraftRecords,
   getPersistedThreadQuestionnaireDraftRecords,
+  getPersistedThreadSavedComposerDraftRecords,
   putPersistedThreadComposerDraft,
   putPersistedThreadQuestionnaireDraft,
+  putPersistedThreadSavedComposerDraft,
 } from "../lib/workbench/thread/thread-composer-drafts";
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
 import ThreadView from "./workbench/thread-view/ThreadView";
@@ -207,6 +211,7 @@ export default function Workbench () {
   const [reloadMessage, setReloadMessage] = useState("");
   const [threadComposerDraftsByThreadId, setThreadComposerDraftsByThreadId] = useState<Record<string, WorkbenchThreadComposerDraft | undefined>>({});
   const [threadQuestionnaireDraftsByKey, setThreadQuestionnaireDraftsByKey] = useState<Record<string, WorkbenchQuestionnaireDraft | undefined>>({});
+  const [threadSavedComposerDrafts, setThreadSavedComposerDrafts] = useState<WorkbenchThreadSavedComposerDraft[]>([]);
   const editorRef = useRef<HTMLDivElement>(null);
   const customCaretRef = useRef<HTMLDivElement>(null);
   const diffGutterRef = useRef<HTMLDivElement>(null);
@@ -389,6 +394,7 @@ export default function Workbench () {
     if (!explorer.currentProjectId) {
       setThreadComposerDraftsByThreadId({});
       setThreadQuestionnaireDraftsByKey({});
+      setThreadSavedComposerDrafts([]);
       return;
     }
 
@@ -396,7 +402,8 @@ export default function Workbench () {
     void Promise.all([
       getPersistedThreadComposerDraftRecords(explorer.currentProjectId),
       getPersistedThreadQuestionnaireDraftRecords(explorer.currentProjectId),
-    ]).then(([composerRecords, questionnaireRecords]) => {
+      getPersistedThreadSavedComposerDraftRecords(explorer.currentProjectId),
+    ]).then(([composerRecords, questionnaireRecords, savedComposerRecords]) => {
       if (cancelled) {
         return;
       }
@@ -415,6 +422,13 @@ export default function Workbench () {
           updatedAt: record.updatedAt,
         }]),
       ));
+      setThreadSavedComposerDrafts(savedComposerRecords.map((record) => ({
+        attachments: record.attachments,
+        createdAt: record.createdAt,
+        id: record.id,
+        text: record.text,
+        updatedAt: record.updatedAt,
+      })));
     });
 
     return () => {
@@ -670,6 +684,26 @@ export default function Workbench () {
 
     if (explorer.currentProjectId) {
       void deletePersistedThreadComposerDraft(explorer.currentProjectId, threadId);
+    }
+  }, [explorer.currentProjectId]);
+
+  const handleThreadSavedComposerDraftSave = useCallback((draft: WorkbenchThreadSavedComposerDraft) => {
+    if (!explorer.currentProjectId) {
+      return;
+    }
+
+    setThreadSavedComposerDrafts((current) => [
+      draft,
+      ...current.filter((candidate) => candidate.id !== draft.id),
+    ]);
+    void putPersistedThreadSavedComposerDraft(explorer.currentProjectId, draft);
+  }, [explorer.currentProjectId]);
+
+  const handleThreadSavedComposerDraftDelete = useCallback((draftId: string) => {
+    setThreadSavedComposerDrafts((current) => current.filter((draft) => draft.id !== draftId));
+
+    if (explorer.currentProjectId) {
+      void deletePersistedThreadSavedComposerDraft(explorer.currentProjectId, draftId);
     }
   }, [explorer.currentProjectId]);
 
@@ -1373,6 +1407,9 @@ export default function Workbench () {
                   rateLimits={rateLimits}
                   threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
                   threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
+                  threadSavedComposerDrafts={threadSavedComposerDrafts}
+                  onThreadSavedComposerDraftDelete={handleThreadSavedComposerDraftDelete}
+                  onThreadSavedComposerDraftSave={handleThreadSavedComposerDraftSave}
                 />
               ) : selectionError ? (
                 <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
