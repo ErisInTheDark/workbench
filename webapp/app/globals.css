@@ -59,14 +59,20 @@
   body {
     min-height: 100%;
     max-width: 100%;
-    overflow-x: hidden;
+    overflow-x: clip;
   }
 
   body {
     margin: 0;
     color: var(--text);
     font-family: var(--font-sans);
-    overflow-x: clip;
+  }
+
+  @supports not (overflow: clip) {
+    html,
+    body {
+      overflow-x: hidden;
+    }
   }
   
   body::before {
