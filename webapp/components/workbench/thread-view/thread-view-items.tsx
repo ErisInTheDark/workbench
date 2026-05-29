@@ -540,7 +540,7 @@ function ThreadCollabAgentToolCallItem ({
       <ThreadDisclosure
         className="py-2"
         contentClassName="mt-2 pl-6"
-        open={isActiveWait}
+        defaultOpen={isActiveWait}
         summary={<><span>{isActiveWait ? "Waiting for " : "Waited for "}</span>{agentName}</>}
         summaryClassName="text-[0.92em] leading-[1.6] text-muted"
       >
@@ -663,7 +663,7 @@ function ThreadReasoningSequence ({
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 space-y-4 pl-6"
-      open={isMostRecent}
+      defaultOpen={isMostRecent}
       summary={totalItems === 1 ? (<>
         <span>Reasoned: </span>
         <span className="thread-item-disclosure-prominent-text-portion font-medium text-text">{getReasoningStepTitle(visibleItems[0])}</span>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
+import { useEffect, useState, type ComponentPropsWithoutRef, type KeyboardEvent, type ReactNode } from "react";
 
 import ChevronIcon from "../ChevronIcon";
 
@@ -35,6 +35,18 @@ export default function ThreadDisclosure ({
   const [uncontrolledOpen, setUncontrolledOpen] = useState(Boolean(open ?? defaultIsOpen));
   const isOpen = isControlled ? Boolean(open) : uncontrolledOpen;
 
+  function markUserToggleIntent () {
+    if (!isControlled) {
+      setHasUserToggled(true);
+    }
+  }
+
+  function handleSummaryKeyDown (event: KeyboardEvent<HTMLElement>) {
+    if (event.key === "Enter" || event.key === " ") {
+      markUserToggleIntent();
+    }
+  }
+
   useEffect(() => {
     if (isControlled) {
       setUncontrolledOpen(Boolean(open));
@@ -52,9 +64,6 @@ export default function ThreadDisclosure ({
       open={isOpen}
       onToggle={(event) => {
         if (!isControlled) {
-          if (event.nativeEvent.isTrusted) {
-            setHasUserToggled(true);
-          }
           setUncontrolledOpen(event.currentTarget.open);
         }
         onToggle?.(event);
@@ -66,6 +75,8 @@ export default function ThreadDisclosure ({
           "flex min-w-0 max-w-full items-center cursor-pointer list-none gap-2 text-muted transition-colors hover:text-text focus-visible:text-text focus-visible:outline-none",
           summaryClassName,
         )}
+        onClick={markUserToggleIntent}
+        onKeyDown={handleSummaryKeyDown}
       >
         <ChevronIcon
           data-thread-chevron
