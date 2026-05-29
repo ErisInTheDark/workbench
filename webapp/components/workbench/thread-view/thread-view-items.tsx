@@ -680,10 +680,12 @@ function ThreadReasoningSequence ({
 }
 
 function ThreadCommandExecutionDetails ({
+  isMostRecent = false,
   item,
   knownSkills,
   projectRootPath,
 }: {
+  isMostRecent?: boolean;
   item: CommandItem;
   knownSkills?: WorkbenchSkillSummary[];
   projectRootPath?: string;
@@ -728,7 +730,7 @@ function ThreadCommandExecutionDetails ({
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 space-y-2 pl-6"
-      open={item.status !== "completed"}
+      defaultOpen={isMostRecent}
       summary={(
         <>
           <ThreadCommandSummary display={commandDisplay} />
@@ -775,16 +777,18 @@ function ThreadCommandExecutionDetails ({
 }
 
 function ThreadCommandSequence ({
+  isMostRecent,
   items,
   knownSkills,
   projectRootPath,
 }: {
+  isMostRecent: boolean;
   items: CommandItem[];
   knownSkills?: WorkbenchSkillSummary[];
   projectRootPath?: string;
 }) {
   if (items.length === 1) {
-    return <ThreadCommandExecutionDetails item={items[0]} knownSkills={knownSkills} projectRootPath={projectRootPath} />;
+    return <ThreadCommandExecutionDetails isMostRecent={isMostRecent} item={items[0]} knownSkills={knownSkills} projectRootPath={projectRootPath} />;
   }
 
   const commandBlockDisplay = getThreadCommandBlockDisplay({
@@ -801,13 +805,19 @@ function ThreadCommandSequence ({
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 space-y-1 pl-6"
-      open={items.some((item) => item.status !== "completed")}
+      defaultOpen={isMostRecent}
       summary={<ThreadCommandSummary display={commandBlockDisplay} />}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"
     >
       <>
-        {items.map((item) => (
-          <ThreadCommandExecutionDetails key={item.id} item={item} knownSkills={knownSkills} projectRootPath={projectRootPath} />
+        {items.map((item, index) => (
+          <ThreadCommandExecutionDetails
+            isMostRecent={isMostRecent && index === items.length - 1}
+            item={item}
+            key={item.id}
+            knownSkills={knownSkills}
+            projectRootPath={projectRootPath}
+          />
         ))}
       </>
     </ThreadDisclosure>
@@ -855,7 +865,7 @@ function ThreadRenderableBlockView ({
   turnStartedAt: number | null;
 }) {
   if (block.kind === "commandSequence") {
-    return <ThreadCommandSequence items={block.items} knownSkills={knownSkills} projectRootPath={projectRootPath} />;
+    return <ThreadCommandSequence isMostRecent={isMostRecentBlock} items={block.items} knownSkills={knownSkills} projectRootPath={projectRootPath} />;
   }
 
   if (block.kind === "fileChangeSequence") {

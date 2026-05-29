@@ -11,6 +11,7 @@ function joinClasses (...values: Array<string | undefined>) {
 type ThreadDisclosureProps = Omit<ComponentPropsWithoutRef<"details">, "children"> & {
   children: ReactNode;
   contentClassName?: string;
+  defaultOpen?: boolean;
   initialOpen?: boolean;
   summary: ReactNode;
   summaryClassName?: string;
@@ -20,6 +21,7 @@ export default function ThreadDisclosure ({
   children,
   className,
   contentClassName,
+  defaultOpen,
   initialOpen = false,
   onToggle,
   open,
@@ -28,21 +30,31 @@ export default function ThreadDisclosure ({
   ...props
 }: ThreadDisclosureProps) {
   const isControlled = typeof open === "boolean";
-  const [uncontrolledOpen, setUncontrolledOpen] = useState(Boolean(open ?? initialOpen));
+  const defaultIsOpen = Boolean(defaultOpen ?? initialOpen);
+  const [hasUserToggled, setHasUserToggled] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(Boolean(open ?? defaultIsOpen));
   const isOpen = isControlled ? Boolean(open) : uncontrolledOpen;
 
   useEffect(() => {
     if (isControlled) {
       setUncontrolledOpen(Boolean(open));
+      return;
     }
-  }, [isControlled, open]);
+
+    if (!hasUserToggled) {
+      setUncontrolledOpen(defaultIsOpen);
+    }
+  }, [defaultIsOpen, hasUserToggled, isControlled, open]);
 
   return (
     <details
       className={joinClasses("min-w-0 max-w-full [&>summary::-webkit-details-marker]:hidden", className)}
-      open={isControlled || initialOpen ? isOpen : undefined}
+      open={isOpen}
       onToggle={(event) => {
         if (!isControlled) {
+          if (event.nativeEvent.isTrusted) {
+            setHasUserToggled(true);
+          }
           setUncontrolledOpen(event.currentTarget.open);
         }
         onToggle?.(event);
