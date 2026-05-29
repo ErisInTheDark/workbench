@@ -5,7 +5,7 @@
  */
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import type {
@@ -32,6 +32,8 @@ const INLINE_CODE_CLASS = "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7
 const GENERIC_CODEX_QUESTIONNAIRE_TITLE = "Follow-up questions";
 const GENERIC_CODEX_QUESTIONNAIRE_SUMMARY = "Codex needs your input before it can continue.";
 const MAX_QUESTIONNAIRE_SUMMARY_LABELS = 3;
+const MAX_QUESTIONNAIRE_TRANSCRIPT_PAIRS = 3;
+const MAX_QUESTIONNAIRE_TRANSCRIPT_TEXT_LENGTH = 520;
 
 function asRecord (value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -174,21 +176,21 @@ function parseQuestionnaireResponse (item: DynamicToolCallItem) {
   }
 }
 
-function normalizeQuestionnaireSummaryLabel(value: string) {
+function normalizeQuestionnaireSummaryLabel (value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function truncateQuestionnaireSummaryLabel(value: string) {
+function truncateQuestionnaireSummaryLabel (value: string) {
   const normalizedValue = normalizeQuestionnaireSummaryLabel(value);
   return normalizedValue.length > 80 ? `${normalizedValue.slice(0, 77).trimEnd()}...` : normalizedValue;
 }
 
-function isGenericCodexQuestionnaireRequest(request: WorkbenchUserInputRequest) {
+function isGenericCodexQuestionnaireRequest (request: WorkbenchUserInputRequest) {
   return request.title.trim() === GENERIC_CODEX_QUESTIONNAIRE_TITLE
     && request.summary.trim() === GENERIC_CODEX_QUESTIONNAIRE_SUMMARY;
 }
 
-function getSingleQuestionnaireSummaryLabel(request: WorkbenchUserInputRequest) {
+function getSingleQuestionnaireSummaryLabel (request: WorkbenchUserInputRequest) {
   const questionText = request.questions[0]?.question.trim() ?? "";
   const title = request.title.trim();
 
@@ -199,7 +201,7 @@ function getSingleQuestionnaireSummaryLabel(request: WorkbenchUserInputRequest) 
   return truncateQuestionnaireSummaryLabel(title || questionText || "User input request");
 }
 
-function getQuestionnaireTopicLabel(question: WorkbenchUserInputQuestion, index: number) {
+function getQuestionnaireTopicLabel (question: WorkbenchUserInputQuestion, index: number) {
   const header = normalizeQuestionnaireSummaryLabel(question.header).replace(/[?.!:]+$/u, "");
   if (header) {
     return header.toLowerCase();
@@ -208,7 +210,7 @@ function getQuestionnaireTopicLabel(question: WorkbenchUserInputQuestion, index:
   return truncateQuestionnaireSummaryLabel(question.question || `question ${index + 1}`).toLowerCase();
 }
 
-function renderQuestionnaireTopicList(labels: string[], hiddenCount: number) {
+function renderQuestionnaireTopicList (labels: string[], hiddenCount: number) {
   const nodes: ReactNode[] = [];
 
   labels.forEach((label, index) => {
@@ -226,7 +228,7 @@ function renderQuestionnaireTopicList(labels: string[], hiddenCount: number) {
   return nodes;
 }
 
-function renderQuestionnaireHistorySummary(request: WorkbenchUserInputRequest | null) {
+function renderQuestionnaireHistorySummary (request: WorkbenchUserInputRequest | null) {
   if (!request || request.questions.length <= 1) {
     return (
       <>
@@ -261,18 +263,139 @@ function renderQuestionnaireHistorySummary(request: WorkbenchUserInputRequest | 
   );
 }
 
-function readTextContentItems(item: DynamicToolCallItem) {
+function truncateQuestionnaireTranscriptText (value: string) {
+  const trimmedValue = value.trim();
+  return trimmedValue.length > MAX_QUESTIONNAIRE_TRANSCRIPT_TEXT_LENGTH
+    ? `${trimmedValue.slice(0, MAX_QUESTIONNAIRE_TRANSCRIPT_TEXT_LENGTH - 3).trimEnd()}...`
+    : trimmedValue;
+}
+
+function getQuestionnairePromptText (request: WorkbenchUserInputRequest, question: WorkbenchUserInputQuestion, index: number) {
+  const questionText = question.question.trim();
+  if (request.questions.length === 1) {
+    const singleSummaryLabel = getSingleQuestionnaireSummaryLabel(request);
+    if (questionText && singleSummaryLabel === truncateQuestionnaireSummaryLabel(questionText)) {
+      return "";
+    }
+  }
+
+  return questionText
+    || normalizeQuestionnaireSummaryLabel(question.header)
+    || `Question ${index + 1}`;
+}
+
+function getQuestionnaireAnswerMarkdown (question: WorkbenchUserInputQuestion, response: WorkbenchUserInputResponse) {
+  const answers = response.answers[question.id]?.answers
+    .map((answer) => answer.trim())
+    .filter(Boolean) ?? [];
+  if (!answers.length) {
+    return "";
+  }
+
+  const optionDescriptionsByLabel = new Map(question.options.map((option) => [option.label, option.description.trim()]));
+  return answers.map((answer) => {
+    const description = optionDescriptionsByLabel.get(answer);
+    if (typeof description === "string") {
+      return description ? `### ${answer}\n\n${description}` : answer;
+    }
+
+    return answer;
+  }).join("\n\n");
+}
+
+function buildQuestionnaireTranscriptPairs (request: WorkbenchUserInputRequest, response: WorkbenchUserInputResponse | null) {
+  if (!response) {
+    return [];
+  }
+
+  return request.questions.map((question, index) => {
+    const answerMarkdown = getQuestionnaireAnswerMarkdown(question, response);
+    if (!answerMarkdown) {
+      return null;
+    }
+
+    return {
+      answerMarkdown: truncateQuestionnaireTranscriptText(answerMarkdown),
+      promptText: getQuestionnairePromptText(request, question, index),
+    };
+  }).filter((pair): pair is { answerMarkdown: string; promptText: string } => pair !== null);
+}
+
+function ThreadQuestionnaireTranscriptPreview ({
+  hiddenCount,
+  pairs,
+}: {
+  hiddenCount: number;
+  pairs: Array<{ answerMarkdown: string; promptText: string }>;
+}) {
+  if (!pairs.length) {
+    return null;
+  }
+
+  return (
+    <div className="mt-2 flex w-full flex-col gap-2">
+      {pairs.map((pair, index) => (
+        <div key={`pair:${index}`} className="flex w-full flex-col gap-1.5">
+          {pair.promptText ? (
+            <div className="max-w-[34rem] whitespace-pre-wrap break-words text-[0.86em] leading-[1.55] text-text">
+              {pair.promptText}
+            </div>
+          ) : null}
+          <div className="ml-auto w-fit max-w-[min(42rem,86%)] rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3 text-left leading-[1.55] text-text">
+            <ThreadMarkdown
+              className="text-[0.98em] leading-[1.55] [&_h3]:mb-[0.2em] [&_h3]:text-[1.15em] [&_p]:leading-[1.55]"
+              markdown={pair.answerMarkdown}
+            />
+          </div>
+        </div>
+      ))}
+      {hiddenCount > 0 ? (
+        <div className="ml-auto text-[0.78em] leading-[1.5] text-muted">
+          +{hiddenCount} more
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ThreadQuestionnaireHistorySummary ({
+  isOpen,
+  request,
+  response,
+}: {
+  isOpen: boolean;
+  request: WorkbenchUserInputRequest | null;
+  response: WorkbenchUserInputResponse | null;
+}) {
+  const transcriptPairs = request ? buildQuestionnaireTranscriptPairs(request, response) : [];
+  const visiblePairs = transcriptPairs.slice(0, MAX_QUESTIONNAIRE_TRANSCRIPT_PAIRS);
+  const hiddenCount = Math.max(0, transcriptPairs.length - visiblePairs.length);
+
+  return (
+    <div className="flex min-w-0 flex-1 flex-col">
+      <div className="min-w-0">{renderQuestionnaireHistorySummary(request)}</div>
+      {!isOpen ? (
+        <ThreadQuestionnaireTranscriptPreview
+          hiddenCount={hiddenCount}
+          pairs={visiblePairs}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function readTextContentItems (item: DynamicToolCallItem) {
   return (item.contentItems ?? []).filter((entry): entry is Extract<NonNullable<DynamicToolCallItem["contentItems"]>[number], { type: "inputText" }> => entry.type === "inputText")
     .map((entry) => entry.text.trim())
     .filter(Boolean)
     .join("\n\n");
 }
 
-function getCopilotDynamicToolMetadata(item: DynamicToolCallItem) {
+function getCopilotDynamicToolMetadata (item: DynamicToolCallItem) {
   return asRecord(asRecord(item.arguments)?.[COPILOT_DYNAMIC_TOOL_METADATA_KEY]);
 }
 
-function getToolLabelText(item: DynamicToolCallItem, fallback = "tool") {
+function getToolLabelText (item: DynamicToolCallItem, fallback = "tool") {
   const metadata = getCopilotDynamicToolMetadata(item);
   return asString(metadata?.agentDisplayName)?.trim()
     || asString(metadata?.agentName)?.trim()
@@ -348,15 +471,26 @@ function ThreadQuestionnaireToolCallItem ({
   const statusLabel = item.status === "completed"
     ? response ? "Answered" : "Completed"
     : humanizeThreadLabel(item.status);
-  const isOpen = item.status !== "completed" || !response;
+  const initialIsOpen = item.status !== "completed" || !response;
+  const [isOpen, setIsOpen] = useState(initialIsOpen);
 
   return (
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 space-y-3 pl-6"
-      open={isOpen}
-      summary={renderQuestionnaireHistorySummary(request)}
-      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      defaultOpen={initialIsOpen}
+      onToggle={(event) => {
+        setIsOpen(event.currentTarget.open);
+      }}
+      chevronClassName="mt-[0.22em]"
+      summary={(
+        <ThreadQuestionnaireHistorySummary
+          isOpen={isOpen}
+          request={request}
+          response={response}
+        />
+      )}
+      summaryClassName="items-start text-[0.92em] leading-[1.6] text-muted"
     >
       <>
         <div className="rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-3">

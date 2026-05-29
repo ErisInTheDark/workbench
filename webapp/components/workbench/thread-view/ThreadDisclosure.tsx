@@ -1,3 +1,8 @@
+/*
+ * Exports:
+ * - default ThreadDisclosure: render a styled details/summary disclosure with controlled or uncontrolled open state. Keywords: thread, disclosure, chevron.
+ * - Local helpers: joinClasses for compact className composition. Keywords: css, class names.
+ */
 "use client";
 
 import { useEffect, useState, type ComponentPropsWithoutRef, type KeyboardEvent, type ReactNode } from "react";
@@ -9,6 +14,7 @@ function joinClasses (...values: Array<string | undefined>) {
 }
 
 type ThreadDisclosureProps = Omit<ComponentPropsWithoutRef<"details">, "children"> & {
+  chevronClassName?: string;
   children: ReactNode;
   contentClassName?: string;
   defaultOpen?: boolean;
@@ -18,6 +24,7 @@ type ThreadDisclosureProps = Omit<ComponentPropsWithoutRef<"details">, "children
 };
 
 export default function ThreadDisclosure ({
+  chevronClassName,
   children,
   className,
   contentClassName,
@@ -60,7 +67,7 @@ export default function ThreadDisclosure ({
 
   return (
     <details
-      className={joinClasses("min-w-0 max-w-full [&>summary::-webkit-details-marker]:hidden", className)}
+      className={joinClasses("thread-disclosure min-w-0 max-w-full [&>summary::-webkit-details-marker]:hidden", className)}
       open={isOpen}
       onToggle={(event) => {
         if (!isControlled) {
@@ -82,10 +89,10 @@ export default function ThreadDisclosure ({
           data-thread-chevron
           className={joinClasses(
             "size-[1.1rem] transition-transform",
-            isOpen ? "rotate-90" : "rotate-0",
+            chevronClassName,
           )}
         />
-        <span className="min-w-0 flex-1">{summary}</span>
+        <div className="min-w-0 flex-1">{summary}</div>
       </summary>
       <div className={joinClasses("min-w-0 max-w-full", contentClassName)}>{children}</div>
     </details>

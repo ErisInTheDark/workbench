@@ -318,6 +318,14 @@
     transform: rotate(90deg);
   }
 
+  .thread-disclosure [data-thread-chevron] {
+    transform: rotate(0deg);
+  }
+
+  .thread-disclosure[open] > summary [data-thread-chevron] {
+    transform: rotate(90deg);
+  }
+
   .editor-content blockquote {
     color: var(--muted);
   }
