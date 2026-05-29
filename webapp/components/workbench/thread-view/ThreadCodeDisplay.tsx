@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 
 import type { ParsedUnifiedDiff, UnifiedDiffLine } from "../../../lib/workbench/thread/thread-file-diff";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
@@ -74,6 +74,8 @@ function ThreadUnifiedDiff ({
   diff: ParsedUnifiedDiff;
   surface?: ThreadCodeDisplaySurface;
 }) {
+  const isFramed = surface === "framed";
+  const contentColumn = isFramed ? "minmax(min-content,1fr)" : "max-content";
   const lineNumberWidth = Math.max(
     2,
     ...diff.hunks.flatMap((hunk) => hunk.lines.flatMap((line) => [
@@ -83,9 +85,12 @@ function ThreadUnifiedDiff ({
   );
 
   return (
-    <div>
+    <div
+      className="grid w-max min-w-full"
+      style={{ gridTemplateColumns: `${lineNumberWidth + 4}ch ${lineNumberWidth + 4}ch 3rem ${contentColumn}` }}
+    >
       {diff.headers.length ? (
-        <div className="px-0 py-2 font-mono text-[0.78em] leading-[1.65] text-muted">
+        <div className="col-span-4 px-0 py-2 font-mono text-[0.78em] leading-[1.65] text-muted">
           {diff.headers.map((line, index) => (
             <div key={`header:${index}`} className="whitespace-pre">
               {line || " "}
@@ -93,41 +98,36 @@ function ThreadUnifiedDiff ({
           ))}
         </div>
       ) : null}
-      <div>
-        {diff.hunks.map((hunk, hunkIndex) => (
-          <div key={`hunk:${hunkIndex}`} className={hunkIndex ? "pt-3" : ""}>
-            <div className="ml-4 whitespace-pre px-0 py-1 font-mono text-[0.78em] leading-[1.65] text-accent md:ml-12">
-              {hunk.header}
-            </div>
-            <div>
-              {hunk.lines.map((line, lineIndex) => (
-                <ThreadUnifiedDiffLine
-                  key={`line:${hunkIndex}:${lineIndex}`}
-                  line={line}
-                  lineNumberWidth={lineNumberWidth}
-                  surface={surface}
-                />
-              ))}
-            </div>
+      {diff.hunks.map((hunk, hunkIndex) => (
+        <Fragment key={`hunk:${hunkIndex}`}>
+          <div
+            className={`col-span-4 ml-4 whitespace-pre px-0 py-1 font-mono text-[0.78em] leading-[1.65] text-accent md:ml-12${hunkIndex ? " pt-4" : ""}`}
+          >
+            {hunk.header}
           </div>
-        ))}
-      </div>
+          {hunk.lines.map((line, lineIndex) => (
+            <ThreadUnifiedDiffLine
+              key={`line:${hunkIndex}:${lineIndex}`}
+              line={line}
+              surface={surface}
+            />
+          ))}
+        </Fragment>
+      ))}
     </div>
   );
 }
 
 function ThreadUnifiedDiffLine ({
   line,
-  lineNumberWidth,
   surface = "default",
 }: {
   line: UnifiedDiffLine;
-  lineNumberWidth: number;
   surface?: ThreadCodeDisplaySurface;
 }) {
   if (line.type === "note") {
     return (
-      <div className="ml-4 whitespace-pre px-4 py-1.5 font-mono text-[0.78em] leading-[1.65] text-muted italic md:ml-12">
+      <div className="col-span-4 ml-4 whitespace-pre px-4 py-1.5 font-mono text-[0.78em] leading-[1.65] text-muted italic md:ml-12">
         {line.text}
       </div>
     );
@@ -138,9 +138,8 @@ function ThreadUnifiedDiffLine ({
   return (
     <div
       className={`
-        ${surface === "framed" ? "" : EDGE_FADE_CLASS} grid w-max min-w-full px-4 font-mono tabular-nums text-[0.78em] leading-[1.65] md:px-12 ${getDiffRowClassName(lineStyle.rowClassName, line.type, surface)}
+        ${EDGE_FADE_CLASS} col-span-4 grid grid-cols-subgrid px-4 font-mono tabular-nums text-[0.78em] leading-[1.65] md:px-12 ${getDiffRowClassName(lineStyle.rowClassName, line.type, surface)}
       `}
-      style={{ gridTemplateColumns: `${lineNumberWidth + 4}ch ${lineNumberWidth + 4}ch 3rem max-content` }}
     >
       <span className={`px-3 py-1 text-right ${lineStyle.gutterTextClassName}`}>
         {line.oldLineNumber ?? ""}
