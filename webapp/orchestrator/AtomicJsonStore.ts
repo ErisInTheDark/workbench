@@ -6,7 +6,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
-const STALE_TEMP_FILE_MS = 60 * 60 * 1000;
 const MAX_IN_MEMORY_JSON_LINES_COMPACT_BYTES = 8 * 1024 * 1024;
 
 export default class AtomicJsonStore {
@@ -42,7 +41,6 @@ export default class AtomicJsonStore {
     try {
       await fs.writeFile(tempPath, `${JSON.stringify(value)}\n`, "utf8");
       await fs.rename(tempPath, filePath);
-      await this.cleanupStaleTempFiles(filePath);
     } catch (error) {
       await fs.rm(tempPath, { force: true }).catch(() => undefined);
       throw error;
@@ -104,32 +102,6 @@ export default class AtomicJsonStore {
 
   private recoveringJsonLinesPath(filePath: string) {
     return filePath.replace(/\.ndjson$/u, ".new.ndjson");
-  }
-
-  private async cleanupStaleTempFiles(filePath: string) {
-    const directoryPath = path.dirname(filePath);
-    const tempFilePrefix = `${path.basename(filePath)}.tmp-`;
-    const cutoff = Date.now() - STALE_TEMP_FILE_MS;
-    let entries: string[] = [];
-    try {
-      entries = await fs.readdir(directoryPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-        return;
-      }
-
-      throw error;
-    }
-
-    await Promise.all(entries
-      .filter((entry) => entry.startsWith(tempFilePrefix))
-      .map(async (entry) => {
-        const tempPath = path.join(directoryPath, entry);
-        const stats = await fs.stat(tempPath).catch(() => null);
-        if (stats?.isFile() && stats.mtimeMs < cutoff) {
-          await fs.rm(tempPath, { force: true });
-        }
-      }));
   }
 
   async readJsonLines<TValue>(filePath: string) {

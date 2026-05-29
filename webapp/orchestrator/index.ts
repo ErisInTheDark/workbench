@@ -96,6 +96,7 @@ let shuttingDown = false;
 let codexBridge: CodexStdioBridge;
 let upstreamMessageQueue: Promise<void> = Promise.resolve();
 let codexBridgeReloadPromise: Promise<void> | null = null;
+let codexFatalExitInProgress = false;
 
 const copilotBridge = new CopilotBridge({
   getReloadableModules: () => reloadableModules,
@@ -107,13 +108,29 @@ const copilotBridge = new CopilotBridge({
 
 const codexAppServer = new CodexAppServer({
   onFatalExit: (reason) => {
-    codexBridge.stop();
-    codexReadyPromise = null;
+    if (codexFatalExitInProgress) {
+      return;
+    }
+    codexFatalExitInProgress = true;
+    codexBridge.beginStopping();
     for (const client of bridgeConnections) {
       client.close(1011, reason);
     }
+
+    const pendingUpstreamMessages = upstreamMessageQueue;
+    void pendingUpstreamMessages
+      .catch(() => undefined)
+      .then(() => codexBridge.stopAfterFlushingTranscripts())
+      .finally(() => {
+        codexReadyPromise = null;
+      });
   },
   onMessage: (message) => {
+    if (codexFatalExitInProgress) {
+      log("codex-bridge", "ignored upstream message after fatal app-server exit");
+      return;
+    }
+
     upstreamMessageQueue = upstreamMessageQueue
       .catch(() => undefined)
       .then(() => waitForCodexBridgeReload())
@@ -384,6 +401,7 @@ async function reloadCodexBridge() {
       },
       storageRoot: PROJECT_ROOT,
     });
+    codexFatalExitInProgress = false;
     log("codex-bridge", "reloaded bridge code without restarting app-server");
   })();
 

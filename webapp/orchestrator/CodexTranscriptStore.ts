@@ -12,10 +12,7 @@ import type { JsonValue } from "../lib/codex/generated/app-server/serde_json/Jso
 import type { WorkbenchQuestionnaireHistoryEntry } from "../lib/types";
 import AtomicJsonStore from "./AtomicJsonStore";
 import { hydrateThreadWithStoredTurns } from "./codex-transcript-hydration";
-import {
-  shouldPersistRawNotificationToJournal,
-  shouldRouteRawResponseToRequestJournal,
-} from "./codex-transcript-event-routing";
+import { shouldPersistRawNotificationToJournal } from "./codex-transcript-event-routing";
 import { mergeThreadItem } from "./codex-transcript-item-merge";
 import {
   asRecord,
@@ -39,20 +36,18 @@ import {
 import type {
   CodexTranscriptOrphanEventsFile,
   CodexTranscriptRawEvent,
-  CodexTranscriptRequestFile,
   CodexTranscriptThreadFile,
   CodexTranscriptTurnFile,
-  SerializableJson,
 } from "./codex-transcript-types";
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import { runCodexTranscriptMigrations } from "./codex-transcript-migrations";
+import { queueCodexTranscriptRequestSidecarCleanup } from "./codex-transcript-migrations/v3";
 import { CODEX_TRANSCRIPT_SCHEMA_VERSION } from "./codex-transcript-version";
-import { log } from "./process-helpers";
 
 const PRUNE_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
 const PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
-const COMPACT_THREAD_RESPONSE_JOURNAL_LOG_INTERVAL_MS = 30_000;
-const SUPPORTED_CODEX_TRANSCRIPT_SCHEMA_VERSIONS = new Set([1, 2, CODEX_TRANSCRIPT_SCHEMA_VERSION]);
+const THREAD_TOUCH_THROTTLE_MS = 30_000;
+const SUPPORTED_CODEX_TRANSCRIPT_SCHEMA_VERSIONS = new Set([1, 2, 3, CODEX_TRANSCRIPT_SCHEMA_VERSION]);
 
 function now() {
   return Date.now();
@@ -73,71 +68,6 @@ function createRawEvent(
     requestId,
     source,
   } satisfies CodexTranscriptRawEvent;
-}
-
-function createRawEventWithSerializablePayload(
-  source: CodexTranscriptRawEvent["source"],
-  payload: SerializableJson,
-  method: string | null,
-  requestId: number | string | null,
-) {
-  const receivedAt = now();
-  return {
-    id: `${receivedAt}:${Math.random().toString(36).slice(2)}`,
-    method,
-    payload,
-    receivedAt,
-    requestId,
-    source,
-  } satisfies CodexTranscriptRawEvent;
-}
-
-function countThreadItems(thread: Thread) {
-  return thread.turns.reduce((total, turn) => total + turn.items.length, 0);
-}
-
-function summarizeThreadForJournal(thread: Thread): SerializableJson {
-  return {
-    agentNickname: thread.agentNickname,
-    agentRole: thread.agentRole,
-    cliVersion: thread.cliVersion,
-    createdAt: thread.createdAt,
-    cwd: toSerializableJson(thread.cwd),
-    ephemeral: thread.ephemeral,
-    forkedFromId: thread.forkedFromId,
-    id: thread.id,
-    itemCount: countThreadItems(thread),
-    modelProvider: thread.modelProvider,
-    name: thread.name,
-    path: thread.path,
-    preview: thread.preview,
-    sessionId: thread.sessionId,
-    source: toSerializableJson(thread.source),
-    status: thread.status,
-    threadSource: toSerializableJson(thread.threadSource),
-    turnCount: thread.turns.length,
-    updatedAt: thread.updatedAt,
-  };
-}
-
-function summarizeThreadResponsePayloadForJournal(payload: unknown, thread: Thread): SerializableJson {
-  const record = asRecord(payload);
-  const result = asRecord(record?.result);
-  const responseId = record?.id;
-  return {
-    id: typeof responseId === "number" || typeof responseId === "string" ? responseId : null,
-    result: {
-      model: toSerializableJson(result?.model),
-      reasoningEffort: toSerializableJson(result?.reasoningEffort),
-      serviceTier: toSerializableJson(result?.serviceTier),
-      thread: summarizeThreadForJournal(thread),
-    },
-    workbenchTranscript: {
-      compactedPayload: true,
-      omitted: "result.thread.turns",
-      reason: "full-thread-session-response",
-    },
-  };
 }
 
 function sortQuestionnaireEntries(entries: WorkbenchQuestionnaireHistoryEntry[]) {
@@ -184,16 +114,6 @@ function createTurnFile(threadId: string, turnId: string): CodexTranscriptTurnFi
     schemaVersion: CODEX_TRANSCRIPT_SCHEMA_VERSION,
     threadId,
     turn: null,
-    turnId,
-  };
-}
-
-function createRequestFile(threadId: string, requestKey: string, turnId: string | null): CodexTranscriptRequestFile {
-  return {
-    lastTouchedAt: now(),
-    requestKey,
-    schemaVersion: CODEX_TRANSCRIPT_SCHEMA_VERSION,
-    threadId,
     turnId,
   };
 }
@@ -505,12 +425,11 @@ function isTurnTerminalEvent(event: CodexTranscriptRawEvent) {
 
 export default class CodexTranscriptStore {
   private readonly getProtectedThreadIds: () => Iterable<string>;
-  private compactedThreadResponseJournalCount = 0;
-  private compactedThreadResponseJournalLastLogAt = 0;
   private lastPrunedAt = 0;
   private readonly json = new AtomicJsonStore();
   private readonly pruneTimer: NodeJS.Timeout;
   private readonly readyPromise: Promise<void>;
+  private readonly throttledThreadTouches = new Map<string, number>();
   private readonly threadsDirectoryPath: string;
 
   constructor(projectRoot: string, getProtectedThreadIds: () => Iterable<string> = () => []) {
@@ -522,6 +441,9 @@ export default class CodexTranscriptStore {
     }, PRUNE_INTERVAL_MS);
     this.pruneTimer.unref();
     void this.pruneExpiredThreads(now(), this.getProtectedThreadIds()).catch(() => undefined);
+    void this.readyPromise
+      .then(() => queueCodexTranscriptRequestSidecarCleanup(path.dirname(this.threadsDirectoryPath)))
+      .catch(() => undefined);
   }
 
   async dispose() {
@@ -603,6 +525,13 @@ export default class CodexTranscriptStore {
 
     if (classifyTimelineEvent(notification.method, null)) {
       await this.updateItemTimelineOnly(threadId, turnId, itemId, notification.method);
+    }
+  }
+
+  async recordUpstreamNotifications(notifications: JsonRpcNotification[]) {
+    await this.ready();
+    for (const notification of notifications) {
+      await this.recordUpstreamNotification(notification);
     }
   }
 
@@ -758,22 +687,6 @@ export default class CodexTranscriptStore {
     const thread = extractThread(payload);
     if (thread) {
       await this.recordThreadSnapshot(thread);
-      if (shouldRouteRawResponseToRequestJournal(method)) {
-        const requestKey = normalizedRequestId !== null ? String(normalizedRequestId) : null;
-        if (requestKey) {
-          await this.updateRequestFile(thread.id, requestKey, null, (file) => ({
-            ...file,
-            lastTouchedAt: now(),
-          }));
-          await this.appendRequestEvent(thread.id, requestKey, createRawEventWithSerializablePayload(
-            source,
-            summarizeThreadResponsePayloadForJournal(payload, thread),
-            method,
-            normalizedRequestId,
-          ));
-          this.rememberCompactedThreadResponseJournal(method, thread);
-        }
-      }
       return;
     }
 
@@ -809,12 +722,7 @@ export default class CodexTranscriptStore {
 
     const requestKey = typeof requestId === "number" || typeof requestId === "string" ? String(requestId) : null;
     if (requestKey) {
-      await this.updateRequestFile(threadId, requestKey, null, (file) => ({
-        ...file,
-        lastTouchedAt: now(),
-      }));
-      await this.appendRequestEvent(threadId, requestKey, event);
-      await this.touchThread(threadId, null);
+      await this.touchThreadThrottled(threadId);
       return;
     }
 
@@ -823,30 +731,12 @@ export default class CodexTranscriptStore {
       lastTouchedAt: now(),
     }));
     await this.appendOrphanEvent(threadId, event);
-    await this.touchThread(threadId, null);
+    await this.touchThreadThrottled(threadId);
   }
 
   private async recordThreadSnapshot(thread: Thread) {
     await this.touchThread(thread.id, thread);
     await Promise.all(thread.turns.map((turn) => this.recordThreadSnapshotTurn(thread.id, turn)));
-  }
-
-  private rememberCompactedThreadResponseJournal(method: string | null, thread: Thread) {
-    this.compactedThreadResponseJournalCount += 1;
-    const timestamp = now();
-    if (timestamp - this.compactedThreadResponseJournalLastLogAt < COMPACT_THREAD_RESPONSE_JOURNAL_LOG_INTERVAL_MS) {
-      return;
-    }
-
-    this.compactedThreadResponseJournalLastLogAt = timestamp;
-    log("codex-transcript-journal", [
-      "compactedFullThreadResponse=true",
-      `count=${this.compactedThreadResponseJournalCount}`,
-      `method=${method ?? "unknown"}`,
-      `threadId=${thread.id}`,
-      `turnCount=${thread.turns.length}`,
-      `itemCount=${countThreadItems(thread)}`,
-    ].join(" "));
   }
 
   private async recordThreadSnapshotTurn(threadId: string, turn: Turn) {
@@ -893,8 +783,10 @@ export default class CodexTranscriptStore {
     await this.appendTurnEvent(threadId, turn.id, event);
     if (isTurnTerminalEvent(event)) {
       await this.compactTurnJournal(threadId, turn.id);
+      await this.touchThread(threadId, null);
+      return;
     }
-    await this.touchThread(threadId, null);
+    await this.touchThreadThrottled(threadId);
   }
 
   private async recordTurnItem(threadId: string, turnId: string, item: ThreadItem, event: CodexTranscriptRawEvent) {
@@ -913,7 +805,7 @@ export default class CodexTranscriptStore {
       };
     });
     await this.appendTurnEvent(threadId, turnId, event);
-    await this.touchThread(threadId, null);
+    await this.touchThreadThrottled(threadId);
   }
 
   private async updateItemTimelineOnly(threadId: string, turnId: string, itemId: string, method: string | null) {
@@ -931,7 +823,7 @@ export default class CodexTranscriptStore {
         }),
       };
     });
-    await this.touchThread(threadId, null);
+    await this.touchThreadThrottled(threadId);
   }
 
   private async updateCommandOutputDelta(threadId: string, turnId: string, itemId: string, method: string | null, delta: string) {
@@ -949,7 +841,7 @@ export default class CodexTranscriptStore {
         }),
       };
     });
-    await this.touchThread(threadId, null);
+    await this.touchThreadThrottled(threadId);
   }
 
   private async updateAgentMessageDelta(threadId: string, turnId: string, itemId: string, method: string | null, delta: string) {
@@ -969,7 +861,7 @@ export default class CodexTranscriptStore {
         }),
       };
     });
-    await this.touchThread(threadId, null);
+    await this.touchThreadThrottled(threadId);
   }
 
   private async updatePlanDelta(threadId: string, turnId: string, itemId: string, method: string | null, delta: string) {
@@ -989,7 +881,7 @@ export default class CodexTranscriptStore {
         }),
       };
     });
-    await this.touchThread(threadId, null);
+    await this.touchThreadThrottled(threadId);
   }
 
   private async updateReasoningSummaryPart(threadId: string, turnId: string, itemId: string, notification: JsonRpcNotification) {
@@ -1014,7 +906,7 @@ export default class CodexTranscriptStore {
         }),
       };
     });
-    await this.touchThread(threadId, null);
+    await this.touchThreadThrottled(threadId);
   }
 
   private async updateReasoningSummaryDelta(
@@ -1047,7 +939,7 @@ export default class CodexTranscriptStore {
         }),
       };
     });
-    await this.touchThread(threadId, null);
+    await this.touchThreadThrottled(threadId);
   }
 
   private async updateReasoningTextDelta(
@@ -1080,7 +972,7 @@ export default class CodexTranscriptStore {
         }),
       };
     });
-    await this.touchThread(threadId, null);
+    await this.touchThreadThrottled(threadId);
   }
 
   private async updateFileChangePatch(threadId: string, turnId: string, itemId: string, notification: JsonRpcNotification) {
@@ -1107,6 +999,17 @@ export default class CodexTranscriptStore {
         }),
       };
     });
+    await this.touchThreadThrottled(threadId);
+  }
+
+  private async touchThreadThrottled(threadId: string) {
+    const timestamp = now();
+    const lastTouchedAt = this.throttledThreadTouches.get(threadId) ?? 0;
+    if (timestamp - lastTouchedAt < THREAD_TOUCH_THROTTLE_MS) {
+      return;
+    }
+
+    this.throttledThreadTouches.set(threadId, timestamp);
     await this.touchThread(threadId, null);
   }
 
@@ -1147,20 +1050,12 @@ export default class CodexTranscriptStore {
     return path.join(this.threadDirectoryPath(threadId), "turns", `${encodeTranscriptPathSegment(turnId)}.json`);
   }
 
-  private requestFilePath(threadId: string, requestKey: string) {
-    return path.join(this.threadDirectoryPath(threadId), "requests", `${encodeTranscriptPathSegment(requestKey)}.json`);
-  }
-
   private orphanEventsFilePath(threadId: string) {
     return path.join(this.threadDirectoryPath(threadId), "orphan-events.json");
   }
 
   private turnJournalPath(threadId: string, turnId: string) {
     return path.join(this.threadDirectoryPath(threadId), "turns", `${encodeTranscriptPathSegment(turnId)}.ndjson`);
-  }
-
-  private requestJournalPath(threadId: string, requestKey: string) {
-    return path.join(this.threadDirectoryPath(threadId), "requests", `${encodeTranscriptPathSegment(requestKey)}.ndjson`);
   }
 
   private orphanEventsJournalPath(threadId: string) {
@@ -1175,25 +1070,12 @@ export default class CodexTranscriptStore {
     return this.json.update(this.turnFilePath(threadId, turnId), createTurnFile(threadId, turnId), updater);
   }
 
-  private updateRequestFile(
-    threadId: string,
-    requestKey: string,
-    turnId: string | null,
-    updater: (file: CodexTranscriptRequestFile) => CodexTranscriptRequestFile,
-  ) {
-    return this.json.update(this.requestFilePath(threadId, requestKey), createRequestFile(threadId, requestKey, turnId), updater);
-  }
-
   private updateOrphanEventsFile(threadId: string, updater: (file: CodexTranscriptOrphanEventsFile) => CodexTranscriptOrphanEventsFile) {
     return this.json.update(this.orphanEventsFilePath(threadId), createOrphanEventsFile(threadId), updater);
   }
 
   private appendTurnEvent(threadId: string, turnId: string, event: CodexTranscriptRawEvent) {
     return this.json.appendLine(this.turnJournalPath(threadId, turnId), event);
-  }
-
-  private appendRequestEvent(threadId: string, requestKey: string, event: CodexTranscriptRawEvent) {
-    return this.json.appendLine(this.requestJournalPath(threadId, requestKey), event);
   }
 
   private appendOrphanEvent(threadId: string, event: CodexTranscriptRawEvent) {

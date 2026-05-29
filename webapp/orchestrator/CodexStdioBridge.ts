@@ -129,6 +129,14 @@ const APPROVAL_ALLOW_SESSION_LABEL = "Allow for session";
 const APPROVAL_DECLINE_LABEL = "Decline";
 const TRANSCRIPT_INSTRUMENTATION_INTERVAL_MS = 5000;
 const TRANSCRIPT_INSTRUMENTATION_BACKLOG_THRESHOLD = 25;
+const TRANSCRIPT_MAX_PENDING_TASKS = 200;
+const TRANSCRIPT_COALESCE_FLUSH_MS = 100;
+const TRANSCRIPT_COALESCE_MAX_BUFFER_BYTES = 512 * 1024;
+
+type CoalescedTranscriptNotification = {
+  key: string;
+  notification: JsonRpcNotification;
+};
 
 function isJsonRpcResponse(message: unknown): message is JsonRpcResponse {
   return !!message
@@ -191,6 +199,110 @@ function shouldRecordHydratedThreadSnapshot(
     && asString(originalRequest.method) === "thread/read"
     && Boolean(originalResponse.error)
     && !hydratedResponse.error;
+}
+
+function readNotificationStringParam(notification: JsonRpcNotification, key: string) {
+  return asString(asRecord(notification.params)?.[key]);
+}
+
+function readNotificationNumberParam(notification: JsonRpcNotification, key: string) {
+  return asNumber(asRecord(notification.params)?.[key]);
+}
+
+function isStreamingTranscriptNotification(notification: JsonRpcNotification) {
+  switch (notification.method) {
+    case "item/agentMessage/delta":
+    case "item/plan/delta":
+    case "item/commandExecution/outputDelta":
+    case "item/reasoning/summaryPartAdded":
+    case "item/reasoning/summaryTextDelta":
+    case "item/reasoning/textDelta":
+    case "item/fileChange/patchUpdated":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function getCoalescedTranscriptNotification(notification: JsonRpcNotification): CoalescedTranscriptNotification | null {
+  if (!isStreamingTranscriptNotification(notification)) {
+    return null;
+  }
+
+  const threadId = readNotificationStringParam(notification, "threadId");
+  const turnId = readNotificationStringParam(notification, "turnId");
+  const itemId = readNotificationStringParam(notification, "itemId");
+  if (!threadId || !turnId || !itemId) {
+    return null;
+  }
+
+  const params = asRecord(notification.params) ?? {};
+  const keyParts = [notification.method, threadId, turnId, itemId];
+  if (notification.method === "item/reasoning/summaryPartAdded" || notification.method === "item/reasoning/summaryTextDelta") {
+    keyParts.push(String(readNotificationNumberParam(notification, "summaryIndex") ?? ""));
+  }
+  if (notification.method === "item/reasoning/textDelta") {
+    keyParts.push(String(readNotificationNumberParam(notification, "contentIndex") ?? ""));
+  }
+
+  const key = keyParts.join(":");
+  switch (notification.method) {
+    case "item/agentMessage/delta":
+    case "item/plan/delta":
+    case "item/commandExecution/outputDelta":
+    case "item/reasoning/summaryTextDelta":
+    case "item/reasoning/textDelta":
+      return {
+        key,
+        notification: {
+          ...notification,
+          params: {
+            ...params,
+            delta: asString(params.delta) ?? "",
+          },
+        },
+      };
+    default:
+      return { key, notification };
+  }
+}
+
+function mergeCoalescedTranscriptNotification(
+  current: JsonRpcNotification,
+  incoming: JsonRpcNotification,
+) {
+  const currentParams = asRecord(current.params) ?? {};
+  const incomingParams = asRecord(incoming.params) ?? {};
+  switch (incoming.method) {
+    case "item/agentMessage/delta":
+    case "item/plan/delta":
+    case "item/commandExecution/outputDelta":
+    case "item/reasoning/summaryTextDelta":
+    case "item/reasoning/textDelta":
+      return {
+        ...incoming,
+        params: {
+          ...incomingParams,
+          delta: `${asString(currentParams.delta) ?? ""}${asString(incomingParams.delta) ?? ""}`,
+        },
+      } satisfies JsonRpcNotification;
+    default:
+      return incoming;
+  }
+}
+
+function estimateCoalescedTranscriptNotificationBytes(notification: JsonRpcNotification) {
+  const params = asRecord(notification.params) ?? {};
+  const delta = asString(params.delta);
+  if (delta !== null) {
+    return delta.length * 2;
+  }
+
+  try {
+    return JSON.stringify(notification).length * 2;
+  } catch {
+    return 1024;
+  }
 }
 
 function normalizeQuestionId(value: string | null, index: number) {
@@ -630,6 +742,11 @@ export default class CodexStdioBridge {
   private readonly transcriptPendingTaskStartedAt = new Map<number, number>();
   private readonly transcriptLabelCounts = new Map<string, number>();
   private readonly transcriptInstrumentationTimer: NodeJS.Timeout;
+  private readonly coalescedTranscriptNotifications = new Map<string, JsonRpcNotification>();
+  private coalescedTranscriptFlushTimer: NodeJS.Timeout | null = null;
+  private coalescedTranscriptFlushPromise: Promise<void> | null = null;
+  private coalescedTranscriptByteEstimate = 0;
+  private transcriptBackpressureCount = 0;
   private nextTranscriptTaskId = 1;
   private transcriptCompletedCount = 0;
   private transcriptEnqueuedCount = 0;
@@ -674,7 +791,14 @@ export default class CodexStdioBridge {
   }
 
   stop() {
+    this.beginStopping();
     clearInterval(this.transcriptInstrumentationTimer);
+    if (this.coalescedTranscriptFlushTimer) {
+      clearTimeout(this.coalescedTranscriptFlushTimer);
+      this.coalescedTranscriptFlushTimer = null;
+    }
+    this.coalescedTranscriptNotifications.clear();
+    this.coalescedTranscriptByteEstimate = 0;
     this.pendingUserInputRequests.clear();
     for (const pending of this.pendingResponses.values()) {
       if (isPendingInternalResponse(pending)) {
@@ -687,15 +811,24 @@ export default class CodexStdioBridge {
       this.upstreamInitializePromise.catch(() => undefined);
     }
     this.upstreamInitializePromise = null;
+  }
+
+  beginStopping() {
     this.acceptingWork = false;
   }
 
   async dispose() {
-    this.stop();
+    await this.stopAfterFlushingTranscripts();
     await this.transcriptStore.dispose();
   }
 
+  async stopAfterFlushingTranscripts() {
+    await this.waitForIdle();
+    this.stop();
+  }
+
   async detachForReload(): Promise<CodexStdioBridgeReloadState> {
+    await this.flushCoalescedTranscriptNotifications();
     await this.waitForIdle();
     this.acceptingWork = false;
     clearInterval(this.transcriptInstrumentationTimer);
@@ -886,8 +1019,10 @@ export default class CodexStdioBridge {
         break;
       }
     }
+    await this.flushCoalescedTranscriptNotifications();
     await Promise.allSettled(Array.from(this.transcriptTasks));
     await this.transcriptQueue.catch(() => undefined);
+    await this.flushCoalescedTranscriptNotifications();
   }
 
   private createTranscriptStore({ reload = false }: { reload?: boolean } = {}) {
@@ -967,7 +1102,15 @@ export default class CodexStdioBridge {
         this.handleServerRequestResolved(message.params);
       }
       this.onNotification(message);
-      void this.captureTranscript(`upstream-notification:${message.method}`, () => this.transcriptStore.recordUpstreamNotification(message));
+      const coalescedNotification = getCoalescedTranscriptNotification(message);
+      if (coalescedNotification) {
+        await this.captureCoalescedTranscriptNotification(coalescedNotification);
+        return;
+      }
+
+      void this.flushCoalescedTranscriptNotifications().then(() => (
+        this.captureTranscript(`upstream-notification:${message.method}`, () => this.transcriptStore.recordUpstreamNotification(message))
+      ));
     }
   }
 
@@ -1032,13 +1175,85 @@ export default class CodexStdioBridge {
       `enqueued=${this.transcriptEnqueuedCount}`,
       `completed=${this.transcriptCompletedCount}`,
       `failed=${this.transcriptFailedCount}`,
+      `backpressure=${this.transcriptBackpressureCount}`,
       `oldestPendingMs=${oldestPendingAgeMs}`,
       `last=${this.transcriptLastLabel || "none"}`,
       `top=[${topLabels}]`,
     ].join(" "));
   }
 
-  private async captureTranscript(label: string, task: () => Promise<unknown>) {
+  private async captureCoalescedTranscriptNotification({ key, notification }: CoalescedTranscriptNotification) {
+    const currentNotification = this.coalescedTranscriptNotifications.get(key);
+    const currentBytes = currentNotification ? estimateCoalescedTranscriptNotificationBytes(currentNotification) : 0;
+    const nextNotification = currentNotification ? mergeCoalescedTranscriptNotification(currentNotification, notification) : notification;
+    this.coalescedTranscriptNotifications.set(
+      key,
+      nextNotification,
+    );
+    this.coalescedTranscriptByteEstimate += estimateCoalescedTranscriptNotificationBytes(nextNotification) - currentBytes;
+
+    if (this.coalescedTranscriptByteEstimate >= TRANSCRIPT_COALESCE_MAX_BUFFER_BYTES) {
+      await this.flushCoalescedTranscriptNotifications();
+      return;
+    }
+
+    if (this.coalescedTranscriptFlushTimer) {
+      return;
+    }
+    this.coalescedTranscriptFlushTimer = setTimeout(() => {
+      this.coalescedTranscriptFlushTimer = null;
+      void this.flushCoalescedTranscriptNotifications().catch((error) => {
+        logError("codex-transcript", error instanceof Error ? error.message : String(error));
+      });
+    }, TRANSCRIPT_COALESCE_FLUSH_MS);
+    this.coalescedTranscriptFlushTimer.unref();
+  }
+
+  private async flushCoalescedTranscriptNotifications() {
+    if (this.coalescedTranscriptFlushTimer) {
+      clearTimeout(this.coalescedTranscriptFlushTimer);
+      this.coalescedTranscriptFlushTimer = null;
+    }
+
+    while (true) {
+      if (this.coalescedTranscriptFlushPromise) {
+        await this.coalescedTranscriptFlushPromise.catch(() => undefined);
+      }
+
+      const notifications = Array.from(this.coalescedTranscriptNotifications.values());
+      if (!notifications.length) {
+        return;
+      }
+
+      if (this.transcriptTasks.size >= TRANSCRIPT_MAX_PENDING_TASKS) {
+        this.transcriptBackpressureCount += 1;
+        this.transcriptLastLabel = "upstream-notification:coalesced";
+        this.logTranscriptInstrumentation("backlog");
+        await Promise.race(Array.from(this.transcriptTasks)).catch(() => undefined);
+        continue;
+      }
+
+      this.coalescedTranscriptNotifications.clear();
+      this.coalescedTranscriptByteEstimate = 0;
+      const flushPromise = this.captureTranscript(
+        "upstream-notification:coalesced",
+        () => this.transcriptStore.recordUpstreamNotifications(notifications),
+      );
+      this.coalescedTranscriptFlushPromise = flushPromise;
+      try {
+        await flushPromise;
+      } finally {
+        if (this.coalescedTranscriptFlushPromise === flushPromise) {
+          this.coalescedTranscriptFlushPromise = null;
+        }
+      }
+    }
+  }
+
+  private async captureTranscript(
+    label: string,
+    task: () => Promise<unknown>,
+  ) {
     const taskId = this.nextTranscriptTaskId;
     this.nextTranscriptTaskId += 1;
     this.transcriptEnqueuedCount += 1;
