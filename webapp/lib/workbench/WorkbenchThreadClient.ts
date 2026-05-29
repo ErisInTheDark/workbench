@@ -1293,6 +1293,13 @@ function WorkbenchThreadClient(
     const liveTurnsById = new Map(liveThread.turns.map((turn) => [turn.id, turn]));
     return {
       ...incomingThread,
+      agentNickname: incomingThread.agentNickname ?? liveThread.agentNickname,
+      agentPath: incomingThread.agentPath ?? liveThread.agentPath,
+      agentRole: incomingThread.agentRole ?? liveThread.agentRole,
+      model: incomingThread.model ?? liveThread.model,
+      name: incomingThread.name ?? liveThread.name,
+      reasoningEffort: incomingThread.reasoningEffort ?? liveThread.reasoningEffort,
+      serviceTier: incomingThread.serviceTier ?? liveThread.serviceTier,
       turns: incomingThread.turns.map((turn) => mergeLiveStreamingTurn(turn, liveTurnsById.get(turn.id))),
     };
   }
@@ -1500,6 +1507,14 @@ function WorkbenchThreadClient(
     return null;
   }
 
+  function getPreferredThreadServiceTier(threadId: string, harness: WorkbenchHarness) {
+    if (harness !== "codex") {
+      return null;
+    }
+
+    return getThreadServiceTier(threadId) ?? readStoredHarnessServiceTier(harness);
+  }
+
   function resolvePreferredReasoningEffort(harness: WorkbenchHarness, modelId: string | null) {
     if (!modelId) {
       return null;
@@ -1674,11 +1689,13 @@ function WorkbenchThreadClient(
 
       if (harness === "codex") {
         const codexDeveloperInstructions = await buildCodexDeveloperInstructions(threadId, selectedAgentPath);
+        const selectedServiceTier = getPreferredThreadServiceTier(threadId, harness);
         try {
           resumedThread = await sendBridgeRequest<ThreadResumeResponse>(harness, {
             method: "thread/resume",
             params: {
               developerInstructions: codexDeveloperInstructions,
+              serviceTier: selectedServiceTier,
               threadId,
             } satisfies ThreadResumeParams,
           });
@@ -1709,8 +1726,8 @@ function WorkbenchThreadClient(
         : resumedThread?.model ?? readStoredHarnessModel(harness);
       const nextServiceTier = harness === "codex"
         ? state.currentThread?.id === threadId
-          ? getThreadServiceTier(threadId) ?? resumedThread?.serviceTier ?? readStoredHarnessServiceTier(harness)
-          : resumedThread?.serviceTier ?? readStoredHarnessServiceTier(harness)
+          ? getPreferredThreadServiceTier(threadId, harness) ?? resumedThread?.serviceTier
+          : resumedThread?.serviceTier ?? getPreferredThreadServiceTier(threadId, harness)
         : null;
       if (harness === "codex") {
         void readCompletedQuestionnaireHistory(threadId);
@@ -1760,9 +1777,7 @@ function WorkbenchThreadClient(
         harness,
         nextModel,
         getThreadReasoningEffort(threadId) ?? readStoredHarnessModelEffort(harness, nextModel),
-        harness === "codex"
-          ? getThreadServiceTier(threadId) ?? readStoredHarnessServiceTier(harness)
-          : null,
+        getPreferredThreadServiceTier(threadId, harness),
         state.currentThread?.id === threadId
           ? state.currentThread.agentPath
           : readStoredHarnessAgent(harness),
