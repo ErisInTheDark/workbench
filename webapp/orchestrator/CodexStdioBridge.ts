@@ -405,13 +405,15 @@ function normalizeQuestionnaireRequest(
     .map((question, index) => normalizeQuestion(question, index))
     .filter((question): question is WorkbenchUserInputQuestion => question !== null)
     .slice(0, 3);
+  const normalizedQuestions = questions.length ? questions : [createFallbackQuestion()];
+  const singleQuestion = normalizedQuestions.length === 1 ? normalizedQuestions[0] : null;
 
   return {
     id: `codex:${params.threadId}:${requestKey}`,
-    questions: questions.length ? questions : [createFallbackQuestion()],
+    questions: normalizedQuestions,
     submitLabel: "Submit response",
-    summary: "Codex needs your input before it can continue.",
-    title: "Follow-up questions",
+    summary: singleQuestion ? "" : "Codex needs your input before it can continue.",
+    title: singleQuestion?.question.trim() || "Follow-up questions",
   };
 }
 

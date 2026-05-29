@@ -29,6 +29,8 @@ function joinClasses (...values: Array<string | false | null | undefined>) {
 const MAX_HEADER_LENGTH = 36;
 const MAX_HEADER_WORDS = 5;
 const EMPTY_HISTORY_CUSTOM_TEXT_SPACER_CLASS = "w-full min-h-[2.45rem] rounded-lg px-3 py-2";
+const GENERIC_CODEX_QUESTIONNAIRE_TITLE = "Follow-up questions";
+const GENERIC_CODEX_QUESTIONNAIRE_SUMMARY = "Codex needs your input before it can continue.";
 
 function normalizeHeaderText (value: string | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
@@ -58,6 +60,25 @@ function formatQuestionDisplay (
     headerText: normalizedHeader,
     questionText,
   };
+}
+
+function isGenericCodexQuestionnaireRequest (request: WorkbenchUserInputRequest) {
+  return request.title.trim() === GENERIC_CODEX_QUESTIONNAIRE_TITLE
+    && request.summary.trim() === GENERIC_CODEX_QUESTIONNAIRE_SUMMARY;
+}
+
+function shouldUseCompactSingleQuestionDisplay (request: WorkbenchUserInputRequest) {
+  if (request.questions.length !== 1) {
+    return false;
+  }
+
+  const questionText = request.questions[0]?.question.trim() ?? "";
+  if (!questionText) {
+    return false;
+  }
+
+  return isGenericCodexQuestionnaireRequest(request)
+    || (!request.summary.trim() && request.title.trim() === questionText);
 }
 
 function deriveAnsweredValues (
@@ -140,6 +161,10 @@ function ThreadApprovalCommandSummary ({
 export default function ThreadUserInputRequest (props: InteractiveThreadUserInputRequestProps | HistoryThreadUserInputRequestProps) {
   const { mode, request } = props;
   const isHistoryMode = mode === "history";
+  const useCompactSingleQuestionDisplay = shouldUseCompactSingleQuestionDisplay(request);
+  const compactQuestion = useCompactSingleQuestionDisplay ? request.questions[0] : null;
+  const requestTitle = compactQuestion?.question.trim() || request.title;
+  const requestSummary = useCompactSingleQuestionDisplay ? "" : request.summary.trim();
   const historyProps = mode === "history" ? props : null;
   const interactiveProps = mode === "history" ? null : props;
   const highlightSources = props.highlightSources;
@@ -257,11 +282,13 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
         <div className="space-y-2">
           <div className="space-y-1">
             <h3 className="m-0 text-[1.02em] font-semibold leading-[1.35] text-text">
-              {request.title}
+              {requestTitle}
             </h3>
-            <p className="m-0 max-w-3xl text-[0.88em] leading-[1.7] text-muted">
-              {request.summary}
-            </p>
+            {requestSummary ? (
+              <p className="m-0 max-w-3xl text-[0.88em] leading-[1.7] text-muted">
+                {requestSummary}
+              </p>
+            ) : null}
           </div>
         </div>
         {isHistoryMode ? (
@@ -308,16 +335,18 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
               key={question.id}
               className="mb-0"
             >
-              <div className="space-y-1">
-                <p className="m-0 text-[0.72em] font-semibold tracking-[0.08em] text-muted uppercase">
-                  {headerText}
-                </p>
-                {questionText ? (
-                  <p className="m-0 whitespace-pre-wrap break-words text-[0.92em] leading-[1.65] text-text">
-                    {questionText}
+              {!useCompactSingleQuestionDisplay ? (
+                <div className="space-y-1">
+                  <p className="m-0 text-[0.72em] font-semibold tracking-[0.08em] text-muted uppercase">
+                    {headerText}
                   </p>
-                ) : null}
-              </div>
+                  {questionText ? (
+                    <p className="m-0 whitespace-pre-wrap break-words text-[0.92em] leading-[1.65] text-text">
+                      {questionText}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="mt-3 space-y-2">
                 {question.options.map((option, index) => {
                   const optionId = `${request.id}:${question.id}:option:${index}`;
