@@ -51,6 +51,7 @@ import {
 import {
     readStoredHarness,
 } from "./workbench/state/browser-state";
+import ActiveTabRefreshLeader from "./workbench/state/ActiveTabRefreshLeader";
 import EditHistoryManager from "./workbench/state/EditHistoryManager";
 import FileSessionState from "./workbench/state/FileSessionState";
 import LifecycleScope from "./workbench/state/LifecycleScope";
@@ -944,9 +945,12 @@ export async function WorkbenchClient(
       await projectClient.selectInitialProject();
     }
 
-    const shouldBlockOnThreads = Boolean(sessionState.currentThreadId || activeRoute.view === "thread");
+    const shouldRefreshThreads = Boolean(sessionState.currentThreadId || activeRoute.view === "thread");
+    const shouldBlockOnThreads = shouldRefreshThreads;
 
-    if (shouldBlockOnThreads) {
+    if (!shouldRefreshThreads) {
+      emitExplorerStateChange();
+    } else if (shouldBlockOnThreads) {
       await Promise.all([
         refreshThreads(),
         threadClient.refreshPendingUserInputRequests(),
@@ -994,14 +998,41 @@ export async function WorkbenchClient(
     }
   }
 
+  async function runAutoRefresh() {
+    try {
+      await refreshTree({ preserveSelection: true });
+    } catch {
+      // Keep polling even if a transient refresh request fails.
+    }
+  }
+
+  function scheduleAutoRefresh() {
+    coordinatorLifecycle.scheduleRepeat("workbench-auto-refresh", AUTO_REFRESH_INTERVAL_MS, runAutoRefresh);
+  }
+
+  function stopAutoRefresh() {
+    coordinatorLifecycle.cancel("workbench-auto-refresh");
+  }
+
   function startAutoRefresh() {
-    coordinatorLifecycle.scheduleRepeat("workbench-auto-refresh", AUTO_REFRESH_INTERVAL_MS, async () => {
-      try {
-        await refreshTree({ preserveSelection: true });
-      } catch {
-        // Keep polling even if a transient refresh request fails.
-      }
+    const leader = new ActiveTabRefreshLeader({
+      onLeadershipChange: (isLeader) => {
+        if (!isLeader) {
+          stopAutoRefresh();
+          return;
+        }
+
+        void runAutoRefresh();
+        scheduleAutoRefresh();
+      },
+      storageKey: "workbench:auto-refresh-leader",
     });
+    coordinatorLifecycle.addUnsubscribe(() => {
+      leader.dispose();
+    });
+    if (leader.current) {
+      scheduleAutoRefresh();
+    }
   }
 
   const controls: WorkbenchControls = {
@@ -1045,7 +1076,9 @@ export async function WorkbenchClient(
   emitRateLimitsChange();
   updateSaveButtonState();
   await refreshTree();
-  void refreshRateLimits();
+  if (sessionState.currentThreadId || activeRoute.view === "thread") {
+    void refreshRateLimits();
+  }
   startAutoRefresh();
   return () => {
     editorClient.dispose();

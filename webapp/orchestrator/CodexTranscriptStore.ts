@@ -423,6 +423,38 @@ function isTurnTerminalEvent(event: CodexTranscriptRawEvent) {
   return event.method === "turn/completed";
 }
 
+function canonicalizeJson(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeJson);
+  }
+
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, nestedValue]) => [key, canonicalizeJson(nestedValue)]));
+}
+
+function stableJsonStringify(value: unknown) {
+  return JSON.stringify(canonicalizeJson(value));
+}
+
+function withoutLastTouchedAt<TValue extends { lastTouchedAt?: unknown }>(value: TValue) {
+  const { lastTouchedAt: _lastTouchedAt, ...rest } = value;
+  return rest;
+}
+
+function preserveCurrentIfOnlyLastTouchedAtChanged<TValue extends { lastTouchedAt?: unknown }>(
+  current: TValue,
+  next: TValue,
+) {
+  return stableJsonStringify(withoutLastTouchedAt(current)) === stableJsonStringify(withoutLastTouchedAt(next))
+    ? current
+    : next;
+}
+
 export default class CodexTranscriptStore {
   private readonly getProtectedThreadIds: () => Iterable<string>;
   private lastPrunedAt = 0;
@@ -1063,15 +1095,21 @@ export default class CodexTranscriptStore {
   }
 
   private updateThreadFile(threadId: string, updater: (file: CodexTranscriptThreadFile) => CodexTranscriptThreadFile) {
-    return this.json.update(this.threadFilePath(threadId), createThreadFile(threadId), updater);
+    return this.json.updateIfChanged(this.threadFilePath(threadId), createThreadFile(threadId), async (file) => (
+      preserveCurrentIfOnlyLastTouchedAtChanged(file, await updater(file))
+    ));
   }
 
   private updateTurnFile(threadId: string, turnId: string, updater: (file: CodexTranscriptTurnFile) => CodexTranscriptTurnFile) {
-    return this.json.update(this.turnFilePath(threadId, turnId), createTurnFile(threadId, turnId), updater);
+    return this.json.updateIfChanged(this.turnFilePath(threadId, turnId), createTurnFile(threadId, turnId), async (file) => (
+      preserveCurrentIfOnlyLastTouchedAtChanged(file, await updater(file))
+    ));
   }
 
   private updateOrphanEventsFile(threadId: string, updater: (file: CodexTranscriptOrphanEventsFile) => CodexTranscriptOrphanEventsFile) {
-    return this.json.update(this.orphanEventsFilePath(threadId), createOrphanEventsFile(threadId), updater);
+    return this.json.updateIfChanged(this.orphanEventsFilePath(threadId), createOrphanEventsFile(threadId), async (file) => (
+      preserveCurrentIfOnlyLastTouchedAtChanged(file, await updater(file))
+    ));
   }
 
   private appendTurnEvent(threadId: string, turnId: string, event: CodexTranscriptRawEvent) {

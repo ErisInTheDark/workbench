@@ -47,6 +47,7 @@ export async function runCodexTranscriptMigrations(rootDirectoryPath: string, js
   await fs.mkdir(rootDirectoryPath, { recursive: true });
   const stateFilePath = path.join(rootDirectoryPath, "migration.json");
   const state = await readMigrationState(stateFilePath);
+  let didRunMigration = false;
   for (let version = state.schemaVersion; version < CODEX_TRANSCRIPT_SCHEMA_VERSION; version += 1) {
     const migration = MIGRATIONS[version];
     if (!migration) {
@@ -54,6 +55,11 @@ export async function runCodexTranscriptMigrations(rootDirectoryPath: string, js
     }
 
     await migration(rootDirectoryPath, jsonStore);
+    didRunMigration = true;
+  }
+
+  if (!didRunMigration && state.schemaVersion === CODEX_TRANSCRIPT_SCHEMA_VERSION) {
+    return;
   }
 
   await jsonStore.write(stateFilePath, {

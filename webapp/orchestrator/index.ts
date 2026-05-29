@@ -673,9 +673,6 @@ function startBridgeServer() {
 
   bridgeServer.listen(port, host, () => {
     log("codex-bridge", `listening on ${CODEX_BRIDGE_URL}; upstream transport is codex app-server stdio or Copilot SDK`);
-    void ensureCodexReady().catch((error) => {
-      logError("codex-bridge", error instanceof Error ? error.message : String(error));
-    });
   });
 }
 

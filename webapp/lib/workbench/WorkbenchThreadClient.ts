@@ -77,6 +77,7 @@ const RATE_LIMIT_REFRESH_TASK_ID = "rate-limit-refresh";
 const CODEX_NOTIFICATION_THREAD_REFRESH_DELAY_MS = 350;
 const CODEX_NOTIFICATION_THREAD_LIST_REFRESH_DELAY_MS = 750;
 const ACTIVE_TURN_RATE_LIMIT_REFRESH_INTERVAL_MS = 15_000;
+const AUTO_REFRESH_REQUEST_SOURCE = "autoRefresh";
 const DEFAULT_TURN_REASONING_SUMMARY = "detailed" as const;
 const DRAFT_THREAD_ID = "new";
 const DRAFT_THREAD_ID_PREFIX = "draft:";
@@ -401,6 +402,7 @@ function WorkbenchThreadClient(
   const optimisticUserMessagesByTurnKey = new Map<string, OptimisticUserMessageEntry[]>();
   const threadUnreadRefreshInFlightKeys = new Set<string>();
   const latestTurnStartedAtByThreadKey = new Map<string, number>();
+  const latestTurnStartedAtRefreshKeyByThreadKey = new Map<string, string>();
   let disposed = false;
   let rateLimitGeneration = 0;
   const refreshRateLimitsPromisesByHarness = new Map<WorkbenchHarness, Promise<void>>();
@@ -508,6 +510,7 @@ function WorkbenchThreadClient(
           includeTurns: true,
           threadId: thread.id,
         },
+        workbenchRequestSource: AUTO_REFRESH_REQUEST_SOURCE,
       });
 
       if (state.projectRootPath && !isProjectCodexThread(response.thread, state.projectRootPath)) {
@@ -783,6 +786,12 @@ function WorkbenchThreadClient(
   }
 
   async function refreshLatestTurnStartedAt(thread: ThreadSummary) {
+    const key = getThreadStateKey(thread.harness, thread.id);
+    const refreshKey = `${thread.status}:${thread.updatedAt}`;
+    if (latestTurnStartedAtRefreshKeyByThreadKey.get(key) === refreshKey) {
+      return;
+    }
+
     try {
       const response = await sendBridgeRequest<ThreadReadResponse>(thread.harness, {
         method: "thread/read",
@@ -790,6 +799,7 @@ function WorkbenchThreadClient(
           includeTurns: true,
           threadId: thread.id,
         },
+        workbenchRequestSource: AUTO_REFRESH_REQUEST_SOURCE,
       });
 
       if (state.projectRootPath && !isProjectCodexThread(response.thread, state.projectRootPath)) {
@@ -797,13 +807,14 @@ function WorkbenchThreadClient(
       }
 
       const latestStartedAt = getLatestTurnStartedAt(response.thread.turns);
-      const key = getThreadStateKey(thread.harness, thread.id);
       if (latestStartedAt === null) {
         latestTurnStartedAtByThreadKey.delete(key);
+        latestTurnStartedAtRefreshKeyByThreadKey.set(key, refreshKey);
         return;
       }
 
       latestTurnStartedAtByThreadKey.set(key, latestStartedAt);
+      latestTurnStartedAtRefreshKeyByThreadKey.set(key, refreshKey);
     } catch {
       // Keep the previous stable ordering key if a best-effort metadata read fails.
     }
@@ -1794,6 +1805,7 @@ function WorkbenchThreadClient(
               limit: 50,
               sortKey: "updated_at",
             },
+            workbenchRequestSource: AUTO_REFRESH_REQUEST_SOURCE,
           });
 
           return response.data
@@ -1874,6 +1886,7 @@ function WorkbenchThreadClient(
         const response = await sendBridgeRequest<GetAccountRateLimitsResponse>(harness, {
           method: "account/rateLimits/read",
           params: undefined,
+          workbenchRequestSource: AUTO_REFRESH_REQUEST_SOURCE,
         });
         const previousSnapshot = rateLimitSnapshotEntriesByHarness.get(harness)?.snapshot ?? null;
         setHarnessRateLimits(harness, selectRateLimitSnapshot(response, harness, previousSnapshot), {
@@ -1899,6 +1912,7 @@ function WorkbenchThreadClient(
       const response = await sendBridgeRequest<{ data?: Array<{ itemId?: string | null; request: WorkbenchUserInputRequest; requestKey: string; threadId: string; turnId?: string | null }> }>(harness, {
         method: "questionnaire/list",
         params: undefined,
+        workbenchRequestSource: AUTO_REFRESH_REQUEST_SOURCE,
       });
       return {
         harness,
