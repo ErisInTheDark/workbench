@@ -7,7 +7,7 @@
  * - isExcludedWorkbenchLibraryFile: test whether a library file is documentation or a template ignored by scanners. Keywords: template, exclusion, scan.
  * - listWorkbenchLibrarySkills: discover Workbench Skill metadata from nested SKILL.md files. Keywords: skills, manifest, discovery.
  * - listWorkbenchLibraryAgents/readWorkbenchLibraryAgentDefinition: discover and load library agent files. Keywords: agent, prompt, library.
- * - listWorkbenchLibraryInstructions: discover universal Workbench instruction packs. Keywords: instructions, universal, bootstrap.
+ * - listWorkbenchLibraryInstructions: discover cached universal Workbench instruction packs. Keywords: instructions, universal, bootstrap, fingerprint.
  * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions: build compact harness instructions and universal instruction content. Keywords: bootstrap, skills, manifest.
  */
 import fs from "node:fs/promises";
@@ -91,6 +91,19 @@ interface WorkbenchInstructionPack {
   path: string;
 }
 
+interface WorkbenchInstructionFileEntry {
+  absolutePath: string;
+  fingerprintPart: string;
+  name: string;
+}
+
+interface WorkbenchInstructionCache {
+  fingerprint: string;
+  instructions: WorkbenchInstructionPack[];
+}
+
+let workbenchInstructionCache: WorkbenchInstructionCache | null = null;
+
 export interface WorkbenchAgentDefinition extends WorkbenchAgentOption {
   prompt: string;
 }
@@ -156,6 +169,19 @@ function normalizeLibraryAgentPath(agentPath: string) {
 async function readTextFile(filePath: string) {
   try {
     return await fs.readFile(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+async function statFileFingerprintPart(filePath: string, entryName: string) {
+  try {
+    const stats = await fs.stat(filePath);
+    if (!stats.isFile()) {
+      return null;
+    }
+
+    return `${entryName}:${stats.size}:${stats.mtimeMs}`;
   } catch {
     return null;
   }
@@ -303,16 +329,22 @@ export async function readWorkbenchLibraryAgentDefinition(agentPath: string): Pr
   };
 }
 
-export async function listWorkbenchLibraryInstructions(): Promise<WorkbenchInstructionPack[]> {
+async function listWorkbenchLibraryInstructionFiles(): Promise<{
+  fingerprint: string;
+  files: WorkbenchInstructionFileEntry[];
+}> {
   await ensureWorkbenchLibrary();
   let entries;
   try {
     entries = await fs.readdir(path.join(workbenchLibraryRoot, "instructions"), { withFileTypes: true });
   } catch {
-    return [];
+    return {
+      files: [],
+      fingerprint: "",
+    };
   }
 
-  const instructions: WorkbenchInstructionPack[] = [];
+  const files: WorkbenchInstructionFileEntry[] = [];
   for (const entry of entries) {
     if (isExcludedWorkbenchLibraryFile(entry.name)) {
       continue;
@@ -324,19 +356,52 @@ export async function listWorkbenchLibraryInstructions(): Promise<WorkbenchInstr
 
     const relativePath = normalizeRelativePath(path.join("instructions", entry.name));
     const absolutePath = safeResolveLibraryPath(relativePath);
-    const content = await readTextFile(absolutePath);
+    const fingerprintPart = await statFileFingerprintPart(absolutePath, entry.name);
+    if (!fingerprintPart) {
+      continue;
+    }
+
+    files.push({
+      absolutePath,
+      fingerprintPart,
+      name: entry.name.replace(/\.md$/i, ""),
+    });
+  }
+
+  files.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+
+  return {
+    files,
+    fingerprint: files.map((file) => file.fingerprintPart).join("|"),
+  };
+}
+
+export async function listWorkbenchLibraryInstructions(): Promise<WorkbenchInstructionPack[]> {
+  const { files, fingerprint } = await listWorkbenchLibraryInstructionFiles();
+  if (workbenchInstructionCache?.fingerprint === fingerprint) {
+    return workbenchInstructionCache.instructions;
+  }
+
+  const instructions: WorkbenchInstructionPack[] = [];
+  for (const file of files) {
+    const content = await readTextFile(file.absolutePath);
     if (!content?.trim()) {
       continue;
     }
 
     instructions.push({
       content: content.trim(),
-      name: entry.name.replace(/\.md$/i, ""),
-      path: normalizeRelativePath(absolutePath),
+      name: file.name,
+      path: normalizeRelativePath(file.absolutePath),
     });
   }
 
-  return instructions.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+  workbenchInstructionCache = {
+    fingerprint,
+    instructions,
+  };
+
+  return instructions;
 }
 
 export async function buildWorkbenchSkillManifestInstructions() {

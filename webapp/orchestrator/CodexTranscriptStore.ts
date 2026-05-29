@@ -9,6 +9,7 @@ import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
 import type { JsonValue } from "../lib/codex/generated/app-server/serde_json/JsonValue";
+import { normalizeThreadItems } from "../lib/codex/thread-item-normalization";
 import type { WorkbenchQuestionnaireHistoryEntry } from "../lib/types";
 import AtomicJsonStore from "./AtomicJsonStore";
 import { hydrateThreadWithStoredTurns } from "./codex-transcript-hydration";
@@ -48,6 +49,10 @@ const PRUNE_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
 const PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const THREAD_TOUCH_THROTTLE_MS = 30_000;
 const SUPPORTED_CODEX_TRANSCRIPT_SCHEMA_VERSIONS = new Set([1, 2, 3, CODEX_TRANSCRIPT_SCHEMA_VERSION]);
+
+interface HydrateThreadResponseOptions {
+  touchThread?: boolean;
+}
 
 function now() {
   return Date.now();
@@ -126,59 +131,6 @@ function createOrphanEventsFile(threadId: string): CodexTranscriptOrphanEventsFi
   };
 }
 
-function normalizeUserInput(value: unknown) {
-  return JSON.stringify(value);
-}
-
-function getTurnItemDedupeKey(item: ThreadItem) {
-  switch (item.type) {
-    case "userMessage":
-      return `userMessage:${normalizeUserInput(item.content)}`;
-    case "hookPrompt":
-      return `hookPrompt:${JSON.stringify(item.fragments)}`;
-    case "agentMessage":
-      return item.text.trim() ? `agentMessage:${item.text.trim()}` : null;
-    case "plan":
-      return item.text.trim() ? `plan:${item.text.trim()}` : null;
-    case "reasoning": {
-      const text = [...item.summary, ...item.content].join("\n").trim();
-      return text ? `reasoning:${text}` : null;
-    }
-    default:
-      return null;
-  }
-}
-
-function chooseRicherTurnItem(left: ThreadItem, right: ThreadItem) {
-  return mergeThreadItem(left, right);
-}
-
-function normalizeMergedTurnItems(items: ThreadItem[]) {
-  const dedupedItems: ThreadItem[] = [];
-  const dedupedIndexesByKey = new Map<string, number>();
-  let changed = false;
-
-  for (const item of items) {
-    const dedupeKey = getTurnItemDedupeKey(item);
-    if (!dedupeKey) {
-      dedupedItems.push(item);
-      continue;
-    }
-
-    const existingIndex = dedupedIndexesByKey.get(dedupeKey);
-    if (existingIndex === undefined) {
-      dedupedIndexesByKey.set(dedupeKey, dedupedItems.length);
-      dedupedItems.push(item);
-      continue;
-    }
-
-    changed = true;
-    dedupedItems[existingIndex] = chooseRicherTurnItem(dedupedItems[existingIndex]!, item);
-  }
-
-  return changed ? dedupedItems : items;
-}
-
 function mergeItemOrder(primaryItemIds: string[], secondaryItemIds: string[]) {
   return Array.from(new Set([
     ...primaryItemIds.filter(Boolean),
@@ -201,7 +153,85 @@ function getTurnOrderingUpdate(file: CodexTranscriptTurnFile, itemId: string, it
 }
 
 function applyTurnTimeline(turn: Turn | null, file: Pick<CodexTranscriptTurnFile, "itemOrder" | "itemTimeline" | "turn">) {
-  return turn ? { ...turn, items: orderMergedItemsByTimeline(turn.items, normalizeTurnTimeline({ ...file, turn })) } : turn;
+  if (!turn) {
+    return turn;
+  }
+
+  const normalizedTurn = {
+    ...turn,
+    items: normalizeThreadItems(turn.items, { mergeDuplicateItems: mergeThreadItem }),
+  };
+  return {
+    ...normalizedTurn,
+    items: orderMergedItemsByTimeline(normalizedTurn.items, normalizeTurnTimeline({ ...file, turn: normalizedTurn })),
+  };
+}
+
+function cleanTurnTimeline(
+  timeline: CodexTranscriptTurnFile["itemTimeline"],
+  survivingItemIds: Set<string>,
+) {
+  const cleanedTimeline: CodexTranscriptTurnFile["itemTimeline"] = [];
+  const removedAnchorRedirects = new Map<string, string | null>();
+  let latestSurvivingAnchorId: string | null = null;
+
+  for (const entry of [...timeline].sort((left, right) => left.sequence - right.sequence)) {
+    const isSelfAnchor = entry.anchorItemId === entry.itemId;
+    if (!survivingItemIds.has(entry.itemId)) {
+      if (isSelfAnchor) {
+        removedAnchorRedirects.set(entry.itemId, latestSurvivingAnchorId);
+      }
+      continue;
+    }
+
+    let anchorItemId = entry.anchorItemId;
+    if (anchorItemId && !survivingItemIds.has(anchorItemId)) {
+      anchorItemId = removedAnchorRedirects.get(anchorItemId) ?? latestSurvivingAnchorId;
+    }
+    if (isSelfAnchor) {
+      anchorItemId = entry.itemId;
+      latestSurvivingAnchorId = entry.itemId;
+    }
+
+    cleanedTimeline.push({
+      anchorItemId,
+      itemId: entry.itemId,
+      sequence: cleanedTimeline.length + 1,
+    });
+  }
+
+  return cleanedTimeline;
+}
+
+function normalizeTurnFileSnapshot(file: CodexTranscriptTurnFile) {
+  if (!file.turn) {
+    return {
+      ...file,
+      itemOrder: file.itemOrder ?? [],
+      itemTimeline: normalizeTurnTimeline(file),
+    };
+  }
+
+  const normalizedTurn = applyTurnTimeline(file.turn, file);
+  if (!normalizedTurn) {
+    return file;
+  }
+
+  const survivingItemIds = new Set(normalizedTurn.items.map((item) => item.id));
+  const normalizedTimeline = normalizeTurnTimeline({
+    ...file,
+    turn: normalizedTurn,
+  });
+
+  return {
+    ...file,
+    itemOrder: normalizedTurn.items.map((item) => item.id),
+    itemTimeline: cleanTurnTimeline(normalizedTimeline, survivingItemIds),
+    turn: {
+      ...normalizedTurn,
+      items: orderMergedItemsByTimeline(normalizedTurn.items, cleanTurnTimeline(normalizedTimeline, survivingItemIds)),
+    },
+  };
 }
 
 function orderTurnFilesByThreadIndex(threadFile: CodexTranscriptThreadFile, turnFiles: CodexTranscriptTurnFile[]) {
@@ -221,7 +251,7 @@ function mergeTurnItems(currentTurn: Turn | null, incomingTurn: Turn) {
   if (!currentTurn) {
     return {
       ...incomingTurn,
-      items: normalizeMergedTurnItems(incomingTurn.items),
+      items: normalizeThreadItems(incomingTurn.items, { mergeDuplicateItems: mergeThreadItem }),
     };
   }
 
@@ -233,7 +263,7 @@ function mergeTurnItems(currentTurn: Turn | null, incomingTurn: Turn) {
   });
   return {
     ...incomingTurn,
-    items: normalizeMergedTurnItems([...mergedCurrentItems, ...incomingOnlyItems]),
+    items: normalizeThreadItems([...mergedCurrentItems, ...incomingOnlyItems], { mergeDuplicateItems: mergeThreadItem }),
     itemsView: incomingTurn.itemsView === "full" || currentTurn.itemsView !== "full"
       ? incomingTurn.itemsView
       : currentTurn.itemsView,
@@ -261,7 +291,7 @@ function upsertItem(turn: Turn | null, item: ThreadItem, turnId: string): Turn {
 
   return {
     ...baseTurn,
-    items: normalizeMergedTurnItems(nextItems),
+    items: normalizeThreadItems(nextItems, { mergeDuplicateItems: mergeThreadItem }),
     itemsView: "full",
   };
 }
@@ -610,7 +640,11 @@ export default class CodexTranscriptStore {
     return sortQuestionnaireEntries(turnFiles.flatMap((file) => file.questionnaireEntries));
   }
 
-  async hydrateThreadResponse(originalRequest: JsonRpcRequest, response: JsonRpcResponse) {
+  async hydrateThreadResponse(
+    originalRequest: JsonRpcRequest,
+    response: JsonRpcResponse,
+    options: HydrateThreadResponseOptions = {},
+  ) {
     await this.ready();
     const method = asString(originalRequest.method);
     const originalParams = asRecord(originalRequest.params);
@@ -627,14 +661,19 @@ export default class CodexTranscriptStore {
     }
 
     const upstreamTurnIds = new Set(thread.turns.map((turn) => turn.id));
-    const storedTurns = (await this.readTurnFiles(thread.id, { turnIds: upstreamTurnIds }))
+    const storedTurns = (await this.readTurnFiles(thread.id, {
+      repair: options.touchThread !== false,
+      turnIds: upstreamTurnIds,
+    }))
       .filter((file) => file.turn !== null)
       .map((file) => ({
         itemTimeline: file.itemTimeline,
         turn: file.turn!,
       }));
     const hydratedThread = hydrateThreadWithStoredTurns(thread, storedTurns);
-    await this.touchThread(thread.id, hydratedThread);
+    if (options.touchThread !== false) {
+      await this.touchThread(thread.id, hydratedThread);
+    }
     return hydratedThread === thread
       ? response
       : {
@@ -657,7 +696,7 @@ export default class CodexTranscriptStore {
       return response;
     }
 
-    const storedTurns = orderTurnFilesByThreadIndex(threadFile, await this.readTurnFiles(threadId))
+    const storedTurns = orderTurnFilesByThreadIndex(threadFile, await this.readTurnFiles(threadId, { repair: true }))
       .filter((file) => file.turn !== null)
       .map((file) => ({
         itemTimeline: file.itemTimeline,
@@ -1102,7 +1141,7 @@ export default class CodexTranscriptStore {
 
   private updateTurnFile(threadId: string, turnId: string, updater: (file: CodexTranscriptTurnFile) => CodexTranscriptTurnFile) {
     return this.json.updateIfChanged(this.turnFilePath(threadId, turnId), createTurnFile(threadId, turnId), async (file) => (
-      preserveCurrentIfOnlyLastTouchedAtChanged(file, await updater(file))
+      preserveCurrentIfOnlyLastTouchedAtChanged(file, normalizeTurnFileSnapshot(await updater(file)))
     ));
   }
 
@@ -1132,7 +1171,7 @@ export default class CodexTranscriptStore {
     await this.readyPromise;
   }
 
-  private async readTurnFiles(threadId: string, options: { turnIds?: Iterable<string> } = {}) {
+  private async readTurnFiles(threadId: string, options: { repair?: boolean; turnIds?: Iterable<string> } = {}) {
     const turnsDirectoryPath = path.join(this.threadDirectoryPath(threadId), "turns");
     let entries: string[] = [];
     try {
@@ -1150,21 +1189,23 @@ export default class CodexTranscriptStore {
     const files = await Promise.all(entries
       .filter((entry) => entry.endsWith(".json"))
       .filter((entry) => !allowedEntries || allowedEntries.has(entry))
-      .map((entry) => this.json.read<CodexTranscriptTurnFile | null>(path.join(turnsDirectoryPath, entry), null)));
-    return files
-      .filter((file): file is CodexTranscriptTurnFile => (
-        file !== null && SUPPORTED_CODEX_TRANSCRIPT_SCHEMA_VERSIONS.has(file.schemaVersion)
-      ))
-      .map((file) => {
-        const normalizedFile = {
-          ...file,
-          itemOrder: file.itemOrder ?? [],
-          itemTimeline: normalizeTurnTimeline(file),
-        };
+      .map(async (entry) => {
+        const filePath = path.join(turnsDirectoryPath, entry);
         return {
-          ...normalizedFile,
-          turn: applyTurnTimeline(file.turn, normalizedFile),
+          file: await this.json.read<CodexTranscriptTurnFile | null>(filePath, null),
+          filePath,
         };
-      });
+      }));
+    return await Promise.all(files
+      .filter((entry): entry is { file: CodexTranscriptTurnFile; filePath: string } => (
+        entry.file !== null && SUPPORTED_CODEX_TRANSCRIPT_SCHEMA_VERSIONS.has(entry.file.schemaVersion)
+      ))
+      .map(async ({ file, filePath }) => {
+        const normalizedFile = normalizeTurnFileSnapshot(file);
+        if (options.repair && stableJsonStringify(file) !== stableJsonStringify(normalizedFile)) {
+          await this.json.updateIfChanged(filePath, normalizedFile, () => normalizedFile);
+        }
+        return normalizedFile;
+      }));
   }
 }

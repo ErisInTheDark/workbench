@@ -3,6 +3,7 @@
  * - No production exports; typechecked manual fixtures for transcript timeline helpers. Keywords: codex, transcript, fixtures.
  */
 import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
+import { normalizeThreadItems } from "../lib/codex/thread-item-normalization";
 import { mergeThreadItem } from "./codex-transcript-item-merge";
 import { orderMergedItemsByTimeline, rememberTimelineItem } from "./codex-transcript-timeline";
 import type { CodexTranscriptTurnTimelineEntry } from "./codex-transcript-types";
@@ -62,14 +63,83 @@ const timelineWithCommand = rememberTimelineItem({
 const orderedItems = orderMergedItemsByTimeline([commandExecution, agentMessage], timelineWithCommand);
 const mergedCommand = mergeThreadItem({ ...commandExecution, aggregatedOutput: null, status: "inProgress" }, commandExecution);
 
+const granularReasoningA = {
+  content: [],
+  id: "rs-a",
+  summary: ["**Considering context skills**\n\nI need to focus on the context skill."],
+  type: "reasoning",
+} satisfies ThreadItem;
+
+const granularReasoningB = {
+  content: [],
+  id: "rs-b",
+  summary: ["**Investigating project guidance**\n\nI need to locate the project guidance."],
+  type: "reasoning",
+} satisfies ThreadItem;
+
+const cumulativeSnapshotReasoning = {
+  content: [],
+  id: "item-5",
+  summary: [
+    granularReasoningA.summary[0],
+    granularReasoningB.summary[0],
+  ],
+  type: "reasoning",
+} satisfies ThreadItem;
+
+const indexedGenericSnapshotReasoning = {
+  content: [],
+  id: "item-6",
+  summary: [
+    "",
+    granularReasoningA.summary[0],
+    "Unique generic snapshot segment",
+  ],
+  type: "reasoning",
+} satisfies ThreadItem;
+
+const repeatedCanonicalReasoningA = {
+  content: [],
+  id: "rs-c",
+  summary: [granularReasoningA.summary[0]],
+  type: "reasoning",
+} satisfies ThreadItem;
+
+const normalizedReasoningItems = normalizeThreadItems([
+  granularReasoningA,
+  granularReasoningB,
+  cumulativeSnapshotReasoning,
+]);
+const normalizedReasoningItemsFromGenericFirst = normalizeThreadItems([
+  cumulativeSnapshotReasoning,
+  granularReasoningA,
+  granularReasoningB,
+]);
+const normalizedIndexedGenericSnapshotReasoning = normalizeThreadItems([
+  granularReasoningA,
+  indexedGenericSnapshotReasoning,
+]);
+const normalizedRepeatedCanonicalReasoning = normalizeThreadItems([
+  granularReasoningA,
+  repeatedCanonicalReasoningA,
+]);
+
 void ([
   timeline,
   timelineWithCommand,
   orderedItems,
   mergedCommand,
-] satisfies [CodexTranscriptTurnTimelineEntry[], CodexTranscriptTurnTimelineEntry[], ThreadItem[], ThreadItem]);
+  normalizedReasoningItems,
+  normalizedReasoningItemsFromGenericFirst,
+  normalizedIndexedGenericSnapshotReasoning,
+  normalizedRepeatedCanonicalReasoning,
+] satisfies [CodexTranscriptTurnTimelineEntry[], CodexTranscriptTurnTimelineEntry[], ThreadItem[], ThreadItem, ThreadItem[], ThreadItem[], ThreadItem[], ThreadItem[]]);
 
 // Manual checklist:
 // - `orderedItems` should be `[agentMessage, commandExecution]`, proving command/tool items stay after their anchor.
 // - `mergedCommand` should keep stored command output and completed status.
+// - `normalizedReasoningItems` should keep `rs-a` and `rs-b`, then drop duplicate cumulative snapshot item `item-5`.
+// - `normalizedReasoningItemsFromGenericFirst` should still prefer granular `rs-*` items when the generic snapshot item appears first.
+// - `normalizedIndexedGenericSnapshotReasoning` should preserve the generic snapshot summary indexes while blanking only duplicated segments.
+// - `normalizedRepeatedCanonicalReasoning` should keep both canonical `rs-*` reasoning items even when their text matches.
 // - Partial `itemTimeline` + legacy `itemOrder` cases should be added here when implementing migrations.

@@ -6,6 +6,7 @@
 import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
+import { normalizeThreadItems } from "../lib/codex/thread-item-normalization";
 import type { CodexTranscriptTurnTimelineEntry } from "./codex-transcript-types";
 import { mergeThreadItem } from "./codex-transcript-item-merge";
 import { orderMergedItemsByTimeline } from "./codex-transcript-timeline";
@@ -61,53 +62,8 @@ function shouldUseStoredItems(upstreamTurn: Turn, storedTurn: Turn) {
   return countStructuredItems(storedTurn.items) > countStructuredItems(upstreamTurn.items);
 }
 
-function getTurnItemDedupeKey(item: ThreadItem) {
-  switch (item.type) {
-    case "userMessage":
-      return `userMessage:${JSON.stringify(item.content)}`;
-    case "hookPrompt":
-      return `hookPrompt:${JSON.stringify(item.fragments)}`;
-    case "agentMessage":
-      return item.text.trim() ? `agentMessage:${item.text.trim()}` : null;
-    case "plan":
-      return item.text.trim() ? `plan:${item.text.trim()}` : null;
-    case "reasoning": {
-      const text = [...item.summary, ...item.content].join("\n").trim();
-      return text ? `reasoning:${text}` : null;
-    }
-    default:
-      return null;
-  }
-}
-
 function chooseRicherTurnItem(left: ThreadItem, right: ThreadItem) {
   return mergeThreadItem(left, right);
-}
-
-function normalizeMergedTurnItems(items: ThreadItem[]) {
-  const dedupedItems: ThreadItem[] = [];
-  const dedupedIndexesByKey = new Map<string, number>();
-  let changed = false;
-
-  for (const item of items) {
-    const dedupeKey = getTurnItemDedupeKey(item);
-    if (!dedupeKey) {
-      dedupedItems.push(item);
-      continue;
-    }
-
-    const existingIndex = dedupedIndexesByKey.get(dedupeKey);
-    if (existingIndex === undefined) {
-      dedupedIndexesByKey.set(dedupeKey, dedupedItems.length);
-      dedupedItems.push(item);
-      continue;
-    }
-
-    changed = true;
-    dedupedItems[existingIndex] = chooseRicherTurnItem(dedupedItems[existingIndex]!, item);
-  }
-
-  return changed ? dedupedItems : items;
 }
 
 function mergeTurnItemLists(primaryItems: ThreadItem[], secondaryItems: ThreadItem[], timeline: CodexTranscriptTurnTimelineEntry[]) {
@@ -118,7 +74,7 @@ function mergeTurnItemLists(primaryItems: ThreadItem[], secondaryItems: ThreadIt
     return secondaryItem ? chooseRicherTurnItem(item, secondaryItem) : item;
   });
   const secondaryOnlyItems = secondaryItems.filter((item) => !primaryIds.has(item.id));
-  return orderMergedItemsByTimeline(normalizeMergedTurnItems([...mergedPrimaryItems, ...secondaryOnlyItems]), timeline);
+  return orderMergedItemsByTimeline(normalizeThreadItems([...mergedPrimaryItems, ...secondaryOnlyItems], { mergeDuplicateItems: mergeThreadItem }), timeline);
 }
 
 export function mergeStoredTurnIntoUpstreamTurn(upstreamTurn: Turn, storedTurn: StoredTurnWithTimeline) {
@@ -163,7 +119,7 @@ export function hydrateThreadWithStoredTurns(thread: Thread, storedTurns: Stored
 
     turns.push({
       ...storedTurn.turn,
-      items: orderMergedItemsByTimeline(storedTurn.turn.items, storedTurn.itemTimeline),
+      items: orderMergedItemsByTimeline(normalizeThreadItems(storedTurn.turn.items, { mergeDuplicateItems: mergeThreadItem }), storedTurn.itemTimeline),
     });
     changed = true;
   }

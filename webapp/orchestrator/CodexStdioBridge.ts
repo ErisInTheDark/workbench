@@ -242,6 +242,18 @@ function shouldCapturePollingTranscript(method: string | null, requestSource: Wo
   }
 }
 
+function shouldHydrateThreadResponse(method: string | null) {
+  switch (method) {
+    case "thread/fork":
+    case "thread/read":
+    case "thread/resume":
+    case "thread/start":
+      return true;
+    default:
+      return false;
+  }
+}
+
 function isStreamingTranscriptNotification(notification: JsonRpcNotification) {
   switch (notification.method) {
     case "item/agentMessage/delta":
@@ -1113,12 +1125,16 @@ export default class CodexStdioBridge {
     let hydratedMessage = message;
     const shouldCaptureTranscript = isPendingInternalResponse(pending)
       || shouldCapturePollingTranscript(pending.method, pending.requestSource);
-    if (shouldCaptureTranscript) {
+    if (shouldCaptureTranscript || shouldHydrateThreadResponse(pending.method)) {
       try {
-        hydratedMessage = await this.ensureTranscriptStore().hydrateThreadResponse(pending.upstreamRequest, message);
+        hydratedMessage = await this.ensureTranscriptStore().hydrateThreadResponse(pending.upstreamRequest, message, {
+          touchThread: shouldCaptureTranscript,
+        });
       } catch (error) {
         logError("codex-transcript", `failed to hydrate thread response: ${error instanceof Error ? error.message : String(error)}`);
       }
+    }
+    if (shouldCaptureTranscript) {
       void this.captureTranscript(`upstream-response:${pending.upstreamRequest.method ?? "unknown"}`, async () => {
         const transcriptStore = this.ensureTranscriptStore();
         await transcriptStore.recordUpstreamResponse(pending.upstreamRequest, message);

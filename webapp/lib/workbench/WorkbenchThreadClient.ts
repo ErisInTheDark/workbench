@@ -32,6 +32,7 @@ import {
     isCodexJsonRpcFailure,
 } from "../codex/protocol";
 import { formatThreadStatus, isProjectCodexThread, toThreadPayload, toThreadSummary } from "../codex/thread-adapter";
+import { normalizeThreadItems } from "../codex/thread-item-normalization";
 import { getCurrentInProgressTurn, getCurrentTurn } from "../codex/thread-state";
 import {
     buildCodexThreadBootstrapInstructions,
@@ -407,7 +408,6 @@ function WorkbenchThreadClient(
   let rateLimitGeneration = 0;
   const refreshRateLimitsPromisesByHarness = new Map<WorkbenchHarness, Promise<void>>();
   let refreshThreadsPromise: Promise<void> | null = null;
-  let workbenchLibraryInstructionsPromise: Promise<string | null> | null = null;
 
   state.threadUnreadStateByKey = new Map(Object.entries(readStoredThreadUnreadState()));
 
@@ -685,6 +685,28 @@ function WorkbenchThreadClient(
     };
   }
 
+  function normalizeThreadPayloadItems(thread: ThreadPayload | null) {
+    if (!thread) {
+      return thread;
+    }
+
+    let changed = false;
+    const turns = thread.turns.map((turn) => {
+      const items = normalizeThreadItems(turn.items, { mergeDuplicateItems: mergeLiveStreamingItem });
+      if (items === turn.items) {
+        return turn;
+      }
+
+      changed = true;
+      return {
+        ...turn,
+        items,
+      };
+    });
+
+    return changed ? { ...thread, turns } : thread;
+  }
+
   function setRateLimits(rateLimits: RateLimitSnapshot | null) {
     if (state.rateLimits === rateLimits) {
       return;
@@ -834,7 +856,7 @@ function WorkbenchThreadClient(
       pruneStreamingDuplicates?: boolean;
     } = {},
   ) {
-    const stableThread = preserveStableServiceTier ? mergeStableThreadMetadata(thread) : thread;
+    const stableThread = normalizeThreadPayloadItems(preserveStableServiceTier ? mergeStableThreadMetadata(thread) : thread);
     const nextThread = pruneStreamingDuplicates
       ? pruneThreadStreamingDuplicates(applyOptimisticUserMessageOverlay(applyPersistedQuestionnaireHistory(stableThread)))
       : applyOptimisticUserMessageOverlay(applyPersistedQuestionnaireHistory(stableThread));
@@ -1026,6 +1048,15 @@ function WorkbenchThreadClient(
   }
 
   function canPruneDuplicateStreamingItems(turnId: string, item: ThreadItem, candidate: ThreadItem) {
+    if (item.type === "reasoning" && candidate.type === "reasoning" && item.id !== candidate.id) {
+      const itemKey = getThreadItemKey(turnId, item.id);
+      const candidateKey = getThreadItemKey(turnId, candidate.id);
+      return (
+        clientCreatedStreamingItemKeys.has(itemKey)
+        || clientCreatedStreamingItemKeys.has(candidateKey)
+      ) && isStructurallyMatchingStreamingItem(item, candidate);
+    }
+
     if (isThreadStateChangeLikeAgentMessage(item) || isThreadStateChangeLikeAgentMessage(candidate)) {
       const itemKey = getThreadItemKey(turnId, item.id);
       const candidateKey = getThreadItemKey(turnId, candidate.id);
@@ -1220,6 +1251,10 @@ function WorkbenchThreadClient(
       || item.type === "collabAgentToolCall";
   }
 
+  function isGenericSnapshotItemId(itemId: string) {
+    return /^item-\d+$/u.test(itemId);
+  }
+
   function shouldPreserveUnmatchedLiveItem(
     incomingTurn: Turn,
     liveTurn: Turn,
@@ -1227,6 +1262,10 @@ function WorkbenchThreadClient(
     preserveAllUnmatchedLiveItems: boolean,
     preserveToolItemsFromThinnerTurn: boolean,
   ) {
+    if (incomingTurn.itemsView === "full" && isGenericSnapshotItemId(liveItem.id)) {
+      return false;
+    }
+
     if (preserveAllUnmatchedLiveItems) {
       return true;
     }
@@ -1639,20 +1678,16 @@ function WorkbenchThreadClient(
   }
 
   async function readWorkbenchLibraryInstructions() {
-    if (!workbenchLibraryInstructionsPromise) {
-      workbenchLibraryInstructionsPromise = fetch("/api/workbench-library/skills", { cache: "no-store" })
-        .then(async (response) => {
-          if (!response.ok) {
-            return null;
-          }
+    return await fetch("/api/workbench-library/skills", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) {
+          return null;
+        }
 
-          const payload = await response.json() as { instructions?: string | null };
-          return payload.instructions?.trim() ? payload.instructions : null;
-        })
-        .catch(() => null);
-    }
-
-    return await workbenchLibraryInstructionsPromise;
+        const payload = await response.json() as { instructions?: string | null };
+        return payload.instructions?.trim() ? payload.instructions : null;
+      })
+      .catch(() => null);
   }
 
   async function buildCodexDeveloperInstructions(
