@@ -39,6 +39,7 @@ import ThreadAgentName from "./ThreadAgentName";
 import ThreadComposer from "./ThreadComposer";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadMarkdown from "./ThreadMarkdown";
+import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadRateLimits from "./ThreadRateLimits";
 import { ThreadThreadContent, ThreadTurnDetails } from "./thread-view-items";
 
@@ -834,18 +835,16 @@ export default memo(function ThreadView ({
                     summary={summary}
                     summaryClassName="text-[0.92em] font-medium leading-[1.6]"
                   >
-                    <div className="flex relative h-[calc(22rem*0.9)] before:absolute before:inset-0 before:-z-1 before:hidden before:bg-[linear-gradient(to_right,transparent,#0008_10%,#0008_90%,transparent)] before:content-[''] before:border-y before:border-[color-mix(in_srgb,var(--text)_10%,transparent)] md:before:block">
-                      <div className="explorer-scrollbar my-[calc(22rem*-0.1*0.5)] h-[22rem] scale-[0.9] overflow-y-auto py-2">
-                        <ThreadThreadContent
-                          onOpenFile={onOpenFile}
-                          inlineMentionSources={inlineMentionSources}
-                          knownSkills={workbenchSkills}
-                          projectRootPath={projectRootPath}
-                          relatedThreadsById={subthreadsById}
-                          thread={liveSubagentThread}
-                        />
-                      </div>
-                    </div>
+                    <ThreadPreviewFrame height="22rem" scale={0.9}>
+                      <ThreadThreadContent
+                        onOpenFile={onOpenFile}
+                        inlineMentionSources={inlineMentionSources}
+                        knownSkills={workbenchSkills}
+                        projectRootPath={projectRootPath}
+                        relatedThreadsById={subthreadsById}
+                        thread={liveSubagentThread}
+                      />
+                    </ThreadPreviewFrame>
                   </ThreadDisclosure>
                 );
               })}

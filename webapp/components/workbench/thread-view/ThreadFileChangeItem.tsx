@@ -121,7 +121,7 @@ function ThreadFileChangeDetails ({
         ) : null}
       </div>
       {parsedChange.change.diff.trim() ? (
-        <ThreadCodeDisplay diff={parsedChange.diff} variant="diff" />
+        <ThreadCodeDisplay diff={parsedChange.diff} preview variant="diff" />
       ) : (
         <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No diff captured.</p>
       )}

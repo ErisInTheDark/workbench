@@ -37,6 +37,7 @@ import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
 import ThreadFileChangeItem from "./ThreadFileChangeItem";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
+import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadReasoningItem from "./ThreadReasoningItem";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadUserImage from "./ThreadUserImage";
@@ -471,19 +472,21 @@ function ThreadCurrentSubagentItemPreview ({
   }
 
   return (
-    <ThreadRenderableBlockView
-      block={block}
-      finalAgentMessageId={getFinalAgentMessageId(currentTurn)}
-      isMostRecentBlock={true}
-      inlineMentionSources={inlineMentionSources}
-      knownSkills={knownSkills}
-      onOpenFile={onOpenFile}
-      primaryUserBlock={null}
-      projectRootPath={projectRootPath}
-      relatedThreadsById={relatedThreadsById}
-      turnCompletedAt={currentTurn.completedAt}
-      turnStartedAt={currentTurn.startedAt}
-    />
+    <ThreadPreviewFrame height="22rem" scale={0.9}>
+      <ThreadRenderableBlockView
+        block={block}
+        finalAgentMessageId={getFinalAgentMessageId(currentTurn)}
+        isMostRecentBlock={true}
+        inlineMentionSources={inlineMentionSources}
+        knownSkills={knownSkills}
+        onOpenFile={onOpenFile}
+        primaryUserBlock={null}
+        projectRootPath={projectRootPath}
+        relatedThreadsById={relatedThreadsById}
+        turnCompletedAt={currentTurn.completedAt}
+        turnStartedAt={currentTurn.startedAt}
+      />
+    </ThreadPreviewFrame>
   );
 }
 
@@ -761,13 +764,15 @@ function ThreadCommandExecutionDetails ({
         ) : null}
         {item.aggregatedOutput?.trim() ? (
           <ThreadCodeDisplay
-            header={<ThreadCommandHeader command={item.command} />}
+            header={<ThreadCommandHeader command={item.command} surface="framed" />}
             output={item.aggregatedOutput.trim()}
+            preview
             variant="plain"
           />
         ) : (
           <ThreadCodeDisplay
-            header={<ThreadCommandHeader command={item.command} />}
+            header={<ThreadCommandHeader command={item.command} surface="framed" />}
+            preview
             variant="plain"
           />
         )}

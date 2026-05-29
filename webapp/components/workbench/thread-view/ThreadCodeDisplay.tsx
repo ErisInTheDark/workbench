@@ -8,20 +8,27 @@
 import { useState, type ReactNode } from "react";
 
 import type { ParsedUnifiedDiff, UnifiedDiffLine } from "../../../lib/workbench/thread/thread-file-diff";
+import ThreadPreviewFrame from "./ThreadPreviewFrame";
 
 type ThreadCodeDisplayProps =
   | {
     diff: ParsedUnifiedDiff;
     header?: ReactNode;
     output?: never;
+    preview?: boolean;
+    previewHeight?: string;
     variant: "diff";
   }
   | {
     diff?: never;
     header?: ReactNode;
     output?: string;
+    preview?: boolean;
+    previewHeight?: string;
     variant: "plain";
   };
+
+type ThreadCodeDisplaySurface = "default" | "framed";
 
 const EDGE_FADE_CLASS = `
   relative
@@ -29,14 +36,21 @@ const EDGE_FADE_CLASS = `
   after:hidden after:absolute after:inset-0 after:left-auto after:w-20 after:bg-linear-to-l after:from-[var(--bg)] after:to-transparent md:after:block
 `;
 
-export function ThreadCommandHeader ({ command }: { command: string }) {
+export function ThreadCommandHeader ({
+  command,
+  surface = "default",
+}: {
+  command: string;
+  surface?: ThreadCodeDisplaySurface;
+}) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const isFramed = surface === "framed";
 
   return (
     <button
       aria-expanded={isExpanded}
       className={`
-        ${EDGE_FADE_CLASS} block w-full cursor-pointer border-0 bg-[color-mix(in_srgb,var(--muted)_5%,transparent)] px-4 py-2 md:px-12
+        ${isFramed ? "" : EDGE_FADE_CLASS} block w-full cursor-pointer border-0 ${isFramed ? "bg-transparent" : "bg-[color-mix(in_srgb,var(--muted)_5%,transparent)]"} px-4 py-2 md:px-12
         text-left font-mono text-[0.78em] leading-[1.6] text-text hover:bg-[color-mix(in_srgb,var(--text)_6%,transparent)]
         focus-visible:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] focus-visible:outline-none
       `}
@@ -55,8 +69,10 @@ export function ThreadCommandHeader ({ command }: { command: string }) {
 
 function ThreadUnifiedDiff ({
   diff,
+  surface = "default",
 }: {
   diff: ParsedUnifiedDiff;
+  surface?: ThreadCodeDisplaySurface;
 }) {
   const lineNumberWidth = Math.max(
     2,
@@ -89,6 +105,7 @@ function ThreadUnifiedDiff ({
                   key={`line:${hunkIndex}:${lineIndex}`}
                   line={line}
                   lineNumberWidth={lineNumberWidth}
+                  surface={surface}
                 />
               ))}
             </div>
@@ -102,9 +119,11 @@ function ThreadUnifiedDiff ({
 function ThreadUnifiedDiffLine ({
   line,
   lineNumberWidth,
+  surface = "default",
 }: {
   line: UnifiedDiffLine;
   lineNumberWidth: number;
+  surface?: ThreadCodeDisplaySurface;
 }) {
   if (line.type === "note") {
     return (
@@ -119,7 +138,7 @@ function ThreadUnifiedDiffLine ({
   return (
     <div
       className={`
-        ${EDGE_FADE_CLASS} grid w-max min-w-full px-4 font-mono tabular-nums text-[0.78em] leading-[1.65] md:px-12 ${lineStyle.rowClassName}
+        ${surface === "framed" ? "" : EDGE_FADE_CLASS} grid w-max min-w-full px-4 font-mono tabular-nums text-[0.78em] leading-[1.65] md:px-12 ${getDiffRowClassName(lineStyle.rowClassName, line.type, surface)}
       `}
       style={{ gridTemplateColumns: `${lineNumberWidth + 4}ch ${lineNumberWidth + 4}ch 3rem max-content` }}
     >
@@ -137,6 +156,18 @@ function ThreadUnifiedDiffLine ({
       </span>
     </div>
   );
+}
+
+function getDiffRowClassName (
+  rowClassName: string,
+  type: UnifiedDiffLine["type"],
+  surface: ThreadCodeDisplaySurface,
+) {
+  if (surface !== "framed" || type !== "context") {
+    return rowClassName;
+  }
+
+  return "";
 }
 
 function getDiffLineStyle (type: UnifiedDiffLine["type"]) {
@@ -169,11 +200,19 @@ function getDiffLineStyle (type: UnifiedDiffLine["type"]) {
   }
 }
 
-function ThreadPlainOutput ({ output }: { output: string }) {
+function ThreadPlainOutput ({
+  output,
+  surface = "default",
+}: {
+  output: string;
+  surface?: ThreadCodeDisplaySurface;
+}) {
+  const isFramed = surface === "framed";
+
   return (
     <pre
       className={`
-        ${EDGE_FADE_CLASS} m-0 overflow-x-auto whitespace-pre bg-[color-mix(in_srgb,var(--muted)_5%,transparent)]
+        ${isFramed ? "" : EDGE_FADE_CLASS} m-0 overflow-x-auto whitespace-pre ${isFramed ? "bg-transparent" : "bg-[color-mix(in_srgb,var(--muted)_5%,transparent)]"}
         px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text md:px-12
       `}
     >
@@ -183,16 +222,28 @@ function ThreadPlainOutput ({ output }: { output: string }) {
 }
 
 export default function ThreadCodeDisplay (props: ThreadCodeDisplayProps) {
+  const surface: ThreadCodeDisplaySurface = props.preview ? "framed" : "default";
+  const content = props.variant === "diff" ? (
+    <ThreadUnifiedDiff diff={props.diff} surface={surface} />
+  ) : props.output ? (
+    <ThreadPlainOutput output={props.output} surface={surface} />
+  ) : null;
+
+  if (props.preview && (content || props.header)) {
+    return (
+      <ThreadPreviewFrame contentPadding="none" height={props.previewHeight ?? "24rem"}>
+        <div className="max-w-full overflow-x-auto">
+          {props.header}
+          {content}
+        </div>
+      </ThreadPreviewFrame>
+    );
+  }
+
   return (
     <div className="max-w-full overflow-x-auto md:-ml-12 md:-mr-4">
       {props.header}
-      {props.variant === "diff" ? (
-        <ThreadUnifiedDiff diff={props.diff} />
-      ) : props.output ? (
-        <ThreadPlainOutput output={props.output} />
-      ) : (
-        null
-      )}
+      {content}
     </div>
   );
 }

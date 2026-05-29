@@ -28,6 +28,7 @@ import {
 } from "../../../lib/workbench/project/project-file-path";
 import { getInlineMentionMarkClassName } from "../../../lib/workbench/thread/inline-mention-styles";
 import ThreadDisclosure from "./ThreadDisclosure";
+import ThreadPreviewFrame from "./ThreadPreviewFrame";
 
 // reusable classes only
 const BLOCK_SPACING_CLASS = "mb-[0.9em] last:mb-0";
@@ -267,11 +268,14 @@ function renderThreadPlanBlock (block: Extract<ParsedBlock, { type: "plan" }>, o
       summary="Plan"
       summaryClassName="text-[0.92em] font-medium leading-[1.6]"
     >
-      <div className="relative before:absolute before:inset-0 before:-z-1 before:hidden before:-mx-8 before:bg-[linear-gradient(to_right,transparent,#8882_10%,#8882_90%,transparent)] before:content-[''] before:border-y before:border-[color-mix(in_srgb,var(--text)_10%,transparent)] md:before:block">
-        <div className="px-4 py-8 mb-8">
-          {content.length ? content : <p className={BLOCK_SPACING_CLASS}><br /></p>}
-        </div>
-      </div>
+      <ThreadPreviewFrame
+        backgroundClassName="before:bg-[linear-gradient(to_right,transparent,#8882_10%,#8882_90%,transparent)]"
+        contentClassName="mb-8 px-4 py-8"
+        edgeBleed="wide"
+        mode="panel"
+      >
+        {content.length ? content : <p className={BLOCK_SPACING_CLASS}><br /></p>}
+      </ThreadPreviewFrame>
     </ThreadDisclosure>
   );
 }
