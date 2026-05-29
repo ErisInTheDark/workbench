@@ -927,12 +927,14 @@ export default memo(function ThreadView ({
             onThreadModelChange={handleThreadModelChange}
             pendingUserInputRequest={activePendingUserInputRequest}
             projectId={projectId}
+            projectRootPath={projectRootPath}
             rateLimits={rateLimits}
             threadComposerDraft={threadComposerDraftsByThreadId[activeThread.id] ?? null}
             threadQuestionnaireDraft={activePendingUserInputRequest
               ? threadQuestionnaireDraftsByKey[`${activeThread.id}:${activePendingUserInputRequest.requestKey}`] ?? null
               : null}
             threadSavedComposerDrafts={threadSavedComposerDrafts}
+            knownSkills={workbenchSkills}
             thread={activeThread}
           >
             <ThreadRateLimits

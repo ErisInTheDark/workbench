@@ -65,6 +65,7 @@ export type ThreadCommandDisplayPart =
   | CommandSeparatorDisplayPart;
 
 export interface ThreadCommandSummaryStats {
+  deletedPaths: number;
   gitDiffChecks: number;
   gitStatusChecks: number;
   listedFiles: number;

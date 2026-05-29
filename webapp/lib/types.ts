@@ -1,4 +1,5 @@
 import type { RateLimitSnapshot } from "./codex/generated/app-server/v2/RateLimitSnapshot";
+import type { CommandAction } from "./codex/generated/app-server/v2/CommandAction";
 import type { Turn } from "./codex/generated/app-server/v2/Turn";
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
 import type { WorkbenchRoute } from "./workbench/navigation/workbench-route";
@@ -154,11 +155,22 @@ export interface WorkbenchUserInputQuestion {
   options: WorkbenchUserInputOption[];
 }
 
+export interface WorkbenchApprovalCommandContext {
+  command: string;
+  commandActions: CommandAction[];
+  cwd: string;
+}
+
+export interface WorkbenchUserInputApprovalContext {
+  command?: WorkbenchApprovalCommandContext;
+}
+
 export interface WorkbenchUserInputRequest {
   id: string;
   title: string;
   summary: string;
   submitLabel: string;
+  approval?: WorkbenchUserInputApprovalContext;
   questions: WorkbenchUserInputQuestion[];
 }
 

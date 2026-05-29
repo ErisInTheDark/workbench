@@ -274,6 +274,12 @@ function formatCommandBlockSummaryText(
       : `listed files ${summaryStats.listedFiles} times`);
   }
 
+  if (summaryStats.deletedPaths) {
+    segments.push(summaryStats.deletedPaths === 1
+      ? "deleted 1 path"
+      : `deleted ${summaryStats.deletedPaths} paths`);
+  }
+
   if (summaryStats.pathChecks) {
     segments.push(summaryStats.pathChecks === 1
       ? "checked 1 path"

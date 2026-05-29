@@ -17,6 +17,7 @@ import type { ToolRequestUserInputParams } from "../lib/codex/generated/app-serv
 import type { ToolRequestUserInputQuestion } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputQuestion";
 import type { ToolRequestUserInputResponse } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputResponse";
 import type {
+    WorkbenchApprovalCommandContext,
     WorkbenchQuestionnaireHistoryEntry,
     WorkbenchUserInputQuestion,
     WorkbenchUserInputRequest,
@@ -359,11 +360,13 @@ function createApprovalRequest(
   requestKey: string,
   {
     actionLabel,
+    approval,
     details,
     prompt,
     title,
   }: {
     actionLabel: string;
+    approval?: WorkbenchUserInputRequest["approval"];
     details: Array<string | null>;
     prompt: string;
     title: string;
@@ -371,6 +374,7 @@ function createApprovalRequest(
 ): WorkbenchUserInputRequest {
   return {
     id: `codex:${threadId}:${requestKey}`,
+    approval,
     questions: [{
       allowOther: false,
       header: "Approval",
@@ -385,6 +389,29 @@ function createApprovalRequest(
   };
 }
 
+function createCommandApprovalContext({
+  command,
+  commandActions,
+  cwd,
+}: {
+  command: string | null | undefined;
+  commandActions?: WorkbenchApprovalCommandContext["commandActions"] | null;
+  cwd: string | null | undefined;
+}): WorkbenchUserInputRequest["approval"] | undefined {
+  const normalizedCommand = command?.trim();
+  if (!normalizedCommand) {
+    return undefined;
+  }
+
+  return {
+    command: {
+      command: normalizedCommand,
+      commandActions: commandActions ?? [],
+      cwd: cwd?.trim() ?? "",
+    },
+  };
+}
+
 function normalizeCommandExecutionApprovalRequest(
   requestKey: string,
   params: CommandExecutionRequestApprovalParams,
@@ -396,6 +423,11 @@ function normalizeCommandExecutionApprovalRequest(
 
   return createApprovalRequest(params.threadId, requestKey, {
     actionLabel: "command",
+    approval: createCommandApprovalContext({
+      command: params.command,
+      commandActions: params.commandActions,
+      cwd: params.cwd,
+    }),
     details: [
       createApprovalDetail("Command", params.command ?? null),
       createApprovalDetail("Working directory", params.cwd ?? null),
@@ -459,10 +491,15 @@ function normalizeExecCommandApprovalRequest(
   requestKey: string,
   params: ExecCommandApprovalParams,
 ): WorkbenchUserInputRequest {
+  const command = params.command.join(" ");
   return createApprovalRequest(params.conversationId, requestKey, {
     actionLabel: "command",
+    approval: createCommandApprovalContext({
+      command,
+      cwd: params.cwd,
+    }),
     details: [
-      createApprovalDetail("Command", params.command.join(" ")),
+      createApprovalDetail("Command", command),
       createApprovalDetail("Working directory", params.cwd),
       createApprovalDetail("Reason", params.reason),
       createApprovalDetail("Parsed command", summarizeList((params.parsedCmd ?? []).map((entry) => entry.cmd))),

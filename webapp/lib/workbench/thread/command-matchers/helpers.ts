@@ -65,6 +65,7 @@ export function collapseWhitespace(value: string) {
 
 export function createEmptyCommandSummaryStats(): ThreadCommandSummaryStats {
   return {
+    deletedPaths: 0,
     gitDiffChecks: 0,
     gitStatusChecks: 0,
     listedFiles: 0,
@@ -101,6 +102,7 @@ export function mergeCommandSummaryStats(
 
 export function countKnownCommandSummaryStats(stats: ThreadCommandSummaryStats) {
   return stats.readFiles
+    + stats.deletedPaths
     + stats.skillLoads
     + stats.searchedFiles
     + stats.listedFiles

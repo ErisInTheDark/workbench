@@ -16,6 +16,7 @@ import type {
   WorkbenchModelOption,
   WorkbenchPendingUserInputRequest,
   WorkbenchQuestionnaireDraft,
+  WorkbenchSkillSummary,
   WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadComposerDraft,
   WorkbenchThreadSavedComposerDraft,
@@ -292,10 +293,12 @@ export default function ThreadComposer ({
   onThreadModelChange,
   pendingUserInputRequest,
   projectId,
+  projectRootPath,
   rateLimits,
   threadQuestionnaireDraft,
   threadComposerDraft,
   threadSavedComposerDrafts,
+  knownSkills,
   highlightSources,
   thread,
 }: {
@@ -320,10 +323,12 @@ export default function ThreadComposer ({
   onThreadModelChange: (threadId: string, model: string) => void;
   pendingUserInputRequest: WorkbenchPendingUserInputRequest | null;
   projectId: string;
+  projectRootPath: string;
   rateLimits: RateLimitSnapshot | null;
   threadQuestionnaireDraft: WorkbenchQuestionnaireDraft | null;
   threadComposerDraft: WorkbenchThreadComposerDraft | null;
   threadSavedComposerDrafts: WorkbenchThreadSavedComposerDraft[];
+  knownSkills: WorkbenchSkillSummary[];
   highlightSources: InlineMentionHighlightSources;
   thread: ThreadPayload;
 }) {
@@ -781,9 +786,11 @@ export default function ThreadComposer ({
               actions={stopButton}
               draft={threadQuestionnaireDraft}
               highlightSources={highlightSources}
+              knownSkills={knownSkills}
               leadingActions={questionnaireToggleButton}
               onDraftChange={handleQuestionnaireDraftChange}
               onDraftClear={handleQuestionnaireDraftClear}
+              projectRootPath={projectRootPath}
               request={pendingUserInputRequest.request}
               mode="live"
               onSubmit={async (response) => {

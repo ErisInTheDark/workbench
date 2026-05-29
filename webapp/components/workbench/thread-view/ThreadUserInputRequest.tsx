@@ -5,11 +5,12 @@
  */
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import type {
   WorkbenchUserInputQuestion,
   WorkbenchQuestionnaireDraft,
+  WorkbenchSkillSummary,
   WorkbenchUserInputRequest,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
@@ -17,7 +18,9 @@ import {
   buildInlineMentionHighlights,
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
+import { getThreadCommandDisplay } from "../../../lib/workbench/thread/thread-command-matchers";
 import PlaintextEditable, { isMobileTextInputEnvironment } from "./PlaintextEditable";
+import { ThreadCommandSummary } from "./thread-view-primitives";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -76,21 +79,63 @@ type InteractiveThreadUserInputRequestProps = {
   actions?: ReactNode;
   draft: WorkbenchQuestionnaireDraft | null;
   highlightSources?: InlineMentionHighlightSources;
+  knownSkills?: WorkbenchSkillSummary[];
   leadingActions?: ReactNode;
   mode: "live";
   onDraftChange: (draft: WorkbenchQuestionnaireDraft) => void;
   onDraftClear: () => void;
   onSubmit: (response: WorkbenchUserInputResponse) => Promise<void>;
+  projectRootPath?: string;
   request: WorkbenchUserInputRequest;
 };
 
 type HistoryThreadUserInputRequestProps = {
   highlightSources?: InlineMentionHighlightSources;
+  knownSkills?: WorkbenchSkillSummary[];
   mode: "history";
+  projectRootPath?: string;
   request: WorkbenchUserInputRequest;
   response: WorkbenchUserInputResponse | null;
   statusLabel?: string;
 };
+
+function ThreadApprovalCommandSummary ({
+  knownSkills,
+  projectRootPath,
+  request,
+}: {
+  knownSkills?: WorkbenchSkillSummary[];
+  projectRootPath?: string;
+  request: WorkbenchUserInputRequest;
+}) {
+  const commandContext = request.approval?.command ?? null;
+  const display = useMemo(() => (
+    commandContext
+      ? getThreadCommandDisplay({
+        command: commandContext.command,
+        commandActions: commandContext.commandActions,
+        cwd: commandContext.cwd,
+        knownSkills,
+        projectRootPath,
+      })
+      : null
+  ), [commandContext, knownSkills, projectRootPath]);
+
+  if (!display || display.omitFromDisplay || display.summaryKind !== "matched") {
+    return null;
+  }
+
+  return (
+    <div className="rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-3 py-2.5">
+      <p className="m-0 text-[0.72em] font-semibold tracking-[0.08em] text-muted uppercase">
+        Matched action
+      </p>
+      <p className="mt-1 mb-0 min-w-0 text-[0.92em] leading-[1.65] text-text">
+        <ThreadCommandSummary display={display} />
+      </p>
+    </div>
+  );
+}
 
 export default function ThreadUserInputRequest (props: InteractiveThreadUserInputRequestProps | HistoryThreadUserInputRequestProps) {
   const { mode, request } = props;
@@ -235,6 +280,12 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
           </button>
         )}
       </div>
+
+      <ThreadApprovalCommandSummary
+        knownSkills={props.knownSkills}
+        projectRootPath={props.projectRootPath}
+        request={request}
+      />
 
       <div className="space-y-3">
         {request.questions.map((question, index) => {

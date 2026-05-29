@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - POWERSHELL_COMMAND_MATCHERS: PowerShell stage matchers for probes, reads, listings, filters, searches, and web requests. Keywords: thread, command, matcher, powershell, web, request.
+ * - POWERSHELL_COMMAND_MATCHERS: PowerShell stage matchers for probes, reads, listings, filters, searches, deletes, and web requests. Keywords: thread, command, matcher, powershell, delete, web, request.
  */
 
 import {
@@ -31,6 +31,65 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         omitFromDisplay: true,
         remainingCommand: null,
         summaryParts: [],
+      });
+    },
+  }),
+  CommandMatcher({
+    id: "powershell.delete-resolved-folder",
+    match: (context) => {
+      if (context.summaryParts.length) {
+        return null;
+      }
+
+      const deletePath = readPowerShellResolvedRemoveItemPath(context.unwrappedCommand);
+      if (!deletePath) {
+        return null;
+      }
+
+      const pathPart = buildCommandPathPart(deletePath, context);
+      if (!pathPart) {
+        return null;
+      }
+
+      return CommandMatcher.Result({
+        remainingCommand: null,
+        stop: true,
+        summaryParts: [
+          CommandMatcher.Text("Delete folder "),
+          pathPart,
+        ],
+        summaryStats: { deletedPaths: 1 },
+      });
+    },
+  }),
+  CommandMatcher({
+    id: "powershell.delete-folder",
+    match: (context) => {
+      const parsedStage = parsePowerShellStage(context.stage.text);
+      if (!matchesPowerShellCommand(parsedStage, ["remove-item", "rm", "del", "erase", "rmdir", "rd", "ri"])) {
+        return null;
+      }
+
+      if (!hasPowerShellTruthyFlag(parsedStage, "-Recurse", ["-r"])) {
+        return null;
+      }
+
+      const path = getPowerShellStagePath(parsedStage);
+      if (!path || path.startsWith("$")) {
+        return null;
+      }
+
+      const pathPart = buildCommandPathPart(path, context);
+      if (!pathPart) {
+        return null;
+      }
+
+      return CommandMatcher.Result({
+        summaryParts: [
+          CommandMatcher.Text("Delete folder "),
+          pathPart,
+        ],
+        summaryStats: { deletedPaths: 1 },
       });
     },
   }),
@@ -588,6 +647,24 @@ function hasPowerShellFlag(parsedStage: ParsedPowerShellStage, flag: string) {
   return parsedStage.tokens.some((token) => token.toLowerCase() === flag.toLowerCase());
 }
 
+function hasPowerShellTruthyFlag(parsedStage: ParsedPowerShellStage, flag: string, aliases: string[] = []) {
+  const normalizedFlags = [flag, ...aliases].map((entry) => entry.toLowerCase());
+  return parsedStage.tokens.some((token) => {
+    const normalizedToken = token.toLowerCase();
+    if (normalizedFlags.includes(normalizedToken)) {
+      return true;
+    }
+
+    const matchedFlag = normalizedFlags.find((candidate) => normalizedToken.startsWith(`${candidate}:`));
+    if (!matchedFlag) {
+      return false;
+    }
+
+    const flagValue = normalizedToken.slice(matchedFlag.length + 1).trim();
+    return flagValue !== "$false" && flagValue !== "false" && flagValue !== "0";
+  });
+}
+
 function readPowerShellNamedValue(parsedStage: ParsedPowerShellStage, flags: string[]) {
   const normalizedFlags = flags.map((flag) => flag.toLowerCase());
 
@@ -651,6 +728,64 @@ function getPowerShellPositionalArguments(parsedStage: ParsedPowerShellStage) {
 
 function getPowerShellStagePath(parsedStage: ParsedPowerShellStage) {
   return readPowerShellNamedValue(parsedStage, ["-LiteralPath", "-Path"]) ?? getPowerShellPositionalPathArgument(parsedStage);
+}
+
+function readPowerShellResolvedRemoveItemPath(commandText: string) {
+  const normalizedCommandText = unwrapPowerShellStageText(commandText);
+  const resolvedPathsByVariable = readPowerShellResolvePathAssignments(normalizedCommandText);
+  if (!resolvedPathsByVariable.size) {
+    return null;
+  }
+
+  const removeItemMatch = normalizedCommandText.match(/\bRemove-Item\b([\s\S]*?)(?=(?:[\r\n;}]|\belse\b|$))/i);
+  if (!removeItemMatch) {
+    return null;
+  }
+
+  const parsedRemoveItem = parsePowerShellStage(`Remove-Item ${removeItemMatch[1] ?? ""}`);
+  if (!matchesPowerShellCommand(parsedRemoveItem, ["remove-item"]) || !hasPowerShellTruthyFlag(parsedRemoveItem, "-Recurse", ["-r"])) {
+    return null;
+  }
+
+  const path = getPowerShellStagePath(parsedRemoveItem);
+  if (!path) {
+    return null;
+  }
+
+  const variablePathMatch = path.match(/^\$([A-Za-z_][\w]*)(?:\.Path)?$/);
+  if (!variablePathMatch?.[1]) {
+    return path.startsWith("$") ? null : path;
+  }
+
+  return resolvedPathsByVariable.get(variablePathMatch[1].toLowerCase()) ?? null;
+}
+
+function readPowerShellResolvePathAssignments(commandText: string) {
+  const assignments = new Map<string, string>();
+  const assignmentPattern = /\$([A-Za-z_][\w]*)\s*=\s*(Resolve-Path\b[\s\S]*?)(?=(?:[\r\n;]+|\s+\$[A-Za-z_][\w]*\s*=|\s+if\s*\(|$))/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = assignmentPattern.exec(commandText)) !== null) {
+    const variableName = match[1];
+    const resolvePathCommand = match[2];
+    if (!variableName || !resolvePathCommand) {
+      continue;
+    }
+
+    const parsedResolvePath = parsePowerShellStage(resolvePathCommand);
+    if (!matchesPowerShellCommand(parsedResolvePath, ["resolve-path"])) {
+      continue;
+    }
+
+    const path = getPowerShellStagePath(parsedResolvePath);
+    if (!path || path.startsWith("$")) {
+      continue;
+    }
+
+    assignments.set(variableName.toLowerCase(), path);
+  }
+
+  return assignments;
 }
 
 function getPowerShellStagePathPart(parsedStage: ParsedPowerShellStage, context: Parameters<typeof buildCommandPathPart>[1]) {
