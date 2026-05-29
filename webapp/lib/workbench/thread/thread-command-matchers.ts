@@ -274,6 +274,12 @@ function formatCommandBlockSummaryText(
       : `listed files ${summaryStats.listedFiles} times`);
   }
 
+  if (summaryStats.pathChecks) {
+    segments.push(summaryStats.pathChecks === 1
+      ? "checked 1 path"
+      : `checked ${summaryStats.pathChecks} paths`);
+  }
+
   if (summaryStats.gitStatusChecks) {
     segments.push(summaryStats.gitStatusChecks === 1
       ? "checked git status"

@@ -69,6 +69,7 @@ export function createEmptyCommandSummaryStats(): ThreadCommandSummaryStats {
     gitStatusChecks: 0,
     listedFiles: 0,
     otherCommands: 0,
+    pathChecks: 0,
     readFiles: 0,
     searchedFiles: 0,
     skillLoads: 0,
@@ -105,6 +106,7 @@ export function countKnownCommandSummaryStats(stats: ThreadCommandSummaryStats) 
     + stats.listedFiles
     + stats.gitDiffChecks
     + stats.gitStatusChecks
+    + stats.pathChecks
     + stats.typescriptBuilds
     + stats.typescriptValidations
     + stats.webRequests;

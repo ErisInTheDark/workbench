@@ -69,6 +69,7 @@ export interface ThreadCommandSummaryStats {
   gitStatusChecks: number;
   listedFiles: number;
   otherCommands: number;
+  pathChecks: number;
   readFiles: number;
   searchedFiles: number;
   skillLoads: number;

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - POWERSHELL_COMMAND_MATCHERS: PowerShell stage matchers for reads, listings, filters, searches, and web requests. Keywords: thread, command, matcher, powershell, web, request.
+ * - POWERSHELL_COMMAND_MATCHERS: PowerShell stage matchers for probes, reads, listings, filters, searches, and web requests. Keywords: thread, command, matcher, powershell, web, request.
  */
 
 import {
@@ -71,6 +71,23 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       return CommandMatcher.Result({
         hide: true,
         summaryParts: [],
+      });
+    },
+  }),
+  CommandMatcher({
+    id: "powershell.check-path",
+    match: (context) => {
+      const pathPart = buildPowerShellTestPathPart(context.stage.text, context);
+      if (!pathPart) {
+        return null;
+      }
+
+      return CommandMatcher.Result({
+        summaryParts: [
+          CommandMatcher.Text("Checked for "),
+          pathPart,
+        ],
+        summaryStats: { pathChecks: 1 },
       });
     },
   }),
@@ -1143,6 +1160,18 @@ function isPowerShellTrivialAssignmentStage(stageText: string) {
   return unwrapPowerShellQuotedTextOnce(assignedValue) !== null;
 }
 
+function buildPowerShellTestPathPart(
+  stageText: string,
+  context: Parameters<typeof buildCommandPathPart>[1],
+) {
+  const parsedStage = parsePowerShellStage(stageText);
+  if (!matchesPowerShellCommand(parsedStage, ["test-path"])) {
+    return null;
+  }
+
+  return getPowerShellStagePathPart(parsedStage, context);
+}
+
 function isPowerShellThreadTitleSettingCommand(commandText: string) {
   const normalizedCommandText = unwrapPowerShellStageText(commandText)
     .replace(/\r\n/g, "\n")
@@ -1385,6 +1414,8 @@ function getPowerShellValueFlags(commandName: string | null) {
     case "select-string":
     case "sls":
       return new Set(["-exclude", "-include", "-literalpath", "-path", "-pattern"]);
+    case "test-path":
+      return new Set(["-credential", "-exclude", "-filter", "-include", "-literalpath", "-newerthan", "-olderthan", "-path", "-pathtype"]);
     case "invoke-restmethod":
     case "irm":
     case "invoke-webrequest":
