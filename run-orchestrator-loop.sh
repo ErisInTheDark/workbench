@@ -19,6 +19,7 @@ echo "Press Ctrl+C to stop."
 while true; do
   (
     cd "$webapp_dir" || exit 1
+    kill-by-port 3002
     pnpm dev
   )
   exit_code=$?
