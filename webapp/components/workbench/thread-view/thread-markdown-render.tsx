@@ -18,6 +18,8 @@ import {
   type ParsedBlock,
   type ParsedInlineNode,
   type ParsedListItem,
+  type ParsedTableAlignment,
+  type ParsedTableCell,
 } from "../../../lib/workbench/markdown/markdown-parse";
 import {
   getProjectFilePathDisplay,
@@ -280,6 +282,78 @@ function renderThreadPlanBlock (block: Extract<ParsedBlock, { type: "plan" }>, o
   );
 }
 
+function getThreadTableCellAlignClassName (alignment: ParsedTableAlignment) {
+  switch (alignment) {
+    case "center":
+      return "text-center";
+    case "right":
+      return "text-right";
+    case "left":
+    default:
+      return "text-left";
+  }
+}
+
+function renderThreadTableCellContent (
+  cell: ParsedTableCell,
+  options: MarkdownParseOptions,
+  keyPrefix: string,
+) {
+  const content = renderThreadInlineMarkdown(cell.text, options, keyPrefix);
+  return content.length ? content : <br />;
+}
+
+function renderThreadTableBlock (
+  block: Extract<ParsedBlock, { type: "table" }>,
+  options: MarkdownParseOptions,
+  keyPrefix: string,
+) {
+  return (
+    <div
+      className={`${BLOCK_SPACING_CLASS} max-w-full overflow-hidden rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)]`}
+      key={keyPrefix}
+    >
+      <div className="max-w-full overflow-x-auto">
+        <table className="w-max min-w-full border-collapse font-sans text-[0.92em] leading-[1.45]">
+          <thead>
+            <tr className="border-b-2 border-[color-mix(in_srgb,var(--text)_16%,transparent)] bg-[color-mix(in_srgb,var(--text)_5%,transparent)]">
+              {block.header.map((cell, index) => (
+                <th
+                  className={`${getThreadTableCellAlignClassName(block.alignments[index] ?? null)} px-[0.65rem] py-[0.48rem] text-[0.82em] font-semibold text-text align-top`}
+                  key={`${keyPrefix}-header-${index}`}
+                  scope="col"
+                >
+                  {renderThreadTableCellContent(cell, options, `${keyPrefix}-header-${index}`)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {block.rows.map((row, rowIndex) => (
+              <tr
+                className="border-t border-[color-mix(in_srgb,var(--text)_7%,transparent)] first:border-t-0"
+                key={`${keyPrefix}-row-${rowIndex}`}
+              >
+                {block.header.map((_, columnIndex) => {
+                  const cell = row[columnIndex] ?? { text: "" };
+                  return (
+                    <td
+                      className={`${getThreadTableCellAlignClassName(block.alignments[columnIndex] ?? null)} px-[0.85rem] py-[0.5rem] align-top text-text`}
+                      key={`${keyPrefix}-row-${rowIndex}-cell-${columnIndex}`}
+                    >
+                      {renderThreadTableCellContent(cell, options, `${keyPrefix}-row-${rowIndex}-cell-${columnIndex}`)}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, keyPrefix: string) {
   switch (block.type) {
     case "list-break":
@@ -338,6 +412,8 @@ function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, k
           </pre>
         </div>
       );
+    case "table":
+      return renderThreadTableBlock(block, options, keyPrefix);
     case "paragraph": {
       const stateChangeMode = parseThreadStateChangeMode(block.text, options);
       if (stateChangeMode) {

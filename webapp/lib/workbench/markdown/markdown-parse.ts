@@ -1,6 +1,8 @@
 /*
  * Exports:
  * - ParsedListItem: list item node used by the markdown block parser. Keywords: markdown, list, parser.
+ * - ParsedTableAlignment: column alignment parsed from markdown table delimiters. Keywords: markdown, table, alignment.
+ * - ParsedTableCell: table cell node with inline markdown text. Keywords: markdown, table, cell.
  * - ParsedBlock: block node union used by markdown parsing and rendering. Keywords: markdown, block, parser.
  * - ParsedInlineNode: inline node union shared by HTML and React markdown render targets. Keywords: markdown, inline, parser, AST.
  * - MarkdownParseProfile: parser behavior profile for editor-stable markdown vs display-only thread markdown. Keywords: markdown, profile, thread, editor.
@@ -34,6 +36,12 @@ export interface ParsedListItem {
   children: ParsedBlock[];
 }
 
+export type ParsedTableAlignment = "left" | "center" | "right" | null;
+
+export interface ParsedTableCell {
+  text: string;
+}
+
 export type ParsedBlock =
   | { type: "heading"; level: number; text: string }
   | { type: "blockquote"; text: string }
@@ -44,6 +52,7 @@ export type ParsedBlock =
   | { type: "break"; count: number }
   | { type: "hr" }
   | { type: "code"; language: string; text: string }
+  | { type: "table"; alignments: ParsedTableAlignment[]; header: ParsedTableCell[]; rows: ParsedTableCell[][] }
   | { type: "comment"; text: string }
   | { type: "paragraph"; text: string };
 
@@ -817,6 +826,138 @@ function isThreadStateChangeLine(line: string, options: MarkdownParseOptions) {
   return parseThreadStateChangeMode(line, options) !== null;
 }
 
+function canParsePipeTables(options: MarkdownParseOptions) {
+  return (options.profile ?? "editor") === "thread";
+}
+
+function splitTableRow(line: string) {
+  let source = line.trim();
+  if (source.startsWith("|")) {
+    source = source.slice(1);
+  }
+
+  if (source.endsWith("|")) {
+    source = source.slice(0, -1);
+  }
+
+  const cells: string[] = [];
+  let cell = "";
+  let index = 0;
+
+  while (index < source.length) {
+    if (source[index] === "\\") {
+      if (source[index + 1] === "|") {
+        cell += "|";
+        index += 2;
+        continue;
+      }
+
+      cell += source[index];
+      index += 1;
+      continue;
+    }
+
+    if (source[index] === "`") {
+      const fenceLength = getBacktickRunLength(source, index);
+      const closeIndex = findClosingCodeSpanFence(source, fenceLength, index + fenceLength);
+      if (closeIndex !== -1) {
+        cell += source.slice(index, closeIndex + fenceLength);
+        index = closeIndex + fenceLength;
+        continue;
+      }
+    }
+
+    if (source[index] === "|") {
+      cells.push(cell.trim());
+      cell = "";
+      index += 1;
+      continue;
+    }
+
+    cell += source[index];
+    index += 1;
+  }
+
+  cells.push(cell.trim());
+  return cells;
+}
+
+function parseTableDelimiterCell(cell: string): ParsedTableAlignment | false {
+  const trimmedCell = cell.trim();
+  if (!/^:?-{3,}:?$/.test(trimmedCell)) {
+    return false;
+  }
+
+  const leftAligned = trimmedCell.startsWith(":");
+  const rightAligned = trimmedCell.endsWith(":");
+  if (leftAligned && rightAligned) {
+    return "center";
+  }
+
+  if (rightAligned) {
+    return "right";
+  }
+
+  if (leftAligned) {
+    return "left";
+  }
+
+  return null;
+}
+
+function parseTableDelimiterRow(line: string) {
+  const cells = splitTableRow(line);
+  if (cells.length < 2) {
+    return null;
+  }
+
+  const alignments = cells.map(parseTableDelimiterCell);
+  return alignments.every((alignment) => alignment !== false)
+    ? alignments as ParsedTableAlignment[]
+    : null;
+}
+
+function looksLikeTableContentRow(line: string) {
+  return splitTableRow(line).length >= 2;
+}
+
+function normalizeTableCells(cells: string[], columnCount: number): ParsedTableCell[] {
+  return Array.from({ length: columnCount }, (_, index) => ({
+    text: cells[index] ?? "",
+  }));
+}
+
+function parseTableBlock(lines: string[], startIndex: number, options: MarkdownParseOptions) {
+  if (!canParsePipeTables(options) || startIndex + 1 >= lines.length) {
+    return null;
+  }
+
+  const headerCells = splitTableRow(lines[startIndex]);
+  const alignments = parseTableDelimiterRow(lines[startIndex + 1]);
+  if (!alignments || headerCells.length < 2) {
+    return null;
+  }
+
+  const columnCount = alignments.length;
+  let index = startIndex + 2;
+  const rows: ParsedTableCell[][] = [];
+
+  while (index < lines.length && lines[index].trim() && looksLikeTableContentRow(lines[index])) {
+    rows.push(normalizeTableCells(splitTableRow(lines[index]), columnCount));
+    index += 1;
+  }
+
+  return {
+    block: {
+      alignments,
+      header: normalizeTableCells(headerCells, columnCount),
+      rows,
+      type: "table",
+    } satisfies Extract<ParsedBlock, { type: "table" }>,
+    nextIndex: index,
+  };
+}
+
 function parseBlocksFromLines(lines: string[], options: MarkdownParseOptions = {}): ParsedBlock[] {
   const blocks: ParsedBlock[] = [];
   let blankLineCount = 0;
@@ -926,6 +1067,16 @@ function parseBlocksFromLines(lines: string[], options: MarkdownParseOptions = {
       continue;
     }
 
+    const tableBlock = parseTableBlock(lines, index, options);
+    if (tableBlock) {
+      maybePushCommentBreak(blocks, blankLineCount, "table");
+      maybePushStandardBreak(blocks, blankLineCount, "table");
+      blankLineCount = 0;
+      blocks.push(tableBlock.block);
+      index = tableBlock.nextIndex;
+      continue;
+    }
+
     const listBlock = parseListBlock(lines, index, options);
     if (listBlock) {
       const previousBlock = getLastNonBreakBlock(blocks);
@@ -956,6 +1107,7 @@ function parseBlocksFromLines(lines: string[], options: MarkdownParseOptions = {
       && !parseCodeFenceOpenLine(lines[index])
       && !/^(#{1,6})\s+/.test(lines[index])
       && !/^>\s?/.test(lines[index])
+      && !parseTableBlock(lines, index, options)
       && !parseListLine(lines[index])
       && !/^ {0,3}([-*_])(?:\s*\1){2,}\s*$/.test(lines[index])
     ) {
