@@ -1,4 +1,10 @@
+/*
+ * Exports:
+ * - default ThreadRateLimits: render harness, account quota windows, auth hints, and optional trailing composer status content. Keywords: thread, rate limits, harness, composer.
+ */
 "use client";
+
+import type { ReactNode } from "react";
 
 import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { RateLimitWindow } from "../../../lib/codex/generated/app-server/v2/RateLimitWindow";
@@ -76,13 +82,15 @@ export default function ThreadRateLimits ({
   harness,
   onHarnessToggle,
   rateLimits,
+  trailingContent = null,
 }: {
   canToggleHarness?: boolean;
   harness: WorkbenchHarness;
   onHarnessToggle?: () => void;
   rateLimits: RateLimitSnapshot | null;
+  trailingContent?: ReactNode;
 }) {
-  if (!canToggleHarness && harness !== "copilot" && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.limitName) {
+  if (!trailingContent && !canToggleHarness && harness !== "copilot" && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.limitName) {
     return null;
   }
 
@@ -105,8 +113,9 @@ export default function ThreadRateLimits ({
 
   if (canToggleHarness && harness !== "copilot" && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.limitName) {
     return (
-      <div className="flex items-center gap-3 mt-2 justify-start px-1 text-[0.78em] leading-[1.6] text-muted">
-        {harnessControl}
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-muted">
+        <div className="flex items-center gap-3">{harnessControl}</div>
+        {trailingContent}
       </div>
     );
   }
@@ -115,48 +124,54 @@ export default function ThreadRateLimits ({
     const isAuthRequired = rateLimits?.limitId === "copilot:auth";
 
     return (
-      <div className="flex items-center gap-3 mt-2 px-1 text-[0.78em] leading-[1.6] text-muted">
-        <div className="flex justify-center">{harnessControl}</div>
-        <p className="mb-0 flex flex-wrap justify-center gap-x-5 gap-y-1 text-center">
-          {isAuthRequired ? (
-            <span className="inline-flex flex-wrap items-baseline justify-center gap-2">
-              <span>{rateLimits?.limitName ?? "Sign in to Copilot CLI."}</span>
-              <span>Run</span>
-              <span className="font-mono text-text">copilot</span>
-              <span>then</span>
-              <span className="font-mono text-text">/login</span>
-            </span>
-          ) : rateLimits?.limitName && rateLimits.primary ? (
-            <span className="inline-flex items-baseline gap-2 whitespace-nowrap">
-              <span className="font-semibold text-text">{rateLimits.limitName}</span>
-              <span>{formatUsedPercent(100 - rateLimits.primary.usedPercent)} ({rateLimits.secondary?.usedPercent ?? "-"})</span>
-              {rateLimits.primary.resetsAt && rateLimits.primary.resetsAt * 1000 > Date.now() ? (
-                <span>{formatResetTimestamp(rateLimits.primary.resetsAt)}</span>
-              ) : null}
-            </span>
-          ) : (
-            <span className="inline-flex items-baseline gap-2 whitespace-nowrap">
-              <span>Premium quota unavailable</span>
-            </span>
-          )}
-        </p>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-muted">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <div className="flex justify-center">{harnessControl}</div>
+          <p className="mb-0 flex flex-wrap gap-x-5 gap-y-1">
+            {isAuthRequired ? (
+              <span className="inline-flex flex-wrap items-baseline gap-2">
+                <span>{rateLimits?.limitName ?? "Sign in to Copilot CLI."}</span>
+                <span>Run</span>
+                <span className="font-mono text-text">copilot</span>
+                <span>then</span>
+                <span className="font-mono text-text">/login</span>
+              </span>
+            ) : rateLimits?.limitName && rateLimits.primary ? (
+              <span className="inline-flex items-baseline gap-2 whitespace-nowrap">
+                <span className="font-semibold text-text">{rateLimits.limitName}</span>
+                <span>{formatUsedPercent(100 - rateLimits.primary.usedPercent)} ({rateLimits.secondary?.usedPercent ?? "-"})</span>
+                {rateLimits.primary.resetsAt && rateLimits.primary.resetsAt * 1000 > Date.now() ? (
+                  <span>{formatResetTimestamp(rateLimits.primary.resetsAt)}</span>
+                ) : null}
+              </span>
+            ) : (
+              <span className="inline-flex items-baseline gap-2 whitespace-nowrap">
+                <span>Premium quota unavailable</span>
+              </span>
+            )}
+          </p>
+        </div>
+        {trailingContent}
       </div>
     );
   }
 
   return (
-    <div className="flex items-center gap-3 mt-2 px-1 text-[0.78em] leading-[1.6] text-muted">
-      <div className="flex justify-center">{harnessControl}</div>
-      {(rateLimits.primary || rateLimits.secondary) ? (
-        <p className="mb-0 flex flex-wrap justify-center gap-x-5 gap-y-1 text-center">
-          {rateLimits.primary ? (
-            <RateLimitWindowText fallback="Primary" window={rateLimits.primary} />
-          ) : null}
-          {rateLimits.secondary ? (
-            <RateLimitWindowText fallback="Secondary" window={rateLimits.secondary} />
-          ) : null}
-        </p>
-      ) : null}
+    <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-muted">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <div className="flex justify-center">{harnessControl}</div>
+        {(rateLimits?.primary || rateLimits?.secondary) ? (
+          <p className="mb-0 flex flex-wrap gap-x-5 gap-y-1">
+            {rateLimits.primary ? (
+              <RateLimitWindowText fallback="Primary" window={rateLimits.primary} />
+            ) : null}
+            {rateLimits.secondary ? (
+              <RateLimitWindowText fallback="Secondary" window={rateLimits.secondary} />
+            ) : null}
+          </p>
+        ) : null}
+      </div>
+      {trailingContent}
     </div>
   );
 }

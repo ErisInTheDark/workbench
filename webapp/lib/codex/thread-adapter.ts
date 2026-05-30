@@ -11,6 +11,7 @@ import type { ThreadPayload, ThreadSummary, WorkbenchHarness } from "../types";
 import type { SessionSource } from "./generated/app-server/v2/SessionSource";
 import type { Thread } from "./generated/app-server/v2/Thread";
 import type { ThreadStatus } from "./generated/app-server/v2/ThreadStatus";
+import type { ThreadTokenUsage } from "./generated/app-server/v2/ThreadTokenUsage";
 
 function normalizeAbsolutePathForComparison(filePath: string) {
   const normalized = String(filePath ?? "")
@@ -115,6 +116,7 @@ export function toThreadPayload(
   reasoningEffort: string | null = null,
   serviceTier: string | null = null,
   agentPath: string | null = null,
+  tokenUsage: ThreadTokenUsage | null = null,
 ): ThreadPayload {
   return {
     ...toThreadSummary(thread, harness),
@@ -123,6 +125,7 @@ export function toThreadPayload(
     serviceTier,
     agentPath,
     isDraft: false,
+    tokenUsage,
     turns: thread.turns,
   };
 }

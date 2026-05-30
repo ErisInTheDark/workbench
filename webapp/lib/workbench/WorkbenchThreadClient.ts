@@ -15,6 +15,7 @@ import type { Model as CodexModel } from "../codex/generated/app-server/v2/Model
 import type { ModelListResponse } from "../codex/generated/app-server/v2/ModelListResponse";
 import type { RateLimitSnapshot } from "../codex/generated/app-server/v2/RateLimitSnapshot";
 import type { ThreadActiveFlag } from "../codex/generated/app-server/v2/ThreadActiveFlag";
+import type { ThreadCompactStartResponse } from "../codex/generated/app-server/v2/ThreadCompactStartResponse";
 import type { ThreadItem } from "../codex/generated/app-server/v2/ThreadItem";
 import type { ThreadListResponse } from "../codex/generated/app-server/v2/ThreadListResponse";
 import type { ThreadReadResponse } from "../codex/generated/app-server/v2/ThreadReadResponse";
@@ -62,13 +63,16 @@ import {
     persistHarnessModel,
     persistHarnessModelEffort,
     persistHarnessServiceTier,
+    persistThreadTokenUsage,
     persistThreadUnreadState,
     readLocalWorkbenchOrigin,
     readStoredHarnessAgent,
     readStoredHarnessModel,
     readStoredHarnessModelEffort,
     readStoredHarnessServiceTier,
+    readStoredThreadTokenUsage,
     readStoredThreadUnreadState,
+    clearStoredThreadTokenUsage,
 } from "./state/browser-state";
 import { applyQuestionnaireHistoryToThread } from "./thread/thread-questionnaire-history";
 import { getTurnRenderSignature } from "./thread/thread-item-signature";
@@ -144,6 +148,7 @@ interface WorkbenchThreadClient {
     input: UserInput[],
     options?: WorkbenchSendThreadMessageOptions,
   ) => Promise<ThreadPayload | null>;
+  compactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   stopThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   submitPendingUserInputRequest: (
     threadId: string,
@@ -664,6 +669,7 @@ function WorkbenchThreadClient(
       && left.forkedFromId === right.forkedFromId
       && left.agentNickname === right.agentNickname
       && left.agentRole === right.agentRole
+      && JSON.stringify(left.tokenUsage) === JSON.stringify(right.tokenUsage)
       && areTurnListsEquivalent(left.turns, right.turns)
       && areCurrentTurnsEquivalent(left, right);
   }
@@ -683,7 +689,17 @@ function WorkbenchThreadClient(
       name: thread.name ?? currentThread.name,
       reasoningEffort: thread.reasoningEffort ?? currentThread.reasoningEffort,
       serviceTier: thread.serviceTier ?? currentThread.serviceTier,
+      tokenUsage: thread.tokenUsage ?? currentThread.tokenUsage,
     };
+  }
+
+  function applyStoredThreadTokenUsage(thread: ThreadPayload) {
+    if (thread.tokenUsage) {
+      return thread;
+    }
+
+    const tokenUsage = readStoredThreadTokenUsage(thread.harness, thread.id);
+    return tokenUsage ? { ...thread, tokenUsage } : thread;
   }
 
   function normalizeThreadPayloadItems(thread: ThreadPayload | null) {
@@ -858,9 +874,10 @@ function WorkbenchThreadClient(
     } = {},
   ) {
     const stableThread = normalizeThreadPayloadItems(preserveStableServiceTier ? mergeStableThreadMetadata(thread) : thread);
+    const storedTokenUsageThread = stableThread ? applyStoredThreadTokenUsage(stableThread) : stableThread;
     const nextThread = pruneStreamingDuplicates
-      ? pruneThreadStreamingDuplicates(applyOptimisticUserMessageOverlay(applyPersistedQuestionnaireHistory(stableThread)))
-      : applyOptimisticUserMessageOverlay(applyPersistedQuestionnaireHistory(stableThread));
+      ? pruneThreadStreamingDuplicates(applyOptimisticUserMessageOverlay(applyPersistedQuestionnaireHistory(storedTokenUsageThread)))
+      : applyOptimisticUserMessageOverlay(applyPersistedQuestionnaireHistory(storedTokenUsageThread));
     const unreadStateChanged = nextThread ? markThreadPayloadSeen(nextThread) : false;
     if (areThreadPayloadsEquivalent(state.currentThread, nextThread)) {
       if (unreadStateChanged) {
@@ -922,6 +939,7 @@ function WorkbenchThreadClient(
       name: hasField("name") ? fields.name ?? null : thread.name,
       reasoningEffort: hasField("reasoningEffort") ? fields.reasoningEffort ?? null : thread.reasoningEffort,
       serviceTier: hasField("serviceTier") ? fields.serviceTier ?? null : thread.serviceTier,
+      tokenUsage: hasField("tokenUsage") ? fields.tokenUsage ?? null : thread.tokenUsage,
     }), { preserveStableServiceTier: false });
   }
 
@@ -1512,6 +1530,7 @@ function WorkbenchThreadClient(
     agentNickname: null,
     agentRole: null,
     unreadBadge: null,
+    tokenUsage: null,
     turns: [],
   };
 }
@@ -2371,6 +2390,11 @@ function WorkbenchThreadClient(
         return updateCurrentThreadFields({
           name: notification.params.threadName ?? null,
         });
+      case "thread/tokenUsage/updated":
+        persistThreadTokenUsage(harness, notification.params.threadId, notification.params.tokenUsage);
+        return updateCurrentThreadFields({
+          tokenUsage: notification.params.tokenUsage,
+        });
       case "turn/started":
       case "turn/completed":
         return upsertTurnMetadata(notification.params.turn);
@@ -2424,7 +2448,6 @@ function WorkbenchThreadClient(
       case "thread/closed":
       case "thread/goal/updated":
       case "thread/goal/cleared":
-      case "thread/tokenUsage/updated":
       case "thread/compacted":
       case "hook/started":
       case "hook/completed":
@@ -3060,6 +3083,35 @@ function WorkbenchThreadClient(
     updateCurrentThreadFields({ reasoningEffort: effort });
   }
 
+  async function compactThread(thread: ThreadPayload) {
+    if (thread.isDraft || thread.harness !== "codex") {
+      return thread;
+    }
+
+    await sendBridgeRequest<ThreadCompactStartResponse>(thread.harness, {
+      method: "thread/compact/start",
+      params: {
+        threadId: thread.id,
+      },
+    });
+    clearStoredThreadTokenUsage(thread.harness, thread.id);
+    if (state.currentThread?.id === thread.id && state.currentThread.harness === thread.harness) {
+      updateCurrentThreadFields({ tokenUsage: null });
+    }
+
+    const refreshedThread = await readThread(thread.id, thread.harness).catch(() => null);
+    if (refreshedThread) {
+      if (state.currentThread?.id === refreshedThread.id && state.currentThread.harness === refreshedThread.harness) {
+        setCurrentThread(refreshedThread);
+      }
+      await refreshThreads();
+      return refreshedThread;
+    }
+
+    await refreshThreads();
+    return thread;
+  }
+
   function setCurrentThreadServiceTier(threadId: string, serviceTier: string | null) {
     if (!state.currentThread || state.currentThread.id !== threadId || state.currentThread.harness !== "codex") {
       return;
@@ -3122,6 +3174,7 @@ function WorkbenchThreadClient(
     refreshRateLimits,
     refreshThreads,
     sendThreadMessage,
+    compactThread,
     stopThread,
     submitPendingUserInputRequest,
     setCurrentThreadAgent,

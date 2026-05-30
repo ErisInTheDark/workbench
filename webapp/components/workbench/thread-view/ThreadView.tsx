@@ -37,6 +37,7 @@ import {
 import { ThreadQuestionBadge, ThreadUnreadBadge as ThreadUnreadBadgeView } from "../ThreadStatusBadges";
 import ThreadAgentName from "./ThreadAgentName";
 import ThreadComposer from "./ThreadComposer";
+import ThreadContextStatus from "./ThreadContextStatus";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
@@ -281,6 +282,7 @@ export default memo(function ThreadView ({
   onOpenFile,
   onReadThread,
   onThreadSeen,
+  onCompactThread,
   onSendMessage,
   onStopThread,
   onSubmitUserInputRequest,
@@ -310,6 +312,7 @@ export default memo(function ThreadView ({
   onOpenFile: (path: string) => Promise<void>;
   onReadThread: (threadId: string, harness?: WorkbenchHarness) => Promise<ThreadPayload | null>;
   onThreadSeen: (thread: ThreadPayload) => void;
+  onCompactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   onSendMessage: (
     thread: ThreadPayload,
     input: UserInput[],
@@ -943,6 +946,12 @@ export default memo(function ThreadView ({
                 onDraftHarnessChange(activeThread.harness === "codex" ? "copilot" : "codex");
               }}
               rateLimits={rateLimits}
+              trailingContent={(
+                <ThreadContextStatus
+                  onCompactThread={onCompactThread}
+                  thread={activeThread}
+                />
+              )}
             />
           </ThreadComposer>
         </>

@@ -732,6 +732,7 @@ export async function WorkbenchClient(
       && left.forkedFromId === right.forkedFromId
       && left.agentNickname === right.agentNickname
       && left.agentRole === right.agentRole
+      && JSON.stringify(left.tokenUsage) === JSON.stringify(right.tokenUsage)
       && areTurnListsEquivalent(left.turns, right.turns)
       && areCurrentTurnsEquivalent(left, right);
   }
@@ -838,6 +839,20 @@ export async function WorkbenchClient(
     editorClient.refreshStatusMessage(`Created ${createdPath}`);
 
     return createdPath;
+  }
+
+  async function compactThread(thread: ThreadPayload) {
+    const payload = await threadClient.compactThread(thread);
+    if (!payload) {
+      return null;
+    }
+
+    if (payload.id === sessionState.currentThreadId) {
+      applyThreadPayloadToCurrentView(payload, "Requested context compaction.");
+    }
+
+    emitExplorerStateChange();
+    return payload;
   }
 
   function clearCurrentSelectionView() {
@@ -1048,6 +1063,7 @@ export async function WorkbenchClient(
     markThreadSeen,
     readThread,
     sendThreadMessage,
+    compactThread,
     stopThread,
     submitPendingUserInputRequest: threadClient.submitPendingUserInputRequest,
     setCurrentThreadModel: (threadId, model) => {

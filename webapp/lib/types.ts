@@ -1,5 +1,6 @@
 import type { RateLimitSnapshot } from "./codex/generated/app-server/v2/RateLimitSnapshot";
 import type { CommandAction } from "./codex/generated/app-server/v2/CommandAction";
+import type { ThreadTokenUsage } from "./codex/generated/app-server/v2/ThreadTokenUsage";
 import type { Turn } from "./codex/generated/app-server/v2/Turn";
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
 import type { WorkbenchRoute } from "./workbench/navigation/workbench-route";
@@ -112,6 +113,7 @@ export interface ThreadPayload extends ThreadSummary {
   serviceTier: string | null;
   agentPath: string | null;
   isDraft: boolean;
+  tokenUsage: ThreadTokenUsage | null;
   turns: Turn[];
 }
 
@@ -273,6 +275,7 @@ export interface WorkbenchControls {
     input: UserInput[],
     options?: WorkbenchSendThreadMessageOptions,
   ) => Promise<ThreadPayload | null>;
+  compactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   stopThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   submitPendingUserInputRequest: (
     threadId: string,

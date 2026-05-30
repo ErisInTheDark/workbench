@@ -804,6 +804,14 @@ export default function Workbench () {
     return await controls.stopThread(thread);
   }, [controls]);
 
+  const compactThread = useCallback(async (thread: ThreadPayload) => {
+    if (!controls) {
+      return null;
+    }
+
+    return await controls.compactThread(thread);
+  }, [controls]);
+
   const listThreadModels = useCallback(async (nextHarness: WorkbenchHarness) => {
     if (!controls) {
       return [];
@@ -1498,6 +1506,7 @@ export default function Workbench () {
                   onOpenFile={openFileFromThreadView}
                   onReadThread={readThread}
                   onThreadSeen={markThreadSeen}
+                  onCompactThread={compactThread}
                   onSendMessage={sendThreadMessage}
                   onStopThread={stopThread}
                   onSubmitUserInputRequest={submitUserInputRequest}
