@@ -3,13 +3,63 @@
  * - normalizeThreadItems: dedupe thread items, including cumulative reasoning snapshot segments. Keywords: thread, reasoning, dedupe, transcript.
  */
 import type { ThreadItem } from "./generated/app-server/v2/ThreadItem";
+import type { UserInput } from "./generated/app-server/v2/UserInput";
 
 interface NormalizeThreadItemsOptions {
   mergeDuplicateItems?: (existingItem: ThreadItem, incomingItem: ThreadItem) => ThreadItem;
 }
 
-function normalizeUserInput(value: unknown) {
-  return JSON.stringify(value);
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
+  }
+
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+    .join(",")}}`;
+}
+
+function normalizeUserInput(input: UserInput) {
+  switch (input.type) {
+    case "text":
+      return stableStringify({
+        text: input.text,
+        text_elements: input.text_elements,
+        type: input.type,
+      });
+    case "image":
+      return stableStringify({
+        type: input.type,
+        url: input.url,
+      });
+    case "localImage":
+      return stableStringify({
+        path: input.path,
+        type: input.type,
+      });
+    case "skill":
+      return stableStringify({
+        name: input.name,
+        path: input.path,
+        type: input.type,
+      });
+    case "mention":
+      return stableStringify({
+        name: input.name,
+        path: input.path,
+        type: input.type,
+      });
+  }
+}
+
+function normalizeUserInputs(inputs: UserInput[]) {
+  return `[${inputs.map((input) => normalizeUserInput(input)).join(",")}]`;
 }
 
 function normalizeTextSegment(value: string) {
@@ -19,9 +69,9 @@ function normalizeTextSegment(value: string) {
 function getTurnItemDedupeKey(item: ThreadItem) {
   switch (item.type) {
     case "userMessage":
-      return `userMessage:${normalizeUserInput(item.content)}`;
+      return `userMessage:${normalizeUserInputs(item.content)}`;
     case "hookPrompt":
-      return `hookPrompt:${JSON.stringify(item.fragments)}`;
+      return `hookPrompt:${stableStringify(item.fragments)}`;
     case "agentMessage":
       return item.text.trim() ? `agentMessage:${item.text.trim()}` : null;
     case "plan":

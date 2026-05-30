@@ -105,6 +105,26 @@ const repeatedCanonicalReasoningA = {
   type: "reasoning",
 } satisfies ThreadItem;
 
+const canonicalUserMessage = {
+  content: [{
+    text: "/iterate duplicate user message",
+    text_elements: [],
+    type: "text",
+  }],
+  id: "user-canonical",
+  type: "userMessage",
+} satisfies ThreadItem;
+
+const genericSnapshotUserMessage = {
+  content: [{
+    text_elements: [],
+    text: "/iterate duplicate user message",
+    type: "text",
+  }],
+  id: "item-1",
+  type: "userMessage",
+} satisfies ThreadItem;
+
 const normalizedReasoningItems = normalizeThreadItems([
   granularReasoningA,
   granularReasoningB,
@@ -123,6 +143,11 @@ const normalizedRepeatedCanonicalReasoning = normalizeThreadItems([
   granularReasoningA,
   repeatedCanonicalReasoningA,
 ]);
+const normalizedDuplicateUserMessages = normalizeThreadItems([
+  canonicalUserMessage,
+  agentMessage,
+  genericSnapshotUserMessage,
+]);
 
 void ([
   timeline,
@@ -133,7 +158,8 @@ void ([
   normalizedReasoningItemsFromGenericFirst,
   normalizedIndexedGenericSnapshotReasoning,
   normalizedRepeatedCanonicalReasoning,
-] satisfies [CodexTranscriptTurnTimelineEntry[], CodexTranscriptTurnTimelineEntry[], ThreadItem[], ThreadItem, ThreadItem[], ThreadItem[], ThreadItem[], ThreadItem[]]);
+  normalizedDuplicateUserMessages,
+] satisfies [CodexTranscriptTurnTimelineEntry[], CodexTranscriptTurnTimelineEntry[], ThreadItem[], ThreadItem, ThreadItem[], ThreadItem[], ThreadItem[], ThreadItem[], ThreadItem[]]);
 
 // Manual checklist:
 // - `orderedItems` should be `[agentMessage, commandExecution]`, proving command/tool items stay after their anchor.
@@ -142,4 +168,5 @@ void ([
 // - `normalizedReasoningItemsFromGenericFirst` should still prefer granular `rs-*` items when the generic snapshot item appears first.
 // - `normalizedIndexedGenericSnapshotReasoning` should preserve the generic snapshot summary indexes while blanking only duplicated segments.
 // - `normalizedRepeatedCanonicalReasoning` should keep both canonical `rs-*` reasoning items even when their text matches.
+// - `normalizedDuplicateUserMessages` should keep the canonical turn-start user item and remove the generic snapshot duplicate.
 // - Partial `itemTimeline` + legacy `itemOrder` cases should be added here when implementing migrations.
