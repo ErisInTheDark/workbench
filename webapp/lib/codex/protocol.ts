@@ -57,6 +57,16 @@ const QUESTIONNAIRE_COLLABORATION_INSTRUCTIONS = [
   "`request_user_input` — Use to show a questionnaire to the user, AFTER you have already given the user any required context.",
   "When you use the tool, prefer 1 to 3 concise multiple-choice questions and do not ask multiple-choice questions in plain chat.",
   "Keep the options simple, do not try to stuff context or planning into the questionnaire.",
+  "",
+  "## Web browsing:",
+  "- ALWAYS use web search 'openPage' tool when you have an exact URL to look at.",
+  "- DO NOT actually search with the web search tool unless the user suggests it due to harness restrictions on what pages can be accessed via search.",
+  "",
+  "## Computer/browser/MCP use:",
+  "This feature is not available. Alternatives include:",
+  "- You're welcome to ask the user to add breakpoints if they would help diagnose an issue, but limit the number you give to save time.",
+  "- If allowed by workspace instructions or explicit user instruction, you can manually send requests to dev web servers the user is running.",
+  "- Tool preference: harness tools > shell commands > MCP.",
 ].join("\n");
 
 function joinInstructionSections(sections: Array<string | null | undefined>) {
