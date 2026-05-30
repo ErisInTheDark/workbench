@@ -24,13 +24,18 @@ import {
   createFileRoute,
   createProjectHref,
   createProjectRoute,
+  createSettingsHref,
+  createSettingsRoute,
   createThreadRoute,
 } from "../lib/workbench/navigation/workbench-route";
 import { useWorkbenchRoute } from "../lib/workbench/navigation/use-workbench-route";
 import { isWorkbenchOpenableFile } from "../lib/workbench/project/tree-utils";
 import {
   persistHarness,
+  persistWorkbenchTheme,
   readStoredHarness,
+  readStoredWorkbenchTheme,
+  type WorkbenchTheme,
 } from "../lib/workbench/state/browser-state";
 import {
   getPreferredMobilePane,
@@ -50,6 +55,7 @@ import {
 } from "../lib/workbench/thread/thread-composer-drafts";
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
 import ThreadView from "./workbench/thread-view/ThreadView";
+import WorkbenchAmbientCanvas, { type WorkbenchAmbientCanvasVariant } from "./workbench/WorkbenchAmbientCanvas";
 import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/WorkbenchTabIcon";
 import {
   workbenchDiffGutterClassName,
@@ -58,8 +64,6 @@ import {
   workbenchIconButtonClassName,
   workbenchNewEntryButtonClassName,
   workbenchRevisionHoverToolbarClassName,
-  workbenchThreadListButtonClassName,
-  workbenchThreadListLabelClassName,
 } from "./workbench/workbench-class-names";
 import {
   dialogButtonClassName,
@@ -74,6 +78,8 @@ import {
 import {
   BackArrowIcon,
   BinIcon,
+  GearIcon,
+  ReloadIcon,
   SaveIcon,
   ZoomInIcon,
   ZoomOutIcon
@@ -100,6 +106,23 @@ const MOBILE_SHELL_HEADER_SHOW_THRESHOLD_PX = 8;
 const DEFAULT_RELOAD_REQUEST: OrchestratorReloadRequest = {
   scopes: ["orchestrator-logic", "codex-bridge", "next-dev"],
 };
+const WORKBENCH_THEME_OPTIONS: { description: string; label: string; value: WorkbenchTheme }[] = [
+  {
+    description: "Current quiet Workbench colors and fonts.",
+    label: "Default",
+    value: "default",
+  },
+  {
+    description: "Pink sparkles with Sour Gummy and Comic Code Light.",
+    label: "Magical girl mode",
+    value: "magical-girl",
+  },
+  {
+    description: "Snowy day and night colors with the normal Workbench fonts.",
+    label: "Winter",
+    value: "winter",
+  },
+];
 
 function isReloadResponse (value: unknown): value is OrchestratorReloadResponse {
   return !!value
@@ -201,6 +224,13 @@ export default function Workbench () {
   const [showUnopenableFiles, setShowUnopenableFiles] = useState(false);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [sidebarMode, setSidebarMode] = useState<"main" | "projects">("main");
+  const [workbenchTheme, setWorkbenchTheme] = useState<WorkbenchTheme>(() => {
+    if (typeof window === "undefined") {
+      return "default";
+    }
+
+    return readStoredWorkbenchTheme();
+  });
   const [createDialogParentPath, setCreateDialogParentPath] = useState("");
   const [createEntryName, setCreateEntryName] = useState("");
   const [isCreatingEntry, setIsCreatingEntry] = useState(false);
@@ -538,6 +568,11 @@ export default function Workbench () {
     closeProjectPicker();
   }, [closeProjectPicker]);
 
+  const selectWorkbenchTheme = useCallback((theme: WorkbenchTheme) => {
+    setWorkbenchTheme(theme);
+    persistWorkbenchTheme(theme);
+  }, []);
+
   useEffect(() => {
     if (sidebarMode !== "projects") {
       return;
@@ -545,6 +580,26 @@ export default function Workbench () {
 
     projectsPaneRef.current?.focus();
   }, [sidebarMode]);
+
+  useEffect(() => {
+    document.documentElement.dataset.workbenchTheme = workbenchTheme;
+  }, [workbenchTheme]);
+
+  const openSettingsFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>) => {
+    if (
+      event.button !== 0
+      || event.metaKey
+      || event.ctrlKey
+      || event.shiftKey
+      || event.altKey
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    navigateToRoute(createSettingsRoute(explorer.currentProjectId || route.projectId));
+    setSidebarMode("main");
+  }, [explorer.currentProjectId, navigateToRoute, route.projectId]);
 
   const selectProjectFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, projectId: string) => {
     if (
@@ -861,8 +916,9 @@ export default function Workbench () {
     .slice(0, 8);
   const showThreadView = route.view === "thread";
   const showFileView = route.view === "file";
-  const showEmptyState = !showThreadView && !showFileView;
-  const showRouteError = Boolean(selectionError) && !showThreadView && !showFileView;
+  const showSettingsView = route.view === "settings";
+  const showEmptyState = !showThreadView && !showFileView && !showSettingsView;
+  const showRouteError = Boolean(selectionError) && !showThreadView && !showFileView && !showSettingsView;
   if (currentThread) {
     retainedThreadRef.current = currentThread;
   }
@@ -877,6 +933,7 @@ export default function Workbench () {
   const isSelectionPending = !selectionError && ((showThreadView && !isThreadViewReady) || (showFileView && !isFileViewReady));
   const activeThreadId = showThreadView ? route.threadId : "";
   const activeFilePath = showFileView ? route.filePath : "";
+  const sidebarTrackTransform = sidebarMode === "projects" ? "translateX(0)" : "translateX(-50%)";
   const pendingQuestionnaireThreadIds = useMemo(
     () => new Set(Object.keys(harnessUserInputRequestsByThreadId)),
     [harnessUserInputRequestsByThreadId],
@@ -895,12 +952,17 @@ export default function Workbench () {
     : hasActiveThread
       ? "active"
       : "default";
+  const ambientCanvasVariant: WorkbenchAmbientCanvasVariant | null = workbenchTheme === "magical-girl" || workbenchTheme === "winter"
+    ? workbenchTheme
+    : null;
   const shouldShowShellHeader = !showEmptyState && (!isMobile || mobilePane === "editor");
   const mainPaneScrollKey = showThreadView
     ? `thread:${activeThreadId}`
     : showFileView
       ? `file:${activeFilePath}`
-      : "";
+      : showSettingsView
+        ? "settings"
+        : "";
 
   useEffect(() => {
     if (!isMobile || mobilePane !== "editor" || !mainPaneScrollKey) {
@@ -1134,7 +1196,8 @@ export default function Workbench () {
   };
 
   return (
-    <div className="h-dvh overflow-hidden md:grid md:min-h-screen md:h-auto md:overflow-visible md:grid-cols-[minmax(16rem,21rem)_1fr] md:items-start">
+    <div className="relative isolate h-dvh overflow-hidden md:grid md:min-h-screen md:h-auto md:overflow-visible md:grid-cols-[minmax(16rem,21rem)_1fr] md:items-start">
+      {ambientCanvasVariant ? <WorkbenchAmbientCanvas variant={ambientCanvasVariant} /> : null}
       <WorkbenchTabIcon state={tabIconState} />
       <div
         className="mobile-workbench-track flex h-dvh w-[200vw] overflow-hidden transition-transform duration-200 ease-out md:contents md:h-auto md:w-auto md:overflow-visible md:transform-none"
@@ -1144,7 +1207,7 @@ export default function Workbench () {
           <div className="-ml-3 min-h-0 flex-1 overflow-hidden text-[0.95rem] leading-6">
             <div
               className="flex h-full w-[200%] flex-row-reverse transition-transform duration-200 ease-out"
-              style={{ transform: sidebarMode === "projects" ? "translateX(0)" : "translateX(-50%)" }}
+              style={{ transform: sidebarTrackTransform }}
             >
               <div className="explorer-scrollbar min-h-0 w-1/2 overflow-y-auto pb-8 pl-2 pr-2">
                 <section className="space-y-2 pb-6">
@@ -1254,18 +1317,33 @@ export default function Workbench () {
                     />
                   </nav>
                   <div className="pr-2 pt-4 md:pr-4.5">
-                    <button
-                      type="button"
-                      className={`${workbenchThreadListButtonClassName}${isReloadingRuntime ? " text-accent" : " text-muted"}`}
-                      disabled={isReloadingRuntime}
-                      onClick={() => {
-                        void reloadLocalRuntime();
-                      }}
-                    >
-                      <span className={`${workbenchThreadListLabelClassName}${isReloadingRuntime ? " font-semibold" : ""}`}>
-                        {isReloadingRuntime ? "Reloading local runtime..." : "Reload local runtime"}
-                      </span>
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <a
+                        aria-label="Open settings"
+                        href={createSettingsHref(explorer.currentProjectId || route.projectId)}
+                        title="Open settings"
+                        className={`${workbenchIconButtonClassName} text-muted`}
+                        onClick={openSettingsFromLink}
+                      >
+                        <GearIcon />
+                        <span className="sr-only">Open settings</span>
+                      </a>
+                      <button
+                        type="button"
+                        aria-label={isReloadingRuntime ? "Reloading local runtime" : "Reload local runtime"}
+                        title={isReloadingRuntime ? "Reloading local runtime" : "Reload local runtime"}
+                        className={`${workbenchIconButtonClassName}${isReloadingRuntime ? " text-accent" : " text-muted"}`}
+                        disabled={isReloadingRuntime}
+                        onClick={() => {
+                          void reloadLocalRuntime();
+                        }}
+                      >
+                        <ReloadIcon />
+                        <span className="sr-only">
+                          {isReloadingRuntime ? "Reloading local runtime" : "Reload local runtime"}
+                        </span>
+                      </button>
+                    </div>
                     {reloadMessage ? (
                       <p className="mt-2 text-[0.84rem] leading-6 text-muted">{reloadMessage}</p>
                     ) : null}
@@ -1310,6 +1388,7 @@ export default function Workbench () {
                   </nav>
                 </section>
               </div>
+
             </div>
           </div>
         </aside>
@@ -1329,15 +1408,15 @@ export default function Workbench () {
           >
             <div
               aria-hidden="true"
-              className="pointer-events-none absolute inset-0 -z-10 md:mx-auto md:max-w-[58rem] bg-[linear-gradient(to_bottom,var(--bg)_calc(100%-var(--spacing)*6),transparent)] md:backdrop-blur-none"
+              className="pointer-events-none absolute inset-0 -z-10 md:mx-auto md:max-w-[58rem] bg-[linear-gradient(to_bottom,var(--shell-fade-bg)_calc(100%-var(--spacing)*6),transparent)] md:backdrop-blur-none"
             />
             <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
               <div className="order-2 min-w-0 md:order-1" hidden={Boolean(currentThread?.isDraft)}>
                 <p id="file-path" ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
-                  Select a file
+                  {showSettingsView ? "Settings" : "Select a file"}
                 </p>
                 <p id="status-line" ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted">
-                  Markdown files open as rich text. Save with Ctrl/Cmd+S.
+                  {showSettingsView ? "Theme and local Workbench preferences." : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
                 </p>
               </div>
               <div className="order-1 flex items-center justify-between gap-3 md:order-2 md:ml-auto md:flex-none md:justify-end">
@@ -1378,7 +1457,7 @@ export default function Workbench () {
                     <span className="sr-only">Increase editor text size</span>
                   </button>
                 </div>
-                <div className="flex items-center gap-1.5" hidden={Boolean(currentThread) || showThreadView}>
+                <div className="flex items-center gap-1.5" hidden={Boolean(currentThread) || showThreadView || showSettingsView}>
                   <button
                     id="save-file"
                     ref={saveFileButtonRef}
@@ -1457,6 +1536,37 @@ export default function Workbench () {
                   </div>
                 </div>
               )
+            ) : null}
+            {showSettingsView ? (
+              <div className="mx-auto flex w-full max-w-[56rem] flex-col gap-8 py-8">
+                <section className="space-y-4">
+                  <div className="space-y-2">
+                    <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">Appearance</p>
+                    <h1 className="m-0 text-[1.65rem] font-semibold leading-tight text-text">Settings</h1>
+                  </div>
+
+                  <fieldset className="m-0 grid gap-2 border-0 p-0 md:grid-cols-2">
+                    <legend className="sr-only">Theme</legend>
+                    {WORKBENCH_THEME_OPTIONS.map((option) => {
+                      const isSelected = workbenchTheme === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          aria-pressed={isSelected}
+                          className={`min-h-[6.5rem] rounded-[0.85rem] px-4 py-3 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none${isSelected ? " bg-accent-soft text-accent" : " text-muted"}`}
+                          onClick={() => {
+                            selectWorkbenchTheme(option.value);
+                          }}
+                        >
+                          <span className={`block text-[1rem] leading-tight${isSelected ? " font-semibold" : " font-medium text-text"}`}>{option.label}</span>
+                          <span className="mt-2 block text-[0.84rem] leading-6 text-muted">{option.description}</span>
+                        </button>
+                      );
+                    })}
+                  </fieldset>
+                </section>
+              </div>
             ) : null}
             {showRouteError ? (
               <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">

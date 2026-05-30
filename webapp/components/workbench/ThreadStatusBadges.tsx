@@ -53,7 +53,7 @@ export function ThreadQuestionBadge() {
       <span
         aria-hidden="true"
         title={accessibilityText}
-        className="inline-flex min-w-[1.55rem] shrink-0 items-center justify-center rounded-full bg-[color-mix(in_srgb,#d0ad12_18%,transparent)] px-2 py-0.5 text-[0.72rem] font-semibold leading-none text-[#7a5b00] dark:bg-[color-mix(in_srgb,#ffd84d_18%,transparent)] dark:text-[#ffd84d]"
+        className="inline-flex min-w-[1.55rem] shrink-0 items-center justify-center rounded-full bg-[color:var(--attention-soft)] px-2 py-0.5 text-[0.72rem] font-semibold leading-none text-[color:var(--attention)]"
       >
         ?
       </span>

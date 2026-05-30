@@ -1,7 +1,7 @@
 /**
  * Exports:
  * - DEFAULT_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE: editor font size defaults and bounds. Keywords: editor zoom, font size, clamp.
- * - EXPANDED_DIRECTORIES_STORAGE_KEY, FONT_SIZE_STORAGE_KEY, HARNESS_STORAGE_KEY, HARNESS_MODEL_STORAGE_KEY, HARNESS_MODEL_EFFORT_STORAGE_KEY, HARNESS_SERVICE_TIER_STORAGE_KEY, HARNESS_AGENT_STORAGE_KEY, THREAD_UNREAD_STATE_STORAGE_KEY, THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY: localStorage keys for persisted explorer, editor, harness, model, effort, service tier, agent, thread unread state, and live activity disclosure state. Keywords: localStorage, explorer, font size, harness, model, effort, service tier, agent, threads, live activity.
+ * - EXPANDED_DIRECTORIES_STORAGE_KEY, FONT_SIZE_STORAGE_KEY, HARNESS_STORAGE_KEY, HARNESS_MODEL_STORAGE_KEY, HARNESS_MODEL_EFFORT_STORAGE_KEY, HARNESS_SERVICE_TIER_STORAGE_KEY, HARNESS_AGENT_STORAGE_KEY, THREAD_UNREAD_STATE_STORAGE_KEY, THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY, WORKBENCH_THEME_STORAGE_KEY: localStorage keys for persisted explorer, editor, harness, model, effort, service tier, agent, thread unread state, live activity disclosure state, and theme. Keywords: localStorage, explorer, font size, harness, model, effort, service tier, agent, threads, live activity, theme.
  * - readStoredExpandedDirectories: read and normalize persisted expanded directory paths for a project. Keywords: localStorage, explorer tree, expanded directories, browser state.
  * - persistExpandedDirectories: persist expanded directory paths for a project from a provided collection. Keywords: localStorage, explorer tree, persistence, directories.
  * - readStoredFontSize: read and clamp the persisted editor font size. Keywords: localStorage, editor zoom, font size, clamp.
@@ -13,6 +13,7 @@
  * - readStoredHarnessAgent/persistHarnessAgent: persist the preferred agent file for each harness. Keywords: localStorage, codex, copilot, harness, agent.
  * - readStoredThreadUnreadState/persistThreadUnreadState: persist per-thread unread tracking for sidebar badges. Keywords: localStorage, threads, unread, badges.
  * - readStoredThreadLiveActivityOpen/persistThreadLiveActivityOpen: persist the shared thread live activity disclosure state. Keywords: localStorage, thread, reasoning, subagent, disclosure.
+ * - readStoredWorkbenchTheme/persistWorkbenchTheme: persist the selected visual theme. Keywords: localStorage, theme, settings, appearance.
  * - readLocalWorkbenchOrigin: read the local loopback workbench origin for agent bootstrap URLs. Keywords: localhost, loopback, URL, workbench, bootstrap.
  */
 
@@ -30,6 +31,9 @@ export const HARNESS_SERVICE_TIER_STORAGE_KEY = "workbench:harness-service-tiers
 export const HARNESS_AGENT_STORAGE_KEY = "workbench:harness-agents";
 export const THREAD_UNREAD_STATE_STORAGE_KEY = "workbench:thread-unread-state";
 export const THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY = "workbench:thread-live-activity-open";
+export const WORKBENCH_THEME_STORAGE_KEY = "workbench:theme";
+
+export type WorkbenchTheme = "default" | "magical-girl" | "winter";
 
 function normalizeStoredThreadUnreadState(value: unknown): WorkbenchStoredThreadUnreadState | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -324,6 +328,23 @@ export function persistThreadLiveActivityOpen(isOpen: boolean) {
     window.localStorage.setItem(THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY, isOpen ? "true" : "false");
   } catch {
     // Ignore storage failures and keep the in-memory disclosure state working.
+  }
+}
+
+export function readStoredWorkbenchTheme(): WorkbenchTheme {
+  try {
+    const storedTheme = window.localStorage.getItem(WORKBENCH_THEME_STORAGE_KEY);
+    return storedTheme === "magical-girl" || storedTheme === "winter" ? storedTheme : "default";
+  } catch {
+    return "default";
+  }
+}
+
+export function persistWorkbenchTheme(theme: WorkbenchTheme) {
+  try {
+    window.localStorage.setItem(WORKBENCH_THEME_STORAGE_KEY, theme);
+  } catch {
+    // Ignore storage failures and keep the in-memory settings view working.
   }
 }
 

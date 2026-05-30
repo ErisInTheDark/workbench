@@ -1,4 +1,15 @@
 @import "tailwindcss";
+@import url("https://fonts.googleapis.com/css2?family=Sour+Gummy:wght@400;500;600;700&display=swap");
+
+@font-face {
+  font-family: "Workbench Comic Code Light";
+  font-style: normal;
+  font-weight: 300;
+  src:
+    local("Comic Code Light"),
+    local("ComicCode-Light"),
+    local("Comic Code");
+}
 
 :root {
   color-scheme: light dark;
@@ -15,6 +26,58 @@
   --success: #237254;
   --shadow: rgba(14, 12, 10, 0.12);
   --selection: #1a42b044;
+  --app-bg-solid: var(--bg);
+  --app-bg-image: radial-gradient(circle at top left, var(--bg-soft), transparent 26rem), var(--bg);
+  --edge-fade: color-mix(in srgb, var(--text) 12%, transparent);
+  --shell-fade-bg: var(--app-bg-solid);
+  --attention: #7a5b00;
+  --attention-soft: color-mix(in srgb, #d0ad12 18%, transparent);
+}
+
+:root[data-workbench-theme="magical-girl"] {
+  --bg: #fff0fa;
+  --bg-soft: rgba(255, 82, 178, 0.12);
+  --text: #3a1831;
+  --oklch-text-lightness: 36%;
+  --muted: rgba(58, 24, 49, 0.64);
+  --accent: #d11b8f;
+  --accent-soft: #ff73c24a;
+  --danger: #b92f67;
+  --explorer-change-add: #299c7b;
+  --explorer-change-del: #d95c8f;
+  --success: #168867;
+  --shadow: rgba(141, 24, 100, 0.16);
+  --selection: #ff73c25a;
+  --app-bg-solid: color-mix(in srgb, var(--bg) 94%, var(--accent) 6%);
+  --app-bg-image: radial-gradient(circle at top left, var(--bg-soft), transparent 24rem), var(--app-bg-solid);
+  --edge-fade: color-mix(in srgb, var(--accent) 15%, transparent);
+  --shell-fade-bg: var(--app-bg-solid);
+  --attention: #9f246f;
+  --attention-soft: color-mix(in srgb, #ffb7e5 32%, transparent);
+  --font-sans: "Sour Gummy", "Aptos", "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  --font-mono: "Workbench Comic Code Light", "Comic Code Light", "Comic Code", "Cascadia Code", "Consolas", monospace;
+}
+
+:root[data-workbench-theme="winter"] {
+  --bg: #f3f8ff;
+  --bg-soft: rgba(65, 133, 196, 0.11);
+  --text: #152234;
+  --oklch-text-lightness: 35%;
+  --muted: rgba(21, 34, 52, 0.62);
+  --accent: #2f73bd;
+  --accent-soft: #78b8ff42;
+  --danger: #9b405a;
+  --explorer-change-add: #31846e;
+  --explorer-change-del: #bf6f82;
+  --success: #237a61;
+  --shadow: rgba(28, 54, 82, 0.13);
+  --selection: #78b8ff4f;
+  --app-bg-solid: color-mix(in srgb, var(--bg) 94%, var(--accent) 6%);
+  --app-bg-image: radial-gradient(circle at top left, var(--bg-soft), transparent 24rem), var(--app-bg-solid);
+  --edge-fade: color-mix(in srgb, var(--accent) 15%, transparent);
+  --shell-fade-bg: var(--app-bg-solid);
+  --attention: #245f9f;
+  --attention-soft: color-mix(in srgb, #bfe2ff 36%, transparent);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -32,6 +95,56 @@
     --success: #61ecae;
     --shadow: rgba(0, 0, 0, 0.35);
     --selection: #74a0ff44;
+    --app-bg-solid: var(--bg);
+    --app-bg-image: radial-gradient(circle at top left, var(--bg-soft), transparent 26rem), var(--bg);
+    --edge-fade: color-mix(in srgb, var(--text) 14%, transparent);
+    --shell-fade-bg: var(--app-bg-solid);
+    --attention: #ffd84d;
+    --attention-soft: color-mix(in srgb, #ffd84d 18%, transparent);
+  }
+
+  :root[data-workbench-theme="magical-girl"] {
+    --bg: #1c1019;
+    --bg-soft: rgba(255, 101, 196, 0.12);
+    --text: #ffe4f6;
+    --oklch-text-lightness: 75%;
+    --muted: rgba(255, 228, 246, 0.66);
+    --accent: #ff86d5;
+    --accent-soft: #ff86d54d;
+    --danger: #ff75a4;
+    --explorer-change-add: #64e0b8;
+    --explorer-change-del: #ff8cb5;
+    --success: #80ffd5;
+    --shadow: rgba(0, 0, 0, 0.42);
+    --selection: #ff86d54d;
+    --app-bg-solid: color-mix(in srgb, var(--bg) 90%, var(--accent) 10%);
+    --app-bg-image: radial-gradient(circle at top left, var(--bg-soft), transparent 24rem), var(--app-bg-solid);
+    --edge-fade: color-mix(in srgb, var(--accent) 18%, transparent);
+    --shell-fade-bg: var(--app-bg-solid);
+    --attention: #ffd1f0;
+    --attention-soft: color-mix(in srgb, #ff86d5 22%, transparent);
+  }
+
+  :root[data-workbench-theme="winter"] {
+    --bg: #0d1420;
+    --bg-soft: rgba(151, 197, 255, 0.1);
+    --text: #eef7ff;
+    --oklch-text-lightness: 74%;
+    --muted: rgba(238, 247, 255, 0.66);
+    --accent: #9bcaff;
+    --accent-soft: #9bcaff42;
+    --danger: #ff7f9f;
+    --explorer-change-add: #75d6b8;
+    --explorer-change-del: #ff9ab1;
+    --success: #8ff1d2;
+    --shadow: rgba(0, 0, 0, 0.42);
+    --selection: #9bcaff42;
+    --app-bg-solid: color-mix(in srgb, var(--bg) 90%, var(--accent) 10%);
+    --app-bg-image: radial-gradient(circle at top left, var(--bg-soft), transparent 24rem), var(--app-bg-solid);
+    --edge-fade: color-mix(in srgb, var(--accent) 18%, transparent);
+    --shell-fade-bg: var(--app-bg-solid);
+    --attention: #dceeff;
+    --attention-soft: color-mix(in srgb, #9bcaff 22%, transparent);
   }
 }
 
@@ -48,6 +161,15 @@
   --font-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
   --font-mono: "Cascadia Code", "Consolas", monospace;
   --shadow-float: 0 0.4rem 1rem var(--shadow);
+}
+
+:root[data-workbench-theme="magical-girl"] {
+  --font-sans: "Sour Gummy", "Aptos", "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  --font-mono: "Workbench Comic Code Light", "Comic Code Light", "Comic Code", "Cascadia Code", "Consolas", monospace;
+}
+
+html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, samp) {
+  font-family: "Workbench Comic Code Light", "Comic Code Light", "Comic Code", "Cascadia Code", "Consolas", monospace;
 }
 
 @layer base {
@@ -81,9 +203,7 @@
     inset: 0;
     pointer-events: none;
     box-shadow: var(--shadow-float);
-    background:
-      radial-gradient(circle at top left, var(--bg-soft), transparent 26rem),
-      var(--bg);
+    background: var(--app-bg-image);
       z-index: -1;
   }
 
@@ -197,17 +317,11 @@
   }
 
   .editor-diff-marker[data-marker-type="modify"] {
-    color: #d0ad12;
+    color: var(--attention);
   }
 
   .editor-diff-marker[data-marker-type="delete"] {
     color: var(--danger);
-  }
-
-  @media (prefers-color-scheme: dark) {
-    .editor-diff-marker[data-marker-type="modify"] {
-      color: #ffd84d;
-    }
   }
 
   .editor-diff-marker-icon {

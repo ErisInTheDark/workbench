@@ -906,7 +906,7 @@ export async function WorkbenchClient(
       return { ok: false };
     }
 
-    if (route.view === "project") {
+    if (route.view === "project" || route.view === "settings") {
       if (sessionState.currentPath) {
         fileClient.syncCurrentDraftBuffer();
       }

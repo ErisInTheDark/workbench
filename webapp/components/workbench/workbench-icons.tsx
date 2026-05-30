@@ -6,6 +6,8 @@
  * - ZoomOutIcon: render the decrease text size icon. Keywords: workbench, icon, zoom.
  * - ZoomInIcon: render the increase text size icon. Keywords: workbench, icon, zoom.
  * - BackArrowIcon: render the mobile back-navigation icon. Keywords: workbench, icon, navigation.
+ * - GearIcon: render the settings navigation icon. Keywords: workbench, icon, settings.
+ * - ReloadIcon: render the local runtime reload icon. Keywords: workbench, icon, reload.
  */
 import type { WorkbenchHarness } from "../../lib/types";
 
@@ -104,6 +106,26 @@ export function BackArrowIcon () {
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
       <path d="M12.75 4.75L7.25 10L12.75 15.25" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M7.75 10H16.25" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function GearIcon () {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
+      <path d="M8.45 2.75H11.55L12.12 5.05C12.5 5.2 12.86 5.4 13.18 5.66L15.38 4.98L16.92 7.64L15.28 9.28C15.34 9.74 15.34 10.26 15.28 10.72L16.92 12.36L15.38 15.02L13.18 14.34C12.86 14.6 12.5 14.8 12.12 14.95L11.55 17.25H8.45L7.88 14.95C7.5 14.8 7.14 14.6 6.82 14.34L4.62 15.02L3.08 12.36L4.72 10.72C4.66 10.26 4.66 9.74 4.72 9.28L3.08 7.64L4.62 4.98L6.82 5.66C7.14 5.4 7.5 5.2 7.88 5.05L8.45 2.75Z" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="10" cy="10" r="2.45" />
+    </svg>
+  );
+}
+
+export function ReloadIcon () {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
+      <path d="M16.25 9.25A6.25 6.25 0 0 0 5.3 5.12L3.75 6.75" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3.75 3.75V6.75H6.75" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3.75 10.75A6.25 6.25 0 0 0 14.7 14.88L16.25 13.25" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M16.25 16.25V13.25H13.25" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

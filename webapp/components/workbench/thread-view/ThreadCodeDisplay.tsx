@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useState, type CSSProperties, type ReactNode } from "react";
 
 import type { ParsedUnifiedDiff, UnifiedDiffLine } from "../../../lib/workbench/thread/thread-file-diff";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
@@ -30,11 +30,17 @@ type ThreadCodeDisplayProps =
 
 type ThreadCodeDisplaySurface = "default" | "framed";
 
-const EDGE_FADE_CLASS = `
-  relative
-  before:hidden before:absolute before:inset-0 before:w-20 before:bg-linear-to-r before:from-[var(--bg)] before:to-transparent md:before:block
-  after:hidden after:absolute after:inset-0 after:left-auto after:w-20 after:bg-linear-to-l after:from-[var(--bg)] after:to-transparent md:after:block
-`;
+type ThreadCodeGradientStyle = CSSProperties;
+const CODE_SURFACE_BACKGROUND = "color-mix(in srgb, var(--muted) 5%, transparent)";
+const EDGE_GRADIENT_WIDTH_PX = 80;
+
+function createEdgeGradientStyle(rowBackground: string): ThreadCodeGradientStyle {
+  return {
+    background: `linear-gradient(to right, transparent 0, ${rowBackground} ${EDGE_GRADIENT_WIDTH_PX}px, ${rowBackground} calc(100% - ${EDGE_GRADIENT_WIDTH_PX}px), transparent 100%)`,
+  };
+}
+
+const CODE_SURFACE_EDGE_STYLE = createEdgeGradientStyle(CODE_SURFACE_BACKGROUND);
 
 export function ThreadCommandHeader ({
   command,
@@ -50,10 +56,11 @@ export function ThreadCommandHeader ({
     <button
       aria-expanded={isExpanded}
       className={`
-        ${isFramed ? "" : EDGE_FADE_CLASS} block w-full cursor-pointer border-0 ${isFramed ? "bg-transparent" : "bg-[color-mix(in_srgb,var(--muted)_5%,transparent)]"} px-4 py-2 md:px-12
+        block w-full cursor-pointer border-0 ${isFramed ? "bg-transparent" : ""} px-4 py-2 md:px-12
         text-left font-mono text-[0.78em] leading-[1.6] text-text hover:bg-[color-mix(in_srgb,var(--text)_6%,transparent)]
         focus-visible:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] focus-visible:outline-none
       `}
+      style={isFramed ? undefined : CODE_SURFACE_EDGE_STYLE}
       title={isExpanded ? "Collapse command" : "Show full command"}
       type="button"
       onClick={() => {
@@ -134,12 +141,14 @@ function ThreadUnifiedDiffLine ({
   }
 
   const lineStyle = getDiffLineStyle(line.type);
+  const edgeStyle = surface === "framed" && line.type === "context" ? undefined : lineStyle.edgeStyle;
 
   return (
     <div
       className={`
-        ${EDGE_FADE_CLASS} col-span-4 grid grid-cols-subgrid px-4 font-mono tabular-nums text-[0.78em] leading-[1.65] md:px-12 ${getDiffRowClassName(lineStyle.rowClassName, line.type, surface)}
+        col-span-4 grid grid-cols-subgrid px-4 font-mono tabular-nums text-[0.78em] leading-[1.65] md:px-12 ${getDiffRowClassName(lineStyle.rowClassName, line.type, surface)}
       `}
+      style={edgeStyle}
     >
       <span className={`px-3 py-1 text-right ${lineStyle.gutterTextClassName}`}>
         {line.oldLineNumber ?? ""}
@@ -166,7 +175,7 @@ function getDiffRowClassName (
     return rowClassName;
   }
 
-  return "";
+    return "";
 }
 
 function getDiffLineStyle (type: UnifiedDiffLine["type"]) {
@@ -174,27 +183,30 @@ function getDiffLineStyle (type: UnifiedDiffLine["type"]) {
     case "addition":
       return {
         contentClassName: "text-text",
+        edgeStyle: createEdgeGradientStyle("color-mix(in srgb, var(--success) 10%, transparent)"),
         gutterTextClassName: "text-[color:color-mix(in_srgb,var(--success)_70%,var(--text)_30%)]",
         prefix: "+",
         prefixClassName: "text-[color:color-mix(in_srgb,var(--success)_82%,var(--text)_18%)]",
-        rowClassName: "bg-[color-mix(in_srgb,var(--success)_10%,transparent)]",
+        rowClassName: "",
       };
     case "deletion":
       return {
         contentClassName: "text-text",
+        edgeStyle: createEdgeGradientStyle("color-mix(in srgb, var(--danger) 10%, transparent)"),
         gutterTextClassName: "text-[color:color-mix(in_srgb,var(--danger)_70%,var(--text)_30%)]",
         prefix: "-",
         prefixClassName: "text-[color:color-mix(in_srgb,var(--danger)_82%,var(--text)_18%)]",
-        rowClassName: "bg-[color-mix(in_srgb,var(--danger)_10%,transparent)]",
+        rowClassName: "",
       };
     case "context":
     default:
       return {
         contentClassName: "text-text",
+        edgeStyle: CODE_SURFACE_EDGE_STYLE,
         gutterTextClassName: "text-muted",
         prefix: "\u00a0",
         prefixClassName: "text-muted",
-        rowClassName: "bg-[color-mix(in_srgb,var(--muted)_5%,transparent)]",
+        rowClassName: "",
       };
   }
 }
@@ -211,9 +223,10 @@ function ThreadPlainOutput ({
   return (
     <pre
       className={`
-        ${isFramed ? "" : EDGE_FADE_CLASS} m-0 overflow-x-auto whitespace-pre ${isFramed ? "bg-transparent" : "bg-[color-mix(in_srgb,var(--muted)_5%,transparent)]"}
+        m-0 overflow-x-auto whitespace-pre ${isFramed ? "bg-transparent" : ""}
         px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text md:px-12
       `}
+      style={isFramed ? undefined : CODE_SURFACE_EDGE_STYLE}
     >
       {output}
     </pre>

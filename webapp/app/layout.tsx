@@ -1,7 +1,22 @@
+/*
+ * Exports:
+ * - metadata: root document metadata for the Workbench app. Keywords: metadata, title, icons.
+ * - viewport: root viewport settings for responsive Workbench rendering. Keywords: viewport, mobile.
+ * - default RootLayout: application document shell with early theme bootstrap. Keywords: layout, theme, bootstrap.
+ */
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
 import "./globals.css";
+
+const THEME_BOOTSTRAP_SCRIPT = `
+try {
+  var theme = window.localStorage.getItem("workbench:theme");
+  document.documentElement.dataset.workbenchTheme = theme === "magical-girl" || theme === "winter" ? theme : "default";
+} catch {
+  document.documentElement.dataset.workbenchTheme = "default";
+}
+`;
 
 export const metadata: Metadata = {
   title: "Workbench",
@@ -26,7 +41,10 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body suppressHydrationWarning>{children}</body>
+      <body suppressHydrationWarning>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }} />
+        {children}
+      </body>
     </html>
   );
 }

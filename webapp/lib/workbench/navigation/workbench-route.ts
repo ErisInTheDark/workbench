@@ -1,10 +1,10 @@
 /*
  * Exports:
  * - WORKBENCH_ROUTE_MARKER: route marker for canonical workbench URLs. Keywords: URL, route, navigation.
- * - WorkbenchRouteView, WorkbenchRoute, WorkbenchRouteParseResult: normalized route contracts. Keywords: URL source of truth, project, file, thread.
- * - createProjectRoute/createFileRoute/createThreadRoute/createInvalidWorkbenchRoute: construct route objects. Keywords: navigation, route builder.
+ * - WorkbenchRouteView, WorkbenchRoute, WorkbenchRouteParseResult: normalized route contracts. Keywords: URL source of truth, project, file, thread, settings.
+ * - createProjectRoute/createFileRoute/createThreadRoute/createSettingsRoute/createInvalidWorkbenchRoute: construct route objects. Keywords: navigation, route builder.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse browser URL state without mutating history. Keywords: route parser, legacy query, malformed URL.
- * - createWorkbenchHref/createProjectHref/createFileHref/createThreadHref: build canonical hrefs. Keywords: links, URL, encode.
+ * - createWorkbenchHref/createProjectHref/createFileHref/createThreadHref/createSettingsHref: build canonical hrefs. Keywords: links, URL, encode.
  * - isSameWorkbenchRoute/routeHasSelection: compare and classify routes. Keywords: route equality, active selection.
  */
 
@@ -13,7 +13,7 @@ export const WORKBENCH_ROUTE_MARKER = "@";
 const LEGACY_FILE_SEARCH_PARAM = "file";
 const LEGACY_THREAD_SEARCH_PARAM = "thread";
 
-export type WorkbenchRouteView = "project" | "file" | "thread" | "invalid";
+export type WorkbenchRouteView = "project" | "file" | "thread" | "settings" | "invalid";
 
 export interface WorkbenchRoute {
   error: string;
@@ -62,6 +62,16 @@ export function createThreadRoute(projectId: string, threadId: string): Workbenc
     projectId,
     threadId,
     view: "thread",
+  };
+}
+
+export function createSettingsRoute(projectId: string): WorkbenchRoute {
+  return {
+    error: "",
+    filePath: "",
+    projectId,
+    threadId: "",
+    view: "settings",
   };
 }
 
@@ -152,6 +162,9 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
     if (mode === "thread") {
       return createThreadRoute(projectId, value);
     }
+    if (mode === "settings") {
+      return createSettingsRoute(projectId);
+    }
     return createInvalidWorkbenchRoute(`Unknown workbench route mode: ${mode}`, projectId);
   }
 
@@ -213,6 +226,9 @@ export function createWorkbenchHref(route: WorkbenchRoute) {
   if (route.view === "thread") {
     return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/${encodeRoutePath(route.threadId)}`;
   }
+  if (route.view === "settings") {
+    return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/settings`;
+  }
 
   return projectPath ? `/${projectPath}` : "/";
 }
@@ -227,6 +243,10 @@ export function createFileHref(projectId: string, filePath: string) {
 
 export function createThreadHref(projectId: string, threadId: string) {
   return createWorkbenchHref(createThreadRoute(projectId, threadId));
+}
+
+export function createSettingsHref(projectId: string) {
+  return createWorkbenchHref(createSettingsRoute(projectId));
 }
 
 export function isSameWorkbenchRoute(left: WorkbenchRoute, right: WorkbenchRoute) {
