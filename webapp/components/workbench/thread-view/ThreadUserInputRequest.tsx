@@ -176,6 +176,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const hydratedDraftKeyRef = useRef("");
+  const hydratedRequestIdRef = useRef("");
   const onInteractiveDraftChangeRef = useRef(onInteractiveDraftChange);
   const onInteractiveDraftClearRef = useRef(onInteractiveDraftClear);
 
@@ -187,12 +188,18 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
       return;
     }
 
+    const requestChanged = hydratedRequestIdRef.current !== request.id;
     const draftKey = `${request.id}:${interactiveDraft?.updatedAt ?? 0}`;
-    if (hydratedDraftKeyRef.current !== draftKey) {
+    if (requestChanged) {
+      hydratedRequestIdRef.current = request.id;
+      hydratedDraftKeyRef.current = draftKey;
+      setSelectedValues(interactiveDraft?.selectedValues ?? {});
+      setCustomValues(interactiveDraft?.customValues ?? {});
+    } else if (hydratedDraftKeyRef.current !== draftKey) {
       hydratedDraftKeyRef.current = draftKey;
       const hasLocalDraft = Object.values(selectedValues).some((value) => value.trim())
         || Object.values(customValues).some((value) => value.trim());
-      if (!hasLocalDraft || interactiveDraft) {
+      if (!hasLocalDraft) {
         setSelectedValues(interactiveDraft?.selectedValues ?? {});
         setCustomValues(interactiveDraft?.customValues ?? {});
       }
