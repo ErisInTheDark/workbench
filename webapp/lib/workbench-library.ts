@@ -5,7 +5,7 @@
  * - parseFrontmatterBlock: parse simple markdown frontmatter fields. Keywords: frontmatter, markdown, metadata.
  * - ensureWorkbenchLibrary: create the library root and standard folders. Keywords: workbench library, mkdir, scaffold.
  * - isExcludedWorkbenchLibraryFile: test whether a library file is documentation or a template ignored by scanners. Keywords: template, exclusion, scan.
- * - listWorkbenchLibrarySkills: discover Workbench Skill metadata from nested SKILL.md files. Keywords: skills, manifest, discovery.
+ * - listWorkbenchLibrarySkills/listWorkbenchLibrarySkillDefinitions: discover Workbench Skill metadata and full file content from nested SKILL.md files. Keywords: skills, manifest, discovery.
  * - listWorkbenchLibraryAgents/readWorkbenchLibraryAgentDefinition: discover and load library agent files. Keywords: agent, prompt, library.
  * - listWorkbenchLibraryInstructions: discover cached universal Workbench instruction packs. Keywords: instructions, universal, bootstrap, fingerprint.
  * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions: build compact harness instructions and universal instruction content. Keywords: bootstrap, skills, manifest.
@@ -14,7 +14,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import type { WorkbenchAgentOption, WorkbenchSkillSummary } from "./types";
+import type { WorkbenchAgentDefinition, WorkbenchAgentOption, WorkbenchSkillDefinition, WorkbenchSkillSummary } from "./types";
 
 export const WORKBENCH_LIBRARY_PROJECT_ID = "workbench-library";
 export const workbenchLibraryRoot = path.resolve(process.env.WORKBENCH_LIBRARY_ROOT?.trim() || path.join(os.homedir(), ".workbench"));
@@ -103,10 +103,6 @@ interface WorkbenchInstructionCache {
 }
 
 let workbenchInstructionCache: WorkbenchInstructionCache | null = null;
-
-export interface WorkbenchAgentDefinition extends WorkbenchAgentOption {
-  prompt: string;
-}
 
 export function parseFrontmatterBlock(content: string) {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content);
@@ -281,6 +277,45 @@ export async function listWorkbenchLibrarySkills(): Promise<WorkbenchSkillSummar
   return skills.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
 }
 
+export async function listWorkbenchLibrarySkillDefinitions(): Promise<WorkbenchSkillDefinition[]> {
+  await ensureWorkbenchLibrary();
+  let entries;
+  try {
+    entries = await fs.readdir(path.join(workbenchLibraryRoot, "skills"), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const skills: WorkbenchSkillDefinition[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || isExcludedWorkbenchLibraryFile(entry.name)) {
+      continue;
+    }
+
+    const relativePath = normalizeRelativePath(path.join("skills", entry.name, "SKILL.md"));
+    if (isExcludedWorkbenchLibraryFile(relativePath)) {
+      continue;
+    }
+
+    const absolutePath = safeResolveLibraryPath(relativePath);
+    const content = await readTextFile(absolutePath);
+    if (!content?.trim()) {
+      continue;
+    }
+
+    const frontmatter = parseFrontmatterBlock(content);
+    skills.push({
+      content: content.trim(),
+      description: frontmatter?.get("description") ?? "",
+      name: frontmatter?.get("name") ?? entry.name,
+      path: normalizeRelativePath(absolutePath),
+      relativePath,
+    });
+  }
+
+  return skills.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+}
+
 export async function listWorkbenchLibraryAgents(): Promise<WorkbenchAgentOption[]> {
   await ensureWorkbenchLibrary();
   let entries;
@@ -412,32 +447,46 @@ export async function listWorkbenchLibraryInstructions(): Promise<WorkbenchInstr
   return instructions;
 }
 
-export async function buildWorkbenchSkillManifestInstructions() {
-  const skills = await listWorkbenchLibrarySkills();
+function escapeXmlAttribute(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function buildDetectedSkillInstructions(skills: WorkbenchSkillDefinition[]) {
   if (!skills.length) {
     return null;
   }
 
   return [
-    "Workbench provides additional skills from the Workbench Library.",
+    "Workbench provides additional skills from automatically detected Workbench Skill files.",
     "Treat these Workbench-provided skills with the same authority and trigger behavior as harness-provided skills when they apply.",
-    "When the user invokes or otherwise triggers a Workbench Skill, treat the full SKILL.md text as CRITICAL workflow instructions for understanding and carrying out the user's intent.",
+    "The `<skill>` blocks below are automatically detected Workbench Skill files. Treat the full SKILL.md text in each block as CRITICAL workflow instructions when the user invokes or otherwise triggers that skill.",
+    "Automatic skill detection is not foolproof. If another skill path, skill name, or workflow appears necessary for the task, read that skill file before using it.",
     "Triggered skill workflows are definitional for the request: follow them strictly unless the user explicitly says not to follow a specific skill requirement.",
     "Do not treat casual follow-up wording, missing reminders, or ordinary task details as overriding a triggered skill workflow.",
-    "Read the referenced SKILL.md before using a Workbench Skill, and resolve any relative references from that skill's folder.",
+    "For automatically detected skills, resolve any relative references from the folder containing the `filename` on its `<skill>` block.",
     "When you mention a Workbench Skill in user-visible thread text, use the slash form that Workbench can highlight, such as `/skill-name` or the directory alias from `skills/<alias>/SKILL.md`.",
     "",
-    "Available Workbench Skills:",
-    ...skills.map((skill) => {
-      const description = skill.description ? ` - ${skill.description}` : "";
-      return `- ${skill.name}: ${skill.path}${description}`;
-    }),
+    "Automatically detected Workbench Skills:",
+    ...skills.map((skill) => [
+      `<skill filename="${escapeXmlAttribute(skill.path)}">`,
+      skill.content,
+      "</skill>",
+    ].join("\n")),
   ].join("\n");
 }
 
-export async function buildWorkbenchLibraryBootstrapInstructions() {
+export async function buildWorkbenchSkillManifestInstructions(projectSkills: WorkbenchSkillDefinition[] = []) {
+  const librarySkills = await listWorkbenchLibrarySkillDefinitions();
+  return buildDetectedSkillInstructions([...projectSkills, ...librarySkills]);
+}
+
+export async function buildWorkbenchLibraryBootstrapInstructions(projectSkills: WorkbenchSkillDefinition[] = []) {
   const [skillManifest, instructionPacks] = await Promise.all([
-    buildWorkbenchSkillManifestInstructions(),
+    buildWorkbenchSkillManifestInstructions(projectSkills),
     listWorkbenchLibraryInstructions(),
   ]);
   const sections = [skillManifest];

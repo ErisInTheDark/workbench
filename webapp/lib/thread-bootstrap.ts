@@ -5,9 +5,9 @@
  * - buildThreadTitleRouteUrl: compose the absolute thread-title route URL from a known workbench origin. Keywords: thread title, URL, origin.
  * - MODE_STATE_TAG_INSTRUCTIONS: shared injected guidance for agent-visible operating mode changes. Keywords: mode, state tag, thread markdown.
  * - buildThreadTitleBootstrapInstructions: create the hidden PowerShell bootstrap instructions that tell a harness how to set a thread title through the local workbench route. Keywords: thread title, instructions, PowerShell, bootstrap.
- * - buildCodexThreadBootstrapInstructions: compose optional Codex agent-file guidance together with the shared title bootstrap instructions. Keywords: codex, agent, developer instructions, bootstrap.
+ * - buildCodexThreadBootstrapInstructions: compose optional Codex agent definition content together with the shared title bootstrap instructions. Keywords: codex, agent, developer instructions, bootstrap.
  */
-import type { WorkbenchHarness } from "./types";
+import type { WorkbenchAgentDefinition, WorkbenchHarness } from "./types";
 
 const MAX_THREAD_TITLE_LENGTH = 80;
 export const DEFAULT_THREAD_TITLE_ROUTE_PATH = "/api/thread-title";
@@ -56,6 +56,20 @@ function truncateText(value: string, maxLength: number) {
 
 function escapePowerShellSingleQuotedString(value: string) {
   return value.replace(/'/g, "''");
+}
+
+function buildAgentDefinitionInstructions(agentDefinition: WorkbenchAgentDefinition) {
+  return [
+    "For this thread, you are the agent defined below. Treat the contents of `<agent_definition>` as CRITICAL rules to follow, only overridden by later user instructions.",
+    "<agent_definition>",
+    `<name>${agentDefinition.name}</name>`,
+    `<path>${agentDefinition.path}</path>`,
+    agentDefinition.description ? `<description>${agentDefinition.description}</description>` : "",
+    "<prompt>",
+    agentDefinition.prompt.trim(),
+    "</prompt>",
+    "</agent_definition>",
+  ].filter(Boolean).join("\n");
 }
 
 export function normalizeThreadTitle(value: string | null | undefined) {
@@ -110,13 +124,13 @@ export function buildThreadTitleBootstrapInstructions({
 }
 
 export function buildCodexThreadBootstrapInstructions({
-  agentPath,
+  agentDefinition,
   harness,
   routeUrl,
   threadId,
   workbenchLibraryInstructions,
 }: {
-  agentPath?: string | null;
+  agentDefinition?: WorkbenchAgentDefinition | null;
   harness: WorkbenchHarness;
   routeUrl?: string | null;
   threadId: string;
@@ -128,10 +142,8 @@ export function buildCodexThreadBootstrapInstructions({
     sections.push(workbenchLibraryInstructions);
   }
 
-  if (agentPath?.trim()) {
-    sections.push(
-      `For this thread, you are the agent defined in ${agentPath}. If you do not already have that file in your context window, read it before taking other actions. Treat it as CRITICAL rules to follow, only overridden by later user instructions.`,
-    );
+  if (agentDefinition?.prompt.trim()) {
+    sections.push(buildAgentDefinitionInstructions(agentDefinition));
   }
 
   sections.push(MODE_STATE_TAG_INSTRUCTIONS);

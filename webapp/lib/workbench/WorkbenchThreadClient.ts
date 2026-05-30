@@ -45,6 +45,7 @@ import {
 import type {
     ThreadPayload,
     ThreadSummary,
+    WorkbenchAgentDefinition,
     WorkbenchHarness,
     WorkbenchModelOption,
     WorkbenchPendingUserInputRequest,
@@ -910,17 +911,18 @@ function WorkbenchThreadClient(
   }
 
   function updateCurrentThreadFields(fields: Partial<Omit<ThreadPayload, "turns">>) {
+    const hasField = (field: keyof Omit<ThreadPayload, "turns">) => Object.prototype.hasOwnProperty.call(fields, field);
     return updateCurrentThread((thread) => ({
       ...thread,
       ...fields,
-      agentNickname: fields.agentNickname ?? thread.agentNickname,
-      agentPath: fields.agentPath ?? thread.agentPath,
-      agentRole: fields.agentRole ?? thread.agentRole,
-      model: fields.model ?? thread.model,
-      name: fields.name ?? thread.name,
-      reasoningEffort: fields.reasoningEffort ?? thread.reasoningEffort,
-      serviceTier: fields.serviceTier ?? thread.serviceTier,
-    }));
+      agentNickname: hasField("agentNickname") ? fields.agentNickname ?? null : thread.agentNickname,
+      agentPath: hasField("agentPath") ? fields.agentPath ?? null : thread.agentPath,
+      agentRole: hasField("agentRole") ? fields.agentRole ?? null : thread.agentRole,
+      model: hasField("model") ? fields.model ?? null : thread.model,
+      name: hasField("name") ? fields.name ?? null : thread.name,
+      reasoningEffort: hasField("reasoningEffort") ? fields.reasoningEffort ?? null : thread.reasoningEffort,
+      serviceTier: hasField("serviceTier") ? fields.serviceTier ?? null : thread.serviceTier,
+    }), { preserveStableServiceTier: false });
   }
 
   function mergeLiveStreamingItem(incomingItem: ThreadItem, liveItem: ThreadItem) {
@@ -1678,7 +1680,16 @@ function WorkbenchThreadClient(
   }
 
   async function readWorkbenchLibraryInstructions() {
-    return await fetch("/api/workbench-library/skills", { cache: "no-store" })
+    const searchParams = new URLSearchParams();
+    if (state.projectId) {
+      searchParams.set("projectId", state.projectId);
+    }
+
+    const requestPath = searchParams.size
+      ? `/api/workbench-library/skills?${searchParams.toString()}`
+      : "/api/workbench-library/skills";
+
+    return await fetch(requestPath, { cache: "no-store" })
       .then(async (response) => {
         if (!response.ok) {
           return null;
@@ -1690,13 +1701,36 @@ function WorkbenchThreadClient(
       .catch(() => null);
   }
 
+  async function readSelectedAgentDefinition(agentPath: string | null): Promise<WorkbenchAgentDefinition | null> {
+    if (!agentPath?.trim()) {
+      return null;
+    }
+
+    const searchParams = new URLSearchParams({
+      agentPath,
+      projectId: state.projectId,
+    });
+    const response = await fetch(`/api/agents?${searchParams.toString()}`, { cache: "no-store" });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null) as { error?: string } | null;
+      throw new Error(payload?.error || "Unable to load the selected agent definition.");
+    }
+
+    const payload = await response.json() as { data?: WorkbenchAgentDefinition };
+    return payload.data ?? null;
+  }
+
   async function buildCodexDeveloperInstructions(
     threadId: string,
     agentPath: string | null,
   ) {
-    const workbenchLibraryInstructions = await readWorkbenchLibraryInstructions();
+    const [workbenchLibraryInstructions, agentDefinition] = await Promise.all([
+      readWorkbenchLibraryInstructions(),
+      readSelectedAgentDefinition(agentPath),
+    ]);
+
     return buildCodexThreadBootstrapInstructions({
-      agentPath,
+      agentDefinition,
       harness: "codex",
       routeUrl: null,
       threadId,

@@ -31,11 +31,19 @@ export interface WorkbenchAgentOption {
   sourceLabel?: string;
 }
 
+export interface WorkbenchAgentDefinition extends WorkbenchAgentOption {
+  prompt: string;
+}
+
 export interface WorkbenchSkillSummary {
   name: string;
   description: string;
   path: string;
   relativePath: string;
+}
+
+export interface WorkbenchSkillDefinition extends WorkbenchSkillSummary {
+  content: string;
 }
 
 export interface WorkbenchProjectOption {

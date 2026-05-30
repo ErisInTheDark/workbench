@@ -415,7 +415,7 @@ export default function ThreadComposer ({
   const selectedAgent = availableAgents.find((agent) => agent.path === thread.agentPath) ?? null;
   const agentButtonLabel = selectedAgent?.name
     ?? thread.agentPath?.split("/").at(-1)?.replace(/\.agent\.md$/i, "")
-    ?? "Agent";
+    ?? "Default agent";
   const deprioritizedModelIds = deprioritizedModelIdsByHarness[thread.harness] ?? [];
   const handleQuestionnaireDraftChange = useCallback((draft: WorkbenchQuestionnaireDraft) => {
     onThreadQuestionnaireDraftChange(thread.id, questionnaireRequestKey, draft);
