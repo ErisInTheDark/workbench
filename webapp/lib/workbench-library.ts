@@ -31,7 +31,7 @@ This folder stores Workbench-wide skills, agents, and instructions outside any s
 Live library files use these shapes:
 
 - \`skills/<name>/SKILL.md\`
-- \`agents/<name>.agent.md\`
+- \`agents/<name>.md\`
 - \`instructions/<name>.md\`
 
 \`README.md\` and files ending in \`.template.md\` are ignored by Workbench scanners.
@@ -159,7 +159,7 @@ function normalizeLibraryAgentPath(agentPath: string) {
   }
 
   const relativePath = agentPath.slice(libraryAgentPrefix.length).replace(/^\/+/, "");
-  if (!relativePath.startsWith("agents/") || !relativePath.endsWith(".agent.md")) {
+  if (!relativePath.startsWith("agents/") || !isAgentMarkdownFile(relativePath)) {
     throw new Error("Library agent path is outside the supported agents directory.");
   }
 
@@ -172,6 +172,18 @@ async function readTextFile(filePath: string) {
   } catch {
     return null;
   }
+}
+
+function isAgentMarkdownFile(fileName: string) {
+  return fileName.endsWith(".md") && !isExcludedWorkbenchLibraryFile(fileName);
+}
+
+function isAgentUserInvocable(frontmatter: Map<string, string> | null) {
+  return frontmatter?.get("user-invocable") !== "false";
+}
+
+function getAgentNameFromFileName(fileName: string) {
+  return fileName.replace(/\.md$/i, "");
 }
 
 async function statFileFingerprintPart(filePath: string, entryName: string) {
@@ -224,7 +236,7 @@ export async function ensureWorkbenchLibrary() {
   }
 
   if (await isDirectoryEmpty(path.join(workbenchLibraryRoot, "agents"))) {
-    await writeFileIfMissing("agents/example.agent.template.md", agentTemplate);
+    await writeFileIfMissing("agents/example.template.md", agentTemplate);
   }
 
   if (await isDirectoryEmpty(path.join(workbenchLibraryRoot, "instructions"))) {
@@ -280,24 +292,20 @@ export async function listWorkbenchLibraryAgents(): Promise<WorkbenchAgentOption
 
   const agents: WorkbenchAgentOption[] = [];
   for (const entry of entries) {
-    if (isExcludedWorkbenchLibraryFile(entry.name)) {
-      continue;
-    }
-
-    if (!entry.isFile() || !entry.name.endsWith(".agent.md")) {
+    if (!entry.isFile() || !isAgentMarkdownFile(entry.name)) {
       continue;
     }
 
     const relativePath = normalizeRelativePath(path.join("agents", entry.name));
     const content = await fs.readFile(safeResolveLibraryPath(relativePath), "utf8");
     const frontmatter = parseFrontmatterBlock(content);
-    if (frontmatter && frontmatter.get("user-invocable") !== "true") {
+    if (!isAgentUserInvocable(frontmatter)) {
       continue;
     }
 
     agents.push({
       description: frontmatter?.get("description") ?? "",
-      name: frontmatter?.get("name") ?? entry.name.replace(/\.agent\.md$/i, ""),
+      name: frontmatter?.get("name") ?? getAgentNameFromFileName(entry.name),
       path: createLibraryAgentId(relativePath),
       source: "library",
       sourceLabel: "Workbench Library",
@@ -315,13 +323,13 @@ export async function readWorkbenchLibraryAgentDefinition(agentPath: string): Pr
 
   const content = await fs.readFile(safeResolveLibraryPath(relativePath), "utf8");
   const frontmatter = parseFrontmatterBlock(content);
-  if (frontmatter && frontmatter.get("user-invocable") !== "true") {
+  if (!isAgentUserInvocable(frontmatter)) {
     throw new Error("Library agent is not user-invocable.");
   }
 
   return {
     description: frontmatter?.get("description") ?? "",
-    name: frontmatter?.get("name") ?? path.basename(relativePath, ".agent.md"),
+    name: frontmatter?.get("name") ?? getAgentNameFromFileName(path.basename(relativePath)),
     path: createLibraryAgentId(relativePath),
     prompt: content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim(),
     source: "library",

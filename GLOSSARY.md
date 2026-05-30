@@ -12,6 +12,10 @@ A harness-neutral skill package surfaced to supported harnesses through a compac
 
 A skill package stored inside the selected project and surfaced to supported harnesses for that project.
 
+## Project Agent
+
+An agent prompt stored inside `.agents/agents` in the selected project and surfaced in the composer agent selector for that project.
+
 ## Skill Load
 
 The act of reading a skill's instruction file so the agent can apply that skill's workflow to the current task.

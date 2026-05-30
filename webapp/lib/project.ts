@@ -11,7 +11,7 @@
  * - buildTree/buildProjectTree: build the visible explorer tree for a project. Keywords: tree, explorer, filesystem.
  * - getProjectSnapshot: assemble the project tree, root info, and git change summary for the client. Keywords: snapshot, project, explorer.
  * - listProjectSkills: discover project-level Workbench Skill metadata from `.agents/skills`. Keywords: project, skills, manifest.
- * - listUserInvocableAgents/readUserInvocableAgentDefinition: discover user-invocable agent markdown files and load their metadata/prompt. Keywords: agent, prompt, custom agent, iterator.
+ * - listUserInvocableAgents/readUserInvocableAgentDefinition: discover project-level agent markdown files from `.agents/agents` and load metadata/prompt. Keywords: agent, prompt, custom agent, iterator.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -32,6 +32,7 @@ export const projectRoot = path.resolve(appRoot, "..");
 export const projectsRoot = path.resolve(process.env.WORKBENCH_PROJECTS_ROOT?.trim() || path.dirname(projectRoot));
 const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", "node_modules", ".next"]);
 const discoveryIgnoredNames = new Set([...ignoredNames, "dist", "build", "coverage"]);
+const README_FILE_NAME = "README.md";
 let discoveredProjectsCache: Promise<WorkbenchProjectOption[]> | null = null;
 
 interface GitignoreMatcherGroup {
@@ -44,7 +45,7 @@ function normalizeProjectId(projectId: string) {
 }
 
 function getAgentDirectoryPath(rootDir = projectRoot) {
-  return path.join(rootDir, ".github", "agents");
+  return path.join(rootDir, ".agents", "agents");
 }
 
 function getProjectSkillDirectoryPath(rootDir = projectRoot) {
@@ -52,11 +53,25 @@ function getProjectSkillDirectoryPath(rootDir = projectRoot) {
 }
 
 function createAgentRelativePath(fileName: string) {
-  return normalizeRelativePath(path.join(".github", "agents", fileName));
+  return normalizeRelativePath(path.join(".agents", "agents", fileName));
 }
 
 function createProjectSkillRelativePath(directoryName: string) {
   return normalizeRelativePath(path.join(".agents", "skills", directoryName, "SKILL.md"));
+}
+
+function isAgentMarkdownFile(fileName: string) {
+  return fileName.endsWith(".md")
+    && path.basename(fileName) !== README_FILE_NAME
+    && !fileName.endsWith(".template.md");
+}
+
+function isAgentUserInvocable(frontmatter: Map<string, string> | null) {
+  return frontmatter?.get("user-invocable") !== "false";
+}
+
+function getAgentNameFromFileName(fileName: string) {
+  return fileName.replace(/\.md$/i, "");
 }
 
 async function readAgentFile(rootDir: string, relativePath: string) {
@@ -633,20 +648,20 @@ export async function listUserInvocableAgents(projectId?: string | null) {
     const entries = await fs.readdir(getAgentDirectoryPath(resolvedProject.root), { withFileTypes: true });
 
     for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".agent.md")) {
+      if (!entry.isFile() || !isAgentMarkdownFile(entry.name)) {
         continue;
       }
 
       const relativePath = createAgentRelativePath(entry.name);
       const content = await readAgentFile(resolvedProject.root, relativePath);
       const frontmatter = parseFrontmatterBlock(content);
-      if (!frontmatter || frontmatter.get("user-invocable") !== "true") {
+      if (!isAgentUserInvocable(frontmatter)) {
         continue;
       }
 
       projectAgents.push({
-        name: frontmatter.get("name") ?? entry.name.replace(/\.agent\.md$/i, ""),
-        description: frontmatter.get("description") ?? "",
+        name: frontmatter?.get("name") ?? getAgentNameFromFileName(entry.name),
+        description: frontmatter?.get("description") ?? "",
         path: relativePath,
         source: "project",
         sourceLabel: "Project",
@@ -670,20 +685,20 @@ export async function readUserInvocableAgentDefinition(relativePath: string, pro
 
   const resolvedProject = await resolveProjectRoot(projectId);
   const normalizedPath = normalizeRelativePath(relativePath);
-  if (!normalizedPath.startsWith(".github/agents/") || !normalizedPath.endsWith(".agent.md")) {
+  if (!normalizedPath.startsWith(".agents/agents/") || !isAgentMarkdownFile(normalizedPath)) {
     throw new Error("Agent path is outside the supported agents directory.");
   }
 
   const content = await readAgentFile(resolvedProject.root, normalizedPath);
   const frontmatter = parseFrontmatterBlock(content);
-  if (!frontmatter || frontmatter.get("user-invocable") !== "true") {
+  if (!isAgentUserInvocable(frontmatter)) {
     throw new Error("Agent is not user-invocable.");
   }
 
   const prompt = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
   return {
-    description: frontmatter.get("description") ?? "",
-    name: frontmatter.get("name") ?? path.basename(normalizedPath, ".agent.md"),
+    description: frontmatter?.get("description") ?? "",
+    name: frontmatter?.get("name") ?? getAgentNameFromFileName(path.basename(normalizedPath)),
     path: normalizedPath,
     prompt,
     source: "project",
