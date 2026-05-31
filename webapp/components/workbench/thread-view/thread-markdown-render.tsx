@@ -274,6 +274,7 @@ function renderThreadPlanBlock (block: Extract<ParsedBlock, { type: "plan" }>, o
         backgroundClassName="before:bg-[linear-gradient(to_right,transparent,#8882_10%,#8882_90%,transparent)]"
         contentClassName="mb-8 px-4 py-8"
         edgeBleed="wide"
+        edgeOffset="none"
         mode="panel"
       >
         {content.length ? content : <p className={BLOCK_SPACING_CLASS}><br /></p>}

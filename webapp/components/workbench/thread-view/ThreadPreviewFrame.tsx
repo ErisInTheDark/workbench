@@ -8,6 +8,7 @@ import type { CSSProperties, ReactNode } from "react";
 
 type ThreadPreviewFrameMode = "panel" | "scroll";
 type ThreadPreviewFrameEdgeBleed = "none" | "wide";
+type ThreadPreviewFrameEdgeOffset = "left" | "none";
 type ThreadPreviewFrameContentPadding = "none" | "normal";
 
 interface ThreadPreviewFrameProps {
@@ -17,6 +18,7 @@ interface ThreadPreviewFrameProps {
   contentClassName?: string;
   contentPadding?: ThreadPreviewFrameContentPadding;
   edgeBleed?: ThreadPreviewFrameEdgeBleed;
+  edgeOffset?: ThreadPreviewFrameEdgeOffset;
   height?: string;
   mode?: ThreadPreviewFrameMode;
   scale?: number;
@@ -46,15 +48,17 @@ export default function ThreadPreviewFrame ({
   contentClassName,
   contentPadding = "normal",
   edgeBleed = "none",
+  edgeOffset = "left",
   height = "22rem",
   mode = "scroll",
   scale = 1,
 }: ThreadPreviewFrameProps) {
   const normalizedScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
   const frameClassName = joinClasses(
-    "relative min-w-0 max-w-full before:absolute before:inset-0 before:-z-1 before:hidden before:content-[''] before:border-y before:border-[color-mix(in_srgb,var(--text)_10%,transparent)] md:before:block -ml-8",
+    "relative min-w-0 max-w-full before:absolute before:inset-0 before:-z-1 before:hidden before:content-[''] before:border-y before:border-[color-mix(in_srgb,var(--text)_10%,transparent)] md:before:block",
     backgroundClassName,
     getEdgeBleedClassName(edgeBleed),
+    edgeOffset === "left" && "-ml-8",
     mode === "scroll" && "flex overflow-hidden",
     className,
   );
