@@ -32,7 +32,13 @@ import {
     createThreadStartRequest,
     isCodexJsonRpcFailure,
 } from "../codex/protocol";
-import { formatThreadStatus, isProjectCodexThread, toThreadPayload, toThreadSummary } from "../codex/thread-adapter";
+import {
+    formatThreadStatus,
+    getCodexThreadCwdFilterPaths,
+    isProjectCodexThread,
+    toThreadPayload,
+    toThreadSummary,
+} from "../codex/thread-adapter";
 import { normalizeThreadItems } from "../codex/thread-item-normalization";
 import { getCurrentInProgressTurn, getCurrentTurn } from "../codex/thread-state";
 import {
@@ -1901,10 +1907,14 @@ function WorkbenchThreadClient(
         }
 
         const results = await Promise.allSettled((["codex", "copilot"] as const).map(async (harness) => {
+          const cwdFilterPaths = harness === "codex"
+            ? getCodexThreadCwdFilterPaths(state.projectRootPath)
+            : null;
           const response = await sendBridgeRequest<ThreadListResponse>(harness, {
             method: "thread/list",
             params: {
               archived: false,
+              ...(cwdFilterPaths?.length ? { cwd: cwdFilterPaths } : {}),
               limit: 50,
               sortKey: "updated_at",
             },
