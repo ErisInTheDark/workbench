@@ -349,6 +349,7 @@ export default memo(function ThreadView ({
   const [seenItemCountsByThreadId, setSeenItemCountsByThreadId] = useState<Record<string, number>>({});
   const [isLiveActivityOpen, setIsLiveActivityOpen] = useState(readStoredThreadLiveActivityOpen);
   const [workbenchSkills, setWorkbenchSkills] = useState<WorkbenchSkillSummary[]>([]);
+  const [draftSavedDraftShelfPortalHost, setDraftSavedDraftShelfPortalHost] = useState<HTMLDivElement | null>(null);
   const threadViewRef = useRef<HTMLDivElement>(null);
   const bottomSentinelRef = useRef<HTMLDivElement>(null);
   const hasMountedActiveThreadScrollRef = useRef(false);
@@ -740,18 +741,87 @@ export default memo(function ThreadView ({
   }, [livePendingUserInputRequestsByThreadId, seenItemCountsByThreadId, thread.id]);
 
   const mainThreadBadge = getTabBadge(thread.id, thread);
+  const isDraftThreadView = Boolean(activeThread?.isDraft);
+  const composer = activeThread ? (
+    <ThreadComposer
+      key={activeThread.id}
+      onListModels={onListModels}
+      highlightSources={inlineMentionSources}
+      onSendMessage={handleSendMessage}
+      onStopThread={() => {
+        void handleStopThread();
+      }}
+      onThreadComposerDraftChange={onThreadComposerDraftChange}
+      onThreadComposerDraftClear={onThreadComposerDraftClear}
+      onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
+      onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
+      onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
+      onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
+      onSubmitUserInputRequest={onSubmitUserInputRequest}
+      onThreadAgentChange={handleThreadAgentChange}
+      onThreadReasoningEffortChange={handleThreadReasoningEffortChange}
+      onThreadServiceTierChange={handleThreadServiceTierChange}
+      onThreadModelChange={handleThreadModelChange}
+      pendingUserInputRequest={activePendingUserInputRequest}
+      projectId={projectId}
+      projectRootPath={projectRootPath}
+      rateLimits={rateLimits}
+      autoExpandSavedDraftShelf={!isDraftThreadView}
+      savedDraftShelfPortalHost={isDraftThreadView ? draftSavedDraftShelfPortalHost : null}
+      threadComposerDraft={threadComposerDraftsByThreadId[activeThread.id] ?? null}
+      threadQuestionnaireDraft={activePendingUserInputRequest
+        ? threadQuestionnaireDraftsByKey[`${activeThread.id}:${activePendingUserInputRequest.requestKey}`] ?? null
+        : null}
+      threadSavedComposerDrafts={threadSavedComposerDrafts}
+      useSavedDraftShelfPortal={isDraftThreadView}
+      knownSkills={workbenchSkills}
+      thread={activeThread}
+    >
+      <ThreadRateLimits
+        canToggleHarness={activeThread.isDraft}
+        harness={activeThread.harness}
+        onHarnessToggle={() => {
+          onDraftHarnessChange(activeThread.harness === "codex" ? "copilot" : "codex");
+        }}
+        rateLimits={rateLimits}
+        trailingContent={(
+          <ThreadContextStatus
+            onCompactThread={onCompactThread}
+            thread={activeThread}
+          />
+        )}
+      />
+    </ThreadComposer>
+  ) : null;
 
   return (
-    <div ref={threadViewRef} className="mx-auto w-full min-w-0 max-w-[56rem] overflow-x-hidden pb-16 md:overflow-x-visible" style={{ fontSize: `${fontSizeRem}rem` }}>
-      {activeThread?.isDraft ? (
-        <header className="pb-4">
-          <h2 className="m-0 text-[1.55em] font-semibold leading-[1.1] tracking-tight text-text">
-            Create new thread
-          </h2>
-        </header>
+    <div
+      ref={threadViewRef}
+      className={joinClasses(
+        "mx-auto w-full min-w-0 max-w-[56rem] overflow-x-hidden pb-16 md:overflow-x-visible",
+      )}
+      style={{ fontSize: `${fontSizeRem}rem` }}
+    >
+      {isDraftThreadView ? (
+        <>
+          <div className="flex min-h-[calc(100dvh-8rem)] w-full items-center">
+            <div className="w-full">
+              <header className="pb-4">
+                <h2 className="m-0 text-[1.55em] font-semibold leading-[1.1] tracking-tight text-text">
+                  Create new thread
+                </h2>
+              </header>
+              {composer}
+            </div>
+          </div>
+          <div
+            ref={setDraftSavedDraftShelfPortalHost}
+            className="mt-4 min-h-0 overflow-visible"
+          />
+        </>
       ) : null}
 
-      <div>
+      <div hidden={isDraftThreadView}>
         {activeThread ? (
           activeThread.turns.length ? activeThread.turns.map((turn) => (
             <ThreadTurnDetails
@@ -906,54 +976,9 @@ export default memo(function ThreadView ({
           </div>
         </div>
       ) : null}
-      {activeThread ? (
+      {activeThread && !isDraftThreadView ? (
         <>
-          <ThreadComposer
-            key={activeThread.id}
-            onListModels={onListModels}
-            highlightSources={inlineMentionSources}
-            onSendMessage={handleSendMessage}
-            onStopThread={() => {
-              void handleStopThread();
-            }}
-            onThreadComposerDraftChange={onThreadComposerDraftChange}
-            onThreadComposerDraftClear={onThreadComposerDraftClear}
-            onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
-            onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
-            onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
-            onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
-            onSubmitUserInputRequest={onSubmitUserInputRequest}
-            onThreadAgentChange={handleThreadAgentChange}
-            onThreadReasoningEffortChange={handleThreadReasoningEffortChange}
-            onThreadServiceTierChange={handleThreadServiceTierChange}
-            onThreadModelChange={handleThreadModelChange}
-            pendingUserInputRequest={activePendingUserInputRequest}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            rateLimits={rateLimits}
-            threadComposerDraft={threadComposerDraftsByThreadId[activeThread.id] ?? null}
-            threadQuestionnaireDraft={activePendingUserInputRequest
-              ? threadQuestionnaireDraftsByKey[`${activeThread.id}:${activePendingUserInputRequest.requestKey}`] ?? null
-              : null}
-            threadSavedComposerDrafts={threadSavedComposerDrafts}
-            knownSkills={workbenchSkills}
-            thread={activeThread}
-          >
-            <ThreadRateLimits
-              canToggleHarness={activeThread.isDraft}
-              harness={activeThread.harness}
-              onHarnessToggle={() => {
-                onDraftHarnessChange(activeThread.harness === "codex" ? "copilot" : "codex");
-              }}
-              rateLimits={rateLimits}
-              trailingContent={(
-                <ThreadContextStatus
-                  onCompactThread={onCompactThread}
-                  thread={activeThread}
-                />
-              )}
-            />
-          </ThreadComposer>
+          {composer}
         </>
       ) : null}
       <div ref={bottomSentinelRef} aria-hidden="true" className="h-px w-full" />

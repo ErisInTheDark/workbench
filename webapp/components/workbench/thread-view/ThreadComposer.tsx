@@ -6,6 +6,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 
 import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
@@ -295,9 +296,12 @@ export default function ThreadComposer ({
   projectId,
   projectRootPath,
   rateLimits,
+  autoExpandSavedDraftShelf = true,
+  savedDraftShelfPortalHost,
   threadQuestionnaireDraft,
   threadComposerDraft,
   threadSavedComposerDrafts,
+  useSavedDraftShelfPortal = false,
   knownSkills,
   highlightSources,
   thread,
@@ -325,9 +329,12 @@ export default function ThreadComposer ({
   projectId: string;
   projectRootPath: string;
   rateLimits: RateLimitSnapshot | null;
+  autoExpandSavedDraftShelf?: boolean;
+  savedDraftShelfPortalHost?: HTMLElement | null;
   threadQuestionnaireDraft: WorkbenchQuestionnaireDraft | null;
   threadComposerDraft: WorkbenchThreadComposerDraft | null;
   threadSavedComposerDrafts: WorkbenchThreadSavedComposerDraft[];
+  useSavedDraftShelfPortal?: boolean;
   knownSkills: WorkbenchSkillSummary[];
   highlightSources: InlineMentionHighlightSources;
   thread: ThreadPayload;
@@ -473,6 +480,10 @@ export default function ThreadComposer ({
   }, [pendingUserInputRequest?.request.id, thread.id]);
 
   useEffect(() => {
+    if (!autoExpandSavedDraftShelf) {
+      return;
+    }
+
     const element = savedDraftShelfRef.current;
     if (!element || typeof IntersectionObserver === "undefined") {
       return;
@@ -489,7 +500,7 @@ export default function ThreadComposer ({
     return () => {
       observer.disconnect();
     };
-  }, [threadSavedComposerDrafts.length]);
+  }, [autoExpandSavedDraftShelf, threadSavedComposerDrafts.length]);
 
   useEffect(() => {
     let cancelled = false;
@@ -777,6 +788,18 @@ export default function ThreadComposer ({
     </button>
   ) : null;
 
+  const savedDraftShelf = (
+    <ThreadSavedDraftShelf
+      drafts={threadSavedComposerDrafts}
+      isExpanded={isSavedDraftShelfExpanded}
+      isRestoreDisabled={hasPendingUserInputRequest || isInputDisabled}
+      onDelete={onThreadSavedComposerDraftDelete}
+      onExpandChange={setIsSavedDraftShelfExpanded}
+      onRestore={restoreSavedDraft}
+      shelfRef={savedDraftShelfRef}
+    />
+  );
+
   return (
     <>
       <form className="mt-6 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4" onSubmit={handleSubmit}>
@@ -1037,15 +1060,9 @@ export default function ThreadComposer ({
         ) : null}
       </form>
       {children}
-      <ThreadSavedDraftShelf
-        drafts={threadSavedComposerDrafts}
-        isExpanded={isSavedDraftShelfExpanded}
-        isRestoreDisabled={hasPendingUserInputRequest || isInputDisabled}
-        onDelete={onThreadSavedComposerDraftDelete}
-        onExpandChange={setIsSavedDraftShelfExpanded}
-        onRestore={restoreSavedDraft}
-        shelfRef={savedDraftShelfRef}
-      />
+      {useSavedDraftShelfPortal
+        ? (savedDraftShelfPortalHost ? createPortal(savedDraftShelf, savedDraftShelfPortalHost) : null)
+        : savedDraftShelf}
     </>
   );
 }
