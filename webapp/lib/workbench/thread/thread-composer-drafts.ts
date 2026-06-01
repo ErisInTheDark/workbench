@@ -1,6 +1,5 @@
 /*
  * Exports:
- * - DRAFT_DATABASE_VERSION: shared IndexedDB schema version for workbench draft stores. Keywords: IndexedDB, schema, migration.
  * - THREAD_COMPOSER_DRAFT_RETENTION_MS: one-month browser retention for unsent thread composer drafts. Keywords: thread, composer, draft, IndexedDB, retention.
  * - createThreadComposerDraftRecordKey: create the project and thread scoped draft key. Keywords: thread, draft, key, project.
  * - createThreadQuestionnaireDraftRecordKey: create the project, thread, and request scoped questionnaire draft key. Keywords: questionnaire, draft, key.
@@ -17,13 +16,12 @@
  */
 
 import type { WorkbenchQuestionnaireDraft, WorkbenchThreadComposerDraft, WorkbenchThreadSavedComposerDraft } from "../../types";
+import workbenchDraftStorage, {
+  THREAD_COMPOSER_DRAFT_STORE_NAME,
+  THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME,
+  THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME,
+} from "../storage/workbench-draft-storage";
 
-const DRAFT_DATABASE_NAME = "workbench";
-export const DRAFT_DATABASE_VERSION = 5;
-const FILE_DRAFT_STORE_NAME = "drafts";
-const THREAD_COMPOSER_DRAFT_STORE_NAME = "threadComposerDrafts";
-const THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME = "threadQuestionnaireDrafts";
-const THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME = "threadSavedComposerDrafts";
 export const THREAD_COMPOSER_DRAFT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export interface PersistedThreadComposerDraftRecord extends WorkbenchThreadComposerDraft {
@@ -42,87 +40,6 @@ export interface PersistedThreadQuestionnaireDraftRecord extends WorkbenchQuesti
 export interface PersistedThreadSavedComposerDraftRecord extends WorkbenchThreadSavedComposerDraft {
   key: string;
   projectId: string;
-}
-
-function wrapIndexedDbRequest<T>(request: IDBRequest<T>) {
-  return new Promise<T>((resolve, reject) => {
-    request.onsuccess = () => {
-      resolve(request.result);
-    };
-    request.onerror = () => {
-      reject(request.error ?? new Error("IndexedDB request failed."));
-    };
-  });
-}
-
-function waitForTransaction(transaction: IDBTransaction) {
-  return new Promise<void>((resolve, reject) => {
-    transaction.oncomplete = () => {
-      resolve();
-    };
-    transaction.onabort = () => {
-      reject(transaction.error ?? new Error("IndexedDB transaction aborted."));
-    };
-    transaction.onerror = () => {
-      reject(transaction.error ?? new Error("IndexedDB transaction failed."));
-    };
-  });
-}
-
-function openDraftDatabase() {
-  if (typeof window.indexedDB === "undefined") {
-    return Promise.resolve<IDBDatabase | null>(null);
-  }
-
-  return new Promise<IDBDatabase | null>((resolve) => {
-    const request = window.indexedDB.open(DRAFT_DATABASE_NAME, DRAFT_DATABASE_VERSION);
-
-    request.onupgradeneeded = (event) => {
-      const database = request.result;
-      if (event.oldVersion > 0 && event.oldVersion < 2 && database.objectStoreNames.contains(FILE_DRAFT_STORE_NAME)) {
-        database.deleteObjectStore(FILE_DRAFT_STORE_NAME);
-      }
-
-      if (!database.objectStoreNames.contains(FILE_DRAFT_STORE_NAME)) {
-        database.createObjectStore(FILE_DRAFT_STORE_NAME, { keyPath: "key" });
-      }
-
-      if (!database.objectStoreNames.contains(THREAD_COMPOSER_DRAFT_STORE_NAME)) {
-        database.createObjectStore(THREAD_COMPOSER_DRAFT_STORE_NAME, { keyPath: "key" });
-      }
-
-      if (!database.objectStoreNames.contains(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME)) {
-        database.createObjectStore(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME, { keyPath: "key" });
-      }
-
-      if (!database.objectStoreNames.contains(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME)) {
-        database.createObjectStore(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME, { keyPath: "key" });
-      }
-    };
-
-    request.onsuccess = () => {
-      const database = request.result;
-      database.onversionchange = () => {
-        database.close();
-      };
-      resolve(database);
-    };
-
-    request.onerror = () => {
-      resolve(null);
-    };
-
-    request.onblocked = () => {
-      resolve(null);
-    };
-  });
-}
-
-const draftDatabasePromise = openDraftDatabase();
-let draftPersistenceQueue = Promise.resolve();
-
-function hasObjectStore(database: IDBDatabase, storeName: string) {
-  return database.objectStoreNames.contains(storeName);
 }
 
 export function createThreadComposerDraftRecordKey(projectId: string, threadId: string) {
@@ -254,28 +171,8 @@ function normalizeQuestionnaireRecord(record: unknown): PersistedThreadQuestionn
   };
 }
 
-function enqueueDraftPersistence(operation: () => Promise<void>) {
-  draftPersistenceQueue = draftPersistenceQueue
-    .catch(() => {
-      // Keep later persistence operations flowing after a transient failure.
-    })
-    .then(operation);
-
-  return draftPersistenceQueue;
-}
-
 export async function getPersistedThreadComposerDraftRecords(projectId: string) {
-  const database = await draftDatabasePromise;
-  if (!database || !hasObjectStore(database, THREAD_COMPOSER_DRAFT_STORE_NAME)) {
-    return [] as PersistedThreadComposerDraftRecord[];
-  }
-
-  const transaction = database.transaction(THREAD_COMPOSER_DRAFT_STORE_NAME, "readonly");
-  const store = transaction.objectStore(THREAD_COMPOSER_DRAFT_STORE_NAME);
-  const request = store.getAll();
-  const rawRecords = await wrapIndexedDbRequest(request as IDBRequest<unknown[]>);
-  await waitForTransaction(transaction);
-
+  const rawRecords = await workbenchDraftStorage.getAll<unknown>(THREAD_COMPOSER_DRAFT_STORE_NAME);
   const expirationCutoff = Date.now() - THREAD_COMPOSER_DRAFT_RETENTION_MS;
   const records = rawRecords.flatMap((record) => {
     const normalized = normalizePersistedRecord(record);
@@ -283,36 +180,16 @@ export async function getPersistedThreadComposerDraftRecords(projectId: string) 
   });
   const expiredRecords = records.filter((record) => record.updatedAt < expirationCutoff);
   if (expiredRecords.length) {
-    void enqueueDraftPersistence(async () => {
-      const writeDatabase = await draftDatabasePromise;
-      if (!writeDatabase || !hasObjectStore(writeDatabase, THREAD_COMPOSER_DRAFT_STORE_NAME)) {
-        return;
-      }
-
-      const writeTransaction = writeDatabase.transaction(THREAD_COMPOSER_DRAFT_STORE_NAME, "readwrite");
-      const writeStore = writeTransaction.objectStore(THREAD_COMPOSER_DRAFT_STORE_NAME);
-      for (const record of expiredRecords) {
-        writeStore.delete(record.key);
-      }
-      await waitForTransaction(writeTransaction);
-    });
+    for (const record of expiredRecords) {
+      void workbenchDraftStorage.delete(THREAD_COMPOSER_DRAFT_STORE_NAME, record.key);
+    }
   }
 
   return records.filter((record) => record.updatedAt >= expirationCutoff);
 }
 
 export async function getPersistedThreadQuestionnaireDraftRecords(projectId: string) {
-  const database = await draftDatabasePromise;
-  if (!database || !hasObjectStore(database, THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME)) {
-    return [] as PersistedThreadQuestionnaireDraftRecord[];
-  }
-
-  const transaction = database.transaction(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME, "readonly");
-  const store = transaction.objectStore(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME);
-  const request = store.getAll();
-  const rawRecords = await wrapIndexedDbRequest(request as IDBRequest<unknown[]>);
-  await waitForTransaction(transaction);
-
+  const rawRecords = await workbenchDraftStorage.getAll<unknown>(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME);
   const expirationCutoff = Date.now() - THREAD_COMPOSER_DRAFT_RETENTION_MS;
   const records = rawRecords.flatMap((record) => {
     const normalized = normalizeQuestionnaireRecord(record);
@@ -320,36 +197,16 @@ export async function getPersistedThreadQuestionnaireDraftRecords(projectId: str
   });
   const expiredRecords = records.filter((record) => record.updatedAt < expirationCutoff);
   if (expiredRecords.length) {
-    void enqueueDraftPersistence(async () => {
-      const writeDatabase = await draftDatabasePromise;
-      if (!writeDatabase || !hasObjectStore(writeDatabase, THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME)) {
-        return;
-      }
-
-      const writeTransaction = writeDatabase.transaction(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME, "readwrite");
-      const writeStore = writeTransaction.objectStore(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME);
-      for (const record of expiredRecords) {
-        writeStore.delete(record.key);
-      }
-      await waitForTransaction(writeTransaction);
-    });
+    for (const record of expiredRecords) {
+      void workbenchDraftStorage.delete(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME, record.key);
+    }
   }
 
   return records.filter((record) => record.updatedAt >= expirationCutoff);
 }
 
 export async function getPersistedThreadSavedComposerDraftRecords(projectId: string) {
-  const database = await draftDatabasePromise;
-  if (!database || !hasObjectStore(database, THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME)) {
-    return [] as PersistedThreadSavedComposerDraftRecord[];
-  }
-
-  const transaction = database.transaction(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME, "readonly");
-  const store = transaction.objectStore(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME);
-  const request = store.getAll();
-  const rawRecords = await wrapIndexedDbRequest(request as IDBRequest<unknown[]>);
-  await waitForTransaction(transaction);
-
+  const rawRecords = await workbenchDraftStorage.getAll<unknown>(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME);
   return rawRecords
     .flatMap((record) => {
       const normalized = normalizeSavedComposerRecord(record);
@@ -359,72 +216,32 @@ export async function getPersistedThreadSavedComposerDraftRecords(projectId: str
 }
 
 export function putPersistedThreadComposerDraft(projectId: string, threadId: string, draft: WorkbenchThreadComposerDraft) {
-  return enqueueDraftPersistence(async () => {
-    const database = await draftDatabasePromise;
-    if (!database || !hasObjectStore(database, THREAD_COMPOSER_DRAFT_STORE_NAME)) {
-      return;
-    }
-
-    const record: PersistedThreadComposerDraftRecord = {
-      ...draft,
-      key: createThreadComposerDraftRecordKey(projectId, threadId),
-      projectId,
-      threadId,
-      updatedAt: Date.now(),
-    };
-    const transaction = database.transaction(THREAD_COMPOSER_DRAFT_STORE_NAME, "readwrite");
-    const store = transaction.objectStore(THREAD_COMPOSER_DRAFT_STORE_NAME);
-    await wrapIndexedDbRequest(store.put(record));
-    await waitForTransaction(transaction);
-  });
+  const record: PersistedThreadComposerDraftRecord = {
+    ...draft,
+    key: createThreadComposerDraftRecordKey(projectId, threadId),
+    projectId,
+    threadId,
+    updatedAt: Date.now(),
+  };
+  return workbenchDraftStorage.put(THREAD_COMPOSER_DRAFT_STORE_NAME, record);
 }
 
 export function putPersistedThreadSavedComposerDraft(projectId: string, draft: WorkbenchThreadSavedComposerDraft) {
-  return enqueueDraftPersistence(async () => {
-    const database = await draftDatabasePromise;
-    if (!database || !hasObjectStore(database, THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME)) {
-      return;
-    }
-
-    const record: PersistedThreadSavedComposerDraftRecord = {
-      ...draft,
-      key: createThreadSavedComposerDraftRecordKey(projectId, draft.id),
-      projectId,
-      updatedAt: Date.now(),
-    };
-    const transaction = database.transaction(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME, "readwrite");
-    const store = transaction.objectStore(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME);
-    await wrapIndexedDbRequest(store.put(record));
-    await waitForTransaction(transaction);
-  });
+  const record: PersistedThreadSavedComposerDraftRecord = {
+    ...draft,
+    key: createThreadSavedComposerDraftRecordKey(projectId, draft.id),
+    projectId,
+    updatedAt: Date.now(),
+  };
+  return workbenchDraftStorage.put(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME, record);
 }
 
 export function deletePersistedThreadComposerDraft(projectId: string, threadId: string) {
-  return enqueueDraftPersistence(async () => {
-    const database = await draftDatabasePromise;
-    if (!database || !hasObjectStore(database, THREAD_COMPOSER_DRAFT_STORE_NAME)) {
-      return;
-    }
-
-    const transaction = database.transaction(THREAD_COMPOSER_DRAFT_STORE_NAME, "readwrite");
-    const store = transaction.objectStore(THREAD_COMPOSER_DRAFT_STORE_NAME);
-    await wrapIndexedDbRequest(store.delete(createThreadComposerDraftRecordKey(projectId, threadId)));
-    await waitForTransaction(transaction);
-  });
+  return workbenchDraftStorage.delete(THREAD_COMPOSER_DRAFT_STORE_NAME, createThreadComposerDraftRecordKey(projectId, threadId));
 }
 
 export function deletePersistedThreadSavedComposerDraft(projectId: string, draftId: string) {
-  return enqueueDraftPersistence(async () => {
-    const database = await draftDatabasePromise;
-    if (!database || !hasObjectStore(database, THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME)) {
-      return;
-    }
-
-    const transaction = database.transaction(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME, "readwrite");
-    const store = transaction.objectStore(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME);
-    await wrapIndexedDbRequest(store.delete(createThreadSavedComposerDraftRecordKey(projectId, draftId)));
-    await waitForTransaction(transaction);
-  });
+  return workbenchDraftStorage.delete(THREAD_SAVED_COMPOSER_DRAFT_STORE_NAME, createThreadSavedComposerDraftRecordKey(projectId, draftId));
 }
 
 export function putPersistedThreadQuestionnaireDraft(
@@ -433,37 +250,17 @@ export function putPersistedThreadQuestionnaireDraft(
   requestKey: string,
   draft: WorkbenchQuestionnaireDraft,
 ) {
-  return enqueueDraftPersistence(async () => {
-    const database = await draftDatabasePromise;
-    if (!database || !hasObjectStore(database, THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME)) {
-      return;
-    }
-
-    const record: PersistedThreadQuestionnaireDraftRecord = {
-      ...draft,
-      key: createThreadQuestionnaireDraftRecordKey(projectId, threadId, requestKey),
-      projectId,
-      requestKey,
-      threadId,
-      updatedAt: Date.now(),
-    };
-    const transaction = database.transaction(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME, "readwrite");
-    const store = transaction.objectStore(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME);
-    await wrapIndexedDbRequest(store.put(record));
-    await waitForTransaction(transaction);
-  });
+  const record: PersistedThreadQuestionnaireDraftRecord = {
+    ...draft,
+    key: createThreadQuestionnaireDraftRecordKey(projectId, threadId, requestKey),
+    projectId,
+    requestKey,
+    threadId,
+    updatedAt: Date.now(),
+  };
+  return workbenchDraftStorage.put(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME, record);
 }
 
 export function deletePersistedThreadQuestionnaireDraft(projectId: string, threadId: string, requestKey: string) {
-  return enqueueDraftPersistence(async () => {
-    const database = await draftDatabasePromise;
-    if (!database || !hasObjectStore(database, THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME)) {
-      return;
-    }
-
-    const transaction = database.transaction(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME, "readwrite");
-    const store = transaction.objectStore(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME);
-    await wrapIndexedDbRequest(store.delete(createThreadQuestionnaireDraftRecordKey(projectId, threadId, requestKey)));
-    await waitForTransaction(transaction);
-  });
+  return workbenchDraftStorage.delete(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME, createThreadQuestionnaireDraftRecordKey(projectId, threadId, requestKey));
 }

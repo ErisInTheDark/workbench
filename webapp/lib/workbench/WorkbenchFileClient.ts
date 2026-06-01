@@ -29,16 +29,14 @@ import type FileSessionState from "./state/FileSessionState";
 import type { DraftBuffer } from "./state/FileSessionState";
 import LifecycleScope from "./state/LifecycleScope";
 import type SessionState from "./state/SessionState";
+import workbenchDraftStorage, {
+    FILE_DRAFT_STORE_NAME,
+} from "./storage/workbench-draft-storage";
 import type { EditorMode, SaveGuardIssue } from "./WorkbenchEditorClient";
 import type WorkbenchEventBus from "./WorkbenchEventBus";
 
 export type { DraftBuffer, default as FileSessionState } from "./state/FileSessionState";
 
-const DRAFT_DATABASE_NAME = "workbench";
-const DRAFT_DATABASE_VERSION = 4;
-const DRAFT_STORE_NAME = "drafts";
-const THREAD_COMPOSER_DRAFT_STORE_NAME = "threadComposerDrafts";
-const THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME = "threadQuestionnaireDrafts";
 const DRAFT_DISCARD_TOMBSTONE_STORAGE_KEY = "workbench:file-draft-discard-tombstones:v1";
 const DRAFT_DISCARD_TOMBSTONE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const FILE_SELECTION_PERSISTENCE_TASK_ID = "file-selection-persistence";
@@ -98,76 +96,6 @@ interface WorkbenchFileClient {
   saveCurrentFile: (options?: { force?: boolean }) => Promise<void>;
   scheduleSelectionPersistence: () => void;
   syncCurrentDraftBuffer: () => void;
-}
-
-function wrapIndexedDbRequest<T>(request: IDBRequest<T>) {
-  return new Promise<T>((resolve, reject) => {
-    request.onsuccess = () => {
-      resolve(request.result);
-    };
-    request.onerror = () => {
-      reject(request.error ?? new Error("IndexedDB request failed."));
-    };
-  });
-}
-
-function waitForTransaction(transaction: IDBTransaction) {
-  return new Promise<void>((resolve, reject) => {
-    transaction.oncomplete = () => {
-      resolve();
-    };
-    transaction.onabort = () => {
-      reject(transaction.error ?? new Error("IndexedDB transaction aborted."));
-    };
-    transaction.onerror = () => {
-      reject(transaction.error ?? new Error("IndexedDB transaction failed."));
-    };
-  });
-}
-
-function openDraftDatabase() {
-  if (typeof window.indexedDB === "undefined") {
-    return Promise.resolve<IDBDatabase | null>(null);
-  }
-
-  return new Promise<IDBDatabase | null>((resolve) => {
-    const request = window.indexedDB.open(DRAFT_DATABASE_NAME, DRAFT_DATABASE_VERSION);
-
-    request.onupgradeneeded = (event) => {
-      const database = request.result;
-      if (event.oldVersion > 0 && event.oldVersion < 2 && database.objectStoreNames.contains(DRAFT_STORE_NAME)) {
-        database.deleteObjectStore(DRAFT_STORE_NAME);
-      }
-
-      if (!database.objectStoreNames.contains(DRAFT_STORE_NAME)) {
-        database.createObjectStore(DRAFT_STORE_NAME, { keyPath: "key" });
-      }
-
-      if (!database.objectStoreNames.contains(THREAD_COMPOSER_DRAFT_STORE_NAME)) {
-        database.createObjectStore(THREAD_COMPOSER_DRAFT_STORE_NAME, { keyPath: "key" });
-      }
-
-      if (!database.objectStoreNames.contains(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME)) {
-        database.createObjectStore(THREAD_QUESTIONNAIRE_DRAFT_STORE_NAME, { keyPath: "key" });
-      }
-    };
-
-    request.onsuccess = () => {
-      const database = request.result;
-      database.onversionchange = () => {
-        database.close();
-      };
-      resolve(database);
-    };
-
-    request.onerror = () => {
-      resolve(null);
-    };
-
-    request.onblocked = () => {
-      resolve(null);
-    };
-  });
 }
 
 function createDraftRecordKey(projectId: string, filePath: string) {
@@ -282,47 +210,21 @@ function WorkbenchFileClient(
     updateHistorySelection,
   } = options;
 
-  const draftDatabasePromise = openDraftDatabase();
   let draftPersistenceQueue = Promise.resolve();
   const discardingDraftPaths = new Set<string>();
 
   async function getPersistedDraftRecords() {
-    const database = await draftDatabasePromise;
-    if (!database) {
-      return [] as PersistedDraftRecord[];
-    }
-
-    const transaction = database.transaction(DRAFT_STORE_NAME, "readonly");
-    const store = transaction.objectStore(DRAFT_STORE_NAME);
-    const request = store.getAll();
-    const result = await wrapIndexedDbRequest(request as IDBRequest<PersistedDraftRecord[]>);
-    await waitForTransaction(transaction);
     const projectId = getProjectId();
-    return result.filter((record) => record.projectId === projectId);
+    const records = await workbenchDraftStorage.getAll<PersistedDraftRecord>(FILE_DRAFT_STORE_NAME);
+    return records.filter((record) => record.projectId === projectId);
   }
 
   async function putPersistedDraftRecord(record: PersistedDraftRecord) {
-    const database = await draftDatabasePromise;
-    if (!database) {
-      return;
-    }
-
-    const transaction = database.transaction(DRAFT_STORE_NAME, "readwrite");
-    const store = transaction.objectStore(DRAFT_STORE_NAME);
-    await wrapIndexedDbRequest(store.put(record));
-    await waitForTransaction(transaction);
+    await workbenchDraftStorage.put(FILE_DRAFT_STORE_NAME, record);
   }
 
   async function deletePersistedDraftRecord(projectId: string, filePath: string) {
-    const database = await draftDatabasePromise;
-    if (!database) {
-      return;
-    }
-
-    const transaction = database.transaction(DRAFT_STORE_NAME, "readwrite");
-    const store = transaction.objectStore(DRAFT_STORE_NAME);
-    await wrapIndexedDbRequest(store.delete(createDraftRecordKey(projectId, filePath)));
-    await waitForTransaction(transaction);
+    await workbenchDraftStorage.delete(FILE_DRAFT_STORE_NAME, createDraftRecordKey(projectId, filePath));
   }
 
   function enqueueDraftPersistence(operation: () => Promise<void>) {
