@@ -29,6 +29,7 @@ import {
   projectFilePathPillClassName,
 } from "../../../lib/workbench/project/project-file-path";
 import { getInlineMentionMarkClassName } from "../../../lib/workbench/thread/inline-mention-styles";
+import ChevronIcon from "../ChevronIcon";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 
@@ -186,8 +187,17 @@ function renderThreadListItem (
 
   return (
     <li className="[&+li]:mt-1" key={keyPrefix}>
-      <details open>
-        <summary>{content.length ? content : <br />}</summary>
+      <details
+        className="thread-disclosure block min-w-0 max-w-full"
+        open
+      >
+        <summary className="flex min-w-0 max-w-full cursor-pointer list-none items-center [&::-webkit-details-marker]:hidden">
+          <span className="min-w-0">{content.length ? content : <br />}</span>
+          <ChevronIcon
+            data-thread-chevron
+            className="ml-[0.12em] size-[1.2em] transition-transform"
+          />
+        </summary>
         {childContent}
       </details>
     </li>
