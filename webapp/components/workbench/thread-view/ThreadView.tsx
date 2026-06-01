@@ -42,6 +42,11 @@ import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadRateLimits from "./ThreadRateLimits";
+import {
+  getThreadWebSearchLiveLabel,
+  isThreadWebSearchPlaceholder,
+  ThreadWebSearchActionRow,
+} from "./ThreadWebSearchItem";
 import { ThreadThreadContent, ThreadTurnDetails } from "./thread-view-items";
 
 const SUBTHREAD_POLL_INTERVAL_MS = 1500;
@@ -60,6 +65,12 @@ type LiveThreadActivity =
       hiddenItemId: string;
       receiverThreadId: string;
     }>;
+  }
+  | {
+    contextItems: Extract<ThreadPayload["turns"][number]["items"][number], { type: "webSearch" }>[];
+    hiddenItemIds: string[];
+    kind: "webSearch";
+    title: string;
   };
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
@@ -263,6 +274,39 @@ function getLiveThreadActivity ({
       hiddenItemId: reasoningStep.id,
       kind: "reasoning",
       title: reasoningStep.title,
+    };
+  }
+
+  const latestItem = turn.items.at(-1);
+  if (latestItem?.type === "webSearch" && isThreadWebSearchPlaceholder(latestItem)) {
+    const contextItems: Extract<ThreadPayload["turns"][number]["items"][number], { type: "webSearch" }>[] = [];
+    for (let index = turn.items.length - 2; index >= 0; index -= 1) {
+      const item = turn.items[index];
+      if (item.type === "reasoning" && !item.summary.some((section) => section.trim()) && !item.content.some((section) => section.trim())) {
+        continue;
+      }
+
+      if (item.type === "agentMessage" && !item.text.trim()) {
+        continue;
+      }
+
+      if (item.type !== "webSearch") {
+        break;
+      }
+
+      if (!isThreadWebSearchPlaceholder(item)) {
+        contextItems.unshift(item);
+      }
+    }
+
+    return {
+      contextItems,
+      hiddenItemIds: [
+        latestItem.id,
+        ...contextItems.map((item) => item.id),
+      ],
+      kind: "webSearch",
+      title: getThreadWebSearchLiveLabel(latestItem),
     };
   }
 
@@ -834,6 +878,7 @@ export default memo(function ThreadView ({
               relatedThreadsById={subthreadsById}
               turn={turn}
               hiddenReasoningItemId={turn.id === currentTurn?.id && liveActivity?.kind === "reasoning" ? liveActivity.hiddenItemId : null}
+              hiddenWebSearchItemIds={turn.id === currentTurn?.id && liveActivity?.kind === "webSearch" ? liveActivity.hiddenItemIds : undefined}
             />
           )) : (
             !activeThread.isDraft ? (
@@ -850,7 +895,31 @@ export default memo(function ThreadView ({
       </div>
       {liveActivity ? (
         <div className="py-4" aria-live="polite">
-          {liveActivity.kind === "reasoning" && liveActivity.body ? (
+          {liveActivity.kind === "webSearch" ? (
+            liveActivity.contextItems.length ? (
+              <ThreadDisclosure
+                contentClassName="mt-2 space-y-1 pl-6"
+                open={isLiveActivityOpen}
+                onToggle={(event) => {
+                  const nextIsOpen = event.currentTarget.open;
+                  setIsLiveActivityOpen(nextIsOpen);
+                  persistThreadLiveActivityOpen(nextIsOpen);
+                }}
+                summary={<span className="thread-thinking-text">{liveActivity.title}</span>}
+                summaryClassName="text-[0.92em] font-medium leading-[1.6]"
+              >
+                {liveActivity.contextItems.map((item) => (
+                  <p key={item.id} className="m-0 text-[0.92em] leading-[1.6] text-muted">
+                    <ThreadWebSearchActionRow item={item} />
+                  </p>
+                ))}
+              </ThreadDisclosure>
+            ) : (
+              <p className="thread-thinking-text m-0 text-[0.92em] font-medium leading-[1.6]">
+                {liveActivity.title}
+              </p>
+            )
+          ) : liveActivity.kind === "reasoning" && liveActivity.body ? (
             <ThreadDisclosure
               contentClassName="mt-2"
               open={isLiveActivityOpen}

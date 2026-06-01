@@ -78,10 +78,7 @@ function renderInlineHtml(nodes: ParsedInlineNode[]) {
         html += "<br>";
         break;
       case "link": {
-        const externalAttributes = node.external
-          ? ' target="_blank" rel="noreferrer"'
-          : "";
-        html += `<a href="${escapeHtml(node.href)}"${externalAttributes}>${renderInlineHtml(node.children)}</a>`;
+        html += `<a href="${escapeHtml(node.href)}" target="_blank" rel="noreferrer">${renderInlineHtml(node.children)}</a>`;
         break;
       }
       case "inlineComment":

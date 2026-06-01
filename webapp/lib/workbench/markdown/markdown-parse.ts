@@ -6,7 +6,7 @@
  * - ParsedBlock: block node union used by markdown parsing and rendering. Keywords: markdown, block, parser.
  * - ParsedInlineNode: inline node union shared by HTML and React markdown render targets. Keywords: markdown, inline, parser, AST.
  * - MarkdownParseProfile: parser behavior profile for editor-stable markdown vs display-only thread markdown. Keywords: markdown, profile, thread, editor.
- * - MarkdownParseOptions: optional project-root and mention context for richer thread parsing. Keywords: markdown, file link, skills, mentions.
+ * - MarkdownParseOptions: optional project-root, mention, and autolink context for richer thread parsing. Keywords: markdown, file link, skills, mentions, autolink.
  * - parseBlocks: parse markdown into block nodes for rendering and diffing. Keywords: markdown, parser, blocks.
  * - parseInlineMarkdown: parse inline markdown into renderer-neutral nodes. Keywords: markdown, inline, parser.
  * - parseThreadStateChangeMode: detect display-only thread mode change tags. Keywords: thread, mode, state, parser.
@@ -81,6 +81,7 @@ export interface MarkdownParseOptions {
   inlineMentionSources?: InlineMentionHighlightSources | null;
   profile?: MarkdownParseProfile;
   projectRootPath?: string;
+  suppressPlaintextAutolinks?: boolean;
 }
 
 const THREAD_STATE_CHANGE_TAG_PATTERN = /^<set-state\s+mode=(["'])((?:(?!\1).)*)\1\s*\/>$/;
@@ -274,6 +275,38 @@ function sanitizeMarkdownHref(value: string) {
 
 function isExternalMarkdownHref(value: string) {
   return /^(https?:|mailto:|ws:|wss:)/i.test(value);
+}
+
+function parseThreadPlaintextUrl(markdown: string, index: number) {
+  const match = /^(https?:\/\/[^\s<>()]+|www\.[^\s<>()]+)/i.exec(markdown.slice(index));
+  if (!match) {
+    return null;
+  }
+
+  const previous = markdown[index - 1];
+  if (previous && /[A-Za-z0-9@._~:/?#\[\]@!$&'()*+,;=%-]/.test(previous)) {
+    return null;
+  }
+
+  const rawUrl = match[0];
+  let text = rawUrl;
+  while (/[.,!?;:\]}]+$/.test(text)) {
+    text = text.slice(0, -1);
+  }
+
+  if (!text || !/[A-Za-z0-9/#]$/.test(text)) {
+    return null;
+  }
+
+  const href = text.startsWith("www.") || text.startsWith("WWW.")
+    ? `https://${text}`
+    : text;
+
+  return {
+    end: index + text.length,
+    href,
+    text,
+  };
 }
 
 function isWordCharacter(value: string | undefined) {
@@ -544,7 +577,7 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
             }
 
             nodes.push({
-              children: parseInlineMarkdown(label, options),
+              children: parseInlineMarkdown(label, { ...options, suppressPlaintextAutolinks: true }),
               external: isExternalMarkdownHref(url),
               href: url,
               type: "link",
@@ -553,6 +586,20 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
             continue;
           }
         }
+      }
+    }
+
+    if ((options.profile ?? "editor") === "thread" && !options.suppressPlaintextAutolinks) {
+      const plaintextUrl = parseThreadPlaintextUrl(markdown, index);
+      if (plaintextUrl) {
+        nodes.push({
+          children: [{ text: plaintextUrl.text, type: "text" }],
+          external: true,
+          href: plaintextUrl.href,
+          type: "link",
+        });
+        index = plaintextUrl.end;
+        continue;
       }
     }
 

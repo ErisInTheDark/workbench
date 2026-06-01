@@ -89,8 +89,8 @@ function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string):
             className="text-accent underline decoration-accent-soft decoration-[0.08em] underline-offset-[0.16em]"
             href={node.href}
             key={key}
-            rel={node.external ? "noreferrer" : undefined}
-            target={node.external ? "_blank" : undefined}
+            rel="noreferrer"
+            target="_blank"
           >
             {renderThreadInlineNodes(node.children, key)}
           </a>

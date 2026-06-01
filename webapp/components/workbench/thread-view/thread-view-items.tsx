@@ -2,7 +2,7 @@
  * Exports:
  * - ThreadTurnDetails: render one thread turn with grouped commands and typed item sections. Keywords: workbench, thread, turn.
  * - ThreadThreadContent: render all turns for one thread payload without composer chrome. Keywords: workbench, thread, subagent, preview.
- * - Local helpers: summarize inputs, group command and reasoning sequences, and render the supported thread item variants. Keywords: thread items, command sequence, reasoning, rendering.
+ * - Local helpers: summarize inputs, group command, reasoning, file, and web-search sequences, and render the supported thread item variants. Keywords: thread items, command sequence, reasoning, rendering.
  */
 "use client";
 
@@ -41,17 +41,22 @@ import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadReasoningItem from "./ThreadReasoningItem";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadUserImage from "./ThreadUserImage";
-import ThreadWebSearchItem from "./ThreadWebSearchItem";
+import ThreadWebSearchItem, {
+  isThreadWebSearchPlaceholder,
+  ThreadWebSearchSequence,
+} from "./ThreadWebSearchItem";
 
 type CommandItem = Extract<ThreadItem, { type: "commandExecution" }>;
 type FileChangeItem = Extract<ThreadItem, { type: "fileChange" }>;
 type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
+type WebSearchItem = Extract<ThreadItem, { type: "webSearch" }>;
 type NonGroupedItem = Exclude<ThreadItem, { type: "commandExecution" } | { type: "fileChange" } | { type: "reasoning" }>;
 
 type ThreadRenderableBlock =
   | { kind: "commandSequence"; items: CommandItem[] }
   | { kind: "fileChangeSequence"; items: FileChangeItem[] }
   | { kind: "reasoningSequence"; items: ReasoningItem[] }
+  | { kind: "webSearchSequence"; items: WebSearchItem[] }
   | { kind: "item"; item: NonGroupedItem };
 
 type RelatedThreadsById = Record<string, ThreadPayload | undefined>;
@@ -59,6 +64,7 @@ type RelatedThreadsById = Record<string, ThreadPayload | undefined>;
 interface HiddenThreadItemIds {
   collabAgentToolCallIds?: ReadonlySet<string> | null;
   reasoningItemId?: string | null;
+  webSearchItemIds?: ReadonlySet<string> | null;
 }
 
 function getFinalAgentMessageId (turn: Turn) {
@@ -101,6 +107,7 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
   let pendingCommands: CommandItem[] = [];
   let pendingFileChanges: FileChangeItem[] = [];
   let pendingReasoning: ReasoningItem[] = [];
+  let pendingWebSearches: WebSearchItem[] = [];
 
   const flushPendingCommands = () => {
     if (!pendingCommands.length) {
@@ -138,6 +145,18 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
     pendingFileChanges = [];
   };
 
+  const flushPendingWebSearches = () => {
+    if (!pendingWebSearches.length) {
+      return;
+    }
+
+    blocks.push({
+      kind: "webSearchSequence",
+      items: pendingWebSearches,
+    });
+    pendingWebSearches = [];
+  };
+
   for (const item of items) {
     if (item.type === "agentMessage" && !item.text.trim()) {
       continue;
@@ -150,6 +169,7 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
     if (item.type === "commandExecution") {
       flushPendingReasoning();
       flushPendingFileChanges();
+      flushPendingWebSearches();
       pendingCommands.push(item);
       continue;
     }
@@ -161,6 +181,7 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
 
       flushPendingCommands();
       flushPendingFileChanges();
+      flushPendingWebSearches();
       pendingReasoning.push(item);
       continue;
     }
@@ -168,7 +189,19 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
     if (item.type === "fileChange") {
       flushPendingCommands();
       flushPendingReasoning();
+      flushPendingWebSearches();
       pendingFileChanges.push(item);
+      continue;
+    }
+
+    if (item.type === "webSearch") {
+      flushPendingCommands();
+      flushPendingReasoning();
+      flushPendingFileChanges();
+      if (hiddenItemIds.webSearchItemIds?.has(item.id) || isThreadWebSearchPlaceholder(item)) {
+        continue;
+      }
+      pendingWebSearches.push(item);
       continue;
     }
 
@@ -176,12 +209,14 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
       flushPendingCommands();
       flushPendingReasoning();
       flushPendingFileChanges();
+      flushPendingWebSearches();
       continue;
     }
 
     flushPendingCommands();
     flushPendingReasoning();
     flushPendingFileChanges();
+    flushPendingWebSearches();
     blocks.push({
       kind: "item",
       item,
@@ -191,6 +226,7 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
   flushPendingCommands();
   flushPendingReasoning();
   flushPendingFileChanges();
+  flushPendingWebSearches();
   return blocks;
 }
 
@@ -889,6 +925,10 @@ function ThreadRenderableBlockView ({
     );
   }
 
+  if (block.kind === "webSearchSequence") {
+    return <ThreadWebSearchSequence items={block.items} />;
+  }
+
   switch (block.item.type) {
     case "userMessage":
       return (
@@ -942,6 +982,7 @@ function ThreadRenderableBlockView ({
 function ThreadTurnDetailsComponent ({
   hiddenCollabAgentToolCallItemIds = [],
   hiddenReasoningItemId = null,
+  hiddenWebSearchItemIds = [],
   inlineMentionSources = null,
   knownSkills = [],
   onOpenFile,
@@ -951,6 +992,7 @@ function ThreadTurnDetailsComponent ({
 }: {
   hiddenCollabAgentToolCallItemIds?: readonly string[];
   hiddenReasoningItemId?: string | null;
+  hiddenWebSearchItemIds?: readonly string[];
   inlineMentionSources?: InlineMentionHighlightSources | null;
   knownSkills?: WorkbenchSkillSummary[];
   onOpenFile?: (path: string) => Promise<void>;
@@ -961,9 +1003,13 @@ function ThreadTurnDetailsComponent ({
   const hiddenCollabAgentToolCallIds = hiddenCollabAgentToolCallItemIds.length
     ? new Set(hiddenCollabAgentToolCallItemIds)
     : null;
+  const hiddenWebSearchIds = hiddenWebSearchItemIds.length
+    ? new Set(hiddenWebSearchItemIds)
+    : null;
   const blocks = buildRenderableBlocks(turn.items, {
     collabAgentToolCallIds: hiddenCollabAgentToolCallIds,
     reasoningItemId: hiddenReasoningItemId,
+    webSearchItemIds: hiddenWebSearchIds,
   });
   const finalAgentMessageId = getFinalAgentMessageId(turn);
   const isCompleted = turn.status === "completed";
@@ -985,7 +1031,9 @@ function ThreadTurnDetailsComponent ({
           ? `fileChanges:${block.items[0]?.id ?? index}`
           : block.kind === "reasoningSequence"
             ? `reasoning:${block.items[0]?.id ?? index}`
-            : `item:${block.item.id}`}
+            : block.kind === "webSearchSequence"
+              ? `webSearches:${block.items[0]?.id ?? index}`
+              : `item:${block.item.id}`}
       block={block}
       finalAgentMessageId={finalAgentMessageId}
       inlineMentionSources={inlineMentionSources}
@@ -1043,6 +1091,7 @@ function areThreadTurnDetailsPropsEqual (
   return left.turn === right.turn
     && left.hiddenCollabAgentToolCallItemIds === right.hiddenCollabAgentToolCallItemIds
     && left.hiddenReasoningItemId === right.hiddenReasoningItemId
+    && left.hiddenWebSearchItemIds === right.hiddenWebSearchItemIds
     && left.inlineMentionSources === right.inlineMentionSources
     && left.knownSkills === right.knownSkills
     && left.onOpenFile === right.onOpenFile
@@ -1056,6 +1105,7 @@ export function ThreadThreadContent ({
   emptyMessage = "No subagent activity was captured yet.",
   hiddenCollabAgentToolCallItemIds = [],
   hiddenReasoningItemId = null,
+  hiddenWebSearchItemIds = [],
   inlineMentionSources = null,
   knownSkills = [],
   onOpenFile,
@@ -1066,6 +1116,7 @@ export function ThreadThreadContent ({
   emptyMessage?: string;
   hiddenCollabAgentToolCallItemIds?: readonly string[];
   hiddenReasoningItemId?: string | null;
+  hiddenWebSearchItemIds?: readonly string[];
   inlineMentionSources?: InlineMentionHighlightSources | null;
   knownSkills?: WorkbenchSkillSummary[];
   onOpenFile?: (path: string) => Promise<void>;
@@ -1096,6 +1147,7 @@ export function ThreadThreadContent ({
           key={turn.id}
           hiddenCollabAgentToolCallItemIds={hiddenCollabAgentToolCallItemIds}
           hiddenReasoningItemId={hiddenReasoningItemId}
+          hiddenWebSearchItemIds={hiddenWebSearchItemIds}
           inlineMentionSources={inlineMentionSources}
           knownSkills={knownSkills}
           onOpenFile={onOpenFile}

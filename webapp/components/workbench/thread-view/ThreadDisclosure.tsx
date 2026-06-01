@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default ThreadDisclosure: render a styled details/summary disclosure with controlled or uncontrolled open state. Keywords: thread, disclosure, chevron.
+ * - ThreadDisclosureStaticRow: render a disclosure-aligned non-expandable row with a dot marker. Keywords: thread, disclosure, static row, dot.
  * - Local helpers: joinClasses for compact className composition. Keywords: css, class names.
  */
 "use client";
@@ -96,5 +97,38 @@ export default function ThreadDisclosure ({
       </summary>
       <div className={joinClasses("min-w-0 max-w-full", contentClassName)}>{children}</div>
     </details>
+  );
+}
+
+export function ThreadDisclosureStaticRow ({
+  className,
+  markerClassName,
+  summary,
+  summaryClassName,
+}: {
+  className?: string;
+  markerClassName?: string;
+  summary: ReactNode;
+  summaryClassName?: string;
+}) {
+  return (
+    <div className={joinClasses("min-w-0 max-w-full py-2", className)}>
+      <div
+        className={joinClasses(
+          "flex min-w-0 max-w-full items-center gap-2 text-muted",
+          summaryClassName,
+        )}
+      >
+        <span className="flex size-[1.1rem] shrink-0 items-center justify-center" aria-hidden="true">
+          <span
+            className={joinClasses(
+              "size-[0.3rem] rounded-full bg-current opacity-45",
+              markerClassName,
+            )}
+          />
+        </span>
+        <div className="min-w-0 flex-1">{summary}</div>
+      </div>
+    </div>
   );
 }
