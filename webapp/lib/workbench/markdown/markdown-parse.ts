@@ -822,6 +822,11 @@ function isThreadPlanCloseLine(line: string) {
   return /^<\/plan>\s*$/i.test(line.trim());
 }
 
+function isThreadStrayPlanCloseLine(line: string, options: MarkdownParseOptions) {
+  return (options.profile ?? "editor") === "thread"
+    && isThreadPlanCloseLine(line);
+}
+
 function isThreadStateChangeLine(line: string, options: MarkdownParseOptions) {
   return parseThreadStateChangeMode(line, options) !== null;
 }
@@ -1000,6 +1005,11 @@ function parseBlocksFromLines(lines: string[], options: MarkdownParseOptions = {
       continue;
     }
 
+    if (isThreadStrayPlanCloseLine(line, options)) {
+      index += 1;
+      continue;
+    }
+
     if (isBlockCommentLine(line)) {
       maybePushCommentBreak(blocks, blankLineCount, "comment");
       blankLineCount = 0;
@@ -1113,6 +1123,11 @@ function parseBlocksFromLines(lines: string[], options: MarkdownParseOptions = {
     ) {
       paragraphLines.push(lines[index]);
       index += 1;
+    }
+    if (!paragraphLines.length) {
+      blocks.push({ type: "paragraph", text: lines[index] });
+      index += 1;
+      continue;
     }
     blocks.push({ type: "paragraph", text: paragraphLines.join("\n") });
   }
