@@ -140,7 +140,7 @@ export interface WorkbenchThreadSavedComposerDraft extends WorkbenchThreadCompos
 
 export interface WorkbenchQuestionnaireDraft {
   customValues: Record<string, string>;
-  selectedValues: Record<string, string>;
+  selectedValues: Record<string, string[]>;
   updatedAt: number;
 }
 

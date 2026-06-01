@@ -31,6 +31,8 @@ const MAX_HEADER_WORDS = 5;
 const EMPTY_HISTORY_CUSTOM_TEXT_SPACER_CLASS = "w-full min-h-[2.45rem] rounded-lg px-3 py-2";
 const GENERIC_CODEX_QUESTIONNAIRE_TITLE = "Follow-up questions";
 const GENERIC_CODEX_QUESTIONNAIRE_SUMMARY = "Codex needs your input before it can continue.";
+const APPROVAL_DECISION_QUESTION_ID = "decision";
+const APPROVAL_OPTION_LABELS = new Set(["Allow once", "Allow for session", "Decline"]);
 
 function normalizeHeaderText (value: string | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
@@ -91,9 +93,25 @@ function deriveAnsweredValues (
   const unmatchedAnswers = answers.filter((answer) => !optionLabels.has(answer));
 
   return {
-    customValue: [...matchedOptions.slice(1), ...unmatchedAnswers].join("\n\n"),
-    selectedValue: matchedOptions[0] ?? "",
+    customValue: unmatchedAnswers.join("\n\n"),
+    selectedValues: matchedOptions,
   };
+}
+
+function hasSelectedDraftValues (values: Record<string, string[]>) {
+  return Object.values(values).some((questionValues) => questionValues.some((value) => value.trim()));
+}
+
+function isSingleChoiceQuestion (
+  request: WorkbenchUserInputRequest,
+  question: WorkbenchUserInputQuestion,
+) {
+  if (request.approval) {
+    return true;
+  }
+
+  return question.id === APPROVAL_DECISION_QUESTION_ID
+    && question.options.some((option) => APPROVAL_OPTION_LABELS.has(option.label));
 }
 
 type InteractiveThreadUserInputRequestProps = {
@@ -171,7 +189,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
   const interactiveDraft = interactiveProps?.draft ?? null;
   const onInteractiveDraftChange = interactiveProps?.onDraftChange;
   const onInteractiveDraftClear = interactiveProps?.onDraftClear;
-  const [selectedValues, setSelectedValues] = useState<Record<string, string>>(interactiveDraft?.selectedValues ?? {});
+  const [selectedValues, setSelectedValues] = useState<Record<string, string[]>>(interactiveDraft?.selectedValues ?? {});
   const [customValues, setCustomValues] = useState<Record<string, string>>(interactiveDraft?.customValues ?? {});
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -197,7 +215,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
       setCustomValues(interactiveDraft?.customValues ?? {});
     } else if (hydratedDraftKeyRef.current !== draftKey) {
       hydratedDraftKeyRef.current = draftKey;
-      const hasLocalDraft = Object.values(selectedValues).some((value) => value.trim())
+      const hasLocalDraft = hasSelectedDraftValues(selectedValues)
         || Object.values(customValues).some((value) => value.trim());
       if (!hasLocalDraft) {
         setSelectedValues(interactiveDraft?.selectedValues ?? {});
@@ -214,7 +232,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
     }
 
     const timeoutId = window.setTimeout(() => {
-      const hasSelectedValues = Object.values(selectedValues).some((value) => value.trim());
+      const hasSelectedValues = hasSelectedDraftValues(selectedValues);
       const hasCustomValues = Object.values(customValues).some((value) => value.trim());
       if (!hasSelectedValues && !hasCustomValues) {
         onInteractiveDraftClearRef.current?.();
@@ -248,12 +266,12 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
 
     const answers: WorkbenchUserInputResponse["answers"] = {};
     for (const question of request.questions) {
-      const selectedValue = selectedValues[question.id];
+      const selectedQuestionValues = selectedValues[question.id] ?? [];
       const customValue = customValues[question.id]?.trim();
 
       answers[question.id] = {
         answers: [
-          ...(selectedValue ? [selectedValue] : []),
+          ...selectedQuestionValues,
           ...(customValue ? [customValue] : []),
         ],
       };
@@ -329,10 +347,11 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
             ? deriveAnsweredValues(question, historyProps?.response ?? null)
             : {
               customValue: customValues[question.id] ?? "",
-              selectedValue: selectedValues[question.id] ?? "",
+              selectedValues: selectedValues[question.id] ?? [],
             };
-          const selectedValue = answerValues.selectedValue;
+          const selectedQuestionValues = answerValues.selectedValues;
           const customValue = answerValues.customValue;
+          const isSingleChoice = isSingleChoiceQuestion(request, question);
           const customValueHighlights = highlightSources
             ? buildInlineMentionHighlights(customValue, highlightSources)
             : [];
@@ -357,7 +376,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
               <div className="mt-3 space-y-2">
                 {question.options.map((option, index) => {
                   const optionId = `${request.id}:${question.id}:option:${index}`;
-                  const isChecked = selectedValue === option.label;
+                  const isChecked = selectedQuestionValues.includes(option.label);
                   const optionDescription = option.description.trim();
 
                   const optionCardClassName = joinClasses(
@@ -373,7 +392,8 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                       id={optionId}
                       aria-hidden="true"
                       className={joinClasses(
-                        "mt-1 inline-flex h-4 w-4 shrink-0 rounded-full border transition",
+                        "mt-1 inline-flex h-4 w-4 shrink-0 border transition",
+                        isSingleChoice ? "rounded-full" : "rounded-[0.28rem]",
                         isChecked
                           ? "border-[color-mix(in_srgb,var(--text)_40%,transparent)] bg-[color-mix(in_srgb,var(--text)_86%,var(--bg)_14%)]"
                           : "border-[color-mix(in_srgb,var(--text)_22%,transparent)] bg-transparent",
@@ -417,10 +437,28 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                       onClick={() => {
                         setSelectedValues((current) => {
                           const next = { ...current };
-                          if (next[question.id] === option.label) {
-                            delete next[question.id];
+                          const currentQuestionValues = next[question.id] ?? [];
+                          if (isSingleChoice) {
+                            if (currentQuestionValues.includes(option.label)) {
+                              delete next[question.id];
+                            } else {
+                              next[question.id] = [option.label];
+                            }
+                            return next;
+                          }
+
+                          if (currentQuestionValues.includes(option.label)) {
+                            const nextQuestionValues = currentQuestionValues.filter((value) => value !== option.label);
+                            if (nextQuestionValues.length) {
+                              next[question.id] = nextQuestionValues;
+                            } else {
+                              delete next[question.id];
+                            }
                           } else {
-                            next[question.id] = option.label;
+                            next[question.id] = [...currentQuestionValues, option.label];
+                          }
+                          if (!next[question.id]?.length) {
+                            delete next[question.id];
                           }
                           return next;
                         });

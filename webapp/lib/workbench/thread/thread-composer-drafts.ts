@@ -144,6 +144,27 @@ function normalizeStringRecord(value: unknown) {
   );
 }
 
+function normalizeStringArrayRecord(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, entry]) => {
+      if (typeof entry === "string") {
+        return entry.trim() ? [[key, [entry]]] : [];
+      }
+
+      if (!Array.isArray(entry)) {
+        return [];
+      }
+
+      const values = entry.filter((candidate): candidate is string => typeof candidate === "string");
+      return values.length ? [[key, values]] : [];
+    }),
+  );
+}
+
 function normalizeQuestionnaireRecord(record: unknown): PersistedThreadQuestionnaireDraftRecord | null {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     return null;
@@ -165,7 +186,7 @@ function normalizeQuestionnaireRecord(record: unknown): PersistedThreadQuestionn
     key: candidate.key,
     projectId: candidate.projectId,
     requestKey: candidate.requestKey,
-    selectedValues: normalizeStringRecord(candidate.selectedValues),
+    selectedValues: normalizeStringArrayRecord(candidate.selectedValues),
     threadId: candidate.threadId,
     updatedAt: Math.trunc(candidate.updatedAt),
   };
