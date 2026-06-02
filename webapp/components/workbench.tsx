@@ -27,16 +27,29 @@ import {
   createSettingsHref,
   createSettingsRoute,
   createThreadRoute,
+  type WorkbenchSettingsScope,
 } from "../lib/workbench/navigation/workbench-route";
 import { useWorkbenchRoute } from "../lib/workbench/navigation/use-workbench-route";
 import { isWorkbenchOpenableFile } from "../lib/workbench/project/tree-utils";
 import {
   persistHarness,
-  persistWorkbenchTheme,
   readStoredHarness,
-  readStoredWorkbenchTheme,
-  type WorkbenchTheme,
 } from "../lib/workbench/state/browser-state";
+import {
+  createDefaultProjectWorkbenchSettings,
+  MAX_EDITOR_FONT_SIZE,
+  MIN_EDITOR_FONT_SIZE,
+  readGlobalWorkbenchSettings,
+  readProjectWorkbenchSettings,
+  resolveWorkbenchSettings,
+  WORKBENCH_SETTING_DEFINITIONS,
+  writeGlobalWorkbenchSettings,
+  writeProjectWorkbenchSettings,
+  type WorkbenchEditorFontFamily,
+  type WorkbenchGlobalSettings,
+  type WorkbenchProjectSettings,
+  type WorkbenchSettingKey,
+} from "../lib/workbench/state/workbench-settings";
 import {
   getPreferredMobilePane,
   MOBILE_MEDIA_QUERY,
@@ -56,6 +69,8 @@ import {
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
 import ThreadView from "./workbench/thread-view/ThreadView";
 import WorkbenchAmbientCanvas, { type WorkbenchAmbientCanvasVariant } from "./workbench/WorkbenchAmbientCanvas";
+import WorkbenchOptionCards, { WorkbenchOptionCard } from "./workbench/WorkbenchOptionCards";
+import WorkbenchStepSlider from "./workbench/WorkbenchStepSlider";
 import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/WorkbenchTabIcon";
 import {
   workbenchDiffGutterClassName,
@@ -106,23 +121,24 @@ const MOBILE_SHELL_HEADER_SHOW_THRESHOLD_PX = 8;
 const DEFAULT_RELOAD_REQUEST: OrchestratorReloadRequest = {
   scopes: ["orchestrator-logic", "codex-bridge", "next-dev"],
 };
-const WORKBENCH_THEME_OPTIONS: { description: string; label: string; value: WorkbenchTheme }[] = [
-  {
-    description: "Current quiet Workbench colors and fonts.",
-    label: "Default",
-    value: "default",
-  },
-  {
-    description: "Pink sparkles with Sour Gummy and Comic Code Light.",
-    label: "Magical girl mode",
-    value: "magical-girl",
-  },
-  {
-    description: "Snowy day and night colors with the normal Workbench fonts.",
-    label: "Winter",
-    value: "winter",
-  },
+const SETTINGS_ORDER: WorkbenchSettingKey[] = [
+  "theme",
+  "editorFontFamily",
+  "editorSpellCheck",
+  "composerSpellCheck",
+  "editorEnabled",
+  "editorFontSize",
 ];
+
+const EDITOR_FONT_CLASS_NAMES: Record<WorkbenchEditorFontFamily, string> = {
+  mono: "font-mono",
+  sans: "font-sans",
+  serif: "font-serif",
+};
+const EDITOR_FONT_SIZE_OPTIONS = [0.9, 1, 1.08, 1.18, 1.32, 1.48].map((value, index) => ({
+  label: String(index + 1),
+  value,
+}));
 
 function isReloadResponse (value: unknown): value is OrchestratorReloadResponse {
   return !!value
@@ -202,6 +218,14 @@ function filterVisibleTreeNodes (nodes: TreeNode[]): TreeNode[] {
   return visibleNodes;
 }
 
+function clampEditorFontSize(value: number) {
+  return Math.min(MAX_EDITOR_FONT_SIZE, Math.max(MIN_EDITOR_FONT_SIZE, Number(value.toFixed(2))));
+}
+
+function getProjectTabLabel(projectName: string | null | undefined) {
+  return projectName?.trim() || "Project";
+}
+
 export default function Workbench () {
   const { navigateToRoute, route } = useWorkbenchRoute();
   const [explorer, setExplorer] = useState(INITIAL_EXPLORER_SNAPSHOT);
@@ -224,13 +248,14 @@ export default function Workbench () {
   const [showUnopenableFiles, setShowUnopenableFiles] = useState(false);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [sidebarMode, setSidebarMode] = useState<"main" | "projects">("main");
-  const [workbenchTheme, setWorkbenchTheme] = useState<WorkbenchTheme>(() => {
+  const [globalSettings, setGlobalSettings] = useState<WorkbenchGlobalSettings>(() => {
     if (typeof window === "undefined") {
-      return "default";
+      return readGlobalWorkbenchSettings();
     }
 
-    return readStoredWorkbenchTheme();
+    return readGlobalWorkbenchSettings();
   });
+  const [projectSettingsByProjectId, setProjectSettingsByProjectId] = useState<Record<string, WorkbenchProjectSettings>>({});
   const [createDialogParentPath, setCreateDialogParentPath] = useState("");
   const [createEntryName, setCreateEntryName] = useState("");
   const [isCreatingEntry, setIsCreatingEntry] = useState(false);
@@ -274,6 +299,7 @@ export default function Workbench () {
   const mobileShellHeaderDirectionRef = useRef<"up" | "down" | null>(null);
   const mobileShellHeaderDirectionTravelRef = useRef(0);
   const mobileShellHeaderVisibleRef = useRef(true);
+  const pendingEditorFontSizeSyncRef = useRef<number | null>(null);
   const retainedThreadRef = useRef<ThreadPayload | null>(null);
 
   function getWorkbenchDomSurfaces (): WorkbenchDomSurfaces | null {
@@ -527,11 +553,30 @@ export default function Workbench () {
     [explorer.tree, showUnopenableFiles],
   );
   const currentProject = explorer.projects.find((project) => project.id === explorer.currentProjectId) ?? null;
+  const activeProjectId = explorer.currentProjectId || route.projectId;
   const pageTitle = formatWorkbenchPageTitle(currentProject?.name ?? explorer.root ?? explorer.currentProjectId);
+  const projectSettings = explorer.currentProjectId
+    ? projectSettingsByProjectId[explorer.currentProjectId] ?? createDefaultProjectWorkbenchSettings()
+    : createDefaultProjectWorkbenchSettings();
+  const resolvedSettings = resolveWorkbenchSettings(globalSettings, projectSettings);
+  const projectTabLabel = getProjectTabLabel(currentProject?.name ?? explorer.root);
+  const settingsScope = route.view === "settings" ? route.settingsScope : "global";
+  const editorFontClassName = EDITOR_FONT_CLASS_NAMES[resolvedSettings.editorFontFamily];
 
   useEffect(() => {
     document.title = pageTitle;
   }, [pageTitle]);
+
+  useEffect(() => {
+    if (!explorer.currentProjectId || projectSettingsByProjectId[explorer.currentProjectId]) {
+      return;
+    }
+
+    setProjectSettingsByProjectId((current) => ({
+      ...current,
+      [explorer.currentProjectId]: readProjectWorkbenchSettings(explorer.currentProjectId),
+    }));
+  }, [explorer.currentProjectId, projectSettingsByProjectId]);
 
   const closeCreateDialog = () => {
     if (isCreatingEntry) {
@@ -568,10 +613,63 @@ export default function Workbench () {
     closeProjectPicker();
   }, [closeProjectPicker]);
 
-  const selectWorkbenchTheme = useCallback((theme: WorkbenchTheme) => {
-    setWorkbenchTheme(theme);
-    persistWorkbenchTheme(theme);
+  const updateGlobalSetting = useCallback(<K extends WorkbenchSettingKey>(key: K, value: WorkbenchGlobalSettings[K]) => {
+    setGlobalSettings((current) => {
+      const nextSettings = {
+        ...current,
+        [key]: key === "editorFontSize" && typeof value === "number" ? clampEditorFontSize(value) : value,
+      };
+      writeGlobalWorkbenchSettings(nextSettings);
+      return nextSettings;
+    });
   }, []);
+
+  const updateProjectSetting = useCallback(<K extends WorkbenchSettingKey>(key: K, value: WorkbenchGlobalSettings[K]) => {
+    const projectId = explorer.currentProjectId;
+    if (!projectId) {
+      return;
+    }
+
+    setProjectSettingsByProjectId((current) => {
+      const currentSettings = current[projectId] ?? readProjectWorkbenchSettings(projectId);
+      const nextSettings = {
+        ...currentSettings,
+        [key]: {
+          ...currentSettings[key],
+          enabled: true,
+          value: key === "editorFontSize" && typeof value === "number" ? clampEditorFontSize(value) : value,
+        },
+      } satisfies WorkbenchProjectSettings;
+      writeProjectWorkbenchSettings(projectId, nextSettings);
+      return {
+        ...current,
+        [projectId]: nextSettings,
+      };
+    });
+  }, [explorer.currentProjectId]);
+
+  const resetProjectSettingOverride = useCallback((key: WorkbenchSettingKey) => {
+    const projectId = explorer.currentProjectId;
+    if (!projectId) {
+      return;
+    }
+
+    setProjectSettingsByProjectId((current) => {
+      const currentSettings = current[projectId] ?? readProjectWorkbenchSettings(projectId);
+      const nextSettings = {
+        ...currentSettings,
+        [key]: {
+          ...currentSettings[key],
+          enabled: false,
+        },
+      } satisfies WorkbenchProjectSettings;
+      writeProjectWorkbenchSettings(projectId, nextSettings);
+      return {
+        ...current,
+        [projectId]: nextSettings,
+      };
+    });
+  }, [explorer.currentProjectId]);
 
   useEffect(() => {
     if (sidebarMode !== "projects") {
@@ -582,10 +680,42 @@ export default function Workbench () {
   }, [sidebarMode]);
 
   useEffect(() => {
-    document.documentElement.dataset.workbenchTheme = workbenchTheme;
-  }, [workbenchTheme]);
+    document.documentElement.dataset.workbenchTheme = resolvedSettings.theme;
+  }, [resolvedSettings.theme]);
 
-  const openSettingsFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>) => {
+  useEffect(() => {
+    pendingEditorFontSizeSyncRef.current = resolvedSettings.editorFontSize;
+    controls?.setEditorFontSize(resolvedSettings.editorFontSize);
+  }, [controls, resolvedSettings.editorFontSize]);
+
+  useEffect(() => {
+    if (pendingEditorFontSizeSyncRef.current !== null) {
+      if (explorer.fontSize === pendingEditorFontSizeSyncRef.current) {
+        pendingEditorFontSizeSyncRef.current = null;
+      }
+      return;
+    }
+
+    if (!controls || explorer.fontSize === resolvedSettings.editorFontSize) {
+      return;
+    }
+
+    if (projectSettings.editorFontSize.enabled) {
+      updateProjectSetting("editorFontSize", explorer.fontSize);
+      return;
+    }
+
+    updateGlobalSetting("editorFontSize", explorer.fontSize);
+  }, [
+    controls,
+    explorer.fontSize,
+    projectSettings.editorFontSize.enabled,
+    resolvedSettings.editorFontSize,
+    updateGlobalSetting,
+    updateProjectSetting,
+  ]);
+
+  const openSettingsScopeFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, scope: WorkbenchSettingsScope) => {
     if (
       event.button !== 0
       || event.metaKey
@@ -597,9 +727,13 @@ export default function Workbench () {
     }
 
     event.preventDefault();
-    navigateToRoute(createSettingsRoute(explorer.currentProjectId || route.projectId));
+    navigateToRoute(createSettingsRoute(activeProjectId, scope));
     setSidebarMode("main");
-  }, [explorer.currentProjectId, navigateToRoute, route.projectId]);
+  }, [activeProjectId, navigateToRoute]);
+
+  const openSettingsFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>) => {
+    openSettingsScopeFromLink(event, "global");
+  }, [openSettingsScopeFromLink]);
 
   const selectProjectFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, projectId: string) => {
     if (
@@ -960,8 +1094,8 @@ export default function Workbench () {
     : hasActiveThread
       ? "active"
       : "default";
-  const ambientCanvasVariant: WorkbenchAmbientCanvasVariant | null = workbenchTheme === "magical-girl" || workbenchTheme === "winter"
-    ? workbenchTheme
+  const ambientCanvasVariant: WorkbenchAmbientCanvasVariant | null = resolvedSettings.theme === "magical-girl" || resolvedSettings.theme === "winter"
+    ? resolvedSettings.theme
     : null;
   const shouldShowShellHeader = !showEmptyState && (!isMobile || mobilePane === "editor");
   const mainPaneScrollKey = showThreadView
@@ -1157,6 +1291,155 @@ export default function Workbench () {
     };
   }, [explorer.currentProjectId, quickOpenPaths, route.projectId, showEmptyState]);
 
+  const renderSettingControl = (
+    key: WorkbenchSettingKey,
+    value: WorkbenchGlobalSettings[WorkbenchSettingKey],
+    disabled: boolean,
+    onChange: (nextValue: WorkbenchGlobalSettings[WorkbenchSettingKey]) => void,
+  ) => {
+    const definition = WORKBENCH_SETTING_DEFINITIONS[key];
+    if (key === "editorFontSize") {
+      return (
+        <WorkbenchStepSlider
+          ariaLabel={definition.label}
+          disabled={disabled}
+          steps={EDITOR_FONT_SIZE_OPTIONS}
+          value={typeof value === "number" ? value : 1.08}
+          onChange={(nextValue) => {
+            onChange(nextValue);
+          }}
+        />
+      );
+    }
+
+    if (definition.type === "boolean" && typeof value === "boolean") {
+      return (
+        <WorkbenchOptionCard
+          description={definition.description}
+          isChecked={value}
+          isSingleChoice={false}
+          label={definition.label}
+          onClick={() => {
+            onChange(!value);
+          }}
+        />
+      );
+    }
+
+    if (definition.options) {
+      return (
+        <WorkbenchOptionCards
+          ariaLabel={definition.label}
+          columns={key === "theme" ? "two" : "one"}
+          disabled={disabled}
+          mode="radio"
+          options={definition.options}
+          value={value as string}
+          onChange={(nextValue) => {
+            if (!disabled) {
+              onChange(nextValue);
+            }
+          }}
+        />
+      );
+    }
+
+    return null;
+  };
+
+  const renderGlobalSettingRow = (key: WorkbenchSettingKey) => {
+    const definition = WORKBENCH_SETTING_DEFINITIONS[key];
+    if (definition.type === "boolean") {
+      return (
+        <section key={key} className="rounded-[0.85rem] py-1">
+          {renderSettingControl(key, globalSettings[key], false, (nextValue) => {
+            updateGlobalSetting(key, nextValue as never);
+          })}
+        </section>
+      );
+    }
+
+    return (
+      <section key={key} className="space-y-3 rounded-[0.85rem] py-1">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="m-0 text-[0.98rem] font-semibold leading-tight text-text">{definition.label}</h3>
+            <p className="mt-1 mb-0 text-[0.82rem] leading-6 text-muted">{definition.description}</p>
+          </div>
+        </div>
+        {renderSettingControl(key, globalSettings[key], false, (nextValue) => {
+          updateGlobalSetting(key, nextValue as never);
+        })}
+      </section>
+    );
+  };
+
+  const renderProjectSettingRow = (key: WorkbenchSettingKey) => {
+    const definition = WORKBENCH_SETTING_DEFINITIONS[key];
+    const override = projectSettings[key];
+    const inheritedValue = globalSettings[key];
+    const displayedValue = override.enabled ? override.value : inheritedValue;
+    if (definition.type === "boolean" && typeof displayedValue === "boolean") {
+      return (
+        <section key={key} className="relative rounded-[0.85rem] py-1">
+          <WorkbenchOptionCard
+            className={override.enabled ? "pr-12" : undefined}
+            description={definition.description}
+            isChecked={displayedValue}
+            isSingleChoice={false}
+            label={definition.label}
+            onClick={() => {
+              updateProjectSetting(key, !displayedValue as never);
+            }}
+          />
+          {override.enabled ? (
+            <button
+              type="button"
+              aria-label={`Reset ${definition.label} to global`}
+              title={`Reset ${definition.label} to global`}
+              className={`${workbenchIconButtonClassName} absolute top-1/2 right-3 -translate-y-1/2`}
+              onClick={() => {
+                resetProjectSettingOverride(key);
+              }}
+            >
+              <ReloadIcon />
+            </button>
+          ) : null}
+        </section>
+      );
+    }
+
+    return (
+      <section
+        key={key}
+        className="space-y-3 rounded-[0.85rem] py-1"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="m-0 text-[0.98rem] font-semibold leading-tight text-text">{definition.label}</h3>
+            <p className="mt-1 mb-0 text-[0.82rem] leading-6 text-muted">{definition.description}</p>
+          </div>
+          {override.enabled ? (
+            <button
+              type="button"
+              aria-label={`Reset ${definition.label} to global`}
+              title={`Reset ${definition.label} to global`}
+              className={`${workbenchIconButtonClassName} shrink-0`}
+              onClick={() => {
+                resetProjectSettingOverride(key);
+              }}
+            >
+              <ReloadIcon />
+            </button>
+          ) : null}
+        </div>
+        {renderSettingControl(key, displayedValue, false, (nextValue) => {
+          updateProjectSetting(key, nextValue as never);
+        })}
+      </section>
+    );
+  };
+
   const handleHarnessChange = (nextHarness: WorkbenchHarness) => {
     if (nextHarness === harness && currentThread?.harness === nextHarness) {
       return;
@@ -1328,7 +1611,7 @@ export default function Workbench () {
                     <div className="flex items-center gap-1">
                       <a
                         aria-label="Open settings"
-                        href={createSettingsHref(explorer.currentProjectId || route.projectId)}
+                        href={createSettingsHref(activeProjectId, "global")}
                         title="Open settings"
                         className={`${workbenchIconButtonClassName} text-muted`}
                         onClick={openSettingsFromLink}
@@ -1499,7 +1782,8 @@ export default function Workbench () {
               isThreadViewReady && threadForThreadView ? (
                 <ThreadView
                   thread={threadForThreadView}
-                  fontSizeRem={explorer.fontSize}
+                  composerSpellCheck={resolvedSettings.composerSpellCheck}
+                  fontSizeRem={resolvedSettings.editorFontSize}
                   livePendingUserInputRequestsByThreadId={harnessUserInputRequestsByThreadId}
                   onDraftHarnessChange={handleHarnessChange}
                   onListModels={listThreadModels}
@@ -1548,32 +1832,47 @@ export default function Workbench () {
             ) : null}
             {showSettingsView ? (
               <div className="mx-auto flex w-full max-w-[56rem] flex-col gap-8 py-8">
-                <section className="space-y-4">
-                  <div className="space-y-2">
-                    <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">Appearance</p>
-                    <h1 className="m-0 text-[1.65rem] font-semibold leading-tight text-text">Settings</h1>
+                <section className="space-y-6">
+                  <div className="flex flex-wrap items-end justify-between gap-4">
+                    <div className="space-y-2">
+                      <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">Preferences</p>
+                      <h1 className="m-0 text-[1.65rem] font-semibold leading-tight text-text">Settings</h1>
+                    </div>
+                    <div className="flex min-w-0 items-end gap-4" role="tablist" aria-label="Settings scope">
+                      <a
+                        href={createSettingsHref(activeProjectId, "global")}
+                        role="tab"
+                        aria-selected={settingsScope === "global"}
+                        className={`border-b-2 px-0 pb-1 text-[0.9rem] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${settingsScope === "global"
+                          ? " border-text text-text"
+                          : " border-transparent text-muted hover:text-text"}`}
+                        onClick={(event) => {
+                          openSettingsScopeFromLink(event, "global");
+                        }}
+                      >
+                        Global
+                      </a>
+                      <a
+                        href={createSettingsHref(activeProjectId, "project")}
+                        role="tab"
+                        aria-selected={settingsScope === "project"}
+                        className={`min-w-0 border-b-2 px-0 pb-1 text-[0.9rem] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${settingsScope === "project"
+                          ? " border-text text-text"
+                          : " border-transparent text-muted hover:text-text"}`}
+                        onClick={(event) => {
+                          openSettingsScopeFromLink(event, "project");
+                        }}
+                      >
+                        <span className="block max-w-[12rem] truncate">{projectTabLabel}</span>
+                      </a>
+                    </div>
                   </div>
 
-                  <fieldset className="m-0 grid gap-2 border-0 p-0 md:grid-cols-2">
-                    <legend className="sr-only">Theme</legend>
-                    {WORKBENCH_THEME_OPTIONS.map((option) => {
-                      const isSelected = workbenchTheme === option.value;
-                      return (
-                        <button
-                          key={option.value}
-                          type="button"
-                          aria-pressed={isSelected}
-                          className={`min-h-[6.5rem] rounded-[0.85rem] px-4 py-3 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none${isSelected ? " bg-accent-soft text-accent" : " text-muted"}`}
-                          onClick={() => {
-                            selectWorkbenchTheme(option.value);
-                          }}
-                        >
-                          <span className={`block text-[1rem] leading-tight${isSelected ? " font-semibold" : " font-medium text-text"}`}>{option.label}</span>
-                          <span className="mt-2 block text-[0.84rem] leading-6 text-muted">{option.description}</span>
-                        </button>
-                      );
-                    })}
-                  </fieldset>
+                  <div className="space-y-7" role="tabpanel">
+                    {settingsScope === "global"
+                      ? SETTINGS_ORDER.map((key) => renderGlobalSettingRow(key))
+                      : SETTINGS_ORDER.map((key) => renderProjectSettingRow(key))}
+                  </div>
                 </section>
               </div>
             ) : null}
@@ -1654,10 +1953,10 @@ export default function Workbench () {
               <div
                 id="editor"
                 ref={editorRef}
-                className="editor-content min-h-[calc(100vh-6rem)] pb-16 font-serif text-[1.08rem] leading-[1.72] whitespace-normal outline-none"
+                className={`editor-content min-h-[calc(100vh-6rem)] pb-16 ${editorFontClassName} text-[1.08rem] leading-[1.72] whitespace-normal outline-none`}
                 contentEditable
                 suppressContentEditableWarning
-                spellCheck
+                spellCheck={resolvedSettings.editorSpellCheck}
                 data-placeholder="Select a markdown file to start editing."
               />
               <div

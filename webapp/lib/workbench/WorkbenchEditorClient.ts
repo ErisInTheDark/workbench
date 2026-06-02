@@ -218,6 +218,7 @@ interface WorkbenchEditorClient {
   scheduleEditorChromeRefresh: () => void;
   scheduleDiffGutterRefresh: () => void;
   setHoveredRevisionNode: (node: HTMLElement | null) => void;
+  setFontSize: (fontSize: number, options?: { persist?: boolean }) => void;
   setSaveButtonState: () => void;
   setStatusMessage: (message: string) => void;
   showResetDraftDialog: () => void;
@@ -1435,12 +1436,22 @@ function WorkbenchEditorClient(
       MAX_EDITOR_FONT_SIZE,
       Math.max(MIN_EDITOR_FONT_SIZE, Number((state.fontSize + delta).toFixed(2))),
     );
+    setFontSize(nextFontSize);
+  }
+
+  function setFontSize(fontSize: number, setOptions: { persist?: boolean } = {}) {
+    const nextFontSize = Math.min(
+      MAX_EDITOR_FONT_SIZE,
+      Math.max(MIN_EDITOR_FONT_SIZE, Number(fontSize.toFixed(2))),
+    );
     if (nextFontSize === state.fontSize) {
       return;
     }
 
     state.fontSize = nextFontSize;
-    persistFontSize(state.fontSize);
+    if (setOptions.persist !== false) {
+      persistFontSize(state.fontSize);
+    }
     applyEditorFontSize();
     emit();
   }
@@ -1760,6 +1771,7 @@ function WorkbenchEditorClient(
     scheduleEditorChromeRefresh,
     scheduleDiffGutterRefresh,
     setHoveredRevisionNode,
+    setFontSize,
     setSaveButtonState,
     setStatusMessage,
     showResetDraftDialog,

@@ -19,6 +19,7 @@ import {
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
 import { getThreadCommandDisplay } from "../../../lib/workbench/thread/thread-command-matchers";
+import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
 import PlaintextEditable, { isMobileTextInputEnvironment } from "./PlaintextEditable";
 import { ThreadCommandSummary } from "./thread-view-primitives";
 
@@ -126,6 +127,7 @@ type InteractiveThreadUserInputRequestProps = {
   onSubmit: (response: WorkbenchUserInputResponse) => Promise<void>;
   projectRootPath?: string;
   request: WorkbenchUserInputRequest;
+  spellCheck: boolean;
 };
 
 type HistoryThreadUserInputRequestProps = {
@@ -377,63 +379,29 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                 {question.options.map((option, index) => {
                   const optionId = `${request.id}:${question.id}:option:${index}`;
                   const isChecked = selectedQuestionValues.includes(option.label);
-                  const optionDescription = option.description.trim();
-
-                  const optionCardClassName = joinClasses(
-                    "flex w-full items-start gap-3 rounded-[0.95rem] border px-3 py-2.5 text-left transition",
-                    isChecked
-                      ? "border-[color-mix(in_srgb,var(--text)_22%,transparent)] bg-[color-mix(in_srgb,var(--text)_5%,transparent)]"
-                      : isHistoryMode
-                        ? "border-[color-mix(in_srgb,var(--text)_10%,transparent)]"
-                        : "border-[color-mix(in_srgb,var(--text)_10%,transparent)] hover:bg-[color-mix(in_srgb,var(--text)_3%,transparent)]",
-                  );
-                  const optionMarker = (
-                    <span
-                      id={optionId}
-                      aria-hidden="true"
-                      className={joinClasses(
-                        "mt-1 inline-flex h-4 w-4 shrink-0 border transition",
-                        isSingleChoice ? "rounded-full" : "rounded-[0.28rem]",
-                        isChecked
-                          ? "border-[color-mix(in_srgb,var(--text)_40%,transparent)] bg-[color-mix(in_srgb,var(--text)_86%,var(--bg)_14%)]"
-                          : "border-[color-mix(in_srgb,var(--text)_22%,transparent)] bg-transparent",
-                      )}
-                    />
-                  );
-                  const optionBody = (
-                    <>
-                      {optionMarker}
-                      <span className="min-w-0">
-                        <span className="block text-[0.86em] font-medium leading-[1.5] text-text">
-                          {option.label}
-                        </span>
-                        {optionDescription ? (
-                          <span className="mt-0.5 block text-[0.78em] leading-[1.55] text-muted">
-                            {optionDescription}
-                          </span>
-                        ) : null}
-                      </span>
-                    </>
-                  );
 
                   if (isHistoryMode) {
                     return (
-                      <div
+                      <WorkbenchOptionCard
                         key={optionId}
-                        aria-pressed={isChecked}
-                        className={optionCardClassName}
-                      >
-                        {optionBody}
-                      </div>
+                        description={option.description}
+                        isChecked={isChecked}
+                        isHistoryMode
+                        isSingleChoice={isSingleChoice}
+                        label={option.label}
+                        markerId={optionId}
+                      />
                     );
                   }
 
                   return (
-                    <button
-                      type="button"
+                    <WorkbenchOptionCard
                       key={optionId}
-                      aria-pressed={isChecked}
-                      className={optionCardClassName}
+                      description={option.description}
+                      isChecked={isChecked}
+                      isSingleChoice={isSingleChoice}
+                      label={option.label}
+                      markerId={optionId}
                       onClick={() => {
                         setSelectedValues((current) => {
                           const next = { ...current };
@@ -466,9 +434,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                           setError("");
                         }
                       }}
-                    >
-                      {optionBody}
-                    </button>
+                    />
                   );
                 })}
                 {isHistoryMode ? (
@@ -503,7 +469,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                           focus-visible:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:py-3 focus-visible:mt-1 focus-visible:mb-3
                         `,
                     )}
-                    spellCheck={!question.isSecret}
+                    spellCheck={!question.isSecret && (interactiveProps?.spellCheck ?? false)}
                     highlights={customValueHighlights}
                     mentionSources={highlightSources}
                     mentionSuggestionsPlacement="below"

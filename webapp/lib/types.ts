@@ -282,6 +282,7 @@ export interface WorkbenchControls {
     response: WorkbenchUserInputResponse,
     options?: WorkbenchSubmitUserInputRequestOptions,
   ) => Promise<void>;
+  setEditorFontSize: (fontSize: number) => void;
   setCurrentThreadModel: (threadId: string, model: string) => void;
   setCurrentThreadAgent: (threadId: string, agentPath: string | null) => void;
   setCurrentThreadReasoningEffort: (threadId: string, effort: string | null) => void;

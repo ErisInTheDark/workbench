@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WORKBENCH_ROUTE_MARKER: route marker for canonical workbench URLs. Keywords: URL, route, navigation.
- * - WorkbenchRouteView, WorkbenchRoute, WorkbenchRouteParseResult: normalized route contracts. Keywords: URL source of truth, project, file, thread, settings.
+ * - WorkbenchRouteView, WorkbenchSettingsScope, WorkbenchRoute, WorkbenchRouteParseResult: normalized route contracts. Keywords: URL source of truth, project, file, thread, settings.
  * - createProjectRoute/createFileRoute/createThreadRoute/createSettingsRoute/createInvalidWorkbenchRoute: construct route objects. Keywords: navigation, route builder.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse browser URL state without mutating history. Keywords: route parser, legacy query, malformed URL.
  * - createWorkbenchHref/createProjectHref/createFileHref/createThreadHref/createSettingsHref: build canonical hrefs. Keywords: links, URL, encode.
@@ -12,13 +12,16 @@ export const WORKBENCH_ROUTE_MARKER = "@";
 
 const LEGACY_FILE_SEARCH_PARAM = "file";
 const LEGACY_THREAD_SEARCH_PARAM = "thread";
+const DEFAULT_SETTINGS_SCOPE: WorkbenchSettingsScope = "global";
 
 export type WorkbenchRouteView = "project" | "file" | "thread" | "settings" | "invalid";
+export type WorkbenchSettingsScope = "global" | "project";
 
 export interface WorkbenchRoute {
   error: string;
   filePath: string;
   projectId: string;
+  settingsScope: WorkbenchSettingsScope;
   threadId: string;
   view: WorkbenchRouteView;
 }
@@ -40,6 +43,7 @@ export function createProjectRoute(projectId: string): WorkbenchRoute {
     error: "",
     filePath: "",
     projectId,
+    settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId: "",
     view: "project",
   };
@@ -50,6 +54,7 @@ export function createFileRoute(projectId: string, filePath: string): WorkbenchR
     error: "",
     filePath,
     projectId,
+    settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId: "",
     view: "file",
   };
@@ -60,16 +65,18 @@ export function createThreadRoute(projectId: string, threadId: string): Workbenc
     error: "",
     filePath: "",
     projectId,
+    settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId,
     view: "thread",
   };
 }
 
-export function createSettingsRoute(projectId: string): WorkbenchRoute {
+export function createSettingsRoute(projectId: string, settingsScope: WorkbenchSettingsScope = DEFAULT_SETTINGS_SCOPE): WorkbenchRoute {
   return {
     error: "",
     filePath: "",
     projectId,
+    settingsScope,
     threadId: "",
     view: "settings",
   };
@@ -80,6 +87,7 @@ export function createInvalidWorkbenchRoute(error: string, projectId = ""): Work
     error,
     filePath: "",
     projectId,
+    settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId: "",
     view: "invalid",
   };
@@ -163,7 +171,19 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
       return createThreadRoute(projectId, value);
     }
     if (mode === "settings") {
-      return createSettingsRoute(projectId);
+      if (!valueSegments.value.length) {
+        return createSettingsRoute(projectId);
+      }
+
+      const settingsScope = valueSegments.value[0];
+      if (settingsScope !== "global" && settingsScope !== "project") {
+        return createInvalidWorkbenchRoute(`Unknown settings scope: ${settingsScope}`, projectId);
+      }
+      if (valueSegments.value.length > 1) {
+        return createInvalidWorkbenchRoute(`Unexpected settings route value: ${value}`, projectId);
+      }
+
+      return createSettingsRoute(projectId, settingsScope);
     }
     return createInvalidWorkbenchRoute(`Unknown workbench route mode: ${mode}`, projectId);
   }
@@ -227,7 +247,7 @@ export function createWorkbenchHref(route: WorkbenchRoute) {
     return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/${encodeRoutePath(route.threadId)}`;
   }
   if (route.view === "settings") {
-    return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/settings`;
+    return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/settings/${route.settingsScope}`;
   }
 
   return projectPath ? `/${projectPath}` : "/";
@@ -245,14 +265,15 @@ export function createThreadHref(projectId: string, threadId: string) {
   return createWorkbenchHref(createThreadRoute(projectId, threadId));
 }
 
-export function createSettingsHref(projectId: string) {
-  return createWorkbenchHref(createSettingsRoute(projectId));
+export function createSettingsHref(projectId: string, settingsScope: WorkbenchSettingsScope = DEFAULT_SETTINGS_SCOPE) {
+  return createWorkbenchHref(createSettingsRoute(projectId, settingsScope));
 }
 
 export function isSameWorkbenchRoute(left: WorkbenchRoute, right: WorkbenchRoute) {
   return left.view === right.view
     && left.projectId === right.projectId
     && left.filePath === right.filePath
+    && left.settingsScope === right.settingsScope
     && left.threadId === right.threadId
     && left.error === right.error;
 }

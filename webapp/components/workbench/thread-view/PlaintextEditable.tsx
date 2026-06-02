@@ -207,7 +207,7 @@ export default function PlaintextEditable ({
   mentionSources = null,
   mentionSuggestionsPlacement = "above",
   readOnly = false,
-  spellCheck = true,
+  spellCheck = false,
   value,
 }: {
   ariaLabel?: string;

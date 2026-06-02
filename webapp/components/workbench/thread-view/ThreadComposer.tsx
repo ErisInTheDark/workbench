@@ -278,6 +278,7 @@ function ThreadSavedDraftShelf ({
 
 export default function ThreadComposer ({
   children,
+  composerSpellCheck,
   onListModels,
   onSendMessage,
   onStopThread,
@@ -307,6 +308,7 @@ export default function ThreadComposer ({
   thread,
 }: {
   children?: ReactNode;
+  composerSpellCheck: boolean;
   onListModels: (harness: ThreadPayload["harness"]) => Promise<WorkbenchModelOption[]>;
   onSendMessage: (threadId: string, input: UserInput[]) => Promise<void>;
   onStopThread: (threadId: string) => Promise<void> | void;
@@ -811,6 +813,7 @@ export default function ThreadComposer ({
               highlightSources={highlightSources}
               knownSkills={knownSkills}
               leadingActions={questionnaireToggleButton}
+              spellCheck={composerSpellCheck}
               onDraftChange={handleQuestionnaireDraftChange}
               onDraftClear={handleQuestionnaireDraftClear}
               projectRootPath={projectRootPath}
@@ -878,6 +881,7 @@ export default function ThreadComposer ({
                 highlights={composerHighlights}
                 mentionSources={highlightSources}
                 mentionSuggestionsPlacement="above"
+                spellCheck={composerSpellCheck}
                 value={value}
                 onChange={(nextValue) => {
                   setValue(nextValue);

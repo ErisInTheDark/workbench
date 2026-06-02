@@ -871,6 +871,7 @@ export async function WorkbenchClient(
       && activeRoute.view === route.view
       && activeRoute.projectId === route.projectId
       && activeRoute.filePath === route.filePath
+      && activeRoute.settingsScope === route.settingsScope
       && activeRoute.threadId === route.threadId;
   }
 
@@ -1066,6 +1067,9 @@ export async function WorkbenchClient(
     compactThread,
     stopThread,
     submitPendingUserInputRequest: threadClient.submitPendingUserInputRequest,
+    setEditorFontSize: (fontSize) => {
+      editorClient.setFontSize(fontSize, { persist: false });
+    },
     setCurrentThreadModel: (threadId, model) => {
       threadClient.setCurrentThreadModel(threadId, model);
     },

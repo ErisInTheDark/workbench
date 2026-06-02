@@ -21,10 +21,18 @@
 import type { ThreadTokenUsage } from "../../codex/generated/app-server/v2/ThreadTokenUsage";
 import type { TokenUsageBreakdown } from "../../codex/generated/app-server/v2/TokenUsageBreakdown";
 import type { WorkbenchHarness, WorkbenchStoredThreadUnreadState } from "../../types";
+import {
+  DEFAULT_EDITOR_FONT_SIZE,
+  MAX_EDITOR_FONT_SIZE,
+  MIN_EDITOR_FONT_SIZE,
+  readStoredEditorFontSize,
+  readStoredTheme,
+  writeStoredEditorFontSize,
+  writeStoredTheme,
+  type WorkbenchTheme,
+} from "./workbench-settings";
 
-export const DEFAULT_EDITOR_FONT_SIZE = 1.08;
-export const MIN_EDITOR_FONT_SIZE = 0.84;
-export const MAX_EDITOR_FONT_SIZE = 1.72;
+export { DEFAULT_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, type WorkbenchTheme };
 export const EXPANDED_DIRECTORIES_STORAGE_KEY = "workbench:expanded-directories";
 export const FONT_SIZE_STORAGE_KEY = "workbench:font-size";
 export const HARNESS_STORAGE_KEY = "workbench:harness";
@@ -36,8 +44,6 @@ export const THREAD_TOKEN_USAGE_STORAGE_KEY = "workbench:thread-token-usage";
 export const THREAD_UNREAD_STATE_STORAGE_KEY = "workbench:thread-unread-state";
 export const THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY = "workbench:thread-live-activity-open";
 export const WORKBENCH_THEME_STORAGE_KEY = "workbench:theme";
-
-export type WorkbenchTheme = "default" | "magical-girl" | "winter";
 
 function normalizeStoredThreadUnreadState(value: unknown): WorkbenchStoredThreadUnreadState | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -150,29 +156,11 @@ export function persistExpandedDirectories(expandedDirectories: Iterable<string>
 }
 
 export function readStoredFontSize() {
-  try {
-    const rawValue = window.localStorage.getItem(FONT_SIZE_STORAGE_KEY);
-    if (!rawValue) {
-      return DEFAULT_EDITOR_FONT_SIZE;
-    }
-
-    const numericValue = Number.parseFloat(rawValue);
-    if (Number.isNaN(numericValue)) {
-      return DEFAULT_EDITOR_FONT_SIZE;
-    }
-
-    return Math.min(MAX_EDITOR_FONT_SIZE, Math.max(MIN_EDITOR_FONT_SIZE, numericValue));
-  } catch {
-    return DEFAULT_EDITOR_FONT_SIZE;
-  }
+  return readStoredEditorFontSize();
 }
 
 export function persistFontSize(fontSize: number) {
-  try {
-    window.localStorage.setItem(FONT_SIZE_STORAGE_KEY, String(fontSize));
-  } catch {
-    // Ignore storage failures and keep the in-memory zoom state working.
-  }
+  writeStoredEditorFontSize(fontSize);
 }
 
 export function readStoredHarness(): WorkbenchHarness {
@@ -441,20 +429,11 @@ export function persistThreadLiveActivityOpen(isOpen: boolean) {
 }
 
 export function readStoredWorkbenchTheme(): WorkbenchTheme {
-  try {
-    const storedTheme = window.localStorage.getItem(WORKBENCH_THEME_STORAGE_KEY);
-    return storedTheme === "magical-girl" || storedTheme === "winter" ? storedTheme : "default";
-  } catch {
-    return "default";
-  }
+  return readStoredTheme();
 }
 
 export function persistWorkbenchTheme(theme: WorkbenchTheme) {
-  try {
-    window.localStorage.setItem(WORKBENCH_THEME_STORAGE_KEY, theme);
-  } catch {
-    // Ignore storage failures and keep the in-memory settings view working.
-  }
+  writeStoredTheme(theme);
 }
 
 export function readLocalWorkbenchOrigin() {

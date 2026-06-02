@@ -319,6 +319,7 @@ function getLiveThreadActivity ({
 }
 
 export default memo(function ThreadView ({
+  composerSpellCheck,
   fontSizeRem,
   livePendingUserInputRequestsByThreadId,
   onDraftHarnessChange,
@@ -349,6 +350,7 @@ export default memo(function ThreadView ({
   threadSavedComposerDrafts,
   thread,
 }: {
+  composerSpellCheck: boolean;
   fontSizeRem: number;
   livePendingUserInputRequestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>;
   onDraftHarnessChange: (harness: WorkbenchHarness) => void;
@@ -789,6 +791,7 @@ export default memo(function ThreadView ({
   const composer = activeThread ? (
     <ThreadComposer
       key={activeThread.id}
+      composerSpellCheck={composerSpellCheck}
       onListModels={onListModels}
       highlightSources={inlineMentionSources}
       onSendMessage={handleSendMessage}
