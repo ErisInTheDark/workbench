@@ -12,7 +12,7 @@ import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/Thre
 import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import { getCurrentTurn } from "../../../lib/codex/thread-state";
-import type { ThreadPayload, WorkbenchSkillSummary } from "../../../lib/types";
+import type { ThreadPayload, WorkbenchFileOpenTarget, WorkbenchSkillSummary } from "../../../lib/types";
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
 import {
   getPrimaryCollabAgentThreadId,
@@ -279,7 +279,7 @@ function ThreadUserInputLine ({
 }: {
   inlineMentionSources?: InlineMentionHighlightSources | null;
   input: UserInput;
-  onOpenFile?: (path: string) => Promise<void>;
+  onOpenFile?: (target: WorkbenchFileOpenTarget) => Promise<void>;
   projectRootPath?: string;
 }) {
   switch (input.type) {
@@ -357,7 +357,7 @@ function ThreadUserMessageItem ({
 }: {
   inlineMentionSources?: InlineMentionHighlightSources | null;
   item: Extract<ThreadItem, { type: "userMessage" }>;
-  onOpenFile?: (path: string) => Promise<void>;
+  onOpenFile?: (target: WorkbenchFileOpenTarget) => Promise<void>;
   projectRootPath?: string;
   showStartedAt: boolean;
   startedAt: number | null;
@@ -396,7 +396,7 @@ function ThreadAgentMessageItem ({
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isFinal: boolean;
   item: Extract<ThreadItem, { type: "agentMessage" }>;
-  onOpenFile?: (path: string) => Promise<void>;
+  onOpenFile?: (target: WorkbenchFileOpenTarget) => Promise<void>;
   projectRootPath?: string;
 }) {
   return (
@@ -437,7 +437,7 @@ function ThreadAgentBubble ({
   inlineMentionSources?: InlineMentionHighlightSources | null;
   label: ReactNode;
   markdown: string;
-  onOpenFile?: (path: string) => Promise<void>;
+  onOpenFile?: (target: WorkbenchFileOpenTarget) => Promise<void>;
   projectRootPath?: string;
 }) {
   return (
@@ -483,7 +483,7 @@ function ThreadCurrentSubagentItemPreview ({
 }: {
   inlineMentionSources?: InlineMentionHighlightSources | null;
   knownSkills?: WorkbenchSkillSummary[];
-  onOpenFile?: (path: string) => Promise<void>;
+  onOpenFile?: (target: WorkbenchFileOpenTarget) => Promise<void>;
   projectRootPath?: string;
   relatedThreadsById: RelatedThreadsById;
   thread: ThreadPayload | undefined;
@@ -539,7 +539,7 @@ function ThreadCollabAgentToolCallItem ({
   isMostRecent: boolean;
   item: CollabAgentToolCallItem;
   knownSkills?: WorkbenchSkillSummary[];
-  onOpenFile?: (path: string) => Promise<void>;
+  onOpenFile?: (target: WorkbenchFileOpenTarget) => Promise<void>;
   projectRootPath?: string;
   relatedThreadsById: RelatedThreadsById;
 }) {
@@ -672,7 +672,7 @@ function ThreadReasoningSequence ({
   block: Extract<ThreadRenderableBlock, { kind: "reasoningSequence" }>;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecent: boolean;
-  onOpenFile?: (path: string) => Promise<void>;
+  onOpenFile?: (target: WorkbenchFileOpenTarget) => Promise<void>;
   projectRootPath?: string;
 }) {
   const visibleItems = block.items.filter(hasReasoningSteps);
@@ -898,7 +898,7 @@ function ThreadRenderableBlockView ({
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecentBlock: boolean;
   knownSkills?: WorkbenchSkillSummary[];
-  onOpenFile?: (path: string) => Promise<void>;
+  onOpenFile?: (target: WorkbenchFileOpenTarget) => Promise<void>;
   primaryUserBlock: ThreadRenderableBlock | null;
   projectRootPath?: string;
   relatedThreadsById: RelatedThreadsById;
@@ -995,7 +995,7 @@ function ThreadTurnDetailsComponent ({
   hiddenWebSearchItemIds?: readonly string[];
   inlineMentionSources?: InlineMentionHighlightSources | null;
   knownSkills?: WorkbenchSkillSummary[];
-  onOpenFile?: (path: string) => Promise<void>;
+  onOpenFile?: (target: WorkbenchFileOpenTarget) => Promise<void>;
   projectRootPath?: string;
   relatedThreadsById?: RelatedThreadsById;
   turn: Turn;
@@ -1119,7 +1119,7 @@ export function ThreadThreadContent ({
   hiddenWebSearchItemIds?: readonly string[];
   inlineMentionSources?: InlineMentionHighlightSources | null;
   knownSkills?: WorkbenchSkillSummary[];
-  onOpenFile?: (path: string) => Promise<void>;
+  onOpenFile?: (target: WorkbenchFileOpenTarget) => Promise<void>;
   projectRootPath?: string;
   relatedThreadsById?: RelatedThreadsById;
   thread: ThreadPayload | null | undefined;

@@ -13,6 +13,7 @@ import type {
   ThreadPayload,
   ThreadUnreadBadge,
   TreeNode,
+  WorkbenchFileOpenTarget,
   WorkbenchHarness,
   WorkbenchModelOption,
   WorkbenchPendingUserInputRequest,
@@ -355,7 +356,7 @@ export default memo(function ThreadView ({
   livePendingUserInputRequestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>;
   onDraftHarnessChange: (harness: WorkbenchHarness) => void;
   onListModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
-  onOpenFile: (path: string) => Promise<void>;
+  onOpenFile: (target: WorkbenchFileOpenTarget) => Promise<void>;
   onReadThread: (threadId: string, harness?: WorkbenchHarness) => Promise<ThreadPayload | null>;
   onThreadSeen: (thread: ThreadPayload) => void;
   onCompactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;

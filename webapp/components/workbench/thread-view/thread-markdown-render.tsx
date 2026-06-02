@@ -131,6 +131,8 @@ function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string):
           <a
             className={className}
             data-project-file-path="true"
+            data-project-file-column-number={node.columnNumber ?? undefined}
+            data-project-file-line-number={node.lineNumber ?? undefined}
             data-project-file-relative-path={node.relativePath}
             href={node.href}
             key={key}

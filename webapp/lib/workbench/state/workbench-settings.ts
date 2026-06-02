@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - DEFAULT_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE: editor zoom defaults and bounds. Keywords: settings, editor, zoom.
- * - WorkbenchTheme, WorkbenchEditorFontFamily, WorkbenchSettingKey: setting value contracts for Workbench preferences. Keywords: settings, theme, editor, composer.
+ * - WorkbenchTheme, WorkbenchEditorFontFamily, WorkbenchFileOpenBehavior, WorkbenchSettingKey: setting value contracts for Workbench preferences. Keywords: settings, theme, editor, composer, file open.
  * - WorkbenchGlobalSettings, WorkbenchProjectSettings, WorkbenchResolvedSettings: stored and resolved settings shapes. Keywords: settings, global, project override.
  * - WORKBENCH_SETTING_DEFINITIONS: labels and option metadata for settings UI rendering. Keywords: settings, registry, UI.
  * - createDefaultGlobalWorkbenchSettings: create agentic global defaults. Keywords: settings, defaults, agentic.
@@ -22,20 +22,23 @@ const LEGACY_THEME_STORAGE_KEY = "workbench:theme";
 
 export type WorkbenchTheme = "default" | "magical-girl" | "winter";
 export type WorkbenchEditorFontFamily = "sans" | "serif" | "mono";
+export type WorkbenchFileOpenBehavior = "workbench" | "workbench-or-vscode" | "vscode";
 export type WorkbenchSettingKey =
   | "theme"
   | "editorFontFamily"
   | "editorSpellCheck"
   | "composerSpellCheck"
-  | "editorEnabled"
-  | "editorFontSize";
+  | "editorFontSize"
+  | "fileOpenBehavior"
+  | "showUnopenableFiles";
 
 export interface WorkbenchGlobalSettings {
   composerSpellCheck: boolean;
-  editorEnabled: boolean;
   editorFontFamily: WorkbenchEditorFontFamily;
   editorFontSize: number;
   editorSpellCheck: boolean;
+  fileOpenBehavior: WorkbenchFileOpenBehavior;
+  showUnopenableFiles: boolean;
   theme: WorkbenchTheme;
 }
 
@@ -69,12 +72,6 @@ export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: Workbe
     label: "Composer spellcheck",
     type: "boolean",
   },
-  editorEnabled: {
-    description: "Stores whether the rich markdown editor should be available for this scope.",
-    key: "editorEnabled",
-    label: "Editor enabled",
-    type: "boolean",
-  },
   editorFontFamily: {
     description: "Controls the body font used by the rich markdown editor.",
     key: "editorFontFamily",
@@ -103,6 +100,35 @@ export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: Workbe
     key: "editorFontSize",
     label: "Text size",
     type: "number",
+  },
+  fileOpenBehavior: {
+    description: "Controls whether project file links open in Workbench or VS Code.",
+    key: "fileOpenBehavior",
+    label: "Open files with",
+    options: [
+      {
+        description: "Open supported markdown files in Workbench and ignore unsupported files.",
+        label: "Workbench only",
+        value: "workbench",
+      },
+      {
+        description: "Open markdown in Workbench and use VS Code for files Workbench cannot open.",
+        label: "Workbench, then VS Code",
+        value: "workbench-or-vscode",
+      },
+      {
+        description: "Always ask the local server to open file links in VS Code.",
+        label: "VS Code",
+        value: "vscode",
+      },
+    ],
+    type: "select",
+  },
+  showUnopenableFiles: {
+    description: "Controls whether the project sidebar shows files Workbench cannot open directly.",
+    key: "showUnopenableFiles",
+    label: "Show unsupported files",
+    type: "boolean",
   },
   editorSpellCheck: {
     description: "Controls browser spellcheck in the rich markdown editor.",
@@ -156,6 +182,10 @@ function normalizeEditorFontFamily(value: unknown): WorkbenchEditorFontFamily {
   return value === "serif" || value === "mono" ? value : "sans";
 }
 
+function normalizeFileOpenBehavior(value: unknown): WorkbenchFileOpenBehavior {
+  return value === "workbench-or-vscode" || value === "vscode" ? value : "workbench";
+}
+
 function readJsonStorageValue(key: string) {
   try {
     const rawValue = window.localStorage.getItem(key);
@@ -193,10 +223,11 @@ function normalizeGlobalWorkbenchSettings(value: unknown): WorkbenchGlobalSettin
   const candidate = isRecord(value) ? value : {};
   return {
     composerSpellCheck: typeof candidate.composerSpellCheck === "boolean" ? candidate.composerSpellCheck : false,
-    editorEnabled: typeof candidate.editorEnabled === "boolean" ? candidate.editorEnabled : true,
     editorFontFamily: normalizeEditorFontFamily(candidate.editorFontFamily),
     editorFontSize: clampEditorFontSize(candidate.editorFontSize ?? readLegacyEditorFontSize()),
     editorSpellCheck: typeof candidate.editorSpellCheck === "boolean" ? candidate.editorSpellCheck : false,
+    fileOpenBehavior: normalizeFileOpenBehavior(candidate.fileOpenBehavior),
+    showUnopenableFiles: typeof candidate.showUnopenableFiles === "boolean" ? candidate.showUnopenableFiles : false,
     theme: normalizeTheme(candidate.theme ?? readLegacyTheme()),
   };
 }
@@ -214,11 +245,13 @@ function normalizeProjectOverride<K extends WorkbenchSettingKey>(
       return { enabled, value: normalizeTheme(candidate.value) } as WorkbenchProjectSettingOverride<K>;
     case "editorFontFamily":
       return { enabled, value: normalizeEditorFontFamily(candidate.value) } as WorkbenchProjectSettingOverride<K>;
+    case "fileOpenBehavior":
+      return { enabled, value: normalizeFileOpenBehavior(candidate.value) } as WorkbenchProjectSettingOverride<K>;
     case "editorFontSize":
       return { enabled, value: clampEditorFontSize(candidate.value) } as WorkbenchProjectSettingOverride<K>;
     case "editorSpellCheck":
     case "composerSpellCheck":
-    case "editorEnabled":
+    case "showUnopenableFiles":
       return {
         enabled,
         value: typeof candidate.value === "boolean" ? candidate.value : defaultValue,
@@ -229,10 +262,11 @@ function normalizeProjectOverride<K extends WorkbenchSettingKey>(
 export function createDefaultGlobalWorkbenchSettings(): WorkbenchGlobalSettings {
   return {
     composerSpellCheck: false,
-    editorEnabled: true,
     editorFontFamily: "sans",
     editorFontSize: DEFAULT_EDITOR_FONT_SIZE,
     editorSpellCheck: false,
+    fileOpenBehavior: "workbench-or-vscode",
+    showUnopenableFiles: false,
     theme: "default",
   };
 }
@@ -241,10 +275,11 @@ export function createDefaultProjectWorkbenchSettings(): WorkbenchProjectSetting
   const globalDefaults = createDefaultGlobalWorkbenchSettings();
   return {
     composerSpellCheck: { enabled: false, value: globalDefaults.composerSpellCheck },
-    editorEnabled: { enabled: false, value: globalDefaults.editorEnabled },
     editorFontFamily: { enabled: false, value: globalDefaults.editorFontFamily },
     editorFontSize: { enabled: false, value: globalDefaults.editorFontSize },
     editorSpellCheck: { enabled: false, value: globalDefaults.editorSpellCheck },
+    fileOpenBehavior: { enabled: false, value: globalDefaults.fileOpenBehavior },
+    showUnopenableFiles: { enabled: false, value: globalDefaults.showUnopenableFiles },
     theme: { enabled: false, value: globalDefaults.theme },
   };
 }
@@ -270,10 +305,11 @@ export function readProjectWorkbenchSettings(projectId: string) {
   const candidate = isRecord(projectSettings) ? projectSettings : {};
   return {
     composerSpellCheck: normalizeProjectOverride("composerSpellCheck", candidate.composerSpellCheck),
-    editorEnabled: normalizeProjectOverride("editorEnabled", candidate.editorEnabled),
     editorFontFamily: normalizeProjectOverride("editorFontFamily", candidate.editorFontFamily),
     editorFontSize: normalizeProjectOverride("editorFontSize", candidate.editorFontSize),
     editorSpellCheck: normalizeProjectOverride("editorSpellCheck", candidate.editorSpellCheck),
+    fileOpenBehavior: normalizeProjectOverride("fileOpenBehavior", candidate.fileOpenBehavior),
+    showUnopenableFiles: normalizeProjectOverride("showUnopenableFiles", candidate.showUnopenableFiles),
     theme: normalizeProjectOverride("theme", candidate.theme),
   } satisfies WorkbenchProjectSettings;
 }
@@ -283,10 +319,11 @@ export function writeProjectWorkbenchSettings(projectId: string, settings: Workb
   const nextProjectSettings = isRecord(allProjectSettings) ? { ...allProjectSettings } : {};
   nextProjectSettings[projectId] = {
     composerSpellCheck: normalizeProjectOverride("composerSpellCheck", settings.composerSpellCheck),
-    editorEnabled: normalizeProjectOverride("editorEnabled", settings.editorEnabled),
     editorFontFamily: normalizeProjectOverride("editorFontFamily", settings.editorFontFamily),
     editorFontSize: normalizeProjectOverride("editorFontSize", settings.editorFontSize),
     editorSpellCheck: normalizeProjectOverride("editorSpellCheck", settings.editorSpellCheck),
+    fileOpenBehavior: normalizeProjectOverride("fileOpenBehavior", settings.fileOpenBehavior),
+    showUnopenableFiles: normalizeProjectOverride("showUnopenableFiles", settings.showUnopenableFiles),
     theme: normalizeProjectOverride("theme", settings.theme),
   };
   writeJsonStorageValue(PROJECT_SETTINGS_STORAGE_KEY, nextProjectSettings);
@@ -298,10 +335,11 @@ export function resolveWorkbenchSettings(
 ): WorkbenchResolvedSettings {
   return {
     composerSpellCheck: projectSettings.composerSpellCheck.enabled ? projectSettings.composerSpellCheck.value : globalSettings.composerSpellCheck,
-    editorEnabled: projectSettings.editorEnabled.enabled ? projectSettings.editorEnabled.value : globalSettings.editorEnabled,
     editorFontFamily: projectSettings.editorFontFamily.enabled ? projectSettings.editorFontFamily.value : globalSettings.editorFontFamily,
     editorFontSize: projectSettings.editorFontSize.enabled ? projectSettings.editorFontSize.value : globalSettings.editorFontSize,
     editorSpellCheck: projectSettings.editorSpellCheck.enabled ? projectSettings.editorSpellCheck.value : globalSettings.editorSpellCheck,
+    fileOpenBehavior: projectSettings.fileOpenBehavior.enabled ? projectSettings.fileOpenBehavior.value : globalSettings.fileOpenBehavior,
+    showUnopenableFiles: projectSettings.showUnopenableFiles.enabled ? projectSettings.showUnopenableFiles.value : globalSettings.showUnopenableFiles,
     theme: projectSettings.theme.enabled ? projectSettings.theme.value : globalSettings.theme,
   };
 }

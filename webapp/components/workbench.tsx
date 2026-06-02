@@ -9,8 +9,9 @@ import { startTransition, useCallback, useEffect, useMemo, useRef, useState, typ
 import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type {
-  ExplorerSnapshot, FilePayload, OrchestratorReloadRequest, OrchestratorReloadResponse, ThreadPayload, TreeNode,
+  ExplorerSnapshot, FilePayload, OpenFileInEditorRequest, OrchestratorReloadRequest, OrchestratorReloadResponse, ThreadPayload, TreeNode,
   WorkbenchControls,
+  WorkbenchFileOpenTarget,
   WorkbenchHarness,
   WorkbenchPendingUserInputRequest,
   WorkbenchQuestionnaireDraft,
@@ -126,7 +127,8 @@ const SETTINGS_ORDER: WorkbenchSettingKey[] = [
   "editorFontFamily",
   "editorSpellCheck",
   "composerSpellCheck",
-  "editorEnabled",
+  "fileOpenBehavior",
+  "showUnopenableFiles",
   "editorFontSize",
 ];
 
@@ -145,6 +147,10 @@ function isReloadResponse (value: unknown): value is OrchestratorReloadResponse 
     && typeof value === "object"
     && "ok" in value
     && "state" in value;
+}
+
+function createFileOpenTarget(path: string): WorkbenchFileOpenTarget {
+  return { path };
 }
 
 function formatQuickOpenTimestamp (updatedAt: string | null | undefined) {
@@ -245,7 +251,6 @@ export default function Workbench () {
   const [mobileShellHeaderHeight, setMobileShellHeaderHeight] = useState(0);
   const [isMobileShellHeaderVisible, setIsMobileShellHeaderVisible] = useState(true);
   const [mobilePane, setMobilePane] = useState<MobilePane>("explorer");
-  const [showUnopenableFiles, setShowUnopenableFiles] = useState(false);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [sidebarMode, setSidebarMode] = useState<"main" | "projects">("main");
   const [globalSettings, setGlobalSettings] = useState<WorkbenchGlobalSettings>(() => {
@@ -548,10 +553,6 @@ export default function Workbench () {
 
   const expandedDirectories = new Set(explorer.expandedDirectories);
   const modifiedPaths = new Set(explorer.locallyModifiedPaths);
-  const visibleTree = useMemo(
-    () => (showUnopenableFiles ? explorer.tree : filterVisibleTreeNodes(explorer.tree)),
-    [explorer.tree, showUnopenableFiles],
-  );
   const currentProject = explorer.projects.find((project) => project.id === explorer.currentProjectId) ?? null;
   const activeProjectId = explorer.currentProjectId || route.projectId;
   const pageTitle = formatWorkbenchPageTitle(currentProject?.name ?? explorer.root ?? explorer.currentProjectId);
@@ -559,6 +560,11 @@ export default function Workbench () {
     ? projectSettingsByProjectId[explorer.currentProjectId] ?? createDefaultProjectWorkbenchSettings()
     : createDefaultProjectWorkbenchSettings();
   const resolvedSettings = resolveWorkbenchSettings(globalSettings, projectSettings);
+  const showUnopenableFiles = resolvedSettings.showUnopenableFiles;
+  const visibleTree = useMemo(
+    () => (showUnopenableFiles ? explorer.tree : filterVisibleTreeNodes(explorer.tree)),
+    [explorer.tree, showUnopenableFiles],
+  );
   const projectTabLabel = getProjectTabLabel(currentProject?.name ?? explorer.root);
   const settingsScope = route.view === "settings" ? route.settingsScope : "global";
   const editorFontClassName = EDITOR_FONT_CLASS_NAMES[resolvedSettings.editorFontFamily];
@@ -761,7 +767,7 @@ export default function Workbench () {
     setSidebarMode("main");
   }, [closeProjectPicker, explorer.currentProjectId, navigateToRoute]);
 
-  const openFileFromExplorer = useCallback(async (path: string) => {
+  const openFileInWorkbench = useCallback(async (path: string) => {
     if (!isWorkbenchOpenableFile(path)) {
       return false;
     }
@@ -774,6 +780,52 @@ export default function Workbench () {
     return true;
   }, [explorer.currentProjectId, navigateToRoute, route]);
 
+  const openFileInVsCode = useCallback(async (target: WorkbenchFileOpenTarget) => {
+    const payload: OpenFileInEditorRequest = {
+      columnNumber: target.columnNumber ?? null,
+      lineNumber: target.lineNumber ?? null,
+      path: target.path,
+      projectId: explorer.currentProjectId || route.projectId,
+    };
+    const response = await fetch("/api/file/open", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: "Unable to open file in VS Code." }));
+      console.error(error.error);
+      return false;
+    }
+
+    return true;
+  }, [explorer.currentProjectId, route.projectId]);
+
+  const openFileByPolicy = useCallback(async (target: WorkbenchFileOpenTarget) => {
+    const path = target.path;
+    const isOpenableInWorkbench = isWorkbenchOpenableFile(path);
+    if (resolvedSettings.fileOpenBehavior === "vscode") {
+      return await openFileInVsCode(target);
+    }
+
+    if (isOpenableInWorkbench) {
+      return await openFileInWorkbench(path);
+    }
+
+    if (resolvedSettings.fileOpenBehavior === "workbench-or-vscode") {
+      return await openFileInVsCode(target);
+    }
+
+    return false;
+  }, [openFileInVsCode, openFileInWorkbench, resolvedSettings.fileOpenBehavior]);
+
+  const openFileFromExplorer = useCallback(async (path: string) => (
+    await openFileByPolicy(createFileOpenTarget(path))
+  ), [openFileByPolicy]);
+
   const openThreadFromExplorer = useCallback(async (threadId: string) => {
     if (route.view === "thread" && threadId === route.threadId) {
       return true;
@@ -782,9 +834,9 @@ export default function Workbench () {
     navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, threadId));
     return true;
   }, [explorer.currentProjectId, navigateToRoute, route]);
-  const openFileFromThreadView = useCallback(async (path: string) => {
-    void await openFileFromExplorer(path);
-  }, [openFileFromExplorer]);
+  const openFileFromThreadView = useCallback(async (target: WorkbenchFileOpenTarget) => {
+    void await openFileByPolicy(target);
+  }, [openFileByPolicy]);
 
   const readThread = useCallback(async (threadId: string, nextHarness?: WorkbenchHarness) => {
     if (!controls) {
@@ -1056,6 +1108,9 @@ export default function Workbench () {
   ]))
     .filter((path) => isWorkbenchOpenableFile(path))
     .slice(0, 8);
+  const canOpenFileFromExplorer = useCallback((path: string) => (
+    resolvedSettings.fileOpenBehavior !== "workbench" || isWorkbenchOpenableFile(path)
+  ), [resolvedSettings.fileOpenBehavior]);
   const showThreadView = route.view === "thread";
   const showFileView = route.view === "file";
   const showSettingsView = route.view === "settings";
@@ -1561,10 +1616,11 @@ export default function Workbench () {
                         type="button"
                         aria-label={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
                         aria-pressed={showUnopenableFiles}
+                        disabled={!explorer.currentProjectId}
                         title={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
                         className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}${showUnopenableFiles ? " bg-accent-soft text-accent" : ""}`}
                         onClick={() => {
-                          setShowUnopenableFiles((current) => !current);
+                          updateProjectSetting("showUnopenableFiles", !showUnopenableFiles);
                         }}
                       >
                         <FileVisibilityIcon visible={showUnopenableFiles} />
@@ -1598,7 +1654,7 @@ export default function Workbench () {
                       controls={workbenchControls}
                       currentPath={activeFilePath}
                       expandedDirectories={expandedDirectories}
-                      isFileOpenable={isWorkbenchOpenableFile}
+                      isFileOpenable={canOpenFileFromExplorer}
                       modifiedPaths={modifiedPaths}
                       nodes={visibleTree}
                       onCreateInDirectory={openCreateDialog}

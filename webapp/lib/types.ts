@@ -330,3 +330,20 @@ export interface SaveConflictPayload {
   actualUpdatedAt: string;
   actualMtimeMs: number;
 }
+
+export interface WorkbenchFileOpenTarget {
+  columnNumber?: number | null;
+  lineNumber?: number | null;
+  path: string;
+}
+
+export interface OpenFileInEditorRequest extends WorkbenchFileOpenTarget {
+  projectId?: string | null;
+}
+
+export interface OpenFileInEditorResponse {
+  ok: true;
+  path: string;
+  projectId: string;
+  target: string;
+}

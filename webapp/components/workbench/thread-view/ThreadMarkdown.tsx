@@ -6,6 +6,7 @@ import {
   parseCodexFileLinkHref,
   toProjectRelativeFilePath,
 } from "../../../lib/workbench/markdown/markdown-links";
+import type { WorkbenchFileOpenTarget } from "../../../lib/types";
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
 import { renderThreadMarkdown } from "./thread-markdown-render";
 
@@ -20,6 +21,13 @@ const THREAD_MARKDOWN_CLASS = [
   "[&:not(:first-child)]:mt-[0.2rem]",
 ].join(" ");
 
+function readPositiveIntegerDatasetValue(value: string | undefined) {
+  const numericValue = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(numericValue) && numericValue > 0
+    ? numericValue
+    : null;
+}
+
 export default memo(function ThreadMarkdown ({
   className,
   inlineMentionSources,
@@ -30,7 +38,7 @@ export default memo(function ThreadMarkdown ({
   className?: string;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   markdown: string;
-  onOpenFile?: (path: string) => Promise<void>;
+  onOpenFile?: (target: WorkbenchFileOpenTarget) => Promise<void>;
   projectRootPath?: string;
 }) {
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
@@ -57,7 +65,11 @@ export default memo(function ThreadMarkdown ({
     const inlineRelativePath = anchor.dataset.projectFileRelativePath?.trim();
     if (inlineRelativePath && onOpenFile) {
       event.preventDefault();
-      void onOpenFile(inlineRelativePath);
+      void onOpenFile({
+        columnNumber: readPositiveIntegerDatasetValue(anchor.dataset.projectFileColumnNumber),
+        lineNumber: readPositiveIntegerDatasetValue(anchor.dataset.projectFileLineNumber),
+        path: inlineRelativePath,
+      });
       return;
     }
 
@@ -76,7 +88,11 @@ export default memo(function ThreadMarkdown ({
     }
 
     event.preventDefault();
-    void onOpenFile(relativePath);
+    void onOpenFile({
+      columnNumber: fileLink.columnNumber,
+      lineNumber: fileLink.lineNumber,
+      path: relativePath,
+    });
   };
 
   const renderedMarkdown = useMemo(
