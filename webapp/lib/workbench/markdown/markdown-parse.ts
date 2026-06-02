@@ -24,9 +24,11 @@ import {
     isBlockCommentLine,
 } from "./comment-markdown";
 import {
+    parsePlaintextProjectFileLink,
+} from "./markdown-file-autolinks";
+import {
     normalizeMarkdownHref,
-    parseCodexFileLinkHref,
-    toProjectRelativeFilePath,
+    resolveProjectFileLinkTarget,
 } from "./markdown-links";
 
 export interface ParsedListItem {
@@ -73,6 +75,7 @@ export type ParsedInlineNode =
     type: "projectFileLink";
     columnNumber: number | null;
     href: string;
+    label?: string | null;
     lineNumber: number | null;
     relativePath: string;
   };
@@ -80,6 +83,8 @@ export type ParsedInlineNode =
 export interface MarkdownParseOptions {
   inlineMentionSources?: InlineMentionHighlightSources | null;
   profile?: MarkdownParseProfile;
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
   projectRootPath?: string;
   suppressPlaintextAutolinks?: boolean;
 }
@@ -393,6 +398,14 @@ function getInlineMentionHighlights(markdown: string, options: MarkdownParseOpti
   return buildInlineMentionHighlights(markdown, sources);
 }
 
+function getProjectFileLinkCandidatePaths(options: MarkdownParseOptions) {
+  if (options.projectFilePaths) {
+    return options.projectFilePaths;
+  }
+
+  return options.inlineMentionSources?.fileCandidatePaths ?? [];
+}
+
 function pushTextNode(nodes: ParsedInlineNode[], text: string) {
   if (!text) {
     return;
@@ -409,14 +422,17 @@ function pushTextNode(nodes: ParsedInlineNode[], text: string) {
 
 function createProjectFileLinkNode(url: string, relativePath: string, {
   columnNumber = null,
+  label = null,
   lineNumber = null,
 }: {
   columnNumber?: number | null;
+  label?: string | null;
   lineNumber?: number | null;
 } = {}): Extract<ParsedInlineNode, { type: "projectFileLink" }> {
   return {
     columnNumber,
     href: url,
+    label,
     lineNumber,
     relativePath,
     type: "projectFileLink",
@@ -560,22 +576,23 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
         const urlEnd = findClosingToken(markdown, ")", labelEnd + 2);
         if (urlEnd !== -1) {
           const label = markdown.slice(index + 1, labelEnd);
-          const url = sanitizeMarkdownHref(markdown.slice(labelEnd + 2, urlEnd));
+          const rawUrl = normalizeMarkdownHref(markdown.slice(labelEnd + 2, urlEnd));
+          const resolvedFileLink = resolveProjectFileLinkTarget(rawUrl, {
+            candidatePaths: getProjectFileLinkCandidatePaths(options),
+            projectRootPath: options.projectRootPath,
+          });
+          if (resolvedFileLink) {
+            nodes.push(createProjectFileLinkNode(rawUrl, resolvedFileLink.relativePath, {
+              columnNumber: resolvedFileLink.columnNumber,
+              label,
+              lineNumber: resolvedFileLink.lineNumber,
+            }));
+            index = urlEnd + 1;
+            continue;
+          }
+
+          const url = sanitizeMarkdownHref(rawUrl);
           if (url) {
-            const parsedFileLink = parseCodexFileLinkHref(url);
-            const relativePath = parsedFileLink
-              ? toProjectRelativeFilePath(parsedFileLink.absolutePath, options.projectRootPath ?? "")
-              : null;
-
-            if (relativePath) {
-              nodes.push(createProjectFileLinkNode(url, relativePath, {
-                columnNumber: parsedFileLink?.columnNumber ?? null,
-                lineNumber: parsedFileLink?.lineNumber ?? null,
-              }));
-              index = urlEnd + 1;
-              continue;
-            }
-
             nodes.push({
               children: parseInlineMarkdown(label, { ...options, suppressPlaintextAutolinks: true }),
               external: isExternalMarkdownHref(url),
@@ -590,6 +607,20 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
     }
 
     if ((options.profile ?? "editor") === "thread" && !options.suppressPlaintextAutolinks) {
+      const plaintextFileLink = parsePlaintextProjectFileLink(markdown, index, {
+        candidatePaths: getProjectFileLinkCandidatePaths(options),
+        inlineMentionSources: options.inlineMentionSources,
+        projectRootPath: options.projectRootPath,
+      });
+      if (plaintextFileLink) {
+        nodes.push(createProjectFileLinkNode(plaintextFileLink.href, plaintextFileLink.relativePath, {
+          columnNumber: plaintextFileLink.columnNumber,
+          lineNumber: plaintextFileLink.lineNumber,
+        }));
+        index = plaintextFileLink.end;
+        continue;
+      }
+
       const plaintextUrl = parseThreadPlaintextUrl(markdown, index);
       if (plaintextUrl) {
         nodes.push({

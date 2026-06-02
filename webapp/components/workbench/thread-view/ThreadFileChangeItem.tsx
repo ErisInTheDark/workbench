@@ -104,8 +104,12 @@ function parseFileChangeDiff (change: FileUpdateChange) {
 
 function ThreadFileChangeDetails ({
   parsedChange,
+  projectFilePaths,
+  projectId,
 }: {
   parsedChange: ParsedFileChange;
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
 }) {
   return (
     <div className="space-y-3">
@@ -116,7 +120,7 @@ function ThreadFileChangeDetails ({
         {parsedChange.movePathDisplay ? (
           <p className="m-0 flex flex-wrap items-baseline gap-2 text-[0.78em] leading-[1.6] text-muted">
             <span>From</span>
-            <ProjectFilePath className="max-w-full align-baseline" path={parsedChange.movePathDisplay} />
+            <ProjectFilePath className="max-w-full align-baseline" disambiguationPaths={projectFilePaths} path={parsedChange.movePathDisplay} projectId={projectId} />
           </p>
         ) : null}
       </div>
@@ -131,9 +135,13 @@ function ThreadFileChangeDetails ({
 
 export default function ThreadFileChangeItem ({
   items,
+  projectFilePaths,
+  projectId,
   projectRootPath,
 }: {
   items: FileChangeItem[];
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
   projectRootPath?: string;
 }) {
   const parsedChanges: ParsedFileChange[] = items.flatMap((item) => item.changes.map((change, sourceChangeIndex) => ({
@@ -157,7 +165,7 @@ export default function ThreadFileChangeItem ({
           summary={(
             <span className="inline-flex min-w-0 max-w-full items-baseline gap-3">
               <ThreadSummaryText text={change.change.kind.type === "add" ? "Created" : "Changed"} />
-              <ProjectFilePath className="max-w-full shrink min-w-0 align-baseline text-[0.82em]" path={change.displayPath} />
+              <ProjectFilePath className="max-w-full shrink min-w-0 align-baseline text-[0.82em]" disambiguationPaths={projectFilePaths} path={change.displayPath} projectId={projectId} />
               <DiffChangeTotals
                 additions={change.diff.additions}
                 deletions={change.diff.deletions}
@@ -167,7 +175,7 @@ export default function ThreadFileChangeItem ({
           )}
           summaryClassName="text-[0.92em] leading-[1.6] text-muted"
         >
-          <ThreadFileChangeDetails parsedChange={change} />
+          <ThreadFileChangeDetails parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} />
         </ThreadDisclosure>
       )) : (
         <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No changed files captured.</p>

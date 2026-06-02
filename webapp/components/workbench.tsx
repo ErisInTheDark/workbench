@@ -153,6 +153,13 @@ function createFileOpenTarget(path: string): WorkbenchFileOpenTarget {
   return { path };
 }
 
+function readPositiveIntegerDatasetValue(value: string | undefined) {
+  const numericValue = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(numericValue) && numericValue > 0
+    ? numericValue
+    : null;
+}
+
 function formatQuickOpenTimestamp (updatedAt: string | null | undefined) {
   if (!updatedAt) {
     return "Unknown time";
@@ -834,8 +841,41 @@ export default function Workbench () {
     navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, threadId));
     return true;
   }, [explorer.currentProjectId, navigateToRoute, route]);
-  const openFileFromThreadView = useCallback(async (target: WorkbenchFileOpenTarget) => {
-    void await openFileByPolicy(target);
+  const handleWorkbenchProjectFileLinkClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    if (
+      event.button !== 0
+      || event.metaKey
+      || event.ctrlKey
+      || event.shiftKey
+      || event.altKey
+    ) {
+      return;
+    }
+
+    if (!(event.target instanceof Element)) {
+      return;
+    }
+
+    const anchor = event.target.closest("a[data-project-file-relative-path]");
+    if (!(anchor instanceof HTMLAnchorElement)) {
+      return;
+    }
+
+    if (!anchor.closest("[data-thread-project-file-link-boundary='true']")) {
+      return;
+    }
+
+    const path = anchor.dataset.projectFileRelativePath?.trim();
+    if (!path) {
+      return;
+    }
+
+    event.preventDefault();
+    void openFileByPolicy({
+      columnNumber: readPositiveIntegerDatasetValue(anchor.dataset.projectFileColumnNumber),
+      lineNumber: readPositiveIntegerDatasetValue(anchor.dataset.projectFileLineNumber),
+      path,
+    });
   }, [openFileByPolicy]);
 
   const readThread = useCallback(async (threadId: string, nextHarness?: WorkbenchHarness) => {
@@ -1542,7 +1582,10 @@ export default function Workbench () {
   };
 
   return (
-    <div className="relative isolate h-dvh overflow-hidden md:grid md:min-h-screen md:h-auto md:overflow-visible md:grid-cols-[minmax(16rem,21rem)_1fr] md:items-start">
+    <div
+      className="relative isolate h-dvh overflow-hidden md:grid md:min-h-screen md:h-auto md:overflow-visible md:grid-cols-[minmax(16rem,21rem)_1fr] md:items-start"
+      onClick={handleWorkbenchProjectFileLinkClick}
+    >
       {ambientCanvasVariant ? <WorkbenchAmbientCanvas variant={ambientCanvasVariant} /> : null}
       <WorkbenchTabIcon state={tabIconState} />
       <div
@@ -1843,7 +1886,6 @@ export default function Workbench () {
                   livePendingUserInputRequestsByThreadId={harnessUserInputRequestsByThreadId}
                   onDraftHarnessChange={handleHarnessChange}
                   onListModels={listThreadModels}
-                  onOpenFile={openFileFromThreadView}
                   onReadThread={readThread}
                   onThreadSeen={markThreadSeen}
                   onCompactThread={compactThread}
@@ -1858,7 +1900,7 @@ export default function Workbench () {
                   onThreadReasoningEffortChange={setThreadReasoningEffort}
                   onThreadServiceTierChange={setThreadServiceTier}
                   onThreadModelChange={setThreadModel}
-                  projectId={explorer.currentProjectId}
+                  projectId={activeProjectId}
                   projectRootPath={explorer.rootPath}
                   projectTree={explorer.tree}
                   rateLimits={rateLimits}

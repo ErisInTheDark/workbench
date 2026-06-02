@@ -8,7 +8,10 @@
  * - createQuestionnaireDeveloperInstructions/createTextInput/createQuestionnaireCollaborationMode/createThreadStartRequest/createTurnStartRequest: typed Codex instruction and request builders. Keywords: thread, turn, user input, collaboration mode, questionnaire, developer instructions.
  * - createRequestIdGenerator/isCodexEventType: small protocol helpers. Keywords: ids, event type.
  */
-import { MODE_STATE_TAG_INSTRUCTIONS } from "../thread-bootstrap";
+import {
+  MODE_STATE_TAG_INSTRUCTIONS,
+  WORKBENCH_FILE_LINK_INSTRUCTIONS,
+} from "../thread-bootstrap";
 import { CODEX_CLIENT_INFO } from "./config";
 import type { ClientInfo } from "./generated/app-server/ClientInfo";
 import type { ClientNotification } from "./generated/app-server/ClientNotification";
@@ -146,6 +149,7 @@ export function createQuestionnaireDeveloperInstructions(
   return joinInstructionSections([
     QUESTIONNAIRE_COLLABORATION_INSTRUCTIONS,
     MODE_STATE_TAG_INSTRUCTIONS,
+    WORKBENCH_FILE_LINK_INSTRUCTIONS,
     additionalInstructions,
   ]);
 }

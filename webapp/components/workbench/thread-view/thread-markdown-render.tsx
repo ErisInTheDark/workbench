@@ -21,15 +21,9 @@ import {
   type ParsedTableAlignment,
   type ParsedTableCell,
 } from "../../../lib/workbench/markdown/markdown-parse";
-import {
-  getProjectFilePathDisplay,
-  projectFilePathInteractiveClassName,
-  projectFilePathLabelClassName,
-  projectFilePathLocationClassName,
-  projectFilePathPillClassName,
-} from "../../../lib/workbench/project/project-file-path";
 import { getInlineMentionMarkClassName } from "../../../lib/workbench/thread/inline-mention-styles";
 import ChevronIcon from "../ChevronIcon";
+import ProjectFilePath from "../ProjectFilePath";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 
@@ -44,7 +38,7 @@ const HEADING_CLASSES = {
   6: `${BLOCK_SPACING_CLASS} font-sans text-[1em] font-semibold leading-[1.2]`,
 } satisfies Record<1 | 2 | 3 | 4 | 5 | 6, string>;
 
-function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string): ReactNode[] {
+function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string, options: MarkdownParseOptions): ReactNode[] {
   return nodes.map((node, index) => {
     const key = `${keyPrefix}-${index}`;
 
@@ -52,16 +46,16 @@ function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string):
       case "text":
         return <Fragment key={key}>{node.text}</Fragment>;
       case "strong":
-        return <strong key={key}>{renderThreadInlineNodes(node.children, key)}</strong>;
+        return <strong key={key}>{renderThreadInlineNodes(node.children, key, options)}</strong>;
       case "em":
-        return <em key={key}>{renderThreadInlineNodes(node.children, key)}</em>;
+        return <em key={key}>{renderThreadInlineNodes(node.children, key, options)}</em>;
       case "delete":
         return (
           <del
             className="-mx-[0.04em] rounded-[0.2em] bg-[color-mix(in_srgb,var(--danger)_16%,transparent)] px-[0.08em] text-inherit decoration-current decoration-[0.08em]"
             key={key}
           >
-            {renderThreadInlineNodes(node.children, key)}
+            {renderThreadInlineNodes(node.children, key, options)}
           </del>
         );
       case "insert":
@@ -70,7 +64,7 @@ function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string):
             className="-mx-[0.04em] rounded-[0.2em] bg-[color-mix(in_srgb,var(--success)_16%,transparent)] px-[0.08em] text-inherit no-underline"
             key={key}
           >
-            {renderThreadInlineNodes(node.children, key)}
+            {renderThreadInlineNodes(node.children, key, options)}
           </ins>
         );
       case "code":
@@ -93,7 +87,7 @@ function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string):
             rel="noreferrer"
             target="_blank"
           >
-            {renderThreadInlineNodes(node.children, key)}
+            {renderThreadInlineNodes(node.children, key, options)}
           </a>
         );
       case "inlineComment":
@@ -103,7 +97,7 @@ function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string):
             data-inline-comment="true"
             key={key}
           >
-            {renderThreadInlineNodes(node.children, key)}
+            {renderThreadInlineNodes(node.children, key, options)}
           </span>
         );
       case "knownSkillMention":
@@ -121,28 +115,16 @@ function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string):
           </span>
         );
       case "projectFileLink": {
-        const display = getProjectFilePathDisplay(node.relativePath, {
-          columnNumber: node.columnNumber,
-          lineNumber: node.lineNumber,
-        });
-        const className = `${projectFilePathPillClassName} ${projectFilePathInteractiveClassName}`;
-
         return (
-          <a
-            className={className}
-            data-project-file-path="true"
-            data-project-file-column-number={node.columnNumber ?? undefined}
-            data-project-file-line-number={node.lineNumber ?? undefined}
-            data-project-file-relative-path={node.relativePath}
-            href={node.href}
+          <ProjectFilePath
+            columnNumber={node.columnNumber}
+            disambiguationPaths={options.projectFilePaths}
             key={key}
-            title={display.title}
-          >
-            <span className={projectFilePathLabelClassName}>{display.fileName}</span>
-            {display.locationSuffix ? (
-              <span className={projectFilePathLocationClassName}>{display.locationSuffix}</span>
-            ) : null}
-          </a>
+            label={node.label}
+            lineNumber={node.lineNumber}
+            path={node.relativePath}
+            projectId={options.projectId}
+          />
         );
       }
     }
@@ -150,7 +132,7 @@ function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string):
 }
 
 function renderThreadInlineMarkdown (markdown: string, options: MarkdownParseOptions, keyPrefix: string) {
-  return renderThreadInlineNodes(parseInlineMarkdown(markdown, options), keyPrefix);
+  return renderThreadInlineNodes(parseInlineMarkdown(markdown, options), keyPrefix, options);
 }
 
 function renderThreadChildBlocks (

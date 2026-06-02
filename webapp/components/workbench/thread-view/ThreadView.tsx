@@ -13,7 +13,6 @@ import type {
   ThreadPayload,
   ThreadUnreadBadge,
   TreeNode,
-  WorkbenchFileOpenTarget,
   WorkbenchHarness,
   WorkbenchModelOption,
   WorkbenchPendingUserInputRequest,
@@ -325,7 +324,6 @@ export default memo(function ThreadView ({
   livePendingUserInputRequestsByThreadId,
   onDraftHarnessChange,
   onListModels,
-  onOpenFile,
   onReadThread,
   onThreadSeen,
   onCompactThread,
@@ -356,7 +354,6 @@ export default memo(function ThreadView ({
   livePendingUserInputRequestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>;
   onDraftHarnessChange: (harness: WorkbenchHarness) => void;
   onListModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
-  onOpenFile: (target: WorkbenchFileOpenTarget) => Promise<void>;
   onReadThread: (threadId: string, harness?: WorkbenchHarness) => Promise<ThreadPayload | null>;
   onThreadSeen: (thread: ThreadPayload) => void;
   onCompactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
@@ -421,10 +418,12 @@ export default memo(function ThreadView ({
     return Array.from(new Set(liveActivity.waits.map((wait) => wait.hiddenItemId)));
   }, [liveActivity]);
   const projectFiles = useMemo(() => flattenProjectTreeFileCandidates(projectTree), [projectTree]);
+  const projectFilePaths = useMemo(() => projectFiles.map((file) => file.path), [projectFiles]);
   const inlineMentionSources = useMemo(() => buildInlineMentionCandidates({
     files: projectFiles,
+    projectRootPath,
     skills: workbenchSkills,
-  }), [projectFiles, workbenchSkills]);
+  }), [projectFiles, projectRootPath, workbenchSkills]);
 
   const tabDefinitions = useMemo(() => {
     const baseLabelCounts = new Map<string, number>();
@@ -845,6 +844,7 @@ export default memo(function ThreadView ({
   return (
     <div
       ref={threadViewRef}
+      data-thread-project-file-link-boundary="true"
       className={joinClasses(
         "mx-auto w-full min-w-0 max-w-[56rem] overflow-x-hidden pb-16 md:overflow-x-visible",
       )}
@@ -877,7 +877,8 @@ export default memo(function ThreadView ({
               hiddenCollabAgentToolCallItemIds={turn.id === currentTurn?.id ? hiddenCollabAgentToolCallItemIds : EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS}
               inlineMentionSources={inlineMentionSources}
               knownSkills={workbenchSkills}
-              onOpenFile={onOpenFile}
+              projectFilePaths={projectFilePaths}
+              projectId={projectId}
               projectRootPath={projectRootPath}
               relatedThreadsById={subthreadsById}
               turn={turn}
@@ -939,7 +940,8 @@ export default memo(function ThreadView ({
                 className="text-[0.8em] text-muted"
                 inlineMentionSources={inlineMentionSources}
                 markdown={liveActivity.body}
-                onOpenFile={onOpenFile}
+                projectFilePaths={projectFilePaths}
+                projectId={projectId}
                 projectRootPath={projectRootPath}
               />
             </ThreadDisclosure>
@@ -983,9 +985,10 @@ export default memo(function ThreadView ({
                   >
                     <ThreadPreviewFrame height="22rem" scale={0.9}>
                       <ThreadThreadContent
-                        onOpenFile={onOpenFile}
                         inlineMentionSources={inlineMentionSources}
                         knownSkills={workbenchSkills}
+                        projectFilePaths={projectFilePaths}
+                        projectId={projectId}
                         projectRootPath={projectRootPath}
                         relatedThreadsById={subthreadsById}
                         thread={liveSubagentThread}

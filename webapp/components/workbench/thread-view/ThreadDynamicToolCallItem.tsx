@@ -14,6 +14,7 @@ import type {
   WorkbenchUserInputRequest,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
+import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadMarkdown from "./ThreadMarkdown";
@@ -323,10 +324,18 @@ function buildQuestionnaireTranscriptPairs (request: WorkbenchUserInputRequest, 
 
 function ThreadQuestionnaireTranscriptPreview ({
   hiddenCount,
+  inlineMentionSources,
   pairs,
+  projectFilePaths,
+  projectId,
+  projectRootPath,
 }: {
   hiddenCount: number;
+  inlineMentionSources?: InlineMentionHighlightSources | null;
   pairs: Array<{ answerMarkdown: string; promptText: string }>;
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+  projectRootPath?: string;
 }) {
   if (!pairs.length) {
     return null;
@@ -344,7 +353,11 @@ function ThreadQuestionnaireTranscriptPreview ({
           <div className="ml-auto w-fit max-w-[min(42rem,86%)] rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3 text-left leading-[1.55] text-text">
             <ThreadMarkdown
               className="text-[0.98em] leading-[1.55] [&_h3]:mb-[0.2em] [&_h3]:text-[1.15em] [&_p]:leading-[1.55]"
+              inlineMentionSources={inlineMentionSources}
               markdown={pair.answerMarkdown}
+              projectFilePaths={projectFilePaths}
+              projectId={projectId}
+              projectRootPath={projectRootPath}
             />
           </div>
         </div>
@@ -359,11 +372,19 @@ function ThreadQuestionnaireTranscriptPreview ({
 }
 
 function ThreadQuestionnaireHistorySummary ({
+  inlineMentionSources,
   isOpen,
+  projectFilePaths,
+  projectId,
+  projectRootPath,
   request,
   response,
 }: {
+  inlineMentionSources?: InlineMentionHighlightSources | null;
   isOpen: boolean;
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+  projectRootPath?: string;
   request: WorkbenchUserInputRequest | null;
   response: WorkbenchUserInputResponse | null;
 }) {
@@ -377,7 +398,11 @@ function ThreadQuestionnaireHistorySummary ({
       {!isOpen ? (
         <ThreadQuestionnaireTranscriptPreview
           hiddenCount={hiddenCount}
+          inlineMentionSources={inlineMentionSources}
           pairs={visiblePairs}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
         />
       ) : null}
     </div>
@@ -462,9 +487,17 @@ function buildMetaParts (item: DynamicToolCallItem) {
 }
 
 function ThreadQuestionnaireToolCallItem ({
+  inlineMentionSources,
   item,
+  projectFilePaths,
+  projectId,
+  projectRootPath,
 }: {
+  inlineMentionSources?: InlineMentionHighlightSources | null;
   item: DynamicToolCallItem;
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+  projectRootPath?: string;
 }) {
   const request = parseQuestionnaireRequest(item.arguments, `history:${item.id}`);
   const { rawText, response } = parseQuestionnaireResponse(item);
@@ -485,7 +518,11 @@ function ThreadQuestionnaireToolCallItem ({
       chevronClassName="mt-[0.22em]"
       summary={(
         <ThreadQuestionnaireHistorySummary
+          inlineMentionSources={inlineMentionSources}
           isOpen={isOpen}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
           request={request}
           response={response}
         />
@@ -644,9 +681,17 @@ function ThreadSkillToolCallItem ({
 }
 
 function ThreadTaskToolCallItem ({
+  inlineMentionSources,
   item,
+  projectFilePaths,
+  projectId,
+  projectRootPath,
 }: {
+  inlineMentionSources?: InlineMentionHighlightSources | null;
   item: DynamicToolCallItem;
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+  projectRootPath?: string;
 }) {
   const argumentsRecord = asRecord(item.arguments);
   const metadata = getCopilotDynamicToolMetadata(item);
@@ -685,12 +730,12 @@ function ThreadTaskToolCallItem ({
         {agentDescription ? <ThreadMetaLine label="Agent:" value={agentDescription} /> : null}
         {prompt ? (
           <ThreadToolBubble label="Main agent">
-            <ThreadMarkdown markdown={prompt} />
+            <ThreadMarkdown inlineMentionSources={inlineMentionSources} markdown={prompt} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} />
           </ThreadToolBubble>
         ) : null}
         {responseMarkdown ? (
           <ThreadToolBubble label={labelText}>
-            <ThreadMarkdown markdown={responseMarkdown} />
+            <ThreadMarkdown inlineMentionSources={inlineMentionSources} markdown={responseMarkdown} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} />
           </ThreadToolBubble>
         ) : (
           item.status !== "completed" ? (
@@ -705,12 +750,20 @@ function ThreadTaskToolCallItem ({
 }
 
 export default function ThreadDynamicToolCallItem ({
+  inlineMentionSources,
   item,
+  projectFilePaths,
+  projectId,
+  projectRootPath,
 }: {
+  inlineMentionSources?: InlineMentionHighlightSources | null;
   item: DynamicToolCallItem;
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+  projectRootPath?: string;
 }) {
   if (item.tool === WORKBENCH_QUESTIONNAIRE_TOOL_NAME) {
-    return <ThreadQuestionnaireToolCallItem item={item} />;
+    return <ThreadQuestionnaireToolCallItem inlineMentionSources={inlineMentionSources} item={item} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} />;
   }
 
   if (item.tool === COPILOT_SKILL_TOOL_NAME) {
@@ -718,7 +771,7 @@ export default function ThreadDynamicToolCallItem ({
   }
 
   if (item.tool === COPILOT_TASK_TOOL_NAME) {
-    return <ThreadTaskToolCallItem item={item} />;
+    return <ThreadTaskToolCallItem inlineMentionSources={inlineMentionSources} item={item} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} />;
   }
 
   return <ThreadGenericDynamicToolCallItem item={item} />;

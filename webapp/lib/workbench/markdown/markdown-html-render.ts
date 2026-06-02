@@ -35,16 +35,18 @@ function escapeHtml(value: string) {
 
 function renderProjectFileLink(url: string, relativePath: string, {
   columnNumber = null,
+  label = null,
   lineNumber = null,
 }: {
   columnNumber?: number | null;
+  label?: string | null;
   lineNumber?: number | null;
 } = {}) {
-  const display = getProjectFilePathDisplay(relativePath, { columnNumber, lineNumber });
+  const display = getProjectFilePathDisplay(relativePath, { columnNumber, label, lineNumber });
   const className = `${projectFilePathPillClassName} ${projectFilePathInteractiveClassName}`;
 
   return `<a href="${escapeHtml(url)}" class="${escapeHtml(className)}" data-project-file-path="true" data-project-file-relative-path="${escapeHtml(relativePath)}" title="${escapeHtml(display.title)}">`
-    + `<span class="${escapeHtml(projectFilePathLabelClassName)}">${escapeHtml(display.fileName)}</span>`
+    + `<span class="${escapeHtml(projectFilePathLabelClassName)}">${escapeHtml(display.label)}</span>`
     + (display.locationSuffix
       ? `<span class="${escapeHtml(projectFilePathLocationClassName)}">${escapeHtml(display.locationSuffix)}</span>`
       : "")
@@ -90,6 +92,7 @@ function renderInlineHtml(nodes: ParsedInlineNode[]) {
       case "projectFileLink":
         html += renderProjectFileLink(node.href, node.relativePath, {
           columnNumber: node.columnNumber,
+          label: node.label,
           lineNumber: node.lineNumber,
         });
         break;

@@ -6,7 +6,7 @@
  */
 "use client";
 
-import { useEffect, useState, type ComponentPropsWithoutRef, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useState, type ComponentPropsWithoutRef, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
 import ChevronIcon from "../ChevronIcon";
 
@@ -23,6 +23,16 @@ type ThreadDisclosureProps = Omit<ComponentPropsWithoutRef<"details">, "children
   summary: ReactNode;
   summaryClassName?: string;
 };
+
+function isSummaryActionTarget(target: EventTarget | null) {
+  return target instanceof Element
+    && Boolean(target.closest("a, button, [data-thread-summary-action='true']"));
+}
+
+function shouldPreventSummaryActionDefault(target: EventTarget | null) {
+  return target instanceof Element
+    && Boolean(target.closest("button, [data-thread-summary-action='true']"));
+}
 
 export default function ThreadDisclosure ({
   chevronClassName,
@@ -50,9 +60,32 @@ export default function ThreadDisclosure ({
   }
 
   function handleSummaryKeyDown (event: KeyboardEvent<HTMLElement>) {
+    if (isSummaryActionTarget(event.target)) {
+      return;
+    }
+
     if (event.key === "Enter" || event.key === " ") {
       markUserToggleIntent();
     }
+  }
+
+  function handleSummaryClick (event: MouseEvent<HTMLElement>) {
+    if (isSummaryActionTarget(event.target)) {
+      if (
+        shouldPreventSummaryActionDefault(event.target)
+        &&
+        event.button === 0
+        && !event.metaKey
+        && !event.ctrlKey
+        && !event.shiftKey
+        && !event.altKey
+      ) {
+        event.preventDefault();
+      }
+      return;
+    }
+
+    markUserToggleIntent();
   }
 
   useEffect(() => {
@@ -83,7 +116,7 @@ export default function ThreadDisclosure ({
           "flex min-w-0 max-w-full items-center cursor-pointer list-none gap-2 text-muted transition-colors hover:text-text focus-visible:text-text focus-visible:outline-none",
           summaryClassName,
         )}
-        onClick={markUserToggleIntent}
+        onClick={handleSummaryClick}
         onKeyDown={handleSummaryKeyDown}
       >
         <ChevronIcon

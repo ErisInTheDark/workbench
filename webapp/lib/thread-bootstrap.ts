@@ -4,6 +4,7 @@
  * - normalizeThreadTitle: trim and normalize candidate thread titles into a short UI-safe value. Keywords: thread title, normalize, truncate.
  * - buildThreadTitleRouteUrl: compose the absolute thread-title route URL from a known workbench origin. Keywords: thread title, URL, origin.
  * - MODE_STATE_TAG_INSTRUCTIONS: shared injected guidance for agent-visible operating mode changes. Keywords: mode, state tag, thread markdown.
+ * - WORKBENCH_FILE_LINK_INSTRUCTIONS: shared injected guidance for agent-visible clickable file links. Keywords: thread markdown, file links, paths.
  * - buildThreadTitleBootstrapInstructions: create the hidden PowerShell bootstrap instructions that tell a harness how to set a thread title through the local workbench route. Keywords: thread title, instructions, PowerShell, bootstrap.
  * - buildCodexThreadBootstrapInstructions: compose optional Codex agent definition content together with the shared title bootstrap instructions. Keywords: codex, agent, developer instructions, bootstrap.
  */
@@ -39,6 +40,13 @@ export const MODE_STATE_TAG_INSTRUCTIONS = [
   "<set-state mode=\"Decision\" />",
   "Do you approve this plan?",
   "[use request_user_input here]",
+].join("\n");
+
+export const WORKBENCH_FILE_LINK_INSTRUCTIONS = [
+  "## Workbench File Links:",
+  "Options for referencing files in the active project:",
+  "- Prefer #[path/to/file.ts:123] (line number is optional) for simple paths; Workbench resolves project-relative, absolute, and unique suffix paths, and displays the shortest disambiguated filename as a clickable link.",
+  "- If you need a custom label, use [label](path/to/file.ts:123).",
 ].join("\n");
 
 function normalizeWhitespace(value: string) {
@@ -147,6 +155,7 @@ export function buildCodexThreadBootstrapInstructions({
   }
 
   sections.push(MODE_STATE_TAG_INSTRUCTIONS);
+  sections.push(WORKBENCH_FILE_LINK_INSTRUCTIONS);
 
   if (routeUrl?.trim()) {
     sections.push(buildThreadTitleBootstrapInstructions({

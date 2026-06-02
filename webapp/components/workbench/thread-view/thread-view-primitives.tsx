@@ -143,7 +143,15 @@ function splitCommandSummaryStages (parts: ThreadCommandDisplayPart[]) {
   return stages.filter((stage) => stage.length);
 }
 
-function ThreadCommandStageParts ({ parts }: { parts: ThreadCommandDisplayPart[]; }) {
+function ThreadCommandStageParts ({
+  parts,
+  projectFilePaths,
+  projectId,
+}: {
+  parts: ThreadCommandDisplayPart[];
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+}) {
   return (
     <>
       {parts.map((part, index) => (
@@ -160,9 +168,11 @@ function ThreadCommandStageParts ({ parts }: { parts: ThreadCommandDisplayPart[]
             key={`path:${part.path}:${part.lineNumber ?? ""}:${part.columnNumber ?? ""}:${index}`}
             className="max-w-full shrink min-w-0 align-baseline"
             columnNumber={part.columnNumber ?? null}
+            disambiguationPaths={projectFilePaths}
             label={part.label}
             lineNumber={part.lineNumber ?? null}
             path={part.path}
+            projectId={projectId}
           />
         ) : (
           <span key={`text:${index}`} className="contents">
@@ -183,7 +193,15 @@ function ThreadCommandStageParts ({ parts }: { parts: ThreadCommandDisplayPart[]
   );
 }
 
-export function ThreadCommandSummary ({ display }: { display: ThreadCommandSummaryDisplay }) {
+export function ThreadCommandSummary ({
+  display,
+  projectFilePaths,
+  projectId,
+}: {
+  display: ThreadCommandSummaryDisplay;
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+}) {
   const stages = splitCommandSummaryStages(display.summaryParts);
 
   return (
@@ -197,7 +215,7 @@ export function ThreadCommandSummary ({ display }: { display: ThreadCommandSumma
         {stages.map((stage, index) => (
           index === 0 ? (
             <span key={`stage:${index}`} className="inline-flex min-w-0 max-w-full items-baseline gap-[0.3rem]">
-              <ThreadCommandStageParts parts={stage} />
+              <ThreadCommandStageParts parts={stage} projectFilePaths={projectFilePaths} projectId={projectId} />
             </span>
           ) : (
             <span
@@ -206,7 +224,7 @@ export function ThreadCommandSummary ({ display }: { display: ThreadCommandSumma
             >
               <ThreadCommandStageArrowIcon />
               <span className="inline-flex min-w-0 max-w-full items-baseline gap-[0.3rem]">
-                <ThreadCommandStageParts parts={stage} />
+                <ThreadCommandStageParts parts={stage} projectFilePaths={projectFilePaths} projectId={projectId} />
               </span>
             </span>
           )

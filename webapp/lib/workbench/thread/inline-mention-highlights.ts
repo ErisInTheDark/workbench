@@ -11,6 +11,10 @@
  */
 
 import type { WorkbenchSkillSummary } from "../../types";
+import {
+  normalizeWorkbenchPath,
+  resolveProjectFileLinkTarget,
+} from "../markdown/markdown-links";
 
 export type InlineMentionCandidateKind = "skill" | "file";
 
@@ -41,7 +45,10 @@ export interface InlineMentionHighlight {
 }
 
 export interface InlineMentionHighlightSources {
+  cacheKey: string;
   candidates: InlineMentionCandidate[];
+  fileCandidatePaths: readonly string[];
+  projectRootPath?: string;
 }
 
 export interface InlineMentionSuggestion {
@@ -55,6 +62,7 @@ export interface InlineMentionSuggestion {
 
 interface ParsedInlineMentionToken {
   end: number;
+  explicitBoundary: boolean;
   kind: InlineMentionCandidateKind;
   marker: "/" | "#";
   rawValue: string;
@@ -78,13 +86,41 @@ function getSkillDirectoryAlias(skill: WorkbenchSkillSummary) {
   return match?.[1] ?? "";
 }
 
+function getStringListCacheKey(values: readonly string[]) {
+  let hash = 2_166_136_261;
+  for (const value of values) {
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16_777_619);
+    }
+    hash ^= 0;
+    hash = Math.imul(hash, 16_777_619);
+  }
+
+  return `${values.length}:${(hash >>> 0).toString(36)}`;
+}
+
 export function buildInlineMentionCandidates({
   files,
+  projectRootPath,
   skills,
 }: {
   files: Array<string | InlineMentionFileCandidateInput>;
+  projectRootPath?: string;
   skills: WorkbenchSkillSummary[];
 }): InlineMentionHighlightSources {
+  const fileCandidates = files.map((file): InlineMentionCandidate => {
+    const filePath = typeof file === "string" ? file : file.path;
+    return {
+      aliases: [normalizeMentionPath(filePath)],
+      description: "",
+      isExcluded: typeof file === "string" ? false : Boolean(file.isIgnored),
+      kind: "file",
+      label: normalizeMentionPath(filePath),
+      path: normalizeMentionPath(filePath),
+    };
+  });
+
   return {
     candidates: [
       ...skills.map((skill): InlineMentionCandidate => {
@@ -97,18 +133,15 @@ export function buildInlineMentionCandidates({
           path: skill.path,
         };
       }),
-      ...files.map((file): InlineMentionCandidate => {
-        const filePath = typeof file === "string" ? file : file.path;
-        return {
-          aliases: [normalizeMentionPath(filePath)],
-          description: "",
-          isExcluded: typeof file === "string" ? false : Boolean(file.isIgnored),
-          kind: "file",
-          label: normalizeMentionPath(filePath),
-          path: normalizeMentionPath(filePath),
-        };
-      }),
+      ...fileCandidates,
     ],
+    cacheKey: [
+      projectRootPath ?? "",
+      getStringListCacheKey(fileCandidates.map((candidate) => candidate.path)),
+      getStringListCacheKey(skills.map((skill) => `${skill.name}\n${skill.path}\n${skill.relativePath}`)),
+    ].join("|"),
+    fileCandidatePaths: fileCandidates.map((candidate) => candidate.path),
+    projectRootPath,
   };
 }
 
@@ -116,24 +149,76 @@ function stripTrailingPunctuation(value: string) {
   return value.replace(TRAILING_PUNCTUATION_PATTERN, "");
 }
 
+function isInlineMentionBoundary(value: string | undefined) {
+  return !value || /\s/.test(value);
+}
+
+function getLineEndIndex(text: string, start: number) {
+  for (let index = start; index < text.length; index += 1) {
+    if (text[index] === "\r" || text[index] === "\n") {
+      return index;
+    }
+  }
+
+  return text.length;
+}
+
 function parseInlineMentionTokens(text: string): ParsedInlineMentionToken[] {
   const tokens: ParsedInlineMentionToken[] = [];
-  const tokenPattern = /(^|\s)([/#])(\S+)/g;
-  let match: RegExpExecArray | null;
+  for (let index = 0; index < text.length; index += 1) {
+    const marker = text[index];
+    if ((marker !== "/" && marker !== "#") || !isInlineMentionBoundary(text[index - 1])) {
+      continue;
+    }
 
-  while ((match = tokenPattern.exec(text)) !== null) {
-    const marker = match[2] as "/" | "#";
-    const rawValue = match[3] ?? "";
-    const leadingText = match[1] ?? "";
-    const start = match.index + leadingText.length;
-    const tokenText = `${marker}${rawValue}`;
+    if (marker === "/") {
+      const match = /^\/(\S+)/.exec(text.slice(index));
+      if (!match) {
+        continue;
+      }
+
+      tokens.push({
+        end: index + match[0].length,
+        explicitBoundary: false,
+        kind: "skill",
+        marker,
+        rawValue: match[1],
+        start: index,
+      });
+      index += match[0].length - 1;
+      continue;
+    }
+
+    if (text[index + 1] === "[") {
+      const closeIndex = text.indexOf("]", index + 2);
+      const lineEndIndex = getLineEndIndex(text, index + 2);
+      if (closeIndex !== -1 && closeIndex <= lineEndIndex) {
+        tokens.push({
+          end: closeIndex + 1,
+          explicitBoundary: true,
+          kind: "file",
+          marker,
+          rawValue: text.slice(index + 2, closeIndex),
+          start: index,
+        });
+        index = closeIndex;
+        continue;
+      }
+    }
+
+    const lineEndIndex = getLineEndIndex(text, index + 1);
+    const rawValue = text.slice(index + 1, lineEndIndex);
+    if (!rawValue.trim()) {
+      continue;
+    }
 
     tokens.push({
-      end: start + tokenText.length,
-      kind: marker === "/" ? "skill" : "file",
+      end: lineEndIndex,
+      explicitBoundary: false,
+      kind: "file",
       marker,
       rawValue,
-      start,
+      start: index,
     });
   }
 
@@ -145,27 +230,102 @@ function parseActiveInlineMentionToken(text: string, caretOffset: number): Parse
     return null;
   }
 
-  const prefix = text.slice(0, caretOffset);
-  const match = prefix.match(/(^|\s)([/#])(\S*)$/);
-  if (!match) {
-    return null;
+  const lineStart = Math.max(text.lastIndexOf("\n", caretOffset - 1), text.lastIndexOf("\r", caretOffset - 1)) + 1;
+  const prefix = text.slice(lineStart, caretOffset);
+  const skillMatch = prefix.match(/(^|\s)\/(\S*)$/);
+  if (skillMatch) {
+    const leadingText = skillMatch[1] ?? "";
+    const rawValue = skillMatch[2] ?? "";
+    const start = caretOffset - 1 - rawValue.length;
+    if (start === 0 || leadingText.length > 0) {
+      return {
+        end: caretOffset,
+        explicitBoundary: false,
+        kind: "skill",
+        marker: "/",
+        rawValue,
+        start,
+      };
+    }
   }
 
-  const leadingText = match[1] ?? "";
-  const marker = match[2] as "/" | "#";
-  const rawValue = match[3] ?? "";
-  const start = caretOffset - marker.length - rawValue.length;
-  if (start > 0 && leadingText.length === 0) {
-    return null;
+  for (let index = caretOffset - 1; index >= lineStart; index -= 1) {
+    if (text[index] !== "#") {
+      continue;
+    }
+
+    if (!isInlineMentionBoundary(text[index - 1])) {
+      continue;
+    }
+
+    const explicitBoundary = text[index + 1] === "[";
+    if (explicitBoundary) {
+      const closeIndex = text.indexOf("]", index + 2);
+      if (closeIndex !== -1 && closeIndex < caretOffset) {
+        return null;
+      }
+    }
+
+    const rawValueStart = explicitBoundary ? index + 2 : index + 1;
+    if (rawValueStart > caretOffset) {
+      continue;
+    }
+
+    return {
+      end: caretOffset,
+      explicitBoundary,
+      kind: "file",
+      marker: "#",
+      rawValue: text.slice(rawValueStart, caretOffset),
+      start: index,
+    };
   }
 
-  return {
-    end: caretOffset,
-    kind: marker === "/" ? "skill" : "file",
-    marker,
-    rawValue,
-    start,
+  return null;
+}
+
+function getFileMentionValues(rawValue: string, explicitBoundary: boolean) {
+  if (explicitBoundary) {
+    const value = rawValue.trim();
+    return value ? [{ consumedLength: rawValue.length, value }] : [];
+  }
+
+  const values: Array<{ consumedLength: number; value: string }> = [];
+  const seenValues = new Set<string>();
+
+  const addValue = (end: number) => {
+    const candidate = stripTrailingPunctuation(rawValue.slice(0, end).trimEnd());
+    if (!candidate || seenValues.has(candidate)) {
+      return;
+    }
+
+    seenValues.add(candidate);
+    values.push({
+      consumedLength: rawValue.indexOf(candidate) + candidate.length,
+      value: candidate,
+    });
   };
+
+  const firstWhitespaceIndex = rawValue.search(/\s/);
+  if (firstWhitespaceIndex > 0) {
+    addValue(firstWhitespaceIndex);
+  } else {
+    addValue(rawValue.length);
+  }
+
+  const fileEndpointPattern = /\.[A-Za-z0-9][A-Za-z0-9_.-]*(?::\d+(?::\d+)?)?/g;
+  let match: RegExpExecArray | null;
+  while ((match = fileEndpointPattern.exec(rawValue)) !== null) {
+    addValue(match.index + match[0].length);
+  }
+
+  return values.sort((left, right) => right.consumedLength - left.consumedLength);
+}
+
+function getTokenResolutionEnd(token: ParsedInlineMentionToken, consumedLength: number) {
+  return token.explicitBoundary
+    ? token.end
+    : token.start + token.marker.length + consumedLength;
 }
 
 function resolveSkillMention(value: string, candidates: InlineMentionCandidate[]) {
@@ -178,56 +338,25 @@ function resolveSkillMention(value: string, candidates: InlineMentionCandidate[]
   return uniquePaths.size === 1 && matches.length === 1 ? matches[0] : null;
 }
 
-function getFileMatches(value: string, candidates: InlineMentionCandidate[]) {
-  const normalizedValue = normalizeComparableValue(value);
-  return candidates.filter((candidate) => {
-    if (candidate.kind !== "file") {
-      return false;
-    }
-
-    const normalizedPath = normalizeComparableValue(candidate.path);
-    return normalizedPath === normalizedValue || normalizedPath.endsWith(`/${normalizedValue}`);
+function resolveFileMention(value: string, sources: InlineMentionHighlightSources) {
+  const fileCandidates = sources.candidates.filter((candidate) => candidate.kind === "file");
+  const resolvedTarget = resolveProjectFileLinkTarget(value, {
+    candidatePaths: sources.fileCandidatePaths,
+    projectRootPath: sources.projectRootPath,
   });
-}
-
-function parseFileMentionLocation(value: string) {
-  const match = value.match(/^(.*):(\d+)(?::(\d+))?$/);
-  if (!match) {
-    return {
-      columnNumber: null,
-      lineNumber: null,
-      path: value,
-    };
+  if (!resolvedTarget) {
+    return null;
   }
 
-  return {
-    columnNumber: match[3] ? Number(match[3]) : null,
-    lineNumber: Number(match[2]),
-    path: match[1],
-  };
-}
-
-function resolveFileMention(value: string, candidates: InlineMentionCandidate[]) {
-  const parsedValue = parseFileMentionLocation(value);
-  const exactMatches = getFileMatches(parsedValue.path, candidates).filter((candidate) => (
-    normalizeComparableValue(candidate.path) === normalizeComparableValue(parsedValue.path)
+  const normalizedTargetPath = normalizeWorkbenchPath(resolvedTarget.relativePath).toLocaleLowerCase();
+  const candidate = fileCandidates.find((entry) => (
+    normalizeWorkbenchPath(entry.path).toLocaleLowerCase() === normalizedTargetPath
   ));
-  const exactPaths = new Set(exactMatches.map((match) => normalizeComparableValue(match.path)));
-  if (exactPaths.size === 1 && exactMatches.length === 1) {
-    return {
-      candidate: exactMatches[0],
-      columnNumber: parsedValue.columnNumber,
-      lineNumber: parsedValue.lineNumber,
-    };
-  }
-
-  const suffixMatches = getFileMatches(parsedValue.path, candidates);
-  const suffixPaths = new Set(suffixMatches.map((match) => normalizeComparableValue(match.path)));
-  return suffixPaths.size === 1 && suffixMatches.length === 1
+  return candidate
     ? {
-      candidate: suffixMatches[0],
-      columnNumber: parsedValue.columnNumber,
-      lineNumber: parsedValue.lineNumber,
+      candidate,
+      columnNumber: resolvedTarget.columnNumber,
+      lineNumber: resolvedTarget.lineNumber,
     }
     : null;
 }
@@ -235,16 +364,20 @@ function resolveFileMention(value: string, candidates: InlineMentionCandidate[])
 function resolveToken(token: ParsedInlineMentionToken, sources: InlineMentionHighlightSources) {
   const rawCandidate = token.rawValue;
   const strippedCandidate = stripTrailingPunctuation(rawCandidate);
-  const values = Array.from(new Set([rawCandidate, strippedCandidate].filter(Boolean)));
+  const values = token.kind === "file"
+    ? getFileMentionValues(rawCandidate, token.explicitBoundary)
+    : Array.from(new Set([rawCandidate, strippedCandidate].filter(Boolean)))
+      .map((value) => ({ consumedLength: value.length, value }));
 
-  for (const value of values) {
+  for (const { consumedLength, value } of values) {
     const match = token.kind === "skill"
       ? resolveSkillMention(value, sources.candidates)
-      : resolveFileMention(value, sources.candidates);
+      : resolveFileMention(value, sources);
     if (match) {
       return {
         candidate: token.kind === "skill" ? match : match.candidate,
         columnNumber: token.kind === "skill" ? null : match.columnNumber,
+        end: getTokenResolutionEnd(token, consumedLength),
         lineNumber: token.kind === "skill" ? null : match.lineNumber,
         value,
       };
@@ -381,7 +514,12 @@ function shouldShowFileSuggestions(query: string, scoredCount: number) {
 }
 
 function getSuggestionReplacementText(marker: "/" | "#", candidate: InlineMentionCandidate) {
-  return `${marker}${candidate.kind === "skill" ? candidate.label : normalizeMentionPath(candidate.path)}`;
+  if (candidate.kind === "skill") {
+    return `${marker}${candidate.label}`;
+  }
+
+  const normalizedPath = normalizeMentionPath(candidate.path);
+  return /\s/.test(normalizedPath) ? `#[${normalizedPath}]` : `${marker}${normalizedPath}`;
 }
 
 export function buildInlineMentionSuggestions(
@@ -444,16 +582,15 @@ export function buildInlineMentionHighlights(
       continue;
     }
 
-    const end = token.start + token.marker.length + resolution.value.length;
     highlights.push({
       columnNumber: resolution.columnNumber,
-      end,
+      end: resolution.end,
       kind: resolution.candidate.kind,
       label: resolution.candidate.label,
       lineNumber: resolution.lineNumber,
       path: resolution.candidate.path,
       start: token.start,
-      text: text.slice(token.start, end),
+      text: text.slice(token.start, resolution.end),
       title: resolution.candidate.kind === "skill"
         ? `Known skill: ${resolution.candidate.label}`
         : `Project file: ${resolution.candidate.path}`,
