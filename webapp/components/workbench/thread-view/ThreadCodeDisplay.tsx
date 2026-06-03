@@ -8,6 +8,7 @@
 import { Fragment, useState, type CSSProperties, type ReactNode } from "react";
 
 import type { ParsedUnifiedDiff, UnifiedDiffLine } from "../../../lib/workbench/thread/thread-file-diff";
+import ThreadAnsiOutput from "./ThreadAnsiOutput";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 
 type ThreadCodeDisplayProps =
@@ -228,7 +229,7 @@ function ThreadPlainOutput ({
       `}
       style={isFramed ? undefined : CODE_SURFACE_EDGE_STYLE}
     >
-      {output}
+      <ThreadAnsiOutput output={output} />
     </pre>
   );
 }
