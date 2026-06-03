@@ -27,12 +27,14 @@ import {
   toSerializableJson,
 } from "./codex-transcript-normalizers";
 import {
+  classifyThreadItemAsTimelineAnchor,
   classifyTimelineEvent,
   createDynamicToolCallItem,
   extractTimelineItemKey,
   normalizeTurnTimeline,
   orderMergedItemsByTimeline,
   rememberTimelineItem,
+  type TimelineItemMetadata,
 } from "./codex-transcript-timeline";
 import type {
   CodexTranscriptOrphanEventsFile,
@@ -142,13 +144,42 @@ function rememberTurnItemIds(file: CodexTranscriptTurnFile, itemIds: string[]) {
   return mergeItemOrder(file.itemOrder ?? [], itemIds);
 }
 
-function rememberTurnTimelineItem(file: CodexTranscriptTurnFile, itemId: string, item: ThreadItem | null, method: string | null) {
-  return rememberTimelineItem(file, itemId, classifyTimelineEvent(method, item));
+function readPayloadTimestamp(event: CodexTranscriptRawEvent, key: "completedAtMs" | "startedAtMs") {
+  const payload = asRecord(event.payload);
+  const params = asRecord(payload?.params);
+  const timestamp = params?.[key];
+  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : null;
 }
 
-function getTurnOrderingUpdate(file: CodexTranscriptTurnFile, itemId: string, item: ThreadItem | null, method: string | null) {
+function createTimelineItemMetadata(event: CodexTranscriptRawEvent): TimelineItemMetadata {
+  const receivedAt = event.receivedAt;
+  return {
+    completedAt: readPayloadTimestamp(event, "completedAtMs"),
+    firstSeenAt: receivedAt,
+    lastSeenAt: receivedAt,
+    startedAt: readPayloadTimestamp(event, "startedAtMs"),
+  };
+}
+
+function rememberTurnTimelineItem(
+  file: CodexTranscriptTurnFile,
+  itemId: string,
+  item: ThreadItem | null,
+  method: string | null,
+  metadata: TimelineItemMetadata | null = null,
+) {
+  return rememberTimelineItem(file, itemId, classifyTimelineEvent(method, item), metadata);
+}
+
+function getTurnOrderingUpdate(
+  file: CodexTranscriptTurnFile,
+  itemId: string,
+  item: ThreadItem | null,
+  method: string | null,
+  metadata: TimelineItemMetadata | null = null,
+) {
   const itemOrder = rememberTurnItemIds(file, [itemId]);
-  const itemTimeline = rememberTurnTimelineItem({ ...file, itemOrder }, itemId, item, method);
+  const itemTimeline = rememberTurnTimelineItem({ ...file, itemOrder }, itemId, item, method, metadata);
   return { itemOrder, itemTimeline };
 }
 
@@ -164,6 +195,63 @@ function applyTurnTimeline(turn: Turn | null, file: Pick<CodexTranscriptTurnFile
   return {
     ...normalizedTurn,
     items: orderMergedItemsByTimeline(normalizedTurn.items, normalizeTurnTimeline({ ...file, turn: normalizedTurn })),
+  };
+}
+
+function getContextCompactionItems(turn: Turn | null) {
+  return (turn?.items ?? []).filter((item): item is Extract<ThreadItem, { type: "contextCompaction" }> => (
+    item.type === "contextCompaction"
+  ));
+}
+
+function isGenericSnapshotItemId(itemId: string) {
+  return /^item-\d+$/u.test(itemId);
+}
+
+function reconcileSnapshotContextCompactionItemIds(currentTurn: Turn | null, incomingTurn: Turn) {
+  const currentCompactionItems = getContextCompactionItems(currentTurn);
+  const incomingCompactionItems = getContextCompactionItems(incomingTurn);
+  if (!currentCompactionItems.length || !incomingCompactionItems.length) {
+    return {
+      aliasesByItemId: new Map<string, string[]>(),
+      turn: incomingTurn,
+    };
+  }
+
+  const canonicalIdsByIncomingId = new Map<string, string>();
+  const aliasesByItemId = new Map<string, string[]>();
+  incomingCompactionItems.forEach((incomingItem, index) => {
+    const currentItem = currentCompactionItems[index];
+    if (
+      !currentItem
+      || currentItem.id === incomingItem.id
+      || isGenericSnapshotItemId(currentItem.id)
+      || !isGenericSnapshotItemId(incomingItem.id)
+    ) {
+      return;
+    }
+
+    canonicalIdsByIncomingId.set(incomingItem.id, currentItem.id);
+    aliasesByItemId.set(currentItem.id, [incomingItem.id]);
+  });
+
+  if (!canonicalIdsByIncomingId.size) {
+    return {
+      aliasesByItemId,
+      turn: incomingTurn,
+    };
+  }
+
+  return {
+    aliasesByItemId,
+    turn: {
+      ...incomingTurn,
+      items: incomingTurn.items.map((item) => (
+        item.type === "contextCompaction" && canonicalIdsByIncomingId.has(item.id)
+          ? { ...item, id: canonicalIdsByIncomingId.get(item.id)! }
+          : item
+      )),
+    },
   };
 }
 
@@ -194,13 +282,74 @@ function cleanTurnTimeline(
     }
 
     cleanedTimeline.push({
+      aliases: entry.aliases,
       anchorItemId,
+      completedAt: entry.completedAt,
+      firstSeenAt: entry.firstSeenAt,
       itemId: entry.itemId,
+      lastSeenAt: entry.lastSeenAt,
       sequence: cleanedTimeline.length + 1,
+      startedAt: entry.startedAt,
     });
   }
 
   return cleanedTimeline;
+}
+
+function reindexTimeline(timeline: CodexTranscriptTurnFile["itemTimeline"]) {
+  return [...timeline]
+    .sort((left, right) => left.sequence - right.sequence)
+    .map((entry, index) => ({
+      ...entry,
+      sequence: index + 1,
+    }));
+}
+
+function repairContextCompactionTimelineFromQuestionnaireAnchors(
+  file: CodexTranscriptTurnFile,
+  turn: Turn,
+  timeline: CodexTranscriptTurnFile["itemTimeline"],
+) {
+  let nextTimeline = timeline;
+  for (const contextCompactionItem of getContextCompactionItems(turn)) {
+    const contextCompactionIndex = turn.items.findIndex((item) => item.id === contextCompactionItem.id);
+    const earliestQuestionnaireAnchorIndex = Math.min(...file.questionnaireEntries
+      .filter((entry) => entry.insertAfterItemId === contextCompactionItem.id)
+      .map((entry) => entry.insertAfterItemIndex)
+      .filter((index): index is number => index !== null && index >= 0));
+    if (
+      !Number.isFinite(earliestQuestionnaireAnchorIndex)
+      || contextCompactionIndex < 0
+      || contextCompactionIndex <= earliestQuestionnaireAnchorIndex
+    ) {
+      continue;
+    }
+
+    for (let index = Math.min(earliestQuestionnaireAnchorIndex, turn.items.length - 1); index >= 0; index -= 1) {
+      const anchorItem = turn.items[index];
+      if (!anchorItem || anchorItem.id === contextCompactionItem.id || !classifyThreadItemAsTimelineAnchor(anchorItem)) {
+        continue;
+      }
+
+      const anchorEntry = nextTimeline.find((entry) => entry.itemId === anchorItem.id);
+      if (!anchorEntry) {
+        break;
+      }
+
+      nextTimeline = reindexTimeline(nextTimeline.map((entry) => (
+        entry.itemId === contextCompactionItem.id
+          ? {
+            ...entry,
+            anchorItemId: anchorItem.id,
+            sequence: anchorEntry.sequence + 0.5,
+          }
+          : entry
+      )));
+      break;
+    }
+  }
+
+  return nextTimeline;
 }
 
 function normalizeTurnFileSnapshot(file: CodexTranscriptTurnFile) {
@@ -222,14 +371,16 @@ function normalizeTurnFileSnapshot(file: CodexTranscriptTurnFile) {
     ...file,
     turn: normalizedTurn,
   });
+  const repairedTimeline = repairContextCompactionTimelineFromQuestionnaireAnchors(file, normalizedTurn, normalizedTimeline);
+  const cleanedTimeline = cleanTurnTimeline(repairedTimeline, survivingItemIds);
 
   return {
     ...file,
     itemOrder: normalizedTurn.items.map((item) => item.id),
-    itemTimeline: cleanTurnTimeline(normalizedTimeline, survivingItemIds),
+    itemTimeline: cleanedTimeline,
     turn: {
       ...normalizedTurn,
-      items: orderMergedItemsByTimeline(normalizedTurn.items, cleanTurnTimeline(normalizedTimeline, survivingItemIds)),
+      items: orderMergedItemsByTimeline(normalizedTurn.items, cleanedTimeline),
     },
   };
 }
@@ -811,11 +962,17 @@ export default class CodexTranscriptStore {
   }
 
   private async recordThreadSnapshotTurn(threadId: string, turn: Turn) {
-    const itemOrder = turn.items.map((item) => item.id);
     await this.updateTurnFile(threadId, turn.id, (file) => {
+      const { aliasesByItemId, turn: reconciledTurn } = reconcileSnapshotContextCompactionItemIds(file.turn, turn);
+      const itemOrder = reconciledTurn.items.map((item) => item.id);
       const nextItemOrder = mergeItemOrder(itemOrder, file.itemOrder ?? []);
-      const nextItemTimeline = turn.items.reduce(
-        (timeline, item) => rememberTimelineItem({ ...file, itemOrder: nextItemOrder, itemTimeline: timeline }, item.id, classifyTimelineEvent(null, item)),
+      const nextItemTimeline = reconciledTurn.items.reduce(
+        (timeline, item) => rememberTimelineItem(
+          { ...file, itemOrder: nextItemOrder, itemTimeline: timeline },
+          item.id,
+          classifyTimelineEvent(null, item),
+          { aliases: aliasesByItemId.get(item.id) },
+        ),
         normalizeTurnTimeline(file),
       );
       return {
@@ -823,7 +980,7 @@ export default class CodexTranscriptStore {
         itemOrder: nextItemOrder,
         itemTimeline: nextItemTimeline,
         lastTouchedAt: now(),
-        turn: applyTurnTimeline(mergeTurnItems(file.turn, turn), {
+        turn: applyTurnTimeline(mergeTurnItems(file.turn, reconciledTurn), {
           ...file,
           itemOrder: nextItemOrder,
           itemTimeline: nextItemTimeline,
@@ -834,9 +991,15 @@ export default class CodexTranscriptStore {
 
   private async recordTurnSnapshot(threadId: string, turn: Turn, event: CodexTranscriptRawEvent) {
     await this.updateTurnFile(threadId, turn.id, (file) => {
-      const nextItemOrder = mergeItemOrder(turn.items.map((item) => item.id), file.itemOrder ?? []);
-      const nextItemTimeline = turn.items.reduce(
-        (timeline, item) => rememberTimelineItem({ ...file, itemOrder: nextItemOrder, itemTimeline: timeline }, item.id, classifyTimelineEvent(event.method, item)),
+      const { aliasesByItemId, turn: reconciledTurn } = reconcileSnapshotContextCompactionItemIds(file.turn, turn);
+      const nextItemOrder = mergeItemOrder(reconciledTurn.items.map((item) => item.id), file.itemOrder ?? []);
+      const nextItemTimeline = reconciledTurn.items.reduce(
+        (timeline, item) => rememberTimelineItem(
+          { ...file, itemOrder: nextItemOrder, itemTimeline: timeline },
+          item.id,
+          classifyTimelineEvent(event.method, item),
+          { aliases: aliasesByItemId.get(item.id) },
+        ),
         normalizeTurnTimeline(file),
       );
       return {
@@ -844,7 +1007,7 @@ export default class CodexTranscriptStore {
         itemOrder: nextItemOrder,
         itemTimeline: nextItemTimeline,
         lastTouchedAt: now(),
-        turn: applyTurnTimeline(mergeTurnItems(file.turn, turn), {
+        turn: applyTurnTimeline(mergeTurnItems(file.turn, reconciledTurn), {
           ...file,
           itemOrder: nextItemOrder,
           itemTimeline: nextItemTimeline,
@@ -862,7 +1025,7 @@ export default class CodexTranscriptStore {
 
   private async recordTurnItem(threadId: string, turnId: string, item: ThreadItem, event: CodexTranscriptRawEvent) {
     await this.updateTurnFile(threadId, turnId, (file) => {
-      const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, item.id, item, event.method);
+      const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, item.id, item, event.method, createTimelineItemMetadata(event));
       return {
         ...file,
         itemOrder,

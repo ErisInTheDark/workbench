@@ -47,9 +47,14 @@ export interface CodexTranscriptThreadFile {
 }
 
 export interface CodexTranscriptTurnTimelineEntry {
+  aliases?: string[];
   anchorItemId: string | null;
+  completedAt?: number | null;
+  firstSeenAt?: number | null;
   itemId: string;
+  lastSeenAt?: number | null;
   sequence: number;
+  startedAt?: number | null;
 }
 
 export interface CodexTranscriptTurnFile {

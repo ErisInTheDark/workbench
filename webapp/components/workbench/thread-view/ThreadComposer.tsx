@@ -100,6 +100,36 @@ function createSavedDraftId () {
   return `saved-draft:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 }
 
+function isQuestionnaireFallbackAnchorItem (item: ThreadPayload["turns"][number]["items"][number]) {
+  switch (item.type) {
+    case "agentMessage":
+      return Boolean(item.text.trim());
+    case "hookPrompt":
+    case "plan":
+    case "reasoning":
+    case "userMessage":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function getQuestionnaireFallbackAnchorIndex (items: ThreadPayload["turns"][number]["items"]) {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (isQuestionnaireFallbackAnchorItem(items[index]!)) {
+      return index;
+    }
+  }
+
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (items[index]?.type !== "contextCompaction") {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
 function readFileAsDataUrl (file: File) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -138,7 +168,7 @@ function buildPendingUserInputRequestSubmissionOptions (
   const requestedAnchorIndex = insertAfterItemId
     ? visibleItems.findIndex((item) => item.id === insertAfterItemId)
     : -1;
-  const fallbackAnchorIndex = visibleItems.length - 1;
+  const fallbackAnchorIndex = getQuestionnaireFallbackAnchorIndex(visibleItems);
   const resolvedAnchorIndex = requestedAnchorIndex >= 0 ? requestedAnchorIndex : fallbackAnchorIndex;
   const resolvedAnchorItem = resolvedAnchorIndex >= 0 ? visibleItems[resolvedAnchorIndex] : null;
 

@@ -10,6 +10,10 @@ import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem
 import type { CodexTranscriptTurnFile, CodexTranscriptTurnTimelineEntry } from "./codex-transcript-types";
 
 type TimelineClassification = "anchor" | "non-anchor" | null;
+export type TimelineItemMetadata = Partial<Pick<
+  CodexTranscriptTurnTimelineEntry,
+  "aliases" | "completedAt" | "firstSeenAt" | "lastSeenAt" | "startedAt"
+>>;
 
 function asRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -78,6 +82,39 @@ function nextTimelineSequence(timeline: CodexTranscriptTurnTimelineEntry[]) {
   return Math.max(0, ...timeline.map((entry) => entry.sequence)) + 1;
 }
 
+function mergeNullableTimestamp(left: number | null | undefined, right: number | null | undefined, mode: "earliest" | "latest") {
+  if (left === null || left === undefined) {
+    return right ?? null;
+  }
+  if (right === null || right === undefined) {
+    return left;
+  }
+  return mode === "earliest" ? Math.min(left, right) : Math.max(left, right);
+}
+
+function mergeTimelineAliases(left: string[] | undefined, right: string[] | undefined) {
+  const aliases = Array.from(new Set([...(left ?? []), ...(right ?? [])].filter(Boolean)));
+  return aliases.length ? aliases : undefined;
+}
+
+function mergeTimelineEntryMetadata(
+  entry: CodexTranscriptTurnTimelineEntry,
+  metadata: TimelineItemMetadata | null | undefined,
+): CodexTranscriptTurnTimelineEntry {
+  if (!metadata) {
+    return entry;
+  }
+
+  return {
+    ...entry,
+    aliases: mergeTimelineAliases(entry.aliases, metadata.aliases),
+    completedAt: mergeNullableTimestamp(entry.completedAt, metadata.completedAt, "latest"),
+    firstSeenAt: mergeNullableTimestamp(entry.firstSeenAt, metadata.firstSeenAt, "earliest"),
+    lastSeenAt: mergeNullableTimestamp(entry.lastSeenAt, metadata.lastSeenAt, "latest"),
+    startedAt: mergeNullableTimestamp(entry.startedAt, metadata.startedAt, "earliest"),
+  };
+}
+
 function findLatestAnchorId(timeline: CodexTranscriptTurnTimelineEntry[]) {
   return [...timeline]
     .sort((left, right) => left.sequence - right.sequence)
@@ -114,19 +151,32 @@ export function rememberTimelineItem(
   file: Pick<CodexTranscriptTurnFile, "itemOrder" | "itemTimeline" | "turn">,
   itemId: string,
   classification: TimelineClassification,
+  metadata: TimelineItemMetadata | null = null,
 ) {
   const timeline = normalizeTurnTimeline(file);
-  if (!classification || timeline.some((entry) => entry.itemId === itemId)) {
+  const existingEntryIndex = timeline.findIndex((entry) => entry.itemId === itemId || entry.aliases?.includes(itemId));
+  if (existingEntryIndex >= 0) {
+    return timeline.map((entry, index) => (
+      index === existingEntryIndex
+        ? mergeTimelineEntryMetadata(entry, {
+          ...metadata,
+          aliases: itemId === entry.itemId ? metadata?.aliases : mergeTimelineAliases(metadata?.aliases, [itemId]),
+        })
+        : entry
+    ));
+  }
+
+  if (!classification) {
     return timeline;
   }
 
   return [
     ...timeline,
-    {
+    mergeTimelineEntryMetadata({
       anchorItemId: classification === "anchor" ? itemId : findLatestAnchorId(timeline),
       itemId,
       sequence: nextTimelineSequence(timeline),
-    },
+    }, metadata),
   ];
 }
 
@@ -136,30 +186,34 @@ export function orderMergedItemsByTimeline(items: ThreadItem[], timeline: CodexT
   const orderedItems: ThreadItem[] = [];
   const sortedTimeline = [...timeline].sort((left, right) => left.sequence - right.sequence);
 
-  const emit = (itemId: string) => {
-    const item = itemsById.get(itemId);
+  const emit = (itemId: string, aliases: string[] = []) => {
+    const item = [itemId, ...aliases].map((candidateId) => itemsById.get(candidateId)).find(Boolean);
     if (!item || emittedIds.has(itemId)) {
       return;
     }
     emittedIds.add(itemId);
+    for (const alias of aliases) {
+      emittedIds.add(alias);
+    }
+    emittedIds.add(item.id);
     orderedItems.push(item);
   };
 
   for (const entry of sortedTimeline.filter((candidate) => candidate.anchorItemId === null)) {
-    emit(entry.itemId);
+    emit(entry.itemId, entry.aliases);
   }
 
   for (const anchorEntry of sortedTimeline.filter((entry) => entry.anchorItemId === entry.itemId)) {
-    emit(anchorEntry.itemId);
+    emit(anchorEntry.itemId, anchorEntry.aliases);
     for (const childEntry of sortedTimeline) {
       if (childEntry.anchorItemId === anchorEntry.itemId && childEntry.itemId !== anchorEntry.itemId) {
-        emit(childEntry.itemId);
+        emit(childEntry.itemId, childEntry.aliases);
       }
     }
   }
 
   for (const entry of sortedTimeline) {
-    emit(entry.itemId);
+    emit(entry.itemId, entry.aliases);
   }
 
   for (const item of items) {

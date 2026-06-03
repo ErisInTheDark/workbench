@@ -149,6 +149,81 @@ const normalizedDuplicateUserMessages = normalizeThreadItems([
   genericSnapshotUserMessage,
 ]);
 
+const contextCompaction = {
+  id: "compaction-live-a",
+  type: "contextCompaction",
+} satisfies ThreadItem;
+
+const snapshotContextCompaction = {
+  id: "item-97",
+  type: "contextCompaction",
+} satisfies ThreadItem;
+
+const secondContextCompaction = {
+  id: "compaction-live-b",
+  type: "contextCompaction",
+} satisfies ThreadItem;
+
+const secondSnapshotContextCompaction = {
+  id: "item-102",
+  type: "contextCompaction",
+} satisfies ThreadItem;
+
+const extraSnapshotContextCompaction = {
+  id: "item-103",
+  type: "contextCompaction",
+} satisfies ThreadItem;
+
+const postCompactionAgentMessage = {
+  id: "agent-after-compaction",
+  memoryCitation: null,
+  phase: "commentary",
+  text: "After compaction",
+  type: "agentMessage",
+} satisfies ThreadItem;
+
+const timelineWithAliasedContextCompaction = [
+  {
+    anchorItemId: agentMessage.id,
+    itemId: agentMessage.id,
+    sequence: 1,
+  },
+  {
+    aliases: [snapshotContextCompaction.id],
+    anchorItemId: agentMessage.id,
+    completedAt: 3000,
+    firstSeenAt: 1000,
+    itemId: contextCompaction.id,
+    lastSeenAt: 3000,
+    sequence: 2,
+    startedAt: 1000,
+  },
+  {
+    aliases: [secondSnapshotContextCompaction.id],
+    anchorItemId: agentMessage.id,
+    completedAt: 5000,
+    firstSeenAt: 4000,
+    itemId: secondContextCompaction.id,
+    lastSeenAt: 5000,
+    sequence: 3,
+    startedAt: 4000,
+  },
+  {
+    anchorItemId: postCompactionAgentMessage.id,
+    itemId: postCompactionAgentMessage.id,
+    sequence: 4,
+  },
+] satisfies CodexTranscriptTurnTimelineEntry[];
+const orderedItemsWithAliasedContextCompaction = orderMergedItemsByTimeline([
+  agentMessage,
+  postCompactionAgentMessage,
+  contextCompaction,
+  snapshotContextCompaction,
+  secondContextCompaction,
+  secondSnapshotContextCompaction,
+  extraSnapshotContextCompaction,
+], timelineWithAliasedContextCompaction);
+
 void ([
   timeline,
   timelineWithCommand,
@@ -159,7 +234,8 @@ void ([
   normalizedIndexedGenericSnapshotReasoning,
   normalizedRepeatedCanonicalReasoning,
   normalizedDuplicateUserMessages,
-] satisfies [CodexTranscriptTurnTimelineEntry[], CodexTranscriptTurnTimelineEntry[], ThreadItem[], ThreadItem, ThreadItem[], ThreadItem[], ThreadItem[], ThreadItem[], ThreadItem[]]);
+  orderedItemsWithAliasedContextCompaction,
+] satisfies [CodexTranscriptTurnTimelineEntry[], CodexTranscriptTurnTimelineEntry[], ThreadItem[], ThreadItem, ThreadItem[], ThreadItem[], ThreadItem[], ThreadItem[], ThreadItem[], ThreadItem[]]);
 
 // Manual checklist:
 // - `orderedItems` should be `[agentMessage, commandExecution]`, proving command/tool items stay after their anchor.
@@ -169,4 +245,5 @@ void ([
 // - `normalizedIndexedGenericSnapshotReasoning` should preserve the generic snapshot summary indexes while blanking only duplicated segments.
 // - `normalizedRepeatedCanonicalReasoning` should keep both canonical `rs-*` reasoning items even when their text matches.
 // - `normalizedDuplicateUserMessages` should keep the canonical turn-start user item and remove the generic snapshot duplicate.
+// - `orderedItemsWithAliasedContextCompaction` should keep one item per aliased compaction between the surrounding messages and leave the unmatched extra compaction at the end.
 // - Partial `itemTimeline` + legacy `itemOrder` cases should be added here when implementing migrations.

@@ -102,6 +102,20 @@ function getFinalAgentMessageInsertIndex(items: ThreadItem[]) {
   return fallbackIndex;
 }
 
+function isQuestionnaireHistoryAnchorItem(item: ThreadItem) {
+  switch (item.type) {
+    case "agentMessage":
+      return Boolean(item.text.trim());
+    case "hookPrompt":
+    case "plan":
+    case "reasoning":
+    case "userMessage":
+      return true;
+    default:
+      return false;
+  }
+}
+
 function sortQuestionnaireHistoryEntries(entries: WorkbenchQuestionnaireHistoryEntry[]) {
   return [...entries].sort((left, right) => {
     if (left.resolvedAt !== right.resolvedAt) {
@@ -136,7 +150,7 @@ function resolveQuestionnaireHistoryAnchorIndex(
 ) {
   if (entry.insertAfterItemId) {
     const anchorIndex = nextItems.findIndex((item) => item.id === entry.insertAfterItemId);
-    if (anchorIndex >= 0) {
+    if (anchorIndex >= 0 && isQuestionnaireHistoryAnchorItem(nextItems[anchorIndex]!)) {
       return anchorIndex;
     }
   }
@@ -146,10 +160,16 @@ function resolveQuestionnaireHistoryAnchorIndex(
     && entry.insertAfterItemIndex >= 0
     && entry.insertAfterItemIndex < baseItems.length
   ) {
-    const baseAnchorItem = baseItems[entry.insertAfterItemIndex];
-    const anchorIndex = nextItems.findIndex((item) => item.id === baseAnchorItem?.id);
-    if (anchorIndex >= 0) {
-      return anchorIndex;
+    for (let baseIndex = entry.insertAfterItemIndex; baseIndex >= 0; baseIndex -= 1) {
+      const baseAnchorItem = baseItems[baseIndex];
+      if (!baseAnchorItem || !isQuestionnaireHistoryAnchorItem(baseAnchorItem)) {
+        continue;
+      }
+
+      const anchorIndex = nextItems.findIndex((item) => item.id === baseAnchorItem.id);
+      if (anchorIndex >= 0 && isQuestionnaireHistoryAnchorItem(nextItems[anchorIndex]!)) {
+        return anchorIndex;
+      }
     }
   }
 
