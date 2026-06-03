@@ -129,6 +129,7 @@ const SETTINGS_ORDER: WorkbenchSettingKey[] = [
   "composerSpellCheck",
   "fileOpenBehavior",
   "showUnopenableFiles",
+  "threadCodeBlockWrap",
   "editorFontSize",
 ];
 
@@ -683,6 +684,15 @@ export default function Workbench () {
       };
     });
   }, [explorer.currentProjectId]);
+
+  const updateThreadCodeBlockWrapSetting = useCallback((nextValue: boolean) => {
+    if (explorer.currentProjectId) {
+      updateProjectSetting("threadCodeBlockWrap", nextValue);
+      return;
+    }
+
+    updateGlobalSetting("threadCodeBlockWrap", nextValue);
+  }, [explorer.currentProjectId, updateGlobalSetting, updateProjectSetting]);
 
   useEffect(() => {
     if (sidebarMode !== "projects") {
@@ -1900,10 +1910,12 @@ export default function Workbench () {
                   onThreadReasoningEffortChange={setThreadReasoningEffort}
                   onThreadServiceTierChange={setThreadServiceTier}
                   onThreadModelChange={setThreadModel}
+                  onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
                   projectId={activeProjectId}
                   projectRootPath={explorer.rootPath}
                   projectTree={explorer.tree}
                   rateLimits={rateLimits}
+                  threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
                   threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
                   threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
                   threadSavedComposerDrafts={threadSavedComposerDrafts}

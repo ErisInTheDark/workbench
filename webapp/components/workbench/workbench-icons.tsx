@@ -8,6 +8,7 @@
  * - BackArrowIcon: render the mobile back-navigation icon. Keywords: workbench, icon, navigation.
  * - GearIcon: render the settings navigation icon. Keywords: workbench, icon, settings.
  * - ReloadIcon: render the local runtime reload icon. Keywords: workbench, icon, reload.
+ * - WrapTextIcon: render the thread codeblock line-wrap toggle icon. Keywords: workbench, icon, thread, code, wrap.
  */
 import type { WorkbenchHarness } from "../../lib/types";
 
@@ -126,6 +127,17 @@ export function ReloadIcon () {
       <path d="M3.75 3.75V6.75H6.75" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M3.75 10.75A6.25 6.25 0 0 0 14.7 14.88L16.25 13.25" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M16.25 16.25V13.25H13.25" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function WrapTextIcon ({ className = "size-4" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
+      <path d="M3.5 5.5H16.5" strokeLinecap="round" />
+      <path d="M3.5 9.5H13.25C15.05 9.5 16.5 10.82 16.5 12.45C16.5 14.08 15.05 15.4 13.25 15.4H10.25" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12.1 13.35L10.05 15.4L12.1 17.45" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3.5 13.5H7.5" strokeLinecap="round" />
     </svg>
   );
 }

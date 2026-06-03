@@ -591,6 +591,25 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     word-break: break-word;
   }
 
+  [data-thread-codeblock-wrap="true"] [data-thread-codeblock-pre="true"] {
+    overflow-x: hidden !important;
+    overflow-wrap: anywhere !important;
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+  }
+
+  [data-thread-codeblock-wrap="true"] [data-thread-codeblock-code="true"] {
+    max-width: 100% !important;
+    min-width: 0 !important;
+    overflow-wrap: anywhere !important;
+    white-space: inherit !important;
+    width: 100% !important;
+  }
+
+  [data-thread-codeblock-wrap="true"] [data-thread-codeblock-wrap-toggle="true"] {
+    color: var(--accent);
+  }
+
   @media (hover: none) and (pointer: coarse) {
     .thread-plaintext-editable {
       font-size: max(1rem, 1em);

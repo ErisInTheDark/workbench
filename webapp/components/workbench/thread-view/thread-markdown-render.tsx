@@ -24,11 +24,29 @@ import {
 import { getInlineMentionMarkClassName } from "../../../lib/workbench/thread/inline-mention-styles";
 import ChevronIcon from "../ChevronIcon";
 import ProjectFilePath from "../ProjectFilePath";
+import { WrapTextIcon } from "../workbench-icons";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 
 // reusable classes only
 const BLOCK_SPACING_CLASS = "mb-[0.9em] last:mb-0";
+const CODE_BLOCK_WRAP_BUTTON_CLASS = [
+  "inline-flex",
+  "size-[1.45rem]",
+  "shrink-0",
+  "items-center",
+  "justify-center",
+  "rounded-[0.38rem]",
+  "text-muted",
+  "transition-[background-color,color,opacity]",
+  "duration-150",
+  "ease-out",
+  "hover:bg-accent-soft",
+  "hover:text-accent",
+  "focus-visible:bg-accent-soft",
+  "focus-visible:text-accent",
+  "focus-visible:outline-none",
+].join(" ");
 const HEADING_CLASSES = {
   1: `${BLOCK_SPACING_CLASS} font-sans text-[1.16em] font-semibold leading-[1.2]`,
   2: `${BLOCK_SPACING_CLASS} font-sans text-[1.08em] font-semibold leading-[1.2]`,
@@ -391,22 +409,34 @@ function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, k
         : renderThreadListBlock(block, options, keyPrefix);
     case "hr":
       return <hr className={BLOCK_SPACING_CLASS} key={keyPrefix} />;
-    case "code":
+    case "code": {
       return (
-        <div className={`${BLOCK_SPACING_CLASS} max-w-full overflow-hidden rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)]`} key={keyPrefix}>
-          {block.language ? (
-            <div className="border-b border-[color-mix(in_srgb,var(--text)_8%,transparent)] px-[0.8rem] py-[0.36rem] font-mono text-[0.72em] leading-none text-muted">
-              {block.language}
-            </div>
-          ) : null}
+        <div className={`${BLOCK_SPACING_CLASS} max-w-full overflow-hidden rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)]`} data-thread-codeblock="true" key={keyPrefix}>
+          <div className="flex min-h-[2.05rem] items-center justify-between gap-2 border-b border-[color-mix(in_srgb,var(--text)_8%,transparent)] px-[0.65rem] py-[0.28rem]">
+            <span className="min-w-0 truncate pl-[0.15rem] font-mono text-[0.72em] leading-none text-muted">
+              {block.language || "code"}
+            </span>
+            <button
+              type="button"
+              aria-label="Toggle code block line wrapping"
+              aria-pressed={false}
+              className={CODE_BLOCK_WRAP_BUTTON_CLASS}
+              data-thread-codeblock-wrap-toggle="true"
+              title="Toggle code block line wrapping"
+            >
+              <WrapTextIcon />
+            </button>
+          </div>
           <pre
             className="max-w-full overflow-x-auto whitespace-pre px-[0.95rem] py-[0.8rem]"
             data-language={block.language}
+            data-thread-codeblock-pre="true"
           >
-            <code className="block w-max min-w-full rounded-none bg-transparent p-0 font-mono text-[0.94em]">{block.text}</code>
+            <code className="block w-max min-w-full rounded-none bg-transparent p-0 font-mono text-[0.94em]" data-thread-codeblock-code="true">{block.text}</code>
           </pre>
         </div>
       );
+    }
     case "table":
       return renderThreadTableBlock(block, options, keyPrefix);
     case "paragraph": {

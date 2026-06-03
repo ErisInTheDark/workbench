@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - DEFAULT_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE: editor zoom defaults and bounds. Keywords: settings, editor, zoom.
- * - WorkbenchTheme, WorkbenchEditorFontFamily, WorkbenchFileOpenBehavior, WorkbenchSettingKey: setting value contracts for Workbench preferences. Keywords: settings, theme, editor, composer, file open.
+ * - WorkbenchTheme, WorkbenchEditorFontFamily, WorkbenchFileOpenBehavior, WorkbenchSettingKey: setting value contracts for Workbench preferences. Keywords: settings, theme, editor, composer, file open, thread code.
  * - WorkbenchGlobalSettings, WorkbenchProjectSettings, WorkbenchResolvedSettings: stored and resolved settings shapes. Keywords: settings, global, project override.
  * - WORKBENCH_SETTING_DEFINITIONS: labels and option metadata for settings UI rendering. Keywords: settings, registry, UI.
  * - createDefaultGlobalWorkbenchSettings: create agentic global defaults. Keywords: settings, defaults, agentic.
@@ -30,7 +30,8 @@ export type WorkbenchSettingKey =
   | "composerSpellCheck"
   | "editorFontSize"
   | "fileOpenBehavior"
-  | "showUnopenableFiles";
+  | "showUnopenableFiles"
+  | "threadCodeBlockWrap";
 
 export interface WorkbenchGlobalSettings {
   composerSpellCheck: boolean;
@@ -40,6 +41,7 @@ export interface WorkbenchGlobalSettings {
   fileOpenBehavior: WorkbenchFileOpenBehavior;
   showUnopenableFiles: boolean;
   theme: WorkbenchTheme;
+  threadCodeBlockWrap: boolean;
 }
 
 export type WorkbenchResolvedSettings = WorkbenchGlobalSettings;
@@ -128,6 +130,12 @@ export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: Workbe
     description: "Controls whether the project sidebar shows files Workbench cannot open directly.",
     key: "showUnopenableFiles",
     label: "Show unsupported files",
+    type: "boolean",
+  },
+  threadCodeBlockWrap: {
+    description: "Controls whether thread markdown code blocks wrap long lines instead of using horizontal scrolling.",
+    key: "threadCodeBlockWrap",
+    label: "Wrap thread code blocks",
     type: "boolean",
   },
   editorSpellCheck: {
@@ -229,6 +237,7 @@ function normalizeGlobalWorkbenchSettings(value: unknown): WorkbenchGlobalSettin
     fileOpenBehavior: normalizeFileOpenBehavior(candidate.fileOpenBehavior),
     showUnopenableFiles: typeof candidate.showUnopenableFiles === "boolean" ? candidate.showUnopenableFiles : false,
     theme: normalizeTheme(candidate.theme ?? readLegacyTheme()),
+    threadCodeBlockWrap: typeof candidate.threadCodeBlockWrap === "boolean" ? candidate.threadCodeBlockWrap : false,
   };
 }
 
@@ -252,6 +261,7 @@ function normalizeProjectOverride<K extends WorkbenchSettingKey>(
     case "editorSpellCheck":
     case "composerSpellCheck":
     case "showUnopenableFiles":
+    case "threadCodeBlockWrap":
       return {
         enabled,
         value: typeof candidate.value === "boolean" ? candidate.value : defaultValue,
@@ -268,6 +278,7 @@ export function createDefaultGlobalWorkbenchSettings(): WorkbenchGlobalSettings 
     fileOpenBehavior: "workbench-or-vscode",
     showUnopenableFiles: false,
     theme: "default",
+    threadCodeBlockWrap: false,
   };
 }
 
@@ -281,6 +292,7 @@ export function createDefaultProjectWorkbenchSettings(): WorkbenchProjectSetting
     fileOpenBehavior: { enabled: false, value: globalDefaults.fileOpenBehavior },
     showUnopenableFiles: { enabled: false, value: globalDefaults.showUnopenableFiles },
     theme: { enabled: false, value: globalDefaults.theme },
+    threadCodeBlockWrap: { enabled: false, value: globalDefaults.threadCodeBlockWrap },
   };
 }
 
@@ -311,6 +323,7 @@ export function readProjectWorkbenchSettings(projectId: string) {
     fileOpenBehavior: normalizeProjectOverride("fileOpenBehavior", candidate.fileOpenBehavior),
     showUnopenableFiles: normalizeProjectOverride("showUnopenableFiles", candidate.showUnopenableFiles),
     theme: normalizeProjectOverride("theme", candidate.theme),
+    threadCodeBlockWrap: normalizeProjectOverride("threadCodeBlockWrap", candidate.threadCodeBlockWrap),
   } satisfies WorkbenchProjectSettings;
 }
 
@@ -325,6 +338,7 @@ export function writeProjectWorkbenchSettings(projectId: string, settings: Workb
     fileOpenBehavior: normalizeProjectOverride("fileOpenBehavior", settings.fileOpenBehavior),
     showUnopenableFiles: normalizeProjectOverride("showUnopenableFiles", settings.showUnopenableFiles),
     theme: normalizeProjectOverride("theme", settings.theme),
+    threadCodeBlockWrap: normalizeProjectOverride("threadCodeBlockWrap", settings.threadCodeBlockWrap),
   };
   writeJsonStorageValue(PROJECT_SETTINGS_STORAGE_KEY, nextProjectSettings);
 }
@@ -341,6 +355,7 @@ export function resolveWorkbenchSettings(
     fileOpenBehavior: projectSettings.fileOpenBehavior.enabled ? projectSettings.fileOpenBehavior.value : globalSettings.fileOpenBehavior,
     showUnopenableFiles: projectSettings.showUnopenableFiles.enabled ? projectSettings.showUnopenableFiles.value : globalSettings.showUnopenableFiles,
     theme: projectSettings.theme.enabled ? projectSettings.theme.value : globalSettings.theme,
+    threadCodeBlockWrap: projectSettings.threadCodeBlockWrap.enabled ? projectSettings.threadCodeBlockWrap.value : globalSettings.threadCodeBlockWrap,
   };
 }
 

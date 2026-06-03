@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 
 import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
@@ -323,6 +323,7 @@ export default memo(function ThreadView ({
   fontSizeRem,
   livePendingUserInputRequestsByThreadId,
   onDraftHarnessChange,
+  onThreadCodeBlockWrapChange,
   onListModels,
   onReadThread,
   onThreadSeen,
@@ -344,6 +345,7 @@ export default memo(function ThreadView ({
   projectRootPath,
   projectTree,
   rateLimits,
+  threadCodeBlockWrap,
   threadComposerDraftsByThreadId,
   threadQuestionnaireDraftsByKey,
   threadSavedComposerDrafts,
@@ -353,6 +355,7 @@ export default memo(function ThreadView ({
   fontSizeRem: number;
   livePendingUserInputRequestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>;
   onDraftHarnessChange: (harness: WorkbenchHarness) => void;
+  onThreadCodeBlockWrapChange: (nextValue: boolean) => void;
   onListModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
   onReadThread: (threadId: string, harness?: WorkbenchHarness) => Promise<ThreadPayload | null>;
   onThreadSeen: (thread: ThreadPayload) => void;
@@ -382,6 +385,7 @@ export default memo(function ThreadView ({
   projectRootPath: string;
   projectTree: TreeNode[];
   rateLimits: RateLimitSnapshot | null;
+  threadCodeBlockWrap: boolean;
   threadComposerDraftsByThreadId: Record<string, WorkbenchThreadComposerDraft | undefined>;
   threadQuestionnaireDraftsByKey: Record<string, WorkbenchQuestionnaireDraft | undefined>;
   threadSavedComposerDrafts: WorkbenchThreadSavedComposerDraft[];
@@ -739,6 +743,35 @@ export default memo(function ThreadView ({
     });
   }, [onThreadServiceTierChange, thread.id]);
 
+  const syncCodeBlockWrapDomState = useCallback((nextValue: boolean) => {
+    const root = threadViewRef.current;
+    if (!root) {
+      return;
+    }
+
+    root.setAttribute("data-thread-codeblock-wrap", nextValue ? "true" : "false");
+    root.querySelectorAll<HTMLButtonElement>("button[data-thread-codeblock-wrap-toggle]").forEach((button) => {
+      button.setAttribute("aria-pressed", nextValue ? "true" : "false");
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    syncCodeBlockWrapDomState(threadCodeBlockWrap);
+  }, [syncCodeBlockWrapDomState, threadCodeBlockWrap]);
+
+  const handleThreadViewClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    const toggle = event.target instanceof Element
+      ? event.target.closest<HTMLButtonElement>("button[data-thread-codeblock-wrap-toggle]")
+      : null;
+    if (!toggle || !threadViewRef.current?.contains(toggle)) {
+      return;
+    }
+
+    const nextValue = threadViewRef.current.getAttribute("data-thread-codeblock-wrap") !== "true";
+    syncCodeBlockWrapDomState(nextValue);
+    onThreadCodeBlockWrapChange(nextValue);
+  }, [onThreadCodeBlockWrapChange, syncCodeBlockWrapDomState]);
+
   const getTabBadge = useCallback((threadId: string, payload: ThreadPayload | null | undefined): { isQuestion: boolean; unreadBadge: ThreadUnreadBadge | null } => {
     const hasPendingQuestion = Boolean(livePendingUserInputRequestsByThreadId[threadId]);
     if (hasPendingQuestion) {
@@ -844,10 +877,12 @@ export default memo(function ThreadView ({
   return (
     <div
       ref={threadViewRef}
+      data-thread-codeblock-wrap={threadCodeBlockWrap ? "true" : "false"}
       data-thread-project-file-link-boundary="true"
       className={joinClasses(
         "mx-auto w-full min-w-0 max-w-[56rem] overflow-x-hidden pb-16 md:overflow-x-visible",
       )}
+      onClick={handleThreadViewClick}
       style={{ fontSize: `${fontSizeRem}rem` }}
     >
       {isDraftThreadView ? (
