@@ -8,7 +8,7 @@
  * - default WorkbenchProjectClient: create the project sub-client that owns project discovery, tree refresh, entry creation, and directory expansion state. Keywords: workbench, project, tree, entries, default export.
  */
 
-import type { ChangeSummary, CreateEntryPayload, ProjectSnapshot, TreeNode, WorkbenchProjectOption, WorkbenchProjectsPayload } from "../types";
+import type { ChangeSummary, CreateEntryPayload, ProjectSnapshot, TreeNode, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchProjectsPayload } from "../types";
 import { persistExpandedDirectories, readStoredExpandedDirectories } from "./state/browser-state";
 
 export function cloneTreeNodes(nodes: TreeNode[]): TreeNode[] {
@@ -31,6 +31,7 @@ export interface WorkbenchProjectState {
   projects: WorkbenchProjectOption[];
   root: string;
   rootPath: string;
+  roots: WorkbenchProjectRoot[];
   tree: TreeNode[];
 }
 
@@ -41,6 +42,7 @@ export interface WorkbenchProjectSnapshot {
   projects: WorkbenchProjectOption[];
   root: string;
   rootPath: string;
+  roots: WorkbenchProjectRoot[];
   tree: TreeNode[];
 }
 
@@ -66,6 +68,7 @@ function createInitialProjectState(): WorkbenchProjectState {
     projects: [],
     root: "Project",
     rootPath: "",
+    roots: [],
     tree: [],
   };
 }
@@ -82,6 +85,7 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
       projects: state.projects.map((project) => ({ ...project })),
       root: state.root,
       rootPath: state.rootPath,
+      roots: state.roots.map((root) => ({ ...root })),
       tree: cloneTreeNodes(state.tree),
     };
   }
@@ -97,8 +101,18 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
     state.currentProjectId = payload.projectId;
     state.root = payload.root;
     state.rootPath = payload.rootPath;
+    state.roots = payload.roots.map((root) => ({ ...root }));
     state.tree = cloneTreeNodes(payload.tree);
     state.changes = { ...payload.changes };
+  }
+
+  function applyProjectOption(project: WorkbenchProjectOption) {
+    state.currentProjectId = project.id;
+    state.root = project.name || project.id;
+    state.rootPath = project.rootPath;
+    state.roots = project.roots.map((root) => ({ ...root }));
+    state.tree = [];
+    state.changes = {};
   }
 
   async function refreshProjects() {
@@ -112,11 +126,14 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
     state.projects = payload.data;
   }
 
-  async function refreshProject() {
-    await refreshProjects();
+  async function refreshProject({ refreshProjectList = true }: { refreshProjectList?: boolean } = {}) {
+    if (refreshProjectList) {
+      await refreshProjects();
+    }
     if (!state.currentProjectId) {
       state.root = "No projects";
       state.rootPath = "";
+      state.roots = [];
       state.tree = [];
       state.changes = {};
       emit();
@@ -125,6 +142,7 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
         projectId: "",
         root: state.root,
         rootPath: state.rootPath,
+        roots: [],
         tree: [],
       };
     }
@@ -181,7 +199,8 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
 
   async function selectProjectStrict(projectId: string) {
     await refreshProjects();
-    if (!state.projects.some((project) => project.id === projectId)) {
+    const project = state.projects.find((candidate) => candidate.id === projectId);
+    if (!project) {
       return false;
     }
 
@@ -189,20 +208,23 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
       return true;
     }
 
-    state.currentProjectId = projectId;
+    applyProjectOption(project);
     state.expandedDirectories = new Set(readStoredExpandedDirectories(projectId));
-    await refreshProject();
+    emit();
+    await refreshProject({ refreshProjectList: false });
     return true;
   }
 
   async function selectInitialProject() {
     await refreshProjects();
-    if (!state.currentProjectId && state.projects[0]) {
-      state.currentProjectId = state.projects[0].id;
+    const initialProject = state.projects.find((project) => project.id === state.currentProjectId) ?? state.projects[0] ?? null;
+    if (!state.currentProjectId && initialProject) {
+      applyProjectOption(initialProject);
       state.expandedDirectories = new Set(readStoredExpandedDirectories(state.currentProjectId));
+      emit();
     }
     if (state.currentProjectId) {
-      await refreshProject();
+      await refreshProject({ refreshProjectList: false });
     }
   }
 

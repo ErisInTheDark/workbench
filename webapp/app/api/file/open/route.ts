@@ -9,7 +9,7 @@ import fs from "node:fs/promises";
 
 import { NextRequest, NextResponse } from "next/server";
 
-import { normalizeRelativePath, resolveProjectRoot, safeResolveProjectPath } from "../../../../lib/project";
+import { resolveProjectFilePath, resolveProjectRoot } from "../../../../lib/project";
 import type { OpenFileInEditorRequest, OpenFileInEditorResponse } from "../../../../lib/types";
 
 export const runtime = "nodejs";
@@ -108,13 +108,14 @@ export async function POST(request: NextRequest) {
     }
 
     const resolvedProject = await resolveProjectRoot(payload.projectId);
-    const absolutePath = safeResolveProjectPath(resolvedProject.root, payload.path);
+    const resolvedFile = resolveProjectFilePath(resolvedProject, payload.path);
+    const absolutePath = resolvedFile.absolutePath;
     const stats = await fs.stat(absolutePath);
     if (!stats.isFile()) {
       return NextResponse.json({ error: "The requested path is not a file." }, { status: 400 });
     }
 
-    const normalizedPath = normalizeRelativePath(payload.path).replace(/^\/+/, "");
+    const normalizedPath = resolvedFile.displayPath;
     const target = createGotoTarget(absolutePath, payload.lineNumber ?? null, payload.columnNumber ?? null);
     await openInVsCode(target);
 

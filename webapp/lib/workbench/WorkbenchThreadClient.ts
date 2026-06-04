@@ -14,6 +14,7 @@ import type { GetAccountRateLimitsResponse } from "../codex/generated/app-server
 import type { Model as CodexModel } from "../codex/generated/app-server/v2/Model";
 import type { ModelListResponse } from "../codex/generated/app-server/v2/ModelListResponse";
 import type { RateLimitSnapshot } from "../codex/generated/app-server/v2/RateLimitSnapshot";
+import type { SandboxPolicy } from "../codex/generated/app-server/v2/SandboxPolicy";
 import type { ThreadActiveFlag } from "../codex/generated/app-server/v2/ThreadActiveFlag";
 import type { ThreadCompactStartResponse } from "../codex/generated/app-server/v2/ThreadCompactStartResponse";
 import type { ThreadItem } from "../codex/generated/app-server/v2/ThreadItem";
@@ -34,7 +35,7 @@ import {
 } from "../codex/protocol";
 import {
     formatThreadStatus,
-    getCodexThreadCwdFilterPaths,
+    getCodexThreadCwdFilterPathsForRoots,
     isProjectCodexThread,
     toThreadPayload,
     toThreadSummary,
@@ -56,6 +57,7 @@ import type {
     WorkbenchHarness,
     WorkbenchModelOption,
     WorkbenchPendingUserInputRequest,
+    WorkbenchProjectRoot,
     WorkbenchQuestionnaireHistoryEntry,
     WorkbenchSendThreadMessageOptions,
     WorkbenchStoredThreadUnreadState,
@@ -99,6 +101,32 @@ const EMPTY_ROLLOUT_ERROR_SUFFIX = "is empty";
 const MISSING_ROLLOUT_ERROR_FRAGMENT = "no rollout found by id";
 const FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE = "Started the thread. Its saved rollout is still warming up, so the live view will refresh automatically.";
 
+function createWorkspaceWriteSandboxPolicy(rootPaths: string[]): SandboxPolicy | null {
+  const writableRoots = Array.from(new Set(rootPaths.filter(Boolean)));
+  return writableRoots.length > 1
+    ? {
+      type: "workspaceWrite",
+      writableRoots,
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    }
+    : null;
+}
+
+function buildWorkspaceRootsInstructions(roots: WorkbenchProjectRoot[]) {
+  if (roots.length <= 1) {
+    return null;
+  }
+
+  return [
+    "## Workbench Workspace Roots",
+    "This thread is attached to a multi-root Workbench workspace. User-visible project file paths use `<root>:<path>`.",
+    "Use these root-qualified paths when referring to files:",
+    ...roots.map((root) => `- ${root.id}: ${root.rootPath}${root.isPrimary ? " (primary cwd for new threads)" : ""}`),
+  ].join("\n");
+}
+
 export interface WorkbenchThreadState {
   currentThread: ThreadPayload | null;
   currentThreadId: string;
@@ -107,6 +135,7 @@ export interface WorkbenchThreadState {
   projectId: string;
   projectRoot: string;
   projectRootPath: string;
+  projectRoots: WorkbenchProjectRoot[];
   questionnaireHistoryByThreadId: Map<string, WorkbenchQuestionnaireHistoryEntry[]>;
   rateLimits: RateLimitSnapshot | null;
   rateLimitsByHarness: Map<WorkbenchHarness, RateLimitSnapshot | null>;
@@ -166,7 +195,7 @@ interface WorkbenchThreadClient {
   setCurrentThreadReasoningEffort: (threadId: string, effort: string | null) => void;
   setCurrentThreadServiceTier: (threadId: string, serviceTier: string | null) => void;
   setDraftThreadHarness: (harness: WorkbenchHarness) => void;
-  setProjectContext: (context: { projectId?: string; root: string; rootPath: string }) => void;
+  setProjectContext: (context: { projectId?: string; root: string; rootPath: string; roots?: WorkbenchProjectRoot[] }) => void;
   subscribe: (listener: WorkbenchThreadListener) => () => void;
 }
 
@@ -202,6 +231,7 @@ function createInitialThreadState(): WorkbenchThreadState {
     projectId: "",
     projectRoot: "Project",
     projectRootPath: "",
+    projectRoots: [],
     questionnaireHistoryByThreadId: new Map(),
     rateLimits: null,
     rateLimitsByHarness: new Map(),
@@ -213,6 +243,15 @@ function createInitialThreadState(): WorkbenchThreadState {
 
 function getThreadStateKey(harness: WorkbenchHarness, threadId: string) {
   return `${harness}:${threadId}`;
+}
+
+function getProjectRootPaths(state: Pick<WorkbenchThreadState, "projectRootPath" | "projectRoots">) {
+  const rootPaths = state.projectRoots.length
+    ? state.projectRoots.map((root) => root.rootPath)
+    : state.projectRootPath
+      ? [state.projectRootPath]
+      : [];
+  return Array.from(new Set(rootPaths.filter(Boolean)));
 }
 
 function getThreadItemKey(turnId: string, itemId: string) {
@@ -525,7 +564,8 @@ function WorkbenchThreadClient(
         workbenchRequestSource: AUTO_REFRESH_REQUEST_SOURCE,
       });
 
-      if (state.projectRootPath && !isProjectCodexThread(response.thread, state.projectRootPath)) {
+      const projectRootPaths = getProjectRootPaths(state);
+      if (projectRootPaths.length && !isProjectCodexThread(response.thread, projectRootPaths)) {
         return false;
       }
 
@@ -597,14 +637,43 @@ function WorkbenchThreadClient(
     };
   }
 
-  function setProjectContext(context: { projectId?: string; root: string; rootPath: string }) {
-    if (state.projectId === (context.projectId ?? "") && state.projectRoot === context.root && state.projectRootPath === context.rootPath) {
+  function areProjectRootsEquivalent(left: WorkbenchProjectRoot[], right: WorkbenchProjectRoot[]) {
+    return left.length === right.length
+      && left.every((root, index) => {
+        const otherRoot = right[index];
+        return otherRoot
+          && root.id === otherRoot.id
+          && root.name === otherRoot.name
+          && root.rootPath === otherRoot.rootPath
+          && root.isPrimary === otherRoot.isPrimary;
+      });
+  }
+
+  function setProjectContext(context: { projectId?: string; root: string; rootPath: string; roots?: WorkbenchProjectRoot[] }) {
+    const nextRoots = context.roots?.length
+      ? context.roots.map((root) => ({ ...root }))
+      : context.rootPath
+        ? [{
+          id: context.root,
+          isPrimary: true,
+          name: context.root,
+          relativePath: context.root,
+          rootPath: context.rootPath,
+        }]
+        : [];
+    if (
+      state.projectId === (context.projectId ?? "")
+      && state.projectRoot === context.root
+      && state.projectRootPath === context.rootPath
+      && areProjectRootsEquivalent(state.projectRoots, nextRoots)
+    ) {
       return;
     }
 
     state.projectId = context.projectId ?? "";
     state.projectRoot = context.root;
     state.projectRootPath = context.rootPath;
+    state.projectRoots = nextRoots;
   }
 
   function applyPersistedQuestionnaireHistory(thread: ThreadPayload | null) {
@@ -847,7 +916,8 @@ function WorkbenchThreadClient(
         workbenchRequestSource: AUTO_REFRESH_REQUEST_SOURCE,
       });
 
-      if (state.projectRootPath && !isProjectCodexThread(response.thread, state.projectRootPath)) {
+      const projectRootPaths = getProjectRootPaths(state);
+      if (projectRootPaths.length && !isProjectCodexThread(response.thread, projectRootPaths)) {
         return;
       }
 
@@ -1754,13 +1824,16 @@ function WorkbenchThreadClient(
       readSelectedAgentDefinition(agentPath),
     ]);
 
-    return buildCodexThreadBootstrapInstructions({
-      agentDefinition,
-      harness: "codex",
-      routeUrl: null,
-      threadId,
-      workbenchLibraryInstructions,
-    });
+    return [
+      buildCodexThreadBootstrapInstructions({
+        agentDefinition,
+        harness: "codex",
+        routeUrl: null,
+        threadId,
+        workbenchLibraryInstructions,
+      }),
+      buildWorkspaceRootsInstructions(state.projectRoots),
+    ].filter(Boolean).join("\n\n") || null;
   }
 
   function buildCodexCollaborationBootstrapInstructions(threadId: string, routeUrl: string | null) {
@@ -1810,7 +1883,8 @@ function WorkbenchThreadClient(
         },
       });
 
-      if (state.projectRootPath && !isProjectCodexThread(response.thread, state.projectRootPath)) {
+      const projectRootPaths = getProjectRootPaths(state);
+      if (projectRootPaths.length && !isProjectCodexThread(response.thread, projectRootPaths)) {
         emitStatusMessage("That Codex thread doesn't belong to this project.");
         return null;
       }
@@ -1857,7 +1931,8 @@ function WorkbenchThreadClient(
         },
       });
 
-      if (state.projectRootPath && !isProjectCodexThread(response.thread, state.projectRootPath)) {
+      const projectRootPaths = getProjectRootPaths(state);
+      if (projectRootPaths.length && !isProjectCodexThread(response.thread, projectRootPaths)) {
         emitStatusMessage("That Codex thread doesn't belong to this project.");
         return null;
       }
@@ -1899,7 +1974,8 @@ function WorkbenchThreadClient(
 
     refreshThreadsPromise = (async () => {
       try {
-        if (!state.projectRootPath) {
+        const projectRootPaths = getProjectRootPaths(state);
+        if (!projectRootPaths.length) {
           state.threads = [];
           state.threadsError = "";
           emit();
@@ -1908,7 +1984,7 @@ function WorkbenchThreadClient(
 
         const results = await Promise.allSettled((["codex", "copilot"] as const).map(async (harness) => {
           const cwdFilterPaths = harness === "codex"
-            ? getCodexThreadCwdFilterPaths(state.projectRootPath)
+            ? getCodexThreadCwdFilterPathsForRoots(projectRootPaths)
             : null;
           const response = await sendBridgeRequest<ThreadListResponse>(harness, {
             method: "thread/list",
@@ -1922,7 +1998,7 @@ function WorkbenchThreadClient(
           });
 
           return response.data
-            .filter((thread) => isProjectCodexThread(thread, state.projectRootPath))
+            .filter((thread) => isProjectCodexThread(thread, projectRootPaths))
             .map((thread) => toThreadSummary(thread, harness));
         }));
 
@@ -2672,6 +2748,9 @@ function WorkbenchThreadClient(
     const shouldBypassCodexDraftBootstrap = harness === "codex" && isDraftThread;
     let previousThread = !thread.isDraft ? thread : null;
     let bootstrapThread: ThreadPayload | null = null;
+    const codexWorkspaceSandboxPolicy = harness === "codex"
+      ? createWorkspaceWriteSandboxPolicy(getProjectRootPaths(state))
+      : null;
 
     if (!normalizedInput.length) {
       throw new Error("Message input cannot be empty.");
@@ -2680,6 +2759,19 @@ function WorkbenchThreadClient(
     if (isDraftThread || !resolvedThreadId.trim()) {
       const threadStartRequest = createThreadStartRequest(0, {
         ...(harness === "codex" && state.projectRootPath ? { cwd: state.projectRootPath } : {}),
+        ...(codexWorkspaceSandboxPolicy
+          ? {
+            config: {
+              sandbox_workspace_write: {
+                writable_roots: codexWorkspaceSandboxPolicy.writableRoots,
+                network_access: codexWorkspaceSandboxPolicy.networkAccess,
+                exclude_tmpdir_env_var: codexWorkspaceSandboxPolicy.excludeTmpdirEnvVar,
+                exclude_slash_tmp: codexWorkspaceSandboxPolicy.excludeSlashTmp,
+              },
+            },
+            sandbox: "workspace-write" as const,
+          }
+          : {}),
         ...(harness === "codex"
           ? {
             developerInstructions: await buildCodexDeveloperInstructions(
@@ -2820,6 +2912,7 @@ function WorkbenchThreadClient(
           ...(selectedReasoningEffort ? { effort: selectedReasoningEffort } : {}),
           ...(selectedModel ? { model: selectedModel } : {}),
           ...(harness === "codex" ? { serviceTier: selectedServiceTier } : {}),
+          ...(codexWorkspaceSandboxPolicy ? { sandboxPolicy: codexWorkspaceSandboxPolicy } : {}),
           summary: DEFAULT_TURN_REASONING_SUMMARY,
           threadId: resolvedThreadId,
         } as TurnStartParams & {

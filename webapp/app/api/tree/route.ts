@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { NextRequest } from "next/server";
 
-import { getProjectSnapshot, createProjectEntry, resolveProjectRoot } from "../../../lib/project";
+import { getProjectSnapshot, createProjectEntry, formatWorkspaceQualifiedPath, resolveProjectFilePath, resolveProjectRoot } from "../../../lib/project";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,7 +33,11 @@ export async function POST(request: NextRequest) {
     }
 
     const resolvedProject = await resolveProjectRoot(projectId);
-    const createdPath = await createProjectEntry(parentPath, name, type, resolvedProject.root);
+    const resolvedParent = resolveProjectFilePath(resolvedProject, parentPath);
+    const createdRootPath = await createProjectEntry(resolvedParent.rootRelativePath, name, type, resolvedParent.gitRoot);
+    const createdPath = resolvedProject.kind === "workspace"
+      ? formatWorkspaceQualifiedPath(resolvedParent.root.id, createdRootPath)
+      : createdRootPath;
     const snapshot = await getProjectSnapshot(resolvedProject.id);
     return NextResponse.json({
       ...snapshot,

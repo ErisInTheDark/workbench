@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 
 import { NextRequest, NextResponse } from "next/server";
 
-import { getGitChanges, getHeadFileContent } from "../../../lib/git";
-import { normalizeRelativePath, resolveProjectRoot, safeResolveProjectPath } from "../../../lib/project";
+import { getHeadFileContent } from "../../../lib/git";
+import { getProjectSnapshot, resolveProjectFilePath, resolveProjectRoot } from "../../../lib/project";
 import { isWorkbenchOpenableFile } from "../../../lib/workbench/project/tree-utils";
 
 export const runtime = "nodejs";
@@ -18,11 +18,12 @@ export async function GET(request: NextRequest) {
 
   try {
     const resolvedProject = await resolveProjectRoot(projectId);
-    const absolutePath = safeResolveProjectPath(resolvedProject.root, relativePath);
+    const resolvedFile = resolveProjectFilePath(resolvedProject, relativePath);
+    const absolutePath = resolvedFile.absolutePath;
     const stats = await fs.stat(absolutePath);
-    const normalizedPath = normalizeRelativePath(relativePath);
+    const normalizedPath = resolvedFile.displayPath;
 
-    if (!isWorkbenchOpenableFile(normalizedPath)) {
+    if (!isWorkbenchOpenableFile(resolvedFile.rootRelativePath)) {
       return NextResponse.json({ error: "Only markdown files can be opened in the workbench." }, { status: 400 });
     }
 
@@ -32,7 +33,7 @@ export async function GET(request: NextRequest) {
 
     const [content, headContent] = await Promise.all([
       fs.readFile(absolutePath, "utf8"),
-      getHeadFileContent(resolvedProject.root, normalizedPath),
+      getHeadFileContent(resolvedFile.gitRoot, resolvedFile.rootRelativePath),
     ]);
 
     return NextResponse.json({
@@ -68,12 +69,13 @@ export async function PUT(request: NextRequest) {
     }
 
     const resolvedProject = await resolveProjectRoot(projectId);
-    const absolutePath = safeResolveProjectPath(resolvedProject.root, relativePath);
+    const resolvedFile = resolveProjectFilePath(resolvedProject, relativePath);
+    const absolutePath = resolvedFile.absolutePath;
     const statsBeforeWrite = await fs.stat(absolutePath);
     const actualMtimeMs = Math.trunc(statsBeforeWrite.mtimeMs);
-    const normalizedPath = normalizeRelativePath(relativePath);
+    const normalizedPath = resolvedFile.displayPath;
 
-    if (!isWorkbenchOpenableFile(normalizedPath)) {
+    if (!isWorkbenchOpenableFile(resolvedFile.rootRelativePath)) {
       return NextResponse.json({ error: "Only markdown files can be edited in the workbench." }, { status: 400 });
     }
 
@@ -106,7 +108,7 @@ export async function PUT(request: NextRequest) {
     }
 
     const nextContent = resetToHead
-      ? await getHeadFileContent(resolvedProject.root, normalizedPath)
+      ? await getHeadFileContent(resolvedFile.gitRoot, resolvedFile.rootRelativePath)
       : content;
 
     if (resetToHead && nextContent === null) {
@@ -122,8 +124,8 @@ export async function PUT(request: NextRequest) {
 
     await fs.writeFile(absolutePath, nextContent, "utf8");
 
-    const [changes, stats] = await Promise.all([
-      getGitChanges(resolvedProject.root),
+    const [snapshot, stats] = await Promise.all([
+      getProjectSnapshot(resolvedProject.id),
       fs.stat(absolutePath),
     ]);
 
@@ -132,7 +134,7 @@ export async function PUT(request: NextRequest) {
       projectId: resolvedProject.id,
       updatedAt: stats.mtime.toISOString(),
       mtimeMs: Math.trunc(stats.mtimeMs),
-      changes,
+      changes: snapshot.changes,
     }, {
       headers: {
         "Cache-Control": "no-store",

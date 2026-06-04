@@ -106,6 +106,7 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   projects: [],
   root: "Project",
   rootPath: "",
+  roots: [],
   tree: [],
   threads: [],
   changes: {},
@@ -563,7 +564,13 @@ export default function Workbench () {
   const modifiedPaths = new Set(explorer.locallyModifiedPaths);
   const currentProject = explorer.projects.find((project) => project.id === explorer.currentProjectId) ?? null;
   const activeProjectId = explorer.currentProjectId || route.projectId;
-  const pageTitle = formatWorkbenchPageTitle(currentProject?.name ?? explorer.root ?? explorer.currentProjectId);
+  const currentProjectDisplayName = currentProject
+    ? `${currentProject.name || currentProject.id}${currentProject.kind === "workspace" ? " workspace" : ""}`
+    : null;
+  const currentProjectTitle = currentProject?.kind === "workspace"
+    ? currentProject.roots.map((root) => `${root.id}: ${root.rootPath}`).join("\n")
+    : currentProject?.rootPath ?? explorer.rootPath;
+  const pageTitle = formatWorkbenchPageTitle(currentProjectDisplayName ?? explorer.root ?? explorer.currentProjectId);
   const projectSettings = explorer.currentProjectId
     ? projectSettingsByProjectId[explorer.currentProjectId] ?? createDefaultProjectWorkbenchSettings()
     : createDefaultProjectWorkbenchSettings();
@@ -573,7 +580,7 @@ export default function Workbench () {
     () => (showUnopenableFiles ? explorer.tree : filterVisibleTreeNodes(explorer.tree)),
     [explorer.tree, showUnopenableFiles],
   );
-  const projectTabLabel = getProjectTabLabel(currentProject?.name ?? explorer.root);
+  const projectTabLabel = getProjectTabLabel(currentProjectDisplayName ?? explorer.root);
   const settingsScope = route.view === "settings" ? route.settingsScope : "global";
   const editorFontClassName = EDITOR_FONT_CLASS_NAMES[resolvedSettings.editorFontFamily];
 
@@ -1613,11 +1620,11 @@ export default function Workbench () {
                   <button
                     type="button"
                     className="flex w-full min-w-0 items-center justify-between gap-3 rounded-lg px-2 py-2 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:-ml-2"
-                    title={currentProject?.rootPath ?? explorer.rootPath}
+                    title={currentProjectTitle}
                     onClick={openProjectPicker}
                   >
                     <span className="min-w-0 relative -top-0.5">
-                      <span className="block truncate text-xl font-semibold leading-tight text-text">{currentProject?.name ?? (explorer.currentProjectId || "No project")}</span>
+                      <span className="block truncate text-xl font-semibold leading-tight text-text">{currentProjectDisplayName ?? (explorer.currentProjectId || "No project")}</span>
                     </span>
                     <span className="shrink-0 relative -top-0.5 text-muted" aria-hidden="true">‹</span>
                   </button>
@@ -1765,18 +1772,23 @@ export default function Workbench () {
                   <nav aria-label="Projects" className="space-y-1">
                     {explorer.projects.map((project) => {
                       const isCurrentProject = project.id === explorer.currentProjectId;
+                      const projectSubtitle = project.kind === "workspace"
+                        ? `${project.workspacePath ?? project.id} · ${project.roots.length} roots`
+                        : project.rootPath;
                       return (
                         <a
                           key={project.id}
                           href={createProjectHref(project.id)}
-                          title={project.rootPath}
+                          title={project.kind === "workspace" ? project.roots.map((root) => `${root.id}: ${root.rootPath}`).join("\n") : project.rootPath}
                           className={`relative block min-w-0 rounded-lg px-2 py-1.5 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:py-1${isCurrentProject ? " text-accent after:absolute after:bottom-1 after:right-0 after:top-1 after:w-px after:bg-accent" : " text-muted"}`}
                           onClick={(event) => {
                             void selectProjectFromLink(event, project.id);
                           }}
                         >
-                          <span className={`block truncate text-[0.94rem] leading-tight${isCurrentProject ? " font-semibold" : ""}`}>{project.name || project.id}</span>
-                          <span className="mt-1 block truncate text-[0.74rem] leading-tight text-muted">{project.rootPath}</span>
+                          <span className={`block truncate text-[0.94rem] leading-tight${isCurrentProject ? " font-semibold" : ""}`}>
+                            {project.name || project.id}{project.kind === "workspace" ? " workspace" : ""}
+                          </span>
+                          <span className="mt-1 block truncate text-[0.74rem] leading-tight text-muted">{projectSubtitle}</span>
                         </a>
                       );
                     })}

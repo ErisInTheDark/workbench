@@ -49,11 +49,21 @@ export interface WorkbenchSkillDefinition extends WorkbenchSkillSummary {
 
 export interface WorkbenchProjectOption {
   id: string;
-  kind: "git" | "workbench-library";
+  kind: "git" | "workspace" | "workbench-library";
   lastCommitTimeMs: number | null;
   name: string;
   rootPath: string;
+  roots: WorkbenchProjectRoot[];
   relativePath: string;
+  workspacePath?: string;
+}
+
+export interface WorkbenchProjectRoot {
+  id: string;
+  isPrimary: boolean;
+  name: string;
+  relativePath: string;
+  rootPath: string;
 }
 
 export interface WorkbenchProjectsPayload {
@@ -239,6 +249,7 @@ export interface ProjectSnapshot {
   projectId: string;
   root: string;
   rootPath: string;
+  roots: WorkbenchProjectRoot[];
   tree: TreeNode[];
   changes: Record<string, ChangeSummary>;
 }
@@ -248,6 +259,7 @@ export interface ExplorerSnapshot {
   projects: WorkbenchProjectOption[];
   root: string;
   rootPath: string;
+  roots: WorkbenchProjectRoot[];
   tree: TreeNode[];
   threads: ThreadSummary[];
   changes: Record<string, ChangeSummary>;

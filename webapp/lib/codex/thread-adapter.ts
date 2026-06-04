@@ -2,7 +2,7 @@
  * Exports:
  * - formatSessionSource: flatten generated Codex session sources for sidebar display. Keywords: thread, source, sidebar.
  * - formatThreadStatus: flatten generated Codex thread statuses for workbench state comparisons. Keywords: thread, status, active.
- * - getCodexThreadCwdFilterPaths: build exact-match cwd filter variants for Codex app-server thread listing. Keywords: thread, cwd, filter, windows.
+ * - getCodexThreadCwdFilterPaths/getCodexThreadCwdFilterPathsForRoots: build exact-match cwd filter variants for Codex app-server thread listing. Keywords: thread, cwd, filter, windows, workspace.
  * - isCodexThreadWithinRoot/isCodexThreadAtRoot: browser-safe absolute path checks for project thread filtering. Keywords: cwd, root, filter.
  * - isProjectCodexThread: test whether a generated Codex thread belongs to the current project root. Keywords: thread, cwd, project.
  * - toThreadSummary: normalize generated Codex threads for the explorer sidebar. Keywords: summary, thread list.
@@ -52,6 +52,10 @@ export function getCodexThreadCwdFilterPaths(rootPath: string) {
   }
 
   return Array.from(candidates).filter(Boolean);
+}
+
+export function getCodexThreadCwdFilterPathsForRoots(rootPaths: string[]) {
+  return Array.from(new Set(rootPaths.flatMap((rootPath) => getCodexThreadCwdFilterPaths(rootPath))));
 }
 
 export function formatSessionSource(source: SessionSource) {
@@ -117,8 +121,9 @@ export function isCodexThreadAtRoot(candidatePath: string, rootPath: string) {
   return normalizeAbsolutePathForComparison(candidatePath) === normalizeAbsolutePathForComparison(rootPath);
 }
 
-export function isProjectCodexThread(thread: Pick<Thread, "cwd">, rootPath: string) {
-  return isCodexThreadAtRoot(thread.cwd, rootPath);
+export function isProjectCodexThread(thread: Pick<Thread, "cwd">, rootPath: string | string[]) {
+  const rootPaths = Array.isArray(rootPath) ? rootPath : [rootPath];
+  return rootPaths.some((candidateRootPath) => isCodexThreadAtRoot(thread.cwd, candidateRootPath));
 }
 
 export function toThreadSummary(thread: Thread, harness: WorkbenchHarness = "codex"): ThreadSummary {

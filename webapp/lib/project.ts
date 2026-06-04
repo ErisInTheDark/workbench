@@ -6,10 +6,11 @@
  * - normalizeRelativePath: normalize project paths to forward-slash form for client transport. Keywords: path, normalize, relative.
  * - safeResolve/safeResolveProjectPath: resolve and validate project-relative paths inside a selected project root. Keywords: path, resolve, safety.
  * - isPathWithinRoot: test whether an absolute path belongs to a project root. Keywords: path, root, thread filter.
- * - discoverProjects/resolveProjectRoot/getDefaultProjectId: find and resolve selectable git projects, newest HEAD activity first. Keywords: project, discovery, id, last commit.
+ * - discoverProjects/resolveProjectRoot/getDefaultProjectId: find and resolve selectable git projects and VS Code workspaces, newest HEAD activity first. Keywords: project, workspace, discovery, id, last commit.
  * - createProjectEntry: create a new project file or directory and return its normalized relative path. Keywords: create, file, directory.
  * - buildTree/buildProjectTree: build the visible explorer tree for a project. Keywords: tree, explorer, filesystem.
  * - getProjectSnapshot: assemble the project tree, root info, and git change summary for the client. Keywords: snapshot, project, explorer.
+ * - parseWorkspaceQualifiedPath/formatWorkspaceQualifiedPath/resolveProjectFilePath: resolve root-qualified workspace paths. Keywords: workspace root, file path, qualified path.
  * - listProjectSkills/listProjectSkillDefinitions: discover project-level Workbench Skill metadata and full file content from `.agents/skills`. Keywords: project, skills, manifest.
  * - listUserInvocableAgents/readUserInvocableAgentDefinition: discover project-level agent markdown files from `.agents/agents` and load metadata/prompt. Keywords: agent, prompt, custom agent, iterator.
  */
@@ -17,7 +18,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { getGitChanges } from "./git";
-import type { ProjectSnapshot, TreeNode, WorkbenchAgentDefinition, WorkbenchAgentOption, WorkbenchProjectOption, WorkbenchSkillDefinition, WorkbenchSkillSummary } from "./types";
+import type { ProjectSnapshot, TreeNode, WorkbenchAgentDefinition, WorkbenchAgentOption, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchSkillDefinition, WorkbenchSkillSummary } from "./types";
 import {
   ensureWorkbenchLibrary,
   listWorkbenchLibraryAgents,
@@ -33,6 +34,7 @@ export const projectsRoot = path.resolve(process.env.WORKBENCH_PROJECTS_ROOT?.tr
 const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", "node_modules", ".next"]);
 const discoveryIgnoredNames = new Set([...ignoredNames, "dist", "build", "coverage"]);
 const README_FILE_NAME = "README.md";
+const WORKSPACE_FILE_EXTENSION = ".code-workspace";
 let discoveredProjectsCache: Promise<WorkbenchProjectOption[]> | null = null;
 
 interface GitignoreMatcherGroup {
@@ -42,6 +44,30 @@ interface GitignoreMatcherGroup {
 
 function normalizeProjectId(projectId: string) {
   return normalizeRelativePath(projectId).replace(/^\/+|\/+$/g, "");
+}
+
+function normalizeWorkspaceRootId(value: string) {
+  return normalizeRelativePath(value)
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(Boolean)
+    .at(-1)
+    ?.trim()
+    .replace(/:/g, "-")
+    .replace(/\s+/g, "-")
+    || "root";
+}
+
+function createUniqueWorkspaceRootId(rawId: string, usedIds: Set<string>) {
+  const baseId = normalizeWorkspaceRootId(rawId);
+  let candidateId = baseId;
+  let suffix = 2;
+  while (usedIds.has(candidateId)) {
+    candidateId = `${baseId}-${suffix}`;
+    suffix += 1;
+  }
+  usedIds.add(candidateId);
+  return candidateId;
 }
 
 function getAgentDirectoryPath(rootDir = projectRoot) {
@@ -212,6 +238,25 @@ export function safeResolve(requestPath: string) {
   return safeResolveProjectPath(projectRoot, requestPath);
 }
 
+export function formatWorkspaceQualifiedPath(rootId: string, relativePath: string) {
+  const normalizedRootId = normalizeWorkspaceRootId(rootId);
+  const normalizedPath = normalizeRelativePath(relativePath).replace(/^\/+/, "");
+  return normalizedPath ? `${normalizedRootId}:${normalizedPath}` : `${normalizedRootId}:`;
+}
+
+export function parseWorkspaceQualifiedPath(requestPath: string) {
+  const normalizedPath = normalizeRelativePath(requestPath).replace(/^\/+/, "");
+  const separatorIndex = normalizedPath.indexOf(":");
+  if (separatorIndex <= 0) {
+    return null;
+  }
+
+  return {
+    rootId: normalizedPath.slice(0, separatorIndex),
+    relativePath: normalizedPath.slice(separatorIndex + 1).replace(/^\/+/, ""),
+  };
+}
+
 function normalizePathForComparison(filePath: string) {
   const normalized = path.resolve(String(filePath ?? "")).split(path.sep).join("/").replace(/\/+$/, "");
   return process.platform === "win32"
@@ -321,9 +366,36 @@ async function getGitHeadActivityTimeMs(rootDir: string) {
   }, null);
 }
 
+export interface ResolvedProjectRoot {
+  id: string;
+  name: string;
+  root: string;
+  rootPath: string;
+}
+
+export interface ResolvedProject {
+  id: string;
+  kind: WorkbenchProjectOption["kind"];
+  root: string;
+  rootPath: string;
+  roots: ResolvedProjectRoot[];
+}
+
+function createSingleProjectRoot(rootDir: string): WorkbenchProjectRoot {
+  const name = path.basename(rootDir) || ".";
+  return {
+    id: normalizeWorkspaceRootId(name),
+    isPrimary: true,
+    name,
+    relativePath: normalizeRelativePath(path.relative(projectsRoot, rootDir)) || ".",
+    rootPath: normalizeRelativePath(rootDir),
+  };
+}
+
 async function createProjectOption(rootDir: string): Promise<WorkbenchProjectOption> {
   const relativePath = normalizeRelativePath(path.relative(projectsRoot, rootDir)) || ".";
   const id = normalizeProjectId(relativePath) || ".";
+  const root = createSingleProjectRoot(rootDir);
   return {
     id,
     kind: "git",
@@ -331,11 +403,19 @@ async function createProjectOption(rootDir: string): Promise<WorkbenchProjectOpt
     name: path.basename(rootDir) || id,
     relativePath: id,
     rootPath: normalizeRelativePath(rootDir),
+    roots: [root],
   };
 }
 
 async function createWorkbenchLibraryProjectOption(): Promise<WorkbenchProjectOption> {
   await ensureWorkbenchLibrary();
+  const root = {
+    id: "workbench-library",
+    isPrimary: true,
+    name: "Workbench Library",
+    relativePath: WORKBENCH_LIBRARY_PROJECT_ID,
+    rootPath: normalizeRelativePath(workbenchLibraryRoot),
+  };
   return {
     id: WORKBENCH_LIBRARY_PROJECT_ID,
     kind: "workbench-library",
@@ -343,19 +423,207 @@ async function createWorkbenchLibraryProjectOption(): Promise<WorkbenchProjectOp
     name: "Workbench Library",
     relativePath: WORKBENCH_LIBRARY_PROJECT_ID,
     rootPath: normalizeRelativePath(workbenchLibraryRoot),
+    roots: [root],
+  };
+}
+
+function stripJsonComments(content: string) {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < content.length; index += 1) {
+    const character = content[index];
+    const nextCharacter = content[index + 1];
+
+    if (inString) {
+      result += character;
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (character === "\"") {
+      inString = true;
+      result += character;
+      continue;
+    }
+
+    if (character === "/" && nextCharacter === "/") {
+      while (index < content.length && !/[\r\n]/u.test(content[index])) {
+        index += 1;
+      }
+      result += content[index] ?? "";
+      continue;
+    }
+
+    if (character === "/" && nextCharacter === "*") {
+      index += 2;
+      while (index < content.length && !(content[index] === "*" && content[index + 1] === "/")) {
+        index += 1;
+      }
+      index += 1;
+      continue;
+    }
+
+    result += character;
+  }
+
+  return result;
+}
+
+function stripJsonTrailingCommas(content: string) {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < content.length; index += 1) {
+    const character = content[index];
+
+    if (inString) {
+      result += character;
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (character === "\"") {
+      inString = true;
+      result += character;
+      continue;
+    }
+
+    if (character === ",") {
+      let lookaheadIndex = index + 1;
+      while (/\s/u.test(content[lookaheadIndex] ?? "")) {
+        lookaheadIndex += 1;
+      }
+      if (content[lookaheadIndex] === "}" || content[lookaheadIndex] === "]") {
+        continue;
+      }
+    }
+
+    result += character;
+  }
+
+  return result;
+}
+
+function parseJsonc(content: string) {
+  return JSON.parse(stripJsonTrailingCommas(stripJsonComments(content)));
+}
+
+function getWorkspaceFolderName(folder: Record<string, unknown>, resolvedRoot: string) {
+  const configuredName = typeof folder.name === "string" ? folder.name.trim() : "";
+  return configuredName || path.basename(resolvedRoot) || "root";
+}
+
+async function createWorkspaceProjectOption(workspacePath: string): Promise<WorkbenchProjectOption | null> {
+  const content = await readTextFile(workspacePath);
+  if (!content) {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = parseJsonc(content);
+  } catch {
+    return null;
+  }
+
+  if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { folders?: unknown }).folders)) {
+    return null;
+  }
+
+  const workspaceDirectory = path.dirname(workspacePath);
+  const usedRootIds = new Set<string>();
+  const roots: WorkbenchProjectRoot[] = [];
+  let latestCommitTimeMs: number | null = null;
+
+  for (const rawFolder of (parsed as { folders: unknown[] }).folders) {
+    if (!rawFolder || typeof rawFolder !== "object") {
+      continue;
+    }
+
+    const folder = rawFolder as Record<string, unknown>;
+    if (typeof folder.path !== "string" || !folder.path.trim()) {
+      continue;
+    }
+
+    const resolvedRoot = path.resolve(workspaceDirectory, folder.path);
+    if (!await hasGitMarker(resolvedRoot)) {
+      continue;
+    }
+
+    const name = getWorkspaceFolderName(folder, resolvedRoot);
+    const id = createUniqueWorkspaceRootId(name, usedRootIds);
+    const commitTimeMs = await getGitHeadActivityTimeMs(resolvedRoot);
+    latestCommitTimeMs = commitTimeMs === null
+      ? latestCommitTimeMs
+      : latestCommitTimeMs === null
+        ? commitTimeMs
+        : Math.max(latestCommitTimeMs, commitTimeMs);
+
+    roots.push({
+      id,
+      isPrimary: roots.length === 0,
+      name,
+      relativePath: normalizeRelativePath(path.relative(projectsRoot, resolvedRoot)) || ".",
+      rootPath: normalizeRelativePath(resolvedRoot),
+    });
+  }
+
+  if (!roots.length) {
+    return null;
+  }
+
+  const relativePath = normalizeRelativePath(path.relative(projectsRoot, workspacePath)) || path.basename(workspacePath);
+  const id = normalizeProjectId(relativePath);
+  const name = path.basename(workspacePath, WORKSPACE_FILE_EXTENSION);
+
+  return {
+    id,
+    kind: "workspace",
+    lastCommitTimeMs: latestCommitTimeMs,
+    name,
+    relativePath: id,
+    rootPath: roots[0].rootPath,
+    roots,
+    workspacePath: normalizeRelativePath(workspacePath),
   };
 }
 
 async function walkProjects(currentDir: string, projects: WorkbenchProjectOption[]) {
-  if (await hasGitMarker(currentDir)) {
-    projects.push(await createProjectOption(currentDir));
-    return;
-  }
-
   let entries;
   try {
     entries = await fs.readdir(currentDir, { withFileTypes: true });
   } catch {
+    return;
+  }
+
+  const workspaceFiles = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(WORKSPACE_FILE_EXTENSION))
+    .sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" }));
+
+  for (const entry of workspaceFiles) {
+    const workspaceProject = await createWorkspaceProjectOption(path.join(currentDir, entry.name));
+    if (workspaceProject) {
+      projects.push(workspaceProject);
+    }
+  }
+
+  if (await hasGitMarker(currentDir)) {
+    projects.push(await createProjectOption(currentDir));
     return;
   }
 
@@ -372,10 +640,10 @@ export async function discoverProjects({ refresh = false }: { refresh?: boolean 
   if (!discoveredProjectsCache || refresh) {
     discoveredProjectsCache = (async () => {
       const projects: WorkbenchProjectOption[] = [];
-      await walkProjects(projectsRoot, projects);
       const libraryProject = await createWorkbenchLibraryProjectOption();
+      await walkProjects(projectsRoot, projects);
       const normalizedLibraryRoot = normalizePathForComparison(workbenchLibraryRoot);
-      const gitProjects = projects
+      const discoveredProjects = projects
         .filter((project) => normalizePathForComparison(project.rootPath) !== normalizedLibraryRoot)
         .sort((left, right) => {
         const leftTime = left.lastCommitTimeMs ?? Number.NEGATIVE_INFINITY;
@@ -386,7 +654,7 @@ export async function discoverProjects({ refresh = false }: { refresh?: boolean 
 
         return left.id.localeCompare(right.id, undefined, { numeric: true, sensitivity: "base" });
       });
-      return [libraryProject, ...gitProjects];
+      return [libraryProject, ...discoveredProjects];
     })();
   }
 
@@ -419,8 +687,42 @@ export async function resolveProjectRoot(projectId?: string | null) {
     await ensureWorkbenchLibrary();
     return {
       id: project.id,
+      kind: project.kind,
       root: workbenchLibraryRoot,
-    };
+      rootPath: normalizeRelativePath(workbenchLibraryRoot),
+      roots: [{
+        id: project.roots[0]?.id ?? "workbench-library",
+        name: project.roots[0]?.name ?? "Workbench Library",
+        root: workbenchLibraryRoot,
+        rootPath: normalizeRelativePath(workbenchLibraryRoot),
+      }],
+    } satisfies ResolvedProject;
+  }
+
+  if (project.kind === "workspace") {
+    const roots = project.roots.map((root) => ({
+      id: root.id,
+      name: root.name,
+      root: path.resolve(root.rootPath),
+      rootPath: normalizeRelativePath(path.resolve(root.rootPath)),
+    }));
+    if (!roots.length) {
+      throw new Error("Workspace is missing roots.");
+    }
+
+    for (const root of roots) {
+      if (!await hasGitMarker(root.root)) {
+        throw new Error(`Workspace root is missing a .git marker: ${root.name}`);
+      }
+    }
+
+    return {
+      id: project.id,
+      kind: project.kind,
+      root: roots[0].root,
+      rootPath: roots[0].rootPath,
+      roots,
+    } satisfies ResolvedProject;
   }
 
   const absolutePath = path.resolve(project.rootPath);
@@ -434,7 +736,72 @@ export async function resolveProjectRoot(projectId?: string | null) {
 
   return {
     id: project.id,
+    kind: project.kind,
     root: absolutePath,
+    rootPath: normalizeRelativePath(absolutePath),
+    roots: [{
+      id: project.roots[0]?.id ?? normalizeWorkspaceRootId(path.basename(absolutePath) || project.id),
+      name: project.roots[0]?.name ?? (path.basename(absolutePath) || project.id),
+      root: absolutePath,
+      rootPath: normalizeRelativePath(absolutePath),
+    }],
+  } satisfies ResolvedProject;
+}
+
+function toProjectSnapshotRoots(project: ResolvedProject): WorkbenchProjectRoot[] {
+  return project.roots.map((root, index) => ({
+    id: root.id,
+    isPrimary: index === 0,
+    name: root.name,
+    relativePath: normalizeRelativePath(path.relative(projectsRoot, root.root)) || ".",
+    rootPath: root.rootPath,
+  }));
+}
+
+function findWorkspaceRoot(project: ResolvedProject, rootId: string) {
+  return project.roots.find((root) => root.id === rootId || root.name === rootId) ?? null;
+}
+
+export function resolveProjectFilePath(project: ResolvedProject, requestPath: string) {
+  if (project.kind !== "workspace") {
+    const normalizedPath = normalizeRelativePath(requestPath).replace(/^\/+/, "");
+    return {
+      absolutePath: safeResolveProjectPath(project.root, normalizedPath),
+      displayPath: normalizedPath,
+      gitRoot: project.root,
+      root: project.roots[0],
+      rootRelativePath: normalizedPath,
+    };
+  }
+
+  const qualifiedPath = parseWorkspaceQualifiedPath(requestPath);
+  if (!qualifiedPath && !String(requestPath ?? "").trim()) {
+    const root = project.roots[0];
+    return {
+      absolutePath: root.root,
+      displayPath: formatWorkspaceQualifiedPath(root.id, ""),
+      gitRoot: root.root,
+      root,
+      rootRelativePath: "",
+    };
+  }
+
+  if (!qualifiedPath) {
+    throw new Error("Workspace file paths must use the root:path format.");
+  }
+
+  const root = findWorkspaceRoot(project, qualifiedPath.rootId);
+  if (!root) {
+    throw new Error("Unknown workspace root.");
+  }
+
+  const rootRelativePath = normalizeRelativePath(qualifiedPath.relativePath).replace(/^\/+/, "");
+  return {
+    absolutePath: safeResolveProjectPath(root.root, rootRelativePath),
+    displayPath: formatWorkspaceQualifiedPath(root.id, rootRelativePath),
+    gitRoot: root.root,
+    root,
+    rootRelativePath,
   };
 }
 
@@ -582,13 +949,64 @@ export async function buildProjectTree(
   return children;
 }
 
+function qualifyTreeNodePaths(root: ResolvedProjectRoot, nodes: TreeNode[]): TreeNode[] {
+  return nodes.map((node) => {
+    const qualifiedPath = formatWorkspaceQualifiedPath(root.id, node.path);
+    if (node.type === "file") {
+      return {
+        ...node,
+        path: qualifiedPath,
+      };
+    }
+
+    return {
+      ...node,
+      path: qualifiedPath,
+      children: qualifyTreeNodePaths(root, node.children),
+    };
+  });
+}
+
+async function buildWorkspaceTree(project: ResolvedProject) {
+  const rootTrees = await Promise.all(project.roots.map(async (root) => ({
+    root,
+    tree: await buildProjectTree(root.root),
+  })));
+
+  return rootTrees.map(({ root, tree }) => ({
+    type: "directory" as const,
+    name: root.name,
+    path: formatWorkspaceQualifiedPath(root.id, ""),
+    children: qualifyTreeNodePaths(root, tree),
+  }));
+}
+
+async function getProjectChanges(project: ResolvedProject) {
+  if (project.kind !== "workspace") {
+    return await getGitChanges(project.root);
+  }
+
+  const changesByRoot = await Promise.all(project.roots.map(async (root) => ({
+    root,
+    changes: await getGitChanges(root.root),
+  })));
+
+  return Object.fromEntries(changesByRoot.flatMap(({ root, changes }) => (
+    Object.entries(changes).map(([filePath, change]) => [formatWorkspaceQualifiedPath(root.id, filePath), change])
+  )));
+}
+
 export async function getProjectSnapshot(projectId?: string | null) {
   const resolvedProject = await resolveProjectRoot(projectId);
-  const [tree, changes] = await Promise.all([buildProjectTree(resolvedProject.root), getGitChanges(resolvedProject.root)]);
+  const [tree, changes] = await Promise.all([
+    resolvedProject.kind === "workspace" ? buildWorkspaceTree(resolvedProject) : buildProjectTree(resolvedProject.root),
+    getProjectChanges(resolvedProject),
+  ]);
   return {
     projectId: resolvedProject.id,
-    root: path.basename(resolvedProject.root),
+    root: resolvedProject.kind === "workspace" ? resolvedProject.id : path.basename(resolvedProject.root),
     rootPath: normalizeRelativePath(resolvedProject.root),
+    roots: toProjectSnapshotRoots(resolvedProject),
     tree,
     changes,
   } satisfies ProjectSnapshot;

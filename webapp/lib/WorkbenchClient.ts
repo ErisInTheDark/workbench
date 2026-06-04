@@ -148,6 +148,7 @@ export async function WorkbenchClient(
       projectId: snapshot.currentProjectId,
       root: snapshot.root,
       rootPath: snapshot.rootPath,
+      roots: snapshot.roots,
     });
     if (previousProjectId && previousProjectId !== snapshot.currentProjectId && fileClient) {
       fileClient.clearSelection();
@@ -604,6 +605,7 @@ export async function WorkbenchClient(
       currentProjectId: projectSnapshot.currentProjectId,
       projects: projectSnapshot.projects,
       rootPath: projectSnapshot.rootPath,
+      roots: projectSnapshot.roots,
       tree: projectSnapshot.tree,
       threads: threadSnapshot.threads,
       changes: projectSnapshot.changes,
