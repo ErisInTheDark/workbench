@@ -12,6 +12,7 @@
 
 import type { WorkbenchSkillSummary } from "../../types";
 import {
+  type WorkspaceFileLinkRoot,
   normalizeWorkbenchPath,
   resolveProjectFileLinkTarget,
 } from "../markdown/markdown-links";
@@ -48,7 +49,9 @@ export interface InlineMentionHighlightSources {
   cacheKey: string;
   candidates: InlineMentionCandidate[];
   fileCandidatePaths: readonly string[];
+  threadCwdPath?: string;
   projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 
 export interface InlineMentionSuggestion {
@@ -102,12 +105,16 @@ function getStringListCacheKey(values: readonly string[]) {
 
 export function buildInlineMentionCandidates({
   files,
+  threadCwdPath,
   projectRootPath,
   skills,
+  workspaceRoots = [],
 }: {
   files: Array<string | InlineMentionFileCandidateInput>;
+  threadCwdPath?: string;
   projectRootPath?: string;
   skills: WorkbenchSkillSummary[];
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }): InlineMentionHighlightSources {
   const fileCandidates = files.map((file): InlineMentionCandidate => {
     const filePath = typeof file === "string" ? file : file.path;
@@ -137,11 +144,15 @@ export function buildInlineMentionCandidates({
     ],
     cacheKey: [
       projectRootPath ?? "",
+      threadCwdPath ?? "",
+      workspaceRoots.map((root) => `${root.id}:${root.rootPath}`).join(";"),
       getStringListCacheKey(fileCandidates.map((candidate) => candidate.path)),
       getStringListCacheKey(skills.map((skill) => `${skill.name}\n${skill.path}\n${skill.relativePath}`)),
     ].join("|"),
     fileCandidatePaths: fileCandidates.map((candidate) => candidate.path),
+    threadCwdPath,
     projectRootPath,
+    workspaceRoots,
   };
 }
 
@@ -338,11 +349,18 @@ function resolveSkillMention(value: string, candidates: InlineMentionCandidate[]
   return uniquePaths.size === 1 && matches.length === 1 ? matches[0] : null;
 }
 
-function resolveFileMention(value: string, sources: InlineMentionHighlightSources) {
+function resolveFileMention(value: string, sources: InlineMentionHighlightSources, {
+  allowThreadCwdPathWithoutCandidate,
+}: {
+  allowThreadCwdPathWithoutCandidate: boolean;
+}) {
   const fileCandidates = sources.candidates.filter((candidate) => candidate.kind === "file");
   const resolvedTarget = resolveProjectFileLinkTarget(value, {
+    allowThreadCwdPathWithoutCandidate,
     candidatePaths: sources.fileCandidatePaths,
+    threadCwdPath: sources.threadCwdPath,
     projectRootPath: sources.projectRootPath,
+    workspaceRoots: sources.workspaceRoots,
   });
   if (!resolvedTarget) {
     return null;
@@ -352,13 +370,23 @@ function resolveFileMention(value: string, sources: InlineMentionHighlightSource
   const candidate = fileCandidates.find((entry) => (
     normalizeWorkbenchPath(entry.path).toLocaleLowerCase() === normalizedTargetPath
   ));
-  return candidate
-    ? {
-      candidate,
-      columnNumber: resolvedTarget.columnNumber,
-      lineNumber: resolvedTarget.lineNumber,
-    }
-    : null;
+  if (!candidate && !allowThreadCwdPathWithoutCandidate) {
+    return null;
+  }
+
+  const resolvedPath = normalizeWorkbenchPath(resolvedTarget.relativePath);
+  return {
+    candidate: candidate ?? {
+      aliases: [resolvedPath],
+      description: "",
+      isExcluded: false,
+      kind: "file",
+      label: resolvedPath,
+      path: resolvedPath,
+    },
+    columnNumber: resolvedTarget.columnNumber,
+    lineNumber: resolvedTarget.lineNumber,
+  };
 }
 
 function resolveToken(token: ParsedInlineMentionToken, sources: InlineMentionHighlightSources) {
@@ -370,15 +398,30 @@ function resolveToken(token: ParsedInlineMentionToken, sources: InlineMentionHig
       .map((value) => ({ consumedLength: value.length, value }));
 
   for (const { consumedLength, value } of values) {
-    const match = token.kind === "skill"
-      ? resolveSkillMention(value, sources.candidates)
-      : resolveFileMention(value, sources);
+    if (token.kind === "skill") {
+      const match = resolveSkillMention(value, sources.candidates);
+      if (!match) {
+        continue;
+      }
+
+      return {
+        candidate: match,
+        columnNumber: null,
+        end: getTokenResolutionEnd(token, consumedLength),
+        lineNumber: null,
+        value,
+      };
+    }
+
+    const match = resolveFileMention(value, sources, {
+      allowThreadCwdPathWithoutCandidate: token.explicitBoundary,
+    });
     if (match) {
       return {
-        candidate: token.kind === "skill" ? match : match.candidate,
-        columnNumber: token.kind === "skill" ? null : match.columnNumber,
+        candidate: match.candidate,
+        columnNumber: match.columnNumber,
         end: getTokenResolutionEnd(token, consumedLength),
-        lineNumber: token.kind === "skill" ? null : match.lineNumber,
+        lineNumber: match.lineNumber,
         value,
       };
     }

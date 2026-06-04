@@ -101,7 +101,9 @@ const EMPTY_ROLLOUT_ERROR_SUFFIX = "is empty";
 const MISSING_ROLLOUT_ERROR_FRAGMENT = "no rollout found by id";
 const FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE = "Started the thread. Its saved rollout is still warming up, so the live view will refresh automatically.";
 
-function createWorkspaceWriteSandboxPolicy(rootPaths: string[]): SandboxPolicy | null {
+type WorkspaceWriteSandboxPolicy = Extract<SandboxPolicy, { type: "workspaceWrite" }>;
+
+function createWorkspaceWriteSandboxPolicy(rootPaths: string[]): WorkspaceWriteSandboxPolicy | null {
   const writableRoots = Array.from(new Set(rootPaths.filter(Boolean)));
   return writableRoots.length > 1
     ? {

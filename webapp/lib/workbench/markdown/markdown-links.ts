@@ -15,6 +15,11 @@ export interface ProjectFileLinkTarget {
   relativePath: string;
 }
 
+export interface WorkspaceFileLinkRoot {
+  id: string;
+  rootPath: string;
+}
+
 const uniqueCandidatePathsCache = new WeakMap<readonly string[], string[]>();
 
 export function normalizeWorkbenchPath(value: string) {
@@ -99,6 +104,124 @@ function normalizeComparableProjectPath(value: string) {
   return normalizeWorkbenchPath(value).toLowerCase();
 }
 
+function formatWorkspaceRootRelativePath(rootId: string, relativePath: string | null) {
+  const normalizedRootId = String(rootId ?? "").trim();
+  const normalizedRelativePath = normalizeWorkbenchPath(relativePath ?? "").replace(/^\/+/, "");
+  return normalizedRelativePath ? `${normalizedRootId}:${normalizedRelativePath}` : `${normalizedRootId}:`;
+}
+
+function parseWorkspaceRootRelativePath(value: string) {
+  const parsedValue = parseProjectFileLinkLocation(value);
+  const normalizedPath = normalizeWorkbenchPath(parsedValue.path).replace(/^\.\//, "");
+  const separatorIndex = normalizedPath.indexOf(":");
+  if (separatorIndex <= 0 || /^[A-Za-z]:\//.test(normalizedPath)) {
+    return null;
+  }
+
+  return {
+    columnNumber: parsedValue.columnNumber,
+    lineNumber: parsedValue.lineNumber,
+    relativePath: normalizedPath.slice(separatorIndex + 1).replace(/^\/+/, ""),
+    rootId: normalizedPath.slice(0, separatorIndex),
+  };
+}
+
+function findWorkspaceRootById(workspaceRoots: readonly WorkspaceFileLinkRoot[], rootId: string) {
+  const comparableRootId = rootId.toLowerCase();
+  return workspaceRoots.find((root) => root.id.toLowerCase() === comparableRootId) ?? null;
+}
+
+function findWorkspaceRootByPath(workspaceRoots: readonly WorkspaceFileLinkRoot[], absolutePath: string) {
+  const normalizedAbsolutePath = normalizeWorkbenchPath(absolutePath);
+  if (!normalizedAbsolutePath) {
+    return null;
+  }
+
+  let bestMatch: { relativePath: string | null; root: WorkspaceFileLinkRoot } | null = null;
+  for (const root of workspaceRoots) {
+    const relativePath = toProjectRelativeFilePath(normalizedAbsolutePath, root.rootPath);
+    if (relativePath === null) {
+      continue;
+    }
+
+    if (!bestMatch || normalizeWorkbenchPath(root.rootPath).length > normalizeWorkbenchPath(bestMatch.root.rootPath).length) {
+      bestMatch = { relativePath, root };
+    }
+  }
+
+  return bestMatch;
+}
+
+function resolveWorkspaceAbsoluteFileLinkTarget(
+  absoluteTarget: NonNullable<ReturnType<typeof parseCodexFileLinkHref>>,
+  workspaceRoots: readonly WorkspaceFileLinkRoot[],
+): ProjectFileLinkTarget | null {
+  const rootMatch = findWorkspaceRootByPath(workspaceRoots, absoluteTarget.absolutePath);
+  return rootMatch
+    ? {
+      columnNumber: absoluteTarget.columnNumber,
+      lineNumber: absoluteTarget.lineNumber,
+      relativePath: formatWorkspaceRootRelativePath(rootMatch.root.id, rootMatch.relativePath),
+    }
+    : null;
+}
+
+function resolveExplicitWorkspaceFileLinkTarget(
+  value: string,
+  workspaceRoots: readonly WorkspaceFileLinkRoot[],
+): ProjectFileLinkTarget | null {
+  const parsedValue = parseWorkspaceRootRelativePath(value);
+  if (!parsedValue) {
+    return null;
+  }
+
+  const root = findWorkspaceRootById(workspaceRoots, parsedValue.rootId);
+  return root
+    ? {
+      columnNumber: parsedValue.columnNumber,
+      lineNumber: parsedValue.lineNumber,
+      relativePath: formatWorkspaceRootRelativePath(root.id, parsedValue.relativePath),
+    }
+    : null;
+}
+
+function resolvePreferredWorkspaceRootFileLinkTarget(
+  value: string,
+  candidatePaths: readonly string[],
+  threadCwdPath: string,
+  workspaceRoots: readonly WorkspaceFileLinkRoot[],
+  {
+    allowWithoutCandidate,
+  }: {
+    allowWithoutCandidate: boolean;
+  },
+): ProjectFileLinkTarget | null {
+  const rootMatch = findWorkspaceRootByPath(workspaceRoots, threadCwdPath);
+  if (!rootMatch) {
+    return null;
+  }
+
+  const parsedValue = parseProjectFileLinkLocation(value);
+  const normalizedPath = normalizeWorkbenchPath(parsedValue.path).replace(/^\.\//, "");
+  if (!normalizedPath || normalizedPath.startsWith("../") || normalizedPath.includes(":")) {
+    return null;
+  }
+
+  const cwdRootRelativePath = normalizeWorkbenchPath(rootMatch.relativePath ?? "").replace(/^\/+/, "");
+  const targetRootRelativePath = cwdRootRelativePath
+    ? normalizeWorkbenchPath(`${cwdRootRelativePath}/${normalizedPath}`)
+    : normalizedPath;
+  const candidatePath = formatWorkspaceRootRelativePath(rootMatch.root.id, targetRootRelativePath);
+  const comparableCandidatePath = normalizeComparableProjectPath(candidatePath);
+  return allowWithoutCandidate || getUniqueCandidatePaths(candidatePaths).some((filePath) => normalizeComparableProjectPath(filePath) === comparableCandidatePath)
+    ? {
+      columnNumber: parsedValue.columnNumber,
+      lineNumber: parsedValue.lineNumber,
+      relativePath: candidatePath,
+    }
+    : null;
+}
+
 function getUniqueCandidatePaths(candidatePaths: readonly string[]) {
   const cachedPaths = uniqueCandidatePathsCache.get(candidatePaths);
   if (cachedPaths) {
@@ -148,6 +271,20 @@ function resolveRelativeProjectFileLinkTarget(
     };
   }
 
+  const workspaceRootRelativeMatches = candidates.filter((candidatePath) => {
+    const parsedCandidatePath = parseWorkspaceRootRelativePath(candidatePath);
+    return parsedCandidatePath
+      ? normalizeComparableProjectPath(parsedCandidatePath.relativePath) === comparablePath
+      : false;
+  });
+  if (workspaceRootRelativeMatches.length === 1) {
+    return {
+      columnNumber: parsedValue.columnNumber,
+      lineNumber: parsedValue.lineNumber,
+      relativePath: workspaceRootRelativeMatches[0],
+    };
+  }
+
   if (!allowSuffixMatch) {
     return null;
   }
@@ -169,16 +306,27 @@ export function resolveProjectFileLinkTarget(
   {
     allowSuffixMatch = true,
     candidatePaths = [],
+    allowThreadCwdPathWithoutCandidate = false,
+    threadCwdPath = "",
     projectRootPath = "",
+    workspaceRoots = [],
   }: {
+    allowThreadCwdPathWithoutCandidate?: boolean;
     allowSuffixMatch?: boolean;
     candidatePaths?: readonly string[];
+    threadCwdPath?: string;
     projectRootPath?: string;
+    workspaceRoots?: readonly WorkspaceFileLinkRoot[];
   } = {},
 ): ProjectFileLinkTarget | null {
   const normalizedValue = normalizeMarkdownHref(value);
   const absoluteTarget = parseCodexFileLinkHref(normalizedValue);
   if (absoluteTarget) {
+    const workspaceRelativePath = resolveWorkspaceAbsoluteFileLinkTarget(absoluteTarget, workspaceRoots);
+    if (workspaceRelativePath) {
+      return workspaceRelativePath;
+    }
+
     const relativePath = toProjectRelativeFilePath(absoluteTarget.absolutePath, projectRootPath);
     return relativePath
       ? {
@@ -187,6 +335,22 @@ export function resolveProjectFileLinkTarget(
         relativePath,
       }
       : null;
+  }
+
+  const explicitWorkspaceTarget = resolveExplicitWorkspaceFileLinkTarget(normalizedValue, workspaceRoots);
+  if (explicitWorkspaceTarget) {
+    return explicitWorkspaceTarget;
+  }
+
+  const preferredWorkspaceTarget = resolvePreferredWorkspaceRootFileLinkTarget(
+    normalizedValue,
+    candidatePaths,
+    threadCwdPath || projectRootPath,
+    workspaceRoots,
+    { allowWithoutCandidate: allowThreadCwdPathWithoutCandidate },
+  );
+  if (preferredWorkspaceTarget) {
+    return preferredWorkspaceTarget;
   }
 
   return resolveRelativeProjectFileLinkTarget(normalizedValue, candidatePaths, {
@@ -256,4 +420,27 @@ export function toWorkbenchDisplayPath(path: string, projectRootPath: string) {
   }
 
   return normalizedPath;
+}
+
+export function toWorkspaceDisplayPath(
+  filePath: string,
+  {
+    projectRootPath = "",
+    workspaceRoots = [],
+  }: {
+    projectRootPath?: string;
+    workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+  } = {},
+) {
+  const normalizedPath = normalizeWorkbenchPath(String(filePath ?? "").trim());
+  if (!normalizedPath) {
+    return null;
+  }
+
+  const workspaceRootMatch = findWorkspaceRootByPath(workspaceRoots, normalizedPath);
+  if (workspaceRootMatch) {
+    return formatWorkspaceRootRelativePath(workspaceRootMatch.root.id, workspaceRootMatch.relativePath);
+  }
+
+  return toWorkbenchDisplayPath(normalizedPath, projectRootPath);
 }

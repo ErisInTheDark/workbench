@@ -46,6 +46,9 @@ function renderProjectFileLink(url: string, relativePath: string, {
   const className = `${projectFilePathPillClassName} ${projectFilePathInteractiveClassName}`;
 
   return `<a href="${escapeHtml(url)}" class="${escapeHtml(className)}" data-project-file-path="true" data-project-file-relative-path="${escapeHtml(relativePath)}" title="${escapeHtml(display.title)}">`
+    + (display.rootPrefix
+      ? `<span class="${escapeHtml(projectFilePathLocationClassName)}">${escapeHtml(display.rootPrefix)}</span>`
+      : "")
     + `<span class="${escapeHtml(projectFilePathLabelClassName)}">${escapeHtml(display.label)}</span>`
     + (display.locationSuffix
       ? `<span class="${escapeHtml(projectFilePathLocationClassName)}">${escapeHtml(display.locationSuffix)}</span>`

@@ -2074,6 +2074,7 @@ export default function Workbench () {
                   onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
                   projectId={activeProjectId}
                   projectRootPath={explorer.rootPath}
+                  projectRoots={explorer.roots}
                   projectTree={explorer.tree}
                   rateLimits={rateLimits}
                   threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}

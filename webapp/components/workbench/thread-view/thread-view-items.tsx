@@ -13,6 +13,7 @@ import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import { getCurrentTurn } from "../../../lib/codex/thread-state";
 import type { ThreadPayload, WorkbenchSkillSummary } from "../../../lib/types";
+import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
 import {
   getPrimaryCollabAgentThreadId,
@@ -26,7 +27,6 @@ import {
   formatThreadTimestamp,
   humanizeThreadLabel,
   ThreadCommandSummary,
-  ThreadTextBlock,
 } from "./thread-view-primitives";
 import ThreadAgentName from "./ThreadAgentName";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
@@ -287,15 +287,19 @@ function getReasoningStepTitle (item: ReasoningItem) {
 function ThreadUserInputLine ({
   inlineMentionSources,
   input,
+  threadCwdPath,
   projectFilePaths,
   projectId,
   projectRootPath,
+  workspaceRoots,
 }: {
   inlineMentionSources?: InlineMentionHighlightSources | null;
   input: UserInput;
+  threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   switch (input.type) {
     case "text": {
@@ -304,9 +308,11 @@ function ThreadUserInputLine ({
         <ThreadMarkdown
           inlineMentionSources={inlineMentionSources}
           markdown={text || "No text captured."}
+          threadCwdPath={threadCwdPath}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
+          workspaceRoots={workspaceRoots}
         />
       );
     }
@@ -366,19 +372,23 @@ function ThreadMessageTimestamp ({
 function ThreadUserMessageItem ({
   inlineMentionSources,
   item,
+  threadCwdPath,
   projectFilePaths,
   projectId,
   projectRootPath,
   showStartedAt,
   startedAt,
+  workspaceRoots,
 }: {
   inlineMentionSources?: InlineMentionHighlightSources | null;
   item: Extract<ThreadItem, { type: "userMessage" }>;
+  threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
   showStartedAt: boolean;
   startedAt: number | null;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   return (
     <section className="flex flex-col items-end py-2">
@@ -389,9 +399,11 @@ function ThreadUserMessageItem ({
               key={`${item.id}:content:${index}:${content.type}`}
               input={content}
               inlineMentionSources={inlineMentionSources}
+              threadCwdPath={threadCwdPath}
               projectFilePaths={projectFilePaths}
               projectId={projectId}
               projectRootPath={projectRootPath}
+              workspaceRoots={workspaceRoots}
             />
           )) : (
             <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No user content captured.</p>
@@ -408,33 +420,55 @@ function ThreadAgentMessageItem ({
   inlineMentionSources,
   isFinal,
   item,
+  threadCwdPath,
   projectFilePaths,
   projectId,
   projectRootPath,
+  workspaceRoots,
 }: {
   completedAt: number | null;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isFinal: boolean;
   item: Extract<ThreadItem, { type: "agentMessage" }>;
+  threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   return (
     <section className="py-2">
       <ThreadMarkdown
         inlineMentionSources={inlineMentionSources}
         markdown={item.text || "No assistant text captured."}
+        threadCwdPath={threadCwdPath}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
         projectRootPath={projectRootPath}
+        workspaceRoots={workspaceRoots}
       />
       {isFinal ? <ThreadMessageTimestamp className="mt-1" timestampSeconds={completedAt} /> : null}
     </section>
   );
 }
 
-function ThreadPlanItem ({ item }: { item: Extract<ThreadItem, { type: "plan" }> }) {
+function ThreadPlanItem ({
+  inlineMentionSources,
+  item,
+  threadCwdPath,
+  projectFilePaths,
+  projectId,
+  projectRootPath,
+  workspaceRoots,
+}: {
+  inlineMentionSources?: InlineMentionHighlightSources | null;
+  item: Extract<ThreadItem, { type: "plan" }>;
+  threadCwdPath?: string;
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+  projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+}) {
   return (
     <ThreadDisclosure
       className="py-2"
@@ -442,9 +476,15 @@ function ThreadPlanItem ({ item }: { item: Extract<ThreadItem, { type: "plan" }>
       summary={<ThreadSummaryText text="Plan" />}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"
     >
-      <>
-        <ThreadTextBlock>{item.text || "No plan text captured."}</ThreadTextBlock>
-      </>
+      <ThreadMarkdown
+        inlineMentionSources={inlineMentionSources}
+        markdown={item.text || "No plan text captured."}
+        threadCwdPath={threadCwdPath}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        projectRootPath={projectRootPath}
+        workspaceRoots={workspaceRoots}
+      />
     </ThreadDisclosure>
   );
 }
@@ -453,16 +493,20 @@ function ThreadAgentBubble ({
   inlineMentionSources,
   label,
   markdown,
+  threadCwdPath,
   projectFilePaths,
   projectId,
   projectRootPath,
+  workspaceRoots,
 }: {
   inlineMentionSources?: InlineMentionHighlightSources | null;
   label: ReactNode;
   markdown: string;
+  threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   return (
     <section className="py-2">
@@ -473,9 +517,11 @@ function ThreadAgentBubble ({
         <ThreadMarkdown
           inlineMentionSources={inlineMentionSources}
           markdown={markdown || "No message captured."}
+          threadCwdPath={threadCwdPath}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
+          workspaceRoots={workspaceRoots}
         />
       </div>
     </section>
@@ -501,19 +547,23 @@ function getCollabAgentStateMessage (item: CollabAgentToolCallItem, receiverThre
 function ThreadCurrentSubagentItemPreview ({
   inlineMentionSources,
   knownSkills,
+  threadCwdPath,
   projectFilePaths,
   projectId,
   projectRootPath,
   relatedThreadsById,
   thread,
+  workspaceRoots,
 }: {
   inlineMentionSources?: InlineMentionHighlightSources | null;
   knownSkills?: WorkbenchSkillSummary[];
+  threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
   relatedThreadsById: RelatedThreadsById;
   thread: ThreadPayload | undefined;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const currentTurn = getCurrentTurn(thread);
   if (!currentTurn) {
@@ -543,12 +593,14 @@ function ThreadCurrentSubagentItemPreview ({
         inlineMentionSources={inlineMentionSources}
         knownSkills={knownSkills}
         primaryUserBlock={null}
+        threadCwdPath={threadCwdPath ?? thread?.cwd}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
         projectRootPath={projectRootPath}
         relatedThreadsById={relatedThreadsById}
         turnCompletedAt={currentTurn.completedAt}
         turnStartedAt={currentTurn.startedAt}
+        workspaceRoots={workspaceRoots}
       />
     </ThreadPreviewFrame>
   );
@@ -559,19 +611,23 @@ function ThreadCollabAgentToolCallItem ({
   isMostRecent,
   item,
   knownSkills,
+  threadCwdPath,
   projectFilePaths,
   projectId,
   projectRootPath,
   relatedThreadsById,
+  workspaceRoots,
 }: {
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecent: boolean;
   item: CollabAgentToolCallItem;
   knownSkills?: WorkbenchSkillSummary[];
+  threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
   relatedThreadsById: RelatedThreadsById;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const receiverThreadId = getPrimaryCollabAgentThreadId(item);
   const receiverThread = relatedThreadsById[receiverThreadId];
@@ -597,9 +653,11 @@ function ThreadCollabAgentToolCallItem ({
           label="Main agent"
           inlineMentionSources={inlineMentionSources}
           markdown={prompt}
+          threadCwdPath={threadCwdPath}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
+          workspaceRoots={workspaceRoots}
         />
       </ThreadDisclosure>
     );
@@ -618,11 +676,13 @@ function ThreadCollabAgentToolCallItem ({
           <ThreadCurrentSubagentItemPreview
             inlineMentionSources={inlineMentionSources}
             knownSkills={knownSkills}
+            threadCwdPath={receiverThread?.cwd ?? threadCwdPath}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}
             relatedThreadsById={relatedThreadsById}
             thread={receiverThread}
+            workspaceRoots={workspaceRoots}
           />
         ) : null}
       </ThreadDisclosure>
@@ -641,9 +701,11 @@ function ThreadCollabAgentToolCallItem ({
           label="Main agent"
           inlineMentionSources={inlineMentionSources}
           markdown={prompt}
+          threadCwdPath={threadCwdPath}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
+          workspaceRoots={workspaceRoots}
         />
       </ThreadDisclosure>
     );
@@ -661,9 +723,11 @@ function ThreadCollabAgentToolCallItem ({
           label={agentName}
           inlineMentionSources={inlineMentionSources}
           markdown={responseMessage}
+          threadCwdPath={receiverThread?.cwd ?? threadCwdPath}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
+          workspaceRoots={workspaceRoots}
         />
       </ThreadDisclosure>
     );
@@ -700,16 +764,20 @@ function ThreadReasoningSequence ({
   block,
   inlineMentionSources,
   isMostRecent,
+  threadCwdPath,
   projectFilePaths,
   projectId,
   projectRootPath,
+  workspaceRoots,
 }: {
   block: Extract<ThreadRenderableBlock, { kind: "reasoningSequence" }>;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecent: boolean;
+  threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const visibleItems = block.items.filter(hasReasoningSteps);
   const totalItems = visibleItems.reduce((sum, item) => (
@@ -727,9 +795,11 @@ function ThreadReasoningSequence ({
           className={index ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4" : undefined}
           item={item}
           inlineMentionSources={inlineMentionSources}
+          threadCwdPath={threadCwdPath}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
+          workspaceRoots={workspaceRoots}
         />
       ))}
     </div>
@@ -934,12 +1004,14 @@ function ThreadRenderableBlockView ({
   isMostRecentBlock,
   knownSkills,
   primaryUserBlock,
+  threadCwdPath,
   projectFilePaths,
   projectId,
   projectRootPath,
   relatedThreadsById,
   turnCompletedAt,
   turnStartedAt,
+  workspaceRoots,
 }: {
   block: ThreadRenderableBlock;
   finalAgentMessageId: string | null;
@@ -947,19 +1019,21 @@ function ThreadRenderableBlockView ({
   isMostRecentBlock: boolean;
   knownSkills?: WorkbenchSkillSummary[];
   primaryUserBlock: ThreadRenderableBlock | null;
+  threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
   relatedThreadsById: RelatedThreadsById;
   turnCompletedAt: number | null;
   turnStartedAt: number | null;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   if (block.kind === "commandSequence") {
     return <ThreadCommandSequence isMostRecent={isMostRecentBlock} items={block.items} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} />;
   }
 
   if (block.kind === "fileChangeSequence") {
-    return <ThreadFileChangeItem items={block.items} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} />;
+    return <ThreadFileChangeItem items={block.items} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
   }
 
   if (block.kind === "reasoningSequence") {
@@ -970,7 +1044,9 @@ function ThreadRenderableBlockView ({
         isMostRecent={isMostRecentBlock}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
+        threadCwdPath={threadCwdPath}
         projectRootPath={projectRootPath}
+        workspaceRoots={workspaceRoots}
       />
     );
   }
@@ -987,7 +1063,9 @@ function ThreadRenderableBlockView ({
           inlineMentionSources={inlineMentionSources}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
+          threadCwdPath={threadCwdPath}
           projectRootPath={projectRootPath}
+          workspaceRoots={workspaceRoots}
           showStartedAt={block === primaryUserBlock}
           startedAt={turnStartedAt}
         />
@@ -1001,17 +1079,29 @@ function ThreadRenderableBlockView ({
           inlineMentionSources={inlineMentionSources}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
+          threadCwdPath={threadCwdPath}
           projectRootPath={projectRootPath}
+          workspaceRoots={workspaceRoots}
         />
       );
     case "plan":
-      return <ThreadPlanItem item={block.item} />;
+      return (
+        <ThreadPlanItem
+          inlineMentionSources={inlineMentionSources}
+          item={block.item}
+          threadCwdPath={threadCwdPath}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          workspaceRoots={workspaceRoots}
+        />
+      );
     case "contextCompaction":
       return <ThreadContextCompactionItem item={block.item} />;
     case "mcpToolCall":
       return <ThreadMcpToolCallItem item={block.item} />;
     case "dynamicToolCall":
-      return <ThreadDynamicToolCallItem inlineMentionSources={inlineMentionSources} item={block.item} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} />;
+      return <ThreadDynamicToolCallItem inlineMentionSources={inlineMentionSources} item={block.item} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
     case "webSearch":
       return <ThreadWebSearchItem item={block.item} />;
     case "collabAgentToolCall":
@@ -1021,10 +1111,12 @@ function ThreadRenderableBlockView ({
           inlineMentionSources={inlineMentionSources}
           item={block.item}
           knownSkills={knownSkills}
+          threadCwdPath={threadCwdPath}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
           relatedThreadsById={relatedThreadsById}
+          workspaceRoots={workspaceRoots}
         />
       );
     default:
@@ -1038,22 +1130,26 @@ function ThreadTurnDetailsComponent ({
   hiddenWebSearchItemIds = [],
   inlineMentionSources = null,
   knownSkills = [],
+  threadCwdPath,
   projectFilePaths,
   projectId,
   projectRootPath,
   relatedThreadsById = {},
   turn,
+  workspaceRoots,
 }: {
   hiddenCollabAgentToolCallItemIds?: readonly string[];
   hiddenReasoningItemId?: string | null;
   hiddenWebSearchItemIds?: readonly string[];
   inlineMentionSources?: InlineMentionHighlightSources | null;
   knownSkills?: WorkbenchSkillSummary[];
+  threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
   relatedThreadsById?: RelatedThreadsById;
   turn: Turn;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const hiddenCollabAgentToolCallIds = hiddenCollabAgentToolCallItemIds.length
     ? new Set(hiddenCollabAgentToolCallItemIds)
@@ -1095,12 +1191,14 @@ function ThreadTurnDetailsComponent ({
       isMostRecentBlock={block === blocks[blocks.length - 1]}
       knownSkills={knownSkills}
       primaryUserBlock={primaryUserBlock}
+      threadCwdPath={threadCwdPath}
       projectFilePaths={projectFilePaths}
       projectId={projectId}
       projectRootPath={projectRootPath}
       relatedThreadsById={relatedThreadsById}
       turnCompletedAt={turn.completedAt}
       turnStartedAt={turn.startedAt}
+      workspaceRoots={workspaceRoots}
     />
   );
 
@@ -1150,6 +1248,7 @@ function areThreadTurnDetailsPropsEqual (
     && left.hiddenWebSearchItemIds === right.hiddenWebSearchItemIds
     && left.inlineMentionSources === right.inlineMentionSources
     && left.knownSkills === right.knownSkills
+    && left.threadCwdPath === right.threadCwdPath
     && left.projectFilePaths === right.projectFilePaths
     && left.projectId === right.projectId
     && left.projectRootPath === right.projectRootPath
@@ -1165,8 +1264,10 @@ export function ThreadThreadContent ({
   hiddenWebSearchItemIds = [],
   inlineMentionSources = null,
   knownSkills = [],
+  threadCwdPath,
   projectFilePaths,
   projectId,
+  projectRoots,
   projectRootPath,
   relatedThreadsById = {},
   thread,
@@ -1177,8 +1278,10 @@ export function ThreadThreadContent ({
   hiddenWebSearchItemIds?: readonly string[];
   inlineMentionSources?: InlineMentionHighlightSources | null;
   knownSkills?: WorkbenchSkillSummary[];
+  threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
+  projectRoots?: readonly { id: string; rootPath: string }[];
   projectRootPath?: string;
   relatedThreadsById?: RelatedThreadsById;
   thread: ThreadPayload | null | undefined;
@@ -1205,11 +1308,13 @@ export function ThreadThreadContent ({
           hiddenWebSearchItemIds={hiddenWebSearchItemIds}
           inlineMentionSources={inlineMentionSources}
           knownSkills={knownSkills}
+          threadCwdPath={threadCwdPath ?? thread.cwd}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
           relatedThreadsById={relatedThreadsById}
           turn={turn}
+          workspaceRoots={projectRoots}
         />
       ))}
     </>

@@ -16,6 +16,7 @@ import type {
   WorkbenchHarness,
   WorkbenchModelOption,
   WorkbenchPendingUserInputRequest,
+  WorkbenchProjectRoot,
   WorkbenchQuestionnaireDraft,
   WorkbenchSendThreadMessageOptions,
   WorkbenchSkillSummary,
@@ -343,6 +344,7 @@ export default memo(function ThreadView ({
   onThreadModelChange,
   projectId,
   projectRootPath,
+  projectRoots,
   projectTree,
   rateLimits,
   threadCodeBlockWrap,
@@ -383,6 +385,7 @@ export default memo(function ThreadView ({
   onThreadModelChange: (threadId: string, model: string) => void;
   projectId: string;
   projectRootPath: string;
+  projectRoots?: readonly WorkbenchProjectRoot[];
   projectTree: TreeNode[];
   rateLimits: RateLimitSnapshot | null;
   threadCodeBlockWrap: boolean;
@@ -424,11 +427,18 @@ export default memo(function ThreadView ({
   }, [liveActivity]);
   const projectFiles = useMemo(() => flattenProjectTreeFileCandidates(projectTree), [projectTree]);
   const projectFilePaths = useMemo(() => projectFiles.map((file) => file.path), [projectFiles]);
+  const workspaceFileLinkRoots = useMemo(() => (
+    projectRoots && projectRoots.length > 1
+      ? projectRoots.map((root) => ({ id: root.id, rootPath: root.rootPath }))
+      : []
+  ), [projectRoots]);
   const inlineMentionSources = useMemo(() => buildInlineMentionCandidates({
     files: projectFiles,
+    threadCwdPath: activeThread?.cwd,
     projectRootPath,
     skills: workbenchSkills,
-  }), [projectFiles, projectRootPath, workbenchSkills]);
+    workspaceRoots: workspaceFileLinkRoots,
+  }), [activeThread?.cwd, projectFiles, projectRootPath, workspaceFileLinkRoots, workbenchSkills]);
 
   const tabDefinitions = useMemo(() => {
     const baseLabelCounts = new Map<string, number>();
@@ -926,11 +936,13 @@ export default memo(function ThreadView ({
               hiddenCollabAgentToolCallItemIds={turn.id === currentTurn?.id ? hiddenCollabAgentToolCallItemIds : EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS}
               inlineMentionSources={inlineMentionSources}
               knownSkills={workbenchSkills}
+              threadCwdPath={activeThread.cwd}
               projectFilePaths={projectFilePaths}
               projectId={projectId}
               projectRootPath={projectRootPath}
               relatedThreadsById={subthreadsById}
               turn={turn}
+              workspaceRoots={workspaceFileLinkRoots}
               hiddenReasoningItemId={turn.id === currentTurn?.id && liveActivity?.kind === "reasoning" ? liveActivity.hiddenItemId : null}
               hiddenWebSearchItemIds={turn.id === currentTurn?.id && liveActivity?.kind === "webSearch" ? liveActivity.hiddenItemIds : undefined}
             />
@@ -989,9 +1001,11 @@ export default memo(function ThreadView ({
                 className="text-[0.8em] text-muted"
                 inlineMentionSources={inlineMentionSources}
                 markdown={liveActivity.body}
+                threadCwdPath={activeThread.cwd}
                 projectFilePaths={projectFilePaths}
                 projectId={projectId}
                 projectRootPath={projectRootPath}
+                workspaceRoots={workspaceFileLinkRoots}
               />
             </ThreadDisclosure>
           ) : liveActivity.kind === "reasoning" ? (
@@ -1038,6 +1052,7 @@ export default memo(function ThreadView ({
                         knownSkills={workbenchSkills}
                         projectFilePaths={projectFilePaths}
                         projectId={projectId}
+                        projectRoots={projectRoots}
                         projectRootPath={projectRootPath}
                         relatedThreadsById={subthreadsById}
                         thread={liveSubagentThread}

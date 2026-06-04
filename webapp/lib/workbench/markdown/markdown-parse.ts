@@ -27,6 +27,7 @@ import {
     parsePlaintextProjectFileLink,
 } from "./markdown-file-autolinks";
 import {
+    type WorkspaceFileLinkRoot,
     normalizeMarkdownHref,
     resolveProjectFileLinkTarget,
 } from "./markdown-links";
@@ -82,11 +83,13 @@ export type ParsedInlineNode =
 
 export interface MarkdownParseOptions {
   inlineMentionSources?: InlineMentionHighlightSources | null;
+  threadCwdPath?: string;
   profile?: MarkdownParseProfile;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
   suppressPlaintextAutolinks?: boolean;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 
 const THREAD_STATE_CHANGE_TAG_PATTERN = /^<set-state\s+mode=(["'])((?:(?!\1).)*)\1\s*\/>$/;
@@ -439,6 +442,54 @@ function createProjectFileLinkNode(url: string, relativePath: string, {
   };
 }
 
+function getInlineLineEndIndex(markdown: string, startIndex: number) {
+  const lineFeedIndex = markdown.indexOf("\n", startIndex);
+  const carriageReturnIndex = markdown.indexOf("\r", startIndex);
+  if (lineFeedIndex === -1) {
+    return carriageReturnIndex === -1 ? markdown.length : carriageReturnIndex;
+  }
+  if (carriageReturnIndex === -1) {
+    return lineFeedIndex;
+  }
+  return Math.min(lineFeedIndex, carriageReturnIndex);
+}
+
+function parseExplicitProjectFileMention(markdown: string, index: number, options: MarkdownParseOptions) {
+  if ((options.profile ?? "editor") !== "thread" || !markdown.startsWith("#[", index)) {
+    return null;
+  }
+
+  const closeIndex = markdown.indexOf("]", index + 2);
+  const lineEndIndex = getInlineLineEndIndex(markdown, index + 2);
+  if (closeIndex === -1 || closeIndex > lineEndIndex) {
+    return null;
+  }
+
+  const rawValue = markdown.slice(index + 2, closeIndex).trim();
+  if (!rawValue) {
+    return null;
+  }
+
+  const resolvedFileLink = resolveProjectFileLinkTarget(rawValue, {
+    allowThreadCwdPathWithoutCandidate: true,
+    candidatePaths: getProjectFileLinkCandidatePaths(options),
+    threadCwdPath: options.threadCwdPath,
+    projectRootPath: options.projectRootPath,
+    workspaceRoots: options.workspaceRoots,
+  });
+  if (!resolvedFileLink) {
+    return null;
+  }
+
+  return {
+    end: closeIndex + 1,
+    node: createProjectFileLinkNode(`#${rawValue}`, resolvedFileLink.relativePath, {
+      columnNumber: resolvedFileLink.columnNumber,
+      lineNumber: resolvedFileLink.lineNumber,
+    }),
+  };
+}
+
 export function parseInlineMarkdown(markdown: string, options: MarkdownParseOptions = {}) {
   const nodes: ParsedInlineNode[] = [];
   let index = 0;
@@ -544,6 +595,13 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
       }
     }
 
+    const explicitFileMention = parseExplicitProjectFileMention(markdown, index, options);
+    if (explicitFileMention) {
+      nodes.push(explicitFileMention.node);
+      index = explicitFileMention.end;
+      continue;
+    }
+
     while (
       inlineMentionIndex < inlineMentionHighlights.length
       && inlineMentionHighlights[inlineMentionIndex].end <= index
@@ -579,7 +637,9 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
           const rawUrl = normalizeMarkdownHref(markdown.slice(labelEnd + 2, urlEnd));
           const resolvedFileLink = resolveProjectFileLinkTarget(rawUrl, {
             candidatePaths: getProjectFileLinkCandidatePaths(options),
+            threadCwdPath: options.threadCwdPath,
             projectRootPath: options.projectRootPath,
+            workspaceRoots: options.workspaceRoots,
           });
           if (resolvedFileLink) {
             nodes.push(createProjectFileLinkNode(rawUrl, resolvedFileLink.relativePath, {
@@ -610,7 +670,9 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
       const plaintextFileLink = parsePlaintextProjectFileLink(markdown, index, {
         candidatePaths: getProjectFileLinkCandidatePaths(options),
         inlineMentionSources: options.inlineMentionSources,
+        threadCwdPath: options.threadCwdPath,
         projectRootPath: options.projectRootPath,
+        workspaceRoots: options.workspaceRoots,
       });
       if (plaintextFileLink) {
         nodes.push(createProjectFileLinkNode(plaintextFileLink.href, plaintextFileLink.relativePath, {

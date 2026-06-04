@@ -6,6 +6,7 @@
 
 import type { InlineMentionHighlightSources } from "../thread/inline-mention-highlights";
 import {
+  type WorkspaceFileLinkRoot,
   resolveProjectFileLinkTarget,
 } from "./markdown-links";
 
@@ -58,11 +59,15 @@ export function parsePlaintextProjectFileLink(
   {
     candidatePaths = null,
     inlineMentionSources = null,
+    threadCwdPath = "",
     projectRootPath = "",
+    workspaceRoots = [],
   }: {
     candidatePaths?: readonly string[] | null;
     inlineMentionSources?: InlineMentionHighlightSources | null;
+    threadCwdPath?: string;
     projectRootPath?: string;
+    workspaceRoots?: readonly WorkspaceFileLinkRoot[];
   } = {},
 ): ParsedPlaintextProjectFileLink | null {
   if (!isAutolinkBoundary(markdown[index - 1])) {
@@ -76,7 +81,9 @@ export function parsePlaintextProjectFileLink(
 
   const resolvedTarget = resolveProjectFileLinkTarget(candidate, {
     candidatePaths: candidatePaths ?? getFileCandidatePaths(inlineMentionSources),
+    threadCwdPath,
     projectRootPath,
+    workspaceRoots,
   });
   if (!resolvedTarget) {
     return null;

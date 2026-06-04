@@ -14,6 +14,7 @@ import type {
   WorkbenchUserInputRequest,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
+import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
@@ -326,16 +327,20 @@ function ThreadQuestionnaireTranscriptPreview ({
   hiddenCount,
   inlineMentionSources,
   pairs,
+  threadCwdPath,
   projectFilePaths,
   projectId,
   projectRootPath,
+  workspaceRoots,
 }: {
   hiddenCount: number;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   pairs: Array<{ answerMarkdown: string; promptText: string }>;
+  threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   if (!pairs.length) {
     return null;
@@ -355,9 +360,11 @@ function ThreadQuestionnaireTranscriptPreview ({
               className="text-[0.98em] leading-[1.55] [&_h3]:mb-[0.2em] [&_h3]:text-[1.15em] [&_p]:leading-[1.55]"
               inlineMentionSources={inlineMentionSources}
               markdown={pair.answerMarkdown}
+              threadCwdPath={threadCwdPath}
               projectFilePaths={projectFilePaths}
               projectId={projectId}
               projectRootPath={projectRootPath}
+              workspaceRoots={workspaceRoots}
             />
           </div>
         </div>
@@ -374,19 +381,23 @@ function ThreadQuestionnaireTranscriptPreview ({
 function ThreadQuestionnaireHistorySummary ({
   inlineMentionSources,
   isOpen,
+  threadCwdPath,
   projectFilePaths,
   projectId,
   projectRootPath,
   request,
   response,
+  workspaceRoots,
 }: {
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isOpen: boolean;
+  threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
   request: WorkbenchUserInputRequest | null;
   response: WorkbenchUserInputResponse | null;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const transcriptPairs = request ? buildQuestionnaireTranscriptPairs(request, response) : [];
   const visiblePairs = transcriptPairs.slice(0, MAX_QUESTIONNAIRE_TRANSCRIPT_PAIRS);
@@ -400,9 +411,11 @@ function ThreadQuestionnaireHistorySummary ({
           hiddenCount={hiddenCount}
           inlineMentionSources={inlineMentionSources}
           pairs={visiblePairs}
+          threadCwdPath={threadCwdPath}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
+          workspaceRoots={workspaceRoots}
         />
       ) : null}
     </div>
@@ -489,15 +502,19 @@ function buildMetaParts (item: DynamicToolCallItem) {
 function ThreadQuestionnaireToolCallItem ({
   inlineMentionSources,
   item,
+  threadCwdPath,
   projectFilePaths,
   projectId,
   projectRootPath,
+  workspaceRoots,
 }: {
   inlineMentionSources?: InlineMentionHighlightSources | null;
   item: DynamicToolCallItem;
+  threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const request = parseQuestionnaireRequest(item.arguments, `history:${item.id}`);
   const { rawText, response } = parseQuestionnaireResponse(item);
@@ -520,11 +537,13 @@ function ThreadQuestionnaireToolCallItem ({
         <ThreadQuestionnaireHistorySummary
           inlineMentionSources={inlineMentionSources}
           isOpen={isOpen}
+          threadCwdPath={threadCwdPath}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
           request={request}
           response={response}
+          workspaceRoots={workspaceRoots}
         />
       )}
       summaryClassName="items-start text-[0.92em] leading-[1.6] text-muted"
@@ -683,15 +702,19 @@ function ThreadSkillToolCallItem ({
 function ThreadTaskToolCallItem ({
   inlineMentionSources,
   item,
+  threadCwdPath,
   projectFilePaths,
   projectId,
   projectRootPath,
+  workspaceRoots,
 }: {
   inlineMentionSources?: InlineMentionHighlightSources | null;
   item: DynamicToolCallItem;
+  threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const argumentsRecord = asRecord(item.arguments);
   const metadata = getCopilotDynamicToolMetadata(item);
@@ -730,12 +753,12 @@ function ThreadTaskToolCallItem ({
         {agentDescription ? <ThreadMetaLine label="Agent:" value={agentDescription} /> : null}
         {prompt ? (
           <ThreadToolBubble label="Main agent">
-            <ThreadMarkdown inlineMentionSources={inlineMentionSources} markdown={prompt} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} />
+            <ThreadMarkdown inlineMentionSources={inlineMentionSources} markdown={prompt} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />
           </ThreadToolBubble>
         ) : null}
         {responseMarkdown ? (
           <ThreadToolBubble label={labelText}>
-            <ThreadMarkdown inlineMentionSources={inlineMentionSources} markdown={responseMarkdown} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} />
+            <ThreadMarkdown inlineMentionSources={inlineMentionSources} markdown={responseMarkdown} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />
           </ThreadToolBubble>
         ) : (
           item.status !== "completed" ? (
@@ -752,18 +775,22 @@ function ThreadTaskToolCallItem ({
 export default function ThreadDynamicToolCallItem ({
   inlineMentionSources,
   item,
+  threadCwdPath,
   projectFilePaths,
   projectId,
   projectRootPath,
+  workspaceRoots,
 }: {
   inlineMentionSources?: InlineMentionHighlightSources | null;
   item: DynamicToolCallItem;
+  threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   if (item.tool === WORKBENCH_QUESTIONNAIRE_TOOL_NAME) {
-    return <ThreadQuestionnaireToolCallItem inlineMentionSources={inlineMentionSources} item={item} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} />;
+    return <ThreadQuestionnaireToolCallItem inlineMentionSources={inlineMentionSources} item={item} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
   }
 
   if (item.tool === COPILOT_SKILL_TOOL_NAME) {
@@ -771,7 +798,7 @@ export default function ThreadDynamicToolCallItem ({
   }
 
   if (item.tool === COPILOT_TASK_TOOL_NAME) {
-    return <ThreadTaskToolCallItem inlineMentionSources={inlineMentionSources} item={item} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} />;
+    return <ThreadTaskToolCallItem inlineMentionSources={inlineMentionSources} item={item} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
   }
 
   return <ThreadGenericDynamicToolCallItem item={item} />;

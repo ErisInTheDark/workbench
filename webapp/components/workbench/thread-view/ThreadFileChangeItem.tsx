@@ -6,7 +6,7 @@
 "use client";
 
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
-import { toWorkbenchDisplayPath } from "../../../lib/workbench/markdown/markdown-links";
+import { toWorkspaceDisplayPath, type WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import {
   parseUnifiedDiff,
   type ParsedUnifiedDiff,
@@ -138,18 +138,20 @@ export default function ThreadFileChangeItem ({
   projectFilePaths,
   projectId,
   projectRootPath,
+  workspaceRoots,
 }: {
   items: FileChangeItem[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const parsedChanges: ParsedFileChange[] = items.flatMap((item) => item.changes.map((change, sourceChangeIndex) => ({
     change,
     diff: parseFileChangeDiff(change),
-    displayPath: toWorkbenchDisplayPath(change.path, projectRootPath ?? "") ?? change.path,
+    displayPath: toWorkspaceDisplayPath(change.path, { projectRootPath: projectRootPath ?? "", workspaceRoots }) ?? change.path,
     movePathDisplay: change.kind.type === "update" && change.kind.move_path
-      ? toWorkbenchDisplayPath(change.kind.move_path, projectRootPath ?? "") ?? change.kind.move_path
+      ? toWorkspaceDisplayPath(change.kind.move_path, { projectRootPath: projectRootPath ?? "", workspaceRoots }) ?? change.kind.move_path
       : null,
     sourceChangeIndex,
     sourceItemId: item.id,

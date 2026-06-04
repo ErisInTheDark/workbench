@@ -3,6 +3,7 @@
 import { memo, useMemo, type ReactNode } from "react";
 
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
+import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import { renderThreadMarkdown } from "./thread-markdown-render";
 
 function joinClasses (...values: Array<string | undefined>) {
@@ -52,15 +53,19 @@ function getProjectFilePathsCacheKey(projectFilePaths: readonly string[] | undef
 function getMarkdownCacheKey({
   inlineMentionSources,
   markdown,
+  threadCwdPath,
   projectFilePathsKey,
   projectId,
   projectRootPath,
+  workspaceRoots,
 }: {
   inlineMentionSources?: InlineMentionHighlightSources | null;
   markdown: string;
+  threadCwdPath?: string;
   projectFilePathsKey: string;
   projectId?: string | null;
   projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   return [
     markdown,
@@ -68,6 +73,8 @@ function getMarkdownCacheKey({
     projectFilePathsKey,
     projectId ?? "",
     projectRootPath ?? "",
+    threadCwdPath ?? "",
+    workspaceRoots?.map((root) => `${root.id}:${root.rootPath}`).join(";") ?? "",
   ].join("|");
 }
 
@@ -112,32 +119,38 @@ export default memo(function ThreadMarkdown ({
   className,
   inlineMentionSources,
   markdown,
+  threadCwdPath,
   projectFilePaths,
   projectId,
   projectRootPath,
+  workspaceRoots,
 }: {
   className?: string;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   markdown: string;
+  threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const projectFilePathsKey = getProjectFilePathsCacheKey(projectFilePaths);
   const cacheKey = getMarkdownCacheKey({
     inlineMentionSources,
     markdown,
+    threadCwdPath,
     projectFilePathsKey,
     projectId,
     projectRootPath,
+    workspaceRoots,
   });
   const renderedMarkdown = useMemo(
     () => renderCachedThreadMarkdown(
       markdown,
-      { inlineMentionSources, projectFilePaths, projectId, projectRootPath },
+      { inlineMentionSources, threadCwdPath, projectFilePaths, projectId, projectRootPath, workspaceRoots },
       cacheKey,
     ),
-    [cacheKey, inlineMentionSources, markdown, projectFilePaths, projectId, projectRootPath],
+    [cacheKey, inlineMentionSources, markdown, threadCwdPath, projectFilePaths, projectId, projectRootPath, workspaceRoots],
   );
 
   return (

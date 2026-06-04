@@ -28,6 +28,7 @@ export interface ProjectFilePathDisplay {
   fileName: string;
   label: string;
   locationSuffix: string;
+  rootPrefix: string;
   title: string;
 }
 
@@ -58,6 +59,20 @@ function normalizeComparableProjectFilePath(value: string) {
 
 function getProjectFilePathSegments(path: string) {
   return normalizeWorkbenchPath(path).split("/").filter(Boolean);
+}
+
+function parseWorkspaceQualifiedDisplayPath(path: string) {
+  const normalizedPath = normalizeWorkbenchPath(path);
+  const separatorIndex = normalizedPath.indexOf(":");
+  if (separatorIndex <= 0 || /^[A-Za-z]:\//.test(normalizedPath)) {
+    return null;
+  }
+
+  const rootId = normalizedPath.slice(0, separatorIndex);
+  const relativePath = normalizedPath.slice(separatorIndex + 1).replace(/^\/+/, "");
+  return rootId && relativePath
+    ? { relativePath, rootId }
+    : null;
 }
 
 function getProjectFilePathSuffix(path: string, depth: number) {
@@ -155,9 +170,14 @@ export function getProjectFilePathDisplay(
   }: ProjectFilePathDisplayOptions = {},
 ): ProjectFilePathDisplay {
   const normalizedPath = normalizeWorkbenchPath(path);
-  const pathSegments = normalizedPath.split("/").filter(Boolean);
-  const fileName = pathSegments[pathSegments.length - 1] || normalizedPath || path;
-  const displayLabel = getShortestDisambiguatedProjectFilePath(normalizedPath || path, disambiguationPaths);
+  const workspacePath = parseWorkspaceQualifiedDisplayPath(normalizedPath);
+  const displayPath = workspacePath?.relativePath || normalizedPath || path;
+  const pathSegments = displayPath.split("/").filter(Boolean);
+  const fileName = pathSegments[pathSegments.length - 1] || displayPath;
+  const displayLabel = getShortestDisambiguatedProjectFilePath(displayPath, disambiguationPaths);
+  const rootPrefix = workspacePath && !label?.startsWith(`${workspacePath.rootId}:`)
+    ? `${workspacePath.rootId}:`
+    : "";
   const locationSuffix = lineNumber === null
     ? ""
     : `:${lineNumber}${columnNumber === null ? "" : `:${columnNumber}`}`;
@@ -166,6 +186,7 @@ export function getProjectFilePathDisplay(
     fileName,
     label: label ?? displayLabel,
     locationSuffix,
+    rootPrefix,
     title: normalizedPath || path,
   };
 }

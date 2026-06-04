@@ -51,6 +51,9 @@ export default function ProjectFilePath ({
   const isLink = projectId !== null;
   const content = (
     <>
+      {display.rootPrefix ? (
+        <span className={projectFilePathLocationClassName}>{display.rootPrefix}</span>
+      ) : null}
       <span className={projectFilePathLabelClassName}>{display.label}</span>
       {display.locationSuffix ? (
         <span className={projectFilePathLocationClassName}>{display.locationSuffix}</span>
