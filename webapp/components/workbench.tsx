@@ -500,6 +500,19 @@ export default function Workbench () {
     let cancelled = false;
     let cleanup = () => { };
     let initTimeoutId: number | null = null;
+    const scheduleWorkbenchStateUpdate = (callback: () => void) => {
+      if (cancelled) {
+        return;
+      }
+
+      startTransition(() => {
+        if (cancelled) {
+          return;
+        }
+
+        callback();
+      });
+    };
 
     initTimeoutId = window.setTimeout(() => {
       void import("../lib/WorkbenchClient").then(async ({ WorkbenchClient: initWorkbench }) => {
@@ -507,38 +520,22 @@ export default function Workbench () {
         const nextCleanup = await initWorkbench({
           dom,
           onExplorerStateChange: (snapshot) => {
-            if (cancelled) {
-              return;
-            }
-
-            startTransition(() => {
+            scheduleWorkbenchStateUpdate(() => {
               setExplorer(snapshot);
             });
           },
           onCurrentThreadChange: (thread) => {
-            if (cancelled) {
-              return;
-            }
-
-            startTransition(() => {
+            scheduleWorkbenchStateUpdate(() => {
               setCurrentThread(thread);
             });
           },
           onPendingUserInputRequestsChange: (requestsByThreadId) => {
-            if (cancelled) {
-              return;
-            }
-
-            startTransition(() => {
+            scheduleWorkbenchStateUpdate(() => {
               setHarnessUserInputRequestsByThreadId(requestsByThreadId);
             });
           },
           onRateLimitsChange: (nextRateLimits) => {
-            if (cancelled) {
-              return;
-            }
-
-            startTransition(() => {
+            scheduleWorkbenchStateUpdate(() => {
               setRateLimits(nextRateLimits);
             });
           },

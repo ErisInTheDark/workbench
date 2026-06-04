@@ -12,6 +12,7 @@ import {
 } from "./workbench-route";
 
 const WORKBENCH_URL_CHANGE_EVENT = "workbench:url-change";
+const WORKBENCH_HISTORY_STATE = { workbench: true };
 
 function readLocationSnapshot() {
   if (typeof window === "undefined") {
@@ -50,9 +51,9 @@ export function useWorkbenchRoute() {
     const currentHref = readLocationSnapshot();
     if (nextHref !== currentHref) {
       if (options.replace) {
-        window.history.replaceState(window.history.state, "", nextHref);
+        window.history.replaceState(WORKBENCH_HISTORY_STATE, "", nextHref);
       } else {
-        window.history.pushState(window.history.state, "", nextHref);
+        window.history.pushState(WORKBENCH_HISTORY_STATE, "", nextHref);
       }
       notifyLocationChanged();
     }
