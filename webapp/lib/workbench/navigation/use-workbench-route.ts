@@ -1,55 +1,61 @@
 /*
  * Exports:
- * - useWorkbenchRoute: React hook that reads browser route state and exposes guarded user navigation. Keywords: URL source of truth, popstate, pushState.
+ * - useWorkbenchRoute: React hook that derives workbench route state from the browser URL and exposes guarded user navigation. Keywords: URL source of truth, external store, popstate, pushState.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 
 import {
   createWorkbenchHref,
-  isSameWorkbenchRoute,
   parseWorkbenchRouteFromLocation,
   type WorkbenchRoute,
 } from "./workbench-route";
 
+const WORKBENCH_URL_CHANGE_EVENT = "workbench:url-change";
+
+function readLocationSnapshot() {
+  if (typeof window === "undefined") {
+    return "/";
+  }
+
+  return `${window.location.pathname}${window.location.search}`;
+}
+
+function subscribeToLocationChanges(listener: () => void) {
+  window.addEventListener("popstate", listener);
+  window.addEventListener(WORKBENCH_URL_CHANGE_EVENT, listener);
+  return () => {
+    window.removeEventListener("popstate", listener);
+    window.removeEventListener(WORKBENCH_URL_CHANGE_EVENT, listener);
+  };
+}
+
+function notifyLocationChanged() {
+  window.dispatchEvent(new Event(WORKBENCH_URL_CHANGE_EVENT));
+}
+
 export function useWorkbenchRoute() {
-  const [route, setRoute] = useState<WorkbenchRoute>(() => {
-    if (typeof window === "undefined") {
-      return parseWorkbenchRouteFromLocation("/");
-    }
-
-    return parseWorkbenchRouteFromLocation(window.location);
-  });
-
-  useEffect(() => {
-    const handlePopState = () => {
-      setRoute(parseWorkbenchRouteFromLocation(window.location));
-    };
-
-    window.addEventListener("popstate", handlePopState);
-    return () => {
-      window.removeEventListener("popstate", handlePopState);
-    };
-  }, []);
+  const locationSnapshot = useSyncExternalStore(
+    subscribeToLocationChanges,
+    readLocationSnapshot,
+    () => "/",
+  );
+  const route = useMemo(
+    () => parseWorkbenchRouteFromLocation(locationSnapshot),
+    [locationSnapshot],
+  );
 
   const navigateToRoute = useCallback((nextRoute: WorkbenchRoute, options: { replace?: boolean } = {}) => {
-    setRoute((currentRoute) => {
-      if (isSameWorkbenchRoute(currentRoute, nextRoute)) {
-        return currentRoute;
+    const nextHref = createWorkbenchHref(nextRoute);
+    const currentHref = readLocationSnapshot();
+    if (nextHref !== currentHref) {
+      if (options.replace) {
+        window.history.replaceState(window.history.state, "", nextHref);
+      } else {
+        window.history.pushState(window.history.state, "", nextHref);
       }
-
-      const nextHref = createWorkbenchHref(nextRoute);
-      const currentHref = `${window.location.pathname}${window.location.search}`;
-      if (nextHref !== currentHref) {
-        if (options.replace) {
-          window.history.replaceState(window.history.state, "", nextHref);
-        } else {
-          window.history.pushState(window.history.state, "", nextHref);
-        }
-      }
-
-      return nextRoute;
-    });
+      notifyLocationChanged();
+    }
   }, []);
 
   return {
