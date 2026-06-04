@@ -1251,6 +1251,8 @@ function readPowerShellForEachNumberedLineRange(parsedStage: ParsedPowerShellSta
 
   const rangeMatch = normalizedScript.match(
     /^\$([A-Za-z_][\w]*)\s*\+\+\s*;\s*if\s*\(\s*\$\1\s*-ge\s*(\d+)\s*-and\s*\$\1\s*-le\s*(\d+)\s*\)\s*\{([\s\S]+)\}\s*$/i,
+  ) ?? normalizedScript.match(
+    /^if\s*\(\s*\$([A-Za-z_][\w]*)\s*-ge\s*(\d+)\s*-and\s*\$\1\s*-le\s*(\d+)\s*\)\s*\{([\s\S]+)\}\s*;?\s*\$\1\s*\+\+\s*$/i,
   );
   if (!rangeMatch?.[2] || !rangeMatch[3] || !rangeMatch[4]) {
     return null;
