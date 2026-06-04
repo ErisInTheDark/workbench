@@ -1924,9 +1924,9 @@ export default function Workbench () {
                     {groupedProjects.timeGroups.map((timeGroup) => (
                       <section key={timeGroup.label} aria-label={`${timeGroup.label} projects`} className="space-y-2">
                         <p className="m-0 mt-8 px-2 text-[1.24rem] font-semibold leading-tight opacity-50 italic flex items-center">
-                          <div className="h-[1px] flex-1 bg-[currentcolor]/25" />
-                          <div className="mx-4">{timeGroup.label}</div>
-                          <div className="h-[1px] flex-1 bg-[currentcolor]/25" />
+                          <span className="block h-[1px] flex-1 bg-[currentcolor]/25" />
+                          <span className="block mx-4">{timeGroup.label}</span>
+                          <span className="block h-[1px] flex-1 bg-[currentcolor]/25" />
                         </p>
                         {timeGroup.folderGroups.map((group) => (
                           <section key={group.label} aria-label={`${timeGroup.label} ${group.label} projects`} className="space-y-1">
