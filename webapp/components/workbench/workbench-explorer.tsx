@@ -2,6 +2,7 @@
  * Exports:
  * - NewEntryIcon: render the create-entry glyph used in the explorer. Keywords: workbench, explorer, icon.
  * - FileVisibilityIcon: render the eye glyph used by the explorer file-visibility toggle. Keywords: workbench, explorer, icon, visibility.
+ * - SidebarLoadingSkeleton: render animated placeholder rows for loading sidebar sections. Keywords: sidebar, loading, skeleton.
  * - ThreadsList: render the thread list in the workbench sidebar, including the create-thread row. Keywords: workbench, threads, sidebar, create.
  * - ExplorerTree: render the recursive project tree with current, modified, and create-entry state. Keywords: workbench, explorer, tree.
  * - Local helpers: support modified markers, change summaries, and recursive directory state. Keywords: recursion, tree state, helpers.
@@ -46,6 +47,29 @@ export function FileVisibilityIcon ({ visible }: { visible: boolean }) {
       <circle cx="10" cy="10" r="2.2" />
       {visible ? null : <path d="M4.1 4.1 15.9 15.9" strokeLinecap="round" />}
     </svg>
+  );
+}
+
+export function SidebarLoadingSkeleton ({
+  ariaLabel,
+  rows,
+}: {
+  ariaLabel: string;
+  rows: number;
+}) {
+  return (
+    <div aria-label={ariaLabel} aria-live="polite" role="status" className="space-y-1 py-1 pr-2 md:pr-4.5">
+      {Array.from({ length: rows }, (_, index) => (
+        <div key={index} className="flex h-7 min-w-0 items-center gap-2 px-2">
+          <span className="size-4 shrink-0 rounded-full workbench-skeleton" aria-hidden="true" />
+          <span
+            className="h-3.5 rounded-full workbench-skeleton"
+            style={{ width: `${Math.max(42, 86 - index * 7)}%` }}
+            aria-hidden="true"
+          />
+        </div>
+      ))}
+    </div>
   );
 }
 

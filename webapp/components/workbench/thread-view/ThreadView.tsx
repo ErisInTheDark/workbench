@@ -401,6 +401,7 @@ export default memo(function ThreadView ({
   const threadViewRef = useRef<HTMLDivElement>(null);
   const bottomSentinelRef = useRef<HTMLDivElement>(null);
   const hasMountedActiveThreadScrollRef = useRef(false);
+  const subthreadLoadGenerationRef = useRef(0);
   const subagentThreadIds = useMemo(() => getCollabAgentThreadIds(thread.turns), [thread.turns]);
   const activeThread = activeThreadId === thread.id
     ? thread
@@ -471,6 +472,7 @@ export default memo(function ThreadView ({
       return null;
     }
 
+    const loadGeneration = subthreadLoadGenerationRef.current;
     setLoadingThreadIds((current) => (
       current[threadId]
         ? current
@@ -485,8 +487,15 @@ export default memo(function ThreadView ({
       if (!payload) {
         return null;
       }
+      if (loadGeneration !== subthreadLoadGenerationRef.current) {
+        return null;
+      }
 
       setSubthreadsById((current) => {
+        if (loadGeneration !== subthreadLoadGenerationRef.current) {
+          return current;
+        }
+
         const existing = current[threadId];
         const mergedPayload = mergeSubthreadTurnSnapshots(payload, existing);
         if (areThreadPayloadsEquivalent(existing, mergedPayload)) {
@@ -509,6 +518,10 @@ export default memo(function ThreadView ({
       return payload;
     } finally {
       setLoadingThreadIds((current) => {
+        if (loadGeneration !== subthreadLoadGenerationRef.current) {
+          return current;
+        }
+
         if (!current[threadId]) {
           return current;
         }
@@ -518,16 +531,17 @@ export default memo(function ThreadView ({
         return next;
       });
     }
-  }, [onReadThread, thread.harness, thread.id]);
+  }, [onReadThread, projectId, thread.harness, thread.id]);
 
   useEffect(() => {
+    subthreadLoadGenerationRef.current += 1;
     setActiveThreadId(thread.id);
     setSubthreadsById({});
     setLoadingThreadIds({});
     setSeenItemCountsByThreadId({
       [thread.id]: countThreadItems(thread),
     });
-  }, [thread.id]);
+  }, [projectId, thread.id]);
 
   useEffect(() => {
     let cancelled = false;

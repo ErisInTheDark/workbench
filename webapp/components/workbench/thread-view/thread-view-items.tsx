@@ -67,6 +67,19 @@ interface HiddenThreadItemIds {
   webSearchItemIds?: ReadonlySet<string> | null;
 }
 
+function ThreadContentLoadingSkeleton () {
+  return (
+    <div aria-label="Loading subagent thread" aria-live="polite" role="status" className="space-y-3 py-1">
+      <div className="h-3.5 w-44 max-w-full rounded-full workbench-skeleton" aria-hidden="true" />
+      <div className="space-y-2">
+        <div className="h-3 w-[92%] rounded-full workbench-skeleton" aria-hidden="true" />
+        <div className="h-3 w-[76%] rounded-full workbench-skeleton" aria-hidden="true" />
+        <div className="h-3 w-[84%] rounded-full workbench-skeleton" aria-hidden="true" />
+      </div>
+    </div>
+  );
+}
+
 function getFinalAgentMessageId (turn: Turn) {
   for (let index = turn.items.length - 1; index >= 0; index -= 1) {
     const item = turn.items[index];
@@ -1171,11 +1184,7 @@ export function ThreadThreadContent ({
   thread: ThreadPayload | null | undefined;
 }) {
   if (!thread) {
-    return (
-      <p className="m-0 text-[0.92em] leading-[1.6] text-muted">
-        Loading subagent thread...
-      </p>
-    );
+    return <ThreadContentLoadingSkeleton />;
   }
 
   if (!thread.turns.length) {

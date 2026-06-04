@@ -130,6 +130,8 @@ function buildWorkspaceRootsInstructions(roots: WorkbenchProjectRoot[]) {
 export interface WorkbenchThreadState {
   currentThread: ThreadPayload | null;
   currentThreadId: string;
+  hasLoadedThreads: boolean;
+  isLoading: boolean;
   modelsByHarness: Map<WorkbenchHarness, WorkbenchModelOption[]>;
   pendingUserInputRequestsByThreadId: Map<string, WorkbenchPendingUserInputRequest>;
   projectId: string;
@@ -147,6 +149,7 @@ export interface WorkbenchThreadState {
 export interface WorkbenchThreadSnapshot {
   currentThread: ThreadPayload | null;
   currentThreadId: string;
+  isLoading: boolean;
   pendingUserInputRequestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>;
   rateLimits: RateLimitSnapshot | null;
   threads: ThreadSummary[];
@@ -226,6 +229,8 @@ function createInitialThreadState(): WorkbenchThreadState {
   return {
     currentThread: null,
     currentThreadId: "",
+    hasLoadedThreads: false,
+    isLoading: false,
     modelsByHarness: new Map(),
     pendingUserInputRequestsByThreadId: new Map(),
     projectId: "",
@@ -456,9 +461,11 @@ function WorkbenchThreadClient(
   const latestTurnStartedAtByThreadKey = new Map<string, number>();
   const latestTurnStartedAtRefreshKeyByThreadKey = new Map<string, string>();
   let disposed = false;
+  let projectContextGeneration = 0;
   let rateLimitGeneration = 0;
   const refreshRateLimitsPromisesByHarness = new Map<WorkbenchHarness, Promise<void>>();
   let refreshThreadsPromise: Promise<void> | null = null;
+  let refreshThreadsPromiseGeneration = 0;
 
   state.threadUnreadStateByKey = new Map(Object.entries(readStoredThreadUnreadState()));
 
@@ -616,6 +623,7 @@ function WorkbenchThreadClient(
     return {
       currentThread: state.currentThread,
       currentThreadId: state.currentThreadId,
+      isLoading: state.isLoading,
       pendingUserInputRequestsByThreadId: serializePendingUserInputRequests(),
       rateLimits: state.rateLimits,
       threads: state.threads.map(buildThreadSummaryWithUnreadBadge),
@@ -674,6 +682,12 @@ function WorkbenchThreadClient(
     state.projectRoot = context.root;
     state.projectRootPath = context.rootPath;
     state.projectRoots = nextRoots;
+    projectContextGeneration += 1;
+    state.threads = [];
+    state.threadsError = "";
+    state.hasLoadedThreads = false;
+    state.isLoading = Boolean(getProjectRootPaths(state).length);
+    emit();
   }
 
   function applyPersistedQuestionnaireHistory(thread: ThreadPayload | null) {
@@ -1968,16 +1982,30 @@ function WorkbenchThreadClient(
 
   async function refreshThreads() {
     if (refreshThreadsPromise) {
+      const inFlightGeneration = refreshThreadsPromiseGeneration;
       await refreshThreadsPromise;
+      if (inFlightGeneration !== projectContextGeneration) {
+        await refreshThreads();
+      }
       return;
     }
 
+    const refreshGeneration = projectContextGeneration;
+    refreshThreadsPromiseGeneration = refreshGeneration;
     refreshThreadsPromise = (async () => {
+      const shouldShowLoading = !state.hasLoadedThreads;
+      if (shouldShowLoading) {
+        state.isLoading = true;
+        emit();
+      }
+
       try {
         const projectRootPaths = getProjectRootPaths(state);
         if (!projectRootPaths.length) {
           state.threads = [];
           state.threadsError = "";
+          state.hasLoadedThreads = true;
+          state.isLoading = false;
           emit();
           return;
         }
@@ -2044,18 +2072,31 @@ function WorkbenchThreadClient(
 
           return left.id.localeCompare(right.id);
         });
+        if (refreshGeneration !== projectContextGeneration) {
+          return;
+        }
+
         state.threads = [
           ...stableVisibleThreads,
           ...threadsByRecentItem.slice(STABLE_VISIBLE_THREAD_COUNT),
         ];
         void refreshVisibleThreadUnreadStates(state.threads);
         state.threadsError = errors.join(" ");
+        state.hasLoadedThreads = true;
       } catch (error) {
+        if (refreshGeneration !== projectContextGeneration) {
+          return;
+        }
+
         state.threads = [];
         state.threadsError = error instanceof Error ? error.message : "Unable to load Codex threads.";
+        state.hasLoadedThreads = true;
       } finally {
         refreshThreadsPromise = null;
-        emit();
+        if (refreshGeneration === projectContextGeneration) {
+          state.isLoading = false;
+          emit();
+        }
       }
     })();
 

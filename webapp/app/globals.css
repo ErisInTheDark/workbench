@@ -242,6 +242,18 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     background-color: color-mix(in srgb, var(--text) 16%, transparent);
   }
 
+  .workbench-skeleton {
+    background:
+      linear-gradient(
+        90deg,
+        color-mix(in srgb, var(--text) 7%, transparent) 0%,
+        color-mix(in srgb, var(--accent) 15%, transparent) 45%,
+        color-mix(in srgb, var(--text) 7%, transparent) 90%
+      );
+    background-size: 220% 100%;
+    animation: workbench-skeleton-shimmer 1.25s ease-in-out infinite;
+  }
+
   .editor-content:empty::before {
     color: var(--muted);
     content: attr(data-placeholder);
@@ -318,6 +330,16 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
 
   .editor-diff-marker[data-marker-type="modify"] {
     color: var(--attention);
+  }
+
+  @keyframes workbench-skeleton-shimmer {
+    from {
+      background-position: 100% 50%;
+    }
+
+    to {
+      background-position: 0% 50%;
+    }
   }
 
   .editor-diff-marker[data-marker-type="delete"] {
@@ -578,6 +600,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   @media (prefers-reduced-motion: reduce) {
+    .workbench-skeleton,
     .thread-thinking-text {
       animation: none;
       background-position: 50% 50%;

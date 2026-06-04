@@ -262,6 +262,8 @@ export interface ExplorerSnapshot {
   roots: WorkbenchProjectRoot[];
   tree: TreeNode[];
   threads: ThreadSummary[];
+  isProjectLoading: boolean;
+  isThreadsLoading: boolean;
   changes: Record<string, ChangeSummary>;
   currentPath: string;
   currentThreadId: string;

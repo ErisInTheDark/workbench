@@ -608,6 +608,8 @@ export async function WorkbenchClient(
       roots: projectSnapshot.roots,
       tree: projectSnapshot.tree,
       threads: threadSnapshot.threads,
+      isProjectLoading: projectSnapshot.isLoading,
+      isThreadsLoading: threadSnapshot.isLoading,
       changes: projectSnapshot.changes,
       currentPath: sessionState.currentPath,
       currentThreadId: sessionState.currentThreadId,
@@ -749,6 +751,40 @@ export async function WorkbenchClient(
 
   async function refreshRateLimits() {
     await threadClient.refreshRateLimits();
+  }
+
+  async function refreshProjectSidebarData(route: WorkbenchRoute, generation: number) {
+    const projectSnapshot = projectClient.getSnapshot();
+    if (!projectSnapshot.currentProjectId) {
+      emitExplorerStateChange();
+      return;
+    }
+
+    const sidebarRefreshTasks = [
+      () => refreshThreads(),
+      () => threadClient.refreshPendingUserInputRequests(),
+    ];
+
+    await Promise.all(sidebarRefreshTasks.map((task) => task()));
+
+    if (isRouteGenerationActive(route, generation)) {
+      emitExplorerStateChange();
+    }
+  }
+
+  function hydrateProjectSidebarData(route: WorkbenchRoute, generation: number, options: { block?: boolean } = {}) {
+    const promise = refreshProjectSidebarData(route, generation).catch(() => {
+      if (isRouteGenerationActive(route, generation)) {
+        emitExplorerStateChange();
+      }
+    });
+
+    if (options.block) {
+      return promise;
+    }
+
+    void promise;
+    return Promise.resolve();
   }
 
   function applyThreadPayloadToCurrentView(payload: ThreadPayload, statusMessage?: string) {
@@ -931,11 +967,13 @@ export async function WorkbenchClient(
       threadClient.clearThreadSelection();
       clearCurrentSelectionView();
       emitExplorerStateChange();
+      void hydrateProjectSidebarData(route, routeGeneration);
       return { ok: true };
     }
 
     if (route.view === "file") {
       threadClient.clearThreadSelection();
+      void hydrateProjectSidebarData(route, routeGeneration);
       const didOpen = await openFile(route.filePath);
       reapplyActiveRouteAfterStaleLoad(route, routeGeneration);
       if (!isRouteGenerationActive(route, routeGeneration)) {
@@ -945,6 +983,7 @@ export async function WorkbenchClient(
     }
 
     if (route.view === "thread") {
+      void hydrateProjectSidebarData(route, routeGeneration);
       const didOpen = await openThread(route.threadId);
       reapplyActiveRouteAfterStaleLoad(route, routeGeneration);
       if (!isRouteGenerationActive(route, routeGeneration)) {
@@ -963,26 +1002,14 @@ export async function WorkbenchClient(
       await projectClient.selectInitialProject();
     }
 
-    const shouldRefreshThreads = Boolean(sessionState.currentThreadId || activeRoute.view === "thread");
-    const shouldBlockOnThreads = shouldRefreshThreads;
+    const shouldBlockOnSidebarData = Boolean(sessionState.currentThreadId || activeRoute.view === "thread");
 
-    if (!shouldRefreshThreads) {
-      emitExplorerStateChange();
-    } else if (shouldBlockOnThreads) {
-      await Promise.all([
-        refreshThreads(),
-        threadClient.refreshPendingUserInputRequests(),
-      ]);
+    if (shouldBlockOnSidebarData) {
+      await hydrateProjectSidebarData(activeRoute, activeRouteGeneration, { block: true });
       emitExplorerStateChange();
     } else {
       emitExplorerStateChange();
-      void (async () => {
-        await Promise.all([
-          refreshThreads(),
-          threadClient.refreshPendingUserInputRequests(),
-        ]);
-        emitExplorerStateChange();
-      })();
+      void hydrateProjectSidebarData(activeRoute, activeRouteGeneration);
     }
 
     if (preserveSelection && activeRoute.view === "thread" && sessionState.currentThreadId === activeRoute.threadId) {

@@ -89,6 +89,7 @@ import {
   ExplorerTree,
   FileVisibilityIcon,
   NewEntryIcon,
+  SidebarLoadingSkeleton,
   ThreadsList,
 } from "./workbench/workbench-explorer";
 import {
@@ -109,6 +110,8 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   roots: [],
   tree: [],
   threads: [],
+  isProjectLoading: false,
+  isThreadsLoading: false,
   changes: {},
   currentPath: "",
   currentThreadId: "",
@@ -564,6 +567,8 @@ export default function Workbench () {
   const modifiedPaths = new Set(explorer.locallyModifiedPaths);
   const currentProject = explorer.projects.find((project) => project.id === explorer.currentProjectId) ?? null;
   const activeProjectId = explorer.currentProjectId || route.projectId;
+  const isSidebarProjectLoading = explorer.isProjectLoading || (Boolean(route.projectId) && route.projectId !== explorer.currentProjectId);
+  const isSidebarThreadsLoading = explorer.isThreadsLoading || isSidebarProjectLoading;
   const currentProjectDisplayName = currentProject
     ? `${currentProject.name || currentProject.id}${currentProject.kind === "workspace" ? " workspace" : ""}`
     : null;
@@ -577,8 +582,14 @@ export default function Workbench () {
   const resolvedSettings = resolveWorkbenchSettings(globalSettings, projectSettings);
   const showUnopenableFiles = resolvedSettings.showUnopenableFiles;
   const visibleTree = useMemo(
-    () => (showUnopenableFiles ? explorer.tree : filterVisibleTreeNodes(explorer.tree)),
-    [explorer.tree, showUnopenableFiles],
+    () => {
+      if (isSidebarProjectLoading) {
+        return [];
+      }
+
+      return showUnopenableFiles ? explorer.tree : filterVisibleTreeNodes(explorer.tree);
+    },
+    [explorer.tree, isSidebarProjectLoading, showUnopenableFiles],
   );
   const projectTabLabel = getProjectTabLabel(currentProjectDisplayName ?? explorer.root);
   const settingsScope = route.view === "settings" ? route.settingsScope : "global";
@@ -1620,11 +1631,15 @@ export default function Workbench () {
                   <button
                     type="button"
                     className="flex w-full min-w-0 items-center justify-between gap-3 rounded-lg px-2 py-2 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:-ml-2"
-                    title={currentProjectTitle}
+                    title={isSidebarProjectLoading ? "Loading project" : currentProjectTitle}
                     onClick={openProjectPicker}
                   >
                     <span className="min-w-0 relative -top-0.5">
-                      <span className="block truncate text-xl font-semibold leading-tight text-text">{currentProjectDisplayName ?? (explorer.currentProjectId || "No project")}</span>
+                      {isSidebarProjectLoading ? (
+                        <span className="block h-6 w-40 max-w-full rounded-md workbench-skeleton" aria-hidden="true" />
+                      ) : (
+                        <span className="block truncate text-xl font-semibold leading-tight text-text">{currentProjectDisplayName ?? (explorer.currentProjectId || "No project")}</span>
+                      )}
                     </span>
                     <span className="shrink-0 relative -top-0.5 text-muted" aria-hidden="true">‹</span>
                   </button>
@@ -1634,25 +1649,29 @@ export default function Workbench () {
                   <div className="flex items-center justify-between gap-3 pr-2 md:pr-4.5">
                     <p className="m-0 text-base font-semibold leading-tight">Threads</p>
                   </div>
-                  <nav aria-label="Threads">
-                    <ThreadsList
-                      createThreadLabel="Create new thread"
-                      currentThreadId={activeThreadId}
-                      isDraftSelected={Boolean(currentThread?.isDraft)}
-                      nodes={explorer.threads}
-                      pendingQuestionnaireThreadIds={pendingQuestionnaireThreadIds}
-                      onCreateThread={() => {
-                        if (!controls) {
-                          return;
-                        }
-                        const draftThread = controls.createThreadDraft(harness);
-                        navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, draftThread.id));
-                      }}
-                      onOpenThread={(threadId) => {
-                        void openThreadFromExplorer(threadId);
-                      }}
-                    />
-                  </nav>
+                  {isSidebarThreadsLoading ? (
+                    <SidebarLoadingSkeleton ariaLabel="Loading threads" rows={5} />
+                  ) : (
+                    <nav aria-label="Threads">
+                      <ThreadsList
+                        createThreadLabel="Create new thread"
+                        currentThreadId={activeThreadId}
+                        isDraftSelected={Boolean(currentThread?.isDraft)}
+                        nodes={explorer.threads}
+                        pendingQuestionnaireThreadIds={pendingQuestionnaireThreadIds}
+                        onCreateThread={() => {
+                          if (!controls) {
+                            return;
+                          }
+                          const draftThread = controls.createThreadDraft(harness);
+                          navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, draftThread.id));
+                        }}
+                        onOpenThread={(threadId) => {
+                          void openThreadFromExplorer(threadId);
+                        }}
+                      />
+                    </nav>
+                  )}
                   {explorer.threadsError ? (
                     <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted">
                       {explorer.threadsError}
@@ -1676,7 +1695,7 @@ export default function Workbench () {
                         type="button"
                         aria-label={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
                         aria-pressed={showUnopenableFiles}
-                        disabled={!explorer.currentProjectId}
+                        disabled={!explorer.currentProjectId || isSidebarProjectLoading}
                         title={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
                         className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}${showUnopenableFiles ? " bg-accent-soft text-accent" : ""}`}
                         onClick={() => {
@@ -1693,7 +1712,7 @@ export default function Workbench () {
                         aria-label="Create in project"
                         title="Create in project"
                         className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}`}
-                        disabled={!explorer.currentProjectId}
+                        disabled={!explorer.currentProjectId || isSidebarProjectLoading}
                         onClick={() => {
                           openCreateDialog("");
                         }}
@@ -1703,26 +1722,30 @@ export default function Workbench () {
                       </button>
                     </div>
                   </div>
-                  {!explorer.projects.length ? (
+                  {!explorer.projects.length && !isSidebarProjectLoading ? (
                     <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted md:pr-4.5">
                       No projects were found.
                     </p>
                   ) : null}
-                  <nav id="file-tree" aria-label="Project files">
-                    <ExplorerTree
-                      changes={explorer.changes}
-                      controls={workbenchControls}
-                      currentPath={activeFilePath}
-                      expandedDirectories={expandedDirectories}
-                      isFileOpenable={canOpenFileFromExplorer}
-                      modifiedPaths={modifiedPaths}
-                      nodes={visibleTree}
-                      onCreateInDirectory={openCreateDialog}
-                      onOpenFile={(path) => {
-                        void openFileFromExplorer(path);
-                      }}
-                    />
-                  </nav>
+                  {isSidebarProjectLoading ? (
+                    <SidebarLoadingSkeleton ariaLabel="Loading project files" rows={8} />
+                  ) : (
+                    <nav id="file-tree" aria-label="Project files">
+                      <ExplorerTree
+                        changes={explorer.changes}
+                        controls={workbenchControls}
+                        currentPath={activeFilePath}
+                        expandedDirectories={expandedDirectories}
+                        isFileOpenable={canOpenFileFromExplorer}
+                        modifiedPaths={modifiedPaths}
+                        nodes={visibleTree}
+                        onCreateInDirectory={openCreateDialog}
+                        onOpenFile={(path) => {
+                          void openFileFromExplorer(path);
+                        }}
+                      />
+                    </nav>
+                  )}
                   <div className="pr-2 pt-4 md:pr-4.5">
                     <div className="flex items-center gap-1">
                       <a
@@ -1902,6 +1925,7 @@ export default function Workbench () {
             {showThreadView ? (
               isThreadViewReady && threadForThreadView ? (
                 <ThreadView
+                  key={`${activeProjectId}:${threadForThreadView.id}`}
                   thread={threadForThreadView}
                   composerSpellCheck={resolvedSettings.composerSpellCheck}
                   fontSizeRem={resolvedSettings.editorFontSize}

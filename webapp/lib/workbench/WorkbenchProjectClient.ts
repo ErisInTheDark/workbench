@@ -28,6 +28,8 @@ export interface WorkbenchProjectState {
   changes: Record<string, ChangeSummary>;
   currentProjectId: string;
   expandedDirectories: Set<string>;
+  hasLoadedProject: boolean;
+  isLoading: boolean;
   projects: WorkbenchProjectOption[];
   root: string;
   rootPath: string;
@@ -39,6 +41,7 @@ export interface WorkbenchProjectSnapshot {
   changes: Record<string, ChangeSummary>;
   currentProjectId: string;
   expandedDirectories: string[];
+  isLoading: boolean;
   projects: WorkbenchProjectOption[];
   root: string;
   rootPath: string;
@@ -65,6 +68,8 @@ function createInitialProjectState(): WorkbenchProjectState {
     changes: {},
     currentProjectId: "",
     expandedDirectories: new Set(readStoredExpandedDirectories()),
+    hasLoadedProject: false,
+    isLoading: false,
     projects: [],
     root: "Project",
     rootPath: "",
@@ -76,12 +81,14 @@ function createInitialProjectState(): WorkbenchProjectState {
 function WorkbenchProjectClient(): WorkbenchProjectClient {
   const listeners = new Set<WorkbenchProjectListener>();
   const state = createInitialProjectState();
+  let projectLoadGeneration = 0;
 
   function getSnapshot(): WorkbenchProjectSnapshot {
     return {
       changes: { ...state.changes },
       currentProjectId: state.currentProjectId,
       expandedDirectories: Array.from(state.expandedDirectories).sort((left, right) => left.localeCompare(right)),
+      isLoading: state.isLoading,
       projects: state.projects.map((project) => ({ ...project })),
       root: state.root,
       rootPath: state.rootPath,
@@ -104,15 +111,20 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
     state.roots = payload.roots.map((root) => ({ ...root }));
     state.tree = cloneTreeNodes(payload.tree);
     state.changes = { ...payload.changes };
+    state.hasLoadedProject = true;
+    state.isLoading = false;
   }
 
-  function applyProjectOption(project: WorkbenchProjectOption) {
+  function applyProjectOption(project: WorkbenchProjectOption, options: { loading?: boolean } = {}) {
+    projectLoadGeneration += 1;
     state.currentProjectId = project.id;
     state.root = project.name || project.id;
     state.rootPath = project.rootPath;
     state.roots = project.roots.map((root) => ({ ...root }));
     state.tree = [];
     state.changes = {};
+    state.hasLoadedProject = false;
+    state.isLoading = options.loading ?? state.isLoading;
   }
 
   async function refreshProjects() {
@@ -136,6 +148,8 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
       state.roots = [];
       state.tree = [];
       state.changes = {};
+      state.hasLoadedProject = true;
+      state.isLoading = false;
       emit();
       return {
         changes: {},
@@ -147,16 +161,37 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
       };
     }
 
-    const response = await fetch(`/api/tree?projectId=${encodeURIComponent(state.currentProjectId)}`, { cache: "no-store" });
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "Unable to load project." }));
-      throw new Error(error.error);
+    const refreshProjectId = state.currentProjectId;
+    const refreshGeneration = ++projectLoadGeneration;
+
+    const shouldShowLoading = !state.hasLoadedProject;
+    if (shouldShowLoading && !state.isLoading) {
+      state.isLoading = true;
+      emit();
     }
 
-    const payload = await response.json() as ProjectSnapshot;
-    applyProjectSnapshot(payload);
-    emit();
-    return payload;
+    try {
+      const response = await fetch(`/api/tree?projectId=${encodeURIComponent(state.currentProjectId)}`, { cache: "no-store" });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: "Unable to load project." }));
+        throw new Error(error.error);
+      }
+
+      const payload = await response.json() as ProjectSnapshot;
+      if (refreshGeneration !== projectLoadGeneration || payload.projectId !== refreshProjectId) {
+        return payload;
+      }
+
+      applyProjectSnapshot(payload);
+      emit();
+      return payload;
+    } catch (error) {
+      if (refreshGeneration === projectLoadGeneration) {
+        state.isLoading = false;
+        emit();
+      }
+      throw error;
+    }
   }
 
   async function createEntry(parentPath: string, name: string, type: "directory" | "file") {
@@ -198,17 +233,24 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
   }
 
   async function selectProjectStrict(projectId: string) {
+    const cachedProject = state.projects.find((candidate) => candidate.id === projectId);
+    if (cachedProject && state.currentProjectId !== projectId) {
+      applyProjectOption(cachedProject, { loading: true });
+      state.expandedDirectories = new Set(readStoredExpandedDirectories(projectId));
+      emit();
+    }
+
     await refreshProjects();
     const project = state.projects.find((candidate) => candidate.id === projectId);
     if (!project) {
       return false;
     }
 
-    if (state.currentProjectId === projectId) {
+    if (state.currentProjectId === projectId && !state.isLoading) {
       return true;
     }
 
-    applyProjectOption(project);
+    applyProjectOption(project, { loading: true });
     state.expandedDirectories = new Set(readStoredExpandedDirectories(projectId));
     emit();
     await refreshProject({ refreshProjectList: false });
@@ -219,7 +261,7 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
     await refreshProjects();
     const initialProject = state.projects.find((project) => project.id === state.currentProjectId) ?? state.projects[0] ?? null;
     if (!state.currentProjectId && initialProject) {
-      applyProjectOption(initialProject);
+      applyProjectOption(initialProject, { loading: true });
       state.expandedDirectories = new Set(readStoredExpandedDirectories(state.currentProjectId));
       emit();
     }
