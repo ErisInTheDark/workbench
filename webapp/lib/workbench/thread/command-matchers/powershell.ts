@@ -1323,12 +1323,21 @@ function isPowerShellThreadTitleSettingCommand(commandText: string) {
 
 function isPowerShellLineNumberFormattingScript(scriptText: string) {
   const incrementMatch = scriptText.match(/;\s*['"`]*\$([A-Za-z_][\w]*)\+\+\s*$/i);
-  if (!incrementMatch?.[1] || incrementMatch.index === undefined) {
+  if (incrementMatch?.[1] && incrementMatch.index !== undefined) {
+    const variableName = incrementMatch[1];
+    const formatStatement = scriptText.slice(0, incrementMatch.index).trim();
+    return isPowerShellLineNumberFormatStatement(formatStatement, variableName);
+  }
+
+  const postIncrementMatch = scriptText.match(/\s-f\s+[\s\S]*\$([A-Za-z_][\w]*)\+\+[\s\S]*$/i);
+  if (!postIncrementMatch?.[1]) {
     return false;
   }
 
-  const variableName = incrementMatch[1];
-  const formatStatement = scriptText.slice(0, incrementMatch.index).trim();
+  return isPowerShellLineNumberFormatStatement(scriptText, postIncrementMatch[1]);
+}
+
+function isPowerShellLineNumberFormatStatement(formatStatement: string, variableName: string) {
   if (!formatStatement) {
     return false;
   }
