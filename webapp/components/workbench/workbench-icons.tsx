@@ -11,8 +11,13 @@
  * - WrapTextIcon: render the thread codeblock line-wrap toggle icon. Keywords: workbench, icon, thread, code, wrap.
  * - CopyIcon: render the thread codeblock copy action icon. Keywords: workbench, icon, thread, code, copy.
  * - CheckIcon: render the thread codeblock copied confirmation icon. Keywords: workbench, icon, thread, code, copied.
+ * - FileAddIcon/FileDeleteIcon/FileUpdateIcon/FileMoveIcon: render thread file-change kind icons. Keywords: workbench, icon, file change, add, delete, update, move.
  */
 import type { WorkbenchHarness } from "../../lib/types";
+
+type IconProps = {
+  className?: string;
+};
 
 export function CodexIcon ({ className = "size-4" }: { className?: string }) {
   return (
@@ -157,6 +162,45 @@ export function CheckIcon ({ className = "size-4" }: { className?: string }) {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className={className}>
       <path d="M4.5 10.35L8.15 14L15.5 6.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function FileAddIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
+      <circle cx="10" cy="10" r="5.75" />
+      <path d="M10 6.75V13.25M6.75 10H13.25" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function FileDeleteIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
+      <path d="M3.75 6.5H16.25" strokeLinecap="round" />
+      <path d="M8.25 3.5H11.75C12.05 3.5 12.3 3.75 12.3 4.05V6.5H7.7V4.05C7.7 3.75 7.95 3.5 8.25 3.5Z" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5.6 6.5L6.4 16.2C6.45 16.65 6.82 17 7.28 17H12.72C13.18 17 13.55 16.65 13.6 16.2L14.4 6.5H5.6Z" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8.5 9.25V14M11.5 9.25V14" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function FileUpdateIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
+      <path d="M4.5 14.6L5.15 11.65L12.65 4.15C13.2 3.6 14.1 3.6 14.65 4.15L15.85 5.35C16.4 5.9 16.4 6.8 15.85 7.35L8.35 14.85L5.4 15.5C4.85 15.62 4.38 15.15 4.5 14.6Z" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M11.55 5.25L14.75 8.45" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function FileMoveIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
+      <path d="M4.5 10H15.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M11.5 6L15.5 10L11.5 14" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4.5 5.5H8.5M4.5 14.5H8.5" strokeLinecap="round" />
     </svg>
   );
 }

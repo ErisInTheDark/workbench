@@ -5,6 +5,8 @@
  */
 "use client";
 
+import type { ReactNode } from "react";
+
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import { toWorkspaceDisplayPath, type WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import {
@@ -12,6 +14,7 @@ import {
   type ParsedUnifiedDiff,
 } from "../../../lib/workbench/thread/thread-file-diff";
 import ProjectFilePath from "../ProjectFilePath";
+import { FileAddIcon, FileDeleteIcon, FileMoveIcon, FileUpdateIcon } from "../workbench-icons";
 import ThreadCodeDisplay from "./ThreadCodeDisplay";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadSummaryText from "./ThreadSummaryText";
@@ -28,14 +31,21 @@ interface ParsedFileChange {
   sourceItemId: string;
 }
 
+interface FileChangePresentation {
+  icon: ReactNode;
+  label: string;
+}
+
+function assertNeverFileChangeKind (kind: never): never {
+  throw new Error(`Unsupported file change kind: ${JSON.stringify(kind)}`);
+}
+
 function DiffChangeTotals ({
   additions,
   deletions,
-  isCreated,
 }: {
   additions: number;
   deletions: number;
-  isCreated: boolean;
 }) {
   if (!additions && !deletions) {
     return null;
@@ -57,16 +67,30 @@ function DiffChangeTotals ({
   );
 }
 
-function getChangeDetailsLabel (change: FileUpdateChange) {
+function getFileChangePresentation (change: FileUpdateChange): FileChangePresentation {
   switch (change.kind.type) {
     case "add":
-      return "Created";
+      return {
+        icon: <FileAddIcon className="size-5" />,
+        label: "Created",
+      };
     case "delete":
-      return "Deleted";
+      return {
+        icon: <FileDeleteIcon className="size-5" />,
+        label: "Deleted",
+      };
     case "update":
-      return change.kind.move_path ? "Moved" : "Updated";
+      return change.kind.move_path
+        ? {
+          icon: <FileMoveIcon className="size-5" />,
+          label: "Moved",
+        }
+        : {
+          icon: <FileUpdateIcon className="size-5" />,
+          label: "Edited",
+        };
     default:
-      return "Changed";
+      return assertNeverFileChangeKind(change.kind);
   }
 }
 
@@ -111,11 +135,13 @@ function ThreadFileChangeDetails ({
   projectFilePaths?: readonly string[];
   projectId?: string | null;
 }) {
+  const presentation = getFileChangePresentation(parsedChange.change);
+
   return (
     <div className="space-y-3">
       <div className="space-y-1">
         <p className="m-0 text-[0.78em] leading-[1.6] text-muted">
-          {getChangeDetailsLabel(parsedChange.change)} file
+          {presentation.label} file
         </p>
         {parsedChange.movePathDisplay ? (
           <p className="m-0 flex flex-wrap items-baseline gap-2 text-[0.78em] leading-[1.6] text-muted">
@@ -130,6 +156,32 @@ function ThreadFileChangeDetails ({
         <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No diff captured.</p>
       )}
     </div>
+  );
+}
+
+function ThreadFileChangeSummary ({
+  parsedChange,
+  projectFilePaths,
+  projectId,
+}: {
+  parsedChange: ParsedFileChange;
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+}) {
+  const presentation = getFileChangePresentation(parsedChange.change);
+
+  return (
+    <span className="inline-flex min-w-0 max-w-full items-baseline gap-1">
+      <span className="inline-flex shrink-0 self-center text-muted -mt-0.5" aria-hidden="true">
+        {presentation.icon}
+      </span>
+      <ThreadSummaryText text={presentation.label} />
+      <ProjectFilePath className="max-w-full shrink min-w-0 align-baseline text-[0.82em]" disambiguationPaths={projectFilePaths} path={parsedChange.displayPath} projectId={projectId} />
+      <DiffChangeTotals
+        additions={parsedChange.diff.additions}
+        deletions={parsedChange.diff.deletions}
+      />
+    </span>
   );
 }
 
@@ -165,15 +217,7 @@ export default function ThreadFileChangeItem ({
           className="py-0.5"
           contentClassName="mt-2 pl-6"
           summary={(
-            <span className="inline-flex min-w-0 max-w-full items-baseline gap-3">
-              <ThreadSummaryText text={change.change.kind.type === "add" ? "Created" : "Changed"} />
-              <ProjectFilePath className="max-w-full shrink min-w-0 align-baseline text-[0.82em]" disambiguationPaths={projectFilePaths} path={change.displayPath} projectId={projectId} />
-              <DiffChangeTotals
-                additions={change.diff.additions}
-                deletions={change.diff.deletions}
-                isCreated={change.change.kind.type === "add"}
-              />
-            </span>
+            <ThreadFileChangeSummary parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} />
           )}
           summaryClassName="text-[0.92em] leading-[1.6] text-muted"
         >
