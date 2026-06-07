@@ -132,6 +132,8 @@ function buildWorkspaceRootsInstructions(roots: WorkbenchProjectRoot[]) {
     "Assume that the user is trying to make changes across the entire workspace unless they're more specific.",
     "Assume that the user is running watch tasks across the entire workspace, and that interdependent projects automatically pick up changes from each other.",
     "When working in a project other than the primary, make sure you've read the project's AGENTS.md file.",
+    "",
+    "Commands should use the cwd of the correct project root. If you base commands from the thread's primary root, the sandbox will error.",
   ].join("\n");
 }
 

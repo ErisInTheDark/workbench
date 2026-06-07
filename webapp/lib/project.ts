@@ -284,6 +284,14 @@ async function hasGitMarker(rootDir: string) {
   }
 }
 
+async function isDirectory(rootDir: string) {
+  try {
+    return (await fs.stat(rootDir)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 async function statMtimeMs(filePath: string) {
   try {
     return (await fs.stat(filePath)).mtimeMs;
@@ -561,7 +569,7 @@ async function createWorkspaceProjectOption(workspacePath: string): Promise<Work
     }
 
     const resolvedRoot = path.resolve(workspaceDirectory, folder.path);
-    if (!await hasGitMarker(resolvedRoot)) {
+    if (!await isDirectory(resolvedRoot)) {
       continue;
     }
 
@@ -711,8 +719,8 @@ export async function resolveProjectRoot(projectId?: string | null) {
     }
 
     for (const root of roots) {
-      if (!await hasGitMarker(root.root)) {
-        throw new Error(`Workspace root is missing a .git marker: ${root.name}`);
+      if (!await isDirectory(root.root)) {
+        throw new Error(`Workspace root is missing a directory: ${root.name}`);
       }
     }
 
