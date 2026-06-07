@@ -24,13 +24,13 @@ import {
 import { getInlineMentionMarkClassName } from "../../../lib/workbench/thread/inline-mention-styles";
 import ChevronIcon from "../ChevronIcon";
 import ProjectFilePath from "../ProjectFilePath";
-import { WrapTextIcon } from "../workbench-icons";
+import { CheckIcon, CopyIcon, WrapTextIcon } from "../workbench-icons";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 
 // reusable classes only
 const BLOCK_SPACING_CLASS = "mb-[0.9em] last:mb-0";
-const CODE_BLOCK_WRAP_BUTTON_CLASS = [
+const CODE_BLOCK_HEADER_BUTTON_CLASS = [
   "inline-flex",
   "size-[1.45rem]",
   "shrink-0",
@@ -46,6 +46,7 @@ const CODE_BLOCK_WRAP_BUTTON_CLASS = [
   "focus-visible:bg-accent-soft",
   "focus-visible:text-accent",
   "focus-visible:outline-none",
+  "data-[thread-codeblock-copy-state=copied]:text-success",
 ].join(" ");
 const HEADING_CLASSES = {
   1: `${BLOCK_SPACING_CLASS} font-sans text-[1.16em] font-semibold leading-[1.2]`,
@@ -416,16 +417,33 @@ function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, k
             <span className="min-w-0 truncate pl-[0.15rem] font-mono text-[0.72em] leading-none text-muted">
               {block.language || "code"}
             </span>
-            <button
-              type="button"
-              aria-label="Toggle code block line wrapping"
-              aria-pressed={false}
-              className={CODE_BLOCK_WRAP_BUTTON_CLASS}
-              data-thread-codeblock-wrap-toggle="true"
-              title="Toggle code block line wrapping"
-            >
-              <WrapTextIcon />
-            </button>
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                aria-label="Copy code block"
+                className={`${CODE_BLOCK_HEADER_BUTTON_CLASS} group`}
+                data-thread-codeblock-copy="true"
+                data-thread-codeblock-copy-state="idle"
+                title="Copy code block"
+              >
+                <span className="block group-data-[thread-codeblock-copy-state=copied]:hidden" data-thread-codeblock-copy-icon="copy">
+                  <CopyIcon />
+                </span>
+                <span className="hidden group-data-[thread-codeblock-copy-state=copied]:block" data-thread-codeblock-copy-icon="check">
+                  <CheckIcon />
+                </span>
+              </button>
+              <button
+                type="button"
+                aria-label="Toggle code block line wrapping"
+                aria-pressed={false}
+                className={CODE_BLOCK_HEADER_BUTTON_CLASS}
+                data-thread-codeblock-wrap-toggle="true"
+                title="Toggle code block line wrapping"
+              >
+                <WrapTextIcon />
+              </button>
+            </div>
           </div>
           <pre
             className="max-w-full overflow-x-auto whitespace-pre px-[0.95rem] py-[0.8rem]"

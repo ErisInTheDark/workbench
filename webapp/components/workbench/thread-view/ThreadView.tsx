@@ -51,6 +51,7 @@ import {
 import { ThreadThreadContent, ThreadTurnDetails } from "./thread-view-items";
 
 const SUBTHREAD_POLL_INTERVAL_MS = 1500;
+const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
 const EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS: readonly string[] = [];
 
 type LiveThreadActivity =
@@ -157,6 +158,25 @@ function hasExpandedSelectionWithin (root: HTMLElement | null) {
   const anchorNode = selection.anchorNode;
   const focusNode = selection.focusNode;
   return Boolean(anchorNode && focusNode && root.contains(anchorNode) && root.contains(focusNode));
+}
+
+async function writeTextToClipboard (text: string) {
+  if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+    return false;
+  }
+
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function setCodeBlockCopyButtonState (button: HTMLButtonElement, isCopied: boolean) {
+  button.setAttribute("data-thread-codeblock-copy-state", isCopied ? "copied" : "idle");
+  button.setAttribute("aria-label", isCopied ? "Copied code block" : "Copy code block");
+  button.title = isCopied ? "Copied" : "Copy code block";
 }
 
 function cleanReasoningTitleLine (value: string) {
@@ -403,6 +423,7 @@ export default memo(function ThreadView ({
   const [draftSavedDraftShelfPortalHost, setDraftSavedDraftShelfPortalHost] = useState<HTMLDivElement | null>(null);
   const threadViewRef = useRef<HTMLDivElement>(null);
   const bottomSentinelRef = useRef<HTMLDivElement>(null);
+  const codeBlockCopyResetTimersRef = useRef<Map<HTMLButtonElement, number>>(new Map());
   const hasMountedActiveThreadScrollRef = useRef(false);
   const subthreadLoadGenerationRef = useRef(0);
   const subagentThreadIds = useMemo(() => getCollabAgentThreadIds(thread.turns), [thread.turns]);
@@ -632,6 +653,13 @@ export default memo(function ThreadView ({
     onThreadSeen(thread);
   }, [onThreadSeen, thread]);
 
+  useEffect(() => () => {
+    codeBlockCopyResetTimersRef.current.forEach((timeoutId) => {
+      window.clearTimeout(timeoutId);
+    });
+    codeBlockCopyResetTimersRef.current.clear();
+  }, []);
+
   useEffect(() => {
     if (!activeThread) {
       return;
@@ -783,7 +811,44 @@ export default memo(function ThreadView ({
     syncCodeBlockWrapDomState(threadCodeBlockWrap);
   }, [syncCodeBlockWrapDomState, threadCodeBlockWrap]);
 
+  const showCodeBlockCopyFeedback = useCallback((button: HTMLButtonElement) => {
+    const existingTimeoutId = codeBlockCopyResetTimersRef.current.get(button);
+    if (existingTimeoutId !== undefined) {
+      window.clearTimeout(existingTimeoutId);
+    }
+
+    setCodeBlockCopyButtonState(button, true);
+    const timeoutId = window.setTimeout(() => {
+      setCodeBlockCopyButtonState(button, false);
+      codeBlockCopyResetTimersRef.current.delete(button);
+    }, CODE_BLOCK_COPY_FEEDBACK_MS);
+    codeBlockCopyResetTimersRef.current.set(button, timeoutId);
+  }, []);
+
+  const handleCodeBlockCopy = useCallback(async (button: HTMLButtonElement) => {
+    const root = threadViewRef.current;
+    const codeBlock = button.closest<HTMLElement>("[data-thread-codeblock='true']");
+    const code = codeBlock?.querySelector<HTMLElement>("[data-thread-codeblock-code='true']");
+    if (!root || !root.contains(button) || !code) {
+      return;
+    }
+
+    const didCopy = await writeTextToClipboard(code.textContent ?? "");
+    if (!didCopy || !root.contains(button)) {
+      return;
+    }
+
+    showCodeBlockCopyFeedback(button);
+  }, [showCodeBlockCopyFeedback]);
+
   const handleThreadViewClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const copyButton = target?.closest<HTMLButtonElement>("button[data-thread-codeblock-copy]") ?? null;
+    if (copyButton && threadViewRef.current?.contains(copyButton)) {
+      void handleCodeBlockCopy(copyButton);
+      return;
+    }
+
     const toggle = event.target instanceof Element
       ? event.target.closest<HTMLButtonElement>("button[data-thread-codeblock-wrap-toggle]")
       : null;
@@ -794,7 +859,7 @@ export default memo(function ThreadView ({
     const nextValue = threadViewRef.current.getAttribute("data-thread-codeblock-wrap") !== "true";
     syncCodeBlockWrapDomState(nextValue);
     onThreadCodeBlockWrapChange(nextValue);
-  }, [onThreadCodeBlockWrapChange, syncCodeBlockWrapDomState]);
+  }, [handleCodeBlockCopy, onThreadCodeBlockWrapChange, syncCodeBlockWrapDomState]);
 
   const getTabBadge = useCallback((threadId: string, payload: ThreadPayload | null | undefined): { isQuestion: boolean; unreadBadge: ThreadUnreadBadge | null } => {
     const hasPendingQuestion = Boolean(livePendingUserInputRequestsByThreadId[threadId]);
