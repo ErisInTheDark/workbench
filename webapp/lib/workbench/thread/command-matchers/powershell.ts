@@ -18,6 +18,11 @@ interface ParsedPowerShellStage {
   tokens: string[];
 }
 
+interface ParsedPowerShellLineRange {
+  endLine: number;
+  startLine: number;
+}
+
 export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
     id: "powershell.hide-thread-title-setting",
@@ -889,12 +894,11 @@ function buildPowerShellSelectObjectReadSummary(
     const parsedNextStage = parsePowerShellStage(nextStage.text);
     if (!matchesPowerShellCommand(parsedNextStage, ["select-object", "select"])) {
       if (matchesPowerShellCommand(parsedNextStage, ["foreach-object", "%"])) {
-        const lineRange = readPowerShellForEachNumberedLineRange(parsedNextStage);
-        if (lineRange) {
-          return buildPowerShellLineRangeReadSummary(
+        const lineRanges = readPowerShellForEachNumberedLineRanges(parsedNextStage);
+        if (lineRanges) {
+          return buildPowerShellLineRangesReadSummary(
             pathPart,
-            lineRange.startLine,
-            lineRange.endLine,
+            lineRanges,
             context,
             nextStage.remainingCommand,
           );
@@ -978,11 +982,37 @@ function buildPowerShellLineRangeReadSummary(
   context: Parameters<CommandMatcherDefinition["match"]>[0],
   remainingCommand?: string | null,
 ) {
+  return buildPowerShellLineRangesReadSummary(pathPart, [{ endLine, startLine }], context, remainingCommand);
+}
+
+function buildPowerShellLineRangesReadSummary(
+  pathPart: NonNullable<ReturnType<typeof getPowerShellStagePathPart>>,
+  lineRanges: ParsedPowerShellLineRange[],
+  context: Parameters<CommandMatcherDefinition["match"]>[0],
+  remainingCommand?: string | null,
+) {
   const skillLoadSummary = buildPowerShellSkillLoadSummaryFromPathPart(pathPart, context, remainingCommand);
   if (skillLoadSummary) {
     return skillLoadSummary;
   }
 
+  const [firstRange] = lineRanges;
+  if (!firstRange) {
+    return null;
+  }
+
+  if (lineRanges.length > 1) {
+    return CommandMatcher.Result({
+      remainingCommand,
+      summaryStats: { readFiles: 1 },
+      summaryParts: [
+        CommandMatcher.Text(`Read lines ${formatPowerShellLineRanges(lineRanges)} of `),
+        pathPart,
+      ],
+    });
+  }
+
+  const { endLine, startLine } = firstRange;
   if (startLine === endLine) {
     return CommandMatcher.Result({
       remainingCommand,
@@ -1005,6 +1035,19 @@ function buildPowerShellLineRangeReadSummary(
       pathPart,
     ],
   });
+}
+
+function formatPowerShellLineRanges(lineRanges: ParsedPowerShellLineRange[]) {
+  const formattedRanges = lineRanges.map(({ endLine, startLine }) => startLine === endLine
+    ? `${startLine}`
+    : `${startLine}-${endLine}`);
+
+  if (formattedRanges.length <= 2) {
+    return formattedRanges.join(" and ");
+  }
+
+  const lastRange = formattedRanges[formattedRanges.length - 1];
+  return `${formattedRanges.slice(0, -1).join(", ")}, and ${lastRange}`;
 }
 
 function buildPowerShellSkillLoadSummaryFromPathPart(
@@ -1243,36 +1286,241 @@ function shouldHidePowerShellWebRequestRemainder(remainingCommand: string | null
   return true;
 }
 
-function readPowerShellForEachNumberedLineRange(parsedStage: ParsedPowerShellStage) {
+function readPowerShellForEachNumberedLineRanges(parsedStage: ParsedPowerShellStage) {
   const normalizedScript = getNormalizedPowerShellScriptBlock(parsedStage);
   if (!normalizedScript) {
     return null;
   }
 
-  const rangeMatch = normalizedScript.match(
-    /^\$([A-Za-z_][\w]*)\s*\+\+\s*;\s*if\s*\(\s*\$\1\s*-ge\s*(\d+)\s*-and\s*\$\1\s*-le\s*(\d+)\s*\)\s*\{([\s\S]+)\}\s*$/i,
-  ) ?? normalizedScript.match(
-    /^if\s*\(\s*\$([A-Za-z_][\w]*)\s*-ge\s*(\d+)\s*-and\s*\$\1\s*-le\s*(\d+)\s*\)\s*\{([\s\S]+)\}\s*;?\s*\$\1\s*\+\+\s*$/i,
+  const parsedCondition = readPowerShellForEachLineRangeCondition(normalizedScript);
+  if (!parsedCondition) {
+    return null;
+  }
+
+  if (!parsedCondition.body || !/\$_(?:\b|[^A-Za-z0-9_])/.test(parsedCondition.body)) {
+    return null;
+  }
+
+  const lineRanges = readPowerShellLineRangeConditionRanges(
+    parsedCondition.condition,
+    parsedCondition.variableName,
   );
-  if (!rangeMatch?.[2] || !rangeMatch[3] || !rangeMatch[4]) {
+  if (!lineRanges.length) {
     return null;
   }
 
-  const startLine = Number(rangeMatch[2]);
-  const endLine = Number(rangeMatch[3]);
-  const body = rangeMatch[4].trim();
-  if (!Number.isFinite(startLine) || !Number.isFinite(endLine) || endLine < startLine || !body) {
-    return null;
+  return lineRanges;
+}
+
+function readPowerShellForEachLineRangeCondition(normalizedScript: string) {
+  const preIncrementMatch = normalizedScript.match(
+    /^\$([A-Za-z_][\w]*)\s*\+\+\s*;\s*if\s*\(([\s\S]+)\)\s*\{([\s\S]+)\}\s*$/i,
+  );
+  if (preIncrementMatch?.[1] && preIncrementMatch[2] && preIncrementMatch[3]) {
+    return {
+      body: preIncrementMatch[3].trim(),
+      condition: preIncrementMatch[2].trim(),
+      variableName: preIncrementMatch[1],
+    };
   }
 
-  if (!/\$_(?:\b|[^A-Za-z0-9_])/.test(body)) {
-    return null;
+  const postIncrementMatch = normalizedScript.match(
+    /^if\s*\(([\s\S]+)\)\s*\{([\s\S]+)\}\s*;?\s*\$([A-Za-z_][\w]*)\s*\+\+\s*$/i,
+  );
+  if (postIncrementMatch?.[1] && postIncrementMatch[2] && postIncrementMatch[3]) {
+    return {
+      body: postIncrementMatch[2].trim(),
+      condition: postIncrementMatch[1].trim(),
+      variableName: postIncrementMatch[3],
+    };
   }
 
-  return {
-    endLine,
-    startLine,
-  };
+  return null;
+}
+
+function readPowerShellLineRangeConditionRanges(
+  condition: string,
+  variableName: string,
+): ParsedPowerShellLineRange[] {
+  const variablePattern = escapeRegExp(variableName);
+  const rangePattern = new RegExp(
+    `^\\$${variablePattern}\\s*-ge\\s*(\\d+)\\s*-and\\s*\\$${variablePattern}\\s*-le\\s*(\\d+)\\s*$`,
+    "i",
+  );
+  const lineRanges: ParsedPowerShellLineRange[] = [];
+
+  for (const rawSegment of splitPowerShellConditionByTopLevelOr(condition)) {
+    const segment = stripBalancedWrappingParentheses(rawSegment.trim());
+    const rangeMatch = segment.match(rangePattern);
+    if (!rangeMatch?.[1] || !rangeMatch[2]) {
+      return [];
+    }
+
+    const startLine = Number(rangeMatch[1]);
+    const endLine = Number(rangeMatch[2]);
+    if (!Number.isFinite(startLine) || !Number.isFinite(endLine) || endLine < startLine) {
+      return [];
+    }
+
+    lineRanges.push({ endLine, startLine });
+  }
+
+  return lineRanges;
+}
+
+function splitPowerShellConditionByTopLevelOr(condition: string) {
+  const segments: string[] = [];
+  let depth = 0;
+  let inDoubleQuote = false;
+  let inSingleQuote = false;
+  let segmentStart = 0;
+  let index = 0;
+
+  while (index < condition.length) {
+    const character = condition[index];
+    const nextCharacter = condition[index + 1] ?? "";
+
+    if (inSingleQuote) {
+      if (character === "'" && nextCharacter === "'") {
+        index += 2;
+        continue;
+      }
+
+      if (character === "'") {
+        inSingleQuote = false;
+      }
+
+      index += 1;
+      continue;
+    }
+
+    if (inDoubleQuote) {
+      if (character === "`") {
+        index += 2;
+        continue;
+      }
+
+      if (character === "\"") {
+        inDoubleQuote = false;
+      }
+
+      index += 1;
+      continue;
+    }
+
+    if (character === "'") {
+      inSingleQuote = true;
+      index += 1;
+      continue;
+    }
+
+    if (character === "\"") {
+      inDoubleQuote = true;
+      index += 1;
+      continue;
+    }
+
+    if (character === "(") {
+      depth += 1;
+      index += 1;
+      continue;
+    }
+
+    if (character === ")") {
+      depth = Math.max(0, depth - 1);
+      index += 1;
+      continue;
+    }
+
+    const orMatch = condition.slice(index).match(/^(\s+)-or(?=\s+)/i);
+    if (depth === 0 && orMatch?.[1]) {
+      segments.push(condition.slice(segmentStart, index).trim());
+      index += orMatch[0].length;
+      segmentStart = index;
+      continue;
+    }
+
+    index += 1;
+  }
+
+  segments.push(condition.slice(segmentStart).trim());
+  return segments.filter(Boolean);
+}
+
+function stripBalancedWrappingParentheses(value: string) {
+  let currentValue = value.trim();
+
+  while (currentValue.startsWith("(") && currentValue.endsWith(")")) {
+    const closingIndex = findMatchingPowerShellClosingParenthesis(currentValue, 0);
+    if (closingIndex !== currentValue.length - 1) {
+      break;
+    }
+
+    currentValue = currentValue.slice(1, -1).trim();
+  }
+
+  return currentValue;
+}
+
+function findMatchingPowerShellClosingParenthesis(value: string, openIndex: number) {
+  let depth = 0;
+  let inDoubleQuote = false;
+  let inSingleQuote = false;
+
+  for (let index = openIndex; index < value.length; index += 1) {
+    const character = value[index];
+    const nextCharacter = value[index + 1] ?? "";
+
+    if (inSingleQuote) {
+      if (character === "'" && nextCharacter === "'") {
+        index += 1;
+        continue;
+      }
+
+      if (character === "'") {
+        inSingleQuote = false;
+      }
+
+      continue;
+    }
+
+    if (inDoubleQuote) {
+      if (character === "`") {
+        index += 1;
+        continue;
+      }
+
+      if (character === "\"") {
+        inDoubleQuote = false;
+      }
+
+      continue;
+    }
+
+    if (character === "'") {
+      inSingleQuote = true;
+      continue;
+    }
+
+    if (character === "\"") {
+      inDoubleQuote = true;
+      continue;
+    }
+
+    if (character === "(") {
+      depth += 1;
+      continue;
+    }
+
+    if (character === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+
+  return -1;
 }
 
 function isPowerShellTrivialAssignmentStage(stageText: string) {
