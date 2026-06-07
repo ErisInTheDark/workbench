@@ -18,6 +18,7 @@ import {
   buildInlineMentionHighlights,
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
+import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import { getThreadCommandDisplay } from "../../../lib/workbench/thread/thread-command-matchers";
 import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
 import PlaintextEditable, { isMobileTextInputEnvironment } from "./PlaintextEditable";
@@ -126,6 +127,7 @@ type InteractiveThreadUserInputRequestProps = {
   onDraftClear: () => void;
   onSubmit: (response: WorkbenchUserInputResponse) => Promise<void>;
   projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
   request: WorkbenchUserInputRequest;
   spellCheck: boolean;
 };
@@ -135,6 +137,7 @@ type HistoryThreadUserInputRequestProps = {
   knownSkills?: WorkbenchSkillSummary[];
   mode: "history";
   projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
   request: WorkbenchUserInputRequest;
   response: WorkbenchUserInputResponse | null;
   statusLabel?: string;
@@ -144,10 +147,12 @@ function ThreadApprovalCommandSummary ({
   knownSkills,
   projectRootPath,
   request,
+  workspaceRoots,
 }: {
   knownSkills?: WorkbenchSkillSummary[];
   projectRootPath?: string;
   request: WorkbenchUserInputRequest;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const commandContext = request.approval?.command ?? null;
   const display = useMemo(() => (
@@ -158,9 +163,10 @@ function ThreadApprovalCommandSummary ({
         cwd: commandContext.cwd,
         knownSkills,
         projectRootPath,
+        workspaceRoots,
       })
       : null
-  ), [commandContext, knownSkills, projectRootPath]);
+  ), [commandContext, knownSkills, projectRootPath, workspaceRoots]);
 
   if (!display || display.omitFromDisplay || display.summaryKind !== "matched") {
     return null;
@@ -339,6 +345,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
         knownSkills={props.knownSkills}
         projectRootPath={props.projectRootPath}
         request={request}
+        workspaceRoots={props.workspaceRoots}
       />
 
       <div className="space-y-3">

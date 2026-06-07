@@ -13,6 +13,7 @@
 
 import {
     normalizeWorkbenchPath,
+    toWorkspaceDisplayPath,
     toProjectRelativeFilePath,
 } from "../../markdown/markdown-links";
 import type {
@@ -52,7 +53,7 @@ export function buildDisplayPathPart(
 
 export function buildCommandPathPart(
   value: string | null | undefined,
-  context: Pick<ParsedCommandDisplayContext, "cwd" | "projectRootPath">,
+  context: Pick<ParsedCommandDisplayContext, "cwd" | "projectRootPath" | "workspaceRoots">,
   options: PathPartOptions = {},
 ) {
   const displayPath = formatThreadCommandPath(value, context);
@@ -157,7 +158,7 @@ export function getCommandPathKnownSkill(
 
 export function buildReadCommandSummary(
   value: string | null | undefined,
-  context: Pick<ParsedCommandDisplayContext, "cwd" | "knownSkills" | "projectRootPath">,
+  context: Pick<ParsedCommandDisplayContext, "cwd" | "knownSkills" | "projectRootPath" | "workspaceRoots">,
   readPrefix = "Read ",
 ) {
   const knownSkill = getCommandPathKnownSkill(value, context);
@@ -191,9 +192,11 @@ export function formatThreadCommandPath(
   {
     cwd,
     projectRootPath,
+    workspaceRoots = [],
   }: {
     cwd?: string;
     projectRootPath?: string;
+    workspaceRoots?: ParsedCommandDisplayContext["workspaceRoots"];
   } = {},
 ) {
   const normalizedValue = normalizeWorkbenchPath(String(value ?? "").trim());
@@ -207,6 +210,12 @@ export function formatThreadCommandPath(
       ? collapseLocalPath(joinLocalPath(cwd, normalizedValue))
       : collapseLocalPath(normalizedValue);
   const normalizedProjectRootPath = normalizeWorkbenchPath(projectRootPath ?? "");
+  const workspaceDisplayPath = workspaceRoots?.length && isAbsoluteLocalPath(resolvedValue)
+    ? toWorkspaceDisplayPath(resolvedValue, { projectRootPath: normalizedProjectRootPath, workspaceRoots })
+    : null;
+  if (workspaceDisplayPath) {
+    return workspaceDisplayPath;
+  }
 
   if (normalizedProjectRootPath) {
     if (pathsEqual(resolvedValue, normalizedProjectRootPath)) {

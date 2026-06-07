@@ -18,6 +18,7 @@
 
 import type { CommandAction } from "../../../codex/generated/app-server/v2/CommandAction";
 import type { WorkbenchSkillSummary } from "../../../types";
+import type { WorkspaceFileLinkRoot } from "../../markdown/markdown-links";
 
 export type CommandShell =
   | "bash"
@@ -102,6 +103,7 @@ export interface CommandDisplayContext {
   cwd: string;
   knownSkills?: WorkbenchSkillSummary[];
   projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 
 export interface ParsedCommandDisplayContext extends CommandDisplayContext {

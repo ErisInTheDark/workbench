@@ -832,6 +832,7 @@ function ThreadCommandExecutionDetails ({
   projectFilePaths,
   projectId,
   projectRootPath,
+  workspaceRoots,
 }: {
   isMostRecent?: boolean;
   item: CommandItem;
@@ -839,6 +840,7 @@ function ThreadCommandExecutionDetails ({
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const commandDisplay = getThreadCommandDisplay({
     command: item.command,
@@ -846,6 +848,7 @@ function ThreadCommandExecutionDetails ({
     cwd: item.cwd,
     knownSkills,
     projectRootPath,
+    workspaceRoots,
   });
   const metaParts = [];
 
@@ -935,6 +938,7 @@ function ThreadCommandSequence ({
   projectFilePaths,
   projectId,
   projectRootPath,
+  workspaceRoots,
 }: {
   isMostRecent: boolean;
   items: CommandItem[];
@@ -942,9 +946,10 @@ function ThreadCommandSequence ({
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   if (items.length === 1) {
-    return <ThreadCommandExecutionDetails isMostRecent={isMostRecent} item={items[0]} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} />;
+    return <ThreadCommandExecutionDetails isMostRecent={isMostRecent} item={items[0]} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
   }
 
   const commandBlockDisplay = getThreadCommandBlockDisplay({
@@ -955,6 +960,7 @@ function ThreadCommandSequence ({
     })),
     knownSkills,
     projectRootPath,
+    workspaceRoots,
   });
 
   return (
@@ -975,6 +981,7 @@ function ThreadCommandSequence ({
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}
+            workspaceRoots={workspaceRoots}
           />
         ))}
       </>
@@ -1029,7 +1036,7 @@ function ThreadRenderableBlockView ({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   if (block.kind === "commandSequence") {
-    return <ThreadCommandSequence isMostRecent={isMostRecentBlock} items={block.items} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} />;
+    return <ThreadCommandSequence isMostRecent={isMostRecentBlock} items={block.items} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
   }
 
   if (block.kind === "fileChangeSequence") {

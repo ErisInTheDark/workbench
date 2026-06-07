@@ -55,18 +55,20 @@ export function getThreadCommandDisplay({
   cwd,
   knownSkills,
   projectRootPath,
+  workspaceRoots,
 }: CommandDisplayContext): ThreadCommandDisplay {
   const shellResult = unwrapShellCommand(command);
   const context: ParsedCommandDisplayContext = {
     command,
     commandActions,
     cwd,
-    cwdDisplay: formatThreadCommandPath(cwd, { projectRootPath }),
+    cwdDisplay: formatThreadCommandPath(cwd, { projectRootPath, workspaceRoots }),
     knownSkills,
     projectRootPath,
     shell: shellResult.shell,
     shellGroup: getCommandShellGroup(shellResult.shell),
     unwrappedCommand: shellResult.command,
+    workspaceRoots,
   };
   const matchedDisplay = runThreadCommandMatchers(context, {
     commonMatchers: [...COPILOT_COMMAND_MATCHERS, ...COMMON_COMMAND_MATCHERS],
@@ -123,10 +125,12 @@ export function getThreadCommandBlockDisplay({
   items,
   knownSkills,
   projectRootPath,
+  workspaceRoots,
 }: {
   items: Array<Pick<CommandDisplayContext, "command" | "commandActions" | "cwd">>;
   knownSkills?: CommandDisplayContext["knownSkills"];
   projectRootPath?: string;
+  workspaceRoots?: CommandDisplayContext["workspaceRoots"];
 }): ThreadCommandSummaryDisplay {
   const summaryStats = createEmptyCommandSummaryStats();
 
@@ -137,6 +141,7 @@ export function getThreadCommandBlockDisplay({
       cwd: item.cwd,
       knownSkills,
       projectRootPath,
+      workspaceRoots,
     });
     mergeCommandSummaryStats(summaryStats, display.summaryStats);
   }

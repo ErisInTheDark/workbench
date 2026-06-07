@@ -869,6 +869,7 @@ export default memo(function ThreadView ({
       pendingUserInputRequest={activePendingUserInputRequest}
       projectId={projectId}
       projectRootPath={projectRootPath}
+      workspaceRoots={workspaceFileLinkRoots}
       rateLimits={rateLimits}
       autoExpandSavedDraftShelf={!isDraftThreadView}
       savedDraftShelfPortalHost={isDraftThreadView ? draftSavedDraftShelfPortalHost : null}

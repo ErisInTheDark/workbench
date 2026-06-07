@@ -27,6 +27,7 @@ import {
   buildInlineMentionHighlights,
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
+import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
 import PlaintextEditable, { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./PlaintextEditable";
 import ThreadAgentPicker from "./ThreadAgentPicker";
@@ -326,6 +327,7 @@ export default function ThreadComposer ({
   pendingUserInputRequest,
   projectId,
   projectRootPath,
+  workspaceRoots,
   rateLimits,
   autoExpandSavedDraftShelf = true,
   savedDraftShelfPortalHost,
@@ -360,6 +362,7 @@ export default function ThreadComposer ({
   pendingUserInputRequest: WorkbenchPendingUserInputRequest | null;
   projectId: string;
   projectRootPath: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
   rateLimits: RateLimitSnapshot | null;
   autoExpandSavedDraftShelf?: boolean;
   savedDraftShelfPortalHost?: HTMLElement | null;
@@ -848,6 +851,7 @@ export default function ThreadComposer ({
               onDraftClear={handleQuestionnaireDraftClear}
               projectRootPath={projectRootPath}
               request={pendingUserInputRequest.request}
+              workspaceRoots={workspaceRoots}
               mode="live"
               onSubmit={async (response) => {
                 await onSubmitUserInputRequest(
