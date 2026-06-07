@@ -47,9 +47,6 @@ import {
     buildThreadTitleBootstrapInstructions,
     buildThreadTitleRouteUrl,
 } from "../thread-bootstrap";
-import {
-    getThreadStateChangeTagText as getNormalizedThreadStateChangeTagText,
-} from "./markdown/markdown-parse";
 import type {
     ThreadPayload,
     ThreadSummary,
@@ -65,8 +62,12 @@ import type {
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
 } from "../types";
+import {
+    getThreadStateChangeTagText as getNormalizedThreadStateChangeTagText,
+} from "./markdown/markdown-parse";
 import LifecycleScope from "./state/LifecycleScope";
 import {
+    clearStoredThreadTokenUsage,
     persistHarnessAgent,
     persistHarnessModel,
     persistHarnessModelEffort,
@@ -80,10 +81,9 @@ import {
     readStoredHarnessServiceTier,
     readStoredThreadTokenUsage,
     readStoredThreadUnreadState,
-    clearStoredThreadTokenUsage,
 } from "./state/browser-state";
-import { applyQuestionnaireHistoryToThread } from "./thread/thread-questionnaire-history";
 import { getTurnRenderSignature } from "./thread/thread-item-signature";
+import { applyQuestionnaireHistoryToThread } from "./thread/thread-questionnaire-history";
 
 const THREAD_REFRESH_TASK_ID = "thread-refresh";
 const THREAD_LIST_REFRESH_TASK_ID = "thread-list-refresh";
@@ -123,9 +123,15 @@ function buildWorkspaceRootsInstructions(roots: WorkbenchProjectRoot[]) {
 
   return [
     "## Workbench Workspace Roots",
-    "This thread is attached to a multi-root Workbench workspace. User-visible project file paths use `<root>:<path>`.",
-    "Use these root-qualified paths when referring to files:",
+    "This thread is attached to a multi-project Workbench workspace. Each project has its own root directory.",
+    "User-visible project file paths should be presented with #[<root>:<path>](no backticks).",
+    "",
+    "Available roots:",
     ...roots.map((root) => `- ${root.id}: ${root.rootPath}${root.isPrimary ? " (primary cwd for new threads)" : ""}`),
+    "",
+    "Assume that the user is trying to make changes across the entire workspace unless they're more specific.",
+    "Assume that the user is running watch tasks across the entire workspace, and that interdependent projects automatically pick up changes from each other.",
+    "When working in a project other than the primary, make sure you've read the project's AGENTS.md file.",
   ].join("\n");
 }
 
