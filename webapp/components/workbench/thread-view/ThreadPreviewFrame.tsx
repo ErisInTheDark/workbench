@@ -42,7 +42,7 @@ function scaleCssLength (value: string, multiplier: number) {
 }
 
 export default function ThreadPreviewFrame ({
-  backgroundClassName = "before:bg-[linear-gradient(to_right,transparent,#0008_10%,#0008_90%,transparent)]",
+  backgroundClassName = "before:bg-[linear-gradient(to_right,transparent,#8882_10%,#8882_90%,transparent)]",
   children,
   className,
   contentClassName,
