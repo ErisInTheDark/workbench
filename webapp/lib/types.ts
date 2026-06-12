@@ -124,7 +124,30 @@ export interface ThreadPayload extends ThreadSummary {
   agentPath: string | null;
   isDraft: boolean;
   tokenUsage: ThreadTokenUsage | null;
+  turnHistory: WorkbenchThreadTurnHistoryEntry[];
   turns: Turn[];
+}
+
+export type WorkbenchThreadTurnLoadState = "loaded" | "missing" | "unloaded";
+
+export interface WorkbenchThreadTurnHistoryEntry {
+  completedAt: number | null;
+  durationMs: number | null;
+  itemCount: number;
+  itemIds?: string[];
+  loadState: WorkbenchThreadTurnLoadState;
+  startedAt: number | null;
+  status: Turn["status"] | null;
+  turnId: string;
+}
+
+export type WorkbenchThreadHydrationRequest =
+  | { mode: "latest" }
+  | { beforeTurnId: string; mode: "previous" }
+  | { mode: "legacyFull" };
+
+export interface WorkbenchReadThreadOptions {
+  hydration?: WorkbenchThreadHydrationRequest;
 }
 
 export interface WorkbenchSendThreadMessageOptions {
@@ -281,7 +304,7 @@ export interface WorkbenchRouteLoadResult {
 export interface WorkbenchControls {
   applyRoute: (route: WorkbenchRoute) => Promise<WorkbenchRouteLoadResult>;
   createThreadDraft: (harness: WorkbenchHarness) => ThreadPayload;
-  readThread: (threadId: string, harness?: WorkbenchHarness) => Promise<ThreadPayload | null>;
+  readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
   markThreadSeen: (thread: ThreadPayload) => void;
   listModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
   sendThreadMessage: (

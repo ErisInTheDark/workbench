@@ -8,7 +8,7 @@
  * - toThreadSummary: normalize generated Codex threads for the explorer sidebar. Keywords: summary, thread list.
  * - toThreadPayload: normalize generated Codex threads for the thread detail view. Keywords: payload, turns, thread read.
  */
-import type { ThreadPayload, ThreadSummary, WorkbenchHarness } from "../types";
+import type { ThreadPayload, ThreadSummary, WorkbenchHarness, WorkbenchThreadTurnHistoryEntry } from "../types";
 import type { SessionSource } from "./generated/app-server/v2/SessionSource";
 import type { Thread } from "./generated/app-server/v2/Thread";
 import type { ThreadStatus } from "./generated/app-server/v2/ThreadStatus";
@@ -162,6 +162,38 @@ export function toThreadPayload(
     agentPath,
     isDraft: false,
     tokenUsage,
+    turnHistory: readWorkbenchTurnHistory(thread) ?? createTurnHistoryFromLoadedTurns(thread.turns),
     turns: thread.turns,
   };
+}
+
+function createTurnHistoryFromLoadedTurns(turns: Thread["turns"]): WorkbenchThreadTurnHistoryEntry[] {
+  return turns.map((turn) => ({
+    completedAt: turn.completedAt,
+    durationMs: turn.durationMs,
+    itemCount: turn.items.length,
+    itemIds: turn.items.map((item) => item.id),
+    loadState: "loaded",
+    startedAt: turn.startedAt,
+    status: turn.status,
+    turnId: turn.id,
+  }));
+}
+
+function readWorkbenchTurnHistory(thread: Thread) {
+  const value = (thread as Thread & { workbenchTurnHistory?: unknown }).workbenchTurnHistory;
+  return Array.isArray(value)
+    ? value.filter(isWorkbenchThreadTurnHistoryEntry)
+    : null;
+}
+
+function isWorkbenchThreadTurnHistoryEntry(value: unknown): value is WorkbenchThreadTurnHistoryEntry {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return typeof record.turnId === "string"
+    && typeof record.itemCount === "number"
+    && (record.loadState === "loaded" || record.loadState === "missing" || record.loadState === "unloaded");
 }

@@ -13,6 +13,7 @@ import type {
     WorkbenchControls,
     WorkbenchHarness,
     WorkbenchRouteLoadResult,
+    WorkbenchReadThreadOptions,
     WorkbenchSendThreadMessageOptions,
 } from "./types";
 import {
@@ -737,6 +738,7 @@ export async function WorkbenchClient(
       && left.agentNickname === right.agentNickname
       && left.agentRole === right.agentRole
       && JSON.stringify(left.tokenUsage) === JSON.stringify(right.tokenUsage)
+      && JSON.stringify(left.turnHistory) === JSON.stringify(right.turnHistory)
       && areTurnListsEquivalent(left.turns, right.turns)
       && areCurrentTurnsEquivalent(left, right);
   }
@@ -829,8 +831,8 @@ export async function WorkbenchClient(
     return true;
   }
 
-  async function readThread(threadId: string, harness?: WorkbenchHarness) {
-    return await threadClient.readThread(threadId, harness);
+  async function readThread(threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) {
+    return await threadClient.readThread(threadId, harness, options);
   }
 
   function markThreadSeen(thread: ThreadPayload) {

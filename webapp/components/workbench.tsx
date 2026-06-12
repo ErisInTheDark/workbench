@@ -16,6 +16,7 @@ import type {
   WorkbenchPendingUserInputRequest,
   WorkbenchProjectOption,
   WorkbenchQuestionnaireDraft,
+  WorkbenchReadThreadOptions,
   WorkbenchSendThreadMessageOptions,
   WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadComposerDraft,
@@ -1030,12 +1031,12 @@ export default function Workbench () {
     });
   }, [openFileByPolicy]);
 
-  const readThread = useCallback(async (threadId: string, nextHarness?: WorkbenchHarness) => {
+  const readThread = useCallback(async (threadId: string, nextHarness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => {
     if (!controls) {
       return null;
     }
 
-    return await controls.readThread(threadId, nextHarness);
+    return await controls.readThread(threadId, nextHarness, options);
   }, [controls]);
 
   const markThreadSeen = useCallback((thread: ThreadPayload) => {

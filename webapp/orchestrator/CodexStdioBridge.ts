@@ -19,6 +19,7 @@ import type { ToolRequestUserInputResponse } from "../lib/codex/generated/app-se
 import type {
     WorkbenchApprovalCommandContext,
     WorkbenchQuestionnaireHistoryEntry,
+    WorkbenchThreadHydrationRequest,
     WorkbenchUserInputQuestion,
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
@@ -39,6 +40,7 @@ type PendingClientResponse = {
   internal: false;
   method: string | null;
   requestSource: WorkbenchRequestSource;
+  threadHydration: WorkbenchThreadHydrationRequest | null;
   upstreamRequest: JsonRpcRequest;
 };
 
@@ -46,6 +48,7 @@ type PendingInternalResponse = {
   internal: true;
   reject: (reason?: unknown) => void;
   resolve: (value: JsonRpcResponse) => void;
+  threadHydration: WorkbenchThreadHydrationRequest | null;
   upstreamRequest: JsonRpcRequest;
 };
 
@@ -134,6 +137,7 @@ const TRANSCRIPT_MAX_PENDING_TASKS = 200;
 const TRANSCRIPT_COALESCE_FLUSH_MS = 100;
 const TRANSCRIPT_COALESCE_MAX_BUFFER_BYTES = 512 * 1024;
 const WORKBENCH_REQUEST_SOURCE_FIELD = "workbenchRequestSource";
+const WORKBENCH_THREAD_HYDRATION_FIELD = "workbenchThreadHydration";
 
 type WorkbenchRequestSource = "autoRefresh" | "internal" | "user";
 
@@ -217,12 +221,33 @@ function readRequestSource(message: JsonRpcRequest): WorkbenchRequestSource {
   return message[WORKBENCH_REQUEST_SOURCE_FIELD] === "autoRefresh" ? "autoRefresh" : "user";
 }
 
+function readThreadHydration(message: JsonRpcRequest): WorkbenchThreadHydrationRequest | null {
+  const value = asRecord(message[WORKBENCH_THREAD_HYDRATION_FIELD]);
+  if (!value) {
+    return null;
+  }
+
+  switch (value.mode) {
+    case "latest":
+      return { mode: "latest" };
+    case "legacyFull":
+      return { mode: "legacyFull" };
+    case "previous":
+      return typeof value.beforeTurnId === "string"
+        ? { beforeTurnId: value.beforeTurnId, mode: "previous" }
+        : null;
+    default:
+      return null;
+  }
+}
+
 function createUpstreamRequest(message: JsonRpcRequest, upstreamRequestId: number) {
   const upstreamMessage = {
     ...message,
     id: upstreamRequestId,
   };
   delete upstreamMessage[WORKBENCH_REQUEST_SOURCE_FIELD];
+  delete upstreamMessage[WORKBENCH_THREAD_HYDRATION_FIELD];
   return upstreamMessage;
 }
 
@@ -1031,6 +1056,7 @@ export default class CodexStdioBridge {
     const upstreamRequestId = this.nextUpstreamRequestId();
     const requestSource: WorkbenchRequestSource = internal ? "internal" : readRequestSource(message);
     const method = typeof message.method === "string" ? message.method : null;
+    const threadHydration = readThreadHydration(message);
     const upstreamMessage = createUpstreamRequest(message, upstreamRequestId);
 
     if (internal) {
@@ -1039,6 +1065,7 @@ export default class CodexStdioBridge {
           internal: true,
           reject,
           resolve,
+          threadHydration,
           upstreamRequest: upstreamMessage,
         });
       });
@@ -1057,6 +1084,7 @@ export default class CodexStdioBridge {
       internal: false,
       method,
       requestSource,
+      threadHydration,
       upstreamRequest: upstreamMessage,
     });
     if (shouldCapturePollingTranscript(method, requestSource)) {
@@ -1128,6 +1156,7 @@ export default class CodexStdioBridge {
     if (shouldCaptureTranscript || shouldHydrateThreadResponse(pending.method)) {
       try {
         hydratedMessage = await this.ensureTranscriptStore().hydrateThreadResponse(pending.upstreamRequest, message, {
+          hydration: pending.threadHydration,
           touchThread: shouldCaptureTranscript,
         });
       } catch (error) {
@@ -1137,8 +1166,9 @@ export default class CodexStdioBridge {
     if (shouldCaptureTranscript) {
       void this.captureTranscript(`upstream-response:${pending.upstreamRequest.method ?? "unknown"}`, async () => {
         const transcriptStore = this.ensureTranscriptStore();
-        await transcriptStore.recordUpstreamResponse(pending.upstreamRequest, message);
-        if (shouldRecordHydratedThreadSnapshot(pending.upstreamRequest, message, hydratedMessage)) {
+        const responseToRecord = pending.threadHydration ? hydratedMessage : message;
+        await transcriptStore.recordUpstreamResponse(pending.upstreamRequest, responseToRecord);
+        if (responseToRecord !== hydratedMessage && shouldRecordHydratedThreadSnapshot(pending.upstreamRequest, message, hydratedMessage)) {
           await transcriptStore.recordHydratedThreadSnapshot(hydratedMessage);
         }
       });

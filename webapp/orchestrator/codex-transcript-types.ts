@@ -28,6 +28,7 @@ export interface CodexTranscriptRawEvent {
 export interface CodexTranscriptTurnIndexEntry {
   completedAt: number | null;
   itemCount: number;
+  itemIds?: string[];
   startedAt: number | null;
   status: Turn["status"] | null;
   turnId: string;

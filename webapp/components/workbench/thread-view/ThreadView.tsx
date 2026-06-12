@@ -18,11 +18,13 @@ import type {
   WorkbenchPendingUserInputRequest,
   WorkbenchProjectRoot,
   WorkbenchQuestionnaireDraft,
+  WorkbenchReadThreadOptions,
   WorkbenchSendThreadMessageOptions,
   WorkbenchSkillSummary,
   WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadComposerDraft,
   WorkbenchThreadSavedComposerDraft,
+  WorkbenchThreadTurnHistoryEntry,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
 import { flattenProjectTreeFileCandidates } from "../../../lib/workbench/project/tree-utils";
@@ -48,10 +50,11 @@ import {
   isThreadWebSearchPlaceholder,
   ThreadWebSearchActionRow,
 } from "./ThreadWebSearchItem";
-import { ThreadThreadContent, ThreadTurnDetails } from "./thread-view-items";
+import { ThreadThreadContent, ThreadTurnDetails, ThreadTurnLoadingSkeleton } from "./thread-view-items";
 
 const SUBTHREAD_POLL_INTERVAL_MS = 1500;
 const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
+const MAX_VISIBLE_HISTORY_ENTRIES = 8;
 const EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS: readonly string[] = [];
 
 type LiveThreadActivity =
@@ -83,6 +86,90 @@ function countThreadItems (thread: Pick<ThreadPayload, "turns">) {
   return thread.turns.reduce((total, turn) => total + turn.items.length, 0);
 }
 
+function orderTurnsByHistory (turns: ThreadPayload["turns"], history: WorkbenchThreadTurnHistoryEntry[]) {
+  const indexesById = new Map(history.map((entry, index) => [entry.turnId, index]));
+  return [...turns].sort((left, right) => {
+    const leftIndex = indexesById.get(left.id) ?? Number.MAX_SAFE_INTEGER;
+    const rightIndex = indexesById.get(right.id) ?? Number.MAX_SAFE_INTEGER;
+    if (leftIndex !== rightIndex) {
+      return leftIndex - rightIndex;
+    }
+
+    return left.id.localeCompare(right.id);
+  });
+}
+
+function mergeThreadHistory (
+  incomingHistory: WorkbenchThreadTurnHistoryEntry[],
+  existingHistory: WorkbenchThreadTurnHistoryEntry[],
+) {
+  if (!existingHistory.length) {
+    return incomingHistory;
+  }
+
+  const incomingById = new Map(incomingHistory.map((entry) => [entry.turnId, entry]));
+  const merged = existingHistory.map((entry) => {
+    const incomingEntry = incomingById.get(entry.turnId);
+    if (!incomingEntry) {
+      return entry;
+    }
+
+    incomingById.delete(entry.turnId);
+    return entry.loadState === "loaded" && incomingEntry.loadState !== "loaded"
+      ? { ...incomingEntry, itemIds: incomingEntry.itemIds ?? entry.itemIds, loadState: entry.loadState }
+      : incomingEntry;
+  });
+
+  return [...merged, ...incomingById.values()];
+}
+
+function mergeLazyThreadPayload (incomingThread: ThreadPayload, existingThread: ThreadPayload | undefined) {
+  if (!existingThread || existingThread.id !== incomingThread.id || existingThread.harness !== incomingThread.harness) {
+    return incomingThread;
+  }
+
+  const history = mergeThreadHistory(incomingThread.turnHistory, existingThread.turnHistory);
+  const existingTurnsById = new Set(existingThread.turns.map((turn) => turn.id));
+  const turns = orderTurnsByHistory([
+    ...existingThread.turns.map((turn) => incomingThread.turns.find((incomingTurn) => incomingTurn.id === turn.id) ?? turn),
+    ...incomingThread.turns.filter((turn) => !existingTurnsById.has(turn.id)),
+  ], history);
+
+  return {
+    ...incomingThread,
+    serviceTier: incomingThread.serviceTier ?? existingThread.serviceTier,
+    turnHistory: history,
+    turns,
+  };
+}
+
+function getVisibleHistoryEntries (thread: ThreadPayload) {
+  const loadedTurnIds = new Set(thread.turns.map((turn) => turn.id));
+  const history = thread.turnHistory.length
+    ? thread.turnHistory
+    : thread.turns.map((turn) => ({
+      completedAt: turn.completedAt,
+      durationMs: turn.durationMs,
+      itemCount: turn.items.length,
+      itemIds: turn.items.map((item) => item.id),
+      loadState: "loaded" as const,
+      startedAt: turn.startedAt,
+      status: turn.status,
+      turnId: turn.id,
+    }));
+  if (!history.length) {
+    return [];
+  }
+  const lastLoadedIndex = Math.max(...history.map((entry, index) => loadedTurnIds.has(entry.turnId) ? index : -1));
+  if (lastLoadedIndex < 0) {
+    return history.slice(-1);
+  }
+
+  const firstLoadedIndex = history.findIndex((entry) => loadedTurnIds.has(entry.turnId));
+  const startIndex = Math.max(0, firstLoadedIndex - 1, lastLoadedIndex - MAX_VISIBLE_HISTORY_ENTRIES + 1);
+  return history.slice(startIndex, lastLoadedIndex + 1);
+}
+
 function areThreadPayloadsEquivalent (left: ThreadPayload | null | undefined, right: ThreadPayload | null | undefined) {
   if (left === right) {
     return true;
@@ -103,10 +190,11 @@ function mergeSubthreadTurnSnapshots (
     return incomingThread;
   }
 
+  const mergedThread = mergeLazyThreadPayload(incomingThread, existingThread);
   const existingTurnsById = new Map(existingThread.turns.map((turn) => [turn.id, turn]));
   let changed = false;
-  const mergedTurns = mergeTurnsPreservingLiveItems(incomingThread.turns, existingThread.turns);
-  if (mergedTurns !== incomingThread.turns) {
+  const mergedTurns = mergeTurnsPreservingLiveItems(mergedThread.turns, existingThread.turns);
+  if (mergedTurns !== mergedThread.turns) {
     changed = true;
   }
 
@@ -136,13 +224,13 @@ function mergeSubthreadTurnSnapshots (
     };
   });
 
-  const serviceTier = incomingThread.serviceTier ?? existingThread.serviceTier;
+  const serviceTier = mergedThread.serviceTier ?? existingThread.serviceTier;
 
-  if (changed || serviceTier !== incomingThread.serviceTier) {
-    return { ...incomingThread, serviceTier, turns };
+  if (changed || serviceTier !== mergedThread.serviceTier || turns !== mergedThread.turns) {
+    return { ...mergedThread, serviceTier, turns };
   }
 
-  return incomingThread;
+  return mergedThread;
 }
 
 function hasExpandedSelectionWithin (root: HTMLElement | null) {
@@ -379,7 +467,7 @@ export default memo(function ThreadView ({
   onDraftHarnessChange: (harness: WorkbenchHarness) => void;
   onThreadCodeBlockWrapChange: (nextValue: boolean) => void;
   onListModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
-  onReadThread: (threadId: string, harness?: WorkbenchHarness) => Promise<ThreadPayload | null>;
+  onReadThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
   onThreadSeen: (thread: ThreadPayload) => void;
   onCompactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   onSendMessage: (
@@ -417,11 +505,13 @@ export default memo(function ThreadView ({
   const [activeThreadId, setActiveThreadId] = useState(thread.id);
   const [subthreadsById, setSubthreadsById] = useState<Record<string, ThreadPayload>>({});
   const [loadingThreadIds, setLoadingThreadIds] = useState<Record<string, true>>({});
+  const [loadingPreviousTurnKeys, setLoadingPreviousTurnKeys] = useState<Record<string, true>>({});
   const [seenItemCountsByThreadId, setSeenItemCountsByThreadId] = useState<Record<string, number>>({});
   const [isLiveActivityOpen, setIsLiveActivityOpen] = useState(readStoredThreadLiveActivityOpen);
   const [workbenchSkills, setWorkbenchSkills] = useState<WorkbenchSkillSummary[]>([]);
   const [draftSavedDraftShelfPortalHost, setDraftSavedDraftShelfPortalHost] = useState<HTMLDivElement | null>(null);
   const threadViewRef = useRef<HTMLDivElement>(null);
+  const historySentinelRef = useRef<HTMLDivElement>(null);
   const bottomSentinelRef = useRef<HTMLDivElement>(null);
   const codeBlockCopyResetTimersRef = useRef<Map<HTMLButtonElement, number>>(new Map());
   const hasMountedActiveThreadScrollRef = useRef(false);
@@ -435,6 +525,17 @@ export default memo(function ThreadView ({
     : null;
   const activePendingUserInputRequest = activeHarnessUserInputRequest;
   const currentTurn = activeThread?.turns.at(-1) ?? null;
+  const visibleHistoryEntries = useMemo(() => activeThread ? getVisibleHistoryEntries(activeThread) : [], [activeThread]);
+  const loadedTurnsById = useMemo(() => new Map(activeThread?.turns.map((turn) => [turn.id, turn]) ?? []), [activeThread?.turns]);
+  const firstVisibleLoadedEntry = visibleHistoryEntries.find((entry) => loadedTurnsById.has(entry.turnId)) ?? null;
+  const previousTurnLoadKey = activeThread && firstVisibleLoadedEntry
+    ? `${activeThread.id}:${firstVisibleLoadedEntry.turnId}`
+    : "";
+  const canLoadPreviousTurn = Boolean(
+    activeThread
+    && firstVisibleLoadedEntry
+    && visibleHistoryEntries.some((entry) => entry.turnId !== firstVisibleLoadedEntry.turnId && entry.loadState === "unloaded" && !loadedTurnsById.has(entry.turnId)),
+  );
   const liveActivity = useMemo(() => getLiveThreadActivity({
     pendingUserInputRequest: activePendingUserInputRequest,
     turn: currentTurn,
@@ -514,7 +615,7 @@ export default memo(function ThreadView ({
     ));
 
     try {
-      const payload = await onReadThread(threadId, harness);
+      const payload = await onReadThread(threadId, harness, { hydration: { mode: "latest" } });
       if (!payload) {
         return null;
       }
@@ -564,11 +665,67 @@ export default memo(function ThreadView ({
     }
   }, [onReadThread, projectId, thread.harness, thread.id]);
 
+  const loadPreviousTurn = useCallback(async () => {
+    if (!activeThread || !firstVisibleLoadedEntry || !previousTurnLoadKey || loadingPreviousTurnKeys[previousTurnLoadKey]) {
+      return;
+    }
+
+    const loadGeneration = subthreadLoadGenerationRef.current;
+    const targetThreadId = activeThread.id;
+    const targetHarness = activeThread.harness;
+    setLoadingPreviousTurnKeys((current) => (
+      current[previousTurnLoadKey]
+        ? current
+        : {
+          ...current,
+          [previousTurnLoadKey]: true,
+        }
+    ));
+
+    try {
+      const payload = await onReadThread(targetThreadId, targetHarness, {
+        hydration: {
+          beforeTurnId: firstVisibleLoadedEntry.turnId,
+          mode: "previous",
+        },
+      });
+      if (!payload || loadGeneration !== subthreadLoadGenerationRef.current) {
+        return;
+      }
+
+      if (targetThreadId !== thread.id) {
+        setSubthreadsById((current) => {
+          const existing = current[targetThreadId];
+          const mergedPayload = mergeLazyThreadPayload(payload, existing);
+          if (areThreadPayloadsEquivalent(existing, mergedPayload)) {
+            return current;
+          }
+
+          return {
+            ...current,
+            [targetThreadId]: mergedPayload,
+          };
+        });
+      }
+    } finally {
+      setLoadingPreviousTurnKeys((current) => {
+        if (!current[previousTurnLoadKey]) {
+          return current;
+        }
+
+        const next = { ...current };
+        delete next[previousTurnLoadKey];
+        return next;
+      });
+    }
+  }, [activeThread, firstVisibleLoadedEntry, loadingPreviousTurnKeys, onReadThread, previousTurnLoadKey, thread.id]);
+
   useEffect(() => {
     subthreadLoadGenerationRef.current += 1;
     setActiveThreadId(thread.id);
     setSubthreadsById({});
     setLoadingThreadIds({});
+    setLoadingPreviousTurnKeys({});
     setSeenItemCountsByThreadId({
       [thread.id]: countThreadItems(thread),
     });
@@ -629,6 +786,27 @@ export default memo(function ThreadView ({
       window.clearInterval(intervalId);
     };
   }, [loadSubthread, pollingThreadIds]);
+
+  useEffect(() => {
+    const sentinel = historySentinelRef.current;
+    if (!sentinel || !canLoadPreviousTurn || !previousTurnLoadKey || loadingPreviousTurnKeys[previousTurnLoadKey]) {
+      return;
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        void loadPreviousTurn();
+      }
+    }, {
+      root: null,
+      rootMargin: "160px 0px 0px 0px",
+      threshold: 0.1,
+    });
+    observer.observe(sentinel);
+    return () => {
+      observer.disconnect();
+    };
+  }, [canLoadPreviousTurn, loadPreviousTurn, loadingPreviousTurnKeys, previousTurnLoadKey]);
 
   useLayoutEffect(() => {
     if (!hasMountedActiveThreadScrollRef.current) {
@@ -996,23 +1174,39 @@ export default memo(function ThreadView ({
 
       <div hidden={isDraftThreadView}>
         {activeThread ? (
-          activeThread.turns.length ? activeThread.turns.map((turn) => (
-            <ThreadTurnDetails
-              key={turn.id}
-              hiddenCollabAgentToolCallItemIds={turn.id === currentTurn?.id ? hiddenCollabAgentToolCallItemIds : EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS}
-              inlineMentionSources={inlineMentionSources}
-              knownSkills={workbenchSkills}
-              threadCwdPath={activeThread.cwd}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
-              relatedThreadsById={subthreadsById}
-              turn={turn}
-              workspaceRoots={workspaceFileLinkRoots}
-              hiddenReasoningItemId={turn.id === currentTurn?.id && liveActivity?.kind === "reasoning" ? liveActivity.hiddenItemId : null}
-              hiddenWebSearchItemIds={turn.id === currentTurn?.id && liveActivity?.kind === "webSearch" ? liveActivity.hiddenItemIds : undefined}
-            />
-          )) : (
+          visibleHistoryEntries.length ? (
+            <>
+              {canLoadPreviousTurn ? (
+                <div ref={historySentinelRef} className="h-px" aria-hidden="true" />
+              ) : null}
+              {visibleHistoryEntries.map((entry) => {
+                const turn = loadedTurnsById.get(entry.turnId);
+                return turn ? (
+                  <ThreadTurnDetails
+                    key={entry.turnId}
+                    hiddenCollabAgentToolCallItemIds={turn.id === currentTurn?.id ? hiddenCollabAgentToolCallItemIds : EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS}
+                    inlineMentionSources={inlineMentionSources}
+                    knownSkills={workbenchSkills}
+                    threadCwdPath={activeThread.cwd}
+                    projectFilePaths={projectFilePaths}
+                    projectId={projectId}
+                    projectRootPath={projectRootPath}
+                    relatedThreadsById={subthreadsById}
+                    turn={turn}
+                    workspaceRoots={workspaceFileLinkRoots}
+                    hiddenReasoningItemId={turn.id === currentTurn?.id && liveActivity?.kind === "reasoning" ? liveActivity.hiddenItemId : null}
+                    hiddenWebSearchItemIds={turn.id === currentTurn?.id && liveActivity?.kind === "webSearch" ? liveActivity.hiddenItemIds : undefined}
+                  />
+                ) : (
+                  <ThreadTurnLoadingSkeleton
+                    key={entry.turnId}
+                    entry={entry}
+                    isLoading={Boolean(firstVisibleLoadedEntry && loadingPreviousTurnKeys[`${activeThread.id}:${firstVisibleLoadedEntry.turnId}`])}
+                  />
+                );
+              })}
+            </>
+          ) : (
             !activeThread.isDraft ? (
               <p className="m-0 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-4 text-[0.92em] leading-[1.6] text-muted">
                 No turns were returned for this thread yet.
