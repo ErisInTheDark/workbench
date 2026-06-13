@@ -46,7 +46,7 @@ export function isIntentionalListBreakParagraph(element: Element | null): elemen
     && isSingleBreakParagraph(element);
 }
 
-export function isListElement(element: Element) {
+export function isListElement(element: Element): element is HTMLUListElement | HTMLOListElement {
   return element.tagName === "UL" || element.tagName === "OL";
 }
 

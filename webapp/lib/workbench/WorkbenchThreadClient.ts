@@ -2719,6 +2719,8 @@ function WorkbenchThreadClient(
       case "item/fileChange/outputDelta":
       case "item/mcpToolCall/progress":
       case "serverRequest/resolved":
+      case "process/outputDelta":
+      case "process/exited":
       case "questionnaire/requested":
       case "questionnaire/resolved":
       case "model/rerouted":

@@ -30,6 +30,7 @@ import {
 import {
     getNestedBlockElementsForItem,
     isIntentionalListBreakParagraph,
+    isListElement,
     isSingleBreakParagraph,
 } from "./dom/query/list-dom";
 import {
@@ -49,7 +50,7 @@ import WorkbenchInlineFormatController, {
     type WorkbenchInlineFormatControllerOptions,
 } from "./editor/WorkbenchInlineFormatController";
 import WorkbenchListStructureController, { type WorkbenchListStructureControllerOptions } from "./editor/WorkbenchListStructureController";
-import WorkbenchRichInputController from "./editor/WorkbenchRichInputController";
+import WorkbenchRichInputController, { type WorkbenchRichInputResult } from "./editor/WorkbenchRichInputController";
 import {
     markdownToHtml as renderMarkdownToHtml,
 } from "./markdown/markdown-html-render";
@@ -203,7 +204,7 @@ interface WorkbenchEditorClient {
   handleFormatKeyDown: (event: KeyboardEvent) => boolean;
   handlePendingInlineBeforeInput: (event: InputEvent) => boolean;
   handlePendingInlineSelectionChange: () => void;
-  handleRichInput: (event: Event) => { transformedListItem: HTMLLIElement | null; transformedBlock: HTMLElement | null; commentCaretMarker: HTMLElement | null };
+  handleRichInput: (event: Event) => WorkbenchRichInputResult;
   handleListStructureKeyDown: (event: KeyboardEvent) => boolean;
   hideResetDraftDialog: () => void;
   hideSaveConflictDialog: () => void;
@@ -376,7 +377,7 @@ function appendLiveListDiffAnchors(
         const childPath = `${itemPath}/child:${childAnchorIndex}`;
         childAnchorIndex += 1;
 
-        if (childBlock instanceof HTMLUListElement || childBlock instanceof HTMLOListElement) {
+        if (isListElement(childBlock)) {
           appendLiveListDiffAnchors(childBlock, childPath, anchors);
           return;
         }
@@ -1183,8 +1184,9 @@ function WorkbenchEditorClient(
   function handleRichInput(event: Event) {
     if (!options.sessionState.currentPath) {
       return {
-        transformedListItem: null,
         commentCaretMarker: null,
+        transformedBlock: null,
+        transformedListItem: null,
       };
     }
 

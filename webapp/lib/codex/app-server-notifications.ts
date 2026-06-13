@@ -137,6 +137,8 @@ export function classifyCodexAppServerNotification(
       });
 
     case "serverRequest/resolved":
+    case "process/outputDelta":
+    case "process/exited":
       return createHandling(notification, "server-request");
 
     case "questionnaire/requested":

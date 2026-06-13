@@ -148,6 +148,31 @@ function renderThreadStateChange(mode: string) {
     + "</div>";
 }
 
+function getTableCellAlignAttribute(alignment: Extract<ParsedBlock, { type: "table" }>["alignments"][number]) {
+  return alignment
+    ? ` style="text-align:${alignment}"`
+    : "";
+}
+
+function renderTableBlock(block: Extract<ParsedBlock, { type: "table" }>, options: MarkdownParseOptions = {}) {
+  const header = block.header
+    .map((cell, index) => `<th${getTableCellAlignAttribute(block.alignments[index] ?? null)}>${renderInline(cell.text, options)}</th>`)
+    .join("");
+  const rows = block.rows
+    .map((row) => {
+      const cells = block.header
+        .map((_, index) => {
+          const cell = row[index] ?? { text: "" };
+          return `<td${getTableCellAlignAttribute(block.alignments[index] ?? null)}>${renderInline(cell.text, options)}</td>`;
+        })
+        .join("");
+      return `<tr>${cells}</tr>`;
+    })
+    .join("");
+
+  return `<table><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
+}
+
 function renderListItem(item: ParsedListItem, options: MarkdownParseOptions = {}) {
   const content = renderInline(item.text, options) || "<br>";
   if (!item.children.length) {
@@ -189,6 +214,8 @@ function renderBlockHtml(block: ParsedBlock, options: MarkdownParseOptions = {})
       return `<pre data-language="${escapeHtml(block.language)}"><code>${escapeHtml(block.text)}</code></pre>`;
     case "plan":
       return renderChildBlocks(parseBlocks(block.text, options), options);
+    case "table":
+      return renderTableBlock(block, options);
     case "paragraph":
     default: {
       const stateChangeMode = parseThreadStateChangeMode(block.text, options);

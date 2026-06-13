@@ -995,13 +995,7 @@ export default function Workbench () {
     return true;
   }, [explorer.currentProjectId, navigateToRoute, route]);
   const handleWorkbenchProjectFileLinkClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
-    if (
-      event.button !== 0
-      || event.metaKey
-      || event.ctrlKey
-      || event.shiftKey
-      || event.altKey
-    ) {
+    if (event.button !== 0) {
       return;
     }
 
@@ -1009,24 +1003,25 @@ export default function Workbench () {
       return;
     }
 
-    const anchor = event.target.closest("a[data-project-file-relative-path]");
-    if (!(anchor instanceof HTMLAnchorElement)) {
+    const control = event.target.closest("button[data-project-file-relative-path]");
+    if (!(control instanceof HTMLButtonElement)) {
       return;
     }
 
-    if (!anchor.closest("[data-thread-project-file-link-boundary='true']")) {
+    if (!control.closest("[data-thread-project-file-link-boundary='true']")) {
       return;
     }
 
-    const path = anchor.dataset.projectFileRelativePath?.trim();
+    const path = control.dataset.projectFileRelativePath?.trim();
     if (!path) {
       return;
     }
 
     event.preventDefault();
+    event.stopPropagation();
     void openFileByPolicy({
-      columnNumber: readPositiveIntegerDatasetValue(anchor.dataset.projectFileColumnNumber),
-      lineNumber: readPositiveIntegerDatasetValue(anchor.dataset.projectFileLineNumber),
+      columnNumber: readPositiveIntegerDatasetValue(control.dataset.projectFileColumnNumber),
+      lineNumber: readPositiveIntegerDatasetValue(control.dataset.projectFileLineNumber),
       path,
     });
   }, [openFileByPolicy]);
@@ -1576,13 +1571,13 @@ export default function Workbench () {
 
     if (definition.options) {
       return (
-        <WorkbenchOptionCards
+        <WorkbenchOptionCards<WorkbenchGlobalSettings[WorkbenchSettingKey]>
           ariaLabel={definition.label}
           columns={key === "theme" ? "two" : "one"}
           disabled={disabled}
           mode="radio"
           options={definition.options}
-          value={value as string}
+          value={value}
           onChange={(nextValue) => {
             if (!disabled) {
               onChange(nextValue);
