@@ -49,7 +49,9 @@ export interface InlineMentionHighlight {
 export interface InlineMentionHighlightSources {
   cacheKey: string;
   candidates: InlineMentionCandidate[];
+  fileCandidateByComparablePath: ReadonlyMap<string, InlineMentionCandidate>;
   fileCandidatePaths: readonly string[];
+  fileResolutionIndex: InlineMentionFileResolutionIndex;
   threadCwdPath?: string;
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
@@ -88,9 +90,11 @@ interface PreparedInlineMentionFileRecord {
 }
 
 interface PreparedInlineMentionFiles {
+  candidateByComparablePath: ReadonlyMap<string, InlineMentionCandidate>;
   candidates: InlineMentionCandidate[];
   fileCandidatePaths: readonly string[];
   key: string;
+  resolutionIndex: InlineMentionFileResolutionIndex;
   records: readonly PreparedInlineMentionFileRecord[];
 }
 
@@ -115,6 +119,12 @@ interface InlineMentionSourcesCacheEntry {
   sources: InlineMentionHighlightSources;
   threadCwdPath?: string;
   workspaceRootsKey: string;
+}
+
+interface InlineMentionFileResolutionIndex {
+  uniqueExactPathByComparablePath: ReadonlyMap<string, string | null>;
+  uniqueSuffixPathByComparableSuffix: ReadonlyMap<string, string | null>;
+  uniqueWorkspaceRelativePathByComparablePath: ReadonlyMap<string, string | null>;
 }
 
 interface InlineMentionRecordKeyBuilder {
@@ -181,6 +191,105 @@ function finishInlineMentionRecordKey(builder: InlineMentionRecordKeyBuilder) {
 
 function getFilePathStem(fileName: string) {
   return fileName.replace(/\.[^.]+$/, "");
+}
+
+function setUniqueInlineMentionPath(
+  map: Map<string, string | null>,
+  key: string,
+  path: string,
+) {
+  if (!key) {
+    return;
+  }
+
+  if (!map.has(key)) {
+    map.set(key, path);
+    return;
+  }
+
+  if (map.get(key) !== path) {
+    map.set(key, null);
+  }
+}
+
+function parseInlineMentionWorkspaceRelativePath(value: string) {
+  const normalizedPath = normalizeMentionPath(value);
+  const separatorIndex = normalizedPath.indexOf(":");
+  if (separatorIndex <= 0 || /^[A-Za-z]:\//.test(normalizedPath)) {
+    return null;
+  }
+
+  const relativePath = normalizedPath.slice(separatorIndex + 1).replace(/^\/+/, "");
+  return relativePath ? relativePath : null;
+}
+
+function parseInlineMentionFileLinkLocation(value: string) {
+  const match = value.match(/^(.*):(\d+)(?::(\d+))?$/);
+  return match
+    ? {
+      columnNumber: match[3] ? Number(match[3]) : null,
+      lineNumber: Number(match[2]),
+      path: match[1],
+    }
+    : {
+      columnNumber: null,
+      lineNumber: null,
+      path: value,
+    };
+}
+
+function buildInlineMentionFileResolutionIndex(
+  records: readonly PreparedInlineMentionFileRecord[],
+): InlineMentionFileResolutionIndex {
+  const uniqueExactPathByComparablePath = new Map<string, string | null>();
+  const uniqueSuffixPathByComparableSuffix = new Map<string, string | null>();
+  const uniqueWorkspaceRelativePathByComparablePath = new Map<string, string | null>();
+
+  for (const record of records) {
+    const comparablePath = normalizeComparableValue(record.path);
+    setUniqueInlineMentionPath(uniqueExactPathByComparablePath, comparablePath, record.path);
+
+    const workspaceRelativePath = parseInlineMentionWorkspaceRelativePath(record.path);
+    if (workspaceRelativePath) {
+      setUniqueInlineMentionPath(
+        uniqueWorkspaceRelativePathByComparablePath,
+        normalizeComparableValue(workspaceRelativePath),
+        record.path,
+      );
+    }
+
+    const segments = getPathSegments(record.path);
+    let suffix = "";
+    for (let index = segments.length - 1; index >= 0; index -= 1) {
+      suffix = suffix ? `${segments[index]}/${suffix}` : segments[index];
+      setUniqueInlineMentionPath(
+        uniqueSuffixPathByComparableSuffix,
+        normalizeComparableValue(suffix),
+        record.path,
+      );
+    }
+
+    if (workspaceRelativePath) {
+      const workspaceRelativeSegments = getPathSegments(workspaceRelativePath);
+      let workspaceRelativeSuffix = "";
+      for (let index = workspaceRelativeSegments.length - 1; index >= 0; index -= 1) {
+        workspaceRelativeSuffix = workspaceRelativeSuffix
+          ? `${workspaceRelativeSegments[index]}/${workspaceRelativeSuffix}`
+          : workspaceRelativeSegments[index];
+        setUniqueInlineMentionPath(
+          uniqueSuffixPathByComparableSuffix,
+          normalizeComparableValue(workspaceRelativeSuffix),
+          record.path,
+        );
+      }
+    }
+  }
+
+  return {
+    uniqueExactPathByComparablePath,
+    uniqueSuffixPathByComparableSuffix,
+    uniqueWorkspaceRelativePathByComparablePath,
+  };
 }
 
 function splitMentionSearchWords(value: string) {
@@ -288,11 +397,17 @@ function prepareInlineMentionFiles(files: readonly (string | InlineMentionFileCa
     return contentCachedFiles;
   }
 
+  const candidates = records.map(createInlineMentionFileCandidate);
   const preparedFiles: PreparedInlineMentionFiles = {
-    candidates: records.map(createInlineMentionFileCandidate),
+    candidateByComparablePath: new Map(candidates.map((candidate) => [
+      normalizeComparableValue(candidate.path),
+      candidate,
+    ])),
+    candidates,
     fileCandidatePaths: records.map((record) => record.path),
     key,
     records,
+    resolutionIndex: buildInlineMentionFileResolutionIndex(records),
   };
   preparedFileInputsByIdentity.set(files, preparedFiles);
   preparedFileInputsByContent.push(preparedFiles);
@@ -462,7 +577,9 @@ export function buildInlineMentionCandidates({
       ...preparedFiles.candidates,
     ],
     cacheKey,
+    fileCandidateByComparablePath: preparedFiles.candidateByComparablePath,
     fileCandidatePaths: preparedFiles.fileCandidatePaths,
+    fileResolutionIndex: preparedFiles.resolutionIndex,
     threadCwdPath,
     projectRootPath,
     workspaceRoots,
@@ -672,12 +789,90 @@ function resolveSkillMention(value: string, candidates: InlineMentionCandidate[]
   return uniquePaths.size === 1 && matches.length === 1 ? matches[0] : null;
 }
 
+function resolveIndexedPathFromMap(map: ReadonlyMap<string, string | null>, comparablePath: string) {
+  if (!map.has(comparablePath)) {
+    return undefined;
+  }
+
+  return map.get(comparablePath) ?? null;
+}
+
+function resolveIndexedFileMention(value: string, sources: InlineMentionHighlightSources) {
+  const parsedValue = parseInlineMentionFileLinkLocation(value);
+  const normalizedPath = normalizeMentionPath(parsedValue.path).replace(/^\.\//, "");
+  if (
+    !normalizedPath
+    || normalizedPath.startsWith("../")
+    || /^(?:[A-Za-z]:\/|\/)/.test(normalizedPath)
+  ) {
+    return null;
+  }
+
+  const comparablePath = normalizeComparableValue(normalizedPath);
+  const exactPath = resolveIndexedPathFromMap(
+    sources.fileResolutionIndex.uniqueExactPathByComparablePath,
+    comparablePath,
+  );
+  const workspaceRelativePath = exactPath === undefined
+    ? resolveIndexedPathFromMap(
+      sources.fileResolutionIndex.uniqueWorkspaceRelativePathByComparablePath,
+      comparablePath,
+    )
+    : undefined;
+  const suffixPath = exactPath === undefined && workspaceRelativePath === undefined
+    ? resolveIndexedPathFromMap(
+      sources.fileResolutionIndex.uniqueSuffixPathByComparableSuffix,
+      comparablePath,
+    )
+    : undefined;
+  const resolvedPath = exactPath ?? workspaceRelativePath ?? suffixPath;
+  if (!resolvedPath) {
+    return null;
+  }
+
+  const candidate = sources.fileCandidateByComparablePath.get(normalizeComparableValue(resolvedPath));
+  if (!candidate) {
+    return null;
+  }
+
+  return {
+    candidate,
+    columnNumber: parsedValue.columnNumber,
+    lineNumber: parsedValue.lineNumber,
+  };
+}
+
+function shouldUseProjectFileLinkResolverFallback(
+  value: string,
+  {
+    allowThreadCwdPathWithoutCandidate,
+  }: {
+    allowThreadCwdPathWithoutCandidate: boolean;
+  },
+) {
+  if (allowThreadCwdPathWithoutCandidate) {
+    return true;
+  }
+
+  const parsedValue = parseInlineMentionFileLinkLocation(value);
+  const normalizedPath = normalizeMentionPath(parsedValue.path).replace(/^\.\//, "");
+  return /^(?:[A-Za-z]:\/|\/)/.test(normalizedPath);
+}
+
 function resolveFileMention(value: string, sources: InlineMentionHighlightSources, {
   allowThreadCwdPathWithoutCandidate,
 }: {
   allowThreadCwdPathWithoutCandidate: boolean;
 }) {
-  const fileCandidates = sources.candidates.filter((candidate) => candidate.kind === "file");
+  const indexedTarget = resolveIndexedFileMention(value, sources);
+  if (indexedTarget) {
+    return indexedTarget;
+  }
+
+  if (!shouldUseProjectFileLinkResolverFallback(value, { allowThreadCwdPathWithoutCandidate })) {
+    return null;
+  }
+
   const resolvedTarget = resolveProjectFileLinkTarget(value, {
     allowThreadCwdPathWithoutCandidate,
     candidatePaths: sources.fileCandidatePaths,
@@ -690,9 +885,7 @@ function resolveFileMention(value: string, sources: InlineMentionHighlightSource
   }
 
   const normalizedTargetPath = normalizeWorkbenchPath(resolvedTarget.relativePath).toLocaleLowerCase();
-  const candidate = fileCandidates.find((entry) => (
-    normalizeWorkbenchPath(entry.path).toLocaleLowerCase() === normalizedTargetPath
-  ));
+  const candidate = sources.fileCandidateByComparablePath.get(normalizedTargetPath);
   if (!candidate && !allowThreadCwdPathWithoutCandidate) {
     return null;
   }
