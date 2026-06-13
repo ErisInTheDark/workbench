@@ -18,8 +18,13 @@ const THREAD_MARKDOWN_CLASS = [
 ].join(" ");
 
 const MAX_RENDERED_THREAD_MARKDOWN_CACHE_ENTRIES = 320;
+const MAX_RENDERED_THREAD_MARKDOWN_CACHE_MARKDOWN_CHARS = 300_000;
 const projectFilePathsCacheKeys = new WeakMap<readonly string[], string>();
-const renderedThreadMarkdownCache = new Map<string, ReactNode>();
+const renderedThreadMarkdownCache = new Map<string, {
+  markdownLength: number;
+  value: ReactNode;
+}>();
+let renderedThreadMarkdownCacheMarkdownChars = 0;
 
 function getStringListCacheKey(values: readonly string[]) {
   let hash = 2_166_136_261;
@@ -79,24 +84,48 @@ function getMarkdownCacheKey({
 }
 
 function readRenderedThreadMarkdownCache(key: string) {
-  const cachedValue = renderedThreadMarkdownCache.get(key);
-  if (cachedValue === undefined) {
+  const cachedEntry = renderedThreadMarkdownCache.get(key);
+  if (cachedEntry === undefined) {
     return null;
   }
 
   renderedThreadMarkdownCache.delete(key);
-  renderedThreadMarkdownCache.set(key, cachedValue);
-  return cachedValue;
+  renderedThreadMarkdownCache.set(key, cachedEntry);
+  return cachedEntry.value;
 }
 
-function writeRenderedThreadMarkdownCache(key: string, value: ReactNode) {
-  renderedThreadMarkdownCache.set(key, value);
-  while (renderedThreadMarkdownCache.size > MAX_RENDERED_THREAD_MARKDOWN_CACHE_ENTRIES) {
-    const oldestKey = renderedThreadMarkdownCache.keys().next().value;
-    if (oldestKey === undefined) {
+function deleteOldestRenderedThreadMarkdownCacheEntry() {
+  const oldestKey = renderedThreadMarkdownCache.keys().next().value;
+  if (oldestKey === undefined) {
+    return false;
+  }
+
+  const oldestEntry = renderedThreadMarkdownCache.get(oldestKey);
+  if (oldestEntry) {
+    renderedThreadMarkdownCacheMarkdownChars -= oldestEntry.markdownLength;
+  }
+  renderedThreadMarkdownCache.delete(oldestKey);
+  return true;
+}
+
+function writeRenderedThreadMarkdownCache(key: string, value: ReactNode, markdownLength: number) {
+  const existingEntry = renderedThreadMarkdownCache.get(key);
+  if (existingEntry) {
+    renderedThreadMarkdownCacheMarkdownChars -= existingEntry.markdownLength;
+  }
+
+  renderedThreadMarkdownCache.set(key, {
+    markdownLength,
+    value,
+  });
+  renderedThreadMarkdownCacheMarkdownChars += markdownLength;
+  while (
+    renderedThreadMarkdownCache.size > MAX_RENDERED_THREAD_MARKDOWN_CACHE_ENTRIES
+    || renderedThreadMarkdownCacheMarkdownChars > MAX_RENDERED_THREAD_MARKDOWN_CACHE_MARKDOWN_CHARS
+  ) {
+    if (!deleteOldestRenderedThreadMarkdownCacheEntry()) {
       break;
     }
-    renderedThreadMarkdownCache.delete(oldestKey);
   }
 }
 
@@ -111,7 +140,7 @@ function renderCachedThreadMarkdown(
   }
 
   const renderedMarkdown = renderThreadMarkdown(markdown, options);
-  writeRenderedThreadMarkdownCache(cacheKey, renderedMarkdown);
+  writeRenderedThreadMarkdownCache(cacheKey, renderedMarkdown, markdown.length);
   return renderedMarkdown;
 }
 

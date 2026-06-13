@@ -11,12 +11,14 @@ import migrateV0 from "./v0";
 import migrateV1 from "./v1";
 import migrateV2 from "./v2";
 import migrateV3 from "./v3";
+import migrateV4 from "./v4";
 
 const MIGRATIONS = [
   migrateV0,
   migrateV1,
   migrateV2,
   migrateV3,
+  migrateV4,
 ] as const;
 
 type MigrationState = {

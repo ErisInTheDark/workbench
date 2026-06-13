@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - CodexTranscriptStore: persist and hydrate Codex extended transcript data under .workbench/transcripts. Keywords: codex, transcript, questionnaire, pruning.
+ * - CodexTranscriptStore: persist, de-bloat, and hydrate Codex extended transcript data under .workbench/transcripts. Keywords: codex, transcript, questionnaire, pruning, image assets.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -43,14 +43,16 @@ import type {
   CodexTranscriptTurnFile,
 } from "./codex-transcript-types";
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import externalizeCodexTranscriptInlineImages from "./codex-transcript-image-assets";
 import { runCodexTranscriptMigrations } from "./codex-transcript-migrations";
 import { queueCodexTranscriptRequestSidecarCleanup } from "./codex-transcript-migrations/v3";
+import { queueCodexTranscriptImageAssetMigration } from "./codex-transcript-migrations/v4";
 import { CODEX_TRANSCRIPT_SCHEMA_VERSION } from "./codex-transcript-version";
 
 const PRUNE_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
 const PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const THREAD_TOUCH_THROTTLE_MS = 30_000;
-const SUPPORTED_CODEX_TRANSCRIPT_SCHEMA_VERSIONS = new Set([1, 2, 3, CODEX_TRANSCRIPT_SCHEMA_VERSION]);
+const SUPPORTED_CODEX_TRANSCRIPT_SCHEMA_VERSIONS = new Set([1, 2, 3, 4, CODEX_TRANSCRIPT_SCHEMA_VERSION]);
 
 interface HydrateThreadResponseOptions {
   hydration?: WorkbenchThreadHydrationRequest | null;
@@ -725,7 +727,11 @@ export default class CodexTranscriptStore {
     this.pruneTimer.unref();
     void this.pruneExpiredThreads(now(), this.getProtectedThreadIds()).catch(() => undefined);
     void this.readyPromise
-      .then(() => queueCodexTranscriptRequestSidecarCleanup(path.dirname(this.threadsDirectoryPath)))
+      .then(async () => {
+        const rootDirectoryPath = path.dirname(this.threadsDirectoryPath);
+        await queueCodexTranscriptRequestSidecarCleanup(rootDirectoryPath);
+        await queueCodexTranscriptImageAssetMigration(rootDirectoryPath);
+      })
       .catch(() => undefined);
   }
 
@@ -1029,30 +1035,35 @@ export default class CodexTranscriptStore {
     fallbackMethod: string | null = null,
     originalRequest: JsonRpcRequest | null = null,
   ) {
-    const method = asString(asRecord(payload)?.method) ?? fallbackMethod;
-    const requestId = asRecord(payload)?.id;
+    const originalParams = asRecord(originalRequest?.params);
+    const payloadThread = extractThread(payload);
+    const payloadThreadId = payloadThread?.id ?? extractThreadId(payload) ?? asString(originalParams?.threadId);
+    const payloadForRecord = payloadThreadId
+      ? (await this.externalizeInlineImages(payloadThreadId, payload)).value
+      : payload;
+    const method = asString(asRecord(payloadForRecord)?.method) ?? fallbackMethod;
+    const requestId = asRecord(payloadForRecord)?.id;
     const normalizedRequestId = typeof requestId === "number" || typeof requestId === "string" ? requestId : null;
-    const thread = extractThread(payload);
+    const thread = extractThread(payloadForRecord);
     if (thread) {
       await this.recordThreadSnapshot(thread);
       return;
     }
 
-    const event = createRawEvent(source, payload, method, normalizedRequestId);
-    const originalParams = asRecord(originalRequest?.params);
-    const threadId = extractThreadId(payload) ?? asString(originalParams?.threadId);
+    const event = createRawEvent(source, payloadForRecord, method, normalizedRequestId);
+    const threadId = extractThreadId(payloadForRecord) ?? asString(originalParams?.threadId);
     if (!threadId) {
       return;
     }
 
-    const turn = extractTurn(payload);
+    const turn = extractTurn(payloadForRecord);
     if (turn) {
       await this.recordTurnSnapshot(threadId, turn, event);
       return;
     }
 
-    const turnId = extractTurnId(payload) ?? asString(originalParams?.turnId);
-    const item = extractItem(payload);
+    const turnId = extractTurnId(payloadForRecord) ?? asString(originalParams?.turnId);
+    const item = extractItem(payloadForRecord);
     if (turnId && item) {
       await this.recordTurnItem(threadId, turnId, item, event);
       return;
@@ -1395,6 +1406,13 @@ export default class CodexTranscriptStore {
     return path.join(this.threadsDirectoryPath, encodeTranscriptPathSegment(threadId));
   }
 
+  private externalizeInlineImages<TValue>(threadId: string, value: TValue) {
+    return externalizeCodexTranscriptInlineImages(value, {
+      encodedThreadId: encodeTranscriptPathSegment(threadId),
+      threadDirectoryPath: this.threadDirectoryPath(threadId),
+    });
+  }
+
   private threadFilePath(threadId: string) {
     return path.join(this.threadDirectoryPath(threadId), "thread.json");
   }
@@ -1421,10 +1439,16 @@ export default class CodexTranscriptStore {
     ));
   }
 
-  private updateTurnFile(threadId: string, turnId: string, updater: (file: CodexTranscriptTurnFile) => CodexTranscriptTurnFile) {
-    return this.json.updateIfChanged(this.turnFilePath(threadId, turnId), createTurnFile(threadId, turnId), async (file) => (
-      preserveCurrentIfOnlyLastTouchedAtChanged(file, normalizeTurnFileSnapshot(await updater(file)))
-    ));
+  private updateTurnFile(
+    threadId: string,
+    turnId: string,
+    updater: (file: CodexTranscriptTurnFile) => CodexTranscriptTurnFile | Promise<CodexTranscriptTurnFile>,
+  ) {
+    return this.json.updateIfChanged(this.turnFilePath(threadId, turnId), createTurnFile(threadId, turnId), async (file) => {
+      const normalizedFile = normalizeTurnFileSnapshot(await updater(file));
+      const externalizedFile = (await this.externalizeInlineImages(threadId, normalizedFile)).value;
+      return preserveCurrentIfOnlyLastTouchedAtChanged(file, externalizedFile);
+    });
   }
 
   private updateOrphanEventsFile(threadId: string, updater: (file: CodexTranscriptOrphanEventsFile) => CodexTranscriptOrphanEventsFile) {
@@ -1433,12 +1457,14 @@ export default class CodexTranscriptStore {
     ));
   }
 
-  private appendTurnEvent(threadId: string, turnId: string, event: CodexTranscriptRawEvent) {
-    return this.json.appendLine(this.turnJournalPath(threadId, turnId), event);
+  private async appendTurnEvent(threadId: string, turnId: string, event: CodexTranscriptRawEvent) {
+    const externalizedEvent = (await this.externalizeInlineImages(threadId, event)).value;
+    return this.json.appendLine(this.turnJournalPath(threadId, turnId), externalizedEvent);
   }
 
-  private appendOrphanEvent(threadId: string, event: CodexTranscriptRawEvent) {
-    return this.json.appendLine(this.orphanEventsJournalPath(threadId), event);
+  private async appendOrphanEvent(threadId: string, event: CodexTranscriptRawEvent) {
+    const externalizedEvent = (await this.externalizeInlineImages(threadId, event)).value;
+    return this.json.appendLine(this.orphanEventsJournalPath(threadId), externalizedEvent);
   }
 
   private async compactJournal(filePath: string) {
@@ -1461,11 +1487,12 @@ export default class CodexTranscriptStore {
     }
 
     const normalizedFile = normalizeTurnFileSnapshot(file);
-    if (options.repair && stableJsonStringify(file) !== stableJsonStringify(normalizedFile)) {
-      await this.json.updateIfChanged(filePath, normalizedFile, () => normalizedFile);
+    const externalizedFile = (await this.externalizeInlineImages(threadId, normalizedFile)).value;
+    if (options.repair && stableJsonStringify(file) !== stableJsonStringify(externalizedFile)) {
+      await this.json.updateIfChanged(filePath, externalizedFile, () => externalizedFile);
     }
 
-    return normalizedFile;
+    return externalizedFile;
   }
 
   private async readTurnFiles(threadId: string, options: { repair?: boolean; turnIds?: Iterable<string> } = {}) {
@@ -1499,10 +1526,11 @@ export default class CodexTranscriptStore {
       ))
       .map(async ({ file, filePath }) => {
         const normalizedFile = normalizeTurnFileSnapshot(file);
-        if (options.repair && stableJsonStringify(file) !== stableJsonStringify(normalizedFile)) {
-          await this.json.updateIfChanged(filePath, normalizedFile, () => normalizedFile);
+        const externalizedFile = (await this.externalizeInlineImages(threadId, normalizedFile)).value;
+        if (options.repair && stableJsonStringify(file) !== stableJsonStringify(externalizedFile)) {
+          await this.json.updateIfChanged(filePath, externalizedFile, () => externalizedFile);
         }
-        return normalizedFile;
+        return externalizedFile;
       }));
   }
 }

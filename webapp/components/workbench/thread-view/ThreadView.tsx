@@ -12,7 +12,6 @@ import { getCurrentInProgressTurn, mergeTurnsPreservingLiveItems } from "../../.
 import type {
   ThreadPayload,
   ThreadUnreadBadge,
-  TreeNode,
   WorkbenchHarness,
   WorkbenchModelOption,
   WorkbenchPendingUserInputRequest,
@@ -27,12 +26,25 @@ import type {
   WorkbenchThreadTurnHistoryEntry,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
-import { flattenProjectTreeFileCandidates } from "../../../lib/workbench/project/tree-utils";
+import type { ProjectTreeFileCandidate } from "../../../lib/workbench/project/ProjectTreeFileIndex";
+import {
+  createProjectFilePathDisambiguationIndexCooperatively,
+  readCachedProjectFilePathDisambiguationIndex,
+  writeProjectFilePathDisambiguationIndexCache,
+  type ProjectFilePathDisambiguationIndex,
+} from "../../../lib/workbench/project/project-file-path";
 import {
   persistThreadLiveActivityOpen,
   readStoredThreadLiveActivityOpen,
 } from "../../../lib/workbench/state/browser-state";
-import { buildInlineMentionCandidates } from "../../../lib/workbench/thread/inline-mention-highlights";
+import CooperativeRebuildQueue from "../../../lib/workbench/state/CooperativeRebuildQueue";
+import {
+  buildInlineMentionCandidates,
+  buildInlineMentionCandidatesCooperatively,
+  readCachedInlineMentionCandidates,
+  type BuildInlineMentionCandidatesOptions,
+  type InlineMentionHighlightSources,
+} from "../../../lib/workbench/thread/inline-mention-highlights";
 import {
   getCollabAgentThreadIds,
   getThreadAgentTabLabel,
@@ -50,12 +62,16 @@ import {
   isThreadWebSearchPlaceholder,
   ThreadWebSearchActionRow,
 } from "./ThreadWebSearchItem";
+import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
 import { ThreadThreadContent, ThreadTurnDetails, ThreadTurnLoadingSkeleton } from "./thread-view-items";
 
 const SUBTHREAD_POLL_INTERVAL_MS = 1500;
 const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
 const MAX_VISIBLE_HISTORY_ENTRIES = 8;
 const EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS: readonly string[] = [];
+const EMPTY_PROJECT_FILE_CANDIDATES: readonly ProjectTreeFileCandidate[] = [];
+const THREAD_VIEW_BACKGROUND_REBUILD_SLICE_MS = 20;
+const threadViewBackgroundRebuildQueue = new CooperativeRebuildQueue();
 
 type LiveThreadActivity =
   | {
@@ -427,6 +443,115 @@ function getLiveThreadActivity ({
   };
 }
 
+function useBackgroundInlineMentionSources({
+  files,
+  filesIdentity,
+  projectRootPath,
+  skills,
+  threadCwdPath,
+  workspaceRoots = [],
+}: BuildInlineMentionCandidatesOptions): InlineMentionHighlightSources {
+  const fallbackSources = useMemo(() => buildInlineMentionCandidates({
+    files: EMPTY_PROJECT_FILE_CANDIDATES,
+    filesIdentity: "thread-view:empty-project-files",
+    projectRootPath,
+    skills,
+    threadCwdPath,
+    workspaceRoots,
+  }), [projectRootPath, skills, threadCwdPath, workspaceRoots]);
+  const [sources, setSources] = useState<InlineMentionHighlightSources>(() => (
+    readCachedInlineMentionCandidates({
+      files,
+      filesIdentity,
+      projectRootPath,
+      skills,
+      threadCwdPath,
+      workspaceRoots,
+    }) ?? fallbackSources
+  ));
+  const generationRef = useRef(0);
+
+  useEffect(() => {
+    generationRef.current += 1;
+    const generation = generationRef.current;
+    const cachedSources = readCachedInlineMentionCandidates({
+      files,
+      filesIdentity,
+      projectRootPath,
+      skills,
+      threadCwdPath,
+      workspaceRoots,
+    });
+    if (cachedSources) {
+      setSources(cachedSources);
+      return;
+    }
+
+    threadViewBackgroundRebuildQueue.enqueue({
+      key: "thread-view:inline-mention-sources",
+      run: (budget) => buildInlineMentionCandidatesCooperatively({
+        files,
+        filesIdentity,
+        projectRootPath,
+        skills,
+        threadCwdPath,
+        workspaceRoots,
+      }, budget),
+      commit(result) {
+        if (generationRef.current === generation) {
+          setSources(result);
+        }
+      },
+      onError(error) {
+        console.error("Failed to rebuild inline mention sources", error);
+      },
+      sliceMs: THREAD_VIEW_BACKGROUND_REBUILD_SLICE_MS,
+    });
+  }, [fallbackSources, files, filesIdentity, projectRootPath, skills, threadCwdPath, workspaceRoots]);
+
+  return sources;
+}
+
+function useBackgroundProjectFilePathDisambiguationIndex(
+  disambiguationPaths: readonly string[],
+  disambiguationKey: string,
+): ProjectFilePathDisambiguationIndex | null {
+  const [disambiguationIndex, setDisambiguationIndex] = useState<ProjectFilePathDisambiguationIndex | null>(() => (
+    readCachedProjectFilePathDisambiguationIndex(disambiguationPaths, disambiguationKey)
+  ));
+  const generationRef = useRef(0);
+
+  useEffect(() => {
+    generationRef.current += 1;
+    const generation = generationRef.current;
+    const cachedIndex = readCachedProjectFilePathDisambiguationIndex(disambiguationPaths, disambiguationKey);
+    if (cachedIndex) {
+      setDisambiguationIndex(cachedIndex);
+      return;
+    }
+
+    threadViewBackgroundRebuildQueue.enqueue({
+      key: "thread-view:project-file-path-disambiguation",
+      async run(budget) {
+        const index = await createProjectFilePathDisambiguationIndexCooperatively(disambiguationPaths, budget);
+        writeProjectFilePathDisambiguationIndexCache(disambiguationPaths, disambiguationKey, index);
+        return index;
+      },
+      commit(result) {
+        if (generationRef.current === generation) {
+          setDisambiguationIndex(result);
+        }
+      },
+      onError(error) {
+        console.error("Failed to rebuild project file path disambiguation index", error);
+      },
+      sliceMs: THREAD_VIEW_BACKGROUND_REBUILD_SLICE_MS,
+    });
+  }, [disambiguationKey, disambiguationPaths]);
+
+  return disambiguationIndex;
+}
+
 export default memo(function ThreadView ({
   composerSpellCheck,
   fontSizeRem,
@@ -451,9 +576,11 @@ export default memo(function ThreadView ({
   onThreadServiceTierChange,
   onThreadModelChange,
   projectId,
+  projectFileCandidates,
+  projectFileIndexId,
+  projectFilePaths,
   projectRootPath,
   projectRoots,
-  projectTree,
   rateLimits,
   threadCodeBlockWrap,
   threadComposerDraftsByThreadId,
@@ -492,9 +619,11 @@ export default memo(function ThreadView ({
   onThreadServiceTierChange: (threadId: string, serviceTier: string | null) => void;
   onThreadModelChange: (threadId: string, model: string) => void;
   projectId: string;
+  projectFileCandidates: readonly ProjectTreeFileCandidate[];
+  projectFileIndexId: string;
+  projectFilePaths: readonly string[];
   projectRootPath: string;
   projectRoots?: readonly WorkbenchProjectRoot[];
-  projectTree: TreeNode[];
   rateLimits: RateLimitSnapshot | null;
   threadCodeBlockWrap: boolean;
   threadComposerDraftsByThreadId: Record<string, WorkbenchThreadComposerDraft | undefined>;
@@ -547,20 +676,23 @@ export default memo(function ThreadView ({
 
     return Array.from(new Set(liveActivity.waits.map((wait) => wait.hiddenItemId)));
   }, [liveActivity]);
-  const projectFiles = useMemo(() => flattenProjectTreeFileCandidates(projectTree), [projectTree]);
-  const projectFilePaths = useMemo(() => projectFiles.map((file) => file.path), [projectFiles]);
   const workspaceFileLinkRoots = useMemo(() => (
     projectRoots && projectRoots.length > 1
       ? projectRoots.map((root) => ({ id: root.id, rootPath: root.rootPath }))
       : []
   ), [projectRoots]);
-  const inlineMentionSources = useMemo(() => buildInlineMentionCandidates({
-    files: projectFiles,
+  const inlineMentionSources = useBackgroundInlineMentionSources({
+    files: projectFileCandidates,
+    filesIdentity: projectFileIndexId,
     threadCwdPath: activeThread?.cwd,
     projectRootPath,
     skills: workbenchSkills,
     workspaceRoots: workspaceFileLinkRoots,
-  }), [activeThread?.cwd, projectFiles, projectRootPath, workspaceFileLinkRoots, workbenchSkills]);
+  });
+  const projectFilePathDisambiguationIndex = useBackgroundProjectFilePathDisambiguationIndex(
+    projectFilePaths,
+    projectFileIndexId,
+  );
 
   const tabDefinitions = useMemo(() => {
     const baseLabelCounts = new Map<string, number>();
@@ -1143,16 +1275,21 @@ export default memo(function ThreadView ({
   ) : null;
 
   return (
-    <div
-      ref={threadViewRef}
-      data-thread-codeblock-wrap={threadCodeBlockWrap ? "true" : "false"}
-      data-thread-project-file-link-boundary="true"
-      className={joinClasses(
-        "mx-auto w-full min-w-0 max-w-[56rem] overflow-x-hidden pb-16 md:overflow-x-visible",
-      )}
-      onClick={handleThreadViewClick}
-      style={{ fontSize: `${fontSizeRem}rem` }}
+    <ProjectFilePathDisplayProvider
+      disambiguationIndex={projectFilePathDisambiguationIndex}
+      disambiguationKey={projectFileIndexId}
+      disambiguationPaths={projectFilePaths}
     >
+      <div
+        ref={threadViewRef}
+        data-thread-codeblock-wrap={threadCodeBlockWrap ? "true" : "false"}
+        data-thread-project-file-link-boundary="true"
+        className={joinClasses(
+          "mx-auto w-full min-w-0 max-w-[56rem] overflow-x-hidden pb-16 md:overflow-x-visible",
+        )}
+        onClick={handleThreadViewClick}
+        style={{ fontSize: `${fontSizeRem}rem` }}
+      >
       {isDraftThreadView ? (
         <>
           <div className="flex min-h-[calc(100dvh-8rem)] w-full items-center">
@@ -1381,7 +1518,8 @@ export default memo(function ThreadView ({
           {composer}
         </>
       ) : null}
-      <div ref={bottomSentinelRef} aria-hidden="true" className="h-px w-full" />
-    </div>
+        <div ref={bottomSentinelRef} aria-hidden="true" className="h-px w-full" />
+      </div>
+    </ProjectFilePathDisplayProvider>
   );
 });

@@ -1,4 +1,11 @@
+/*
+ * Exports:
+ * - ProjectFilePathDisplayProvider: provide a project-owned disambiguation index to nested path pills. Keywords: project path, cache, context.
+ * - default ProjectFilePath: render a project-relative file path pill or file-open button. Keywords: project path, display, button.
+ */
 "use client";
+
+import { createContext, useContext, useMemo, type ReactNode } from "react";
 
 import {
   getProjectFilePathDisplay,
@@ -6,11 +13,18 @@ import {
   projectFilePathLabelClassName,
   projectFilePathLocationClassName,
   projectFilePathPillClassName,
+  type ProjectFilePathDisambiguationIndex,
   type ProjectFilePathDisplayOptions,
 } from "../../lib/workbench/project/project-file-path";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
+}
+
+interface ProjectFilePathDisplayContextValue {
+  disambiguationIndex?: ProjectFilePathDisambiguationIndex | null;
+  disambiguationKey?: string;
+  disambiguationPaths?: readonly string[];
 }
 
 type ProjectFilePathProps = ProjectFilePathDisplayOptions & {
@@ -20,9 +34,37 @@ type ProjectFilePathProps = ProjectFilePathDisplayOptions & {
   projectId?: string | null;
 };
 
+const ProjectFilePathDisplayContext = createContext<ProjectFilePathDisplayContextValue | null>(null);
+
+export function ProjectFilePathDisplayProvider ({
+  children,
+  disambiguationIndex,
+  disambiguationKey,
+  disambiguationPaths,
+}: {
+  children: ReactNode;
+  disambiguationIndex?: ProjectFilePathDisambiguationIndex | null;
+  disambiguationKey?: string;
+  disambiguationPaths?: readonly string[];
+}) {
+  const value = useMemo(() => ({
+    disambiguationIndex,
+    disambiguationKey,
+    disambiguationPaths,
+  }), [disambiguationIndex, disambiguationKey, disambiguationPaths]);
+
+  return (
+    <ProjectFilePathDisplayContext.Provider value={value}>
+      {children}
+    </ProjectFilePathDisplayContext.Provider>
+  );
+}
+
 export default function ProjectFilePath ({
   className,
   columnNumber,
+  disambiguationIndex,
+  disambiguationKey,
   disambiguationPaths,
   interactive = false,
   label,
@@ -30,7 +72,21 @@ export default function ProjectFilePath ({
   path,
   projectId = null,
 }: ProjectFilePathProps) {
-  const display = getProjectFilePathDisplay(path, { columnNumber, disambiguationPaths, label, lineNumber });
+  const context = useContext(ProjectFilePathDisplayContext);
+  const usesInheritedDisambiguation = context?.disambiguationPaths === disambiguationPaths;
+  const resolvedDisambiguationIndex = disambiguationIndex !== undefined
+    ? disambiguationIndex
+    : usesInheritedDisambiguation
+      ? context?.disambiguationIndex ?? null
+      : undefined;
+  const display = getProjectFilePathDisplay(path, {
+    columnNumber,
+    disambiguationIndex: resolvedDisambiguationIndex,
+    disambiguationKey: disambiguationKey ?? (usesInheritedDisambiguation ? context?.disambiguationKey : undefined),
+    disambiguationPaths,
+    label,
+    lineNumber,
+  });
   const isFileControl = typeof projectId === "string" && projectId.trim().length > 0;
   const content = (
     <>

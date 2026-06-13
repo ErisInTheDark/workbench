@@ -5,11 +5,15 @@
  * - InlineMentionHighlight: resolved token range and target metadata for editor highlights. Keywords: highlight, token, skill, file.
  * - InlineMentionHighlightSources: grouped skill and file candidates for reusable mention resolution. Keywords: source, resolver, popup.
  * - InlineMentionSuggestion: active caret suggestion candidate with replacement range. Keywords: autocomplete, popup, mention.
+ * - BuildInlineMentionCandidatesOptions: project, skill, and workspace inputs for mention source building. Keywords: mentions, builder, options.
  * - buildInlineMentionCandidates: convert loaded skills and project files into suggestion-ready candidates. Keywords: skills, files, source.
+ * - buildInlineMentionCandidatesCooperatively: build mention candidates in browser-yielding slices. Keywords: skills, files, scheduler.
  * - buildInlineMentionHighlights: resolve unambiguous /skill and #file tokens in plaintext. Keywords: parser, highlighter, plaintext.
  * - buildInlineMentionSuggestions: rank caret-local skill or file suggestions. Keywords: autocomplete, caret, ranking.
+ * - readCachedInlineMentionCandidates: return already-prepared mention candidates without rebuilding. Keywords: cache, mentions, render.
  */
 
+import type { CooperativeWorkBudget } from "../state/cooperative-work";
 import type { WorkbenchSkillSummary } from "../../types";
 import {
   type WorkspaceFileLinkRoot,
@@ -48,10 +52,11 @@ export interface InlineMentionHighlight {
 
 export interface InlineMentionHighlightSources {
   cacheKey: string;
-  candidates: InlineMentionCandidate[];
   fileCandidateByComparablePath: ReadonlyMap<string, InlineMentionCandidate>;
   fileCandidatePaths: readonly string[];
+  fileCandidates: readonly InlineMentionCandidate[];
   fileResolutionIndex: InlineMentionFileResolutionIndex;
+  skillCandidates: readonly InlineMentionCandidate[];
   threadCwdPath?: string;
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
@@ -64,6 +69,15 @@ export interface InlineMentionSuggestion {
   query: string;
   replacementText: string;
   start: number;
+}
+
+export interface BuildInlineMentionCandidatesOptions {
+  files: readonly (string | InlineMentionFileCandidateInput)[];
+  filesIdentity?: string;
+  threadCwdPath?: string;
+  projectRootPath?: string;
+  skills: readonly WorkbenchSkillSummary[];
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 
 interface InlineMentionFileSearchMetadata {
@@ -82,6 +96,11 @@ interface InlineMentionFileSearchPart {
   comparableText: string;
   isBasename: boolean;
   text: string;
+}
+
+interface InlineMentionFileSearchInterner {
+  internSearchPart(text: string, comparableText: string, isBasename: boolean): InlineMentionFileSearchPart;
+  internString(value: string): string;
 }
 
 interface PreparedInlineMentionFileRecord {
@@ -123,8 +142,13 @@ interface InlineMentionSourcesCacheEntry {
 
 interface InlineMentionFileResolutionIndex {
   uniqueExactPathByComparablePath: ReadonlyMap<string, string | null>;
-  uniqueSuffixPathByComparableSuffix: ReadonlyMap<string, string | null>;
+  uniqueSuffixPathRoot: InlineMentionFileResolutionSuffixNode;
   uniqueWorkspaceRelativePathByComparablePath: ReadonlyMap<string, string | null>;
+}
+
+interface InlineMentionFileResolutionSuffixNode {
+  children: Map<string, InlineMentionFileResolutionSuffixNode>;
+  uniquePath?: string | null;
 }
 
 interface InlineMentionRecordKeyBuilder {
@@ -146,7 +170,10 @@ const TRAILING_PUNCTUATION_PATTERN = /[.,;:!?)}\]]+$/;
 const DEFAULT_INLINE_MENTION_SUGGESTION_LIMIT = 12;
 const BROAD_FILE_SUGGESTION_LIMIT = 36;
 const INLINE_MENTION_SOURCE_CACHE_LIMIT = 8;
+const INLINE_MENTION_FILE_INPUT_CACHE_LIMIT = 2;
+const EMPTY_INLINE_MENTION_FILE_ALIASES: string[] = [];
 const preparedFileInputsByIdentity = new WeakMap<readonly (string | InlineMentionFileCandidateInput)[], PreparedInlineMentionFiles>();
+const preparedFileInputsByIdentityKey = new Map<string, PreparedInlineMentionFiles>();
 const preparedFileInputsByContent: PreparedInlineMentionFiles[] = [];
 const preparedSkillInputsByIdentity = new WeakMap<readonly WorkbenchSkillSummary[], PreparedInlineMentionSkills>();
 const preparedSkillInputsByContent: PreparedInlineMentionSkills[] = [];
@@ -189,6 +216,42 @@ function finishInlineMentionRecordKey(builder: InlineMentionRecordKeyBuilder) {
   return `${builder.count}:${builder.totalLength}:${(builder.hash >>> 0).toString(36)}`;
 }
 
+function createInlineMentionFileSearchInterner(): InlineMentionFileSearchInterner {
+  const strings = new Map<string, string>();
+  const searchParts = new Map<string, InlineMentionFileSearchPart>();
+
+  return {
+    internSearchPart(text, comparableText, isBasename) {
+      const key = `${isBasename ? "1" : "0"}\0${comparableText}\0${text}`;
+      const cachedPart = searchParts.get(key);
+      if (cachedPart) {
+        return cachedPart;
+      }
+
+      const part = {
+        comparableText,
+        isBasename,
+        text,
+      };
+      searchParts.set(key, part);
+      return part;
+    },
+    internString(value) {
+      const cachedValue = strings.get(value);
+      if (cachedValue !== undefined) {
+        return cachedValue;
+      }
+
+      strings.set(value, value);
+      return value;
+    },
+  };
+}
+
+function internInlineMentionString(value: string, interner: InlineMentionFileSearchInterner | undefined) {
+  return interner?.internString(value) ?? value;
+}
+
 function getFilePathStem(fileName: string) {
   return fileName.replace(/\.[^.]+$/, "");
 }
@@ -209,6 +272,45 @@ function setUniqueInlineMentionPath(
 
   if (map.get(key) !== path) {
     map.set(key, null);
+  }
+}
+
+function createInlineMentionFileResolutionSuffixNode(): InlineMentionFileResolutionSuffixNode {
+  return {
+    children: new Map<string, InlineMentionFileResolutionSuffixNode>(),
+  };
+}
+
+function setUniqueInlineMentionSuffixNodePath(
+  node: InlineMentionFileResolutionSuffixNode,
+  path: string,
+) {
+  if (!("uniquePath" in node)) {
+    node.uniquePath = path;
+    return;
+  }
+
+  if (node.uniquePath !== path) {
+    node.uniquePath = null;
+  }
+}
+
+function addInlineMentionSuffixPath(
+  root: InlineMentionFileResolutionSuffixNode,
+  comparableSegments: readonly string[],
+  path: string,
+) {
+  let node = root;
+  for (let index = comparableSegments.length - 1; index >= 0; index -= 1) {
+    const segment = comparableSegments[index];
+    let child = node.children.get(segment);
+    if (!child) {
+      child = createInlineMentionFileResolutionSuffixNode();
+      node.children.set(segment, child);
+    }
+
+    node = child;
+    setUniqueInlineMentionSuffixNodePath(node, path);
   }
 }
 
@@ -240,54 +342,93 @@ function parseInlineMentionFileLinkLocation(value: string) {
 
 function buildInlineMentionFileResolutionIndex(
   records: readonly PreparedInlineMentionFileRecord[],
+  interner: InlineMentionFileSearchInterner,
 ): InlineMentionFileResolutionIndex {
   const uniqueExactPathByComparablePath = new Map<string, string | null>();
-  const uniqueSuffixPathByComparableSuffix = new Map<string, string | null>();
+  const uniqueSuffixPathRoot = createInlineMentionFileResolutionSuffixNode();
   const uniqueWorkspaceRelativePathByComparablePath = new Map<string, string | null>();
 
   for (const record of records) {
-    const comparablePath = normalizeComparableValue(record.path);
+    const comparablePath = internInlineMentionString(normalizeComparableValue(record.path), interner);
     setUniqueInlineMentionPath(uniqueExactPathByComparablePath, comparablePath, record.path);
 
     const workspaceRelativePath = parseInlineMentionWorkspaceRelativePath(record.path);
     if (workspaceRelativePath) {
       setUniqueInlineMentionPath(
         uniqueWorkspaceRelativePathByComparablePath,
-        normalizeComparableValue(workspaceRelativePath),
+        internInlineMentionString(normalizeComparableValue(workspaceRelativePath), interner),
         record.path,
       );
     }
 
     const segments = getPathSegments(record.path);
-    let suffix = "";
-    for (let index = segments.length - 1; index >= 0; index -= 1) {
-      suffix = suffix ? `${segments[index]}/${suffix}` : segments[index];
-      setUniqueInlineMentionPath(
-        uniqueSuffixPathByComparableSuffix,
-        normalizeComparableValue(suffix),
-        record.path,
-      );
-    }
+    addInlineMentionSuffixPath(
+      uniqueSuffixPathRoot,
+      segments.map((segment) => internInlineMentionString(normalizeComparableValue(segment), interner)),
+      record.path,
+    );
 
     if (workspaceRelativePath) {
       const workspaceRelativeSegments = getPathSegments(workspaceRelativePath);
-      let workspaceRelativeSuffix = "";
-      for (let index = workspaceRelativeSegments.length - 1; index >= 0; index -= 1) {
-        workspaceRelativeSuffix = workspaceRelativeSuffix
-          ? `${workspaceRelativeSegments[index]}/${workspaceRelativeSuffix}`
-          : workspaceRelativeSegments[index];
-        setUniqueInlineMentionPath(
-          uniqueSuffixPathByComparableSuffix,
-          normalizeComparableValue(workspaceRelativeSuffix),
-          record.path,
-        );
-      }
+      addInlineMentionSuffixPath(
+        uniqueSuffixPathRoot,
+        workspaceRelativeSegments.map((segment) => internInlineMentionString(normalizeComparableValue(segment), interner)),
+        record.path,
+      );
     }
   }
 
   return {
     uniqueExactPathByComparablePath,
-    uniqueSuffixPathByComparableSuffix,
+    uniqueSuffixPathRoot,
+    uniqueWorkspaceRelativePathByComparablePath,
+  };
+}
+
+async function buildInlineMentionFileResolutionIndexCooperatively(
+  records: readonly PreparedInlineMentionFileRecord[],
+  interner: InlineMentionFileSearchInterner,
+  budget: CooperativeWorkBudget,
+): Promise<InlineMentionFileResolutionIndex> {
+  const uniqueExactPathByComparablePath = new Map<string, string | null>();
+  const uniqueSuffixPathRoot = createInlineMentionFileResolutionSuffixNode();
+  const uniqueWorkspaceRelativePathByComparablePath = new Map<string, string | null>();
+
+  for (const record of records) {
+    const comparablePath = internInlineMentionString(normalizeComparableValue(record.path), interner);
+    setUniqueInlineMentionPath(uniqueExactPathByComparablePath, comparablePath, record.path);
+
+    const workspaceRelativePath = parseInlineMentionWorkspaceRelativePath(record.path);
+    if (workspaceRelativePath) {
+      setUniqueInlineMentionPath(
+        uniqueWorkspaceRelativePathByComparablePath,
+        internInlineMentionString(normalizeComparableValue(workspaceRelativePath), interner),
+        record.path,
+      );
+    }
+
+    const segments = getPathSegments(record.path);
+    addInlineMentionSuffixPath(
+      uniqueSuffixPathRoot,
+      segments.map((segment) => internInlineMentionString(normalizeComparableValue(segment), interner)),
+      record.path,
+    );
+
+    if (workspaceRelativePath) {
+      const workspaceRelativeSegments = getPathSegments(workspaceRelativePath);
+      addInlineMentionSuffixPath(
+        uniqueSuffixPathRoot,
+        workspaceRelativeSegments.map((segment) => internInlineMentionString(normalizeComparableValue(segment), interner)),
+        record.path,
+      );
+    }
+
+    await budget.yieldIfNeeded();
+  }
+
+  return {
+    uniqueExactPathByComparablePath,
+    uniqueSuffixPathRoot,
     uniqueWorkspaceRelativePathByComparablePath,
   };
 }
@@ -300,11 +441,14 @@ function splitMentionSearchWords(value: string) {
     .filter(Boolean);
 }
 
-function createInlineMentionFileSearchMetadata(path: string): InlineMentionFileSearchMetadata {
-  const normalizedPath = normalizeMentionPath(path);
-  const segments = getPathSegments(normalizedPath);
+function createInlineMentionFileSearchMetadata(
+  path: string,
+  interner?: InlineMentionFileSearchInterner,
+): InlineMentionFileSearchMetadata {
+  const normalizedPath = internInlineMentionString(normalizeMentionPath(path), interner);
+  const segments = getPathSegments(normalizedPath).map((segment) => internInlineMentionString(segment, interner));
   const basename = segments[segments.length - 1] ?? normalizedPath;
-  const basenameStem = getFilePathStem(basename);
+  const basenameStem = internInlineMentionString(getFilePathStem(basename), interner);
   const searchParts: InlineMentionFileSearchPart[] = [];
 
   for (let index = 0; index < segments.length; index += 1) {
@@ -315,42 +459,49 @@ function createInlineMentionFileSearchMetadata(path: string): InlineMentionFileS
       : [segment, ...splitMentionSearchWords(segment)];
 
     for (const value of values) {
-      const comparableText = normalizeComparableValue(value);
+      const internedValue = internInlineMentionString(value, interner);
+      const comparableText = internInlineMentionString(normalizeComparableValue(internedValue), interner);
       if (!comparableText || searchParts.some((part) => part.comparableText === comparableText && part.isBasename === isBasename)) {
         continue;
       }
 
-      searchParts.push({
-        comparableText,
-        isBasename,
-        text: value,
-      });
+      searchParts.push(interner
+        ? interner.internSearchPart(internedValue, comparableText, isBasename)
+        : {
+          comparableText,
+          isBasename,
+          text: internedValue,
+        });
     }
   }
 
   return {
     basename,
     basenameStem,
-    comparableBasename: normalizeComparableValue(basename),
-    comparableBasenameStem: normalizeComparableValue(basenameStem),
-    comparablePath: normalizeComparableValue(normalizedPath),
-    comparableSegments: segments.map(normalizeComparableValue),
+    comparableBasename: internInlineMentionString(normalizeComparableValue(basename), interner),
+    comparableBasenameStem: internInlineMentionString(normalizeComparableValue(basenameStem), interner),
+    comparablePath: internInlineMentionString(normalizeComparableValue(normalizedPath), interner),
+    comparableSegments: segments.map((segment) => internInlineMentionString(normalizeComparableValue(segment), interner)),
     path: normalizedPath,
     searchParts,
     segments,
   };
 }
 
-function createInlineMentionFileCandidate(record: PreparedInlineMentionFileRecord): InlineMentionCandidate {
-  const fileSearch = createInlineMentionFileSearchMetadata(record.path);
+function createInlineMentionFileCandidate(
+  record: PreparedInlineMentionFileRecord,
+  interner: InlineMentionFileSearchInterner,
+): InlineMentionCandidate {
+  const fileSearch = createInlineMentionFileSearchMetadata(record.path, interner);
+  const path = internInlineMentionString(record.path, interner);
   return {
-    aliases: [record.path],
+    aliases: EMPTY_INLINE_MENTION_FILE_ALIASES,
     description: "",
     fileSearch,
     isExcluded: record.isExcluded,
     kind: "file",
-    label: record.path,
-    path: record.path,
+    label: path,
+    path,
   };
 }
 
@@ -371,48 +522,173 @@ function arePreparedFileRecordsEqual(
   return true;
 }
 
-function prepareInlineMentionFiles(files: readonly (string | InlineMentionFileCandidateInput)[]): PreparedInlineMentionFiles {
-  const cachedFiles = preparedFileInputsByIdentity.get(files);
+function readPreparedFileInputsByIdentityKey(identity: string | undefined) {
+  if (!identity) {
+    return null;
+  }
+
+  const cachedFiles = preparedFileInputsByIdentityKey.get(identity);
+  if (!cachedFiles) {
+    return null;
+  }
+
+  preparedFileInputsByIdentityKey.delete(identity);
+  preparedFileInputsByIdentityKey.set(identity, cachedFiles);
+  return cachedFiles;
+}
+
+function writePreparedFileInputsByIdentityKey(identity: string | undefined, files: PreparedInlineMentionFiles) {
+  if (!identity) {
+    return;
+  }
+
+  preparedFileInputsByIdentityKey.delete(identity);
+  preparedFileInputsByIdentityKey.set(identity, files);
+  while (preparedFileInputsByIdentityKey.size > INLINE_MENTION_FILE_INPUT_CACHE_LIMIT) {
+    const oldestKey = preparedFileInputsByIdentityKey.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    preparedFileInputsByIdentityKey.delete(oldestKey);
+  }
+}
+
+function readPreparedFileInputsCacheOnly(
+  files: readonly (string | InlineMentionFileCandidateInput)[],
+  filesIdentity: string | undefined,
+) {
+  const cachedFilesByIdentityKey = readPreparedFileInputsByIdentityKey(filesIdentity);
+  if (cachedFilesByIdentityKey) {
+    preparedFileInputsByIdentity.set(files, cachedFilesByIdentityKey);
+    return cachedFilesByIdentityKey;
+  }
+
+  return preparedFileInputsByIdentity.get(files) ?? null;
+}
+
+function prepareInlineMentionFiles(
+  files: readonly (string | InlineMentionFileCandidateInput)[],
+  filesIdentity: string | undefined,
+): PreparedInlineMentionFiles {
+  const cachedFiles = readPreparedFileInputsCacheOnly(files, filesIdentity);
   if (cachedFiles) {
+    writePreparedFileInputsByIdentityKey(filesIdentity, cachedFiles);
     return cachedFiles;
   }
 
+  const interner = createInlineMentionFileSearchInterner();
   const keyBuilder = createInlineMentionRecordKeyBuilder();
   const records: PreparedInlineMentionFileRecord[] = [];
   for (const file of files) {
     const record = {
       isExcluded: typeof file === "string" ? false : Boolean(file.isIgnored),
-      path: normalizeMentionPath(typeof file === "string" ? file : file.path),
+      path: interner.internString(normalizeMentionPath(typeof file === "string" ? file : file.path)),
     };
     records.push(record);
     addInlineMentionRecordKeyValue(keyBuilder, record.isExcluded ? "1" : "0");
     addInlineMentionRecordKeyValue(keyBuilder, record.path);
   }
   const key = finishInlineMentionRecordKey(keyBuilder);
-  const contentCachedFiles = preparedFileInputsByContent.find((entry) => (
-    entry.key === key && arePreparedFileRecordsEqual(entry.records, records)
-  ));
-  if (contentCachedFiles) {
-    preparedFileInputsByIdentity.set(files, contentCachedFiles);
-    return contentCachedFiles;
+  if (!filesIdentity) {
+    const contentCachedFiles = preparedFileInputsByContent.find((entry) => (
+      entry.key === key && arePreparedFileRecordsEqual(entry.records, records)
+    ));
+    if (contentCachedFiles) {
+      preparedFileInputsByIdentity.set(files, contentCachedFiles);
+      return contentCachedFiles;
+    }
   }
 
-  const candidates = records.map(createInlineMentionFileCandidate);
+  const candidates = records.map((record) => createInlineMentionFileCandidate(record, interner));
   const preparedFiles: PreparedInlineMentionFiles = {
     candidateByComparablePath: new Map(candidates.map((candidate) => [
-      normalizeComparableValue(candidate.path),
+      candidate.fileSearch?.comparablePath ?? normalizeComparableValue(candidate.path),
       candidate,
     ])),
     candidates,
     fileCandidatePaths: records.map((record) => record.path),
     key,
-    records,
-    resolutionIndex: buildInlineMentionFileResolutionIndex(records),
+    records: filesIdentity ? [] : records,
+    resolutionIndex: buildInlineMentionFileResolutionIndex(records, interner),
   };
   preparedFileInputsByIdentity.set(files, preparedFiles);
-  preparedFileInputsByContent.push(preparedFiles);
-  while (preparedFileInputsByContent.length > INLINE_MENTION_SOURCE_CACHE_LIMIT) {
-    preparedFileInputsByContent.shift();
+  writePreparedFileInputsByIdentityKey(filesIdentity, preparedFiles);
+  if (!filesIdentity) {
+    preparedFileInputsByContent.push(preparedFiles);
+    while (preparedFileInputsByContent.length > INLINE_MENTION_FILE_INPUT_CACHE_LIMIT) {
+      preparedFileInputsByContent.shift();
+    }
+  }
+  return preparedFiles;
+}
+
+async function prepareInlineMentionFilesCooperatively(
+  files: readonly (string | InlineMentionFileCandidateInput)[],
+  filesIdentity: string | undefined,
+  budget: CooperativeWorkBudget,
+): Promise<PreparedInlineMentionFiles> {
+  const cachedFiles = readPreparedFileInputsCacheOnly(files, filesIdentity);
+  if (cachedFiles) {
+    writePreparedFileInputsByIdentityKey(filesIdentity, cachedFiles);
+    return cachedFiles;
+  }
+
+  const interner = createInlineMentionFileSearchInterner();
+  const keyBuilder = createInlineMentionRecordKeyBuilder();
+  const records: PreparedInlineMentionFileRecord[] = [];
+  for (const file of files) {
+    const record = {
+      isExcluded: typeof file === "string" ? false : Boolean(file.isIgnored),
+      path: interner.internString(normalizeMentionPath(typeof file === "string" ? file : file.path)),
+    };
+    records.push(record);
+    addInlineMentionRecordKeyValue(keyBuilder, record.isExcluded ? "1" : "0");
+    addInlineMentionRecordKeyValue(keyBuilder, record.path);
+    await budget.yieldIfNeeded();
+  }
+
+  const key = finishInlineMentionRecordKey(keyBuilder);
+  if (!filesIdentity) {
+    const contentCachedFiles = preparedFileInputsByContent.find((entry) => (
+      entry.key === key && arePreparedFileRecordsEqual(entry.records, records)
+    ));
+    if (contentCachedFiles) {
+      preparedFileInputsByIdentity.set(files, contentCachedFiles);
+      return contentCachedFiles;
+    }
+  }
+
+  const candidates: InlineMentionCandidate[] = [];
+  for (const record of records) {
+    candidates.push(createInlineMentionFileCandidate(record, interner));
+    await budget.yieldIfNeeded();
+  }
+
+  const candidateByComparablePath = new Map<string, InlineMentionCandidate>();
+  const fileCandidatePaths: string[] = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const candidate = candidates[index];
+    const record = records[index];
+    candidateByComparablePath.set(candidate.fileSearch?.comparablePath ?? normalizeComparableValue(candidate.path), candidate);
+    fileCandidatePaths.push(record.path);
+    await budget.yieldIfNeeded();
+  }
+
+  const preparedFiles: PreparedInlineMentionFiles = {
+    candidateByComparablePath,
+    candidates,
+    fileCandidatePaths,
+    key,
+    records: filesIdentity ? [] : records,
+    resolutionIndex: await buildInlineMentionFileResolutionIndexCooperatively(records, interner, budget),
+  };
+  preparedFileInputsByIdentity.set(files, preparedFiles);
+  writePreparedFileInputsByIdentityKey(filesIdentity, preparedFiles);
+  if (!filesIdentity) {
+    preparedFileInputsByContent.push(preparedFiles);
+    while (preparedFileInputsByContent.length > INLINE_MENTION_FILE_INPUT_CACHE_LIMIT) {
+      preparedFileInputsByContent.shift();
+    }
   }
   return preparedFiles;
 }
@@ -536,20 +812,56 @@ function writeInlineMentionSourcesCache(entry: InlineMentionSourcesCacheEntry) {
   }
 }
 
-export function buildInlineMentionCandidates({
+function readPreparedSkillInputsCacheOnly(skills: readonly WorkbenchSkillSummary[]) {
+  return preparedSkillInputsByIdentity.get(skills) ?? null;
+}
+
+export function readCachedInlineMentionCandidates({
   files,
+  filesIdentity,
   threadCwdPath,
   projectRootPath,
   skills,
   workspaceRoots = [],
-}: {
-  files: Array<string | InlineMentionFileCandidateInput>;
-  threadCwdPath?: string;
-  projectRootPath?: string;
-  skills: WorkbenchSkillSummary[];
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
-}): InlineMentionHighlightSources {
-  const preparedFiles = prepareInlineMentionFiles(files);
+}: BuildInlineMentionCandidatesOptions): InlineMentionHighlightSources | null {
+  const preparedFiles = readPreparedFileInputsCacheOnly(files, filesIdentity);
+  if (!preparedFiles) {
+    return null;
+  }
+
+  const preparedSkills = readPreparedSkillInputsCacheOnly(skills);
+  if (!preparedSkills) {
+    return null;
+  }
+
+  const workspaceRootsKey = getWorkspaceRootsCacheKey(workspaceRoots);
+  const cacheKey = [
+    projectRootPath ?? "",
+    threadCwdPath ?? "",
+    workspaceRootsKey,
+    preparedFiles.key,
+    preparedSkills.key,
+  ].join("|");
+
+  return readInlineMentionSourcesCache({
+    cacheKey,
+    files: preparedFiles,
+    projectRootPath,
+    skills: preparedSkills,
+    threadCwdPath,
+    workspaceRootsKey,
+  });
+}
+
+export function buildInlineMentionCandidates({
+  files,
+  filesIdentity,
+  threadCwdPath,
+  projectRootPath,
+  skills,
+  workspaceRoots = [],
+}: BuildInlineMentionCandidatesOptions): InlineMentionHighlightSources {
+  const preparedFiles = prepareInlineMentionFiles(files, filesIdentity);
   const preparedSkills = prepareInlineMentionSkills(skills);
   const workspaceRootsKey = getWorkspaceRootsCacheKey(workspaceRoots);
   const cacheKey = [
@@ -572,14 +884,82 @@ export function buildInlineMentionCandidates({
   }
 
   const sources: InlineMentionHighlightSources = {
-    candidates: [
-      ...preparedSkills.candidates,
-      ...preparedFiles.candidates,
-    ],
     cacheKey,
     fileCandidateByComparablePath: preparedFiles.candidateByComparablePath,
     fileCandidatePaths: preparedFiles.fileCandidatePaths,
+    fileCandidates: preparedFiles.candidates,
     fileResolutionIndex: preparedFiles.resolutionIndex,
+    skillCandidates: preparedSkills.candidates,
+    threadCwdPath,
+    projectRootPath,
+    workspaceRoots,
+  };
+  writeInlineMentionSourcesCache({
+    cacheKey,
+    files: preparedFiles,
+    projectRootPath,
+    skills: preparedSkills,
+    sources,
+    threadCwdPath,
+    workspaceRootsKey,
+  });
+  return sources;
+}
+
+export async function buildInlineMentionCandidatesCooperatively(
+  {
+    files,
+    filesIdentity,
+    threadCwdPath,
+    projectRootPath,
+    skills,
+    workspaceRoots = [],
+  }: BuildInlineMentionCandidatesOptions,
+  budget: CooperativeWorkBudget,
+): Promise<InlineMentionHighlightSources> {
+  const cachedSources = readCachedInlineMentionCandidates({
+    files,
+    filesIdentity,
+    projectRootPath,
+    skills,
+    threadCwdPath,
+    workspaceRoots,
+  });
+  if (cachedSources) {
+    return cachedSources;
+  }
+
+  const preparedFiles = await prepareInlineMentionFilesCooperatively(files, filesIdentity, budget);
+  await budget.yieldIfNeeded();
+  const preparedSkills = prepareInlineMentionSkills(skills);
+  await budget.yieldIfNeeded();
+  const workspaceRootsKey = getWorkspaceRootsCacheKey(workspaceRoots);
+  const cacheKey = [
+    projectRootPath ?? "",
+    threadCwdPath ?? "",
+    workspaceRootsKey,
+    preparedFiles.key,
+    preparedSkills.key,
+  ].join("|");
+  const rebuiltCachedSources = readInlineMentionSourcesCache({
+    cacheKey,
+    files: preparedFiles,
+    projectRootPath,
+    skills: preparedSkills,
+    threadCwdPath,
+    workspaceRootsKey,
+  });
+  if (rebuiltCachedSources) {
+    return rebuiltCachedSources;
+  }
+
+  const sources: InlineMentionHighlightSources = {
+    cacheKey,
+    fileCandidateByComparablePath: preparedFiles.candidateByComparablePath,
+    fileCandidatePaths: preparedFiles.fileCandidatePaths,
+    fileCandidates: preparedFiles.candidates,
+    fileResolutionIndex: preparedFiles.resolutionIndex,
+    skillCandidates: preparedSkills.candidates,
     threadCwdPath,
     projectRootPath,
     workspaceRoots,
@@ -779,7 +1159,7 @@ function getTokenResolutionEnd(token: ParsedInlineMentionToken, consumedLength: 
     : token.start + token.marker.length + consumedLength;
 }
 
-function resolveSkillMention(value: string, candidates: InlineMentionCandidate[]) {
+function resolveSkillMention(value: string, candidates: readonly InlineMentionCandidate[]) {
   const normalizedValue = value.toLocaleLowerCase();
   const matches = candidates.filter((candidate) => (
     candidate.kind === "skill"
@@ -795,6 +1175,21 @@ function resolveIndexedPathFromMap(map: ReadonlyMap<string, string | null>, comp
   }
 
   return map.get(comparablePath) ?? null;
+}
+
+function resolveIndexedPathFromSuffixTrie(root: InlineMentionFileResolutionSuffixNode, comparablePath: string) {
+  const comparableSegments = getPathSegments(comparablePath);
+  let node = root;
+  for (let index = comparableSegments.length - 1; index >= 0; index -= 1) {
+    const child = node.children.get(comparableSegments[index]);
+    if (!child) {
+      return undefined;
+    }
+
+    node = child;
+  }
+
+  return "uniquePath" in node ? node.uniquePath ?? null : undefined;
 }
 
 function resolveIndexedFileMention(value: string, sources: InlineMentionHighlightSources) {
@@ -820,8 +1215,8 @@ function resolveIndexedFileMention(value: string, sources: InlineMentionHighligh
     )
     : undefined;
   const suffixPath = exactPath === undefined && workspaceRelativePath === undefined
-    ? resolveIndexedPathFromMap(
-      sources.fileResolutionIndex.uniqueSuffixPathByComparableSuffix,
+    ? resolveIndexedPathFromSuffixTrie(
+      sources.fileResolutionIndex.uniqueSuffixPathRoot,
       comparablePath,
     )
     : undefined;
@@ -893,7 +1288,7 @@ function resolveFileMention(value: string, sources: InlineMentionHighlightSource
   const resolvedPath = normalizeWorkbenchPath(resolvedTarget.relativePath);
   return {
     candidate: candidate ?? {
-      aliases: [resolvedPath],
+      aliases: EMPTY_INLINE_MENTION_FILE_ALIASES,
       description: "",
       isExcluded: false,
       kind: "file",
@@ -915,7 +1310,7 @@ function resolveToken(token: ParsedInlineMentionToken, sources: InlineMentionHig
 
   for (const { consumedLength, value } of values) {
     if (token.kind === "skill") {
-      const match = resolveSkillMention(value, sources.candidates);
+      const match = resolveSkillMention(value, sources.skillCandidates);
       if (!match) {
         continue;
       }
@@ -1241,8 +1636,10 @@ export function buildInlineMentionSuggestions(
     return [];
   }
 
-  const scoredSuggestions = sources.candidates
-    .filter((candidate) => candidate.kind === token.kind)
+  const suggestionCandidates = token.kind === "file"
+    ? sources.fileCandidates
+    : sources.skillCandidates;
+  const scoredSuggestions = suggestionCandidates
     .filter((candidate) => (
       token.kind !== "file" || allowsExcludedFileSuggestion(token.rawValue, candidate)
     ))

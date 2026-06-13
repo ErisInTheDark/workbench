@@ -33,6 +33,7 @@ import {
   createThreadRoute,
   type WorkbenchSettingsScope,
 } from "../lib/workbench/navigation/workbench-route";
+import ProjectTreeFileIndex from "../lib/workbench/project/ProjectTreeFileIndex";
 import { isWorkbenchOpenableFile } from "../lib/workbench/project/tree-utils";
 import {
   persistHarness,
@@ -111,6 +112,10 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   rootPath: "",
   roots: [],
   tree: [],
+  projectFileCandidates: ProjectTreeFileIndex.empty.candidates,
+  projectFileIndexId: ProjectTreeFileIndex.empty.id,
+  projectFileIndexKey: ProjectTreeFileIndex.empty.key,
+  projectFilePaths: ProjectTreeFileIndex.empty.paths,
   threads: [],
   isProjectLoading: false,
   isThreadsLoading: false,
@@ -2069,9 +2074,11 @@ export default function Workbench () {
                   onThreadModelChange={setThreadModel}
                   onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
                   projectId={activeProjectId}
+                  projectFileCandidates={explorer.projectFileCandidates}
+                  projectFileIndexId={explorer.projectFileIndexId}
+                  projectFilePaths={explorer.projectFilePaths}
                   projectRootPath={explorer.rootPath}
                   projectRoots={explorer.roots}
-                  projectTree={explorer.tree}
                   rateLimits={rateLimits}
                   threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
                   threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}

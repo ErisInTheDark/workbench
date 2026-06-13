@@ -4,6 +4,7 @@ import type { ThreadTokenUsage } from "./codex/generated/app-server/v2/ThreadTok
 import type { Turn } from "./codex/generated/app-server/v2/Turn";
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
 import type { WorkbenchRoute } from "./workbench/navigation/workbench-route";
+import type { ProjectTreeFileCandidate } from "./workbench/project/ProjectTreeFileIndex";
 
 export type WorkbenchHarness = "codex" | "copilot";
 export type OrchestratorReloadScope = "codex-bridge" | "next-dev" | "orchestrator-logic";
@@ -284,6 +285,10 @@ export interface ExplorerSnapshot {
   rootPath: string;
   roots: WorkbenchProjectRoot[];
   tree: TreeNode[];
+  projectFileCandidates: readonly ProjectTreeFileCandidate[];
+  projectFileIndexId: string;
+  projectFileIndexKey: string;
+  projectFilePaths: readonly string[];
   threads: ThreadSummary[];
   isProjectLoading: boolean;
   isThreadsLoading: boolean;

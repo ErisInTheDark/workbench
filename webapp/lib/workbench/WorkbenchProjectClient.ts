@@ -9,6 +9,7 @@
  */
 
 import type { ChangeSummary, CreateEntryPayload, ProjectSnapshot, TreeNode, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchProjectsPayload } from "../types";
+import ProjectTreeFileIndex, { type ProjectTreeFileCandidate, type ProjectTreeFileIndex as ProjectTreeFileIndexRecord } from "./project/ProjectTreeFileIndex";
 import { persistExpandedDirectories, readStoredExpandedDirectories } from "./state/browser-state";
 
 export function cloneTreeNodes(nodes: TreeNode[]): TreeNode[] {
@@ -28,6 +29,7 @@ export interface WorkbenchProjectState {
   changes: Record<string, ChangeSummary>;
   currentProjectId: string;
   expandedDirectories: Set<string>;
+  fileIndex: ProjectTreeFileIndexRecord;
   hasLoadedProject: boolean;
   isLoading: boolean;
   projects: WorkbenchProjectOption[];
@@ -42,6 +44,10 @@ export interface WorkbenchProjectSnapshot {
   currentProjectId: string;
   expandedDirectories: string[];
   isLoading: boolean;
+  projectFileCandidates: readonly ProjectTreeFileCandidate[];
+  projectFileIndexId: string;
+  projectFileIndexKey: string;
+  projectFilePaths: readonly string[];
   projects: WorkbenchProjectOption[];
   root: string;
   rootPath: string;
@@ -68,6 +74,7 @@ function createInitialProjectState(): WorkbenchProjectState {
     changes: {},
     currentProjectId: "",
     expandedDirectories: new Set(readStoredExpandedDirectories()),
+    fileIndex: ProjectTreeFileIndex.empty,
     hasLoadedProject: false,
     isLoading: false,
     projects: [],
@@ -89,6 +96,10 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
       currentProjectId: state.currentProjectId,
       expandedDirectories: Array.from(state.expandedDirectories).sort((left, right) => left.localeCompare(right)),
       isLoading: state.isLoading,
+      projectFileCandidates: state.fileIndex.candidates,
+      projectFileIndexId: state.fileIndex.id,
+      projectFileIndexKey: state.fileIndex.key,
+      projectFilePaths: state.fileIndex.paths,
       projects: state.projects.map((project) => ({ ...project })),
       root: state.root,
       rootPath: state.rootPath,
@@ -110,6 +121,7 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
     state.rootPath = payload.rootPath;
     state.roots = payload.roots.map((root) => ({ ...root }));
     state.tree = cloneTreeNodes(payload.tree);
+    state.fileIndex = ProjectTreeFileIndex.fromTree(state.tree, state.fileIndex);
     state.changes = { ...payload.changes };
     state.hasLoadedProject = true;
     state.isLoading = false;
@@ -122,6 +134,7 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
     state.rootPath = project.rootPath;
     state.roots = project.roots.map((root) => ({ ...root }));
     state.tree = [];
+    state.fileIndex = ProjectTreeFileIndex.empty;
     state.changes = {};
     state.hasLoadedProject = false;
     state.isLoading = options.loading ?? state.isLoading;
@@ -147,6 +160,7 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
       state.rootPath = "";
       state.roots = [];
       state.tree = [];
+      state.fileIndex = ProjectTreeFileIndex.empty;
       state.changes = {};
       state.hasLoadedProject = true;
       state.isLoading = false;
