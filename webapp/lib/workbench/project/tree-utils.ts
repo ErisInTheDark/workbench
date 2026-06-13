@@ -56,31 +56,44 @@ export function isWorkbenchOpenableFile(filePath: string) {
 
 export function flattenProjectTreeFiles(nodes: TreeNode[]): string[] {
   const filePaths: string[] = [];
-  for (const node of nodes) {
-    if (node.type === "file") {
-      filePaths.push(node.path);
-      continue;
-    }
-
-    filePaths.push(...flattenProjectTreeFiles(node.children));
-  }
+  visitProjectTreeFiles(nodes, (node) => {
+    filePaths.push(node.path);
+  });
 
   return filePaths;
 }
 
-export function flattenProjectTreeFileCandidates(nodes: TreeNode[]): ProjectTreeFileCandidate[] {
-  const files: ProjectTreeFileCandidate[] = [];
-  for (const node of nodes) {
-    if (node.type === "file") {
-      files.push({
-        isIgnored: Boolean(node.isIgnored),
-        path: node.path,
-      });
+function visitProjectTreeFiles(nodes: TreeNode[], visitor: (node: Extract<TreeNode, { type: "file" }>) => void) {
+  const stack: TreeNode[] = [];
+  for (let index = nodes.length - 1; index >= 0; index -= 1) {
+    stack.push(nodes[index]);
+  }
+
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
       continue;
     }
 
-    files.push(...flattenProjectTreeFileCandidates(node.children));
+    if (node.type === "file") {
+      visitor(node);
+      continue;
+    }
+
+    for (let index = node.children.length - 1; index >= 0; index -= 1) {
+      stack.push(node.children[index]);
+    }
   }
+}
+
+export function flattenProjectTreeFileCandidates(nodes: TreeNode[]): ProjectTreeFileCandidate[] {
+  const files: ProjectTreeFileCandidate[] = [];
+  visitProjectTreeFiles(nodes, (node) => {
+    files.push({
+      isIgnored: Boolean(node.isIgnored),
+      path: node.path,
+    });
+  });
 
   return files;
 }
