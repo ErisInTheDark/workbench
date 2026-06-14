@@ -890,6 +890,10 @@ export async function buildTree(
     const relativePath = normalizeRelativePath(path.relative(projectRoot, absolutePath));
 
     if (entry.isDirectory()) {
+      if (shouldIgnorePath(relativePath)) {
+        continue;
+      }
+
       children.push({
         type: "directory",
         name: entry.name,
@@ -937,6 +941,10 @@ export async function buildProjectTree(
     const relativePath = normalizeRelativePath(path.relative(rootDir, absolutePath));
 
     if (entry.isDirectory()) {
+      if (shouldIgnorePath(relativePath)) {
+        continue;
+      }
+
       children.push({
         type: "directory",
         name: entry.name,
