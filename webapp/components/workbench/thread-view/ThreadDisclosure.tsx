@@ -52,6 +52,7 @@ export default function ThreadDisclosure ({
   const [hasUserToggled, setHasUserToggled] = useState(false);
   const [uncontrolledOpen, setUncontrolledOpen] = useState(Boolean(open ?? defaultIsOpen));
   const isOpen = isControlled ? Boolean(open) : uncontrolledOpen;
+  const [hasMountedContent, setHasMountedContent] = useState(isOpen);
 
   function markUserToggleIntent () {
     if (!isControlled) {
@@ -99,6 +100,12 @@ export default function ThreadDisclosure ({
     }
   }, [defaultIsOpen, hasUserToggled, isControlled, open]);
 
+  useEffect(() => {
+    if (isOpen) {
+      setHasMountedContent(true);
+    }
+  }, [isOpen]);
+
   return (
     <details
       className={joinClasses("thread-disclosure min-w-0 max-w-full [&>summary::-webkit-details-marker]:hidden", className)}
@@ -128,7 +135,9 @@ export default function ThreadDisclosure ({
         />
         <div className="min-w-0 flex-1">{summary}</div>
       </summary>
-      <div className={joinClasses("min-w-0 max-w-full", contentClassName)}>{children}</div>
+      {hasMountedContent ? (
+        <div className={joinClasses("min-w-0 max-w-full", contentClassName)}>{children}</div>
+      ) : null}
     </details>
   );
 }

@@ -137,7 +137,6 @@ function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string, 
         return (
           <ProjectFilePath
             columnNumber={node.columnNumber}
-            disambiguationPaths={options.projectFilePaths}
             key={key}
             label={node.label}
             lineNumber={node.lineNumber}

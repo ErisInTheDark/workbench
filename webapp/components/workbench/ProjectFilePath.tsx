@@ -73,7 +73,16 @@ export default function ProjectFilePath ({
   projectId = null,
 }: ProjectFilePathProps) {
   const context = useContext(ProjectFilePathDisplayContext);
-  const usesInheritedDisambiguation = context?.disambiguationPaths === disambiguationPaths;
+  const usesInheritedDisambiguation = Boolean(
+    context
+    && disambiguationIndex === undefined
+    && (disambiguationPaths === undefined || context.disambiguationPaths === disambiguationPaths),
+  );
+  const resolvedDisambiguationPaths = disambiguationPaths ?? (
+    usesInheritedDisambiguation
+      ? context?.disambiguationPaths
+      : undefined
+  );
   const resolvedDisambiguationIndex = disambiguationIndex !== undefined
     ? disambiguationIndex
     : usesInheritedDisambiguation
@@ -83,7 +92,7 @@ export default function ProjectFilePath ({
     columnNumber,
     disambiguationIndex: resolvedDisambiguationIndex,
     disambiguationKey: disambiguationKey ?? (usesInheritedDisambiguation ? context?.disambiguationKey : undefined),
-    disambiguationPaths,
+    disambiguationPaths: resolvedDisambiguationPaths,
     label,
     lineNumber,
   });
