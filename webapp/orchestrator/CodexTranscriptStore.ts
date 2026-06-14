@@ -9,6 +9,7 @@ import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
 import type { JsonValue } from "../lib/codex/generated/app-server/serde_json/JsonValue";
+import { appendCommandOutputDelta, compactCommandOutputPayload } from "../lib/codex/thread-command-output";
 import { normalizeThreadItems } from "../lib/codex/thread-item-normalization";
 import type { WorkbenchQuestionnaireHistoryEntry, WorkbenchThreadHydrationRequest, WorkbenchThreadTurnHistoryEntry } from "../lib/types";
 import AtomicJsonStore from "./AtomicJsonStore";
@@ -47,12 +48,13 @@ import externalizeCodexTranscriptInlineImages from "./codex-transcript-image-ass
 import { runCodexTranscriptMigrations } from "./codex-transcript-migrations";
 import { queueCodexTranscriptRequestSidecarCleanup } from "./codex-transcript-migrations/v3";
 import { queueCodexTranscriptImageAssetMigration } from "./codex-transcript-migrations/v4";
+import { queueCodexTranscriptCommandOutputCompactionMigration } from "./codex-transcript-migrations/v5";
 import { CODEX_TRANSCRIPT_SCHEMA_VERSION } from "./codex-transcript-version";
 
 const PRUNE_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
 const PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const THREAD_TOUCH_THROTTLE_MS = 30_000;
-const SUPPORTED_CODEX_TRANSCRIPT_SCHEMA_VERSIONS = new Set([1, 2, 3, 4, CODEX_TRANSCRIPT_SCHEMA_VERSION]);
+const SUPPORTED_CODEX_TRANSCRIPT_SCHEMA_VERSIONS = new Set([1, 2, 3, 4, 5, CODEX_TRANSCRIPT_SCHEMA_VERSION]);
 
 interface HydrateThreadResponseOptions {
   hydration?: WorkbenchThreadHydrationRequest | null;
@@ -533,7 +535,7 @@ function updateCommandOutput(turn: Turn | null, itemId: string, delta: string) {
     changed = true;
     return {
       ...item,
-      aggregatedOutput: `${item.aggregatedOutput ?? ""}${delta}`,
+      aggregatedOutput: appendCommandOutputDelta(item.aggregatedOutput, delta),
     };
   });
 
@@ -731,6 +733,7 @@ export default class CodexTranscriptStore {
         const rootDirectoryPath = path.dirname(this.threadsDirectoryPath);
         await queueCodexTranscriptRequestSidecarCleanup(rootDirectoryPath);
         await queueCodexTranscriptImageAssetMigration(rootDirectoryPath);
+        await queueCodexTranscriptCommandOutputCompactionMigration(rootDirectoryPath);
       })
       .catch(() => undefined);
   }
@@ -953,11 +956,12 @@ export default class CodexTranscriptStore {
           turn: file.turn!,
         }));
       const legacyThread = hydrateThreadWithStoredTurns(thread, storedTurns);
+      const compactedLegacyThread = compactCommandOutputPayload(legacyThread);
       return {
-        ...legacyThread,
+        ...compactedLegacyThread,
         workbenchTurnHistory: turnIndex.map((entry) => createTurnHistoryEntry(
           entry,
-          new Set(legacyThread.turns.map((turn) => turn.id)),
+          new Set(compactedLegacyThread.turns.map((turn) => turn.id)),
           new Set(),
         )),
       };
@@ -980,7 +984,7 @@ export default class CodexTranscriptStore {
         itemTimeline: file.itemTimeline,
         turn: file.turn!,
       }));
-    const hydratedThread = hydrateThreadWithStoredTurns(selectedUpstreamThread, storedTurns);
+    const hydratedThread = compactCommandOutputPayload(hydrateThreadWithStoredTurns(selectedUpstreamThread, storedTurns));
     const loadedTurnIds = new Set(hydratedThread.turns.map((turn) => turn.id));
     const missingTurnIds = new Set<string>();
     if (requestedTurnId && !loadedTurnIds.has(requestedTurnId)) {
@@ -1035,12 +1039,13 @@ export default class CodexTranscriptStore {
     fallbackMethod: string | null = null,
     originalRequest: JsonRpcRequest | null = null,
   ) {
+    const compactedPayload = compactCommandOutputPayload(payload);
     const originalParams = asRecord(originalRequest?.params);
-    const payloadThread = extractThread(payload);
-    const payloadThreadId = payloadThread?.id ?? extractThreadId(payload) ?? asString(originalParams?.threadId);
+    const payloadThread = extractThread(compactedPayload);
+    const payloadThreadId = payloadThread?.id ?? extractThreadId(compactedPayload) ?? asString(originalParams?.threadId);
     const payloadForRecord = payloadThreadId
-      ? (await this.externalizeInlineImages(payloadThreadId, payload)).value
-      : payload;
+      ? (await this.externalizeInlineImages(payloadThreadId, compactedPayload)).value
+      : compactedPayload;
     const method = asString(asRecord(payloadForRecord)?.method) ?? fallbackMethod;
     const requestId = asRecord(payloadForRecord)?.id;
     const normalizedRequestId = typeof requestId === "number" || typeof requestId === "string" ? requestId : null;
@@ -1446,7 +1451,8 @@ export default class CodexTranscriptStore {
   ) {
     return this.json.updateIfChanged(this.turnFilePath(threadId, turnId), createTurnFile(threadId, turnId), async (file) => {
       const normalizedFile = normalizeTurnFileSnapshot(await updater(file));
-      const externalizedFile = (await this.externalizeInlineImages(threadId, normalizedFile)).value;
+      const compactedFile = compactCommandOutputPayload(normalizedFile);
+      const externalizedFile = (await this.externalizeInlineImages(threadId, compactedFile)).value;
       return preserveCurrentIfOnlyLastTouchedAtChanged(file, externalizedFile);
     });
   }
@@ -1458,12 +1464,14 @@ export default class CodexTranscriptStore {
   }
 
   private async appendTurnEvent(threadId: string, turnId: string, event: CodexTranscriptRawEvent) {
-    const externalizedEvent = (await this.externalizeInlineImages(threadId, event)).value;
+    const compactedEvent = compactCommandOutputPayload(event);
+    const externalizedEvent = (await this.externalizeInlineImages(threadId, compactedEvent)).value;
     return this.json.appendLine(this.turnJournalPath(threadId, turnId), externalizedEvent);
   }
 
   private async appendOrphanEvent(threadId: string, event: CodexTranscriptRawEvent) {
-    const externalizedEvent = (await this.externalizeInlineImages(threadId, event)).value;
+    const compactedEvent = compactCommandOutputPayload(event);
+    const externalizedEvent = (await this.externalizeInlineImages(threadId, compactedEvent)).value;
     return this.json.appendLine(this.orphanEventsJournalPath(threadId), externalizedEvent);
   }
 
@@ -1487,7 +1495,8 @@ export default class CodexTranscriptStore {
     }
 
     const normalizedFile = normalizeTurnFileSnapshot(file);
-    const externalizedFile = (await this.externalizeInlineImages(threadId, normalizedFile)).value;
+    const compactedFile = compactCommandOutputPayload(normalizedFile);
+    const externalizedFile = (await this.externalizeInlineImages(threadId, compactedFile)).value;
     if (options.repair && stableJsonStringify(file) !== stableJsonStringify(externalizedFile)) {
       await this.json.updateIfChanged(filePath, externalizedFile, () => externalizedFile);
     }
@@ -1526,7 +1535,8 @@ export default class CodexTranscriptStore {
       ))
       .map(async ({ file, filePath }) => {
         const normalizedFile = normalizeTurnFileSnapshot(file);
-        const externalizedFile = (await this.externalizeInlineImages(threadId, normalizedFile)).value;
+        const compactedFile = compactCommandOutputPayload(normalizedFile);
+        const externalizedFile = (await this.externalizeInlineImages(threadId, compactedFile)).value;
         if (options.repair && stableJsonStringify(file) !== stableJsonStringify(externalizedFile)) {
           await this.json.updateIfChanged(filePath, externalizedFile, () => externalizedFile);
         }

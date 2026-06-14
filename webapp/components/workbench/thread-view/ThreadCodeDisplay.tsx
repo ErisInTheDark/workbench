@@ -7,6 +7,7 @@
 
 import { Fragment, useState, type CSSProperties, type ReactNode } from "react";
 
+import { compactCommandOutput } from "../../../lib/codex/thread-command-output";
 import type { ParsedUnifiedDiff, UnifiedDiffLine } from "../../../lib/workbench/thread/thread-file-diff";
 import ThreadAnsiOutput from "./ThreadAnsiOutput";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
@@ -220,6 +221,7 @@ function ThreadPlainOutput ({
   surface?: ThreadCodeDisplaySurface;
 }) {
   const isFramed = surface === "framed";
+  const compactedOutput = compactCommandOutput(output) ?? "";
 
   return (
     <pre
@@ -229,7 +231,7 @@ function ThreadPlainOutput ({
       `}
       style={isFramed ? undefined : CODE_SURFACE_EDGE_STYLE}
     >
-      <ThreadAnsiOutput output={output} />
+      <ThreadAnsiOutput output={compactedOutput} />
     </pre>
   );
 }

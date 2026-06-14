@@ -12,6 +12,7 @@ import migrateV1 from "./v1";
 import migrateV2 from "./v2";
 import migrateV3 from "./v3";
 import migrateV4 from "./v4";
+import migrateV5 from "./v5";
 
 const MIGRATIONS = [
   migrateV0,
@@ -19,6 +20,7 @@ const MIGRATIONS = [
   migrateV2,
   migrateV3,
   migrateV4,
+  migrateV5,
 ] as const;
 
 type MigrationState = {

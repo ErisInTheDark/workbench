@@ -17,6 +17,7 @@ import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem
 import type { ThreadStatus } from "../lib/codex/generated/app-server/v2/ThreadStatus";
 import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
+import { appendCommandOutputDelta, compactCommandOutput } from "../lib/codex/thread-command-output";
 import type { JsonRpcNotification } from "./bridge-types";
 
 export type CopilotThreadState = {
@@ -966,7 +967,7 @@ export function applyCopilotEvent(
         return;
       }
 
-      target.item.aggregatedOutput = `${target.item.aggregatedOutput ?? ""}${event.data.partialOutput}`;
+      target.item.aggregatedOutput = appendCommandOutputDelta(target.item.aggregatedOutput, event.data.partialOutput);
       state.thread.updatedAt = timestampSeconds;
       if (emitNotifications) {
         onNotification({
@@ -994,11 +995,11 @@ export function applyCopilotEvent(
           ? event.data.toolTelemetry.durationMs
           : target.item.durationMs;
         if (event.data.result?.detailedContent) {
-          target.item.aggregatedOutput = event.data.result.detailedContent;
+          target.item.aggregatedOutput = compactCommandOutput(event.data.result.detailedContent);
         } else if (event.data.result?.content) {
-          target.item.aggregatedOutput = event.data.result.content;
+          target.item.aggregatedOutput = compactCommandOutput(event.data.result.content);
         } else if (event.data.error?.message) {
-          target.item.aggregatedOutput = event.data.error.message;
+          target.item.aggregatedOutput = compactCommandOutput(event.data.error.message);
         }
       } else if (target.item.type === "dynamicToolCall") {
         target.item.status = event.data.success ? "completed" : "failed";

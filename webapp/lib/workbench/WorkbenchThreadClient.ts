@@ -33,6 +33,7 @@ import {
     createThreadStartRequest,
     isCodexJsonRpcFailure,
 } from "../codex/protocol";
+import { appendCommandOutputDelta, compactCommandExecutionItemOutput } from "../codex/thread-command-output";
 import {
     formatThreadStatus,
     getCodexThreadCwdFilterPathsForRoots,
@@ -2450,26 +2451,27 @@ function WorkbenchThreadClient(
   }
 
   function upsertThreadItem(turnId: string, incomingItem: ThreadItem) {
+    const compactedIncomingItem = compactCommandExecutionItemOutput(incomingItem);
     return updateTurnItems(turnId, (items) => {
-      const itemIndex = items.findIndex((item) => item.id === incomingItem.id);
+      const itemIndex = items.findIndex((item) => item.id === compactedIncomingItem.id);
       if (itemIndex === -1) {
         let matchedClientItem: ThreadItem | null = null;
         const nextItems = items.filter((item) => {
           const itemKey = getThreadItemKey(turnId, item.id);
-          if (!clientCreatedStreamingItemKeys.has(itemKey) || !isStructurallyMatchingStreamingItem(incomingItem, item)) {
+          if (!clientCreatedStreamingItemKeys.has(itemKey) || !isStructurallyMatchingStreamingItem(compactedIncomingItem, item)) {
             return true;
           }
 
           matchedClientItem = item;
-          forgetReplacedStreamingItem(turnId, item.id, incomingItem.id);
+          forgetReplacedStreamingItem(turnId, item.id, compactedIncomingItem.id);
           return false;
         });
-        return [...nextItems, matchedClientItem ? mergeLiveStreamingItem(incomingItem, matchedClientItem) : incomingItem];
+        return [...nextItems, matchedClientItem ? mergeLiveStreamingItem(compactedIncomingItem, matchedClientItem) : compactedIncomingItem];
       }
 
-      forgetStreamingItemKey(turnId, incomingItem.id);
+      forgetStreamingItemKey(turnId, compactedIncomingItem.id);
       return items.map((item, index) => (
-        index === itemIndex ? mergeLiveStreamingItem(incomingItem, item) : item
+        index === itemIndex ? mergeLiveStreamingItem(compactedIncomingItem, item) : item
       ));
     });
   }
@@ -2674,7 +2676,7 @@ function WorkbenchThreadClient(
       case "item/commandExecution/outputDelta":
         return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
           item.type === "commandExecution"
-            ? { ...item, aggregatedOutput: `${item.aggregatedOutput ?? ""}${notification.params.delta}` }
+            ? { ...item, aggregatedOutput: appendCommandOutputDelta(item.aggregatedOutput, notification.params.delta) }
             : null
         ));
       case "item/fileChange/patchUpdated":

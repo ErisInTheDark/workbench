@@ -3,6 +3,7 @@
  * - mergeThreadItem: merge same-id Codex thread items without losing richer stored history. Keywords: codex, transcript, item merge.
  */
 import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
+import { compactCommandOutput } from "../lib/codex/thread-command-output";
 
 function isNonEmptyArray<TValue>(value: TValue[] | null | undefined): value is TValue[] {
   return Array.isArray(value) && value.length > 0;
@@ -70,9 +71,10 @@ export function mergeThreadItem(incoming: ThreadItem, stored: ThreadItem): Threa
     }
     case "commandExecution": {
       const storedItem = stored as Extract<ThreadItem, { type: "commandExecution" }>;
+      const aggregatedOutput = compactCommandOutput(preferValue(incoming.aggregatedOutput, storedItem.aggregatedOutput, (value) => Boolean(value?.length)));
       return {
         ...incoming,
-        aggregatedOutput: preferValue(incoming.aggregatedOutput, storedItem.aggregatedOutput, (value) => Boolean(value?.length)),
+        aggregatedOutput,
         commandActions: preferValue(incoming.commandActions, storedItem.commandActions, isNonEmptyArray),
         durationMs: incoming.durationMs ?? storedItem.durationMs,
         exitCode: incoming.exitCode ?? storedItem.exitCode,
