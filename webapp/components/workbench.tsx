@@ -2309,7 +2309,7 @@ export default function Workbench () {
         className="mobile-workbench-track flex h-dvh w-[200vw] overflow-hidden transition-transform duration-200 ease-out md:contents md:h-auto md:w-auto md:overflow-visible md:transform-none"
         style={mobileTrackStyle}
       >
-        <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden px-5 pb-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:px-6 md:py-5${isDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
+        <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden px-5 py-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:px-6${isDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
           <div className="-ml-3 min-h-0 flex-1 overflow-hidden text-[0.95rem] leading-6">
             <div
               className="flex h-full w-[200%] flex-row-reverse transition-transform duration-200 ease-out"

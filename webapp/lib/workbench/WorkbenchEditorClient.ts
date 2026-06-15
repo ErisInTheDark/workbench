@@ -103,6 +103,11 @@ interface DiffRowAnchor {
   element: HTMLElement;
 }
 
+interface CurrentMarkerRun {
+  paths: string[];
+  symbol: DiffMarkerSymbol;
+}
+
 interface DeletedMarkerPlacement {
   afterPath: string | null;
   beforePath: string | null;
@@ -487,7 +492,7 @@ function diffRowsAgainstHead(headRows: DiffRow[], currentRows: DiffRow[]) {
     }
   }
 
-  const currentMarkers = new Map<string, DiffMarkerSymbol>();
+  const currentMarkerRuns: CurrentMarkerRun[] = [];
   const deletedPlacements: DeletedMarkerPlacement[] = [];
   let previousEqualPath: string | null = null;
 
@@ -517,15 +522,17 @@ function diffRowsAgainstHead(headRows: DiffRow[], currentRows: DiffRow[]) {
       : null;
 
     if (insertedPaths.length && deletedCount) {
-      insertedPaths.forEach((path) => {
-        currentMarkers.set(path, "*");
+      currentMarkerRuns.push({
+        paths: insertedPaths,
+        symbol: "*",
       });
       continue;
     }
 
     if (insertedPaths.length) {
-      insertedPaths.forEach((path) => {
-        currentMarkers.set(path, "+");
+      currentMarkerRuns.push({
+        paths: insertedPaths,
+        symbol: "+",
       });
       continue;
     }
@@ -538,7 +545,7 @@ function diffRowsAgainstHead(headRows: DiffRow[], currentRows: DiffRow[]) {
     }
   }
 
-  return { currentMarkers, deletedPlacements };
+  return { currentMarkerRuns, deletedPlacements };
 }
 
 function getAnchorMetrics(element: HTMLElement, editorShell: HTMLElement) {
@@ -592,11 +599,15 @@ function resolveDeletedMarkerTop(
   return Math.max(0, lineHeight * 0.5);
 }
 
-function createDiffMarker(symbol: DiffMarkerSymbol, top: number) {
+function createDiffMarker(symbol: DiffMarkerSymbol, top: number, bottom?: number) {
   const marker = document.createElement("span");
   marker.className = "editor-diff-marker";
   marker.dataset.markerType = symbol === "+" ? "insert" : symbol === "-" ? "delete" : "modify";
   marker.style.top = `${Math.max(0, top)}px`;
+  if (typeof bottom === "number" && bottom > top) {
+    marker.dataset.markerRange = "true";
+    marker.style.setProperty("--editor-diff-marker-span", `${bottom - top}px`);
+  }
   marker.append(createDiffMarkerIcon(symbol));
   return marker;
 }
@@ -1021,9 +1032,9 @@ function WorkbenchEditorClient(
 
     const currentRows = flattenMarkdownDiffRows(options.fileSessionState.currentContent);
     const headRows = flattenMarkdownDiffRows(options.fileSessionState.headContent);
-    const { currentMarkers, deletedPlacements } = diffRowsAgainstHead(headRows, currentRows);
+    const { currentMarkerRuns, deletedPlacements } = diffRowsAgainstHead(headRows, currentRows);
 
-    if (!currentMarkers.size && !deletedPlacements.length) {
+    if (!currentMarkerRuns.length && !deletedPlacements.length) {
       return;
     }
 
@@ -1037,15 +1048,23 @@ function WorkbenchEditorClient(
       anchorMetrics.set(anchor.path, metrics);
     }
 
-    const markers: Array<{ symbol: DiffMarkerSymbol; top: number }> = [];
+    const markers: Array<{ bottom?: number; symbol: DiffMarkerSymbol; top: number }> = [];
 
-    for (const [path, symbol] of currentMarkers) {
-      const metrics = anchorMetrics.get(path);
-      if (!metrics) {
+    for (const run of currentMarkerRuns) {
+      const runMetrics = run.paths
+        .map((path) => anchorMetrics.get(path))
+        .filter((metrics): metrics is DiffAnchorMetrics => Boolean(metrics));
+      const firstMetrics = runMetrics[0];
+      const lastMetrics = runMetrics[runMetrics.length - 1];
+      if (!firstMetrics || !lastMetrics) {
         continue;
       }
 
-      markers.push({ symbol, top: metrics.center });
+      markers.push({
+        bottom: runMetrics.length > 1 ? lastMetrics.center : undefined,
+        symbol: run.symbol,
+        top: firstMetrics.center,
+      });
     }
 
     const lineHeight = getEditorLineHeight(editor);
@@ -1058,8 +1077,8 @@ function WorkbenchEditorClient(
 
     markers
       .sort((left, right) => left.top - right.top)
-      .forEach(({ symbol, top }) => {
-        diffGutter.append(createDiffMarker(symbol, top));
+      .forEach(({ bottom, symbol, top }) => {
+        diffGutter.append(createDiffMarker(symbol, top, bottom));
       });
   }
 

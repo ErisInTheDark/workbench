@@ -324,6 +324,19 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     transform: translate(-50%, -50%);
   }
 
+  .editor-diff-marker[data-marker-range="true"]::before {
+    background: currentColor;
+    border-radius: 999px;
+    content: "";
+    height: var(--editor-diff-marker-span, 0px);
+    left: 50%;
+    opacity: 0.58;
+    position: absolute;
+    top: 50%;
+    transform: translateX(-50%);
+    width: 0.13rem;
+  }
+
   .editor-diff-marker[data-marker-type="insert"] {
     color: var(--success);
   }
@@ -348,10 +361,12 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
 
   .editor-diff-marker-icon {
     display: block;
-    width: 1.1rem;
+    filter: drop-shadow(0 0.08rem 0.18rem color-mix(in srgb, var(--shadow) 35%, transparent));
     height: 1.1rem;
     overflow: visible;
-    filter: drop-shadow(0 0.08rem 0.18rem color-mix(in srgb, var(--shadow) 35%, transparent));
+    position: relative;
+    width: 1.1rem;
+    z-index: 1;
   }
 
   @media (max-width: 767px) {
@@ -388,15 +403,15 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   .editor-content h1 {
-    font-size: clamp(2.1rem, 2vw + 1.4rem, 3.2rem);
+    font-size: 2.05em;
   }
 
   .editor-content h2 {
-    font-size: clamp(1.5rem, 1vw + 1.2rem, 2.1rem);
+    font-size: 1.55em;
   }
 
   .editor-content h3 {
-    font-size: 1.25rem;
+    font-size: 1.25em;
   }
 
   .editor-content ul,
