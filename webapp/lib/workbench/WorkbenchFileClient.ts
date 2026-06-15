@@ -9,9 +9,6 @@
 
 import type { FilePayload, SaveConflictPayload, SaveFilePayload } from "../types";
 import {
-    markdownToHtml as renderMarkdownToHtml,
-} from "./markdown/markdown-html-render";
-import {
     formatTimestamp,
     isMarkdownFile,
     isWorkbenchOpenableFile,
@@ -22,44 +19,20 @@ import {
     createInitialEditHistory,
     normalizeEditHistory,
     type EditHistorySelection,
-    type EditHistoryState,
 } from "./state/edit-history";
 import type EditorDocumentAdapter from "./state/EditorDocumentAdapter";
+import type { FileDraftStore } from "./state/FileDraftStore";
 import type FileSessionState from "./state/FileSessionState";
 import type { DraftBuffer } from "./state/FileSessionState";
 import LifecycleScope from "./state/LifecycleScope";
 import type SessionState from "./state/SessionState";
-import workbenchDraftStorage, {
-    FILE_DRAFT_STORE_NAME,
-} from "./storage/workbench-draft-storage";
-import type { EditorMode, SaveGuardIssue } from "./WorkbenchEditorClient";
+import type { SaveGuardIssue } from "./WorkbenchEditorClient";
 import type WorkbenchEventBus from "./WorkbenchEventBus";
 
 export type { DraftBuffer, default as FileSessionState } from "./state/FileSessionState";
 
-const DRAFT_DISCARD_TOMBSTONE_STORAGE_KEY = "workbench:file-draft-discard-tombstones:v1";
-const DRAFT_DISCARD_TOMBSTONE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const FILE_SELECTION_PERSISTENCE_TASK_ID = "file-selection-persistence";
 const FILE_SELECTION_PERSISTENCE_DELAY_MS = 260;
-
-interface PersistedDraftRecord {
-  key: string;
-  projectId: string;
-  path: string;
-  baselineContent: string;
-  content: string;
-  expectedMtimeMs: number | null;
-  headContent: string | null;
-  history?: EditHistoryState | null;
-  mode: EditorMode;
-}
-
-interface DraftDiscardTombstone {
-  discardedAt: number;
-  key: string;
-  path: string;
-  projectId: string;
-}
 
 type WorkbenchFileOpenSource = "open" | "reload";
 type WorkbenchFileOpenOptions = {
@@ -69,6 +42,7 @@ type WorkbenchFileOpenOptions = {
 
 export interface WorkbenchFileClientOptions {
   clearThreadSelection: () => void;
+  draftStore: FileDraftStore;
   editorDocument: EditorDocumentAdapter;
   emitExplorerStateChange: () => void;
   eventBus: WorkbenchEventBus;
@@ -83,7 +57,6 @@ export interface WorkbenchFileClientOptions {
 interface WorkbenchFileClient {
   clearSelection: () => void;
   dispose: () => void;
-  hydratePersistedDrafts: () => Promise<void>;
   inspectCurrentDraft: () => { content: string; issue: SaveGuardIssue | null };
   openFile: (
     filePath: string,
@@ -98,97 +71,6 @@ interface WorkbenchFileClient {
   syncCurrentDraftBuffer: () => void;
 }
 
-function createDraftRecordKey(projectId: string, filePath: string) {
-  return `${projectId}:${filePath}`;
-}
-
-function readDraftDiscardTombstones() {
-  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
-    return new Map<string, DraftDiscardTombstone>();
-  }
-
-  const records = new Map<string, DraftDiscardTombstone>();
-  const now = Date.now();
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(DRAFT_DISCARD_TOMBSTONE_STORAGE_KEY) ?? "[]") as DraftDiscardTombstone[];
-    for (const record of parsed) {
-      if (
-        !record
-        || typeof record.key !== "string"
-        || typeof record.projectId !== "string"
-        || typeof record.path !== "string"
-        || !Number.isFinite(record.discardedAt)
-      ) {
-        continue;
-      }
-
-      if (now - record.discardedAt > DRAFT_DISCARD_TOMBSTONE_RETENTION_MS) {
-        continue;
-      }
-
-      records.set(record.key, record);
-    }
-  } catch {
-    return records;
-  }
-
-  return records;
-}
-
-function writeDraftDiscardTombstones(records: Map<string, DraftDiscardTombstone>) {
-  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
-    return;
-  }
-
-  try {
-    window.localStorage.setItem(DRAFT_DISCARD_TOMBSTONE_STORAGE_KEY, JSON.stringify(Array.from(records.values())));
-  } catch {
-    // Draft tombstones are a best-effort guard around IndexedDB cleanup.
-  }
-}
-
-function markDraftDiscardTombstone(projectId: string, filePath: string) {
-  const records = readDraftDiscardTombstones();
-  const key = createDraftRecordKey(projectId, filePath);
-  records.set(key, {
-    discardedAt: Date.now(),
-    key,
-    path: filePath,
-    projectId,
-  });
-  writeDraftDiscardTombstones(records);
-}
-
-function clearDraftDiscardTombstone(projectId: string, filePath: string) {
-  const records = readDraftDiscardTombstones();
-  const key = createDraftRecordKey(projectId, filePath);
-  if (!records.delete(key)) {
-    return;
-  }
-
-  writeDraftDiscardTombstones(records);
-}
-
-function buildPersistedDraftRecord(projectId: string, filePath: string, buffer: DraftBuffer): PersistedDraftRecord {
-  return {
-    key: createDraftRecordKey(projectId, filePath),
-    projectId,
-    path: filePath,
-    baselineContent: buffer.baselineContent,
-    content: buffer.content,
-    expectedMtimeMs: buffer.expectedMtimeMs,
-    headContent: buffer.headContent,
-    history: cloneEditHistory(buffer.history),
-    mode: buffer.mode,
-  };
-}
-
-function createEditorStateFromContent(content: string, mode: EditorMode) {
-  return mode === "rich"
-    ? renderMarkdownToHtml(content)
-    : content;
-}
-
 function hasBufferedDraftState(buffer: DraftBuffer) {
   return buffer.dirty || Boolean(buffer.saveIssue) || Boolean(buffer.pendingWriteConflict);
 }
@@ -199,6 +81,7 @@ function WorkbenchFileClient(
 ): WorkbenchFileClient {
   const {
     clearThreadSelection,
+    draftStore,
     editorDocument,
     emitExplorerStateChange,
     eventBus,
@@ -210,56 +93,10 @@ function WorkbenchFileClient(
     updateHistorySelection,
   } = options;
 
-  let draftPersistenceQueue = Promise.resolve();
   const discardingDraftPaths = new Set<string>();
 
-  async function getPersistedDraftRecords() {
-    const projectId = getProjectId();
-    const records = await workbenchDraftStorage.getAll<PersistedDraftRecord>(FILE_DRAFT_STORE_NAME);
-    return records.filter((record) => record.projectId === projectId);
-  }
-
-  async function putPersistedDraftRecord(record: PersistedDraftRecord) {
-    await workbenchDraftStorage.put(FILE_DRAFT_STORE_NAME, record);
-  }
-
-  async function deletePersistedDraftRecord(projectId: string, filePath: string) {
-    await workbenchDraftStorage.delete(FILE_DRAFT_STORE_NAME, createDraftRecordKey(projectId, filePath));
-  }
-
-  function enqueueDraftPersistence(operation: () => Promise<void>) {
-    draftPersistenceQueue = draftPersistenceQueue
-      .catch(() => {
-        // Keep later persistence operations flowing after a transient failure.
-      })
-      .then(operation);
-
-    return draftPersistenceQueue;
-  }
-
-  function persistDraftBuffer(filePath: string, buffer: DraftBuffer | null) {
-    const projectId = getProjectId();
-    return enqueueDraftPersistence(async () => {
-      if (!buffer || !buffer.dirty) {
-        markDraftDiscardTombstone(projectId, filePath);
-        await deletePersistedDraftRecord(projectId, filePath);
-        return;
-      }
-
-      clearDraftDiscardTombstone(projectId, filePath);
-      await putPersistedDraftRecord(buildPersistedDraftRecord(projectId, filePath, buffer));
-    });
-  }
-
   async function clearDraftBuffer(filePath: string) {
-    const previousModified = state.draftBuffers.get(filePath)?.dirty ?? false;
-    const nextDraftBuffers = new Map(state.draftBuffers);
-    nextDraftBuffers.delete(filePath);
-    state.draftBuffers = nextDraftBuffers;
-    await persistDraftBuffer(filePath, null);
-    if (previousModified) {
-      emitExplorerStateChange();
-    }
+    await draftStore.clearBuffer(filePath);
   }
 
   function beginDraftDiscard(filePath: string) {
@@ -424,7 +261,6 @@ function WorkbenchFileClient(
       return;
     }
 
-    const previousModified = state.draftBuffers.get(filePath)?.dirty ?? false;
     const nextBuffer: DraftBuffer = {
       baselineContent: state.baselineContent,
       content: state.currentContent,
@@ -447,13 +283,8 @@ function WorkbenchFileClient(
       return;
     }
 
-    const nextDraftBuffers = new Map(state.draftBuffers);
-    nextDraftBuffers.set(filePath, nextBuffer);
-    state.draftBuffers = nextDraftBuffers;
-    void persistDraftBuffer(filePath, nextBuffer);
-    if (previousModified !== nextBuffer.dirty) {
-      emitExplorerStateChange();
-    }
+    draftStore.setBuffer(filePath, nextBuffer);
+    emitExplorerStateChange();
   }
 
   function scheduleSelectionPersistence() {
@@ -465,43 +296,6 @@ function WorkbenchFileClient(
     lifecycle.scheduleOnce(FILE_SELECTION_PERSISTENCE_TASK_ID, FILE_SELECTION_PERSISTENCE_DELAY_MS, () => {
       syncCurrentDraftBuffer();
     });
-  }
-
-  async function hydratePersistedDrafts() {
-    const records = await getPersistedDraftRecords();
-    const tombstones = readDraftDiscardTombstones();
-    const staleDiscardedRecords: PersistedDraftRecord[] = [];
-    const draftEntries = records
-      .filter((record) => {
-        const isDiscarded = tombstones.has(createDraftRecordKey(record.projectId, record.path));
-        if (isDiscarded) {
-          staleDiscardedRecords.push(record);
-        }
-
-        return !isDiscarded;
-      })
-      .map((record) => {
-        const buffer: DraftBuffer = {
-          baselineContent: record.baselineContent,
-          content: record.content,
-          dirty: record.content !== record.baselineContent,
-          editorState: createEditorStateFromContent(record.content, record.mode),
-          expectedMtimeMs: record.expectedMtimeMs,
-          headContent: record.headContent ?? null,
-          history: normalizeEditHistory(record.history ?? null, record.content),
-          mode: record.mode,
-          pendingWriteConflict: null,
-          saveIssue: null,
-        };
-
-        return [record.path, buffer] satisfies [string, DraftBuffer];
-      });
-
-    state.draftBuffers = new Map(draftEntries);
-
-    for (const record of staleDiscardedRecords) {
-      void persistDraftBuffer(record.path, null);
-    }
   }
 
   async function openFile(
@@ -530,7 +324,7 @@ function WorkbenchFileClient(
 
     try {
       if (source !== "reload") {
-        const bufferedDraft = state.draftBuffers.get(filePath);
+        const bufferedDraft = draftStore.getBuffer(filePath);
         if (bufferedDraft) {
           applyDraftBuffer(filePath, bufferedDraft);
           editorDocument.refreshStatusMessage("Opened draft");
@@ -683,7 +477,7 @@ function WorkbenchFileClient(
         syncCurrentDraftBuffer();
       }
     } else {
-      const bufferedDraft = state.draftBuffers.get(filePath);
+      const bufferedDraft = draftStore.getBuffer(filePath);
       if (!bufferedDraft || bufferedDraft.content === content) {
         await clearDraftBuffer(filePath);
       }
@@ -729,7 +523,6 @@ function WorkbenchFileClient(
   return {
     clearSelection,
     dispose,
-    hydratePersistedDrafts,
     inspectCurrentDraft,
     openFile,
     selectThread,

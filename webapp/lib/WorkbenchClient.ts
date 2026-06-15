@@ -21,107 +21,38 @@ import {
     type WorkbenchRoute,
 } from "./workbench/navigation/workbench-route";
 import {
-    createListItemDomEditor,
-} from "./workbench/dom/mutation/list-item-dom-edit";
-import {
-    ensureParagraphHasEditableContent,
-} from "./workbench/dom/mutation/rich-input-dom";
-import {
-    getDirectChildSummaryTextElement,
-} from "./workbench/dom/mutation/structured-block-dom";
-import {
-    deleteTextImmediatelyBeforeSelection,
-    getTextBeforeSelectionInElement,
-} from "./workbench/dom/query/text-position-dom";
-import {
-    captureEditorSelection,
-    placeCaretInElement,
-    restoreParagraphSelection,
-    restoreListItemSelection,
-} from "./workbench/dom/selection/selection-dom";
-import {
-    getInlineRunContainer,
-    isInlineRunContainer,
-} from "./workbench/editor/inline-run-containers";
-import {
-    restoreCaretToMarker,
-} from "./workbench/editor/WorkbenchInlineFormatController";
-import {
-    formatTimestamp
-} from "./workbench/project/tree-utils";
-import {
     readStoredHarness,
+    readStoredFontSize,
 } from "./workbench/state/browser-state";
 import ActiveTabRefreshLeader from "./workbench/state/ActiveTabRefreshLeader";
-import EditHistoryManager from "./workbench/state/EditHistoryManager";
-import FileSessionState from "./workbench/state/FileSessionState";
+import FileDraftStore from "./workbench/state/FileDraftStore";
 import LifecycleScope from "./workbench/state/LifecycleScope";
 import SessionState from "./workbench/state/SessionState";
 import {
-    hasRequiredControlButtonsDomSurface,
-    hasRequiredDialogDomSurface,
-    hasRequiredEditorDomSurface,
-    hasRequiredStatusDisplaySurface,
-    hasRequiredToolbarDomSurface,
+    type WorkbenchEditorDomSurfaces,
     type WorkbenchDomSurfaces,
 } from "./workbench/workbench-dom";
-import WorkbenchEditorClient, {
-    type EditorUIStateSnapshot
-} from "./workbench/WorkbenchEditorClient";
-import WorkbenchEventBus from "./workbench/WorkbenchEventBus";
-import WorkbenchFileClient from "./workbench/WorkbenchFileClient";
+import WorkbenchFilePanelClient from "./workbench/WorkbenchFilePanelClient";
 import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
 import WorkbenchThreadClient from "./workbench/WorkbenchThreadClient";
 import { getTurnRenderSignature } from "./workbench/thread/thread-item-signature";
 
 const AUTO_REFRESH_INTERVAL_MS = 1500;
-const HISTORY_KEYFRAME_INTERVAL = 50;
+
+type MountedWorkbenchControls = WorkbenchControls & {
+  createFilePanelClient: (surfaces: WorkbenchEditorDomSurfaces) => ReturnType<typeof WorkbenchFilePanelClient>;
+};
 
 export async function WorkbenchClient(
   bindings: WorkbenchBindings & { dom?: WorkbenchDomSurfaces | null } = {},
 ): Promise<() => void> {
-  const { dom, ...workbenchBindings } = bindings;
-  if (
-    !hasRequiredEditorDomSurface(dom?.editor)
-    || !hasRequiredStatusDisplaySurface(dom?.statusDisplay)
-    || !hasRequiredControlButtonsDomSurface(dom?.controls)
-    || !hasRequiredDialogDomSurface(dom?.dialogs)
-    || !hasRequiredToolbarDomSurface(dom?.toolbars)
-  ) {
-    return () => {};
-  }
-
-  const editorSurface = dom.editor;
-  const statusDisplay = dom.statusDisplay;
-  const controlButtons = dom.controls;
-  const dialogSurface = dom.dialogs;
-  const toolbarSurface = dom.toolbars;
-  const editor = editorSurface.editor;
-  const saveConflictDialog = dialogSurface.saveConflict.dialog;
-  const resetDraftDialog = dialogSurface.resetDraft.dialog;
-  const {
-    getClosestListItem,
-    getListItemTextContainer,
-    getSelectedListItems,
-    indentListItems,
-    isSelectionAtListItemStart,
-    isTopLevelListItem,
-    outdentListItems,
-    unwrapTopLevelListItemToParagraph,
-  } = createListItemDomEditor({
-    root: editor,
-    ensureParagraphHasEditableContent,
-    getDirectChildSummaryTextElement,
-  });
+  const { ...workbenchBindings } = bindings;
 
   const coordinatorLifecycle = new LifecycleScope();
-  let editorHasFocus = false;
   let explorerStateChangeScheduled = false;
-  let isComposing = false;
   let reportStatusMessage = (_message: string) => {};
   let activeRoute: WorkbenchRoute = createProjectRoute("");
   let activeRouteGeneration = 0;
-  const eventBus = WorkbenchEventBus();
   const projectClient = WorkbenchProjectClient();
   const threadClient = WorkbenchThreadClient({
     onStatusMessage: (message) => {
@@ -139,8 +70,11 @@ export async function WorkbenchClient(
     currentThread: initialThreadSnapshot.currentThread,
     currentThreadId: initialThreadSnapshot.currentThreadId,
   });
-  const fileSessionState = FileSessionState();
-  let fileClient: ReturnType<typeof WorkbenchFileClient>;
+  const draftStore = FileDraftStore(
+    () => projectClient.getSnapshot().currentProjectId,
+    emitExplorerStateChange,
+  );
+  let activeFilePath = "";
   let activeProjectId = projectClient.getSnapshot().currentProjectId;
   coordinatorLifecycle.addUnsubscribe(projectClient.subscribe((snapshot) => {
     const previousProjectId = activeProjectId;
@@ -151,9 +85,9 @@ export async function WorkbenchClient(
       rootPath: snapshot.rootPath,
       roots: snapshot.roots,
     });
-    if (previousProjectId && previousProjectId !== snapshot.currentProjectId && fileClient) {
-      fileClient.clearSelection();
-      void fileClient.hydratePersistedDrafts();
+    if (previousProjectId && previousProjectId !== snapshot.currentProjectId) {
+      activeFilePath = "";
+      void draftStore.hydratePersistedDrafts();
     }
     emitExplorerStateChange();
   }));
@@ -195,266 +129,8 @@ export async function WorkbenchClient(
 
   document.execCommand?.("defaultParagraphSeparator", false, "p");
 
-  const dialogs = [saveConflictDialog, resetDraftDialog] as const;
-
-  function isDialogOpen(dialog: HTMLDivElement) {
-    return !dialog.hidden;
-  }
-
-  function hideDialog(dialog: HTMLDivElement) {
-    dialog.hidden = true;
-  }
-
-  function closeActiveDialog() {
-    if (isDialogOpen(resetDraftDialog)) {
-      hideDialog(resetDraftDialog);
-      editor.focus();
-      return true;
-    }
-
-    if (isDialogOpen(saveConflictDialog)) {
-      hideDialog(saveConflictDialog);
-      editor.focus();
-      return true;
-    }
-
-    return false;
-  }
-  let editHistoryManager: ReturnType<typeof EditHistoryManager>;
-  const editorClient = WorkbenchEditorClient({
-    controls: controlButtons,
-    dialogs: dialogSurface,
-    editor: {
-      customCaret: editorSurface.customCaret,
-      diffGutter: editorSurface.diffGutter,
-      editor,
-    },
-    statusDisplay,
-    toolbars: toolbarSurface,
-  }, {
-    closeActiveDialog,
-    controllerOptions: {
-      inlineFormat: {
-        deleteTextImmediatelyBeforeSelection,
-        getEditorHasFocus: () => editorHasFocus,
-        getInlineRunContainer: (node) => getInlineRunContainer(editor, node),
-        getIsComposing: () => isComposing,
-        getTextBeforeSelectionInElement,
-        isInlineRunContainer: (element) => isInlineRunContainer(editor, element),
-        syncCurrentDraftBuffer: () => {
-          fileClient.syncCurrentDraftBuffer();
-        },
-        updateHistorySelection: (selection) => {
-          editHistoryManager.updateHistorySelection(selection);
-        },
-      },
-    },
-    fileSessionState,
-    getEditorHasFocus: () => editorHasFocus,
-    getProjectChangeSummary: (path) => projectClient.getSnapshot().changes[path] ?? null,
-    handleCompositionEnd: () => {
-      isComposing = false;
-    },
-    handleCompositionStart: () => {
-      isComposing = true;
-      editorClient.clearPendingInlineFormats();
-      editorClient.refreshEditorChrome();
-    },
-    handleEditorBeforeInput: (event) => {
-      if (editorClient.handlePendingInlineBeforeInput(event)) {
-        return;
-      }
-
-      if (event.inputType === "historyUndo") {
-        event.preventDefault();
-        editHistoryManager.undoEditHistory();
-        return;
-      }
-
-      if (event.inputType === "historyRedo") {
-        event.preventDefault();
-        editHistoryManager.redoEditHistory();
-      }
-    },
-    handleEditorBlur: () => {
-      editorHasFocus = false;
-      editorClient.clearPendingInlineFormats();
-      editorClient.refreshEditorChrome();
-    },
-    handleEditorClick: (event) => {
-      const summaryText = event.target instanceof Element
-        ? event.target.closest<HTMLElement>('[data-summary-text="true"]')
-        : null;
-      if (!summaryText || !editor.contains(summaryText)) {
-        return;
-      }
-
-      const summary = summaryText.closest<HTMLElement>("summary");
-      if (!summary) {
-        return;
-      }
-
-      event.preventDefault();
-      placeCaretInElement(editor, summaryText, event.clientX, event.clientY);
-    },
-    handleEditorFocus: () => {
-      editorHasFocus = true;
-      editorClient.refreshEditorChrome();
-    },
-    handleEditorInput: (event) => {
-      let transformedListItem: HTMLLIElement | null = null;
-      let transformedBlock: HTMLElement | null = null;
-      let commentCaretMarker: HTMLElement | null = null;
-
-      editorClient.runInputMutation(() => {
-        const {
-          transformedListItem: nextTransformedListItem,
-          transformedBlock: nextTransformedBlock,
-          commentCaretMarker: richInputCommentCaretMarker,
-        } = editorClient.handleRichInput(event);
-        transformedListItem = nextTransformedListItem;
-        transformedBlock = nextTransformedBlock;
-        commentCaretMarker = richInputCommentCaretMarker ?? editorClient.maybeActivateInlineCommentShortcut(event);
-      }, {
-        afterDomMutation: () => {
-          if (transformedListItem) {
-            restoreListItemSelection([transformedListItem], {
-              collapsed: true,
-              getListItemTextContainer,
-            });
-          }
-
-          if (transformedBlock) {
-            restoreParagraphSelection(transformedBlock);
-          }
-
-          if (commentCaretMarker) {
-            restoreCaretToMarker(commentCaretMarker);
-          }
-        },
-      });
-    },
-    handleEditorKeyDown: (event) => {
-      if (!sessionState.currentPath || fileSessionState.mode !== "rich") {
-        return;
-      }
-
-      editorClient.maybeClearPendingInlineFormatsForKey(event);
-
-      if (editorClient.handleListStructureKeyDown(event)) {
-        return;
-      }
-
-      const isPrimaryModifier = event.metaKey || event.ctrlKey;
-      if (!isPrimaryModifier) {
-        return;
-      }
-
-      if (!event.altKey && event.key.toLowerCase() === "z") {
-        event.preventDefault();
-        if (event.shiftKey) {
-          editHistoryManager.redoEditHistory();
-        } else {
-          editHistoryManager.undoEditHistory();
-        }
-        return;
-      }
-
-      if (!event.shiftKey && !event.altKey && event.key.toLowerCase() === "y") {
-        event.preventDefault();
-        editHistoryManager.redoEditHistory();
-        return;
-      }
-
-      if (editorClient.handleFormatKeyDown(event)) {
-        return;
-      }
-    },
-    handleEditorPointerDown: () => {
-      editorClient.clearPendingInlineFormats();
-    },
-    handleEditorToggle: (event) => {
-      if (!(event.target instanceof HTMLDetailsElement)) {
-        return;
-      }
-
-      editorClient.scheduleDiffGutterRefresh();
-      editorClient.scheduleEditorChromeRefresh();
-    },
-    handleOverwriteConflict: async () => {
-      await saveCurrentFile({ force: true });
-    },
-    handlePointerMove: (event) => {
-      const revisionNode = event.target instanceof Element
-        ? event.target.closest<HTMLElement>('del, ins, [data-inline-comment="true"], [data-block-comment="true"]')
-        : null;
-      if (revisionNode && editor.contains(revisionNode)) {
-        editorClient.setHoveredRevisionNode(revisionNode);
-        return;
-      }
-
-      if (!editorClient.isPointerNearRevisionHoverUi(event.clientX, event.clientY)) {
-        editorClient.setHoveredRevisionNode(null);
-      }
-    },
-    handleReloadConflict: async () => {
-      if (!sessionState.currentPath) {
-        return;
-      }
-
-      await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload" });
-    },
-    handleResetCurrentDraftToSaved: async () => {
-      await resetCurrentDraftToSaved();
-    },
-    handleResetCurrentFileToHead: async () => {
-      await resetCurrentFileToHead();
-    },
-    handleSaveCurrentFile: async () => {
-      await saveCurrentFile();
-    },
-    handleSelectionChange: () => {
-      editorClient.handlePendingInlineSelectionChange();
-
-      editHistoryManager.updateHistorySelection(captureEditorSelection(editor));
-      scheduleSelectionPersistence();
-      editorClient.scheduleEditorChromeRefresh();
-    },
-    handleViewportChanged: () => {
-      editorClient.scheduleDiffGutterRefresh();
-      editorClient.scheduleEditorChromeRefresh();
-    },
-    listStructure: {
-      getClosestListItem,
-      getListItemTextContainer,
-      getSelectedListItems,
-      indentListItems,
-      isSelectionAtListItemStart,
-      isTopLevelListItem,
-      outdentListItems,
-      unwrapTopLevelListItemToParagraph,
-    },
-    isSaveButtonInvalid: () => Boolean(fileSessionState.saveIssue) || Array.from(fileSessionState.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue)),
-    mutationRuntime: {
-      inspectCurrentDraft: () => {
-        fileClient.inspectCurrentDraft();
-      },
-      recordEditHistory: (previousContent, nextContent, selection) => {
-        editHistoryManager.recordEditHistory(previousContent, nextContent, selection);
-      },
-      syncCurrentDraftBuffer: () => {
-        fileClient.syncCurrentDraftBuffer();
-      },
-      updateHistorySelection: (selection) => {
-        editHistoryManager.updateHistorySelection(selection);
-      },
-    },
-    sessionState,
-    shouldBlockBeforeUnload: () => Boolean(fileSessionState.saveIssue) || Array.from(fileSessionState.draftBuffers.values()).some((buffer) => Boolean(buffer.saveIssue)),
-  });
-  let previousEditorUiSnapshot: EditorUIStateSnapshot = editorClient.getSnapshot();
   reportStatusMessage = (message) => {
-    editorClient.refreshStatusMessage(message);
+    void message;
   };
   let previousSessionSnapshot = sessionState.getSnapshot();
   coordinatorLifecycle.addUnsubscribe(sessionState.subscribe((snapshot) => {
@@ -472,125 +148,23 @@ export async function WorkbenchClient(
       emitCurrentThreadChange();
     }
   }));
-  let previousFileSessionSnapshot = fileSessionState.getSnapshot();
-  coordinatorLifecycle.addUnsubscribe(fileSessionState.subscribe((snapshot) => {
-    const lastSnapshot = previousFileSessionSnapshot;
-    previousFileSessionSnapshot = snapshot;
-
-    if (
-      lastSnapshot.dirty !== snapshot.dirty
-      || lastSnapshot.mode !== snapshot.mode
-      || Boolean(lastSnapshot.saveIssue) !== Boolean(snapshot.saveIssue)
-      || Boolean(lastSnapshot.pendingWriteConflict) !== Boolean(snapshot.pendingWriteConflict)
-      || lastSnapshot.draftBuffers.size !== snapshot.draftBuffers.size
-    ) {
-      emitExplorerStateChange();
-    }
-  }));
-  coordinatorLifecycle.addUnsubscribe(editorClient.subscribe((snapshot) => {
-    const previousSnapshot = previousEditorUiSnapshot;
-    previousEditorUiSnapshot = snapshot;
-
-    if (previousSnapshot.fontSize !== snapshot.fontSize) {
-      emitExplorerStateChange();
-    }
-  }));
-  coordinatorLifecycle.addUnsubscribe(eventBus.subscribe("fileOpened", () => {
-    editorClient.refreshEditorChrome();
-  }));
-  coordinatorLifecycle.addUnsubscribe(eventBus.subscribe("saveConflictCleared", () => {
-    editorClient.hideSaveConflictDialog();
-  }));
-  coordinatorLifecycle.addUnsubscribe(eventBus.subscribe("saveConflictSurfaced", (conflict) => {
-    editorClient.showSaveConflict({
-      ...conflict,
-      expectedUpdatedAt: formatTimestamp(conflict.expectedUpdatedAt),
-      actualUpdatedAt: formatTimestamp(conflict.actualUpdatedAt),
-    });
-  }));
-
-  editHistoryManager = EditHistoryManager({
-    applyHistoryReplay: (request) => {
-      editorClient.runHistoryReplay(request);
-    },
-    getCurrentContent: () => fileSessionState.currentContent,
-    getHistory: () => fileSessionState.history,
-    historyKeyframeInterval: HISTORY_KEYFRAME_INTERVAL,
-    setHistory: (history) => {
-      fileSessionState.history = history;
-    },
-  });
-
-  fileClient = WorkbenchFileClient({
-    clearThreadSelection: () => {
-      threadClient.clearThreadSelection();
-    },
-    editorDocument: editorClient.getDocumentAdapter(),
-    emitExplorerStateChange,
-    eventBus,
-    expandProjectPath: (filePath) => {
-      projectClient.expandPath(filePath);
-    },
-    fileSessionState,
-    getProjectId: () => projectClient.getSnapshot().currentProjectId,
-    refreshProject: async () => {
-      await projectClient.refreshProject();
-    },
-    sessionState,
-    updateHistorySelection: editHistoryManager.updateHistorySelection,
-  });
-
-  function scheduleSelectionPersistence() {
-    fileClient.scheduleSelectionPersistence();
-  }
-
   async function openFile(
     filePath: string,
     options?: { ignoreDirty?: boolean; source?: "open" | "reload" },
   ) {
-    const didOpen = await fileClient.openFile(filePath, options);
-    return didOpen;
-  }
-
-  async function resetCurrentDraftToSaved() {
-    hideResetDraftDialog();
-    await fileClient.resetCurrentDraftToSaved();
-    editor.focus();
-  }
-
-  async function resetCurrentFileToHead() {
-    hideResetDraftDialog();
-    await fileClient.resetCurrentFileToHead();
-    editor.focus();
-  }
-
-  async function saveCurrentFile(options?: { force?: boolean }) {
-    await fileClient.saveCurrentFile(options);
+    void options;
+    activeFilePath = filePath;
+    emitExplorerStateChange();
+    return true;
   }
 
   async function refreshCurrentFileFromDiskIfSafe() {
-    await fileClient.refreshCurrentFileFromDiskIfSafe();
-  }
-
-  function updateSaveButtonState() {
-    editorClient.setSaveButtonState();
-  }
-
-  function hideResetDraftDialog() {
-    editorClient.hideResetDraftDialog();
   }
 
   function getLocallyModifiedPaths() {
     const modifiedPaths = new Set<string>();
-
-    if (sessionState.currentPath && fileSessionState.dirty) {
-      modifiedPaths.add(sessionState.currentPath);
-    }
-
-    for (const [filePath, buffer] of fileSessionState.draftBuffers) {
-      if (buffer.dirty) {
-        modifiedPaths.add(filePath);
-      }
+    for (const filePath of draftStore.getLocallyModifiedPaths()) {
+      modifiedPaths.add(filePath);
     }
 
     return Array.from(modifiedPaths).sort((left, right) => left.localeCompare(right));
@@ -599,8 +173,6 @@ export async function WorkbenchClient(
   function getExplorerSnapshot(): ExplorerSnapshot {
     const projectSnapshot = projectClient.getSnapshot();
     const threadSnapshot = threadClient.getSnapshot();
-    const editorUiSnapshot = editorClient.getSnapshot();
-
     return {
       root: projectSnapshot.root,
       currentProjectId: projectSnapshot.currentProjectId,
@@ -616,12 +188,12 @@ export async function WorkbenchClient(
       isProjectLoading: projectSnapshot.isLoading,
       isThreadsLoading: threadSnapshot.isLoading,
       changes: projectSnapshot.changes,
-      currentPath: sessionState.currentPath,
+      currentPath: activeFilePath,
       currentThreadId: sessionState.currentThreadId,
       expandedDirectories: projectSnapshot.expandedDirectories,
       locallyModifiedPaths: getLocallyModifiedPaths(),
       threadsError: threadSnapshot.threadsError,
-      fontSize: editorUiSnapshot.fontSize,
+      fontSize: readStoredFontSize(),
     };
   }
 
@@ -794,15 +366,9 @@ export async function WorkbenchClient(
   }
 
   function applyThreadPayloadToCurrentView(payload: ThreadPayload, statusMessage?: string) {
+    activeFilePath = "";
     applyCurrentThreadSelection(payload);
-    fileClient.selectThread(payload.id);
-    editorClient.showThreadPlaceholder(payload.name || payload.preview || payload.id);
-    editorClient.clearPendingInlineFormats();
-    editorClient.setHoveredRevisionNode(null);
-    updateSaveButtonState();
-    editorClient.refreshStatusMessage(statusMessage);
-    editorClient.scheduleDiffGutterRefresh();
-    editorClient.refreshEditorChrome();
+    reportStatusMessage(statusMessage || payload.name || payload.preview || payload.id);
   }
 
   async function openThread(
@@ -811,10 +377,6 @@ export async function WorkbenchClient(
   ) {
     if (source === "open" && threadId === sessionState.currentThreadId) {
       return true;
-    }
-
-    if (sessionState.currentPath) {
-      fileClient.syncCurrentDraftBuffer();
     }
 
     if (threadClient.isDraftThreadId(threadId)) {
@@ -880,7 +442,7 @@ export async function WorkbenchClient(
   async function createEntry(parentPath: string, name: string, type: "directory" | "file") {
     const createdPath = await projectClient.createEntry(parentPath, name, type);
 
-    editorClient.refreshStatusMessage(`Created ${createdPath}`);
+    reportStatusMessage(`Created ${createdPath}`);
 
     return createdPath;
   }
@@ -900,14 +462,7 @@ export async function WorkbenchClient(
   }
 
   function clearCurrentSelectionView() {
-    fileClient.clearSelection();
-    editorClient.setHoveredRevisionNode(null);
-    editorClient.clearPendingInlineFormats();
-    editorClient.clearSelectionView();
-    updateSaveButtonState();
-    editorClient.refreshStatusMessage();
-    editorClient.scheduleDiffGutterRefresh();
-    editorClient.refreshEditorChrome();
+    activeFilePath = "";
   }
 
   function isRouteGenerationActive(route: WorkbenchRoute, generation: number) {
@@ -915,6 +470,7 @@ export async function WorkbenchClient(
       && activeRoute.view === route.view
       && activeRoute.projectId === route.projectId
       && activeRoute.filePath === route.filePath
+      && JSON.stringify(activeRoute.mosaicNode) === JSON.stringify(route.mosaicNode)
       && activeRoute.settingsScope === route.settingsScope
       && activeRoute.threadId === route.threadId;
   }
@@ -937,7 +493,7 @@ export async function WorkbenchClient(
 
     const nextProjectId = projectClient.getSnapshot().currentProjectId;
     if (nextProjectId && previousProjectId !== nextProjectId) {
-      await fileClient.hydratePersistedDrafts();
+      await draftStore.hydratePersistedDrafts();
     }
 
     return "";
@@ -950,6 +506,7 @@ export async function WorkbenchClient(
     if (route.view === "invalid") {
       clearCurrentSelectionView();
       threadClient.clearThreadSelection();
+      applyCurrentThreadSelection(null);
       emitExplorerStateChange();
       return { error: route.error || "Invalid route.", ok: false };
     }
@@ -958,6 +515,7 @@ export async function WorkbenchClient(
     if (projectError) {
       clearCurrentSelectionView();
       threadClient.clearThreadSelection();
+      applyCurrentThreadSelection(null);
       emitExplorerStateChange();
       return { error: projectError, ok: false };
     }
@@ -966,11 +524,10 @@ export async function WorkbenchClient(
       return { ok: false };
     }
 
-    if (route.view === "project" || route.view === "settings") {
-      if (sessionState.currentPath) {
-        fileClient.syncCurrentDraftBuffer();
-      }
+    if (route.view === "project" || route.view === "settings" || route.view === "mosaic") {
+      activeFilePath = "";
       threadClient.clearThreadSelection();
+      applyCurrentThreadSelection(null);
       clearCurrentSelectionView();
       emitExplorerStateChange();
       void hydrateProjectSidebarData(route, routeGeneration);
@@ -979,6 +536,7 @@ export async function WorkbenchClient(
 
     if (route.view === "file") {
       threadClient.clearThreadSelection();
+      applyCurrentThreadSelection(null);
       void hydrateProjectSidebarData(route, routeGeneration);
       const didOpen = await openFile(route.filePath);
       reapplyActiveRouteAfterStaleLoad(route, routeGeneration);
@@ -1040,10 +598,10 @@ export async function WorkbenchClient(
       }
     }
 
-    if (preserveSelection && activeRoute.view === "file" && sessionState.currentPath === activeRoute.filePath) {
-      const currentPath = sessionState.currentPath;
+    if (preserveSelection && activeRoute.view === "file" && activeFilePath === activeRoute.filePath) {
+      const currentPath = activeFilePath;
       await refreshCurrentFileFromDiskIfSafe();
-      if (sessionState.currentPath === currentPath) {
+      if (activeFilePath === currentPath) {
         return;
       }
     }
@@ -1086,8 +644,25 @@ export async function WorkbenchClient(
     }
   }
 
-  const controls: WorkbenchControls = {
+  const controls: MountedWorkbenchControls = {
     applyRoute,
+    createFilePanelClient: (surfaces) => WorkbenchFilePanelClient({
+      clearThreadSelection: () => {
+        threadClient.clearThreadSelection();
+        applyCurrentThreadSelection(null);
+      },
+      draftStore,
+      emitExplorerStateChange,
+      expandProjectPath: (filePath) => {
+        projectClient.expandPath(filePath);
+      },
+      getProjectChangeSummary: (path) => projectClient.getSnapshot().changes[path] ?? null,
+      getProjectId: () => projectClient.getSnapshot().currentProjectId,
+      refreshProject: async () => {
+        await projectClient.refreshProject();
+      },
+      surfaces,
+    }),
     createThreadDraft: (harness) => {
       const draftThread = threadClient.createThread(harness);
       applyThreadPayloadToCurrentView(draftThread);
@@ -1098,12 +673,13 @@ export async function WorkbenchClient(
     listModels: threadClient.listModels,
     markThreadSeen,
     readThread,
+    refreshRateLimits,
     sendThreadMessage,
     compactThread,
     stopThread,
     submitPendingUserInputRequest: threadClient.submitPendingUserInputRequest,
     setEditorFontSize: (fontSize) => {
-      editorClient.setFontSize(fontSize, { persist: false });
+      void fontSize;
     },
     setCurrentThreadModel: (threadId, model) => {
       threadClient.setCurrentThreadModel(threadId, model);
@@ -1123,21 +699,18 @@ export async function WorkbenchClient(
     toggleDirectory,
   };
 
-  await fileClient.hydratePersistedDrafts();
+  await draftStore.hydratePersistedDrafts();
   workbenchBindings.onControlsReady?.(controls);
   emitExplorerStateChange();
   emitCurrentThreadChange();
   emitPendingUserInputRequestsChange();
   emitRateLimitsChange();
-  updateSaveButtonState();
   await refreshTree();
   if (sessionState.currentThreadId || activeRoute.view === "thread") {
     void refreshRateLimits();
   }
   startAutoRefresh();
   return () => {
-    editorClient.dispose();
-    fileClient.dispose();
     projectClient.dispose();
     threadClient.dispose();
     coordinatorLifecycle.dispose();

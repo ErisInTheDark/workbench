@@ -6,6 +6,9 @@
  * - ZoomOutIcon: render the decrease text size icon. Keywords: workbench, icon, zoom.
  * - ZoomInIcon: render the increase text size icon. Keywords: workbench, icon, zoom.
  * - BackArrowIcon: render the mobile back-navigation icon. Keywords: workbench, icon, navigation.
+ * - SidebarCollapseIcon/SidebarExpandIcon: render desktop sidebar visibility controls. Keywords: workbench, icon, sidebar.
+ * - PanelMinimizeIcon/PanelExpandIcon: render mosaic panel minimize controls. Keywords: workbench, icon, panel.
+ * - PanelCloseIcon: render the mosaic panel close control. Keywords: workbench, icon, panel, close.
  * - GearIcon: render the settings navigation icon. Keywords: workbench, icon, settings.
  * - ReloadIcon: render the local runtime reload icon. Keywords: workbench, icon, reload.
  * - WrapTextIcon: render the thread codeblock line-wrap toggle icon. Keywords: workbench, icon, thread, code, wrap.
@@ -114,6 +117,52 @@ export function BackArrowIcon () {
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
       <path d="M12.75 4.75L7.25 10L12.75 15.25" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M7.75 10H16.25" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function SidebarCollapseIcon () {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
+      <rect x="3.5" y="4" width="13" height="12" rx="1.5" />
+      <path d="M8 4V16" />
+      <path d="M12.5 7.5L10 10L12.5 12.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function SidebarExpandIcon () {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
+      <rect x="3.5" y="4" width="13" height="12" rx="1.5" />
+      <path d="M8 4V16" />
+      <path d="M10.5 7.5L13 10L10.5 12.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function PanelMinimizeIcon () {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
+      <rect x="4" y="4" width="12" height="12" rx="1.6" />
+      <path d="M7 10H13" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function PanelExpandIcon () {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
+      <rect x="4" y="4" width="12" height="12" rx="1.6" />
+      <path d="M8 10H12M10 8V12" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function PanelCloseIcon () {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
+      <path d="M6.25 6.25L13.75 13.75M13.75 6.25L6.25 13.75" strokeLinecap="round" />
     </svg>
   );
 }

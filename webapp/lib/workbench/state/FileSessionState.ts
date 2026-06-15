@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - DraftBuffer: in-memory file draft state including persisted editor markup, conflicts, and save-guard metadata. Keywords: workbench, file, draft, buffer.
+ * - cloneDraftBuffer: copy a draft buffer and its nested mutable history/conflict metadata. Keywords: workbench, file, draft, clone.
  * - FileSessionStateSnapshot: readonly projection of current file persistence and history state. Keywords: workbench, file, session, snapshot.
  * - FileSessionStateListener: subscriber signature for file-session updates. Keywords: workbench, file, session, subscribe.
  * - FileSessionState: mutable owner of file persistence, history, and save-guard state for the active file. Keywords: workbench, file, session, state.
@@ -44,7 +45,7 @@ interface FileSessionState extends FileSessionStateSnapshot {
   subscribe: (listener: FileSessionStateListener) => () => void;
 }
 
-function cloneDraftBuffer(buffer: DraftBuffer): DraftBuffer {
+export function cloneDraftBuffer(buffer: DraftBuffer): DraftBuffer {
   return {
     baselineContent: buffer.baselineContent,
     content: buffer.content,

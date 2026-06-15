@@ -1497,6 +1497,26 @@ function WorkbenchEditorClient(
     return target instanceof Node ? target.parentElement : null;
   }
 
+  function isSelectionInsideEditor() {
+    const selection = window.getSelection();
+    return Boolean(
+      selection?.rangeCount
+        && selection.anchorNode
+        && selection.focusNode
+        && editor.contains(selection.anchorNode)
+        && editor.contains(selection.focusNode),
+    );
+  }
+
+  function isEventInsideEditorSurface(event: Event) {
+    const target = getEventTargetElement(event.target);
+    return Boolean(target && (
+      editor.contains(target)
+        || floatingToolbar.contains(target)
+        || toolbars.revisionHover.contains(target)
+    ));
+  }
+
   controls.saveFileButton.addEventListener("click", () => {
     void options.handleSaveCurrentFile();
   }, { signal });
@@ -1555,6 +1575,10 @@ function WorkbenchEditorClient(
       return;
     }
 
+    if (!options.getEditorHasFocus()) {
+      return;
+    }
+
     event.preventDefault();
     void options.handleSaveCurrentFile();
   }, { signal });
@@ -1574,6 +1598,11 @@ function WorkbenchEditorClient(
   }, { signal });
 
   document.addEventListener("selectionchange", () => {
+    if (!isSelectionInsideEditor()) {
+      scheduleEditorChromeRefresh();
+      return;
+    }
+
     options.handleSelectionChange();
   }, { signal });
 
@@ -1656,6 +1685,10 @@ function WorkbenchEditorClient(
   }, { signal });
 
   document.addEventListener("pointermove", (event) => {
+    if (!isEventInsideEditorSurface(event)) {
+      return;
+    }
+
     options.handlePointerMove(event);
   }, { signal });
 

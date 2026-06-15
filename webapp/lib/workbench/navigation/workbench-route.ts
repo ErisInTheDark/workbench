@@ -1,12 +1,18 @@
 /*
  * Exports:
  * - WORKBENCH_ROUTE_MARKER: route marker for canonical workbench URLs. Keywords: URL, route, navigation.
- * - WorkbenchRouteView, WorkbenchSettingsScope, WorkbenchRoute, WorkbenchRouteParseResult: normalized route contracts. Keywords: URL source of truth, project, file, thread, settings.
- * - createProjectRoute/createFileRoute/createThreadRoute/createSettingsRoute/createInvalidWorkbenchRoute: construct route objects. Keywords: navigation, route builder.
+ * - WorkbenchRouteView, WorkbenchSettingsScope, WorkbenchRoute, WorkbenchRouteParseResult: normalized route contracts. Keywords: URL source of truth, project, file, thread, settings, mosaic.
+ * - createProjectRoute/createFileRoute/createThreadRoute/createSettingsRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct route objects. Keywords: navigation, route builder.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse browser URL state without mutating history. Keywords: route parser, legacy query, malformed URL.
  * - createWorkbenchHref/createProjectHref/createFileHref/createThreadHref/createSettingsHref: build canonical hrefs. Keywords: links, URL, encode.
  * - isSameWorkbenchRoute/routeHasSelection: compare and classify routes. Keywords: route equality, active selection.
  */
+
+import {
+  parseWorkbenchMosaicRouteExpression,
+  serializeWorkbenchMosaicRouteExpression,
+  type WorkbenchMosaicNode,
+} from "./workbench-mosaic-route";
 
 export const WORKBENCH_ROUTE_MARKER = "@";
 
@@ -14,12 +20,13 @@ const LEGACY_FILE_SEARCH_PARAM = "file";
 const LEGACY_THREAD_SEARCH_PARAM = "thread";
 const DEFAULT_SETTINGS_SCOPE: WorkbenchSettingsScope = "global";
 
-export type WorkbenchRouteView = "project" | "file" | "thread" | "settings" | "invalid";
+export type WorkbenchRouteView = "project" | "file" | "thread" | "settings" | "mosaic" | "invalid";
 export type WorkbenchSettingsScope = "global" | "project";
 
 export interface WorkbenchRoute {
   error: string;
   filePath: string;
+  mosaicNode: WorkbenchMosaicNode | null;
   projectId: string;
   settingsScope: WorkbenchSettingsScope;
   threadId: string;
@@ -42,6 +49,7 @@ export function createProjectRoute(projectId: string): WorkbenchRoute {
   return {
     error: "",
     filePath: "",
+    mosaicNode: null,
     projectId,
     settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId: "",
@@ -53,6 +61,7 @@ export function createFileRoute(projectId: string, filePath: string): WorkbenchR
   return {
     error: "",
     filePath,
+    mosaicNode: null,
     projectId,
     settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId: "",
@@ -64,6 +73,7 @@ export function createThreadRoute(projectId: string, threadId: string): Workbenc
   return {
     error: "",
     filePath: "",
+    mosaicNode: null,
     projectId,
     settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId,
@@ -75,6 +85,7 @@ export function createSettingsRoute(projectId: string, settingsScope: WorkbenchS
   return {
     error: "",
     filePath: "",
+    mosaicNode: null,
     projectId,
     settingsScope,
     threadId: "",
@@ -82,10 +93,23 @@ export function createSettingsRoute(projectId: string, settingsScope: WorkbenchS
   };
 }
 
+export function createMosaicRoute(projectId: string, mosaicNode: WorkbenchMosaicNode): WorkbenchRoute {
+  return {
+    error: "",
+    filePath: "",
+    mosaicNode,
+    projectId,
+    settingsScope: DEFAULT_SETTINGS_SCOPE,
+    threadId: "",
+    view: "mosaic",
+  };
+}
+
 export function createInvalidWorkbenchRoute(error: string, projectId = ""): WorkbenchRoute {
   return {
     error,
     filePath: "",
+    mosaicNode: null,
     projectId,
     settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId: "",
@@ -157,12 +181,21 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
     }
 
     const mode = segments[markerIndex + 1] ?? "";
-    const valueSegments = decodeRouteSegments(segments.slice(markerIndex + 2));
-    if (valueSegments.ok === false) {
-      return createInvalidWorkbenchRoute(valueSegments.error, projectSegments.value.join("/"));
+    const projectId = projectSegments.value.join("/");
+    if (mode === "mosaic") {
+      const parsedMosaic = parseWorkbenchMosaicRouteExpression(segments.slice(markerIndex + 2).join("/"));
+      if (parsedMosaic.ok === false) {
+        return createProjectRoute(projectId);
+      }
+
+      return createMosaicRoute(projectId, parsedMosaic.node);
     }
 
-    const projectId = projectSegments.value.join("/");
+    const valueSegments = decodeRouteSegments(segments.slice(markerIndex + 2));
+    if (valueSegments.ok === false) {
+      return createInvalidWorkbenchRoute(valueSegments.error, projectId);
+    }
+
     const value = valueSegments.value.join("/");
     if (mode === "file") {
       return createFileRoute(projectId, value);
@@ -249,6 +282,9 @@ export function createWorkbenchHref(route: WorkbenchRoute) {
   if (route.view === "settings") {
     return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/settings/${route.settingsScope}`;
   }
+  if (route.view === "mosaic" && route.mosaicNode) {
+    return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/mosaic/${serializeWorkbenchMosaicRouteExpression(route.mosaicNode)}`;
+  }
 
   return projectPath ? `/${projectPath}` : "/";
 }
@@ -269,15 +305,20 @@ export function createSettingsHref(projectId: string, settingsScope: WorkbenchSe
   return createWorkbenchHref(createSettingsRoute(projectId, settingsScope));
 }
 
+export function createMosaicHref(projectId: string, mosaicNode: WorkbenchMosaicNode) {
+  return createWorkbenchHref(createMosaicRoute(projectId, mosaicNode));
+}
+
 export function isSameWorkbenchRoute(left: WorkbenchRoute, right: WorkbenchRoute) {
   return left.view === right.view
     && left.projectId === right.projectId
     && left.filePath === right.filePath
+    && JSON.stringify(left.mosaicNode) === JSON.stringify(right.mosaicNode)
     && left.settingsScope === right.settingsScope
     && left.threadId === right.threadId
     && left.error === right.error;
 }
 
 export function routeHasSelection(route: WorkbenchRoute) {
-  return route.view === "file" || route.view === "thread";
+  return route.view === "file" || route.view === "thread" || route.view === "mosaic";
 }

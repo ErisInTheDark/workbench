@@ -49,6 +49,8 @@ export const WORKBENCH_FILE_LINK_INSTRUCTIONS = [
   "- If you need a custom label, use [label](path/to/file.ts:123).",
   "- In a multi-root workspace project, add the project prefix like #[project-name:path/to/file.ts:123] or #[project-name:path/to/file.ts].",
   "- Do not use backticks around file links, as they will prevent Workbench from rendering them as clickable links.",
+  "  Bad: `#[path/to/file.ts]` or `[label](path/to/file.ts)` — this will render the link text but it will not be clickable.",
+  "  Good: #[path/to/file.ts] or [label](path/to/file.ts) — the user can click the link to open the file in their editor!",
 ].join("\n");
 
 function normalizeWhitespace(value: string) {

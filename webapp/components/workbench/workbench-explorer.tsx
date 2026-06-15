@@ -9,7 +9,7 @@
  */
 "use client";
 
-import type { ReactNode } from "react";
+import type { PointerEvent, ReactNode } from "react";
 
 import type {
   ChangeSummary,
@@ -17,6 +17,7 @@ import type {
   TreeNode,
   WorkbenchControls,
 } from "../../lib/types";
+import type { WorkbenchDragPayload } from "../../lib/workbench/layout/workbench-drag";
 import ChevronIcon from "./ChevronIcon";
 import { ThreadQuestionBadge, ThreadUnreadBadge } from "./ThreadStatusBadges";
 import ThreadDisclosure from "./thread-view/ThreadDisclosure";
@@ -167,18 +168,24 @@ function ExplorerChangeSummary ({ summary }: { summary: ChangeSummary | null }) 
 export function ThreadsList ({
   createThreadLabel = "Create new thread",
   currentThreadId,
+  getThreadDragPayload,
   isDraftSelected = false,
   nodes,
   pendingQuestionnaireThreadIds,
   onCreateThread,
+  onCreateThreadPointerDragStart,
+  onThreadPointerDragStart,
   onOpenThread,
 }: {
   createThreadLabel?: string;
   currentThreadId: string;
+  getThreadDragPayload?: (thread: ThreadSummary) => WorkbenchDragPayload | null;
   isDraftSelected?: boolean;
   nodes: ThreadSummary[];
   pendingQuestionnaireThreadIds: ReadonlySet<string>;
   onCreateThread: () => void;
+  onCreateThreadPointerDragStart?: (event: PointerEvent<HTMLButtonElement>) => void;
+  onThreadPointerDragStart?: (event: PointerEvent<HTMLElement>, thread: ThreadSummary) => void;
   onOpenThread: (threadId: string) => void;
 }) {
   const recentThreads = nodes.slice(0, DEFAULT_VISIBLE_THREAD_COUNT);
@@ -202,7 +209,13 @@ export function ThreadsList ({
               }}
               title={label}
             >
-              <span className="flex w-full min-w-0 items-center justify-between gap-3">
+              <span
+                className="flex w-full min-w-0 items-center justify-between gap-3"
+                onPointerDown={(event) => {
+                  event.stopPropagation();
+                  onThreadPointerDragStart?.(event, thread);
+                }}
+              >
                 <span className="inline-flex min-w-0 items-center gap-2">
                   <HarnessIcon className="size-4 shrink-0" harness={thread.harness} />
                   <span className={`${workbenchThreadListLabelClassName}${isCurrent ? " font-semibold" : ""}`}>{label}</span>
@@ -223,6 +236,10 @@ export function ThreadsList ({
         title={createThreadLabel}
         className={`${workbenchThreadListButtonClassName}${isDraftSelected ? " text-accent" : " text-muted"}`}
         onClick={onCreateThread}
+        onPointerDown={(event) => {
+          event.stopPropagation();
+          onCreateThreadPointerDragStart?.(event);
+        }}
       >
         <span className="inline-flex min-w-0 items-center gap-2">
           <span className="inline-flex size-4 shrink-0 items-center justify-center text-[1.05em] leading-none">+</span>
@@ -259,10 +276,12 @@ interface ExplorerTreeProps {
   currentPath: string;
   expandedDirectories: Set<string>;
   isFileOpenable?: (path: string) => boolean;
+  getFileDragPayload?: (path: string) => WorkbenchDragPayload | null;
   modifiedPaths: Set<string>;
   nested?: boolean;
   nodes: TreeNode[];
   onCreateInDirectory?: (path: string) => void;
+  onFilePointerDragStart?: (event: PointerEvent<HTMLElement>, path: string) => void;
   onOpenFile?: (path: string) => void;
 }
 
@@ -272,10 +291,12 @@ export function ExplorerTree ({
   currentPath,
   expandedDirectories,
   isFileOpenable,
+  getFileDragPayload,
   modifiedPaths,
   nested = false,
   nodes,
   onCreateInDirectory,
+  onFilePointerDragStart,
   onOpenFile,
 }: ExplorerTreeProps) {
   return (
@@ -338,11 +359,13 @@ export function ExplorerTree ({
                   controls={controls}
                   currentPath={currentPath}
                   expandedDirectories={expandedDirectories}
+                  getFileDragPayload={getFileDragPayload}
                   isFileOpenable={isFileOpenable}
                   modifiedPaths={modifiedPaths}
                   nested
                   nodes={node.children}
                   onCreateInDirectory={onCreateInDirectory}
+                  onFilePointerDragStart={onFilePointerDragStart}
                   onOpenFile={onOpenFile}
                 />
               ) : null}
@@ -372,6 +395,14 @@ export function ExplorerTree ({
                 disabled={!isOpenable}
                 title={isOpenable ? node.name : disabledTitle}
                 className={`inline-flex max-w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-muted disabled:focus-visible:bg-transparent disabled:focus-visible:text-muted md:py-0.5${isCurrent ? " font-semibold text-accent" : ""}`}
+                onPointerDown={(event) => {
+                  if (!isOpenable) {
+                    return;
+                  }
+
+                  event.stopPropagation();
+                  onFilePointerDragStart?.(event, node.path);
+                }}
                 onClick={() => {
                   if (!isOpenable) {
                     return;

@@ -554,6 +554,7 @@ function useBackgroundProjectFilePathDisambiguationIndex(
 
 export default memo(function ThreadView ({
   composerSpellCheck,
+  contained = false,
   fontSizeRem,
   livePendingUserInputRequestsByThreadId,
   onDraftHarnessChange,
@@ -589,6 +590,7 @@ export default memo(function ThreadView ({
   thread,
 }: {
   composerSpellCheck: boolean;
+  contained?: boolean;
   fontSizeRem: number;
   livePendingUserInputRequestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>;
   onDraftHarnessChange: (harness: WorkbenchHarness) => void;
@@ -1285,14 +1287,18 @@ export default memo(function ThreadView ({
         data-thread-codeblock-wrap={threadCodeBlockWrap ? "true" : "false"}
         data-thread-project-file-link-boundary="true"
         className={joinClasses(
-          "mx-auto w-full min-w-0 max-w-[56rem] overflow-x-hidden pb-16 md:overflow-x-visible",
+          "mx-auto w-full min-w-0 max-w-[56rem] overflow-x-hidden md:overflow-x-visible",
+          contained ? "pb-8" : "pb-16",
         )}
         onClick={handleThreadViewClick}
         style={{ fontSize: `${fontSizeRem}rem` }}
       >
       {isDraftThreadView ? (
         <>
-          <div className="flex min-h-[calc(100dvh-8rem)] w-full items-center">
+          <div className={joinClasses(
+            "flex w-full items-center",
+            contained ? "min-h-0 py-4" : "min-h-[calc(100dvh-8rem)]",
+          )}>
             <div className="w-full">
               <header className="pb-4">
                 <h2 className="m-0 text-[1.55em] font-semibold leading-[1.1] tracking-tight text-text">
