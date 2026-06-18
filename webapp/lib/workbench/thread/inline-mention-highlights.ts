@@ -167,6 +167,7 @@ interface ParsedInlineMentionToken {
 }
 
 const TRAILING_PUNCTUATION_PATTERN = /[.,;:!?)}\]]+$/;
+const FILE_MENTION_ENDPOINT_PATTERN = /\.[A-Za-z0-9][A-Za-z0-9_.-]*(?::\d+(?::\d+)?)?/g;
 const DEFAULT_INLINE_MENTION_SUGGESTION_LIMIT = 12;
 const BROAD_FILE_SUGGESTION_LIMIT = 36;
 const INLINE_MENTION_SOURCE_CACHE_LIMIT = 8;
@@ -1144,7 +1145,7 @@ function getFileMentionValues(rawValue: string, explicitBoundary: boolean) {
     addValue(rawValue.length);
   }
 
-  const fileEndpointPattern = /\.[A-Za-z0-9][A-Za-z0-9_.-]*(?::\d+(?::\d+)?)?/g;
+  const fileEndpointPattern = new RegExp(FILE_MENTION_ENDPOINT_PATTERN);
   let match: RegExpExecArray | null;
   while ((match = fileEndpointPattern.exec(rawValue)) !== null) {
     addValue(match.index + match[0].length);
@@ -1612,6 +1613,105 @@ function shouldShowFileSuggestions(query: string, scoredCount: number) {
   return normalizedQuery.length >= 3 || (normalizedQuery.length >= 2 && scoredCount <= BROAD_FILE_SUGGESTION_LIMIT);
 }
 
+function canFileSuggestionQueryMatch(query: string) {
+  const normalizedQuery = normalizeComparableValue(query);
+  if (!normalizedQuery) {
+    return false;
+  }
+
+  return normalizedQuery.includes("/")
+    || normalizedQuery.startsWith(".")
+    || normalizedQuery.length >= 2;
+}
+
+function isBroadShortFileSuggestionQuery(query: string) {
+  const normalizedQuery = normalizeComparableValue(query);
+  return normalizedQuery.length === 2
+    && !normalizedQuery.includes("/")
+    && !normalizedQuery.startsWith(".");
+}
+
+function isAbsoluteFileMentionQuery(query: string) {
+  return /^(?:[A-Za-z]:\/|\/)/.test(normalizeWorkbenchPath(query));
+}
+
+function isPathLikeFileMentionQuery(query: string) {
+  const normalizedQuery = normalizeMentionPath(query);
+  return normalizedQuery.includes("/")
+    || normalizedQuery.startsWith(".")
+    || /^[A-Za-z]:\//.test(normalizedQuery);
+}
+
+function getLastFileMentionEndpointEnd(rawValue: string) {
+  const endpointPattern = new RegExp(FILE_MENTION_ENDPOINT_PATTERN);
+  let lastEndpointEnd: number | null = null;
+  let match: RegExpExecArray | null;
+  while ((match = endpointPattern.exec(rawValue)) !== null) {
+    lastEndpointEnd = match.index + match[0].length;
+  }
+
+  return lastEndpointEnd;
+}
+
+function getActiveFileSuggestionQuery(token: ParsedInlineMentionToken) {
+  if (token.explicitBoundary) {
+    return token.rawValue;
+  }
+
+  const rawValue = token.rawValue;
+  if (!rawValue.trim()) {
+    return "";
+  }
+
+  if (/^\s/.test(rawValue)) {
+    return null;
+  }
+
+  const lastEndpointEnd = getLastFileMentionEndpointEnd(rawValue);
+  if (lastEndpointEnd !== null && /^\s/.test(rawValue.slice(lastEndpointEnd))) {
+    return null;
+  }
+
+  if (isAbsoluteFileMentionQuery(rawValue)) {
+    return null;
+  }
+
+  if (/\s/.test(rawValue) && !isPathLikeFileMentionQuery(rawValue)) {
+    return null;
+  }
+
+  return rawValue;
+}
+
+function compareScoredInlineMentionSuggestions(
+  left: { candidate: InlineMentionCandidate; score: number },
+  right: { candidate: InlineMentionCandidate; score: number },
+) {
+  return left.score - right.score
+    || left.candidate.label.localeCompare(right.candidate.label, undefined, { sensitivity: "base" })
+    || left.candidate.path.localeCompare(right.candidate.path, undefined, { sensitivity: "base" });
+}
+
+function insertScoredInlineMentionSuggestion(
+  suggestions: Array<{ candidate: InlineMentionCandidate; score: number }>,
+  suggestion: { candidate: InlineMentionCandidate; score: number },
+  limit: number,
+) {
+  let insertIndex = suggestions.findIndex((current) => compareScoredInlineMentionSuggestions(suggestion, current) < 0);
+  if (insertIndex === -1) {
+    insertIndex = suggestions.length;
+  }
+
+  if (insertIndex >= limit) {
+    return;
+  }
+
+  suggestions.splice(insertIndex, 0, suggestion);
+  if (suggestions.length > limit) {
+    suggestions.pop();
+  }
+}
+
 function getSuggestionReplacementText(marker: "/" | "#", candidate: InlineMentionCandidate) {
   if (candidate.kind === "skill") {
     return `${marker}${candidate.label}`;
@@ -1636,37 +1736,48 @@ export function buildInlineMentionSuggestions(
     return [];
   }
 
+  const query = token.kind === "file"
+    ? getActiveFileSuggestionQuery(token)
+    : token.rawValue;
+  if (query === null || (token.kind === "file" && !canFileSuggestionQueryMatch(query))) {
+    return [];
+  }
+
   const suggestionCandidates = token.kind === "file"
     ? sources.fileCandidates
     : sources.skillCandidates;
-  const scoredSuggestions = suggestionCandidates
-    .filter((candidate) => (
-      token.kind !== "file" || allowsExcludedFileSuggestion(token.rawValue, candidate)
-    ))
-    .map((candidate) => ({
-      candidate,
-      score: token.kind === "file"
-        ? getFileSuggestionScore(token.rawValue, candidate)
-        : getSkillSuggestionScore(token.rawValue, candidate),
-    }))
-    .filter((entry): entry is { candidate: InlineMentionCandidate; score: number } => entry.score !== null);
+  const scoredSuggestions: Array<{ candidate: InlineMentionCandidate; score: number }> = [];
+  let scoredCount = 0;
+  for (const candidate of suggestionCandidates) {
+    if (token.kind === "file" && !allowsExcludedFileSuggestion(query, candidate)) {
+      continue;
+    }
 
-  if (token.kind === "file" && !shouldShowFileSuggestions(token.rawValue, scoredSuggestions.length)) {
+    const score = token.kind === "file"
+      ? getFileSuggestionScore(query, candidate)
+      : getSkillSuggestionScore(query, candidate);
+    if (score === null) {
+      continue;
+    }
+
+    scoredCount += 1;
+    if (token.kind === "file" && isBroadShortFileSuggestionQuery(query) && scoredCount > BROAD_FILE_SUGGESTION_LIMIT) {
+      return [];
+    }
+
+    insertScoredInlineMentionSuggestion(scoredSuggestions, { candidate, score }, limit);
+  }
+
+  if (token.kind === "file" && !shouldShowFileSuggestions(query, scoredCount)) {
     return [];
   }
 
   return scoredSuggestions
-    .sort((left, right) => (
-      left.score - right.score
-      || left.candidate.label.localeCompare(right.candidate.label, undefined, { sensitivity: "base" })
-      || left.candidate.path.localeCompare(right.candidate.path, undefined, { sensitivity: "base" })
-    ))
-    .slice(0, limit)
     .map(({ candidate }) => ({
       candidate,
       end: token.end,
       marker: token.marker,
-      query: token.rawValue,
+      query,
       replacementText: getSuggestionReplacementText(token.marker, candidate),
       start: token.start,
     }));
