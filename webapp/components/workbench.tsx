@@ -32,6 +32,7 @@ import {
   createSettingsHref,
   createSettingsRoute,
   createThreadRoute,
+  type WorkbenchRoute,
   type WorkbenchSettingsScope,
 } from "../lib/workbench/navigation/workbench-route";
 import {
@@ -263,6 +264,18 @@ function getRouteMosaicFallbackTarget(routeNode: WorkbenchMosaicNode | null, isM
   return isMobile ? getFirstMosaicTarget(routeNode) : null;
 }
 
+function mosaicContainsThreadTarget(node: WorkbenchMosaicNode | null, threadId: string): boolean {
+  if (!node) {
+    return false;
+  }
+
+  if (node.type === "target") {
+    return node.target.kind === "thread" && node.target.threadId === threadId;
+  }
+
+  return node.children.some((child) => mosaicContainsThreadTarget(child, threadId));
+}
+
 function getPanelTargetMosaicNode(target: WorkbenchPanelTarget): WorkbenchMosaicNode | null {
   if (target.kind === "file" || target.kind === "thread") {
     return createWorkbenchMosaicTarget(target);
@@ -454,6 +467,8 @@ function getGroupedProjects (projects: WorkbenchProjectOption[]): GroupedProject
 
 export default function Workbench () {
   const { navigateToRoute, route } = useWorkbenchRoute();
+  const currentRouteRef = useRef<WorkbenchRoute>(route);
+  currentRouteRef.current = route;
   const [explorer, setExplorer] = useState(INITIAL_EXPLORER_SNAPSHOT);
   const [currentThread, setCurrentThread] = useState<ThreadPayload | null>(null);
   const [harnessUserInputRequestsByThreadId, setHarnessUserInputRequestsByThreadId] = useState<Record<string, WorkbenchPendingUserInputRequest>>({});
@@ -1214,11 +1229,17 @@ export default function Workbench () {
         void _removedNewDraft;
         return rest;
       });
-      if (route.view === "mosaic" && route.mosaicNode && materializedThread.id !== thread.id) {
+
+      const currentRoute = currentRouteRef.current;
+      if (currentRoute.view === "mosaic"
+        && currentRoute.mosaicNode
+        && materializedThread.id !== thread.id
+        && mosaicContainsThreadTarget(currentRoute.mosaicNode, thread.id)
+      ) {
         navigateToRoute(createMosaicRoute(
-          explorer.currentProjectId || route.projectId,
+          currentRoute.projectId,
           replaceWorkbenchMosaicTarget(
-            route.mosaicNode,
+            currentRoute.mosaicNode,
             { kind: "thread", threadId: thread.id },
             { kind: "thread", threadId: materializedThread.id },
           ),
@@ -1229,21 +1250,37 @@ export default function Workbench () {
       return false;
     };
 
+    const replaceCurrentDraftThreadRoute = (materializedThread: ThreadPayload) => {
+      if (materializedThread.id === thread.id) {
+        return false;
+      }
+
+      if (replaceMosaicDraftThread(materializedThread)) {
+        return true;
+      }
+
+      const currentRoute = currentRouteRef.current;
+      if (currentRoute.view !== "thread" || currentRoute.threadId !== thread.id) {
+        return false;
+      }
+
+      navigateToRoute(createThreadRoute(currentRoute.projectId, materializedThread.id), { replace: true });
+      return true;
+    };
+
     const materializedOptions: WorkbenchSendThreadMessageOptions | undefined = thread.isDraft
       ? {
         ...options,
         onThreadMaterialized: (materializedThread) => {
           options?.onThreadMaterialized?.(materializedThread);
-          if (materializedThread.id !== thread.id && !replaceMosaicDraftThread(materializedThread)) {
-            navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, materializedThread.id), { replace: true });
-          }
+          replaceCurrentDraftThreadRoute(materializedThread);
         },
       }
       : options;
     const payload = await controls.sendThreadMessage(thread, input, materializedOptions);
     if (payload) {
-      if (thread.isDraft && payload.id !== thread.id && !replaceMosaicDraftThread(payload)) {
-        navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, payload.id), { replace: true });
+      if (thread.isDraft) {
+        replaceCurrentDraftThreadRoute(payload);
       }
 
       const draftThreadIdsToClear = Array.from(new Set([
@@ -1269,7 +1306,7 @@ export default function Workbench () {
     }
 
     return payload;
-  }, [controls, explorer.currentProjectId, navigateToRoute, route.mosaicNode, route.projectId, route.view]);
+  }, [controls, navigateToRoute]);
 
   const handleThreadComposerDraftChange = useCallback((threadId: string, draft: WorkbenchThreadComposerDraft) => {
     if (!explorer.currentProjectId) {
