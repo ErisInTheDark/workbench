@@ -6,7 +6,7 @@
  * - MODE_STATE_TAG_INSTRUCTIONS: shared injected guidance for agent-visible operating mode changes. Keywords: mode, state tag, thread markdown.
  * - WORKBENCH_FILE_LINK_INSTRUCTIONS: shared injected guidance for agent-visible clickable file links. Keywords: thread markdown, file links, paths.
  * - buildThreadTitleBootstrapInstructions: create the hidden PowerShell bootstrap instructions that tell a harness how to set a thread title through the local workbench route. Keywords: thread title, instructions, PowerShell, bootstrap.
- * - buildCodexThreadBootstrapInstructions: compose optional Codex agent definition content together with the shared title bootstrap instructions. Keywords: codex, agent, developer instructions, bootstrap.
+ * - buildCodexThreadBootstrapInstructions: compose optional Codex agent activation/definition content together with the shared title bootstrap instructions. Keywords: codex, agent, developer instructions, bootstrap.
  */
 import type { WorkbenchAgentDefinition, WorkbenchHarness } from "./types";
 
@@ -84,6 +84,16 @@ function buildAgentDefinitionInstructions(agentDefinition: WorkbenchAgentDefinit
   ].filter(Boolean).join("\n");
 }
 
+function buildDedupedAgentActivationInstructions(agentDefinition: WorkbenchAgentDefinition) {
+  return [
+    "For this thread, use the already-loaded Workbench agent named below as the active visible identity. Its full prompt body is already present in Codex global guidance and is intentionally not repeated here.",
+    "<agent_activation>",
+    `<name>${agentDefinition.name}</name>`,
+    agentDefinition.description ? `<description>${agentDefinition.description}</description>` : "",
+    "</agent_activation>",
+  ].filter(Boolean).join("\n");
+}
+
 export function normalizeThreadTitle(value: string | null | undefined) {
   if (typeof value !== "string") {
     return null;
@@ -137,12 +147,14 @@ export function buildThreadTitleBootstrapInstructions({
 
 export function buildCodexThreadBootstrapInstructions({
   agentDefinition,
+  dedupedAgentDefinition,
   harness,
   routeUrl,
   threadId,
   workbenchLibraryInstructions,
 }: {
   agentDefinition?: WorkbenchAgentDefinition | null;
+  dedupedAgentDefinition?: WorkbenchAgentDefinition | null;
   harness: WorkbenchHarness;
   routeUrl?: string | null;
   threadId: string;
@@ -156,6 +168,8 @@ export function buildCodexThreadBootstrapInstructions({
 
   if (agentDefinition?.prompt.trim()) {
     sections.push(buildAgentDefinitionInstructions(agentDefinition));
+  } else if (dedupedAgentDefinition?.prompt.trim()) {
+    sections.push(buildDedupedAgentActivationInstructions(dedupedAgentDefinition));
   }
 
   sections.push(MODE_STATE_TAG_INSTRUCTIONS);

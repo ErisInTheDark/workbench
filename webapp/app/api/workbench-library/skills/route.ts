@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { NextRequest } from "next/server";
 
+import { containsExactGuidanceText, readCodexGlobalGuidance } from "../../../../lib/codex/CodexGlobalGuidance";
 import { listProjectSkillDefinitions } from "../../../../lib/project";
 import {
   buildWorkbenchLibraryBootstrapInstructions,
@@ -30,7 +31,13 @@ export async function GET(request: NextRequest) {
       listWorkbenchLibraryInstructions(),
     ]);
     const data = [...projectSkills, ...librarySkills].map(summarizeSkill);
-    const instructions = await buildWorkbenchLibraryBootstrapInstructions(projectSkills);
+    const codexGlobalGuidance = await readCodexGlobalGuidance();
+    const globallyPresentInstructionPacks = instructionPacks
+      .filter((instructionPack) => containsExactGuidanceText(codexGlobalGuidance, instructionPack.content))
+      .map((instructionPack) => instructionPack.content);
+    const instructions = await buildWorkbenchLibraryBootstrapInstructions(projectSkills, {
+      skipInstructionPackContents: globallyPresentInstructionPacks,
+    });
 
     return NextResponse.json({ data, instructionPacks, instructions }, {
       headers: {

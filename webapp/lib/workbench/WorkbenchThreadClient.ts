@@ -238,6 +238,11 @@ type CodexThreadSessionResponse = {
   thread: ThreadReadResponse["thread"];
 };
 
+type WorkbenchAgentDefinitionResult = {
+  codexGlobalDuplicate: boolean;
+  definition: WorkbenchAgentDefinition | null;
+};
+
 function createInitialThreadState(): WorkbenchThreadState {
   return {
     currentThread: null,
@@ -1919,9 +1924,12 @@ function WorkbenchThreadClient(
       .catch(() => null);
   }
 
-  async function readSelectedAgentDefinition(agentPath: string | null): Promise<WorkbenchAgentDefinition | null> {
+  async function readSelectedAgentDefinition(agentPath: string | null): Promise<WorkbenchAgentDefinitionResult> {
     if (!agentPath?.trim()) {
-      return null;
+      return {
+        codexGlobalDuplicate: false,
+        definition: null,
+      };
     }
 
     const searchParams = new URLSearchParams({
@@ -1934,22 +1942,28 @@ function WorkbenchThreadClient(
       throw new Error(payload?.error || "Unable to load the selected agent definition.");
     }
 
-    const payload = await response.json() as { data?: WorkbenchAgentDefinition };
-    return payload.data ?? null;
+    const payload = await response.json() as { codexGlobalDuplicate?: boolean; data?: WorkbenchAgentDefinition };
+    return {
+      codexGlobalDuplicate: payload.codexGlobalDuplicate === true,
+      definition: payload.data ?? null,
+    };
   }
 
   async function buildCodexDeveloperInstructions(
     threadId: string,
     agentPath: string | null,
   ) {
-    const [workbenchLibraryInstructions, agentDefinition] = await Promise.all([
+    const [workbenchLibraryInstructions, agentResult] = await Promise.all([
       readWorkbenchLibraryInstructions(),
       readSelectedAgentDefinition(agentPath),
     ]);
+    const agentDefinition = agentResult.codexGlobalDuplicate ? null : agentResult.definition;
+    const dedupedAgentDefinition = agentResult.codexGlobalDuplicate ? agentResult.definition : null;
 
     return [
       buildCodexThreadBootstrapInstructions({
         agentDefinition,
+        dedupedAgentDefinition,
         harness: "codex",
         routeUrl: null,
         threadId,

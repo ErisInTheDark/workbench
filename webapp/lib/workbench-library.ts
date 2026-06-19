@@ -8,6 +8,7 @@
  * - listWorkbenchLibrarySkills/listWorkbenchLibrarySkillDefinitions: discover Workbench Skill metadata and full file content from nested SKILL.md files. Keywords: skills, manifest, discovery.
  * - listWorkbenchLibraryAgents/readWorkbenchLibraryAgentDefinition: discover and load library agent files. Keywords: agent, prompt, library.
  * - listWorkbenchLibraryInstructions: discover cached universal Workbench instruction packs. Keywords: instructions, universal, bootstrap, fingerprint.
+ * - WorkbenchLibraryBootstrapInstructionsOptions: controls duplicate instruction-pack filtering. Keywords: bootstrap, dedupe, codex.
  * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions: build compact harness instructions and universal instruction content. Keywords: bootstrap, skills, manifest.
  */
 import fs from "node:fs/promises";
@@ -484,17 +485,35 @@ export async function buildWorkbenchSkillManifestInstructions(projectSkills: Wor
   return buildDetectedSkillInstructions([...projectSkills, ...librarySkills]);
 }
 
-export async function buildWorkbenchLibraryBootstrapInstructions(projectSkills: WorkbenchSkillDefinition[] = []) {
+export interface WorkbenchLibraryBootstrapInstructionsOptions {
+  readonly skipInstructionPackContents?: readonly string[];
+}
+
+function shouldIncludeInstructionPack(
+  instructionPack: WorkbenchInstructionPack,
+  options: WorkbenchLibraryBootstrapInstructionsOptions,
+) {
+  const normalizedContent = instructionPack.content.trim();
+  return !options.skipInstructionPackContents?.some((content) => content.trim() === normalizedContent);
+}
+
+export async function buildWorkbenchLibraryBootstrapInstructions(
+  projectSkills: WorkbenchSkillDefinition[] = [],
+  options: WorkbenchLibraryBootstrapInstructionsOptions = {},
+) {
   const [skillManifest, instructionPacks] = await Promise.all([
     buildWorkbenchSkillManifestInstructions(projectSkills),
     listWorkbenchLibraryInstructions(),
   ]);
   const sections = [skillManifest];
+  const includedInstructionPacks = instructionPacks.filter((instructionPack) => (
+    shouldIncludeInstructionPack(instructionPack, options)
+  ));
 
-  if (instructionPacks.length) {
+  if (includedInstructionPacks.length) {
     sections.push([
       "Workbench provides these universal instruction packs from the Workbench Library. Treat them as Workbench-provided instructions for this thread.",
-      ...instructionPacks.map((instructionPack) => [
+      ...includedInstructionPacks.map((instructionPack) => [
         "",
         `## ${instructionPack.name}`,
         `Source: ${instructionPack.path}`,
