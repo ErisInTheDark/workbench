@@ -26,6 +26,7 @@ import type {
   WorkbenchThreadTurnHistoryEntry,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
+import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import type { ProjectTreeFileCandidate } from "../../../lib/workbench/project/ProjectTreeFileIndex";
 import {
   createProjectFilePathDisambiguationIndexCooperatively,
@@ -579,6 +580,7 @@ export default memo(function ThreadView ({
   projectId,
   projectFileCandidates,
   projectFileIndexId,
+  projectFileLinkRoots,
   projectFilePaths,
   projectRootPath,
   projectRoots,
@@ -623,6 +625,7 @@ export default memo(function ThreadView ({
   projectId: string;
   projectFileCandidates: readonly ProjectTreeFileCandidate[];
   projectFileIndexId: string;
+  projectFileLinkRoots?: readonly WorkspaceFileLinkRoot[];
   projectFilePaths: readonly string[];
   projectRootPath: string;
   projectRoots?: readonly WorkbenchProjectRoot[];
@@ -679,10 +682,10 @@ export default memo(function ThreadView ({
     return Array.from(new Set(liveActivity.waits.map((wait) => wait.hiddenItemId)));
   }, [liveActivity]);
   const workspaceFileLinkRoots = useMemo(() => (
-    projectRoots && projectRoots.length > 1
+    projectFileLinkRoots ?? (projectRoots && projectRoots.length > 1
       ? projectRoots.map((root) => ({ id: root.id, rootPath: root.rootPath }))
-      : []
-  ), [projectRoots]);
+      : [])
+  ), [projectFileLinkRoots, projectRoots]);
   const inlineMentionSources = useBackgroundInlineMentionSources({
     files: projectFileCandidates,
     filesIdentity: projectFileIndexId,

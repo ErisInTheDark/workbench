@@ -10,6 +10,7 @@
  * - createProjectEntry: create a new project file or directory and return its normalized relative path. Keywords: create, file, directory.
  * - buildTree/buildProjectTree: build the visible explorer tree for a project. Keywords: tree, explorer, filesystem.
  * - getProjectSnapshot: assemble the project tree, root info, and git change summary for the client. Keywords: snapshot, project, explorer.
+ * - resolveExternalFileLinkRoot: find the owning git root for an absolute local file link. Keywords: file link, absolute path, git root.
  * - parseWorkspaceQualifiedPath/formatWorkspaceQualifiedPath/resolveProjectFilePath: resolve root-qualified workspace paths. Keywords: workspace root, file path, qualified path.
  * - listProjectSkills/listProjectSkillDefinitions: discover project-level Workbench Skill metadata and full file content from `.agents/skills`. Keywords: project, skills, manifest.
  * - listUserInvocableAgents/readUserInvocableAgentDefinition: discover project-level agent markdown files from `.agents/agents` and load metadata/prompt. Keywords: agent, prompt, custom agent, iterator.
@@ -282,6 +283,54 @@ async function hasGitMarker(rootDir: string) {
   } catch {
     return false;
   }
+}
+
+function isLocalAbsolutePath(filePath: string) {
+  const normalizedPath = normalizeRelativePath(String(filePath ?? "").trim());
+  return path.isAbsolute(filePath) && !normalizedPath.startsWith("//");
+}
+
+async function findNearestGitRoot(startDir: string) {
+  let currentDir = path.resolve(startDir);
+  for (;;) {
+    if (await hasGitMarker(currentDir)) {
+      return currentDir;
+    }
+
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      return null;
+    }
+
+    currentDir = parentDir;
+  }
+}
+
+export async function resolveExternalFileLinkRoot(filePath: string) {
+  const candidatePath = String(filePath ?? "").trim();
+  if (!isLocalAbsolutePath(candidatePath)) {
+    return null;
+  }
+
+  const absolutePath = path.resolve(candidatePath);
+  let stats;
+  try {
+    stats = await fs.stat(absolutePath);
+  } catch {
+    return null;
+  }
+
+  if (!stats.isFile()) {
+    return null;
+  }
+
+  const gitRoot = await findNearestGitRoot(path.dirname(absolutePath));
+  return gitRoot
+    ? {
+      id: normalizeWorkspaceRootId(path.basename(gitRoot) || "root"),
+      rootPath: normalizeRelativePath(gitRoot),
+    }
+    : null;
 }
 
 async function isDirectory(rootDir: string) {

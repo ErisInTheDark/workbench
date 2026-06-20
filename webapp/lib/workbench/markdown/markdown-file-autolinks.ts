@@ -1,20 +1,25 @@
 /*
  * Exports:
  * - ParsedPlaintextProjectFileLink: resolved plaintext project-file autolink range and target metadata. Keywords: markdown, file link, autolink.
+ * - collectPlaintextAbsoluteFileLinkPaths: collect absolute local file path candidates for external root resolution. Keywords: markdown, absolute path, resolver.
  * - parsePlaintextProjectFileLink: recognize bare project file paths in thread markdown. Keywords: markdown, plaintext, file link.
  */
 
 import type { InlineMentionHighlightSources } from "../thread/inline-mention-highlights";
 import {
   type WorkspaceFileLinkRoot,
+  parseCodexFileLinkHref,
   resolveProjectFileLinkTarget,
 } from "./markdown-links";
 
 export interface ParsedPlaintextProjectFileLink {
+  absolutePath: string | null;
   columnNumber: number | null;
   end: number;
   href: string;
   lineNumber: number | null;
+  openPath: string;
+  projectId: string | null;
   relativePath: string;
   start: number;
 }
@@ -51,6 +56,29 @@ function getPlaintextFilePathCandidate(markdown: string, index: number) {
   return candidate.includes("/") || candidate.includes("\\") || candidate.startsWith("./")
     ? candidate
     : null;
+}
+
+export function collectPlaintextAbsoluteFileLinkPaths(markdown: string) {
+  const paths: string[] = [];
+  const seenPaths = new Set<string>();
+  const source = String(markdown ?? "");
+  const pattern = new RegExp(ABSOLUTE_FILE_PATH_PATTERN.source, "g");
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(source))) {
+    if (!isAutolinkBoundary(source[match.index - 1])) {
+      continue;
+    }
+
+    const path = parseCodexFileLinkHref(stripTrailingPunctuation(match[0]))?.absolutePath;
+    if (!path || seenPaths.has(path)) {
+      continue;
+    }
+
+    seenPaths.add(path);
+    paths.push(path);
+  }
+
+  return paths;
 }
 
 export function parsePlaintextProjectFileLink(

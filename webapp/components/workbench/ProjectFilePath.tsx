@@ -28,8 +28,10 @@ interface ProjectFilePathDisplayContextValue {
 }
 
 type ProjectFilePathProps = ProjectFilePathDisplayOptions & {
+  absolutePath?: string | null;
   className?: string;
   interactive?: boolean;
+  openPath?: string | null;
   path: string;
   projectId?: string | null;
 };
@@ -61,6 +63,7 @@ export function ProjectFilePathDisplayProvider ({
 }
 
 export default function ProjectFilePath ({
+  absolutePath = null,
   className,
   columnNumber,
   disambiguationIndex,
@@ -69,6 +72,7 @@ export default function ProjectFilePath ({
   interactive = false,
   label,
   lineNumber,
+  openPath = null,
   path,
   projectId = null,
 }: ProjectFilePathProps) {
@@ -96,7 +100,8 @@ export default function ProjectFilePath ({
     label,
     lineNumber,
   });
-  const isFileControl = typeof projectId === "string" && projectId.trim().length > 0;
+  const isFileControl = (typeof projectId === "string" && projectId.trim().length > 0)
+    || (typeof absolutePath === "string" && absolutePath.trim().length > 0);
   const content = (
     <>
       {display.rootPrefix ? (
@@ -122,7 +127,9 @@ export default function ProjectFilePath ({
         className={joinClasses(controlClassName, "border-0 text-left")}
         data-project-file-column-number={columnNumber ?? undefined}
         data-project-file-line-number={lineNumber ?? undefined}
-        data-project-file-relative-path={path}
+        data-project-file-project-id={projectId}
+        data-project-file-absolute-path={absolutePath ?? undefined}
+        data-project-file-relative-path={openPath ?? path}
         data-thread-summary-action="true"
         title={display.title}
       >

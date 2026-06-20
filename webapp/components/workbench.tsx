@@ -43,6 +43,7 @@ import {
 } from "../lib/workbench/navigation/workbench-mosaic-route";
 import ProjectTreeFileIndex from "../lib/workbench/project/ProjectTreeFileIndex";
 import { isWorkbenchOpenableFile } from "../lib/workbench/project/tree-utils";
+import type { WorkspaceFileLinkRoot } from "../lib/workbench/markdown/markdown-links";
 import {
   persistHarness,
   readStoredHarness,
@@ -188,6 +189,70 @@ const EDITOR_FONT_SIZE_OPTIONS = [0.9, 1, 1.08, 1.18, 1.32, 1.48].map((value, in
   value,
 }));
 
+function createUniqueFileLinkRootId(id: string, usedIds: Set<string>) {
+  const baseId = id.trim() || "root";
+  let candidateId = baseId;
+  let suffix = 2;
+  while (usedIds.has(candidateId.toLowerCase())) {
+    candidateId = `${baseId}-${suffix}`;
+    suffix += 1;
+  }
+
+  usedIds.add(candidateId.toLowerCase());
+  return candidateId;
+}
+
+function createProjectFileLinkRoots(
+  projects: readonly WorkbenchProjectOption[],
+  currentProjectId: string,
+  currentRoots: readonly ExplorerSnapshot["roots"][number][],
+): WorkspaceFileLinkRoot[] {
+  const roots: WorkspaceFileLinkRoot[] = [];
+  const usedIds = new Set<string>();
+  const usedRootPaths = new Set<string>();
+
+  const addRoot = (root: WorkspaceFileLinkRoot) => {
+    const rootPathKey = root.rootPath.toLowerCase();
+    if (!root.rootPath || usedRootPaths.has(rootPathKey)) {
+      return;
+    }
+
+    usedRootPaths.add(rootPathKey);
+    roots.push({
+      ...root,
+      id: createUniqueFileLinkRootId(root.id, usedIds),
+    });
+  };
+
+  if (currentRoots.length > 1) {
+    for (const root of currentRoots) {
+      addRoot({
+        id: root.id,
+        openPathMode: "workspace-qualified",
+        projectId: currentProjectId,
+        rootPath: root.rootPath,
+      });
+    }
+  }
+
+  for (const project of projects) {
+    if (project.id === currentProjectId) {
+      continue;
+    }
+
+    for (const root of project.roots) {
+      addRoot({
+        id: project.kind === "git" ? project.name || project.id : root.id,
+        openPathMode: project.kind === "workspace" ? "workspace-qualified" : "root-relative",
+        projectId: project.id,
+        rootPath: root.rootPath,
+      });
+    }
+  }
+
+  return roots;
+}
+
 function isReloadResponse (value: unknown): value is OrchestratorReloadResponse {
   return !!value
     && typeof value === "object"
@@ -195,8 +260,8 @@ function isReloadResponse (value: unknown): value is OrchestratorReloadResponse 
     && "state" in value;
 }
 
-function createFileOpenTarget (path: string): WorkbenchFileOpenTarget {
-  return { path };
+function createFileOpenTarget (path: string, projectId?: string | null): WorkbenchFileOpenTarget {
+  return { path, projectId };
 }
 
 function readPositiveIntegerDatasetValue (value: string | undefined) {
@@ -845,6 +910,10 @@ export default function Workbench () {
   const modifiedPaths = new Set(explorer.locallyModifiedPaths);
   const currentProject = explorer.projects.find((project) => project.id === explorer.currentProjectId) ?? null;
   const activeProjectId = explorer.currentProjectId || route.projectId;
+  const projectFileLinkRoots = useMemo(
+    () => createProjectFileLinkRoots(explorer.projects, activeProjectId, explorer.roots),
+    [activeProjectId, explorer.projects, explorer.roots],
+  );
   const isSidebarProjectLoading = explorer.isProjectLoading || (Boolean(route.projectId) && route.projectId !== explorer.currentProjectId);
   const isSidebarThreadsLoading = explorer.isThreadsLoading || isSidebarProjectLoading;
   const currentProjectDisplayName = currentProject
@@ -1102,25 +1171,28 @@ export default function Workbench () {
     );
   }, [activeProjectId, selectProjectFromLink]);
 
-  const openFileInWorkbench = useCallback(async (path: string) => {
+  const openFileInWorkbench = useCallback(async (target: WorkbenchFileOpenTarget) => {
+    const path = target.path;
+    const targetProjectId = target.projectId ?? explorer.currentProjectId ?? route.projectId;
     if (!isWorkbenchOpenableFile(path)) {
       return false;
     }
 
-    if (route.view === "file" && path === route.filePath) {
+    if (route.view === "file" && path === route.filePath && route.projectId === targetProjectId) {
       return true;
     }
 
-    navigateToRoute(createFileRoute(explorer.currentProjectId || route.projectId, path));
+    navigateToRoute(createFileRoute(targetProjectId, path));
     return true;
   }, [explorer.currentProjectId, navigateToRoute, route]);
 
   const openFileInVsCode = useCallback(async (target: WorkbenchFileOpenTarget) => {
     const payload: OpenFileInEditorRequest = {
+      absolutePath: target.absolutePath ?? null,
       columnNumber: target.columnNumber ?? null,
       lineNumber: target.lineNumber ?? null,
       path: target.path,
-      projectId: explorer.currentProjectId || route.projectId,
+      projectId: target.projectId ?? explorer.currentProjectId ?? route.projectId,
     };
     const response = await fetch("/api/file/open", {
       method: "POST",
@@ -1141,13 +1213,17 @@ export default function Workbench () {
 
   const openFileByPolicy = useCallback(async (target: WorkbenchFileOpenTarget) => {
     const path = target.path;
+    if (target.absolutePath) {
+      return await openFileInVsCode(target);
+    }
+
     const isOpenableInWorkbench = isWorkbenchOpenableFile(path);
     if (resolvedSettings.fileOpenBehavior === "vscode") {
       return await openFileInVsCode(target);
     }
 
     if (isOpenableInWorkbench) {
-      return await openFileInWorkbench(path);
+      return await openFileInWorkbench(target);
     }
 
     if (resolvedSettings.fileOpenBehavior === "workbench-or-vscode") {
@@ -1158,8 +1234,8 @@ export default function Workbench () {
   }, [openFileInVsCode, openFileInWorkbench, resolvedSettings.fileOpenBehavior]);
 
   const openFileFromExplorer = useCallback(async (path: string) => (
-    await openFileByPolicy(createFileOpenTarget(path))
-  ), [openFileByPolicy]);
+    await openFileByPolicy(createFileOpenTarget(path, explorer.currentProjectId || route.projectId))
+  ), [explorer.currentProjectId, openFileByPolicy, route.projectId]);
 
   const openThreadFromExplorer = useCallback(async (threadId: string) => {
     if (route.view === "thread" && threadId === route.threadId) {
@@ -1195,9 +1271,11 @@ export default function Workbench () {
     event.preventDefault();
     event.stopPropagation();
     void openFileByPolicy({
+      absolutePath: control.dataset.projectFileAbsolutePath?.trim() || null,
       columnNumber: readPositiveIntegerDatasetValue(control.dataset.projectFileColumnNumber),
       lineNumber: readPositiveIntegerDatasetValue(control.dataset.projectFileLineNumber),
       path,
+      projectId: control.dataset.projectFileProjectId?.trim() || null,
     });
   }, [openFileByPolicy]);
 
@@ -2804,6 +2882,7 @@ export default function Workbench () {
                   projectFileCandidates={explorer.projectFileCandidates}
                   projectFileIndexId={explorer.projectFileIndexId}
                   projectFilePaths={explorer.projectFilePaths}
+                  projectFileLinkRoots={projectFileLinkRoots}
                   projectRootPath={explorer.rootPath}
                   projectRoots={explorer.roots}
                   rateLimits={rateLimits}

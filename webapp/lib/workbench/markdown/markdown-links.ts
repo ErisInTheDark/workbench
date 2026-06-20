@@ -3,20 +3,25 @@
  * - normalizeWorkbenchPath: normalize local paths to forward-slash form for display and comparison. Keywords: path, normalize, local.
  * - normalizeMarkdownHref: unwrap markdown link destinations and normalize Windows absolute-path prefixes. Keywords: markdown, href, normalize.
  * - parseCodexFileLinkHref: parse absolute local file links with optional `:line[:column]` suffixes. Keywords: codex, file link, line number, column.
- * - resolveProjectFileLinkTarget: resolve absolute, relative, or suffix file references to project-relative targets. Keywords: project file, link, resolver.
+ * - resolveProjectFileLinkTarget: resolve absolute, relative, or suffix file references to clickable file targets. Keywords: project file, absolute link, resolver.
  * - appendCodexFileLinkLocation: append missing `:line[:column]` suffixes to codex file-link labels. Keywords: codex, file link, label, location.
  * - toProjectRelativeFilePath: convert an absolute local path into a project-relative path when it belongs to the current project root. Keywords: path, project root, relative.
  * - toWorkbenchDisplayPath: normalize a path for UI display and prefer project-relative forward-slash paths when possible. Keywords: path, display, project root.
  */
 
 export interface ProjectFileLinkTarget {
+  absolutePath: string | null;
   columnNumber: number | null;
   lineNumber: number | null;
+  openPath: string;
+  projectId: string | null;
   relativePath: string;
 }
 
 export interface WorkspaceFileLinkRoot {
   id: string;
+  openPathMode?: "absolute" | "root-relative" | "workspace-qualified";
+  projectId?: string | null;
   rootPath: string;
 }
 
@@ -110,6 +115,24 @@ function formatWorkspaceRootRelativePath(rootId: string, relativePath: string | 
   return normalizedRelativePath ? `${normalizedRootId}:${normalizedRelativePath}` : `${normalizedRootId}:`;
 }
 
+function formatWorkspaceRootOpenPath(root: WorkspaceFileLinkRoot, relativePath: string | null, absolutePath: string) {
+  const mode = root.openPathMode ?? "workspace-qualified";
+  const normalizedRelativePath = normalizeWorkbenchPath(relativePath ?? "").replace(/^\/+/, "");
+  if (mode === "absolute") {
+    const normalizedAbsolutePath = normalizeWorkbenchPath(absolutePath);
+    if (normalizedAbsolutePath) {
+      return normalizedAbsolutePath;
+    }
+
+    const normalizedRootPath = normalizeWorkbenchPath(root.rootPath);
+    return normalizedRelativePath ? `${normalizedRootPath}/${normalizedRelativePath}` : normalizedRootPath;
+  }
+
+  return mode === "root-relative"
+    ? normalizedRelativePath
+    : formatWorkspaceRootRelativePath(root.id, normalizedRelativePath);
+}
+
 function parseWorkspaceRootRelativePath(value: string) {
   const parsedValue = parseProjectFileLinkLocation(value);
   const normalizedPath = normalizeWorkbenchPath(parsedValue.path).replace(/^\.\//, "");
@@ -159,8 +182,11 @@ function resolveWorkspaceAbsoluteFileLinkTarget(
   const rootMatch = findWorkspaceRootByPath(workspaceRoots, absoluteTarget.absolutePath);
   return rootMatch
     ? {
+      absolutePath: rootMatch.root.openPathMode === "absolute" ? absoluteTarget.absolutePath : null,
       columnNumber: absoluteTarget.columnNumber,
       lineNumber: absoluteTarget.lineNumber,
+      openPath: formatWorkspaceRootOpenPath(rootMatch.root, rootMatch.relativePath, absoluteTarget.absolutePath),
+      projectId: rootMatch.root.projectId ?? null,
       relativePath: formatWorkspaceRootRelativePath(rootMatch.root.id, rootMatch.relativePath),
     }
     : null;
@@ -176,10 +202,14 @@ function resolveExplicitWorkspaceFileLinkTarget(
   }
 
   const root = findWorkspaceRootById(workspaceRoots, parsedValue.rootId);
+  const openPath = root ? formatWorkspaceRootOpenPath(root, parsedValue.relativePath, "") : "";
   return root
     ? {
+      absolutePath: root.openPathMode === "absolute" ? openPath : null,
       columnNumber: parsedValue.columnNumber,
       lineNumber: parsedValue.lineNumber,
+      openPath,
+      projectId: root.projectId ?? null,
       relativePath: formatWorkspaceRootRelativePath(root.id, parsedValue.relativePath),
     }
     : null;
@@ -212,11 +242,15 @@ function resolvePreferredWorkspaceRootFileLinkTarget(
     ? normalizeWorkbenchPath(`${cwdRootRelativePath}/${normalizedPath}`)
     : normalizedPath;
   const candidatePath = formatWorkspaceRootRelativePath(rootMatch.root.id, targetRootRelativePath);
+  const openPath = formatWorkspaceRootOpenPath(rootMatch.root, targetRootRelativePath, "");
   const comparableCandidatePath = normalizeComparableProjectPath(candidatePath);
   return allowWithoutCandidate || getUniqueCandidatePaths(candidatePaths).some((filePath) => normalizeComparableProjectPath(filePath) === comparableCandidatePath)
     ? {
+      absolutePath: rootMatch.root.openPathMode === "absolute" ? openPath : null,
       columnNumber: parsedValue.columnNumber,
       lineNumber: parsedValue.lineNumber,
+      openPath,
+      projectId: rootMatch.root.projectId ?? null,
       relativePath: candidatePath,
     }
     : null;
@@ -265,8 +299,11 @@ function resolveRelativeProjectFileLinkTarget(
   ));
   if (exactMatches.length === 1) {
     return {
+      absolutePath: null,
       columnNumber: parsedValue.columnNumber,
       lineNumber: parsedValue.lineNumber,
+      openPath: exactMatches[0],
+      projectId: null,
       relativePath: exactMatches[0],
     };
   }
@@ -279,8 +316,11 @@ function resolveRelativeProjectFileLinkTarget(
   });
   if (workspaceRootRelativeMatches.length === 1) {
     return {
+      absolutePath: null,
       columnNumber: parsedValue.columnNumber,
       lineNumber: parsedValue.lineNumber,
+      openPath: workspaceRootRelativeMatches[0],
+      projectId: null,
       relativePath: workspaceRootRelativeMatches[0],
     };
   }
@@ -294,8 +334,11 @@ function resolveRelativeProjectFileLinkTarget(
   ));
   return suffixMatches.length === 1
     ? {
+      absolutePath: null,
       columnNumber: parsedValue.columnNumber,
       lineNumber: parsedValue.lineNumber,
+      openPath: suffixMatches[0],
+      projectId: null,
       relativePath: suffixMatches[0],
     }
     : null;
@@ -330,11 +373,21 @@ export function resolveProjectFileLinkTarget(
     const relativePath = toProjectRelativeFilePath(absoluteTarget.absolutePath, projectRootPath);
     return relativePath
       ? {
+        absolutePath: null,
         columnNumber: absoluteTarget.columnNumber,
         lineNumber: absoluteTarget.lineNumber,
+        openPath: relativePath,
+        projectId: null,
         relativePath,
       }
-      : null;
+      : {
+        absolutePath: absoluteTarget.absolutePath,
+        columnNumber: absoluteTarget.columnNumber,
+        lineNumber: absoluteTarget.lineNumber,
+        openPath: absoluteTarget.absolutePath,
+        projectId: null,
+        relativePath: absoluteTarget.absolutePath,
+      };
   }
 
   const explicitWorkspaceTarget = resolveExplicitWorkspaceFileLinkTarget(normalizedValue, workspaceRoots);

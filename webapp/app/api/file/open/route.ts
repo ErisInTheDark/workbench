@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - runtime/dynamic: force the VS Code launcher route onto Node.js without static caching. Keywords: file open, VS Code, route.
- * - POST: open a project-relative file in VS Code through the local `code --goto` CLI. Keywords: file open, VS Code, goto.
+ * - POST: open a project-relative or absolute local file in VS Code through the local `code --goto` CLI. Keywords: file open, VS Code, absolute, goto.
  */
 
 import { spawn } from "node:child_process";
@@ -27,16 +27,28 @@ function normalizePositiveInteger(value: unknown) {
 }
 
 function normalizeOpenFileRequest(value: unknown): OpenFileInEditorRequest | null {
-  if (!isRecord(value) || typeof value.path !== "string" || !value.path.trim()) {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const path = typeof value.path === "string" ? value.path.trim() : "";
+  const absolutePath = typeof value.absolutePath === "string" ? value.absolutePath.trim() : "";
+  if (!path && !absolutePath) {
     return null;
   }
 
   return {
+    absolutePath: absolutePath || null,
     columnNumber: normalizePositiveInteger(value.columnNumber),
     lineNumber: normalizePositiveInteger(value.lineNumber),
-    path: value.path,
+    path,
     projectId: typeof value.projectId === "string" ? value.projectId : null,
   };
+}
+
+function isLocalAbsolutePath(filePath: string) {
+  const normalizedPath = filePath.replace(/\\/g, "/");
+  return /^[A-Za-z]:\//.test(normalizedPath) || (normalizedPath.startsWith("/") && !normalizedPath.startsWith("//"));
 }
 
 function createGotoTarget(absolutePath: string, lineNumber: number | null, columnNumber: number | null) {
@@ -107,22 +119,26 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "A project file path is required." }, { status: 400 });
     }
 
-    const resolvedProject = await resolveProjectRoot(payload.projectId);
-    const resolvedFile = resolveProjectFilePath(resolvedProject, payload.path);
-    const absolutePath = resolvedFile.absolutePath;
+    const resolvedProject = payload.absolutePath ? null : await resolveProjectRoot(payload.projectId);
+    const resolvedFile = resolvedProject ? resolveProjectFilePath(resolvedProject, payload.path) : null;
+    const absolutePath = payload.absolutePath ?? resolvedFile?.absolutePath;
+    if (!absolutePath || !isLocalAbsolutePath(absolutePath)) {
+      return NextResponse.json({ error: "The requested path must be a local absolute file path." }, { status: 400 });
+    }
+
     const stats = await fs.stat(absolutePath);
     if (!stats.isFile()) {
       return NextResponse.json({ error: "The requested path is not a file." }, { status: 400 });
     }
 
-    const normalizedPath = resolvedFile.displayPath;
+    const normalizedPath = resolvedFile?.displayPath ?? absolutePath.replace(/\\/g, "/");
     const target = createGotoTarget(absolutePath, payload.lineNumber ?? null, payload.columnNumber ?? null);
     await openInVsCode(target);
 
     return NextResponse.json({
       ok: true,
       path: normalizedPath,
-      projectId: resolvedProject.id,
+      projectId: resolvedProject?.id ?? null,
       target,
     } satisfies OpenFileInEditorResponse, {
       headers: {

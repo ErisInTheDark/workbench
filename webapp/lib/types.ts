@@ -375,18 +375,32 @@ export interface SaveConflictPayload {
 }
 
 export interface WorkbenchFileOpenTarget {
+  absolutePath?: string | null;
   columnNumber?: number | null;
   lineNumber?: number | null;
   path: string;
-}
-
-export interface OpenFileInEditorRequest extends WorkbenchFileOpenTarget {
   projectId?: string | null;
 }
+
+export interface OpenFileInEditorRequest extends WorkbenchFileOpenTarget {}
 
 export interface OpenFileInEditorResponse {
   ok: true;
   path: string;
-  projectId: string;
+  projectId: string | null;
   target: string;
+}
+
+export interface ResolveExternalFileLinkRootsRequest {
+  paths: string[];
+}
+
+export interface ExternalFileLinkRoot {
+  id: string;
+  openPathMode: "absolute";
+  rootPath: string;
+}
+
+export interface ResolveExternalFileLinkRootsResponse {
+  roots: ExternalFileLinkRoot[];
 }

@@ -136,12 +136,14 @@ function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string, 
       case "projectFileLink": {
         return (
           <ProjectFilePath
+            absolutePath={node.absolutePath}
             columnNumber={node.columnNumber}
             key={key}
             label={node.label}
             lineNumber={node.lineNumber}
+            openPath={node.openPath}
             path={node.relativePath}
-            projectId={options.projectId}
+            projectId={node.projectId ?? options.projectId}
           />
         );
       }

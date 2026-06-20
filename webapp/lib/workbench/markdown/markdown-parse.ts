@@ -74,10 +74,13 @@ export type ParsedInlineNode =
   | { type: "knownSkillMention"; text: string; title: string }
   | {
     type: "projectFileLink";
+    absolutePath: string | null;
     columnNumber: number | null;
     href: string;
     label?: string | null;
     lineNumber: number | null;
+    openPath: string;
+    projectId: string | null;
     relativePath: string;
   };
 
@@ -424,19 +427,28 @@ function pushTextNode(nodes: ParsedInlineNode[], text: string) {
 }
 
 function createProjectFileLinkNode(url: string, relativePath: string, {
+  absolutePath = null,
   columnNumber = null,
   label = null,
   lineNumber = null,
+  openPath = relativePath,
+  projectId = null,
 }: {
+  absolutePath?: string | null;
   columnNumber?: number | null;
   label?: string | null;
   lineNumber?: number | null;
+  openPath?: string;
+  projectId?: string | null;
 } = {}): Extract<ParsedInlineNode, { type: "projectFileLink" }> {
   return {
+    absolutePath,
     columnNumber,
     href: url,
     label,
     lineNumber,
+    openPath,
+    projectId,
     relativePath,
     type: "projectFileLink",
   };
@@ -486,6 +498,9 @@ function parseExplicitProjectFileMention(markdown: string, index: number, option
     node: createProjectFileLinkNode(`#${rawValue}`, resolvedFileLink.relativePath, {
       columnNumber: resolvedFileLink.columnNumber,
       lineNumber: resolvedFileLink.lineNumber,
+      absolutePath: resolvedFileLink.absolutePath,
+      openPath: resolvedFileLink.openPath,
+      projectId: resolvedFileLink.projectId,
     }),
   };
 }
@@ -646,6 +661,9 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
               columnNumber: resolvedFileLink.columnNumber,
               label,
               lineNumber: resolvedFileLink.lineNumber,
+              absolutePath: resolvedFileLink.absolutePath,
+              openPath: resolvedFileLink.openPath,
+              projectId: resolvedFileLink.projectId,
             }));
             index = urlEnd + 1;
             continue;
@@ -678,6 +696,9 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
         nodes.push(createProjectFileLinkNode(plaintextFileLink.href, plaintextFileLink.relativePath, {
           columnNumber: plaintextFileLink.columnNumber,
           lineNumber: plaintextFileLink.lineNumber,
+          absolutePath: plaintextFileLink.absolutePath,
+          openPath: plaintextFileLink.openPath,
+          projectId: plaintextFileLink.projectId,
         }));
         index = plaintextFileLink.end;
         continue;
