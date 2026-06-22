@@ -9,6 +9,7 @@ import { useState } from "react";
 import type { ThreadTokenUsage } from "../../../lib/codex/generated/app-server/v2/ThreadTokenUsage";
 import type { ThreadPayload } from "../../../lib/types";
 import { readStoredThreadTokenUsage } from "../../../lib/workbench/state/browser-state";
+import WorkbenchProgressWheel from "../WorkbenchProgressWheel";
 
 const visibleTokenUsageByThreadKey = new Map<string, ThreadTokenUsage>();
 
@@ -64,58 +65,6 @@ function isThreadActive (thread: ThreadPayload) {
   return thread.status === "active" || thread.status.startsWith("active:");
 }
 
-function ContextProgressWheel ({
-  percent,
-}: {
-  percent: number;
-}) {
-  const radius = 7;
-  const clampedPercent = Math.min(100, Math.max(0, percent));
-  const center = 10;
-  const startX = center;
-  const startY = center - radius;
-  const endAngleRadians = (-90 - (360 * clampedPercent) / 100) * (Math.PI / 180);
-  const endX = center + radius * Math.cos(endAngleRadians);
-  const endY = center + radius * Math.sin(endAngleRadians);
-  const isLargeArc = clampedPercent > 50 ? 1 : 0;
-  const pathData = `M ${startX} ${startY} A ${radius} ${radius} 0 ${isLargeArc} 0 ${endX} ${endY}`;
-
-  return (
-    <svg viewBox="0 0 20 20" className="size-5" aria-hidden="true">
-      <circle
-        cx="10"
-        cy="10"
-        r={radius}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        className="text-[color-mix(in_srgb,var(--text)_14%,transparent)]"
-      />
-      {clampedPercent >= 99.5 ? (
-        <circle
-          cx="10"
-          cy="10"
-          r={radius}
-          fill="none"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeWidth="2"
-          className="text-accent"
-        />
-      ) : clampedPercent > 0 ? (
-        <path
-          d={pathData}
-          fill="none"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeWidth="2"
-          className="text-accent"
-        />
-      ) : null}
-    </svg>
-  );
-}
-
 function CompactIcon () {
   return (
     <svg viewBox="0 0 20 20" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
@@ -162,7 +111,7 @@ export default function ThreadContextStatus ({
       <div className="flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-1" title={contextStatusTitle}>
         {usedPercent !== null ? (
           <span className="inline-flex items-center gap-2 whitespace-nowrap">
-            <ContextProgressWheel percent={usedPercent} />
+            <WorkbenchProgressWheel percent={usedPercent} />
             <span className="font-semibold text-text">{formatPercent(usedPercent)}</span>
             <span>window size</span>
           </span>

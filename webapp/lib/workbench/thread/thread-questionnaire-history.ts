@@ -8,6 +8,7 @@
 
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem";
 import type { ThreadPayload, WorkbenchQuestionnaireHistoryEntry } from "../../types";
+import { areDeeplyEqual } from "../deep-equality";
 
 export const WORKBENCH_QUESTIONNAIRE_TOOL_NAME = "workbench_request_user_input";
 export const SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX = "workbench:questionnaire-history:";
@@ -51,7 +52,7 @@ function isEquivalentSyntheticQuestionnaireHistoryItem(
     && item.success === true
     && item.namespace === null
     && item.durationMs === null
-    && JSON.stringify(item.arguments) === JSON.stringify(entry.request)
+    && areDeeplyEqual(item.arguments, entry.request)
     && item.contentItems?.length === 1
     && firstContentItem?.type === "inputText"
     && firstContentItem.text === buildSyntheticQuestionnaireHistoryResponseText(entry);

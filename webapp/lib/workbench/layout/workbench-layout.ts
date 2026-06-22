@@ -13,6 +13,12 @@ export type WorkbenchPanelTarget =
     readonly kind: "empty";
   }
   | {
+    readonly kind: "collaborationCollaborator";
+  }
+  | {
+    readonly kind: "collaborationScratchpad";
+  }
+  | {
     readonly filePath: string;
     readonly kind: "file";
   }
@@ -81,6 +87,9 @@ function isPanelTarget(value: unknown): value is WorkbenchPanelTarget {
   if (candidate.kind === "empty") {
     return true;
   }
+  if (candidate.kind === "collaborationCollaborator" || candidate.kind === "collaborationScratchpad") {
+    return true;
+  }
   if (candidate.kind === "file") {
     return typeof candidate.filePath === "string";
   }
@@ -96,6 +105,10 @@ function isPanelTarget(value: unknown): value is WorkbenchPanelTarget {
 
 function isDirection(value: unknown): value is "horizontal" | "vertical" {
   return value === "horizontal" || value === "vertical";
+}
+
+function normalizePositiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function normalizeNode(value: unknown): WorkbenchMainLayoutNode | null {
@@ -126,8 +139,12 @@ function normalizeNode(value: unknown): WorkbenchMainLayoutNode | null {
     return {
       direction: candidate.direction,
       first,
+      firstFr: normalizePositiveNumber(candidate.firstFr),
+      firstMinimized: candidate.firstMinimized === true || undefined,
       id,
       second,
+      secondFr: normalizePositiveNumber(candidate.secondFr),
+      secondMinimized: candidate.secondMinimized === true || undefined,
       type: "split",
     };
   }
@@ -177,6 +194,9 @@ function targetsEqual(left: WorkbenchPanelTarget, right: WorkbenchPanelTarget) {
   }
   if (left.kind === "settings" && right.kind === "settings") {
     return left.scope === right.scope;
+  }
+  if (left.kind === "collaborationCollaborator" || left.kind === "collaborationScratchpad") {
+    return true;
   }
 
   return left.kind === "empty";
@@ -272,6 +292,37 @@ function flattenPanels(node: WorkbenchMainLayoutNode): WorkbenchPanelReference[]
   ];
 }
 
+function resizeSplitNode(
+  node: WorkbenchMainLayoutNode,
+  splitId: string,
+  firstPercent: number,
+): WorkbenchMainLayoutNode {
+  if (node.type === "leaf") {
+    return node;
+  }
+
+  if (node.id === splitId) {
+    const firstFr = Math.min(95, Math.max(5, firstPercent));
+    return {
+      ...node,
+      firstFr,
+      secondFr: 100 - firstFr,
+    };
+  }
+
+  const first = resizeSplitNode(node.first, splitId, firstPercent);
+  const second = resizeSplitNode(node.second, splitId, firstPercent);
+  if (first === node.first && second === node.second) {
+    return node;
+  }
+
+  return {
+    ...node,
+    first,
+    second,
+  };
+}
+
 function WorkbenchMainLayout(target: WorkbenchPanelTarget = { kind: "empty" }): WorkbenchMainLayout {
   const root: WorkbenchMainLayoutNode = {
     id: createPanelId(),
@@ -351,6 +402,13 @@ namespace WorkbenchMainLayout {
       panelId: layout.focusedPanelId,
       placement: "center",
     }, target);
+  }
+
+  export function resizeSplit(layout: WorkbenchMainLayout, splitId: string, firstPercent: number): WorkbenchMainLayout {
+    return {
+      ...layout,
+      root: resizeSplitNode(layout.root, splitId, firstPercent),
+    };
   }
 
   export function closePanel(layout: WorkbenchMainLayout, panelId: string): WorkbenchMainLayout {

@@ -33,6 +33,7 @@ import {
     createThreadStartRequest,
     isCodexJsonRpcFailure,
 } from "../codex/protocol";
+import { areDeeplyEqual } from "./deep-equality";
 import { appendCommandOutputDelta, compactCommandExecutionItemOutput } from "../codex/thread-command-output";
 import {
     formatThreadStatus,
@@ -106,9 +107,9 @@ const FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE = "Started the thread. Its saved
 
 type WorkspaceWriteSandboxPolicy = Extract<SandboxPolicy, { type: "workspaceWrite" }>;
 
-function createWorkspaceWriteSandboxPolicy(rootPaths: string[]): WorkspaceWriteSandboxPolicy | null {
+function createWorkspaceWriteSandboxPolicy(rootPaths: string[], options: { force?: boolean } = {}): WorkspaceWriteSandboxPolicy | null {
   const writableRoots = Array.from(new Set(rootPaths.filter(Boolean)));
-  return writableRoots.length > 1
+  return writableRoots.length > 1 || (options.force && writableRoots.length > 0)
     ? {
       type: "workspaceWrite",
       writableRoots,
@@ -178,7 +179,7 @@ export interface WorkbenchThreadClientOptions {
 
 interface WorkbenchThreadClient {
   clearThreadSelection: () => void;
-  createThread: (harness: WorkbenchHarness, threadId?: string) => ThreadPayload;
+  createThread: (harness: WorkbenchHarness, threadId?: string, options?: { select?: boolean }) => ThreadPayload;
   dispose: () => void;
   getSnapshot: () => WorkbenchThreadSnapshot;
   hasThread: (threadId: string) => boolean;
@@ -363,7 +364,7 @@ function mergeThreadTurnHistory(
         loadState: entry.loadState,
       }
       : incomingEntry;
-    if (JSON.stringify(mergedEntry) !== JSON.stringify(entry)) {
+    if (!areDeeplyEqual(mergedEntry, entry)) {
       changed = true;
     }
     return mergedEntry;
@@ -821,7 +822,7 @@ function WorkbenchThreadClient(
       return false;
     }
 
-    return JSON.stringify(leftTurn) === JSON.stringify(rightTurn);
+    return areDeeplyEqual(leftTurn, rightTurn);
   }
 
   function areTurnListsEquivalent(leftTurns: Turn[], rightTurns: Turn[]) {
@@ -866,8 +867,8 @@ function WorkbenchThreadClient(
       && left.forkedFromId === right.forkedFromId
       && left.agentNickname === right.agentNickname
       && left.agentRole === right.agentRole
-      && JSON.stringify(left.tokenUsage) === JSON.stringify(right.tokenUsage)
-      && JSON.stringify(left.turnHistory) === JSON.stringify(right.turnHistory)
+      && areDeeplyEqual(left.tokenUsage, right.tokenUsage)
+      && areDeeplyEqual(left.turnHistory, right.turnHistory)
       && areTurnListsEquivalent(left.turns, right.turns)
       && areCurrentTurnsEquivalent(left, right);
   }
@@ -1413,7 +1414,7 @@ function WorkbenchThreadClient(
     for (const [index, entry] of entries.entries()) {
       const matchingEntriesThroughCurrent = entries
         .slice(0, index + 1)
-        .filter((candidate) => JSON.stringify(candidate.input) === JSON.stringify(entry.input))
+        .filter((candidate) => areDeeplyEqual(candidate.input, entry.input))
         .length;
       if (countCanonicalUserMessageMatches(canonicalItems, entry.input) < matchingEntriesThroughCurrent) {
         visibleEntries.push(entry);
@@ -1602,7 +1603,7 @@ function WorkbenchThreadClient(
       && existing.harness === harness
       && existing.turnId === turnId
       && existing.itemId === itemId
-      && JSON.stringify(existing.request) === JSON.stringify(request)
+      && areDeeplyEqual(existing.request, request)
     ) {
       return false;
     }
@@ -1686,7 +1687,7 @@ function WorkbenchThreadClient(
           || existing.harness !== request.harness
           || existing.turnId !== request.turnId
           || existing.itemId !== request.itemId
-          || JSON.stringify(existing.request) !== JSON.stringify(request.request)
+          || !areDeeplyEqual(existing.request, request.request)
         ) {
           unchanged = false;
           break;
@@ -1861,7 +1862,7 @@ function WorkbenchThreadClient(
   function setQuestionnaireHistoryEntries(threadId: string, entries: WorkbenchQuestionnaireHistoryEntry[]) {
     const nextEntries = entries.filter((entry) => entry.threadId === threadId);
     const existingEntries = state.questionnaireHistoryByThreadId.get(threadId) ?? [];
-    if (JSON.stringify(existingEntries) === JSON.stringify(nextEntries)) {
+    if (areDeeplyEqual(existingEntries, nextEntries)) {
       return false;
     }
 
@@ -2938,8 +2939,14 @@ function WorkbenchThreadClient(
     const shouldBypassCodexDraftBootstrap = harness === "codex" && isDraftThread;
     let previousThread = !thread.isDraft ? thread : null;
     let bootstrapThread: ThreadPayload | null = null;
+    const additionalWritableRoots = sendOptions.additionalWritableRoots ?? [];
     const codexWorkspaceSandboxPolicy = harness === "codex"
-      ? createWorkspaceWriteSandboxPolicy(getProjectRootPaths(state))
+      ? createWorkspaceWriteSandboxPolicy([
+        ...getProjectRootPaths(state),
+        ...additionalWritableRoots,
+      ], {
+        force: additionalWritableRoots.length > 0,
+      })
       : null;
 
     if (!normalizedInput.length) {
@@ -3440,9 +3447,11 @@ function WorkbenchThreadClient(
     }));
   }
 
-  function createThread(harness: WorkbenchHarness, threadId?: string) {
+  function createThread(harness: WorkbenchHarness, threadId?: string, options: { select?: boolean } = {}) {
     const draftThread = createDraftThread(harness, threadId);
-    setCurrentThread(draftThread);
+    if (options.select !== false) {
+      setCurrentThread(draftThread);
+    }
     return draftThread;
   }
 

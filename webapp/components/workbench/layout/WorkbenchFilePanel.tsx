@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 
 import type { WorkbenchControls } from "../../../lib/types";
-import type { WorkbenchFilePanelClient, WorkbenchFilePanelSnapshot } from "../../../lib/workbench/WorkbenchFilePanelClient";
+import type { WorkbenchFilePanelClient, WorkbenchFilePanelClientOptions, WorkbenchFilePanelSnapshot } from "../../../lib/workbench/WorkbenchFilePanelClient";
 import type { WorkbenchEditorDomSurfaces } from "../../../lib/workbench/workbench-dom";
 import {
   workbenchDiffGutterClassName,
@@ -28,6 +28,7 @@ import {
 } from "../workbench-icons";
 
 interface WorkbenchFilePanelProps {
+  clientOptions?: Partial<Omit<WorkbenchFilePanelClientOptions, "clearThreadSelection" | "draftStore" | "emitExplorerStateChange" | "expandProjectPath" | "getProjectChangeSummary" | "getProjectId" | "refreshProject" | "surfaces">>;
   contained?: boolean;
   controls: WorkbenchControls | null;
   editorFontClassName: string;
@@ -44,10 +45,13 @@ interface WorkbenchFilePanelProps {
   onSnapshotChange?: (snapshot: WorkbenchFilePanelSnapshot | null) => void;
   panelZoomDelta?: number;
   path: string;
+  showManualFileActions?: boolean;
   spellCheck: boolean;
+  titleLabel?: string;
 }
 
 export default function WorkbenchFilePanel ({
+  clientOptions,
   contained = false,
   controls,
   editorFontClassName,
@@ -64,7 +68,9 @@ export default function WorkbenchFilePanel ({
   onSnapshotChange,
   panelZoomDelta = 0,
   path,
+  showManualFileActions = true,
   spellCheck,
+  titleLabel,
 }: WorkbenchFilePanelProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const customCaretRef = useRef<HTMLDivElement>(null);
@@ -131,7 +137,7 @@ export default function WorkbenchFilePanel ({
     }
 
     const panelControls = controls as WorkbenchControls & {
-      createFilePanelClient: (surfaces: WorkbenchEditorDomSurfaces) => WorkbenchFilePanelClient;
+      createFilePanelClient: (surfaces: WorkbenchEditorDomSurfaces, options?: WorkbenchFilePanelProps["clientOptions"]) => WorkbenchFilePanelClient;
     };
 
     const surfaces: WorkbenchEditorDomSurfaces = {
@@ -175,7 +181,7 @@ export default function WorkbenchFilePanel ({
       },
     };
 
-    const client = panelControls.createFilePanelClient(surfaces);
+    const client = panelControls.createFilePanelClient(surfaces, clientOptions);
     clientRef.current = client;
     client.setFontSize(fontSizeRem, { persist: false });
     const unsubscribe = client.subscribe((nextSnapshot) => {
@@ -193,7 +199,7 @@ export default function WorkbenchFilePanel ({
       setSnapshot(null);
       onSnapshotChange?.(null);
     };
-  }, [controls, onSnapshotChange, path]);
+  }, [clientOptions, controls, onSnapshotChange, path]);
 
   useEffect(() => {
     clientRef.current?.setFontSize(fontSizeRem, { persist: false });
@@ -243,7 +249,7 @@ export default function WorkbenchFilePanel ({
         <div className={`flex flex-col gap-2 md:flex-row md:items-start md:justify-between${isMinimizedVertical ? " rotate-90 whitespace-nowrap" : ""}`}>
           <div className="order-2 min-w-0 md:order-1">
             <p ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
-              {snapshot?.currentPath || path}
+              {titleLabel ?? snapshot?.currentPath ?? path}
             </p>
             <p ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted" hidden={isMinimized}>
               Markdown files open as rich text. Save with Ctrl/Cmd+S.
@@ -262,7 +268,7 @@ export default function WorkbenchFilePanel ({
                 <span className="sr-only">{isMinimized ? "Expand panel" : "Minimize panel"}</span>
               </button>
             ) : null}
-            <div className="flex items-center gap-1.5" hidden={isMinimized}>
+            <div className="flex items-center gap-1.5" hidden={isMinimized || !showManualFileActions}>
               <button
                 ref={zoomOutButtonRef}
                 type="button"
@@ -290,7 +296,7 @@ export default function WorkbenchFilePanel ({
                 <span className="sr-only">Increase editor text size</span>
               </button>
             </div>
-            <div className="flex items-center gap-1.5" hidden={isMinimized}>
+            <div className="flex items-center gap-1.5" hidden={isMinimized || !showManualFileActions}>
               <button
                 ref={saveFileButtonRef}
                 type="button"

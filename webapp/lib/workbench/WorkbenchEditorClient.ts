@@ -25,6 +25,7 @@ import {
     unwrapTransparentSpans,
 } from "./dom/mutation/dom-normalization";
 import {
+    normalizeRootInlineBlocks,
     syncStructuredBlockStyles as syncStructuredBlockDomStyles,
 } from "./dom/mutation/structured-block-dom";
 import {
@@ -54,6 +55,11 @@ import WorkbenchRichInputController, { type WorkbenchRichInputResult } from "./e
 import {
     markdownToHtml as renderMarkdownToHtml,
 } from "./markdown/markdown-html-render";
+import {
+    normalizeCollaborationScratchpadDom,
+    renderCollaborationScratchpadMarkdownToHtml,
+    serializeCollaborationScratchpadDomToMarkdown,
+} from "./collaboration/collaboration-scratchpad";
 import {
     parseBlocks as parseMarkdownBlocks,
     type ParsedBlock,
@@ -192,6 +198,7 @@ export interface WorkbenchEditorClientOptions {
   mutationRuntime: WorkbenchEditorMutationRuntimeOptions;
   sessionState: SessionState;
   shouldBlockBeforeUnload: () => boolean;
+  documentProfile?: "standard" | "collaborationScratchpad";
 }
 
 interface WorkbenchEditorClient {
@@ -1094,7 +1101,11 @@ function WorkbenchEditorClient(
     replaceTag(root, "strike", "del");
     replaceTag(root, "s", "del");
     unwrapTransparentSpans(root);
+    normalizeRootInlineBlocks(root);
     syncStructuredBlockStyles(root);
+    if (options.documentProfile === "collaborationScratchpad") {
+      normalizeCollaborationScratchpadDom(root);
+    }
     (root as Node).normalize();
   }
 
@@ -1104,6 +1115,12 @@ function WorkbenchEditorClient(
       editorRoot: editor,
       isInlineRunContainer: (element) => isInlineRunContainer(editor, element),
       normalizeMarkup: normalizeEditorMarkup,
+      renderMarkdown: options.documentProfile === "collaborationScratchpad"
+        ? renderCollaborationScratchpadMarkdownToHtml
+        : undefined,
+      serializeMarkdown: options.documentProfile === "collaborationScratchpad"
+        ? (root, serializeOptions) => serializeCollaborationScratchpadDomToMarkdown(root, serializeOptions)
+        : undefined,
     });
   }
 
@@ -1151,10 +1168,36 @@ function WorkbenchEditorClient(
     });
   }
 
+  function renderMarkdownFragment(markdown: string) {
+    const fragmentRoot = document.createElement("div");
+    fragmentRoot.innerHTML = options.documentProfile === "collaborationScratchpad"
+      ? renderCollaborationScratchpadMarkdownToHtml(markdown)
+      : renderMarkdownToHtml(markdown);
+    normalizeEditorMarkup(fragmentRoot);
+    return fragmentRoot;
+  }
+
   const documentAdapter: EditorDocumentAdapter = {
+    appendMarkdownFragment: (markdown) => {
+      if (!markdown.trim()) {
+        return;
+      }
+
+      lastLoggedSaveIssue = null;
+      const selectionSnapshot = options.getEditorHasFocus() ? captureCurrentSelection() : null;
+      const fragmentRoot = renderMarkdownFragment(markdown);
+      while (fragmentRoot.firstChild) {
+        editor.append(fragmentRoot.firstChild);
+      }
+      syncStructuredBlockStyles();
+      if (selectionSnapshot) {
+        restoreSelection(selectionSnapshot);
+      }
+    },
     captureSelection: captureCurrentSelection,
     inspectDraft,
     inspectRichDocument,
+    isFocused: () => options.getEditorHasFocus(),
     logBlockedSaveIssue: (issue) => {
       syncSaveIssueLogging(issue, "save attempt blocked by markup mismatch", true);
     },
@@ -1165,7 +1208,11 @@ function WorkbenchEditorClient(
     renderDocument: (content, mode, renderOptions = {}) => {
       lastLoggedSaveIssue = null;
       if (mode === "rich") {
-        editor.innerHTML = renderOptions.renderedState ?? renderMarkdownToHtml(content);
+        editor.innerHTML = renderOptions.renderedState ?? (
+          options.documentProfile === "collaborationScratchpad"
+            ? renderCollaborationScratchpadMarkdownToHtml(content)
+            : renderMarkdownToHtml(content)
+        );
       } else {
         editor.textContent = renderOptions.renderedState ?? content;
       }

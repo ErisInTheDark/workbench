@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - DEFAULT_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE: editor zoom defaults and bounds. Keywords: settings, editor, zoom.
- * - WorkbenchTheme, WorkbenchEditorFontFamily, WorkbenchFileOpenBehavior, WorkbenchSettingKey: setting value contracts for Workbench preferences. Keywords: settings, theme, editor, composer, file open, thread code.
+ * - WorkbenchTheme, WorkbenchEditorFontFamily, WorkbenchFileOpenBehavior, WorkbenchSettingKey: setting value contracts for Workbench preferences. Keywords: settings, theme, editor, composer, file open, thread code, collaboration.
  * - WorkbenchGlobalSettings, WorkbenchProjectSettings, WorkbenchResolvedSettings: stored and resolved settings shapes. Keywords: settings, global, project override.
  * - WORKBENCH_SETTING_DEFINITIONS: labels and option metadata for settings UI rendering. Keywords: settings, registry, UI.
  * - createDefaultGlobalWorkbenchSettings: create agentic global defaults. Keywords: settings, defaults, agentic.
@@ -10,6 +10,8 @@
  * - resolveWorkbenchSettings: merge project overrides over global settings. Keywords: settings, inheritance, overrides.
  * - readStoredEditorFontSize/writeStoredEditorFontSize/readStoredTheme/writeStoredTheme: compatibility helpers for older callers. Keywords: settings, legacy, bridge.
  */
+
+import { DEFAULT_COLLABORATION_SCRATCHPAD_SETTING_VALUE } from "../collaboration/collaboration-scratchpad-path";
 
 export const DEFAULT_EDITOR_FONT_SIZE = 1.08;
 export const MIN_EDITOR_FONT_SIZE = 0.84;
@@ -25,6 +27,8 @@ export type WorkbenchEditorFontFamily = "sans" | "serif" | "mono";
 export type WorkbenchFileOpenBehavior = "workbench" | "workbench-or-vscode" | "vscode";
 export type WorkbenchSettingKey =
   | "theme"
+  | "collaborationCollaboratorPrompt"
+  | "collaborationScratchpadPath"
   | "editorFontFamily"
   | "editorSpellCheck"
   | "composerSpellCheck"
@@ -34,6 +38,8 @@ export type WorkbenchSettingKey =
   | "threadCodeBlockWrap";
 
 export interface WorkbenchGlobalSettings {
+  collaborationCollaboratorPrompt: string;
+  collaborationScratchpadPath: string;
   composerSpellCheck: boolean;
   editorFontFamily: WorkbenchEditorFontFamily;
   editorFontSize: number;
@@ -64,10 +70,39 @@ export type WorkbenchSettingDefinition<K extends WorkbenchSettingKey = Workbench
     label: string;
     value: WorkbenchGlobalSettings[K];
   }>;
-  type: "boolean" | "number" | "select";
+  type: "boolean" | "number" | "select" | "text" | "textarea";
 };
 
+export const DEFAULT_COLLABORATION_SCRATCHPAD_PATH = DEFAULT_COLLABORATION_SCRATCHPAD_SETTING_VALUE;
+export const DEFAULT_COLLABORATION_COLLABORATOR_PROMPT = [
+  "You are the project collaborator for this Workbench project.",
+  "",
+  "Read the shared scratchpad as plain Workbench-owned project notes.",
+  "",
+  "Use the scratchpad for collaborative planning and evolving todo context only when the user explicitly asks you to update project notes. Do not write suggested thread prompts into the scratchpad; Workbench owns those as structured suggestions.",
+  "",
+  "Inspect the project yourself when useful, including current worktree state and diffs. Notice coherent work you could help with instead of asking the user to orchestrate obvious discovery.",
+  "",
+  "Prefer suggestions that improve project coherence, not only task completion. Consider dedicated implementation threads, ADRs for durable or strange decisions, glossary entries for fuzzy language, local docs under `.agents` or the project's existing context location, comments for intentionally unusual code, and refactors where the current shape is costly or misleading.",
+  "",
+  "If the project has its own existing ADR, glossary, notes, or context workflow, prefer that over inventing a new `.agents` convention.",
+  "",
+  "Return only the JSON shape requested by Workbench in your final message. Put durable shared planning in the scratchpad, but put suggested dedicated-thread prompts only in the Workbench-owned suggestions JSON.",
+].join("\n");
+
 export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: WorkbenchSettingDefinition<K> } = {
+  collaborationCollaboratorPrompt: {
+    description: "Controls the recurring Collaboration collaborator instructions.",
+    key: "collaborationCollaboratorPrompt",
+    label: "Collaboration collaborator prompt",
+    type: "textarea",
+  },
+  collaborationScratchpadPath: {
+    description: "Overrides the Collaboration scratchpad markdown file. Leave blank for Workbench-owned per-project storage.",
+    key: "collaborationScratchpadPath",
+    label: "Collaboration scratchpad",
+    type: "text",
+  },
   composerSpellCheck: {
     description: "Controls spellcheck in thread composers and questionnaire text answers.",
     key: "composerSpellCheck",
@@ -194,6 +229,11 @@ function normalizeFileOpenBehavior(value: unknown): WorkbenchFileOpenBehavior {
   return value === "workbench-or-vscode" || value === "vscode" ? value : "workbench";
 }
 
+function normalizeText(value: unknown, fallback: string) {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text || fallback;
+}
+
 function readJsonStorageValue(key: string) {
   try {
     const rawValue = window.localStorage.getItem(key);
@@ -231,6 +271,8 @@ function normalizeGlobalWorkbenchSettings(value: unknown): WorkbenchGlobalSettin
   const candidate = isRecord(value) ? value : {};
   return {
     composerSpellCheck: typeof candidate.composerSpellCheck === "boolean" ? candidate.composerSpellCheck : false,
+    collaborationCollaboratorPrompt: normalizeText(candidate.collaborationCollaboratorPrompt ?? candidate.collaborationAdvisorPrompt, DEFAULT_COLLABORATION_COLLABORATOR_PROMPT),
+    collaborationScratchpadPath: normalizeText(candidate.collaborationScratchpadPath, DEFAULT_COLLABORATION_SCRATCHPAD_PATH),
     editorFontFamily: normalizeEditorFontFamily(candidate.editorFontFamily),
     editorFontSize: clampEditorFontSize(candidate.editorFontSize ?? readLegacyEditorFontSize()),
     editorSpellCheck: typeof candidate.editorSpellCheck === "boolean" ? candidate.editorSpellCheck : false,
@@ -256,6 +298,10 @@ function normalizeProjectOverride<K extends WorkbenchSettingKey>(
       return { enabled, value: normalizeEditorFontFamily(candidate.value) } as WorkbenchProjectSettingOverride<K>;
     case "fileOpenBehavior":
       return { enabled, value: normalizeFileOpenBehavior(candidate.value) } as WorkbenchProjectSettingOverride<K>;
+    case "collaborationCollaboratorPrompt":
+      return { enabled, value: normalizeText(candidate.value, defaultValue as string) } as WorkbenchProjectSettingOverride<K>;
+    case "collaborationScratchpadPath":
+      return { enabled, value: normalizeText(candidate.value, defaultValue as string) } as WorkbenchProjectSettingOverride<K>;
     case "editorFontSize":
       return { enabled, value: clampEditorFontSize(candidate.value) } as WorkbenchProjectSettingOverride<K>;
     case "editorSpellCheck":
@@ -271,6 +317,8 @@ function normalizeProjectOverride<K extends WorkbenchSettingKey>(
 
 export function createDefaultGlobalWorkbenchSettings(): WorkbenchGlobalSettings {
   return {
+    collaborationCollaboratorPrompt: DEFAULT_COLLABORATION_COLLABORATOR_PROMPT,
+    collaborationScratchpadPath: DEFAULT_COLLABORATION_SCRATCHPAD_PATH,
     composerSpellCheck: false,
     editorFontFamily: "sans",
     editorFontSize: DEFAULT_EDITOR_FONT_SIZE,
@@ -285,6 +333,8 @@ export function createDefaultGlobalWorkbenchSettings(): WorkbenchGlobalSettings 
 export function createDefaultProjectWorkbenchSettings(): WorkbenchProjectSettings {
   const globalDefaults = createDefaultGlobalWorkbenchSettings();
   return {
+    collaborationCollaboratorPrompt: { enabled: false, value: globalDefaults.collaborationCollaboratorPrompt },
+    collaborationScratchpadPath: { enabled: false, value: globalDefaults.collaborationScratchpadPath },
     composerSpellCheck: { enabled: false, value: globalDefaults.composerSpellCheck },
     editorFontFamily: { enabled: false, value: globalDefaults.editorFontFamily },
     editorFontSize: { enabled: false, value: globalDefaults.editorFontSize },
@@ -317,6 +367,8 @@ export function readProjectWorkbenchSettings(projectId: string) {
   const candidate = isRecord(projectSettings) ? projectSettings : {};
   return {
     composerSpellCheck: normalizeProjectOverride("composerSpellCheck", candidate.composerSpellCheck),
+    collaborationCollaboratorPrompt: normalizeProjectOverride("collaborationCollaboratorPrompt", candidate.collaborationCollaboratorPrompt ?? candidate.collaborationAdvisorPrompt),
+    collaborationScratchpadPath: normalizeProjectOverride("collaborationScratchpadPath", candidate.collaborationScratchpadPath),
     editorFontFamily: normalizeProjectOverride("editorFontFamily", candidate.editorFontFamily),
     editorFontSize: normalizeProjectOverride("editorFontSize", candidate.editorFontSize),
     editorSpellCheck: normalizeProjectOverride("editorSpellCheck", candidate.editorSpellCheck),
@@ -332,6 +384,8 @@ export function writeProjectWorkbenchSettings(projectId: string, settings: Workb
   const nextProjectSettings = isRecord(allProjectSettings) ? { ...allProjectSettings } : {};
   nextProjectSettings[projectId] = {
     composerSpellCheck: normalizeProjectOverride("composerSpellCheck", settings.composerSpellCheck),
+    collaborationCollaboratorPrompt: normalizeProjectOverride("collaborationCollaboratorPrompt", settings.collaborationCollaboratorPrompt),
+    collaborationScratchpadPath: normalizeProjectOverride("collaborationScratchpadPath", settings.collaborationScratchpadPath),
     editorFontFamily: normalizeProjectOverride("editorFontFamily", settings.editorFontFamily),
     editorFontSize: normalizeProjectOverride("editorFontSize", settings.editorFontSize),
     editorSpellCheck: normalizeProjectOverride("editorSpellCheck", settings.editorSpellCheck),
@@ -348,6 +402,8 @@ export function resolveWorkbenchSettings(
   projectSettings: WorkbenchProjectSettings,
 ): WorkbenchResolvedSettings {
   return {
+    collaborationCollaboratorPrompt: projectSettings.collaborationCollaboratorPrompt.enabled ? projectSettings.collaborationCollaboratorPrompt.value : globalSettings.collaborationCollaboratorPrompt,
+    collaborationScratchpadPath: projectSettings.collaborationScratchpadPath.enabled ? projectSettings.collaborationScratchpadPath.value : globalSettings.collaborationScratchpadPath,
     composerSpellCheck: projectSettings.composerSpellCheck.enabled ? projectSettings.composerSpellCheck.value : globalSettings.composerSpellCheck,
     editorFontFamily: projectSettings.editorFontFamily.enabled ? projectSettings.editorFontFamily.value : globalSettings.editorFontFamily,
     editorFontSize: projectSettings.editorFontSize.enabled ? projectSettings.editorFontSize.value : globalSettings.editorFontSize,

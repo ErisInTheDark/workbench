@@ -310,6 +310,8 @@ function ThreadSavedDraftShelf ({
 export default function ThreadComposer ({
   children,
   composerSpellCheck,
+  header,
+  layout = "thread",
   onListModels,
   onSendMessage,
   onStopThread,
@@ -331,6 +333,9 @@ export default function ThreadComposer ({
   rateLimits,
   autoExpandSavedDraftShelf = true,
   savedDraftShelfPortalHost,
+  sendLabel = "Send",
+  showSavedDraftControls = true,
+  trailingActions,
   threadQuestionnaireDraft,
   threadComposerDraft,
   threadSavedComposerDrafts,
@@ -341,6 +346,8 @@ export default function ThreadComposer ({
 }: {
   children?: ReactNode;
   composerSpellCheck: boolean;
+  header?: ReactNode;
+  layout?: "thread" | "inline";
   onListModels: (harness: ThreadPayload["harness"]) => Promise<WorkbenchModelOption[]>;
   onSendMessage: (threadId: string, input: UserInput[]) => Promise<void>;
   onStopThread: (threadId: string) => Promise<void> | void;
@@ -366,6 +373,9 @@ export default function ThreadComposer ({
   rateLimits: RateLimitSnapshot | null;
   autoExpandSavedDraftShelf?: boolean;
   savedDraftShelfPortalHost?: HTMLElement | null;
+  sendLabel?: string;
+  showSavedDraftControls?: boolean;
+  trailingActions?: ReactNode;
   threadQuestionnaireDraft: WorkbenchQuestionnaireDraft | null;
   threadComposerDraft: WorkbenchThreadComposerDraft | null;
   threadSavedComposerDrafts: WorkbenchThreadSavedComposerDraft[];
@@ -837,8 +847,20 @@ export default function ThreadComposer ({
 
   return (
     <>
-      <form className="mt-6 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4" onSubmit={handleSubmit}>
+      <form
+        className={joinClasses(
+          layout === "thread"
+            ? "mt-6 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4"
+            : "m-0",
+        )}
+        onSubmit={handleSubmit}
+      >
         <div className="rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-3">
+          {header ? (
+            <div className="mb-3 px-1">
+              {header}
+            </div>
+          ) : null}
           {showQuestionnairePanel && pendingUserInputRequest ? (
             <ThreadUserInputRequest
               actions={stopButton}
@@ -999,21 +1021,23 @@ export default function ThreadComposer ({
                 ) : null}
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  aria-label="Save message draft for later"
-                  title="Save message draft for later"
-                  disabled={isSaveDraftDisabled}
-                  className={joinClasses(
-                    "inline-flex size-10 items-center justify-center rounded-full border transition",
-                    "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-muted hover:text-text",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
-                    isSaveDraftDisabled && "cursor-not-allowed opacity-45",
-                  )}
-                  onClick={saveCurrentComposerForLater}
-                >
-                  <ArchiveTrayIcon />
-                </button>
+                {showSavedDraftControls ? (
+                  <button
+                    type="button"
+                    aria-label="Save message draft for later"
+                    title="Save message draft for later"
+                    disabled={isSaveDraftDisabled}
+                    className={joinClasses(
+                      "inline-flex size-10 items-center justify-center rounded-full border transition",
+                      "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-muted hover:text-text",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
+                      isSaveDraftDisabled && "cursor-not-allowed opacity-45",
+                    )}
+                    onClick={saveCurrentComposerForLater}
+                  >
+                    <ArchiveTrayIcon />
+                  </button>
+                ) : null}
                 <div className="inline-flex items-stretch overflow-hidden rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-[0.78em] font-medium text-text">
                   <button
                     type="button"
@@ -1086,8 +1110,9 @@ export default function ThreadComposer ({
                     ((!trimmedValue && !attachments.length) || isSendDisabled) && "cursor-not-allowed opacity-45",
                   )}
                 >
-                  {isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : "Send"}
+                  {isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : sendLabel}
                 </button>
+                {trailingActions}
                 {stopButton}
               </div>
             </div>
@@ -1098,9 +1123,11 @@ export default function ThreadComposer ({
         ) : null}
       </form>
       {children}
-      {useSavedDraftShelfPortal
-        ? (savedDraftShelfPortalHost ? createPortal(savedDraftShelf, savedDraftShelfPortalHost) : null)
-        : savedDraftShelf}
+      {showSavedDraftControls
+        ? useSavedDraftShelfPortal
+          ? (savedDraftShelfPortalHost ? createPortal(savedDraftShelf, savedDraftShelfPortalHost) : null)
+          : savedDraftShelf
+        : null}
     </>
   );
 }

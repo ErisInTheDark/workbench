@@ -152,6 +152,7 @@ export interface WorkbenchReadThreadOptions {
 }
 
 export interface WorkbenchSendThreadMessageOptions {
+  additionalWritableRoots?: string[];
   onThreadMaterialized?: (thread: ThreadPayload) => void;
   selectThread?: boolean;
 }
@@ -276,6 +277,7 @@ export interface ProjectSnapshot {
   roots: WorkbenchProjectRoot[];
   tree: TreeNode[];
   changes: Record<string, ChangeSummary>;
+  workbenchStorageRootPath: string;
 }
 
 export interface ExplorerSnapshot {
@@ -299,6 +301,7 @@ export interface ExplorerSnapshot {
   locallyModifiedPaths: string[];
   threadsError: string;
   fontSize: number;
+  workbenchStorageRootPath: string;
 }
 
 export interface WorkbenchRouteLoadResult {
@@ -306,9 +309,38 @@ export interface WorkbenchRouteLoadResult {
   ok: boolean;
 }
 
+export interface WorkbenchCollaborationSuggestion {
+  id: string;
+  prompt: string;
+  rationale?: string;
+  title: string;
+  updatedAt: number;
+}
+
+export interface WorkbenchCollaborationStartedSuggestionThread {
+  prompt: string;
+  rationale?: string;
+  startedAt: number;
+  suggestionId: string;
+  threadId: string;
+  title: string;
+}
+
+export interface WorkbenchCollaborationThreadRegistry {
+  autoWakeEnabled: boolean;
+  currentThreadId: string;
+  dismissedSuggestionIds: string[];
+  lastAppliedSuggestionPatchSignature: string;
+  lastAutoWakeAt: number;
+  lastRunSummary: string;
+  startedSuggestionThreads: Record<string, WorkbenchCollaborationStartedSuggestionThread>;
+  suggestions: Record<string, WorkbenchCollaborationSuggestion>;
+  threadIds: string[];
+}
+
 export interface WorkbenchControls {
   applyRoute: (route: WorkbenchRoute) => Promise<WorkbenchRouteLoadResult>;
-  createThreadDraft: (harness: WorkbenchHarness) => ThreadPayload;
+  createThreadDraft: (harness: WorkbenchHarness, options?: { select?: boolean; threadId?: string }) => ThreadPayload;
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
   refreshRateLimits: () => Promise<void>;
   markThreadSeen: (thread: ThreadPayload) => void;

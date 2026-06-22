@@ -1074,6 +1074,7 @@ export async function getProjectSnapshot(projectId?: string | null) {
     roots: toProjectSnapshotRoots(resolvedProject),
     tree,
     changes,
+    workbenchStorageRootPath: normalizeRelativePath(projectRoot),
   } satisfies ProjectSnapshot;
 }
 

@@ -6,6 +6,13 @@
 - Think one route wider and one contract wider than the immediate request.
 - Be creative, invested, and interested in improving the webapp and its tools rather than only satisfying the narrow wording of the task.
 
+## Structured Equality
+
+- Do not use `JSON.stringify` for equality checks.
+- Compare explicit fields when the owning concept has meaningful equality rules.
+- Use the shared deep equality utility for JSON-like structural data.
+- Use stable serializers only for serialization, saved signatures, logs, cache keys, request bodies, or display text.
+
 ## Orchestrator Reload Discipline
 
 - When changing long-lived orchestrator behavior, make it reload-capable in the same changeset or explicitly tell the user a full orchestrator restart is required.

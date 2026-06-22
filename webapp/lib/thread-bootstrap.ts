@@ -9,6 +9,7 @@
  * - buildCodexThreadBootstrapInstructions: compose optional Codex agent activation/definition content together with the shared title bootstrap instructions. Keywords: codex, agent, developer instructions, bootstrap.
  */
 import type { WorkbenchAgentDefinition, WorkbenchHarness } from "./types";
+import { WORKBENCH_FILE_LINK_INSTRUCTIONS } from "./workbench/thread/workbench-file-link-instructions";
 
 const MAX_THREAD_TITLE_LENGTH = 80;
 export const DEFAULT_THREAD_TITLE_ROUTE_PATH = "/api/thread-title";
@@ -42,16 +43,7 @@ export const MODE_STATE_TAG_INSTRUCTIONS = [
   "[use request_user_input here]",
 ].join("\n");
 
-export const WORKBENCH_FILE_LINK_INSTRUCTIONS = [
-  "## Workbench File Links:",
-  "Options for referencing files in the active project:",
-  "- Prefer #[path/to/file.ts] or #[path/to/file.ts:123] for simple paths; Workbench resolves project-relative, absolute, and unique suffix paths, and displays the shortest disambiguated filename as a clickable link.",
-  "- If you need a custom label, use [label](path/to/file.ts:123).",
-  "- In a multi-root workspace project, add the project prefix like #[project-name:path/to/file.ts:123] or #[project-name:path/to/file.ts].",
-  "- Do not use backticks around file links, as they will prevent Workbench from rendering them as clickable links.",
-  "  Bad: `#[path/to/file.ts]` or `[label](path/to/file.ts)` — this will render the link text but it will not be clickable.",
-  "  Good: #[path/to/file.ts] or [label](path/to/file.ts) — the user can click the link to open the file in their editor!",
-].join("\n");
+export { WORKBENCH_FILE_LINK_INSTRUCTIONS };
 
 function normalizeWhitespace(value: string) {
   return value.replace(/\s+/g, " ").trim();

@@ -9,6 +9,10 @@
 
 import type { FilePayload, SaveConflictPayload, SaveFilePayload } from "../types";
 import {
+    reconcileLiveMarkdownUpdate,
+    type LiveMarkdownReconcileAction,
+} from "./markdown/live-markdown-reconcile";
+import {
     formatTimestamp,
     isMarkdownFile,
     isWorkbenchOpenableFile,
@@ -33,6 +37,10 @@ export type { DraftBuffer, default as FileSessionState } from "./state/FileSessi
 
 const FILE_SELECTION_PERSISTENCE_TASK_ID = "file-selection-persistence";
 const FILE_SELECTION_PERSISTENCE_DELAY_MS = 260;
+const FILE_AUTOSAVE_TASK_ID = "file-autosave";
+const FILE_AUTOSAVE_DELAY_MS = 900;
+const FILE_AUTO_REFRESH_TASK_ID = "file-auto-refresh";
+const FILE_AUTO_REFRESH_DELAY_MS = 5000;
 
 type WorkbenchFileOpenSource = "open" | "reload";
 type WorkbenchFileOpenOptions = {
@@ -41,14 +49,21 @@ type WorkbenchFileOpenOptions = {
 };
 
 export interface WorkbenchFileClientOptions {
+  autoRefreshCleanFileDelayMs?: number;
+  autoRefreshCleanFile?: boolean;
+  autoSave?: boolean;
+  autoSaveDelayMs?: number;
   clearThreadSelection: () => void;
   draftStore: FileDraftStore;
   editorDocument: EditorDocumentAdapter;
   emitExplorerStateChange: () => void;
   eventBus: WorkbenchEventBus;
   expandProjectPath: (path: string) => void;
+  fileApiPath?: string;
   fileSessionState: FileSessionState;
   getProjectId: () => string;
+  keepEverythingOnSave?: boolean;
+  refreshProjectOnSave?: boolean;
   refreshProject: () => Promise<void>;
   sessionState: SessionState;
   updateHistorySelection: (selection: EditHistorySelection | null) => void;
@@ -75,19 +90,27 @@ function hasBufferedDraftState(buffer: DraftBuffer) {
   return buffer.dirty || Boolean(buffer.saveIssue) || Boolean(buffer.pendingWriteConflict);
 }
 
+type IncomingMarkdownApplyResult =
+  { action: LiveMarkdownReconcileAction["type"]; currentContent: string; dirty: boolean };
+
 function WorkbenchFileClient(
   options: WorkbenchFileClientOptions,
   lifecycle: LifecycleScope = new LifecycleScope(),
 ): WorkbenchFileClient {
   const {
+    autoRefreshCleanFileDelayMs = FILE_AUTO_REFRESH_DELAY_MS,
+    autoSaveDelayMs = FILE_AUTOSAVE_DELAY_MS,
     clearThreadSelection,
     draftStore,
     editorDocument,
     emitExplorerStateChange,
     eventBus,
     expandProjectPath,
+    fileApiPath = "/api/file",
     fileSessionState: state,
     getProjectId,
+    keepEverythingOnSave = false,
+    refreshProjectOnSave = true,
     refreshProject,
     sessionState,
     updateHistorySelection,
@@ -241,7 +264,7 @@ function WorkbenchFileClient(
 
   async function fetchFilePayload(filePath: string) {
     const projectId = getProjectId();
-    const response = await fetch(`/api/file?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(filePath)}`, { cache: "no-store" });
+    const response = await fetch(`${fileApiPath}?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(filePath)}`, { cache: "no-store" });
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: "Unable to open file." }));
       editorDocument.refreshStatusMessage(error.error);
@@ -280,11 +303,76 @@ function WorkbenchFileClient(
 
     if (!hasBufferedDraftState(nextBuffer)) {
       void clearDraftBuffer(filePath);
+      scheduleAutoSave();
       return;
     }
 
     draftStore.setBuffer(filePath, nextBuffer);
+    scheduleAutoSave();
     emitExplorerStateChange();
+  }
+
+  function applyIncomingMarkdownToCurrentFile(incomingContent: string): IncomingMarkdownApplyResult {
+    if (state.mode !== "rich") {
+      editorDocument.renderDocument(incomingContent, state.mode);
+      state.currentContent = incomingContent;
+      state.baselineContent = incomingContent;
+      state.dirty = false;
+      return {
+        action: "replaceDocument",
+        currentContent: state.currentContent,
+        dirty: state.dirty,
+      };
+    }
+
+    const action = reconcileLiveMarkdownUpdate({
+      baselineContent: state.baselineContent,
+      currentContent: state.currentContent,
+      incomingContent,
+      isDirty: state.dirty,
+      isFocused: editorDocument.isFocused(),
+    });
+
+    switch (action.type) {
+      case "metadataOnly":
+        state.baselineContent = action.baselineContent;
+        state.dirty = state.currentContent !== state.baselineContent;
+        return {
+          action: action.type,
+          currentContent: state.currentContent,
+          dirty: state.dirty,
+        };
+      case "keepLocal":
+        state.dirty = state.currentContent !== state.baselineContent;
+        return {
+          action: action.type,
+          currentContent: state.currentContent,
+          dirty: state.dirty,
+        };
+      case "appendRemoteTail": {
+        editorDocument.appendMarkdownFragment(action.tailMarkdown);
+        const inspection = editorDocument.inspectRichDocument();
+        state.currentContent = inspection.markdown;
+        state.saveIssue = inspection.issue;
+        state.baselineContent = action.nextBaselineContent;
+        state.dirty = state.currentContent !== state.baselineContent;
+        return {
+          action: action.type,
+          currentContent: state.currentContent,
+          dirty: state.dirty,
+        };
+      }
+      case "replaceDocument":
+        editorDocument.renderDocument(action.nextContent, state.mode);
+        state.currentContent = editorDocument.inspectRichDocument().markdown;
+        state.baselineContent = action.nextContent;
+        state.dirty = state.currentContent !== state.baselineContent;
+        return {
+          action: action.type,
+          currentContent: state.currentContent,
+          dirty: state.dirty,
+        };
+    }
   }
 
   function scheduleSelectionPersistence() {
@@ -295,6 +383,24 @@ function WorkbenchFileClient(
     // Draft persistence debounce is owned by the file client so cleanup follows file-client disposal.
     lifecycle.scheduleOnce(FILE_SELECTION_PERSISTENCE_TASK_ID, FILE_SELECTION_PERSISTENCE_DELAY_MS, () => {
       syncCurrentDraftBuffer();
+    });
+  }
+
+  function scheduleAutoSave() {
+    if (!options.autoSave || !sessionState.currentPath || !state.dirty || state.saveIssue || state.pendingWriteConflict) {
+      return;
+    }
+
+    lifecycle.scheduleOnce(FILE_AUTOSAVE_TASK_ID, autoSaveDelayMs, () => {
+      void saveCurrentFile().catch(() => {
+        editorDocument.refreshStatusMessage("Autosave failed.");
+      });
+    });
+  }
+
+  if (options.autoRefreshCleanFile) {
+    lifecycle.scheduleRepeat(FILE_AUTO_REFRESH_TASK_ID, autoRefreshCleanFileDelayMs, async () => {
+      await refreshCurrentFileFromDiskIfSafe();
     });
   }
 
@@ -371,7 +477,7 @@ function WorkbenchFileClient(
 
     const filePath = sessionState.currentPath;
     const expectedMtimeMs = state.expectedMtimeMs;
-    const response = await fetch("/api/file", {
+    const response = await fetch(fileApiPath, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
@@ -403,7 +509,9 @@ function WorkbenchFileClient(
     }
 
     const payload = (await response.json()) as SaveFilePayload;
-    await refreshProject();
+    if (refreshProjectOnSave) {
+      await refreshProject();
+    }
     if (sessionState.currentPath === filePath) {
       await openFile(filePath, { ignoreDirty: true, source: "reload" });
       editorDocument.refreshStatusMessage(`Reset to HEAD - ${formatTimestamp(payload.updatedAt)}`);
@@ -429,7 +537,7 @@ function WorkbenchFileClient(
     const filePath = sessionState.currentPath;
     const expectedMtimeMs = state.expectedMtimeMs;
     const content = inspection.content;
-    const response = await fetch("/api/file", {
+    const response = await fetch(fileApiPath, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
@@ -438,6 +546,7 @@ function WorkbenchFileClient(
         projectId: getProjectId(),
         path: filePath,
         content,
+        ...(keepEverythingOnSave ? { baseContent: state.baselineContent } : {}),
         expectedMtimeMs,
         force,
       }),
@@ -461,15 +570,28 @@ function WorkbenchFileClient(
       return;
     }
 
-    const payload = (await response.json()) as SaveFilePayload;
-    await refreshProject();
+    const payload = (await response.json()) as SaveFilePayload & { content?: string; headContent?: string | null };
+    const savedContent = typeof payload.content === "string" ? payload.content : content;
+    if (refreshProjectOnSave) {
+      await refreshProject();
+    }
+    let saveReconcileAction: LiveMarkdownReconcileAction["type"] | null = null;
     if (sessionState.currentPath === filePath) {
-      state.baselineContent = content;
+      if (savedContent !== content && state.mode === "rich") {
+        saveReconcileAction = applyIncomingMarkdownToCurrentFile(savedContent).action;
+      } else {
+        state.currentContent = content;
+        state.baselineContent = savedContent;
+        state.dirty = state.currentContent !== state.baselineContent;
+      }
       state.expectedMtimeMs = payload.mtimeMs;
+      state.headContent = payload.headContent ?? state.headContent;
       clearWriteConflict();
-      state.saveIssue = null;
+      if (state.currentContent === state.baselineContent) {
+        state.saveIssue = null;
+      }
 
-      if (state.currentContent === content) {
+      if (!state.dirty) {
         state.dirty = false;
         await clearDraftBuffer(filePath);
       } else {
@@ -478,7 +600,7 @@ function WorkbenchFileClient(
       }
     } else {
       const bufferedDraft = draftStore.getBuffer(filePath);
-      if (!bufferedDraft || bufferedDraft.content === content) {
+      if (!bufferedDraft || bufferedDraft.content === savedContent) {
         await clearDraftBuffer(filePath);
       }
     }
@@ -488,7 +610,14 @@ function WorkbenchFileClient(
       updatedAt: payload.updatedAt,
     });
     if (sessionState.currentPath === filePath) {
-      editorDocument.refreshStatusMessage(`Saved - ${formatTimestamp(payload.updatedAt)}`);
+      const saveStatus = savedContent === content || saveReconcileAction === "metadataOnly"
+        ? "Saved"
+        : saveReconcileAction === "appendRemoteTail"
+          ? "Saved with disk append"
+          : saveReconcileAction === "keepLocal"
+            ? "Saved local editor state"
+            : "Updated from disk";
+      editorDocument.refreshStatusMessage(`${saveStatus} - ${formatTimestamp(payload.updatedAt)}`);
       editorDocument.scheduleDiffGutterRefresh();
     }
     emitExplorerStateChange();
@@ -509,10 +638,23 @@ function WorkbenchFileClient(
       return;
     }
 
-    applyFilePayloadToCurrentFile(payload, {
-      preserveSelection: true,
-      statusMessage: `Updated from disk - ${formatTimestamp(payload.updatedAt)}`,
-    });
+    if (state.mode === "rich" && sessionState.currentPath === payload.path) {
+      state.expectedMtimeMs = payload.mtimeMs;
+      state.headContent = payload.headContent;
+      const result = applyIncomingMarkdownToCurrentFile(payload.content);
+      if (!result.dirty) {
+        await clearDraftBuffer(payload.path);
+      } else {
+        syncCurrentDraftBuffer();
+      }
+      editorDocument.refreshStatusMessage(`Updated from disk - ${formatTimestamp(payload.updatedAt)}`);
+      editorDocument.scheduleDiffGutterRefresh();
+    } else {
+      applyFilePayloadToCurrentFile(payload, {
+        preserveSelection: true,
+        statusMessage: `Updated from disk - ${formatTimestamp(payload.updatedAt)}`,
+      });
+    }
     emitExplorerStateChange();
   }
 

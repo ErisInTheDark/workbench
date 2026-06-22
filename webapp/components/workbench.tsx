@@ -10,6 +10,7 @@ import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/Rat
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type {
   ExplorerSnapshot, FilePayload, OpenFileInEditorRequest, OrchestratorReloadRequest, OrchestratorReloadResponse, ThreadPayload, TreeNode,
+  WorkbenchCollaborationThreadRegistry,
   WorkbenchControls,
   WorkbenchFileOpenTarget,
   WorkbenchHarness,
@@ -23,8 +24,21 @@ import type {
   WorkbenchThreadSavedComposerDraft,
   WorkbenchUserInputResponse
 } from "../lib/types";
+import {
+  claimWorkbenchCollaborationAutoWake,
+  readWorkbenchCollaborationThreadRegistry,
+  writeWorkbenchCollaborationThreadRegistry,
+} from "../lib/workbench/collaboration/collaboration-registry-api";
+import {
+  EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY,
+  mergeWorkbenchCollaborationThreadRegistry,
+  normalizeWorkbenchCollaborationThreadRegistry,
+} from "../lib/workbench/collaboration/collaboration-registry";
+import { areDeeplyEqual } from "../lib/workbench/deep-equality";
 import { useWorkbenchRoute } from "../lib/workbench/navigation/use-workbench-route";
 import {
+  createCollaborationHref,
+  createCollaborationRoute,
   createFileRoute,
   createMosaicRoute,
   createProjectHref,
@@ -44,6 +58,10 @@ import {
 import ProjectTreeFileIndex from "../lib/workbench/project/ProjectTreeFileIndex";
 import { isWorkbenchOpenableFile } from "../lib/workbench/project/tree-utils";
 import type { WorkspaceFileLinkRoot } from "../lib/workbench/markdown/markdown-links";
+import {
+  createWorkbenchCollaborationScratchpadRelativePath,
+  createWorkbenchCollaborationScratchpadWritableRoot,
+} from "../lib/workbench/collaboration/collaboration-scratchpad-path";
 import {
   persistHarness,
   readStoredHarness,
@@ -81,6 +99,7 @@ import {
 } from "../lib/workbench/thread/thread-composer-drafts";
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
 import ThreadView from "./workbench/thread-view/ThreadView";
+import WorkbenchCollaborationView from "./workbench/collaboration/WorkbenchCollaborationView";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
 import WorkbenchMainLayoutView from "./workbench/layout/WorkbenchMainLayoutView";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
@@ -126,6 +145,7 @@ import {
 import {
   BackArrowIcon,
   BinIcon,
+  CollaborationIcon,
   GearIcon,
   ReloadIcon,
   SaveIcon,
@@ -160,6 +180,7 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   locallyModifiedPaths: [],
   threadsError: "",
   fontSize: 1.08,
+  workbenchStorageRootPath: "",
 };
 
 const MOBILE_SHELL_HEADER_HIDE_THRESHOLD_PX = 24;
@@ -170,6 +191,8 @@ const DEFAULT_RELOAD_REQUEST: OrchestratorReloadRequest = {
 };
 const SETTINGS_ORDER: WorkbenchSettingKey[] = [
   "theme",
+  "collaborationScratchpadPath",
+  "collaborationCollaboratorPrompt",
   "editorFontFamily",
   "editorSpellCheck",
   "composerSpellCheck",
@@ -178,6 +201,38 @@ const SETTINGS_ORDER: WorkbenchSettingKey[] = [
   "threadCodeBlockWrap",
   "editorFontSize",
 ];
+const COLLABORATION_THREAD_IDS_STORAGE_KEY = "workbench:collaboration:thread-registries";
+
+function readStoredCollaborationThreadRegistries() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(COLLABORATION_THREAD_IDS_STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(parsed).map(([projectId, value]) => [projectId, normalizeWorkbenchCollaborationThreadRegistry(value)]));
+  } catch {
+    return {};
+  }
+}
+
+function writeStoredCollaborationThreadRegistries(registriesByProjectId: Record<string, WorkbenchCollaborationThreadRegistry>) {
+  try {
+    window.localStorage.setItem(COLLABORATION_THREAD_IDS_STORAGE_KEY, JSON.stringify(registriesByProjectId));
+  } catch {
+    // Collaboration remains usable when localStorage is unavailable.
+  }
+}
+
+function areCollaborationThreadRegistriesEqual(
+  left: WorkbenchCollaborationThreadRegistry,
+  right: WorkbenchCollaborationThreadRegistry,
+) {
+  return areDeeplyEqual(
+    normalizeWorkbenchCollaborationThreadRegistry(left),
+    normalizeWorkbenchCollaborationThreadRegistry(right),
+  );
+}
+
+function hasCollaborationThreadRegistryData(registry: WorkbenchCollaborationThreadRegistry) {
+  return !areCollaborationThreadRegistriesEqual(registry, EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY);
+}
 
 const EDITOR_FONT_CLASS_NAMES: Record<WorkbenchEditorFontFamily, string> = {
   mono: "font-mono",
@@ -583,6 +638,14 @@ export default function Workbench () {
   const [threadComposerDraftsByThreadId, setThreadComposerDraftsByThreadId] = useState<Record<string, WorkbenchThreadComposerDraft | undefined>>({});
   const [threadQuestionnaireDraftsByKey, setThreadQuestionnaireDraftsByKey] = useState<Record<string, WorkbenchQuestionnaireDraft | undefined>>({});
   const [threadSavedComposerDrafts, setThreadSavedComposerDrafts] = useState<WorkbenchThreadSavedComposerDraft[]>([]);
+  const [collaborationThreadRegistriesByProjectId, setCollaborationThreadRegistriesByProjectId] = useState<Record<string, WorkbenchCollaborationThreadRegistry>>(() => {
+    if (typeof window === "undefined") {
+      return {};
+    }
+
+    return readStoredCollaborationThreadRegistries();
+  });
+  const collaborationRegistryHydrationGenerationRef = useRef(0);
   const editorRef = useRef<HTMLDivElement>(null);
   const mainPaneRef = useRef<HTMLElement>(null);
   const customCaretRef = useRef<HTMLDivElement>(null);
@@ -910,6 +973,87 @@ export default function Workbench () {
   const modifiedPaths = new Set(explorer.locallyModifiedPaths);
   const currentProject = explorer.projects.find((project) => project.id === explorer.currentProjectId) ?? null;
   const activeProjectId = explorer.currentProjectId || route.projectId;
+  const collaborationThreadRegistry = collaborationThreadRegistriesByProjectId[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY;
+  const collaborationThreadIdSet = useMemo(() => new Set(collaborationThreadRegistry.threadIds), [collaborationThreadRegistry.threadIds]);
+  const collaborationThreadSummaries = useMemo(() => explorer.threads.filter((thread) => collaborationThreadIdSet.has(thread.id)), [collaborationThreadIdSet, explorer.threads]);
+  const collaborationStartedSuggestionThreadIdSet = useMemo(() => (
+    new Set(Object.values(collaborationThreadRegistry.startedSuggestionThreads).map((startedThread) => startedThread.threadId))
+  ), [collaborationThreadRegistry.startedSuggestionThreads]);
+  const collaborationStartedSuggestionThreadSummaries = useMemo(() => (
+    collaborationStartedSuggestionThreadIdSet.size
+      ? explorer.threads.filter((thread) => collaborationStartedSuggestionThreadIdSet.has(thread.id))
+      : []
+  ), [collaborationStartedSuggestionThreadIdSet, explorer.threads]);
+  const visibleSidebarThreads = useMemo(() => (
+    collaborationThreadIdSet.size
+      ? explorer.threads.filter((thread) => !collaborationThreadIdSet.has(thread.id))
+      : explorer.threads
+  ), [collaborationThreadIdSet, explorer.threads]);
+  useEffect(() => {
+    if (!activeProjectId) {
+      return;
+    }
+
+    const generation = collaborationRegistryHydrationGenerationRef.current + 1;
+    collaborationRegistryHydrationGenerationRef.current = generation;
+    let cancelled = false;
+
+    void readWorkbenchCollaborationThreadRegistry(activeProjectId)
+      .then(async (diskRegistry) => {
+        if (cancelled || collaborationRegistryHydrationGenerationRef.current !== generation) {
+          return;
+        }
+
+        const localRegistry = collaborationThreadRegistriesByProjectId[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY;
+        const mergedRegistry = hasCollaborationThreadRegistryData(localRegistry)
+          ? {
+            ...mergeWorkbenchCollaborationThreadRegistry(diskRegistry, localRegistry),
+            autoWakeEnabled: diskRegistry.autoWakeEnabled || localRegistry.autoWakeEnabled,
+          }
+          : diskRegistry;
+        setCollaborationThreadRegistriesByProjectId((current) => {
+          const existing = current[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY;
+          if (areCollaborationThreadRegistriesEqual(existing, mergedRegistry)) {
+            return current;
+          }
+
+          const next = {
+            ...current,
+            [activeProjectId]: mergedRegistry,
+          };
+          writeStoredCollaborationThreadRegistries(next);
+          return next;
+        });
+
+        if (!areCollaborationThreadRegistriesEqual(diskRegistry, mergedRegistry)) {
+          const savedRegistry = await writeWorkbenchCollaborationThreadRegistry(activeProjectId, mergedRegistry);
+          if (cancelled || collaborationRegistryHydrationGenerationRef.current !== generation) {
+            return;
+          }
+
+          setCollaborationThreadRegistriesByProjectId((current) => {
+            const existing = current[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY;
+            if (areCollaborationThreadRegistriesEqual(existing, savedRegistry)) {
+              return current;
+            }
+
+            const next = {
+              ...current,
+              [activeProjectId]: savedRegistry,
+            };
+            writeStoredCollaborationThreadRegistries(next);
+            return next;
+          });
+        }
+      })
+      .catch(() => {
+        // Browser-local Collaboration state remains usable when disk sync is unavailable.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProjectId]);
   const projectFileLinkRoots = useMemo(
     () => createProjectFileLinkRoots(explorer.projects, activeProjectId, explorer.roots),
     [activeProjectId, explorer.projects, explorer.roots],
@@ -927,6 +1071,11 @@ export default function Workbench () {
     ? projectSettingsByProjectId[explorer.currentProjectId] ?? createDefaultProjectWorkbenchSettings()
     : createDefaultProjectWorkbenchSettings();
   const resolvedSettings = resolveWorkbenchSettings(globalSettings, projectSettings);
+  const collaborationScratchpadPath = resolvedSettings.collaborationScratchpadPath.trim()
+    || createWorkbenchCollaborationScratchpadRelativePath(activeProjectId);
+  const collaborationScratchpadWritableRoot = resolvedSettings.collaborationScratchpadPath.trim()
+    ? ""
+    : createWorkbenchCollaborationScratchpadWritableRoot(explorer.workbenchStorageRootPath, activeProjectId);
   const showUnopenableFiles = resolvedSettings.showUnopenableFiles;
   const visibleTree = useMemo(
     () => {
@@ -1603,10 +1752,12 @@ export default function Workbench () {
   const showThreadView = route.view === "thread" || mobileMosaicFallbackTarget?.kind === "thread";
   const showFileView = route.view === "file" || mobileMosaicFallbackTarget?.kind === "file";
   const showSettingsView = route.view === "settings";
+  const showCollaborationView = route.view === "collaboration";
+  const showFullBleedMainView = showMosaicView || showCollaborationView;
   const effectiveThreadId = mobileMosaicFallbackTarget?.kind === "thread" ? mobileMosaicFallbackTarget.threadId : route.threadId;
   const effectiveFilePath = mobileMosaicFallbackTarget?.kind === "file" ? mobileMosaicFallbackTarget.filePath : route.filePath;
-  const showEmptyState = !showThreadView && !showFileView && !showSettingsView && !showMosaicView;
-  const showRouteError = Boolean(selectionError) && !showThreadView && !showFileView && !showSettingsView && !showMosaicView;
+  const showEmptyState = !showThreadView && !showFileView && !showSettingsView && !showCollaborationView && !showMosaicView;
+  const showRouteError = Boolean(selectionError) && !showThreadView && !showFileView && !showSettingsView && !showCollaborationView && !showMosaicView;
   if (currentThread) {
     retainedThreadRef.current = currentThread;
   }
@@ -1629,12 +1780,12 @@ export default function Workbench () {
   const hasPendingQuestionnaire = Boolean(currentThread
     && pendingQuestionnaireThreadIds.has(currentThread.id)
     && isThreadStatusWaitingOnUserInput(currentThread.status))
-    || explorer.threads.some((thread) => (
+    || visibleSidebarThreads.some((thread) => (
       pendingQuestionnaireThreadIds.has(thread.id)
       && isThreadStatusWaitingOnUserInput(thread.status)
     ));
   const hasActiveThread = Boolean(currentThread && isThreadStatusActive(currentThread.status))
-    || explorer.threads.some((thread) => Boolean(thread.unreadBadge?.hasActiveTurn));
+    || visibleSidebarThreads.some((thread) => Boolean(thread.unreadBadge?.hasActiveTurn));
   const tabIconState: WorkbenchTabIconState = hasPendingQuestionnaire
     ? "questionnaire"
     : hasActiveThread
@@ -1643,14 +1794,16 @@ export default function Workbench () {
   const ambientCanvasVariant: WorkbenchAmbientCanvasVariant | null = resolvedSettings.theme === "magical-girl" || resolvedSettings.theme === "winter"
     ? resolvedSettings.theme
     : null;
-  const shouldShowShellHeader = !showMosaicView && !showFileView && !showEmptyState && (!isMobile || mobilePane === "editor");
+  const shouldShowShellHeader = !showFullBleedMainView && !showFileView && !showEmptyState && (!isMobile || mobilePane === "editor");
   const mainPaneScrollKey = showThreadView
     ? `thread:${activeThreadId}`
     : showFileView
       ? `file:${activeFilePath}`
-      : showSettingsView
-        ? "settings"
-        : "";
+    : showSettingsView
+      ? "settings"
+      : showCollaborationView
+        ? "collaboration"
+      : "";
   const routeMosaicProjection = useMemo(() => (
     showMosaicView && route.mosaicNode
       ? createWorkbenchMainLayoutFromMosaic(route.mosaicNode)
@@ -2200,6 +2353,33 @@ export default function Workbench () {
       );
     }
 
+    if (definition.type === "text" && typeof value === "string") {
+      return (
+        <input
+          type="text"
+          className="w-full rounded-lg border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-transparent px-3 py-2 text-[0.9rem] leading-6 text-text outline-none transition focus:border-accent focus:ring-2 focus:ring-accent-soft disabled:opacity-45"
+          disabled={disabled}
+          value={value}
+          onChange={(event) => {
+            onChange(event.currentTarget.value);
+          }}
+        />
+      );
+    }
+
+    if (definition.type === "textarea" && typeof value === "string") {
+      return (
+        <textarea
+          className="explorer-scrollbar min-h-56 w-full resize-y rounded-lg border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-transparent px-3 py-2 font-mono text-[0.82rem] leading-6 text-text outline-none transition focus:border-accent focus:ring-2 focus:ring-accent-soft disabled:opacity-45"
+          disabled={disabled}
+          value={value}
+          onChange={(event) => {
+            onChange(event.currentTarget.value);
+          }}
+        />
+      );
+    }
+
     if (definition.options) {
       return (
         <WorkbenchOptionCards<WorkbenchGlobalSettings[WorkbenchSettingKey]>
@@ -2360,6 +2540,86 @@ export default function Workbench () {
     }
   };
 
+  const handleCollaborationThreadRegistryChange = useCallback((registry: WorkbenchCollaborationThreadRegistry) => {
+    if (!activeProjectId) {
+      return;
+    }
+
+    const normalizedRegistry = normalizeWorkbenchCollaborationThreadRegistry(registry);
+    setCollaborationThreadRegistriesByProjectId((current) => {
+      const existing = current[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY;
+      if (areCollaborationThreadRegistriesEqual(existing, normalizedRegistry)) {
+        return current;
+      }
+
+      const next = {
+        ...current,
+        [activeProjectId]: normalizedRegistry,
+      };
+      writeStoredCollaborationThreadRegistries(next);
+      return next;
+    });
+    void writeWorkbenchCollaborationThreadRegistry(activeProjectId, normalizedRegistry)
+      .then((savedRegistry) => {
+        setCollaborationThreadRegistriesByProjectId((current) => {
+          const existing = current[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY;
+          if (areCollaborationThreadRegistriesEqual(existing, savedRegistry)) {
+            return current;
+          }
+
+          const next = {
+            ...current,
+            [activeProjectId]: savedRegistry,
+          };
+          writeStoredCollaborationThreadRegistries(next);
+          return next;
+        });
+      })
+      .catch(() => {
+        // Browser-local Collaboration state remains usable when disk sync is unavailable.
+      });
+  }, [activeProjectId]);
+
+  const handleStartCollaborationSuggestionThread = useCallback(async (
+    input: UserInput[],
+    draftThread: ThreadPayload,
+  ): Promise<{ status: "started"; threadId: string } | { error: string; status: "failed" }> => {
+    if (!controls) {
+      return {
+        error: "Workbench controls are not ready.",
+        status: "failed",
+      };
+    };
+
+    try {
+      let materializedThreadId = "";
+      const payload = await sendThreadMessage(draftThread, input, {
+        onThreadMaterialized: (materializedThread) => {
+          materializedThreadId = materializedThread.id;
+        },
+        selectThread: false,
+      });
+
+      const threadId = payload?.id || materializedThreadId;
+      if (!threadId) {
+        return {
+          error: "Workbench did not return a thread id for the started suggestion.",
+          status: "failed",
+        };
+      }
+
+      return {
+        status: "started",
+        threadId,
+      };
+    } catch (error) {
+      return {
+        error: error instanceof Error ? error.message : "Unable to start suggestion thread.",
+        status: "failed",
+      };
+    }
+  }, [controls, sendThreadMessage]);
+
   return (
     <div
       className={`relative isolate h-dvh overflow-hidden md:grid md:min-h-screen md:h-auto md:overflow-visible md:items-start${isDesktopSidebarCollapsed
@@ -2481,6 +2741,20 @@ export default function Workbench () {
                   </div>
                 </section>
 
+                <section className="pb-4 pr-2 md:pr-4.5">
+                  <a
+                    href={createCollaborationHref(activeProjectId)}
+                    className={`flex min-w-0 items-center gap-3 rounded-lg px-2 py-2 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:-ml-2${showCollaborationView ? " bg-accent-soft text-accent" : " text-muted"}`}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      navigateToRoute(createCollaborationRoute(explorer.currentProjectId || route.projectId));
+                    }}
+                  >
+                    <CollaborationIcon />
+                    <span className="min-w-0 truncate text-[0.95rem] font-semibold">Collaboration</span>
+                  </a>
+                </section>
+
                 <section
                   className={`relative space-y-2 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "threads" ? " opacity-45" : ""}`}
                   {...getSidebarSectionDragProps("threads")}
@@ -2527,7 +2801,7 @@ export default function Workbench () {
                           });
                         } : undefined}
                         isDraftSelected={Boolean(currentThread?.isDraft)}
-                        nodes={explorer.threads}
+                        nodes={visibleSidebarThreads}
                         pendingQuestionnaireThreadIds={pendingQuestionnaireThreadIds}
                         onCreateThread={() => {
                           if (showMosaicView) {
@@ -2752,7 +3026,7 @@ export default function Workbench () {
 
         <main
           ref={mainPaneRef}
-          className={`explorer-scrollbar flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden overflow-y-auto md:w-auto${showMosaicView
+          className={`explorer-scrollbar flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden overflow-y-auto md:w-auto${showFullBleedMainView
             ? " px-5 pb-5 md:h-screen md:min-h-0 md:overflow-hidden md:px-0 md:pb-0"
             : " px-5 pb-5 md:h-auto md:min-h-screen md:overflow-visible md:px-6 md:pb-5"
           }`}
@@ -2850,7 +3124,7 @@ export default function Workbench () {
           </header>
 
           <section
-            className={`relative md:min-h-0 md:flex-1${showMosaicView ? " min-h-0 overflow-hidden" : ""}`}
+            className={`relative md:min-h-0 md:flex-1${showFullBleedMainView ? " min-h-0 overflow-hidden" : ""}`}
             aria-busy={isSelectionPending}
           >
             {showThreadView && !shouldRenderMainLayout ? (
@@ -2955,6 +3229,63 @@ export default function Workbench () {
                       : SETTINGS_ORDER.map((key) => renderProjectSettingRow(key))}
                   </div>
                 </section>
+              </div>
+            ) : null}
+            {showCollaborationView && !shouldRenderMainLayout ? (
+              <div className="h-full min-h-0">
+                <WorkbenchCollaborationView
+                  collaboratorPrompt={resolvedSettings.collaborationCollaboratorPrompt}
+                  collaborationThreadRegistry={collaborationThreadRegistry}
+                  collaborationStartedSuggestionThreadSummaries={collaborationStartedSuggestionThreadSummaries}
+                  collaborationThreadSummaries={collaborationThreadSummaries}
+                  composerSpellCheck={resolvedSettings.composerSpellCheck}
+                  controls={controls}
+                  editorFontClassName={editorFontClassName}
+                  fontSizeRem={resolvedSettings.editorFontSize}
+                  harness={harness}
+                  isMobile={isMobile}
+                  livePendingUserInputRequestsByThreadId={harnessUserInputRequestsByThreadId}
+                  onCollaborationThreadRegistryChange={handleCollaborationThreadRegistryChange}
+                  onClaimAutoWake={claimWorkbenchCollaborationAutoWake}
+                  onDraftHarnessChange={handleHarnessChange}
+                  onListModels={listThreadModels}
+                  onReadThread={readThread}
+                  onThreadSeen={markThreadSeen}
+                  onCompactThread={compactThread}
+                  onSendMessage={sendThreadMessage}
+                  onStopThread={stopThread}
+                  onSubmitUserInputRequest={submitUserInputRequest}
+                  onThreadComposerDraftChange={handleThreadComposerDraftChange}
+                  onThreadComposerDraftClear={handleThreadComposerDraftClear}
+                  onThreadQuestionnaireDraftChange={handleThreadQuestionnaireDraftChange}
+                  onThreadQuestionnaireDraftClear={handleThreadQuestionnaireDraftClear}
+                  onThreadAgentChange={setThreadAgent}
+                  onThreadReasoningEffortChange={setThreadReasoningEffort}
+                  onThreadServiceTierChange={setThreadServiceTier}
+                  onOpenThreadFromSuggestion={(threadId) => {
+                    navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, threadId));
+                  }}
+                  onStartThreadFromPrompt={handleStartCollaborationSuggestionThread}
+                  onThreadModelChange={setThreadModel}
+                  onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
+                  projectFileCandidates={explorer.projectFileCandidates}
+                  projectChanges={explorer.changes}
+                  projectFileIndexId={explorer.projectFileIndexId}
+                  projectFileLinkRoots={projectFileLinkRoots}
+                  projectFilePaths={explorer.projectFilePaths}
+                  projectId={activeProjectId}
+                  projectRootPath={explorer.rootPath}
+                  projectRoots={explorer.roots}
+                  rateLimits={rateLimits}
+                  scratchpadPath={collaborationScratchpadPath}
+                  scratchpadWritableRoot={collaborationScratchpadWritableRoot}
+                  threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
+                  threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
+                  threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
+                  threadSavedComposerDrafts={threadSavedComposerDrafts}
+                  onThreadSavedComposerDraftDelete={handleThreadSavedComposerDraftDelete}
+                  onThreadSavedComposerDraftSave={handleThreadSavedComposerDraftSave}
+                />
               </div>
             ) : null}
             {showRouteError && !shouldRenderMainLayout ? (

@@ -16,6 +16,7 @@ import type {
     WorkbenchReadThreadOptions,
     WorkbenchSendThreadMessageOptions,
 } from "./types";
+import { areDeeplyEqual } from "./workbench/deep-equality";
 import {
     createProjectRoute,
     type WorkbenchRoute,
@@ -33,6 +34,7 @@ import {
     type WorkbenchDomSurfaces,
 } from "./workbench/workbench-dom";
 import WorkbenchFilePanelClient from "./workbench/WorkbenchFilePanelClient";
+import type { WorkbenchFilePanelClientOptions } from "./workbench/WorkbenchFilePanelClient";
 import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
 import WorkbenchThreadClient from "./workbench/WorkbenchThreadClient";
 import { getTurnRenderSignature } from "./workbench/thread/thread-item-signature";
@@ -40,7 +42,10 @@ import { getTurnRenderSignature } from "./workbench/thread/thread-item-signature
 const AUTO_REFRESH_INTERVAL_MS = 1500;
 
 type MountedWorkbenchControls = WorkbenchControls & {
-  createFilePanelClient: (surfaces: WorkbenchEditorDomSurfaces) => ReturnType<typeof WorkbenchFilePanelClient>;
+  createFilePanelClient: (
+    surfaces: WorkbenchEditorDomSurfaces,
+    options?: Partial<Omit<WorkbenchFilePanelClientOptions, "clearThreadSelection" | "draftStore" | "emitExplorerStateChange" | "expandProjectPath" | "getProjectChangeSummary" | "getProjectId" | "refreshProject" | "surfaces">>,
+  ) => ReturnType<typeof WorkbenchFilePanelClient>;
 };
 
 export async function WorkbenchClient(
@@ -194,6 +199,7 @@ export async function WorkbenchClient(
       locallyModifiedPaths: getLocallyModifiedPaths(),
       threadsError: threadSnapshot.threadsError,
       fontSize: readStoredFontSize(),
+      workbenchStorageRootPath: projectSnapshot.workbenchStorageRootPath,
     };
   }
 
@@ -248,7 +254,7 @@ export async function WorkbenchClient(
       return false;
     }
 
-    return JSON.stringify(leftTurn) === JSON.stringify(rightTurn);
+    return areDeeplyEqual(leftTurn, rightTurn);
   }
 
   function arePendingUserInputRequestsEquivalent(
@@ -267,7 +273,7 @@ export async function WorkbenchClient(
 
     return leftEntries.every(([threadId, request]) => {
       const matchingRequest = right[threadId];
-      return Boolean(matchingRequest) && JSON.stringify(request) === JSON.stringify(matchingRequest);
+      return Boolean(matchingRequest) && areDeeplyEqual(request, matchingRequest);
     });
   }
 
@@ -313,8 +319,8 @@ export async function WorkbenchClient(
       && left.forkedFromId === right.forkedFromId
       && left.agentNickname === right.agentNickname
       && left.agentRole === right.agentRole
-      && JSON.stringify(left.tokenUsage) === JSON.stringify(right.tokenUsage)
-      && JSON.stringify(left.turnHistory) === JSON.stringify(right.turnHistory)
+      && areDeeplyEqual(left.tokenUsage, right.tokenUsage)
+      && areDeeplyEqual(left.turnHistory, right.turnHistory)
       && areTurnListsEquivalent(left.turns, right.turns)
       && areCurrentTurnsEquivalent(left, right);
   }
@@ -470,7 +476,7 @@ export async function WorkbenchClient(
       && activeRoute.view === route.view
       && activeRoute.projectId === route.projectId
       && activeRoute.filePath === route.filePath
-      && JSON.stringify(activeRoute.mosaicNode) === JSON.stringify(route.mosaicNode)
+      && areDeeplyEqual(activeRoute.mosaicNode, route.mosaicNode)
       && activeRoute.settingsScope === route.settingsScope
       && activeRoute.threadId === route.threadId;
   }
@@ -524,7 +530,7 @@ export async function WorkbenchClient(
       return { ok: false };
     }
 
-    if (route.view === "project" || route.view === "settings" || route.view === "mosaic") {
+    if (route.view === "project" || route.view === "settings" || route.view === "collaboration" || route.view === "mosaic") {
       activeFilePath = "";
       threadClient.clearThreadSelection();
       applyCurrentThreadSelection(null);
@@ -646,7 +652,8 @@ export async function WorkbenchClient(
 
   const controls: MountedWorkbenchControls = {
     applyRoute,
-    createFilePanelClient: (surfaces) => WorkbenchFilePanelClient({
+    createFilePanelClient: (surfaces, filePanelOptions = {}) => WorkbenchFilePanelClient({
+      ...filePanelOptions,
       clearThreadSelection: () => {
         threadClient.clearThreadSelection();
         applyCurrentThreadSelection(null);
@@ -663,9 +670,13 @@ export async function WorkbenchClient(
       },
       surfaces,
     }),
-    createThreadDraft: (harness) => {
-      const draftThread = threadClient.createThread(harness);
-      applyThreadPayloadToCurrentView(draftThread);
+    createThreadDraft: (harness, draftOptions = {}) => {
+      const draftThread = threadClient.createThread(harness, draftOptions.threadId, {
+        select: draftOptions.select,
+      });
+      if (draftOptions.select !== false) {
+        applyThreadPayloadToCurrentView(draftThread);
+      }
       emitExplorerStateChange();
       return draftThread;
     },

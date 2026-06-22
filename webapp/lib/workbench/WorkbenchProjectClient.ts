@@ -37,6 +37,7 @@ export interface WorkbenchProjectState {
   rootPath: string;
   roots: WorkbenchProjectRoot[];
   tree: TreeNode[];
+  workbenchStorageRootPath: string;
 }
 
 export interface WorkbenchProjectSnapshot {
@@ -53,6 +54,7 @@ export interface WorkbenchProjectSnapshot {
   rootPath: string;
   roots: WorkbenchProjectRoot[];
   tree: TreeNode[];
+  workbenchStorageRootPath: string;
 }
 
 export type WorkbenchProjectListener = (snapshot: WorkbenchProjectSnapshot) => void;
@@ -82,6 +84,7 @@ function createInitialProjectState(): WorkbenchProjectState {
     rootPath: "",
     roots: [],
     tree: [],
+    workbenchStorageRootPath: "",
   };
 }
 
@@ -105,6 +108,7 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
       rootPath: state.rootPath,
       roots: state.roots.map((root) => ({ ...root })),
       tree: cloneTreeNodes(state.tree),
+      workbenchStorageRootPath: state.workbenchStorageRootPath,
     };
   }
 
@@ -121,6 +125,7 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
     state.rootPath = payload.rootPath;
     state.roots = payload.roots.map((root) => ({ ...root }));
     state.tree = cloneTreeNodes(payload.tree);
+    state.workbenchStorageRootPath = payload.workbenchStorageRootPath;
     state.fileIndex = ProjectTreeFileIndex.fromTree(state.tree, state.fileIndex);
     state.changes = { ...payload.changes };
     state.hasLoadedProject = true;
@@ -172,6 +177,7 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
         rootPath: state.rootPath,
         roots: [],
         tree: [],
+        workbenchStorageRootPath: state.workbenchStorageRootPath,
       };
     }
 

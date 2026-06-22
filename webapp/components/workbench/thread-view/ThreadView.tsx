@@ -27,6 +27,7 @@ import type {
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
+import { areDeeplyEqual } from "../../../lib/workbench/deep-equality";
 import type { ProjectTreeFileCandidate } from "../../../lib/workbench/project/ProjectTreeFileIndex";
 import {
   createProjectFilePathDisambiguationIndexCooperatively,
@@ -196,7 +197,7 @@ function areThreadPayloadsEquivalent (left: ThreadPayload | null | undefined, ri
     return false;
   }
 
-  return JSON.stringify(left) === JSON.stringify(right);
+  return areDeeplyEqual(left, right);
 }
 
 function mergeSubthreadTurnSnapshots (
@@ -557,6 +558,9 @@ export default memo(function ThreadView ({
   composerSpellCheck,
   contained = false,
   fontSizeRem,
+  hideFinalAgentMessage = false,
+  hideWorkbenchControlAgentMessages = false,
+  hideWorkbenchControlUserMessages = false,
   livePendingUserInputRequestsByThreadId,
   onDraftHarnessChange,
   onThreadCodeBlockWrapChange,
@@ -594,6 +598,9 @@ export default memo(function ThreadView ({
   composerSpellCheck: boolean;
   contained?: boolean;
   fontSizeRem: number;
+  hideFinalAgentMessage?: boolean;
+  hideWorkbenchControlAgentMessages?: boolean;
+  hideWorkbenchControlUserMessages?: boolean;
   livePendingUserInputRequestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>;
   onDraftHarnessChange: (harness: WorkbenchHarness) => void;
   onThreadCodeBlockWrapChange: (nextValue: boolean) => void;
@@ -1331,6 +1338,9 @@ export default memo(function ThreadView ({
                   <ThreadTurnDetails
                     key={entry.turnId}
                     hiddenCollabAgentToolCallItemIds={turn.id === currentTurn?.id ? hiddenCollabAgentToolCallItemIds : EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS}
+                    hideFinalAgentMessage={hideFinalAgentMessage}
+                    hideWorkbenchControlAgentMessages={hideWorkbenchControlAgentMessages}
+                    hideWorkbenchControlUserMessages={hideWorkbenchControlUserMessages}
                     inlineMentionSources={inlineMentionSources}
                     knownSkills={workbenchSkills}
                     threadCwdPath={activeThread.cwd}

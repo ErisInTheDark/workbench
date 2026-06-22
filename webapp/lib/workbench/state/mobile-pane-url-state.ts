@@ -14,5 +14,5 @@ export function getPreferredMobilePane (isMobileViewport: boolean, route: Workbe
     return "editor";
   }
 
-  return route.view === "file" || route.view === "thread" || route.view === "settings" || route.view === "mosaic" ? "editor" : "explorer";
+  return route.view === "file" || route.view === "thread" || route.view === "settings" || route.view === "collaboration" || route.view === "mosaic" ? "editor" : "explorer";
 }

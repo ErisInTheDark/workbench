@@ -11,6 +11,7 @@
  * - normalizeListItemHierarchy: normalize a single list item into the details-plus-summary structured nesting form when needed. Keywords: workbench, list, hierarchy, details.
  * - normalizeNestedListHierarchy: normalize all list items under a root into structured nesting form. Keywords: workbench, list, hierarchy, normalize.
  * - mergeAdjacentSiblingLists: merge compatible sibling lists separated only by empty spacer nodes. Keywords: workbench, list, merge, cleanup.
+ * - normalizeRootInlineBlocks: wrap direct root inline content into stable paragraph blocks for markdown round-trip comparison. Keywords: workbench, editor, root, inline, paragraph, save guard.
  * - syncStructuredBlockStyles: run structured block normalization plus optional injected inline cleanup callbacks. Keywords: workbench, block dom, comment block, list, sync.
  * - isBlockLikeChildElement: detect child elements that force a container to behave as block content. Keywords: workbench, block dom, predicate, inline container.
  * - hasDirectBlockLikeChildren: detect whether a container contains direct block-like children. Keywords: workbench, block dom, predicate, container.
@@ -350,6 +351,142 @@ function getStructuredBlockCandidates(root: ParentNode) {
   }
 
   return Array.from(root.querySelectorAll("p, div"));
+}
+
+function isRootBreakNode(node: Node | null) {
+  return node instanceof HTMLBRElement
+    || (
+      node instanceof HTMLElement
+      && node.dataset.blockComment !== "true"
+      && isSingleBreakParagraph(node)
+      && !isIntentionalListBreakParagraph(node)
+    );
+}
+
+function isRootBlockBoundaryNode(node: Node) {
+  if (isRootBreakNode(node)) {
+    return true;
+  }
+
+  return node instanceof HTMLElement && isBlockLikeChildElement(node);
+}
+
+function isSerializableRootInlineNode(node: Node) {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return Boolean((node.textContent ?? "").trim());
+  }
+
+  if (!(node instanceof HTMLElement)) {
+    return false;
+  }
+
+  return Boolean((node.textContent ?? "").trim() || node.querySelector("br"));
+}
+
+function isIgnorableRootWhitespaceNode(node: Node) {
+  return node.nodeType === Node.TEXT_NODE && !(node.textContent ?? "").trim();
+}
+
+function getFirstRootContentNode(root: ParentNode) {
+  let node = root.firstChild;
+  while (node && (isIgnorableRootWhitespaceNode(node) || isRootBreakNode(node))) {
+    node = node.nextSibling;
+  }
+
+  return node;
+}
+
+function getLastRootContentNode(root: ParentNode) {
+  let node = root.lastChild;
+  while (node && (isIgnorableRootWhitespaceNode(node) || isRootBreakNode(node))) {
+    node = node.previousSibling;
+  }
+
+  return node;
+}
+
+function isBlockCommentNode(node: Node | null) {
+  return node instanceof HTMLElement && node.dataset.blockComment === "true";
+}
+
+function isRemovableRootEdgeNode(node: Node | null) {
+  return isRootBreakNode(node) || (node !== null && isIgnorableRootWhitespaceNode(node));
+}
+
+function removeRootWhitespaceTextNodes(root: ParentNode) {
+  for (const child of Array.from(root.childNodes)) {
+    if (isIgnorableRootWhitespaceNode(child)) {
+      child.remove();
+    }
+  }
+}
+
+function trimRootBreaksDroppedByMarkdown(root: ParentNode) {
+  removeRootWhitespaceTextNodes(root);
+
+  if (!isBlockCommentNode(getFirstRootContentNode(root))) {
+    while (isRemovableRootEdgeNode(root.firstChild)) {
+      root.firstChild?.remove();
+    }
+  }
+
+  if (!isBlockCommentNode(getLastRootContentNode(root))) {
+    while (isRemovableRootEdgeNode(root.lastChild)) {
+      root.lastChild?.remove();
+    }
+  }
+}
+
+export function normalizeRootInlineBlocks(root: ParentNode) {
+  if (!(root instanceof HTMLElement || root instanceof DocumentFragment)) {
+    return;
+  }
+
+  if (root instanceof HTMLElement && root.tagName !== "DIV") {
+    return;
+  }
+
+  const ownerDocument = root instanceof Node ? root.ownerDocument : document;
+  let inlineNodes: Node[] = [];
+
+  function flushInlineNodes(beforeNode: Node | null) {
+    if (!inlineNodes.length) {
+      return;
+    }
+
+    const hasSerializableContent = inlineNodes.some(isSerializableRootInlineNode);
+    if (!hasSerializableContent) {
+      for (const node of inlineNodes) {
+        node.parentNode?.removeChild(node);
+      }
+      inlineNodes = [];
+      return;
+    }
+
+    const paragraph = ownerDocument.createElement("p");
+    for (const node of inlineNodes) {
+      if (isIgnorableRootWhitespaceNode(node)) {
+        node.parentNode?.removeChild(node);
+        continue;
+      }
+
+      paragraph.append(node);
+    }
+    root.insertBefore(paragraph, beforeNode);
+    inlineNodes = [];
+  }
+
+  for (const child of Array.from(root.childNodes)) {
+    if (isRootBlockBoundaryNode(child)) {
+      flushInlineNodes(child);
+      continue;
+    }
+
+    inlineNodes.push(child);
+  }
+
+  flushInlineNodes(null);
+  trimRootBreaksDroppedByMarkdown(root);
 }
 
 export function syncStructuredBlockStyles(

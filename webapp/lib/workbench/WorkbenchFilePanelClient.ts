@@ -63,12 +63,21 @@ export interface WorkbenchFilePanelSnapshot {
 export type WorkbenchFilePanelListener = (snapshot: WorkbenchFilePanelSnapshot) => void;
 
 export interface WorkbenchFilePanelClientOptions {
+  autoRefreshCleanFileDelayMs?: number;
+  autoRefreshCleanFile?: boolean;
+  autoSave?: boolean;
+  autoSaveDelayMs?: number;
   clearThreadSelection: () => void;
+  documentProfile?: "standard" | "collaborationScratchpad";
   draftStore: FileDraftStore;
   emitExplorerStateChange: () => void;
   expandProjectPath: (filePath: string) => void;
+  fileApiPath?: string;
   getProjectChangeSummary: (path: string) => ChangeSummary | null | undefined;
   getProjectId: () => string;
+  keepEverythingOnSave?: boolean;
+  onContentChange?: (content: string) => void;
+  refreshProjectOnSave?: boolean;
   refreshProject: () => Promise<void>;
   surfaces: WorkbenchEditorDomSurfaces;
 }
@@ -93,12 +102,21 @@ function WorkbenchFilePanelClient(
   lifecycle: LifecycleScope = new LifecycleScope(),
 ): WorkbenchFilePanelClient {
   const {
+    autoRefreshCleanFileDelayMs,
     clearThreadSelection,
+    autoRefreshCleanFile = false,
+    autoSave = false,
+    autoSaveDelayMs,
+    documentProfile = "standard",
     draftStore,
     emitExplorerStateChange,
     expandProjectPath,
+    fileApiPath,
     getProjectChangeSummary,
     getProjectId,
+    keepEverythingOnSave = false,
+    onContentChange,
+    refreshProjectOnSave,
     refreshProject,
     surfaces,
   } = options;
@@ -189,6 +207,7 @@ function WorkbenchFilePanelClient(
     fileSessionState,
     getEditorHasFocus: () => editorHasFocus,
     getProjectChangeSummary,
+    documentProfile,
     handleCompositionEnd: () => {
       isComposing = false;
     },
@@ -374,7 +393,11 @@ function WorkbenchFilePanelClient(
     },
     mutationRuntime: {
       inspectCurrentDraft: () => {
+        const previousContent = fileSessionState.currentContent;
         fileClient.inspectCurrentDraft();
+        if (fileSessionState.currentContent !== previousContent) {
+          onContentChange?.(fileSessionState.currentContent);
+        }
       },
       recordEditHistory: (previousContent, nextContent, selection) => {
         editHistoryManager.recordEditHistory(previousContent, nextContent, selection);
@@ -403,14 +426,21 @@ function WorkbenchFilePanelClient(
   });
 
   fileClient = WorkbenchFileClient({
+    autoRefreshCleanFileDelayMs,
+    autoRefreshCleanFile,
+    autoSave,
+    autoSaveDelayMs,
     clearThreadSelection,
     draftStore,
     editorDocument: editorClient.getDocumentAdapter(),
     emitExplorerStateChange,
     eventBus,
     expandProjectPath,
+    fileApiPath,
     fileSessionState,
     getProjectId,
+    keepEverythingOnSave,
+    refreshProjectOnSave,
     refreshProject,
     sessionState,
     updateHistorySelection: editHistoryManager.updateHistorySelection,

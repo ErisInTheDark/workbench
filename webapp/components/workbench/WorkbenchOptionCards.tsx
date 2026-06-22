@@ -6,6 +6,8 @@
 
 "use client";
 
+import type { ReactNode } from "react";
+
 type WorkbenchOptionCardsProps<T extends string | boolean | number> = {
   ariaLabel: string;
   columns?: "one" | "two";
@@ -14,7 +16,7 @@ type WorkbenchOptionCardsProps<T extends string | boolean | number> = {
   onChange: (value: T) => void;
   options: Array<{
     description: string;
-    label: string;
+    label: ReactNode;
     value: T;
   }>;
   value: T;
@@ -27,7 +29,7 @@ type WorkbenchOptionCardProps = {
   isChecked: boolean;
   isHistoryMode?: boolean;
   isSingleChoice?: boolean;
-  label: string;
+  label: ReactNode;
   markerId?: string;
   onClick?: () => void;
 };

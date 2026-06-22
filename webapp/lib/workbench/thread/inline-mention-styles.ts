@@ -10,6 +10,7 @@ import type { InlineMentionCandidateKind } from "./inline-mention-highlights";
 
 export const inlineMentionMarkBaseClassName = [
   "ring-1 ring-inset",
+  "[box-decoration-break:clone] [-webkit-box-decoration-break:clone]",
 ].join(" ");
 
 export function getInlineMentionMarkToneClassName(kind: InlineMentionCandidateKind) {
@@ -24,11 +25,10 @@ export function getInlineMentionMarkClassName(kind: InlineMentionCandidateKind) 
 
 export function getInlineMentionOverlayClassName(kind: InlineMentionCandidateKind) {
   return [
-    "relative isolate",
-    "before:absolute before:inset-x-[-0.12em] before:inset-y-[-0.04em]",
-    "before:rounded-[0.28em] before:ring-1 before:ring-inset before:content-['']",
+    "rounded-[0.28em] ring-1 ring-inset",
+    "[box-decoration-break:clone] [-webkit-box-decoration-break:clone]",
     kind === "skill"
-      ? "before:bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] before:ring-[color-mix(in_srgb,var(--accent)_24%,transparent)]"
-      : "before:bg-[color-mix(in_srgb,var(--success)_14%,transparent)] before:ring-[color-mix(in_srgb,var(--success)_24%,transparent)]",
+      ? "bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] ring-[color-mix(in_srgb,var(--accent)_24%,transparent)] shadow-[0_0_0_0.12em_color-mix(in_srgb,var(--accent)_14%,transparent)]"
+      : "bg-[color-mix(in_srgb,var(--success)_14%,transparent)] ring-[color-mix(in_srgb,var(--success)_24%,transparent)] shadow-[0_0_0_0.12em_color-mix(in_srgb,var(--success)_14%,transparent)]",
   ].join(" ");
 }

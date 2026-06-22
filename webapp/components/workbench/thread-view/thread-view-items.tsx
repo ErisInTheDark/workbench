@@ -64,6 +64,8 @@ type RelatedThreadsById = Record<string, ThreadPayload | undefined>;
 
 interface HiddenThreadItemIds {
   collabAgentToolCallIds?: ReadonlySet<string> | null;
+  controlAgentMessages?: boolean;
+  controlUserMessages?: boolean;
   reasoningItemId?: string | null;
   webSearchItemIds?: ReadonlySet<string> | null;
 }
@@ -118,6 +120,10 @@ function getFinalAgentMessageId (turn: Turn) {
 
 function isUserMessageBlock (block: ThreadRenderableBlock) {
   return block.kind === "item" && block.item.type === "userMessage";
+}
+
+function isWorkbenchControlUserMessage(item: Extract<ThreadItem, { type: "userMessage" }>) {
+  return item.content.some((content) => content.type === "text" && content.text.includes("<!-- workbench-collaboration-control -->"));
 }
 
 function isFinalAgentMessageBlock (block: ThreadRenderableBlock, finalAgentMessageId: string | null) {
@@ -193,6 +199,14 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
 
   for (const item of items) {
     if (item.type === "agentMessage" && !item.text.trim()) {
+      continue;
+    }
+
+    if (item.type === "agentMessage" && hiddenItemIds.controlAgentMessages) {
+      continue;
+    }
+
+    if (item.type === "userMessage" && hiddenItemIds.controlUserMessages && isWorkbenchControlUserMessage(item)) {
       continue;
     }
 
@@ -1154,6 +1168,9 @@ function ThreadRenderableBlockView ({
 
 function ThreadTurnDetailsComponent ({
   hiddenCollabAgentToolCallItemIds = [],
+  hideFinalAgentMessage = false,
+  hideWorkbenchControlAgentMessages = false,
+  hideWorkbenchControlUserMessages = false,
   hiddenReasoningItemId = null,
   hiddenWebSearchItemIds = [],
   inlineMentionSources = null,
@@ -1167,6 +1184,9 @@ function ThreadTurnDetailsComponent ({
   workspaceRoots,
 }: {
   hiddenCollabAgentToolCallItemIds?: readonly string[];
+  hideFinalAgentMessage?: boolean;
+  hideWorkbenchControlAgentMessages?: boolean;
+  hideWorkbenchControlUserMessages?: boolean;
   hiddenReasoningItemId?: string | null;
   hiddenWebSearchItemIds?: readonly string[];
   inlineMentionSources?: InlineMentionHighlightSources | null;
@@ -1185,8 +1205,11 @@ function ThreadTurnDetailsComponent ({
   const hiddenWebSearchIds = hiddenWebSearchItemIds.length
     ? new Set(hiddenWebSearchItemIds)
     : null;
+  const isWorkbenchControlTurn = turn.items.some((item) => item.type === "userMessage" && isWorkbenchControlUserMessage(item));
   const blocks = buildRenderableBlocks(turn.items, {
     collabAgentToolCallIds: hiddenCollabAgentToolCallIds,
+    controlAgentMessages: hideWorkbenchControlAgentMessages && isWorkbenchControlTurn,
+    controlUserMessages: hideWorkbenchControlUserMessages,
     reasoningItemId: hiddenReasoningItemId,
     webSearchItemIds: hiddenWebSearchIds,
   });
@@ -1196,11 +1219,14 @@ function ThreadTurnDetailsComponent ({
     ? blocks.find((block) => isUserMessageBlock(block)) ?? null
     : null;
   const finalAgentBlocks = isCompleted
-    ? blocks.filter((block) => isFinalAgentMessageBlock(block, finalAgentMessageId))
+    ? hideFinalAgentMessage ? [] : blocks.filter((block) => isFinalAgentMessageBlock(block, finalAgentMessageId))
     : [];
   const workedBlocks = isCompleted
     ? blocks.filter((block) => block !== primaryUserBlock && !isFinalAgentMessageBlock(block, finalAgentMessageId))
     : blocks;
+  if (isCompleted && hideFinalAgentMessage && hideWorkbenchControlUserMessages && !primaryUserBlock && !workedBlocks.length && !finalAgentBlocks.length) {
+    return null;
+  }
 
   const renderBlock = (block: ThreadRenderableBlock, index: number) => (
     <ThreadRenderableBlockView
@@ -1272,6 +1298,9 @@ function areThreadTurnDetailsPropsEqual (
 ) {
   return left.turn === right.turn
     && left.hiddenCollabAgentToolCallItemIds === right.hiddenCollabAgentToolCallItemIds
+    && left.hideFinalAgentMessage === right.hideFinalAgentMessage
+    && left.hideWorkbenchControlAgentMessages === right.hideWorkbenchControlAgentMessages
+    && left.hideWorkbenchControlUserMessages === right.hideWorkbenchControlUserMessages
     && left.hiddenReasoningItemId === right.hiddenReasoningItemId
     && left.hiddenWebSearchItemIds === right.hiddenWebSearchItemIds
     && left.inlineMentionSources === right.inlineMentionSources
@@ -1288,6 +1317,9 @@ export const ThreadTurnDetails = memo(ThreadTurnDetailsComponent, areThreadTurnD
 export function ThreadThreadContent ({
   emptyMessage = "No subagent activity was captured yet.",
   hiddenCollabAgentToolCallItemIds = [],
+  hideFinalAgentMessage = false,
+  hideWorkbenchControlAgentMessages = false,
+  hideWorkbenchControlUserMessages = false,
   hiddenReasoningItemId = null,
   hiddenWebSearchItemIds = [],
   inlineMentionSources = null,
@@ -1302,6 +1334,9 @@ export function ThreadThreadContent ({
 }: {
   emptyMessage?: string;
   hiddenCollabAgentToolCallItemIds?: readonly string[];
+  hideFinalAgentMessage?: boolean;
+  hideWorkbenchControlAgentMessages?: boolean;
+  hideWorkbenchControlUserMessages?: boolean;
   hiddenReasoningItemId?: string | null;
   hiddenWebSearchItemIds?: readonly string[];
   inlineMentionSources?: InlineMentionHighlightSources | null;
@@ -1351,6 +1386,9 @@ export function ThreadThreadContent ({
           <ThreadTurnDetails
             key={entry.turnId}
             hiddenCollabAgentToolCallItemIds={hiddenCollabAgentToolCallItemIds}
+            hideFinalAgentMessage={hideFinalAgentMessage}
+            hideWorkbenchControlAgentMessages={hideWorkbenchControlAgentMessages}
+            hideWorkbenchControlUserMessages={hideWorkbenchControlUserMessages}
             hiddenReasoningItemId={hiddenReasoningItemId}
             hiddenWebSearchItemIds={hiddenWebSearchItemIds}
             inlineMentionSources={inlineMentionSources}

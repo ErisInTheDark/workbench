@@ -543,6 +543,32 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     font-size: 0.85em;
   }
 
+  .editor-content [data-collaboration-author-marker] {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    margin-block: 1rem 0.35rem;
+    color: color-mix(in srgb, var(--text) 55%, transparent);
+    font-family: var(--font-sans);
+    font-size: 0.78em;
+    font-weight: 650;
+    letter-spacing: 0.08em;
+    line-height: 1;
+    text-transform: uppercase;
+    user-select: none;
+  }
+
+  .editor-content [data-collaboration-author-marker]::before {
+    content: attr(data-label);
+  }
+
+  .editor-content [data-collaboration-author-marker]::after {
+    content: "";
+    height: 1px;
+    flex: 1;
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+  }
+
   .editor-content [data-inline-comment="true"] {
     background: color-mix(in srgb, var(--text) 6%, transparent);
     border-radius: 0.35rem;
