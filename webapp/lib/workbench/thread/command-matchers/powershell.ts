@@ -106,22 +106,16 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         return null;
       }
 
-      const nextStage = consumeNextCommandStage(context.stage.remainingCommand, "powershell");
-      if (!nextStage) {
+      const lineRanges = readPowerShellNumberedLineRanges(context.stage.remainingCommand, assignedRead.variableName);
+      if (!lineRanges) {
         return null;
       }
 
-      const lineRange = readPowerShellNumberedLineRange(nextStage.text, assignedRead.variableName);
-      if (!lineRange) {
-        return null;
-      }
-
-      return buildPowerShellLineRangeReadSummary(
+      return buildPowerShellLineRangesReadSummary(
         assignedRead.pathPart,
-        lineRange.startLine,
-        lineRange.endLine,
+        lineRanges.ranges,
         context,
-        nextStage.remainingCommand,
+        lineRanges.remainingCommand,
       );
     },
   }),
@@ -855,6 +849,35 @@ function readPowerShellNumberedLineRange(stageText: string, variableName: string
   return {
     endLine: endIndex + lineOffset,
     startLine: startIndex + lineOffset,
+  };
+}
+
+function readPowerShellNumberedLineRanges(commandText: string, variableName: string) {
+  const ranges: ParsedPowerShellLineRange[] = [];
+  let remainingCommand: string | null = commandText;
+
+  while (remainingCommand) {
+    const nextStage = consumeNextCommandStage(remainingCommand, "powershell");
+    if (!nextStage) {
+      break;
+    }
+
+    const lineRange = readPowerShellNumberedLineRange(nextStage.text, variableName);
+    if (!lineRange) {
+      break;
+    }
+
+    ranges.push(lineRange);
+    remainingCommand = nextStage.remainingCommand ?? null;
+  }
+
+  if (!ranges.length) {
+    return null;
+  }
+
+  return {
+    ranges,
+    remainingCommand,
   };
 }
 
