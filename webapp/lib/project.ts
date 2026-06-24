@@ -12,8 +12,8 @@
  * - getProjectSnapshot: assemble the project tree, root info, and git change summary for the client. Keywords: snapshot, project, explorer.
  * - resolveExternalFileLinkRoot: find the owning git root for an absolute local file link. Keywords: file link, absolute path, git root.
  * - parseWorkspaceQualifiedPath/formatWorkspaceQualifiedPath/resolveProjectFilePath: resolve root-qualified workspace paths. Keywords: workspace root, file path, qualified path.
- * - listProjectSkills/listProjectSkillDefinitions: discover project-level Workbench Skill metadata and full file content from `.agents/skills`. Keywords: project, skills, manifest.
- * - listUserInvocableAgents/readUserInvocableAgentDefinition: discover project-level agent markdown files from `.agents/agents` and load metadata/prompt. Keywords: agent, prompt, custom agent, iterator.
+ * - listProjectSkills/listProjectSkillDefinitions/listProjectSkillDefinitionsFromRoot: discover project-level Workbench Skill metadata and full file content from `.agents/skills`. Keywords: project, skills, manifest.
+ * - listUserInvocableAgents/readUserInvocableAgentDefinition/readUserInvocableAgentDefinitionFromRoot: discover project-level agent markdown files from `.agents/agents` and load metadata/prompt. Keywords: agent, prompt, custom agent, iterator.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -226,9 +226,12 @@ async function createGitignoreMatcher(rootDir: string) {
 
 export function safeResolveProjectPath(rootDir: string, requestPath: string) {
   const normalized = String(requestPath ?? "").replace(/\\/g, "/").replace(/^\/+/, "");
-  const absolute = path.resolve(rootDir, normalized);
+  const absoluteRoot = path.resolve(rootDir);
+  const absolute = path.resolve(absoluteRoot, normalized);
+  const comparableRoot = normalizePathForComparison(absoluteRoot);
+  const comparableAbsolute = normalizePathForComparison(absolute);
 
-  if (absolute !== rootDir && !absolute.startsWith(`${rootDir}${path.sep}`)) {
+  if (comparableAbsolute !== comparableRoot && !comparableAbsolute.startsWith(`${comparableRoot}/`)) {
     throw new Error("Path is outside the project workspace.");
   }
 
@@ -1126,9 +1129,13 @@ export async function listProjectSkillDefinitions(projectId?: string | null): Pr
     return [];
   }
 
+  return await listProjectSkillDefinitionsFromRoot(resolvedProject.root);
+}
+
+export async function listProjectSkillDefinitionsFromRoot(rootDir: string): Promise<WorkbenchSkillDefinition[]> {
   let entries;
   try {
-    entries = await fs.readdir(getProjectSkillDirectoryPath(resolvedProject.root), { withFileTypes: true });
+    entries = await fs.readdir(getProjectSkillDirectoryPath(rootDir), { withFileTypes: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return [];
@@ -1144,7 +1151,7 @@ export async function listProjectSkillDefinitions(projectId?: string | null): Pr
     }
 
     const relativePath = createProjectSkillRelativePath(entry.name);
-    const absolutePath = safeResolveProjectPath(resolvedProject.root, relativePath);
+    const absolutePath = safeResolveProjectPath(rootDir, relativePath);
     const content = await readTextFile(absolutePath);
     if (!content?.trim()) {
       continue;
@@ -1211,12 +1218,20 @@ export async function readUserInvocableAgentDefinition(relativePath: string, pro
   }
 
   const resolvedProject = await resolveProjectRoot(projectId);
+  return await readUserInvocableAgentDefinitionFromRoot(relativePath, resolvedProject.root);
+}
+
+export async function readUserInvocableAgentDefinitionFromRoot(relativePath: string, rootDir: string): Promise<WorkbenchAgentDefinition> {
+  if (relativePath.startsWith("library:")) {
+    return await readWorkbenchLibraryAgentDefinition(relativePath);
+  }
+
   const normalizedPath = normalizeRelativePath(relativePath);
   if (!normalizedPath.startsWith(".agents/agents/") || !isAgentMarkdownFile(normalizedPath)) {
     throw new Error("Agent path is outside the supported agents directory.");
   }
 
-  const content = await readAgentFile(resolvedProject.root, normalizedPath);
+  const content = await readAgentFile(rootDir, normalizedPath);
   const frontmatter = parseFrontmatterBlock(content);
   if (!isAgentUserInvocable(frontmatter)) {
     throw new Error("Agent is not user-invocable.");

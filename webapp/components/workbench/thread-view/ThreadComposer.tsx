@@ -27,6 +27,10 @@ import {
   buildInlineMentionHighlights,
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
+import {
+  areWorkbenchAgentPathsEqual,
+  getWorkbenchAgentPathLabel,
+} from "../../../lib/workbench/agent-paths";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
 import PlaintextEditable, { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./PlaintextEditable";
@@ -464,9 +468,9 @@ export default function ThreadComposer ({
   const isModelPickerOpen = activePicker === "model";
   const isPickerOpen = activePicker !== null;
   const showStopButton = isActiveThread || isStopping;
-  const selectedAgent = availableAgents.find((agent) => agent.path === thread.agentPath) ?? null;
+  const selectedAgent = availableAgents.find((agent) => areWorkbenchAgentPathsEqual(agent.path, thread.agentPath)) ?? null;
   const agentButtonLabel = selectedAgent?.name
-    ?? thread.agentPath?.split("/").at(-1)?.replace(/\.agent\.md$/i, "")
+    ?? getWorkbenchAgentPathLabel(thread.agentPath)
     ?? "Default agent";
   const deprioritizedModelIds = deprioritizedModelIdsByHarness[thread.harness] ?? [];
   const handleQuestionnaireDraftChange = useCallback((draft: WorkbenchQuestionnaireDraft) => {

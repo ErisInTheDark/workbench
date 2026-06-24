@@ -44,16 +44,10 @@ import {
 } from "../codex/thread-adapter";
 import { normalizeThreadItems } from "../codex/thread-item-normalization";
 import { getCurrentInProgressTurn, getCurrentTurn } from "../codex/thread-state";
-import {
-    buildCodexThreadBootstrapInstructions,
-    buildThreadTitleBootstrapInstructions,
-    buildThreadTitleRouteUrl,
-} from "../thread-bootstrap";
 import type {
     ThreadPayload,
     ThreadSummary,
     WorkbenchReadThreadOptions,
-    WorkbenchAgentDefinition,
     WorkbenchHarness,
     WorkbenchModelOption,
     WorkbenchPendingUserInputRequest,
@@ -69,6 +63,7 @@ import type {
 import {
     getThreadStateChangeTagText as getNormalizedThreadStateChangeTagText,
 } from "./markdown/markdown-parse";
+import { normalizeWorkbenchAgentPath } from "./agent-paths";
 import LifecycleScope from "./state/LifecycleScope";
 import {
     clearStoredThreadTokenUsage,
@@ -96,7 +91,10 @@ const CODEX_NOTIFICATION_THREAD_REFRESH_DELAY_MS = 350;
 const CODEX_NOTIFICATION_THREAD_LIST_REFRESH_DELAY_MS = 750;
 const ACTIVE_TURN_RATE_LIMIT_REFRESH_INTERVAL_MS = 15_000;
 const AUTO_REFRESH_REQUEST_SOURCE = "autoRefresh";
+const WORKBENCH_PROMPT_CONTEXT_FIELD = "workbenchPromptContext";
 const DEFAULT_TURN_REASONING_SUMMARY = "detailed" as const;
+const DEFAULT_WORKFLOW_IDS = ["default"] as const;
+const SUBAGENT_WORKFLOW_IDS = ["subagent"] as const;
 const DRAFT_THREAD_ID = "new";
 const DRAFT_THREAD_ID_PREFIX = "draft:";
 const STABLE_VISIBLE_THREAD_COUNT = 5;
@@ -118,27 +116,6 @@ function createWorkspaceWriteSandboxPolicy(rootPaths: string[], options: { force
       excludeSlashTmp: false,
     }
     : null;
-}
-
-function buildWorkspaceRootsInstructions(roots: WorkbenchProjectRoot[]) {
-  if (roots.length <= 1) {
-    return null;
-  }
-
-  return [
-    "## Workbench Workspace Roots",
-    "This thread is attached to a multi-project Workbench workspace. Each project has its own root directory.",
-    "User-visible project file paths should be presented with #[<root>:<path>](no backticks).",
-    "",
-    "Available roots:",
-    ...roots.map((root) => `- ${root.id}: ${root.rootPath}${root.isPrimary ? " (primary cwd for new threads)" : ""}`),
-    "",
-    "Assume that the user is trying to make changes across the entire workspace unless they're more specific.",
-    "Assume that the user is running watch tasks across the entire workspace, and that interdependent projects automatically pick up changes from each other.",
-    "When working in a project other than the primary, make sure you've read the project's AGENTS.md file.",
-    "",
-    "Commands should use the cwd of the correct project root. If you base commands from the thread's primary root, the sandbox will error.",
-  ].join("\n");
 }
 
 export interface WorkbenchThreadState {
@@ -237,11 +214,6 @@ type CodexThreadSessionResponse = {
   reasoningEffort?: string | null;
   serviceTier?: string | null;
   thread: ThreadReadResponse["thread"];
-};
-
-type WorkbenchAgentDefinitionResult = {
-  codexGlobalDuplicate: boolean;
-  definition: WorkbenchAgentDefinition | null;
 };
 
 function createInitialThreadState(): WorkbenchThreadState {
@@ -1903,85 +1875,30 @@ function WorkbenchThreadClient(
     }
   }
 
-  async function readWorkbenchLibraryInstructions() {
-    const searchParams = new URLSearchParams();
-    if (state.projectId) {
-      searchParams.set("projectId", state.projectId);
-    }
-
-    const requestPath = searchParams.size
-      ? `/api/workbench-library/skills?${searchParams.toString()}`
-      : "/api/workbench-library/skills";
-
-    return await fetch(requestPath, { cache: "no-store" })
-      .then(async (response) => {
-        if (!response.ok) {
-          return null;
-        }
-
-        const payload = await response.json() as { instructions?: string | null };
-        return payload.instructions?.trim() ? payload.instructions : null;
-      })
-      .catch(() => null);
+  function getDefaultWorkflowIdsForCodexThread(threadId: string) {
+    const thread = state.currentThread?.id === threadId
+      ? state.currentThread
+      : state.threads.find((candidateThread) => candidateThread.id === threadId);
+    return thread?.source.toLowerCase().startsWith("subagent")
+      ? SUBAGENT_WORKFLOW_IDS
+      : DEFAULT_WORKFLOW_IDS;
   }
 
-  async function readSelectedAgentDefinition(agentPath: string | null): Promise<WorkbenchAgentDefinitionResult> {
-    if (!agentPath?.trim()) {
-      return {
-        codexGlobalDuplicate: false,
-        definition: null,
-      };
-    }
-
-    const searchParams = new URLSearchParams({
-      agentPath,
-      projectId: state.projectId,
-    });
-    const response = await fetch(`/api/agents?${searchParams.toString()}`, { cache: "no-store" });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null) as { error?: string } | null;
-      throw new Error(payload?.error || "Unable to load the selected agent definition.");
-    }
-
-    const payload = await response.json() as { codexGlobalDuplicate?: boolean; data?: WorkbenchAgentDefinition };
-    return {
-      codexGlobalDuplicate: payload.codexGlobalDuplicate === true,
-      definition: payload.data ?? null,
-    };
-  }
-
-  async function buildCodexDeveloperInstructions(
+  function buildCodexPromptContext(
     threadId: string,
     agentPath: string | null,
+    workbenchOrigin: string | null,
+    workflowIds: readonly string[] | undefined = undefined,
   ) {
-    const [workbenchLibraryInstructions, agentResult] = await Promise.all([
-      readWorkbenchLibraryInstructions(),
-      readSelectedAgentDefinition(agentPath),
-    ]);
-    const agentDefinition = agentResult.codexGlobalDuplicate ? null : agentResult.definition;
-    const dedupedAgentDefinition = agentResult.codexGlobalDuplicate ? agentResult.definition : null;
-
-    return [
-      buildCodexThreadBootstrapInstructions({
-        agentDefinition,
-        dedupedAgentDefinition,
-        harness: "codex",
-        routeUrl: null,
-        threadId,
-        workbenchLibraryInstructions,
-      }),
-      buildWorkspaceRootsInstructions(state.projectRoots),
-    ].filter(Boolean).join("\n\n") || null;
-  }
-
-  function buildCodexCollaborationBootstrapInstructions(threadId: string, routeUrl: string | null) {
-    return routeUrl
-      ? buildThreadTitleBootstrapInstructions({
-        harness: "codex",
-        routeUrl,
-        threadId,
-      })
-      : null;
+    return {
+      agentPath: normalizeWorkbenchAgentPath(agentPath),
+      harness: "codex",
+      projectId: state.projectId,
+      roots: state.projectRoots,
+      threadId,
+      workbenchOrigin,
+      workflowIds: workflowIds ?? getDefaultWorkflowIdsForCodexThread(threadId),
+    };
   }
 
   async function fetchThreadPayload(threadId: string, harness: WorkbenchHarness, options: WorkbenchReadThreadOptions = {}) {
@@ -1994,18 +1911,17 @@ function WorkbenchThreadClient(
       let resumedThread: ThreadResumeResponse | null = null;
 
       if (harness === "codex") {
-        const codexDeveloperInstructions = await buildCodexDeveloperInstructions(threadId, selectedAgentPath);
         const selectedServiceTier = getPreferredThreadServiceTier(threadId, harness);
         try {
           resumedThread = await sendBridgeRequest<ThreadResumeResponse>(harness, {
             method: "thread/resume",
-          params: {
-            developerInstructions: codexDeveloperInstructions,
-            serviceTier: selectedServiceTier,
-            threadId,
-          } satisfies ThreadResumeParams,
-          workbenchThreadHydration: hydration,
-        });
+            params: {
+              serviceTier: selectedServiceTier,
+              threadId,
+            } satisfies ThreadResumeParams,
+            [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildCodexPromptContext(threadId, selectedAgentPath, workbenchOrigin),
+            workbenchThreadHydration: hydration,
+          });
         } catch {
           resumedThread = null;
         }
@@ -2925,16 +2841,15 @@ function WorkbenchThreadClient(
           : state.currentThread?.serviceTier ?? readStoredHarnessServiceTier(harness)
       )
       : null;
-    const selectedAgentPath = thread.agentPath ?? (
+    const selectedAgentPath = normalizeWorkbenchAgentPath(thread.agentPath ?? (
       resolvedThreadId.trim()
         ? state.currentThread?.id === resolvedThreadId
           ? state.currentThread.agentPath
           : readStoredHarnessAgent(harness)
         : state.currentThread?.agentPath ?? readStoredHarnessAgent(harness)
-    );
+    ));
     const normalizedInput = normalizeThreadMessageInput(input);
     const workbenchOrigin = readLocalWorkbenchOrigin();
-    const titleRouteUrl = workbenchOrigin ? buildThreadTitleRouteUrl(workbenchOrigin) : null;
     const isDraftThread = thread.isDraft;
     const shouldBypassCodexDraftBootstrap = harness === "codex" && isDraftThread;
     let previousThread = !thread.isDraft ? thread : null;
@@ -2969,20 +2884,15 @@ function WorkbenchThreadClient(
             sandbox: "workspace-write" as const,
           }
           : {}),
-        ...(harness === "codex"
-          ? {
-            developerInstructions: await buildCodexDeveloperInstructions(
-              resolvedThreadId,
-              selectedAgentPath,
-            ),
-          }
-          : {}),
         ...(harness === "codex" ? { ephemeral: false } : {}),
         ...(selectedModel ? { model: selectedModel } : {}),
         ...(harness === "codex" ? { serviceTier: selectedServiceTier } : {}),
       });
       const startedThreadResponse = await sendBridgeRequest<CodexThreadSessionResponse>(harness, {
         method: threadStartRequest.method,
+        ...(harness === "codex"
+          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildCodexPromptContext(resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.workflowIds) }
+          : {}),
         params: harness === "copilot"
           ? {
             ...threadStartRequest.params,
@@ -3016,9 +2926,6 @@ function WorkbenchThreadClient(
       }
     }
 
-    const codexDeveloperInstructions = harness === "codex"
-      ? await buildCodexDeveloperInstructions(resolvedThreadId, selectedAgentPath)
-      : null;
     let resumedThread = bootstrapThread;
     if (!resumedThread || !shouldBypassCodexDraftBootstrap) {
       const readableThreadResponse = await sendBridgeRequest<ThreadReadResponse>(harness, {
@@ -3031,16 +2938,18 @@ function WorkbenchThreadClient(
       });
       const resumedThreadResponse = await sendBridgeRequest<CodexThreadSessionResponse>(harness, {
         method: "thread/resume",
-          params: {
-            ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
-            ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
-            ...(state.projectRootPath && harness === "copilot" ? { cwd: state.projectRootPath } : {}),
+        params: {
+          ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
+          ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
+          ...(state.projectRootPath && harness === "copilot" ? { cwd: state.projectRootPath } : {}),
           ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
-          ...(codexDeveloperInstructions && harness === "codex" ? { developerInstructions: codexDeveloperInstructions } : {}),
           ...(selectedModel ? { model: selectedModel } : {}),
           ...(harness === "codex" ? { serviceTier: selectedServiceTier } : {}),
           threadId: resolvedThreadId,
-        } as ThreadResumeParams & { agentPath?: string; developerInstructions?: string; model?: string; serviceTier?: string | null; threadId: string; workbenchOrigin?: string },
+        } as ThreadResumeParams & { agentPath?: string; model?: string; serviceTier?: string | null; threadId: string; workbenchOrigin?: string },
+        ...(harness === "codex"
+          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildCodexPromptContext(resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.workflowIds) }
+          : {}),
         workbenchThreadHydration: { mode: "latest" },
       });
       const readableThread = toThreadPayload(readableThreadResponse.thread, harness);
@@ -3096,13 +3005,15 @@ function WorkbenchThreadClient(
             ? createQuestionnaireCollaborationMode(
               collaborationModel,
               selectedReasoningEffort ?? null,
-              buildCodexCollaborationBootstrapInstructions(resolvedThreadId, titleRouteUrl),
             )
             : null;
         })()
         : null;
       const turnStartResponse = await sendBridgeRequest<TurnStartResponse>(harness, {
         method: "turn/start",
+        ...(harness === "codex"
+          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildCodexPromptContext(resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.workflowIds) }
+          : {}),
         params: {
           ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
           ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
@@ -3145,6 +3056,7 @@ function WorkbenchThreadClient(
             serviceTier: selectedServiceTier,
             threadId: resolvedThreadId,
           } as ThreadResumeParams & { model?: string; serviceTier?: string | null; threadId: string },
+          [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildCodexPromptContext(resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.workflowIds),
           workbenchThreadHydration: { mode: "latest" },
         });
         refreshedThread = mergeLiveStreamingThreadSnapshot(toThreadPayload(
@@ -3374,8 +3286,9 @@ function WorkbenchThreadClient(
       return;
     }
 
-    persistHarnessAgent(state.currentThread.harness, agentPath);
-    updateCurrentThreadFields({ agentPath });
+    const normalizedAgentPath = normalizeWorkbenchAgentPath(agentPath);
+    persistHarnessAgent(state.currentThread.harness, normalizedAgentPath);
+    updateCurrentThreadFields({ agentPath: normalizedAgentPath });
   }
 
   function setCurrentThreadReasoningEffort(threadId: string, effort: string | null) {

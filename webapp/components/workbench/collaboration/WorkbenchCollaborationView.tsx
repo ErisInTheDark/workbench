@@ -764,6 +764,7 @@ export default function WorkbenchCollaborationView ({
           });
         },
         selectThread: false,
+        workflowIds: ["collaborator"],
       });
       if (payload) {
         rememberCollaboratorThread(payload, {

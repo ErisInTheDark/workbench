@@ -21,6 +21,7 @@
 import type { ThreadTokenUsage } from "../../codex/generated/app-server/v2/ThreadTokenUsage";
 import type { TokenUsageBreakdown } from "../../codex/generated/app-server/v2/TokenUsageBreakdown";
 import type { WorkbenchHarness, WorkbenchStoredThreadUnreadState } from "../../types";
+import { normalizeWorkbenchAgentPath } from "../agent-paths";
 import {
   DEFAULT_EDITOR_FONT_SIZE,
   MAX_EDITOR_FONT_SIZE,
@@ -308,7 +309,7 @@ export function readStoredHarnessAgent(harness: WorkbenchHarness) {
     }
 
     const selectedAgent = parsedValue[harness];
-    return typeof selectedAgent === "string" && selectedAgent.trim() ? selectedAgent : null;
+    return normalizeWorkbenchAgentPath(typeof selectedAgent === "string" ? selectedAgent : null);
   } catch {
     return null;
   }
@@ -322,7 +323,7 @@ export function persistHarnessAgent(harness: WorkbenchHarness, agentPath: string
       ? parsedValue as Record<string, string | null>
       : {};
 
-    nextValue[harness] = agentPath;
+    nextValue[harness] = normalizeWorkbenchAgentPath(agentPath);
     window.localStorage.setItem(HARNESS_AGENT_STORAGE_KEY, JSON.stringify(nextValue));
   } catch {
     // Ignore storage failures and keep the in-memory agent state working.

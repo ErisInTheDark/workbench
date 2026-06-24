@@ -18,12 +18,19 @@ import type { ToolRequestUserInputQuestion } from "../lib/codex/generated/app-se
 import type { ToolRequestUserInputResponse } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputResponse";
 import type {
     WorkbenchApprovalCommandContext,
+    WorkbenchProjectRoot,
     WorkbenchQuestionnaireHistoryEntry,
     WorkbenchThreadHydrationRequest,
     WorkbenchUserInputQuestion,
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
 } from "../lib/types";
+import {
+  buildWorkbenchCollaborationDeveloperInstructions,
+  buildWorkbenchPromptInstructions,
+  type WorkbenchPromptContext,
+  type WorkbenchPromptInstructions,
+} from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type CodexAppServer from "./CodexAppServer";
 import { log, logError } from "./process-helpers";
@@ -136,6 +143,7 @@ const TRANSCRIPT_INSTRUMENTATION_BACKLOG_THRESHOLD = 25;
 const TRANSCRIPT_MAX_PENDING_TASKS = 200;
 const TRANSCRIPT_COALESCE_FLUSH_MS = 100;
 const TRANSCRIPT_COALESCE_MAX_BUFFER_BYTES = 512 * 1024;
+const WORKBENCH_PROMPT_CONTEXT_FIELD = "workbenchPromptContext";
 const WORKBENCH_REQUEST_SOURCE_FIELD = "workbenchRequestSource";
 const WORKBENCH_THREAD_HYDRATION_FIELD = "workbenchThreadHydration";
 
@@ -241,14 +249,100 @@ function readThreadHydration(message: JsonRpcRequest): WorkbenchThreadHydrationR
   }
 }
 
+function readWorkbenchPromptContext(message: JsonRpcRequest): WorkbenchPromptContext | null {
+  const value = asRecord(message[WORKBENCH_PROMPT_CONTEXT_FIELD]);
+  if (!value) {
+    return null;
+  }
+
+  const roots = Array.isArray(value.roots)
+    ? value.roots.filter((root): root is WorkbenchProjectRoot => {
+      const record = asRecord(root);
+      return typeof record?.id === "string"
+        && typeof record.name === "string"
+        && typeof record.relativePath === "string"
+        && typeof record.rootPath === "string"
+        && typeof record.isPrimary === "boolean";
+    })
+    : undefined;
+  const workflowIds = Array.isArray(value.workflowIds)
+    ? value.workflowIds.filter((workflowId): workflowId is string => typeof workflowId === "string")
+    : undefined;
+
+  return {
+    agentPath: asString(value.agentPath),
+    harness: value.harness === "copilot" ? "copilot" : "codex",
+    projectId: asString(value.projectId),
+    roots,
+    threadId: asString(value.threadId),
+    workbenchOrigin: asString(value.workbenchOrigin),
+    workflowIds,
+  };
+}
+
 function createUpstreamRequest(message: JsonRpcRequest, upstreamRequestId: number) {
   const upstreamMessage = {
     ...message,
     id: upstreamRequestId,
   };
+  delete upstreamMessage[WORKBENCH_PROMPT_CONTEXT_FIELD];
   delete upstreamMessage[WORKBENCH_REQUEST_SOURCE_FIELD];
   delete upstreamMessage[WORKBENCH_THREAD_HYDRATION_FIELD];
   return upstreamMessage;
+}
+
+function isPromptAugmentedThreadMethod(method: string | null) {
+  return method === "thread/start" || method === "thread/resume" || method === "thread/fork";
+}
+
+function isPromptAugmentedTurnMethod(method: string | null) {
+  return method === "turn/start";
+}
+
+function asMutableParamsRecord(params: unknown) {
+  return params && typeof params === "object" && !Array.isArray(params)
+    ? params as Record<string, unknown>
+    : {};
+}
+
+function buildWorkbenchOwnedPromptParams(
+  params: Record<string, unknown>,
+  promptInstructions: WorkbenchPromptInstructions,
+) {
+  const existingConfig = asRecord(params.config);
+  return {
+    ...params,
+    baseInstructions: promptInstructions.baseInstructions,
+    developerInstructions: promptInstructions.developerInstructions,
+    config: {
+      ...existingConfig,
+      instructions: "",
+      developer_instructions: "",
+    },
+    personality: "none",
+  };
+}
+
+function buildWorkbenchOwnedCollaborationParams(
+  params: Record<string, unknown>,
+  developerInstructions: string | null,
+) {
+  const collaborationMode = asRecord(params.collaborationMode);
+  if (!collaborationMode) {
+    return params;
+  }
+
+  const settings = asRecord(collaborationMode.settings) ?? {};
+  return {
+    ...params,
+    collaborationMode: {
+      ...collaborationMode,
+      settings: {
+        ...settings,
+        developer_instructions: developerInstructions,
+      },
+    },
+  };
 }
 
 function shouldCapturePollingTranscript(method: string | null, requestSource: WorkbenchRequestSource) {
@@ -965,7 +1059,7 @@ export default class CodexStdioBridge {
   async forwardRequest(message: JsonRpcRequest, client: BridgeClient, clientRequestId: number | string) {
     await this.enqueueOperation(() => {
       this.assertAcceptingWork();
-      this.request(message, { client, clientRequestId });
+      return this.request(message, { client, clientRequestId });
     });
   }
 
@@ -1041,7 +1135,7 @@ export default class CodexStdioBridge {
     this.appServer.send(message);
   }
 
-  private request(
+  private async request(
     message: JsonRpcRequest,
     {
       client,
@@ -1057,7 +1151,10 @@ export default class CodexStdioBridge {
     const requestSource: WorkbenchRequestSource = internal ? "internal" : readRequestSource(message);
     const method = typeof message.method === "string" ? message.method : null;
     const threadHydration = readThreadHydration(message);
-    const upstreamMessage = createUpstreamRequest(message, upstreamRequestId);
+    const upstreamMessage = createUpstreamRequest(
+      await this.withWorkbenchPromptInstructions(message, method),
+      upstreamRequestId,
+    );
 
     if (internal) {
       const responsePromise = new Promise<JsonRpcResponse>((resolve, reject) => {
@@ -1094,6 +1191,32 @@ export default class CodexStdioBridge {
     }
     this.send(upstreamMessage);
     return null;
+  }
+
+  private async withWorkbenchPromptInstructions(message: JsonRpcRequest, method: string | null): Promise<JsonRpcRequest> {
+    if (!isPromptAugmentedThreadMethod(method) && !isPromptAugmentedTurnMethod(method)) {
+      return message;
+    }
+
+    const promptContext = readWorkbenchPromptContext(message);
+    if (!promptContext) {
+      return message;
+    }
+
+    const params = asMutableParamsRecord(message.params);
+    if (isPromptAugmentedTurnMethod(method)) {
+      const developerInstructions = await buildWorkbenchCollaborationDeveloperInstructions(promptContext);
+      return {
+        ...message,
+        params: buildWorkbenchOwnedCollaborationParams(params, developerInstructions),
+      };
+    }
+
+    const promptInstructions = await buildWorkbenchPromptInstructions(promptContext);
+    return {
+      ...message,
+      params: buildWorkbenchOwnedPromptParams(params, promptInstructions),
+    };
   }
 
   private async enqueueOperation<TValue>(task: () => TValue | Promise<TValue>) {

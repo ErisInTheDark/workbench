@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WORKBENCH_LIBRARY_PROJECT_ID: stable project id for the external Workbench Library. Keywords: workbench library, project id.
- * - workbenchLibraryRoot: absolute root for personal Workbench skills, agents, and instructions. Keywords: workbench library, root.
+ * - workbenchLibraryRoot: absolute root for personal Workbench skills, agents, workflows, and instructions. Keywords: workbench library, root.
  * - parseFrontmatterBlock: parse simple markdown frontmatter fields. Keywords: frontmatter, markdown, metadata.
  * - ensureWorkbenchLibrary: create the library root and standard folders. Keywords: workbench library, mkdir, scaffold.
  * - isExcludedWorkbenchLibraryFile: test whether a library file is documentation or a template ignored by scanners. Keywords: template, exclusion, scan.
@@ -12,27 +12,32 @@
  * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions: build compact harness instructions and universal instruction content. Keywords: bootstrap, skills, manifest.
  */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import type { WorkbenchAgentDefinition, WorkbenchAgentOption, WorkbenchSkillDefinition, WorkbenchSkillSummary } from "./types";
+import {
+  normalizeWorkbenchLibraryPath,
+  safeResolveWorkbenchLibraryPath,
+  WORKBENCH_LIBRARY_PROJECT_ID,
+  workbenchLibraryRoot,
+} from "./workbench-library-paths";
 
-export const WORKBENCH_LIBRARY_PROJECT_ID = "workbench-library";
-export const workbenchLibraryRoot = path.resolve(process.env.WORKBENCH_LIBRARY_ROOT?.trim() || path.join(os.homedir(), ".workbench"));
+export { WORKBENCH_LIBRARY_PROJECT_ID, workbenchLibraryRoot };
 
 const libraryAgentPrefix = "library:";
-const standardDirectories = ["skills", "agents", "instructions"];
+const standardDirectories = ["skills", "agents", "instructions", "workflows"];
 const TEMPLATE_FILE_SUFFIX = ".template.md";
 const README_FILE_NAME = "README.md";
 
 const readmeTemplate = `# Workbench Library
 
-This folder stores Workbench-wide skills, agents, and instructions outside any selected project.
+This folder stores Workbench-wide skills, agents, workflows, and instructions outside any selected project.
 
 Live library files use these shapes:
 
 - \`skills/<name>/SKILL.md\`
 - \`agents/<name>.md\`
+- \`workflows/<name>.md\`
 - \`instructions/<name>.md\`
 
 \`README.md\` and files ending in \`.template.md\` are ignored by Workbench scanners.
@@ -127,7 +132,7 @@ export function parseFrontmatterBlock(content: string) {
 }
 
 function normalizeRelativePath(filePath: string) {
-  return String(filePath ?? "").replace(/\\/g, "/");
+  return normalizeWorkbenchLibraryPath(filePath);
 }
 
 export function isExcludedWorkbenchLibraryFile(filePath: string) {
@@ -136,14 +141,7 @@ export function isExcludedWorkbenchLibraryFile(filePath: string) {
 }
 
 function safeResolveLibraryPath(relativePath: string) {
-  const normalized = normalizeRelativePath(relativePath).replace(/^\/+/, "");
-  const absolutePath = path.resolve(workbenchLibraryRoot, normalized);
-
-  if (absolutePath !== workbenchLibraryRoot && !absolutePath.startsWith(`${workbenchLibraryRoot}${path.sep}`)) {
-    throw new Error("Path is outside the Workbench Library.");
-  }
-
-  return absolutePath;
+  return safeResolveWorkbenchLibraryPath(relativePath);
 }
 
 function createLibraryAgentId(relativePath: string) {

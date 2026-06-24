@@ -155,6 +155,7 @@ export interface WorkbenchSendThreadMessageOptions {
   additionalWritableRoots?: string[];
   onThreadMaterialized?: (thread: ThreadPayload) => void;
   selectThread?: boolean;
+  workflowIds?: string[];
 }
 
 export interface WorkbenchThreadComposerAttachmentDraft {

@@ -5,13 +5,9 @@
  * - CodexJsonRpcResponse helpers: typed JSON-RPC success/failure checks. Keywords: json-rpc, response, error.
  * - createCodexClientInfo/createInitializeCapabilities/createInitializeParams: initialize payload builders. Keywords: app-server, handshake.
  * - createInitializeRequest/createInitializedNotification/createBootstrapMessages: app-server bootstrap messages. Keywords: initialize, initialized.
- * - createQuestionnaireDeveloperInstructions/createTextInput/createQuestionnaireCollaborationMode/createThreadStartRequest/createTurnStartRequest: typed Codex instruction and request builders. Keywords: thread, turn, user input, collaboration mode, questionnaire, developer instructions.
+ * - createTextInput/createQuestionnaireCollaborationMode/createThreadStartRequest/createTurnStartRequest: typed Codex instruction and request builders. Keywords: thread, turn, user input, collaboration mode, questionnaire.
  * - createRequestIdGenerator/isCodexEventType: small protocol helpers. Keywords: ids, event type.
  */
-import {
-  MODE_STATE_TAG_INSTRUCTIONS,
-  WORKBENCH_FILE_LINK_INSTRUCTIONS,
-} from "../thread-bootstrap";
 import { CODEX_CLIENT_INFO } from "./config";
 import type { ClientInfo } from "./generated/app-server/ClientInfo";
 import type { ClientNotification } from "./generated/app-server/ClientNotification";
@@ -53,30 +49,6 @@ export type CodexJsonRpcResponse<TResult> = CodexJsonRpcSuccess<TResult> | Codex
 export interface CodexBootstrapMessages {
   initialize: Extract<ClientRequest, { method: "initialize" }>;
   initialized: ClientNotification;
-}
-
-const QUESTIONNAIRE_COLLABORATION_INSTRUCTIONS = [
-  "# Workbench Tools",
-  "`request_user_input` — Use to show a questionnaire to the user, AFTER you have already given the user any required context.",
-  "When you use the tool, prefer 1 to 3 concise multiple-choice questions and do not ask multiple-choice questions in plain chat.",
-  "Keep the options simple, do not try to stuff context or planning into the questionnaire.",
-  "",
-  "## Web browsing:",
-  "- ALWAYS use web search 'openPage' tool when you have an exact URL to look at.",
-  "- DO NOT actually search with the web search tool unless the user suggests it due to harness restrictions on what pages can be accessed via search.",
-  "",
-  "## Computer/browser/MCP use:",
-  "This feature is not available. Alternatives include:",
-  "- You're welcome to ask the user to add breakpoints if they would help diagnose an issue, but limit the number you give to save time.",
-  "- If allowed by workspace instructions or explicit user instruction, you can manually send requests to dev web servers the user is running.",
-  "- Tool preference: harness tools > shell commands > MCP.",
-].join("\n");
-
-function joinInstructionSections(sections: Array<string | null | undefined>) {
-  return sections
-    .map((section) => section?.trim() ?? "")
-    .filter(Boolean)
-    .join("\n\n");
 }
 
 function normalizeReasoningEffort(value: string | null | undefined): ReasoningEffort | null {
@@ -143,17 +115,6 @@ export function createBootstrapMessages(
   };
 }
 
-export function createQuestionnaireDeveloperInstructions(
-  additionalInstructions: string | null | undefined = null,
-) {
-  return joinInstructionSections([
-    QUESTIONNAIRE_COLLABORATION_INSTRUCTIONS,
-    MODE_STATE_TAG_INSTRUCTIONS,
-    WORKBENCH_FILE_LINK_INSTRUCTIONS,
-    additionalInstructions,
-  ]);
-}
-
 export function createTextInput(text: string): Extract<UserInput, { type: "text" }> {
   return {
     type: "text",
@@ -165,12 +126,11 @@ export function createTextInput(text: string): Extract<UserInput, { type: "text"
 export function createQuestionnaireCollaborationMode(
   model: string,
   reasoningEffort: string | null | undefined = null,
-  additionalInstructions: string | null | undefined = null,
 ): CollaborationMode {
   return {
     mode: "plan",
     settings: {
-      developer_instructions: createQuestionnaireDeveloperInstructions(additionalInstructions),
+      developer_instructions: null,
       model,
       reasoning_effort: normalizeReasoningEffort(reasoningEffort),
     },

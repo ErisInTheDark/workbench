@@ -317,6 +317,10 @@ function reloadOrchestratorLogic() {
   log("orchestrator", "reloaded orchestrator helper modules");
 }
 
+async function ensureWorkbenchPromptFiles() {
+  await reloadableModules.workbenchPromptFiles.ensureWorkbenchPromptFiles();
+}
+
 async function waitForCodexBridgeReload() {
   while (codexBridgeReloadPromise) {
     await codexBridgeReloadPromise.catch(() => undefined);
@@ -422,6 +426,10 @@ function queueReload(scopes: OrchestratorReloadScope[]) {
       try {
         if (scopes.includes("orchestrator-logic")) {
           reloadOrchestratorLogic();
+        }
+
+        if (scopes.includes("orchestrator-logic") || scopes.includes("codex-bridge")) {
+          await ensureWorkbenchPromptFiles();
         }
 
         if (scopes.includes("codex-bridge")) {
@@ -705,8 +713,15 @@ process.on("exit", () => {
   shuttingDown = true;
 });
 
-log("orchestrator", `starting bridge at ${CODEX_BRIDGE_URL} and Next.js on port ${NEXT_PORT}`);
-startBridgeServer();
-for (const spec of specs) {
-  startChild(spec);
+async function startOrchestrator() {
+  log("orchestrator", `starting bridge at ${CODEX_BRIDGE_URL} and Next.js on port ${NEXT_PORT}`);
+  await ensureWorkbenchPromptFiles();
+  startBridgeServer();
+  for (const spec of specs) {
+    startChild(spec);
+  }
 }
+
+void startOrchestrator().catch((error) => {
+  shutdownAndExit(1, error);
+});
