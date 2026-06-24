@@ -2,6 +2,7 @@
 
 /*
  * Exports:
+ * - WorkbenchAmbientCanvasVariant: supported ambient canvas theme variants. Keywords: theme, variant, ambient.
  * - default WorkbenchAmbientCanvas: reusable animated theme background canvas. Keywords: theme, canvas, sparkles, snow, ambient.
  */
 import { useEffect, useRef } from "react";
@@ -21,7 +22,8 @@ type Particle = {
 };
 
 type AmbientPreset = {
-  colorFallbacks: string[];
+  colorSource: "theme" | "preset";
+  colors: string[];
   countDivisor: number;
   draw: "snow" | "sparkle";
   maxCount: number;
@@ -30,14 +32,16 @@ type AmbientPreset = {
 
 const AMBIENT_PRESETS: Record<WorkbenchAmbientCanvasVariant, AmbientPreset> = {
   "magical-girl": {
-    colorFallbacks: ["#ffd7f0", "#d9c7ff", "#fff8fd"],
+    colorSource: "theme",
+    colors: ["#ffd7f0", "#d9c7ff", "#fff8fd"],
     countDivisor: 14000,
     draw: "sparkle",
     maxCount: 132,
     minCount: 38,
   },
   winter: {
-    colorFallbacks: ["#ffffff", "#d8efff", "#b7d8ff"],
+    colorSource: "preset",
+    colors: ["#ffffff", "#fbfdff", "#f1f8ff"],
     countDivisor: 12500,
     draw: "snow",
     maxCount: 150,
@@ -92,11 +96,16 @@ function createParticles(
 }
 
 function readCanvasColors(variant: WorkbenchAmbientCanvasVariant) {
+  const preset = AMBIENT_PRESETS[variant];
+  if (preset.colorSource === "preset") {
+    return preset.colors;
+  }
+
   const styles = window.getComputedStyle(document.documentElement);
   const accent = styles.getPropertyValue("--accent").trim() || "#ff86d5";
   const text = styles.getPropertyValue("--text").trim() || "#ffe4f6";
   const selection = styles.getPropertyValue("--selection").trim() || "#ff86d54d";
-  return [accent, text, selection, ...AMBIENT_PRESETS[variant].colorFallbacks];
+  return [accent, text, selection, ...preset.colors];
 }
 
 function getParticleFrame(particle: Particle, timestamp: number) {

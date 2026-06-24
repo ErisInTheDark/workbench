@@ -59,25 +59,25 @@
 }
 
 :root[data-workbench-theme="winter"] {
-  --bg: #f3f8ff;
-  --bg-soft: rgba(65, 133, 196, 0.11);
-  --text: #152234;
+  --bg: #e0e9fa;
+  --bg-soft: rgba(92, 105, 151, 0.14);
+  --text: #182433;
   --oklch-text-lightness: 35%;
-  --muted: rgba(21, 34, 52, 0.62);
-  --accent: #2f73bd;
-  --accent-soft: #78b8ff42;
+  --muted: rgba(24, 36, 51, 0.61);
+  --accent: #596f9d;
+  --accent-soft: #8c9fd347;
   --danger: #9b405a;
   --explorer-change-add: #31846e;
   --explorer-change-del: #bf6f82;
   --success: #237a61;
-  --shadow: rgba(28, 54, 82, 0.13);
-  --selection: #78b8ff4f;
+  --shadow: rgba(31, 52, 70, 0.13);
+  --selection: #8c9fd35c;
   --app-bg-solid: color-mix(in srgb, var(--bg) 94%, var(--accent) 6%);
   --app-bg-image: radial-gradient(circle at top left, var(--bg-soft), transparent 24rem), var(--app-bg-solid);
-  --edge-fade: color-mix(in srgb, var(--accent) 15%, transparent);
+  --edge-fade: color-mix(in srgb, var(--accent) 17%, transparent);
   --shell-fade-bg: var(--app-bg-solid);
-  --attention: #245f9f;
-  --attention-soft: color-mix(in srgb, #bfe2ff 36%, transparent);
+  --attention: #52678f;
+  --attention-soft: color-mix(in srgb, #becbf1 44%, transparent);
 }
 
 @media (prefers-color-scheme: dark) {
