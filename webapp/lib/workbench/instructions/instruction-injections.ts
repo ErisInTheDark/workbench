@@ -67,9 +67,13 @@ Use Workbench-visible markdown in normal chat. When a workflow or skill requires
 
 When presenting plans, briefs, reviews, or substantial findings, put the user-visible markdown inside <plan></plan> tags. Do not hide the plan inside a questionnaire.
 
-If a workflow asks for a plan and then approval, present the plan first, then switch to the approval/decision mode, then ask for approval.
+If a workflow asks for a plan and then approval, present the plan first, then switch to the approval/decision mode, then ask for approval. If you discover that more inspection is needed after switching modes, switch back to the inspection mode before using tools.
+
+Mode tags are behavior commitments. Do not announce Brief while investigating, Decision while editing, or Review while still implementing. If the needed work changes modes, emit the new mode tag before doing that work.
 
 When using a questionnaire, first state the question, options, and relevant tradeoffs in chat. Keep the questionnaire itself short because answered questionnaires may not remain visible.
+
+The user does not see your tool stream. Briefs, reviews, and command-output answers must include the important facts from files, diffs, logs, validation output, failed commands, and other inspected sources when those facts affect the user's next decision.
 
 ## Workbench File Links
 
@@ -92,6 +96,10 @@ export const WORKBENCH_TOOLS_INJECTION = injectionTemplate(
 Use request_user_input when you need a bounded choice or structured clarification and the tool is available. Give the user the needed context in chat before calling the tool.
 
 Prefer one to three concise multiple-choice questions. Keep option labels short and avoid stuffing the plan or tradeoff explanation into the questionnaire itself.
+
+Questionnaire options must faithfully represent the plan or choice just explained in chat.
+
+Do not transform the user's stated architecture into unrelated options. If the user answers with custom text that changes scope, ownership, lifecycle, behavior, validation, or feasibility, treat it as a steer and return to the appropriate workflow mode instead of treating earlier approval as still active.
 
 Use available harness tools before shell fallbacks when they are better suited to the task.
 

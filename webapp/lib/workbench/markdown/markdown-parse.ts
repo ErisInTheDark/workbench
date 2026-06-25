@@ -983,6 +983,40 @@ function isThreadPlanCloseLine(line: string) {
   return /^<\/plan>\s*$/i.test(line.trim());
 }
 
+function collectThreadPlanLines(lines: string[], startIndex: number) {
+  const planLines: string[] = [];
+  let codeFenceOpener: ParsedCodeFenceOpenLine | null = null;
+  let index = startIndex;
+
+  while (index < lines.length) {
+    const line = lines[index];
+
+    if (codeFenceOpener) {
+      if (isCodeFenceCloseLine(line, codeFenceOpener)) {
+        codeFenceOpener = null;
+      }
+
+      planLines.push(line);
+      index += 1;
+      continue;
+    }
+
+    if (isThreadPlanCloseLine(line)) {
+      return { nextIndex: index + 1, planLines };
+    }
+
+    const fenceOpener = parseCodeFenceOpenLine(line);
+    if (fenceOpener) {
+      codeFenceOpener = fenceOpener;
+    }
+
+    planLines.push(line);
+    index += 1;
+  }
+
+  return { nextIndex: index, planLines };
+}
+
 function isThreadStrayPlanCloseLine(line: string, options: MarkdownParseOptions) {
   return (options.profile ?? "editor") === "thread"
     && isThreadPlanCloseLine(line);
@@ -1150,19 +1184,10 @@ function parseBlocksFromLines(lines: string[], options: MarkdownParseOptions = {
       maybePushCommentBreak(blocks, blankLineCount, "plan");
       maybePushStandardBreak(blocks, blankLineCount, "plan");
       blankLineCount = 0;
-      const planLines: string[] = [];
-      index += 1;
+      const plan = collectThreadPlanLines(lines, index + 1);
+      index = plan.nextIndex;
 
-      while (index < lines.length && !isThreadPlanCloseLine(lines[index])) {
-        planLines.push(lines[index]);
-        index += 1;
-      }
-
-      if (index < lines.length) {
-        index += 1;
-      }
-
-      blocks.push({ type: "plan", text: planLines.join("\n").trim() });
+      blocks.push({ type: "plan", text: plan.planLines.join("\n").trim() });
       continue;
     }
 
