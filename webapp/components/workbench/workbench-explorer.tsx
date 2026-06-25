@@ -9,7 +9,7 @@
  */
 "use client";
 
-import type { PointerEvent, ReactNode } from "react";
+import { useEffect, useState, type PointerEvent, type ReactNode } from "react";
 
 import type {
   ChangeSummary,
@@ -191,6 +191,13 @@ export function ThreadsList ({
   const recentThreads = nodes.slice(0, DEFAULT_VISIBLE_THREAD_COUNT);
   const olderThreads = nodes.slice(DEFAULT_VISIBLE_THREAD_COUNT);
   const shouldOpenOlderThreads = olderThreads.some((thread) => thread.id === currentThreadId);
+  const [isOlderThreadsOpen, setIsOlderThreadsOpen] = useState(shouldOpenOlderThreads);
+
+  useEffect(() => {
+    if (shouldOpenOlderThreads) {
+      setIsOlderThreadsOpen(true);
+    }
+  }, [shouldOpenOlderThreads]);
 
   const renderThreads = (threads: ThreadSummary[]) => (
     <ul className="m-0 p-0">
@@ -251,7 +258,10 @@ export function ThreadsList ({
         <ThreadDisclosure
           className="pt-1"
           contentClassName="mt-1 pl-6"
-          open={shouldOpenOlderThreads}
+          open={isOlderThreadsOpen}
+          onToggle={(event) => {
+            setIsOlderThreadsOpen(event.currentTarget.open);
+          }}
           summary="Older threads"
           summaryClassName="text-[0.78em] leading-[1.5] text-muted"
         >
