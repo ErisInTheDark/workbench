@@ -79,12 +79,26 @@ For non-trivial work, challenge the obvious plan against at least one alternativ
 
 - Assume the user may be editing files, answering prompts, running watch tasks, testing the app, or coordinating other agents while you work.
 - Avoid commands that emit build artifacts, rewrite generated files, restart services, disturb watch tasks, or change shared runtime state unless the user or active instructions allow them.
-- Before editing after a pause, approval request, questionnaire, long tool call, or context switch, re-check planned edit files when the touched file set is known.
-- For known existing files, use this drift-check command before and after waiting:
-  \`"workbench-file-state-check-v1"; Get-FileHash -Algorithm SHA256 -LiteralPath @("path/a.ts","path/b.ts") | Select-Object Path,Hash | ConvertTo-Json -Compress\`
-- If a planned file is missing, newly created, generated, or otherwise not covered by the hash check, re-inspect the relevant file or tree state before patching.
 - Treat existing worktree changes as user-owned unless you know you made them.
 - Never revert user changes unless the user explicitly asks for that exact operation.
+
+### Edit Drift Protection
+
+Before presenting a plan for non-trivial file edits:
+
+- Identify the exact existing files you intend to edit.
+- Run this drift-check command for those exact files and keep the result as a private baseline:
+  \`"workbench-file-state-check-v1"; Get-FileHash -Algorithm SHA256 -LiteralPath @("path/a.ts","path/b.ts") | Select-Object Path,Hash | ConvertTo-Json -Compress\`
+- In the user-facing plan, name the exact planned edit files, but do not print hash values unless the user asks or the hash state is relevant to a problem.
+- If a planned file is missing, newly created, generated, or otherwise not covered by the hash check, privately re-inspect the relevant file or tree state before planning and mention only the user-relevant file-state concern in the plan.
+
+After approval and before the first edit:
+
+- Re-run the same drift-check command against the same planned existing files.
+- Compare the fresh result to the private baseline.
+- If every planned existing file matches the baseline, proceed with the approved edits.
+- If any planned existing file changed, disappeared, or was not included in the baseline, stop before editing. Re-inspect the changed state, explain that the planned files changed since the plan, and return to Brief mode with an updated plan.
+- If the approved touch set changes for any reason, take a new private baseline for the revised exact file set before asking for approval again.
 
 ## Project Quality
 
@@ -402,11 +416,18 @@ In Brief mode:
 - summarize what inspection showed
 - say when the requested approach seems wrong or incomplete
 - present a concrete plan
-- include likely files, owners, behavior changes, risks, tradeoffs, and validation
+- include exact planned edit files, owners, behavior changes, risks, tradeoffs, and validation
 - include any needed project hygiene
 - if the user distinguished two code shapes or architectures, restate that exact distinction before planning
 - do not edit files
 - do not use a questionnaire until after the plan is visible
+
+Before presenting a plan that edits files:
+
+- Name the exact files you intend to edit.
+- Take the private drift-check baseline for the exact existing edit files before showing the plan.
+- Do not include hash values in the plan unless the user asks or a file-state problem needs to be explained.
+- If the exact edit set is still unknown, the plan must be for further inspection or diagnostics, not implementation.
 
 Plans and substantial findings must be inside <plan></plan> tags.
 
@@ -426,7 +447,11 @@ In Decision mode:
 - do not treat vague agreement as approval
 - do not edit files
 
+Approval applies only to the exact user-visible planned edit set.
+
 If the user changes the plan, corrects your assumptions, or adds new scope, return to Brief mode with an updated plan.
+
+If the user changes the requested files, scope, ownership, behavior, or implementation route, return to Brief mode, present the revised exact edit set, and take a new private drift-check baseline before asking for approval again.
 
 If the user asks for more investigation, return to Inspect mode.
 
@@ -446,6 +471,13 @@ In Implement mode:
 - preserve unrelated user or agent changes
 - stop and re-plan if new facts change behavior, dependencies, lifecycle, ownership, validation scope, or the plan itself
 - stop and return to Brief mode if the approved plan proves mechanically impossible or runtime-invalid
+
+Before the first file edit in Implement mode:
+
+- Re-run the private drift-check command against the exact existing files named in the approved plan.
+- Compare the fresh hashes to the private baseline captured before the plan.
+- If they match, continue with the approved implementation without reporting the hashes.
+- If they differ, stop before editing, re-inspect, and return to Brief mode. Tell the user the planned files changed since approval, but do not dump hash values unless they ask or the details matter for resolving the conflict.
 
 Prefer project code and existing ownership over new dependencies.
 
@@ -565,9 +597,9 @@ Never revert unexpected edits unless the user explicitly asks for that exact rev
 
 After compaction, resume, interruption, or a long delay, verify the newest user request and the current file state before risky work.
 
-Assume approval is not actionable unless the current context preserves the exact approved plan and the implementation boundaries.
+Assume approval is not actionable unless the current context preserves the exact approved plan, exact edit set, private drift-check baseline, and implementation boundaries.
 
-If the exact plan or boundaries are missing, return to Brief mode and restate the recovered plan before editing.
+If the exact plan, edit set, baseline, or boundaries are missing, return to Brief mode, restate the recovered plan, take a new private baseline for the planned existing files, and ask for approval again before editing.
 
 ### Rollbacks or known-bad work
 
