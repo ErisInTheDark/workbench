@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - normalizeThreadItems: dedupe thread items, including cumulative reasoning snapshot segments. Keywords: thread, reasoning, dedupe, transcript.
+ * - areUserInputsEquivalentForUserMessageDedupe: compare user inputs for duplicate user-message pruning. Keywords: thread, user message, image, equality.
  */
 import type { ThreadItem } from "./generated/app-server/v2/ThreadItem";
 import type { UserInput } from "./generated/app-server/v2/UserInput";
@@ -25,41 +26,73 @@ function stableStringify(value: unknown): string {
     .join(",")}}`;
 }
 
-function normalizeUserInput(input: UserInput) {
-  switch (input.type) {
+function isInlineDataImageUrl(value: string) {
+  return /^data:image\/(?:png|jpeg|jpg|webp|gif);base64,/iu.test(value.trim());
+}
+
+function isWorkbenchTranscriptAssetUrl(value: string) {
+  return /^\/api\/transcript-assets\//u.test(value.trim());
+}
+
+function areUserImageUrlsEquivalentForDedupe(left: string, right: string) {
+  const normalizedLeft = left.trim();
+  const normalizedRight = right.trim();
+  return normalizedLeft === normalizedRight
+    || (isInlineDataImageUrl(normalizedLeft) && isWorkbenchTranscriptAssetUrl(normalizedRight))
+    || (isWorkbenchTranscriptAssetUrl(normalizedLeft) && isInlineDataImageUrl(normalizedRight));
+}
+
+function areTextElementsEquivalent(left: Extract<UserInput, { type: "text" }>["text_elements"], right: Extract<UserInput, { type: "text" }>["text_elements"]) {
+  return left.length === right.length
+    && left.every((element, index) => {
+      const rightElement = right[index];
+      return !!rightElement
+        && element.placeholder === rightElement.placeholder
+        && element.byteRange.start === rightElement.byteRange.start
+        && element.byteRange.end === rightElement.byteRange.end;
+    });
+}
+
+function areUserInputsEquivalentForDedupe(left: UserInput, right: UserInput) {
+  if (left.type !== right.type) {
+    return false;
+  }
+
+  switch (left.type) {
     case "text":
-      return stableStringify({
-        text: input.text,
-        text_elements: input.text_elements,
-        type: input.type,
-      });
+      return right.type === "text"
+        && left.text.trim() === right.text.trim()
+        && areTextElementsEquivalent(left.text_elements, right.text_elements);
     case "image":
-      return stableStringify({
-        type: input.type,
-        url: input.url,
-      });
+      return right.type === "image"
+        && areUserImageUrlsEquivalentForDedupe(left.url, right.url);
     case "localImage":
-      return stableStringify({
-        path: input.path,
-        type: input.type,
-      });
+      return right.type === "localImage"
+        && left.path === right.path;
     case "skill":
-      return stableStringify({
-        name: input.name,
-        path: input.path,
-        type: input.type,
-      });
+      return right.type === "skill"
+        && left.name === right.name
+        && left.path === right.path;
     case "mention":
-      return stableStringify({
-        name: input.name,
-        path: input.path,
-        type: input.type,
-      });
+      return right.type === "mention"
+        && left.name === right.name
+        && left.path === right.path;
   }
 }
 
-function normalizeUserInputs(inputs: UserInput[]) {
-  return `[${inputs.map((input) => normalizeUserInput(input)).join(",")}]`;
+export function areUserInputsEquivalentForUserMessageDedupe(left: UserInput[], right: UserInput[]) {
+  return left.length === right.length
+    && left.every((input, index) => {
+      const rightInput = right[index];
+      return !!rightInput && areUserInputsEquivalentForDedupe(input, rightInput);
+    });
+}
+
+function areUserMessagesEquivalentForDedupe(
+  left: Extract<ThreadItem, { type: "userMessage" }>,
+  right: Extract<ThreadItem, { type: "userMessage" }>,
+) {
+  return areUserInputsEquivalentForUserMessageDedupe(left.content, right.content);
 }
 
 function normalizeTextSegment(value: string) {
@@ -68,8 +101,6 @@ function normalizeTextSegment(value: string) {
 
 function getTurnItemDedupeKey(item: ThreadItem) {
   switch (item.type) {
-    case "userMessage":
-      return `userMessage:${normalizeUserInputs(item.content)}`;
     case "hookPrompt":
       return `hookPrompt:${stableStringify(item.fragments)}`;
     case "agentMessage":
@@ -157,6 +188,23 @@ export function normalizeThreadItems(items: ThreadItem[], options: NormalizeThre
           reasoningSegmentOwners.set(normalizedSegment, item);
         }
       }
+      continue;
+    }
+
+    if (item.type === "userMessage") {
+      const existingIndex = dedupedItems.findIndex((candidate) => (
+        candidate.type === "userMessage"
+        && areUserMessagesEquivalentForDedupe(candidate, item)
+      ));
+      if (existingIndex === -1) {
+        dedupedItems.push(item);
+        continue;
+      }
+
+      changed = true;
+      dedupedItems[existingIndex] = options.mergeDuplicateItems
+        ? options.mergeDuplicateItems(dedupedItems[existingIndex]!, item)
+        : dedupedItems[existingIndex]!;
       continue;
     }
 

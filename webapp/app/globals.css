@@ -630,6 +630,49 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     animation: thread-thinking-shimmer 1.45s linear infinite;
   }
 
+  .thread-pending-steer-message {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    border-radius: 1.1rem;
+  }
+
+  .thread-pending-steer-message::before,
+  .thread-pending-steer-message::after {
+    content: "";
+    position: absolute;
+    pointer-events: none;
+    border-radius: inherit;
+    border-radius: 1.06rem;
+  }
+
+  .thread-pending-steer-message::before {
+    aspect-ratio: 1 / 1;
+    --color: color-mix(in srgb, var(--text), var(--accent) 50%);
+    background: conic-gradient(transparent, 
+      var(--color) 180deg, transparent 180deg, 
+    var(--color));
+    opacity: .5;
+    inset: 50% auto auto 50%;
+    min-height: 100%;
+    translate: -50% -50%;
+    width: max(100%, 18rem);
+    z-index: -2;
+    animation: thread-pending-steer-spin 3.6s linear infinite;
+  }
+
+  .thread-pending-steer-message::after {
+    inset: calc(var(--spacing) * 0.5);
+    z-index: -1;
+    background: var(--shell-fade-bg);
+  }
+
+  @keyframes thread-pending-steer-spin {
+    to {
+      rotate: z 360deg;
+    }
+  }
+
   @keyframes thread-thinking-shimmer {
     from {
       background-position: 100% 50%;
@@ -642,6 +685,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
 
   @media (prefers-reduced-motion: reduce) {
     .workbench-skeleton,
+    .thread-pending-steer-message::before,
     .thread-thinking-text {
       animation: none;
       background-position: 50% 50%;

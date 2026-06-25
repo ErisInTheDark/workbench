@@ -42,7 +42,7 @@ import {
     toThreadPayload,
     toThreadSummary,
 } from "../codex/thread-adapter";
-import { normalizeThreadItems } from "../codex/thread-item-normalization";
+import { areUserInputsEquivalentForUserMessageDedupe, normalizeThreadItems } from "../codex/thread-item-normalization";
 import { getCurrentInProgressTurn, getCurrentTurn } from "../codex/thread-state";
 import type {
     ThreadPayload,
@@ -206,7 +206,12 @@ interface OptimisticUserMessageEntry {
   createdAt: number;
   input: UserInput[];
   item: Extract<ThreadItem, { type: "userMessage" }>;
+  placement: OptimisticUserMessagePlacement;
+  status: OptimisticUserMessageStatus;
 }
+
+type OptimisticUserMessagePlacement = "initial" | "steer";
+type OptimisticUserMessageStatus = "pending" | "sent";
 
 type CodexThreadSessionResponse = {
   model?: string | null;
@@ -1325,23 +1330,87 @@ function WorkbenchThreadClient(
     return item.type === "userMessage" && item.id.startsWith("optimistic-user-message:");
   }
 
+  function createOptimisticUserMessageId(
+    placement: OptimisticUserMessagePlacement,
+    status: OptimisticUserMessageStatus,
+  ) {
+    return `optimistic-user-message:${placement}:${status}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  }
+
   function enqueueOptimisticUserMessage(
     harness: WorkbenchHarness,
     threadId: string,
     turnId: string,
     input: UserInput[],
+    placement: OptimisticUserMessagePlacement,
+    status: OptimisticUserMessageStatus,
   ) {
     const turnKey = getOptimisticTurnKey(harness, threadId, turnId);
     const entry: OptimisticUserMessageEntry = {
       createdAt: Date.now(),
       input: input.map((item) => cloneUserInput(item)),
-      item: createOptimisticUserMessage(input),
+      item: createOptimisticUserMessage(input, placement, status),
+      placement,
+      status,
     };
     optimisticUserMessagesByTurnKey.set(turnKey, [
       ...(optimisticUserMessagesByTurnKey.get(turnKey) ?? []),
       entry,
     ]);
     return entry.item;
+  }
+
+  function updateOptimisticUserMessageEntry(
+    harness: WorkbenchHarness,
+    threadId: string,
+    turnId: string,
+    itemId: string,
+    updater: (entry: OptimisticUserMessageEntry) => OptimisticUserMessageEntry | null,
+  ) {
+    const turnKey = getOptimisticTurnKey(harness, threadId, turnId);
+    const entries = optimisticUserMessagesByTurnKey.get(turnKey);
+    if (!entries?.length) {
+      return false;
+    }
+
+    let changed = false;
+    const nextEntries: OptimisticUserMessageEntry[] = [];
+    for (const entry of entries) {
+      if (entry.item.id !== itemId) {
+        nextEntries.push(entry);
+        continue;
+      }
+
+      const nextEntry = updater(entry);
+      changed = true;
+      if (nextEntry) {
+        nextEntries.push(nextEntry);
+      }
+    }
+
+    if (!changed) {
+      return false;
+    }
+
+    if (nextEntries.length) {
+      optimisticUserMessagesByTurnKey.set(turnKey, nextEntries);
+    } else {
+      optimisticUserMessagesByTurnKey.delete(turnKey);
+    }
+    return true;
+  }
+
+  function removeOptimisticUserMessage(
+    harness: WorkbenchHarness,
+    threadId: string,
+    turnId: string,
+    itemId: string,
+  ) {
+    return updateOptimisticUserMessageEntry(harness, threadId, turnId, itemId, () => null);
+  }
+
+  function refreshCurrentThreadOptimisticUserMessages() {
+    return updateCurrentThread((thread) => applyOptimisticUserMessageOverlay(thread) ?? thread);
   }
 
   function countCanonicalUserMessageMatches(items: ThreadItem[], input: UserInput[]) {
@@ -1356,7 +1425,53 @@ function WorkbenchThreadClient(
     return insertIndex;
   }
 
-  function insertOptimisticUserMessageItems(
+  function placeCanonicalInitialUserMessages(
+    items: ThreadItem[],
+    optimisticEntries: OptimisticUserMessageEntry[],
+  ) {
+    const initialEntries = optimisticEntries.filter((entry) => entry.placement === "initial");
+    if (!initialEntries.length) {
+      return items;
+    }
+
+    let nextItems = items;
+    let didMove = false;
+    for (const entry of initialEntries) {
+      const currentIndex = nextItems.findIndex((item) => (
+        !isOptimisticUserMessageItem(item)
+        && doesUserMessageMatchInput(item, entry.input)
+      ));
+      if (currentIndex < 0) {
+        continue;
+      }
+
+      const insertIndex = getOptimisticUserMessageInsertIndex(nextItems);
+      if (currentIndex < insertIndex) {
+        continue;
+      }
+
+      const [item] = nextItems.slice(currentIndex, currentIndex + 1);
+      if (!item) {
+        continue;
+      }
+
+      const withoutItem = [
+        ...nextItems.slice(0, currentIndex),
+        ...nextItems.slice(currentIndex + 1),
+      ];
+      const nextInsertIndex = getOptimisticUserMessageInsertIndex(withoutItem);
+      nextItems = [
+        ...withoutItem.slice(0, nextInsertIndex),
+        item,
+        ...withoutItem.slice(nextInsertIndex),
+      ];
+      didMove = true;
+    }
+
+    return didMove ? nextItems : items;
+  }
+
+  function insertInitialOptimisticUserMessageItems(
     items: ThreadItem[],
     optimisticItems: Array<Extract<ThreadItem, { type: "userMessage" }>>,
   ) {
@@ -1372,6 +1487,26 @@ function WorkbenchThreadClient(
     ];
   }
 
+  function insertOptimisticUserMessageEntries(
+    items: ThreadItem[],
+    optimisticEntries: OptimisticUserMessageEntry[],
+  ) {
+    if (!optimisticEntries.length) {
+      return items;
+    }
+
+    const initialItems = optimisticEntries
+      .filter((entry) => entry.placement === "initial")
+      .map((entry) => entry.item);
+    const steerItems = optimisticEntries
+      .filter((entry) => entry.placement === "steer")
+      .map((entry) => entry.item);
+    return [
+      ...insertInitialOptimisticUserMessageItems(items, initialItems),
+      ...steerItems,
+    ];
+  }
+
   function applyOptimisticUserMessagesToTurn(
     thread: Pick<ThreadPayload, "harness" | "id">,
     turn: Turn,
@@ -1381,12 +1516,15 @@ function WorkbenchThreadClient(
       return turn;
     }
 
-    const canonicalItems = turn.items.filter((item) => !isOptimisticUserMessageItem(item));
+    const canonicalItems = placeCanonicalInitialUserMessages(
+      turn.items.filter((item) => !isOptimisticUserMessageItem(item)),
+      entries,
+    );
     const visibleEntries: OptimisticUserMessageEntry[] = [];
     for (const [index, entry] of entries.entries()) {
       const matchingEntriesThroughCurrent = entries
         .slice(0, index + 1)
-        .filter((candidate) => areDeeplyEqual(candidate.input, entry.input))
+        .filter((candidate) => areUserInputsEquivalentForUserMessageDedupe(candidate.input, entry.input))
         .length;
       if (countCanonicalUserMessageMatches(canonicalItems, entry.input) < matchingEntriesThroughCurrent) {
         visibleEntries.push(entry);
@@ -1395,13 +1533,14 @@ function WorkbenchThreadClient(
 
     if (!visibleEntries.length) {
       return turn.items.length === canonicalItems.length
+        && turn.items.every((item, index) => item === canonicalItems[index])
         ? turn
         : { ...turn, items: canonicalItems };
     }
 
     return {
       ...turn,
-      items: insertOptimisticUserMessageItems(canonicalItems, visibleEntries.map((entry) => entry.item)),
+      items: insertOptimisticUserMessageEntries(canonicalItems, visibleEntries),
     };
   }
 
@@ -2708,44 +2847,18 @@ function WorkbenchThreadClient(
     item: ThreadPayload["turns"][number]["items"][number],
     input: UserInput[],
   ) {
-    if (item.type !== "userMessage" || item.content.length !== input.length) {
-      return false;
-    }
-
-    return item.content.every((content, index) => {
-      const nextInput = input[index];
-      if (!nextInput || content.type !== nextInput.type) {
-        return false;
-      }
-
-      switch (nextInput.type) {
-        case "text":
-          return content.type === "text"
-            && content.text.trim() === nextInput.text.trim();
-        case "image":
-          return content.type === "image"
-            && content.url === nextInput.url;
-        case "localImage":
-          return content.type === "localImage"
-            && content.path === nextInput.path;
-        case "skill":
-          return content.type === "skill"
-            && content.name === nextInput.name
-            && content.path === nextInput.path;
-        case "mention":
-          return content.type === "mention"
-            && content.name === nextInput.name
-            && content.path === nextInput.path;
-        default:
-          return false;
-      }
-    });
+    return item.type === "userMessage"
+      && areUserInputsEquivalentForUserMessageDedupe(item.content, input);
   }
 
-  function createOptimisticUserMessage(input: UserInput[]): Extract<ThreadPayload["turns"][number]["items"][number], { type: "userMessage" }> {
+  function createOptimisticUserMessage(
+    input: UserInput[],
+    placement: OptimisticUserMessagePlacement,
+    status: OptimisticUserMessageStatus,
+  ): Extract<ThreadPayload["turns"][number]["items"][number], { type: "userMessage" }> {
     return {
       type: "userMessage",
-      id: `optimistic-user-message:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      id: createOptimisticUserMessageId(placement, status),
       content: input.map((entry) => cloneUserInput(entry)),
     };
   }
@@ -2781,7 +2894,7 @@ function WorkbenchThreadClient(
         index === nextTurnIndex
           ? {
             ...turn,
-            items: insertOptimisticUserMessageItems(turn.items, [createOptimisticUserMessage(input)]),
+            items: [...turn.items, createOptimisticUserMessage(input, "steer", "pending")],
           }
           : turn
       )),
@@ -2983,20 +3096,44 @@ function WorkbenchThreadClient(
     let optimisticTurnId: string | null = null;
 
     if (currentInProgressTurn) {
-      const steerResponse = await sendBridgeRequest<TurnSteerResponse>(harness, {
-        method: "turn/steer",
-          params: {
-            ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
-            ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
-            ...(state.projectRootPath && harness === "copilot" ? { cwd: state.projectRootPath } : {}),
-            ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
-          expectedTurnId: currentInProgressTurn.id,
-          input: normalizedInput,
-          threadId: resolvedThreadId,
-        } as { agentPath?: string; expectedTurnId: string; input: UserInput[]; threadId: string; workbenchOrigin?: string },
-      });
+      optimisticTurnId = currentInProgressTurn.id;
+      const pendingSteerItem = enqueueOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, normalizedInput, "steer", "pending");
+      if (sendOptions.selectThread !== false) {
+        resumedThread = applyOptimisticUserMessageOverlay(resumedThread) ?? resumedThread;
+        setCurrentThread(resumedThread);
+      }
+
+      let steerResponse: TurnSteerResponse;
+      try {
+        steerResponse = await sendBridgeRequest<TurnSteerResponse>(harness, {
+          method: "turn/steer",
+            params: {
+              ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
+              ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
+              ...(state.projectRootPath && harness === "copilot" ? { cwd: state.projectRootPath } : {}),
+              ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
+            expectedTurnId: currentInProgressTurn.id,
+            input: normalizedInput,
+            threadId: resolvedThreadId,
+          } as { agentPath?: string; expectedTurnId: string; input: UserInput[]; threadId: string; workbenchOrigin?: string },
+        });
+      } catch (error) {
+        removeOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, pendingSteerItem.id);
+        if (sendOptions.selectThread !== false) {
+          refreshCurrentThreadOptimisticUserMessages();
+        }
+        throw error;
+      }
+
+      const acknowledgedTurnId = steerResponse.turnId || currentInProgressTurn.id;
+      if (acknowledgedTurnId !== optimisticTurnId) {
+        removeOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, pendingSteerItem.id);
+        enqueueOptimisticUserMessage(harness, resolvedThreadId, acknowledgedTurnId, normalizedInput, "steer", "pending");
+      }
       optimisticTurnId = steerResponse.turnId || currentInProgressTurn.id;
-      enqueueOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, normalizedInput);
+      if (sendOptions.selectThread !== false) {
+        refreshCurrentThreadOptimisticUserMessages();
+      }
     } else {
       const codexCollaborationMode = harness === "codex"
         ? (() => {
@@ -3032,7 +3169,7 @@ function WorkbenchThreadClient(
         },
       });
       optimisticTurnId = turnStartResponse.turn.id;
-      enqueueOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, normalizedInput);
+      enqueueOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, normalizedInput, "initial", "sent");
       resumedThread = applyOptimisticUserMessageOverlay({
         ...resumedThread,
         status: isThreadStatusActive(resumedThread.status) ? resumedThread.status : "active",

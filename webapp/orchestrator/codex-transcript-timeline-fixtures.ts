@@ -125,6 +125,38 @@ const genericSnapshotUserMessage = {
   type: "userMessage",
 } satisfies ThreadItem;
 
+const inlineImageUserMessage = {
+  content: [
+    {
+      text: "same image prompt",
+      text_elements: [],
+      type: "text",
+    },
+    {
+      type: "image",
+      url: "data:image/png;base64,iVBORw0KGgo=",
+    },
+  ],
+  id: "optimistic-user-message:initial:sent:1",
+  type: "userMessage",
+} satisfies ThreadItem;
+
+const transcriptAssetImageUserMessage = {
+  content: [
+    {
+      text: "same image prompt",
+      text_elements: [],
+      type: "text",
+    },
+    {
+      type: "image",
+      url: "/api/transcript-assets/codex/thread-1/hash.png",
+    },
+  ],
+  id: "item-image-canonical",
+  type: "userMessage",
+} satisfies ThreadItem;
+
 const normalizedReasoningItems = normalizeThreadItems([
   granularReasoningA,
   granularReasoningB,
@@ -148,6 +180,11 @@ const normalizedDuplicateUserMessages = normalizeThreadItems([
   agentMessage,
   genericSnapshotUserMessage,
 ]);
+const normalizedDuplicateImageUserMessages = normalizeThreadItems([
+  inlineImageUserMessage,
+  agentMessage,
+  transcriptAssetImageUserMessage,
+], { mergeDuplicateItems: mergeThreadItem });
 
 const contextCompaction = {
   id: "compaction-live-a",
@@ -234,8 +271,9 @@ void ([
   normalizedIndexedGenericSnapshotReasoning,
   normalizedRepeatedCanonicalReasoning,
   normalizedDuplicateUserMessages,
+  normalizedDuplicateImageUserMessages,
   orderedItemsWithAliasedContextCompaction,
-] satisfies [CodexTranscriptTurnTimelineEntry[], CodexTranscriptTurnTimelineEntry[], ThreadItem[], ThreadItem, ThreadItem[], ThreadItem[], ThreadItem[], ThreadItem[], ThreadItem[], ThreadItem[]]);
+] satisfies [CodexTranscriptTurnTimelineEntry[], CodexTranscriptTurnTimelineEntry[], ThreadItem[], ThreadItem, ThreadItem[], ThreadItem[], ThreadItem[], ThreadItem[], ThreadItem[], ThreadItem[], ThreadItem[]]);
 
 // Manual checklist:
 // - `orderedItems` should be `[agentMessage, commandExecution]`, proving command/tool items stay after their anchor.
@@ -245,5 +283,6 @@ void ([
 // - `normalizedIndexedGenericSnapshotReasoning` should preserve the generic snapshot summary indexes while blanking only duplicated segments.
 // - `normalizedRepeatedCanonicalReasoning` should keep both canonical `rs-*` reasoning items even when their text matches.
 // - `normalizedDuplicateUserMessages` should keep the canonical turn-start user item and remove the generic snapshot duplicate.
+// - `normalizedDuplicateImageUserMessages` should keep one top-position user item when an optimistic inline image is later represented as a transcript asset URL.
 // - `orderedItemsWithAliasedContextCompaction` should keep one item per aliased compaction between the surrounding messages and leave the unmatched extra compaction at the end.
 // - Partial `itemTimeline` + legacy `itemOrder` cases should be added here when implementing migrations.

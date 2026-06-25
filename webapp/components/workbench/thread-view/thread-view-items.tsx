@@ -126,6 +126,10 @@ function isWorkbenchControlUserMessage(item: Extract<ThreadItem, { type: "userMe
   return item.content.some((content) => content.type === "text" && content.text.includes("<!-- workbench-collaboration-control -->"));
 }
 
+function isOptimisticSteerUserMessage(item: Extract<ThreadItem, { type: "userMessage" }>) {
+  return item.id.startsWith("optimistic-user-message:steer:pending:");
+}
+
 function isFinalAgentMessageBlock (block: ThreadRenderableBlock, finalAgentMessageId: string | null) {
   return block.kind === "item"
     && block.item.type === "agentMessage"
@@ -425,10 +429,11 @@ function ThreadUserMessageItem ({
   startedAt: number | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  const isPendingSteer = isOptimisticSteerUserMessage(item);
   return (
-    <section className="flex flex-col items-end py-2">
-      <div className="w-full max-w-[42rem] rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3">
-        <div className="space-y-2 text-left">
+    <section className="flex flex-col items-end py-2" data-thread-user-message-state={isPendingSteer ? "pending-steer" : undefined}>
+      <div className={`w-full max-w-[42rem]${isPendingSteer ? " thread-pending-steer-message px-0.5 py-0.5" : " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3"}`}>
+        <div className={`space-y-2 text-left${isPendingSteer ? " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3" : ""}`}>
           {item.content.length ? item.content.map((content, index) => (
             <ThreadUserInputLine
               key={`${item.id}:content:${index}:${content.type}`}
