@@ -255,6 +255,21 @@ export interface WorkbenchQuestionnaireHistoryEntry {
   resolvedAt: number;
 }
 
+export type WorkbenchSteerHistoryStatus = "pending" | "sent" | "interrupted" | "failed";
+
+export interface WorkbenchSteerHistoryEntry {
+  entryKey: string;
+  threadId: string;
+  turnId: string;
+  input: UserInput[];
+  status: WorkbenchSteerHistoryStatus;
+  attemptedAt: number;
+  resolvedAt: number | null;
+  requestId: string | null;
+  canonicalItemId: string | null;
+  error: string | null;
+}
+
 export interface FileNode {
   isIgnored?: boolean;
   type: "file";

@@ -33,6 +33,7 @@ import {
 } from "../../../lib/workbench/agent-paths";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
+import { isWorkbenchSyntheticSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import PlaintextEditable, { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./PlaintextEditable";
 import ThreadAgentPicker from "./ThreadAgentPicker";
 import ThreadLightboxImage from "./ThreadLightboxImage";
@@ -106,6 +107,10 @@ function createSavedDraftId () {
 }
 
 function isQuestionnaireFallbackAnchorItem (item: ThreadPayload["turns"][number]["items"][number]) {
+  if (isWorkbenchSyntheticSteerUserMessage(item)) {
+    return false;
+  }
+
   switch (item.type) {
     case "agentMessage":
       return Boolean(item.text.trim());
@@ -133,6 +138,11 @@ function getQuestionnaireFallbackAnchorIndex (items: ThreadPayload["turns"][numb
   }
 
   return -1;
+}
+
+function isDurableQuestionnairePlacementItem (item: ThreadPayload["turns"][number]["items"][number]) {
+  return !isSyntheticQuestionnaireHistoryItem(item)
+    && !isWorkbenchSyntheticSteerUserMessage(item);
 }
 
 function readFileAsDataUrl (file: File) {
@@ -169,7 +179,7 @@ function buildPendingUserInputRequestSubmissionOptions (
     };
   }
 
-  const visibleItems = turn.items.filter((item) => !isSyntheticQuestionnaireHistoryItem(item));
+  const visibleItems = turn.items.filter(isDurableQuestionnairePlacementItem);
   const requestedAnchorIndex = insertAfterItemId
     ? visibleItems.findIndex((item) => item.id === insertAfterItemId)
     : -1;

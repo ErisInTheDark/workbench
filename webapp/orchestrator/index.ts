@@ -37,6 +37,7 @@ const CODEX_BRIDGE_URL = process.env.CODEX_APP_SERVER_URL ?? DEFAULT_CODEX_BRIDG
 const NEXT_PORT = process.env.PORT ?? "3002";
 const RESTART_DELAY_MS = 1000;
 const ORCHESTRATOR_RELOAD_PATH = "/orchestrator/reload";
+const CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS = 5000;
 const ORCHESTRATOR_RELOAD_SCOPE_VALUES = new Set<OrchestratorReloadScope>([
   "codex-bridge",
   "next-dev",
@@ -332,6 +333,26 @@ async function runAfterCodexBridgeReload<TValue>(task: () => TValue | Promise<TV
   return await task();
 }
 
+function withTimeout<TValue>(promise: Promise<TValue>, timeoutMs: number, message: string) {
+  return new Promise<TValue>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(message));
+    }, timeoutMs);
+    timer.unref();
+
+    void promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 function collectCacheSubtree(moduleId: string, visited = new Set<string>()) {
   if (visited.has(moduleId)) {
     return visited;
@@ -390,8 +411,14 @@ async function reloadCodexBridge() {
 
   const upstreamQueueBeforeReload = upstreamMessageQueue;
   const reloadPromise = (async () => {
-    await upstreamQueueBeforeReload.catch(() => undefined);
-    const state = await codexBridge.detachForReload();
+    await withTimeout(
+      upstreamQueueBeforeReload.catch(() => undefined),
+      CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS,
+      "Codex bridge reload timed out waiting for the upstream message queue to drain; retry after current bridge activity settles.",
+    );
+    const state = await codexBridge.detachForReload({
+      idleTimeoutMs: CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS,
+    });
     const { default: ReloadedCodexStdioBridge } = reloadCodexBridgeModule();
     codexBridge = new ReloadedCodexStdioBridge({
       appServer: codexAppServer,

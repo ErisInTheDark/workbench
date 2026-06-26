@@ -86,6 +86,10 @@ export type CodexStdioBridgeReloadState = {
   upstreamInitialized: boolean;
 };
 
+type CodexStdioBridgeReloadOptions = {
+  idleTimeoutMs?: number;
+};
+
 type PendingCodexUserInputRequestBase = {
   itemId: string | null;
   request: WorkbenchUserInputRequest;
@@ -177,6 +181,30 @@ function isJsonRpcServerRequest(message: unknown): message is ServerRequest {
     && "params" in message
     && !("result" in message)
     && !("error" in message);
+}
+
+function withTimeout<TValue>(promise: Promise<TValue>, timeoutMs: number | undefined, message: string) {
+  if (timeoutMs === undefined) {
+    return promise;
+  }
+
+  return new Promise<TValue>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(message));
+    }, timeoutMs);
+    timer.unref();
+
+    void promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 function asRecord(value: unknown) {
@@ -999,9 +1027,12 @@ export default class CodexStdioBridge {
     this.stop();
   }
 
-  async detachForReload(): Promise<CodexStdioBridgeReloadState> {
-    await this.flushCoalescedTranscriptNotifications();
-    await this.waitForIdle();
+  async detachForReload(options: CodexStdioBridgeReloadOptions = {}): Promise<CodexStdioBridgeReloadState> {
+    await withTimeout(
+      this.waitForIdle(),
+      options.idleTimeoutMs,
+      "Codex bridge is busy with active work; retry reload after the current bridge work settles.",
+    );
     this.acceptingWork = false;
     clearInterval(this.transcriptInstrumentationTimer);
     if (this.transcriptStore) {
@@ -1099,6 +1130,11 @@ export default class CodexStdioBridge {
           return {
             id: requestId,
             result: await this.listQuestionnaireHistory(message.params),
+          };
+        case "steer/history/list":
+          return {
+            id: requestId,
+            result: await this.listSteerHistory(message.params),
           };
         case "questionnaire/respond":
           return {
@@ -1713,6 +1749,18 @@ export default class CodexStdioBridge {
 
     return {
       data: await this.ensureTranscriptStore().listQuestionnaireHistory(threadId),
+    };
+  }
+
+  private async listSteerHistory(params: unknown) {
+    const record = asRecord(params);
+    const threadId = asString(record?.threadId)?.trim() ?? "";
+    if (!threadId) {
+      throw new Error("Missing steer/history/list thread id.");
+    }
+
+    return {
+      data: await this.ensureTranscriptStore().listSteerHistory(threadId),
     };
   }
 

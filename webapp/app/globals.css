@@ -630,20 +630,22 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     animation: thread-thinking-shimmer 1.45s linear infinite;
   }
 
-  .thread-pending-steer-message {
+  .thread-pending-steer-message,
+  .thread-unsent-steer-message {
     position: relative;
     isolation: isolate;
     overflow: hidden;
-    border-radius: 1.1rem;
+    border-radius: 1.4rem;
   }
 
   .thread-pending-steer-message::before,
-  .thread-pending-steer-message::after {
+  .thread-pending-steer-message::after,
+  .thread-unsent-steer-message::before,
+  .thread-unsent-steer-message::after {
     content: "";
     position: absolute;
     pointer-events: none;
     border-radius: inherit;
-    border-radius: 1.06rem;
   }
 
   .thread-pending-steer-message::before {
@@ -661,7 +663,18 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     animation: thread-pending-steer-spin 3.6s linear infinite;
   }
 
-  .thread-pending-steer-message::after {
+  .thread-unsent-steer-message::before {
+    inset: 0;
+    z-index: -2;
+    background:
+      radial-gradient(circle at 22% 18%, color-mix(in srgb, #f97316 38%, transparent), transparent 32%),
+      radial-gradient(circle at 82% 72%, color-mix(in srgb, #ef4444 30%, transparent), transparent 34%),
+      linear-gradient(135deg, color-mix(in srgb, #f97316 42%, transparent), color-mix(in srgb, #ef4444 30%, transparent));
+    opacity: 0.46;
+  }
+
+  .thread-pending-steer-message::after,
+  .thread-unsent-steer-message::after {
     inset: calc(var(--spacing) * 0.5);
     z-index: -1;
     background: var(--shell-fade-bg);

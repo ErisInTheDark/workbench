@@ -8,15 +8,17 @@ import path from "node:path";
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
+import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type { JsonValue } from "../lib/codex/generated/app-server/serde_json/JsonValue";
 import { appendCommandOutputDelta, compactCommandOutputPayload } from "../lib/codex/thread-command-output";
-import { normalizeThreadItems } from "../lib/codex/thread-item-normalization";
-import type { WorkbenchQuestionnaireHistoryEntry, WorkbenchThreadHydrationRequest, WorkbenchThreadTurnHistoryEntry } from "../lib/types";
+import { areUserInputsEquivalentForUserMessageDedupe, normalizeThreadItems } from "../lib/codex/thread-item-normalization";
+import type { WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadHydrationRequest, WorkbenchThreadTurnHistoryEntry } from "../lib/types";
 import AtomicJsonStore from "./AtomicJsonStore";
 import { hydrateThreadWithStoredTurns } from "./codex-transcript-hydration";
 import { shouldPersistRawNotificationToJournal } from "./codex-transcript-event-routing";
 import { mergeThreadItem } from "./codex-transcript-item-merge";
 import {
+  asNumber,
   asRecord,
   asString,
   encodeTranscriptPathSegment,
@@ -90,6 +92,223 @@ function sortQuestionnaireEntries(entries: WorkbenchQuestionnaireHistoryEntry[])
 
     return left.requestKey.localeCompare(right.requestKey);
   });
+}
+
+function sortSteerEntries(entries: WorkbenchSteerHistoryEntry[]) {
+  return [...entries].sort((left, right) => {
+    if (left.attemptedAt !== right.attemptedAt) {
+      return left.attemptedAt - right.attemptedAt;
+    }
+
+    return left.entryKey.localeCompare(right.entryKey);
+  });
+}
+
+function readTextElements(value: unknown): Extract<UserInput, { type: "text" }>["text_elements"] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const elements: Extract<UserInput, { type: "text" }>["text_elements"] = [];
+  for (const entry of value) {
+    const record = asRecord(entry);
+    const byteRange = asRecord(record?.byteRange);
+    const start = asNumber(byteRange?.start);
+    const end = asNumber(byteRange?.end);
+    if (!record || start === null || end === null) {
+      return null;
+    }
+
+    elements.push({
+      byteRange: { end, start },
+      placeholder: asString(record.placeholder) ?? "",
+    });
+  }
+
+  return elements;
+}
+
+function readUserInput(value: unknown): UserInput | null {
+  const record = asRecord(value);
+  const type = asString(record?.type);
+  if (!record || !type) {
+    return null;
+  }
+
+  switch (type) {
+    case "text": {
+      const text = asString(record.text);
+      const textElements = readTextElements(record.text_elements);
+      return text !== null && textElements
+        ? { text, text_elements: textElements, type }
+        : null;
+    }
+    case "image": {
+      const url = asString(record.url);
+      return url !== null ? { type, url } : null;
+    }
+    case "localImage": {
+      const path = asString(record.path);
+      return path !== null ? { path, type } : null;
+    }
+    case "skill": {
+      const name = asString(record.name);
+      const path = asString(record.path);
+      return name !== null && path !== null ? { name, path, type } : null;
+    }
+    case "mention": {
+      const name = asString(record.name);
+      const path = asString(record.path);
+      return name !== null && path !== null ? { name, path, type } : null;
+    }
+    default:
+      return null;
+  }
+}
+
+function readUserInputArray(value: unknown): UserInput[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const inputs: UserInput[] = [];
+  for (const entry of value) {
+    const input = readUserInput(entry);
+    if (!input) {
+      return null;
+    }
+
+    inputs.push(input);
+  }
+
+  return inputs;
+}
+
+function cloneUserInput(input: UserInput): UserInput {
+  switch (input.type) {
+    case "text":
+      return {
+        text: input.text,
+        text_elements: input.text_elements.map((element) => ({
+          byteRange: { ...element.byteRange },
+          placeholder: element.placeholder,
+        })),
+        type: input.type,
+      };
+    case "image":
+      return { type: input.type, url: input.url };
+    case "localImage":
+      return { path: input.path, type: input.type };
+    case "skill":
+      return { name: input.name, path: input.path, type: input.type };
+    case "mention":
+      return { name: input.name, path: input.path, type: input.type };
+  }
+}
+
+function createSteerHistoryEntryFromRequest(request: JsonRpcRequest): WorkbenchSteerHistoryEntry | null {
+  if (request.method !== "turn/steer") {
+    return null;
+  }
+
+  const params = asRecord(request.params);
+  const threadId = asString(params?.threadId)?.trim() ?? "";
+  const turnId = asString(params?.expectedTurnId)?.trim() || asString(params?.turnId)?.trim() || "";
+  const input = readUserInputArray(params?.input);
+  if (!threadId || !turnId || !input?.length) {
+    return null;
+  }
+
+  const requestId = typeof request.id === "number" || typeof request.id === "string"
+    ? String(request.id)
+    : null;
+  const attemptedAt = now();
+  return {
+    attemptedAt,
+    canonicalItemId: null,
+    entryKey: requestId ? `turn-steer:${requestId}` : `turn-steer:${attemptedAt}:${Math.random().toString(36).slice(2)}`,
+    error: null,
+    input: input.map(cloneUserInput),
+    requestId,
+    resolvedAt: null,
+    status: "pending",
+    threadId,
+    turnId,
+  };
+}
+
+function getJsonRpcErrorMessage(response: JsonRpcResponse) {
+  const error = asRecord(response.error);
+  return asString(error?.message) ?? (error ? "turn/steer failed." : null);
+}
+
+function updateSteerEntryStatus(
+  entry: WorkbenchSteerHistoryEntry,
+  status: WorkbenchSteerHistoryEntry["status"],
+  resolvedAt: number,
+  options: { canonicalItemId?: string | null; error?: string | null } = {},
+): WorkbenchSteerHistoryEntry {
+  return {
+    ...entry,
+    canonicalItemId: options.canonicalItemId ?? entry.canonicalItemId,
+    error: options.error ?? entry.error,
+    resolvedAt,
+    status,
+  };
+}
+
+function updateMatchingPendingSteerEntriesForUserMessage(
+  entries: WorkbenchSteerHistoryEntry[],
+  item: ThreadItem,
+  resolvedAt: number,
+) {
+  if (item.type !== "userMessage") {
+    return entries;
+  }
+
+  let changed = false;
+  const nextEntries = entries.map((entry) => {
+    if (
+      entry.status !== "pending"
+      || !areUserInputsEquivalentForUserMessageDedupe(entry.input, item.content)
+    ) {
+      return entry;
+    }
+
+    changed = true;
+    return updateSteerEntryStatus(entry, "sent", resolvedAt, { canonicalItemId: item.id, error: null });
+  });
+
+  return changed ? sortSteerEntries(nextEntries) : entries;
+}
+
+function updatePendingSteerEntriesForInterruptedTurn(
+  entries: WorkbenchSteerHistoryEntry[],
+  turn: Turn,
+  resolvedAt: number,
+) {
+  if (turn.status !== "interrupted") {
+    return entries;
+  }
+
+  const canonicalUserMessages = turn.items.filter((item): item is Extract<ThreadItem, { type: "userMessage" }> => item.type === "userMessage");
+  let changed = false;
+  const nextEntries = entries.map((entry) => {
+    if (entry.status !== "pending") {
+      return entry;
+    }
+
+    const canonicalMatch = canonicalUserMessages.find((item) => areUserInputsEquivalentForUserMessageDedupe(entry.input, item.content));
+    if (canonicalMatch) {
+      changed = true;
+      return updateSteerEntryStatus(entry, "sent", resolvedAt, { canonicalItemId: canonicalMatch.id, error: null });
+    }
+
+    changed = true;
+    return updateSteerEntryStatus(entry, "interrupted", resolvedAt, { error: "The turn stopped before this steer was delivered." });
+  });
+
+  return changed ? sortSteerEntries(nextEntries) : entries;
 }
 
 function getThreadTimestamp(thread: Thread | null) {
@@ -193,6 +412,7 @@ function createTurnFile(threadId: string, turnId: string): CodexTranscriptTurnFi
     lastTouchedAt: now(),
     questionnaireEntries: [],
     schemaVersion: CODEX_TRANSCRIPT_SCHEMA_VERSION,
+    steerEntries: [],
     threadId,
     turn: null,
     turnId,
@@ -432,12 +652,18 @@ function normalizeTurnFileSnapshot(file: CodexTranscriptTurnFile) {
       ...file,
       itemOrder: file.itemOrder ?? [],
       itemTimeline: normalizeTurnTimeline(file),
+      questionnaireEntries: file.questionnaireEntries ?? [],
+      steerEntries: file.steerEntries ?? [],
     };
   }
 
   const normalizedTurn = applyTurnTimeline(file.turn, file);
   if (!normalizedTurn) {
-    return file;
+    return {
+      ...file,
+      questionnaireEntries: file.questionnaireEntries ?? [],
+      steerEntries: file.steerEntries ?? [],
+    };
   }
 
   const survivingItemIds = new Set(normalizedTurn.items.map((item) => item.id));
@@ -452,6 +678,8 @@ function normalizeTurnFileSnapshot(file: CodexTranscriptTurnFile) {
     ...file,
     itemOrder: normalizedTurn.items.map((item) => item.id),
     itemTimeline: cleanedTimeline,
+    questionnaireEntries: file.questionnaireEntries ?? [],
+    steerEntries: file.steerEntries ?? [],
     turn: {
       ...normalizedTurn,
       items: orderMergedItemsByTimeline(normalizedTurn.items, cleanedTimeline),
@@ -746,11 +974,34 @@ export default class CodexTranscriptStore {
 
   async recordClientRequest(request: JsonRpcRequest) {
     await this.ready();
+    const steerEntry = createSteerHistoryEntryFromRequest(request);
+    if (steerEntry) {
+      await this.recordSteerHistoryEntry(steerEntry, createRawEvent("client-request", request, request.method, request.id ?? null));
+      return;
+    }
+
     return this.recordRawTraffic("client-request", request, null, request);
   }
 
   async recordUpstreamResponse(originalRequest: JsonRpcRequest | null, response: JsonRpcResponse) {
     await this.ready();
+    if (originalRequest?.method === "turn/steer") {
+      const errorMessage = getJsonRpcErrorMessage(response);
+      if (errorMessage) {
+        const steerEntry = createSteerHistoryEntryFromRequest(originalRequest);
+        if (steerEntry) {
+          const event = createRawEvent("upstream-response", response, originalRequest.method, response.id ?? null);
+          await this.recordSteerHistoryEntry(updateSteerEntryStatus(
+            steerEntry,
+            "failed",
+            event.receivedAt,
+            { error: errorMessage },
+          ), event);
+          return;
+        }
+      }
+    }
+
     await this.recordRawTraffic("upstream-response", response, originalRequest?.method ?? null, originalRequest);
   }
 
@@ -862,6 +1113,57 @@ export default class CodexTranscriptStore {
     }));
     await this.appendTurnEvent(entry.threadId, entry.turnId, event);
     await this.touchThread(entry.threadId, null);
+  }
+
+  async recordSteerHistoryEntry(entry: WorkbenchSteerHistoryEntry, event: CodexTranscriptRawEvent) {
+    await this.ready();
+    await this.updateTurnFile(entry.threadId, entry.turnId, (file) => ({
+      ...file,
+      lastTouchedAt: now(),
+      steerEntries: sortSteerEntries([
+        ...(file.steerEntries ?? []).filter((existingEntry) => existingEntry.entryKey !== entry.entryKey),
+        entry,
+      ]),
+    }));
+    await this.appendTurnEvent(entry.threadId, entry.turnId, event);
+    await this.touchThread(entry.threadId, null);
+  }
+
+  async updateSteerHistoryEntryStatus(
+    threadId: string,
+    turnId: string,
+    entryKey: string,
+    status: WorkbenchSteerHistoryEntry["status"],
+    event: CodexTranscriptRawEvent,
+    options: { canonicalItemId?: string | null; error?: string | null } = {},
+  ) {
+    await this.ready();
+    await this.updateTurnFile(threadId, turnId, (file) => {
+      const entries = file.steerEntries ?? [];
+      let changed = false;
+      const nextEntries = entries.map((entry) => {
+        if (entry.entryKey !== entryKey) {
+          return entry;
+        }
+
+        changed = true;
+        return updateSteerEntryStatus(entry, status, event.receivedAt, options);
+      });
+
+      return {
+        ...file,
+        lastTouchedAt: now(),
+        steerEntries: changed ? sortSteerEntries(nextEntries) : entries,
+      };
+    });
+    await this.appendTurnEvent(threadId, turnId, event);
+    await this.touchThread(threadId, null);
+  }
+
+  async listSteerHistory(threadId: string) {
+    await this.ready();
+    const turnFiles = await this.readTurnFiles(threadId);
+    return sortSteerEntries(turnFiles.flatMap((file) => file.steerEntries ?? []));
   }
 
   async listQuestionnaireHistory(threadId: string) {
@@ -1067,7 +1369,7 @@ export default class CodexTranscriptStore {
       return;
     }
 
-    const turnId = extractTurnId(payloadForRecord) ?? asString(originalParams?.turnId);
+    const turnId = extractTurnId(payloadForRecord) ?? asString(originalParams?.turnId) ?? asString(originalParams?.expectedTurnId);
     const item = extractItem(payloadForRecord);
     if (turnId && item) {
       await this.recordTurnItem(threadId, turnId, item, event);
@@ -1134,6 +1436,7 @@ export default class CodexTranscriptStore {
   private async recordTurnSnapshot(threadId: string, turn: Turn, event: CodexTranscriptRawEvent) {
     await this.updateTurnFile(threadId, turn.id, (file) => {
       const { aliasesByItemId, turn: reconciledTurn } = reconcileSnapshotContextCompactionItemIds(file.turn, turn);
+      const mergedTurn = mergeTurnItems(file.turn, reconciledTurn);
       const nextItemOrder = mergeItemOrder(reconciledTurn.items.map((item) => item.id), file.itemOrder ?? []);
       const nextItemTimeline = reconciledTurn.items.reduce(
         (timeline, item) => rememberTimelineItem(
@@ -1149,7 +1452,8 @@ export default class CodexTranscriptStore {
         itemOrder: nextItemOrder,
         itemTimeline: nextItemTimeline,
         lastTouchedAt: now(),
-        turn: applyTurnTimeline(mergeTurnItems(file.turn, reconciledTurn), {
+        steerEntries: updatePendingSteerEntriesForInterruptedTurn(file.steerEntries ?? [], mergedTurn, event.receivedAt),
+        turn: applyTurnTimeline(mergedTurn, {
           ...file,
           itemOrder: nextItemOrder,
           itemTimeline: nextItemTimeline,
@@ -1173,6 +1477,7 @@ export default class CodexTranscriptStore {
         itemOrder,
         itemTimeline,
         lastTouchedAt: now(),
+        steerEntries: updateMatchingPendingSteerEntriesForUserMessage(file.steerEntries ?? [], item, event.receivedAt),
         turn: applyTurnTimeline(upsertItem(file.turn, item, turnId), {
           ...file,
           itemOrder,

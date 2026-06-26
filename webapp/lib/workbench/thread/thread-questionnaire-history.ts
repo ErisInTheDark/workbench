@@ -9,11 +9,17 @@
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem";
 import type { ThreadPayload, WorkbenchQuestionnaireHistoryEntry } from "../../types";
 import { areDeeplyEqual } from "../deep-equality";
+import { isWorkbenchSyntheticSteerUserMessage } from "./thread-steer-history";
 
 export const WORKBENCH_QUESTIONNAIRE_TOOL_NAME = "workbench_request_user_input";
 export const SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX = "workbench:questionnaire-history:";
 
 type DynamicToolCallItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
+
+type QuestionnaireHistoryAnchorResolution =
+  | { index: number; type: "resolved" }
+  | { type: "defer" }
+  | { type: "fallback" };
 
 function createSyntheticQuestionnaireHistoryItemId(threadId: string, requestKey: string) {
   return `${SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX}${threadId}:${requestKey}`;
@@ -27,7 +33,7 @@ export function isSyntheticQuestionnaireHistoryItem(item: ThreadItem): item is D
 function stripSyntheticQuestionnaireHistoryItems(items: ThreadItem[]) {
   const nextItems: ThreadItem[] = [];
   for (const item of items) {
-    if (isSyntheticQuestionnaireHistoryItem(item)) {
+    if (isSyntheticQuestionnaireHistoryItem(item) || isWorkbenchSyntheticSteerUserMessage(item)) {
       continue;
     }
 
@@ -104,6 +110,10 @@ function getFinalAgentMessageInsertIndex(items: ThreadItem[]) {
 }
 
 function isQuestionnaireHistoryAnchorItem(item: ThreadItem) {
+  if (isWorkbenchSyntheticSteerUserMessage(item)) {
+    return false;
+  }
+
   switch (item.type) {
     case "agentMessage":
       return Boolean(item.text.trim());
@@ -144,15 +154,20 @@ function collectSyntheticQuestionnaireHistoryItems(items: ThreadItem[]) {
   return syntheticItemsById;
 }
 
-function resolveQuestionnaireHistoryAnchorIndex(
+function hasQuestionnaireHistoryAnchorMetadata(entry: WorkbenchQuestionnaireHistoryEntry) {
+  return Boolean(entry.insertAfterItemId)
+    || (entry.insertAfterItemIndex !== null && entry.insertAfterItemIndex >= 0);
+}
+
+function resolveQuestionnaireHistoryAnchor(
   nextItems: ThreadItem[],
   baseItems: ThreadItem[],
   entry: WorkbenchQuestionnaireHistoryEntry,
-) {
+): QuestionnaireHistoryAnchorResolution {
   if (entry.insertAfterItemId) {
     const anchorIndex = nextItems.findIndex((item) => item.id === entry.insertAfterItemId);
     if (anchorIndex >= 0 && isQuestionnaireHistoryAnchorItem(nextItems[anchorIndex]!)) {
-      return anchorIndex;
+      return { index: anchorIndex, type: "resolved" };
     }
   }
 
@@ -169,12 +184,14 @@ function resolveQuestionnaireHistoryAnchorIndex(
 
       const anchorIndex = nextItems.findIndex((item) => item.id === baseAnchorItem.id);
       if (anchorIndex >= 0 && isQuestionnaireHistoryAnchorItem(nextItems[anchorIndex]!)) {
-        return anchorIndex;
+        return { index: anchorIndex, type: "resolved" };
       }
     }
   }
 
-  return -1;
+  return hasQuestionnaireHistoryAnchorMetadata(entry)
+    ? { type: "defer" }
+    : { type: "fallback" };
 }
 
 function applyQuestionnaireHistoryToItems(
@@ -190,10 +207,14 @@ function applyQuestionnaireHistoryToItems(
       entry,
       syntheticItemsById.get(createSyntheticQuestionnaireHistoryItemId(entry.threadId, entry.requestKey)) ?? null,
     );
-    const anchorIndex = resolveQuestionnaireHistoryAnchorIndex(nextItems, baseItems, entry);
+    const anchorResolution = resolveQuestionnaireHistoryAnchor(nextItems, baseItems, entry);
 
-    if (anchorIndex >= 0) {
-      nextItems.splice(anchorIndex + 1, 0, syntheticItem);
+    if (anchorResolution.type === "resolved") {
+      nextItems.splice(anchorResolution.index + 1, 0, syntheticItem);
+      continue;
+    }
+
+    if (anchorResolution.type === "defer") {
       continue;
     }
 

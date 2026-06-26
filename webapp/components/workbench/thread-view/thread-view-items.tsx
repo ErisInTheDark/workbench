@@ -126,8 +126,24 @@ function isWorkbenchControlUserMessage(item: Extract<ThreadItem, { type: "userMe
   return item.content.some((content) => content.type === "text" && content.text.includes("<!-- workbench-collaboration-control -->"));
 }
 
-function isOptimisticSteerUserMessage(item: Extract<ThreadItem, { type: "userMessage" }>) {
-  return item.id.startsWith("optimistic-user-message:steer:pending:");
+function getSteerUserMessageState(item: Extract<ThreadItem, { type: "userMessage" }>) {
+  if (
+    item.id.startsWith("optimistic-user-message:steer:pending:")
+    || item.id.startsWith("workbench:steer-history:pending:")
+  ) {
+    return "pending";
+  }
+
+  if (
+    item.id.startsWith("optimistic-user-message:steer:interrupted:")
+    || item.id.startsWith("optimistic-user-message:steer:failed:")
+    || item.id.startsWith("workbench:steer-history:interrupted:")
+    || item.id.startsWith("workbench:steer-history:failed:")
+  ) {
+    return "unsent";
+  }
+
+  return null;
 }
 
 function isFinalAgentMessageBlock (block: ThreadRenderableBlock, finalAgentMessageId: string | null) {
@@ -429,11 +445,13 @@ function ThreadUserMessageItem ({
   startedAt: number | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const isPendingSteer = isOptimisticSteerUserMessage(item);
+  const steerState = getSteerUserMessageState(item);
+  const isDecoratedSteer = steerState !== null;
+  const steerMessageClass = steerState ? ` thread-${steerState}-steer-message px-0.5 py-0.5` : "";
   return (
-    <section className="flex flex-col items-end py-2" data-thread-user-message-state={isPendingSteer ? "pending-steer" : undefined}>
-      <div className={`w-full max-w-[42rem]${isPendingSteer ? " thread-pending-steer-message px-0.5 py-0.5" : " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3"}`}>
-        <div className={`space-y-2 text-left${isPendingSteer ? " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3" : ""}`}>
+    <section className="flex flex-col items-end py-2" data-thread-user-message-state={steerState ? `${steerState}-steer` : undefined}>
+      <div className={`w-full max-w-[42rem]${isDecoratedSteer ? steerMessageClass : " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3"}`}>
+        <div className={`space-y-2 text-left${isDecoratedSteer ? " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3" : ""}`}>
           {item.content.length ? item.content.map((content, index) => (
             <ThreadUserInputLine
               key={`${item.id}:content:${index}:${content.type}`}

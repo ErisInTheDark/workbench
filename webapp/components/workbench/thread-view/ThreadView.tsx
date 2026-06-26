@@ -216,36 +216,10 @@ function mergeSubthreadTurnSnapshots (
     changed = true;
   }
 
-  const turns = mergedTurns.map((incomingTurn) => {
-    const existingTurn = existingTurnsById.get(incomingTurn.id);
-    if (!existingTurn || incomingTurn.status !== "inProgress" || existingTurn.status !== "inProgress") {
-      return incomingTurn;
-    }
-
-    const incomingItemIds = new Set(incomingTurn.items.map((item) => item.id));
-    const missingActiveCommandItems = existingTurn.items.filter((item) => (
-      item.type === "commandExecution"
-      && item.status === "inProgress"
-      && !incomingItemIds.has(item.id)
-    ));
-    if (!missingActiveCommandItems.length) {
-      return incomingTurn;
-    }
-
-    changed = true;
-    return {
-      ...incomingTurn,
-      items: [
-        ...incomingTurn.items,
-        ...missingActiveCommandItems,
-      ],
-    };
-  });
-
   const serviceTier = mergedThread.serviceTier ?? existingThread.serviceTier;
 
-  if (changed || serviceTier !== mergedThread.serviceTier || turns !== mergedThread.turns) {
-    return { ...mergedThread, serviceTier, turns };
+  if (changed || serviceTier !== mergedThread.serviceTier || mergedTurns !== mergedThread.turns) {
+    return { ...mergedThread, serviceTier, turns: mergedTurns };
   }
 
   return mergedThread;

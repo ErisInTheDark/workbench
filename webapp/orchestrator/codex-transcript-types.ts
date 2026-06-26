@@ -6,7 +6,7 @@
  */
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
-import type { WorkbenchQuestionnaireHistoryEntry } from "../lib/types";
+import type { WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry } from "../lib/types";
 
 export type SerializableJson =
   | null
@@ -64,6 +64,7 @@ export interface CodexTranscriptTurnFile {
   lastTouchedAt: number;
   questionnaireEntries: WorkbenchQuestionnaireHistoryEntry[];
   schemaVersion: number;
+  steerEntries: WorkbenchSteerHistoryEntry[];
   threadId: string;
   turn: Turn | null;
   turnId: string;

@@ -46,6 +46,25 @@ function countStructuredTurnItems(items: ThreadItem[]) {
   }, 0);
 }
 
+function isPreservableLiveTurnItem(item: ThreadItem) {
+  switch (item.type) {
+    case "agentMessage":
+    case "plan":
+    case "reasoning":
+      return true;
+    case "commandExecution":
+      return item.status === "inProgress";
+    case "collabAgentToolCall":
+    case "dynamicToolCall":
+    case "fileChange":
+    case "mcpToolCall":
+    case "webSearch":
+      return true;
+    default:
+      return false;
+  }
+}
+
 export function hasThreadActiveFlag(status: ThreadLikeStatus, flag: ThreadActiveFlag) {
   if (typeof status === "string") {
     const [type, activeFlags] = status.split(":", 2);
@@ -110,11 +129,37 @@ export function mergeTurnsPreservingLiveItems(incomingTurns: Turn[], liveTurns: 
       return turn;
     }
 
+    const liveItemsById = new Map(liveTurn.items.map((item) => [item.id, item]));
+    let turnChanged = false;
+    const nextItems = turn.items.map((item) => {
+      const liveItem = liveItemsById.get(item.id);
+      if (!liveItem) {
+        return item;
+      }
+
+      liveItemsById.delete(item.id);
+      if (liveItem === item) {
+        return item;
+      }
+
+      turnChanged = true;
+      return liveItem;
+    });
+
+    const missingLiveItems = Array.from(liveItemsById.values()).filter(isPreservableLiveTurnItem);
+    if (missingLiveItems.length) {
+      turnChanged = true;
+      nextItems.push(...missingLiveItems);
+    }
+
+    if (!turnChanged) {
+      return turn;
+    }
+
     changed = true;
     return {
       ...turn,
-      items: liveTurn.items,
-      itemsView: liveTurn.itemsView,
+      items: nextItems,
     };
   });
 

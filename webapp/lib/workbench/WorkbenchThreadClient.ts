@@ -54,6 +54,7 @@ import type {
     WorkbenchProjectRoot,
     WorkbenchQuestionnaireHistoryEntry,
     WorkbenchSendThreadMessageOptions,
+    WorkbenchSteerHistoryEntry,
     WorkbenchStoredThreadUnreadState,
     WorkbenchSubmitUserInputRequestOptions,
     WorkbenchThreadTurnHistoryEntry,
@@ -83,6 +84,7 @@ import {
 } from "./state/browser-state";
 import { getTurnRenderSignature } from "./thread/thread-item-signature";
 import { applyQuestionnaireHistoryToThread } from "./thread/thread-questionnaire-history";
+import { applySteerHistoryToThread, isSyntheticSteerHistoryItem } from "./thread/thread-steer-history";
 
 const THREAD_REFRESH_TASK_ID = "thread-refresh";
 const THREAD_LIST_REFRESH_TASK_ID = "thread-list-refresh";
@@ -132,6 +134,7 @@ export interface WorkbenchThreadState {
   questionnaireHistoryByThreadId: Map<string, WorkbenchQuestionnaireHistoryEntry[]>;
   rateLimits: RateLimitSnapshot | null;
   rateLimitsByHarness: Map<WorkbenchHarness, RateLimitSnapshot | null>;
+  steerHistoryByThreadId: Map<string, WorkbenchSteerHistoryEntry[]>;
   threadUnreadStateByKey: Map<string, WorkbenchStoredThreadUnreadState>;
   threads: ThreadSummary[];
   threadsError: string;
@@ -211,7 +214,7 @@ interface OptimisticUserMessageEntry {
 }
 
 type OptimisticUserMessagePlacement = "initial" | "steer";
-type OptimisticUserMessageStatus = "pending" | "sent";
+type OptimisticUserMessageStatus = "pending" | "sent" | "interrupted" | "failed";
 
 type CodexThreadSessionResponse = {
   model?: string | null;
@@ -236,6 +239,7 @@ function createInitialThreadState(): WorkbenchThreadState {
     questionnaireHistoryByThreadId: new Map(),
     rateLimits: null,
     rateLimitsByHarness: new Map(),
+    steerHistoryByThreadId: new Map(),
     threadUnreadStateByKey: new Map(),
     threads: [],
     threadsError: "",
@@ -787,6 +791,17 @@ function WorkbenchThreadClient(
     );
   }
 
+  function applyPersistedSteerHistory(thread: ThreadPayload | null) {
+    if (!thread || thread.harness !== "codex") {
+      return thread;
+    }
+
+    return applySteerHistoryToThread(
+      thread,
+      state.steerHistoryByThreadId.get(thread.id) ?? [],
+    );
+  }
+
   function areCurrentTurnsEquivalent(left: ThreadPayload | null, right: ThreadPayload | null) {
     const leftTurn = getCurrentTurn(left);
     const rightTurn = getCurrentTurn(right);
@@ -878,6 +893,26 @@ function WorkbenchThreadClient(
     return tokenUsage ? { ...thread, tokenUsage } : thread;
   }
 
+  function isWorkbenchSyntheticUserMessageItem(item: ThreadItem) {
+    return isOptimisticUserMessageItem(item) || isSyntheticSteerHistoryItem(item);
+  }
+
+  function mergeDuplicateNormalizedThreadItem(existingItem: ThreadItem, incomingItem: ThreadItem) {
+    if (existingItem.type === "userMessage" && incomingItem.type === "userMessage") {
+      const existingIsSynthetic = isWorkbenchSyntheticUserMessageItem(existingItem);
+      const incomingIsSynthetic = isWorkbenchSyntheticUserMessageItem(incomingItem);
+      if (existingIsSynthetic && !incomingIsSynthetic) {
+        return incomingItem;
+      }
+
+      if (!existingIsSynthetic && incomingIsSynthetic) {
+        return existingItem;
+      }
+    }
+
+    return mergeLiveStreamingItem(existingItem, incomingItem);
+  }
+
   function normalizeThreadPayloadItems(thread: ThreadPayload | null) {
     if (!thread) {
       return thread;
@@ -885,7 +920,7 @@ function WorkbenchThreadClient(
 
     let changed = false;
     const turns = thread.turns.map((turn) => {
-      const items = normalizeThreadItems(turn.items, { mergeDuplicateItems: mergeLiveStreamingItem });
+      const items = normalizeThreadItems(turn.items, { mergeDuplicateItems: mergeDuplicateNormalizedThreadItem });
       if (items === turn.items) {
         return turn;
       }
@@ -1054,8 +1089,8 @@ function WorkbenchThreadClient(
     const stableThread = normalizeThreadPayloadItems(preserveStableServiceTier ? mergeStableThreadMetadata(thread ? ensureThreadHistory(thread) : thread) : thread ? ensureThreadHistory(thread) : thread);
     const storedTokenUsageThread = stableThread ? applyStoredThreadTokenUsage(stableThread) : stableThread;
     const nextThread = pruneStreamingDuplicates
-      ? pruneThreadStreamingDuplicates(applyOptimisticUserMessageOverlay(applyPersistedQuestionnaireHistory(storedTokenUsageThread)))
-      : applyOptimisticUserMessageOverlay(applyPersistedQuestionnaireHistory(storedTokenUsageThread));
+      ? pruneThreadStreamingDuplicates(applyOptimisticUserMessageOverlay(applyPersistedSteerHistory(applyPersistedQuestionnaireHistory(storedTokenUsageThread))))
+      : applyOptimisticUserMessageOverlay(applyPersistedSteerHistory(applyPersistedQuestionnaireHistory(storedTokenUsageThread)));
     const unreadStateChanged = nextThread ? markThreadPayloadSeen(nextThread) : false;
     if (areThreadPayloadsEquivalent(state.currentThread, nextThread)) {
       if (unreadStateChanged) {
@@ -1409,12 +1444,64 @@ function WorkbenchThreadClient(
     return updateOptimisticUserMessageEntry(harness, threadId, turnId, itemId, () => null);
   }
 
+  function updateOptimisticUserMessageStatus(
+    harness: WorkbenchHarness,
+    threadId: string,
+    turnId: string,
+    itemId: string,
+    status: OptimisticUserMessageStatus,
+  ) {
+    return updateOptimisticUserMessageEntry(harness, threadId, turnId, itemId, (entry) => ({
+      ...entry,
+      item: createOptimisticUserMessage(entry.input, entry.placement, status),
+      status,
+    }));
+  }
+
+  function updatePendingOptimisticSteersForTurn(
+    harness: WorkbenchHarness,
+    threadId: string,
+    turnId: string,
+    status: Extract<OptimisticUserMessageStatus, "interrupted" | "failed">,
+  ) {
+    const turnKey = getOptimisticTurnKey(harness, threadId, turnId);
+    const entries = optimisticUserMessagesByTurnKey.get(turnKey);
+    if (!entries?.length) {
+      return false;
+    }
+
+    let changed = false;
+    const nextEntries = entries.map((entry) => {
+      if (entry.placement !== "steer" || entry.status !== "pending") {
+        return entry;
+      }
+
+      changed = true;
+      return {
+        ...entry,
+        item: createOptimisticUserMessage(entry.input, entry.placement, status),
+        status,
+      };
+    });
+
+    if (!changed) {
+      return false;
+    }
+
+    optimisticUserMessagesByTurnKey.set(turnKey, nextEntries);
+    return true;
+  }
+
   function refreshCurrentThreadOptimisticUserMessages() {
     return updateCurrentThread((thread) => applyOptimisticUserMessageOverlay(thread) ?? thread);
   }
 
   function countCanonicalUserMessageMatches(items: ThreadItem[], input: UserInput[]) {
-    return items.filter((item) => !isOptimisticUserMessageItem(item) && doesUserMessageMatchInput(item, input)).length;
+    return items.filter((item) => !isWorkbenchSyntheticUserMessageItem(item) && doesUserMessageMatchInput(item, input)).length;
+  }
+
+  function countSyntheticSteerHistoryMatches(items: ThreadItem[], input: UserInput[]) {
+    return items.filter((item) => isSyntheticSteerHistoryItem(item) && doesUserMessageMatchInput(item, input)).length;
   }
 
   function getOptimisticUserMessageInsertIndex(items: ThreadItem[]) {
@@ -1438,7 +1525,7 @@ function WorkbenchThreadClient(
     let didMove = false;
     for (const entry of initialEntries) {
       const currentIndex = nextItems.findIndex((item) => (
-        !isOptimisticUserMessageItem(item)
+        !isWorkbenchSyntheticUserMessageItem(item)
         && doesUserMessageMatchInput(item, entry.input)
       ));
       if (currentIndex < 0) {
@@ -1526,7 +1613,9 @@ function WorkbenchThreadClient(
         .slice(0, index + 1)
         .filter((candidate) => areUserInputsEquivalentForUserMessageDedupe(candidate.input, entry.input))
         .length;
-      if (countCanonicalUserMessageMatches(canonicalItems, entry.input) < matchingEntriesThroughCurrent) {
+      const resolvedMatchCount = countCanonicalUserMessageMatches(canonicalItems, entry.input)
+        + (entry.placement === "steer" ? countSyntheticSteerHistoryMatches(canonicalItems, entry.input) : 0);
+      if (resolvedMatchCount < matchingEntriesThroughCurrent) {
         visibleEntries.push(entry);
       }
     }
@@ -1993,6 +2082,29 @@ function WorkbenchThreadClient(
     setCurrentThread(state.currentThread);
   }
 
+  function setSteerHistoryEntries(threadId: string, entries: WorkbenchSteerHistoryEntry[]) {
+    const nextEntries = entries.filter((entry) => entry.threadId === threadId);
+    const existingEntries = state.steerHistoryByThreadId.get(threadId) ?? [];
+    if (areDeeplyEqual(existingEntries, nextEntries)) {
+      return false;
+    }
+
+    if (nextEntries.length) {
+      state.steerHistoryByThreadId.set(threadId, nextEntries);
+    } else {
+      state.steerHistoryByThreadId.delete(threadId);
+    }
+    return true;
+  }
+
+  function reapplyCurrentThreadSteerHistory(threadId: string) {
+    if (state.currentThread?.id !== threadId || state.currentThread.harness !== "codex") {
+      return;
+    }
+
+    setCurrentThread(state.currentThread);
+  }
+
   async function readCompletedQuestionnaireHistory(threadId: string) {
     try {
       const response = await sendBridgeRequest<{ data?: WorkbenchQuestionnaireHistoryEntry[] }>("codex", {
@@ -2012,6 +2124,60 @@ function WorkbenchThreadClient(
       }
       return [];
     }
+  }
+
+  function reconcileCurrentThreadFromReadWhenIdle(threadId: string, harness: WorkbenchHarness) {
+    if (state.currentThread?.id !== threadId || state.currentThread.harness !== harness) {
+      return;
+    }
+
+    if (getCurrentInProgressTurn(state.currentThread)) {
+      return;
+    }
+
+    void reconcileCurrentThreadFromRead(threadId, harness);
+  }
+
+  async function readCompletedQuestionnaireHistoryAndReconcileIdleCurrentThread(threadId: string, harness: WorkbenchHarness) {
+    if (harness !== "codex") {
+      return [];
+    }
+
+    const entries = await readCompletedQuestionnaireHistory(threadId);
+    reconcileCurrentThreadFromReadWhenIdle(threadId, harness);
+    return entries;
+  }
+
+  async function readCompletedSteerHistory(threadId: string) {
+    try {
+      const response = await sendBridgeRequest<{ data?: WorkbenchSteerHistoryEntry[] }>("codex", {
+        method: "steer/history/list",
+        params: {
+          threadId,
+        },
+      });
+      const entries = response.data ?? [];
+      if (setSteerHistoryEntries(threadId, entries)) {
+        reapplyCurrentThreadSteerHistory(threadId);
+      }
+      return entries;
+    } catch {
+      if (setSteerHistoryEntries(threadId, [])) {
+        reapplyCurrentThreadSteerHistory(threadId);
+      }
+      return [];
+    }
+  }
+
+  async function readCompletedThreadWorkbenchHistory(threadId: string) {
+    const [questionnaireEntries, steerEntries] = await Promise.all([
+      readCompletedQuestionnaireHistory(threadId),
+      readCompletedSteerHistory(threadId),
+    ]);
+    return {
+      questionnaireEntries,
+      steerEntries,
+    };
   }
 
   function getDefaultWorkflowIdsForCodexThread(threadId: string) {
@@ -2094,7 +2260,7 @@ function WorkbenchThreadClient(
           : resumedThread?.serviceTier ?? getPreferredThreadServiceTier(threadId, harness)
         : null;
       if (harness === "codex") {
-        void readCompletedQuestionnaireHistory(threadId);
+        void readCompletedThreadWorkbenchHistory(threadId);
       }
       return mergeLiveStreamingThreadSnapshot(toThreadPayload(
         response.thread,
@@ -2137,7 +2303,7 @@ function WorkbenchThreadClient(
 
       const nextModel = getThreadModel(threadId);
       if (harness === "codex") {
-        void readCompletedQuestionnaireHistory(threadId);
+        void readCompletedThreadWorkbenchHistory(threadId);
       }
       return mergeLiveStreamingThreadSnapshot(toThreadPayload(
         response.thread,
@@ -2727,6 +2893,13 @@ function WorkbenchThreadClient(
         });
       case "turn/started":
       case "turn/completed":
+        if (
+          notification.method === "turn/completed"
+          && notification.params.turn.status === "interrupted"
+          && updatePendingOptimisticSteersForTurn(harness, notification.params.threadId, notification.params.turn.id, "interrupted")
+        ) {
+          refreshCurrentThreadOptimisticUserMessages();
+        }
         return upsertTurnMetadata(notification.params.turn);
       case "item/started":
       case "item/completed":
@@ -3118,7 +3291,7 @@ function WorkbenchThreadClient(
           } as { agentPath?: string; expectedTurnId: string; input: UserInput[]; threadId: string; workbenchOrigin?: string },
         });
       } catch (error) {
-        removeOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, pendingSteerItem.id);
+        updateOptimisticUserMessageStatus(harness, resolvedThreadId, optimisticTurnId, pendingSteerItem.id, "failed");
         if (sendOptions.selectThread !== false) {
           refreshCurrentThreadOptimisticUserMessages();
         }
@@ -3223,7 +3396,7 @@ function WorkbenchThreadClient(
         ));
       }
       if (harness === "codex") {
-        await readCompletedQuestionnaireHistory(resolvedThreadId);
+        await readCompletedThreadWorkbenchHistory(resolvedThreadId);
       }
     } catch (error) {
       if (!(shouldBypassCodexDraftBootstrap && harness === "codex" && isTransientRolloutReadError(error))) {
@@ -3306,9 +3479,7 @@ function WorkbenchThreadClient(
     if (submitResult.warning) {
       emitStatusMessage(submitResult.warning);
     }
-    if (pendingRequest.harness === "codex") {
-      await readCompletedQuestionnaireHistory(threadId);
-    }
+    await readCompletedQuestionnaireHistoryAndReconcileIdleCurrentThread(threadId, pendingRequest.harness);
     const clearedPendingRequest = clearPendingUserInputRequest(threadId, pendingRequest.requestKey);
     const clearedWaitingFlag = clearThreadWaitingOnUserInputFlag(threadId);
     if (clearedPendingRequest || clearedWaitingFlag) {
@@ -3366,9 +3537,7 @@ function WorkbenchThreadClient(
       if (clearedPendingRequest || clearedWaitingFlag) {
         emit();
       }
-      if (harness === "codex") {
-        void readCompletedQuestionnaireHistory(notification.params.threadId);
-      }
+      void readCompletedQuestionnaireHistoryAndReconcileIdleCurrentThread(notification.params.threadId, harness);
       return;
     }
 
@@ -3379,6 +3548,15 @@ function WorkbenchThreadClient(
 
     if (applyCodexNotificationToCurrentThread(notification, harness)) {
       emit();
+    }
+    if (
+      harness === "codex"
+      && (
+        notification.method === "turn/completed"
+        || (notification.method === "item/completed" && notification.params.item.type === "userMessage")
+      )
+    ) {
+      void readCompletedSteerHistory(notification.params.threadId);
     }
     scheduleCodexNotificationRefresh(handling);
   }
