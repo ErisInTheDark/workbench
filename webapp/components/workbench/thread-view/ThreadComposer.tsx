@@ -405,6 +405,7 @@ export default function ThreadComposer ({
   const [deprioritizedModelIdsByHarness, setDeprioritizedModelIdsByHarness] = useState<Record<ThreadPayload["harness"], string[]>>({
     codex: [],
     copilot: [],
+    opencode: [],
   });
   const [activePicker, setActivePicker] = useState<"agent" | "model" | null>(null);
   const [error, setError] = useState("");

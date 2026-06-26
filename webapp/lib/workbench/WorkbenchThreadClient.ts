@@ -5,7 +5,7 @@
  * - WorkbenchThreadListener: subscriber signature for thread client state changes. Keywords: workbench, thread, subscribe.
  * - WorkbenchThreadClientOptions: creation options for the thread client manager hooks. Keywords: workbench, thread, status, callbacks.
  * - WorkbenchThreadClient: public surface for thread transport, draft threads, and notification handling. Keywords: workbench, thread, client, dispose.
- * - default WorkbenchThreadClient: create the thread sub-client that owns Codex or Copilot thread state and notifications. Keywords: workbench, thread, codex, copilot, default export.
+ * - default WorkbenchThreadClient: create the thread sub-client that owns Codex, Copilot, or OpenCode thread state and notifications. Keywords: workbench, thread, codex, copilot, opencode, default export.
  */
 
 import { CodexAppServerClient } from "../codex/app-server-client";
@@ -95,6 +95,7 @@ const ACTIVE_TURN_RATE_LIMIT_REFRESH_INTERVAL_MS = 15_000;
 const AUTO_REFRESH_REQUEST_SOURCE = "autoRefresh";
 const WORKBENCH_PROMPT_CONTEXT_FIELD = "workbenchPromptContext";
 const DEFAULT_TURN_REASONING_SUMMARY = "detailed" as const;
+const THREAD_HARNESSES: readonly WorkbenchHarness[] = ["codex", "copilot", "opencode"];
 const DEFAULT_WORKFLOW_IDS = ["default"] as const;
 const SUBAGENT_WORKFLOW_IDS = ["subagent"] as const;
 const DRAFT_THREAD_ID = "new";
@@ -259,6 +260,18 @@ function getProjectRootPaths(state: Pick<WorkbenchThreadState, "projectRootPath"
   return Array.from(new Set(rootPaths.filter(Boolean)));
 }
 
+function isWorkbenchThreadInCurrentProject(thread: Pick<ThreadSummary, "cwd">, harness: WorkbenchHarness, projectRootPaths: string[]) {
+  if (!projectRootPaths.length) {
+    return true;
+  }
+
+  if (harness === "opencode") {
+    return true;
+  }
+
+  return isProjectCodexThread(thread, projectRootPaths);
+}
+
 function getThreadItemKey(turnId: string, itemId: string) {
   return `${turnId}:${itemId}`;
 }
@@ -378,6 +391,60 @@ function mergeThreadTurnBodies(incomingTurns: Turn[], existingTurns: Turn[], his
   const mergedExisting = existingTurns.map((turn) => incomingById.get(turn.id) ?? turn);
   const appended = incomingTurns.filter((turn) => !existingTurns.some((existingTurn) => existingTurn.id === turn.id));
   return incomingIds.size || appended.length ? orderTurnsByHistory([...mergedExisting, ...appended], history) : existingTurns;
+}
+
+function isOpenCodePendingTurn(turn: Turn) {
+  return /^opencode:turn:[^:]+:pending:\d+$/u.test(turn.id);
+}
+
+function firstUserMessageInput(turn: Turn) {
+  return turn.items.find((item): item is Extract<ThreadItem, { type: "userMessage" }> => item.type === "userMessage")?.content ?? null;
+}
+
+function removeResolvedOpenCodePendingTurns(incomingTurns: Turn[], existingTurns: Turn[]) {
+  const matchedIncomingIndexes = new Set<number>();
+  let changed = false;
+  const nextExistingTurns = existingTurns.filter((existingTurn) => {
+    if (!isOpenCodePendingTurn(existingTurn)) {
+      return true;
+    }
+
+    const existingInput = firstUserMessageInput(existingTurn);
+    if (!existingInput) {
+      return true;
+    }
+
+    const incomingIndex = incomingTurns.findIndex((incomingTurn, index) => {
+      if (matchedIncomingIndexes.has(index) || isOpenCodePendingTurn(incomingTurn)) {
+        return false;
+      }
+
+      const incomingInput = firstUserMessageInput(incomingTurn);
+      return !!incomingInput && areUserInputsEquivalentForUserMessageDedupe(existingInput, incomingInput);
+    });
+    if (incomingIndex === -1) {
+      return true;
+    }
+
+    matchedIncomingIndexes.add(incomingIndex);
+    changed = true;
+    return false;
+  });
+
+  return changed ? nextExistingTurns : existingTurns;
+}
+
+function mergeWorkbenchThreadTurnBodies(
+  harness: WorkbenchHarness,
+  incomingTurns: Turn[],
+  existingTurns: Turn[],
+  history: WorkbenchThreadTurnHistoryEntry[],
+) {
+  return mergeThreadTurnBodies(
+    incomingTurns,
+    harness === "opencode" ? removeResolvedOpenCodePendingTurns(incomingTurns, existingTurns) : existingTurns,
+    history,
+  );
 }
 
 function ensureThreadHistory(thread: ThreadPayload): ThreadPayload {
@@ -781,7 +848,7 @@ function WorkbenchThreadClient(
   }
 
   function applyPersistedQuestionnaireHistory(thread: ThreadPayload | null) {
-    if (!thread || thread.harness !== "codex") {
+    if (!thread || (thread.harness !== "codex" && thread.harness !== "opencode")) {
       return thread;
     }
 
@@ -1035,6 +1102,60 @@ function WorkbenchThreadClient(
       ?? thread.updatedAt;
   }
 
+  function toThreadSummaryFromPayload(payload: ThreadPayload): ThreadSummary {
+    return {
+      agentNickname: payload.agentNickname,
+      agentRole: payload.agentRole,
+      createdAt: payload.createdAt,
+      cwd: payload.cwd,
+      forkedFromId: payload.forkedFromId,
+      harness: payload.harness,
+      id: payload.id,
+      name: payload.name,
+      path: payload.path,
+      preview: payload.preview,
+      source: payload.source,
+      status: payload.status,
+      unreadBadge: payload.unreadBadge,
+      updatedAt: payload.updatedAt,
+    };
+  }
+
+  function upsertThreadSummaryFromPayload(payload: ThreadPayload) {
+    if (payload.isDraft) {
+      return false;
+    }
+
+    const summary = buildThreadSummaryWithUnreadBadge(toThreadSummaryFromPayload(payload));
+    const existingIndex = state.threads.findIndex((thread) => thread.id === summary.id && thread.harness === summary.harness);
+    if (existingIndex !== -1 && areDeeplyEqual(state.threads[existingIndex], summary)) {
+      return false;
+    }
+
+    state.threads = existingIndex === -1
+      ? [summary, ...state.threads]
+      : state.threads.map((thread, index) => index === existingIndex ? summary : thread);
+    return true;
+  }
+
+  function mergeCurrentThreadSummary(threads: ThreadSummary[]) {
+    const currentThread = state.currentThread;
+    if (!currentThread || currentThread.isDraft) {
+      return threads;
+    }
+
+    const projectRootPaths = getProjectRootPaths(state);
+    if (!isWorkbenchThreadInCurrentProject(currentThread, currentThread.harness, projectRootPaths)) {
+      return threads;
+    }
+
+    const currentSummary = buildThreadSummaryWithUnreadBadge(toThreadSummaryFromPayload(currentThread));
+    const existingIndex = threads.findIndex((thread) => thread.id === currentSummary.id && thread.harness === currentSummary.harness);
+    return existingIndex === -1
+      ? [currentSummary, ...threads]
+      : threads.map((thread, index) => index === existingIndex ? currentSummary : thread);
+  }
+
   async function refreshLatestTurnStartedAt(thread: ThreadSummary) {
     const key = getThreadStateKey(thread.harness, thread.id);
     const refreshKey = `${thread.status}:${thread.updatedAt}`;
@@ -1047,6 +1168,7 @@ function WorkbenchThreadClient(
         method: "thread/read",
         params: {
           includeTurns: true,
+          ...(state.projectRootPath && thread.harness !== "codex" ? { cwd: state.projectRootPath } : {}),
           threadId: thread.id,
         },
         workbenchRequestSource: AUTO_REFRESH_REQUEST_SOURCE,
@@ -1763,7 +1885,7 @@ function WorkbenchThreadClient(
       reasoningEffort: incomingThread.reasoningEffort ?? liveThread.reasoningEffort,
       serviceTier: incomingThread.serviceTier ?? liveThread.serviceTier,
       turnHistory,
-      turns: mergeThreadTurnBodies(incomingTurns, liveThread.turns, turnHistory),
+      turns: mergeWorkbenchThreadTurnBodies(incomingThread.harness, incomingTurns, liveThread.turns, turnHistory),
     };
   }
 
@@ -1940,12 +2062,33 @@ function WorkbenchThreadClient(
   };
 }
 
-  function getThreadHarness(threadId: string, fallback: WorkbenchHarness = "codex") {
+  function getKnownThreadHarness(threadId: string) {
     if (state.currentThread?.id === threadId) {
       return state.currentThread.harness;
     }
 
-    return state.threads.find((thread) => thread.id === threadId)?.harness ?? fallback;
+    return state.threads.find((thread) => thread.id === threadId)?.harness ?? null;
+  }
+
+  function getThreadHarness(threadId: string, fallback: WorkbenchHarness = "codex") {
+    return getKnownThreadHarness(threadId) ?? fallback;
+  }
+
+  function getThreadHarnessCandidates(threadId: string, harness?: WorkbenchHarness) {
+    if (harness) {
+      return [harness];
+    }
+
+    const knownHarness = getKnownThreadHarness(threadId);
+    if (knownHarness) {
+      return [knownHarness];
+    }
+
+    const preferredHarness: WorkbenchHarness = threadId.startsWith("ses_") ? "opencode" : "codex";
+    return [
+      preferredHarness,
+      ...THREAD_HARNESSES.filter((candidateHarness) => candidateHarness !== preferredHarness),
+    ];
   }
 
   function getThreadModel(threadId: string) {
@@ -2030,10 +2173,10 @@ function WorkbenchThreadClient(
       return cachedModels;
     }
 
-    if (harness === "copilot") {
+    if (harness === "copilot" || harness === "opencode") {
       const response = await sendBridgeRequest<{ data: WorkbenchModelOption[] }>(harness, {
         method: "model/list",
-        params: undefined,
+        params: harness === "opencode" && state.projectRootPath ? { cwd: state.projectRootPath } : undefined,
       });
       state.modelsByHarness.set(harness, response.data);
       return response.data;
@@ -2075,11 +2218,45 @@ function WorkbenchThreadClient(
   }
 
   function reapplyCurrentThreadQuestionnaireHistory(threadId: string) {
-    if (state.currentThread?.id !== threadId || state.currentThread.harness !== "codex") {
+    if (
+      state.currentThread?.id !== threadId
+      || (state.currentThread.harness !== "codex" && state.currentThread.harness !== "opencode")
+    ) {
       return;
     }
 
     setCurrentThread(state.currentThread);
+  }
+
+  function recordLocalQuestionnaireHistoryEntry(
+    pendingRequest: WorkbenchPendingUserInputRequest,
+    response: WorkbenchUserInputResponse,
+    options: WorkbenchSubmitUserInputRequestOptions,
+  ) {
+    const turnId = options.turnId ?? pendingRequest.turnId;
+    if (!turnId) {
+      return false;
+    }
+
+    const existingEntries = state.questionnaireHistoryByThreadId.get(pendingRequest.threadId) ?? [];
+    const entry: WorkbenchQuestionnaireHistoryEntry = {
+      insertAfterItemId: options.insertAfterItemId ?? pendingRequest.itemId,
+      insertAfterItemIndex: options.insertAfterItemIndex ?? null,
+      itemId: pendingRequest.itemId,
+      request: pendingRequest.request,
+      requestKey: pendingRequest.requestKey,
+      resolvedAt: Date.now(),
+      response,
+      threadId: pendingRequest.threadId,
+      turnId,
+    };
+    return setQuestionnaireHistoryEntries(
+      pendingRequest.threadId,
+      [
+        ...existingEntries.filter((existingEntry) => existingEntry.requestKey !== pendingRequest.requestKey),
+        entry,
+      ],
+    );
   }
 
   function setSteerHistoryEntries(threadId: string, entries: WorkbenchSteerHistoryEntry[]) {
@@ -2180,7 +2357,7 @@ function WorkbenchThreadClient(
     };
   }
 
-  function getDefaultWorkflowIdsForCodexThread(threadId: string) {
+  function getDefaultWorkflowIdsForThread(threadId: string) {
     const thread = state.currentThread?.id === threadId
       ? state.currentThread
       : state.threads.find((candidateThread) => candidateThread.id === threadId);
@@ -2189,7 +2366,12 @@ function WorkbenchThreadClient(
       : DEFAULT_WORKFLOW_IDS;
   }
 
-  function buildCodexPromptContext(
+  function shouldSendWorkbenchPromptContext(harness: WorkbenchHarness) {
+    return harness === "codex" || harness === "opencode";
+  }
+
+  function buildWorkbenchPromptContext(
+    harness: WorkbenchHarness,
     threadId: string,
     agentPath: string | null,
     workbenchOrigin: string | null,
@@ -2197,16 +2379,16 @@ function WorkbenchThreadClient(
   ) {
     return {
       agentPath: normalizeWorkbenchAgentPath(agentPath),
-      harness: "codex",
+      harness,
       projectId: state.projectId,
       roots: state.projectRoots,
       threadId,
       workbenchOrigin,
-      workflowIds: workflowIds ?? getDefaultWorkflowIdsForCodexThread(threadId),
+      workflowIds: workflowIds ?? getDefaultWorkflowIdsForThread(threadId),
     };
   }
 
-  async function fetchThreadPayload(threadId: string, harness: WorkbenchHarness, options: WorkbenchReadThreadOptions = {}) {
+  async function fetchThreadPayload(threadId: string, harness: WorkbenchHarness, options: WorkbenchReadThreadOptions & { suppressStatusMessage?: boolean } = {}) {
     const hydration = options.hydration ?? { mode: "latest" as const };
     try {
       const selectedAgentPath = state.currentThread?.id === threadId
@@ -2224,7 +2406,7 @@ function WorkbenchThreadClient(
               serviceTier: selectedServiceTier,
               threadId,
             } satisfies ThreadResumeParams,
-            [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildCodexPromptContext(threadId, selectedAgentPath, workbenchOrigin),
+            [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext("codex", threadId, selectedAgentPath, workbenchOrigin),
             workbenchThreadHydration: hydration,
           });
         } catch {
@@ -2238,8 +2420,8 @@ function WorkbenchThreadClient(
           includeTurns: true,
           ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
           ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
-          ...(state.projectRootPath && harness === "copilot" ? { cwd: state.projectRootPath } : {}),
-          ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
+          ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
+          ...(workbenchOrigin && harness !== "codex" ? { workbenchOrigin } : {}),
           threadId,
         },
         workbenchThreadHydration: hydration,
@@ -2247,7 +2429,9 @@ function WorkbenchThreadClient(
 
       const projectRootPaths = getProjectRootPaths(state);
       if (projectRootPaths.length && !isProjectCodexThread(response.thread, projectRootPaths)) {
-        emitStatusMessage("That Codex thread doesn't belong to this project.");
+        if (!options.suppressStatusMessage) {
+          emitStatusMessage(`That ${harness} thread doesn't belong to this project.`);
+        }
         return null;
       }
 
@@ -2274,11 +2458,15 @@ function WorkbenchThreadClient(
       ));
     } catch (error) {
       if (harness === "codex" && isTransientRolloutReadError(error)) {
-        emitStatusMessage(FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE);
+        if (!options.suppressStatusMessage) {
+          emitStatusMessage(FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE);
+        }
         return null;
       }
 
-      emitStatusMessage(error instanceof Error ? error.message : "Unable to open Codex thread.");
+      if (!options.suppressStatusMessage) {
+        emitStatusMessage(error instanceof Error ? error.message : `Unable to open ${harness} thread.`);
+      }
       return null;
     }
   }
@@ -2290,6 +2478,7 @@ function WorkbenchThreadClient(
         method: "thread/read",
         params: {
           includeTurns: true,
+          ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
           threadId,
         },
         workbenchThreadHydration: hydration,
@@ -2297,7 +2486,7 @@ function WorkbenchThreadClient(
 
       const projectRootPaths = getProjectRootPaths(state);
       if (projectRootPaths.length && !isProjectCodexThread(response.thread, projectRootPaths)) {
-        emitStatusMessage("That Codex thread doesn't belong to this project.");
+        emitStatusMessage(`That ${harness} thread doesn't belong to this project.`);
         return null;
       }
 
@@ -2321,17 +2510,39 @@ function WorkbenchThreadClient(
         return null;
       }
 
-      emitStatusMessage(error instanceof Error ? error.message : "Unable to read Codex thread.");
+      emitStatusMessage(error instanceof Error ? error.message : `Unable to read ${harness} thread.`);
       return null;
     }
   }
 
   async function readThread(threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) {
-    const payload = await fetchThreadPayload(threadId, harness ?? getThreadHarness(threadId), options);
+    const payload = await fetchThreadPayloadFromCandidates(threadId, harness, options);
     if (payload && state.currentThread?.id === payload.id && state.currentThread.harness === payload.harness) {
       setCurrentThread(payload);
     }
+    if (payload && upsertThreadSummaryFromPayload(payload)) {
+      emit();
+    }
     return payload;
+  }
+
+  async function fetchThreadPayloadFromCandidates(threadId: string, harness?: WorkbenchHarness, options: WorkbenchReadThreadOptions = {}) {
+    if (harness) {
+      return await fetchThreadPayload(threadId, harness, options);
+    }
+
+    for (const candidateHarness of getThreadHarnessCandidates(threadId)) {
+      const payload = await fetchThreadPayload(threadId, candidateHarness, {
+        ...options,
+        suppressStatusMessage: true,
+      });
+      if (payload) {
+        return payload;
+      }
+    }
+
+    emitStatusMessage(`Thread not found: ${threadId}`);
+    return null;
   }
 
   async function refreshThreads() {
@@ -2364,7 +2575,7 @@ function WorkbenchThreadClient(
           return;
         }
 
-        const results = await Promise.allSettled((["codex", "copilot"] as const).map(async (harness) => {
+        const results = await Promise.allSettled((["codex", "copilot", "opencode"] as const).map(async (harness) => {
           const cwdFilterPaths = harness === "codex"
             ? getCodexThreadCwdFilterPathsForRoots(projectRootPaths)
             : null;
@@ -2373,6 +2584,7 @@ function WorkbenchThreadClient(
             params: {
               archived: false,
               ...(cwdFilterPaths?.length ? { cwd: cwdFilterPaths } : {}),
+              ...(harness === "opencode" && state.projectRootPath ? { cwd: state.projectRootPath } : {}),
               limit: 50,
               sortKey: "updated_at",
             },
@@ -2380,7 +2592,7 @@ function WorkbenchThreadClient(
           });
 
           return response.data
-            .filter((thread) => isProjectCodexThread(thread, projectRootPaths))
+            .filter((thread) => isWorkbenchThreadInCurrentProject(thread, harness, projectRootPaths))
             .map((thread) => toThreadSummary(thread, harness));
         }));
 
@@ -2430,10 +2642,10 @@ function WorkbenchThreadClient(
           return;
         }
 
-        state.threads = [
+        state.threads = mergeCurrentThreadSummary([
           ...stableVisibleThreads,
           ...threadsByRecentItem.slice(STABLE_VISIBLE_THREAD_COUNT),
-        ];
+        ]);
         void refreshVisibleThreadUnreadStates(state.threads);
         state.threadsError = errors.join(" ");
         state.hasLoadedThreads = true;
@@ -2443,7 +2655,7 @@ function WorkbenchThreadClient(
         }
 
         state.threads = [];
-        state.threadsError = error instanceof Error ? error.message : "Unable to load Codex threads.";
+        state.threadsError = error instanceof Error ? error.message : "Unable to load threads.";
         state.hasLoadedThreads = true;
       } finally {
         refreshThreadsPromise = null;
@@ -2491,7 +2703,7 @@ function WorkbenchThreadClient(
   }
 
   async function refreshPendingUserInputRequests() {
-    const questionnaireHarnesses = ["codex", "copilot"] as const;
+    const questionnaireHarnesses = ["codex", "copilot", "opencode"] as const;
     const results = await Promise.allSettled(questionnaireHarnesses.map(async (harness) => {
       const response = await sendBridgeRequest<{ data?: Array<{ itemId?: string | null; request: WorkbenchUserInputRequest; requestKey: string; threadId: string; turnId?: string | null }> }>(harness, {
         method: "questionnaire/list",
@@ -3082,12 +3294,16 @@ function WorkbenchThreadClient(
       return;
     }
 
-    const payload = await fetchThreadPayload(threadId, harness ?? getThreadHarness(threadId));
+    const payload = await fetchThreadPayloadFromCandidates(threadId, harness);
     if (!payload) {
       return;
     }
 
+    const didUpsertThreadSummary = upsertThreadSummaryFromPayload(payload);
     setCurrentThread(payload);
+    if (didUpsertThreadSummary) {
+      emit();
+    }
   }
 
   function selectThreadPayload(thread: ThreadPayload) {
@@ -3156,7 +3372,7 @@ function WorkbenchThreadClient(
 
     if (isDraftThread || !resolvedThreadId.trim()) {
       const threadStartRequest = createThreadStartRequest(0, {
-        ...(harness === "codex" && state.projectRootPath ? { cwd: state.projectRootPath } : {}),
+        ...((harness === "codex" || harness === "opencode") && state.projectRootPath ? { cwd: state.projectRootPath } : {}),
         ...(codexWorkspaceSandboxPolicy
           ? {
             config: {
@@ -3176,8 +3392,8 @@ function WorkbenchThreadClient(
       });
       const startedThreadResponse = await sendBridgeRequest<CodexThreadSessionResponse>(harness, {
         method: threadStartRequest.method,
-        ...(harness === "codex"
-          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildCodexPromptContext(resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.workflowIds) }
+        ...(shouldSendWorkbenchPromptContext(harness)
+          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.workflowIds) }
           : {}),
         params: harness === "copilot"
           ? {
@@ -3218,6 +3434,7 @@ function WorkbenchThreadClient(
         method: "thread/read",
         params: {
           includeTurns: true,
+          ...(state.projectRootPath ? { cwd: state.projectRootPath } : {}),
           threadId: resolvedThreadId,
         },
         workbenchThreadHydration: { mode: "latest" },
@@ -3227,14 +3444,14 @@ function WorkbenchThreadClient(
         params: {
           ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
           ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
-          ...(state.projectRootPath && harness === "copilot" ? { cwd: state.projectRootPath } : {}),
-          ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
+          ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
+          ...(workbenchOrigin && harness !== "codex" ? { workbenchOrigin } : {}),
           ...(selectedModel ? { model: selectedModel } : {}),
           ...(harness === "codex" ? { serviceTier: selectedServiceTier } : {}),
           threadId: resolvedThreadId,
-        } as ThreadResumeParams & { agentPath?: string; model?: string; serviceTier?: string | null; threadId: string; workbenchOrigin?: string },
-        ...(harness === "codex"
-          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildCodexPromptContext(resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.workflowIds) }
+        } as ThreadResumeParams & { agentPath?: string; cwd?: string; model?: string; serviceTier?: string | null; threadId: string; workbenchOrigin?: string },
+        ...(shouldSendWorkbenchPromptContext(harness)
+          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.workflowIds) }
           : {}),
         workbenchThreadHydration: { mode: "latest" },
       });
@@ -3261,7 +3478,7 @@ function WorkbenchThreadClient(
     }
 
     if (!resumedThread) {
-      throw new Error("Unable to prepare the new Codex thread for its first turn.");
+      throw new Error(`Unable to prepare the new ${harness} thread for its first turn.`);
     }
 
     harness = resumedThread.harness;
@@ -3280,15 +3497,18 @@ function WorkbenchThreadClient(
       try {
         steerResponse = await sendBridgeRequest<TurnSteerResponse>(harness, {
           method: "turn/steer",
+          ...(shouldSendWorkbenchPromptContext(harness)
+            ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.workflowIds) }
+            : {}),
             params: {
               ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
               ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
-              ...(state.projectRootPath && harness === "copilot" ? { cwd: state.projectRootPath } : {}),
-              ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
+              ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
+              ...(workbenchOrigin && harness !== "codex" ? { workbenchOrigin } : {}),
             expectedTurnId: currentInProgressTurn.id,
             input: normalizedInput,
             threadId: resolvedThreadId,
-          } as { agentPath?: string; expectedTurnId: string; input: UserInput[]; threadId: string; workbenchOrigin?: string },
+          } as { agentPath?: string; cwd?: string; expectedTurnId: string; input: UserInput[]; threadId: string; workbenchOrigin?: string },
         });
       } catch (error) {
         updateOptimisticUserMessageStatus(harness, resolvedThreadId, optimisticTurnId, pendingSteerItem.id, "failed");
@@ -3321,12 +3541,13 @@ function WorkbenchThreadClient(
         : null;
       const turnStartResponse = await sendBridgeRequest<TurnStartResponse>(harness, {
         method: "turn/start",
-        ...(harness === "codex"
-          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildCodexPromptContext(resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.workflowIds) }
+        ...(shouldSendWorkbenchPromptContext(harness)
+          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.workflowIds) }
           : {}),
         params: {
           ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
-          ...(workbenchOrigin && harness === "copilot" ? { workbenchOrigin } : {}),
+          ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
+          ...(workbenchOrigin && harness !== "codex" ? { workbenchOrigin } : {}),
           ...(codexCollaborationMode ? { collaborationMode: codexCollaborationMode } : {}),
           input: normalizedInput,
           ...(selectedReasoningEffort ? { effort: selectedReasoningEffort } : {}),
@@ -3338,21 +3559,26 @@ function WorkbenchThreadClient(
         } as TurnStartParams & {
           agentPath?: string;
           collaborationMode?: ReturnType<typeof createQuestionnaireCollaborationMode>;
+          cwd?: string;
           workbenchOrigin?: string;
         },
       });
       optimisticTurnId = turnStartResponse.turn.id;
-      enqueueOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, normalizedInput, "initial", "sent");
-      resumedThread = applyOptimisticUserMessageOverlay({
-        ...resumedThread,
-        status: isThreadStatusActive(resumedThread.status) ? resumedThread.status : "active",
-        turns: resumedThread.turns.some((turn) => turn.id === turnStartResponse.turn.id)
-          ? resumedThread.turns.map((turn) => turn.id === turnStartResponse.turn.id ? turnStartResponse.turn : turn)
-          : [...resumedThread.turns, turnStartResponse.turn],
-      }) ?? resumedThread;
+      if (harness !== "opencode") {
+        enqueueOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, normalizedInput, "initial", "sent");
+        resumedThread = applyOptimisticUserMessageOverlay({
+          ...resumedThread,
+          status: isThreadStatusActive(resumedThread.status) ? resumedThread.status : "active",
+          turns: resumedThread.turns.some((turn) => turn.id === turnStartResponse.turn.id)
+            ? resumedThread.turns.map((turn) => turn.id === turnStartResponse.turn.id ? turnStartResponse.turn : turn)
+            : [...resumedThread.turns, turnStartResponse.turn],
+        }) ?? resumedThread;
+      }
       if (sendOptions.selectThread !== false) {
-        setCurrentThread(resumedThread);
-        options.onThreadStarted?.(resumedThread);
+        if (harness !== "opencode") {
+          setCurrentThread(resumedThread);
+          options.onThreadStarted?.(resumedThread);
+        }
       }
     }
 
@@ -3366,7 +3592,7 @@ function WorkbenchThreadClient(
             serviceTier: selectedServiceTier,
             threadId: resolvedThreadId,
           } as ThreadResumeParams & { model?: string; serviceTier?: string | null; threadId: string },
-          [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildCodexPromptContext(resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.workflowIds),
+          [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext("codex", resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.workflowIds),
           workbenchThreadHydration: { mode: "latest" },
         });
         refreshedThread = mergeLiveStreamingThreadSnapshot(toThreadPayload(
@@ -3382,6 +3608,7 @@ function WorkbenchThreadClient(
           method: "thread/read",
           params: {
             includeTurns: true,
+            ...(state.projectRootPath ? { cwd: state.projectRootPath } : {}),
             threadId: resolvedThreadId,
           },
           workbenchThreadHydration: { mode: "latest" },
@@ -3479,7 +3706,17 @@ function WorkbenchThreadClient(
     if (submitResult.warning) {
       emitStatusMessage(submitResult.warning);
     }
-    await readCompletedQuestionnaireHistoryAndReconcileIdleCurrentThread(threadId, pendingRequest.harness);
+    if (pendingRequest.harness === "opencode") {
+      if (recordLocalQuestionnaireHistoryEntry(pendingRequest, response, {
+        insertAfterItemId: options.insertAfterItemId ?? pendingRequest.itemId,
+        insertAfterItemIndex: options.insertAfterItemIndex ?? null,
+        turnId: options.turnId ?? pendingRequest.turnId,
+      })) {
+        reapplyCurrentThreadQuestionnaireHistory(threadId);
+      }
+    } else {
+      await readCompletedQuestionnaireHistoryAndReconcileIdleCurrentThread(threadId, pendingRequest.harness);
+    }
     const clearedPendingRequest = clearPendingUserInputRequest(threadId, pendingRequest.requestKey);
     const clearedWaitingFlag = clearThreadWaitingOnUserInputFlag(threadId);
     if (clearedPendingRequest || clearedWaitingFlag) {

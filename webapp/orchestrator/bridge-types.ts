@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - HarnessKind: bridge harness selector shared across orchestrator modules. Keywords: harness, codex, copilot.
+ * - HarnessKind: bridge harness selector shared across orchestrator modules. Keywords: harness, codex, copilot, opencode.
  * - JsonRpcRequest/JsonRpcResponse/JsonRpcNotification: shared transport shapes for the local WebSocket bridge. Keywords: json-rpc, websocket, bridge.
  * - BridgeClient: minimal websocket client contract used by the orchestrator modules. Keywords: websocket, client, bridge.
  */
-export type HarnessKind = "codex" | "copilot";
+export type HarnessKind = "codex" | "copilot" | "opencode";
 
 export type JsonRpcRequest = Record<string, unknown> & {
   id?: number | string | null;

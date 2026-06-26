@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 function normalizeHarness(value: unknown): WorkbenchHarness | null {
-  return value === "copilot" || value === "codex" ? value : null;
+  return value === "copilot" || value === "codex" || value === "opencode" ? value : null;
 }
 
 export async function POST(request: NextRequest) {

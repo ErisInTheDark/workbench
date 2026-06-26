@@ -56,6 +56,17 @@ function buildFeatureList (model: WorkbenchModelOption) {
 	return features;
 }
 
+function formatHarnessLabel(harness: WorkbenchHarness) {
+	switch (harness) {
+		case "copilot":
+			return "Copilot";
+		case "opencode":
+			return "OpenCode";
+		case "codex":
+			return "Codex";
+	}
+}
+
 function DownArrowIcon () {
 	return (
 		<svg viewBox="0 0 16 16" className="h-4 w-4" aria-hidden="true">
@@ -98,6 +109,7 @@ export default function ThreadModelPicker ({
 	const visibleModels = models.filter((model) => model.policyState !== "disabled");
 	const topGroup = visibleModels.filter((model) => !deprioritizedModelIds.includes(model.id));
 	const bottomGroup = visibleModels.filter((model) => deprioritizedModelIds.includes(model.id));
+	const harnessLabel = formatHarnessLabel(harness);
 
 	const handleCardKeyDown = (event: KeyboardEvent<HTMLDivElement>, model: WorkbenchModelOption) => {
 		if (event.key !== "Enter" && event.key !== " ") {
@@ -176,7 +188,7 @@ export default function ThreadModelPicker ({
 			<div className="flex items-center justify-between gap-3">
 				<div className="shrink-1">
 					<p className="m-0 text-[0.82em] font-semibold uppercase tracking-[0.16em] text-muted">
-						{harness === "copilot" ? "Copilot models" : "Codex models"}
+						{harnessLabel} models
 					</p>
 					<p className="mt-1 mb-0 text-[0.86em] leading-[1.6] text-muted">
 						Choose the model for this thread and save it as the default for new {harness} threads.

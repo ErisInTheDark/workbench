@@ -28,6 +28,25 @@ description: "When the author asks for webapp work, including Next.js page work,
 - ENSURE MOBILE SUPPORT. Make desktop and mobile behavior DELIBERATE, especially for split explorer and editor layout, sticky controls, and save or reset affordances.
 - KEEP SHARED CODE IN SYNC. Never write shared code, such as client/server code, with `any`/`unknown` types, always use shared types and keep the two sides synchronised.
 - UPDATE GUIDANCE. Keep`AGENTS.md` or nearby project guidance up-to-date when the webapp's structure or operating workflow changes materially. Confirm the changes with the user.
+- OPENCODE DIAGNOSTICS ARE ALLOWED. When diagnosing OpenCode integration under `webapp/orchestrator/`, it is safe to run local OpenCode SDK probes with small prompts because OpenCode usage here is unlimited. This does not override the rule against calling webapp endpoints without explicit permission. Prefer bounded probes that subscribe to events, send a tiny prompt, print event types, and abort promptly. Minimal pattern:
+
+```powershell
+$script = @'
+import { createOpencodeClient } from "@opencode-ai/sdk/v2";
+const baseUrl = process.env.OPENCODE_SERVER_URL || "http://127.0.0.1:4096";
+const directory = process.cwd().replace(/\\/g, "/").replace(/\/webapp$/i, "");
+const client = createOpencodeClient({ baseUrl, directory });
+const abort = new AbortController();
+void (async () => {
+  const events = await client.v2.event.subscribe({ signal: abort.signal });
+  for await (const event of events.stream) console.log(event.type, event.data?.sessionID ?? "");
+})();
+const session = (await client.session.create({ directory, title: "OpenCode probe" })).data;
+await client.session.promptAsync({ directory, sessionID: session.id, parts: [{ type: "text", text: "who are you, and summarise instructions and tools" }] });
+setTimeout(() => abort.abort(), 30000);
+'@
+node --input-type=module -e $script
+```
 
 ## DO NOT
 

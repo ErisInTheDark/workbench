@@ -61,6 +61,17 @@ function formatResetTimestamp (timestampSeconds: number | null) {
   });
 }
 
+function formatHarnessLabel(harness: WorkbenchHarness) {
+  switch (harness) {
+    case "copilot":
+      return "Copilot";
+    case "opencode":
+      return "OpenCode";
+    case "codex":
+      return "Codex";
+  }
+}
+
 function RateLimitWindowText ({
   fallback,
   window,
@@ -90,11 +101,11 @@ export default function ThreadRateLimits ({
   rateLimits: RateLimitSnapshot | null;
   trailingContent?: ReactNode;
 }) {
-  if (!trailingContent && !canToggleHarness && harness !== "copilot" && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.limitName) {
+  if (!trailingContent && !canToggleHarness && harness !== "copilot" && harness !== "opencode" && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.limitName) {
     return null;
   }
 
-  const harnessLabel = harness === "copilot" ? "Copilot" : "Codex";
+  const harnessLabel = formatHarnessLabel(harness);
   const harnessControl = canToggleHarness ? (
     <button
       type="button"
@@ -149,6 +160,22 @@ export default function ThreadRateLimits ({
                 <span>Premium quota unavailable</span>
               </span>
             )}
+          </p>
+        </div>
+        {trailingContent}
+      </div>
+    );
+  }
+
+  if (harness === "opencode") {
+    return (
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-muted">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <div className="flex justify-center">{harnessControl}</div>
+          <p className="mb-0 flex flex-wrap gap-x-5 gap-y-1">
+            <span className="inline-flex items-baseline gap-2 whitespace-nowrap">
+              <span>OpenCode bridge</span>
+            </span>
           </p>
         </div>
         {trailingContent}

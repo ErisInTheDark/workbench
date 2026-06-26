@@ -18,7 +18,6 @@ import type { ToolRequestUserInputQuestion } from "../lib/codex/generated/app-se
 import type { ToolRequestUserInputResponse } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputResponse";
 import type {
     WorkbenchApprovalCommandContext,
-    WorkbenchProjectRoot,
     WorkbenchQuestionnaireHistoryEntry,
     WorkbenchThreadHydrationRequest,
     WorkbenchUserInputQuestion,
@@ -28,12 +27,12 @@ import type {
 import {
   buildWorkbenchCollaborationDeveloperInstructions,
   buildWorkbenchPromptInstructions,
-  type WorkbenchPromptContext,
   type WorkbenchPromptInstructions,
 } from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type CodexAppServer from "./CodexAppServer";
 import { log, logError } from "./process-helpers";
+import { readWorkbenchPromptContext, WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
 
 type CodexTranscriptStoreInstance = import("./CodexTranscriptStore").default;
 type CodexTranscriptStoreConstructor = new (
@@ -147,7 +146,6 @@ const TRANSCRIPT_INSTRUMENTATION_BACKLOG_THRESHOLD = 25;
 const TRANSCRIPT_MAX_PENDING_TASKS = 200;
 const TRANSCRIPT_COALESCE_FLUSH_MS = 100;
 const TRANSCRIPT_COALESCE_MAX_BUFFER_BYTES = 512 * 1024;
-const WORKBENCH_PROMPT_CONTEXT_FIELD = "workbenchPromptContext";
 const WORKBENCH_REQUEST_SOURCE_FIELD = "workbenchRequestSource";
 const WORKBENCH_THREAD_HYDRATION_FIELD = "workbenchThreadHydration";
 
@@ -275,37 +273,6 @@ function readThreadHydration(message: JsonRpcRequest): WorkbenchThreadHydrationR
     default:
       return null;
   }
-}
-
-function readWorkbenchPromptContext(message: JsonRpcRequest): WorkbenchPromptContext | null {
-  const value = asRecord(message[WORKBENCH_PROMPT_CONTEXT_FIELD]);
-  if (!value) {
-    return null;
-  }
-
-  const roots = Array.isArray(value.roots)
-    ? value.roots.filter((root): root is WorkbenchProjectRoot => {
-      const record = asRecord(root);
-      return typeof record?.id === "string"
-        && typeof record.name === "string"
-        && typeof record.relativePath === "string"
-        && typeof record.rootPath === "string"
-        && typeof record.isPrimary === "boolean";
-    })
-    : undefined;
-  const workflowIds = Array.isArray(value.workflowIds)
-    ? value.workflowIds.filter((workflowId): workflowId is string => typeof workflowId === "string")
-    : undefined;
-
-  return {
-    agentPath: asString(value.agentPath),
-    harness: value.harness === "copilot" ? "copilot" : "codex",
-    projectId: asString(value.projectId),
-    roots,
-    threadId: asString(value.threadId),
-    workbenchOrigin: asString(value.workbenchOrigin),
-    workflowIds,
-  };
 }
 
 function createUpstreamRequest(message: JsonRpcRequest, upstreamRequestId: number) {

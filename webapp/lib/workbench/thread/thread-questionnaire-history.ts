@@ -3,7 +3,7 @@
  * - WORKBENCH_QUESTIONNAIRE_TOOL_NAME: stable dynamic-tool name used for rendered questionnaire history entries. Keywords: questionnaire, dynamic tool, thread history.
  * - SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX: item id prefix reserved for workbench-injected questionnaire history items. Keywords: synthetic, questionnaire, history.
  * - isSyntheticQuestionnaireHistoryItem: detect workbench-injected questionnaire history items in a turn. Keywords: synthetic, questionnaire, history, guard.
- * - applyQuestionnaireHistoryToThread: strip prior synthetic questionnaire items and reinsert persisted questionnaire history into Codex thread turns. Keywords: questionnaire, thread, overlay, persisted history.
+ * - applyQuestionnaireHistoryToThread: strip prior synthetic questionnaire items and reinsert persisted questionnaire history into supported thread turns. Keywords: questionnaire, thread, overlay, persisted history, codex, opencode.
  */
 
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem";
@@ -232,7 +232,7 @@ export function applyQuestionnaireHistoryToThread(
   thread: ThreadPayload,
   entries: WorkbenchQuestionnaireHistoryEntry[],
 ) {
-  if (thread.harness !== "codex") {
+  if (thread.harness !== "codex" && thread.harness !== "opencode") {
     return thread;
   }
 

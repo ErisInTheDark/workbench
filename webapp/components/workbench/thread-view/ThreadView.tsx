@@ -71,6 +71,7 @@ const SUBTHREAD_POLL_INTERVAL_MS = 1500;
 const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
 const MAX_VISIBLE_HISTORY_ENTRIES = 8;
 const EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS: readonly string[] = [];
+const EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS: readonly string[] = [];
 const EMPTY_PROJECT_FILE_CANDIDATES: readonly ProjectTreeFileCandidate[] = [];
 const THREAD_VIEW_BACKGROUND_REBUILD_SLICE_MS = 20;
 const threadViewBackgroundRebuildQueue = new CooperativeRebuildQueue();
@@ -662,6 +663,16 @@ export default memo(function ThreadView ({
 
     return Array.from(new Set(liveActivity.waits.map((wait) => wait.hiddenItemId)));
   }, [liveActivity]);
+  const hiddenDynamicToolCallItemIds = useMemo(() => {
+    if (!currentTurn || activePendingUserInputRequest?.harness !== "opencode") {
+      return EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS;
+    }
+
+    const itemIds = currentTurn.items
+      .filter((item) => item.type === "dynamicToolCall" && item.namespace === "opencode" && item.tool === "question")
+      .map((item) => item.id);
+    return itemIds.length ? Array.from(new Set(itemIds)) : EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS;
+  }, [activePendingUserInputRequest?.harness, currentTurn]);
   const workspaceFileLinkRoots = useMemo(() => (
     projectFileLinkRoots ?? (projectRoots && projectRoots.length > 1
       ? projectRoots.map((root) => ({ id: root.id, rootPath: root.rootPath }))
@@ -1247,7 +1258,9 @@ export default memo(function ThreadView ({
         canToggleHarness={activeThread.isDraft}
         harness={activeThread.harness}
         onHarnessToggle={() => {
-          onDraftHarnessChange(activeThread.harness === "codex" ? "copilot" : "codex");
+          const harnesses: WorkbenchHarness[] = ["codex", "copilot", "opencode"];
+          const currentIndex = harnesses.indexOf(activeThread.harness);
+          onDraftHarnessChange(harnesses[(currentIndex + 1) % harnesses.length] ?? "codex");
         }}
         rateLimits={rateLimits}
         trailingContent={(
@@ -1308,10 +1321,15 @@ export default memo(function ThreadView ({
               ) : null}
               {visibleHistoryEntries.map((entry) => {
                 const turn = loadedTurnsById.get(entry.turnId);
+                const isPreviousTurnLoading = Boolean(
+                  firstVisibleLoadedEntry
+                  && loadingPreviousTurnKeys[`${activeThread.id}:${firstVisibleLoadedEntry.turnId}`],
+                );
                 return turn ? (
                   <ThreadTurnDetails
                     key={entry.turnId}
                     hiddenCollabAgentToolCallItemIds={turn.id === currentTurn?.id ? hiddenCollabAgentToolCallItemIds : EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS}
+                    hiddenDynamicToolCallItemIds={turn.id === currentTurn?.id ? hiddenDynamicToolCallItemIds : EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS}
                     hideFinalAgentMessage={hideFinalAgentMessage}
                     hideWorkbenchControlAgentMessages={hideWorkbenchControlAgentMessages}
                     hideWorkbenchControlUserMessages={hideWorkbenchControlUserMessages}
@@ -1327,13 +1345,13 @@ export default memo(function ThreadView ({
                     hiddenReasoningItemId={turn.id === currentTurn?.id && liveActivity?.kind === "reasoning" ? liveActivity.hiddenItemId : null}
                     hiddenWebSearchItemIds={turn.id === currentTurn?.id && liveActivity?.kind === "webSearch" ? liveActivity.hiddenItemIds : undefined}
                   />
-                ) : (
+                ) : isPreviousTurnLoading ? (
                   <ThreadTurnLoadingSkeleton
                     key={entry.turnId}
                     entry={entry}
-                    isLoading={Boolean(firstVisibleLoadedEntry && loadingPreviousTurnKeys[`${activeThread.id}:${firstVisibleLoadedEntry.turnId}`])}
+                    isLoading
                   />
-                );
+                ) : null;
               })}
             </>
           ) : (

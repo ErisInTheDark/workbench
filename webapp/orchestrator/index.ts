@@ -14,6 +14,7 @@ import type { BridgeClient, HarnessKind, JsonRpcNotification, JsonRpcRequest } f
 import CodexAppServer from "./CodexAppServer";
 import CodexStdioBridge from "./CodexStdioBridge";
 import { CopilotBridge } from "./copilot-bridge";
+import { OpenCodeBridge } from "./opencode-bridge";
 import {
     createSpawnOptions,
     getSpawnDescriptor,
@@ -41,6 +42,7 @@ const CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS = 5000;
 const ORCHESTRATOR_RELOAD_SCOPE_VALUES = new Set<OrchestratorReloadScope>([
   "codex-bridge",
   "next-dev",
+  "opencode-bridge",
   "orchestrator-logic",
 ]);
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
@@ -95,8 +97,10 @@ let lastReloadResponse: OrchestratorReloadResponse = {
 let reloadableModules = loadOrchestratorReloadableModules();
 let shuttingDown = false;
 let codexBridge: CodexStdioBridge;
+let opencodeBridge: OpenCodeBridge;
 let upstreamMessageQueue: Promise<void> = Promise.resolve();
 let codexBridgeReloadPromise: Promise<void> | null = null;
+let opencodeBridgeReloadPromise: Promise<void> | null = null;
 let codexFatalExitInProgress = false;
 
 const copilotBridge = new CopilotBridge({
@@ -144,6 +148,7 @@ const codexAppServer = new CodexAppServer({
 });
 
 codexBridge = createCodexBridge();
+opencodeBridge = createOpenCodeBridge();
 
 const specs: ProcessSpec[] = [
   {
@@ -170,7 +175,8 @@ function broadcastToClients(harness: HarnessKind, message: JsonRpcNotification) 
 }
 
 function readHarness(message: JsonRpcRequest): HarnessKind {
-  return message[WORKBENCH_HARNESS_FIELD] === "copilot" ? "copilot" : "codex";
+  const harness = message[WORKBENCH_HARNESS_FIELD];
+  return harness === "copilot" || harness === "opencode" ? harness : "codex";
 }
 
 function stripHarnessField(message: JsonRpcRequest) {
@@ -280,6 +286,7 @@ async function stopAllChildren() {
   bridgeConnections.clear();
 
   await codexBridge.dispose();
+  await opencodeBridge.stop();
   codexAppServer.stop();
 
   if (bridgeWebSocketServer) {
@@ -384,6 +391,15 @@ function reloadCodexBridgeModule() {
   return require("./CodexStdioBridge") as typeof import("./CodexStdioBridge");
 }
 
+function reloadOpenCodeBridgeModule() {
+  const resolvedPath = require.resolve("./opencode-bridge");
+  for (const moduleId of collectCacheSubtree(resolvedPath)) {
+    delete require.cache[moduleId];
+  }
+
+  return require("./opencode-bridge") as typeof import("./opencode-bridge");
+}
+
 function createCodexBridge() {
   return new CodexStdioBridge({
     appServer: codexAppServer,
@@ -395,6 +411,17 @@ function createCodexBridge() {
       sendJsonToClient(client, message);
     },
     storageRoot: PROJECT_ROOT,
+  });
+}
+
+function createOpenCodeBridge(initialState?: Awaited<ReturnType<OpenCodeBridge["detachForReload"]>>) {
+  return new OpenCodeBridge({
+    getReloadableModules: () => reloadableModules,
+    initialState,
+    onNotification: (notification) => {
+      broadcastToClients("opencode", notification);
+    },
+    projectRoot: PROJECT_ROOT,
   });
 }
 
@@ -446,6 +473,47 @@ async function reloadCodexBridge() {
   }
 }
 
+async function waitForOpenCodeBridgeReload() {
+  while (opencodeBridgeReloadPromise) {
+    await opencodeBridgeReloadPromise.catch(() => undefined);
+  }
+}
+
+async function runAfterOpenCodeBridgeReload<TValue>(task: () => TValue | Promise<TValue>) {
+  await waitForOpenCodeBridgeReload();
+  return await task();
+}
+
+async function reloadOpenCodeBridge() {
+  if (opencodeBridgeReloadPromise) {
+    await opencodeBridgeReloadPromise;
+    return;
+  }
+
+  const reloadPromise = (async () => {
+    const state = await opencodeBridge.detachForReload();
+    const { OpenCodeBridge: ReloadedOpenCodeBridge } = reloadOpenCodeBridgeModule();
+    opencodeBridge = new ReloadedOpenCodeBridge({
+      getReloadableModules: () => reloadableModules,
+      initialState: state,
+      onNotification: (notification) => {
+        broadcastToClients("opencode", notification);
+      },
+      projectRoot: PROJECT_ROOT,
+    });
+    log("opencode-bridge", "reloaded bridge code without restarting OpenCode server");
+  })();
+
+  opencodeBridgeReloadPromise = reloadPromise;
+  try {
+    await reloadPromise;
+  } finally {
+    if (opencodeBridgeReloadPromise === reloadPromise) {
+      opencodeBridgeReloadPromise = null;
+    }
+  }
+}
+
 function queueReload(scopes: OrchestratorReloadScope[]) {
   const startedAt = lastReloadResponse.startedAt;
   setImmediate(() => {
@@ -455,12 +523,16 @@ function queueReload(scopes: OrchestratorReloadScope[]) {
           reloadOrchestratorLogic();
         }
 
-        if (scopes.includes("orchestrator-logic") || scopes.includes("codex-bridge")) {
+        if (scopes.includes("orchestrator-logic") || scopes.includes("codex-bridge") || scopes.includes("opencode-bridge")) {
           await ensureWorkbenchPromptFiles();
         }
 
         if (scopes.includes("codex-bridge")) {
           await reloadCodexBridge();
+        }
+
+        if (scopes.includes("opencode-bridge")) {
+          await reloadOpenCodeBridge();
         }
 
         if (scopes.includes("next-dev")) {
@@ -626,6 +698,16 @@ async function handleClientMessage(client: BridgeClient, data: Buffer) {
     return;
   }
 
+  if (harness === "opencode") {
+    if (!("id" in message)) {
+      return;
+    }
+
+    const response = await runAfterOpenCodeBridgeReload(() => opencodeBridge.handleRequest(stripHarnessField(message)));
+    sendJsonToClient(client, response);
+    return;
+  }
+
   if ("id" in message) {
     const strippedMessage = stripHarnessField(message);
     try {
@@ -707,7 +789,7 @@ function startBridgeServer() {
   });
 
   bridgeServer.listen(port, host, () => {
-    log("codex-bridge", `listening on ${CODEX_BRIDGE_URL}; upstream transport is codex app-server stdio or Copilot SDK`);
+    log("codex-bridge", `listening on ${CODEX_BRIDGE_URL}; upstream transport is codex app-server stdio, Copilot SDK, or OpenCode SDK`);
   });
 }
 
@@ -725,7 +807,7 @@ function shutdownAndExit(exitCode: number, error?: unknown) {
     logError("orchestrator", error instanceof Error ? error.stack ?? error.message : String(error));
   }
 
-  void stopAllChildren().finally(() => copilotBridge.stop()).finally(() => {
+  void stopAllChildren().finally(() => copilotBridge.stop()).finally(() => opencodeBridge.stop()).finally(() => {
     process.exit(exitCode);
   });
 }

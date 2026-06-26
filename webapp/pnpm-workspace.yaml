@@ -2,6 +2,7 @@ allowBuilds:
   esbuild: true
   sharp: true
 minimumReleaseAgeExclude:
+  - "@opencode-ai/sdk"
   - "@github/copilot"
   - "@github/copilot-sdk"
   - "@github/copilot-linux-x64"

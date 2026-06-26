@@ -13,18 +13,37 @@ export type OrchestratorReloadableModules = {
     | "formatPromptFromInput"
     | "INITIALIZE_RESULT"
     | "metadataToThread">;
+  opencodeThreadState: Pick<typeof import("./opencode-thread-state"),
+    "cloneThread"
+    | "createOpenCodePermissionRequest"
+    | "createOpenCodeQuestionRequest"
+    | "EMPTY_OPENCODE_RATE_LIMITS"
+    | "formatPromptFromInput"
+    | "mapOpenCodeModelsToWorkbenchOptions"
+    | "OPENCODE_INITIALIZE_RESULT"
+    | "opencodeSessionToThread">;
+  opencodeLiveThreadState: Pick<typeof import("./opencode-live-thread-state"),
+    "applyOpenCodeLiveEvent"
+    | "createOpenCodeLiveThreadState">;
   project: Pick<typeof import("../lib/project"), "isPathWithinRoot" | "readUserInvocableAgentDefinition" | "resolveProjectRoot">;
   threadBootstrap: Pick<typeof import("../lib/thread-bootstrap"),
     "buildThreadTitleBootstrapInstructions"
     | "buildThreadTitleRouteUrl"
     | "normalizeThreadTitle">;
+  opencodeWorkbenchInstructions: Pick<typeof import("./opencode-workbench-instructions"),
+    "buildOpenCodeWorkbenchSystemPrompt"
+    | "ensureOpenCodeWorkbenchConfigDirectory">;
   workbenchPromptFiles: Pick<typeof import("../lib/workbench/instructions/WorkbenchPromptFiles"),
-    "ensureWorkbenchPromptFiles">;
+    "buildWorkbenchPromptInstructions"
+    | "ensureWorkbenchPromptFiles">;
   workbenchLibrary: Pick<typeof import("../lib/workbench-library"), "buildWorkbenchLibraryBootstrapInstructions">;
 };
 
 const RELOADABLE_MODULE_SPECIFIERS = [
   "./copilot-thread-state",
+  "./opencode-live-thread-state",
+  "./opencode-thread-state",
+  "./opencode-workbench-instructions",
   "../lib/project",
   "../lib/thread-bootstrap",
   "../lib/workbench/instructions/WorkbenchPromptFiles",
@@ -60,6 +79,9 @@ function collectCacheSubtree(moduleId: string, visited = new Set<string>()) {
 export function loadOrchestratorReloadableModules(): OrchestratorReloadableModules {
   return {
     copilotThreadState: requireTyped<OrchestratorReloadableModules["copilotThreadState"]>("./copilot-thread-state"),
+    opencodeLiveThreadState: requireTyped<OrchestratorReloadableModules["opencodeLiveThreadState"]>("./opencode-live-thread-state"),
+    opencodeThreadState: requireTyped<OrchestratorReloadableModules["opencodeThreadState"]>("./opencode-thread-state"),
+    opencodeWorkbenchInstructions: requireTyped<OrchestratorReloadableModules["opencodeWorkbenchInstructions"]>("./opencode-workbench-instructions"),
     project: requireTyped<OrchestratorReloadableModules["project"]>("../lib/project"),
     threadBootstrap: requireTyped<OrchestratorReloadableModules["threadBootstrap"]>("../lib/thread-bootstrap"),
     workbenchPromptFiles: requireTyped<OrchestratorReloadableModules["workbenchPromptFiles"]>("../lib/workbench/instructions/WorkbenchPromptFiles"),

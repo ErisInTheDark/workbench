@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - CodexIcon/CopilotIcon/HarnessIcon: render harness-specific icons for thread and rate-limit UI. Keywords: workbench, icon, harness, codex, copilot.
+ * - CodexIcon/CopilotIcon/OpenCodeIcon/HarnessIcon: render harness-specific icons for thread and rate-limit UI. Keywords: workbench, icon, harness, codex, copilot, opencode.
  * - SaveIcon: render the save control icon with its disabled slash overlay. Keywords: workbench, icon, save.
  * - BinIcon: render the discard-draft bin icon. Keywords: workbench, icon, reset.
  * - ZoomOutIcon: render the decrease text size icon. Keywords: workbench, icon, zoom.
@@ -53,10 +53,32 @@ export function CopilotIcon ({ className = "size-4" }: { className?: string }) {
   );
 }
 
+export function OpenCodeIcon ({ className = "size-4" }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      fill="currentColor"
+      fillRule="evenodd"
+      viewBox="0 0 240 300"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path d="M240 300H0V0H240V300Z M180 60H60V240H180V60Z" />
+      <path d="M180 240H60V120H180V240Z" fillOpacity="0.35" />
+    </svg>
+  );
+}
+
 export function HarnessIcon ({ className = "size-4", harness }: { className?: string; harness: WorkbenchHarness }) {
-  return harness === "copilot"
-    ? <CopilotIcon className={className} />
-    : <CodexIcon className={className} />;
+  if (harness === "copilot") {
+    return <CopilotIcon className={className} />;
+  }
+
+  if (harness === "opencode") {
+    return <OpenCodeIcon className={className} />;
+  }
+
+  return <CodexIcon className={className} />;
 }
 
 export function SaveIcon () {

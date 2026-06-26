@@ -6,11 +6,11 @@
  * - persistExpandedDirectories: persist expanded directory paths for a project from a provided collection. Keywords: localStorage, explorer tree, persistence, directories.
  * - readStoredFontSize: read and clamp the persisted editor font size. Keywords: localStorage, editor zoom, font size, clamp.
  * - persistFontSize: persist a provided editor font size value. Keywords: localStorage, editor zoom, persistence.
- * - readStoredHarness/persistHarness: persist the selected bridge harness. Keywords: localStorage, codex, copilot, harness.
- * - readStoredHarnessModel/persistHarnessModel: persist the preferred model for each harness. Keywords: localStorage, codex, copilot, harness, model.
- * - readStoredHarnessModelEffort/persistHarnessModelEffort: persist the preferred reasoning effort for each harness/model pair. Keywords: localStorage, codex, copilot, harness, model, effort.
+ * - readStoredHarness/persistHarness: persist the selected bridge harness. Keywords: localStorage, codex, copilot, opencode, harness.
+ * - readStoredHarnessModel/persistHarnessModel: persist the preferred model for each harness. Keywords: localStorage, codex, copilot, opencode, harness, model.
+ * - readStoredHarnessModelEffort/persistHarnessModelEffort: persist the preferred reasoning effort for each harness/model pair. Keywords: localStorage, codex, copilot, opencode, harness, model, effort.
  * - readStoredHarnessServiceTier/persistHarnessServiceTier: persist the preferred service tier for each harness. Keywords: localStorage, codex, harness, service tier, fast.
- * - readStoredHarnessAgent/persistHarnessAgent: persist the preferred agent file for each harness. Keywords: localStorage, codex, copilot, harness, agent.
+ * - readStoredHarnessAgent/persistHarnessAgent: persist the preferred agent file for each harness. Keywords: localStorage, codex, copilot, opencode, harness, agent.
  * - readStoredThreadTokenUsage/persistThreadTokenUsage/clearStoredThreadTokenUsage: persist latest per-thread token usage when the harness only sends it as a live notification. Keywords: localStorage, thread, token usage, context.
  * - readStoredThreadUnreadState/persistThreadUnreadState: persist per-thread unread tracking for sidebar badges. Keywords: localStorage, threads, unread, badges.
  * - readStoredThreadLiveActivityOpen/persistThreadLiveActivityOpen: persist the shared thread live activity disclosure state. Keywords: localStorage, thread, reasoning, subagent, disclosure.
@@ -167,7 +167,7 @@ export function persistFontSize(fontSize: number) {
 export function readStoredHarness(): WorkbenchHarness {
   try {
     const rawValue = window.localStorage.getItem(HARNESS_STORAGE_KEY);
-    return rawValue === "copilot" ? "copilot" : "codex";
+    return rawValue === "copilot" || rawValue === "opencode" ? rawValue : "codex";
   } catch {
     return "codex";
   }

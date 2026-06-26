@@ -20,6 +20,7 @@ import {
   getPrimaryCollabAgentThreadId,
   type CollabAgentToolCallItem,
 } from "../../../lib/workbench/thread/thread-collab-agents";
+import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
 import {
   getThreadCommandBlockDisplay,
   getThreadCommandDisplay,
@@ -68,8 +69,15 @@ interface HiddenThreadItemIds {
   collabAgentToolCallIds?: ReadonlySet<string> | null;
   controlAgentMessages?: boolean;
   controlUserMessages?: boolean;
+  dynamicToolCallIds?: ReadonlySet<string> | null;
   reasoningItemId?: string | null;
   webSearchItemIds?: ReadonlySet<string> | null;
+}
+
+function isOpenCodeQuestionToolCall(item: ThreadItem) {
+  return item.type === "dynamicToolCall"
+    && item.namespace === "opencode"
+    && item.tool === "question";
 }
 
 function ThreadContentLoadingSkeleton () {
@@ -170,6 +178,7 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
   let pendingFileChanges: FileChangeItem[] = [];
   let pendingReasoning: ReasoningItem[] = [];
   let pendingWebSearches: WebSearchItem[] = [];
+  const hasSyntheticQuestionnaireHistory = items.some(isSyntheticQuestionnaireHistoryItem);
 
   const flushPendingCommands = () => {
     if (!pendingCommands.length) {
@@ -276,6 +285,20 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
     }
 
     if (item.type === "collabAgentToolCall" && hiddenItemIds.collabAgentToolCallIds?.has(item.id)) {
+      flushPendingCommands();
+      flushPendingReasoning();
+      flushPendingFileChanges();
+      flushPendingWebSearches();
+      continue;
+    }
+
+    if (
+      item.type === "dynamicToolCall"
+      && (
+        hiddenItemIds.dynamicToolCallIds?.has(item.id)
+        || (hasSyntheticQuestionnaireHistory && isOpenCodeQuestionToolCall(item))
+      )
+    ) {
       flushPendingCommands();
       flushPendingReasoning();
       flushPendingFileChanges();
@@ -1210,6 +1233,7 @@ function ThreadRenderableBlockView ({
 
 function ThreadTurnDetailsComponent ({
   hiddenCollabAgentToolCallItemIds = [],
+  hiddenDynamicToolCallItemIds = [],
   hideFinalAgentMessage = false,
   hideWorkbenchControlAgentMessages = false,
   hideWorkbenchControlUserMessages = false,
@@ -1226,6 +1250,7 @@ function ThreadTurnDetailsComponent ({
   workspaceRoots,
 }: {
   hiddenCollabAgentToolCallItemIds?: readonly string[];
+  hiddenDynamicToolCallItemIds?: readonly string[];
   hideFinalAgentMessage?: boolean;
   hideWorkbenchControlAgentMessages?: boolean;
   hideWorkbenchControlUserMessages?: boolean;
@@ -1244,6 +1269,9 @@ function ThreadTurnDetailsComponent ({
   const hiddenCollabAgentToolCallIds = hiddenCollabAgentToolCallItemIds.length
     ? new Set(hiddenCollabAgentToolCallItemIds)
     : null;
+  const hiddenDynamicToolCallIds = hiddenDynamicToolCallItemIds.length
+    ? new Set(hiddenDynamicToolCallItemIds)
+    : null;
   const hiddenWebSearchIds = hiddenWebSearchItemIds.length
     ? new Set(hiddenWebSearchItemIds)
     : null;
@@ -1252,6 +1280,7 @@ function ThreadTurnDetailsComponent ({
     collabAgentToolCallIds: hiddenCollabAgentToolCallIds,
     controlAgentMessages: hideWorkbenchControlAgentMessages && isWorkbenchControlTurn,
     controlUserMessages: hideWorkbenchControlUserMessages,
+    dynamicToolCallIds: hiddenDynamicToolCallIds,
     reasoningItemId: hiddenReasoningItemId,
     webSearchItemIds: hiddenWebSearchIds,
   });
@@ -1340,6 +1369,7 @@ function areThreadTurnDetailsPropsEqual (
 ) {
   return left.turn === right.turn
     && left.hiddenCollabAgentToolCallItemIds === right.hiddenCollabAgentToolCallItemIds
+    && left.hiddenDynamicToolCallItemIds === right.hiddenDynamicToolCallItemIds
     && left.hideFinalAgentMessage === right.hideFinalAgentMessage
     && left.hideWorkbenchControlAgentMessages === right.hideWorkbenchControlAgentMessages
     && left.hideWorkbenchControlUserMessages === right.hideWorkbenchControlUserMessages
@@ -1359,6 +1389,7 @@ export const ThreadTurnDetails = memo(ThreadTurnDetailsComponent, areThreadTurnD
 export function ThreadThreadContent ({
   emptyMessage = "No subagent activity was captured yet.",
   hiddenCollabAgentToolCallItemIds = [],
+  hiddenDynamicToolCallItemIds = [],
   hideFinalAgentMessage = false,
   hideWorkbenchControlAgentMessages = false,
   hideWorkbenchControlUserMessages = false,
@@ -1376,6 +1407,7 @@ export function ThreadThreadContent ({
 }: {
   emptyMessage?: string;
   hiddenCollabAgentToolCallItemIds?: readonly string[];
+  hiddenDynamicToolCallItemIds?: readonly string[];
   hideFinalAgentMessage?: boolean;
   hideWorkbenchControlAgentMessages?: boolean;
   hideWorkbenchControlUserMessages?: boolean;
@@ -1428,6 +1460,7 @@ export function ThreadThreadContent ({
           <ThreadTurnDetails
             key={entry.turnId}
             hiddenCollabAgentToolCallItemIds={hiddenCollabAgentToolCallItemIds}
+            hiddenDynamicToolCallItemIds={hiddenDynamicToolCallItemIds}
             hideFinalAgentMessage={hideFinalAgentMessage}
             hideWorkbenchControlAgentMessages={hideWorkbenchControlAgentMessages}
             hideWorkbenchControlUserMessages={hideWorkbenchControlUserMessages}

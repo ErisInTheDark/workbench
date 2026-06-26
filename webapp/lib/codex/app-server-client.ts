@@ -162,9 +162,8 @@ export class CodexAppServerClient {
 
     if (isCodexAppServerNotification(parsed)) {
       const handling = classifyCodexAppServerNotification(parsed);
-      const harness = (parsed as CodexAppServerNotification & { workbenchHarness?: WorkbenchHarness }).workbenchHarness === "copilot"
-        ? "copilot"
-        : "codex";
+      const rawHarness = (parsed as CodexAppServerNotification & { workbenchHarness?: WorkbenchHarness }).workbenchHarness;
+      const harness = rawHarness === "copilot" || rawHarness === "opencode" ? rawHarness : "codex";
       for (const listener of this.notificationListeners) {
         listener(parsed, handling, harness);
       }

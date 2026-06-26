@@ -187,7 +187,7 @@ const MOBILE_SHELL_HEADER_HIDE_THRESHOLD_PX = 24;
 const MOBILE_SHELL_HEADER_SHOW_THRESHOLD_PX = 8;
 const MOSAIC_RATE_LIMIT_REFRESH_INTERVAL_MS = 15_000;
 const DEFAULT_RELOAD_REQUEST: OrchestratorReloadRequest = {
-  scopes: ["orchestrator-logic", "codex-bridge", "next-dev"],
+  scopes: ["orchestrator-logic", "codex-bridge", "opencode-bridge", "next-dev"],
 };
 const SETTINGS_ORDER: WorkbenchSettingKey[] = [
   "theme",
