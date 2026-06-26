@@ -6,6 +6,8 @@
  * - ThreadCommandSummaryStats: aggregate command-summary counts for grouped command labels. Keywords: thread, command, summary, aggregate.
  * - ThreadCommandDisplay: parsed command-summary metadata for thread command rendering. Keywords: thread, command, summary, shell, omit.
  * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text. Keywords: path, command, relative, display.
+ * - isGitCheckpointDiffMatcherClaim: detect checkpoint diff matcher ids for specialized command-output rendering. Keywords: thread, command, checkpoint, diff.
+ * - parseGitCheckpointDiffOutput: parse checkpoint diff command output into file-change display entries. Keywords: checkpoint, diff, file change.
  * - getThreadCommandDisplay: unwrap shell launchers and describe common command patterns with staged shell matchers. Keywords: thread, command, matcher, shell.
  * - getThreadCommandBlockDisplay: aggregate multiple command displays into one grouped summary label. Keywords: thread, command, summary, aggregate.
  */
@@ -14,6 +16,11 @@ import type { CommandAction } from "../../codex/generated/app-server/v2/CommandA
 import { CMD_COMMAND_MATCHERS } from "./command-matchers/cmd";
 import { COPILOT_COMMAND_MATCHERS } from "./command-matchers/copilot-tool-calls";
 import { CommandMatcher, runThreadCommandMatchers } from "./command-matchers/core";
+import {
+  GIT_CHECKPOINT_COMMAND_MATCHERS,
+  isGitCheckpointDiffMatcherClaim,
+  parseGitCheckpointDiffOutput,
+} from "./command-matchers/git-checkpoints";
 import {
     buildCommandPathPart,
     buildDisplayPathPart,
@@ -42,6 +49,7 @@ import type {
 } from "./command-matchers/types";
 
 export { CommandMatcher, formatThreadCommandPath };
+export { isGitCheckpointDiffMatcherClaim, parseGitCheckpointDiffOutput };
 export type {
     ThreadCommandDisplay,
     ThreadCommandDisplayPart,
@@ -71,7 +79,7 @@ export function getThreadCommandDisplay({
     workspaceRoots,
   };
   const matchedDisplay = runThreadCommandMatchers(context, {
-    commonMatchers: [...COPILOT_COMMAND_MATCHERS, ...COMMON_COMMAND_MATCHERS],
+    commonMatchers: [...COPILOT_COMMAND_MATCHERS, ...GIT_CHECKPOINT_COMMAND_MATCHERS, ...COMMON_COMMAND_MATCHERS],
     shellMatchers: getShellCommandMatchers(context.shellGroup),
   });
 
@@ -313,6 +321,24 @@ function formatCommandBlockSummaryText(
     segments.push(summaryStats.typescriptBuilds === 1
       ? "built TypeScript"
       : `built TypeScript ${summaryStats.typescriptBuilds} times`);
+  }
+
+  if (summaryStats.gitCheckpointCreates) {
+    segments.push(summaryStats.gitCheckpointCreates === 1
+      ? "created a git checkpoint"
+      : `created ${summaryStats.gitCheckpointCreates} git checkpoints`);
+  }
+
+  if (summaryStats.gitCheckpointDiffs) {
+    segments.push(summaryStats.gitCheckpointDiffs === 1
+      ? "diffed against a git checkpoint"
+      : `diffed against git checkpoints ${summaryStats.gitCheckpointDiffs} times`);
+  }
+
+  if (summaryStats.gitCheckpointRestores) {
+    segments.push(summaryStats.gitCheckpointRestores === 1
+      ? "restored a git checkpoint"
+      : `restored git checkpoints ${summaryStats.gitCheckpointRestores} times`);
   }
 
   if (summaryStats.webRequests) {

@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default ThreadFileChangeItem: render one or more adjacent fileChange items with per-file counts and expandable unified diffs. Keywords: workbench, thread, file change, diff.
+ * - ThreadFileChangeList: render reusable file-change rows from already-shaped file update changes. Keywords: workbench, thread, file change, diff list.
  * - Local helpers: format paths, summary labels, and change totals for thread file changes. Keywords: additions, deletions, path display.
  */
 "use client";
@@ -29,6 +30,12 @@ interface ParsedFileChange {
   movePathDisplay: string | null;
   sourceChangeIndex: number;
   sourceItemId: string;
+}
+
+export interface ThreadFileChangeListChange {
+  change: FileUpdateChange;
+  sourceChangeIndex?: number;
+  sourceItemId?: string;
 }
 
 interface FileChangePresentation {
@@ -185,29 +192,29 @@ function ThreadFileChangeSummary ({
   );
 }
 
-export default function ThreadFileChangeItem ({
-  items,
+export function ThreadFileChangeList ({
+  changes,
   projectFilePaths,
   projectId,
   projectRootPath,
   workspaceRoots,
 }: {
-  items: FileChangeItem[];
+  changes: ThreadFileChangeListChange[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const parsedChanges: ParsedFileChange[] = items.flatMap((item) => item.changes.map((change, sourceChangeIndex) => ({
-    change,
-    diff: parseFileChangeDiff(change),
-    displayPath: toWorkspaceDisplayPath(change.path, { projectRootPath: projectRootPath ?? "", workspaceRoots }) ?? change.path,
-    movePathDisplay: change.kind.type === "update" && change.kind.move_path
-      ? toWorkspaceDisplayPath(change.kind.move_path, { projectRootPath: projectRootPath ?? "", workspaceRoots }) ?? change.kind.move_path
+  const parsedChanges: ParsedFileChange[] = changes.map((entry, index) => ({
+    change: entry.change,
+    diff: parseFileChangeDiff(entry.change),
+    displayPath: toWorkspaceDisplayPath(entry.change.path, { projectRootPath: projectRootPath ?? "", workspaceRoots }) ?? entry.change.path,
+    movePathDisplay: entry.change.kind.type === "update" && entry.change.kind.move_path
+      ? toWorkspaceDisplayPath(entry.change.kind.move_path, { projectRootPath: projectRootPath ?? "", workspaceRoots }) ?? entry.change.kind.move_path
       : null,
-    sourceChangeIndex,
-    sourceItemId: item.id,
-  })));
+    sourceChangeIndex: entry.sourceChangeIndex ?? index,
+    sourceItemId: entry.sourceItemId ?? "file-change-list",
+  }));
 
   return (
     <div className="space-y-1.5 py-2">
@@ -227,5 +234,33 @@ export default function ThreadFileChangeItem ({
         <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No changed files captured.</p>
       )}
     </div>
+  );
+}
+
+export default function ThreadFileChangeItem ({
+  items,
+  projectFilePaths,
+  projectId,
+  projectRootPath,
+  workspaceRoots,
+}: {
+  items: FileChangeItem[];
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+  projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+}) {
+  return (
+    <ThreadFileChangeList
+      changes={items.flatMap((item) => item.changes.map((change, sourceChangeIndex) => ({
+        change,
+        sourceChangeIndex,
+        sourceItemId: item.id,
+      })))}
+      projectFilePaths={projectFilePaths}
+      projectId={projectId}
+      projectRootPath={projectRootPath}
+      workspaceRoots={workspaceRoots}
+    />
   );
 }

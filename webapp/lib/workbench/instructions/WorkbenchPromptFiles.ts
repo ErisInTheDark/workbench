@@ -396,6 +396,74 @@ function buildThreadTitleInstructions(context: WorkbenchPromptContext) {
   });
 }
 
+function buildWorkbenchCheckpointInstructions(context: WorkbenchPromptContext) {
+  const threadId = context.threadId?.trim();
+  const workbenchOrigin = context.workbenchOrigin?.trim();
+  if (!threadId || threadId === "new" || threadId.startsWith("draft:") || !workbenchOrigin) {
+    return null;
+  }
+
+  const routeUrl = buildGitCheckpointRouteUrl(workbenchOrigin);
+  const powerShellRouteUrl = escapePowerShellSingleQuotedString(routeUrl);
+  const powerShellThreadId = escapePowerShellSingleQuotedString(threadId);
+
+  return `
+## Workbench Git Checkpoints
+
+Workbench supports hidden Git checkpoints for agent workflow baselines. Checkpoints are real local Git commit objects stored under per-worktree refs by the Workbench checkpoint endpoint, not visible branch commits.
+
+This thread's checkpoint namespace is owned by Workbench and scoped to the current Git worktree:
+
+\`\`\`text
+refs/worktree/agents/${threadId}/checkpoints
+\`\`\`
+
+Checkpoint refs are convenience state, not a security boundary. Do not use them to store secrets unless the repo state is already allowed to contain those secrets.
+
+Use these exact one-line commands so Workbench can match and render checkpoint operations. The endpoint owns the Git plumbing and uses a temporary index internally, so agents should not run raw \`git update-ref\` checkpoint scripts themselves.
+
+### Create a baseline checkpoint
+
+Run after entering Brief mode for an approved-plan baseline.
+
+\`\`\`powershell
+"workbench-agent-checkpoint-baseline-v1"; $body = @{ action = 'baseline'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
+\`\`\`
+
+### Diff against the newest checkpoint
+
+Run immediately after entering Implement mode before editing, and again after entering Review mode before creating the diff checkpoint. The command output is a full unified diff that Workbench renders as file diffs.
+
+\`\`\`powershell
+"workbench-agent-checkpoint-diff-v1"; $body = @{ action = 'diff'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
+\`\`\`
+
+### Create a diff checkpoint
+
+Run after the Review-mode diff command when the current state should become the next preserved checkpoint.
+
+\`\`\`powershell
+"workbench-agent-checkpoint-create-diff-v1"; $body = @{ action = 'diffCheckpoint'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
+\`\`\`
+
+### Restore a checkpoint after explicit user request
+
+Only restore when the user asks for a checkpoint restore. First run the diff command or another preview. Restore uses a checkpoint commit sha supplied by the user or selected from the thread's checkpoint output. The endpoint requires \`confirmRestore = $true\` and blocks when the checkpoint parent is not the current HEAD.
+
+\`\`\`powershell
+"workbench-agent-checkpoint-restore-v1"; $body = @{ action = 'restore'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path; checkpointCommit = '<checkpoint-commit-sha>'; confirmRestore = $true } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
+\`\`\`
+`.trim();
+}
+
+function buildGitCheckpointRouteUrl(workbenchOrigin: string) {
+  return `${workbenchOrigin.replace(/\/+$/g, "")}/api/git-checkpoint`;
+}
+
+function escapePowerShellSingleQuotedString(value: string) {
+  return value.replace(/'/g, "''");
+}
+
 async function listProjectSkillDefinitionsForPrompt(context: WorkbenchPromptContext) {
   const promptRoot = getPrimaryPromptRoot(context);
   if (!promptRoot?.rootPath.trim()) {
@@ -464,6 +532,7 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
   const developerInstructions = joinInstructionSections([
     buildWorkbenchSkillsDeveloperInstructions(skillManifest),
     buildInstructionPackSections(instructionPacks),
+    buildWorkbenchCheckpointInstructions(context),
     buildThreadTitleInstructions(context),
   ]);
 
@@ -498,6 +567,7 @@ This collaboration-mode overlay must not replace the active Workbench workflow, 
     WORKBENCH_INJECTION_TEMPLATES["workbench.tools"].injection,
     WORKBENCH_INJECTION_TEMPLATES["workbench.rendering"].injection,
     workflowInjection,
+    buildWorkbenchCheckpointInstructions(context),
     buildThreadTitleInstructions(context),
   ]);
 }

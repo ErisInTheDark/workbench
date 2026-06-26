@@ -67,6 +67,9 @@ export type ThreadCommandDisplayPart =
 
 export interface ThreadCommandSummaryStats {
   deletedPaths: number;
+  gitCheckpointCreates: number;
+  gitCheckpointDiffs: number;
+  gitCheckpointRestores: number;
   gitDiffChecks: number;
   gitStatusChecks: number;
   listedFiles: number;

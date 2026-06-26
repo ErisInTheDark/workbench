@@ -23,6 +23,8 @@ import {
 import {
   getThreadCommandBlockDisplay,
   getThreadCommandDisplay,
+  isGitCheckpointDiffMatcherClaim,
+  parseGitCheckpointDiffOutput,
 } from "../../../lib/workbench/thread/thread-command-matchers";
 import {
   formatThreadTimestamp,
@@ -35,7 +37,7 @@ import ThreadContextCompactionItem from "./ThreadContextCompactionItem";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
-import ThreadFileChangeItem from "./ThreadFileChangeItem";
+import ThreadFileChangeItem, { ThreadFileChangeList } from "./ThreadFileChangeItem";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
@@ -908,6 +910,11 @@ function ThreadCommandExecutionDetails ({
     projectRootPath,
     workspaceRoots,
   });
+  const checkpointDiffChanges = isGitCheckpointDiffMatcherClaim(commandDisplay.claimedBy)
+    ? parseGitCheckpointDiffOutput(item.aggregatedOutput ?? "")
+    : null;
+  const shouldRenderCheckpointDiff = checkpointDiffChanges !== null
+    && (!item.aggregatedOutput?.trim() || checkpointDiffChanges.length > 0);
   const metaParts = [];
 
   if (item.status !== "completed") {
@@ -970,7 +977,19 @@ function ThreadCommandExecutionDetails ({
             Working dir: <span className="break-all font-mono text-text">{commandDisplay.cwdDisplay}</span>
           </p>
         ) : null}
-        {item.aggregatedOutput?.trim() ? (
+        {shouldRenderCheckpointDiff ? (
+          <ThreadFileChangeList
+            changes={(checkpointDiffChanges ?? []).map((change, sourceChangeIndex) => ({
+              change,
+              sourceChangeIndex,
+              sourceItemId: item.id,
+            }))}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            workspaceRoots={workspaceRoots}
+          />
+        ) : item.aggregatedOutput?.trim() ? (
           <ThreadCodeDisplay
             header={<ThreadCommandHeader command={item.command} surface="framed" />}
             output={item.aggregatedOutput.trim()}

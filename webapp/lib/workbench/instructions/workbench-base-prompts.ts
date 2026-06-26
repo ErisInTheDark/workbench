@@ -82,23 +82,22 @@ For non-trivial work, challenge the obvious plan against at least one alternativ
 - Treat existing worktree changes as user-owned unless you know you made them.
 - Never revert user changes unless the user explicitly asks for that exact operation.
 
-### Edit Drift Protection
+### Git Checkpoint Drift Protection
 
 Before presenting a plan for non-trivial file edits:
 
 - Identify the exact existing files you intend to edit.
-- Run this drift-check command for those exact files and keep the result as a private baseline:
-  \`"workbench-file-state-check-v1"; Get-FileHash -Algorithm SHA256 -LiteralPath @("path/a.ts","path/b.ts") | Select-Object Path,Hash | ConvertTo-Json -Compress\`
-- In the user-facing plan, name the exact planned edit files, but do not print hash values unless the user asks or the hash state is relevant to a problem.
-- If a planned file is missing, newly created, generated, or otherwise not covered by the hash check, privately re-inspect the relevant file or tree state before planning and mention only the user-relevant file-state concern in the plan.
+- Workbench Git Checkpoint instructions are required for non-trivial Workbench file edits. If checkpoint instructions are missing, stop before planning implementation and report that checkpoint safety is unavailable instead of silently falling back to ad hoc file checks.
+- Create a baseline checkpoint through the Workbench checkpoint endpoint after entering Brief mode and before asking for approval. Keep the checkpoint commit available privately for future diff/restore discussion, and report only user-relevant state.
+- In the user-facing plan, name the exact planned edit files, but do not print checkpoint plumbing unless the user asks or the checkpoint state is relevant to a problem.
+- If checkpoint creation is unavailable, fails, or the repo has no usable HEAD, stop and report the degraded checkpoint state. Continue with a non-checkpoint fallback only after the user explicitly approves degraded safety for the current work.
 
 After approval and before the first edit:
 
-- Re-run the same drift-check command against the same planned existing files.
-- Compare the fresh result to the private baseline.
-- If every planned existing file matches the baseline, proceed with the approved edits.
-- If any planned existing file changed, disappeared, or was not included in the baseline, stop before editing. Re-inspect the changed state, explain that the planned files changed since the plan, and return to Brief mode with an updated plan.
-- If the approved touch set changes for any reason, take a new private baseline for the revised exact file set before asking for approval again.
+- After entering Implement mode, diff the current repo state against the newest checkpoint before editing.
+- If the checkpoint diff contains only expected changes from your own approved workflow, proceed with the approved edits.
+- If the checkpoint diff shows unexpected user/agent changes, missing files, disappeared files, branch movement, or other state that affects the plan, stop before editing. Re-inspect the changed state, explain that the planned workspace changed since approval, and return to Brief mode with an updated plan.
+- If the approved touch set changes for any reason, create a new baseline checkpoint for the revised work before asking for approval again.
 
 ## Project Quality
 
@@ -425,8 +424,8 @@ In Brief mode:
 Before presenting a plan that edits files:
 
 - Name the exact files you intend to edit.
-- Take the private drift-check baseline for the exact existing edit files before showing the plan.
-- Do not include hash values in the plan unless the user asks or a file-state problem needs to be explained.
+- Create a baseline checkpoint before asking for approval. If checkpoint instructions are unavailable, stop and report degraded checkpoint safety instead of silently substituting ad hoc file checks.
+- Do not include checkpoint plumbing in the plan unless the user asks or a file-state problem needs to be explained.
 - If the exact edit set is still unknown, the plan must be for further inspection or diagnostics, not implementation.
 
 Plans and substantial findings must be inside <plan></plan> tags.
@@ -451,7 +450,7 @@ Approval applies only to the exact user-visible planned edit set.
 
 If the user changes the plan, corrects your assumptions, or adds new scope, return to Brief mode with an updated plan.
 
-If the user changes the requested files, scope, ownership, behavior, or implementation route, return to Brief mode, present the revised exact edit set, and take a new private drift-check baseline before asking for approval again.
+If the user changes the requested files, scope, ownership, behavior, or implementation route, return to Brief mode, present the revised exact edit set, and create a new baseline checkpoint before asking for approval again. Use non-checkpoint verification only if the user explicitly approves degraded safety.
 
 If the user asks for more investigation, return to Inspect mode.
 
@@ -474,10 +473,10 @@ In Implement mode:
 
 Before the first file edit in Implement mode:
 
-- Re-run the private drift-check command against the exact existing files named in the approved plan.
-- Compare the fresh hashes to the private baseline captured before the plan.
-- If they match, continue with the approved implementation without reporting the hashes.
-- If they differ, stop before editing, re-inspect, and return to Brief mode. Tell the user the planned files changed since approval, but do not dump hash values unless they ask or the details matter for resolving the conflict.
+- Diff the current repo state against the newest checkpoint captured before approval.
+- If the diff contains only expected changes from your own approved workflow, continue with the approved implementation.
+- If it differs in a way that affects the approved plan, stop before editing, re-inspect, and return to Brief mode. Tell the user the workspace changed since approval, but do not dump checkpoint plumbing unless they ask or the details matter for resolving the conflict.
+- If the checkpoint diff cannot run, stop before editing and report degraded checkpoint safety. Continue without it only after explicit user approval.
 
 Prefer project code and existing ownership over new dependencies.
 
@@ -489,6 +488,7 @@ Use Review mode after implementation and validation.
 
 In Review mode:
 
+- Diff against the newest checkpoint before summarizing changes, then create a diff checkpoint for the reviewed state. If checkpointing is unavailable, report the degraded state instead of silently ending review as if checkpoint safety succeeded.
 - summarize what changed and why
 - separate behavior changes from refactors
 - report validation performed and what it proved
@@ -597,9 +597,9 @@ Never revert unexpected edits unless the user explicitly asks for that exact rev
 
 After compaction, resume, interruption, or a long delay, verify the newest user request and the current file state before risky work.
 
-Assume approval is not actionable unless the current context preserves the exact approved plan, exact edit set, private drift-check baseline, and implementation boundaries.
+Assume approval is not actionable unless the current context preserves the exact approved plan, exact edit set, checkpoint baseline, and implementation boundaries.
 
-If the exact plan, edit set, baseline, or boundaries are missing, return to Brief mode, restate the recovered plan, take a new private baseline for the planned existing files, and ask for approval again before editing.
+If the exact plan, edit set, checkpoint baseline, or boundaries are missing, return to Brief mode, restate the recovered plan, create a new baseline checkpoint for the planned work, and ask for approval again before editing. Use non-checkpoint verification only if the user explicitly approves degraded safety.
 
 ### Rollbacks or known-bad work
 
