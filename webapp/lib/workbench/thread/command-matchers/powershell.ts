@@ -1581,6 +1581,85 @@ function buildPowerShellTestPathPart(
 }
 
 function isPowerShellThreadTitleSettingCommand(commandText: string) {
+  if (isGeneralPowerShellThreadTitleSettingCommand(commandText)) {
+    return true;
+  }
+
+  return isLegacyPowerShellThreadTitleSettingCommand(commandText);
+}
+
+function isGeneralPowerShellThreadTitleSettingCommand(commandText: string) {
+  const normalizedCommandText = normalizePowerShellThreadTitleCommandText(commandText);
+  const bodyAssignmentMatch = normalizedCommandText.match(/\$body\s*=\s*@\{([\s\S]*?)\}\s*\|\s*ConvertTo-Json\s+-Compress\b/i);
+  const bodyText = bodyAssignmentMatch?.[1];
+  if (!bodyText || bodyAssignmentMatch.index === undefined) {
+    return false;
+  }
+
+  const prefix = normalizedCommandText.slice(0, bodyAssignmentMatch.index).trim();
+  if (prefix && !isPowerShellThreadTitleCommandPrefix(prefix)) {
+    return false;
+  }
+
+  return isPowerShellThreadTitleBody(bodyText)
+    && isPowerShellThreadTitleRequest(normalizedCommandText.slice(bodyAssignmentMatch.index));
+}
+
+function normalizePowerShellThreadTitleCommandText(commandText: string) {
+  return unwrapPowerShellStageText(commandText)
+    .replace(/\r\n/g, "\n")
+    .replace(/(?:'")|(?:"')/g, "'")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+}
+
+function isPowerShellThreadTitleCommandPrefix(prefix: string) {
+  const normalizedPrefix = prefix.replace(/\s+/g, " ").trim();
+  if (!normalizedPrefix) {
+    return true;
+  }
+
+  if (/^['"`]*workbench-(?:agent-)?thread-title-v1['"`]*\s*;?$/i.test(normalizedPrefix)) {
+    return true;
+  }
+
+  return /^\$title\s*=\s*['"`]+[^;\r\n]+['"`]+\s*;?$/i.test(normalizedPrefix);
+}
+
+function isPowerShellThreadTitleBody(bodyText: string) {
+  return hasPowerShellHashtableField(bodyText, "harness", /['"`]*codex['"`]*/i)
+    && hasPowerShellHashtableField(
+      bodyText,
+      "threadId",
+      /['"`]*[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}['"`]*/i,
+    )
+    && hasPowerShellHashtableField(bodyText, "title", /(?:['"`]*\$title\b|['"`]+[^;}\r\n]+['"`]*)/i);
+}
+
+function hasPowerShellHashtableField(bodyText: string, key: string, valuePattern: RegExp) {
+  const fieldPattern = new RegExp(
+    `(?:^|;)\\s*${escapeRegExp(key)}\\s*=\\s*${valuePattern.source}\\s*(?=;|$)`,
+    valuePattern.ignoreCase ? "i" : "",
+  );
+  return fieldPattern.test(bodyText.trim());
+}
+
+function isPowerShellThreadTitleRequest(commandText: string) {
+  const requestMatch = commandText.match(/\bInvoke-RestMethod\b[\s\S]*$/i);
+  const requestText = requestMatch?.[0]?.trim();
+  if (!requestText) {
+    return false;
+  }
+
+  const requestTextWithoutOutNull = requestText.replace(/\|\s*Out-Null\s*$/i, "").trim();
+  return /-Method\s+Post\b/i.test(requestTextWithoutOutNull)
+    && /-Uri\s+['"`]*https?:\/\/[^'"`\s]*\/api\/thread-title['"`]*/i.test(requestTextWithoutOutNull)
+    && /-ContentType\s+['"`]*application\/json['"`]*/i.test(requestTextWithoutOutNull)
+    && /-Body\s+['"`]*\$body\b/i.test(requestTextWithoutOutNull)
+    && !/[;|&]\s*\S/.test(requestTextWithoutOutNull);
+}
+
+function isLegacyPowerShellThreadTitleSettingCommand(commandText: string) {
   const normalizedCommandText = unwrapPowerShellStageText(commandText)
     .replace(/\r\n/g, "\n")
     .replace(/(?:'")|(?:"')/g, "'")
