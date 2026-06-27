@@ -904,6 +904,14 @@ export default function Workbench () {
     };
   }, [route]);
 
+  useEffect(() => {
+    if (!isMobile || !isDesktopSidebarCollapsed) {
+      return;
+    }
+
+    setIsDesktopSidebarCollapsed(false);
+  }, [isDesktopSidebarCollapsed, isMobile]);
+
   const routeMosaicNodeForControls = isMobile && route.view === "mosaic" ? route.mosaicNode : null;
   const routeToApplyToControls = useMemo(() => {
     if (route.view === "mosaic") {
@@ -1754,6 +1762,8 @@ export default function Workbench () {
   const showSettingsView = route.view === "settings";
   const showCollaborationView = route.view === "collaboration";
   const showFullBleedMainView = showMosaicView || showCollaborationView;
+  const usesDesktopSidebarCollapse = !isMobile;
+  const isEffectiveDesktopSidebarCollapsed = usesDesktopSidebarCollapse && isDesktopSidebarCollapsed;
   const effectiveThreadId = mobileMosaicFallbackTarget?.kind === "thread" ? mobileMosaicFallbackTarget.threadId : route.threadId;
   const effectiveFilePath = mobileMosaicFallbackTarget?.kind === "file" ? mobileMosaicFallbackTarget.filePath : route.filePath;
   const showEmptyState = !showThreadView && !showFileView && !showSettingsView && !showCollaborationView && !showMosaicView;
@@ -2622,7 +2632,7 @@ export default function Workbench () {
 
   return (
     <div
-      className={`relative isolate h-dvh overflow-hidden md:grid md:min-h-screen md:h-auto md:overflow-visible md:items-start${isDesktopSidebarCollapsed
+      className={`relative isolate h-dvh overflow-hidden md:grid md:min-h-screen md:h-auto md:overflow-visible md:items-start${isEffectiveDesktopSidebarCollapsed
         ? " md:grid-cols-[minmax(0,1fr)]"
         : " md:grid-cols-[minmax(16rem,21rem)_1fr]"
       }`}
@@ -2631,7 +2641,7 @@ export default function Workbench () {
     >
       {ambientCanvasVariant ? <WorkbenchAmbientCanvas variant={ambientCanvasVariant} /> : null}
       <WorkbenchTabIcon state={tabIconState} />
-      {isDesktopSidebarCollapsed ? (
+      {isEffectiveDesktopSidebarCollapsed ? (
         <>
           <button
             type="button"
@@ -2684,7 +2694,7 @@ export default function Workbench () {
         className="mobile-workbench-track flex h-dvh w-[200vw] overflow-hidden transition-transform duration-200 ease-out md:contents md:h-auto md:w-auto md:overflow-visible md:transform-none"
         style={mobileTrackStyle}
       >
-        <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden px-5 py-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:px-6${isDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
+        <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden px-5 py-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:px-6${isEffectiveDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
           <div className="-ml-3 min-h-0 flex-1 overflow-hidden text-[0.95rem] leading-6">
             <div
               className="flex h-full w-[200%] flex-row-reverse transition-transform duration-200 ease-out"
@@ -2726,18 +2736,20 @@ export default function Workbench () {
                       </span>
                       <span className="shrink-0 relative -top-0.5 text-muted" aria-hidden="true">‹</span>
                     </button>
-                    <button
-                      type="button"
-                      aria-label="Hide sidebar"
-                      title="Hide sidebar"
-                      className={`${workbenchIconButtonClassName} hidden shrink-0 text-muted md:inline-flex`}
-                      onClick={() => {
-                        setIsDesktopSidebarCollapsed(true);
-                      }}
-                    >
-                      <SidebarCollapseIcon />
-                      <span className="sr-only">Hide sidebar</span>
-                    </button>
+                    {usesDesktopSidebarCollapse ? (
+                      <button
+                        type="button"
+                        aria-label="Hide sidebar"
+                        title="Hide sidebar"
+                        className={`${workbenchIconButtonClassName} hidden shrink-0 text-muted md:inline-flex`}
+                        onClick={() => {
+                          setIsDesktopSidebarCollapsed(true);
+                        }}
+                      >
+                        <SidebarCollapseIcon />
+                        <span className="sr-only">Hide sidebar</span>
+                      </button>
+                    ) : null}
                   </div>
                 </section>
 
@@ -3366,7 +3378,7 @@ export default function Workbench () {
                   const panelFontSizeRem = clampEditorFontSize(resolvedSettings.editorFontSize + panelZoomDelta * 0.08);
                   const isMinimized = Boolean(mosaicPanel?.minimized);
                   const isMinimizedVertical = isMinimized && mosaicPanel?.parentDirection === "horizontal";
-                  const hasSidebarRestoreInset = isDesktopSidebarCollapsed
+                  const hasSidebarRestoreInset = isEffectiveDesktopSidebarCollapsed
                     && showMosaicView
                     && panelId === mainLayoutForRender.focusedPanelId;
                   const updatePanelZoomDelta = (zoomDelta: number) => {

@@ -220,7 +220,7 @@ export default function WorkbenchThreadPanel ({
   }
 
   return (
-    <div className="flex min-h-full min-w-0 flex-col">
+    <div className="flex h-full min-h-full min-w-0 flex-col">
       <header
         className={`sticky top-0 z-10 px-5 py-3 md:px-6${onHeaderPointerDragStart ? " cursor-grab active:cursor-grabbing" : ""}${hasSidebarRestoreInset ? " pl-28 md:pl-28" : ""}${isMinimizedVertical ? " flex h-full items-center justify-center" : ""}`}
         onPointerDown={handleHeaderPointerDown}
@@ -288,7 +288,7 @@ export default function WorkbenchThreadPanel ({
           </div>
         </div>
       </header>
-      <div className="min-w-0 px-5 md:px-6" hidden={isMinimized}>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col px-5 md:px-6" hidden={isMinimized}>
         <ThreadView
           {...threadViewProps}
           contained

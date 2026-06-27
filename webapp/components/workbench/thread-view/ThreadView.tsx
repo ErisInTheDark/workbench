@@ -70,6 +70,8 @@ import { ThreadThreadContent, ThreadTurnDetails, ThreadTurnLoadingSkeleton } fro
 const SUBTHREAD_POLL_INTERVAL_MS = 1500;
 const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
 const MAX_VISIBLE_HISTORY_ENTRIES = 8;
+const THREAD_BOTTOM_ANCHOR_TOLERANCE_PX = 96;
+const THREAD_HISTORY_LOAD_TOLERANCE_PX = 160;
 const EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS: readonly string[] = [];
 const EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS: readonly string[] = [];
 const EMPTY_PROJECT_FILE_CANDIDATES: readonly ProjectTreeFileCandidate[] = [];
@@ -96,6 +98,19 @@ type LiveThreadActivity =
     kind: "webSearch";
     title: string;
   };
+
+type ThreadScrollTarget = HTMLElement | Window;
+
+interface ThreadScrollSnapshot {
+  scrollHeight: number;
+  scrollTop: number;
+  target: ThreadScrollTarget;
+}
+
+interface PendingPreviousTurnScrollRestore {
+  beforeTurnId: string;
+  snapshot: ThreadScrollSnapshot;
+}
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -239,6 +254,112 @@ function hasExpandedSelectionWithin (root: HTMLElement | null) {
   const anchorNode = selection.anchorNode;
   const focusNode = selection.focusNode;
   return Boolean(anchorNode && focusNode && root.contains(anchorNode) && root.contains(focusNode));
+}
+
+function isScrollableOverflowValue (value: string) {
+  return value === "auto" || value === "scroll" || value === "overlay";
+}
+
+function findThreadScrollTarget (root: HTMLElement | null): ThreadScrollTarget | null {
+  if (!root || typeof window === "undefined") {
+    return null;
+  }
+
+  for (let element = root.parentElement; element; element = element.parentElement) {
+    if (element === document.body || element === document.documentElement) {
+      break;
+    }
+
+    if (isScrollableOverflowValue(window.getComputedStyle(element).overflowY)) {
+      return element;
+    }
+  }
+
+  return window;
+}
+
+function getDocumentScrollingElement () {
+  return document.scrollingElement ?? document.documentElement;
+}
+
+function isWindowScrollTarget (target: ThreadScrollTarget): target is Window {
+  return target === window;
+}
+
+function getThreadScrollMetrics (target: ThreadScrollTarget) {
+  if (isWindowScrollTarget(target)) {
+    const scrollingElement = getDocumentScrollingElement();
+    const scrollHeight = Math.max(
+      scrollingElement.scrollHeight,
+      document.body?.scrollHeight ?? 0,
+    );
+    const clientHeight = window.innerHeight || scrollingElement.clientHeight;
+    const scrollTop = Math.max(window.scrollY, scrollingElement.scrollTop, document.body?.scrollTop ?? 0);
+    return {
+      clientHeight,
+      maxScrollTop: Math.max(0, scrollHeight - clientHeight),
+      scrollHeight,
+      scrollTop,
+    };
+  }
+
+  return {
+    clientHeight: target.clientHeight,
+    maxScrollTop: Math.max(0, target.scrollHeight - target.clientHeight),
+    scrollHeight: target.scrollHeight,
+    scrollTop: target.scrollTop,
+  };
+}
+
+function setThreadScrollTop (target: ThreadScrollTarget, scrollTop: number) {
+  const nextScrollTop = Math.max(0, scrollTop);
+  if (isWindowScrollTarget(target)) {
+    window.scrollTo({
+      behavior: "auto",
+      left: window.scrollX,
+      top: nextScrollTop,
+    });
+    return;
+  }
+
+  target.scrollTop = nextScrollTop;
+}
+
+function isThreadScrollTargetNearBottom (target: ThreadScrollTarget, tolerancePx = THREAD_BOTTOM_ANCHOR_TOLERANCE_PX) {
+  const metrics = getThreadScrollMetrics(target);
+  return metrics.maxScrollTop - metrics.scrollTop <= tolerancePx;
+}
+
+function isThreadScrollTargetNearTop (target: ThreadScrollTarget, tolerancePx = THREAD_HISTORY_LOAD_TOLERANCE_PX) {
+  return getThreadScrollMetrics(target).scrollTop <= tolerancePx;
+}
+
+function scrollThreadViewToBottom (root: HTMLElement | null) {
+  const target = findThreadScrollTarget(root);
+  if (!target) {
+    return;
+  }
+
+  setThreadScrollTop(target, getThreadScrollMetrics(target).maxScrollTop);
+}
+
+function captureThreadScrollSnapshot (root: HTMLElement | null): ThreadScrollSnapshot | null {
+  const target = findThreadScrollTarget(root);
+  if (!target) {
+    return null;
+  }
+
+  const metrics = getThreadScrollMetrics(target);
+  return {
+    scrollHeight: metrics.scrollHeight,
+    scrollTop: metrics.scrollTop,
+    target,
+  };
+}
+
+function restoreThreadScrollSnapshotAfterPrepend (snapshot: ThreadScrollSnapshot) {
+  const nextMetrics = getThreadScrollMetrics(snapshot.target);
+  setThreadScrollTop(snapshot.target, snapshot.scrollTop + (nextMetrics.scrollHeight - snapshot.scrollHeight));
 }
 
 async function writeTextToClipboard (text: string) {
@@ -632,9 +753,12 @@ export default memo(function ThreadView ({
   const [draftSavedDraftShelfPortalHost, setDraftSavedDraftShelfPortalHost] = useState<HTMLDivElement | null>(null);
   const threadViewRef = useRef<HTMLDivElement>(null);
   const historySentinelRef = useRef<HTMLDivElement>(null);
-  const bottomSentinelRef = useRef<HTMLDivElement>(null);
   const codeBlockCopyResetTimersRef = useRef<Map<HTMLButtonElement, number>>(new Map());
-  const hasMountedActiveThreadScrollRef = useRef(false);
+  const activeThreadScrollKeyRef = useRef("");
+  const bottomScrollFrameRef = useRef<number | null>(null);
+  const didRestorePreviousTurnScrollRef = useRef(false);
+  const pendingPreviousTurnScrollRestoreRef = useRef<PendingPreviousTurnScrollRestore | null>(null);
+  const shouldStickToBottomRef = useRef(true);
   const subthreadLoadGenerationRef = useRef(0);
   const subagentThreadIds = useMemo(() => getCollabAgentThreadIds(thread.turns), [thread.turns]);
   const activeThread = activeThreadId === thread.id
@@ -644,6 +768,7 @@ export default memo(function ThreadView ({
     ? livePendingUserInputRequestsByThreadId[activeThread.id] ?? null
     : null;
   const activePendingUserInputRequest = activeHarnessUserInputRequest;
+  const isDraftThreadView = Boolean(activeThread?.isDraft);
   const currentTurn = activeThread?.turns.at(-1) ?? null;
   const visibleHistoryEntries = useMemo(() => activeThread ? getVisibleHistoryEntries(activeThread) : [], [activeThread]);
   const loadedTurnsById = useMemo(() => new Map(activeThread?.turns.map((turn) => [turn.id, turn]) ?? []), [activeThread?.turns]);
@@ -651,6 +776,9 @@ export default memo(function ThreadView ({
   const previousTurnLoadKey = activeThread && firstVisibleLoadedEntry
     ? `${activeThread.id}:${firstVisibleLoadedEntry.turnId}`
     : "";
+  const visibleHistorySignature = useMemo(() => visibleHistoryEntries
+    .map((entry) => `${entry.turnId}:${entry.loadState}:${entry.itemCount}`)
+    .join("|"), [visibleHistoryEntries]);
   const canLoadPreviousTurn = Boolean(
     activeThread
     && firstVisibleLoadedEntry
@@ -677,6 +805,25 @@ export default memo(function ThreadView ({
       .map((item) => item.id);
     return itemIds.length ? Array.from(new Set(itemIds)) : EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS;
   }, [activePendingUserInputRequest?.harness, currentTurn]);
+  const activeThreadContentSignature = useMemo(() => {
+    if (!activeThread) {
+      return "";
+    }
+
+    const latestTurn = activeThread.turns.at(-1);
+    return [
+      activeThread.id,
+      activeThread.status,
+      activeThread.turns.length,
+      countThreadItems(activeThread),
+      latestTurn?.id ?? "",
+      latestTurn?.status ?? "",
+      latestTurn?.items.length ?? 0,
+      visibleHistorySignature,
+      liveActivity?.kind ?? "",
+      activePendingUserInputRequest?.requestKey ?? "",
+    ].join("|");
+  }, [activePendingUserInputRequest?.requestKey, activeThread, liveActivity?.kind, visibleHistorySignature]);
   const workspaceFileLinkRoots = useMemo(() => (
     projectFileLinkRoots ?? (projectRoots && projectRoots.length > 1
       ? projectRoots.map((root) => ({ id: root.id, rootPath: root.rootPath }))
@@ -715,6 +862,18 @@ export default memo(function ThreadView ({
       };
     });
   }, [loadingThreadIds, subagentThreadIds, subthreadsById]);
+
+  const scheduleScrollToBottom = useCallback(() => {
+    if (bottomScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(bottomScrollFrameRef.current);
+    }
+
+    bottomScrollFrameRef.current = window.requestAnimationFrame(() => {
+      bottomScrollFrameRef.current = null;
+      scrollThreadViewToBottom(threadViewRef.current);
+      shouldStickToBottomRef.current = true;
+    });
+  }, []);
 
   const markThreadSeen = useCallback((threadId: string, payload: ThreadPayload | null | undefined) => {
     if (!payload) {
@@ -803,6 +962,24 @@ export default memo(function ThreadView ({
       return;
     }
 
+    const scrollTarget = findThreadScrollTarget(threadViewRef.current);
+    if (
+      !scrollTarget
+      || !isThreadScrollTargetNearTop(scrollTarget)
+      || isThreadScrollTargetNearBottom(scrollTarget)
+    ) {
+      return;
+    }
+
+    const scrollSnapshot = captureThreadScrollSnapshot(threadViewRef.current);
+    if (scrollSnapshot) {
+      pendingPreviousTurnScrollRestoreRef.current = {
+        beforeTurnId: firstVisibleLoadedEntry.turnId,
+        snapshot: scrollSnapshot,
+      };
+      shouldStickToBottomRef.current = false;
+    }
+
     const loadGeneration = subthreadLoadGenerationRef.current;
     const targetThreadId = activeThread.id;
     const targetHarness = activeThread.harness;
@@ -855,6 +1032,10 @@ export default memo(function ThreadView ({
 
   useEffect(() => {
     subthreadLoadGenerationRef.current += 1;
+    activeThreadScrollKeyRef.current = "";
+    didRestorePreviousTurnScrollRef.current = false;
+    pendingPreviousTurnScrollRestoreRef.current = null;
+    shouldStickToBottomRef.current = true;
     setActiveThreadId(thread.id);
     setSubthreadsById({});
     setLoadingThreadIds({});
@@ -922,16 +1103,21 @@ export default memo(function ThreadView ({
 
   useEffect(() => {
     const sentinel = historySentinelRef.current;
-    if (!sentinel || !canLoadPreviousTurn || !previousTurnLoadKey || loadingPreviousTurnKeys[previousTurnLoadKey]) {
+    const scrollTarget = findThreadScrollTarget(threadViewRef.current);
+    if (!sentinel || !scrollTarget || !canLoadPreviousTurn || !previousTurnLoadKey || loadingPreviousTurnKeys[previousTurnLoadKey]) {
       return;
     }
 
     const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
+      if (
+        entries.some((entry) => entry.isIntersecting)
+        && isThreadScrollTargetNearTop(scrollTarget)
+        && !isThreadScrollTargetNearBottom(scrollTarget)
+      ) {
         void loadPreviousTurn();
       }
     }, {
-      root: null,
+      root: scrollTarget instanceof HTMLElement ? scrollTarget : null,
       rootMargin: "160px 0px 0px 0px",
       threshold: 0.1,
     });
@@ -941,9 +1127,49 @@ export default memo(function ThreadView ({
     };
   }, [canLoadPreviousTurn, loadPreviousTurn, loadingPreviousTurnKeys, previousTurnLoadKey]);
 
+  useEffect(() => {
+    const scrollTarget = findThreadScrollTarget(threadViewRef.current);
+    if (!scrollTarget) {
+      return;
+    }
+
+    const updateBottomStickiness = () => {
+      shouldStickToBottomRef.current = isThreadScrollTargetNearBottom(scrollTarget);
+    };
+    updateBottomStickiness();
+
+    scrollTarget.addEventListener("scroll", updateBottomStickiness, { passive: true });
+    return () => {
+      scrollTarget.removeEventListener("scroll", updateBottomStickiness);
+    };
+  }, [activeThread?.id]);
+
   useLayoutEffect(() => {
-    if (!hasMountedActiveThreadScrollRef.current) {
-      hasMountedActiveThreadScrollRef.current = true;
+    const pendingRestore = pendingPreviousTurnScrollRestoreRef.current;
+    if (!pendingRestore || firstVisibleLoadedEntry?.turnId === pendingRestore.beforeTurnId) {
+      return;
+    }
+
+    pendingPreviousTurnScrollRestoreRef.current = null;
+    restoreThreadScrollSnapshotAfterPrepend(pendingRestore.snapshot);
+    didRestorePreviousTurnScrollRef.current = true;
+    shouldStickToBottomRef.current = false;
+  }, [firstVisibleLoadedEntry?.turnId, visibleHistorySignature]);
+
+  useLayoutEffect(() => {
+    if (!activeThread || isDraftThreadView) {
+      return;
+    }
+
+    const activeThreadScrollKey = `${projectId}:${activeThread.id}`;
+    const didSwitchActiveThread = activeThreadScrollKeyRef.current !== activeThreadScrollKey;
+    if (didSwitchActiveThread) {
+      activeThreadScrollKeyRef.current = activeThreadScrollKey;
+      shouldStickToBottomRef.current = true;
+    }
+
+    if (didRestorePreviousTurnScrollRef.current) {
+      didRestorePreviousTurnScrollRef.current = false;
       return;
     }
 
@@ -951,20 +1177,44 @@ export default memo(function ThreadView ({
       return;
     }
 
-    const frameId = window.requestAnimationFrame(() => {
-      bottomSentinelRef.current?.scrollIntoView({ block: "end" });
-    });
+    const scrollTarget = findThreadScrollTarget(threadViewRef.current);
+    if (
+      didSwitchActiveThread
+      || shouldStickToBottomRef.current
+      || (scrollTarget && isThreadScrollTargetNearBottom(scrollTarget))
+    ) {
+      scheduleScrollToBottom();
+    }
+  }, [activeThread, activeThreadContentSignature, isDraftThreadView, projectId, scheduleScrollToBottom]);
 
+  useEffect(() => {
+    const root = threadViewRef.current;
+    if (!root || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      if (!shouldStickToBottomRef.current || hasExpandedSelectionWithin(root)) {
+        return;
+      }
+
+      scheduleScrollToBottom();
+    });
+    observer.observe(root);
     return () => {
-      window.cancelAnimationFrame(frameId);
+      observer.disconnect();
     };
-  }, [activeThread?.id]);
+  }, [activeThread?.id, scheduleScrollToBottom]);
 
   useEffect(() => {
     onThreadSeen(thread);
   }, [onThreadSeen, thread]);
 
   useEffect(() => () => {
+    if (bottomScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(bottomScrollFrameRef.current);
+      bottomScrollFrameRef.current = null;
+    }
     codeBlockCopyResetTimersRef.current.forEach((timeoutId) => {
       window.clearTimeout(timeoutId);
     });
@@ -1220,7 +1470,6 @@ export default memo(function ThreadView ({
   }, [livePendingUserInputRequestsByThreadId, seenItemCountsByThreadId, thread.id]);
 
   const mainThreadBadge = getTabBadge(thread.id, thread);
-  const isDraftThreadView = Boolean(activeThread?.isDraft);
   const composer = activeThread ? (
     <ThreadComposer
       key={activeThread.id}
@@ -1289,6 +1538,8 @@ export default memo(function ThreadView ({
         data-thread-project-file-link-boundary="true"
         className={joinClasses(
           "mx-auto w-full min-w-0 max-w-[56rem] overflow-x-hidden md:overflow-x-visible",
+          !isDraftThreadView && "flex flex-col justify-end",
+          !isDraftThreadView && (contained ? "min-h-full" : "min-h-[calc(100dvh-8rem)]"),
           contained ? "pb-8" : "pb-16",
         )}
         onClick={handleThreadViewClick}
@@ -1533,7 +1784,7 @@ export default memo(function ThreadView ({
           {composer}
         </>
       ) : null}
-        <div ref={bottomSentinelRef} aria-hidden="true" className="h-px w-full" />
+        <div aria-hidden="true" className="h-px w-full" />
       </div>
     </ProjectFilePathDisplayProvider>
   );
