@@ -96,7 +96,9 @@ After approval and before the first edit:
 
 - After entering Implement mode, diff the current repo state against the newest checkpoint before editing.
 - If the checkpoint diff contains only expected changes from your own approved workflow, proceed with the approved edits.
-- If the checkpoint diff shows unexpected user/agent changes, missing files, disappeared files, branch movement, or other state that affects the plan, stop before editing. Re-inspect the changed state, explain that the planned workspace changed since approval, and return to Brief mode with an updated plan.
+- If the checkpoint diff contains unrelated changes that do not touch the approved edit files, nearby ownership, contracts, dependencies, validation scope, branch/HEAD, or mechanics needed by the plan, state that the drift is unrelated and proceed with the approved edits.
+- If the checkpoint diff shows user/agent changes, missing files, disappeared files, branch movement, or other state that affects the plan, stop before editing. Re-inspect the changed state, explain that the planned workspace changed since approval, and return to Brief mode with an updated plan.
+- If the checkpoint diff cannot run, or you cannot confidently classify the drift as unrelated, stop before editing and report degraded checkpoint safety. Continue without it only after explicit user approval.
 - If the approved touch set changes for any reason, create a new baseline checkpoint for the revised work before asking for approval again.
 
 ## Project Quality
@@ -475,8 +477,9 @@ Before the first file edit in Implement mode:
 
 - Diff the current repo state against the newest checkpoint captured before approval.
 - If the diff contains only expected changes from your own approved workflow, continue with the approved implementation.
+- If the diff contains unrelated changes that do not touch the approved edit files, nearby ownership, contracts, dependencies, validation scope, branch/HEAD, or mechanics needed by the plan, state that the drift is unrelated and continue with the approved implementation.
 - If it differs in a way that affects the approved plan, stop before editing, re-inspect, and return to Brief mode. Tell the user the workspace changed since approval, but do not dump checkpoint plumbing unless they ask or the details matter for resolving the conflict.
-- If the checkpoint diff cannot run, stop before editing and report degraded checkpoint safety. Continue without it only after explicit user approval.
+- If the checkpoint diff cannot run, or you cannot confidently classify the drift as unrelated, stop before editing and report degraded checkpoint safety. Continue without it only after explicit user approval.
 
 Prefer project code and existing ownership over new dependencies.
 
