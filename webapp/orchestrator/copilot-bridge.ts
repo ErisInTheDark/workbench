@@ -28,6 +28,7 @@ import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bri
 import type { CopilotThreadState } from "./copilot-thread-state";
 import { appendCopilotEventLog, log, logError } from "./process-helpers";
 import type { OrchestratorReloadableModules } from "./reloadable-modules";
+import { isWorkbenchPauseControlRequest, WORKBENCH_PAUSE_CONTROL_KIND } from "../lib/workbench/thread/thread-pause-control";
 
 type CopilotAccountGetQuotaResult = Awaited<ReturnType<CopilotClient["rpc"]["account"]["getQuota"]>>;
 type CopilotAccountQuotaSnapshot = NonNullable<CopilotAccountGetQuotaResult["quotaSnapshots"]>[string];
@@ -40,6 +41,8 @@ type CopilotBridgeOptions = {
 
 type CopilotReasoningEffort = "low" | "medium" | "high" | "xhigh";
 type PendingQuestionnaireRequest = {
+  controlKind?: "pause" | null;
+  hidden?: boolean;
   request: WorkbenchUserInputRequest;
   resolve: (response: WorkbenchUserInputResponse) => void;
   reject: (reason?: unknown) => void;
@@ -679,6 +682,8 @@ export class CopilotBridge {
     return {
       data: Array.from(this.pendingQuestionnaires.values(), (pending) => ({
         itemId: null,
+        controlKind: pending.controlKind ?? null,
+        hidden: pending.hidden || undefined,
         request: pending.request,
         requestKey: pending.toolCallId,
         threadId: pending.threadId,
@@ -692,8 +697,11 @@ export class CopilotBridge {
     invocation: { sessionId: string; toolCallId: string },
     request: WorkbenchUserInputRequest,
   ) {
+    const isPauseControl = isWorkbenchPauseControlRequest(request);
     return await new Promise<WorkbenchUserInputResponse>((resolve, reject) => {
       this.pendingQuestionnaires.set(invocation.toolCallId, {
+        controlKind: isPauseControl ? WORKBENCH_PAUSE_CONTROL_KIND : null,
+        hidden: isPauseControl || undefined,
         request,
         reject,
         resolve,
@@ -705,6 +713,8 @@ export class CopilotBridge {
         method: "questionnaire/requested",
         params: {
           itemId: null,
+          controlKind: isPauseControl ? WORKBENCH_PAUSE_CONTROL_KIND : null,
+          hidden: isPauseControl || undefined,
           request,
           requestKey: invocation.toolCallId,
           threadId,

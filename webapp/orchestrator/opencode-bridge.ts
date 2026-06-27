@@ -21,7 +21,8 @@ import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { ThreadStatus } from "../lib/codex/generated/app-server/v2/ThreadStatus";
 import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
-import type { WorkbenchUserInputResponse } from "../lib/types";
+import type { WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "../lib/types";
+import { isWorkbenchPauseControlRequest, WORKBENCH_PAUSE_CONTROL_KIND } from "../lib/workbench/thread/thread-pause-control";
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { OpenCodeLiveThreadState } from "./opencode-live-thread-state";
 import { log, logError } from "./process-helpers";
@@ -968,6 +969,14 @@ export class OpenCodeBridge {
     });
   }
 
+  private pauseControlMetadata(request: WorkbenchUserInputRequest) {
+    const isPauseControl = isWorkbenchPauseControlRequest(request);
+    return {
+      controlKind: isPauseControl ? WORKBENCH_PAUSE_CONTROL_KIND : null,
+      hidden: isPauseControl || undefined,
+    };
+  }
+
   private clearPendingUserInputForThread(threadId: string) {
     for (const [requestKey, pendingPermission] of this.pendingPermissions) {
       if (pendingPermission.legacy?.sessionID !== threadId && pendingPermission.v2?.sessionID !== threadId) {
@@ -1024,12 +1033,16 @@ export class OpenCodeBridge {
     if (!displayQuestion) {
       return;
     }
+    const request = this.getReloadableModules().opencodeThreadState.createOpenCodeQuestionRequest(displayQuestion);
+    const pauseControl = this.pauseControlMetadata(request);
 
     this.onNotification({
       method: "questionnaire/requested",
       params: {
+        controlKind: pauseControl.controlKind,
+        hidden: pauseControl.hidden,
         itemId: null,
-        request: this.getReloadableModules().opencodeThreadState.createOpenCodeQuestionRequest(displayQuestion),
+        request,
         requestKey,
         threadId: displayQuestion.sessionID,
         turnId: null,
@@ -1086,10 +1099,16 @@ export class OpenCodeBridge {
         }),
         ...Array.from(this.pendingQuestions.values()).flatMap((question) => {
           const displayQuestion = openCodeQuestionDisplayRequest(question);
+          const request = displayQuestion
+            ? this.getReloadableModules().opencodeThreadState.createOpenCodeQuestionRequest(displayQuestion)
+            : null;
+          const pauseControl = request ? this.pauseControlMetadata(request) : null;
           return displayQuestion
             ? [{
+              controlKind: pauseControl?.controlKind ?? null,
+              hidden: pauseControl?.hidden,
               itemId: null,
-              request: this.getReloadableModules().opencodeThreadState.createOpenCodeQuestionRequest(displayQuestion),
+              request,
               requestKey: question.requestKey,
               threadId: displayQuestion.sessionID,
               turnId: null,

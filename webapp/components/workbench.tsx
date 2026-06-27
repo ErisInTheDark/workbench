@@ -174,6 +174,7 @@ import {
 } from "./workbench/workbench-icons";
 import WorkbenchAmbientCanvas, { type WorkbenchAmbientCanvasVariant } from "./workbench/WorkbenchAmbientCanvas";
 import WorkbenchOptionCards, { WorkbenchOptionCard } from "./workbench/WorkbenchOptionCards";
+import PrimaryButton from "./workbench/PrimaryButton";
 import WorkbenchStepSlider from "./workbench/WorkbenchStepSlider";
 import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/WorkbenchTabIcon";
 
@@ -1777,6 +1778,22 @@ export default function Workbench () {
     return await controls.stopThread(thread);
   }, [controls]);
 
+  const pauseThread = useCallback(async (thread: ThreadPayload) => {
+    if (!controls) {
+      return null;
+    }
+
+    return await controls.pauseThread(thread);
+  }, [controls]);
+
+  const resumeThread = useCallback(async (thread: ThreadPayload) => {
+    if (!controls) {
+      return null;
+    }
+
+    return await controls.resumeThread(thread);
+  }, [controls]);
+
   const compactThread = useCallback(async (thread: ThreadPayload) => {
     if (!controls) {
       return null;
@@ -1960,7 +1977,9 @@ export default function Workbench () {
     )
   ), [harnessUserInputRequestsByThreadId, locallyResolvedUserInputRequestKeysByThreadId]);
   const pendingQuestionnaireThreadIds = useMemo(
-    () => new Set(Object.keys(visibleUserInputRequestsByThreadId)),
+    () => new Set(Object.entries(visibleUserInputRequestsByThreadId)
+      .filter(([, request]) => !request.hidden)
+      .map(([threadId]) => threadId)),
     [visibleUserInputRequestsByThreadId],
   );
   const hasPendingQuestionnaire = Boolean(currentThread
@@ -3344,7 +3363,9 @@ export default function Workbench () {
                   livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
                   onDraftHarnessChange={handleHarnessChange}
                   onListModels={listThreadModels}
+                  onPauseThread={pauseThread}
                   onReadThread={readThread}
+                  onResumeThread={resumeThread}
                   onThreadSeen={markThreadSeen}
                   onCompactThread={compactThread}
                   onSendMessage={sendThreadMessage}
@@ -3451,7 +3472,9 @@ export default function Workbench () {
                   onClaimAutoWake={claimWorkbenchCollaborationAutoWake}
                   onDraftHarnessChange={handleHarnessChange}
                   onListModels={listThreadModels}
+                  onPauseThread={pauseThread}
                   onReadThread={readThread}
+                  onResumeThread={resumeThread}
                   onThreadSeen={markThreadSeen}
                   onCompactThread={compactThread}
                   onSendMessage={sendThreadMessage}
@@ -3501,9 +3524,9 @@ export default function Workbench () {
             ) : showEmptyState && !shouldRenderMainLayout ? (
               <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
                 <div className="flex w-full max-w-[42rem] flex-col gap-8">
-                  <button
+                  <PrimaryButton
                     type="button"
-                    className="inline-flex w-fit items-center gap-2 rounded-full bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] px-4 py-2 text-[0.84rem] font-medium text-[var(--bg)] transition hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]"
+                    className="w-fit gap-2"
                     onClick={() => {
                       if (!controls) {
                         return;
@@ -3514,7 +3537,7 @@ export default function Workbench () {
                   >
                     <span className="inline-flex size-4 items-center justify-center text-[1.05em] leading-none">+</span>
                     <span>Create new thread</span>
-                  </button>
+                  </PrimaryButton>
                   {quickOpenPaths.length ? (
                     <div className="space-y-2">
                       {quickOpenPaths.map((path) => (
@@ -3622,7 +3645,9 @@ export default function Workbench () {
                         livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
                         onDraftHarnessChange={handleHarnessChange}
                         onListModels={listThreadModels}
+                        onPauseThread={pauseThread}
                         onReadThread={readThread}
+                        onResumeThread={resumeThread}
                         onThreadSeen={markThreadSeen}
                         onCompactThread={compactThread}
                         onCreateDraftThread={() => controls?.createThreadDraft(harness) ?? null}

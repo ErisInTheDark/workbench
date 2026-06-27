@@ -24,16 +24,21 @@ import type {
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
 import {
-  buildInlineMentionHighlights,
-  type InlineMentionHighlightSources,
-} from "../../../lib/workbench/thread/inline-mention-highlights";
-import {
   areWorkbenchAgentPathsEqual,
   getWorkbenchAgentPathLabel,
 } from "../../../lib/workbench/agent-paths";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
+import {
+  buildInlineMentionHighlights,
+  type InlineMentionHighlightSources,
+} from "../../../lib/workbench/thread/inline-mention-highlights";
+import {
+  WORKBENCH_PAUSE_CONTROL_KIND,
+  WORKBENCH_PAUSE_PENDING_HALO_MS,
+} from "../../../lib/workbench/thread/thread-pause-control";
 import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
 import { isWorkbenchSyntheticSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
+import PrimaryButton from "../PrimaryButton";
 import PlaintextEditable, { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./PlaintextEditable";
 import ThreadAgentPicker from "./ThreadAgentPicker";
 import ThreadLightboxImage from "./ThreadLightboxImage";
@@ -70,6 +75,23 @@ function ArrowUpIcon () {
     <svg viewBox="0 0 20 20" className="h-4.5 w-4.5" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8">
       <path d="M10 15.75V4.25" strokeLinecap="round" />
       <path d="M5.75 8.5L10 4.25l4.25 4.25" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function PauseIcon () {
+  return (
+    <svg viewBox="0 0 16 16" className="h-4.5 w-4.5" aria-hidden="true">
+      <rect x="4" y="2.75" width="2.6" height="10.5" rx="1" fill="currentColor" />
+      <rect x="9.4" y="2.75" width="2.6" height="10.5" rx="1" fill="currentColor" />
+    </svg>
+  );
+}
+
+function PlayIcon () {
+  return (
+    <svg viewBox="0 0 16 16" className="h-4.5 w-4.5" aria-hidden="true">
+      <path d="M5 3.5v9l7-4.5-7-4.5z" fill="currentColor" />
     </svg>
   );
 }
@@ -282,23 +304,18 @@ function ThreadSavedDraftShelf ({
                 >
                   <TrashIcon />
                 </button>
-                <button
+                <PrimaryButton
                   type="button"
                   aria-label="Restore saved draft to composer"
                   title="Restore saved draft to composer"
                   disabled={isRestoreDisabled}
-                  className={joinClasses(
-                    "inline-flex size-10 items-center justify-center rounded-full transition",
-                    "bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] text-[var(--bg)]",
-                    "hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]",
-                    isRestoreDisabled && "cursor-not-allowed opacity-45",
-                  )}
+                  shape="circle"
                   onClick={() => {
                     onRestore(draft);
                   }}
                 >
                   <ArrowUpIcon />
-                </button>
+                </PrimaryButton>
               </div>
             </div>
             {draft.attachments.length ? (
@@ -327,6 +344,8 @@ export default function ThreadComposer ({
   header,
   layout = "thread",
   onListModels,
+  onPauseThread,
+  onResumeThread,
   onSendMessage,
   onStopThread,
   onThreadComposerDraftChange,
@@ -363,6 +382,8 @@ export default function ThreadComposer ({
   header?: ReactNode;
   layout?: "thread" | "inline";
   onListModels: (harness: ThreadPayload["harness"]) => Promise<WorkbenchModelOption[]>;
+  onPauseThread: (threadId: string) => Promise<void> | void;
+  onResumeThread: (threadId: string) => Promise<void> | void;
   onSendMessage: (threadId: string, input: UserInput[]) => Promise<void>;
   onStopThread: (threadId: string) => Promise<void> | void;
   onThreadComposerDraftChange: (threadId: string, draft: WorkbenchThreadComposerDraft) => void;
@@ -416,7 +437,10 @@ export default function ThreadComposer ({
   const [modelsError, setModelsError] = useState("");
   const [isQuestionnaireVisible, setIsQuestionnaireVisible] = useState(Boolean(pendingUserInputRequest));
   const [pendingAttachmentReads, setPendingAttachmentReads] = useState(0);
+  const [pauseRequestedAt, setPauseRequestedAt] = useState<number | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [isPausing, setIsPausing] = useState(false);
+  const [isResuming, setIsResuming] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [isSavedDraftShelfExpanded, setIsSavedDraftShelfExpanded] = useState(false);
   const hydratedDraftKeyRef = useRef("");
@@ -429,36 +453,48 @@ export default function ThreadComposer ({
   const trimmedValue = value.trim();
   const isAttaching = pendingAttachmentReads > 0;
   const hasPendingUserInputRequest = pendingUserInputRequest !== null;
+  const hiddenPauseRequest = pendingUserInputRequest?.hidden && pendingUserInputRequest.controlKind === WORKBENCH_PAUSE_CONTROL_KIND
+    ? pendingUserInputRequest
+    : null;
+  const visiblePendingUserInputRequest = pendingUserInputRequest && !pendingUserInputRequest.hidden
+    ? pendingUserInputRequest
+    : null;
+  const hasVisiblePendingUserInputRequest = visiblePendingUserInputRequest !== null;
   const questionnaireRequestKey = pendingUserInputRequest?.requestKey ?? "";
-  const showQuestionnairePanel = hasPendingUserInputRequest && isQuestionnaireVisible;
+  const showQuestionnairePanel = hasVisiblePendingUserInputRequest && isQuestionnaireVisible;
   const isCopilotAuthRequired = thread.harness === "copilot" && rateLimits?.limitId === "copilot:auth";
   const isThreadStateBroken = hasStaleApprovalState(thread);
   const isApprovalBlocked = isCurrentTurnWaitingOnApproval(thread);
   const isActiveThread = getCurrentInProgressTurn(thread) !== null;
   const isInputDisabled = isSending || isAttaching || isThreadStateBroken || isCopilotAuthRequired;
-  const isSendDisabled = hasPendingUserInputRequest || isInputDisabled;
+  const isSendDisabled = isInputDisabled;
   const isSaveDraftDisabled = hasPendingUserInputRequest || isInputDisabled || (!trimmedValue && !attachments.length);
   const isStopDisabled = !isActiveThread || isStopping;
+  const isPauseRequestPending = pauseRequestedAt !== null && !hiddenPauseRequest;
+  const isPauseDisabled = !isActiveThread || isPausing || isResuming || isPauseRequestPending;
+  const isResumeDisabled = !hiddenPauseRequest || isResuming;
   const isMobileTextInput = useMobileTextInputEnvironment();
-  const helperText = hasPendingUserInputRequest
-    ? "Answer the question card before sending."
-    : isAttaching
-      ? "Attaching pasted image..."
-      : isCopilotAuthRequired
-        ? "Open a terminal, run copilot, then use /login to authenticate Copilot CLI."
-        : isThreadStateBroken
-          ? "Thread state is out of sync. Sending is disabled here."
-          : isApprovalBlocked
-            ? ""
-            : isActiveThread
-              ? isMobileTextInput
-                ? ""
-                : ""
-              : thread.isDraft
-                ? ""
-                : isMobileTextInput
+  const helperText = hiddenPauseRequest
+    ? "Paused. Send a steer or resume the agent."
+    : hasVisiblePendingUserInputRequest
+      ? "\xa0"
+      : isAttaching
+        ? "Attaching pasted image..."
+        : isCopilotAuthRequired
+          ? "Open a terminal, run copilot, then use /login to authenticate Copilot CLI."
+          : isThreadStateBroken
+            ? "Thread state is out of sync. Sending is disabled here."
+            : isApprovalBlocked
+              ? ""
+              : isActiveThread
+                ? isMobileTextInput
                   ? ""
-                  : "";
+                  : ""
+                : thread.isDraft
+                  ? ""
+                  : isMobileTextInput
+                    ? ""
+                    : "";
   const selectedModel = thread.model;
   const selectedModelOption = availableModels.find((model) => model.id === selectedModel) ?? null;
   const defaultModelOption = availableModels.find((model) => model.isDefault) ?? null;
@@ -536,8 +572,30 @@ export default function ThreadComposer ({
     setActivePicker(null);
     setAgentsError("");
     setModelsError("");
-    setIsQuestionnaireVisible(Boolean(pendingUserInputRequest));
-  }, [pendingUserInputRequest?.request.id, thread.id]);
+    setIsQuestionnaireVisible(Boolean(visiblePendingUserInputRequest));
+  }, [thread.id, visiblePendingUserInputRequest?.request.id]);
+
+  useEffect(() => {
+    if (hiddenPauseRequest) {
+      setPauseRequestedAt(null);
+      setIsPausing(false);
+      return;
+    }
+
+    if (pauseRequestedAt === null) {
+      return;
+    }
+
+    const remainingMs = Math.max(0, WORKBENCH_PAUSE_PENDING_HALO_MS - (Date.now() - pauseRequestedAt));
+    const timeoutId = window.setTimeout(() => {
+      setPauseRequestedAt(null);
+      setIsPausing(false);
+    }, remainingMs);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [hiddenPauseRequest, pauseRequestedAt]);
 
   useEffect(() => {
     if (!autoExpandSavedDraftShelf) {
@@ -748,6 +806,41 @@ export default function ThreadComposer ({
     }
   };
 
+  const pause = async () => {
+    if (isPauseDisabled || isPickerOpen) {
+      return;
+    }
+
+    setIsPausing(true);
+    setPauseRequestedAt(Date.now());
+    setError("");
+    try {
+      await onPauseThread(thread.id);
+    } catch (pauseError) {
+      setPauseRequestedAt(null);
+      setError(pauseError instanceof Error ? pauseError.message : "Unable to pause that turn.");
+    } finally {
+      setIsPausing(false);
+    }
+  };
+
+  const resume = async () => {
+    if (isResumeDisabled || isPickerOpen) {
+      return;
+    }
+
+    setIsResuming(true);
+    setError("");
+    try {
+      await onResumeThread(thread.id);
+      setPauseRequestedAt(null);
+    } catch (resumeError) {
+      setError(resumeError instanceof Error ? resumeError.message : "Unable to resume that turn.");
+    } finally {
+      setIsResuming(false);
+    }
+  };
+
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     void submit();
@@ -805,18 +898,29 @@ export default function ThreadComposer ({
     onThreadReasoningEffortChange(thread.id, supportedReasoningEfforts[nextIndex] ?? null);
   };
 
+  const pauseButton = showStopButton || hiddenPauseRequest || isPauseRequestPending ? (
+    <PrimaryButton
+      type="button"
+      aria-label={hiddenPauseRequest ? (isResuming ? "Resuming paused agent" : "Resume paused agent") : isPauseRequestPending ? "Pause request pending" : "Pause current turn"}
+      title={hiddenPauseRequest ? (isResuming ? "Resuming paused agent" : "Resume paused agent") : isPauseRequestPending ? "Pause request pending" : "Pause current turn"}
+      disabled={hiddenPauseRequest ? isResumeDisabled : isPauseDisabled}
+      pendingHalo={isPauseRequestPending}
+      shape="circle"
+      onClick={() => {
+        void (hiddenPauseRequest ? resume() : pause());
+      }}
+    >
+      {hiddenPauseRequest ? <PlayIcon /> : <PauseIcon />}
+    </PrimaryButton>
+  ) : null;
+
   const stopButton = showStopButton ? (
-    <button
+    <PrimaryButton
       type="button"
       aria-label={isStopping ? "Stopping current turn" : "Stop current turn"}
       title={isStopping ? "Stopping current turn" : "Stop current turn"}
       disabled={isStopDisabled}
-      className={joinClasses(
-        "inline-flex size-10 items-center justify-center rounded-full transition",
-        "bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] text-[var(--bg)]",
-        "hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]",
-        isStopDisabled && "cursor-not-allowed opacity-45",
-      )}
+      shape="circle"
       onClick={() => {
         void stop();
       }}
@@ -824,9 +928,9 @@ export default function ThreadComposer ({
       <svg viewBox="0 0 16 16" className="h-4.5 w-4.5" aria-hidden="true">
         <rect x="2.5" y="2.5" width="11" height="11" rx="1.9" fill="currentColor" />
       </svg>
-    </button>
+    </PrimaryButton>
   ) : null;
-  const questionnaireToggleButton = hasPendingUserInputRequest ? (
+  const questionnaireToggleButton = hasVisiblePendingUserInputRequest ? (
     <button
       type="button"
       aria-label={showQuestionnairePanel ? "Show composer" : "Show questionnaire"}
@@ -876,7 +980,7 @@ export default function ThreadComposer ({
               {header}
             </div>
           ) : null}
-          {showQuestionnairePanel && pendingUserInputRequest ? (
+          {showQuestionnairePanel && visiblePendingUserInputRequest ? (
             <ThreadUserInputRequest
               actions={stopButton}
               draft={threadQuestionnaireDraft}
@@ -887,14 +991,14 @@ export default function ThreadComposer ({
               onDraftChange={handleQuestionnaireDraftChange}
               onDraftClear={handleQuestionnaireDraftClear}
               projectRootPath={projectRootPath}
-              request={pendingUserInputRequest.request}
+              request={visiblePendingUserInputRequest.request}
               workspaceRoots={workspaceRoots}
               mode="live"
               onSubmit={async (response) => {
                 await onSubmitUserInputRequest(
                   thread.id,
                   response,
-                  buildPendingUserInputRequestSubmissionOptions(thread, pendingUserInputRequest),
+                  buildPendingUserInputRequestSubmissionOptions(thread, visiblePendingUserInputRequest),
                 );
               }}
             />
@@ -1115,19 +1219,15 @@ export default function ThreadComposer ({
                     {agentButtonLabel}
                   </button>
                 </div>
-                <button
+                <PrimaryButton
                   type="submit"
                   disabled={(!trimmedValue && !attachments.length) || isSendDisabled}
-                  className={joinClasses(
-                    "rounded-full px-4 py-2 text-[0.84em] font-medium transition",
-                    "bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] text-[var(--bg)]",
-                    "hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]",
-                    ((!trimmedValue && !attachments.length) || isSendDisabled) && "cursor-not-allowed opacity-45",
-                  )}
+                  className="text-[0.84em]"
                 >
                   {isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : sendLabel}
-                </button>
+                </PrimaryButton>
                 {trailingActions}
+                {pauseButton}
                 {stopButton}
               </div>
             </div>

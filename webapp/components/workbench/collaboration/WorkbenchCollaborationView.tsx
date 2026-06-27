@@ -40,6 +40,7 @@ import { WORKBENCH_FILE_LINK_INSTRUCTIONS } from "../../../lib/workbench/thread/
 import type { WorkbenchFilePanelClientOptions } from "../../../lib/workbench/WorkbenchFilePanelClient";
 import WorkbenchFilePanel from "../layout/WorkbenchFilePanel";
 import WorkbenchMainLayoutView from "../layout/WorkbenchMainLayoutView";
+import PrimaryButton from "../PrimaryButton";
 import { ThreadThreadContent } from "../thread-view/thread-view-items";
 import ThreadComposer from "../thread-view/ThreadComposer";
 import ThreadDisclosure from "../thread-view/ThreadDisclosure";
@@ -426,7 +427,9 @@ export default function WorkbenchCollaborationView ({
   onClaimAutoWake,
   onDraftHarnessChange,
   onListModels,
+  onPauseThread,
   onReadThread,
+  onResumeThread,
   onSendMessage,
   onStopThread,
   onSubmitUserInputRequest,
@@ -1192,6 +1195,24 @@ export default function WorkbenchCollaborationView ({
     return payload;
   }, [onStopThread, rememberCollaboratorThread]);
 
+  const handleCollaboratorPauseThread = useCallback(async (thread: ThreadPayload) => {
+    const payload = await onPauseThread(thread);
+    if (payload) {
+      rememberCollaboratorThread(payload);
+      setCollaboratorRunStatus(isThreadStatusActive(payload.status) ? "running" : "idle");
+    }
+    return payload;
+  }, [onPauseThread, rememberCollaboratorThread]);
+
+  const handleCollaboratorResumeThread = useCallback(async (thread: ThreadPayload) => {
+    const payload = await onResumeThread(thread);
+    if (payload) {
+      rememberCollaboratorThread(payload);
+      setCollaboratorRunStatus(isThreadStatusActive(payload.status) ? "running" : "idle");
+    }
+    return payload;
+  }, [onResumeThread, rememberCollaboratorThread]);
+
   const updateCollaboratorDraftThread = useCallback((update: (thread: ThreadPayload) => ThreadPayload) => {
     setCollaboratorDraftThread((current) => {
       if (!current) {
@@ -1351,16 +1372,15 @@ export default function WorkbenchCollaborationView ({
                   </span>
                 ) : null}
               </button>
-              <button
+              <PrimaryButton
                 type="button"
-                className="rounded-full bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] px-4 py-2 text-[0.84rem] font-medium text-[var(--bg)] transition hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)] disabled:cursor-not-allowed disabled:opacity-45"
                 disabled={!controls || isSendingControlPrompt}
                 onClick={() => {
                   void runCollaboratorNow();
                 }}
               >
                 {isSendingControlPrompt ? "Running..." : collaboratorHistory.length ? "Run now" : "Start collaborator"}
-              </button>
+              </PrimaryButton>
             </div>
           </div>
           <div className="mt-4 flex flex-col gap-3">
@@ -1388,15 +1408,14 @@ export default function WorkbenchCollaborationView ({
                   >
                     <p className="mb-0 whitespace-pre-wrap px-1 pr-18 text-[0.9rem] leading-6 text-muted">{startedSuggestion.prompt}</p>
                     <div className="mt-3 flex justify-end px-1">
-                      <button
+                      <PrimaryButton
                         type="button"
-                        className="rounded-full px-4 py-2 text-[0.84rem] font-medium transition bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] text-[var(--bg)] hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]"
                         onClick={() => {
                           onOpenThreadFromSuggestion(startedSuggestion.startedThreadId);
                         }}
                       >
                         Go to thread
-                      </button>
+                      </PrimaryButton>
                     </div>
                   </CollaborationSuggestionCard>
                 );
@@ -1435,6 +1454,8 @@ export default function WorkbenchCollaborationView ({
                     knownSkills={[]}
                     layout="inline"
                     onListModels={onListModels}
+                    onPauseThread={() => { }}
+                    onResumeThread={() => { }}
                     onSendMessage={async (_threadId, input) => {
                       const result = await onStartThreadFromPrompt(input, suggestionComposerThread);
                       if (result.status === "started") {
@@ -1554,6 +1575,8 @@ export default function WorkbenchCollaborationView ({
                           onDraftHarnessChange={onDraftHarnessChange}
                           onListModels={onListModels}
                           onReadThread={onReadThread}
+                          onPauseThread={handleCollaboratorPauseThread}
+                          onResumeThread={handleCollaboratorResumeThread}
                           onSendMessage={handleCollaboratorSendMessage}
                           onStopThread={handleCollaboratorStopThread}
                           onSubmitUserInputRequest={onSubmitUserInputRequest}
@@ -1643,6 +1666,8 @@ export default function WorkbenchCollaborationView ({
             highlightSources={suggestionComposerHighlightSources}
             knownSkills={[]}
             onListModels={onListModels}
+            onPauseThread={() => { }}
+            onResumeThread={() => { }}
             onSendMessage={handleCollaboratorDraftSendMessage}
             onStopThread={() => { }}
             onSubmitUserInputRequest={onSubmitUserInputRequest}

@@ -59,7 +59,9 @@ export default function WorkbenchThreadPanel ({
   onReadThread,
   onMinimizeToggle,
   onPanelZoomDeltaChange,
+  onPauseThread,
   onSendMessage,
+  onResumeThread,
   onStopThread,
   panelZoomDelta = 0,
   threadId,
@@ -185,6 +187,24 @@ export default function WorkbenchThreadPanel ({
     return payload;
   }, [onStopThread, threadId]);
 
+  const handlePauseThread = useCallback<ThreadViewProps["onPauseThread"]>(async (activeThread) => {
+    const payload = await onPauseThread(activeThread);
+    if (payload?.id === threadId) {
+      setThread(payload);
+    }
+
+    return payload;
+  }, [onPauseThread, threadId]);
+
+  const handleResumeThread = useCallback<ThreadViewProps["onResumeThread"]>(async (activeThread) => {
+    const payload = await onResumeThread(activeThread);
+    if (payload?.id === threadId) {
+      setThread(payload);
+    }
+
+    return payload;
+  }, [onResumeThread, threadId]);
+
   useEffect(() => {
     if (!thread || thread.isDraft) {
       return;
@@ -305,6 +325,8 @@ export default function WorkbenchThreadPanel ({
           contained
           fontSizeRem={effectiveFontSizeRem}
           onReadThread={handleReadThread}
+          onPauseThread={handlePauseThread}
+          onResumeThread={handleResumeThread}
           onSendMessage={handleSendMessage}
           onStopThread={handleStopThread}
           thread={thread}

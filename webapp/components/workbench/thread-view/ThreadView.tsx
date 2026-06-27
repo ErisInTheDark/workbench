@@ -547,12 +547,14 @@ export default memo(function ThreadView ({
   fontSizeRem,
   hideFinalAgentMessage = false,
   hideWorkbenchControlAgentMessages = false,
-  hideWorkbenchControlUserMessages = false,
+  hideWorkbenchControlUserMessages = true,
   livePendingUserInputRequestsByThreadId,
   onDraftHarnessChange,
   onThreadCodeBlockWrapChange,
   onListModels,
+  onPauseThread,
   onReadThread,
+  onResumeThread,
   onThreadSeen,
   onCompactThread,
   onSendMessage,
@@ -592,7 +594,9 @@ export default memo(function ThreadView ({
   onDraftHarnessChange: (harness: WorkbenchHarness) => void;
   onThreadCodeBlockWrapChange: (nextValue: boolean) => void;
   onListModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
+  onPauseThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   onReadThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
+  onResumeThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   onThreadSeen: (thread: ThreadPayload) => void;
   onCompactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   onSendMessage: (
@@ -1182,6 +1186,34 @@ export default memo(function ThreadView ({
     }
   }, [activeThread, onStopThread, thread.id]);
 
+  const handlePauseThread = useCallback(async () => {
+    if (!activeThread) {
+      return;
+    }
+
+    const payload = await onPauseThread(activeThread);
+    if (payload && activeThread.id !== thread.id) {
+      setSubthreadsById((current) => ({
+        ...current,
+        [activeThread.id]: payload,
+      }));
+    }
+  }, [activeThread, onPauseThread, thread.id]);
+
+  const handleResumeThread = useCallback(async () => {
+    if (!activeThread) {
+      return;
+    }
+
+    const payload = await onResumeThread(activeThread);
+    if (payload && activeThread.id !== thread.id) {
+      setSubthreadsById((current) => ({
+        ...current,
+        [activeThread.id]: payload,
+      }));
+    }
+  }, [activeThread, onResumeThread, thread.id]);
+
   const handleThreadModelChange = useCallback((threadId: string, model: string) => {
     if (threadId === thread.id) {
       onThreadModelChange(threadId, model);
@@ -1411,6 +1443,12 @@ export default memo(function ThreadView ({
       composerSpellCheck={composerSpellCheck}
       onListModels={onListModels}
       highlightSources={inlineMentionSources}
+      onPauseThread={() => {
+        void handlePauseThread();
+      }}
+      onResumeThread={() => {
+        void handleResumeThread();
+      }}
       onSendMessage={handleSendMessage}
       onStopThread={() => {
         void handleStopThread();

@@ -84,6 +84,11 @@ import {
 } from "./state/browser-state";
 import { getTurnRenderSignature } from "./thread/thread-item-signature";
 import { applyQuestionnaireHistoryToThread, isSyntheticQuestionnaireHistoryItem } from "./thread/thread-questionnaire-history";
+import {
+    createWorkbenchPauseControlInput,
+    createWorkbenchPauseResumeResponse,
+    WORKBENCH_PAUSE_CONTROL_KIND,
+} from "./thread/thread-pause-control";
 import { applySteerHistoryToThread, isSyntheticSteerHistoryItem } from "./thread/thread-steer-history";
 
 const THREAD_REFRESH_TASK_ID = "thread-refresh";
@@ -182,6 +187,8 @@ interface WorkbenchThreadClient {
     options?: WorkbenchSendThreadMessageOptions,
   ) => Promise<ThreadPayload | null>;
   compactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
+  pauseThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
+  resumeThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   stopThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   submitPendingUserInputRequest: (
     threadId: string,
@@ -1881,9 +1888,13 @@ function WorkbenchThreadClient(
     requestKey: string,
     request: WorkbenchUserInputRequest,
     {
+      controlKind = null,
+      hidden = false,
       itemId = null,
       turnId = null,
     }: {
+      controlKind?: WorkbenchPendingUserInputRequest["controlKind"];
+      hidden?: boolean;
       itemId?: string | null;
       turnId?: string | null;
     } = {},
@@ -1894,6 +1905,8 @@ function WorkbenchThreadClient(
       && existing.harness === harness
       && existing.turnId === turnId
       && existing.itemId === itemId
+      && Boolean(existing.hidden) === hidden
+      && (existing.controlKind ?? null) === (controlKind ?? null)
       && areDeeplyEqual(existing.request, request)
     ) {
       return false;
@@ -1901,6 +1914,8 @@ function WorkbenchThreadClient(
 
     state.pendingUserInputRequestsByThreadId.set(threadId, {
       harness,
+      controlKind,
+      hidden: hidden || undefined,
       itemId,
       request,
       requestKey,
@@ -2013,6 +2028,8 @@ function WorkbenchThreadClient(
           || existing.harness !== request.harness
           || existing.turnId !== request.turnId
           || existing.itemId !== request.itemId
+          || existing.hidden !== request.hidden
+          || (existing.controlKind ?? null) !== (request.controlKind ?? null)
           || !areDeeplyEqual(existing.request, request.request)
         ) {
           unchanged = false;
@@ -2252,6 +2269,8 @@ function WorkbenchThreadClient(
 
     const existingEntries = state.questionnaireHistoryByThreadId.get(pendingRequest.threadId) ?? [];
     const entry: WorkbenchQuestionnaireHistoryEntry = {
+      controlKind: pendingRequest.controlKind ?? null,
+      hidden: pendingRequest.hidden || undefined,
       insertAfterItemId: options.insertAfterItemId ?? pendingRequest.itemId,
       insertAfterItemIndex: options.insertAfterItemIndex ?? null,
       itemId: pendingRequest.itemId,
@@ -2715,7 +2734,15 @@ function WorkbenchThreadClient(
     const questionnaireHarnesses = ["codex", "copilot", "opencode"] as const;
     const results = await Promise.allSettled(questionnaireHarnesses.map(async (harness) => {
       const generation = getPendingUserInputRequestGeneration(harness);
-      const response = await sendBridgeRequest<{ data?: Array<{ itemId?: string | null; request: WorkbenchUserInputRequest; requestKey: string; threadId: string; turnId?: string | null }> }>(harness, {
+      const response = await sendBridgeRequest<{ data?: Array<{
+        controlKind?: WorkbenchPendingUserInputRequest["controlKind"];
+        hidden?: boolean;
+        itemId?: string | null;
+        request: WorkbenchUserInputRequest;
+        requestKey: string;
+        threadId: string;
+        turnId?: string | null;
+      }> }>(harness, {
         method: "questionnaire/list",
         params: undefined,
         workbenchRequestSource: AUTO_REFRESH_REQUEST_SOURCE,
@@ -2724,7 +2751,9 @@ function WorkbenchThreadClient(
         generation,
         harness,
         pendingRequests: (response.data ?? []).map((entry) => ({
+          controlKind: entry.controlKind ?? null,
           harness,
+          hidden: entry.hidden || undefined,
           itemId: entry.itemId ?? null,
           request: entry.request,
           requestKey: entry.requestKey,
@@ -3735,6 +3764,58 @@ function WorkbenchThreadClient(
     return thread;
   }
 
+  async function pauseThread(thread: ThreadPayload) {
+    if (thread.isDraft) {
+      return thread;
+    }
+
+    const activeTurn = getCurrentInProgressTurn(thread);
+    if (!activeTurn) {
+      return thread;
+    }
+
+    const normalizedInput = normalizeThreadMessageInput(createWorkbenchPauseControlInput());
+    const workbenchOrigin = readLocalWorkbenchOrigin();
+    await sendBridgeRequest<TurnSteerResponse>(thread.harness, {
+      method: "turn/steer",
+      ...(shouldSendWorkbenchPromptContext(thread.harness)
+        ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(thread.harness, thread.id, thread.agentPath, workbenchOrigin) }
+        : {}),
+      params: {
+        ...(thread.agentPath && thread.harness === "copilot" ? { agentPath: thread.agentPath } : {}),
+        ...(state.projectId && thread.harness === "copilot" ? { projectId: state.projectId } : {}),
+        ...(state.projectRootPath && thread.harness !== "codex" ? { cwd: state.projectRootPath } : {}),
+        ...(workbenchOrigin && thread.harness !== "codex" ? { workbenchOrigin } : {}),
+        expectedTurnId: activeTurn.id,
+        input: normalizedInput,
+        threadId: thread.id,
+      } as { agentPath?: string; cwd?: string; expectedTurnId: string; input: UserInput[]; threadId: string; workbenchOrigin?: string },
+    });
+
+    await refreshPendingUserInputRequests();
+    return state.currentThread?.id === thread.id && state.currentThread.harness === thread.harness
+      ? state.currentThread
+      : thread;
+  }
+
+  async function resumeThread(thread: ThreadPayload) {
+    if (thread.isDraft) {
+      return thread;
+    }
+
+    const pendingRequest = state.pendingUserInputRequestsByThreadId.get(thread.id);
+    if (!pendingRequest?.hidden || pendingRequest.controlKind !== WORKBENCH_PAUSE_CONTROL_KIND) {
+      throw new Error("There is no paused questionnaire for this thread.");
+    }
+
+    await submitPendingUserInputRequest(thread.id, createWorkbenchPauseResumeResponse(), {
+      insertAfterItemId: pendingRequest.itemId,
+      turnId: pendingRequest.turnId,
+    });
+    const refreshedThread = await readThread(thread.id, thread.harness).catch(() => null);
+    return refreshedThread ?? thread;
+  }
+
   async function submitPendingUserInputRequest(
     threadId: string,
     response: WorkbenchUserInputResponse,
@@ -3812,6 +3893,8 @@ function WorkbenchThreadClient(
         notification.params.requestKey,
         notification.params.request,
         {
+          controlKind: "controlKind" in notification.params ? notification.params.controlKind as WorkbenchPendingUserInputRequest["controlKind"] : null,
+          hidden: "hidden" in notification.params ? Boolean(notification.params.hidden) : false,
           itemId: notification.params.itemId,
           turnId: notification.params.turnId,
         },
@@ -4003,6 +4086,8 @@ function WorkbenchThreadClient(
     refreshThreads,
     sendThreadMessage,
     compactThread,
+    pauseThread,
+    resumeThread,
     stopThread,
     submitPendingUserInputRequest,
     setCurrentThreadAgent,

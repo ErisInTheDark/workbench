@@ -184,7 +184,7 @@ function isQuestionnaireHistoryAnchorItem(item: ThreadItem) {
 }
 
 function sortQuestionnaireHistoryEntries(entries: WorkbenchQuestionnaireHistoryEntry[]) {
-  return [...entries].sort((left, right) => {
+  return entries.filter((entry) => !entry.hidden).sort((left, right) => {
     if (left.resolvedAt !== right.resolvedAt) {
       return left.resolvedAt - right.resolvedAt;
     }

@@ -20,6 +20,7 @@ import {
 } from "../../../lib/workbench/thread/inline-mention-highlights";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import { getThreadCommandDisplay } from "../../../lib/workbench/thread/thread-command-matchers";
+import PrimaryButton from "../PrimaryButton";
 import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
 import PlaintextEditable, { isMobileTextInputEnvironment } from "./PlaintextEditable";
 import { ThreadCommandSummary } from "./thread-view-primitives";
@@ -505,22 +506,16 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
             {interactiveProps?.leadingActions}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-3">
-            <button
+            <PrimaryButton
               type="button"
               onClick={() => {
                 void handleSubmit();
               }}
               disabled={isSubmitting}
-              className={joinClasses(
-                "justify-self-end",
-                "rounded-full px-4 py-2 text-[0.84em] font-medium transition",
-                "bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] text-[var(--bg)]",
-                "hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]",
-                isSubmitting && "cursor-not-allowed opacity-45",
-              )}
+              className="justify-self-end text-[0.84em]"
             >
               {isSubmitting ? "Submitting..." : request.submitLabel}
-            </button>
+            </PrimaryButton>
             {interactiveProps?.actions}
           </div>
         </div>

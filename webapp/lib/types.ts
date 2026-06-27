@@ -228,6 +228,8 @@ export interface WorkbenchUserInputResponse {
   answers: Record<string, WorkbenchUserInputAnswer | undefined>;
 }
 
+export type WorkbenchUserInputControlKind = "pause";
+
 export interface WorkbenchSubmitUserInputRequestOptions {
   turnId?: string | null;
   insertAfterItemId?: string | null;
@@ -241,6 +243,8 @@ export interface WorkbenchPendingUserInputRequest {
   turnId: string | null;
   itemId: string | null;
   request: WorkbenchUserInputRequest;
+  hidden?: boolean;
+  controlKind?: WorkbenchUserInputControlKind | null;
 }
 
 export interface WorkbenchQuestionnaireHistoryEntry {
@@ -253,6 +257,8 @@ export interface WorkbenchQuestionnaireHistoryEntry {
   request: WorkbenchUserInputRequest;
   response: WorkbenchUserInputResponse;
   resolvedAt: number;
+  hidden?: boolean;
+  controlKind?: WorkbenchUserInputControlKind | null;
 }
 
 export type WorkbenchSteerHistoryStatus = "pending" | "sent" | "interrupted" | "failed";
@@ -367,6 +373,8 @@ export interface WorkbenchControls {
     options?: WorkbenchSendThreadMessageOptions,
   ) => Promise<ThreadPayload | null>;
   compactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
+  pauseThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
+  resumeThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   stopThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   submitPendingUserInputRequest: (
     threadId: string,

@@ -445,6 +445,34 @@ export async function WorkbenchClient(
     return payload;
   }
 
+  async function pauseThread(thread: ThreadPayload) {
+    const payload = await threadClient.pauseThread(thread);
+    if (!payload) {
+      return null;
+    }
+
+    if (payload.id === sessionState.currentThreadId) {
+      applyThreadPayloadToCurrentView(payload, "Requested agent pause.");
+    }
+
+    emitExplorerStateChange();
+    return payload;
+  }
+
+  async function resumeThread(thread: ThreadPayload) {
+    const payload = await threadClient.resumeThread(thread);
+    if (!payload) {
+      return null;
+    }
+
+    if (payload.id === sessionState.currentThreadId) {
+      applyThreadPayloadToCurrentView(payload, "Resumed paused agent.");
+    }
+
+    emitExplorerStateChange();
+    return payload;
+  }
+
   async function createEntry(parentPath: string, name: string, type: "directory" | "file") {
     const createdPath = await projectClient.createEntry(parentPath, name, type);
 
@@ -687,6 +715,8 @@ export async function WorkbenchClient(
     refreshRateLimits,
     sendThreadMessage,
     compactThread,
+    pauseThread,
+    resumeThread,
     stopThread,
     submitPendingUserInputRequest: threadClient.submitPendingUserInputRequest,
     setEditorFontSize: (fontSize) => {
