@@ -601,6 +601,46 @@ function getGroupedProjects (projects: WorkbenchProjectOption[]): GroupedProject
   return { libraryProjects, timeGroups };
 }
 
+function filterVisibleUserInputRequestsByThreadId (
+  requestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>,
+  locallyResolvedRequestKeysByThreadId: Record<string, string | undefined>,
+) {
+  let didFilter = false;
+  const visibleEntries = Object.entries(requestsByThreadId).filter(([threadId, request]) => {
+    const isLocallyResolved = locallyResolvedRequestKeysByThreadId[threadId] === request.requestKey;
+    if (isLocallyResolved) {
+      didFilter = true;
+    }
+    return !isLocallyResolved;
+  });
+
+  return didFilter
+    ? Object.fromEntries(visibleEntries)
+    : requestsByThreadId;
+}
+
+function pruneResolvedUserInputRequestKeys (
+  resolvedRequestKeysByThreadId: Record<string, string | undefined>,
+  requestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>,
+) {
+  let didChange = false;
+  const nextResolvedRequestKeysByThreadId = { ...resolvedRequestKeysByThreadId };
+
+  for (const [threadId, resolvedRequestKey] of Object.entries(resolvedRequestKeysByThreadId)) {
+    const pendingRequest = requestsByThreadId[threadId];
+    if (pendingRequest?.requestKey === resolvedRequestKey) {
+      continue;
+    }
+
+    delete nextResolvedRequestKeysByThreadId[threadId];
+    didChange = true;
+  }
+
+  return didChange
+    ? nextResolvedRequestKeysByThreadId
+    : resolvedRequestKeysByThreadId;
+}
+
 export default function Workbench () {
   const { navigateToRoute, route } = useWorkbenchRoute();
   const currentRouteRef = useRef<WorkbenchRoute>(route);
@@ -609,6 +649,7 @@ export default function Workbench () {
   const [currentThread, setCurrentThread] = useState<ThreadPayload | null>(null);
   const [threadRelativeTimeNowMs, setThreadRelativeTimeNowMs] = useState(() => Date.now());
   const [harnessUserInputRequestsByThreadId, setHarnessUserInputRequestsByThreadId] = useState<Record<string, WorkbenchPendingUserInputRequest>>({});
+  const [locallyResolvedUserInputRequestKeysByThreadId, setLocallyResolvedUserInputRequestKeysByThreadId] = useState<Record<string, string | undefined>>({});
   const [selectionError, setSelectionError] = useState("");
   const [rateLimits, setRateLimits] = useState<RateLimitSnapshot | null>(null);
   const [controls, setControls] = useState<WorkbenchControls | null>(null);
@@ -821,6 +862,9 @@ export default function Workbench () {
           onPendingUserInputRequestsChange: (requestsByThreadId) => {
             scheduleWorkbenchStateUpdate(() => {
               setHarnessUserInputRequestsByThreadId(requestsByThreadId);
+              setLocallyResolvedUserInputRequestKeysByThreadId((current) => (
+                pruneResolvedUserInputRequestKeys(current, requestsByThreadId)
+              ));
             });
           },
           onRateLimitsChange: (nextRateLimits) => {
@@ -1759,8 +1803,25 @@ export default function Workbench () {
     response: WorkbenchUserInputResponse,
     options?: WorkbenchSubmitUserInputRequestOptions,
   ) => {
-    await controls?.submitPendingUserInputRequest(threadId, response, options);
-  }, [controls]);
+    if (!controls) {
+      return;
+    }
+
+    const pendingRequestKey = harnessUserInputRequestsByThreadId[threadId]?.requestKey ?? null;
+    await controls.submitPendingUserInputRequest(threadId, response, options);
+    if (!pendingRequestKey) {
+      return;
+    }
+
+    setLocallyResolvedUserInputRequestKeysByThreadId((current) => (
+      current[threadId] === pendingRequestKey
+        ? current
+        : {
+          ...current,
+          [threadId]: pendingRequestKey,
+        }
+    ));
+  }, [controls, harnessUserInputRequestsByThreadId]);
 
   const reloadLocalRuntime = useCallback(async () => {
     setReloadError("");
@@ -1881,9 +1942,15 @@ export default function Workbench () {
   const activeThreadId = showThreadView ? effectiveThreadId : "";
   const activeFilePath = showFileView ? effectiveFilePath : "";
   const sidebarTrackTransform = sidebarMode === "projects" ? "translateX(0)" : "translateX(-50%)";
+  const visibleUserInputRequestsByThreadId = useMemo(() => (
+    filterVisibleUserInputRequestsByThreadId(
+      harnessUserInputRequestsByThreadId,
+      locallyResolvedUserInputRequestKeysByThreadId,
+    )
+  ), [harnessUserInputRequestsByThreadId, locallyResolvedUserInputRequestKeysByThreadId]);
   const pendingQuestionnaireThreadIds = useMemo(
-    () => new Set(Object.keys(harnessUserInputRequestsByThreadId)),
-    [harnessUserInputRequestsByThreadId],
+    () => new Set(Object.keys(visibleUserInputRequestsByThreadId)),
+    [visibleUserInputRequestsByThreadId],
   );
   const hasPendingQuestionnaire = Boolean(currentThread
     && pendingQuestionnaireThreadIds.has(currentThread.id)
@@ -3263,7 +3330,7 @@ export default function Workbench () {
                   thread={threadForThreadView}
                   composerSpellCheck={resolvedSettings.composerSpellCheck}
                   fontSizeRem={resolvedSettings.editorFontSize}
-                  livePendingUserInputRequestsByThreadId={harnessUserInputRequestsByThreadId}
+                  livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
                   onDraftHarnessChange={handleHarnessChange}
                   onListModels={listThreadModels}
                   onReadThread={readThread}
@@ -3368,7 +3435,7 @@ export default function Workbench () {
                   harness={harness}
                   isMobile={isMobile}
                   isProjectLoading={explorer.isProjectLoading}
-                  livePendingUserInputRequestsByThreadId={harnessUserInputRequestsByThreadId}
+                  livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
                   onCollaborationThreadRegistryChange={handleCollaborationThreadRegistryChange}
                   onClaimAutoWake={claimWorkbenchCollaborationAutoWake}
                   onDraftHarnessChange={handleHarnessChange}
@@ -3541,7 +3608,7 @@ export default function Workbench () {
                         isFocused={isFocused}
                         isMinimized={isMinimized}
                         isMinimizedVertical={isMinimizedVertical}
-                        livePendingUserInputRequestsByThreadId={harnessUserInputRequestsByThreadId}
+                        livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
                         onDraftHarnessChange={handleHarnessChange}
                         onListModels={listThreadModels}
                         onReadThread={readThread}

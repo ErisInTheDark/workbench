@@ -629,6 +629,7 @@ function WorkbenchThreadClient(
   let projectContextGeneration = 0;
   let rateLimitGeneration = 0;
   const refreshRateLimitsPromisesByHarness = new Map<WorkbenchHarness, Promise<void>>();
+  const pendingUserInputRequestGenerationsByHarness = new Map<WorkbenchHarness, number>();
   let refreshThreadsPromise: Promise<void> | null = null;
   let refreshThreadsPromiseGeneration = 0;
 
@@ -640,6 +641,14 @@ function WorkbenchThreadClient(
 
   function serializePendingUserInputRequests() {
     return Object.fromEntries(state.pendingUserInputRequestsByThreadId.entries());
+  }
+
+  function getPendingUserInputRequestGeneration(harness: WorkbenchHarness) {
+    return pendingUserInputRequestGenerationsByHarness.get(harness) ?? 0;
+  }
+
+  function bumpPendingUserInputRequestGeneration(harness: WorkbenchHarness) {
+    pendingUserInputRequestGenerationsByHarness.set(harness, getPendingUserInputRequestGeneration(harness) + 1);
   }
 
   function persistUnreadStateSnapshot() {
@@ -1898,6 +1907,7 @@ function WorkbenchThreadClient(
       threadId,
       turnId,
     });
+    bumpPendingUserInputRequestGeneration(harness);
     return true;
   }
 
@@ -1912,6 +1922,7 @@ function WorkbenchThreadClient(
     }
 
     state.pendingUserInputRequestsByThreadId.delete(threadId);
+    bumpPendingUserInputRequestGeneration(existing.harness);
     return true;
   }
 
@@ -2018,6 +2029,7 @@ function WorkbenchThreadClient(
     }
 
     state.pendingUserInputRequestsByThreadId = nextRequests;
+    bumpPendingUserInputRequestGeneration(harness);
     for (const request of requests) {
       markThreadWaitingOnUserInput(request.threadId);
     }
@@ -2702,12 +2714,14 @@ function WorkbenchThreadClient(
   async function refreshPendingUserInputRequests() {
     const questionnaireHarnesses = ["codex", "copilot", "opencode"] as const;
     const results = await Promise.allSettled(questionnaireHarnesses.map(async (harness) => {
+      const generation = getPendingUserInputRequestGeneration(harness);
       const response = await sendBridgeRequest<{ data?: Array<{ itemId?: string | null; request: WorkbenchUserInputRequest; requestKey: string; threadId: string; turnId?: string | null }> }>(harness, {
         method: "questionnaire/list",
         params: undefined,
         workbenchRequestSource: AUTO_REFRESH_REQUEST_SOURCE,
       });
       return {
+        generation,
         harness,
         pendingRequests: (response.data ?? []).map((entry) => ({
           harness,
@@ -2721,14 +2735,14 @@ function WorkbenchThreadClient(
     }));
 
     let changed = false;
-    for (const [index, result] of results.entries()) {
+    for (const result of results) {
       if (result.status === "fulfilled") {
-        changed = replacePendingUserInputRequests(result.value.harness, result.value.pendingRequests) || changed;
-        continue;
-      }
+        if (getPendingUserInputRequestGeneration(result.value.harness) !== result.value.generation) {
+          continue;
+        }
 
-      const rejectedHarness = questionnaireHarnesses[index] ?? "codex";
-      changed = replacePendingUserInputRequests(rejectedHarness, []) || changed;
+        changed = replacePendingUserInputRequests(result.value.harness, result.value.pendingRequests) || changed;
+      }
     }
 
     if (changed) {
