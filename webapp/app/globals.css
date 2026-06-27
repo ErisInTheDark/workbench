@@ -243,15 +243,18 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   .workbench-skeleton {
-    background:
+    background-color: color-mix(in srgb, var(--text) 7%, transparent);
+    background-image:
       linear-gradient(
         90deg,
         color-mix(in srgb, var(--text) 7%, transparent) 0%,
-        color-mix(in srgb, var(--accent) 15%, transparent) 45%,
-        color-mix(in srgb, var(--text) 7%, transparent) 90%
+        color-mix(in srgb, var(--text) 7%, transparent) 36%,
+        color-mix(in srgb, var(--accent) 15%, transparent) 50%,
+        color-mix(in srgb, var(--text) 7%, transparent) 64%,
+        color-mix(in srgb, var(--text) 7%, transparent) 100%
       );
-    background-size: 220% 100%;
-    animation: workbench-skeleton-shimmer 1.25s ease-in-out infinite;
+    background-size: 200% 100%;
+    animation: workbench-skeleton-shimmer 1.6s linear infinite;
   }
 
   .editor-content:empty::before {
@@ -347,7 +350,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
 
   @keyframes workbench-skeleton-shimmer {
     from {
-      background-position: 100% 50%;
+      background-position: 200% 50%;
     }
 
     to {

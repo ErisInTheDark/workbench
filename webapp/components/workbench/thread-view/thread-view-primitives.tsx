@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - formatThreadTimestamp: format thread timestamps for human-readable display. Keywords: workbench, thread, time.
+ * - formatThreadRelativeTimestamp: format thread timestamps as compact relative activity labels. Keywords: workbench, thread, relative time, bumped.
  * - formatThreadDuration: format durations in short d/h/m/s form for thread metadata. Keywords: workbench, thread, duration.
  * - humanizeThreadLabel: turn thread status and type labels into readable text. Keywords: workbench, thread, label.
  * - getThreadTitle: derive the best available thread title. Keywords: workbench, thread, title.
@@ -33,6 +34,30 @@ font-mono text-[0.94em]
 
 export function formatThreadTimestamp (timestampSeconds: number) {
   return new Date(timestampSeconds * 1000).toLocaleString();
+}
+
+export function formatThreadRelativeTimestamp (timestampSeconds: number, nowMs: number) {
+  if (!Number.isFinite(timestampSeconds) || timestampSeconds <= 0 || !Number.isFinite(nowMs)) {
+    return "";
+  }
+
+  const elapsedSeconds = Math.max(0, Math.floor((nowMs - timestampSeconds * 1000) / 1000));
+  if (elapsedSeconds < 45) {
+    return "just now";
+  }
+
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) {
+    return `${elapsedMinutes}m ago`;
+  }
+
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) {
+    return `${elapsedHours}h ago`;
+  }
+
+  const elapsedDays = Math.floor(elapsedHours / 24);
+  return `${elapsedDays}d ago`;
 }
 
 export function formatThreadDuration (durationMs: number | null) {

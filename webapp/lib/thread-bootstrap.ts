@@ -129,8 +129,8 @@ CRITICAL: Before ANYTHING else, no matter how simple your task, you must ensure 
 If you already know that the thread has a title, continue normally without setting a new one.
 Use a plaintext, action-oriented title, avoiding quotes and other special chars.
 
-Route URL: ${ escapedRouteUrl }
-Send a JSON body: { "harness": "${escapedHarness}", "threadId": "${escapedThreadId}", "title": "<short title>" }
+Use the shell tool of your choice to send a POST request to this URL: ${ escapedRouteUrl }
+Include a JSON body: { "harness": "${escapedHarness}", "threadId": "${escapedThreadId}", "title": "<short title>" }
 
 If the call fails because you made a mistake, try again with the correct command.
 If the call fails for any other reason, continue normally.

@@ -107,7 +107,9 @@ import {
   putPersistedThreadSavedComposerDraft,
 } from "../lib/workbench/thread/thread-composer-drafts";
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
+import ThreadLoadingSkeleton from "./workbench/thread-view/ThreadLoadingSkeleton";
 import ThreadView from "./workbench/thread-view/ThreadView";
+import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-primitives";
 import WorkbenchCollaborationView from "./workbench/collaboration/WorkbenchCollaborationView";
 import WorkbenchContextMenuProvider, { type WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuProvider";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
@@ -509,6 +511,7 @@ interface PendingWorkbenchPointerDrag {
 }
 
 const PROJECT_RECENCY_DAY_MS = 24 * 60 * 60 * 1000;
+const THREAD_RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000;
 const PROJECT_RECENCY_BUCKETS = [
   { label: "last week", maxAgeMs: 7 * PROJECT_RECENCY_DAY_MS },
   { label: "last month", maxAgeMs: 31 * PROJECT_RECENCY_DAY_MS },
@@ -603,6 +606,7 @@ export default function Workbench () {
   currentRouteRef.current = route;
   const [explorer, setExplorer] = useState(INITIAL_EXPLORER_SNAPSHOT);
   const [currentThread, setCurrentThread] = useState<ThreadPayload | null>(null);
+  const [threadRelativeTimeNowMs, setThreadRelativeTimeNowMs] = useState(() => Date.now());
   const [harnessUserInputRequestsByThreadId, setHarnessUserInputRequestsByThreadId] = useState<Record<string, WorkbenchPendingUserInputRequest>>({});
   const [selectionError, setSelectionError] = useState("");
   const [rateLimits, setRateLimits] = useState<RateLimitSnapshot | null>(null);
@@ -1019,6 +1023,7 @@ export default function Workbench () {
       && !archivedSidebarThreadKeySet.has(createWorkbenchThreadPreferenceKey(thread))
     ))
   ), [archivedSidebarThreadKeySet, collaborationThreadIdSet, explorer.threads]);
+  const threadSummariesById = useMemo(() => new Map<string, ThreadSummary>(explorer.threads.map((thread) => [thread.id, thread])), [explorer.threads]);
   const pinnedSidebarThreads = useMemo(() => (
     visibleSidebarThreads.filter((thread) => pinnedSidebarThreadKeySet.has(createWorkbenchThreadPreferenceKey(thread)))
   ), [pinnedSidebarThreadKeySet, visibleSidebarThreads]);
@@ -1861,6 +1866,12 @@ export default function Workbench () {
     : showThreadView && retainedThread?.id === effectiveThreadId
       ? retainedThread
       : null;
+  const threadSummaryForThreadView = showThreadView ? threadSummariesById.get(effectiveThreadId) ?? null : null;
+  const threadShellSource = threadForThreadView ?? threadSummaryForThreadView;
+  const threadShellTitle = threadShellSource ? getThreadTitle(threadShellSource) : effectiveThreadId || "Thread";
+  const threadShellStatusLabel = threadShellSource
+    ? formatThreadRelativeTimestamp(threadShellSource.updatedAt, threadRelativeTimeNowMs)
+    : "";
   const isThreadViewReady = showThreadView && Boolean(threadForThreadView);
   const isFileViewReady = showFileView && !currentThread && explorer.currentPath === effectiveFilePath;
   const isSelectionPending = !selectionError && ((showThreadView && !isThreadViewReady) || (showFileView && !isFileViewReady));
@@ -1898,6 +1909,20 @@ export default function Workbench () {
       : showCollaborationView
         ? "collaboration"
       : "";
+  useEffect(() => {
+    if (!showThreadView || !threadShellSource) {
+      return;
+    }
+
+    setThreadRelativeTimeNowMs(Date.now());
+    const intervalId = window.setInterval(() => {
+      setThreadRelativeTimeNowMs(Date.now());
+    }, THREAD_RELATIVE_TIME_REFRESH_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [showThreadView, threadShellSource?.id, threadShellSource?.updatedAt]);
   const routeMosaicProjection = useMemo(() => (
     showMosaicView && route.mosaicNode
       ? createWorkbenchMainLayoutFromMosaic(route.mosaicNode)
@@ -3149,10 +3174,10 @@ export default function Workbench () {
             <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
               <div className="order-2 min-w-0 md:order-1" hidden={Boolean(currentThread?.isDraft)}>
                 <p id="file-path" ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
-                  {showSettingsView ? "Settings" : "Select a file"}
+                  {showThreadView ? threadShellTitle : showSettingsView ? "Settings" : "Select a file"}
                 </p>
                 <p id="status-line" ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted">
-                  {showSettingsView ? "Theme and local Workbench preferences." : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
+                  {showThreadView ? threadShellStatusLabel : showSettingsView ? "Theme and local Workbench preferences." : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
                 </p>
               </div>
               <div className="order-1 flex items-center justify-between gap-3 md:order-2 md:ml-auto md:flex-none md:justify-end">
@@ -3275,13 +3300,7 @@ export default function Workbench () {
                   </div>
                 </div>
               ) : (
-                <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
-                  <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
-                    <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">Thread</p>
-                    <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Loading thread...</p>
-                    <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{effectiveThreadId}</p>
-                  </div>
-                </div>
+                <ThreadLoadingSkeleton />
               )
             ) : null}
             {showSettingsView && !shouldRenderMainLayout ? (
@@ -3511,6 +3530,7 @@ export default function Workbench () {
                       <WorkbenchThreadPanel
                         composerSpellCheck={resolvedSettings.composerSpellCheck}
                         fallbackThread={mosaicDraftThreadsById[target.threadId] ?? currentThread}
+                        fallbackThreadSummary={threadSummariesById.get(target.threadId) ?? null}
                         fontSizeRem={resolvedSettings.editorFontSize}
                         hasSidebarRestoreInset={hasSidebarRestoreInset}
                         isFocused={isFocused}

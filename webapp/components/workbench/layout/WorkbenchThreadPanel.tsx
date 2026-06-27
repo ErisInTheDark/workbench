@@ -6,8 +6,10 @@
 
 import { useCallback, useEffect, useRef, useState, type ComponentProps, type PointerEvent } from "react";
 
-import type { ThreadPayload, WorkbenchThreadHydrationRequest } from "../../../lib/types";
+import type { ThreadPayload, ThreadSummary, WorkbenchThreadHydrationRequest } from "../../../lib/types";
+import ThreadLoadingSkeleton from "../thread-view/ThreadLoadingSkeleton";
 import ThreadView from "../thread-view/ThreadView";
+import { formatThreadRelativeTimestamp, getThreadTitle } from "../thread-view/thread-view-primitives";
 import { workbenchIconButtonClassName } from "../workbench-class-names";
 import {
   PanelCloseIcon,
@@ -22,9 +24,11 @@ type ThreadViewProps = ComponentProps<typeof ThreadView>;
 const THREAD_PANEL_REFRESH_INTERVAL_MS = 1500;
 const THREAD_PANEL_IDLE_REFRESH_INTERVAL_MS = 5000;
 const THREAD_PANEL_HYDRATION: WorkbenchThreadHydrationRequest = { mode: "legacyFull" };
+const THREAD_PANEL_RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000;
 
 interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "thread"> {
   fallbackThread?: ThreadPayload | null;
+  fallbackThreadSummary?: ThreadSummary | null;
   hasSidebarRestoreInset?: boolean;
   isFocused: boolean;
   isMinimized?: boolean;
@@ -42,27 +46,9 @@ function isThreadStatusActive(status: string) {
   return status === "active" || status.startsWith("active:");
 }
 
-function formatThreadStatus(status: string) {
-  if (status === "active:waitingOnUserInput") {
-    return "Waiting on user input";
-  }
-  if (status.startsWith("active:")) {
-    return "Active";
-  }
-
-  const [firstWord, ...restWords] = status.split(/[-_\s:]+/).filter(Boolean);
-  if (!firstWord) {
-    return "Thread";
-  }
-
-  return [
-    `${firstWord.slice(0, 1).toUpperCase()}${firstWord.slice(1).toLowerCase()}`,
-    ...restWords.map((word) => word.toLowerCase()),
-  ].join(" ");
-}
-
 export default function WorkbenchThreadPanel ({
   fallbackThread = null,
+  fallbackThreadSummary = null,
   hasSidebarRestoreInset = false,
   isMinimized = false,
   isMinimizedVertical = false,
@@ -79,6 +65,7 @@ export default function WorkbenchThreadPanel ({
   ...threadViewProps
 }: WorkbenchThreadPanelProps) {
   const [thread, setThread] = useState<ThreadPayload | null>(fallbackThread?.id === threadId ? fallbackThread : null);
+  const [relativeTimeNowMs, setRelativeTimeNowMs] = useState(() => Date.now());
   const loadGenerationRef = useRef(0);
   const threadRef = useRef<ThreadPayload | null>(thread);
 
@@ -136,6 +123,28 @@ export default function WorkbenchThreadPanel ({
     }
   }, [fallbackThread, threadId]);
 
+  const fallbackSummary = fallbackThreadSummary?.id === threadId ? fallbackThreadSummary : null;
+  const threadDisplaySource = thread ?? fallbackSummary;
+  const threadLabel = threadDisplaySource ? getThreadTitle(threadDisplaySource) : threadId;
+  const threadStatusLabel = threadDisplaySource
+    ? formatThreadRelativeTimestamp(threadDisplaySource.updatedAt, relativeTimeNowMs)
+    : "";
+
+  useEffect(() => {
+    if (!threadDisplaySource) {
+      return;
+    }
+
+    setRelativeTimeNowMs(Date.now());
+    const intervalId = window.setInterval(() => {
+      setRelativeTimeNowMs(Date.now());
+    }, THREAD_PANEL_RELATIVE_TIME_REFRESH_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [threadDisplaySource?.id, threadDisplaySource?.updatedAt]);
+
   const readPanelThread = useCallback(async () => {
     const payload = await onReadThread(threadId, thread?.harness, {
       hydration: THREAD_PANEL_HYDRATION,
@@ -190,18 +199,17 @@ export default function WorkbenchThreadPanel ({
 
   if (!thread) {
     return (
-      <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
-        <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
-          <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">Thread</p>
-          <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Loading thread...</p>
-          <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{threadId}</p>
-        </div>
+      <div className="flex h-full min-h-full min-w-0 flex-col px-5 md:px-6">
+        <ThreadLoadingSkeleton
+          contained
+          showHeader
+          statusLabel={threadStatusLabel}
+          title={threadLabel}
+        />
       </div>
     );
   }
 
-  const threadLabel = thread.name || thread.preview || thread.id;
-  const threadStatusLabel = formatThreadStatus(thread.status);
   const effectiveFontSizeRem = Math.min(1.72, Math.max(0.84, Number((threadViewProps.fontSizeRem + panelZoomDelta * 0.08).toFixed(2))));
 
   function handleHeaderPointerDown(event: PointerEvent<HTMLElement>) {
