@@ -825,18 +825,21 @@ function readPowerShellNumberedLineRange(stageText: string, variableName: string
   }
 
   const loopMatch = normalizedStageText.match(
-    /^for\s*\(\s*\$([A-Za-z_][\w]*)\s*=\s*(\d+)\s*;\s*\$\1\s*-le\s*(\d+)\s*;\s*\$\1\s*\+\+\s*\)\s*\{([\s\S]+)\}$/i,
+    /^for\s*\(\s*\$([A-Za-z_][\w]*)\s*=\s*(\d+)\s*;\s*\$\1\s*(-l[et])\s*(\d+)\s*;\s*\$\1\s*\+\+\s*\)\s*\{([\s\S]+)\}$/i,
   );
-  if (!loopMatch?.[1] || !loopMatch[2] || !loopMatch[3] || !loopMatch[4]) {
+  if (!loopMatch?.[1] || !loopMatch[2] || !loopMatch[3] || !loopMatch[4] || !loopMatch[5]) {
     return null;
   }
 
   const indexVariableName = loopMatch[1];
   const startIndex = Number(loopMatch[2]);
-  const endIndex = Number(loopMatch[3]);
-  const body = loopMatch[4];
+  const comparisonOperator = loopMatch[3].toLowerCase();
+  const loopBound = Number(loopMatch[4]);
+  const endIndex = comparisonOperator === "-lt" ? loopBound - 1 : loopBound;
+  const body = loopMatch[5];
   if (
     !Number.isFinite(startIndex)
+    || !Number.isFinite(loopBound)
     || !Number.isFinite(endIndex)
     || endIndex < startIndex
     || !new RegExp(`\\$${escapeRegExp(variableName)}\\s*\\[\\s*\\$${escapeRegExp(indexVariableName)}\\s*\\]`, "i").test(body)
