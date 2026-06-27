@@ -380,6 +380,10 @@ function getLiveThreadActivity ({
   }
 
   const latestItem = turn.items.at(-1);
+  if (latestItem?.type === "contextCompaction") {
+    return null;
+  }
+
   if (latestItem?.type === "webSearch" && isThreadWebSearchPlaceholder(latestItem)) {
     const contextItems: Extract<ThreadPayload["turns"][number]["items"][number], { type: "webSearch" }>[] = [];
     for (let index = turn.items.length - 2; index >= 0; index -= 1) {

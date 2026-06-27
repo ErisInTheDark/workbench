@@ -683,6 +683,7 @@ function ThreadCurrentSubagentItemPreview ({
         relatedThreadsById={relatedThreadsById}
         turnCompletedAt={currentTurn.completedAt}
         turnStartedAt={currentTurn.startedAt}
+        turnStatus={currentTurn.status}
         workspaceRoots={workspaceRoots}
       />
     </ThreadPreviewFrame>
@@ -1118,6 +1119,7 @@ function ThreadRenderableBlockView ({
   relatedThreadsById,
   turnCompletedAt,
   turnStartedAt,
+  turnStatus,
   workspaceRoots,
 }: {
   block: ThreadRenderableBlock;
@@ -1133,6 +1135,7 @@ function ThreadRenderableBlockView ({
   relatedThreadsById: RelatedThreadsById;
   turnCompletedAt: number | null;
   turnStartedAt: number | null;
+  turnStatus: Turn["status"];
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   if (block.kind === "commandSequence") {
@@ -1204,7 +1207,7 @@ function ThreadRenderableBlockView ({
         />
       );
     case "contextCompaction":
-      return <ThreadContextCompactionItem item={block.item} />;
+      return <ThreadContextCompactionItem isActive={turnStatus === "inProgress"} item={block.item} />;
     case "mcpToolCall":
       return <ThreadMcpToolCallItem item={block.item} />;
     case "dynamicToolCall":
@@ -1323,6 +1326,7 @@ function ThreadTurnDetailsComponent ({
       relatedThreadsById={relatedThreadsById}
       turnCompletedAt={turn.completedAt}
       turnStartedAt={turn.startedAt}
+      turnStatus={turn.status}
       workspaceRoots={workspaceRoots}
     />
   );

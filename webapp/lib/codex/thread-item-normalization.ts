@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - normalizeThreadItems: dedupe thread items, including cumulative reasoning snapshot segments. Keywords: thread, reasoning, dedupe, transcript.
+ * - normalizeThreadItems: dedupe thread items, including cumulative reasoning snapshot segments and context-compaction lifecycle aliases. Keywords: thread, reasoning, compaction, dedupe, transcript.
  * - areUserInputsEquivalentForUserMessageDedupe: compare user inputs for duplicate user-message pruning. Keywords: thread, user message, image, equality.
  */
 import type { ThreadItem } from "./generated/app-server/v2/ThreadItem";
@@ -116,6 +116,36 @@ function isGenericSnapshotItemId(itemId: string) {
   return /^item-\d+$/u.test(itemId);
 }
 
+function mergeContextCompactionDedupeItem(
+  existingItem: Extract<ThreadItem, { type: "contextCompaction" }>,
+  incomingItem: Extract<ThreadItem, { type: "contextCompaction" }>,
+) {
+  return !isGenericSnapshotItemId(incomingItem.id) || isGenericSnapshotItemId(existingItem.id)
+    ? incomingItem
+    : existingItem;
+}
+
+function findContextCompactionDedupeIndex(items: ThreadItem[], incomingItem: Extract<ThreadItem, { type: "contextCompaction" }>) {
+  const previousItem = items.at(-1);
+  if (previousItem?.type === "contextCompaction") {
+    return items.length - 1;
+  }
+
+  const incomingIdIsGeneric = isGenericSnapshotItemId(incomingItem.id);
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item?.type !== "contextCompaction") {
+      continue;
+    }
+
+    if (isGenericSnapshotItemId(item.id) !== incomingIdIsGeneric) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
 function shouldPreferReasoningOwner(
   currentOwner: Extract<ThreadItem, { type: "reasoning" }>,
   candidateOwner: Extract<ThreadItem, { type: "reasoning" }>,
@@ -188,6 +218,24 @@ export function normalizeThreadItems(items: ThreadItem[], options: NormalizeThre
           reasoningSegmentOwners.set(normalizedSegment, item);
         }
       }
+      continue;
+    }
+
+    if (item.type === "contextCompaction") {
+      const existingIndex = findContextCompactionDedupeIndex(dedupedItems, item);
+      if (existingIndex === -1) {
+        dedupedItems.push(item);
+        continue;
+      }
+
+      const existingItem = dedupedItems[existingIndex];
+      if (existingItem?.type !== "contextCompaction") {
+        dedupedItems.push(item);
+        continue;
+      }
+
+      changed = true;
+      dedupedItems[existingIndex] = mergeContextCompactionDedupeItem(existingItem, item);
       continue;
     }
 

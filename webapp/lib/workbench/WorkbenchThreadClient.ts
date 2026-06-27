@@ -2903,6 +2903,15 @@ function WorkbenchThreadClient(
     return updateTurnItems(turnId, (items) => {
       const itemIndex = items.findIndex((item) => item.id === compactedIncomingItem.id);
       if (itemIndex === -1) {
+        const contextCompactionItemIndex = findContextCompactionLifecycleItemIndex(items, compactedIncomingItem);
+        if (contextCompactionItemIndex !== -1) {
+          return items.map((item, index) => (
+            index === contextCompactionItemIndex
+              ? mergeContextCompactionLifecycleItem(compactedIncomingItem, item)
+              : item
+          ));
+        }
+
         let matchedClientItem: ThreadItem | null = null;
         const nextItems = items.filter((item) => {
           const itemKey = getThreadItemKey(turnId, item.id);
@@ -2922,6 +2931,41 @@ function WorkbenchThreadClient(
         index === itemIndex ? mergeLiveStreamingItem(compactedIncomingItem, item) : item
       ));
     });
+  }
+
+  function mergeContextCompactionLifecycleItem(incomingItem: ThreadItem, existingItem: ThreadItem) {
+    if (incomingItem.type !== "contextCompaction" || existingItem.type !== "contextCompaction") {
+      return incomingItem;
+    }
+
+    if (isGenericSnapshotItemId(incomingItem.id) && !isGenericSnapshotItemId(existingItem.id)) {
+      return existingItem;
+    }
+
+    return incomingItem;
+  }
+
+  function findContextCompactionLifecycleItemIndex(items: ThreadItem[], incomingItem: ThreadItem) {
+    if (incomingItem.type !== "contextCompaction") {
+      return -1;
+    }
+
+    const compactionIndexes = items
+      .map((item, index) => item.type === "contextCompaction" ? index : -1)
+      .filter((index) => index !== -1);
+    if (!compactionIndexes.length) {
+      return -1;
+    }
+
+    const incomingIdIsGeneric = isGenericSnapshotItemId(incomingItem.id);
+    const preferredIndex = incomingIdIsGeneric
+      ? compactionIndexes.findLast((index) => !isGenericSnapshotItemId(items[index]!.id))
+      : compactionIndexes.findLast((index) => isGenericSnapshotItemId(items[index]!.id));
+    if (preferredIndex !== undefined) {
+      return preferredIndex;
+    }
+
+    return compactionIndexes.length === 1 ? compactionIndexes[0]! : -1;
   }
 
   function createStreamingAgentMessageItem(itemId: string): Extract<ThreadItem, { type: "agentMessage" }> {
