@@ -61,7 +61,7 @@ type PendingQuestion = {
 };
 
 type OpenCodeBridgeState = {
-  client: OpencodeClient | null;
+  hadClient: boolean;
   liveThreadState: OpenCodeLiveThreadState;
   pendingPermissions: Map<string, PendingPermission>;
   pendingQuestions: Map<string, PendingQuestion>;
@@ -181,6 +181,17 @@ function requestDirectory(params: unknown, fallback: string) {
   return normalizeDirectoryForOpenCodeSdk(asString(record?.cwd) ?? asString(record?.directory) ?? fallback);
 }
 
+function requestDirectories(params: unknown, fallback: string) {
+  const record = asRecord(params);
+  const rawDirectories = asStringArray(record?.cwd).length
+    ? asStringArray(record?.cwd)
+    : asStringArray(record?.directory).length
+      ? asStringArray(record?.directory)
+      : [asString(record?.cwd) ?? asString(record?.directory) ?? fallback];
+
+  return Array.from(new Set(rawDirectories.map(normalizeDirectoryForOpenCodeSdk).filter(Boolean)));
+}
+
 function requestThreadId(params: unknown) {
   return asString(asRecord(params)?.threadId);
 }
@@ -293,7 +304,7 @@ export class OpenCodeBridge {
     this.getReloadableModules = getReloadableModules;
     this.onNotification = onNotification;
     this.projectRoot = projectRoot;
-    this.client = initialState?.client ?? null;
+    this.client = null;
     this.liveThreadState = initialState?.liveThreadState
       ?? getReloadableModules().opencodeLiveThreadState.createOpenCodeLiveThreadState();
     this.pendingPermissions = initialState?.pendingPermissions ?? new Map();
@@ -301,8 +312,10 @@ export class OpenCodeBridge {
     this.server = initialState?.server ?? null;
     this.sessionDirectories = initialState?.sessionDirectories ?? new Map();
     this.sessionStatuses = initialState?.sessionStatuses ?? new Map();
-    if (this.client) {
-      this.startEventPump(this.client);
+    if (initialState?.hadClient || this.server) {
+      void this.ensureClient().catch((error) => {
+        logError("opencode-bridge", error instanceof Error ? error.message : String(error));
+      });
     }
   }
 
@@ -342,7 +355,7 @@ export class OpenCodeBridge {
     this.snapshotRefreshTimers.clear();
 
     const state: OpenCodeBridgeState = {
-      client: this.client,
+      hadClient: Boolean(this.client),
       liveThreadState: this.liveThreadState,
       pendingPermissions: this.pendingPermissions,
       pendingQuestions: this.pendingQuestions,
@@ -372,7 +385,7 @@ export class OpenCodeBridge {
     try {
       switch (method) {
         case "thread/list":
-          return okResponse(requestId, await this.listThreads(requestDirectory(message.params, this.projectRoot)));
+          return okResponse(requestId, await this.listThreads(requestDirectories(message.params, this.projectRoot)));
         case "thread/read":
         case "thread/resume": {
           const threadId = requestThreadId(message.params);
@@ -421,7 +434,7 @@ export class OpenCodeBridge {
     }
   }
 
-  private async ensureClient(directory = this.projectRoot) {
+  private async ensureClient(_directory = this.projectRoot) {
     if (this.client) {
       return this.client;
     }
@@ -434,6 +447,8 @@ export class OpenCodeBridge {
       const { createOpencodeClient } = await loadOpenCodeSdk();
       const baseUrl = EXTERNAL_OPENCODE_SERVER_URL
         ? normalizeOpenCodeBaseUrl(EXTERNAL_OPENCODE_SERVER_URL)
+        : this.server
+          ? normalizeOpenCodeBaseUrl(this.server.url)
         : await this.startManagedServer();
       const headers: Record<string, string> = {};
       if (process.env.OPENCODE_SERVER_USERNAME || process.env.OPENCODE_SERVER_PASSWORD) {
@@ -443,7 +458,6 @@ export class OpenCodeBridge {
       }
       this.client = createOpencodeClient({
         baseUrl,
-        directory,
         headers,
       });
       this.startEventPump(this.client);
@@ -678,10 +692,13 @@ export class OpenCodeBridge {
     });
   }
 
-  private async listThreads(directory: string) {
-    const client = await this.ensureClient(directory);
-    const sessions = unwrapResponse(await client.session.list({ directory }));
-    const visibleSessions = sessions.filter((session) => isSameDirectory(session.directory, directory));
+  private async listThreads(directories: string[]) {
+    const [primaryDirectory = this.projectRoot] = directories;
+    const client = await this.ensureClient(primaryDirectory);
+    const sessions = unwrapResponse(await client.session.list());
+    const visibleSessions = sessions.filter((session) => (
+      directories.some((directory) => isSameDirectory(session.directory, directory))
+    ));
     for (const session of visibleSessions) {
       this.rememberSessionDirectory(session.id, session.directory);
     }

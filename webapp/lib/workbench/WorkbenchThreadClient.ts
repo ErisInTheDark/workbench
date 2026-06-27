@@ -2581,7 +2581,7 @@ function WorkbenchThreadClient(
             params: {
               archived: false,
               ...(cwdFilterPaths?.length ? { cwd: cwdFilterPaths } : {}),
-              ...(harness === "opencode" && state.projectRootPath ? { cwd: state.projectRootPath } : {}),
+              ...(harness === "opencode" && projectRootPaths.length ? { cwd: projectRootPaths } : {}),
               limit: 50,
               sortKey: "updated_at",
             },
