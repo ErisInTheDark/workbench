@@ -1654,12 +1654,19 @@ function isPowerShellThreadTitleRequest(commandText: string) {
     return false;
   }
 
-  const requestTextWithoutOutNull = requestText.replace(/\|\s*Out-Null\s*$/i, "").trim();
-  return /-Method\s+Post\b/i.test(requestTextWithoutOutNull)
-    && /-Uri\s+['"`]*https?:\/\/[^'"`\s]*\/api\/thread-title['"`]*/i.test(requestTextWithoutOutNull)
-    && /-ContentType\s+['"`]*application\/json['"`]*/i.test(requestTextWithoutOutNull)
-    && /-Body\s+['"`]*\$body\b/i.test(requestTextWithoutOutNull)
-    && !/[;|&]\s*\S/.test(requestTextWithoutOutNull);
+  const normalizedRequestText = stripPowerShellThreadTitleRequestTail(requestText);
+  return /-Method\s+Post\b/i.test(normalizedRequestText)
+    && /-Uri\s+['"`]*https?:\/\/[^'"`\s]*\/api\/thread-title['"`]*/i.test(normalizedRequestText)
+    && /-ContentType\s+['"`]*application\/json['"`]*/i.test(normalizedRequestText)
+    && /-Body\s+['"`]*\$body\b/i.test(normalizedRequestText)
+    && !/[;|&]\s*\S/.test(normalizedRequestText);
+}
+
+function stripPowerShellThreadTitleRequestTail(requestText: string) {
+  return requestText
+    .replace(/\|\s*Out-Null\s*\}?\s*catch\s*\{\s*\}\s*['"`]*$/i, "")
+    .replace(/\|\s*Out-Null\s*['"`]*$/i, "")
+    .trim();
 }
 
 function isLegacyPowerShellThreadTitleSettingCommand(commandText: string) {
