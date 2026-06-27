@@ -77,6 +77,7 @@ const OPENCODE_SERVER_HOSTNAME = process.env.OPENCODE_SERVER_HOSTNAME?.trim() ||
 const OPENCODE_SERVER_PORT = Number.parseInt(process.env.OPENCODE_SERVER_PORT ?? "4096", 10);
 const OPENCODE_SERVER_START_TIMEOUT_MS = Number.parseInt(process.env.OPENCODE_SERVER_START_TIMEOUT_MS ?? "7000", 10);
 const OPENCODE_EVENT_SNAPSHOT_REFRESH_DELAY_MS = 150;
+const DEFAULT_OPENCODE_THREAD_TITLE = "New OpenCode thread";
 
 let openCodeSdkPromise: Promise<OpenCodeSdkModule> | null = null;
 
@@ -199,6 +200,11 @@ function requestAgent(params: unknown) {
 
 function requestName(params: unknown) {
   return asString(asRecord(params)?.name);
+}
+
+function isDefaultOpenCodeThreadTitle(title: string | null | undefined) {
+  const normalizedTitle = title?.trim();
+  return !normalizedTitle || normalizedTitle === DEFAULT_OPENCODE_THREAD_TITLE;
 }
 
 function statusToThreadStatus(status: SessionStatus | null | undefined): ThreadStatus {
@@ -715,7 +721,7 @@ export class OpenCodeBridge {
     const client = await this.ensureClient(directory);
     const session = unwrapResponse(await client.session.create({
       directory,
-      title: "New OpenCode thread",
+      title: DEFAULT_OPENCODE_THREAD_TITLE,
     }));
     this.rememberSessionDirectory(session.id, session.directory);
     const thread = this.getReloadableModules().opencodeThreadState.opencodeSessionToThread({
@@ -747,6 +753,35 @@ export class OpenCodeBridge {
       },
     });
     return {};
+  }
+
+  private async updateDefaultThreadTitleFromPrompt(client: OpencodeClient, threadId: string, directory: string, prompt: string) {
+    const title = this.getReloadableModules().threadBootstrap.normalizeThreadTitle(prompt);
+    if (!title) {
+      return;
+    }
+
+    try {
+      const session = unwrapResponse(await client.session.get({ directory, sessionID: threadId }));
+      if (!isDefaultOpenCodeThreadTitle(session.title)) {
+        return;
+      }
+
+      const updatedSession = unwrapResponse(await client.session.update({
+        directory,
+        sessionID: threadId,
+        title,
+      }));
+      this.onNotification({
+        method: "thread/name/updated",
+        params: {
+          threadId: updatedSession.id,
+          threadName: updatedSession.title,
+        },
+      });
+    } catch (error) {
+      logError("opencode-bridge", `failed to set default thread title: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private async buildTurnSystemPrompt(message: JsonRpcRequest, threadId: string, params: unknown) {
@@ -788,6 +823,7 @@ export class OpenCodeBridge {
     const model = modelParts(requestModel(params));
     const agent = requestAgent(params);
     const system = await this.buildTurnSystemPrompt(message, threadId, params);
+    await this.updateDefaultThreadTitleFromPrompt(client, threadId, directory, prompt);
     this.rememberSessionDirectory(threadId, directory);
     const turn = createSyntheticTurn(threadId, input);
     this.onNotification({

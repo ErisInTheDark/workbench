@@ -83,7 +83,7 @@ import {
     readStoredThreadUnreadState,
 } from "./state/browser-state";
 import { getTurnRenderSignature } from "./thread/thread-item-signature";
-import { applyQuestionnaireHistoryToThread } from "./thread/thread-questionnaire-history";
+import { applyQuestionnaireHistoryToThread, isSyntheticQuestionnaireHistoryItem } from "./thread/thread-questionnaire-history";
 import { applySteerHistoryToThread, isSyntheticSteerHistoryItem } from "./thread/thread-steer-history";
 
 const THREAD_REFRESH_TASK_ID = "thread-refresh";
@@ -1112,60 +1112,6 @@ function WorkbenchThreadClient(
       ?? thread.updatedAt;
   }
 
-  function toThreadSummaryFromPayload(payload: ThreadPayload): ThreadSummary {
-    return {
-      agentNickname: payload.agentNickname,
-      agentRole: payload.agentRole,
-      createdAt: payload.createdAt,
-      cwd: payload.cwd,
-      forkedFromId: payload.forkedFromId,
-      harness: payload.harness,
-      id: payload.id,
-      name: payload.name,
-      path: payload.path,
-      preview: payload.preview,
-      source: payload.source,
-      status: payload.status,
-      unreadBadge: payload.unreadBadge,
-      updatedAt: payload.updatedAt,
-    };
-  }
-
-  function upsertThreadSummaryFromPayload(payload: ThreadPayload) {
-    if (payload.isDraft) {
-      return false;
-    }
-
-    const summary = buildThreadSummaryWithUnreadBadge(toThreadSummaryFromPayload(payload));
-    const existingIndex = state.threads.findIndex((thread) => thread.id === summary.id && thread.harness === summary.harness);
-    if (existingIndex !== -1 && areDeeplyEqual(state.threads[existingIndex], summary)) {
-      return false;
-    }
-
-    state.threads = existingIndex === -1
-      ? [summary, ...state.threads]
-      : state.threads.map((thread, index) => index === existingIndex ? summary : thread);
-    return true;
-  }
-
-  function mergeCurrentThreadSummary(threads: ThreadSummary[]) {
-    const currentThread = state.currentThread;
-    if (!currentThread || currentThread.isDraft) {
-      return threads;
-    }
-
-    const projectRootPaths = getProjectRootPaths(state);
-    if (!isWorkbenchThreadInCurrentProject(currentThread, currentThread.harness, projectRootPaths)) {
-      return threads;
-    }
-
-    const currentSummary = buildThreadSummaryWithUnreadBadge(toThreadSummaryFromPayload(currentThread));
-    const existingIndex = threads.findIndex((thread) => thread.id === currentSummary.id && thread.harness === currentSummary.harness);
-    return existingIndex === -1
-      ? [currentSummary, ...threads]
-      : threads.map((thread, index) => index === existingIndex ? currentSummary : thread);
-  }
-
   async function refreshLatestTurnStartedAt(thread: ThreadSummary) {
     const key = getThreadStateKey(thread.harness, thread.id);
     const refreshKey = `${thread.status}:${thread.updatedAt}`;
@@ -1815,6 +1761,10 @@ function WorkbenchThreadClient(
     preserveAllUnmatchedLiveItems: boolean,
     preserveToolItemsFromThinnerTurn: boolean,
   ) {
+    if (isSyntheticQuestionnaireHistoryItem(liveItem)) {
+      return false;
+    }
+
     if (incomingTurn.itemsView === "full" && isGenericSnapshotItemId(liveItem.id)) {
       return false;
     }
@@ -2570,9 +2520,6 @@ function WorkbenchThreadClient(
     if (payload && state.currentThread?.id === payload.id && state.currentThread.harness === payload.harness) {
       setCurrentThread(payload);
     }
-    if (payload && upsertThreadSummaryFromPayload(payload)) {
-      emit();
-    }
     return payload;
   }
 
@@ -2692,10 +2639,10 @@ function WorkbenchThreadClient(
           return;
         }
 
-        state.threads = mergeCurrentThreadSummary([
+        state.threads = [
           ...stableVisibleThreads,
           ...threadsByRecentItem.slice(STABLE_VISIBLE_THREAD_COUNT),
-        ]);
+        ];
         void refreshVisibleThreadUnreadStates(state.threads);
         state.threadsError = errors.join(" ");
         state.hasLoadedThreads = true;
@@ -3395,11 +3342,7 @@ function WorkbenchThreadClient(
       return;
     }
 
-    const didUpsertThreadSummary = upsertThreadSummaryFromPayload(payload);
     setCurrentThread(payload);
-    if (didUpsertThreadSummary) {
-      emit();
-    }
   }
 
   function selectThreadPayload(thread: ThreadPayload) {
