@@ -734,6 +734,36 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     color: var(--accent);
   }
 
+  [data-thread-codeblock-toggle-state="active"] {
+    background: color-mix(in srgb, var(--accent) 11%, transparent);
+    color: var(--accent);
+  }
+
+  [data-thread-codeblock-toggle-state="active"]:hover,
+  [data-thread-codeblock-toggle-state="active"]:focus-visible {
+    background: color-mix(in srgb, var(--accent) 17%, transparent);
+    color: var(--accent);
+  }
+
+  [data-thread-codeblock-svg-preview-state="preview"] [data-thread-codeblock-pre="true"] {
+    pointer-events: none;
+    visibility: hidden;
+  }
+
+  [data-thread-codeblock-svg-preview-layer="true"] {
+    display: none;
+  }
+
+  [data-thread-codeblock-svg-preview-state="preview"] [data-thread-codeblock-svg-preview-layer="true"] {
+    display: block;
+  }
+
+  [data-thread-codeblock-svg-preview-frame="true"] {
+    background: transparent;
+    border: 0;
+    color-scheme: light dark;
+  }
+
   @media (hover: none) and (pointer: coarse) {
     .thread-plaintext-editable {
       font-size: max(1rem, 1em);

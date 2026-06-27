@@ -257,6 +257,17 @@ function setCodeBlockCopyButtonState (button: HTMLButtonElement, isCopied: boole
   button.title = isCopied ? "Copied" : "Copy code block";
 }
 
+function setCodeBlockToggleButtonState (button: HTMLButtonElement, isActive: boolean) {
+  button.setAttribute("aria-pressed", isActive ? "true" : "false");
+  button.setAttribute("data-thread-codeblock-toggle-state", isActive ? "active" : "idle");
+}
+
+function setSvgCodeBlockPreviewButtonState (button: HTMLButtonElement, isPreviewing: boolean) {
+  setCodeBlockToggleButtonState(button, isPreviewing);
+  button.setAttribute("aria-label", isPreviewing ? "Show SVG source" : "Preview SVG code block");
+  button.title = isPreviewing ? "Show SVG source" : "Preview SVG code block";
+}
+
 function cleanReasoningTitleLine (value: string) {
   return value
     .split(/\r?\n/)
@@ -1269,7 +1280,7 @@ export default memo(function ThreadView ({
 
     root.setAttribute("data-thread-codeblock-wrap", nextValue ? "true" : "false");
     root.querySelectorAll<HTMLButtonElement>("button[data-thread-codeblock-wrap-toggle]").forEach((button) => {
-      button.setAttribute("aria-pressed", nextValue ? "true" : "false");
+      setCodeBlockToggleButtonState(button, nextValue);
     });
   }, []);
 
@@ -1307,11 +1318,30 @@ export default memo(function ThreadView ({
     showCodeBlockCopyFeedback(button);
   }, [showCodeBlockCopyFeedback]);
 
+  const handleSvgCodeBlockPreviewToggle = useCallback((button: HTMLButtonElement) => {
+    const root = threadViewRef.current;
+    const codeBlock = button.closest<HTMLElement>("[data-thread-codeblock='true']");
+    if (!root || !root.contains(button) || !codeBlock) {
+      return;
+    }
+
+    const isPreviewing = codeBlock.getAttribute("data-thread-codeblock-svg-preview-state") === "preview";
+    const nextIsPreviewing = !isPreviewing;
+    codeBlock.setAttribute("data-thread-codeblock-svg-preview-state", nextIsPreviewing ? "preview" : "code");
+    setSvgCodeBlockPreviewButtonState(button, nextIsPreviewing);
+  }, []);
+
   const handleThreadViewClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
     const target = event.target instanceof Element ? event.target : null;
     const copyButton = target?.closest<HTMLButtonElement>("button[data-thread-codeblock-copy]") ?? null;
     if (copyButton && threadViewRef.current?.contains(copyButton)) {
       void handleCodeBlockCopy(copyButton);
+      return;
+    }
+
+    const svgPreviewButton = target?.closest<HTMLButtonElement>("button[data-thread-codeblock-svg-preview]") ?? null;
+    if (svgPreviewButton && threadViewRef.current?.contains(svgPreviewButton)) {
+      handleSvgCodeBlockPreviewToggle(svgPreviewButton);
       return;
     }
 
@@ -1325,7 +1355,7 @@ export default memo(function ThreadView ({
     const nextValue = threadViewRef.current.getAttribute("data-thread-codeblock-wrap") !== "true";
     syncCodeBlockWrapDomState(nextValue);
     onThreadCodeBlockWrapChange(nextValue);
-  }, [handleCodeBlockCopy, onThreadCodeBlockWrapChange, syncCodeBlockWrapDomState]);
+  }, [handleCodeBlockCopy, handleSvgCodeBlockPreviewToggle, onThreadCodeBlockWrapChange, syncCodeBlockWrapDomState]);
 
   const getTabBadge = useCallback((threadId: string, payload: ThreadPayload | null | undefined): { isQuestion: boolean; unreadBadge: ThreadUnreadBadge | null } => {
     const hasPendingQuestion = Boolean(livePendingUserInputRequestsByThreadId[threadId]);

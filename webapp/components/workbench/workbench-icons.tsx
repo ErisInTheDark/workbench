@@ -15,6 +15,7 @@
  * - PinIcon: render the pinned thread icon. Keywords: workbench, icon, thread, pin.
  * - ArchiveIcon: render the thread archive context menu icon. Keywords: workbench, icon, thread, archive.
  * - WrapTextIcon: render the thread codeblock line-wrap toggle icon. Keywords: workbench, icon, thread, code, wrap.
+ * - PreviewIcon: render the thread codeblock preview toggle icon. Keywords: workbench, icon, thread, code, preview.
  * - CopyIcon: render thread copy action icons for context menus and code blocks. Keywords: workbench, icon, thread, copy.
  * - CheckIcon: render the thread codeblock copied confirmation icon. Keywords: workbench, icon, thread, code, copied.
  * - FileAddIcon/FileDeleteIcon/FileUpdateIcon/FileMoveIcon: render thread file-change kind icons. Keywords: workbench, icon, file change, add, delete, update, move.
@@ -247,6 +248,15 @@ export function WrapTextIcon ({ className = "size-4" }: { className?: string }) 
       <path d="M3.5 9.5H13.25C15.05 9.5 16.5 10.82 16.5 12.45C16.5 14.08 15.05 15.4 13.25 15.4H10.25" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M12.1 13.35L10.05 15.4L12.1 17.45" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M3.5 13.5H7.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function PreviewIcon ({ className = "size-4" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
+      <path d="M2.75 10C4.35 6.9 6.75 5.35 10 5.35C13.25 5.35 15.65 6.9 17.25 10C15.65 13.1 13.25 14.65 10 14.65C6.75 14.65 4.35 13.1 2.75 10Z" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="10" cy="10" r="2.15" />
     </svg>
   );
 }

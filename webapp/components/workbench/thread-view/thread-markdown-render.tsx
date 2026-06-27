@@ -24,7 +24,7 @@ import {
 import { getInlineMentionMarkClassName } from "../../../lib/workbench/thread/inline-mention-styles";
 import ChevronIcon from "../ChevronIcon";
 import ProjectFilePath from "../ProjectFilePath";
-import { CheckIcon, CopyIcon, WrapTextIcon } from "../workbench-icons";
+import { CheckIcon, CopyIcon, PreviewIcon, WrapTextIcon } from "../workbench-icons";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 
@@ -47,6 +47,7 @@ const CODE_BLOCK_HEADER_BUTTON_CLASS = [
   "focus-visible:text-accent",
   "focus-visible:outline-none",
   "data-[thread-codeblock-copy-state=copied]:text-success",
+  "data-[thread-codeblock-toggle-state=active]:text-accent",
 ].join(" ");
 const HEADING_CLASSES = {
   1: `${BLOCK_SPACING_CLASS} font-sans text-[1.16em] font-semibold leading-[1.2]`,
@@ -56,6 +57,29 @@ const HEADING_CLASSES = {
   5: `${BLOCK_SPACING_CLASS} font-sans text-[1em] font-semibold leading-[1.2]`,
   6: `${BLOCK_SPACING_CLASS} font-sans text-[1em] font-semibold leading-[1.2]`,
 } satisfies Record<1 | 2 | 3 | 4 | 5 | 6, string>;
+const SVG_PREVIEW_SRC_DOC_STYLE = [
+  "html,body{margin:0;padding:0;background:transparent;min-height:100%;}",
+  "body{display:grid;place-items:center;box-sizing:border-box;min-height:100vh;overflow:auto;}",
+  "*,::before,::after{box-sizing:border-box;}",
+  "svg{display:block;max-width:100%;max-height:100vh;}",
+].join("");
+
+function createSvgCodeBlockPreviewSrcDoc (svgSource: string) {
+  return [
+    "<!doctype html>",
+    "<html>",
+    "<head>",
+    "<meta charset=\"utf-8\">",
+    "<meta name=\"color-scheme\" content=\"light dark\">",
+    "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data: blob:; style-src 'unsafe-inline';\">",
+    `<style>${SVG_PREVIEW_SRC_DOC_STYLE}</style>`,
+    "</head>",
+    "<body>",
+    svgSource,
+    "</body>",
+    "</html>",
+  ].join("");
+}
 
 function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string, options: MarkdownParseOptions): ReactNode[] {
   return nodes.map((node, index) => {
@@ -370,6 +394,10 @@ function renderThreadTableBlock (
   );
 }
 
+function isSvgCodeBlockLanguage (language: string) {
+  return language.split(/\s+/)[0] === "svg";
+}
+
 function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, keyPrefix: string) {
   switch (block.type) {
     case "list-break":
@@ -413,8 +441,14 @@ function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, k
     case "hr":
       return <hr className={BLOCK_SPACING_CLASS} key={keyPrefix} />;
     case "code": {
+      const isSvgCodeBlock = isSvgCodeBlockLanguage(block.language);
       return (
-        <div className={`${BLOCK_SPACING_CLASS} max-w-full overflow-hidden rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)]`} data-thread-codeblock="true" key={keyPrefix}>
+        <div
+          className={`${BLOCK_SPACING_CLASS} max-w-full overflow-hidden rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)]`}
+          data-thread-codeblock="true"
+          data-thread-codeblock-svg-preview-state={isSvgCodeBlock ? "code" : undefined}
+          key={keyPrefix}
+        >
           <div className="flex min-h-[2.05rem] items-center justify-between gap-2 border-b border-[color-mix(in_srgb,var(--text)_8%,transparent)] px-[0.65rem] py-[0.28rem]">
             <span className="min-w-0 truncate pl-[0.15rem] font-mono text-[0.72em] leading-none text-muted">
               {block.language || "code"}
@@ -435,11 +469,25 @@ function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, k
                   <CheckIcon />
                 </span>
               </button>
+              {isSvgCodeBlock ? (
+                <button
+                  type="button"
+                  aria-label="Preview SVG code block"
+                  aria-pressed={false}
+                  className={CODE_BLOCK_HEADER_BUTTON_CLASS}
+                  data-thread-codeblock-svg-preview="true"
+                  data-thread-codeblock-toggle-state="idle"
+                  title="Preview SVG code block"
+                >
+                  <PreviewIcon />
+                </button>
+              ) : null}
               <button
                 type="button"
                 aria-label="Toggle code block line wrapping"
                 aria-pressed={false}
                 className={CODE_BLOCK_HEADER_BUTTON_CLASS}
+                data-thread-codeblock-toggle-state="idle"
                 data-thread-codeblock-wrap-toggle="true"
                 title="Toggle code block line wrapping"
               >
@@ -447,13 +495,29 @@ function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, k
               </button>
             </div>
           </div>
-          <pre
-            className="max-w-full overflow-x-auto whitespace-pre px-[0.95rem] py-[0.8rem]"
-            data-language={block.language}
-            data-thread-codeblock-pre="true"
-          >
-            <code className="block w-max min-w-full rounded-none bg-transparent p-0 font-mono text-[0.94em]" data-thread-codeblock-code="true">{block.text}</code>
-          </pre>
+          <div className="relative min-h-[2.8rem]" data-thread-codeblock-body="true">
+            <pre
+              className="max-w-full overflow-x-auto whitespace-pre px-[0.95rem] py-[0.8rem]"
+              data-language={block.language}
+              data-thread-codeblock-pre="true"
+            >
+              <code className="block w-max min-w-full rounded-none bg-transparent p-0 font-mono text-[0.94em]" data-thread-codeblock-code="true">{block.text}</code>
+            </pre>
+            {isSvgCodeBlock ? (
+              <div
+                className="absolute inset-0 overflow-auto p-[0.95rem]"
+                data-thread-codeblock-svg-preview-layer="true"
+              >
+                <iframe
+                  className="block size-full border-0 bg-transparent"
+                  data-thread-codeblock-svg-preview-frame="true"
+                  sandbox=""
+                  srcDoc={createSvgCodeBlockPreviewSrcDoc(block.text)}
+                  title="SVG code block preview"
+                />
+              </div>
+            ) : null}
+          </div>
         </div>
       );
     }
