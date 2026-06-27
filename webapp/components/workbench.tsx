@@ -3256,6 +3256,7 @@ export default function Workbench () {
                   fontSizeRem={resolvedSettings.editorFontSize}
                   harness={harness}
                   isMobile={isMobile}
+                  isProjectLoading={explorer.isProjectLoading}
                   livePendingUserInputRequestsByThreadId={harnessUserInputRequestsByThreadId}
                   onCollaborationThreadRegistryChange={handleCollaborationThreadRegistryChange}
                   onClaimAutoWake={claimWorkbenchCollaborationAutoWake}

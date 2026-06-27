@@ -79,6 +79,7 @@ interface WorkbenchCollaborationViewProps extends Omit<ThreadViewProps, "contain
   fontSizeRem: number;
   harness: WorkbenchHarness;
   isMobile: boolean;
+  isProjectLoading: boolean;
   onCollaborationThreadRegistryChange: (registry: WorkbenchCollaborationThreadRegistry) => void;
   onClaimAutoWake: (projectId: string, ownerId: string) => Promise<{ acquired: boolean; registry: WorkbenchCollaborationThreadRegistry }>;
   onOpenThreadFromSuggestion: (threadId: string) => void;
@@ -372,6 +373,7 @@ export default function WorkbenchCollaborationView ({
   fontSizeRem,
   harness,
   isMobile,
+  isProjectLoading,
   livePendingUserInputRequestsByThreadId,
   onCollaborationThreadRegistryChange,
   onCompactThread,
@@ -486,31 +488,23 @@ export default function WorkbenchCollaborationView ({
 
   useEffect(() => {
     const observed = observedProjectDiffMapRef.current;
-    if (observed.projectId !== projectId) {
+    if (isProjectLoading || observed.projectId !== projectId) {
       observedProjectDiffMapRef.current = { projectDiffMap, projectId };
-      projectDiffMapObserverReadyRef.current = false;
+      projectDiffMapObserverReadyRef.current = !isProjectLoading;
+      return;
+    }
+
+    if (!projectDiffMapObserverReadyRef.current) {
+      observedProjectDiffMapRef.current = { projectDiffMap, projectId };
+      projectDiffMapObserverReadyRef.current = true;
       return;
     }
 
     if (observed.projectDiffMap !== projectDiffMap) {
       observedProjectDiffMapRef.current = { projectDiffMap, projectId };
-      if (projectDiffMapObserverReadyRef.current) {
-        resetPendingAutoWakeActivity();
-      }
+      resetPendingAutoWakeActivity();
     }
-  }, [projectDiffMap, projectId, resetPendingAutoWakeActivity]);
-
-  useEffect(() => {
-    projectDiffMapObserverReadyRef.current = false;
-    const timeoutId = window.setTimeout(() => {
-      projectDiffMapObserverReadyRef.current = true;
-      observedProjectDiffMapRef.current = { projectDiffMap, projectId };
-    }, 0);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [projectId, projectDiffMap]);
+  }, [isProjectLoading, projectDiffMap, projectId, resetPendingAutoWakeActivity]);
 
   useEffect(() => {
     if (pendingAutoWakeActivityAt === null) {
