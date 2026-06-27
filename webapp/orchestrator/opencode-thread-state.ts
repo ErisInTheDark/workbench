@@ -147,7 +147,11 @@ function createToolItem(part: Extract<Part, { type: "tool" }>): Extract<ThreadIt
   };
 }
 
-function createPatchItem(part: Extract<Part, { type: "patch" }>): Extract<ThreadItem, { type: "dynamicToolCall" }> {
+function createPatchItem(part: Extract<Part, { type: "patch" }>): Extract<ThreadItem, { type: "dynamicToolCall" }> | null {
+  if (!part.files.length) {
+    return null;
+  }
+
   return {
     arguments: jsonLike({
       files: part.files,
@@ -236,7 +240,12 @@ function createAssistantItems(message: Message, parts: Part[]): ThreadItem[] {
         items.push(createToolItem(part));
         break;
       case "patch":
-        items.push(createPatchItem(part));
+        {
+          const patchItem = createPatchItem(part);
+          if (patchItem) {
+            items.push(patchItem);
+          }
+        }
         break;
       case "text":
         items.push(createAgentItem(message, part.id, part.text));

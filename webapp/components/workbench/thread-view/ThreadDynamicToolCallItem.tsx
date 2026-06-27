@@ -133,6 +133,25 @@ function parseQuestionnaireRequest (value: unknown, requestId: string) {
   } satisfies WorkbenchUserInputRequest;
 }
 
+function parseOpenCodeQuestionnaireRequest(value: unknown, requestId: string) {
+  const request = parseQuestionnaireRequest(value, requestId);
+  if (!request) {
+    return null;
+  }
+
+  const singleQuestionText = request.questions.length === 1
+    ? request.questions[0]?.question.trim() ?? ""
+    : "";
+  if (!singleQuestionText || request.title.trim() !== "User input request" || request.summary.trim()) {
+    return request;
+  }
+
+  return {
+    ...request,
+    title: singleQuestionText,
+  } satisfies WorkbenchUserInputRequest;
+}
+
 function parseQuestionnaireResponse (item: DynamicToolCallItem) {
   const rawText = item.contentItems?.filter((entry): entry is Extract<NonNullable<DynamicToolCallItem["contentItems"]>[number], { type: "inputText" }> => entry.type === "inputText")
     .map((entry) => entry.text)
@@ -499,6 +518,10 @@ function buildMetaParts (item: DynamicToolCallItem) {
   return metaParts;
 }
 
+function isOpenCodeQuestionToolCall(item: DynamicToolCallItem) {
+  return item.namespace === "opencode" && item.tool === "question";
+}
+
 function ThreadQuestionnaireToolCallItem ({
   inlineMentionSources,
   item,
@@ -516,11 +539,11 @@ function ThreadQuestionnaireToolCallItem ({
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const request = parseQuestionnaireRequest(item.arguments, `history:${item.id}`);
-  const { rawText, response } = parseQuestionnaireResponse(item);
-  const statusLabel = item.status === "completed"
-    ? response ? "Answered" : "Completed"
-    : humanizeThreadLabel(item.status);
+  const request = isOpenCodeQuestionToolCall(item)
+    ? parseOpenCodeQuestionnaireRequest(item.arguments, `history:${item.id}`)
+    : parseQuestionnaireRequest(item.arguments, `history:${item.id}`);
+  const { response } = parseQuestionnaireResponse(item);
+  const statusLabel = response ? "Answered" : "Unanswered";
   const initialIsOpen = item.status !== "completed" || !response;
   const [isOpen, setIsOpen] = useState(initialIsOpen);
 
@@ -561,18 +584,12 @@ function ThreadQuestionnaireToolCallItem ({
             <p className="m-0 px-1 py-1 text-[0.84em] leading-[1.6] text-muted">
               Waiting for a response in the composer.
             </p>
-          ) : null}
+          ) : (
+            <p className="m-0 px-1 py-1 text-[0.84em] leading-[1.6] text-muted">
+              Questionnaire details unavailable.
+            </p>
+          )}
         </div>
-
-        {rawText && !response ? (
-          <ThreadDisclosure
-            contentClassName="mt-2 pl-6"
-            summary={<ThreadSummaryText text="Raw response" />}
-            summaryClassName="text-[0.84em] leading-[1.6] text-muted"
-          >
-            <pre className={JSON_BLOCK_CLASS}>{rawText}</pre>
-          </ThreadDisclosure>
-        ) : null}
       </>
     </ThreadDisclosure>
   );
@@ -789,7 +806,7 @@ export default function ThreadDynamicToolCallItem ({
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  if (item.tool === WORKBENCH_QUESTIONNAIRE_TOOL_NAME) {
+  if (item.tool === WORKBENCH_QUESTIONNAIRE_TOOL_NAME || isOpenCodeQuestionToolCall(item)) {
     return <ThreadQuestionnaireToolCallItem inlineMentionSources={inlineMentionSources} item={item} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
   }
 

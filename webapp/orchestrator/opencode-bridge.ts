@@ -590,6 +590,9 @@ export class OpenCodeBridge {
         if (!threadId) {
           break;
         }
+        if (event.type === "session.error") {
+          this.clearPendingUserInputForThread(threadId);
+        }
         if (event.type === "message.updated" || event.type === "message.part.updated") {
           this.getReloadableModules().opencodeLiveThreadState.applyOpenCodeLiveEvent(this.liveThreadState, event, this.onNotification);
         }
@@ -814,6 +817,7 @@ export class OpenCodeBridge {
   private async abortThread(threadId: string, directory: string) {
     const client = await this.ensureClient(directory);
     await client.session.abort({ directory, sessionID: threadId });
+    this.clearPendingUserInputForThread(threadId);
     return { ok: true };
   }
 
@@ -868,6 +872,40 @@ export class OpenCodeBridge {
         turnId: null,
       },
     });
+  }
+
+  private clearPendingUserInputForThread(threadId: string) {
+    for (const [requestKey, pendingPermission] of this.pendingPermissions) {
+      if (pendingPermission.permission.sessionID !== threadId) {
+        continue;
+      }
+
+      this.pendingPermissions.delete(requestKey);
+      this.onNotification({
+        method: "questionnaire/resolved",
+        params: {
+          requestKey,
+          threadId,
+          turnId: null,
+        },
+      });
+    }
+
+    for (const [requestKey, pendingQuestion] of this.pendingQuestions) {
+      if (pendingQuestion.legacy?.sessionID !== threadId && pendingQuestion.v2?.sessionID !== threadId) {
+        continue;
+      }
+
+      this.pendingQuestions.delete(requestKey);
+      this.onNotification({
+        method: "questionnaire/resolved",
+        params: {
+          requestKey,
+          threadId,
+          turnId: null,
+        },
+      });
+    }
   }
 
   private upsertQuestion(
