@@ -15,6 +15,7 @@ export type OrchestratorReloadableModules = {
     | "metadataToThread">;
   opencodeThreadState: Pick<typeof import("./opencode-thread-state"),
     "cloneThread"
+    | "createOpenCodeLegacyPermissionRequest"
     | "createOpenCodePermissionRequest"
     | "createOpenCodeQuestionRequest"
     | "EMPTY_OPENCODE_RATE_LIMITS"

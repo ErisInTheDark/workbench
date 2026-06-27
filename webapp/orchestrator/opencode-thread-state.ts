@@ -3,12 +3,13 @@
  * - OPENCODE_INITIALIZE_RESULT/EMPTY_OPENCODE_RATE_LIMITS: bridge constants for OpenCode harness responses. Keywords: opencode, initialize, rate limits.
  * - OpenCodeMessageEntry/OpenCodeThreadSnapshotInput: typed OpenCode session/message bundle for thread conversion. Keywords: opencode, session, message, parts.
  * - cloneThread/formatPromptFromInput: helpers shared by the OpenCode bridge for thread snapshots and prompt payloads. Keywords: opencode, clone, prompt.
- * - opencodeSessionToThread/mapOpenCodeModelsToWorkbenchOptions/createOpenCodePermissionRequest/createOpenCodeQuestionRequest: convert typed OpenCode SDK data into Workbench/Codex-shaped state. Keywords: opencode, adapter, thread, models, permission, question.
+ * - opencodeSessionToThread/mapOpenCodeModelsToWorkbenchOptions/createOpenCodePermissionRequest/createOpenCodeLegacyPermissionRequest/createOpenCodeQuestionRequest: convert typed OpenCode SDK data into Workbench/Codex-shaped state. Keywords: opencode, adapter, thread, models, permission, question.
  */
 import type {
   Message,
   ModelV2Info,
   Part,
+  PermissionRequest,
   PermissionV2Request,
   ProviderV2Info,
   QuestionRequest,
@@ -502,6 +503,37 @@ export function createOpenCodePermissionRequest(permission: PermissionV2Request)
         { description: "Reject this OpenCode permission request.", label: "Reject" },
       ],
       question: permission.action,
+    }],
+    submitLabel: "Respond",
+    summary,
+    title: "OpenCode permission request",
+  };
+}
+
+export function createOpenCodeLegacyPermissionRequest(permission: PermissionRequest): WorkbenchUserInputRequest {
+  const summary = [
+    permission.permission,
+    permission.patterns.length ? `Patterns: ${permission.patterns.join(", ")}` : null,
+    permission.always.length ? `Can save: ${permission.always.join(", ")}` : null,
+  ].filter(Boolean).join("\n");
+
+  const question = permission.patterns.length
+    ? `${permission.permission}: ${permission.patterns.join(", ")}`
+    : permission.permission;
+
+  return {
+    id: `opencode:${permission.sessionID}:legacy-permission:${permission.id}`,
+    questions: [{
+      allowOther: false,
+      header: "OpenCode",
+      id: "permission",
+      isSecret: false,
+      options: [
+        { description: "Allow this OpenCode permission request once.", label: "Allow once" },
+        { description: "Always allow matching OpenCode requests where OpenCode supports it.", label: "Always allow" },
+        { description: "Reject this OpenCode permission request.", label: "Reject" },
+      ],
+      question,
     }],
     submitLabel: "Respond",
     summary,

@@ -5,6 +5,7 @@
 import type {
   Event as OpenCodeEvent,
   OpencodeClient,
+  PermissionRequest,
   PermissionV2Request,
   QuestionRequest,
   QuestionV2Request,
@@ -47,8 +48,9 @@ type OpenCodeSessionResponse = {
 type OpenCodeStreamEvent = OpenCodeEvent | V2Event;
 
 type PendingPermission = {
-  permission: PermissionV2Request;
+  legacy?: PermissionRequest;
   requestKey: string;
+  v2?: PermissionV2Request;
 };
 
 type PendingQuestion = {
@@ -544,9 +546,15 @@ export class OpenCodeBridge {
         this.scheduleThreadSnapshotRefresh(event.data.sessionID);
         break;
       case "permission.v2.asked":
-        this.upsertPermission(event.data);
+        this.upsertPermission("v2", event.data);
         break;
       case "permission.v2.replied":
+        this.resolvePermission(event.data.sessionID, event.data.requestID);
+        break;
+      case "permission.asked":
+        this.upsertPermission("legacy", event.data);
+        break;
+      case "permission.replied":
         this.resolvePermission(event.data.sessionID, event.data.requestID);
         break;
       case "question.asked":
@@ -843,17 +851,32 @@ export class OpenCodeBridge {
     };
   }
 
-  private upsertPermission(permission: PermissionV2Request) {
-    const requestKey = `opencode:${permission.sessionID}:${permission.id}`;
+  private permissionRequestKey(permission: PermissionRequest | PermissionV2Request) {
+    return `opencode:${permission.sessionID}:${permission.id}`;
+  }
+
+  private upsertPermission(
+    kind: "legacy" | "v2",
+    permission: PermissionRequest | PermissionV2Request,
+  ) {
+    const requestKey = this.permissionRequestKey(permission);
+    const existing = this.pendingPermissions.get(requestKey);
     this.pendingPermissions.set(requestKey, {
-      permission,
+      legacy: kind === "legacy" ? permission as PermissionRequest : existing?.legacy,
       requestKey,
+      v2: kind === "v2" ? permission as PermissionV2Request : existing?.v2,
     });
+    if (existing) {
+      return;
+    }
+
     this.onNotification({
       method: "questionnaire/requested",
       params: {
         itemId: null,
-        request: this.getReloadableModules().opencodeThreadState.createOpenCodePermissionRequest(permission),
+        request: kind === "v2"
+          ? this.getReloadableModules().opencodeThreadState.createOpenCodePermissionRequest(permission as PermissionV2Request)
+          : this.getReloadableModules().opencodeThreadState.createOpenCodeLegacyPermissionRequest(permission as PermissionRequest),
         requestKey,
         threadId: permission.sessionID,
         turnId: null,
@@ -876,7 +899,7 @@ export class OpenCodeBridge {
 
   private clearPendingUserInputForThread(threadId: string) {
     for (const [requestKey, pendingPermission] of this.pendingPermissions) {
-      if (pendingPermission.permission.sessionID !== threadId) {
+      if (pendingPermission.legacy?.sessionID !== threadId && pendingPermission.v2?.sessionID !== threadId) {
         continue;
       }
 
@@ -974,13 +997,22 @@ export class OpenCodeBridge {
 
     return {
       data: [
-        ...Array.from(this.pendingPermissions.values()).map(({ permission, requestKey }) => ({
-          itemId: null,
-          request: this.getReloadableModules().opencodeThreadState.createOpenCodePermissionRequest(permission),
-          requestKey,
-          threadId: permission.sessionID,
-          turnId: null,
-        })),
+        ...Array.from(this.pendingPermissions.values()).flatMap((permission) => {
+          const displayPermission = permission.v2 ?? permission.legacy;
+          if (!displayPermission) {
+            return [];
+          }
+
+          return [{
+            itemId: null,
+            request: permission.v2
+              ? this.getReloadableModules().opencodeThreadState.createOpenCodePermissionRequest(permission.v2)
+              : this.getReloadableModules().opencodeThreadState.createOpenCodeLegacyPermissionRequest(displayPermission as PermissionRequest),
+            requestKey: permission.requestKey,
+            threadId: displayPermission.sessionID,
+            turnId: null,
+          }];
+        }),
         ...Array.from(this.pendingQuestions.values()).flatMap((question) => {
           const displayQuestion = openCodeQuestionDisplayRequest(question);
           return displayQuestion
@@ -1004,12 +1036,21 @@ export class OpenCodeBridge {
     if (pendingPermission) {
       const response = this.readPermissionResponse(record?.response);
       const client = await this.ensureClient(this.projectRoot);
-      await client.v2.session.permission.reply({
-        reply: response,
-        requestID: pendingPermission.permission.id,
-        sessionID: pendingPermission.permission.sessionID,
-      });
-      this.resolvePermission(pendingPermission.permission.sessionID, pendingPermission.permission.id);
+      if (pendingPermission.v2) {
+        await client.v2.session.permission.reply({
+          reply: response,
+          requestID: pendingPermission.v2.id,
+          sessionID: pendingPermission.v2.sessionID,
+        });
+        this.resolvePermission(pendingPermission.v2.sessionID, pendingPermission.v2.id);
+      } else if (pendingPermission.legacy) {
+        await client.permission.reply({
+          directory: this.sessionDirectories.get(pendingPermission.legacy.sessionID) ?? this.projectRoot,
+          reply: response,
+          requestID: pendingPermission.legacy.id,
+        });
+        this.resolvePermission(pendingPermission.legacy.sessionID, pendingPermission.legacy.id);
+      }
       return { ok: true };
     }
 

@@ -290,6 +290,16 @@ function removeThreadActiveFlag(status: string, flag: ThreadActiveFlag) {
   return nextFlags.length ? `active:${nextFlags.join(",")}` : "active";
 }
 
+function addThreadActiveFlag(status: string, flag: ThreadActiveFlag) {
+  if (!status.startsWith("active")) {
+    return `active:${flag}`;
+  }
+
+  const [, activeFlags = ""] = status.split(":", 2);
+  const nextFlags = Array.from(new Set([...activeFlags.split(",").filter(Boolean), flag]));
+  return nextFlags.length ? `active:${nextFlags.join(",")}` : "active";
+}
+
 function getThreadItemIds(turns: Turn[]) {
   return turns.flatMap((turn) => turn.items.map((item) => item.id));
 }
@@ -1988,6 +1998,39 @@ function WorkbenchThreadClient(
     return changed;
   }
 
+  function markThreadWaitingOnUserInput(threadId: string) {
+    let changed = false;
+    if (state.currentThread?.id === threadId) {
+      const nextStatus = addThreadActiveFlag(state.currentThread.status, "waitingOnUserInput");
+      if (nextStatus !== state.currentThread.status) {
+        state.currentThread = {
+          ...state.currentThread,
+          status: nextStatus,
+        };
+        changed = true;
+      }
+    }
+
+    state.threads = state.threads.map((thread) => {
+      if (thread.id !== threadId) {
+        return thread;
+      }
+
+      const nextStatus = addThreadActiveFlag(thread.status, "waitingOnUserInput");
+      if (nextStatus === thread.status) {
+        return thread;
+      }
+
+      changed = true;
+      return buildThreadSummaryWithUnreadBadge({
+        ...thread,
+        status: nextStatus,
+      });
+    });
+
+    return changed;
+  }
+
   function replacePendingUserInputRequests(
     harness: WorkbenchHarness,
     requests: WorkbenchPendingUserInputRequest[],
@@ -2015,12 +2058,19 @@ function WorkbenchThreadClient(
           break;
         }
       }
-      if (unchanged) {
+      const statusChanged = requests.some((request) => markThreadWaitingOnUserInput(request.threadId));
+      if (unchanged && !statusChanged) {
         return false;
+      }
+      if (unchanged) {
+        return true;
       }
     }
 
     state.pendingUserInputRequestsByThreadId = nextRequests;
+    for (const request of requests) {
+      markThreadWaitingOnUserInput(request.threadId);
+    }
     return true;
   }
 
@@ -3136,7 +3186,9 @@ function WorkbenchThreadClient(
         });
       case "thread/status/changed":
         return updateCurrentThreadFields({
-          status: formatThreadStatus(notification.params.status),
+          status: state.pendingUserInputRequestsByThreadId.has(notification.params.threadId)
+            ? addThreadActiveFlag(formatThreadStatus(notification.params.status), "waitingOnUserInput")
+            : formatThreadStatus(notification.params.status),
         });
       case "thread/name/updated":
         return updateCurrentThreadFields({
@@ -3807,6 +3859,7 @@ function WorkbenchThreadClient(
           turnId: notification.params.turnId,
         },
       )) {
+        markThreadWaitingOnUserInput(notification.params.threadId);
         emit();
       }
       return;
