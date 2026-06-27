@@ -430,12 +430,20 @@ Run after entering Brief mode for an approved-plan baseline.
 "workbench-agent-checkpoint-baseline-v1"; $body = @{ action = 'baseline'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
 \`\`\`
 
+\`\`\`bash
+: 'workbench-agent-checkpoint-baseline-v1'; curl -s -X POST '${routeUrl}' -H 'Content-Type: application/json' -d '{"action":"baseline","threadId":"${threadId}","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'"}'
+\`\`\`
+
 ### Diff against the newest checkpoint
 
 Run immediately after entering Implement mode before editing, and again after entering Review mode before creating the diff checkpoint. The command output is a full unified diff that Workbench renders as file diffs.
 
 \`\`\`powershell
 "workbench-agent-checkpoint-diff-v1"; $body = @{ action = 'diff'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
+\`\`\`
+
+\`\`\`bash
+: 'workbench-agent-checkpoint-diff-v1'; curl -s -X POST '${routeUrl}' -H 'Content-Type: application/json' -d '{"action":"diff","threadId":"${threadId}","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'"}'
 \`\`\`
 
 ### Create a diff checkpoint
@@ -446,12 +454,20 @@ Run after the Review-mode diff command when the current state should become the 
 "workbench-agent-checkpoint-create-diff-v1"; $body = @{ action = 'diffCheckpoint'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
 \`\`\`
 
+\`\`\`bash
+: 'workbench-agent-checkpoint-create-diff-v1'; curl -s -X POST '${routeUrl}' -H 'Content-Type: application/json' -d '{"action":"diffCheckpoint","threadId":"${threadId}","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'"}'
+\`\`\`
+
 ### Restore a checkpoint after explicit user request
 
 Only restore when the user asks for a checkpoint restore. First run the diff command or another preview. Restore uses a checkpoint commit sha supplied by the user or selected from the thread's checkpoint output. The endpoint requires \`confirmRestore = $true\` and blocks when the checkpoint parent is not the current HEAD.
 
 \`\`\`powershell
 "workbench-agent-checkpoint-restore-v1"; $body = @{ action = 'restore'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path; checkpointCommit = '<checkpoint-commit-sha>'; confirmRestore = $true } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
+\`\`\`
+
+\`\`\`bash
+: 'workbench-agent-checkpoint-restore-v1'; curl -s -X POST '${routeUrl}' -H 'Content-Type: application/json' -d '{"action":"restore","threadId":"${threadId}","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'","checkpointCommit":"<checkpoint-commit-sha>","confirmRestore":true}'
 \`\`\`
 `.trim();
 }

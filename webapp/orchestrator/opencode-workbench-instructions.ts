@@ -1,11 +1,12 @@
 /*
  * Exports:
  * - buildOpenCodeWorkbenchSystemPrompt: compose sentinel-wrapped Workbench instructions for OpenCode prompt calls. Keywords: opencode, system, instructions.
- * - ensureOpenCodeWorkbenchConfigDirectory: create the managed-server config directory containing the Workbench OpenCode plugin. Keywords: opencode, plugin, config.
+ * - ensureOpenCodeWorkbenchConfigDirectory: create the managed-server config directory by overlaying the Workbench OpenCode plugin onto the user's OpenCode config. Keywords: opencode, plugin, config, overlay.
  */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { Dirent } from "node:fs";
 
 import type { WorkbenchPromptInstructions } from "../lib/workbench/instructions/WorkbenchPromptFiles";
 
@@ -13,6 +14,15 @@ const WORKBENCH_OPENCODE_SYSTEM_BEGIN = "<<<WORKBENCH_OPENCODE_SYSTEM_REPLACEMEN
 const WORKBENCH_OPENCODE_SYSTEM_END = "<<<WORKBENCH_OPENCODE_SYSTEM_REPLACEMENT_END_V1>>>";
 const WORKBENCH_OPENCODE_CONFIG_DIR_NAME = "workbench-opencode";
 const WORKBENCH_OPENCODE_PLUGIN_FILE = "plugins/workbench-system-replacement.js";
+
+type EnsureOpenCodeWorkbenchConfigDirectoryOptions = {
+  baseConfigDirectory?: string | null;
+};
+
+type CopyConfigDirectoryContentsResult = {
+  copied: boolean;
+  unavailableReason: string | null;
+};
 
 function joinInstructionSections(sections: Array<string | null | undefined>) {
   return sections
@@ -65,10 +75,80 @@ Treat the Workbench instructions below as the complete instruction set for this 
     : null;
 }
 
-export async function ensureOpenCodeWorkbenchConfigDirectory() {
+function defaultOpenCodeConfigDirectory() {
+  const configuredXdgConfigHome = process.env.XDG_CONFIG_HOME?.trim();
+  return path.join(configuredXdgConfigHome || path.join(os.homedir(), ".config"), "opencode");
+}
+
+function normalizeOptionalPath(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? path.resolve(trimmed) : null;
+}
+
+function comparablePath(value: string) {
+  const resolvedPath = path.resolve(value);
+  return process.platform === "win32" ? resolvedPath.toLowerCase() : resolvedPath;
+}
+
+function isSameDirectory(left: string, right: string) {
+  return comparablePath(left) === comparablePath(right);
+}
+
+function nodeErrorCode(error: unknown) {
+  return error && typeof error === "object" && "code" in error && typeof error.code === "string"
+    ? error.code
+    : null;
+}
+
+async function copyConfigDirectoryContents(
+  sourceDirectory: string,
+  destinationDirectory: string,
+): Promise<CopyConfigDirectoryContentsResult> {
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(sourceDirectory, { withFileTypes: true });
+  } catch (error) {
+    const code = nodeErrorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR" || code === "EACCES" || code === "EPERM") {
+      return {
+        copied: false,
+        unavailableReason: code,
+      };
+    }
+    throw error;
+  }
+
+  for (const entry of entries) {
+    const sourcePath = path.join(sourceDirectory, entry.name);
+    const destinationPath = path.join(destinationDirectory, entry.name);
+    await fs.cp(sourcePath, destinationPath, {
+      force: true,
+      recursive: true,
+    });
+  }
+  return {
+    copied: true,
+    unavailableReason: null,
+  };
+}
+
+export async function ensureOpenCodeWorkbenchConfigDirectory(
+  options: EnsureOpenCodeWorkbenchConfigDirectoryOptions = {},
+) {
   const configDirectory = path.join(os.tmpdir(), WORKBENCH_OPENCODE_CONFIG_DIR_NAME);
+  const baseConfigDirectory = normalizeOptionalPath(options.baseConfigDirectory) ?? defaultOpenCodeConfigDirectory();
+  await fs.rm(configDirectory, { force: true, recursive: true });
+  await fs.mkdir(configDirectory, { recursive: true });
+  const baseConfigCopy = isSameDirectory(baseConfigDirectory, configDirectory)
+    ? { copied: false, unavailableReason: "self" }
+    : await copyConfigDirectoryContents(baseConfigDirectory, configDirectory);
   const pluginPath = path.join(configDirectory, WORKBENCH_OPENCODE_PLUGIN_FILE);
   await fs.mkdir(path.dirname(pluginPath), { recursive: true });
   await fs.writeFile(pluginPath, buildOpenCodeSystemReplacementPluginSource(), "utf8");
-  return configDirectory;
+  return {
+    baseConfigDirectory,
+    configDirectory,
+    copiedBaseConfig: baseConfigCopy.copied,
+    unavailableBaseConfigReason: baseConfigCopy.unavailableReason,
+  };
 }

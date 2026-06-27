@@ -453,12 +453,16 @@ export class OpenCodeBridge {
   private async startManagedServer() {
     const { createOpencodeServer } = await loadOpenCodeSdk();
     const previousConfigDirectory = process.env.OPENCODE_CONFIG_DIR;
-    const shouldInstallWorkbenchPlugin = !previousConfigDirectory?.trim();
-    if (shouldInstallWorkbenchPlugin) {
-      process.env.OPENCODE_CONFIG_DIR = await this.getReloadableModules().opencodeWorkbenchInstructions.ensureOpenCodeWorkbenchConfigDirectory();
-    } else {
-      log("opencode-bridge", "OPENCODE_CONFIG_DIR is already set; Workbench OpenCode system replacement plugin was not injected.");
-    }
+    const workbenchConfig = await this.getReloadableModules().opencodeWorkbenchInstructions.ensureOpenCodeWorkbenchConfigDirectory({
+      baseConfigDirectory: previousConfigDirectory,
+    });
+    process.env.OPENCODE_CONFIG_DIR = workbenchConfig.configDirectory;
+    log(
+      "opencode-bridge",
+      workbenchConfig.copiedBaseConfig
+        ? `using Workbench OpenCode config overlay from ${workbenchConfig.baseConfigDirectory}`
+        : `using Workbench OpenCode config without base config; ${workbenchConfig.baseConfigDirectory} was unavailable (${workbenchConfig.unavailableBaseConfigReason ?? "unknown"})`,
+    );
 
     let server: OpenCodeServerHandle;
     try {
@@ -468,12 +472,10 @@ export class OpenCodeBridge {
         timeout: Number.isFinite(OPENCODE_SERVER_START_TIMEOUT_MS) ? OPENCODE_SERVER_START_TIMEOUT_MS : 7000,
       });
     } finally {
-      if (shouldInstallWorkbenchPlugin) {
-        if (previousConfigDirectory === undefined) {
-          delete process.env.OPENCODE_CONFIG_DIR;
-        } else {
-          process.env.OPENCODE_CONFIG_DIR = previousConfigDirectory;
-        }
+      if (previousConfigDirectory === undefined) {
+        delete process.env.OPENCODE_CONFIG_DIR;
+      } else {
+        process.env.OPENCODE_CONFIG_DIR = previousConfigDirectory;
       }
     }
 
