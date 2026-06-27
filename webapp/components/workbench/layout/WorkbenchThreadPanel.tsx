@@ -126,7 +126,7 @@ export default function WorkbenchThreadPanel ({
 
   const fallbackSummary = fallbackThreadSummary?.id === threadId ? fallbackThreadSummary : null;
   const threadDisplaySource = thread ?? fallbackSummary;
-  const threadActivityTimestampMs = useThreadActivityTimestamp(threadDisplaySource);
+  const threadActivityTimestampMs = useThreadActivityTimestamp(threadDisplaySource, fallbackSummary);
   const threadLabel = threadDisplaySource ? getThreadTitle(threadDisplaySource) : "";
   const threadStatusLabel = threadActivityTimestampMs
     ? formatThreadRelativeTimestamp(threadActivityTimestampMs / 1000, relativeTimeNowMs)

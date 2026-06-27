@@ -1930,7 +1930,7 @@ export default function Workbench () {
       : null;
   const threadSummaryForThreadView = showThreadView ? threadSummariesById.get(effectiveThreadId) ?? null : null;
   const threadShellSource = threadForThreadView ?? threadSummaryForThreadView;
-  const threadShellActivityTimestampMs = useThreadActivityTimestamp(threadShellSource);
+  const threadShellActivityTimestampMs = useThreadActivityTimestamp(threadShellSource, threadSummaryForThreadView);
   const isThreadShellTitleLoading = showThreadView && !threadShellSource;
   const threadShellTitle = threadShellSource ? getThreadTitle(threadShellSource) : "";
   const threadShellStatusLabel = threadShellActivityTimestampMs

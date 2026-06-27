@@ -9,12 +9,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ThreadPayload, ThreadSummary } from "../../../lib/types";
 import { getTurnRenderSignature } from "../../../lib/workbench/thread/thread-item-signature";
 
-function getFallbackActivityTimestampMs(thread: ThreadPayload | ThreadSummary | null) {
-  if (!thread || !Number.isFinite(thread.updatedAt) || thread.updatedAt <= 0) {
-    return 0;
+function getFallbackActivityTimestampMs(...threads: Array<ThreadPayload | ThreadSummary | null | undefined>) {
+  let timestampMs = 0;
+  for (const thread of threads) {
+    if (!thread || !Number.isFinite(thread.updatedAt) || thread.updatedAt <= 0) {
+      continue;
+    }
+
+    timestampMs = Math.max(timestampMs, thread.updatedAt * 1000);
   }
 
-  return thread.updatedAt * 1000;
+  return timestampMs;
 }
 
 function getThreadActivitySignature(thread: ThreadPayload | ThreadSummary | null) {
@@ -25,9 +30,16 @@ function getThreadActivitySignature(thread: ThreadPayload | ThreadSummary | null
   return thread.turns.map((turn) => getTurnRenderSignature(turn)).join("\n\n");
 }
 
-export default function useThreadActivityTimestamp(thread: ThreadPayload | ThreadSummary | null) {
-  const fallbackTimestampMs = getFallbackActivityTimestampMs(thread);
+export default function useThreadActivityTimestamp(
+  thread: ThreadPayload | ThreadSummary | null,
+  fallbackThread?: ThreadPayload | ThreadSummary | null,
+) {
+  const fallbackTimestampMs = getFallbackActivityTimestampMs(thread, fallbackThread);
   const activitySignature = useMemo(() => getThreadActivitySignature(thread), [thread]);
+  const latestFallbackTimestampRef = useRef<{
+    key: string;
+    timestampMs: number;
+  } | null>(null);
   const previousActivityRef = useRef<{
     key: string;
     signature: string;
@@ -37,10 +49,19 @@ export default function useThreadActivityTimestamp(thread: ThreadPayload | Threa
 
   useEffect(() => {
     if (!threadKey) {
+      latestFallbackTimestampRef.current = null;
       previousActivityRef.current = null;
       setObservedActivityTimestampMs(0);
       return;
     }
+
+    const latestFallback = latestFallbackTimestampRef.current;
+    latestFallbackTimestampRef.current = {
+      key: threadKey,
+      timestampMs: latestFallback?.key === threadKey
+        ? Math.max(latestFallback.timestampMs, fallbackTimestampMs)
+        : fallbackTimestampMs,
+    };
 
     const previous = previousActivityRef.current;
     if (!previous || previous.key !== threadKey) {
@@ -54,8 +75,15 @@ export default function useThreadActivityTimestamp(thread: ThreadPayload | Threa
     }
 
     previousActivityRef.current = { key: threadKey, signature: activitySignature };
-    setObservedActivityTimestampMs(Date.now());
-  }, [activitySignature, threadKey]);
+    if (!previous.signature) {
+      return;
+    }
 
-  return Math.max(fallbackTimestampMs, observedActivityTimestampMs);
+    setObservedActivityTimestampMs(Date.now());
+  }, [activitySignature, fallbackTimestampMs, threadKey]);
+
+  const latestFallbackTimestampMs = latestFallbackTimestampRef.current?.key === threadKey
+    ? Math.max(latestFallbackTimestampRef.current.timestampMs, fallbackTimestampMs)
+    : fallbackTimestampMs;
+  return Math.max(latestFallbackTimestampMs, observedActivityTimestampMs);
 }
