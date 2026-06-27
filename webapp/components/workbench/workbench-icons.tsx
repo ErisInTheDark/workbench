@@ -12,6 +12,8 @@
  * - GearIcon: render the settings navigation icon. Keywords: workbench, icon, settings.
  * - CollaborationIcon: render the collaboration navigation icon. Keywords: workbench, icon, collaboration.
  * - ReloadIcon: render the local runtime reload icon. Keywords: workbench, icon, reload.
+ * - PinIcon: render the pinned thread icon. Keywords: workbench, icon, thread, pin.
+ * - ArchiveIcon: render the thread archive context menu icon. Keywords: workbench, icon, thread, archive.
  * - WrapTextIcon: render the thread codeblock line-wrap toggle icon. Keywords: workbench, icon, thread, code, wrap.
  * - CopyIcon: render the thread codeblock copy action icon. Keywords: workbench, icon, thread, code, copy.
  * - CheckIcon: render the thread codeblock copied confirmation icon. Keywords: workbench, icon, thread, code, copied.
@@ -215,6 +217,25 @@ export function ReloadIcon () {
       <path d="M3.75 3.75V6.75H6.75" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M3.75 10.75A6.25 6.25 0 0 0 14.7 14.88L16.25 13.25" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M16.25 16.25V13.25H13.25" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function PinIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
+      <path d="M7.75 3.75H12.25L11.65 8.35L14.75 11.2V12.5H5.25V11.2L8.35 8.35L7.75 3.75Z" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M10 12.5V17" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function ArchiveIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
+      <path d="M3.75 5.25H16.25V7.75H3.75V5.25Z" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5.25 7.75V15.2C5.25 15.78 5.72 16.25 6.3 16.25H13.7C14.28 16.25 14.75 15.78 14.75 15.2V7.75" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8.25 10.25H11.75" strokeLinecap="round" />
     </svg>
   );
 }

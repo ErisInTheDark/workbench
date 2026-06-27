@@ -132,7 +132,8 @@ Use a plaintext, action-oriented title, avoiding quotes and other special chars.
 Route URL: ${ escapedRouteUrl }
 Send a JSON body: { "harness": "${escapedHarness}", "threadId": "${escapedThreadId}", "title": "<short title>" }
 
-If the call fails once, continue normally.
+If the call fails because you made a mistake, try again with the correct command.
+If the call fails for any other reason, continue normally.
 Keep it invisible: Do not reason about the title or process of setting it, and do not mention it or its failure in chat.
 `.trimStart();
 }

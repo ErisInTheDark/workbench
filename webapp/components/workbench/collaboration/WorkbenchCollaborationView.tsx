@@ -24,12 +24,12 @@ import {
   readStoredWorkbenchCollaborationLayout,
   writeStoredWorkbenchCollaborationLayout,
 } from "../../../lib/workbench/collaboration/collaboration-layout";
+import { WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS } from "../../../lib/workbench/collaboration/collaboration-registry";
 import {
   applyWorkbenchCollaborationSuggestionPatch,
   findWorkbenchCollaborationSuggestionPatch,
   type WorkbenchCollaborationSuggestionPatch,
 } from "../../../lib/workbench/collaboration/collaboration-suggestions";
-import { WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS } from "../../../lib/workbench/collaboration/collaboration-registry";
 import { areDeeplyEqual } from "../../../lib/workbench/deep-equality";
 import WorkbenchMainLayout from "../../../lib/workbench/layout/workbench-layout";
 import ActiveTabRefreshLeader from "../../../lib/workbench/state/ActiveTabRefreshLeader";
@@ -40,11 +40,16 @@ import { WORKBENCH_FILE_LINK_INSTRUCTIONS } from "../../../lib/workbench/thread/
 import type { WorkbenchFilePanelClientOptions } from "../../../lib/workbench/WorkbenchFilePanelClient";
 import WorkbenchFilePanel from "../layout/WorkbenchFilePanel";
 import WorkbenchMainLayoutView from "../layout/WorkbenchMainLayoutView";
+import { ThreadThreadContent } from "../thread-view/thread-view-items";
 import ThreadComposer from "../thread-view/ThreadComposer";
+import ThreadDisclosure from "../thread-view/ThreadDisclosure";
+import ThreadRateLimits from "../thread-view/ThreadRateLimits";
 import ThreadView from "../thread-view/ThreadView";
 import WorkbenchProgressWheel from "../WorkbenchProgressWheel";
+import CollaborationSuggestionCard from "./CollaborationSuggestionCard";
 
 type ThreadViewProps = ComponentProps<typeof ThreadView>;
+type CollaborationComposerDraft = Parameters<ThreadViewProps["onThreadComposerDraftChange"]>[1];
 
 const SCRATCHPAD_AUTOSAVE_DELAY_MS = 180;
 const SCRATCHPAD_AUTO_REFRESH_DELAY_MS = 650;
@@ -53,6 +58,7 @@ const COLLABORATOR_THREAD_IDLE_REFRESH_INTERVAL_MS = 10000;
 const COLLABORATOR_THREAD_HYDRATION_RETRY_ATTEMPTS = 4;
 const COLLABORATOR_THREAD_HYDRATION_RETRY_DELAY_MS = 600;
 const COLLABORATOR_THREAD_HYDRATION = { mode: "legacyFull" as const };
+const THREAD_HARNESSES: readonly WorkbenchHarness[] = ["codex", "copilot", "opencode"];
 
 type CollaboratorRunStatus = "idle" | "starting" | "hydrating" | "running" | "failed";
 type WorkbenchCollaborationSuggestionStartResult =
@@ -114,10 +120,44 @@ function getThreadLabel (threadId: string, summariesById: Map<string, ThreadSumm
   return summary?.name || summary?.preview || threadId.replace(/^draft:collaboration:/, "Draft ");
 }
 
+function formatCollaboratorRunRelativeTime (summary: ThreadSummary | null, now: number) {
+  if (!summary) {
+    return "saved run";
+  }
+
+  const elapsedSeconds = Math.max(0, Math.floor((now - summary.updatedAt * 1000) / 1000));
+  if (elapsedSeconds < 45) {
+    return "just now";
+  }
+
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) {
+    return `${elapsedMinutes}m ago`;
+  }
+
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) {
+    return `${elapsedHours}h ago`;
+  }
+
+  const elapsedDays = Math.floor(elapsedHours / 24);
+  return `${elapsedDays}d ago`;
+}
+
 function createSuggestionDraftThreadId (projectId: string, suggestionId: string) {
   const safeProjectId = projectId.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "project";
   const safeSuggestionId = suggestionId.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "suggestion";
   return `draft:collaboration-suggestion:${safeProjectId}:${safeSuggestionId}`;
+}
+
+function applyCollaboratorDraftSettings (draftThread: ThreadPayload, settingsThread: ThreadPayload) {
+  return {
+    ...draftThread,
+    agentPath: settingsThread.agentPath,
+    model: settingsThread.model,
+    reasoningEffort: settingsThread.reasoningEffort,
+    serviceTier: settingsThread.harness === "codex" ? settingsThread.serviceTier : null,
+  };
 }
 
 function formatSuggestionsForPrompt (suggestions: readonly WorkbenchCollaborationSuggestion[]) {
@@ -183,6 +223,7 @@ function formatFileLinkingInfoForPrompt (
 }
 
 function buildCollaboratorControlPrompt ({
+  additionalUserMessage,
   collaboratorPrompt,
   diffMap,
   fileLinkingInfo,
@@ -192,6 +233,7 @@ function buildCollaboratorControlPrompt ({
   startedSuggestionThreads,
   suggestions,
 }: {
+  additionalUserMessage?: string;
   collaboratorPrompt: string;
   diffMap: string;
   fileLinkingInfo: string;
@@ -203,6 +245,10 @@ function buildCollaboratorControlPrompt ({
 }) {
   return `<!-- workbench-collaboration-control -->
 ${collaboratorPrompt}
+${additionalUserMessage ? `
+Additional user message:
+${additionalUserMessage}
+` : ""}
 
 Mode: ${mode}.
 Scratchpad path: ${scratchpadPath}
@@ -416,6 +462,8 @@ export default function WorkbenchCollaborationView ({
 }: WorkbenchCollaborationViewProps) {
   const [selectedThreadId, setSelectedThreadId] = useState(collaborationThreadRegistry.currentThreadId || collaborationThreadRegistry.threadIds[0] || "");
   const [collaboratorThread, setCollaboratorThread] = useState<ThreadPayload | null>(null);
+  const [collaboratorDraftThread, setCollaboratorDraftThread] = useState<ThreadPayload | null>(null);
+  const [collaboratorDraftComposerDraft, setCollaboratorDraftComposerDraft] = useState<CollaborationComposerDraft | null>(null);
   const [collaboratorError, setCollaboratorError] = useState("");
   const [collaboratorRunStatus, setCollaboratorRunStatus] = useState<CollaboratorRunStatus>("idle");
   const [isAutoWakeLeader, setIsAutoWakeLeader] = useState(false);
@@ -425,11 +473,13 @@ export default function WorkbenchCollaborationView ({
   const [collaborationLayout, setCollaborationLayout] = useState(() => readStoredWorkbenchCollaborationLayout(projectId));
   const [pendingAutoWakeActivityAt, setPendingAutoWakeActivityAt] = useState<number | null>(null);
   const [autoWakeNow, setAutoWakeNow] = useState(() => Date.now());
+  const [openSuggestionIds, setOpenSuggestionIds] = useState<Record<string, boolean | undefined>>({});
   const [suggestionDraftThreadsById, setSuggestionDraftThreadsById] = useState<Record<string, ThreadPayload | undefined>>({});
   const [startedSuggestionsById, setStartedSuggestionsById] = useState<Record<string, StartedCollaborationSuggestion | undefined>>({});
   const [suggestionStartErrorsById, setSuggestionStartErrorsById] = useState<Record<string, string | undefined>>({});
   const collaboratorThreadRef = useRef<ThreadPayload | null>(null);
   const collaborationThreadRegistryRef = useRef(collaborationThreadRegistry);
+  const collaboratorDraftProjectIdRef = useRef(projectId);
   const hydrationGenerationRef = useRef(0);
   const isSendingControlPromptRef = useRef(false);
   const autoWakeOwnerIdRef = useRef(typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -477,6 +527,7 @@ export default function WorkbenchCollaborationView ({
     threadCwdPath: projectRootPath,
     workspaceRoots: suggestionComposerWorkspaceRoots,
   }), [projectFileCandidates, projectFileIndexId, projectRootPath, suggestionComposerWorkspaceRoots]);
+  const collaboratorDraftHasContent = Boolean(collaboratorDraftComposerDraft?.text.trim() || collaboratorDraftComposerDraft?.attachments.length);
   const resetPendingAutoWakeActivity = useCallback(() => {
     const now = Date.now();
     setAutoWakeNow(now);
@@ -485,6 +536,12 @@ export default function WorkbenchCollaborationView ({
   const clearPendingAutoWakeActivity = useCallback(() => {
     setPendingAutoWakeActivityAt(null);
   }, []);
+
+  useEffect(() => {
+    if (collaboratorDraftHasContent) {
+      clearPendingAutoWakeActivity();
+    }
+  }, [clearPendingAutoWakeActivity, collaboratorDraftHasContent]);
 
   useEffect(() => {
     const observed = observedProjectDiffMapRef.current;
@@ -555,6 +612,38 @@ export default function WorkbenchCollaborationView ({
     onContentChange: resetPendingAutoWakeActivity,
     refreshProjectOnSave: false,
   }), [resetPendingAutoWakeActivity]);
+
+  const createCollaboratorDraftThread = useCallback((settingsThread?: ThreadPayload | null) => {
+    if (!controls) {
+      return null;
+    }
+
+    const draftThread = controls.createThreadDraft(settingsThread?.harness ?? harness, {
+      select: false,
+      threadId: createDraftCollaboratorThreadId(projectId),
+    });
+    collaboratorDraftProjectIdRef.current = projectId;
+    return settingsThread ? applyCollaboratorDraftSettings(draftThread, settingsThread) : draftThread;
+  }, [controls, harness, projectId]);
+
+  useEffect(() => {
+    if (!controls) {
+      setCollaboratorDraftThread(null);
+      setCollaboratorDraftComposerDraft(null);
+      return;
+    }
+
+    if (collaboratorDraftProjectIdRef.current !== projectId) {
+      setCollaboratorDraftComposerDraft(null);
+    }
+    setCollaboratorDraftThread((current) => {
+      if (current && collaboratorDraftProjectIdRef.current === projectId) {
+        return current;
+      }
+
+      return createCollaboratorDraftThread();
+    });
+  }, [controls, createCollaboratorDraftThread, projectId]);
 
   useEffect(() => {
     if (!controls) {
@@ -637,10 +726,10 @@ export default function WorkbenchCollaborationView ({
   }, [collaborationThreadRegistry, publishRegistryIfChanged]);
 
   const publishSuggestionPatchFromThread = useCallback((thread: ThreadPayload) => {
-    const baseThreadIds = [
-      thread.id,
-      ...collaborationThreadRegistry.threadIds.filter((threadId) => threadId !== thread.id && !threadId.startsWith("draft:collaboration:")),
-    ];
+    const existingThreadIds = collaborationThreadRegistry.threadIds.filter((threadId) => !threadId.startsWith("draft:collaboration:"));
+    const baseThreadIds = existingThreadIds.includes(thread.id)
+      ? existingThreadIds
+      : [thread.id, ...existingThreadIds];
     const baseRegistry = {
       ...collaborationThreadRegistry,
       currentThreadId: collaborationThreadRegistry.currentThreadId.startsWith("draft:collaboration:")
@@ -723,7 +812,7 @@ export default function WorkbenchCollaborationView ({
     };
   }, [collaboratorThread?.id, hydrateCollaboratorThread, selectedThreadId]);
 
-  const sendControlPrompt = useCallback(async (thread: ThreadPayload, mode: "bootstrap" | "wake", options: { replaceThreadId?: string } = {}) => {
+  const sendControlPrompt = useCallback(async (thread: ThreadPayload, mode: "bootstrap" | "wake", options: { additionalInput?: UserInput[]; replaceThreadId?: string; throwOnError?: boolean } = {}) => {
     if (isSendingControlPromptRef.current) {
       return thread;
     }
@@ -734,8 +823,11 @@ export default function WorkbenchCollaborationView ({
     setCollaboratorRunStatus(mode === "bootstrap" ? "starting" : "running");
     setCollaboratorError("");
     try {
+      const additionalText = options.additionalInput?.find((input): input is Extract<UserInput, { type: "text" }> => input.type === "text")?.text.trim() ?? "";
+      const additionalNonTextInput = options.additionalInput?.filter((input) => input.type !== "text") ?? [];
       const payload = await onSendMessage(thread, [
         createTextInput(buildCollaboratorControlPrompt({
+          additionalUserMessage: additionalText,
           collaboratorPrompt,
           diffMap: projectDiffMap,
           fileLinkingInfo,
@@ -745,6 +837,7 @@ export default function WorkbenchCollaborationView ({
           startedSuggestionThreads: startedSuggestionThreadsForPrompt,
           suggestions: collaborationSuggestions,
         })),
+        ...additionalNonTextInput,
       ], {
         additionalWritableRoots: scratchpadWritableRoot ? [scratchpadWritableRoot] : undefined,
         onThreadMaterialized: (materializedThread) => {
@@ -775,6 +868,9 @@ export default function WorkbenchCollaborationView ({
     } catch (error) {
       setCollaboratorRunStatus("failed");
       setCollaboratorError(error instanceof Error ? error.message : "Unable to wake the collaborator.");
+      if (options.throwOnError) {
+        throw error;
+      }
       return thread;
     } finally {
       isSendingControlPromptRef.current = false;
@@ -787,28 +883,37 @@ export default function WorkbenchCollaborationView ({
       return;
     }
 
-    const draftThread = controls.createThreadDraft(harness, {
-      select: false,
-      threadId: createDraftCollaboratorThreadId(projectId),
-    });
+    const settingsThread = collaboratorDraftThread ?? createCollaboratorDraftThread();
+    if (!settingsThread) {
+      return;
+    }
+
+    const draftThread = createCollaboratorDraftThread(settingsThread);
+    if (!draftThread) {
+      return;
+    }
+
     rememberCollaboratorThread(draftThread);
-    await sendControlPrompt(draftThread, mode, {
+    const result = await sendControlPrompt(draftThread, mode, {
       replaceThreadId: draftThread.id,
     });
-  }, [collaborationThreadRegistry.threadIds.length, controls, harness, projectId, rememberCollaboratorThread, sendControlPrompt]);
+    if (result.id !== draftThread.id || !result.isDraft) {
+      setCollaboratorDraftThread(createCollaboratorDraftThread(settingsThread));
+    }
+  }, [collaborationThreadRegistry.threadIds.length, collaboratorDraftThread, controls, createCollaboratorDraftThread, rememberCollaboratorThread, sendControlPrompt]);
 
   const runCollaboratorNow = useCallback(async () => {
     await startCollaboratorRun();
   }, [startCollaboratorRun]);
 
   useEffect(() => {
-    if (!collaborationThreadRegistry.autoWakeEnabled || !isAutoWakeLeader || pendingAutoWakeActivityAt === null) {
+    if (!collaborationThreadRegistry.autoWakeEnabled || !isAutoWakeLeader || pendingAutoWakeActivityAt === null || collaboratorDraftHasContent) {
       return;
     }
 
     const delayMs = Math.max(0, WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS - (Date.now() - pendingAutoWakeActivityAt));
     const timeoutId = window.setTimeout(async () => {
-      if (hasActiveCollaboratorRun || isSendingControlPromptRef.current) {
+      if (hasActiveCollaboratorRun || isSendingControlPromptRef.current || collaboratorDraftHasContent) {
         resetPendingAutoWakeActivity();
         return;
       }
@@ -834,6 +939,7 @@ export default function WorkbenchCollaborationView ({
   }, [
     clearPendingAutoWakeActivity,
     collaborationThreadRegistry.autoWakeEnabled,
+    collaboratorDraftHasContent,
     hasActiveCollaboratorRun,
     isAutoWakeLeader,
     onClaimAutoWake,
@@ -883,6 +989,15 @@ export default function WorkbenchCollaborationView ({
   }, [clearPendingAutoWakeActivity, collaborationThreadRegistry, publishRegistryIfChanged]);
 
   const dismissSuggestion = useCallback((suggestionId: string) => {
+    setOpenSuggestionIds((current) => {
+      if (!(suggestionId in current)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[suggestionId];
+      return next;
+    });
     const { [suggestionId]: _removedSuggestion, ...nextSuggestions } = collaborationThreadRegistry.suggestions;
     void _removedSuggestion;
     const dismissedSuggestionIds = collaborationThreadRegistry.dismissedSuggestionIds.includes(suggestionId)
@@ -894,6 +1009,47 @@ export default function WorkbenchCollaborationView ({
       suggestions: nextSuggestions,
     });
   }, [collaborationThreadRegistry, publishRegistryIfChanged]);
+
+  const openSuggestion = useCallback((suggestionId: string) => {
+    setOpenSuggestionIds((current) => current[suggestionId] ? current : {
+      ...current,
+      [suggestionId]: true,
+    });
+  }, []);
+
+  const collapseSuggestion = useCallback((suggestionId: string) => {
+    setOpenSuggestionIds((current) => {
+      if (!current[suggestionId]) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [suggestionId]: false,
+      };
+    });
+  }, []);
+
+  const hideStartedSuggestion = useCallback((suggestionId: string) => {
+    setStartedSuggestionsById((current) => {
+      if (!current[suggestionId]) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[suggestionId];
+      return next;
+    });
+    setOpenSuggestionIds((current) => {
+      if (!(suggestionId in current)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[suggestionId];
+      return next;
+    });
+  }, []);
 
   const updateSuggestionPrompt = useCallback((suggestionId: string, prompt: string) => {
     const suggestion = collaborationThreadRegistry.suggestions[suggestionId];
@@ -931,6 +1087,15 @@ export default function WorkbenchCollaborationView ({
         startedThreadId: threadId,
       },
     }));
+    setOpenSuggestionIds((current) => {
+      if (!(suggestion.id in current)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[suggestion.id];
+      return next;
+    });
     setSuggestionStartErrorsById((current) => {
       if (!current[suggestion.id]) {
         return current;
@@ -1027,11 +1192,96 @@ export default function WorkbenchCollaborationView ({
     return payload;
   }, [onStopThread, rememberCollaboratorThread]);
 
+  const updateCollaboratorDraftThread = useCallback((update: (thread: ThreadPayload) => ThreadPayload) => {
+    setCollaboratorDraftThread((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const nextThread = update(current);
+      return nextThread === current ? current : nextThread;
+    });
+  }, []);
+
+  const cycleCollaboratorDraftHarness = useCallback(() => {
+    if (!controls) {
+      return;
+    }
+
+    setCollaboratorDraftThread((current) => {
+      const currentHarness = current?.harness ?? harness;
+      const currentIndex = THREAD_HARNESSES.indexOf(currentHarness);
+      const nextHarness = THREAD_HARNESSES[(currentIndex + 1) % THREAD_HARNESSES.length] ?? "codex";
+      collaboratorDraftProjectIdRef.current = projectId;
+      return controls.createThreadDraft(nextHarness, {
+        select: false,
+        threadId: createDraftCollaboratorThreadId(projectId),
+      });
+    });
+  }, [controls, harness, projectId]);
+
+  const handleCollaboratorDraftComposerChange = useCallback((threadId: string, draft: CollaborationComposerDraft) => {
+    if (threadId !== collaboratorDraftThread?.id) {
+      return;
+    }
+
+    setCollaboratorDraftComposerDraft(draft);
+  }, [collaboratorDraftThread?.id]);
+
+  const handleCollaboratorDraftComposerClear = useCallback((threadId: string) => {
+    if (threadId !== collaboratorDraftThread?.id) {
+      return;
+    }
+
+    setCollaboratorDraftComposerDraft(null);
+  }, [collaboratorDraftThread?.id]);
+
+  const handleCollaboratorDraftSendMessage = useCallback(async (threadId: string, input: UserInput[]) => {
+    if (!collaboratorDraftThread || threadId !== collaboratorDraftThread.id) {
+      throw new Error("Collaborator draft is not ready.");
+    }
+
+    const draftThread = createCollaboratorDraftThread(collaboratorDraftThread);
+    if (!draftThread) {
+      throw new Error("Collaborator draft is not ready.");
+    }
+
+    const mode = collaborationThreadRegistry.threadIds.length ? "wake" : "bootstrap";
+    rememberCollaboratorThread(draftThread);
+    await sendControlPrompt(draftThread, mode, {
+      additionalInput: input,
+      replaceThreadId: draftThread.id,
+      throwOnError: true,
+    });
+    setCollaboratorDraftThread(createCollaboratorDraftThread(collaboratorDraftThread));
+    setCollaboratorDraftComposerDraft(null);
+  }, [collaborationThreadRegistry.threadIds.length, collaboratorDraftThread, createCollaboratorDraftThread, rememberCollaboratorThread, sendControlPrompt]);
+
   const collaboratorHistory = collaborationThreadRegistry.threadIds;
   const currentCollaboratorThreadId = selectedThreadId || collaboratorHistory[0] || "";
-  const previousCollaboratorThreadIds = collaboratorHistory
-    .filter((threadId) => threadId !== currentCollaboratorThreadId)
-    .slice(0, 3);
+  const currentCollaboratorSummary = currentCollaboratorThreadId ? summariesById.get(currentCollaboratorThreadId) ?? null : null;
+  const currentCollaboratorPendingUserInputRequest = currentCollaboratorThreadId
+    ? livePendingUserInputRequestsByThreadId[currentCollaboratorThreadId] ?? null
+    : null;
+  const shouldRenderCurrentCollaboratorThread = Boolean(
+    collaboratorThread
+    && collaboratorThread.id === currentCollaboratorThreadId
+    && (
+      isThreadStatusActive(collaboratorThread.status)
+      || Boolean(currentCollaboratorSummary && isThreadStatusActive(currentCollaboratorSummary.status))
+      || Boolean(currentCollaboratorPendingUserInputRequest)
+    ),
+  );
+  const shouldShowCollaboratorThreadLoading = Boolean(
+    isLoadingThread
+    && currentCollaboratorThreadId
+    && !shouldRenderCurrentCollaboratorThread
+    && (
+      currentCollaboratorPendingUserInputRequest
+      || (currentCollaboratorSummary && isThreadStatusActive(currentCollaboratorSummary.status))
+    ),
+  );
+  const recentCollaboratorThreadIds = [...collaboratorHistory.slice(0, 3)].reverse();
   const collaboratorStatusLabel = collaboratorRunStatus === "starting"
     ? "Starting collaborator..."
     : collaboratorRunStatus === "hydrating"
@@ -1047,6 +1297,7 @@ export default function WorkbenchCollaborationView ({
   const autoWakeProgressPercent = autoWakeCountdownMs === null
     ? 0
     : ((WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS - autoWakeCountdownMs) / WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS) * 100;
+  const isAutoWakeToggleDisabled = !controls || (!collaborationThreadRegistry.autoWakeEnabled && collaboratorDraftHasContent);
 
   function renderScratchpadPanel (isFocused: boolean, onFocus: () => void) {
     return (
@@ -1072,15 +1323,16 @@ export default function WorkbenchCollaborationView ({
         <div className="mb-6 border-b border-[color-mix(in_srgb,var(--text)_10%,transparent)] pb-5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
-              <p className="m-0 text-[0.78rem] font-medium uppercase tracking-[0.08em] text-muted">Collaboration suggestions</p>
+              <p className="m-0 text-[0.78rem] font-medium uppercase tracking-[0.08em] text-muted">Collaborator</p>
               <p className="mt-1 mb-0 text-[0.84rem] leading-5 text-muted">{collaboratorStatusLabel}</p>
             </div>
             <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
               <button
                 type="button"
                 aria-pressed={collaborationThreadRegistry.autoWakeEnabled}
+                title={collaboratorDraftHasContent ? "Auto-run is paused while the collaborator composer has unsent text." : "Toggle collaborator auto-run"}
                 className="inline-flex h-9 items-center gap-2 rounded-full px-2.5 text-[0.82rem] font-medium text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:cursor-not-allowed disabled:opacity-45"
-                disabled={!controls}
+                disabled={isAutoWakeToggleDisabled}
                 onClick={toggleAutoWake}
               >
                 <span
@@ -1092,7 +1344,7 @@ export default function WorkbenchCollaborationView ({
                       : "border-[color-mix(in_srgb,var(--text)_22%,transparent)] bg-transparent",
                   )}
                 />
-                <span>Auto-run</span>
+                <span>{collaboratorDraftHasContent ? "Auto-run paused" : "Auto-run"}</span>
                 {collaborationThreadRegistry.autoWakeEnabled && autoWakeCountdownMs !== null ? (
                   <span className="inline-flex shrink-0 items-center text-muted">
                     <WorkbenchProgressWheel percent={autoWakeProgressPercent} />
@@ -1114,20 +1366,28 @@ export default function WorkbenchCollaborationView ({
           <div className="mt-4 flex flex-col gap-3">
             {visibleSuggestions.length ? visibleSuggestions.map((suggestion) => {
               const startedSuggestion = startedSuggestionsById[suggestion.id];
+              const isSuggestionOpen = Boolean(openSuggestionIds[suggestion.id]);
               if (startedSuggestion && !(suggestion.id in collaborationThreadRegistry.suggestions)) {
                 return (
-                  <div
+                  <CollaborationSuggestionCard
                     key={suggestion.id}
-                    className="rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-3 opacity-75"
+                    isDimmed
+                    isOpen={isSuggestionOpen}
+                    onCollapse={() => {
+                      collapseSuggestion(suggestion.id);
+                    }}
+                    onDismiss={() => {
+                      hideStartedSuggestion(suggestion.id);
+                      dismissSuggestion(suggestion.id);
+                    }}
+                    onOpen={() => {
+                      openSuggestion(suggestion.id);
+                    }}
+                    rationale={startedSuggestion.rationale}
+                    title={startedSuggestion.title}
                   >
-                    <div className="px-1">
-                      <h3 className="m-0 text-[0.98rem] font-semibold leading-5 text-text">{startedSuggestion.title}</h3>
-                      {startedSuggestion.rationale ? (
-                        <p className="mt-1 mb-0 text-[0.84rem] leading-5 text-muted">{startedSuggestion.rationale}</p>
-                      ) : null}
-                    </div>
-                    <p className="mt-3 mb-0 whitespace-pre-wrap px-1 text-[0.9rem] leading-6 text-muted">{startedSuggestion.prompt}</p>
-                    <div className="mt-3 flex justify-end">
+                    <p className="mb-0 whitespace-pre-wrap px-1 pr-18 text-[0.9rem] leading-6 text-muted">{startedSuggestion.prompt}</p>
+                    <div className="mt-3 flex justify-end px-1">
                       <button
                         type="button"
                         className="rounded-full px-4 py-2 text-[0.84rem] font-medium transition bg-[color:color-mix(in_srgb,var(--text)_92%,var(--bg)_8%)] text-[var(--bg)] hover:opacity-92 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]"
@@ -1138,19 +1398,33 @@ export default function WorkbenchCollaborationView ({
                         Go to thread
                       </button>
                     </div>
-                  </div>
+                  </CollaborationSuggestionCard>
                 );
               }
 
               const suggestionComposerThread = suggestionDraftThreadsById[suggestion.id];
               const suggestionStartError = suggestionStartErrorsById[suggestion.id];
               return suggestionComposerThread ? (
-                <div key={suggestion.id}>
+                <CollaborationSuggestionCard
+                  key={suggestion.id}
+                  isOpen={isSuggestionOpen}
+                  onCollapse={() => {
+                    collapseSuggestion(suggestion.id);
+                  }}
+                  onDismiss={() => {
+                    dismissSuggestion(suggestion.id);
+                  }}
+                  onOpen={() => {
+                    openSuggestion(suggestion.id);
+                  }}
+                  rationale={suggestion.rationale}
+                  title={suggestion.title}
+                >
                   <ThreadComposer
                     autoExpandSavedDraftShelf={false}
                     composerSpellCheck={composerSpellCheck}
                     header={(
-                      <div>
+                      <div className="pr-18">
                         <h3 className="m-0 text-[0.98rem] font-semibold leading-5 text-text">{suggestion.title}</h3>
                         {suggestion.rationale ? (
                           <p className="mt-1 mb-0 text-[0.84rem] leading-5 text-muted">{suggestion.rationale}</p>
@@ -1204,25 +1478,30 @@ export default function WorkbenchCollaborationView ({
                     }}
                     threadQuestionnaireDraft={null}
                     threadSavedComposerDrafts={[]}
-                    trailingActions={(
-                      <button
-                        type="button"
-                        className="rounded-full px-3 py-2 text-[0.78rem] font-medium text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                        onClick={() => {
-                          dismissSuggestion(suggestion.id);
-                        }}
-                      >
-                        Dismiss
-                      </button>
-                    )}
                     workspaceRoots={suggestionComposerWorkspaceRoots}
                   />
                   {suggestionStartError ? (
                     <p className="mt-2 mb-0 px-1 text-[0.84rem] leading-5 text-danger">{suggestionStartError}</p>
                   ) : null}
-                </div>
+                </CollaborationSuggestionCard>
               ) : (
-                <p key={suggestion.id} className="m-0 px-1 py-4 text-[0.86rem] leading-6 text-muted">Preparing suggestion composer...</p>
+                <CollaborationSuggestionCard
+                  key={suggestion.id}
+                  isOpen={isSuggestionOpen}
+                  onCollapse={() => {
+                    collapseSuggestion(suggestion.id);
+                  }}
+                  onDismiss={() => {
+                    dismissSuggestion(suggestion.id);
+                  }}
+                  onOpen={() => {
+                    openSuggestion(suggestion.id);
+                  }}
+                  rationale={suggestion.rationale}
+                  title={suggestion.title}
+                >
+                  <p className="m-0 px-1 py-4 text-[0.86rem] leading-6 text-muted">Preparing suggestion composer...</p>
+                </CollaborationSuggestionCard>
               );
             }) : (
               <div className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4">
@@ -1233,26 +1512,103 @@ export default function WorkbenchCollaborationView ({
           </div>
         </div>
 
-        {previousCollaboratorThreadIds.length ? (
-          <details className="mb-4">
-            <summary className="cursor-pointer list-none text-[0.78rem] font-medium uppercase tracking-[0.08em] text-muted marker:hidden">
-              Previous runs
-            </summary>
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {previousCollaboratorThreadIds.map((threadId) => (
-                <button
-                  key={threadId}
-                  type="button"
-                  className="max-w-full truncate rounded-lg px-2.5 py-1.5 text-[0.78rem] font-medium text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                  onClick={() => {
-                    selectCollaboratorThread(threadId);
-                  }}
-                >
-                  {getThreadLabel(threadId, summariesById)}
-                </button>
-              ))}
+        {recentCollaboratorThreadIds.length ? (
+          <section className="mb-5 space-y-3">
+            <p className="m-0 text-[0.78rem] font-medium uppercase tracking-[0.08em] text-muted">Recent collaborator runs</p>
+            <div className="space-y-3">
+              {recentCollaboratorThreadIds.map((threadId) => {
+                const summary = summariesById.get(threadId) ?? null;
+                const isOpen = currentCollaboratorThreadId === threadId;
+                return (
+                  <ThreadDisclosure
+                    key={threadId}
+                    className="py-0.5"
+                    contentClassName="-mt-2 pl-[1.6rem] md:pl-[1.85rem]"
+                    open={isOpen}
+                    onToggle={(event) => {
+                      if (event.currentTarget.open) {
+                        selectCollaboratorThread(threadId);
+                      }
+                    }}
+                    summary={(
+                      <span className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+                        <span className="max-w-full truncate font-semibold text-text">{getThreadLabel(threadId, summariesById)}</span>
+                        <span className="text-[0.84rem] font-normal text-muted">{formatCollaboratorRunRelativeTime(summary, Date.now())}</span>
+                      </span>
+                    )}
+                    summaryClassName="text-[0.92rem] leading-6"
+                  >
+                    {isOpen && shouldShowCollaboratorThreadLoading ? (
+                      <p className="m-0 text-[0.86rem] leading-6 text-muted">Loading collaborator thread...</p>
+                    ) : isOpen && collaboratorThread?.id === threadId ? (
+                      shouldRenderCurrentCollaboratorThread ? (
+                        <ThreadView
+                          composerSpellCheck={composerSpellCheck}
+                          contained
+                          fontSizeRem={fontSizeRem}
+                          hideWorkbenchControlAgentMessages
+                          hideFinalAgentMessage
+                          hideWorkbenchControlUserMessages
+                          livePendingUserInputRequestsByThreadId={livePendingUserInputRequestsByThreadId}
+                          onCompactThread={onCompactThread}
+                          onDraftHarnessChange={onDraftHarnessChange}
+                          onListModels={onListModels}
+                          onReadThread={onReadThread}
+                          onSendMessage={handleCollaboratorSendMessage}
+                          onStopThread={handleCollaboratorStopThread}
+                          onSubmitUserInputRequest={onSubmitUserInputRequest}
+                          onThreadAgentChange={onThreadAgentChange}
+                          onThreadCodeBlockWrapChange={onThreadCodeBlockWrapChange}
+                          onThreadComposerDraftChange={onThreadComposerDraftChange}
+                          onThreadComposerDraftClear={onThreadComposerDraftClear}
+                          onThreadModelChange={onThreadModelChange}
+                          onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
+                          onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
+                          onThreadReasoningEffortChange={onThreadReasoningEffortChange}
+                          onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
+                          onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
+                          onThreadSeen={onThreadSeen}
+                          onThreadServiceTierChange={onThreadServiceTierChange}
+                          projectFileCandidates={projectFileCandidates}
+                          projectFileIndexId={projectFileIndexId}
+                          projectFileLinkRoots={projectFileLinkRoots}
+                          projectFilePaths={projectFilePaths}
+                          projectId={projectId}
+                          projectRootPath={projectRootPath}
+                          projectRoots={projectRoots}
+                          rateLimits={rateLimits}
+                          thread={collaboratorThread}
+                          threadCodeBlockWrap={threadCodeBlockWrap}
+                          threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
+                          threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
+                          threadSavedComposerDrafts={threadSavedComposerDrafts}
+                        />
+                      ) : (
+                        <ThreadThreadContent
+                          emptyMessage="No collaborator activity was captured yet."
+                          flattenCompletedWork
+                          hideFinalAgentMessage
+                          hideFirstTurnTopBorder
+                          hideWorkbenchControlAgentMessages
+                          hideWorkbenchControlUserMessages
+                          inlineMentionSources={suggestionComposerHighlightSources}
+                          knownSkills={[]}
+                          projectFilePaths={projectFilePaths}
+                          projectId={projectId}
+                          projectRoots={projectRoots}
+                          projectRootPath={projectRootPath}
+                          thread={collaboratorThread}
+                          threadCwdPath={collaboratorThread.cwd}
+                        />
+                      )
+                    ) : (
+                      <p className="m-0 text-[0.86rem] leading-6 text-muted">Select this run to load its transcript.</p>
+                    )}
+                  </ThreadDisclosure>
+                );
+              })}
             </div>
-          </details>
+          </section>
         ) : null}
 
         <details className="mb-4" open={!visibleSuggestions.length}>
@@ -1280,56 +1636,66 @@ export default function WorkbenchCollaborationView ({
             {collaboratorError}
           </p>
         ) : null}
-        {isLoadingThread ? (
-          <p className="m-0 text-[0.86rem] leading-6 text-muted">Loading collaborator thread...</p>
-        ) : collaboratorThread ? (
-          <ThreadView
+        {!shouldRenderCurrentCollaboratorThread && collaboratorDraftThread ? (
+          <ThreadComposer
+            key={collaboratorDraftThread.id}
             composerSpellCheck={composerSpellCheck}
-            contained
-            fontSizeRem={fontSizeRem}
-            hideWorkbenchControlAgentMessages
-            hideFinalAgentMessage
-            hideWorkbenchControlUserMessages
-            livePendingUserInputRequestsByThreadId={livePendingUserInputRequestsByThreadId}
-            onCompactThread={onCompactThread}
-            onDraftHarnessChange={onDraftHarnessChange}
+            highlightSources={suggestionComposerHighlightSources}
+            knownSkills={[]}
             onListModels={onListModels}
-            onReadThread={onReadThread}
-            onSendMessage={handleCollaboratorSendMessage}
-            onStopThread={handleCollaboratorStopThread}
+            onSendMessage={handleCollaboratorDraftSendMessage}
+            onStopThread={() => { }}
             onSubmitUserInputRequest={onSubmitUserInputRequest}
-            onThreadAgentChange={onThreadAgentChange}
-            onThreadCodeBlockWrapChange={onThreadCodeBlockWrapChange}
-            onThreadComposerDraftChange={onThreadComposerDraftChange}
-            onThreadComposerDraftClear={onThreadComposerDraftClear}
-            onThreadModelChange={onThreadModelChange}
+            onThreadAgentChange={(threadId, agentPath) => {
+              if (threadId === collaboratorDraftThread.id) {
+                updateCollaboratorDraftThread((thread) => ({ ...thread, agentPath }));
+              }
+            }}
+            onThreadComposerDraftChange={handleCollaboratorDraftComposerChange}
+            onThreadComposerDraftClear={handleCollaboratorDraftComposerClear}
+            onThreadModelChange={(threadId, model) => {
+              if (threadId === collaboratorDraftThread.id) {
+                updateCollaboratorDraftThread((thread) => ({ ...thread, model }));
+              }
+            }}
             onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
             onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
-            onThreadReasoningEffortChange={onThreadReasoningEffortChange}
+            onThreadReasoningEffortChange={(threadId, reasoningEffort) => {
+              if (threadId === collaboratorDraftThread.id) {
+                updateCollaboratorDraftThread((thread) => ({ ...thread, reasoningEffort }));
+              }
+            }}
             onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
             onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
-            onThreadSeen={onThreadSeen}
-            onThreadServiceTierChange={onThreadServiceTierChange}
-            projectFileCandidates={projectFileCandidates}
-            projectFileIndexId={projectFileIndexId}
-            projectFileLinkRoots={projectFileLinkRoots}
-            projectFilePaths={projectFilePaths}
+            onThreadServiceTierChange={(threadId, serviceTier) => {
+              if (threadId === collaboratorDraftThread.id) {
+                updateCollaboratorDraftThread((thread) => ({ ...thread, serviceTier }));
+              }
+            }}
+            pendingUserInputRequest={null}
             projectId={projectId}
             projectRootPath={projectRootPath}
-            projectRoots={projectRoots}
             rateLimits={rateLimits}
-            thread={collaboratorThread}
-            threadCodeBlockWrap={threadCodeBlockWrap}
-            threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
-            threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
+            sendLabel="Run with note"
+            thread={collaboratorDraftThread}
+            threadComposerDraft={collaboratorDraftComposerDraft}
+            threadQuestionnaireDraft={null}
             threadSavedComposerDrafts={threadSavedComposerDrafts}
-          />
-        ) : (
+            workspaceRoots={suggestionComposerWorkspaceRoots}
+          >
+            <ThreadRateLimits
+              canToggleHarness={collaboratorDraftThread.isDraft}
+              harness={collaboratorDraftThread.harness}
+              onHarnessToggle={cycleCollaboratorDraftHarness}
+              rateLimits={rateLimits}
+            />
+          </ThreadComposer>
+        ) : !shouldRenderCurrentCollaboratorThread ? (
           <div className="py-8">
-            <p className="m-0 text-[0.95rem] font-semibold text-text">No collaborator thread selected</p>
-            <p className="mt-1 mb-0 text-[0.86rem] leading-6 text-muted">Start the collaborator when you want it to read the scratchpad and project state.</p>
+            <p className="m-0 text-[0.95rem] font-semibold text-text">Collaborator is not ready</p>
+            <p className="mt-1 mb-0 text-[0.86rem] leading-6 text-muted">Run the collaborator when the Workbench controls are ready.</p>
           </div>
-        )}
+        ) : null}
       </div>
     );
   }

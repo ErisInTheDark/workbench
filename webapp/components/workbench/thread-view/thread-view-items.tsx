@@ -1247,9 +1247,11 @@ function ThreadRenderableBlockView ({
 }
 
 function ThreadTurnDetailsComponent ({
+  flattenCompletedWork = false,
   hiddenCollabAgentToolCallItemIds = [],
   hiddenDynamicToolCallItemIds = [],
   hideFinalAgentMessage = false,
+  hideTopBorder = false,
   hideWorkbenchControlAgentMessages = false,
   hideWorkbenchControlUserMessages = false,
   hiddenReasoningItemId = null,
@@ -1265,9 +1267,11 @@ function ThreadTurnDetailsComponent ({
   turn,
   workspaceRoots,
 }: {
+  flattenCompletedWork?: boolean;
   hiddenCollabAgentToolCallItemIds?: readonly string[];
   hiddenDynamicToolCallItemIds?: readonly string[];
   hideFinalAgentMessage?: boolean;
+  hideTopBorder?: boolean;
   hideWorkbenchControlAgentMessages?: boolean;
   hideWorkbenchControlUserMessages?: boolean;
   hiddenReasoningItemId?: string | null;
@@ -1347,8 +1351,14 @@ function ThreadTurnDetailsComponent ({
   );
 
   return (
-    <section className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-3">
-      {isCompleted ? (
+    <section className={hideTopBorder ? "py-3" : "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-3"}>
+      {isCompleted && flattenCompletedWork ? (
+        <div className="space-y-2">
+          {primaryUserBlock ? renderBlock(primaryUserBlock, 0) : null}
+          {workedBlocks.map(renderBlock)}
+          {finalAgentBlocks.map(renderBlock)}
+        </div>
+      ) : isCompleted ? (
         <div className="space-y-2">
           {primaryUserBlock ? renderBlock(primaryUserBlock, 0) : null}
           <ThreadDisclosure
@@ -1387,9 +1397,11 @@ function areThreadTurnDetailsPropsEqual (
   right: Readonly<Parameters<typeof ThreadTurnDetailsComponent>[0]>,
 ) {
   return left.turn === right.turn
+    && left.flattenCompletedWork === right.flattenCompletedWork
     && left.hiddenCollabAgentToolCallItemIds === right.hiddenCollabAgentToolCallItemIds
     && left.hiddenDynamicToolCallItemIds === right.hiddenDynamicToolCallItemIds
     && left.hideFinalAgentMessage === right.hideFinalAgentMessage
+    && left.hideTopBorder === right.hideTopBorder
     && left.hideWorkbenchControlAgentMessages === right.hideWorkbenchControlAgentMessages
     && left.hideWorkbenchControlUserMessages === right.hideWorkbenchControlUserMessages
     && left.hiddenReasoningItemId === right.hiddenReasoningItemId
@@ -1408,9 +1420,11 @@ export const ThreadTurnDetails = memo(ThreadTurnDetailsComponent, areThreadTurnD
 
 export function ThreadThreadContent ({
   emptyMessage = "No subagent activity was captured yet.",
+  flattenCompletedWork = false,
   hiddenCollabAgentToolCallItemIds = [],
   hiddenDynamicToolCallItemIds = [],
   hideFinalAgentMessage = false,
+  hideFirstTurnTopBorder = false,
   hideWorkbenchControlAgentMessages = false,
   hideWorkbenchControlUserMessages = false,
   hiddenReasoningItemId = null,
@@ -1426,9 +1440,11 @@ export function ThreadThreadContent ({
   thread,
 }: {
   emptyMessage?: string;
+  flattenCompletedWork?: boolean;
   hiddenCollabAgentToolCallItemIds?: readonly string[];
   hiddenDynamicToolCallItemIds?: readonly string[];
   hideFinalAgentMessage?: boolean;
+  hideFirstTurnTopBorder?: boolean;
   hideWorkbenchControlAgentMessages?: boolean;
   hideWorkbenchControlUserMessages?: boolean;
   hiddenReasoningItemId?: string | null;
@@ -1474,14 +1490,16 @@ export function ThreadThreadContent ({
 
   return (
     <>
-      {visibleEntries.map((entry) => {
+      {visibleEntries.map((entry, index) => {
         const turn = loadedTurnsById.get(entry.turnId);
         return turn ? (
           <ThreadTurnDetails
             key={entry.turnId}
+            flattenCompletedWork={flattenCompletedWork}
             hiddenCollabAgentToolCallItemIds={hiddenCollabAgentToolCallItemIds}
             hiddenDynamicToolCallItemIds={hiddenDynamicToolCallItemIds}
             hideFinalAgentMessage={hideFinalAgentMessage}
+            hideTopBorder={hideFirstTurnTopBorder && index === 0}
             hideWorkbenchControlAgentMessages={hideWorkbenchControlAgentMessages}
             hideWorkbenchControlUserMessages={hideWorkbenchControlUserMessages}
             hiddenReasoningItemId={hiddenReasoningItemId}

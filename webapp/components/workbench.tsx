@@ -9,7 +9,7 @@ import { startTransition, useCallback, useEffect, useMemo, useRef, useState, typ
 import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type {
-  ExplorerSnapshot, FilePayload, OpenFileInEditorRequest, OrchestratorReloadRequest, OrchestratorReloadResponse, ThreadPayload, TreeNode,
+  ExplorerSnapshot, FilePayload, OpenFileInEditorRequest, OrchestratorReloadRequest, OrchestratorReloadResponse, ThreadPayload, ThreadSummary, TreeNode,
   WorkbenchCollaborationThreadRegistry,
   WorkbenchControls,
   WorkbenchFileOpenTarget,
@@ -67,6 +67,15 @@ import {
   readStoredHarness,
 } from "../lib/workbench/state/browser-state";
 import {
+  EMPTY_WORKBENCH_THREAD_SIDEBAR_PREFERENCES,
+  areWorkbenchThreadSidebarPreferencesEqual,
+  createWorkbenchThreadPreferenceKey,
+  normalizeWorkbenchThreadSidebarPreferences,
+  readStoredWorkbenchThreadSidebarPreferences,
+  writeStoredWorkbenchThreadSidebarPreferences,
+  type WorkbenchThreadSidebarPreferences,
+} from "../lib/workbench/state/thread-sidebar-preferences";
+import {
   getPreferredMobilePane,
   MOBILE_MEDIA_QUERY,
   type MobilePane,
@@ -100,6 +109,7 @@ import {
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
 import ThreadView from "./workbench/thread-view/ThreadView";
 import WorkbenchCollaborationView from "./workbench/collaboration/WorkbenchCollaborationView";
+import WorkbenchContextMenuProvider, { type WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuProvider";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
 import WorkbenchMainLayoutView from "./workbench/layout/WorkbenchMainLayoutView";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
@@ -143,10 +153,12 @@ import {
   ThreadsList,
 } from "./workbench/workbench-explorer";
 import {
+  ArchiveIcon,
   BackArrowIcon,
   BinIcon,
   CollaborationIcon,
   GearIcon,
+  PinIcon,
   ReloadIcon,
   SaveIcon,
   SidebarCollapseIcon,
@@ -638,6 +650,13 @@ export default function Workbench () {
   const [threadComposerDraftsByThreadId, setThreadComposerDraftsByThreadId] = useState<Record<string, WorkbenchThreadComposerDraft | undefined>>({});
   const [threadQuestionnaireDraftsByKey, setThreadQuestionnaireDraftsByKey] = useState<Record<string, WorkbenchQuestionnaireDraft | undefined>>({});
   const [threadSavedComposerDrafts, setThreadSavedComposerDrafts] = useState<WorkbenchThreadSavedComposerDraft[]>([]);
+  const [threadSidebarPreferences, setThreadSidebarPreferences] = useState<WorkbenchThreadSidebarPreferences>(() => {
+    if (typeof window === "undefined") {
+      return EMPTY_WORKBENCH_THREAD_SIDEBAR_PREFERENCES;
+    }
+
+    return readStoredWorkbenchThreadSidebarPreferences(route.projectId);
+  });
   const [collaborationThreadRegistriesByProjectId, setCollaborationThreadRegistriesByProjectId] = useState<Record<string, WorkbenchCollaborationThreadRegistry>>(() => {
     if (typeof window === "undefined") {
       return {};
@@ -983,6 +1002,8 @@ export default function Workbench () {
   const activeProjectId = explorer.currentProjectId || route.projectId;
   const collaborationThreadRegistry = collaborationThreadRegistriesByProjectId[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY;
   const collaborationThreadIdSet = useMemo(() => new Set(collaborationThreadRegistry.threadIds), [collaborationThreadRegistry.threadIds]);
+  const archivedSidebarThreadKeySet = useMemo(() => new Set(threadSidebarPreferences.archivedThreadKeys), [threadSidebarPreferences.archivedThreadKeys]);
+  const pinnedSidebarThreadKeySet = useMemo(() => new Set(threadSidebarPreferences.pinnedThreadKeys), [threadSidebarPreferences.pinnedThreadKeys]);
   const collaborationThreadSummaries = useMemo(() => explorer.threads.filter((thread) => collaborationThreadIdSet.has(thread.id)), [collaborationThreadIdSet, explorer.threads]);
   const collaborationStartedSuggestionThreadIdSet = useMemo(() => (
     new Set(Object.values(collaborationThreadRegistry.startedSuggestionThreads).map((startedThread) => startedThread.threadId))
@@ -993,10 +1014,20 @@ export default function Workbench () {
       : []
   ), [collaborationStartedSuggestionThreadIdSet, explorer.threads]);
   const visibleSidebarThreads = useMemo(() => (
-    collaborationThreadIdSet.size
-      ? explorer.threads.filter((thread) => !collaborationThreadIdSet.has(thread.id))
-      : explorer.threads
-  ), [collaborationThreadIdSet, explorer.threads]);
+    explorer.threads.filter((thread) => (
+      !collaborationThreadIdSet.has(thread.id)
+      && !archivedSidebarThreadKeySet.has(createWorkbenchThreadPreferenceKey(thread))
+    ))
+  ), [archivedSidebarThreadKeySet, collaborationThreadIdSet, explorer.threads]);
+  const pinnedSidebarThreads = useMemo(() => (
+    visibleSidebarThreads.filter((thread) => pinnedSidebarThreadKeySet.has(createWorkbenchThreadPreferenceKey(thread)))
+  ), [pinnedSidebarThreadKeySet, visibleSidebarThreads]);
+  const regularSidebarThreads = useMemo(() => (
+    visibleSidebarThreads.filter((thread) => !pinnedSidebarThreadKeySet.has(createWorkbenchThreadPreferenceKey(thread)))
+  ), [pinnedSidebarThreadKeySet, visibleSidebarThreads]);
+  useEffect(() => {
+    setThreadSidebarPreferences(activeProjectId ? readStoredWorkbenchThreadSidebarPreferences(activeProjectId) : EMPTY_WORKBENCH_THREAD_SIDEBAR_PREFERENCES);
+  }, [activeProjectId]);
   useEffect(() => {
     if (!activeProjectId) {
       return;
@@ -1402,6 +1433,59 @@ export default function Workbench () {
     navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, threadId));
     return true;
   }, [explorer.currentProjectId, navigateToRoute, route]);
+  const updateThreadSidebarPreferences = useCallback((updater: (current: WorkbenchThreadSidebarPreferences) => WorkbenchThreadSidebarPreferences) => {
+    const projectId = activeProjectId;
+    if (!projectId) {
+      return;
+    }
+
+    setThreadSidebarPreferences((current) => {
+      const nextPreferences = normalizeWorkbenchThreadSidebarPreferences(updater(current));
+      if (areWorkbenchThreadSidebarPreferencesEqual(current, nextPreferences)) {
+        return current;
+      }
+
+      writeStoredWorkbenchThreadSidebarPreferences(projectId, nextPreferences);
+      return nextPreferences;
+    });
+  }, [activeProjectId]);
+  const getThreadContextMenu = useCallback((thread: ThreadSummary): WorkbenchContextMenuDefinition => {
+    const threadKey = createWorkbenchThreadPreferenceKey(thread);
+    const label = thread.name || thread.preview || thread.id;
+    const isPinned = pinnedSidebarThreadKeySet.has(threadKey);
+
+    return {
+      id: `thread:${threadKey}`,
+      items: [
+        {
+          icon: <PinIcon className="size-4" />,
+          id: isPinned ? "unpin" : "pin",
+          label: isPinned ? "Unpin thread" : "Pin thread",
+          onSelect: () => {
+            updateThreadSidebarPreferences((current) => ({
+              ...current,
+              pinnedThreadKeys: isPinned
+                ? current.pinnedThreadKeys.filter((pinnedThreadKey) => pinnedThreadKey !== threadKey)
+                : [...current.pinnedThreadKeys.filter((pinnedThreadKey) => pinnedThreadKey !== threadKey), threadKey],
+            }));
+          },
+        },
+        {
+          icon: <ArchiveIcon className="size-4" />,
+          id: "archive",
+          label: "Archive thread",
+          onSelect: () => {
+            updateThreadSidebarPreferences((current) => ({
+              archivedThreadKeys: [...current.archivedThreadKeys.filter((archivedThreadKey) => archivedThreadKey !== threadKey), threadKey],
+              pinnedThreadKeys: current.pinnedThreadKeys.filter((pinnedThreadKey) => pinnedThreadKey !== threadKey),
+            }));
+          },
+          tone: "danger",
+        },
+      ],
+      label: `Thread actions for ${label}`,
+    };
+  }, [pinnedSidebarThreadKeySet, updateThreadSidebarPreferences]);
   const handleWorkbenchProjectFileLinkClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
     if (event.button !== 0) {
       return;
@@ -2631,14 +2715,15 @@ export default function Workbench () {
   }, [controls, sendThreadMessage]);
 
   return (
-    <div
-      className={`relative isolate h-dvh overflow-hidden md:grid md:min-h-screen md:h-auto md:overflow-visible md:items-start${isEffectiveDesktopSidebarCollapsed
-        ? " md:grid-cols-[minmax(0,1fr)]"
-        : " md:grid-cols-[minmax(16rem,21rem)_1fr]"
-      }`}
-      onClickCapture={handleWorkbenchClickCapture}
-      onClick={handleWorkbenchProjectFileLinkClick}
-    >
+    <WorkbenchContextMenuProvider>
+      <div
+        className={`relative isolate h-dvh overflow-hidden md:grid md:min-h-screen md:h-auto md:overflow-visible md:items-start${isEffectiveDesktopSidebarCollapsed
+          ? " md:grid-cols-[minmax(0,1fr)]"
+          : " md:grid-cols-[minmax(16rem,21rem)_1fr]"
+        }`}
+        onClickCapture={handleWorkbenchClickCapture}
+        onClick={handleWorkbenchProjectFileLinkClick}
+      >
       {ambientCanvasVariant ? <WorkbenchAmbientCanvas variant={ambientCanvasVariant} /> : null}
       <WorkbenchTabIcon state={tabIconState} />
       {isEffectiveDesktopSidebarCollapsed ? (
@@ -2813,8 +2898,10 @@ export default function Workbench () {
                           });
                         } : undefined}
                         isDraftSelected={Boolean(currentThread?.isDraft)}
-                        nodes={visibleSidebarThreads}
+                        getThreadContextMenu={getThreadContextMenu}
+                        nodes={regularSidebarThreads}
                         pendingQuestionnaireThreadIds={pendingQuestionnaireThreadIds}
+                        pinnedNodes={pinnedSidebarThreads}
                         onCreateThread={() => {
                           if (showMosaicView) {
                             return;
@@ -3805,6 +3892,7 @@ export default function Workbench () {
           reject
         </button>
       </div>
-    </div>
+      </div>
+    </WorkbenchContextMenuProvider>
   );
 }

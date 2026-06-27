@@ -19,15 +19,17 @@ import type {
 } from "../../lib/types";
 import type { WorkbenchDragPayload } from "../../lib/workbench/layout/workbench-drag";
 import ChevronIcon from "./ChevronIcon";
+import ContextMenuCapability from "./ContextMenuCapability";
 import { ThreadQuestionBadge, ThreadUnreadBadge } from "./ThreadStatusBadges";
 import ThreadDisclosure from "./thread-view/ThreadDisclosure";
+import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuProvider";
 import {
   workbenchIconButtonClassName,
   workbenchNewEntryButtonClassName,
   workbenchThreadListButtonClassName,
   workbenchThreadListLabelClassName,
 } from "./workbench-class-names";
-import { HarnessIcon } from "./workbench-icons";
+import { HarnessIcon, PinIcon } from "./workbench-icons";
 
 const DEFAULT_VISIBLE_THREAD_COUNT = 5;
 
@@ -169,20 +171,24 @@ export function ThreadsList ({
   createThreadLabel = "Create new thread",
   currentThreadId,
   getThreadDragPayload,
+  getThreadContextMenu,
   isDraftSelected = false,
   nodes,
   pendingQuestionnaireThreadIds,
+  pinnedNodes = [],
   onCreateThread,
   onCreateThreadPointerDragStart,
   onThreadPointerDragStart,
   onOpenThread,
 }: {
   createThreadLabel?: string;
+  getThreadContextMenu?: (thread: ThreadSummary) => WorkbenchContextMenuDefinition | null;
   currentThreadId: string;
   getThreadDragPayload?: (thread: ThreadSummary) => WorkbenchDragPayload | null;
   isDraftSelected?: boolean;
   nodes: ThreadSummary[];
   pendingQuestionnaireThreadIds: ReadonlySet<string>;
+  pinnedNodes?: ThreadSummary[];
   onCreateThread: () => void;
   onCreateThreadPointerDragStart?: (event: PointerEvent<HTMLButtonElement>) => void;
   onThreadPointerDragStart?: (event: PointerEvent<HTMLElement>, thread: ThreadSummary) => void;
@@ -199,7 +205,7 @@ export function ThreadsList ({
     }
   }, [shouldOpenOlderThreads]);
 
-  const renderThreads = (threads: ThreadSummary[]) => (
+  const renderThreads = (threads: ThreadSummary[], options: { pinned?: boolean } = {}) => (
     <ul className="m-0 p-0">
       {threads.map((thread) => {
         const label = thread.name || thread.preview || thread.id;
@@ -208,28 +214,30 @@ export function ThreadsList ({
         const unreadBadge = isCurrent ? null : thread.unreadBadge;
 
         return (
-          <li key={thread.id} className="m-0 list-none">
-            <ThreadListRow
-              active={isCurrent}
-              onClick={() => {
-                onOpenThread(thread.id);
-              }}
-              title={label}
-            >
-              <span
-                className="flex w-full min-w-0 items-center justify-between gap-3"
-                onPointerDown={(event) => {
-                  event.stopPropagation();
-                  onThreadPointerDragStart?.(event, thread);
+          <li key={`${thread.harness}:${thread.id}`} className="m-0 list-none">
+            <ContextMenuCapability menu={getThreadContextMenu?.(thread) ?? null}>
+              <ThreadListRow
+                active={isCurrent}
+                onClick={() => {
+                  onOpenThread(thread.id);
                 }}
+                title={label}
               >
-                <span className="inline-flex min-w-0 items-center gap-2">
-                  <HarnessIcon className="size-4 shrink-0" harness={thread.harness} />
-                  <span className={`${workbenchThreadListLabelClassName}${isCurrent ? " font-semibold" : ""}`}>{label}</span>
+                <span
+                  className="flex w-full min-w-0 items-center justify-between gap-3"
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    onThreadPointerDragStart?.(event, thread);
+                  }}
+                >
+                  <span className="inline-flex min-w-0 items-center gap-2">
+                    {options.pinned ? <PinIcon className="size-4 shrink-0" /> : <HarnessIcon className="size-4 shrink-0" harness={thread.harness} />}
+                    <span className={`${workbenchThreadListLabelClassName}${isCurrent ? " font-semibold" : ""}`}>{label}</span>
+                  </span>
+                  {hasPendingQuestionnaire ? <ThreadQuestionBadge /> : unreadBadge ? <ThreadUnreadBadge badge={unreadBadge} /> : null}
                 </span>
-                {hasPendingQuestionnaire ? <ThreadQuestionBadge /> : unreadBadge ? <ThreadUnreadBadge badge={unreadBadge} /> : null}
-              </span>
-            </ThreadListRow>
+              </ThreadListRow>
+            </ContextMenuCapability>
           </li>
         );
       })}
@@ -238,6 +246,7 @@ export function ThreadsList ({
 
   return (
     <div className="space-y-1">
+      {pinnedNodes.length ? renderThreads(pinnedNodes, { pinned: true }) : null}
       <button
         type="button"
         title={createThreadLabel}
