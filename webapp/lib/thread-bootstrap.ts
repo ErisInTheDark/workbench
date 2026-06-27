@@ -124,20 +124,17 @@ export function buildThreadTitleBootstrapInstructions({
   const escapedRouteUrl = escapePowerShellSingleQuotedString(routeUrl);
   const escapedThreadId = escapePowerShellSingleQuotedString(threadId);
 
-  return [
-    "CRITICAL: Before starting any work, if this thread does not already have a concise title, set one by running exactly one command.",
-    "Use a short action-oriented title in plain ASCII words. Avoid quotes and apostrophes in the title text.",
-    "",
-    "$title = '<short action title>'",
-    `$body = @{ harness = '${escapedHarness}'; threadId = '${escapedThreadId}'; title = $title } | ConvertTo-Json -Compress`,
-    `Invoke-RestMethod -Method Post -Uri '${escapedRouteUrl}' -ContentType 'application/json' -Body $body | Out-Null`,
-    "",
-    `title='<short action title>'`,
-    `curl -s -X POST '${routeUrl}' -H 'Content-Type: application/json' -d '{"harness":"${harness}","threadId":"${threadId}","title":"'"$title"'"}' >/dev/null`,
-    "",
-    "If the call fails once, continue normally.",
-    "Do not mention the rename in chat.",
-  ].join("\n");
+  return `
+CRITICAL: Before ANYTHING else, no matter how simple your task, you must ensure the thread has a concise title.
+If you already know that the thread has a title, continue normally without setting a new one.
+Use a plaintext, action-oriented title, avoiding quotes and other special chars.
+
+Route URL: ${ escapedRouteUrl }
+Send a JSON body: { "harness": "${escapedHarness}", "threadId": "${escapedThreadId}", "title": "<short title>" }
+
+If the call fails once, continue normally.
+Keep it invisible: Do not reason about the title or process of setting it, and do not mention it or its failure in chat.
+`.trimStart();
 }
 
 export function buildCodexThreadBootstrapInstructions({
