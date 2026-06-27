@@ -3839,6 +3839,9 @@ function WorkbenchThreadClient(
     ) {
       void readCompletedSteerHistory(notification.params.threadId);
     }
+    if (harness === "codex" && notification.method === "turn/completed") {
+      void readCompletedQuestionnaireHistoryAndReconcileIdleCurrentThread(notification.params.threadId, harness);
+    }
     scheduleCodexNotificationRefresh(handling);
   }
 

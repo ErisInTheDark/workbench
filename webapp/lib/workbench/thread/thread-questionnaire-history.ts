@@ -225,6 +225,8 @@ function resolveQuestionnaireHistoryAnchor(
     if (anchorIndex >= 0 && isQuestionnaireHistoryAnchorItem(nextItems[anchorIndex]!)) {
       return { index: anchorIndex, type: "resolved" };
     }
+
+    return { type: "defer" };
   }
 
   if (
