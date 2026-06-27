@@ -3,7 +3,7 @@
  * - WORKBENCH_QUESTIONNAIRE_TOOL_NAME: stable dynamic-tool name used for rendered questionnaire history entries. Keywords: questionnaire, dynamic tool, thread history.
  * - SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX: item id prefix reserved for workbench-injected questionnaire history items. Keywords: synthetic, questionnaire, history.
  * - isSyntheticQuestionnaireHistoryItem: detect workbench-injected questionnaire history items in a turn. Keywords: synthetic, questionnaire, history, guard.
- * - applyQuestionnaireHistoryToThread: strip prior synthetic questionnaire items and reinsert persisted questionnaire history into supported thread turns. Keywords: questionnaire, thread, overlay, persisted history, codex, opencode.
+ * - applyQuestionnaireHistoryToThread: strip duplicate questionnaire items and reinsert persisted questionnaire history into supported thread turns. Keywords: questionnaire, thread, overlay, persisted history, codex, opencode.
  */
 
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem";
@@ -13,6 +13,8 @@ import { isWorkbenchSyntheticSteerUserMessage } from "./thread-steer-history";
 
 export const WORKBENCH_QUESTIONNAIRE_TOOL_NAME = "workbench_request_user_input";
 export const SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX = "workbench:questionnaire-history:";
+const OPENCODE_QUESTION_TOOL_NAMESPACE = "opencode";
+const OPENCODE_QUESTION_TOOL_NAME = "question";
 
 type DynamicToolCallItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 
@@ -30,10 +32,64 @@ export function isSyntheticQuestionnaireHistoryItem(item: ThreadItem): item is D
     && item.id.startsWith(SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX);
 }
 
-function stripSyntheticQuestionnaireHistoryItems(items: ThreadItem[]) {
+function isWorkbenchQuestionnaireToolCallItem(item: ThreadItem): item is DynamicToolCallItem {
+  return item.type === "dynamicToolCall"
+    && item.tool === WORKBENCH_QUESTIONNAIRE_TOOL_NAME;
+}
+
+function isOpenCodeQuestionToolCallItem(item: ThreadItem): item is DynamicToolCallItem {
+  return item.type === "dynamicToolCall"
+    && item.namespace === OPENCODE_QUESTION_TOOL_NAMESPACE
+    && item.tool === OPENCODE_QUESTION_TOOL_NAME;
+}
+
+function isQuestionnaireToolCallItem(item: ThreadItem): item is DynamicToolCallItem {
+  return isWorkbenchQuestionnaireToolCallItem(item) || isOpenCodeQuestionToolCallItem(item);
+}
+
+function readQuestionnaireHistoryResponseText(item: DynamicToolCallItem) {
+  const firstContentItem = item.contentItems?.[0];
+  return item.contentItems?.length === 1 && firstContentItem?.type === "inputText"
+    ? firstContentItem.text
+    : null;
+}
+
+function isQuestionnaireHistoryResponseTextForEntry(item: DynamicToolCallItem, entry: WorkbenchQuestionnaireHistoryEntry) {
+  return readQuestionnaireHistoryResponseText(item) === buildSyntheticQuestionnaireHistoryResponseText(entry);
+}
+
+function isMatchingPersistedQuestionnaireToolCallItem(
+  item: DynamicToolCallItem,
+  entry: WorkbenchQuestionnaireHistoryEntry,
+) {
+  if (entry.itemId && item.id === entry.itemId) {
+    return true;
+  }
+
+  return areDeeplyEqual(item.arguments, entry.request)
+    && isQuestionnaireHistoryResponseTextForEntry(item, entry);
+}
+
+function isRedundantPersistedQuestionnaireToolCallItem(
+  item: ThreadItem,
+  entries: WorkbenchQuestionnaireHistoryEntry[],
+) {
+  return isQuestionnaireToolCallItem(item)
+    && item.status === "completed"
+    && entries.some((entry) => isMatchingPersistedQuestionnaireToolCallItem(item, entry));
+}
+
+function stripQuestionnaireHistoryOverlayItems(
+  items: ThreadItem[],
+  entries: WorkbenchQuestionnaireHistoryEntry[],
+) {
   const nextItems: ThreadItem[] = [];
   for (const item of items) {
-    if (isSyntheticQuestionnaireHistoryItem(item) || isWorkbenchSyntheticSteerUserMessage(item)) {
+    if (
+      isSyntheticQuestionnaireHistoryItem(item)
+      || isRedundantPersistedQuestionnaireToolCallItem(item, entries)
+      || isWorkbenchSyntheticSteerUserMessage(item)
+    ) {
       continue;
     }
 
@@ -199,7 +255,7 @@ function applyQuestionnaireHistoryToItems(
   entries: WorkbenchQuestionnaireHistoryEntry[],
 ) {
   const syntheticItemsById = collectSyntheticQuestionnaireHistoryItems(items);
-  const baseItems = stripSyntheticQuestionnaireHistoryItems(items);
+  const baseItems = stripQuestionnaireHistoryOverlayItems(items, entries);
   const nextItems = [...baseItems];
 
   for (const entry of sortQuestionnaireHistoryEntries(entries)) {
