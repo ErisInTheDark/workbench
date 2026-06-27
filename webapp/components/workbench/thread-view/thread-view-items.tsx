@@ -25,6 +25,7 @@ import {
   getThreadCommandBlockDisplay,
   getThreadCommandDisplay,
   isGitCheckpointDiffMatcherClaim,
+  parseGitCheckpointDiffArtifactId,
   parseGitCheckpointDiffOutput,
 } from "../../../lib/workbench/thread/thread-command-matchers";
 import {
@@ -33,12 +34,13 @@ import {
   ThreadCommandSummary,
 } from "./thread-view-primitives";
 import ThreadAgentName from "./ThreadAgentName";
+import ThreadCheckpointDiffItem from "./ThreadCheckpointDiffItem";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
 import ThreadContextCompactionItem from "./ThreadContextCompactionItem";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
-import ThreadFileChangeItem, { ThreadFileChangeList } from "./ThreadFileChangeItem";
+import ThreadFileChangeItem from "./ThreadFileChangeItem";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
@@ -677,6 +679,7 @@ function ThreadCurrentSubagentItemPreview ({
         knownSkills={knownSkills}
         primaryUserBlock={null}
         threadCwdPath={threadCwdPath ?? thread?.cwd}
+        threadId={thread.id}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
         projectRootPath={projectRootPath}
@@ -916,6 +919,7 @@ function ThreadCommandExecutionDetails ({
   projectFilePaths,
   projectId,
   projectRootPath,
+  threadId,
   workspaceRoots,
 }: {
   isMostRecent?: boolean;
@@ -924,6 +928,7 @@ function ThreadCommandExecutionDetails ({
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  threadId: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const commandDisplay = getThreadCommandDisplay({
@@ -937,8 +942,11 @@ function ThreadCommandExecutionDetails ({
   const checkpointDiffChanges = isGitCheckpointDiffMatcherClaim(commandDisplay.claimedBy)
     ? parseGitCheckpointDiffOutput(item.aggregatedOutput ?? "")
     : null;
+  const checkpointDiffArtifactId = isGitCheckpointDiffMatcherClaim(commandDisplay.claimedBy)
+    ? parseGitCheckpointDiffArtifactId(item.aggregatedOutput ?? "")
+    : null;
   const shouldRenderCheckpointDiff = checkpointDiffChanges !== null
-    && (!item.aggregatedOutput?.trim() || checkpointDiffChanges.length > 0);
+    && (!item.aggregatedOutput?.trim() || Boolean(checkpointDiffArtifactId) || checkpointDiffChanges.length > 0);
   const metaParts = [];
 
   if (item.status !== "completed") {
@@ -1002,15 +1010,14 @@ function ThreadCommandExecutionDetails ({
           </p>
         ) : null}
         {shouldRenderCheckpointDiff ? (
-          <ThreadFileChangeList
-            changes={(checkpointDiffChanges ?? []).map((change, sourceChangeIndex) => ({
-              change,
-              sourceChangeIndex,
-              sourceItemId: item.id,
-            }))}
+          <ThreadCheckpointDiffItem
+            cwd={item.cwd}
+            output={item.aggregatedOutput ?? ""}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}
+            sourceItemId={item.id}
+            threadId={threadId}
             workspaceRoots={workspaceRoots}
           />
         ) : item.aggregatedOutput?.trim() ? (
@@ -1039,6 +1046,7 @@ function ThreadCommandSequence ({
   projectFilePaths,
   projectId,
   projectRootPath,
+  threadId,
   workspaceRoots,
 }: {
   isMostRecent: boolean;
@@ -1047,10 +1055,11 @@ function ThreadCommandSequence ({
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  threadId: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   if (items.length === 1) {
-    return <ThreadCommandExecutionDetails isMostRecent={isMostRecent} item={items[0]} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
+    return <ThreadCommandExecutionDetails isMostRecent={isMostRecent} item={items[0]} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
   }
 
   const commandBlockDisplay = getThreadCommandBlockDisplay({
@@ -1082,6 +1091,7 @@ function ThreadCommandSequence ({
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}
+            threadId={threadId}
             workspaceRoots={workspaceRoots}
           />
         ))}
@@ -1113,6 +1123,7 @@ function ThreadRenderableBlockView ({
   knownSkills,
   primaryUserBlock,
   threadCwdPath,
+  threadId,
   projectFilePaths,
   projectId,
   projectRootPath,
@@ -1129,6 +1140,7 @@ function ThreadRenderableBlockView ({
   knownSkills?: WorkbenchSkillSummary[];
   primaryUserBlock: ThreadRenderableBlock | null;
   threadCwdPath?: string;
+  threadId: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
@@ -1139,7 +1151,7 @@ function ThreadRenderableBlockView ({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   if (block.kind === "commandSequence") {
-    return <ThreadCommandSequence isMostRecent={isMostRecentBlock} items={block.items} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
+    return <ThreadCommandSequence isMostRecent={isMostRecentBlock} items={block.items} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
   }
 
   if (block.kind === "fileChangeSequence") {
@@ -1245,6 +1257,7 @@ function ThreadTurnDetailsComponent ({
   inlineMentionSources = null,
   knownSkills = [],
   threadCwdPath,
+  threadId,
   projectFilePaths,
   projectId,
   projectRootPath,
@@ -1262,6 +1275,7 @@ function ThreadTurnDetailsComponent ({
   inlineMentionSources?: InlineMentionHighlightSources | null;
   knownSkills?: WorkbenchSkillSummary[];
   threadCwdPath?: string;
+  threadId: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
@@ -1320,6 +1334,7 @@ function ThreadTurnDetailsComponent ({
       knownSkills={knownSkills}
       primaryUserBlock={primaryUserBlock}
       threadCwdPath={threadCwdPath}
+      threadId={threadId}
       projectFilePaths={projectFilePaths}
       projectId={projectId}
       projectRootPath={projectRootPath}
@@ -1382,6 +1397,7 @@ function areThreadTurnDetailsPropsEqual (
     && left.inlineMentionSources === right.inlineMentionSources
     && left.knownSkills === right.knownSkills
     && left.threadCwdPath === right.threadCwdPath
+    && left.threadId === right.threadId
     && left.projectFilePaths === right.projectFilePaths
     && left.projectId === right.projectId
     && left.projectRootPath === right.projectRootPath
@@ -1473,6 +1489,7 @@ export function ThreadThreadContent ({
             inlineMentionSources={inlineMentionSources}
             knownSkills={knownSkills}
             threadCwdPath={threadCwdPath ?? thread.cwd}
+            threadId={thread.id}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}

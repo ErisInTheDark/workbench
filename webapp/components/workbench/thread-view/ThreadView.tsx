@@ -1591,6 +1591,7 @@ export default memo(function ThreadView ({
                     inlineMentionSources={inlineMentionSources}
                     knownSkills={workbenchSkills}
                     threadCwdPath={activeThread.cwd}
+                    threadId={activeThread.id}
                     projectFilePaths={projectFilePaths}
                     projectId={projectId}
                     projectRootPath={projectRootPath}

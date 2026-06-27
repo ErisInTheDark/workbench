@@ -2,18 +2,24 @@
  * Exports:
  * - GitCheckpointPurpose: baseline or diff checkpoint purpose stored in checkpoint commit messages. Keywords: git, checkpoint, purpose.
  * - GitCheckpointCreateResult: created checkpoint commit/ref metadata returned by checkpoint operations. Keywords: git, checkpoint, create.
+ * - GitCheckpointDiffResult: checkpoint diff metadata, compact summary, full diff, and artifact id. Keywords: git, checkpoint, diff, artifact.
  * - createGitCheckpoint: capture the current non-ignored repo worktree in a per-worktree checkpoint ref. Keywords: git, checkpoint, commit-tree.
  * - diffLatestGitCheckpoint: diff the current non-ignored repo worktree against the newest checkpoint. Keywords: git, checkpoint, diff.
+ * - readGitCheckpointDiffArtifact: read a stored full checkpoint diff artifact by thread and id. Keywords: git, checkpoint, diff, artifact.
  * - restoreGitCheckpoint: restore a checkpoint commit to the worktree after explicit confirmation. Keywords: git, checkpoint, restore.
  */
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
+import { projectRoot } from "./project";
+
 const execFileAsync = promisify(execFile);
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
+const CHECKPOINT_DIFF_ARTIFACT_PATTERN = /^[a-f0-9]{64}$/u;
 
 export type GitCheckpointPurpose = "baseline" | "diff";
 
@@ -21,6 +27,15 @@ export interface GitCheckpointCreateResult {
   checkpointCommit: string;
   checkpointRef: string;
   repoRoot: string;
+}
+
+export interface GitCheckpointDiffResult {
+  checkpointCommit: string;
+  checkpointRef: string;
+  diff: string;
+  diffArtifactId: string;
+  repoRoot: string;
+  summary: string;
 }
 
 interface GitCheckpointOperationInput {
@@ -71,6 +86,18 @@ function normalizeCheckpointThreadId(threadId: string) {
 
 function getCheckpointNamespace(threadId: string) {
   return `refs/worktree/agents/${normalizeCheckpointThreadId(threadId)}/checkpoints`;
+}
+
+function getCheckpointDiffArtifactDirectory(threadId: string) {
+  return path.join(projectRoot, ".workbench", "git-checkpoint-diffs", "threads", normalizeCheckpointThreadId(threadId));
+}
+
+function getCheckpointDiffArtifactPath(threadId: string, diffArtifactId: string) {
+  if (!CHECKPOINT_DIFF_ARTIFACT_PATTERN.test(diffArtifactId)) {
+    throw new Error("Invalid checkpoint diff artifact id.");
+  }
+
+  return path.join(getCheckpointDiffArtifactDirectory(threadId), `${diffArtifactId}.diff`);
 }
 
 async function writeCurrentWorktreeTree(repoRoot: string) {
@@ -143,21 +170,86 @@ export async function createGitCheckpoint({
   };
 }
 
+async function writeGitCheckpointDiffArtifact(threadId: string, diff: string) {
+  const diffArtifactId = createHash("sha256")
+    .update(diff)
+    .digest("hex");
+  const artifactDirectory = getCheckpointDiffArtifactDirectory(threadId);
+  await fs.mkdir(artifactDirectory, { recursive: true });
+  await fs.writeFile(getCheckpointDiffArtifactPath(threadId, diffArtifactId), diff, "utf8");
+  return diffArtifactId;
+}
+
+function formatCheckpointDiffSummary({
+  diffArtifactId,
+  nameStatus,
+  stat,
+}: {
+  diffArtifactId: string;
+  nameStatus: string;
+  stat: string;
+}) {
+  const changedFiles = nameStatus.trim();
+  const statText = stat.trim();
+  const lines = [
+    "Workbench checkpoint diff summary",
+    `Full diff artifact: ${diffArtifactId}`,
+    "",
+    "Changed files:",
+    ...(changedFiles ? changedFiles.split(/\r?\n/) : ["(none)"]),
+  ];
+
+  if (statText) {
+    lines.push("", "Stat:", ...statText.split(/\r?\n/));
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
 export async function diffLatestGitCheckpoint({
   cwd,
   threadId,
-}: GitCheckpointOperationInput) {
+}: GitCheckpointOperationInput): Promise<GitCheckpointDiffResult> {
   const repoRoot = await resolveRepoRoot(cwd);
   const { checkpointCommit, checkpointRef } = await readNewestCheckpointCommit(repoRoot, threadId);
   const currentTree = await writeCurrentWorktreeTree(repoRoot);
   const diff = await runGit(repoRoot, ["diff", "--find-renames", "--binary", checkpointCommit, currentTree]);
+  const [nameStatus, stat] = await Promise.all([
+    runGit(repoRoot, ["diff", "--find-renames", "--name-status", checkpointCommit, currentTree]),
+    runGit(repoRoot, ["diff", "--find-renames", "--stat", checkpointCommit, currentTree]),
+  ]);
+  const diffArtifactId = await writeGitCheckpointDiffArtifact(threadId, diff);
 
   return {
     checkpointCommit,
     checkpointRef,
     diff,
+    diffArtifactId,
     repoRoot,
+    summary: formatCheckpointDiffSummary({
+      diffArtifactId,
+      nameStatus,
+      stat,
+    }),
   };
+}
+
+export async function readGitCheckpointDiffArtifact({
+  diffArtifactId,
+  threadId,
+}: {
+  diffArtifactId: string;
+  threadId: string;
+}) {
+  try {
+    return await fs.readFile(getCheckpointDiffArtifactPath(threadId, diffArtifactId), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      throw new Error("Checkpoint diff artifact not found.");
+    }
+
+    throw error;
+  }
 }
 
 export async function restoreGitCheckpoint({

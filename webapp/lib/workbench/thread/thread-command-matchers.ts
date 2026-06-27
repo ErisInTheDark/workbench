@@ -7,6 +7,7 @@
  * - ThreadCommandDisplay: parsed command-summary metadata for thread command rendering. Keywords: thread, command, summary, shell, omit.
  * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text. Keywords: path, command, relative, display.
  * - isGitCheckpointDiffMatcherClaim: detect checkpoint diff matcher ids for specialized command-output rendering. Keywords: thread, command, checkpoint, diff.
+ * - parseGitCheckpointDiffArtifactId: parse compact checkpoint diff output for a stored full-diff artifact id. Keywords: checkpoint, diff, artifact.
  * - parseGitCheckpointDiffOutput: parse checkpoint diff command output into file-change display entries. Keywords: checkpoint, diff, file change.
  * - getThreadCommandDisplay: unwrap shell launchers and describe common command patterns with staged shell matchers. Keywords: thread, command, matcher, shell.
  * - getThreadCommandBlockDisplay: aggregate multiple command displays into one grouped summary label. Keywords: thread, command, summary, aggregate.
@@ -19,6 +20,7 @@ import { CommandMatcher, runThreadCommandMatchers } from "./command-matchers/cor
 import {
   GIT_CHECKPOINT_COMMAND_MATCHERS,
   isGitCheckpointDiffMatcherClaim,
+  parseGitCheckpointDiffArtifactId,
   parseGitCheckpointDiffOutput,
 } from "./command-matchers/git-checkpoints";
 import {
@@ -49,7 +51,7 @@ import type {
 } from "./command-matchers/types";
 
 export { CommandMatcher, formatThreadCommandPath };
-export { isGitCheckpointDiffMatcherClaim, parseGitCheckpointDiffOutput };
+export { isGitCheckpointDiffMatcherClaim, parseGitCheckpointDiffArtifactId, parseGitCheckpointDiffOutput };
 export type {
     ThreadCommandDisplay,
     ThreadCommandDisplayPart,

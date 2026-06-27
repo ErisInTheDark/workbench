@@ -436,7 +436,7 @@ Run after entering Brief mode for an approved-plan baseline.
 
 ### Diff against the newest checkpoint
 
-Run immediately after entering Implement mode before editing, and again after entering Review mode before creating the diff checkpoint. The command output is a full unified diff that Workbench renders as file diffs.
+Run immediately after entering Implement mode before editing, and again after entering Review mode before creating the diff checkpoint. The command output is a compact checkpoint diff summary for agent review. Workbench stores the full unified diff separately and renders it for the user in the UI.
 
 \`\`\`powershell
 "workbench-agent-checkpoint-diff-v1"; $body = @{ action = 'diff'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
