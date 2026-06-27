@@ -168,6 +168,7 @@ import {
   SaveIcon,
   SidebarCollapseIcon,
   SidebarExpandIcon,
+  SparkleIcon,
   ZoomInIcon,
   ZoomOutIcon
 } from "./workbench/workbench-icons";
@@ -2861,7 +2862,7 @@ export default function Workbench () {
                 });
               }}
             >
-              <span className="inline-flex size-5 items-center justify-center text-[1.15rem] leading-none">+</span>
+              <SparkleIcon className="size-5" />
               <span className="sr-only">Drag to create a new thread panel</span>
             </button>
           ) : null}

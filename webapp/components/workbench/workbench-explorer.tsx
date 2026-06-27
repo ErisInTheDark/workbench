@@ -29,7 +29,7 @@ import {
   workbenchThreadListButtonClassName,
   workbenchThreadListLabelClassName,
 } from "./workbench-class-names";
-import { HarnessIcon, PinIcon } from "./workbench-icons";
+import { HarnessIcon, PinIcon, SparkleIcon } from "./workbench-icons";
 
 const DEFAULT_VISIBLE_THREAD_COUNT = 5;
 
@@ -258,7 +258,7 @@ export function ThreadsList ({
         }}
       >
         <span className="inline-flex min-w-0 items-center gap-2">
-          <span className="inline-flex size-4 shrink-0 items-center justify-center text-[1.05em] leading-none">+</span>
+          <SparkleIcon className="size-4 shrink-0" />
           <span className={`${workbenchThreadListLabelClassName}${isDraftSelected ? " font-semibold" : ""}`}>{createThreadLabel}</span>
         </span>
       </button>
