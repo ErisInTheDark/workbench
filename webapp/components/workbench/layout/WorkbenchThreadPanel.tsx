@@ -10,6 +10,7 @@ import type { ThreadPayload, ThreadSummary, WorkbenchThreadHydrationRequest } fr
 import ThreadLoadingSkeleton from "../thread-view/ThreadLoadingSkeleton";
 import ThreadView from "../thread-view/ThreadView";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "../thread-view/thread-view-primitives";
+import useThreadActivityTimestamp from "../thread-view/use-thread-activity-timestamp";
 import { workbenchIconButtonClassName } from "../workbench-class-names";
 import {
   PanelCloseIcon,
@@ -125,9 +126,10 @@ export default function WorkbenchThreadPanel ({
 
   const fallbackSummary = fallbackThreadSummary?.id === threadId ? fallbackThreadSummary : null;
   const threadDisplaySource = thread ?? fallbackSummary;
-  const threadLabel = threadDisplaySource ? getThreadTitle(threadDisplaySource) : threadId;
-  const threadStatusLabel = threadDisplaySource
-    ? formatThreadRelativeTimestamp(threadDisplaySource.updatedAt, relativeTimeNowMs)
+  const threadActivityTimestampMs = useThreadActivityTimestamp(threadDisplaySource);
+  const threadLabel = threadDisplaySource ? getThreadTitle(threadDisplaySource) : "";
+  const threadStatusLabel = threadActivityTimestampMs
+    ? formatThreadRelativeTimestamp(threadActivityTimestampMs / 1000, relativeTimeNowMs)
     : "";
 
   useEffect(() => {
@@ -143,7 +145,7 @@ export default function WorkbenchThreadPanel ({
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [threadDisplaySource?.id, threadDisplaySource?.updatedAt]);
+  }, [threadActivityTimestampMs, threadDisplaySource?.id]);
 
   const readPanelThread = useCallback(async () => {
     const payload = await onReadThread(threadId, thread?.harness, {
@@ -202,6 +204,7 @@ export default function WorkbenchThreadPanel ({
       <div className="flex h-full min-h-full min-w-0 flex-col px-5 md:px-6">
         <ThreadLoadingSkeleton
           contained
+          fillAvailableHeight
           showHeader
           statusLabel={threadStatusLabel}
           title={threadLabel}

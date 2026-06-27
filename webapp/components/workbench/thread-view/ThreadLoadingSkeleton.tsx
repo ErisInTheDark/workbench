@@ -10,11 +10,13 @@ function joinClasses(...values: Array<string | false | null | undefined>) {
 
 export default function ThreadLoadingSkeleton ({
   contained = false,
+  fillAvailableHeight = false,
   showHeader = false,
   statusLabel = "",
   title = "",
 }: {
   contained?: boolean;
+  fillAvailableHeight?: boolean;
   showHeader?: boolean;
   statusLabel?: string;
   title?: string;
@@ -26,10 +28,13 @@ export default function ThreadLoadingSkeleton ({
       role="status"
       className={joinClasses(
         "mx-auto flex w-full min-w-0 max-w-[56rem] flex-col justify-end overflow-hidden",
-        contained ? "min-h-full pb-8" : "min-h-[calc(100dvh-8rem)] pb-16",
+        contained ? "min-h-full pb-8" : fillAvailableHeight ? "min-h-full pb-16" : "min-h-[calc(100dvh-8rem)] pb-16",
       )}
     >
-      <div className="flex min-h-0 flex-1 flex-col justify-end gap-6 py-6">
+      <div className={joinClasses(
+        "flex min-h-0 flex-1 flex-col gap-6 py-6",
+        fillAvailableHeight ? "justify-center" : "justify-end",
+      )}>
         {showHeader ? (
           <header className="space-y-2">
             {title ? (

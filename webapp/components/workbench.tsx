@@ -110,6 +110,7 @@ import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
 import ThreadLoadingSkeleton from "./workbench/thread-view/ThreadLoadingSkeleton";
 import ThreadView from "./workbench/thread-view/ThreadView";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-primitives";
+import useThreadActivityTimestamp from "./workbench/thread-view/use-thread-activity-timestamp";
 import WorkbenchCollaborationView from "./workbench/collaboration/WorkbenchCollaborationView";
 import WorkbenchContextMenuProvider, { type WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuProvider";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
@@ -1868,9 +1869,11 @@ export default function Workbench () {
       : null;
   const threadSummaryForThreadView = showThreadView ? threadSummariesById.get(effectiveThreadId) ?? null : null;
   const threadShellSource = threadForThreadView ?? threadSummaryForThreadView;
-  const threadShellTitle = threadShellSource ? getThreadTitle(threadShellSource) : effectiveThreadId || "Thread";
-  const threadShellStatusLabel = threadShellSource
-    ? formatThreadRelativeTimestamp(threadShellSource.updatedAt, threadRelativeTimeNowMs)
+  const threadShellActivityTimestampMs = useThreadActivityTimestamp(threadShellSource);
+  const isThreadShellTitleLoading = showThreadView && !threadShellSource;
+  const threadShellTitle = threadShellSource ? getThreadTitle(threadShellSource) : "";
+  const threadShellStatusLabel = threadShellActivityTimestampMs
+    ? formatThreadRelativeTimestamp(threadShellActivityTimestampMs / 1000, threadRelativeTimeNowMs)
     : "";
   const isThreadViewReady = showThreadView && Boolean(threadForThreadView);
   const isFileViewReady = showFileView && !currentThread && explorer.currentPath === effectiveFilePath;
@@ -1922,7 +1925,7 @@ export default function Workbench () {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [showThreadView, threadShellSource?.id, threadShellSource?.updatedAt]);
+  }, [showThreadView, threadShellActivityTimestampMs, threadShellSource?.id]);
   const routeMosaicProjection = useMemo(() => (
     showMosaicView && route.mosaicNode
       ? createWorkbenchMainLayoutFromMosaic(route.mosaicNode)
@@ -3174,7 +3177,9 @@ export default function Workbench () {
             <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
               <div className="order-2 min-w-0 md:order-1" hidden={Boolean(currentThread?.isDraft)}>
                 <p id="file-path" ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
-                  {showThreadView ? threadShellTitle : showSettingsView ? "Settings" : "Select a file"}
+                  {isThreadShellTitleLoading ? (
+                    <span className="block h-4 w-48 max-w-[60vw] rounded-full workbench-skeleton" aria-hidden="true" />
+                  ) : showThreadView ? threadShellTitle : showSettingsView ? "Settings" : "Select a file"}
                 </p>
                 <p id="status-line" ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted">
                   {showThreadView ? threadShellStatusLabel : showSettingsView ? "Theme and local Workbench preferences." : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
@@ -3300,7 +3305,7 @@ export default function Workbench () {
                   </div>
                 </div>
               ) : (
-                <ThreadLoadingSkeleton />
+                <ThreadLoadingSkeleton fillAvailableHeight />
               )
             ) : null}
             {showSettingsView && !shouldRenderMainLayout ? (
