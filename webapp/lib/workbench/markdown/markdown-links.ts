@@ -3,7 +3,7 @@
  * - normalizeWorkbenchPath: normalize local paths to forward-slash form for display and comparison. Keywords: path, normalize, local.
  * - normalizeMarkdownHref: unwrap markdown link destinations and normalize Windows absolute-path prefixes. Keywords: markdown, href, normalize.
  * - parseCodexFileLinkHref: parse absolute local file links with optional `:line[:column]` suffixes. Keywords: codex, file link, line number, column.
- * - resolveProjectFileLinkTarget: resolve absolute, relative, or suffix file references to clickable file targets. Keywords: project file, absolute link, resolver.
+ * - resolveProjectFileLinkTarget: resolve absolute, relative, suffix, or explicit missing project file references. Keywords: project file, absolute link, missing file, resolver.
  * - appendCodexFileLinkLocation: append missing `:line[:column]` suffixes to codex file-link labels. Keywords: codex, file link, label, location.
  * - toProjectRelativeFilePath: convert an absolute local path into a project-relative path when it belongs to the current project root. Keywords: path, project root, relative.
  * - toWorkbenchDisplayPath: normalize a path for UI display and prefer project-relative forward-slash paths when possible. Keywords: path, display, project root.
@@ -12,6 +12,7 @@
 export interface ProjectFileLinkTarget {
   absolutePath: string | null;
   columnNumber: number | null;
+  exists: boolean;
   lineNumber: number | null;
   openPath: string;
   projectId: string | null;
@@ -184,6 +185,7 @@ function resolveWorkspaceAbsoluteFileLinkTarget(
     ? {
       absolutePath: rootMatch.root.openPathMode === "absolute" ? absoluteTarget.absolutePath : null,
       columnNumber: absoluteTarget.columnNumber,
+      exists: true,
       lineNumber: absoluteTarget.lineNumber,
       openPath: formatWorkspaceRootOpenPath(rootMatch.root, rootMatch.relativePath, absoluteTarget.absolutePath),
       projectId: rootMatch.root.projectId ?? null,
@@ -207,6 +209,7 @@ function resolveExplicitWorkspaceFileLinkTarget(
     ? {
       absolutePath: root.openPathMode === "absolute" ? openPath : null,
       columnNumber: parsedValue.columnNumber,
+      exists: true,
       lineNumber: parsedValue.lineNumber,
       openPath,
       projectId: root.projectId ?? null,
@@ -244,10 +247,12 @@ function resolvePreferredWorkspaceRootFileLinkTarget(
   const candidatePath = formatWorkspaceRootRelativePath(rootMatch.root.id, targetRootRelativePath);
   const openPath = formatWorkspaceRootOpenPath(rootMatch.root, targetRootRelativePath, "");
   const comparableCandidatePath = normalizeComparableProjectPath(candidatePath);
-  return allowWithoutCandidate || getUniqueCandidatePaths(candidatePaths).some((filePath) => normalizeComparableProjectPath(filePath) === comparableCandidatePath)
+  const exists = getUniqueCandidatePaths(candidatePaths).some((filePath) => normalizeComparableProjectPath(filePath) === comparableCandidatePath);
+  return allowWithoutCandidate || exists
     ? {
       absolutePath: rootMatch.root.openPathMode === "absolute" ? openPath : null,
       columnNumber: parsedValue.columnNumber,
+      exists,
       lineNumber: parsedValue.lineNumber,
       openPath,
       projectId: rootMatch.root.projectId ?? null,
@@ -301,6 +306,7 @@ function resolveRelativeProjectFileLinkTarget(
     return {
       absolutePath: null,
       columnNumber: parsedValue.columnNumber,
+      exists: true,
       lineNumber: parsedValue.lineNumber,
       openPath: exactMatches[0],
       projectId: null,
@@ -318,6 +324,7 @@ function resolveRelativeProjectFileLinkTarget(
     return {
       absolutePath: null,
       columnNumber: parsedValue.columnNumber,
+      exists: true,
       lineNumber: parsedValue.lineNumber,
       openPath: workspaceRootRelativeMatches[0],
       projectId: null,
@@ -336,12 +343,48 @@ function resolveRelativeProjectFileLinkTarget(
     ? {
       absolutePath: null,
       columnNumber: parsedValue.columnNumber,
+      exists: true,
       lineNumber: parsedValue.lineNumber,
       openPath: suffixMatches[0],
       projectId: null,
       relativePath: suffixMatches[0],
     }
     : null;
+}
+
+function isCompleteProjectRelativeFilePath(value: string) {
+  const normalizedPath = normalizeWorkbenchPath(value).replace(/^\.\//, "");
+  if (
+    !normalizedPath
+    || normalizedPath.startsWith("../")
+    || normalizedPath.includes(":")
+    || /^(?:[A-Za-z]:\/|\/)/.test(normalizedPath)
+    || !normalizedPath.includes("/")
+    || normalizedPath.includes("*")
+  ) {
+    return false;
+  }
+
+  const fileName = normalizedPath.split("/").at(-1) ?? "";
+  return /\.[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(fileName);
+}
+
+function resolveMissingProjectRelativeFileLinkTarget(value: string): ProjectFileLinkTarget | null {
+  const parsedValue = parseProjectFileLinkLocation(value);
+  const normalizedPath = normalizeWorkbenchPath(parsedValue.path).replace(/^\.\//, "");
+  if (!isCompleteProjectRelativeFilePath(normalizedPath)) {
+    return null;
+  }
+
+  return {
+    absolutePath: null,
+    columnNumber: parsedValue.columnNumber,
+    exists: false,
+    lineNumber: parsedValue.lineNumber,
+    openPath: normalizedPath,
+    projectId: null,
+    relativePath: normalizedPath,
+  };
 }
 
 export function resolveProjectFileLinkTarget(
@@ -375,6 +418,7 @@ export function resolveProjectFileLinkTarget(
       ? {
         absolutePath: null,
         columnNumber: absoluteTarget.columnNumber,
+        exists: true,
         lineNumber: absoluteTarget.lineNumber,
         openPath: relativePath,
         projectId: null,
@@ -383,6 +427,7 @@ export function resolveProjectFileLinkTarget(
       : {
         absolutePath: absoluteTarget.absolutePath,
         columnNumber: absoluteTarget.columnNumber,
+        exists: true,
         lineNumber: absoluteTarget.lineNumber,
         openPath: absoluteTarget.absolutePath,
         projectId: null,
@@ -406,9 +451,16 @@ export function resolveProjectFileLinkTarget(
     return preferredWorkspaceTarget;
   }
 
-  return resolveRelativeProjectFileLinkTarget(normalizedValue, candidatePaths, {
+  const relativeTarget = resolveRelativeProjectFileLinkTarget(normalizedValue, candidatePaths, {
     allowSuffixMatch,
   });
+  if (relativeTarget) {
+    return relativeTarget;
+  }
+
+  return allowThreadCwdPathWithoutCandidate
+    ? resolveMissingProjectRelativeFileLinkTarget(normalizedValue)
+    : null;
 }
 
 export function appendCodexFileLinkLocation(label: string, href: string) {

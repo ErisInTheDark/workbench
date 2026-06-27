@@ -138,6 +138,7 @@ function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string, 
           <ProjectFilePath
             absolutePath={node.absolutePath}
             columnNumber={node.columnNumber}
+            exists={node.exists}
             key={key}
             label={node.label}
             lineNumber={node.lineNumber}

@@ -12,6 +12,7 @@ import {
   projectFilePathInteractiveClassName,
   projectFilePathLabelClassName,
   projectFilePathLocationClassName,
+  projectFilePathMissingClassName,
   projectFilePathPillClassName,
   type ProjectFilePathDisambiguationIndex,
   type ProjectFilePathDisplayOptions,
@@ -30,6 +31,7 @@ interface ProjectFilePathDisplayContextValue {
 type ProjectFilePathProps = ProjectFilePathDisplayOptions & {
   absolutePath?: string | null;
   className?: string;
+  exists?: boolean;
   interactive?: boolean;
   openPath?: string | null;
   path: string;
@@ -69,6 +71,7 @@ export default function ProjectFilePath ({
   disambiguationIndex,
   disambiguationKey,
   disambiguationPaths,
+  exists = true,
   interactive = false,
   label,
   lineNumber,
@@ -116,11 +119,12 @@ export default function ProjectFilePath ({
 
   const controlClassName = joinClasses(
     projectFilePathPillClassName,
-    (interactive || isFileControl) && projectFilePathInteractiveClassName,
+    !exists && projectFilePathMissingClassName,
+    exists && (interactive || isFileControl) && projectFilePathInteractiveClassName,
     className,
   );
 
-  if (isFileControl) {
+  if (exists && isFileControl) {
     return (
       <button
         type="button"
@@ -142,9 +146,11 @@ export default function ProjectFilePath ({
     <span
       className={joinClasses(
         projectFilePathPillClassName,
-        interactive && projectFilePathInteractiveClassName,
+        !exists && projectFilePathMissingClassName,
+        exists && interactive && projectFilePathInteractiveClassName,
         className,
       )}
+      data-project-file-missing-path={exists ? undefined : "true"}
       title={display.title}
     >
       {content}

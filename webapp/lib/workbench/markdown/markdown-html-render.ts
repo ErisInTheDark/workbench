@@ -8,6 +8,7 @@ import {
     projectFilePathInteractiveClassName,
     projectFilePathLabelClassName,
     projectFilePathLocationClassName,
+    projectFilePathMissingClassName,
     projectFilePathPillClassName,
 } from "../project/project-file-path";
 import {
@@ -36,27 +37,37 @@ function escapeHtml(value: string) {
 function renderProjectFileLink(url: string, relativePath: string, {
   absolutePath = null,
   columnNumber = null,
+  exists = true,
   label = null,
   lineNumber = null,
   openPath = relativePath,
 }: {
   absolutePath?: string | null;
   columnNumber?: number | null;
+  exists?: boolean;
   label?: string | null;
   lineNumber?: number | null;
   openPath?: string;
 } = {}) {
   const display = getProjectFilePathDisplay(relativePath, { columnNumber, label, lineNumber });
-  const className = `${projectFilePathPillClassName} ${projectFilePathInteractiveClassName}`;
-
-  return `<a href="${escapeHtml(url)}" class="${escapeHtml(className)}" data-project-file-path="true" data-project-file-relative-path="${escapeHtml(openPath)}"${absolutePath ? ` data-project-file-absolute-path="${escapeHtml(absolutePath)}"` : ""} title="${escapeHtml(display.title)}">`
-    + (display.rootPrefix
-      ? `<span class="${escapeHtml(projectFilePathLocationClassName)}">${escapeHtml(display.rootPrefix)}</span>`
-      : "")
+  const className = [
+    projectFilePathPillClassName,
+    exists ? projectFilePathInteractiveClassName : projectFilePathMissingClassName,
+  ].join(" ");
+  const content = (display.rootPrefix
+    ? `<span class="${escapeHtml(projectFilePathLocationClassName)}">${escapeHtml(display.rootPrefix)}</span>`
+    : "")
     + `<span class="${escapeHtml(projectFilePathLabelClassName)}">${escapeHtml(display.label)}</span>`
     + (display.locationSuffix
       ? `<span class="${escapeHtml(projectFilePathLocationClassName)}">${escapeHtml(display.locationSuffix)}</span>`
-      : "")
+      : "");
+
+  if (!exists) {
+    return `<span class="${escapeHtml(className)}" data-project-file-missing-path="true" title="${escapeHtml(display.title)}">${content}</span>`;
+  }
+
+  return `<a href="${escapeHtml(url)}" class="${escapeHtml(className)}" data-project-file-path="true" data-project-file-relative-path="${escapeHtml(openPath)}"${absolutePath ? ` data-project-file-absolute-path="${escapeHtml(absolutePath)}"` : ""} title="${escapeHtml(display.title)}">`
+    + content
     + "</a>";
 }
 
@@ -100,6 +111,7 @@ function renderInlineHtml(nodes: ParsedInlineNode[]) {
         html += renderProjectFileLink(node.href, node.relativePath, {
           absolutePath: node.absolutePath,
           columnNumber: node.columnNumber,
+          exists: node.exists,
           label: node.label,
           lineNumber: node.lineNumber,
           openPath: node.openPath,

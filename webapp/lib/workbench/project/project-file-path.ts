@@ -6,6 +6,7 @@
  * - ProjectFilePathDisplayOptions: optional label override, disambiguation paths/key, and location metadata for project path pills. Keywords: project path, label, line, column.
  * - projectFilePathPillClassName: shared rounded pill classes for project path rendering. Keywords: project path, pill, classes.
  * - projectFilePathInteractiveClassName: shared interactive hover/focus classes for clickable project path pills. Keywords: project path, interactive, classes.
+ * - projectFilePathMissingClassName: shared border-only classes for non-clickable missing project path pills. Keywords: project path, missing file, classes.
  * - projectFilePathLabelClassName: shared classes for the visible filename text. Keywords: project path, label, classes.
  * - projectFilePathLocationClassName: shared low-contrast classes for line and column suffixes. Keywords: project path, location, classes.
  * - createProjectFilePathDisambiguationIndexCooperatively: build project path disambiguation in browser-yielding slices. Keywords: project path, scheduler, index.
@@ -90,6 +91,12 @@ export const projectFilePathPillClassName = [
 export const projectFilePathInteractiveClassName = [
   "cursor-pointer no-underline",
   "focus-visible:bg-[color-mix(in_srgb,var(--text)_10%,transparent)] focus-visible:outline-none",
+].join(" ");
+
+export const projectFilePathMissingClassName = [
+  "border border-[color-mix(in_srgb,var(--text)_24%,transparent)]",
+  "!bg-transparent hover:!bg-transparent",
+  "text-[color:color-mix(in_srgb,var(--text)_82%,transparent)]",
 ].join(" ");
 
 export const projectFilePathLabelClassName = "min-w-0 truncate";

@@ -76,6 +76,7 @@ export type ParsedInlineNode =
     type: "projectFileLink";
     absolutePath: string | null;
     columnNumber: number | null;
+    exists: boolean;
     href: string;
     label?: string | null;
     lineNumber: number | null;
@@ -429,6 +430,7 @@ function pushTextNode(nodes: ParsedInlineNode[], text: string) {
 function createProjectFileLinkNode(url: string, relativePath: string, {
   absolutePath = null,
   columnNumber = null,
+  exists = true,
   label = null,
   lineNumber = null,
   openPath = relativePath,
@@ -436,6 +438,7 @@ function createProjectFileLinkNode(url: string, relativePath: string, {
 }: {
   absolutePath?: string | null;
   columnNumber?: number | null;
+  exists?: boolean;
   label?: string | null;
   lineNumber?: number | null;
   openPath?: string;
@@ -444,6 +447,7 @@ function createProjectFileLinkNode(url: string, relativePath: string, {
   return {
     absolutePath,
     columnNumber,
+    exists,
     href: url,
     label,
     lineNumber,
@@ -497,6 +501,7 @@ function parseExplicitProjectFileMention(markdown: string, index: number, option
     end: closeIndex + 1,
     node: createProjectFileLinkNode(`#${rawValue}`, resolvedFileLink.relativePath, {
       columnNumber: resolvedFileLink.columnNumber,
+      exists: resolvedFileLink.exists,
       lineNumber: resolvedFileLink.lineNumber,
       absolutePath: resolvedFileLink.absolutePath,
       openPath: resolvedFileLink.openPath,
@@ -659,6 +664,7 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
           if (resolvedFileLink) {
             nodes.push(createProjectFileLinkNode(rawUrl, resolvedFileLink.relativePath, {
               columnNumber: resolvedFileLink.columnNumber,
+              exists: resolvedFileLink.exists,
               label,
               lineNumber: resolvedFileLink.lineNumber,
               absolutePath: resolvedFileLink.absolutePath,
@@ -695,6 +701,7 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
       if (plaintextFileLink) {
         nodes.push(createProjectFileLinkNode(plaintextFileLink.href, plaintextFileLink.relativePath, {
           columnNumber: plaintextFileLink.columnNumber,
+          exists: true,
           lineNumber: plaintextFileLink.lineNumber,
           absolutePath: plaintextFileLink.absolutePath,
           openPath: plaintextFileLink.openPath,
