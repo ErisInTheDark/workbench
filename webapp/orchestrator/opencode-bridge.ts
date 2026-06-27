@@ -2,6 +2,8 @@
  * Exports:
  * - OpenCodeBridge: translate Workbench bridge requests into typed OpenCode SDK server/session calls and emit Codex-shaped notifications back out. Keywords: opencode, sdk, bridge, session, events.
  */
+import fs from "node:fs";
+
 import type {
   Event as OpenCodeEvent,
   OpencodeClient,
@@ -9,6 +11,7 @@ import type {
   PermissionV2Request,
   QuestionRequest,
   QuestionV2Request,
+  Session,
   SessionStatus,
   V2Event,
 } from "@opencode-ai/sdk/v2";
@@ -123,15 +126,23 @@ function normalizeDirectoryForComparison(value: string) {
 
 function normalizeDirectoryForOpenCodeSdk(value: string) {
   const trimmed = value.trim();
-  if (/^[a-z]:[\\/]/iu.test(trimmed)) {
-    return `${trimmed.slice(0, 1).toUpperCase()}${trimmed.slice(1).replace(/\//gu, "\\")}`;
+  const canonicalPath = (() => {
+    try {
+      return fs.realpathSync.native(trimmed);
+    } catch {
+      return trimmed;
+    }
+  })();
+
+  if (/^[a-z]:[\\/]/iu.test(canonicalPath)) {
+    return `${canonicalPath.slice(0, 1).toUpperCase()}${canonicalPath.slice(1).replace(/\\/gu, "/")}`;
   }
 
-  if (trimmed.startsWith("//")) {
-    return `\\\\${trimmed.slice(2).replace(/\//gu, "\\")}`;
+  if (canonicalPath.startsWith("\\\\")) {
+    return `//${canonicalPath.slice(2).replace(/\\/gu, "/")}`;
   }
 
-  return trimmed;
+  return canonicalPath;
 }
 
 function isSameDirectory(left: string, right: string) {
@@ -695,7 +706,14 @@ export class OpenCodeBridge {
   private async listThreads(directories: string[]) {
     const [primaryDirectory = this.projectRoot] = directories;
     const client = await this.ensureClient(primaryDirectory);
-    const sessions = unwrapResponse(await client.session.list());
+    const sessionsById = new Map<string, Session>();
+    for (const directory of directories) {
+      const sessions = unwrapResponse(await client.session.list({ directory }));
+      for (const session of sessions) {
+        sessionsById.set(session.id, session);
+      }
+    }
+    const sessions = Array.from(sessionsById.values());
     const visibleSessions = sessions.filter((session) => (
       directories.some((directory) => isSameDirectory(session.directory, directory))
     ));
