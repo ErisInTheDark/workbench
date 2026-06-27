@@ -15,7 +15,7 @@
  * - PinIcon: render the pinned thread icon. Keywords: workbench, icon, thread, pin.
  * - ArchiveIcon: render the thread archive context menu icon. Keywords: workbench, icon, thread, archive.
  * - WrapTextIcon: render the thread codeblock line-wrap toggle icon. Keywords: workbench, icon, thread, code, wrap.
- * - CopyIcon: render the thread codeblock copy action icon. Keywords: workbench, icon, thread, code, copy.
+ * - CopyIcon: render thread copy action icons for context menus and code blocks. Keywords: workbench, icon, thread, copy.
  * - CheckIcon: render the thread codeblock copied confirmation icon. Keywords: workbench, icon, thread, code, copied.
  * - FileAddIcon/FileDeleteIcon/FileUpdateIcon/FileMoveIcon: render thread file-change kind icons. Keywords: workbench, icon, file change, add, delete, update, move.
  */

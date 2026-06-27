@@ -106,6 +106,7 @@ import {
   putPersistedThreadQuestionnaireDraft,
   putPersistedThreadSavedComposerDraft,
 } from "../lib/workbench/thread/thread-composer-drafts";
+import { writeTextToClipboard } from "../lib/workbench/dom/clipboard";
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
 import ThreadLoadingSkeleton from "./workbench/thread-view/ThreadLoadingSkeleton";
 import ThreadView from "./workbench/thread-view/ThreadView";
@@ -160,6 +161,7 @@ import {
   BackArrowIcon,
   BinIcon,
   CollaborationIcon,
+  CopyIcon,
   GearIcon,
   PinIcon,
   ReloadIcon,
@@ -1507,6 +1509,14 @@ export default function Workbench () {
     return {
       id: `thread:${threadKey}`,
       items: [
+        {
+          icon: <CopyIcon className="size-4" />,
+          id: "copy-id",
+          label: "Copy ID",
+          onSelect: () => {
+            void writeTextToClipboard(thread.id);
+          },
+        },
         {
           icon: <PinIcon className="size-4" />,
           id: isPinned ? "unpin" : "pin",

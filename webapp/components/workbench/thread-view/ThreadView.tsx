@@ -28,6 +28,7 @@ import type {
 } from "../../../lib/types";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import { areDeeplyEqual } from "../../../lib/workbench/deep-equality";
+import { writeTextToClipboard } from "../../../lib/workbench/dom/clipboard";
 import type { ProjectTreeFileCandidate } from "../../../lib/workbench/project/ProjectTreeFileIndex";
 import {
   createProjectFilePathDisambiguationIndexCooperatively,
@@ -248,19 +249,6 @@ function hasExpandedSelectionWithin (root: HTMLElement | null) {
   const anchorNode = selection.anchorNode;
   const focusNode = selection.focusNode;
   return Boolean(anchorNode && focusNode && root.contains(anchorNode) && root.contains(focusNode));
-}
-
-async function writeTextToClipboard (text: string) {
-  if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
-    return false;
-  }
-
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function setCodeBlockCopyButtonState (button: HTMLButtonElement, isCopied: boolean) {
