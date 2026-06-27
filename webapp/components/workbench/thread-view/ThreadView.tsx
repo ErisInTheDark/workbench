@@ -59,6 +59,7 @@ import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadRateLimits from "./ThreadRateLimits";
+import ThreadScrollAnchorController, { type ThreadScrollSnapshot } from "./ThreadScrollAnchorController";
 import {
   getThreadWebSearchLiveLabel,
   isThreadWebSearchPlaceholder,
@@ -70,8 +71,6 @@ import { ThreadThreadContent, ThreadTurnDetails, ThreadTurnLoadingSkeleton } fro
 const SUBTHREAD_POLL_INTERVAL_MS = 1500;
 const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
 const MAX_VISIBLE_HISTORY_ENTRIES = 8;
-const THREAD_BOTTOM_ANCHOR_TOLERANCE_PX = 96;
-const THREAD_HISTORY_LOAD_TOLERANCE_PX = 160;
 const EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS: readonly string[] = [];
 const EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS: readonly string[] = [];
 const EMPTY_PROJECT_FILE_CANDIDATES: readonly ProjectTreeFileCandidate[] = [];
@@ -98,14 +97,6 @@ type LiveThreadActivity =
     kind: "webSearch";
     title: string;
   };
-
-type ThreadScrollTarget = HTMLElement | Window;
-
-interface ThreadScrollSnapshot {
-  scrollHeight: number;
-  scrollTop: number;
-  target: ThreadScrollTarget;
-}
 
 interface PendingPreviousTurnScrollRestore {
   beforeTurnId: string;
@@ -257,112 +248,6 @@ function hasExpandedSelectionWithin (root: HTMLElement | null) {
   const anchorNode = selection.anchorNode;
   const focusNode = selection.focusNode;
   return Boolean(anchorNode && focusNode && root.contains(anchorNode) && root.contains(focusNode));
-}
-
-function isScrollableOverflowValue (value: string) {
-  return value === "auto" || value === "scroll" || value === "overlay";
-}
-
-function findThreadScrollTarget (root: HTMLElement | null): ThreadScrollTarget | null {
-  if (!root || typeof window === "undefined") {
-    return null;
-  }
-
-  for (let element = root.parentElement; element; element = element.parentElement) {
-    if (element === document.body || element === document.documentElement) {
-      break;
-    }
-
-    if (isScrollableOverflowValue(window.getComputedStyle(element).overflowY)) {
-      return element;
-    }
-  }
-
-  return window;
-}
-
-function getDocumentScrollingElement () {
-  return document.scrollingElement ?? document.documentElement;
-}
-
-function isWindowScrollTarget (target: ThreadScrollTarget): target is Window {
-  return target === window;
-}
-
-function getThreadScrollMetrics (target: ThreadScrollTarget) {
-  if (isWindowScrollTarget(target)) {
-    const scrollingElement = getDocumentScrollingElement();
-    const scrollHeight = Math.max(
-      scrollingElement.scrollHeight,
-      document.body?.scrollHeight ?? 0,
-    );
-    const clientHeight = window.innerHeight || scrollingElement.clientHeight;
-    const scrollTop = Math.max(window.scrollY, scrollingElement.scrollTop, document.body?.scrollTop ?? 0);
-    return {
-      clientHeight,
-      maxScrollTop: Math.max(0, scrollHeight - clientHeight),
-      scrollHeight,
-      scrollTop,
-    };
-  }
-
-  return {
-    clientHeight: target.clientHeight,
-    maxScrollTop: Math.max(0, target.scrollHeight - target.clientHeight),
-    scrollHeight: target.scrollHeight,
-    scrollTop: target.scrollTop,
-  };
-}
-
-function setThreadScrollTop (target: ThreadScrollTarget, scrollTop: number) {
-  const nextScrollTop = Math.max(0, scrollTop);
-  if (isWindowScrollTarget(target)) {
-    window.scrollTo({
-      behavior: "auto",
-      left: window.scrollX,
-      top: nextScrollTop,
-    });
-    return;
-  }
-
-  target.scrollTop = nextScrollTop;
-}
-
-function isThreadScrollTargetNearBottom (target: ThreadScrollTarget, tolerancePx = THREAD_BOTTOM_ANCHOR_TOLERANCE_PX) {
-  const metrics = getThreadScrollMetrics(target);
-  return metrics.maxScrollTop - metrics.scrollTop <= tolerancePx;
-}
-
-function isThreadScrollTargetNearTop (target: ThreadScrollTarget, tolerancePx = THREAD_HISTORY_LOAD_TOLERANCE_PX) {
-  return getThreadScrollMetrics(target).scrollTop <= tolerancePx;
-}
-
-function scrollThreadViewToBottom (root: HTMLElement | null) {
-  const target = findThreadScrollTarget(root);
-  if (!target) {
-    return;
-  }
-
-  setThreadScrollTop(target, getThreadScrollMetrics(target).maxScrollTop);
-}
-
-function captureThreadScrollSnapshot (root: HTMLElement | null): ThreadScrollSnapshot | null {
-  const target = findThreadScrollTarget(root);
-  if (!target) {
-    return null;
-  }
-
-  const metrics = getThreadScrollMetrics(target);
-  return {
-    scrollHeight: metrics.scrollHeight,
-    scrollTop: metrics.scrollTop,
-    target,
-  };
-}
-
-function restoreThreadScrollSnapshotAfterPrepend (snapshot: ThreadScrollSnapshot) {
-  const nextMetrics = getThreadScrollMetrics(snapshot.target);
-  setThreadScrollTop(snapshot.target, snapshot.scrollTop + (nextMetrics.scrollHeight - snapshot.scrollHeight));
 }
 
 async function writeTextToClipboard (text: string) {
@@ -760,10 +645,13 @@ export default memo(function ThreadView ({
   const activeThreadScrollKeyRef = useRef("");
   const bottomScrollFrameRef = useRef<number | null>(null);
   const didRestorePreviousTurnScrollRef = useRef(false);
-  const lastObservedScrollTopRef = useRef<number | null>(null);
   const pendingPreviousTurnScrollRestoreRef = useRef<PendingPreviousTurnScrollRestore | null>(null);
-  const shouldStickToBottomRef = useRef(true);
+  const scrollAnchorControllerRef = useRef<ReturnType<typeof ThreadScrollAnchorController> | null>(null);
   const subthreadLoadGenerationRef = useRef(0);
+  if (!scrollAnchorControllerRef.current) {
+    scrollAnchorControllerRef.current = ThreadScrollAnchorController();
+  }
+  const scrollAnchorController = scrollAnchorControllerRef.current;
   const subagentThreadIds = useMemo(() => getCollabAgentThreadIds(thread.turns), [thread.turns]);
   const activeThread = activeThreadId === thread.id
     ? thread
@@ -869,21 +757,19 @@ export default memo(function ThreadView ({
     });
   }, [loadingThreadIds, subagentThreadIds, subthreadsById]);
 
-  const scheduleScrollToBottom = useCallback(() => {
+  const scheduleScrollToBottom = useCallback((options: { force?: boolean } = {}) => {
     if (bottomScrollFrameRef.current !== null) {
       window.cancelAnimationFrame(bottomScrollFrameRef.current);
     }
 
     bottomScrollFrameRef.current = window.requestAnimationFrame(() => {
       bottomScrollFrameRef.current = null;
-      scrollThreadViewToBottom(threadViewRef.current);
-      const scrollTarget = findThreadScrollTarget(threadViewRef.current);
-      if (scrollTarget) {
-        lastObservedScrollTopRef.current = getThreadScrollMetrics(scrollTarget).scrollTop;
+      if (!options.force && !scrollAnchorController.shouldStickToBottom()) {
+        return;
       }
-      shouldStickToBottomRef.current = true;
+      scrollAnchorController.scrollRootToBottom(threadViewRef.current);
     });
-  }, []);
+  }, [scrollAnchorController]);
 
   const markThreadSeen = useCallback((threadId: string, payload: ThreadPayload | null | undefined) => {
     if (!payload) {
@@ -972,21 +858,21 @@ export default memo(function ThreadView ({
       return;
     }
 
-    const scrollTarget = findThreadScrollTarget(threadViewRef.current);
+    const scrollTarget = scrollAnchorController.findScrollTarget(threadViewRef.current);
     if (
       !scrollTarget
-      || !isThreadScrollTargetNearTop(scrollTarget)
+      || !scrollAnchorController.isNearTop(scrollTarget)
     ) {
       return;
     }
 
-    const scrollSnapshot = captureThreadScrollSnapshot(threadViewRef.current);
+    const scrollSnapshot = scrollAnchorController.captureSnapshot(threadViewRef.current);
     if (scrollSnapshot) {
       pendingPreviousTurnScrollRestoreRef.current = {
         beforeTurnId: firstVisibleLoadedEntry.turnId,
         snapshot: scrollSnapshot,
       };
-      shouldStickToBottomRef.current = false;
+      scrollAnchorController.setStickToBottom(false);
     }
 
     const loadGeneration = subthreadLoadGenerationRef.current;
@@ -1037,28 +923,27 @@ export default memo(function ThreadView ({
         return next;
       });
     }
-  }, [activeThread, firstVisibleLoadedEntry, loadingPreviousTurnKeys, onReadThread, previousTurnLoadKey, thread.id]);
+  }, [activeThread, firstVisibleLoadedEntry, loadingPreviousTurnKeys, onReadThread, previousTurnLoadKey, scrollAnchorController, thread.id]);
 
   const requestPreviousTurnIfAtTop = useCallback(() => {
     if (!canLoadPreviousTurn || !previousTurnLoadKey || loadingPreviousTurnKeys[previousTurnLoadKey]) {
       return;
     }
 
-    const scrollTarget = findThreadScrollTarget(threadViewRef.current);
-    if (!scrollTarget || !isThreadScrollTargetNearTop(scrollTarget)) {
+    const scrollTarget = scrollAnchorController.findScrollTarget(threadViewRef.current);
+    if (!scrollTarget || !scrollAnchorController.isNearTop(scrollTarget)) {
       return;
     }
 
     void loadPreviousTurn();
-  }, [canLoadPreviousTurn, loadPreviousTurn, loadingPreviousTurnKeys, previousTurnLoadKey]);
+  }, [canLoadPreviousTurn, loadPreviousTurn, loadingPreviousTurnKeys, previousTurnLoadKey, scrollAnchorController]);
 
   useEffect(() => {
     subthreadLoadGenerationRef.current += 1;
     activeThreadScrollKeyRef.current = "";
     didRestorePreviousTurnScrollRef.current = false;
-    lastObservedScrollTopRef.current = null;
     pendingPreviousTurnScrollRestoreRef.current = null;
-    shouldStickToBottomRef.current = true;
+    scrollAnchorController.resetForThreadSwitch();
     setActiveThreadId(thread.id);
     setSubthreadsById({});
     setLoadingThreadIds({});
@@ -1066,7 +951,7 @@ export default memo(function ThreadView ({
     setSeenItemCountsByThreadId({
       [thread.id]: countThreadItems(thread),
     });
-  }, [projectId, thread.id]);
+  }, [projectId, scrollAnchorController, thread.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1126,7 +1011,7 @@ export default memo(function ThreadView ({
 
   useEffect(() => {
     const sentinel = historySentinelRef.current;
-    const scrollTarget = findThreadScrollTarget(threadViewRef.current);
+    const scrollTarget = scrollAnchorController.findScrollTarget(threadViewRef.current);
     if (!sentinel || !scrollTarget || !canLoadPreviousTurn || !previousTurnLoadKey || loadingPreviousTurnKeys[previousTurnLoadKey]) {
       return;
     }
@@ -1144,33 +1029,26 @@ export default memo(function ThreadView ({
     return () => {
       observer.disconnect();
     };
-  }, [canLoadPreviousTurn, loadPreviousTurn, loadingPreviousTurnKeys, previousTurnLoadKey]);
+  }, [canLoadPreviousTurn, loadPreviousTurn, loadingPreviousTurnKeys, previousTurnLoadKey, scrollAnchorController]);
 
   useEffect(() => {
-    const scrollTarget = findThreadScrollTarget(threadViewRef.current);
+    const scrollTarget = scrollAnchorController.findScrollTarget(threadViewRef.current);
     if (!scrollTarget) {
       return;
     }
 
     const updateBottomStickiness = () => {
-      const metrics = getThreadScrollMetrics(scrollTarget);
-      const lastScrollTop = lastObservedScrollTopRef.current;
-      const isScrollingUp = lastScrollTop !== null && metrics.scrollTop < lastScrollTop - 1;
-      if (isScrollingUp) {
-        shouldStickToBottomRef.current = false;
-      } else if (metrics.maxScrollTop - metrics.scrollTop <= THREAD_BOTTOM_ANCHOR_TOLERANCE_PX) {
-        shouldStickToBottomRef.current = true;
-      }
-      lastObservedScrollTopRef.current = metrics.scrollTop;
+      scrollAnchorController.updateFromScroll(scrollTarget);
       requestPreviousTurnIfAtTop();
     };
-    updateBottomStickiness();
+    scrollAnchorController.syncObservedScrollTop(scrollTarget);
+    requestPreviousTurnIfAtTop();
 
     scrollTarget.addEventListener("scroll", updateBottomStickiness, { passive: true });
     return () => {
       scrollTarget.removeEventListener("scroll", updateBottomStickiness);
     };
-  }, [activeThread?.id, requestPreviousTurnIfAtTop]);
+  }, [activeThread?.id, requestPreviousTurnIfAtTop, scrollAnchorController]);
 
   useEffect(() => {
     if (!canLoadPreviousTurn || !previousTurnLoadKey || loadingPreviousTurnKeys[previousTurnLoadKey]) {
@@ -1192,11 +1070,10 @@ export default memo(function ThreadView ({
     }
 
     pendingPreviousTurnScrollRestoreRef.current = null;
-    restoreThreadScrollSnapshotAfterPrepend(pendingRestore.snapshot);
-    lastObservedScrollTopRef.current = getThreadScrollMetrics(pendingRestore.snapshot.target).scrollTop;
+    scrollAnchorController.restoreSnapshotAfterPrepend(pendingRestore.snapshot);
     didRestorePreviousTurnScrollRef.current = true;
-    shouldStickToBottomRef.current = false;
-  }, [firstVisibleLoadedEntry?.turnId, visibleHistorySignature]);
+    scrollAnchorController.setStickToBottom(false);
+  }, [firstVisibleLoadedEntry?.turnId, scrollAnchorController, visibleHistorySignature]);
 
   useLayoutEffect(() => {
     if (!activeThread || isDraftThreadView) {
@@ -1207,7 +1084,7 @@ export default memo(function ThreadView ({
     const didSwitchActiveThread = activeThreadScrollKeyRef.current !== activeThreadScrollKey;
     if (didSwitchActiveThread) {
       activeThreadScrollKeyRef.current = activeThreadScrollKey;
-      shouldStickToBottomRef.current = true;
+      scrollAnchorController.resetForThreadSwitch();
     }
 
     if (didRestorePreviousTurnScrollRef.current) {
@@ -1219,15 +1096,13 @@ export default memo(function ThreadView ({
       return;
     }
 
-    const scrollTarget = findThreadScrollTarget(threadViewRef.current);
     if (
       didSwitchActiveThread
-      || shouldStickToBottomRef.current
-      || (scrollTarget && isThreadScrollTargetNearBottom(scrollTarget))
+      || scrollAnchorController.shouldStickToBottom()
     ) {
-      scheduleScrollToBottom();
+      scheduleScrollToBottom({ force: didSwitchActiveThread });
     }
-  }, [activeThread, activeThreadContentSignature, isDraftThreadView, projectId, scheduleScrollToBottom]);
+  }, [activeThread, activeThreadContentSignature, isDraftThreadView, projectId, scheduleScrollToBottom, scrollAnchorController]);
 
   useEffect(() => {
     const root = threadViewRef.current;
@@ -1236,7 +1111,7 @@ export default memo(function ThreadView ({
     }
 
     const observer = new ResizeObserver(() => {
-      if (!shouldStickToBottomRef.current || hasExpandedSelectionWithin(root)) {
+      if (!scrollAnchorController.shouldStickToBottom() || hasExpandedSelectionWithin(root)) {
         return;
       }
 
@@ -1246,7 +1121,7 @@ export default memo(function ThreadView ({
     return () => {
       observer.disconnect();
     };
-  }, [activeThread?.id, scheduleScrollToBottom]);
+  }, [activeThread?.id, scheduleScrollToBottom, scrollAnchorController]);
 
   useEffect(() => {
     onThreadSeen(thread);
