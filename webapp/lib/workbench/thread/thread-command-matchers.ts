@@ -50,6 +50,92 @@ import type {
     ThreadCommandSummaryStats,
 } from "./command-matchers/types";
 
+type KnownCommandSummaryStatKey = Exclude<keyof ThreadCommandSummaryStats, "otherCommands">;
+
+const COMMAND_BLOCK_SUMMARY_CATEGORIES: Array<{
+  format: (count: number) => string;
+  key: KnownCommandSummaryStatKey;
+}> = [
+  {
+    key: "skillLoads",
+    format: (count) => `loaded ${count} ${pluralize(count, "skill")}`,
+  },
+  {
+    key: "readFiles",
+    format: (count) => `read ${count} ${pluralize(count, "file")}`,
+  },
+  {
+    key: "searchedFiles",
+    format: (count) => `searched ${count} ${pluralize(count, "file")}`,
+  },
+  {
+    key: "listedFiles",
+    format: (count) => count === 1
+      ? "listed files"
+      : `listed files ${count} times`,
+  },
+  {
+    key: "deletedPaths",
+    format: (count) => count === 1
+      ? "deleted 1 path"
+      : `deleted ${count} paths`,
+  },
+  {
+    key: "pathChecks",
+    format: (count) => count === 1
+      ? "checked 1 path"
+      : `checked ${count} paths`,
+  },
+  {
+    key: "gitStatusChecks",
+    format: (count) => count === 1
+      ? "checked git status"
+      : `checked git status ${count} times`,
+  },
+  {
+    key: "gitDiffChecks",
+    format: (count) => count === 1
+      ? "checked git diff"
+      : `checked git diff ${count} times`,
+  },
+  {
+    key: "typescriptValidations",
+    format: (count) => count === 1
+      ? "validated TypeScript"
+      : `validated TypeScript ${count} times`,
+  },
+  {
+    key: "typescriptBuilds",
+    format: (count) => count === 1
+      ? "built TypeScript"
+      : `built TypeScript ${count} times`,
+  },
+  {
+    key: "gitCheckpointCreates",
+    format: (count) => count === 1
+      ? "created a git checkpoint"
+      : `created ${count} git checkpoints`,
+  },
+  {
+    key: "gitCheckpointDiffs",
+    format: (count) => count === 1
+      ? "diffed against a git checkpoint"
+      : `diffed against git checkpoints ${count} times`,
+  },
+  {
+    key: "gitCheckpointRestores",
+    format: (count) => count === 1
+      ? "restored a git checkpoint"
+      : `restored git checkpoints ${count} times`,
+  },
+  {
+    key: "webRequests",
+    format: (count) => count === 1
+      ? "made a web request"
+      : `made ${count} web requests`,
+  },
+];
+
 export { CommandMatcher, formatThreadCommandPath };
 export { isGitCheckpointDiffMatcherClaim, parseGitCheckpointDiffArtifactId, parseGitCheckpointDiffOutput };
 export type {
@@ -143,6 +229,8 @@ export function getThreadCommandBlockDisplay({
   workspaceRoots?: CommandDisplayContext["workspaceRoots"];
 }): ThreadCommandSummaryDisplay {
   const summaryStats = createEmptyCommandSummaryStats();
+  const summaryCategoryOrder: KnownCommandSummaryStatKey[] = [];
+  const seenSummaryCategories = new Set<KnownCommandSummaryStatKey>();
 
   for (const item of items) {
     const display = getThreadCommandDisplay({
@@ -153,10 +241,18 @@ export function getThreadCommandBlockDisplay({
       projectRootPath,
       workspaceRoots,
     });
+    for (const key of getKnownCommandSummaryCategoryKeys(display.summaryStats)) {
+      if (seenSummaryCategories.has(key)) {
+        continue;
+      }
+
+      seenSummaryCategories.add(key);
+      summaryCategoryOrder.push(key);
+    }
     mergeCommandSummaryStats(summaryStats, display.summaryStats);
   }
 
-  const summaryText = formatCommandBlockSummaryText(summaryStats, items.length);
+  const summaryText = formatCommandBlockSummaryText(summaryStats, items.length, summaryCategoryOrder);
   return {
     claimedBy: "command-block",
     omitFromDisplay: false,
@@ -268,86 +364,15 @@ function summarizeCommandAction(
 function formatCommandBlockSummaryText(
   summaryStats: ThreadCommandSummaryStats,
   fallbackCommandCount: number,
+  summaryCategoryOrder = getKnownCommandSummaryCategoryKeys(summaryStats),
 ) {
-  const segments: string[] = [];
-
-  if (summaryStats.skillLoads) {
-    segments.push(`loaded ${summaryStats.skillLoads} ${pluralize(summaryStats.skillLoads, "skill")}`);
-  }
-
-  if (summaryStats.readFiles) {
-    segments.push(`read ${summaryStats.readFiles} ${pluralize(summaryStats.readFiles, "file")}`);
-  }
-
-  if (summaryStats.searchedFiles) {
-    segments.push(`searched ${summaryStats.searchedFiles} ${pluralize(summaryStats.searchedFiles, "file")}`);
-  }
-
-  if (summaryStats.listedFiles) {
-    segments.push(summaryStats.listedFiles === 1
-      ? "listed files"
-      : `listed files ${summaryStats.listedFiles} times`);
-  }
-
-  if (summaryStats.deletedPaths) {
-    segments.push(summaryStats.deletedPaths === 1
-      ? "deleted 1 path"
-      : `deleted ${summaryStats.deletedPaths} paths`);
-  }
-
-  if (summaryStats.pathChecks) {
-    segments.push(summaryStats.pathChecks === 1
-      ? "checked 1 path"
-      : `checked ${summaryStats.pathChecks} paths`);
-  }
-
-  if (summaryStats.gitStatusChecks) {
-    segments.push(summaryStats.gitStatusChecks === 1
-      ? "checked git status"
-      : `checked git status ${summaryStats.gitStatusChecks} times`);
-  }
-
-  if (summaryStats.gitDiffChecks) {
-    segments.push(summaryStats.gitDiffChecks === 1
-      ? "checked git diff"
-      : `checked git diff ${summaryStats.gitDiffChecks} times`);
-  }
-
-  if (summaryStats.typescriptValidations) {
-    segments.push(summaryStats.typescriptValidations === 1
-      ? "validated TypeScript"
-      : `validated TypeScript ${summaryStats.typescriptValidations} times`);
-  }
-
-  if (summaryStats.typescriptBuilds) {
-    segments.push(summaryStats.typescriptBuilds === 1
-      ? "built TypeScript"
-      : `built TypeScript ${summaryStats.typescriptBuilds} times`);
-  }
-
-  if (summaryStats.gitCheckpointCreates) {
-    segments.push(summaryStats.gitCheckpointCreates === 1
-      ? "created a git checkpoint"
-      : `created ${summaryStats.gitCheckpointCreates} git checkpoints`);
-  }
-
-  if (summaryStats.gitCheckpointDiffs) {
-    segments.push(summaryStats.gitCheckpointDiffs === 1
-      ? "diffed against a git checkpoint"
-      : `diffed against git checkpoints ${summaryStats.gitCheckpointDiffs} times`);
-  }
-
-  if (summaryStats.gitCheckpointRestores) {
-    segments.push(summaryStats.gitCheckpointRestores === 1
-      ? "restored a git checkpoint"
-      : `restored git checkpoints ${summaryStats.gitCheckpointRestores} times`);
-  }
-
-  if (summaryStats.webRequests) {
-    segments.push(summaryStats.webRequests === 1
-      ? "made a web request"
-      : `made ${summaryStats.webRequests} web requests`);
-  }
+  const segments = summaryCategoryOrder
+    .map((key) => {
+      const count = summaryStats[key];
+      const category = COMMAND_BLOCK_SUMMARY_CATEGORIES.find((candidate) => candidate.key === key);
+      return count && category ? category.format(count) : null;
+    })
+    .filter((segment): segment is string => Boolean(segment));
 
   if (countKnownCommandSummaryStats(summaryStats) && summaryStats.otherCommands) {
     segments.push(`ran ${summaryStats.otherCommands} other ${pluralize(summaryStats.otherCommands, "command")}`);
@@ -360,6 +385,12 @@ function formatCommandBlockSummaryText(
   const [firstSegment, ...remainingSegments] = segments;
   const normalizedFirstSegment = `${firstSegment.slice(0, 1).toUpperCase()}${firstSegment.slice(1)}`;
   return [normalizedFirstSegment, ...remainingSegments].join(", ");
+}
+
+function getKnownCommandSummaryCategoryKeys(stats: ThreadCommandSummaryStats) {
+  return COMMAND_BLOCK_SUMMARY_CATEGORIES
+    .map((category) => category.key)
+    .filter((key) => stats[key] > 0);
 }
 
 function pluralize(count: number, singular: string, plural = `${singular}s`) {
