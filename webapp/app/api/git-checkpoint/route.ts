@@ -1,10 +1,17 @@
+/*
+ * Exports:
+ * - runtime: force the checkpoint route onto the Node.js runtime for Git and filesystem access. Keywords: api, git checkpoint, node runtime.
+ * - dynamic: disable static caching for checkpoint operations. Keywords: api, git checkpoint, dynamic.
+ * - POST: execute hidden Workbench Git checkpoint baseline, explicit diff, file diff, diff checkpoint, and restore actions. Keywords: api, git checkpoint, drift, restore.
+ */
 import path from "node:path";
 
 import { NextRequest, NextResponse } from "next/server";
 
 import {
   createGitCheckpoint,
-  diffLatestGitCheckpoint,
+  diffGitCheckpoint,
+  diffGitCheckpointFile,
   readGitCheckpointDiffArtifact,
   restoreGitCheckpoint,
   type GitCheckpointPurpose,
@@ -14,11 +21,11 @@ import { discoverProjects, isPathWithinRoot, resolveProjectRoot, type ResolvedPr
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type GitCheckpointAction = "baseline" | "diff" | "diffCheckpoint" | "restore";
+type GitCheckpointAction = "baseline" | "diff" | "diffCheckpoint" | "fileDiff" | "restore";
 type GitCheckpointDiffView = "compact" | "full";
 
 function normalizeAction(value: unknown): GitCheckpointAction | null {
-  return value === "baseline" || value === "diff" || value === "diffCheckpoint" || value === "restore"
+  return value === "baseline" || value === "diff" || value === "diffCheckpoint" || value === "fileDiff" || value === "restore"
     ? value
     : null;
 }
@@ -154,11 +161,36 @@ export async function POST(request: NextRequest) {
         }));
       }
 
-      const result = await diffLatestGitCheckpoint({
+      const checkpointCommit = readString(body?.checkpointCommit);
+      if (!checkpointCommit) {
+        return NextResponse.json({ error: "A checkpoint commit is required for diff." }, { status: 400 });
+      }
+
+      const result = await diffGitCheckpoint({
+        checkpointCommit,
         cwd: resolvedCwd,
         threadId,
       });
       return textResponse(result.summary);
+    }
+
+    if (action === "fileDiff") {
+      const filePath = readString(body?.filePath);
+      if (!filePath) {
+        return NextResponse.json({ error: "A checkpoint file diff path is required." }, { status: 400 });
+      }
+      const checkpointCommit = readString(body?.checkpointCommit);
+      if (!checkpointCommit) {
+        return NextResponse.json({ error: "A checkpoint commit is required for file diff." }, { status: 400 });
+      }
+
+      const result = await diffGitCheckpointFile({
+        checkpointCommit,
+        cwd: resolvedCwd,
+        filePath,
+        threadId,
+      });
+      return textResponse(result.diff);
     }
 
     const checkpointCommit = readString(body?.checkpointCommit);

@@ -14,6 +14,7 @@ import type { CommandMatcherDefinition } from "./types";
 const CHECKPOINT_BASELINE_SENTINEL = "workbench-agent-checkpoint-baseline-v1";
 const CHECKPOINT_DIFF_CREATE_SENTINEL = "workbench-agent-checkpoint-create-diff-v1";
 const CHECKPOINT_DIFF_SENTINEL = "workbench-agent-checkpoint-diff-v1";
+const CHECKPOINT_FILE_DIFF_SENTINEL = "workbench-agent-checkpoint-file-diff-v1";
 const CHECKPOINT_RESTORE_SENTINEL = "workbench-agent-checkpoint-restore-v1";
 const CHECKPOINT_DIFF_MATCHER_ID = "git-checkpoint.diff";
 const CHECKPOINT_DIFF_ARTIFACT_PATTERN = /^Full diff artifact:\s*([a-f0-9]{64})\s*$/im;
@@ -40,7 +41,10 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
     id: CHECKPOINT_DIFF_MATCHER_ID,
     match: ({ stage }) => {
-      if (!hasCheckpointSentinel(stage.text, CHECKPOINT_DIFF_SENTINEL)) {
+      if (
+        !hasCheckpointSentinel(stage.text, CHECKPOINT_DIFF_SENTINEL)
+        && !hasCheckpointSentinel(stage.text, CHECKPOINT_FILE_DIFF_SENTINEL)
+      ) {
         return null;
       }
 

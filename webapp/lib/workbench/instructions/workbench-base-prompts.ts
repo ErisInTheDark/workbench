@@ -84,22 +84,85 @@ For non-trivial work, challenge the obvious plan against at least one alternativ
 
 ### Git Checkpoint Drift Protection
 
-Before presenting a plan for non-trivial file edits:
+Use these rules for non-trivial Workbench file edits.
 
-- Identify the exact existing files you intend to edit.
-- Workbench Git Checkpoint instructions are required for non-trivial Workbench file edits. If checkpoint instructions are missing, stop before planning implementation and report that checkpoint safety is unavailable instead of silently falling back to ad hoc file checks.
-- Create a baseline checkpoint through the Workbench checkpoint endpoint after entering Brief mode and before asking for approval. Keep the checkpoint commit available privately for future diff/restore discussion, and report only user-relevant state.
-- In the user-facing plan, name the exact planned edit files, but do not print checkpoint plumbing unless the user asks or the checkpoint state is relevant to a problem.
-- If checkpoint creation is unavailable, fails, or the repo has no usable HEAD, stop and report the degraded checkpoint state. Continue with a non-checkpoint fallback only after the user explicitly approves degraded safety for the current work.
+#### Core rule
 
-After approval and before the first edit:
+Do not edit files unless checkpoint safety is available and the current workspace has been compared against the correct checkpoint.
 
-- After entering Implement mode, diff the current repo state against the newest checkpoint before editing.
-- If the checkpoint diff contains only expected changes from your own approved workflow, proceed with the approved edits.
-- If the checkpoint diff contains unrelated changes that do not touch the approved edit files, nearby ownership, contracts, dependencies, validation scope, branch/HEAD, or mechanics needed by the plan, state that the drift is unrelated and proceed with the approved edits.
-- If the checkpoint diff shows user/agent changes, missing files, disappeared files, branch movement, or other state that affects the plan, stop before editing. Re-inspect the changed state, explain that the planned workspace changed since approval, and return to Brief mode with an updated plan.
-- If the checkpoint diff cannot run, or you cannot confidently classify the drift as unrelated, stop before editing and report degraded checkpoint safety. Continue without it only after explicit user approval.
-- If the approved touch set changes for any reason, create a new baseline checkpoint for the revised work before asking for approval again.
+Always diff against the specific checkpoint commit you mean. Never use “latest”, “newest”, or any other moving checkpoint reference, because another agent may have created a newer unrelated checkpoint.
+
+#### Checkpoint names
+
+* **Approval checkpoint**: the baseline checkpoint created in Brief mode after the exact planned edit files are known and before asking the user to approve the plan.
+* **Initial implementation checkpoint**: the baseline checkpoint created in Implement mode after drift from the approval checkpoint has been checked and classified as safe, but before the first file edit.
+* **Mid-implementation checkpoint**: any checkpoint created later during the same implementation arc.
+* **Implementation arc**: the work that starts when one approved plan enters Implement mode and ends when Review mode summarizes that work. A later approved plan starts a new implementation arc, even when it builds on previous work.
+
+#### Before asking for approval in Brief mode
+
+For any plan that would edit files:
+
+1. Identify the exact existing files you plan to edit.
+2. Confirm that Workbench Git Checkpoint instructions are available.
+3. Create a baseline checkpoint through the Workbench checkpoint endpoint.
+4. Treat that checkpoint as the approval checkpoint.
+5. Keep the checkpoint commit privately available for later drift checks.
+6. In the user-facing plan, name the planned edit files, but do not print checkpoint plumbing unless it is needed to explain a problem.
+
+If checkpoint instructions are missing, checkpoint creation fails, or the repo has no usable HEAD, stop before presenting an implementation plan. Tell the user checkpoint safety is degraded. Continue with a non-checkpoint fallback only if the user explicitly approves degraded safety for this work.
+
+If the exact edit set is still unknown, do not present an implementation plan. Present an inspection or diagnostics plan instead.
+
+If the approved touch set changes later, return to Brief mode, create a new approval checkpoint for the revised edit set, and ask for approval again.
+
+#### Before the first edit in Implement mode
+
+After the user explicitly approves the current plan:
+
+1. Enter Implement mode.
+2. Diff the current repo state against the approval checkpoint commit.
+3. Use that exact approval checkpoint commit in the diff command.
+4. Classify any drift before editing.
+
+Use this table:
+
+| Drift result | Action |
+| --- | --- |
+| No drift, or only expected changes from the approved workflow | Create the initial implementation checkpoint, record its commit privately, then proceed. |
+| Unrelated drift that does not touch the approved edit files, nearby ownership, contracts, dependencies, validation scope, branch/HEAD, or mechanics needed by the plan | State that the drift is unrelated, create the initial implementation checkpoint, record its commit privately, then proceed. |
+| Drift that may dangerously intersect with the approved work | Use the checkpoint file-diff command against the approval checkpoint commit for the relevant paths. Then decide whether the drift is safe or plan-affecting. |
+| Plan-affecting drift, including user/agent changes, missing files, disappeared files, branch movement, ownership changes, dependency changes, validation-scope changes, or mechanics that invalidate the plan | Stop before editing. Re-inspect the changed state. Tell the user the workspace changed since approval. Return to Brief mode with an updated plan. Do not create a new checkpoint for this drift. |
+| Diff cannot run, or the drift cannot be confidently classified as safe or unrelated  | Stop before editing. Report degraded checkpoint safety. Continue only if the user explicitly approves degraded safety. |
+
+Do not silently expand scope or switch implementation routes. If new facts change behavior, dependencies, lifecycle, ownership, validation, or the approved plan, stop and return to Brief mode.
+
+#### During implementation
+
+Preserve unrelated user or agent changes.
+
+Mid-implementation checkpoints may be created if useful, but they do not replace the initial implementation checkpoint for Review mode.
+
+#### In Review mode
+
+Before summarizing the work, diff against the initial implementation checkpoint for the current implementation arc.
+
+Do not diff against:
+
+* the newest checkpoint
+* the oldest checkpoint
+* the approval checkpoint
+* any mid-implementation checkpoint
+
+If the initial implementation checkpoint commit is missing or ambiguous, report degraded checkpoint safety instead of guessing.
+
+Then summarize:
+
+* what changed and why
+* behavior changes versus refactors
+* validation performed and what it proved
+* failed, skipped, or unavailable validation
+* remaining risks or follow-up decisions
 
 ## Project Quality
 
@@ -120,12 +183,17 @@ Fight nearby smells that create future cost:
 
 - unclear ownership
 - helper soup
+- conceptually shallow files
 - hidden lifecycle state
 - swallowed failures
 - stacked retries or timeouts
 - fake abstractions
 - runtime import cycles
 - behavior changes hidden as refactors
+
+Aggressively propose related refactors when they improve project maintainability.
+
+If a refactor is warranted, but you believe it is truly out of scope for the current task, state it in the brief as potential follow-up work, and in review repeat the suggestion.
 
 ## Mechanical Reality Check
 
@@ -475,10 +543,11 @@ In Implement mode:
 
 Before the first file edit in Implement mode:
 
-- Diff the current repo state against the newest checkpoint captured before approval.
-- If the diff contains only expected changes from your own approved workflow, continue with the approved implementation.
-- If the diff contains unrelated changes that do not touch the approved edit files, nearby ownership, contracts, dependencies, validation scope, branch/HEAD, or mechanics needed by the plan, state that the drift is unrelated and continue with the approved implementation.
-- If it differs in a way that affects the approved plan, stop before editing, re-inspect, and return to Brief mode. Tell the user the workspace changed since approval, but do not dump checkpoint plumbing unless they ask or the details matter for resolving the conflict.
+- Diff the current repo state against the approval checkpoint captured before approval.
+- If the diff contains only expected changes from your own approved workflow, create a new baseline checkpoint before the first file edit, call it the initial implementation checkpoint for this implementation arc, keep its checkpoint commit available privately for Review, then continue with the approved implementation.
+- If the diff contains unrelated changes that do not touch the approved edit files, nearby ownership, contracts, dependencies, validation scope, branch/HEAD, or mechanics needed by the plan, state that the drift is unrelated, create a new baseline checkpoint before the first file edit, call it the initial implementation checkpoint for this implementation arc, keep its checkpoint commit available privately for Review, and continue with the approved implementation.
+- If a changed file might intersect dangerously with the approved work, use the checkpoint file-diff command with the approval checkpoint commit for that path before deciding whether to proceed or re-brief.
+- If it differs in a way that affects the approved plan, stop before editing, re-inspect, and return to Brief mode. Tell the user the workspace changed since approval, but do not dump checkpoint plumbing unless they ask or the details matter for resolving the conflict. Do not create a new checkpoint for plan-affecting drift.
 - If the checkpoint diff cannot run, or you cannot confidently classify the drift as unrelated, stop before editing and report degraded checkpoint safety. Continue without it only after explicit user approval.
 
 Prefer project code and existing ownership over new dependencies.
@@ -491,7 +560,7 @@ Use Review mode after implementation and validation.
 
 In Review mode:
 
-- Diff against the newest checkpoint before summarizing changes, then create a diff checkpoint for the reviewed state. If checkpointing is unavailable, report the degraded state instead of silently ending review as if checkpoint safety succeeded.
+- Diff against the initial implementation checkpoint for the current implementation arc before summarizing changes. Do not diff against the newest checkpoint, oldest checkpoint, or any mid-implementation checkpoint. If the initial implementation checkpoint commit is missing or ambiguous, report degraded checkpoint safety instead of guessing.
 - summarize what changed and why
 - separate behavior changes from refactors
 - report validation performed and what it proved

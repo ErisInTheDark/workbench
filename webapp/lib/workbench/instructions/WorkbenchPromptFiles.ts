@@ -424,7 +424,7 @@ Use these exact one-line commands so Workbench can match and render checkpoint o
 
 ### Create a baseline checkpoint
 
-Run after entering Brief mode for an approved-plan baseline.
+Run after entering Brief mode for an approved-plan baseline; call this returned checkpoint commit the approval checkpoint. Also run in Implement mode after the start-of-implementation checkpoint diff is classified safe and before the first file edit; call that returned checkpoint commit the initial implementation checkpoint for the current implementation arc.
 
 \`\`\`powershell
 "workbench-agent-checkpoint-baseline-v1"; $body = @{ action = 'baseline'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
@@ -434,21 +434,33 @@ Run after entering Brief mode for an approved-plan baseline.
 : 'workbench-agent-checkpoint-baseline-v1'; curl -s -X POST '${routeUrl}' -H 'Content-Type: application/json' -d '{"action":"baseline","threadId":"${threadId}","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'"}'
 \`\`\`
 
-### Diff against the newest checkpoint
+### Diff against a specific checkpoint
 
-Run immediately after entering Implement mode before editing, and again after entering Review mode before creating the diff checkpoint. The command output is a compact checkpoint diff summary for agent review. Workbench stores the full unified diff separately and renders it for the user in the UI.
+Run immediately after entering Implement mode before editing by passing the approval checkpoint commit. Run again after entering Review mode before summarizing changes by passing the initial implementation checkpoint commit for the current implementation arc. Do not omit \`checkpointCommit\`, do not substitute the newest checkpoint, and do not guess from thread history; parallel agents may create unrelated newer checkpoints. The command output is a compact checkpoint diff summary for agent review. Workbench stores the full unified diff separately and renders it for the user in the UI.
 
 \`\`\`powershell
-"workbench-agent-checkpoint-diff-v1"; $body = @{ action = 'diff'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
+"workbench-agent-checkpoint-diff-v1"; $body = @{ action = 'diff'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path; checkpointCommit = '<checkpoint-commit-sha>' } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
 \`\`\`
 
 \`\`\`bash
-: 'workbench-agent-checkpoint-diff-v1'; curl -s -X POST '${routeUrl}' -H 'Content-Type: application/json' -d '{"action":"diff","threadId":"${threadId}","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'"}'
+: 'workbench-agent-checkpoint-diff-v1'; curl -s -X POST '${routeUrl}' -H 'Content-Type: application/json' -d '{"action":"diff","threadId":"${threadId}","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'","checkpointCommit":"<checkpoint-commit-sha>"}'
+\`\`\`
+
+### Diff a specific file against a specific checkpoint
+
+Use after the compact checkpoint diff when a changed file may dangerously intersect with the approved edit files, nearby ownership, contracts, dependencies, validation scope, branch/HEAD, or mechanics needed by the plan. Use the same \`checkpointCommit\` as the compact diff you are investigating. Replace \`<repo-relative-path>\` with a changed file path from that compact summary. The command returns that file's unified diff only.
+
+\`\`\`powershell
+"workbench-agent-checkpoint-file-diff-v1"; $body = @{ action = 'fileDiff'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path; checkpointCommit = '<checkpoint-commit-sha>'; filePath = '<repo-relative-path>' } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
+\`\`\`
+
+\`\`\`bash
+: 'workbench-agent-checkpoint-file-diff-v1'; curl -s -X POST '${routeUrl}' -H 'Content-Type: application/json' -d '{"action":"fileDiff","threadId":"${threadId}","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'","checkpointCommit":"<checkpoint-commit-sha>","filePath":"<repo-relative-path>"}'
 \`\`\`
 
 ### Create a diff checkpoint
 
-Run after the Review-mode diff command when the current state should become the next preserved checkpoint.
+Do not run this as part of normal Review mode. Use only when the user explicitly asks to preserve the current state as a checkpoint.
 
 \`\`\`powershell
 "workbench-agent-checkpoint-create-diff-v1"; $body = @{ action = 'diffCheckpoint'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
