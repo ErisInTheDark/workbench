@@ -3745,6 +3745,11 @@ function WorkbenchThreadClient(
     if (submitResult.warning) {
       emitStatusMessage(submitResult.warning);
     }
+    const clearedPendingRequest = clearPendingUserInputRequest(threadId, pendingRequest.requestKey);
+    const clearedWaitingFlag = clearThreadWaitingOnUserInputFlag(threadId);
+    if (clearedPendingRequest || clearedWaitingFlag) {
+      emit();
+    }
     if (pendingRequest.harness === "opencode") {
       if (recordLocalQuestionnaireHistoryEntry(pendingRequest, response, {
         insertAfterItemId: options.insertAfterItemId ?? pendingRequest.itemId,
@@ -3755,11 +3760,6 @@ function WorkbenchThreadClient(
       }
     } else {
       await readCompletedQuestionnaireHistoryAndReconcileIdleCurrentThread(threadId, pendingRequest.harness);
-    }
-    const clearedPendingRequest = clearPendingUserInputRequest(threadId, pendingRequest.requestKey);
-    const clearedWaitingFlag = clearThreadWaitingOnUserInputFlag(threadId);
-    if (clearedPendingRequest || clearedWaitingFlag) {
-      emit();
     }
   }
 
