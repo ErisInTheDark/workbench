@@ -200,8 +200,11 @@ function getVisibleHistoryEntries (thread: ThreadPayload) {
   }
 
   const firstLoadedIndex = history.findIndex((entry) => loadedTurnIds.has(entry.turnId));
-  const startIndex = Math.max(0, firstLoadedIndex - 1, lastLoadedIndex - MAX_VISIBLE_HISTORY_ENTRIES + 1);
-  return history.slice(startIndex, lastLoadedIndex + 1);
+  const loadedWindowStartIndex = Math.max(firstLoadedIndex, lastLoadedIndex - MAX_VISIBLE_HISTORY_ENTRIES + 1);
+  const triggerIndex = loadedWindowStartIndex > 0 && !loadedTurnIds.has(history[loadedWindowStartIndex - 1]?.turnId ?? "")
+    ? loadedWindowStartIndex - 1
+    : loadedWindowStartIndex;
+  return history.slice(triggerIndex, lastLoadedIndex + 1);
 }
 
 function areThreadPayloadsEquivalent (left: ThreadPayload | null | undefined, right: ThreadPayload | null | undefined) {
@@ -757,6 +760,7 @@ export default memo(function ThreadView ({
   const activeThreadScrollKeyRef = useRef("");
   const bottomScrollFrameRef = useRef<number | null>(null);
   const didRestorePreviousTurnScrollRef = useRef(false);
+  const lastObservedScrollTopRef = useRef<number | null>(null);
   const pendingPreviousTurnScrollRestoreRef = useRef<PendingPreviousTurnScrollRestore | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const subthreadLoadGenerationRef = useRef(0);
@@ -782,7 +786,9 @@ export default memo(function ThreadView ({
   const canLoadPreviousTurn = Boolean(
     activeThread
     && firstVisibleLoadedEntry
-    && visibleHistoryEntries.some((entry) => entry.turnId !== firstVisibleLoadedEntry.turnId && entry.loadState === "unloaded" && !loadedTurnsById.has(entry.turnId)),
+    && visibleHistoryEntries
+      .slice(0, visibleHistoryEntries.findIndex((entry) => entry.turnId === firstVisibleLoadedEntry.turnId))
+      .some((entry) => entry.loadState === "unloaded" && !loadedTurnsById.has(entry.turnId)),
   );
   const liveActivity = useMemo(() => getLiveThreadActivity({
     pendingUserInputRequest: activePendingUserInputRequest,
@@ -871,6 +877,10 @@ export default memo(function ThreadView ({
     bottomScrollFrameRef.current = window.requestAnimationFrame(() => {
       bottomScrollFrameRef.current = null;
       scrollThreadViewToBottom(threadViewRef.current);
+      const scrollTarget = findThreadScrollTarget(threadViewRef.current);
+      if (scrollTarget) {
+        lastObservedScrollTopRef.current = getThreadScrollMetrics(scrollTarget).scrollTop;
+      }
       shouldStickToBottomRef.current = true;
     });
   }, []);
@@ -966,7 +976,6 @@ export default memo(function ThreadView ({
     if (
       !scrollTarget
       || !isThreadScrollTargetNearTop(scrollTarget)
-      || isThreadScrollTargetNearBottom(scrollTarget)
     ) {
       return;
     }
@@ -1030,10 +1039,24 @@ export default memo(function ThreadView ({
     }
   }, [activeThread, firstVisibleLoadedEntry, loadingPreviousTurnKeys, onReadThread, previousTurnLoadKey, thread.id]);
 
+  const requestPreviousTurnIfAtTop = useCallback(() => {
+    if (!canLoadPreviousTurn || !previousTurnLoadKey || loadingPreviousTurnKeys[previousTurnLoadKey]) {
+      return;
+    }
+
+    const scrollTarget = findThreadScrollTarget(threadViewRef.current);
+    if (!scrollTarget || !isThreadScrollTargetNearTop(scrollTarget)) {
+      return;
+    }
+
+    void loadPreviousTurn();
+  }, [canLoadPreviousTurn, loadPreviousTurn, loadingPreviousTurnKeys, previousTurnLoadKey]);
+
   useEffect(() => {
     subthreadLoadGenerationRef.current += 1;
     activeThreadScrollKeyRef.current = "";
     didRestorePreviousTurnScrollRef.current = false;
+    lastObservedScrollTopRef.current = null;
     pendingPreviousTurnScrollRestoreRef.current = null;
     shouldStickToBottomRef.current = true;
     setActiveThreadId(thread.id);
@@ -1109,12 +1132,8 @@ export default memo(function ThreadView ({
     }
 
     const observer = new IntersectionObserver((entries) => {
-      if (
-        entries.some((entry) => entry.isIntersecting)
-        && isThreadScrollTargetNearTop(scrollTarget)
-        && !isThreadScrollTargetNearBottom(scrollTarget)
-      ) {
-        void loadPreviousTurn();
+      if (entries.some((entry) => entry.isIntersecting)) {
+        requestPreviousTurnIfAtTop();
       }
     }, {
       root: scrollTarget instanceof HTMLElement ? scrollTarget : null,
@@ -1134,7 +1153,16 @@ export default memo(function ThreadView ({
     }
 
     const updateBottomStickiness = () => {
-      shouldStickToBottomRef.current = isThreadScrollTargetNearBottom(scrollTarget);
+      const metrics = getThreadScrollMetrics(scrollTarget);
+      const lastScrollTop = lastObservedScrollTopRef.current;
+      const isScrollingUp = lastScrollTop !== null && metrics.scrollTop < lastScrollTop - 1;
+      if (isScrollingUp) {
+        shouldStickToBottomRef.current = false;
+      } else if (metrics.maxScrollTop - metrics.scrollTop <= THREAD_BOTTOM_ANCHOR_TOLERANCE_PX) {
+        shouldStickToBottomRef.current = true;
+      }
+      lastObservedScrollTopRef.current = metrics.scrollTop;
+      requestPreviousTurnIfAtTop();
     };
     updateBottomStickiness();
 
@@ -1142,7 +1170,20 @@ export default memo(function ThreadView ({
     return () => {
       scrollTarget.removeEventListener("scroll", updateBottomStickiness);
     };
-  }, [activeThread?.id]);
+  }, [activeThread?.id, requestPreviousTurnIfAtTop]);
+
+  useEffect(() => {
+    if (!canLoadPreviousTurn || !previousTurnLoadKey || loadingPreviousTurnKeys[previousTurnLoadKey]) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      requestPreviousTurnIfAtTop();
+    });
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [activeThreadContentSignature, canLoadPreviousTurn, loadingPreviousTurnKeys, previousTurnLoadKey, requestPreviousTurnIfAtTop, visibleHistorySignature]);
 
   useLayoutEffect(() => {
     const pendingRestore = pendingPreviousTurnScrollRestoreRef.current;
@@ -1152,6 +1193,7 @@ export default memo(function ThreadView ({
 
     pendingPreviousTurnScrollRestoreRef.current = null;
     restoreThreadScrollSnapshotAfterPrepend(pendingRestore.snapshot);
+    lastObservedScrollTopRef.current = getThreadScrollMetrics(pendingRestore.snapshot.target).scrollTop;
     didRestorePreviousTurnScrollRef.current = true;
     shouldStickToBottomRef.current = false;
   }, [firstVisibleLoadedEntry?.turnId, visibleHistorySignature]);
