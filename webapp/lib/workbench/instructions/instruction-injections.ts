@@ -11,6 +11,8 @@
  * - WORKBENCH_INJECTION_TEMPLATES: flat template object for AGENTS placeholder expansion. Keywords: prompt, injection, registry.
  */
 
+import { WORKBENCH_SKILL_TRIGGER_AND_PRECEDENCE_INSTRUCTIONS } from "./workbench-skill-precedence";
+
 export interface InstructionInjectionTemplate {
   readonly [id: string]: {
     readonly description: string;
@@ -129,10 +131,10 @@ Assume the user may be running watch tasks across the workspace and that interde
 export const WORKBENCH_SKILLS_INJECTION = injectionTemplate(
   "workbench.skills",
   "Detected Workbench skill manifest and trigger rules. Skill files are active when their trigger conditions match.",
-  `
+`
 Workbench provides additional skills from automatically detected Workbench Skill files.
 
-Treat detected Workbench skills with the same authority and trigger behavior as harness-provided skills when they apply.
+${WORKBENCH_SKILL_TRIGGER_AND_PRECEDENCE_INSTRUCTIONS}
 
 Triggered skill workflows are definitional for the request. Follow them strictly unless the user explicitly says not to follow a specific skill requirement.
 

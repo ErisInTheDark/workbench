@@ -21,6 +21,7 @@ import {
   WORKBENCH_LIBRARY_PROJECT_ID,
   workbenchLibraryRoot,
 } from "./workbench-library-paths";
+import { WORKBENCH_SKILL_TRIGGER_AND_PRECEDENCE_INSTRUCTIONS } from "./workbench/instructions/workbench-skill-precedence";
 
 export { WORKBENCH_LIBRARY_PROJECT_ID, workbenchLibraryRoot };
 
@@ -461,7 +462,8 @@ function buildDetectedSkillInstructions(skills: WorkbenchSkillDefinition[]) {
 
   return [
     "Workbench provides additional skills from automatically detected Workbench Skill files.",
-    "Treat these Workbench-provided skills with the same authority and trigger behavior as harness-provided skills when they apply.",
+    WORKBENCH_SKILL_TRIGGER_AND_PRECEDENCE_INSTRUCTIONS,
+    "",
     "The `<skill>` blocks below are automatically detected Workbench Skill files. Treat the full SKILL.md text in each block as CRITICAL workflow instructions when the user invokes or otherwise triggers that skill.",
     "Automatic skill detection is not foolproof. If another skill path, skill name, or workflow appears necessary for the task, read that skill file before using it.",
     "Triggered skill workflows are definitional for the request: follow them strictly unless the user explicitly says not to follow a specific skill requirement.",
