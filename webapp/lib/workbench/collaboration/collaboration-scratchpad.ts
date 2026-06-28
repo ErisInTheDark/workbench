@@ -1,8 +1,10 @@
 /*
  * Exports:
  * - CollaborationScratchpadAuthor, CollaborationScratchpadFile: collaboration scratchpad data contracts. Keywords: collaboration, scratchpad, author, file.
+ * - CollaborationScratchpadImage/CollaborationScratchpadRenderOptions: scratchpad image block data and render context. Keywords: collaboration, scratchpad, image, asset.
  * - COLLABORATION_AUTHOR_MARKER_PATTERN: detects persisted user/agent author comments. Keywords: collaboration, marker, markdown.
  * - createDefaultCollaborationScratchpadContent/formatCollaborationAuthorMarker: create and serialize lightweight author markers. Keywords: collaboration, markdown, serialize.
+ * - extractCollaborationScratchpadImages/formatCollaborationScratchpadImageMarkdown: parse and write scratchpad image markdown blocks. Keywords: collaboration, scratchpad, image, markdown.
  * - normalizeCollaborationScratchpadContent/mergeCollaborationScratchpadContent: keep scratchpad content labeled and preserve concurrent edits. Keywords: collaboration, autosave, merge.
  * - renderCollaborationScratchpadMarkdownToHtml/serializeCollaborationScratchpadDomToMarkdown/normalizeCollaborationScratchpadDom: shared editor hooks for non-editable author markers. Keywords: collaboration, editor, render, serialize.
  */
@@ -21,7 +23,22 @@ export interface CollaborationScratchpadFile {
   updatedAt: string;
 }
 
+export interface CollaborationScratchpadImage {
+  alt: string;
+  href: string;
+  id: string;
+}
+
+export interface CollaborationScratchpadRenderOptions {
+  assetApiPath?: string;
+  projectId?: string;
+  scratchpadPath?: string;
+}
+
 export const COLLABORATION_AUTHOR_MARKER_PATTERN = /^<!--\s*(user|agent):\s*-->$/i;
+const COLLABORATION_SCRATCHPAD_IMAGE_MARKDOWN_PATTERN = /^!\[([^\]\n]*)\]\(([^)\s]+)\)\s*$/u;
+const COLLABORATION_SCRATCHPAD_IMAGE_ASSET_HREF_PATTERN = /^scratchpad-image-[a-f0-9]{64}\.(?:png|jpg|webp|gif)$/u;
+const COLLABORATION_SCRATCHPAD_IMAGE_DEFAULT_ALT = "Scratchpad image";
 
 export function formatCollaborationAuthorMarker(author: CollaborationScratchpadAuthor) {
   return `<!-- ${author}: -->`;
@@ -57,6 +74,82 @@ export function normalizeCollaborationScratchpadContent(
 
 function normalizeForComparison(content: string) {
   return content.replace(/\r\n/g, "\n").trim();
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function isExternalHref(href: string) {
+  return /^[a-z][a-z0-9+.-]*:/iu.test(href) || href.startsWith("//");
+}
+
+function isLocalScratchpadImageHref(href: string) {
+  const normalizedHref = href.trim().replace(/\\/g, "/");
+  return Boolean(normalizedHref)
+    && !isExternalHref(normalizedHref)
+    && !normalizedHref.startsWith("/")
+    && !normalizedHref.includes("/")
+    && !normalizedHref.split("/").includes("..")
+    && COLLABORATION_SCRATCHPAD_IMAGE_ASSET_HREF_PATTERN.test(normalizedHref);
+}
+
+function createScratchpadImageId(href: string, index: number) {
+  let hash = 5381;
+  for (let characterIndex = 0; characterIndex < href.length; characterIndex += 1) {
+    hash = ((hash << 5) + hash) ^ href.charCodeAt(characterIndex);
+  }
+
+  return `scratchpad-image-${index + 1}-${(hash >>> 0).toString(36)}`;
+}
+
+function parseCollaborationScratchpadImageLine(line: string) {
+  const match = COLLABORATION_SCRATCHPAD_IMAGE_MARKDOWN_PATTERN.exec(line.trim());
+  if (!match) {
+    return null;
+  }
+
+  const href = match[2]?.trim() ?? "";
+  if (!isLocalScratchpadImageHref(href)) {
+    return null;
+  }
+
+  return {
+    alt: match[1]?.trim() || COLLABORATION_SCRATCHPAD_IMAGE_DEFAULT_ALT,
+    href,
+  };
+}
+
+export function formatCollaborationScratchpadImageMarkdown({
+  alt = COLLABORATION_SCRATCHPAD_IMAGE_DEFAULT_ALT,
+  href,
+}: {
+  alt?: string;
+  href: string;
+}) {
+  const normalizedAlt = alt.replace(/[\]\r\n]/g, " ").replace(/\s+/g, " ").trim() || COLLABORATION_SCRATCHPAD_IMAGE_DEFAULT_ALT;
+  return `![${normalizedAlt}](${href})`;
+}
+
+export function extractCollaborationScratchpadImages(content: string): CollaborationScratchpadImage[] {
+  const images: CollaborationScratchpadImage[] = [];
+  for (const line of normalizeCollaborationScratchpadContent(content, "user").split("\n")) {
+    const image = parseCollaborationScratchpadImageLine(line);
+    if (!image) {
+      continue;
+    }
+
+    images.push({
+      ...image,
+      id: createScratchpadImageId(image.href, images.length),
+    });
+  }
+
+  return images;
 }
 
 function trimTrailingBlankLines(lines: readonly string[]) {
@@ -293,9 +386,50 @@ function isAuthorMarkerElement(node: Node): node is HTMLElement {
   return node instanceof HTMLElement && (node.dataset.collaborationAuthorMarker === "user" || node.dataset.collaborationAuthorMarker === "agent");
 }
 
-export function renderCollaborationScratchpadMarkdownToHtml(content: string) {
+function getScratchpadImageSrc(href: string, options: CollaborationScratchpadRenderOptions) {
+  if (!options.assetApiPath || !options.projectId || !options.scratchpadPath) {
+    return href;
+  }
+
+  return `${options.assetApiPath}?projectId=${encodeURIComponent(options.projectId)}&path=${encodeURIComponent(options.scratchpadPath)}&href=${encodeURIComponent(href)}`;
+}
+
+function imageElementHtml(image: Omit<CollaborationScratchpadImage, "id">, options: CollaborationScratchpadRenderOptions = {}) {
+  const src = getScratchpadImageSrc(image.href, options);
+  return `<figure contenteditable="false" data-collaboration-scratchpad-image="true" data-href="${escapeHtml(image.href)}" data-alt="${escapeHtml(image.alt)}">`
+    + `<img src="${escapeHtml(src)}" alt="${escapeHtml(image.alt)}" draggable="false">`
+    + "</figure>";
+}
+
+export function renderCollaborationScratchpadMarkdownToHtml(content: string, options: CollaborationScratchpadRenderOptions = {}) {
   const normalizedContent = normalizeCollaborationScratchpadContent(content, "user");
-  return normalizedContent.trim() ? markdownToHtml(normalizedContent) : "<p><br></p>";
+  if (!normalizedContent.trim()) {
+    return "<p><br></p>";
+  }
+
+  const htmlChunks: string[] = [];
+  let markdownLines: string[] = [];
+  const flushMarkdown = () => {
+    const markdown = markdownLines.join("\n").trimEnd();
+    if (markdown.trim()) {
+      htmlChunks.push(markdownToHtml(markdown));
+    }
+    markdownLines = [];
+  };
+
+  for (const line of normalizedContent.split("\n")) {
+    const image = parseCollaborationScratchpadImageLine(line);
+    if (!image) {
+      markdownLines.push(line);
+      continue;
+    }
+
+    flushMarkdown();
+    htmlChunks.push(imageElementHtml(image, options));
+  }
+
+  flushMarkdown();
+  return htmlChunks.join("") || "<p><br></p>";
 }
 
 export function normalizeCollaborationScratchpadDom(root: ParentNode) {
@@ -315,6 +449,15 @@ export function normalizeCollaborationScratchpadDom(root: ParentNode) {
     marker.contentEditable = "false";
     marker.remove();
   }
+
+  const images = Array.from(root.querySelectorAll("[data-collaboration-scratchpad-image]"));
+  for (const image of images) {
+    if (!(image instanceof HTMLElement)) {
+      continue;
+    }
+
+    image.contentEditable = "false";
+  }
 }
 
 function serializeFragment(fragment: DocumentFragment, options: { isInlineRunContainer: (element: HTMLElement) => boolean }) {
@@ -323,11 +466,14 @@ function serializeFragment(fragment: DocumentFragment, options: { isInlineRunCon
   }).trim();
 }
 
+function createScratchpadImageSerializationToken(index: number) {
+  return `WBSPIMG${index.toString(36)}TOKEN${Date.now().toString(36)}${Math.random().toString(36).slice(2)}END`;
+}
+
 export function serializeCollaborationScratchpadDomToMarkdown(
   root: ParentNode,
   options: { isInlineRunContainer: (element: HTMLElement) => boolean; normalizeMarkup?: (root: ParentNode) => void },
 ) {
-  options.normalizeMarkup?.(root);
   const ownerDocument = root instanceof Node ? root.ownerDocument : globalThis.document;
   const fragment = ownerDocument.createDocumentFragment();
   for (const child of Array.from(root.childNodes)) {
@@ -336,5 +482,36 @@ export function serializeCollaborationScratchpadDomToMarkdown(
     }
   }
 
-  return normalizeCollaborationScratchpadContent(serializeFragment(fragment, options), "user");
+  const imageMarkdownByToken = new Map<string, string>();
+  let imageTokenIndex = 0;
+  for (const image of Array.from(fragment.querySelectorAll("[data-collaboration-scratchpad-image]"))) {
+    if (!(image instanceof HTMLElement)) {
+      continue;
+    }
+
+    const href = image.dataset.href?.trim() ?? "";
+    if (!isLocalScratchpadImageHref(href)) {
+      image.remove();
+      continue;
+    }
+
+    const token = createScratchpadImageSerializationToken(imageTokenIndex);
+    imageTokenIndex += 1;
+    imageMarkdownByToken.set(token, formatCollaborationScratchpadImageMarkdown({
+      alt: image.dataset.alt ?? COLLABORATION_SCRATCHPAD_IMAGE_DEFAULT_ALT,
+      href,
+    }));
+
+    const paragraph = ownerDocument.createElement("p");
+    paragraph.textContent = token;
+    image.replaceWith(paragraph);
+  }
+
+  options.normalizeMarkup?.(fragment);
+  let markdown = serializeFragment(fragment, options);
+  for (const [token, imageMarkdown] of imageMarkdownByToken) {
+    markdown = markdown.replaceAll(token, imageMarkdown);
+  }
+
+  return normalizeCollaborationScratchpadContent(markdown, "user");
 }

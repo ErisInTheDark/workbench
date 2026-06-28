@@ -13,18 +13,22 @@ import type {
   ChangeSummary,
   ThreadPayload,
   ThreadSummary,
-  WorkbenchCollaborationStartedSuggestionThread,
   WorkbenchCollaborationSuggestion,
   WorkbenchCollaborationThreadRegistry,
   WorkbenchControls,
   WorkbenchHarness,
   WorkbenchSendThreadMessageOptions,
+  WorkbenchThreadComposerAttachmentDraft,
 } from "../../../lib/types";
 import {
   readStoredWorkbenchCollaborationLayout,
   writeStoredWorkbenchCollaborationLayout,
 } from "../../../lib/workbench/collaboration/collaboration-layout";
 import { WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS } from "../../../lib/workbench/collaboration/collaboration-registry";
+import {
+  extractCollaborationScratchpadImages,
+  type CollaborationScratchpadImage,
+} from "../../../lib/workbench/collaboration/collaboration-scratchpad";
 import {
   applyWorkbenchCollaborationSuggestionPatch,
   findWorkbenchCollaborationSuggestionPatch,
@@ -60,6 +64,7 @@ const COLLABORATOR_THREAD_HYDRATION_RETRY_ATTEMPTS = 4;
 const COLLABORATOR_THREAD_HYDRATION_RETRY_DELAY_MS = 600;
 const COLLABORATOR_THREAD_HYDRATION = { mode: "legacyFull" as const };
 const THREAD_HARNESSES: readonly WorkbenchHarness[] = ["codex", "copilot", "opencode"];
+const COLLABORATION_SCRATCHPAD_ASSET_API_PATH = "/api/collaboration/scratchpad/assets";
 
 type CollaboratorRunStatus = "idle" | "starting" | "hydrating" | "running" | "failed";
 type WorkbenchCollaborationSuggestionStartResult =
@@ -71,14 +76,15 @@ type WorkbenchCollaborationSuggestionStartResult =
     readonly status: "started";
     readonly threadId: string;
   };
-type StartedCollaborationSuggestion = WorkbenchCollaborationSuggestion & {
-  readonly startedAt: number;
-  readonly startedThreadId: string;
-};
+interface ResolvedScratchpadImageAsset {
+  absolutePath: string;
+  assetUrl: string;
+  href: string;
+}
 
 interface WorkbenchCollaborationViewProps extends Omit<ThreadViewProps, "contained" | "fontSizeRem" | "hideFinalAgentMessage" | "hideWorkbenchControlAgentMessages" | "hideWorkbenchControlUserMessages" | "projectId" | "thread"> {
   collaborationThreadRegistry: WorkbenchCollaborationThreadRegistry;
-  collaborationStartedSuggestionThreadSummaries: ThreadSummary[];
+  collaborationMaterializedSuggestionThreadSummaries: ThreadSummary[];
   collaborationThreadSummaries: ThreadSummary[];
   controls: WorkbenchControls | null;
   editorFontClassName: string;
@@ -168,32 +174,37 @@ function formatSuggestionsForPrompt (suggestions: readonly WorkbenchCollaboratio
   return suggestions.map((suggestion) => [
     `- id: ${suggestion.id}`,
     `  title: ${suggestion.title}`,
+    ...(suggestion.materializedThreadId ? [`  materialized thread id: ${suggestion.materializedThreadId}`] : []),
     ...(suggestion.rationale ? [`  rationale: ${suggestion.rationale}`] : []),
+    ...(suggestion.scratchpadImageIds?.length ? [`  scratchpad image ids: ${suggestion.scratchpadImageIds.join(", ")}`] : []),
     `  prompt: ${suggestion.prompt}`,
   ].join("\n")).join("\n");
 }
 
-function formatStartedSuggestionThreadsForPrompt (
-  startedThreads: readonly WorkbenchCollaborationStartedSuggestionThread[],
+function formatMaterializedSuggestionsForPrompt (
+  suggestions: readonly WorkbenchCollaborationSuggestion[],
   summariesByThreadId: Map<string, ThreadSummary>,
 ) {
-  if (!startedThreads.length) {
+  const materializedSuggestions = suggestions.filter((suggestion) => Boolean(suggestion.materializedThreadId));
+  if (!materializedSuggestions.length) {
     return "None.";
   }
 
-  return [...startedThreads]
-    .sort((left, right) => right.startedAt - left.startedAt || left.title.localeCompare(right.title))
-    .map((startedThread) => {
-      const summary = summariesByThreadId.get(startedThread.threadId);
+  return materializedSuggestions
+    .sort((left, right) => right.updatedAt - left.updatedAt || left.title.localeCompare(right.title))
+    .map((suggestion) => {
+      const threadId = suggestion.materializedThreadId ?? "";
+      const summary = summariesByThreadId.get(threadId);
       return [
-        `- suggestion id: ${startedThread.suggestionId}`,
-        `  title: ${startedThread.title}`,
-        `  thread id: ${startedThread.threadId}`,
+        `- suggestion id: ${suggestion.id}`,
+        `  title: ${suggestion.title}`,
+        `  materialized thread id: ${threadId}`,
         `  thread status: ${summary?.status ?? "unknown"}`,
         `  thread label: ${summary?.name || summary?.preview || "unknown"}`,
         `  thread updated at: ${summary ? new Date(summary.updatedAt).toISOString() : "unknown"}`,
-        ...(startedThread.rationale ? [`  original rationale: ${startedThread.rationale}`] : []),
-        `  original prompt: ${startedThread.prompt}`,
+        ...(suggestion.rationale ? [`  rationale: ${suggestion.rationale}`] : []),
+        ...(suggestion.scratchpadImageIds?.length ? [`  scratchpad image ids: ${suggestion.scratchpadImageIds.join(", ")}`] : []),
+        `  prompt: ${suggestion.prompt}`,
       ].join("\n");
     })
     .join("\n");
@@ -222,23 +233,37 @@ function formatFileLinkingInfoForPrompt (
   ].join("\n");
 }
 
+function formatScratchpadImagesForPrompt(images: readonly CollaborationScratchpadImage[]) {
+  if (!images.length) {
+    return "None.";
+  }
+
+  return images.map((image) => [
+    `- id: ${image.id}`,
+    `  alt: ${image.alt}`,
+    `  markdown href: ${image.href}`,
+  ].join("\n")).join("\n");
+}
+
 function buildCollaboratorControlPrompt ({
   additionalUserMessage,
   diffMap,
   fileLinkingInfo,
+  materializedSuggestions,
   mode,
   previousSummary,
+  scratchpadImages,
   scratchpadPath,
-  startedSuggestionThreads,
   suggestions,
 }: {
   additionalUserMessage?: string;
   diffMap: string;
   fileLinkingInfo: string;
+  materializedSuggestions: string;
   mode: "bootstrap" | "wake";
   previousSummary: string;
+  scratchpadImages: readonly CollaborationScratchpadImage[];
   scratchpadPath: string;
-  startedSuggestionThreads: string;
   suggestions: readonly WorkbenchCollaborationSuggestion[];
 }) {
   return `<!-- workbench-collaboration-control -->
@@ -249,6 +274,9 @@ ${additionalUserMessage}
 
 Mode: ${mode}.
 Scratchpad path: ${scratchpadPath}
+
+Scratchpad image blocks attached to this message:
+${formatScratchpadImagesForPrompt(scratchpadImages)}
 
 Previous private Workbench summary:
 ${previousSummary || "None."}
@@ -262,8 +290,8 @@ ${fileLinkingInfo}
 Current Workbench-owned suggestions:
 ${formatSuggestionsForPrompt(suggestions)}
 
-Previous suggestion-created threads:
-${startedSuggestionThreads}
+Materialized Workbench-owned suggestions:
+${materializedSuggestions}
 
 Use the scratchpad as plain Workbench-owned project notes. Read it every run.
 
@@ -271,17 +299,18 @@ Scratchpad rules:
 
 * Read the scratchpad every run.
 * Do not write suggested agent threads into the scratchpad. Workbench owns suggestions as structured state in your final JSON.
-* You may edit the scratchpad only when the user explicitly asks for project-note updates, when the current collaborator-thread conversation is specifically about changing the scratchpad, or when previous suggestion-created thread state plus the current diff strongly indicates a scratchpad item has been dealt with.
+* You may edit the scratchpad only when the user explicitly asks for project-note updates, when the current collaborator-thread conversation is specifically about changing the scratchpad, or when materialized suggestion state plus the current diff strongly indicates a scratchpad item has been dealt with.
 * If scratchpad cleanup is warranted, do not delete text outright. Wrap stale or dealt-with scratchpad text in <del></del> markers so the user can review and accept the deletion.
 * Scratchpad edits happen in the scratchpad file before the final JSON. Do not describe scratchpad edits in the JSON unless they affect the summary.
 * If there is nothing useful to add or mark, leave the scratchpad unchanged.
+* If a suggestion needs one or more scratchpad images, include their exact ids in scratchpadImageIds. Use only ids from "Scratchpad image blocks attached to this message".
 
 Suggestion selection rules:
 
 * Keep the visible suggestion set small. Target four or fewer active suggestions unless the current project state makes an exception clearly worthwhile.
 * Do not exhaustively cover every scratchpad item. The scratchpad is context, not a queue.
 * Choose suggestions based on current usefulness: current scratchpad, current code, current diff context, user-visible urgency, and whether a dedicated thread would be coherent.
-* Treat previous summaries, deferred suggestions, and previous suggestion-created thread state as leads to verify, not as sources of truth. Current scratchpad, code, diff, and thread state win.
+* Treat previous summaries, deferred suggestions, and materialized suggestion state as leads to verify, not as sources of truth. Current scratchpad, code, diff, and thread state win.
 * Combine related concerns when they share an owner, implementation area, or review context. Do not combine unrelated work just to reduce count.
 * When a suggestion combines related concerns, the prompt must preserve each concrete sub-goal and constraint.
 
@@ -296,11 +325,29 @@ Suggestion prompt quality rules:
 
 * Suggestion prompts must be self-contained for a fresh agent thread.
 * Include the concrete desired outcome, relevant TODO/project context, adjacent work that affects judgment, task-specific constraints not already supplied by the project, and only the most useful Workbench-clickable file links when anchors materially help.
+* Do not mention the scratchpad, collaborator scratchpad, private summary, Collaboration registry, previous collaborator memory, or hidden collaborator context in suggestion prompts.
+* If collaborator-only context matters, translate it into concrete task context that a normal Workbench thread can understand without knowing the collaborator-only source exists.
+* Bad: "Check the scratchpad note about the follow-up and do it."
+* Good: "Investigate the named follow-up by verifying the current code path, identifying the owner of the behavior, and making the smallest coherent change that resolves the described issue."
 * Do not repeat generic agent instructions.
 * Do not tell the executing agent to read AGENTS files, inspect before planning, wait for approval, use skills, follow project style rules, avoid deep selectors, or obey baseline project instructions.
 * Do not use exhaustive file lists as a substitute for task context.
 * Do not soften explicit scratchpad intent with hedges such as "if appropriate"; if uncertainty is real, make it a concrete verification step.
 * Repair existing suggestions when they are vague, over-bundled, under-bundled, stale, too exhaustive, missing rationale, or too wordy.
+
+Materialized suggestion rules:
+
+* Suggestions with materializedThreadId already created a dedicated Workbench thread.
+* Treat materialized suggestions as read-only except for cleanup.
+* Do not update the title, rationale, prompt, or scratchpadImageIds for a materialized suggestion.
+* If a materialized suggestion still looks useful or unresolved, omit it from the suggestions patch.
+* Null a materialized suggestion only when you have verified at least one concrete cleanup condition:
+  - the materialized thread explicitly completed the requested work and the relevant project state still reflects that result;
+  - the materialized thread or current project state proves the suggestion is obsolete, impossible, duplicate, or no longer useful;
+  - the user explicitly asked to remove or stop tracking that suggestion.
+* Do not null a materialized suggestion merely because a thread exists, because the thread is inactive, or because you assume someone probably handled it.
+* If completion is uncertain, omit the materialized suggestion from the patch and explain the uncertainty in the private summary instead.
+* Workbench ignores non-null patch objects for materialized suggestions.
 
 Checkpoint memory rules:
 
@@ -344,6 +391,9 @@ interface Suggestion {
    */
   prompt: string;
 
+  /** Scratchpad image ids that should be attached when starting this suggestion thread. Use ids listed above only. */
+  scratchpadImageIds?: string[];
+
   /** User-facing preview text. Required for non-null suggestions; explain current value and grouping in two or three sentences. */
   rationale?: string;
 }
@@ -357,8 +407,10 @@ interface WorkbenchCollaborationResponse {
    *
    * Use stable slug-like IDs.
    * Omit still-good suggestions.
-   * Replace stale, weak, incomplete, or lower-quality suggestions with an improved object.
-   * Set obsolete suggestions to null.
+   * Add or update only suggestions that do not have materializedThreadId.
+   * Set obsolete active suggestions to null.
+   * Set verified-cleanup materialized suggestions to null.
+   * Do not return non-null objects for materialized suggestions; Workbench ignores them.
    */
   suggestions: SuggestionsPatch;
 }
@@ -428,7 +480,7 @@ function applySuggestionPatchToRegistry (
 
 export default function WorkbenchCollaborationView ({
   collaborationThreadRegistry,
-  collaborationStartedSuggestionThreadSummaries,
+  collaborationMaterializedSuggestionThreadSummaries,
   collaborationThreadSummaries,
   composerSpellCheck,
   controls,
@@ -494,8 +546,9 @@ export default function WorkbenchCollaborationView ({
   const [autoWakeNow, setAutoWakeNow] = useState(() => Date.now());
   const [openSuggestionIds, setOpenSuggestionIds] = useState<Record<string, boolean | undefined>>({});
   const [suggestionDraftThreadsById, setSuggestionDraftThreadsById] = useState<Record<string, ThreadPayload | undefined>>({});
-  const [startedSuggestionsById, setStartedSuggestionsById] = useState<Record<string, StartedCollaborationSuggestion | undefined>>({});
   const [suggestionStartErrorsById, setSuggestionStartErrorsById] = useState<Record<string, string | undefined>>({});
+  const [scratchpadContent, setScratchpadContent] = useState("");
+  const [resolvedScratchpadImageAssetsById, setResolvedScratchpadImageAssetsById] = useState<Record<string, ResolvedScratchpadImageAsset | undefined>>({});
   const collaboratorThreadRef = useRef<ThreadPayload | null>(null);
   const collaborationThreadRegistryRef = useRef(collaborationThreadRegistry);
   const collaboratorDraftProjectIdRef = useRef(projectId);
@@ -509,29 +562,23 @@ export default function WorkbenchCollaborationView ({
     () => collaborationThreadSummaries.some((thread) => isThreadStatusActive(thread.status)),
     [collaborationThreadSummaries],
   );
-  const startedSuggestionSummariesByThreadId = useMemo(
-    () => new Map(collaborationStartedSuggestionThreadSummaries.map((thread) => [thread.id, thread])),
-    [collaborationStartedSuggestionThreadSummaries],
+  const materializedSuggestionSummariesByThreadId = useMemo(
+    () => new Map(collaborationMaterializedSuggestionThreadSummaries.map((thread) => [thread.id, thread])),
+    [collaborationMaterializedSuggestionThreadSummaries],
   );
   const collaborationSuggestions = useMemo(() => (
     Object.values(collaborationThreadRegistry.suggestions)
       .sort((left, right) => right.updatedAt - left.updatedAt || left.title.localeCompare(right.title))
   ), [collaborationThreadRegistry.suggestions]);
-  const visibleSuggestions = useMemo(() => (
-    [
-      ...collaborationSuggestions,
-      ...Object.values(startedSuggestionsById).filter((suggestion): suggestion is StartedCollaborationSuggestion => (
-        Boolean(suggestion) && !(suggestion.id in collaborationThreadRegistry.suggestions)
-      )),
-    ].sort((left, right) => right.updatedAt - left.updatedAt || left.title.localeCompare(right.title))
-  ), [collaborationSuggestions, collaborationThreadRegistry.suggestions, startedSuggestionsById]);
+  const visibleSuggestions = collaborationSuggestions;
+  const scratchpadImages = useMemo(() => extractCollaborationScratchpadImages(scratchpadContent), [scratchpadContent]);
   const projectDiffMap = useMemo(() => formatProjectDiffMapForPrompt(projectChanges), [projectChanges]);
-  const startedSuggestionThreadsForPrompt = useMemo(() => (
-    formatStartedSuggestionThreadsForPrompt(
-      Object.values(collaborationThreadRegistry.startedSuggestionThreads),
-      startedSuggestionSummariesByThreadId,
+  const materializedSuggestionsForPrompt = useMemo(() => (
+    formatMaterializedSuggestionsForPrompt(
+      collaborationSuggestions,
+      materializedSuggestionSummariesByThreadId,
     )
-  ), [collaborationThreadRegistry.startedSuggestionThreads, startedSuggestionSummariesByThreadId]);
+  ), [collaborationSuggestions, materializedSuggestionSummariesByThreadId]);
   const suggestionComposerWorkspaceRoots = useMemo(() => (
     projectFileLinkRoots ?? (projectRoots.length > 1
       ? projectRoots.map((root) => ({ id: root.id, rootPath: root.rootPath }))
@@ -547,6 +594,74 @@ export default function WorkbenchCollaborationView ({
     workspaceRoots: suggestionComposerWorkspaceRoots,
   }), [projectFileCandidates, projectFileIndexId, projectRootPath, suggestionComposerWorkspaceRoots]);
   const collaboratorDraftHasContent = Boolean(collaboratorDraftComposerDraft?.text.trim() || collaboratorDraftComposerDraft?.attachments.length);
+
+  useEffect(() => {
+    if (!scratchpadImages.length) {
+      setResolvedScratchpadImageAssetsById({});
+      return;
+    }
+
+    let cancelled = false;
+    void fetch(COLLABORATION_SCRATCHPAD_ASSET_API_PATH, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        action: "resolve",
+        hrefs: scratchpadImages.map((image) => image.href),
+        path: scratchpadPath,
+        projectId,
+      }),
+    }).then(async (response) => {
+      if (!response.ok) {
+        throw new Error("Unable to resolve scratchpad image assets.");
+      }
+
+      return await response.json() as { assets?: ResolvedScratchpadImageAsset[] };
+    }).then((payload) => {
+      if (cancelled) {
+        return;
+      }
+
+      const assetsByHref = new Map((payload.assets ?? []).map((asset) => [asset.href, asset]));
+      setResolvedScratchpadImageAssetsById(Object.fromEntries(
+        scratchpadImages.map((image) => [image.id, assetsByHref.get(image.href)]),
+      ));
+    }).catch(() => {
+      if (!cancelled) {
+        setResolvedScratchpadImageAssetsById({});
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, scratchpadImages, scratchpadPath]);
+
+  const createScratchpadImageInputs = useCallback((imageIds: readonly string[] = scratchpadImages.map((image) => image.id)): UserInput[] => (
+    imageIds
+      .map((imageId) => resolvedScratchpadImageAssetsById[imageId]?.absolutePath ?? "")
+      .filter((path) => Boolean(path))
+      .map((path) => ({
+        type: "localImage" as const,
+        path,
+      }))
+  ), [resolvedScratchpadImageAssetsById, scratchpadImages]);
+
+  const resolveSuggestionAttachments = useCallback((suggestion: Pick<WorkbenchCollaborationSuggestion, "scratchpadImageIds">): WorkbenchThreadComposerAttachmentDraft[] => (
+    (suggestion.scratchpadImageIds ?? [])
+      .map((imageId) => {
+        const asset = resolvedScratchpadImageAssetsById[imageId];
+        return asset
+          ? {
+            id: imageId,
+            url: asset.assetUrl,
+          }
+          : null;
+      })
+      .filter((attachment): attachment is WorkbenchThreadComposerAttachmentDraft => attachment !== null)
+  ), [resolvedScratchpadImageAssetsById]);
   const resetPendingAutoWakeActivity = useCallback(() => {
     const now = Date.now();
     setAutoWakeNow(now);
@@ -628,7 +743,10 @@ export default function WorkbenchCollaborationView ({
     documentProfile: "collaborationScratchpad",
     fileApiPath: "/api/collaboration/scratchpad",
     keepEverythingOnSave: true,
-    onContentChange: resetPendingAutoWakeActivity,
+    onContentChange: (content) => {
+      setScratchpadContent(content);
+      resetPendingAutoWakeActivity();
+    },
     refreshProjectOnSave: false,
   }), [resetPendingAutoWakeActivity]);
 
@@ -674,6 +792,10 @@ export default function WorkbenchCollaborationView ({
       const next: Record<string, ThreadPayload | undefined> = {};
       let changed = false;
       for (const suggestion of collaborationSuggestions) {
+        if (suggestion.materializedThreadId) {
+          continue;
+        }
+
         const existing = current[suggestion.id];
         next[suggestion.id] = existing?.harness === harness
           ? existing
@@ -844,17 +966,20 @@ export default function WorkbenchCollaborationView ({
     try {
       const additionalText = options.additionalInput?.find((input): input is Extract<UserInput, { type: "text" }> => input.type === "text")?.text.trim() ?? "";
       const additionalNonTextInput = options.additionalInput?.filter((input) => input.type !== "text") ?? [];
+      const scratchpadImageInput = createScratchpadImageInputs();
       const payload = await onSendMessage(thread, [
         createTextInput(buildCollaboratorControlPrompt({
           additionalUserMessage: additionalText,
           diffMap: projectDiffMap,
           fileLinkingInfo,
+          materializedSuggestions: materializedSuggestionsForPrompt,
           mode,
           previousSummary: collaborationThreadRegistry.lastRunSummary,
+          scratchpadImages,
           scratchpadPath,
-          startedSuggestionThreads: startedSuggestionThreadsForPrompt,
           suggestions: collaborationSuggestions,
         })),
+        ...scratchpadImageInput,
         ...additionalNonTextInput,
       ], {
         additionalWritableRoots: scratchpadWritableRoot ? [scratchpadWritableRoot] : undefined,
@@ -894,7 +1019,7 @@ export default function WorkbenchCollaborationView ({
       isSendingControlPromptRef.current = false;
       setIsSendingControlPrompt(false);
     }
-  }, [clearPendingAutoWakeActivity, collaborationSuggestions, collaborationThreadRegistry.lastRunSummary, fileLinkingInfo, hydrateCollaboratorThread, onSendMessage, projectDiffMap, rememberCollaboratorThread, scratchpadPath, scratchpadWritableRoot, startedSuggestionThreadsForPrompt]);
+  }, [clearPendingAutoWakeActivity, collaborationSuggestions, collaborationThreadRegistry.lastRunSummary, createScratchpadImageInputs, fileLinkingInfo, hydrateCollaboratorThread, materializedSuggestionsForPrompt, onSendMessage, projectDiffMap, rememberCollaboratorThread, scratchpadImages, scratchpadPath, scratchpadWritableRoot]);
 
   const startCollaboratorRun = useCallback(async (mode: "bootstrap" | "wake" = collaborationThreadRegistry.threadIds.length ? "wake" : "bootstrap") => {
     if (!controls) {
@@ -1048,30 +1173,19 @@ export default function WorkbenchCollaborationView ({
     });
   }, []);
 
-  const hideStartedSuggestion = useCallback((suggestionId: string) => {
-    setStartedSuggestionsById((current) => {
-      if (!current[suggestionId]) {
-        return current;
-      }
-
-      const next = { ...current };
-      delete next[suggestionId];
-      return next;
-    });
-    setOpenSuggestionIds((current) => {
-      if (!(suggestionId in current)) {
-        return current;
-      }
-
-      const next = { ...current };
-      delete next[suggestionId];
-      return next;
-    });
-  }, []);
-
-  const updateSuggestionPrompt = useCallback((suggestionId: string, prompt: string) => {
+  const updateSuggestionDraft = useCallback((suggestionId: string, draft: CollaborationComposerDraft) => {
     const suggestion = collaborationThreadRegistry.suggestions[suggestionId];
-    if (!suggestion || suggestion.prompt === prompt) {
+    const scratchpadImageIds = draft.attachments
+      .map((attachment) => attachment.id)
+      .filter((imageId) => Boolean(resolvedScratchpadImageAssetsById[imageId]));
+    if (
+      !suggestion
+      || suggestion.materializedThreadId
+      || (
+        suggestion.prompt === draft.text
+        && areDeeplyEqual(suggestion.scratchpadImageIds ?? [], scratchpadImageIds)
+      )
+    ) {
       return;
     }
 
@@ -1081,30 +1195,15 @@ export default function WorkbenchCollaborationView ({
         ...collaborationThreadRegistry.suggestions,
         [suggestionId]: {
           ...suggestion,
-          prompt,
+          prompt: draft.text,
+          ...(scratchpadImageIds.length ? { scratchpadImageIds } : { scratchpadImageIds: undefined }),
           updatedAt: Date.now(),
         },
       },
     });
-  }, [collaborationThreadRegistry, publishRegistryIfChanged]);
+  }, [collaborationThreadRegistry, publishRegistryIfChanged, resolvedScratchpadImageAssetsById]);
 
-  const markSuggestionStarted = useCallback((suggestion: WorkbenchCollaborationSuggestion, threadId: string) => {
-    const startedSuggestionThread: WorkbenchCollaborationStartedSuggestionThread = {
-      prompt: suggestion.prompt,
-      startedAt: Date.now(),
-      suggestionId: suggestion.id,
-      threadId,
-      title: suggestion.title,
-      ...(suggestion.rationale ? { rationale: suggestion.rationale } : {}),
-    };
-    setStartedSuggestionsById((current) => ({
-      ...current,
-      [suggestion.id]: {
-        ...suggestion,
-        startedAt: startedSuggestionThread.startedAt,
-        startedThreadId: threadId,
-      },
-    }));
+  const materializeSuggestion = useCallback((suggestion: WorkbenchCollaborationSuggestion, threadId: string) => {
     setOpenSuggestionIds((current) => {
       if (!(suggestion.id in current)) {
         return current;
@@ -1123,19 +1222,16 @@ export default function WorkbenchCollaborationView ({
       delete next[suggestion.id];
       return next;
     });
-    const { [suggestion.id]: _removedSuggestion, ...nextSuggestions } = collaborationThreadRegistry.suggestions;
-    void _removedSuggestion;
-    const dismissedSuggestionIds = collaborationThreadRegistry.dismissedSuggestionIds.includes(suggestion.id)
-      ? collaborationThreadRegistry.dismissedSuggestionIds
-      : [...collaborationThreadRegistry.dismissedSuggestionIds, suggestion.id];
     publishRegistryIfChanged({
       ...collaborationThreadRegistry,
-      dismissedSuggestionIds,
-      startedSuggestionThreads: {
-        ...collaborationThreadRegistry.startedSuggestionThreads,
-        [suggestion.id]: startedSuggestionThread,
+      suggestions: {
+        ...collaborationThreadRegistry.suggestions,
+        [suggestion.id]: {
+          ...suggestion,
+          materializedThreadId: threadId,
+          updatedAt: Date.now(),
+        },
       },
-      suggestions: nextSuggestions,
     });
   }, [collaborationThreadRegistry, publishRegistryIfChanged]);
 
@@ -1180,8 +1276,8 @@ export default function WorkbenchCollaborationView ({
       return;
     }
 
-    updateSuggestionPrompt(suggestionId, draft.text);
-  }, [readSuggestionIdFromComposerThreadId, updateSuggestionPrompt]);
+    updateSuggestionDraft(suggestionId, draft);
+  }, [readSuggestionIdFromComposerThreadId, updateSuggestionDraft]);
 
   const handleSuggestionComposerDraftClear = useCallback(() => { }, []);
 
@@ -1400,9 +1496,9 @@ export default function WorkbenchCollaborationView ({
           </div>
           <div className="mt-4 flex flex-col gap-3">
             {visibleSuggestions.length ? visibleSuggestions.map((suggestion) => {
-              const startedSuggestion = startedSuggestionsById[suggestion.id];
               const isSuggestionOpen = Boolean(openSuggestionIds[suggestion.id]);
-              if (startedSuggestion && !(suggestion.id in collaborationThreadRegistry.suggestions)) {
+              const materializedThreadId = suggestion.materializedThreadId;
+              if (materializedThreadId) {
                 return (
                   <CollaborationSuggestionCard
                     key={suggestion.id}
@@ -1412,21 +1508,20 @@ export default function WorkbenchCollaborationView ({
                       collapseSuggestion(suggestion.id);
                     }}
                     onDismiss={() => {
-                      hideStartedSuggestion(suggestion.id);
                       dismissSuggestion(suggestion.id);
                     }}
                     onOpen={() => {
                       openSuggestion(suggestion.id);
                     }}
-                    rationale={startedSuggestion.rationale}
-                    title={startedSuggestion.title}
+                    rationale={suggestion.rationale}
+                    title={suggestion.title}
                   >
-                    <p className="mb-0 whitespace-pre-wrap px-1 pr-18 text-[0.9rem] leading-6 text-muted">{startedSuggestion.prompt}</p>
+                    <p className="mb-0 whitespace-pre-wrap px-1 pr-18 text-[0.9rem] leading-6 text-muted">{suggestion.prompt}</p>
                     <div className="mt-3 flex justify-end px-1">
                       <PrimaryButton
                         type="button"
                         onClick={() => {
-                          onOpenThreadFromSuggestion(startedSuggestion.startedThreadId);
+                          onOpenThreadFromSuggestion(materializedThreadId);
                         }}
                       >
                         Go to thread
@@ -1474,7 +1569,7 @@ export default function WorkbenchCollaborationView ({
                     onSendMessage={async (_threadId, input) => {
                       const result = await onStartThreadFromPrompt(input, suggestionComposerThread);
                       if (result.status === "started") {
-                        markSuggestionStarted(suggestion, result.threadId);
+                        materializeSuggestion(suggestion, result.threadId);
                         return;
                       }
 
@@ -1508,7 +1603,7 @@ export default function WorkbenchCollaborationView ({
                     showSavedDraftControls={false}
                     thread={suggestionComposerThread}
                     threadComposerDraft={{
-                      attachments: [],
+                      attachments: resolveSuggestionAttachments(suggestion),
                       text: suggestion.prompt,
                       updatedAt: suggestion.updatedAt,
                     }}

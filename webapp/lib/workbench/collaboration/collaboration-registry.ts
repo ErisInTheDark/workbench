@@ -8,7 +8,6 @@
  */
 
 import type {
-  WorkbenchCollaborationStartedSuggestionThread,
   WorkbenchCollaborationSuggestion,
   WorkbenchCollaborationThreadRegistry,
 } from "../../types";
@@ -21,7 +20,6 @@ export const EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY: WorkbenchCollaborati
   lastAppliedSuggestionPatchSignature: "",
   lastAutoWakeAt: 0,
   lastRunSummary: "",
-  startedSuggestionThreads: {},
   suggestions: {},
   threadIds: [],
 };
@@ -60,7 +58,9 @@ function normalizeCollaborationSuggestion(value: unknown): WorkbenchCollaboratio
   const id = normalizeText(candidate.id);
   const title = normalizeText(candidate.title);
   const prompt = normalizeText(candidate.prompt);
+  const materializedThreadId = normalizeText(candidate.materializedThreadId);
   const rationale = normalizeText(candidate.rationale);
+  const scratchpadImageIds = normalizeStringArray(candidate.scratchpadImageIds);
   const updatedAt = normalizeTimestamp(candidate.updatedAt) || Date.now();
 
   if (!id || !title || !prompt) {
@@ -69,10 +69,12 @@ function normalizeCollaborationSuggestion(value: unknown): WorkbenchCollaboratio
 
   return {
     id,
+    ...(materializedThreadId ? { materializedThreadId } : {}),
     prompt,
     title,
     updatedAt,
     ...(rationale ? { rationale } : {}),
+    ...(scratchpadImageIds.length ? { scratchpadImageIds } : {}),
   };
 }
 
@@ -94,7 +96,7 @@ function normalizeCollaborationSuggestions(value: unknown) {
   return suggestions;
 }
 
-function normalizeStartedSuggestionThread(value: unknown): WorkbenchCollaborationStartedSuggestionThread | null {
+function normalizeLegacyStartedSuggestion(value: unknown): WorkbenchCollaborationSuggestion | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -105,6 +107,7 @@ function normalizeStartedSuggestionThread(value: unknown): WorkbenchCollaboratio
   const title = normalizeText(candidate.title);
   const prompt = normalizeText(candidate.prompt);
   const rationale = normalizeText(candidate.rationale);
+  const scratchpadImageIds = normalizeStringArray(candidate.scratchpadImageIds);
   const startedAt = normalizeTimestamp(candidate.startedAt) || Date.now();
 
   if (!suggestionId || !threadId || !title || !prompt) {
@@ -112,31 +115,57 @@ function normalizeStartedSuggestionThread(value: unknown): WorkbenchCollaboratio
   }
 
   return {
+    id: suggestionId,
+    materializedThreadId: threadId,
     prompt,
-    startedAt,
-    suggestionId,
-    threadId,
     title,
+    updatedAt: startedAt,
     ...(rationale ? { rationale } : {}),
+    ...(scratchpadImageIds.length ? { scratchpadImageIds } : {}),
   };
 }
 
-function normalizeStartedSuggestionThreads(value: unknown) {
+function normalizeLegacyStartedSuggestions(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }
 
-  const startedThreads: Record<string, WorkbenchCollaborationStartedSuggestionThread> = {};
-  for (const [key, rawStartedThread] of Object.entries(value as Record<string, unknown>)) {
-    const startedThread = normalizeStartedSuggestionThread(rawStartedThread);
-    if (!startedThread) {
+  const suggestions: Record<string, WorkbenchCollaborationSuggestion> = {};
+  for (const [key, rawStartedSuggestion] of Object.entries(value as Record<string, unknown>)) {
+    const suggestion = normalizeLegacyStartedSuggestion(rawStartedSuggestion);
+    if (!suggestion) {
       continue;
     }
 
-    startedThreads[startedThread.suggestionId || key] = startedThread;
+    suggestions[suggestion.id || key] = suggestion;
   }
 
-  return startedThreads;
+  return suggestions;
+}
+
+function mergeLegacyMaterializedSuggestions(
+  suggestions: Record<string, WorkbenchCollaborationSuggestion>,
+  legacySuggestions: Record<string, WorkbenchCollaborationSuggestion>,
+) {
+  const merged = { ...suggestions };
+  for (const [suggestionId, legacySuggestion] of Object.entries(legacySuggestions)) {
+    const existingSuggestion = merged[suggestionId];
+    if (!existingSuggestion) {
+      merged[suggestionId] = legacySuggestion;
+      continue;
+    }
+
+    if (!existingSuggestion.materializedThreadId || legacySuggestion.updatedAt >= existingSuggestion.updatedAt) {
+      merged[suggestionId] = {
+        ...legacySuggestion,
+        ...existingSuggestion,
+        materializedThreadId: legacySuggestion.materializedThreadId,
+        updatedAt: Math.max(existingSuggestion.updatedAt, legacySuggestion.updatedAt),
+      };
+    }
+  }
+
+  return merged;
 }
 
 export function normalizeWorkbenchCollaborationThreadRegistry(value: unknown): WorkbenchCollaborationThreadRegistry {
@@ -157,10 +186,17 @@ export function normalizeWorkbenchCollaborationThreadRegistry(value: unknown): W
   const currentThreadId = typeof candidate.currentThreadId === "string" && threadIds.includes(candidate.currentThreadId)
     ? candidate.currentThreadId
     : threadIds[0] ?? "";
-  const dismissedSuggestionIds = normalizeStringArray(candidate.dismissedSuggestionIds);
+  const legacyMaterializedSuggestions = normalizeLegacyStartedSuggestions(candidate.startedSuggestionThreads);
+  const legacyMaterializedSuggestionIds = new Set(Object.keys(legacyMaterializedSuggestions));
+  const dismissedSuggestionIds = normalizeStringArray(candidate.dismissedSuggestionIds)
+    .filter((suggestionId) => !legacyMaterializedSuggestionIds.has(suggestionId));
   const dismissedSuggestionIdSet = new Set(dismissedSuggestionIds);
+  const mergedSuggestions = mergeLegacyMaterializedSuggestions(
+    normalizeCollaborationSuggestions(candidate.suggestions),
+    legacyMaterializedSuggestions,
+  );
   const suggestions = Object.fromEntries(
-    Object.entries(normalizeCollaborationSuggestions(candidate.suggestions))
+    Object.entries(mergedSuggestions)
       .filter(([suggestionId]) => !dismissedSuggestionIdSet.has(suggestionId)),
   );
 
@@ -171,7 +207,6 @@ export function normalizeWorkbenchCollaborationThreadRegistry(value: unknown): W
     lastAppliedSuggestionPatchSignature: normalizeText(candidate.lastAppliedSuggestionPatchSignature),
     lastAutoWakeAt: normalizeTimestamp(candidate.lastAutoWakeAt),
     lastRunSummary: normalizeText(candidate.lastRunSummary),
-    startedSuggestionThreads: normalizeStartedSuggestionThreads(candidate.startedSuggestionThreads),
     suggestions,
     threadIds,
   };
@@ -179,20 +214,6 @@ export function normalizeWorkbenchCollaborationThreadRegistry(value: unknown): W
 
 function mergeUniqueStrings(left: readonly string[], right: readonly string[]) {
   return Array.from(new Set([...left, ...right].filter((value) => Boolean(value.trim()))));
-}
-
-function mergeStartedSuggestionThreads(
-  left: Record<string, WorkbenchCollaborationStartedSuggestionThread>,
-  right: Record<string, WorkbenchCollaborationStartedSuggestionThread>,
-) {
-  const merged = { ...left };
-  for (const [suggestionId, incomingThread] of Object.entries(right)) {
-    const existingThread = merged[suggestionId];
-    if (!existingThread || incomingThread.startedAt >= existingThread.startedAt) {
-      merged[suggestionId] = incomingThread;
-    }
-  }
-  return merged;
 }
 
 function mergeSuggestions(
@@ -239,7 +260,6 @@ export function mergeWorkbenchCollaborationThreadRegistry(
     lastAppliedSuggestionPatchSignature: incoming.lastAppliedSuggestionPatchSignature || base.lastAppliedSuggestionPatchSignature,
     lastAutoWakeAt: Math.max(base.lastAutoWakeAt, incoming.lastAutoWakeAt),
     lastRunSummary: incoming.lastRunSummary || base.lastRunSummary,
-    startedSuggestionThreads: mergeStartedSuggestionThreads(base.startedSuggestionThreads, incoming.startedSuggestionThreads),
     suggestions: mergeSuggestions(base.suggestions, incoming.suggestions, dismissedSuggestionIdSet),
     threadIds,
   };

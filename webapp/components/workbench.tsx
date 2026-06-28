@@ -1057,14 +1057,16 @@ export default function Workbench () {
   const archivedSidebarThreadKeySet = useMemo(() => new Set(threadSidebarPreferences.archivedThreadKeys), [threadSidebarPreferences.archivedThreadKeys]);
   const pinnedSidebarThreadKeySet = useMemo(() => new Set(threadSidebarPreferences.pinnedThreadKeys), [threadSidebarPreferences.pinnedThreadKeys]);
   const collaborationThreadSummaries = useMemo(() => explorer.threads.filter((thread) => collaborationThreadIdSet.has(thread.id)), [collaborationThreadIdSet, explorer.threads]);
-  const collaborationStartedSuggestionThreadIdSet = useMemo(() => (
-    new Set(Object.values(collaborationThreadRegistry.startedSuggestionThreads).map((startedThread) => startedThread.threadId))
-  ), [collaborationThreadRegistry.startedSuggestionThreads]);
-  const collaborationStartedSuggestionThreadSummaries = useMemo(() => (
-    collaborationStartedSuggestionThreadIdSet.size
-      ? explorer.threads.filter((thread) => collaborationStartedSuggestionThreadIdSet.has(thread.id))
+  const collaborationMaterializedSuggestionThreadIdSet = useMemo(() => (
+    new Set(Object.values(collaborationThreadRegistry.suggestions)
+      .map((suggestion) => suggestion.materializedThreadId)
+      .filter((threadId): threadId is string => Boolean(threadId)))
+  ), [collaborationThreadRegistry.suggestions]);
+  const collaborationMaterializedSuggestionThreadSummaries = useMemo(() => (
+    collaborationMaterializedSuggestionThreadIdSet.size
+      ? explorer.threads.filter((thread) => collaborationMaterializedSuggestionThreadIdSet.has(thread.id))
       : []
-  ), [collaborationStartedSuggestionThreadIdSet, explorer.threads]);
+  ), [collaborationMaterializedSuggestionThreadIdSet, explorer.threads]);
   const visibleSidebarThreads = useMemo(() => (
     explorer.threads.filter((thread) => (
       !collaborationThreadIdSet.has(thread.id)
@@ -3456,7 +3458,7 @@ export default function Workbench () {
               <div className="h-full min-h-0">
                 <WorkbenchCollaborationView
                   collaborationThreadRegistry={collaborationThreadRegistry}
-                  collaborationStartedSuggestionThreadSummaries={collaborationStartedSuggestionThreadSummaries}
+                  collaborationMaterializedSuggestionThreadSummaries={collaborationMaterializedSuggestionThreadSummaries}
                   collaborationThreadSummaries={collaborationThreadSummaries}
                   composerSpellCheck={resolvedSettings.composerSpellCheck}
                   controls={controls}

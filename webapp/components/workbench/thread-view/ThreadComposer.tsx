@@ -27,6 +27,7 @@ import {
   areWorkbenchAgentPathsEqual,
   getWorkbenchAgentPathLabel,
 } from "../../../lib/workbench/agent-paths";
+import { readClipboardImageDataUrls } from "../../../lib/workbench/dom/clipboard";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import {
   buildInlineMentionHighlights,
@@ -165,24 +166,6 @@ function getQuestionnaireFallbackAnchorIndex (items: ThreadPayload["turns"][numb
 function isDurableQuestionnairePlacementItem (item: ThreadPayload["turns"][number]["items"][number]) {
   return !isSyntheticQuestionnaireHistoryItem(item)
     && !isWorkbenchSyntheticSteerUserMessage(item);
-}
-
-function readFileAsDataUrl (file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => {
-      reject(new Error("Unable to read the pasted image."));
-    };
-    reader.onload = () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-        return;
-      }
-
-      reject(new Error("Unable to read the pasted image."));
-    };
-    reader.readAsDataURL(file);
-  });
 }
 
 function buildPendingUserInputRequestSubmissionOptions (
@@ -860,12 +843,8 @@ export default function ThreadComposer ({
   };
 
   const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
-    const imageFiles = Array.from(event.clipboardData.items)
-      .filter((item) => item.type.startsWith("image/"))
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => file !== null);
-
-    if (!imageFiles.length) {
+    const hasImage = Array.from(event.clipboardData.items).some((item) => item.type.startsWith("image/"));
+    if (!hasImage) {
       return;
     }
 
@@ -874,10 +853,10 @@ export default function ThreadComposer ({
     setPendingAttachmentReads((count) => count + 1);
     void (async () => {
       try {
-        const nextAttachments = await Promise.all(imageFiles.map(async (file) => ({
+        const nextAttachments = (await readClipboardImageDataUrls(event.clipboardData.items)).map((image) => ({
           id: createAttachmentId(),
-          url: await readFileAsDataUrl(file),
-        })));
+          url: image.url,
+        }));
         setAttachments((current) => [...current, ...nextAttachments]);
       } catch (pasteError) {
         setError(pasteError instanceof Error ? pasteError.message : "Unable to attach the pasted image.");

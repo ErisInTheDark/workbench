@@ -56,6 +56,7 @@ import {
     markdownToHtml as renderMarkdownToHtml,
 } from "./markdown/markdown-html-render";
 import {
+    type CollaborationScratchpadRenderOptions,
     normalizeCollaborationScratchpadDom,
     renderCollaborationScratchpadMarkdownToHtml,
     serializeCollaborationScratchpadDomToMarkdown,
@@ -183,6 +184,7 @@ export interface WorkbenchEditorClientOptions {
   handleEditorFocus: () => void;
   handleEditorInput: (event: Event) => void;
   handleEditorKeyDown: (event: KeyboardEvent) => void;
+  handleEditorPaste?: (event: ClipboardEvent) => void;
   handleEditorPointerDown: () => void;
   handleEditorToggle: (event: Event) => void;
   handleOverwriteConflict: () => Promise<void>;
@@ -199,6 +201,7 @@ export interface WorkbenchEditorClientOptions {
   sessionState: SessionState;
   shouldBlockBeforeUnload: () => boolean;
   documentProfile?: "standard" | "collaborationScratchpad";
+  getCollaborationScratchpadRenderOptions?: () => CollaborationScratchpadRenderOptions;
 }
 
 interface WorkbenchEditorClient {
@@ -1111,13 +1114,14 @@ function WorkbenchEditorClient(
   }
 
   function inspectRichDocument() {
+    const renderOptions = options.getCollaborationScratchpadRenderOptions?.() ?? {};
     return inspectSaveGuardMarkup({
       canonicalizeMarkup: syncStructuredBlockStyles,
       editorRoot: editor,
       isInlineRunContainer: (element) => isInlineRunContainer(editor, element),
       normalizeMarkup: normalizeEditorMarkup,
       renderMarkdown: options.documentProfile === "collaborationScratchpad"
-        ? renderCollaborationScratchpadMarkdownToHtml
+        ? (markdown) => renderCollaborationScratchpadMarkdownToHtml(markdown, renderOptions)
         : undefined,
       serializeMarkdown: options.documentProfile === "collaborationScratchpad"
         ? (root, serializeOptions) => serializeCollaborationScratchpadDomToMarkdown(root, serializeOptions)
@@ -1172,7 +1176,7 @@ function WorkbenchEditorClient(
   function renderMarkdownFragment(markdown: string) {
     const fragmentRoot = document.createElement("div");
     fragmentRoot.innerHTML = options.documentProfile === "collaborationScratchpad"
-      ? renderCollaborationScratchpadMarkdownToHtml(markdown)
+      ? renderCollaborationScratchpadMarkdownToHtml(markdown, options.getCollaborationScratchpadRenderOptions?.() ?? {})
       : renderMarkdownToHtml(markdown);
     normalizeEditorMarkup(fragmentRoot);
     return fragmentRoot;
@@ -1211,7 +1215,7 @@ function WorkbenchEditorClient(
       if (mode === "rich") {
         editor.innerHTML = renderOptions.renderedState ?? (
           options.documentProfile === "collaborationScratchpad"
-            ? renderCollaborationScratchpadMarkdownToHtml(content)
+            ? renderCollaborationScratchpadMarkdownToHtml(content, options.getCollaborationScratchpadRenderOptions?.() ?? {})
             : renderMarkdownToHtml(content)
         );
       } else {
@@ -1385,7 +1389,9 @@ function WorkbenchEditorClient(
     }), () => {
       clearPendingInlineFormats();
       if (options.fileSessionState.mode === "rich") {
-        editor.innerHTML = renderMarkdownToHtml(request.content);
+        editor.innerHTML = options.documentProfile === "collaborationScratchpad"
+          ? renderCollaborationScratchpadMarkdownToHtml(request.content, options.getCollaborationScratchpadRenderOptions?.() ?? {})
+          : renderMarkdownToHtml(request.content);
       } else {
         editor.textContent = request.content;
       }
@@ -1673,6 +1679,10 @@ function WorkbenchEditorClient(
 
   editor.addEventListener("keydown", (event) => {
     options.handleEditorKeyDown(event);
+  }, { signal });
+
+  editor.addEventListener("paste", (event) => {
+    options.handleEditorPaste?.(event);
   }, { signal });
 
   document.addEventListener("selectionchange", () => {

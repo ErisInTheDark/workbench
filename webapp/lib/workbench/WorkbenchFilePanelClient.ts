@@ -8,6 +8,7 @@
  */
 
 import type { ChangeSummary } from "../types";
+import { readClipboardImageDataUrls, type ClipboardImageDataUrl } from "./dom/clipboard";
 import {
     createListItemDomEditor,
 } from "./dom/mutation/list-item-dom-edit";
@@ -21,6 +22,9 @@ import {
     deleteTextImmediatelyBeforeSelection,
     getTextBeforeSelectionInElement,
 } from "./dom/query/text-position-dom";
+import {
+    isSingleBreakParagraph,
+} from "./dom/query/list-dom";
 import {
     captureEditorSelection,
     placeCaretInElement,
@@ -50,6 +54,12 @@ import WorkbenchFileClient from "./WorkbenchFileClient";
 import type { WorkbenchEditorDomSurfaces } from "./workbench-dom";
 
 const HISTORY_KEYFRAME_INTERVAL = 50;
+const COLLABORATION_SCRATCHPAD_ASSET_API_PATH = "/api/collaboration/scratchpad/assets";
+
+interface ScratchpadImageAssetUploadResponse {
+  assetUrl: string;
+  href: string;
+}
 
 export interface WorkbenchFilePanelSnapshot {
   currentPath: string;
@@ -176,6 +186,139 @@ function WorkbenchFilePanelClient(
     return false;
   }
 
+  function hasClipboardImageItems(event: ClipboardEvent) {
+    return Array.from(event.clipboardData?.items ?? []).some((item) => item.type.startsWith("image/"));
+  }
+
+  async function uploadScratchpadImage(image: ClipboardImageDataUrl): Promise<ScratchpadImageAssetUploadResponse> {
+    const response = await fetch(COLLABORATION_SCRATCHPAD_ASSET_API_PATH, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        action: "upload",
+        dataUrl: image.url,
+        path: sessionState.currentPath,
+        projectId: getProjectId(),
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: "Unable to upload pasted image." }));
+      throw new Error(typeof error.error === "string" ? error.error : "Unable to upload pasted image.");
+    }
+
+    const payload = await response.json() as Partial<ScratchpadImageAssetUploadResponse>;
+    if (!payload.href || !payload.assetUrl) {
+      throw new Error("Scratchpad image upload did not return an asset link.");
+    }
+
+    return {
+      assetUrl: payload.assetUrl,
+      href: payload.href,
+    };
+  }
+
+  function createScratchpadImageBlock(asset: ScratchpadImageAssetUploadResponse) {
+    const figure = document.createElement("figure");
+    figure.contentEditable = "false";
+    figure.dataset.collaborationScratchpadImage = "true";
+    figure.dataset.href = asset.href;
+    figure.dataset.alt = "Scratchpad image";
+
+    const image = document.createElement("img");
+    image.alt = "Scratchpad image";
+    image.draggable = false;
+    image.src = asset.assetUrl;
+    figure.append(image);
+
+    return figure;
+  }
+
+  function createEmptyParagraph() {
+    const paragraph = document.createElement("p");
+    paragraph.append(document.createElement("br"));
+    return paragraph;
+  }
+
+  function findSelectionTopLevelChild() {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !selection.anchorNode || !editor.contains(selection.anchorNode)) {
+      return null;
+    }
+
+    let node: Node | null = selection.anchorNode;
+    while (node?.parentNode && node.parentNode !== editor) {
+      node = node.parentNode;
+    }
+
+    return node;
+  }
+
+  function placeCaretInParagraph(paragraph: HTMLElement) {
+    const selection = window.getSelection();
+    if (!selection) {
+      return;
+    }
+
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  function insertScratchpadImageBlocks(assets: readonly ScratchpadImageAssetUploadResponse[]) {
+    if (!assets.length) {
+      return;
+    }
+
+    let trailingParagraph: HTMLElement | null = null;
+    editorClient.runStructuralMutation(() => {
+      const fragment = document.createDocumentFragment();
+      for (const asset of assets) {
+        fragment.append(createScratchpadImageBlock(asset));
+      }
+      trailingParagraph = createEmptyParagraph();
+      fragment.append(trailingParagraph);
+
+      const topLevelChild = findSelectionTopLevelChild();
+      if (topLevelChild instanceof HTMLElement && isSingleBreakParagraph(topLevelChild)) {
+        topLevelChild.replaceWith(fragment);
+      } else if (topLevelChild?.parentNode === editor) {
+        topLevelChild.parentNode.insertBefore(fragment, topLevelChild.nextSibling);
+      } else {
+        editor.append(fragment);
+      }
+    }, {
+      afterSelectionRestore: () => {
+        if (trailingParagraph) {
+          placeCaretInParagraph(trailingParagraph);
+        }
+      },
+    });
+  }
+
+  function handleScratchpadImagePaste(event: ClipboardEvent) {
+    if (documentProfile !== "collaborationScratchpad" || fileSessionState.mode !== "rich" || !sessionState.currentPath || !hasClipboardImageItems(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    void (async () => {
+      try {
+        editorClient.setStatusMessage("Uploading pasted image...");
+        const images = await readClipboardImageDataUrls(event.clipboardData.items);
+        const assets = await Promise.all(images.map(uploadScratchpadImage));
+        insertScratchpadImageBlocks(assets);
+        editorClient.refreshStatusMessage();
+      } catch (error) {
+        editorClient.setStatusMessage(error instanceof Error ? error.message : "Unable to paste that image.");
+      }
+    })();
+  }
+
   const editorClient = WorkbenchEditorClient({
     controls: controlButtons,
     dialogs: dialogSurface,
@@ -206,6 +349,11 @@ function WorkbenchFilePanelClient(
     },
     fileSessionState,
     getEditorHasFocus: () => editorHasFocus,
+    getCollaborationScratchpadRenderOptions: () => ({
+      assetApiPath: COLLABORATION_SCRATCHPAD_ASSET_API_PATH,
+      projectId: getProjectId(),
+      scratchpadPath: sessionState.currentPath,
+    }),
     getProjectChangeSummary,
     documentProfile,
     handleCompositionEnd: () => {
@@ -326,6 +474,7 @@ function WorkbenchFilePanelClient(
         return;
       }
     },
+    handleEditorPaste: handleScratchpadImagePaste,
     handleEditorPointerDown: () => {
       editorClient.clearPendingInlineFormats();
     },
@@ -540,6 +689,7 @@ function WorkbenchFilePanelClient(
   ) {
     const didOpen = await fileClient.openFile(filePath, fileOptions);
     if (didOpen) {
+      onContentChange?.(fileSessionState.currentContent);
       emit();
     }
     return didOpen;
@@ -548,6 +698,7 @@ function WorkbenchFilePanelClient(
   async function resetCurrentDraftToSaved() {
     editorClient.hideResetDraftDialog();
     await fileClient.resetCurrentDraftToSaved();
+    onContentChange?.(fileSessionState.currentContent);
     editor.focus();
     emit();
   }
@@ -555,17 +706,20 @@ function WorkbenchFilePanelClient(
   async function resetCurrentFileToHead() {
     editorClient.hideResetDraftDialog();
     await fileClient.resetCurrentFileToHead();
+    onContentChange?.(fileSessionState.currentContent);
     editor.focus();
     emit();
   }
 
   async function saveCurrentFile(saveOptions?: { force?: boolean }) {
     await fileClient.saveCurrentFile(saveOptions);
+    onContentChange?.(fileSessionState.currentContent);
     emit();
   }
 
   async function refreshCurrentFileFromDiskIfSafe() {
     await fileClient.refreshCurrentFileFromDiskIfSafe();
+    onContentChange?.(fileSessionState.currentContent);
     emit();
   }
 

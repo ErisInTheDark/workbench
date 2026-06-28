@@ -333,19 +333,12 @@ export interface WorkbenchRouteLoadResult {
 
 export interface WorkbenchCollaborationSuggestion {
   id: string;
+  materializedThreadId?: string;
   prompt: string;
   rationale?: string;
+  scratchpadImageIds?: string[];
   title: string;
   updatedAt: number;
-}
-
-export interface WorkbenchCollaborationStartedSuggestionThread {
-  prompt: string;
-  rationale?: string;
-  startedAt: number;
-  suggestionId: string;
-  threadId: string;
-  title: string;
 }
 
 export interface WorkbenchCollaborationThreadRegistry {
@@ -355,7 +348,6 @@ export interface WorkbenchCollaborationThreadRegistry {
   lastAppliedSuggestionPatchSignature: string;
   lastAutoWakeAt: number;
   lastRunSummary: string;
-  startedSuggestionThreads: Record<string, WorkbenchCollaborationStartedSuggestionThread>;
   suggestions: Record<string, WorkbenchCollaborationSuggestion>;
   threadIds: string[];
 }

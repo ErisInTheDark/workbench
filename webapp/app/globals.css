@@ -521,6 +521,21 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     border-radius: 0;
     padding: 0;
   }
+
+  .editor-content [data-collaboration-scratchpad-image="true"] {
+    display: flex;
+    justify-content: center;
+    margin: 0 0 1rem;
+  }
+
+  .editor-content [data-collaboration-scratchpad-image="true"] img {
+    display: block;
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: min(70vh, 42rem);
+    border-radius: 0.85rem;
+  }
   
   .editor-content p:has(+ :where(br, [data-single-break="true"]) + [data-block-comment="true"]) {
     margin-bottom: 0;

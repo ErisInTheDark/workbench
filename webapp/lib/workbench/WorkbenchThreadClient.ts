@@ -108,7 +108,7 @@ const DRAFT_THREAD_ID_PREFIX = "draft:";
 const STABLE_VISIBLE_THREAD_COUNT = 5;
 const EMPTY_ROLLOUT_ERROR_FRAGMENT = "rollout at";
 const EMPTY_ROLLOUT_ERROR_SUFFIX = "is empty";
-const MISSING_ROLLOUT_ERROR_FRAGMENT = "no rollout found by id";
+const MISSING_ROLLOUT_ERROR_FRAGMENTS = ["no rollout found by id", "no rollout found for thread id"] as const;
 const FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE = "Started the thread. Its saved rollout is still warming up, so the live view will refresh automatically.";
 
 type WorkspaceWriteSandboxPolicy = Extract<SandboxPolicy, { type: "workspaceWrite" }>;
@@ -612,7 +612,8 @@ function isEmptyRolloutError(error: unknown) {
 
 function isMissingRolloutError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  return message.toLowerCase().includes(MISSING_ROLLOUT_ERROR_FRAGMENT);
+  const normalizedMessage = message.toLowerCase();
+  return MISSING_ROLLOUT_ERROR_FRAGMENTS.some((fragment) => normalizedMessage.includes(fragment));
 }
 
 function isTransientRolloutReadError(error: unknown) {

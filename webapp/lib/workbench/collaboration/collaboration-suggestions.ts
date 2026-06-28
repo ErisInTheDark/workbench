@@ -17,6 +17,7 @@ export type WorkbenchCollaborationSuggestionPatch = Record<string, WorkbenchColl
 export interface WorkbenchCollaborationSuggestionPatchEntry {
   prompt: string;
   rationale?: string;
+  scratchpadImageIds?: string[];
   title: string;
 }
 
@@ -38,6 +39,12 @@ function normalizeSuggestionId(value: string) {
 
 function normalizeText(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? Array.from(new Set(value.filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim())).map((entry) => entry.trim())))
+    : [];
 }
 
 function createSuggestionPatchSignature(thread: ThreadPayload, turnIndex: number, itemIndex: number, text: string) {
@@ -62,6 +69,7 @@ function normalizePatchEntry(value: unknown): WorkbenchCollaborationSuggestionPa
   const title = normalizeText(candidate.title);
   const prompt = normalizeText(candidate.prompt);
   const rationale = normalizeText(candidate.rationale);
+  const scratchpadImageIds = normalizeStringArray(candidate.scratchpadImageIds);
 
   if (!title || !prompt) {
     return undefined;
@@ -71,6 +79,7 @@ function normalizePatchEntry(value: unknown): WorkbenchCollaborationSuggestionPa
     prompt,
     title,
     ...(rationale ? { rationale } : {}),
+    ...(scratchpadImageIds.length ? { scratchpadImageIds } : {}),
   };
 }
 
@@ -126,6 +135,7 @@ export function applyWorkbenchCollaborationSuggestionPatch(
   const nextSuggestions = { ...currentSuggestions };
 
   for (const [id, entry] of Object.entries(patch)) {
+    const existingSuggestion = nextSuggestions[id];
     if (entry === null) {
       if (id in nextSuggestions) {
         delete nextSuggestions[id];
@@ -134,14 +144,19 @@ export function applyWorkbenchCollaborationSuggestionPatch(
       continue;
     }
 
+    if (existingSuggestion?.materializedThreadId) {
+      continue;
+    }
+
     const nextSuggestion: WorkbenchCollaborationSuggestion = {
       id,
       prompt: entry.prompt,
       rationale: entry.rationale,
+      scratchpadImageIds: entry.scratchpadImageIds,
       title: entry.title,
       updatedAt,
     };
-    if (!areDeeplyEqual(nextSuggestions[id], nextSuggestion)) {
+    if (!areDeeplyEqual(existingSuggestion, nextSuggestion)) {
       nextSuggestions[id] = nextSuggestion;
       changed = true;
     }
