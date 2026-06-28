@@ -221,7 +221,7 @@ export default function WorkbenchThreadPanel ({
 
   if (!thread) {
     return (
-      <div className="flex h-full min-h-full min-w-0 flex-col px-5 md:px-6">
+      <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden px-5 md:px-6">
         <ThreadLoadingSkeleton
           contained
           fillAvailableHeight
@@ -251,7 +251,7 @@ export default function WorkbenchThreadPanel ({
   }
 
   return (
-    <div className="flex h-full min-h-full min-w-0 flex-col">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       <header
         className={`sticky top-0 z-10 px-5 py-3 md:px-6${onHeaderPointerDragStart ? " cursor-grab active:cursor-grabbing" : ""}${hasSidebarRestoreInset ? " pl-28 md:pl-28" : ""}${isMinimizedVertical ? " flex h-full items-center justify-center" : ""}`}
         onPointerDown={handleHeaderPointerDown}
@@ -319,18 +319,20 @@ export default function WorkbenchThreadPanel ({
           </div>
         </div>
       </header>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col px-5 md:px-6" hidden={isMinimized}>
-        <ThreadView
-          {...threadViewProps}
-          contained
-          fontSizeRem={effectiveFontSizeRem}
-          onReadThread={handleReadThread}
-          onPauseThread={handlePauseThread}
-          onResumeThread={handleResumeThread}
-          onSendMessage={handleSendMessage}
-          onStopThread={handleStopThread}
-          thread={thread}
-        />
+      <div className="relative min-h-0 min-w-0 flex-1" hidden={isMinimized}>
+        <div className="explorer-scrollbar absolute inset-0 overflow-x-hidden overflow-y-auto px-5 md:px-6" data-thread-scroll-target="true">
+          <ThreadView
+            {...threadViewProps}
+            contained
+            fontSizeRem={effectiveFontSizeRem}
+            onReadThread={handleReadThread}
+            onPauseThread={handlePauseThread}
+            onResumeThread={handleResumeThread}
+            onSendMessage={handleSendMessage}
+            onStopThread={handleStopThread}
+            thread={thread}
+          />
+        </div>
       </div>
     </div>
   );

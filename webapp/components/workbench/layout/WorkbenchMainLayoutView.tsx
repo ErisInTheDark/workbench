@@ -285,7 +285,10 @@ export default function WorkbenchMainLayoutView ({
     return (
       <section
         key={node.id}
-        className="explorer-scrollbar relative h-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto border border-[color-mix(in_srgb,var(--text)_10%,transparent)]"
+        className={joinClasses(
+          "explorer-scrollbar relative h-full min-h-0 min-w-0 overflow-x-hidden border border-[color-mix(in_srgb,var(--text)_10%,transparent)]",
+          node.target.kind === "thread" ? "overflow-hidden" : "overflow-y-auto",
+        )}
         data-panel-id={node.id}
         onClick={() => {
           onFocusPanel(node.id);

@@ -10,6 +10,7 @@
 const THREAD_BOTTOM_ANCHOR_TOLERANCE_PX = 96;
 const THREAD_HISTORY_LOAD_TOLERANCE_PX = 160;
 const THREAD_SCROLL_DIRECTION_EPSILON_PX = 1;
+const THREAD_SCROLL_TARGET_ATTRIBUTE = "data-thread-scroll-target";
 
 export interface ThreadScrollMetrics {
   clientHeight: number;
@@ -79,6 +80,10 @@ function ThreadScrollAnchorController (): ThreadScrollAnchorController {
     for (let element = root.parentElement; element; element = element.parentElement) {
       if (element === document.body || element === document.documentElement) {
         break;
+      }
+
+      if (element.getAttribute(THREAD_SCROLL_TARGET_ATTRIBUTE) === "true") {
+        return element;
       }
 
       if (isScrollableOverflowValue(window.getComputedStyle(element).overflowY)) {
