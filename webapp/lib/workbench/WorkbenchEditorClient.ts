@@ -223,6 +223,7 @@ interface WorkbenchEditorClient {
   isPointerNearRevisionHoverUi: (clientX: number, clientY: number) => boolean;
   maybeActivateInlineCommentShortcut: (event: Event) => null;
   maybeClearPendingInlineFormatsForKey: (event: KeyboardEvent) => void;
+  normalizeRichInputBlocksOutsideSelection: () => void;
   refreshEditorChrome: () => void;
   refreshStatusMessage: (message?: string) => void;
   runHistoryReplay: (request: EditHistoryReplayRequest) => void;
@@ -1322,6 +1323,10 @@ function WorkbenchEditorClient(
         syncStructuredBlockStyles();
       }
 
+      if (context.kind === "input" && options.fileSessionState.mode === "rich") {
+        normalizeRichInputBlocksOutsideSelection();
+      }
+
       hooks.afterDomMutation?.();
 
       options.mutationRuntime.inspectCurrentDraft();
@@ -1403,6 +1408,13 @@ function WorkbenchEditorClient(
 
   function maybeClearPendingInlineFormatsForKey(event: KeyboardEvent) {
     inlineFormatController.maybeClearPendingInlineFormatsForKey(event);
+  }
+
+  function normalizeRichInputBlocksOutsideSelection() {
+    const result = richInputController.normalizeBlocksOutsideSelection();
+    if (result.normalizedBlockCount > 0) {
+      syncStructuredBlockStyles();
+    }
   }
 
   function canonicalizeAllInlineRunContainers(root: ParentNode) {
@@ -1864,6 +1876,7 @@ function WorkbenchEditorClient(
     isPointerNearRevisionHoverUi,
     maybeActivateInlineCommentShortcut,
     maybeClearPendingInlineFormatsForKey,
+    normalizeRichInputBlocksOutsideSelection,
     refreshEditorChrome,
     refreshStatusMessage,
     runHistoryReplay,
