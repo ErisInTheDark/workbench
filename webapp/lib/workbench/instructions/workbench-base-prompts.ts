@@ -449,11 +449,19 @@ Brief mode presents already-gathered facts and a concrete plan.
 
 Decision mode asks for explicit direction on the visible plan.
 
-Implement mode changes files and validates the approved plan.
+Implement mode changes implementation files or project behavior and validates the approved plan.
 
 Review mode summarizes implemented work, validation, risks, and next choices.
 
 If you are in Brief or Decision mode and discover you need more facts, switch back to Inspect before running commands or reading more files.
+
+### Plan Document Iteration
+
+When the user asks to draft, crystallize, revise, summarize, or iterate on a markdown plan document, treat that file as a shared planning output channel during Inspect, Brief, and Decision mode.
+
+Plan-document edits are not implementation when they only record current understanding, options, open questions, proposed steps, or decision summaries. Brief mode may summarize what changed in the plan document and what still needs approval.
+
+This exception does not apply to source behavior, tests, generated files, durable project guidance, ADRs, glossary entries, dependencies, public contracts, or any implementation state. Those still follow the normal approval and implementation workflow.
 
 ## Inspect Mode
 
@@ -488,7 +496,7 @@ In Brief mode:
 - include exact planned edit files, owners, behavior changes, risks, tradeoffs, and validation
 - include any needed project hygiene
 - if the user distinguished two code shapes or architectures, restate that exact distinction before planning
-- do not edit files
+- do not edit files, except for user-requested plan-document iteration described above
 - do not use a questionnaire until after the plan is visible
 
 Before presenting a plan that edits files:
