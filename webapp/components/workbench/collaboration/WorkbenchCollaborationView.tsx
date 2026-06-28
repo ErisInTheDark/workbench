@@ -80,7 +80,6 @@ interface WorkbenchCollaborationViewProps extends Omit<ThreadViewProps, "contain
   collaborationThreadRegistry: WorkbenchCollaborationThreadRegistry;
   collaborationStartedSuggestionThreadSummaries: ThreadSummary[];
   collaborationThreadSummaries: ThreadSummary[];
-  collaboratorPrompt: string;
   controls: WorkbenchControls | null;
   editorFontClassName: string;
   fontSizeRem: number;
@@ -225,7 +224,6 @@ function formatFileLinkingInfoForPrompt (
 
 function buildCollaboratorControlPrompt ({
   additionalUserMessage,
-  collaboratorPrompt,
   diffMap,
   fileLinkingInfo,
   mode,
@@ -235,7 +233,6 @@ function buildCollaboratorControlPrompt ({
   suggestions,
 }: {
   additionalUserMessage?: string;
-  collaboratorPrompt: string;
   diffMap: string;
   fileLinkingInfo: string;
   mode: "bootstrap" | "wake";
@@ -245,7 +242,6 @@ function buildCollaboratorControlPrompt ({
   suggestions: readonly WorkbenchCollaborationSuggestion[];
 }) {
   return `<!-- workbench-collaboration-control -->
-${collaboratorPrompt}
 ${additionalUserMessage ? `
 Additional user message:
 ${additionalUserMessage}
@@ -280,13 +276,21 @@ Scratchpad rules:
 * Scratchpad edits happen in the scratchpad file before the final JSON. Do not describe scratchpad edits in the JSON unless they affect the summary.
 * If there is nothing useful to add or mark, leave the scratchpad unchanged.
 
-Suggestion judgment rules:
+Suggestion selection rules:
 
-* Suggest work that is coherent as a separate dedicated thread.
-* Actively maintain existing suggestions based on the current scratchpad, diff map, and suggestion-created thread state.
-* Meaningfully improve existing suggestions when the current scratchpad, diff map, or suggestion-created thread state gives you better context for the title, rationale, or prompt.
-* When relevant files matter, use Workbench-clickable file links from the file-linking information above.
-* Avoid suggestions that are vague, duplicate existing work, already completed, or mostly generic process reminders.
+* Keep the visible suggestion set small. Target four or fewer active suggestions unless the current project state makes an exception clearly worthwhile.
+* Do not exhaustively cover every scratchpad item. The scratchpad is context, not a queue.
+* Choose suggestions based on current usefulness: current scratchpad, current code, current diff context, user-visible urgency, and whether a dedicated thread would be coherent.
+* Treat previous summaries, deferred suggestions, and previous suggestion-created thread state as leads to verify, not as sources of truth. Current scratchpad, code, diff, and thread state win.
+* Combine related concerns when they share an owner, implementation area, or review context. Do not combine unrelated work just to reduce count.
+* When a suggestion combines related concerns, the prompt must preserve each concrete sub-goal and constraint.
+
+Suggestion rationale rules:
+
+* Every non-null suggestion must include rationale.
+* Rationale is user-facing preview text. Keep it to two or three sentences.
+* Rationale should explain why this suggestion is worth surfacing now and why its grouping is coherent.
+* Put implementation detail in the prompt, not in the rationale.
 
 Suggestion prompt quality rules:
 
@@ -295,12 +299,25 @@ Suggestion prompt quality rules:
 * Do not repeat generic agent instructions.
 * Do not tell the executing agent to read AGENTS files, inspect before planning, wait for approval, use skills, follow project style rules, avoid deep selectors, or obey baseline project instructions.
 * Do not use exhaustive file lists as a substitute for task context.
+* Do not soften explicit scratchpad intent with hedges such as "if appropriate"; if uncertainty is real, make it a concrete verification step.
+* Repair existing suggestions when they are vague, over-bundled, under-bundled, stale, too exhaustive, missing rationale, or too wordy.
+
+Checkpoint memory rules:
+
+* Use the previous private summary as memory, not as authority.
+* If the previous summary contains checkpointThreadId and checkpointCommit, treat them as a lead and try to diff against that exact checkpoint.
+* Compare the checkpoint diff with the current git diff map and any current working-tree evidence you inspect.
+* Prefer whichever diff context is smaller and more relevant for suggestion maintenance.
+* If old summary memory or checkpoint diff conflicts with current scratchpad, code, diff, or thread state, current reality wins.
+* Before returning the final JSON, after any scratchpad edits and after deciding suggestions, create a new Workbench diff checkpoint as your final tool action if checkpoint tools are available.
+* In the final JSON summary, include checkpointThreadId, checkpointCommit, and createdAt for the new checkpoint when available.
+* The summary may be very long if that helps the next collaborator run. Include deferred ideas, stale-memory corrections, checkpoint interpretation, and useful reasoning there instead of flooding visible suggestions.
 
 Bad suggestion prompt example:
-\"Inspect and plan this follow-up; do not implement until approval. Read AGENTS.md and focus on file A, file B, file C, file D.\"
+\"Polish the related follow-ups. Update the assets if appropriate, check the sizing, and keep unrelated work in separate suggestions.\"
 
 Good suggestion prompt example:
-\"Make static component content align toward its placement edges. The scratchpad is tracking MenuBar top-left and Stats bottom-right behavior; preserve the existing orientation model unless inspection shows it is the wrong owner. Useful anchors: #[src/ui/screen/screens/game/static/StaticComponent.ts], #[style/newui/screens/game/MenuBar.scss].\"
+\"Update the related UI assets in one focused pass. Replace the known placeholder asset and verify the related asset dimensions against their metadata. If an asset mapping is uncertain, make that verification explicit before changing callers.\"
 
 Workbench hides the final response in the Collaboration view; the scratchpad is the user-facing source of truth.
 
@@ -327,12 +344,12 @@ interface Suggestion {
    */
   prompt: string;
 
-  /** Why this suggestion is coherent now. Include when it helps the user decide. */
+  /** User-facing preview text. Required for non-null suggestions; explain current value and grouping in two or three sentences. */
   rationale?: string;
 }
 
 interface WorkbenchCollaborationResponse {
-  /** Concise private state for the next collaborator run, including the diff map and important interpretation from this run. */
+  /** Private memory for the next collaborator run. May be long; include checkpoint breadcrumbs, deferred leads, and stale-memory corrections when useful. */
   summary: string;
 
   /**
@@ -413,7 +430,6 @@ export default function WorkbenchCollaborationView ({
   collaborationThreadRegistry,
   collaborationStartedSuggestionThreadSummaries,
   collaborationThreadSummaries,
-  collaboratorPrompt,
   composerSpellCheck,
   controls,
   editorFontClassName,
@@ -831,7 +847,6 @@ export default function WorkbenchCollaborationView ({
       const payload = await onSendMessage(thread, [
         createTextInput(buildCollaboratorControlPrompt({
           additionalUserMessage: additionalText,
-          collaboratorPrompt,
           diffMap: projectDiffMap,
           fileLinkingInfo,
           mode,
@@ -879,7 +894,7 @@ export default function WorkbenchCollaborationView ({
       isSendingControlPromptRef.current = false;
       setIsSendingControlPrompt(false);
     }
-  }, [clearPendingAutoWakeActivity, collaborationSuggestions, collaborationThreadRegistry.lastRunSummary, collaboratorPrompt, fileLinkingInfo, hydrateCollaboratorThread, onSendMessage, projectDiffMap, rememberCollaboratorThread, scratchpadPath, scratchpadWritableRoot, startedSuggestionThreadsForPrompt]);
+  }, [clearPendingAutoWakeActivity, collaborationSuggestions, collaborationThreadRegistry.lastRunSummary, fileLinkingInfo, hydrateCollaboratorThread, onSendMessage, projectDiffMap, rememberCollaboratorThread, scratchpadPath, scratchpadWritableRoot, startedSuggestionThreadsForPrompt]);
 
   const startCollaboratorRun = useCallback(async (mode: "bootstrap" | "wake" = collaborationThreadRegistry.threadIds.length ? "wake" : "bootstrap") => {
     if (!controls) {

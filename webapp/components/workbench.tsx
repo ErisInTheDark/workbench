@@ -211,7 +211,6 @@ const DEFAULT_RELOAD_REQUEST: OrchestratorReloadRequest = {
 const SETTINGS_ORDER: WorkbenchSettingKey[] = [
   "theme",
   "collaborationScratchpadPath",
-  "collaborationCollaboratorPrompt",
   "editorFontFamily",
   "editorSpellCheck",
   "composerSpellCheck",
@@ -3456,7 +3455,6 @@ export default function Workbench () {
             {showCollaborationView && !shouldRenderMainLayout ? (
               <div className="h-full min-h-0">
                 <WorkbenchCollaborationView
-                  collaboratorPrompt={resolvedSettings.collaborationCollaboratorPrompt}
                   collaborationThreadRegistry={collaborationThreadRegistry}
                   collaborationStartedSuggestionThreadSummaries={collaborationStartedSuggestionThreadSummaries}
                   collaborationThreadSummaries={collaborationThreadSummaries}

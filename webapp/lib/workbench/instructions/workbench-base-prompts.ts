@@ -744,9 +744,15 @@ If the project has its own ADR, glossary, notes, or context workflow, prefer tha
 
 When maintaining suggestions:
 
-- Suggest work that is coherent as a separate dedicated thread.
-- Improve existing suggestions when current scratchpad, diff, or thread state gives you better context.
-- Avoid suggestions that are vague, duplicate existing work, already completed, or mostly generic process reminders.
+- Keep visible suggestions limited; target about four or fewer unless current reality justifies more.
+- Do not exhaustively cover project notes; notes are context, not a queue.
+- Choose work based on current scratchpad/project notes, current code, current diff context, current thread state, and usefulness as a dedicated thread.
+- Treat previous summaries, deferred ideas, previous suggestions, and checkpoint breadcrumbs as leads to verify, not sources of truth.
+- Current project notes, code, diff, and thread state win over old memory.
+- Group related concerns when they share an owner, implementation area, or review context; preserve each concrete sub-goal in the prompt.
+- Require rationale for every non-null suggestion and keep it to two or three user-facing sentences.
+- Use the private summary for rich next-run memory; it may be long.
+- If checkpoint tools are available, use checkpointThreadId/checkpointCommit from prior summary as a diff lead, compare it to current diff context, and create a new diff checkpoint before final JSON.
 - Make suggestion prompts self-contained for a fresh Workbench thread.
 - Include the concrete desired outcome, relevant project context, adjacent work that affects judgment, task-specific constraints not already supplied by project instructions, and only the most useful Workbench-clickable file links.
 - Do not repeat generic agent instructions, AGENTS-file reminders, approval workflow reminders, or exhaustive file lists.

@@ -27,7 +27,6 @@ export type WorkbenchEditorFontFamily = "sans" | "serif" | "mono";
 export type WorkbenchFileOpenBehavior = "workbench" | "workbench-or-vscode" | "vscode";
 export type WorkbenchSettingKey =
   | "theme"
-  | "collaborationCollaboratorPrompt"
   | "collaborationScratchpadPath"
   | "editorFontFamily"
   | "editorSpellCheck"
@@ -38,7 +37,6 @@ export type WorkbenchSettingKey =
   | "threadCodeBlockWrap";
 
 export interface WorkbenchGlobalSettings {
-  collaborationCollaboratorPrompt: string;
   collaborationScratchpadPath: string;
   composerSpellCheck: boolean;
   editorFontFamily: WorkbenchEditorFontFamily;
@@ -74,29 +72,8 @@ export type WorkbenchSettingDefinition<K extends WorkbenchSettingKey = Workbench
 };
 
 export const DEFAULT_COLLABORATION_SCRATCHPAD_PATH = DEFAULT_COLLABORATION_SCRATCHPAD_SETTING_VALUE;
-export const DEFAULT_COLLABORATION_COLLABORATOR_PROMPT = [
-  "You are the project collaborator for this Workbench project.",
-  "",
-  "Read the shared scratchpad as plain Workbench-owned project notes.",
-  "",
-  "Use the scratchpad for collaborative planning and evolving todo context only when the user explicitly asks you to update project notes. Do not write suggested thread prompts into the scratchpad; Workbench owns those as structured suggestions.",
-  "",
-  "Inspect the project yourself when useful, including current worktree state and diffs. Notice coherent work you could help with instead of asking the user to orchestrate obvious discovery.",
-  "",
-  "Prefer suggestions that improve project coherence, not only task completion. Consider dedicated implementation threads, ADRs for durable or strange decisions, glossary entries for fuzzy language, local docs under `.agents` or the project's existing context location, comments for intentionally unusual code, and refactors where the current shape is costly or misleading.",
-  "",
-  "If the project has its own existing ADR, glossary, notes, or context workflow, prefer that over inventing a new `.agents` convention.",
-  "",
-  "Return only the JSON shape requested by Workbench in your final message. Put durable shared planning in the scratchpad, but put suggested dedicated-thread prompts only in the Workbench-owned suggestions JSON.",
-].join("\n");
 
 export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: WorkbenchSettingDefinition<K> } = {
-  collaborationCollaboratorPrompt: {
-    description: "Controls the recurring Collaboration collaborator instructions.",
-    key: "collaborationCollaboratorPrompt",
-    label: "Collaboration collaborator prompt",
-    type: "textarea",
-  },
   collaborationScratchpadPath: {
     description: "Overrides the Collaboration scratchpad markdown file. Leave blank for Workbench-owned per-project storage.",
     key: "collaborationScratchpadPath",
@@ -271,7 +248,6 @@ function normalizeGlobalWorkbenchSettings(value: unknown): WorkbenchGlobalSettin
   const candidate = isRecord(value) ? value : {};
   return {
     composerSpellCheck: typeof candidate.composerSpellCheck === "boolean" ? candidate.composerSpellCheck : false,
-    collaborationCollaboratorPrompt: normalizeText(candidate.collaborationCollaboratorPrompt ?? candidate.collaborationAdvisorPrompt, DEFAULT_COLLABORATION_COLLABORATOR_PROMPT),
     collaborationScratchpadPath: normalizeText(candidate.collaborationScratchpadPath, DEFAULT_COLLABORATION_SCRATCHPAD_PATH),
     editorFontFamily: normalizeEditorFontFamily(candidate.editorFontFamily),
     editorFontSize: clampEditorFontSize(candidate.editorFontSize ?? readLegacyEditorFontSize()),
@@ -298,8 +274,6 @@ function normalizeProjectOverride<K extends WorkbenchSettingKey>(
       return { enabled, value: normalizeEditorFontFamily(candidate.value) } as WorkbenchProjectSettingOverride<K>;
     case "fileOpenBehavior":
       return { enabled, value: normalizeFileOpenBehavior(candidate.value) } as WorkbenchProjectSettingOverride<K>;
-    case "collaborationCollaboratorPrompt":
-      return { enabled, value: normalizeText(candidate.value, defaultValue as string) } as WorkbenchProjectSettingOverride<K>;
     case "collaborationScratchpadPath":
       return { enabled, value: normalizeText(candidate.value, defaultValue as string) } as WorkbenchProjectSettingOverride<K>;
     case "editorFontSize":
@@ -317,7 +291,6 @@ function normalizeProjectOverride<K extends WorkbenchSettingKey>(
 
 export function createDefaultGlobalWorkbenchSettings(): WorkbenchGlobalSettings {
   return {
-    collaborationCollaboratorPrompt: DEFAULT_COLLABORATION_COLLABORATOR_PROMPT,
     collaborationScratchpadPath: DEFAULT_COLLABORATION_SCRATCHPAD_PATH,
     composerSpellCheck: false,
     editorFontFamily: "sans",
@@ -333,7 +306,6 @@ export function createDefaultGlobalWorkbenchSettings(): WorkbenchGlobalSettings 
 export function createDefaultProjectWorkbenchSettings(): WorkbenchProjectSettings {
   const globalDefaults = createDefaultGlobalWorkbenchSettings();
   return {
-    collaborationCollaboratorPrompt: { enabled: false, value: globalDefaults.collaborationCollaboratorPrompt },
     collaborationScratchpadPath: { enabled: false, value: globalDefaults.collaborationScratchpadPath },
     composerSpellCheck: { enabled: false, value: globalDefaults.composerSpellCheck },
     editorFontFamily: { enabled: false, value: globalDefaults.editorFontFamily },
@@ -367,7 +339,6 @@ export function readProjectWorkbenchSettings(projectId: string) {
   const candidate = isRecord(projectSettings) ? projectSettings : {};
   return {
     composerSpellCheck: normalizeProjectOverride("composerSpellCheck", candidate.composerSpellCheck),
-    collaborationCollaboratorPrompt: normalizeProjectOverride("collaborationCollaboratorPrompt", candidate.collaborationCollaboratorPrompt ?? candidate.collaborationAdvisorPrompt),
     collaborationScratchpadPath: normalizeProjectOverride("collaborationScratchpadPath", candidate.collaborationScratchpadPath),
     editorFontFamily: normalizeProjectOverride("editorFontFamily", candidate.editorFontFamily),
     editorFontSize: normalizeProjectOverride("editorFontSize", candidate.editorFontSize),
@@ -384,7 +355,6 @@ export function writeProjectWorkbenchSettings(projectId: string, settings: Workb
   const nextProjectSettings = isRecord(allProjectSettings) ? { ...allProjectSettings } : {};
   nextProjectSettings[projectId] = {
     composerSpellCheck: normalizeProjectOverride("composerSpellCheck", settings.composerSpellCheck),
-    collaborationCollaboratorPrompt: normalizeProjectOverride("collaborationCollaboratorPrompt", settings.collaborationCollaboratorPrompt),
     collaborationScratchpadPath: normalizeProjectOverride("collaborationScratchpadPath", settings.collaborationScratchpadPath),
     editorFontFamily: normalizeProjectOverride("editorFontFamily", settings.editorFontFamily),
     editorFontSize: normalizeProjectOverride("editorFontSize", settings.editorFontSize),
@@ -402,7 +372,6 @@ export function resolveWorkbenchSettings(
   projectSettings: WorkbenchProjectSettings,
 ): WorkbenchResolvedSettings {
   return {
-    collaborationCollaboratorPrompt: projectSettings.collaborationCollaboratorPrompt.enabled ? projectSettings.collaborationCollaboratorPrompt.value : globalSettings.collaborationCollaboratorPrompt,
     collaborationScratchpadPath: projectSettings.collaborationScratchpadPath.enabled ? projectSettings.collaborationScratchpadPath.value : globalSettings.collaborationScratchpadPath,
     composerSpellCheck: projectSettings.composerSpellCheck.enabled ? projectSettings.composerSpellCheck.value : globalSettings.composerSpellCheck,
     editorFontFamily: projectSettings.editorFontFamily.enabled ? projectSettings.editorFontFamily.value : globalSettings.editorFontFamily,
