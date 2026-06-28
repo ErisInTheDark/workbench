@@ -439,7 +439,7 @@ function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, k
         ? renderThreadSingleItemOrderedStep(block, options, keyPrefix)
         : renderThreadListBlock(block, options, keyPrefix);
     case "hr":
-      return <hr className={BLOCK_SPACING_CLASS} key={keyPrefix} />;
+      return <hr className="[margin-inline:10%] my-8 [border-color:color-mix(var(--text),var(--shell-fade-bg)_70%)]" key={keyPrefix} />;
     case "code": {
       const isSvgCodeBlock = isSvgCodeBlockLanguage(block.language);
       return (
