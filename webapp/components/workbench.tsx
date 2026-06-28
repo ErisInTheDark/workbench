@@ -852,6 +852,7 @@ export default function Workbench () {
         const dom = getWorkbenchDomSurfaces();
         const nextCleanup = await initWorkbench({
           dom,
+          initialRoute: currentRouteRef.current,
           onExplorerStateChange: (snapshot) => {
             scheduleWorkbenchStateUpdate(() => {
               setExplorer(snapshot);

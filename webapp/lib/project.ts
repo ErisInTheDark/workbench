@@ -1050,6 +1050,10 @@ async function buildWorkspaceTree(project: ResolvedProject) {
 }
 
 async function getProjectChanges(project: ResolvedProject) {
+  if (project.kind === "workbench-library") {
+    return {};
+  }
+
   if (project.kind !== "workspace") {
     return await getGitChanges(project.root);
   }

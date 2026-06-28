@@ -384,6 +384,7 @@ export interface WorkbenchControls {
 }
 
 export interface WorkbenchBindings {
+  initialRoute?: WorkbenchRoute;
   onExplorerStateChange?: (snapshot: ExplorerSnapshot) => void;
   onCurrentThreadChange?: (thread: ThreadPayload | null) => void;
   onPendingUserInputRequestsChange?: (requestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>) => void;

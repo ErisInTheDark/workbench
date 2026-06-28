@@ -56,7 +56,7 @@ export async function WorkbenchClient(
   const coordinatorLifecycle = new LifecycleScope();
   let explorerStateChangeScheduled = false;
   let reportStatusMessage = (_message: string) => {};
-  let activeRoute: WorkbenchRoute = createProjectRoute("");
+  let activeRoute: WorkbenchRoute = workbenchBindings.initialRoute ?? createProjectRoute("");
   let activeRouteGeneration = 0;
   const projectClient = WorkbenchProjectClient();
   const threadClient = WorkbenchThreadClient({
@@ -741,12 +741,12 @@ export async function WorkbenchClient(
   };
 
   await draftStore.hydratePersistedDrafts();
-  workbenchBindings.onControlsReady?.(controls);
   emitExplorerStateChange();
   emitCurrentThreadChange();
   emitPendingUserInputRequestsChange();
   emitRateLimitsChange();
-  await refreshTree();
+  await applyRoute(activeRoute);
+  workbenchBindings.onControlsReady?.(controls);
   if (sessionState.currentThreadId || activeRoute.view === "thread") {
     void refreshRateLimits();
   }
