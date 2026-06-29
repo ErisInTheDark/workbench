@@ -129,6 +129,12 @@ export interface ThreadPayload extends ThreadSummary {
   turns: Turn[];
 }
 
+export interface WorkbenchThreadDocumentSnapshot {
+  documentsByKey: Record<string, ThreadPayload | undefined>;
+  keysByThreadId: Record<string, string | undefined>;
+  selectedThreadKey: string;
+}
+
 export type WorkbenchThreadTurnLoadState = "loaded" | "missing" | "unloaded";
 
 export interface WorkbenchThreadTurnHistoryEntry {
@@ -387,6 +393,7 @@ export interface WorkbenchBindings {
   initialRoute?: WorkbenchRoute;
   onExplorerStateChange?: (snapshot: ExplorerSnapshot) => void;
   onCurrentThreadChange?: (thread: ThreadPayload | null) => void;
+  onThreadDocumentsChange?: (snapshot: WorkbenchThreadDocumentSnapshot) => void;
   onPendingUserInputRequestsChange?: (requestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>) => void;
   onRateLimitsChange?: (rateLimits: RateLimitSnapshot | null) => void;
   onControlsReady?: (controls: WorkbenchControls) => void;

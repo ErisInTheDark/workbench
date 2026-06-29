@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ComponentProps, type PointerEvent } from "react";
+import { useCallback, useEffect, useState, type ComponentProps, type PointerEvent } from "react";
 
 import type { ThreadPayload, ThreadSummary, WorkbenchThreadHydrationRequest } from "../../../lib/types";
 import ThreadLoadingSkeleton from "../thread-view/ThreadLoadingSkeleton";
@@ -28,7 +28,6 @@ const THREAD_PANEL_HYDRATION: WorkbenchThreadHydrationRequest = { mode: "legacyF
 const THREAD_PANEL_RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000;
 
 interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "thread"> {
-  fallbackThread?: ThreadPayload | null;
   fallbackThreadSummary?: ThreadSummary | null;
   hasSidebarRestoreInset?: boolean;
   isFocused: boolean;
@@ -40,6 +39,7 @@ interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "thread"> {
   onMinimizeToggle?: () => void;
   onPanelZoomDeltaChange?: (zoomDelta: number) => void;
   panelZoomDelta?: number;
+  thread: ThreadPayload | null;
   threadId: string;
 }
 
@@ -48,7 +48,6 @@ function isThreadStatusActive(status: string) {
 }
 
 export default function WorkbenchThreadPanel ({
-  fallbackThread = null,
   fallbackThreadSummary = null,
   hasSidebarRestoreInset = false,
   isMinimized = false,
@@ -64,67 +63,33 @@ export default function WorkbenchThreadPanel ({
   onResumeThread,
   onStopThread,
   panelZoomDelta = 0,
+  thread,
   threadId,
   ...threadViewProps
 }: WorkbenchThreadPanelProps) {
-  const [thread, setThread] = useState<ThreadPayload | null>(fallbackThread?.id === threadId ? fallbackThread : null);
   const [relativeTimeNowMs, setRelativeTimeNowMs] = useState(() => Date.now());
-  const loadGenerationRef = useRef(0);
-  const threadRef = useRef<ThreadPayload | null>(thread);
 
   useEffect(() => {
-    threadRef.current = thread;
-  }, [thread]);
-
-  useEffect(() => {
-    if (threadRef.current?.id === threadId) {
+    if (threadId !== "new" || thread?.id === threadId) {
       return;
     }
 
-    setThread(null);
-  }, [threadId]);
+    onCreateDraftThread?.();
+  }, [onCreateDraftThread, thread?.id, threadId]);
 
   useEffect(() => {
-    if (threadId !== "new" || threadRef.current?.id === threadId) {
+    if (threadId === "new" || thread?.id === threadId) {
       return;
     }
-
-    const draftThread = onCreateDraftThread?.();
-    if (draftThread) {
-      setThread(draftThread);
-    }
-  }, [onCreateDraftThread, threadId]);
-
-  useEffect(() => {
-    if (threadId === "new") {
-      return;
-    }
-
-    let cancelled = false;
-    const generation = loadGenerationRef.current + 1;
-    loadGenerationRef.current = generation;
 
     async function loadThread() {
-      const payload = await onReadThread(threadId, undefined, {
+      await onReadThread(threadId, undefined, {
         hydration: THREAD_PANEL_HYDRATION,
       });
-      if (!cancelled && loadGenerationRef.current === generation) {
-        setThread(payload);
-      }
     }
 
     void loadThread();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [onReadThread, threadId]);
-
-  useEffect(() => {
-    if (fallbackThread?.id === threadId) {
-      setThread(fallbackThread);
-    }
-  }, [fallbackThread, threadId]);
+  }, [onReadThread, thread?.id, threadId]);
 
   const fallbackSummary = fallbackThreadSummary?.id === threadId ? fallbackThreadSummary : null;
   const threadDisplaySource = thread ?? fallbackSummary;
@@ -150,60 +115,30 @@ export default function WorkbenchThreadPanel ({
   }, [threadActivityTimestampMs, threadDisplaySource?.id]);
 
   const readPanelThread = useCallback(async () => {
-    const payload = await onReadThread(threadId, thread?.harness, {
+    return await onReadThread(threadId, thread?.harness, {
       hydration: THREAD_PANEL_HYDRATION,
     });
-    if (payload?.id === threadId) {
-      setThread(payload);
-    }
-
-    return payload;
   }, [onReadThread, thread?.harness, threadId]);
 
   const handleReadThread = useCallback<ThreadViewProps["onReadThread"]>(async (nextThreadId, harness, options) => {
-    const payload = await onReadThread(nextThreadId, harness, options);
-    if (payload?.id === threadId) {
-      setThread(payload);
-    }
-
-    return payload;
-  }, [onReadThread, threadId]);
+    return await onReadThread(nextThreadId, harness, options);
+  }, [onReadThread]);
 
   const handleSendMessage = useCallback<ThreadViewProps["onSendMessage"]>(async (activeThread, input, options) => {
-    const payload = await onSendMessage(activeThread, input, options);
-    if (payload?.id === threadId) {
-      setThread(payload);
-    }
-
-    return payload;
-  }, [onSendMessage, threadId]);
+    return await onSendMessage(activeThread, input, options);
+  }, [onSendMessage]);
 
   const handleStopThread = useCallback<ThreadViewProps["onStopThread"]>(async (activeThread) => {
-    const payload = await onStopThread(activeThread);
-    if (payload?.id === threadId) {
-      setThread(payload);
-    }
-
-    return payload;
-  }, [onStopThread, threadId]);
+    return await onStopThread(activeThread);
+  }, [onStopThread]);
 
   const handlePauseThread = useCallback<ThreadViewProps["onPauseThread"]>(async (activeThread) => {
-    const payload = await onPauseThread(activeThread);
-    if (payload?.id === threadId) {
-      setThread(payload);
-    }
-
-    return payload;
-  }, [onPauseThread, threadId]);
+    return await onPauseThread(activeThread);
+  }, [onPauseThread]);
 
   const handleResumeThread = useCallback<ThreadViewProps["onResumeThread"]>(async (activeThread) => {
-    const payload = await onResumeThread(activeThread);
-    if (payload?.id === threadId) {
-      setThread(payload);
-    }
-
-    return payload;
-  }, [onResumeThread, threadId]);
+    return await onResumeThread(activeThread);
+  }, [onResumeThread]);
 
   useEffect(() => {
     if (!thread || thread.isDraft) {

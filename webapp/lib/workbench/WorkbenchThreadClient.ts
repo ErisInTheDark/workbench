@@ -57,6 +57,7 @@ import type {
     WorkbenchSteerHistoryEntry,
     WorkbenchStoredThreadUnreadState,
     WorkbenchSubmitUserInputRequestOptions,
+    WorkbenchThreadDocumentSnapshot,
     WorkbenchThreadTurnHistoryEntry,
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
@@ -82,6 +83,7 @@ import {
     readStoredThreadTokenUsage,
     readStoredThreadUnreadState,
 } from "./state/browser-state";
+import ThreadDocumentStore from "./state/ThreadDocumentStore";
 import { getTurnRenderSignature } from "./thread/thread-item-signature";
 import { applyQuestionnaireHistoryToThread, isSyntheticQuestionnaireHistoryItem } from "./thread/thread-questionnaire-history";
 import {
@@ -152,6 +154,7 @@ export interface WorkbenchThreadSnapshot {
   isLoading: boolean;
   pendingUserInputRequestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>;
   rateLimits: RateLimitSnapshot | null;
+  threadDocuments: WorkbenchThreadDocumentSnapshot;
   threads: ThreadSummary[];
   threadsError: string;
 }
@@ -628,6 +631,9 @@ function WorkbenchThreadClient(
   const listeners = new Set<WorkbenchThreadListener>();
   const rateLimitSnapshotEntriesByHarness = new Map<WorkbenchHarness, RateLimitSnapshotEntry>();
   const state = createInitialThreadState();
+  const threadDocuments = ThreadDocumentStore({
+    areDocumentsEquivalent: areThreadPayloadsEquivalent,
+  });
   const clientCreatedStreamingItemKeys = new Set<string>();
   const optimisticUserMessagesByTurnKey = new Map<string, OptimisticUserMessageEntry[]>();
   const threadUnreadRefreshInFlightKeys = new Set<string>();
@@ -810,6 +816,7 @@ function WorkbenchThreadClient(
       isLoading: state.isLoading,
       pendingUserInputRequestsByThreadId: serializePendingUserInputRequests(),
       rateLimits: state.rateLimits,
+      threadDocuments: threadDocuments.getSnapshot(),
       threads: state.threads.map(buildThreadSummaryWithUnreadBadge),
       threadsError: state.threadsError,
     };
@@ -871,6 +878,7 @@ function WorkbenchThreadClient(
     state.threadsError = "";
     state.hasLoadedThreads = false;
     state.isLoading = Boolean(getProjectRootPaths(state).length);
+    threadDocuments.clear();
     emit();
   }
 
@@ -894,6 +902,43 @@ function WorkbenchThreadClient(
       thread,
       state.steerHistoryByThreadId.get(thread.id) ?? [],
     );
+  }
+
+  function normalizeThreadDocument(
+    thread: ThreadPayload | null,
+    {
+      preserveStableServiceTier = true,
+      pruneStreamingDuplicates = true,
+    }: {
+      preserveStableServiceTier?: boolean;
+      pruneStreamingDuplicates?: boolean;
+    } = {},
+  ) {
+    const stableThread = normalizeThreadPayloadItems(preserveStableServiceTier ? mergeStableThreadMetadata(thread ? ensureThreadHistory(thread) : thread) : thread ? ensureThreadHistory(thread) : thread);
+    const storedTokenUsageThread = stableThread ? applyStoredThreadTokenUsage(stableThread) : stableThread;
+    const nextThread = applyOptimisticUserMessageOverlay(applyPersistedSteerHistory(applyPersistedQuestionnaireHistory(storedTokenUsageThread)));
+    return pruneStreamingDuplicates
+      ? pruneThreadStreamingDuplicates(nextThread)
+      : nextThread;
+  }
+
+  function upsertThreadDocument(
+    thread: ThreadPayload,
+    options: {
+      emitChange?: boolean;
+      preserveStableServiceTier?: boolean;
+      pruneStreamingDuplicates?: boolean;
+      select?: boolean;
+    } = {},
+  ) {
+    const document = normalizeThreadDocument(thread, options) ?? thread;
+    const result = threadDocuments.upsertDocument(document, {
+      select: options.select,
+    });
+    if (options.emitChange && (result.didChange || result.didSelectionChange)) {
+      emit();
+    }
+    return result.document;
   }
 
   function areCurrentTurnsEquivalent(left: ThreadPayload | null, right: ThreadPayload | null) {
@@ -1181,11 +1226,16 @@ function WorkbenchThreadClient(
       pruneStreamingDuplicates?: boolean;
     } = {},
   ) {
-    const stableThread = normalizeThreadPayloadItems(preserveStableServiceTier ? mergeStableThreadMetadata(thread ? ensureThreadHistory(thread) : thread) : thread ? ensureThreadHistory(thread) : thread);
-    const storedTokenUsageThread = stableThread ? applyStoredThreadTokenUsage(stableThread) : stableThread;
-    const nextThread = pruneStreamingDuplicates
-      ? pruneThreadStreamingDuplicates(applyOptimisticUserMessageOverlay(applyPersistedSteerHistory(applyPersistedQuestionnaireHistory(storedTokenUsageThread))))
-      : applyOptimisticUserMessageOverlay(applyPersistedSteerHistory(applyPersistedQuestionnaireHistory(storedTokenUsageThread)));
+    const normalizedThread = normalizeThreadDocument(thread, {
+      preserveStableServiceTier,
+      pruneStreamingDuplicates,
+    });
+    const nextThread = normalizedThread
+      ? threadDocuments.upsertDocument(normalizedThread, { select: true }).document
+      : null;
+    if (!nextThread) {
+      threadDocuments.selectDocument(null);
+    }
     const unreadStateChanged = nextThread ? markThreadPayloadSeen(nextThread) : false;
     if (areThreadPayloadsEquivalent(state.currentThread, nextThread)) {
       if (unreadStateChanged) {
@@ -1951,6 +2001,7 @@ function WorkbenchThreadClient(
           ...state.currentThread,
           status: nextStatus,
         };
+        threadDocuments.upsertDocument(state.currentThread, { select: true });
         changed = true;
       }
     }
@@ -1984,6 +2035,7 @@ function WorkbenchThreadClient(
           ...state.currentThread,
           status: nextStatus,
         };
+        threadDocuments.upsertDocument(state.currentThread, { select: true });
         changed = true;
       }
     }
@@ -2248,6 +2300,18 @@ function WorkbenchThreadClient(
   }
 
   function reapplyCurrentThreadQuestionnaireHistory(threadId: string) {
+    const document = threadDocuments.getDocumentByThreadId(threadId);
+    if (document && (document.harness === "codex" || document.harness === "opencode")) {
+      const nextDocument = upsertThreadDocument(document, {
+        select: state.currentThread?.id === threadId && state.currentThread.harness === document.harness,
+      });
+      if (state.currentThread?.id === threadId && state.currentThread.harness === nextDocument.harness) {
+        setCurrentThread(nextDocument);
+        return;
+      }
+      emit();
+    }
+
     if (
       state.currentThread?.id !== threadId
       || (state.currentThread.harness !== "codex" && state.currentThread.harness !== "opencode")
@@ -2307,6 +2371,18 @@ function WorkbenchThreadClient(
   }
 
   function reapplyCurrentThreadSteerHistory(threadId: string) {
+    const document = threadDocuments.getDocumentByThreadId(threadId);
+    if (document?.harness === "codex") {
+      const nextDocument = upsertThreadDocument(document, {
+        select: state.currentThread?.id === threadId && state.currentThread.harness === document.harness,
+      });
+      if (state.currentThread?.id === threadId && state.currentThread.harness === nextDocument.harness) {
+        setCurrentThread(nextDocument);
+        return;
+      }
+      emit();
+    }
+
     if (state.currentThread?.id !== threadId || state.currentThread.harness !== "codex") {
       return;
     }
@@ -2478,7 +2554,7 @@ function WorkbenchThreadClient(
       if (harness === "codex") {
         void readCompletedThreadWorkbenchHistory(threadId);
       }
-      return mergeLiveStreamingThreadSnapshot(toThreadPayload(
+      return normalizeThreadDocument(mergeLiveStreamingThreadSnapshot(toThreadPayload(
         response.thread,
         harness,
         nextModel,
@@ -2487,7 +2563,7 @@ function WorkbenchThreadClient(
           : readStoredHarnessModelEffort(harness, nextModel) ?? resumedThread?.reasoningEffort ?? null,
         nextServiceTier,
         selectedAgentPath,
-      ));
+      )));
     } catch (error) {
       if (harness === "codex" && isTransientRolloutReadError(error)) {
         if (!options.suppressStatusMessage) {
@@ -2526,7 +2602,7 @@ function WorkbenchThreadClient(
       if (harness === "codex") {
         void readCompletedThreadWorkbenchHistory(threadId);
       }
-      return mergeLiveStreamingThreadSnapshot(toThreadPayload(
+      return normalizeThreadDocument(mergeLiveStreamingThreadSnapshot(toThreadPayload(
         response.thread,
         harness,
         nextModel,
@@ -2535,7 +2611,7 @@ function WorkbenchThreadClient(
         state.currentThread?.id === threadId
           ? state.currentThread.agentPath
           : readStoredHarnessAgent(harness),
-      ));
+      )));
     } catch (error) {
       if (harness === "codex" && isTransientRolloutReadError(error)) {
         emitStatusMessage(FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE);
@@ -2551,6 +2627,12 @@ function WorkbenchThreadClient(
     const payload = await fetchThreadPayloadFromCandidates(threadId, harness, options);
     if (payload && state.currentThread?.id === payload.id && state.currentThread.harness === payload.harness) {
       setCurrentThread(payload);
+      return state.currentThread;
+    }
+    if (payload) {
+      return upsertThreadDocument(payload, {
+        emitChange: true,
+      });
     }
     return payload;
   }
@@ -3723,6 +3805,10 @@ function WorkbenchThreadClient(
     );
     if (sendOptions.selectThread !== false) {
       setCurrentThread(payload);
+    } else {
+      upsertThreadDocument(payload, {
+        emitChange: true,
+      });
     }
     await refreshThreads();
     return payload;

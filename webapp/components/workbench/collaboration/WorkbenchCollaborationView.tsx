@@ -40,6 +40,7 @@ import ActiveTabRefreshLeader from "../../../lib/workbench/state/ActiveTabRefres
 import {
   buildInlineMentionCandidates,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
+import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
 import { WORKBENCH_FILE_LINK_INSTRUCTIONS } from "../../../lib/workbench/thread/workbench-file-link-instructions";
 import type { WorkbenchFilePanelClientOptions } from "../../../lib/workbench/WorkbenchFilePanelClient";
 import WorkbenchFilePanel from "../layout/WorkbenchFilePanel";
@@ -528,6 +529,7 @@ export default function WorkbenchCollaborationView ({
   scratchpadWritableRoot,
   threadCodeBlockWrap,
   threadComposerDraftsByThreadId,
+  threadDocuments,
   threadQuestionnaireDraftsByKey,
   threadSavedComposerDrafts,
 }: WorkbenchCollaborationViewProps) {
@@ -543,6 +545,10 @@ export default function WorkbenchCollaborationView ({
   const [mobilePane, setMobilePane] = useState<"scratchpad" | "collaborator">("scratchpad");
   const [collaborationLayout, setCollaborationLayout] = useState(() => readStoredWorkbenchCollaborationLayout(projectId));
   const [pendingAutoWakeActivityAt, setPendingAutoWakeActivityAt] = useState<number | null>(null);
+  const centralCollaboratorThread = selectedThreadId
+    ? getThreadDocumentFromSnapshot(threadDocuments, selectedThreadId)
+    : null;
+  const effectiveCollaboratorThread = centralCollaboratorThread ?? collaboratorThread;
   const [autoWakeNow, setAutoWakeNow] = useState(() => Date.now());
   const [openSuggestionIds, setOpenSuggestionIds] = useState<Record<string, boolean | undefined>>({});
   const [suggestionDraftThreadsById, setSuggestionDraftThreadsById] = useState<Record<string, ThreadPayload | undefined>>({});
@@ -817,8 +823,8 @@ export default function WorkbenchCollaborationView ({
   }, [collaborationSuggestions, controls, harness, projectId]);
 
   useEffect(() => {
-    collaboratorThreadRef.current = collaboratorThread;
-  }, [collaboratorThread]);
+    collaboratorThreadRef.current = effectiveCollaboratorThread;
+  }, [effectiveCollaboratorThread]);
 
   useEffect(() => {
     collaborationThreadRegistryRef.current = collaborationThreadRegistry;
@@ -942,7 +948,7 @@ export default function WorkbenchCollaborationView ({
       return;
     }
 
-    if (collaboratorThread?.id === selectedThreadId) {
+    if (effectiveCollaboratorThread?.id === selectedThreadId) {
       return;
     }
 
@@ -951,7 +957,7 @@ export default function WorkbenchCollaborationView ({
     return () => {
       hydrationGenerationRef.current += 1;
     };
-  }, [collaboratorThread?.id, hydrateCollaboratorThread, selectedThreadId]);
+  }, [effectiveCollaboratorThread?.id, hydrateCollaboratorThread, selectedThreadId]);
 
   const sendControlPrompt = useCallback(async (thread: ThreadPayload, mode: "bootstrap" | "wake", options: { additionalInput?: UserInput[]; replaceThreadId?: string; throwOnError?: boolean } = {}) => {
     if (isSendingControlPromptRef.current) {
@@ -1094,7 +1100,7 @@ export default function WorkbenchCollaborationView ({
   ]);
 
   useEffect(() => {
-    const thread = collaboratorThread;
+    const thread = effectiveCollaboratorThread;
     if (!thread || thread.isDraft) {
       return;
     }
@@ -1109,7 +1115,7 @@ export default function WorkbenchCollaborationView ({
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [collaboratorThread, hydrateCollaboratorThread]);
+  }, [effectiveCollaboratorThread, hydrateCollaboratorThread]);
 
   const selectCollaboratorThread = useCallback((threadId: string) => {
     setSelectedThreadId(threadId);
@@ -1396,10 +1402,10 @@ export default function WorkbenchCollaborationView ({
     ? livePendingUserInputRequestsByThreadId[currentCollaboratorThreadId] ?? null
     : null;
   const shouldRenderCurrentCollaboratorThread = Boolean(
-    collaboratorThread
-    && collaboratorThread.id === currentCollaboratorThreadId
+    effectiveCollaboratorThread
+    && effectiveCollaboratorThread.id === currentCollaboratorThreadId
     && (
-      isThreadStatusActive(collaboratorThread.status)
+      isThreadStatusActive(effectiveCollaboratorThread.status)
       || Boolean(currentCollaboratorSummary && isThreadStatusActive(currentCollaboratorSummary.status))
       || Boolean(currentCollaboratorPendingUserInputRequest)
     ),
@@ -1671,7 +1677,7 @@ export default function WorkbenchCollaborationView ({
                   >
                     {isOpen && shouldShowCollaboratorThreadLoading ? (
                       <p className="m-0 text-[0.86rem] leading-6 text-muted">Loading collaborator thread...</p>
-                    ) : isOpen && collaboratorThread?.id === threadId ? (
+                    ) : isOpen && effectiveCollaboratorThread?.id === threadId ? (
                       shouldRenderCurrentCollaboratorThread ? (
                         <ThreadView
                           composerSpellCheck={composerSpellCheck}
@@ -1710,9 +1716,10 @@ export default function WorkbenchCollaborationView ({
                           projectRootPath={projectRootPath}
                           projectRoots={projectRoots}
                           rateLimits={rateLimits}
-                          thread={collaboratorThread}
+                          thread={effectiveCollaboratorThread}
                           threadCodeBlockWrap={threadCodeBlockWrap}
                           threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
+                          threadDocuments={threadDocuments}
                           threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
                           threadSavedComposerDrafts={threadSavedComposerDrafts}
                         />
@@ -1730,8 +1737,8 @@ export default function WorkbenchCollaborationView ({
                           projectId={projectId}
                           projectRoots={projectRoots}
                           projectRootPath={projectRootPath}
-                          thread={collaboratorThread}
-                          threadCwdPath={collaboratorThread.cwd}
+                          thread={effectiveCollaboratorThread}
+                          threadCwdPath={effectiveCollaboratorThread.cwd}
                         />
                       )
                     ) : (

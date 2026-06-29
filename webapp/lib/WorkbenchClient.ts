@@ -15,6 +15,7 @@ import type {
     WorkbenchRouteLoadResult,
     WorkbenchReadThreadOptions,
     WorkbenchSendThreadMessageOptions,
+    WorkbenchThreadDocumentSnapshot,
 } from "./types";
 import { areDeeplyEqual } from "./workbench/deep-equality";
 import {
@@ -123,6 +124,10 @@ export async function WorkbenchClient(
       emitPendingUserInputRequestsChange();
     }
 
+    if (!areDeeplyEqual(lastSnapshot.threadDocuments, snapshot.threadDocuments)) {
+      emitThreadDocumentsChange(snapshot.threadDocuments);
+    }
+
     if (
       lastSnapshot.currentThreadId !== snapshot.currentThreadId
       || lastSnapshot.threads !== snapshot.threads
@@ -221,6 +226,10 @@ export async function WorkbenchClient(
 
   function emitCurrentThreadChange() {
     workbenchBindings.onCurrentThreadChange?.(sessionState.currentThread);
+  }
+
+  function emitThreadDocumentsChange(snapshot: WorkbenchThreadDocumentSnapshot = threadClient.getSnapshot().threadDocuments) {
+    workbenchBindings.onThreadDocumentsChange?.(snapshot);
   }
 
   function emitRateLimitsChange() {
@@ -743,6 +752,7 @@ export async function WorkbenchClient(
   await draftStore.hydratePersistedDrafts();
   emitExplorerStateChange();
   emitCurrentThreadChange();
+  emitThreadDocumentsChange();
   emitPendingUserInputRequestsChange();
   emitRateLimitsChange();
   await applyRoute(activeRoute);

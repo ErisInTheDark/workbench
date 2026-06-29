@@ -21,6 +21,7 @@ import type {
   WorkbenchSendThreadMessageOptions,
   WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadComposerDraft,
+  WorkbenchThreadDocumentSnapshot,
   WorkbenchThreadSavedComposerDraft,
   WorkbenchUserInputResponse
 } from "../lib/types";
@@ -106,6 +107,7 @@ import {
   putPersistedThreadQuestionnaireDraft,
   putPersistedThreadSavedComposerDraft,
 } from "../lib/workbench/thread/thread-composer-drafts";
+import { getThreadDocumentFromSnapshot } from "../lib/workbench/thread/thread-document-keys";
 import { writeTextToClipboard } from "../lib/workbench/dom/clipboard";
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
 import ThreadLoadingSkeleton from "./workbench/thread-view/ThreadLoadingSkeleton";
@@ -200,6 +202,12 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   threadsError: "",
   fontSize: 1.08,
   workbenchStorageRootPath: "",
+};
+
+const EMPTY_THREAD_DOCUMENT_SNAPSHOT: WorkbenchThreadDocumentSnapshot = {
+  documentsByKey: {},
+  keysByThreadId: {},
+  selectedThreadKey: "",
 };
 
 const MOBILE_SHELL_HEADER_HIDE_THRESHOLD_PX = 24;
@@ -650,6 +658,7 @@ export default function Workbench () {
   currentRouteRef.current = route;
   const [explorer, setExplorer] = useState(INITIAL_EXPLORER_SNAPSHOT);
   const [currentThread, setCurrentThread] = useState<ThreadPayload | null>(null);
+  const [threadDocuments, setThreadDocuments] = useState<WorkbenchThreadDocumentSnapshot>(EMPTY_THREAD_DOCUMENT_SNAPSHOT);
   const [threadRelativeTimeNowMs, setThreadRelativeTimeNowMs] = useState(() => Date.now());
   const [harnessUserInputRequestsByThreadId, setHarnessUserInputRequestsByThreadId] = useState<Record<string, WorkbenchPendingUserInputRequest>>({});
   const [locallyResolvedUserInputRequestKeysByThreadId, setLocallyResolvedUserInputRequestKeysByThreadId] = useState<Record<string, string | undefined>>({});
@@ -861,6 +870,11 @@ export default function Workbench () {
           onCurrentThreadChange: (thread) => {
             scheduleWorkbenchStateUpdate(() => {
               setCurrentThread(thread);
+            });
+          },
+          onThreadDocumentsChange: (snapshot) => {
+            scheduleWorkbenchStateUpdate(() => {
+              setThreadDocuments(snapshot);
             });
           },
           onPendingUserInputRequestsChange: (requestsByThreadId) => {
@@ -1953,11 +1967,16 @@ export default function Workbench () {
     retainedThreadRef.current = currentThread;
   }
   const retainedThread = retainedThreadRef.current;
-  const threadForThreadView = showThreadView && currentThread?.id === effectiveThreadId
-    ? currentThread
-    : showThreadView && retainedThread?.id === effectiveThreadId
+  const documentThreadForThreadView = showThreadView
+    ? getThreadDocumentFromSnapshot(threadDocuments, effectiveThreadId)
+    : null;
+  const threadForThreadView = documentThreadForThreadView
+    ?? (showThreadView && currentThread?.id === effectiveThreadId
+      ? currentThread
+      : null)
+    ?? (showThreadView && retainedThread?.id === effectiveThreadId
       ? retainedThread
-      : null;
+      : null);
   const threadSummaryForThreadView = showThreadView ? threadSummariesById.get(effectiveThreadId) ?? null : null;
   const threadShellSource = threadForThreadView ?? threadSummaryForThreadView;
   const threadShellActivityTimestampMs = useThreadActivityTimestamp(threadShellSource, threadSummaryForThreadView);
@@ -3392,6 +3411,7 @@ export default function Workbench () {
                   rateLimits={rateLimits}
                   threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
                   threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
+                  threadDocuments={threadDocuments}
                   threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
                   threadSavedComposerDrafts={threadSavedComposerDrafts}
                   onThreadSavedComposerDraftDelete={handleThreadSavedComposerDraftDelete}
@@ -3507,6 +3527,7 @@ export default function Workbench () {
                   scratchpadWritableRoot={collaborationScratchpadWritableRoot}
                   threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
                   threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
+                  threadDocuments={threadDocuments}
                   threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
                   threadSavedComposerDrafts={threadSavedComposerDrafts}
                   onThreadSavedComposerDraftDelete={handleThreadSavedComposerDraftDelete}
@@ -3636,7 +3657,6 @@ export default function Workbench () {
                     return (
                       <WorkbenchThreadPanel
                         composerSpellCheck={resolvedSettings.composerSpellCheck}
-                        fallbackThread={mosaicDraftThreadsById[target.threadId] ?? currentThread}
                         fallbackThreadSummary={threadSummariesById.get(target.threadId) ?? null}
                         fontSizeRem={resolvedSettings.editorFontSize}
                         hasSidebarRestoreInset={hasSidebarRestoreInset}
@@ -3673,6 +3693,7 @@ export default function Workbench () {
                         rateLimits={rateLimits}
                         threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
                         threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
+                        threadDocuments={threadDocuments}
                         threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
                         threadSavedComposerDrafts={threadSavedComposerDrafts}
                         onThreadSavedComposerDraftDelete={handleThreadSavedComposerDraftDelete}
@@ -3690,6 +3711,7 @@ export default function Workbench () {
                         onMinimizeToggle={showMosaicView ? togglePanelMinimized : undefined}
                         onPanelZoomDeltaChange={showMosaicView ? updatePanelZoomDelta : undefined}
                         panelZoomDelta={panelZoomDelta}
+                        thread={getThreadDocumentFromSnapshot(threadDocuments, target.threadId) ?? mosaicDraftThreadsById[target.threadId] ?? (currentThread?.id === target.threadId ? currentThread : null)}
                         threadId={target.threadId}
                       />
                     );

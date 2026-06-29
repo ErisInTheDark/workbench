@@ -22,6 +22,7 @@ import type {
   WorkbenchSkillSummary,
   WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadComposerDraft,
+  WorkbenchThreadDocumentSnapshot,
   WorkbenchThreadSavedComposerDraft,
   WorkbenchThreadTurnHistoryEntry,
   WorkbenchUserInputResponse,
@@ -48,6 +49,7 @@ import {
   type BuildInlineMentionCandidatesOptions,
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
+import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
 import {
   getCollabAgentThreadIds,
   getThreadAgentTabLabel,
@@ -580,6 +582,7 @@ export default memo(function ThreadView ({
   rateLimits,
   threadCodeBlockWrap,
   threadComposerDraftsByThreadId,
+  threadDocuments,
   threadQuestionnaireDraftsByKey,
   threadSavedComposerDrafts,
   thread,
@@ -630,6 +633,7 @@ export default memo(function ThreadView ({
   rateLimits: RateLimitSnapshot | null;
   threadCodeBlockWrap: boolean;
   threadComposerDraftsByThreadId: Record<string, WorkbenchThreadComposerDraft | undefined>;
+  threadDocuments: WorkbenchThreadDocumentSnapshot;
   threadQuestionnaireDraftsByKey: Record<string, WorkbenchQuestionnaireDraft | undefined>;
   threadSavedComposerDrafts: WorkbenchThreadSavedComposerDraft[];
   thread: ThreadPayload;
@@ -656,9 +660,19 @@ export default memo(function ThreadView ({
   }
   const scrollAnchorController = scrollAnchorControllerRef.current;
   const subagentThreadIds = useMemo(() => getCollabAgentThreadIds(thread.turns), [thread.turns]);
+  const relatedThreadsById = useMemo(() => {
+    const nextThreadsById = { ...subthreadsById };
+    for (const threadId of subagentThreadIds) {
+      const documentThread = getThreadDocumentFromSnapshot(threadDocuments, threadId);
+      if (documentThread) {
+        nextThreadsById[threadId] = documentThread;
+      }
+    }
+    return nextThreadsById;
+  }, [subagentThreadIds, subthreadsById, threadDocuments]);
   const activeThread = activeThreadId === thread.id
-    ? thread
-    : subthreadsById[activeThreadId] ?? null;
+    ? getThreadDocumentFromSnapshot(threadDocuments, thread.id) ?? thread
+    : relatedThreadsById[activeThreadId] ?? null;
   const activeHarnessUserInputRequest = activeThread
     ? livePendingUserInputRequestsByThreadId[activeThread.id] ?? null
     : null;
@@ -742,23 +756,23 @@ export default memo(function ThreadView ({
   const tabDefinitions = useMemo(() => {
     const baseLabelCounts = new Map<string, number>();
     for (const threadId of subagentThreadIds) {
-      const label = getThreadAgentTabLabel(subthreadsById[threadId]);
+      const label = getThreadAgentTabLabel(relatedThreadsById[threadId]);
       baseLabelCounts.set(label, (baseLabelCounts.get(label) ?? 0) + 1);
     }
 
     const usedLabels = new Map<string, number>();
     return subagentThreadIds.map((threadId) => {
-      const baseLabel = getThreadAgentTabLabel(subthreadsById[threadId]);
+      const baseLabel = getThreadAgentTabLabel(relatedThreadsById[threadId]);
       const totalCount = baseLabelCounts.get(baseLabel) ?? 0;
       const nextCount = (usedLabels.get(baseLabel) ?? 0) + 1;
       usedLabels.set(baseLabel, nextCount);
       return {
         id: threadId,
-        isLoading: Boolean(loadingThreadIds[threadId]) && !subthreadsById[threadId],
+        isLoading: Boolean(loadingThreadIds[threadId]) && !relatedThreadsById[threadId],
         suffix: totalCount > 1 ? ` ${nextCount}` : "",
       };
     });
-  }, [loadingThreadIds, subagentThreadIds, subthreadsById]);
+  }, [loadingThreadIds, relatedThreadsById, subagentThreadIds]);
 
   const scheduleScrollToBottom = useCallback((options: { force?: boolean } = {}) => {
     if (bottomScrollFrameRef.current !== null) {
@@ -983,18 +997,18 @@ export default memo(function ThreadView ({
 
   useEffect(() => {
     for (const threadId of subagentThreadIds) {
-      if (threadId === thread.id || subthreadsById[threadId] || loadingThreadIds[threadId]) {
+      if (threadId === thread.id || relatedThreadsById[threadId] || loadingThreadIds[threadId]) {
         continue;
       }
 
       void loadSubthread(threadId);
     }
-  }, [loadSubthread, loadingThreadIds, subagentThreadIds, subthreadsById, thread.id]);
+  }, [loadSubthread, loadingThreadIds, relatedThreadsById, subagentThreadIds, thread.id]);
 
   const pollingThreadIds = useMemo(() => subagentThreadIds.filter((threadId) => {
-    const payload = subthreadsById[threadId];
+    const payload = relatedThreadsById[threadId];
     return Boolean(payload && getCurrentInProgressTurn(payload));
-  }), [subagentThreadIds, subthreadsById]);
+  }), [relatedThreadsById, subagentThreadIds]);
 
   useEffect(() => {
     if (!pollingThreadIds.length) {
@@ -1568,7 +1582,7 @@ export default memo(function ThreadView ({
                     projectFilePaths={projectFilePaths}
                     projectId={projectId}
                     projectRootPath={projectRootPath}
-                    relatedThreadsById={subthreadsById}
+                    relatedThreadsById={relatedThreadsById}
                     turn={turn}
                     workspaceRoots={workspaceFileLinkRoots}
                     hiddenReasoningItemId={turn.id === currentTurn?.id && liveActivity?.kind === "reasoning" ? liveActivity.hiddenItemId : null}
@@ -1652,7 +1666,7 @@ export default memo(function ThreadView ({
           ) : (
             <div className="space-y-3">
               {liveActivity.waits.map((wait) => {
-                const liveSubagentThread = subthreadsById[wait.receiverThreadId] ?? null;
+                const liveSubagentThread = relatedThreadsById[wait.receiverThreadId] ?? null;
                 const summary = (
                   <span>
                     <span className="thread-thinking-text">waiting for</span>{" "}
@@ -1691,7 +1705,7 @@ export default memo(function ThreadView ({
                         projectId={projectId}
                         projectRoots={projectRoots}
                         projectRootPath={projectRootPath}
-                        relatedThreadsById={subthreadsById}
+                        relatedThreadsById={relatedThreadsById}
                         thread={liveSubagentThread}
                       />
                     </ThreadPreviewFrame>
@@ -1722,7 +1736,7 @@ export default memo(function ThreadView ({
             </button>
             <span className="text-[0.84em] text-muted" aria-hidden="true">|</span>
             {tabDefinitions.map((tab) => {
-              const tabThread = subthreadsById[tab.id];
+              const tabThread = relatedThreadsById[tab.id];
               const badge = getTabBadge(tab.id, tabThread);
 
               return (
