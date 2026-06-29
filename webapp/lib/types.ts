@@ -358,6 +358,55 @@ export interface WorkbenchCollaborationThreadRegistry {
   threadIds: string[];
 }
 
+export type WorkbenchCollaborationPostAuthor = "agent" | "user";
+
+export type WorkbenchCollaborationPostRevisionSource = "agent" | "restore" | "user";
+
+export interface WorkbenchCollaborationPostRevision {
+  attachments?: WorkbenchThreadComposerAttachmentDraft[];
+  body: string;
+  createdAt: number;
+  id: string;
+  prompt?: string;
+  source: WorkbenchCollaborationPostRevisionSource;
+}
+
+export interface WorkbenchCollaborationPost {
+  attachments?: WorkbenchThreadComposerAttachmentDraft[];
+  author: WorkbenchCollaborationPostAuthor;
+  body: string;
+  childIds: string[];
+  createdAt: number;
+  id: string;
+  parentId: string | null;
+  prompt?: string;
+  promptThreadId?: string;
+  revisions: WorkbenchCollaborationPostRevision[];
+  updatedAt: number;
+}
+
+export interface WorkbenchCollaborationState {
+  autoWakeEnabled: boolean;
+  lastAppliedPostPatchSignature: string;
+  lastAutoWakeAt: number;
+  lastRunSummary: string;
+  posts: Record<string, WorkbenchCollaborationPost>;
+  rootPostIds: string[];
+  runThreadIds: string[];
+  version: 2;
+}
+
+export interface WorkbenchCollaborationPostPatch {
+  body: string;
+  parentId?: string;
+  prompt?: string;
+}
+
+export interface WorkbenchCollaborationResponse {
+  posts: Record<string, WorkbenchCollaborationPostPatch | null>;
+  summary: string;
+}
+
 export interface WorkbenchControls {
   applyRoute: (route: WorkbenchRoute) => Promise<WorkbenchRouteLoadResult>;
   createThreadDraft: (harness: WorkbenchHarness, options?: { select?: boolean; threadId?: string }) => ThreadPayload;

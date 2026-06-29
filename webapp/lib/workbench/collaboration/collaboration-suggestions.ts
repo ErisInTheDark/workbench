@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - WorkbenchCollaborationSuggestionPatch: JSON patch shape returned by Collaboration collaborator runs. Keywords: collaboration, suggestions, patch.
- * - parseWorkbenchCollaborationSuggestionPatch: read the hidden final collaborator JSON response. Keywords: collaboration, JSON, parse.
- * - applyWorkbenchCollaborationSuggestionPatch: merge collaborator suggestion patches into persisted Workbench state. Keywords: collaboration, suggestions, merge.
- * - findWorkbenchCollaborationSuggestionPatch: scan a thread payload for the latest suggestion patch. Keywords: collaboration, thread, final response.
+ * - WorkbenchCollaborationSuggestionPatch: legacy JSON patch shape returned by old Collaboration collaborator runs. Keywords: collaboration, suggestions, legacy, patch.
+ * - parseWorkbenchCollaborationSuggestionPatch: read the old hidden final collaborator JSON response. Keywords: collaboration, JSON, parse, legacy.
+ * - applyWorkbenchCollaborationSuggestionPatch: merge old collaborator suggestion patches into v1 compatibility state. Keywords: collaboration, suggestions, merge, legacy.
+ * - findWorkbenchCollaborationSuggestionPatch: scan a thread payload for the latest legacy suggestion patch. Keywords: collaboration, thread, final response, legacy.
  */
 
 import type {

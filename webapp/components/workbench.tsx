@@ -10,7 +10,7 @@ import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/Rat
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type {
   ExplorerSnapshot, FilePayload, OpenFileInEditorRequest, OrchestratorReloadRequest, OrchestratorReloadResponse, ThreadPayload, ThreadSummary, TreeNode,
-  WorkbenchCollaborationThreadRegistry,
+  WorkbenchCollaborationState,
   WorkbenchControls,
   WorkbenchFileOpenTarget,
   WorkbenchHarness,
@@ -26,15 +26,15 @@ import type {
   WorkbenchUserInputResponse
 } from "../lib/types";
 import {
-  claimWorkbenchCollaborationAutoWake,
-  readWorkbenchCollaborationThreadRegistry,
-  writeWorkbenchCollaborationThreadRegistry,
+  claimWorkbenchCollaborationStateAutoWake,
+  readWorkbenchCollaborationState,
+  writeWorkbenchCollaborationState,
 } from "../lib/workbench/collaboration/collaboration-registry-api";
 import {
-  EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY,
-  mergeWorkbenchCollaborationThreadRegistry,
-  normalizeWorkbenchCollaborationThreadRegistry,
-} from "../lib/workbench/collaboration/collaboration-registry";
+  EMPTY_WORKBENCH_COLLABORATION_STATE,
+  mergeWorkbenchCollaborationState,
+  normalizeWorkbenchCollaborationState,
+} from "../lib/workbench/collaboration/collaboration-state";
 import { areDeeplyEqual } from "../lib/workbench/deep-equality";
 import { useWorkbenchRoute } from "../lib/workbench/navigation/use-workbench-route";
 import {
@@ -227,37 +227,41 @@ const SETTINGS_ORDER: WorkbenchSettingKey[] = [
   "threadCodeBlockWrap",
   "editorFontSize",
 ];
-const COLLABORATION_THREAD_IDS_STORAGE_KEY = "workbench:collaboration:thread-registries";
+const COLLABORATION_STATE_STORAGE_KEY = "workbench:collaboration:thread-states";
 
-function readStoredCollaborationThreadRegistries() {
+function readStoredCollaborationStates() {
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(COLLABORATION_THREAD_IDS_STORAGE_KEY) ?? "{}") as Record<string, unknown>;
-    return Object.fromEntries(Object.entries(parsed).map(([projectId, value]) => [projectId, normalizeWorkbenchCollaborationThreadRegistry(value)]));
+    const parsed = JSON.parse(
+      window.localStorage.getItem(COLLABORATION_STATE_STORAGE_KEY)
+      ?? window.localStorage.getItem("workbench:collaboration:thread-registries")
+      ?? "{}",
+    ) as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(parsed).map(([projectId, value]) => [projectId, normalizeWorkbenchCollaborationState(value)]));
   } catch {
     return {};
   }
 }
 
-function writeStoredCollaborationThreadRegistries(registriesByProjectId: Record<string, WorkbenchCollaborationThreadRegistry>) {
+function writeStoredCollaborationStates(statesByProjectId: Record<string, WorkbenchCollaborationState>) {
   try {
-    window.localStorage.setItem(COLLABORATION_THREAD_IDS_STORAGE_KEY, JSON.stringify(registriesByProjectId));
+    window.localStorage.setItem(COLLABORATION_STATE_STORAGE_KEY, JSON.stringify(statesByProjectId));
   } catch {
     // Collaboration remains usable when localStorage is unavailable.
   }
 }
 
-function areCollaborationThreadRegistriesEqual(
-  left: WorkbenchCollaborationThreadRegistry,
-  right: WorkbenchCollaborationThreadRegistry,
+function areCollaborationStatesEqual(
+  left: WorkbenchCollaborationState,
+  right: WorkbenchCollaborationState,
 ) {
   return areDeeplyEqual(
-    normalizeWorkbenchCollaborationThreadRegistry(left),
-    normalizeWorkbenchCollaborationThreadRegistry(right),
+    normalizeWorkbenchCollaborationState(left),
+    normalizeWorkbenchCollaborationState(right),
   );
 }
 
-function hasCollaborationThreadRegistryData(registry: WorkbenchCollaborationThreadRegistry) {
-  return !areCollaborationThreadRegistriesEqual(registry, EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY);
+function hasCollaborationStateData(state: WorkbenchCollaborationState) {
+  return !areCollaborationStatesEqual(state, EMPTY_WORKBENCH_COLLABORATION_STATE);
 }
 
 const EDITOR_FONT_CLASS_NAMES: Record<WorkbenchEditorFontFamily, string> = {
@@ -715,12 +719,12 @@ export default function Workbench () {
 
     return readStoredWorkbenchThreadSidebarPreferences(route.projectId);
   });
-  const [collaborationThreadRegistriesByProjectId, setCollaborationThreadRegistriesByProjectId] = useState<Record<string, WorkbenchCollaborationThreadRegistry>>(() => {
+  const [collaborationStatesByProjectId, setCollaborationStatesByProjectId] = useState<Record<string, WorkbenchCollaborationState>>(() => {
     if (typeof window === "undefined") {
       return {};
     }
 
-    return readStoredCollaborationThreadRegistries();
+    return readStoredCollaborationStates();
   });
   const collaborationRegistryHydrationGenerationRef = useRef(0);
   const editorRef = useRef<HTMLDivElement>(null);
@@ -1067,21 +1071,11 @@ export default function Workbench () {
   const modifiedPaths = new Set(explorer.locallyModifiedPaths);
   const currentProject = explorer.projects.find((project) => project.id === explorer.currentProjectId) ?? null;
   const activeProjectId = explorer.currentProjectId || route.projectId;
-  const collaborationThreadRegistry = collaborationThreadRegistriesByProjectId[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY;
-  const collaborationThreadIdSet = useMemo(() => new Set(collaborationThreadRegistry.threadIds), [collaborationThreadRegistry.threadIds]);
+  const collaborationState = collaborationStatesByProjectId[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
+  const collaborationThreadIdSet = useMemo(() => new Set(collaborationState.runThreadIds), [collaborationState.runThreadIds]);
   const archivedSidebarThreadKeySet = useMemo(() => new Set(threadSidebarPreferences.archivedThreadKeys), [threadSidebarPreferences.archivedThreadKeys]);
   const pinnedSidebarThreadKeySet = useMemo(() => new Set(threadSidebarPreferences.pinnedThreadKeys), [threadSidebarPreferences.pinnedThreadKeys]);
   const collaborationThreadSummaries = useMemo(() => explorer.threads.filter((thread) => collaborationThreadIdSet.has(thread.id)), [collaborationThreadIdSet, explorer.threads]);
-  const collaborationMaterializedSuggestionThreadIdSet = useMemo(() => (
-    new Set(Object.values(collaborationThreadRegistry.suggestions)
-      .map((suggestion) => suggestion.materializedThreadId)
-      .filter((threadId): threadId is string => Boolean(threadId)))
-  ), [collaborationThreadRegistry.suggestions]);
-  const collaborationMaterializedSuggestionThreadSummaries = useMemo(() => (
-    collaborationMaterializedSuggestionThreadIdSet.size
-      ? explorer.threads.filter((thread) => collaborationMaterializedSuggestionThreadIdSet.has(thread.id))
-      : []
-  ), [collaborationMaterializedSuggestionThreadIdSet, explorer.threads]);
   const visibleSidebarThreads = useMemo(() => (
     explorer.threads.filter((thread) => (
       !collaborationThreadIdSet.has(thread.id)
@@ -1107,50 +1101,50 @@ export default function Workbench () {
     collaborationRegistryHydrationGenerationRef.current = generation;
     let cancelled = false;
 
-    void readWorkbenchCollaborationThreadRegistry(activeProjectId)
-      .then(async (diskRegistry) => {
+    void readWorkbenchCollaborationState(activeProjectId)
+      .then(async (diskState) => {
         if (cancelled || collaborationRegistryHydrationGenerationRef.current !== generation) {
           return;
         }
 
-        const localRegistry = collaborationThreadRegistriesByProjectId[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY;
-        const mergedRegistry = hasCollaborationThreadRegistryData(localRegistry)
+        const localState = collaborationStatesByProjectId[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
+        const mergedState = hasCollaborationStateData(localState)
           ? {
-            ...mergeWorkbenchCollaborationThreadRegistry(diskRegistry, localRegistry),
-            autoWakeEnabled: diskRegistry.autoWakeEnabled || localRegistry.autoWakeEnabled,
+            ...mergeWorkbenchCollaborationState(diskState, localState),
+            autoWakeEnabled: diskState.autoWakeEnabled || localState.autoWakeEnabled,
           }
-          : diskRegistry;
-        setCollaborationThreadRegistriesByProjectId((current) => {
-          const existing = current[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY;
-          if (areCollaborationThreadRegistriesEqual(existing, mergedRegistry)) {
+          : diskState;
+        setCollaborationStatesByProjectId((current) => {
+          const existing = current[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
+          if (areCollaborationStatesEqual(existing, mergedState)) {
             return current;
           }
 
           const next = {
             ...current,
-            [activeProjectId]: mergedRegistry,
+            [activeProjectId]: mergedState,
           };
-          writeStoredCollaborationThreadRegistries(next);
+          writeStoredCollaborationStates(next);
           return next;
         });
 
-        if (!areCollaborationThreadRegistriesEqual(diskRegistry, mergedRegistry)) {
-          const savedRegistry = await writeWorkbenchCollaborationThreadRegistry(activeProjectId, mergedRegistry);
+        if (!areCollaborationStatesEqual(diskState, mergedState)) {
+          const savedState = await writeWorkbenchCollaborationState(activeProjectId, mergedState);
           if (cancelled || collaborationRegistryHydrationGenerationRef.current !== generation) {
             return;
           }
 
-          setCollaborationThreadRegistriesByProjectId((current) => {
-            const existing = current[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY;
-            if (areCollaborationThreadRegistriesEqual(existing, savedRegistry)) {
+          setCollaborationStatesByProjectId((current) => {
+            const existing = current[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
+            if (areCollaborationStatesEqual(existing, savedState)) {
               return current;
             }
 
             const next = {
               ...current,
-              [activeProjectId]: savedRegistry,
+              [activeProjectId]: savedState,
             };
-            writeStoredCollaborationThreadRegistries(next);
+            writeStoredCollaborationStates(next);
             return next;
           });
         }
@@ -2363,6 +2357,10 @@ export default function Workbench () {
     if (payload.type === "new-thread") {
       return "New thread";
     }
+    if (payload.type === "collaboration-post") {
+      const post = collaborationState.posts[payload.postId];
+      return post?.body.split(/\r?\n/).find((line) => line.trim())?.trim() || "Collaboration post";
+    }
     if (payload.target.kind === "file") {
       return payload.target.filePath;
     }
@@ -2371,7 +2369,7 @@ export default function Workbench () {
     }
 
     return payload.target.kind;
-  }, []);
+  }, [collaborationState.posts]);
 
   useEffect(() => {
     if (!isMobile || mobilePane !== "editor" || !mainPaneScrollKey) {
@@ -2780,38 +2778,38 @@ export default function Workbench () {
     }
   };
 
-  const handleCollaborationThreadRegistryChange = useCallback((registry: WorkbenchCollaborationThreadRegistry) => {
+  const handleCollaborationStateChange = useCallback((state: WorkbenchCollaborationState) => {
     if (!activeProjectId) {
       return;
     }
 
-    const normalizedRegistry = normalizeWorkbenchCollaborationThreadRegistry(registry);
-    setCollaborationThreadRegistriesByProjectId((current) => {
-      const existing = current[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY;
-      if (areCollaborationThreadRegistriesEqual(existing, normalizedRegistry)) {
+    const normalizedState = normalizeWorkbenchCollaborationState(state);
+    setCollaborationStatesByProjectId((current) => {
+      const existing = current[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
+      if (areCollaborationStatesEqual(existing, normalizedState)) {
         return current;
       }
 
       const next = {
         ...current,
-        [activeProjectId]: normalizedRegistry,
+        [activeProjectId]: normalizedState,
       };
-      writeStoredCollaborationThreadRegistries(next);
+      writeStoredCollaborationStates(next);
       return next;
     });
-    void writeWorkbenchCollaborationThreadRegistry(activeProjectId, normalizedRegistry)
-      .then((savedRegistry) => {
-        setCollaborationThreadRegistriesByProjectId((current) => {
-          const existing = current[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY;
-          if (areCollaborationThreadRegistriesEqual(existing, savedRegistry)) {
+    void writeWorkbenchCollaborationState(activeProjectId, normalizedState)
+      .then((savedState) => {
+        setCollaborationStatesByProjectId((current) => {
+          const existing = current[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
+          if (areCollaborationStatesEqual(existing, savedState)) {
             return current;
           }
 
           const next = {
             ...current,
-            [activeProjectId]: savedRegistry,
+            [activeProjectId]: savedState,
           };
-          writeStoredCollaborationThreadRegistries(next);
+          writeStoredCollaborationStates(next);
           return next;
         });
       })
@@ -3478,8 +3476,8 @@ export default function Workbench () {
             {showCollaborationView && !shouldRenderMainLayout ? (
               <div className="h-full min-h-0">
                 <WorkbenchCollaborationView
-                  collaborationThreadRegistry={collaborationThreadRegistry}
-                  collaborationMaterializedSuggestionThreadSummaries={collaborationMaterializedSuggestionThreadSummaries}
+                  activeDrag={activeWorkbenchDrag}
+                  collaborationState={collaborationState}
                   collaborationThreadSummaries={collaborationThreadSummaries}
                   composerSpellCheck={resolvedSettings.composerSpellCheck}
                   controls={controls}
@@ -3489,8 +3487,8 @@ export default function Workbench () {
                   isMobile={isMobile}
                   isProjectLoading={explorer.isProjectLoading}
                   livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
-                  onCollaborationThreadRegistryChange={handleCollaborationThreadRegistryChange}
-                  onClaimAutoWake={claimWorkbenchCollaborationAutoWake}
+                  onCollaborationStateChange={handleCollaborationStateChange}
+                  onClaimAutoWake={claimWorkbenchCollaborationStateAutoWake}
                   onDraftHarnessChange={handleHarnessChange}
                   onListModels={listThreadModels}
                   onPauseThread={pauseThread}
@@ -3508,8 +3506,15 @@ export default function Workbench () {
                   onThreadAgentChange={setThreadAgent}
                   onThreadReasoningEffortChange={setThreadReasoningEffort}
                   onThreadServiceTierChange={setThreadServiceTier}
-                  onOpenThreadFromSuggestion={(threadId) => {
+                  onOpenThreadFromPromptPost={(threadId) => {
                     navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, threadId));
+                  }}
+                  onPointerDrop={endWorkbenchPointerDrag}
+                  onPostPointerDragStart={(event, post) => {
+                    beginWorkbenchPointerDrag(event, {
+                      postId: post.id,
+                      type: "collaboration-post",
+                    });
                   }}
                   onStartThreadFromPrompt={handleStartCollaborationSuggestionThread}
                   onThreadModelChange={setThreadModel}

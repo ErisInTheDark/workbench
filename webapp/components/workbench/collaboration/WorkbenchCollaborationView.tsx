@@ -1,11 +1,11 @@
 /*
  * Exports:
- * - default WorkbenchCollaborationView: render resizable Collaboration scratchpad and collaborator panels. Keywords: collaboration, scratchpad, collaborator, split layout.
- * - Local helpers: build collaborator control prompts, select/persist Collaboration threads, and own mobile pane switching. Keywords: collaboration, registry, prompt, mobile, suggestions.
+ * - default WorkbenchCollaborationView: own threaded Collaboration state, collaborator runs, prompt materialization, and tree UI wiring. Keywords: collaboration, threaded, posts, runs.
+ * - Local helpers: format tree context, create collaborator drafts, and coordinate run patch application. Keywords: collaboration, prompt, patches, auto-wake.
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type PointerEvent as ReactPointerEvent } from "react";
 
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import { createTextInput } from "../../../lib/codex/protocol";
@@ -13,62 +13,66 @@ import type {
   ChangeSummary,
   ThreadPayload,
   ThreadSummary,
-  WorkbenchCollaborationSuggestion,
-  WorkbenchCollaborationThreadRegistry,
+  WorkbenchCollaborationPost,
+  WorkbenchCollaborationState,
   WorkbenchControls,
   WorkbenchHarness,
   WorkbenchSendThreadMessageOptions,
-  WorkbenchThreadComposerAttachmentDraft,
+  WorkbenchThreadComposerDraft,
 } from "../../../lib/types";
+import {
+  COLLABORATION_IMPORTED_SCRATCHPAD_POST_ID,
+  ensureImportedScratchpadPost,
+  normalizeWorkbenchCollaborationState,
+} from "../../../lib/workbench/collaboration/collaboration-state";
 import {
   readStoredWorkbenchCollaborationLayout,
   writeStoredWorkbenchCollaborationLayout,
 } from "../../../lib/workbench/collaboration/collaboration-layout";
 import { WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS } from "../../../lib/workbench/collaboration/collaboration-registry";
 import {
-  extractCollaborationScratchpadImages,
-  type CollaborationScratchpadImage,
-} from "../../../lib/workbench/collaboration/collaboration-scratchpad";
+  applyWorkbenchCollaborationPostPatch,
+  findWorkbenchCollaborationPostPatch,
+} from "../../../lib/workbench/collaboration/collaboration-post-patches";
 import {
-  applyWorkbenchCollaborationSuggestionPatch,
-  findWorkbenchCollaborationSuggestionPatch,
-  type WorkbenchCollaborationSuggestionPatch,
-} from "../../../lib/workbench/collaboration/collaboration-suggestions";
+  createCollaborationPost,
+  deleteCollaborationSubtree,
+  isCollaborationLeafPost,
+  isEditableAgentLeafPost,
+  moveCollaborationPost,
+  restoreCollaborationPostRevision,
+  updateCollaborationPost,
+  type CollaborationPostDropIntent,
+  type WorkbenchCollaborationPostDraft,
+} from "../../../lib/workbench/collaboration/collaboration-tree-mutations";
 import { areDeeplyEqual } from "../../../lib/workbench/deep-equality";
-import WorkbenchMainLayout from "../../../lib/workbench/layout/workbench-layout";
+import type { WorkbenchDragPayload } from "../../../lib/workbench/layout/workbench-drag";
 import ActiveTabRefreshLeader from "../../../lib/workbench/state/ActiveTabRefreshLeader";
 import {
   buildInlineMentionCandidates,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
 import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
 import { WORKBENCH_FILE_LINK_INSTRUCTIONS } from "../../../lib/workbench/thread/workbench-file-link-instructions";
-import type { WorkbenchFilePanelClientOptions } from "../../../lib/workbench/WorkbenchFilePanelClient";
-import WorkbenchFilePanel from "../layout/WorkbenchFilePanel";
+import WorkbenchMainLayout from "../../../lib/workbench/layout/workbench-layout";
 import WorkbenchMainLayoutView from "../layout/WorkbenchMainLayoutView";
-import PrimaryButton from "../PrimaryButton";
 import { ThreadThreadContent } from "../thread-view/thread-view-items";
 import ThreadComposer from "../thread-view/ThreadComposer";
-import ThreadDisclosure from "../thread-view/ThreadDisclosure";
 import ThreadRateLimits from "../thread-view/ThreadRateLimits";
 import ThreadView from "../thread-view/ThreadView";
-import WorkbenchProgressWheel from "../WorkbenchProgressWheel";
-import CollaborationSuggestionCard from "./CollaborationSuggestionCard";
+import CollaborationRevisionHistoryDialog from "./CollaborationRevisionHistoryDialog";
+import CollaborationRunPanel from "./CollaborationRunPanel";
+import CollaborationThreadedView from "./CollaborationThreadedView";
 
 type ThreadViewProps = ComponentProps<typeof ThreadView>;
-type CollaborationComposerDraft = Parameters<ThreadViewProps["onThreadComposerDraftChange"]>[1];
 
-const SCRATCHPAD_AUTOSAVE_DELAY_MS = 180;
-const SCRATCHPAD_AUTO_REFRESH_DELAY_MS = 650;
+const COLLABORATOR_THREAD_HYDRATION = { mode: "legacyFull" as const };
 const COLLABORATOR_THREAD_ACTIVE_REFRESH_INTERVAL_MS = 1500;
 const COLLABORATOR_THREAD_IDLE_REFRESH_INTERVAL_MS = 10000;
-const COLLABORATOR_THREAD_HYDRATION_RETRY_ATTEMPTS = 4;
-const COLLABORATOR_THREAD_HYDRATION_RETRY_DELAY_MS = 600;
-const COLLABORATOR_THREAD_HYDRATION = { mode: "legacyFull" as const };
 const THREAD_HARNESSES: readonly WorkbenchHarness[] = ["codex", "copilot", "opencode"];
-const COLLABORATION_SCRATCHPAD_ASSET_API_PATH = "/api/collaboration/scratchpad/assets";
 
-type CollaboratorRunStatus = "idle" | "starting" | "hydrating" | "running" | "failed";
-type WorkbenchCollaborationSuggestionStartResult =
+type CollaboratorRunStatus = "failed" | "hydrating" | "idle" | "running" | "starting";
+
+type WorkbenchCollaborationPromptStartResult =
   | {
     readonly error: string;
     readonly status: "failed";
@@ -77,15 +81,14 @@ type WorkbenchCollaborationSuggestionStartResult =
     readonly status: "started";
     readonly threadId: string;
   };
-interface ResolvedScratchpadImageAsset {
-  absolutePath: string;
-  assetUrl: string;
-  href: string;
+
+function joinClasses(...values: Array<string | false | null | undefined>) {
+  return values.filter(Boolean).join(" ");
 }
 
 interface WorkbenchCollaborationViewProps extends Omit<ThreadViewProps, "contained" | "fontSizeRem" | "hideFinalAgentMessage" | "hideWorkbenchControlAgentMessages" | "hideWorkbenchControlUserMessages" | "projectId" | "thread"> {
-  collaborationThreadRegistry: WorkbenchCollaborationThreadRegistry;
-  collaborationMaterializedSuggestionThreadSummaries: ThreadSummary[];
+  activeDrag: { payload: WorkbenchDragPayload; x: number; y: number } | null;
+  collaborationState: WorkbenchCollaborationState;
   collaborationThreadSummaries: ThreadSummary[];
   controls: WorkbenchControls | null;
   editorFontClassName: string;
@@ -93,136 +96,48 @@ interface WorkbenchCollaborationViewProps extends Omit<ThreadViewProps, "contain
   harness: WorkbenchHarness;
   isMobile: boolean;
   isProjectLoading: boolean;
-  onCollaborationThreadRegistryChange: (registry: WorkbenchCollaborationThreadRegistry) => void;
-  onClaimAutoWake: (projectId: string, ownerId: string) => Promise<{ acquired: boolean; registry: WorkbenchCollaborationThreadRegistry }>;
-  onOpenThreadFromSuggestion: (threadId: string) => void;
-  onStartThreadFromPrompt: (input: UserInput[], thread: ThreadPayload) => Promise<WorkbenchCollaborationSuggestionStartResult>;
+  onClaimAutoWake: (projectId: string, ownerId: string) => Promise<{ acquired: boolean; state: WorkbenchCollaborationState }>;
+  onCollaborationStateChange: (state: WorkbenchCollaborationState) => void;
+  onOpenThreadFromPromptPost: (threadId: string) => void;
+  onPointerDrop: () => void;
+  onPostPointerDragStart: (event: ReactPointerEvent<HTMLElement>, post: WorkbenchCollaborationPost) => void;
+  onStartThreadFromPrompt: (input: UserInput[], thread: ThreadPayload) => Promise<WorkbenchCollaborationPromptStartResult>;
   projectChanges: Record<string, ChangeSummary>;
   projectId: string;
   scratchpadPath: string;
   scratchpadWritableRoot: string;
 }
 
-function joinClasses (...values: Array<string | false | null | undefined>) {
-  return values.filter(Boolean).join(" ");
-}
-
-function createDraftCollaboratorThreadId (projectId: string) {
+function createDraftCollaboratorThreadId(projectId: string) {
   const safeProjectId = projectId.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "project";
   return `draft:collaboration:${safeProjectId}:${Date.now()}`;
 }
 
-function isThreadStatusActive (status: string) {
+function createPromptDraftThreadId(projectId: string, postId: string) {
+  const safeProjectId = projectId.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "project";
+  const safePostId = postId.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "post";
+  return `draft:collaboration-prompt:${safeProjectId}:${safePostId}`;
+}
+
+function isThreadStatusActive(status: string) {
   return status === "active" || status.startsWith("active:");
 }
 
-function waitForCollaboratorHydrationDelay () {
-  return new Promise<void>((resolve) => {
-    window.setTimeout(resolve, COLLABORATOR_THREAD_HYDRATION_RETRY_DELAY_MS);
-  });
+function getPromptTextFromInput(input: readonly UserInput[]) {
+  return input
+    .flatMap((entry) => entry.type === "text" ? [entry.text] : [])
+    .join("\n")
+    .trim();
 }
 
-function getThreadLabel (threadId: string, summariesById: Map<string, ThreadSummary>) {
-  const summary = summariesById.get(threadId);
-  return summary?.name || summary?.preview || threadId.replace(/^draft:collaboration:/, "Draft ");
-}
-
-function formatCollaboratorRunRelativeTime (summary: ThreadSummary | null, now: number) {
-  if (!summary) {
-    return "saved run";
-  }
-
-  const elapsedSeconds = Math.max(0, Math.floor((now - summary.updatedAt * 1000) / 1000));
-  if (elapsedSeconds < 45) {
-    return "just now";
-  }
-
-  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
-  if (elapsedMinutes < 60) {
-    return `${elapsedMinutes}m ago`;
-  }
-
-  const elapsedHours = Math.floor(elapsedMinutes / 60);
-  if (elapsedHours < 24) {
-    return `${elapsedHours}h ago`;
-  }
-
-  const elapsedDays = Math.floor(elapsedHours / 24);
-  return `${elapsedDays}d ago`;
-}
-
-function createSuggestionDraftThreadId (projectId: string, suggestionId: string) {
-  const safeProjectId = projectId.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "project";
-  const safeSuggestionId = suggestionId.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "suggestion";
-  return `draft:collaboration-suggestion:${safeProjectId}:${safeSuggestionId}`;
-}
-
-function applyCollaboratorDraftSettings (draftThread: ThreadPayload, settingsThread: ThreadPayload) {
-  return {
-    ...draftThread,
-    agentPath: settingsThread.agentPath,
-    model: settingsThread.model,
-    reasoningEffort: settingsThread.reasoningEffort,
-    serviceTier: settingsThread.harness === "codex" ? settingsThread.serviceTier : null,
-  };
-}
-
-function formatSuggestionsForPrompt (suggestions: readonly WorkbenchCollaborationSuggestion[]) {
-  if (!suggestions.length) {
-    return "None.";
-  }
-
-  return suggestions.map((suggestion) => [
-    `- id: ${suggestion.id}`,
-    `  title: ${suggestion.title}`,
-    ...(suggestion.materializedThreadId ? [`  materialized thread id: ${suggestion.materializedThreadId}`] : []),
-    ...(suggestion.rationale ? [`  rationale: ${suggestion.rationale}`] : []),
-    ...(suggestion.scratchpadImageIds?.length ? [`  scratchpad image ids: ${suggestion.scratchpadImageIds.join(", ")}`] : []),
-    `  prompt: ${suggestion.prompt}`,
-  ].join("\n")).join("\n");
-}
-
-function formatMaterializedSuggestionsForPrompt (
-  suggestions: readonly WorkbenchCollaborationSuggestion[],
-  summariesByThreadId: Map<string, ThreadSummary>,
-) {
-  const materializedSuggestions = suggestions.filter((suggestion) => Boolean(suggestion.materializedThreadId));
-  if (!materializedSuggestions.length) {
-    return "None.";
-  }
-
-  return materializedSuggestions
-    .sort((left, right) => right.updatedAt - left.updatedAt || left.title.localeCompare(right.title))
-    .map((suggestion) => {
-      const threadId = suggestion.materializedThreadId ?? "";
-      const summary = summariesByThreadId.get(threadId);
-      return [
-        `- suggestion id: ${suggestion.id}`,
-        `  title: ${suggestion.title}`,
-        `  materialized thread id: ${threadId}`,
-        `  thread status: ${summary?.status ?? "unknown"}`,
-        `  thread label: ${summary?.name || summary?.preview || "unknown"}`,
-        `  thread updated at: ${summary ? new Date(summary.updatedAt).toISOString() : "unknown"}`,
-        ...(suggestion.rationale ? [`  rationale: ${suggestion.rationale}`] : []),
-        ...(suggestion.scratchpadImageIds?.length ? [`  scratchpad image ids: ${suggestion.scratchpadImageIds.join(", ")}`] : []),
-        `  prompt: ${suggestion.prompt}`,
-      ].join("\n");
-    })
-    .join("\n");
-}
-
-function formatProjectDiffMapForPrompt (changes: Record<string, ChangeSummary>) {
+function formatProjectDiffMapForPrompt(changes: Record<string, ChangeSummary>) {
   const entries = Object.entries(changes).sort(([leftPath], [rightPath]) => leftPath.localeCompare(rightPath));
-  if (!entries.length) {
-    return "No reported git changes.";
-  }
-
-  return entries.map(([path, change]) => `- ${path}: +${change.additions} -${change.deletions}`).join("\n");
+  return entries.length
+    ? entries.map(([path, change]) => `- ${path}: +${change.additions} -${change.deletions}`).join("\n")
+    : "No reported git changes.";
 }
 
-function formatFileLinkingInfoForPrompt (
-  workspaceRoots: readonly { id: string; openPathMode?: string; rootPath: string }[],
-) {
+function formatFileLinkingInfoForPrompt(workspaceRoots: readonly { id: string; openPathMode?: string; rootPath: string }[]) {
   const rootLines = workspaceRoots.length
     ? workspaceRoots.map((root) => `- ${root.id}: ${root.rootPath}${root.openPathMode ? ` (${root.openPathMode})` : ""}`).join("\n")
     : "- single-root project: use project-relative paths";
@@ -234,38 +149,53 @@ function formatFileLinkingInfoForPrompt (
   ].join("\n");
 }
 
-function formatScratchpadImagesForPrompt(images: readonly CollaborationScratchpadImage[]) {
-  if (!images.length) {
-    return "None.";
+function formatPostForPrompt(state: WorkbenchCollaborationState, postId: string, depth = 0): string[] {
+  const post = state.posts[postId];
+  if (!post) {
+    return [];
   }
 
-  return images.map((image) => [
-    `- id: ${image.id}`,
-    `  alt: ${image.alt}`,
-    `  markdown href: ${image.href}`,
-  ].join("\n")).join("\n");
+  const indent = "  ".repeat(depth);
+  const lines = [
+    `${indent}- id: ${post.id}`,
+    `${indent}  author: ${post.author}`,
+    `${indent}  editable agent leaf: ${isEditableAgentLeafPost(state, post.id) ? "yes" : "no"}`,
+    `${indent}  eligible user leaf parent: ${post.author === "user" && isCollaborationLeafPost(state, post.id) ? "yes" : "no"}`,
+    ...(post.promptThreadId ? [`${indent}  materialized prompt thread id: ${post.promptThreadId}`] : []),
+    ...(post.prompt ? [`${indent}  prompt: ${post.prompt}`] : []),
+    `${indent}  body: ${post.body.replace(/\n/g, "\n" + indent + "    ")}`,
+  ];
+  for (const childId of post.childIds) {
+    lines.push(...formatPostForPrompt(state, childId, depth + 1));
+  }
+
+  return lines;
 }
 
-function buildCollaboratorControlPrompt ({
+function formatTreeForPrompt(state: WorkbenchCollaborationState) {
+  if (!state.rootPostIds.length) {
+    return "No visible posts yet.";
+  }
+
+  return state.rootPostIds.flatMap((postId) => formatPostForPrompt(state, postId)).join("\n");
+}
+
+function buildCollaboratorControlPrompt({
   additionalUserMessage,
   diffMap,
   fileLinkingInfo,
-  materializedSuggestions,
   mode,
   previousSummary,
-  scratchpadImages,
   scratchpadPath,
-  suggestions,
+  state,
 }: {
   additionalUserMessage?: string;
   diffMap: string;
   fileLinkingInfo: string;
-  materializedSuggestions: string;
   mode: "bootstrap" | "wake";
   previousSummary: string;
-  scratchpadImages: readonly CollaborationScratchpadImage[];
   scratchpadPath: string;
-  suggestions: readonly WorkbenchCollaborationSuggestion[];
+  state: WorkbenchCollaborationState;
 }) {
   return `<!-- workbench-collaboration-control -->
 ${additionalUserMessage ? `
@@ -274,10 +204,7 @@ ${additionalUserMessage}
 ` : ""}
 
 Mode: ${mode}.
-Scratchpad path: ${scratchpadPath}
-
-Scratchpad image blocks attached to this message:
-${formatScratchpadImagesForPrompt(scratchpadImages)}
+Former scratchpad path, if this project still references old notes: ${scratchpadPath}
 
 Previous private Workbench summary:
 ${previousSummary || "None."}
@@ -288,438 +215,125 @@ ${diffMap}
 Workbench file-linking information:
 ${fileLinkingInfo}
 
-Current Workbench-owned suggestions:
-${formatSuggestionsForPrompt(suggestions)}
+Current Workbench-owned threaded discussion tree:
+${formatTreeForPrompt(state)}
 
-Materialized Workbench-owned suggestions:
-${materializedSuggestions}
+Threaded Collaboration rules:
 
-Use the scratchpad as plain Workbench-owned project notes. Read it every run.
+* Workbench owns the visible discussion tree. Real agent transcripts are run records, not the editable source of truth for posts.
+* You receive the latest visible post version only. Do not assume revision history.
+* You may create new agent posts only under user-authored leaf posts marked as eligible user leaf parents.
+* You may edit or null-delete only agent-authored leaf posts marked as editable agent leaves.
+* Once a user replies under an agent post, that agent post is no longer editable by you.
+* Prompt-bearing posts are local thread suggestions. Use \`prompt\` only when starting a normal Workbench thread would be useful.
+* Keep useful context in the post body. Use \`prompt\` for the dedicated thread prompt only.
+* If nothing useful should change, return an empty \`posts\` object and a summary.
 
-Scratchpad rules:
-
-* Read the scratchpad every run.
-* Do not write suggested agent threads into the scratchpad. Workbench owns suggestions as structured state in your final JSON.
-* You may edit the scratchpad only when the user explicitly asks for project-note updates, when the current collaborator-thread conversation is specifically about changing the scratchpad, or when materialized suggestion state plus the current diff strongly indicates a scratchpad item has been dealt with.
-* If scratchpad cleanup is warranted, do not delete text outright. Wrap stale or dealt-with scratchpad text in <del></del> markers so the user can review and accept the deletion.
-* Scratchpad edits happen in the scratchpad file before the final JSON. Do not describe scratchpad edits in the JSON unless they affect the summary.
-* If there is nothing useful to add or mark, leave the scratchpad unchanged.
-* If a suggestion needs one or more scratchpad images, include their exact ids in scratchpadImageIds. Use only ids from "Scratchpad image blocks attached to this message".
-
-Suggestion selection rules:
-
-* Keep the visible suggestion set small. Target four or fewer active suggestions unless the current project state makes an exception clearly worthwhile.
-* Do not exhaustively cover every scratchpad item. The scratchpad is context, not a queue.
-* Choose suggestions based on current usefulness: current scratchpad, current code, current diff context, user-visible urgency, and whether a dedicated thread would be coherent.
-* Treat previous summaries, deferred suggestions, and materialized suggestion state as leads to verify, not as sources of truth. Current scratchpad, code, diff, and thread state win.
-* Combine related concerns when they share an owner, implementation area, or review context. Do not combine unrelated work just to reduce count.
-* When a suggestion combines related concerns, the prompt must preserve each concrete sub-goal and constraint.
-
-Suggestion rationale rules:
-
-* Every non-null suggestion must include rationale.
-* Rationale is user-facing preview text. Keep it to two or three sentences.
-* Rationale should explain why this suggestion is worth surfacing now and why its grouping is coherent.
-* Put implementation detail in the prompt, not in the rationale.
-
-Suggestion prompt quality rules:
-
-* Suggestion prompts must be self-contained for a fresh agent thread.
-* Include the concrete desired outcome, relevant TODO/project context, adjacent work that affects judgment, task-specific constraints not already supplied by the project, and only the most useful Workbench-clickable file links when anchors materially help.
-* Do not mention the scratchpad, collaborator scratchpad, private summary, Collaboration registry, previous collaborator memory, or hidden collaborator context in suggestion prompts.
-* If collaborator-only context matters, translate it into concrete task context that a normal Workbench thread can understand without knowing the collaborator-only source exists.
-* Bad: "Check the scratchpad note about the follow-up and do it."
-* Good: "Investigate the named follow-up by verifying the current code path, identifying the owner of the behavior, and making the smallest coherent change that resolves the described issue."
-* Do not repeat generic agent instructions.
-* Do not tell the executing agent to read AGENTS files, inspect before planning, wait for approval, use skills, follow project style rules, avoid deep selectors, or obey baseline project instructions.
-* Do not use exhaustive file lists as a substitute for task context.
-* Do not soften explicit scratchpad intent with hedges such as "if appropriate"; if uncertainty is real, make it a concrete verification step.
-* Repair existing suggestions when they are vague, over-bundled, under-bundled, stale, too exhaustive, missing rationale, or too wordy.
-
-Materialized suggestion rules:
-
-* Suggestions with materializedThreadId already created a dedicated Workbench thread.
-* Treat materialized suggestions as read-only except for cleanup.
-* Do not update the title, rationale, prompt, or scratchpadImageIds for a materialized suggestion.
-* If a materialized suggestion still looks useful or unresolved, omit it from the suggestions patch.
-* Null a materialized suggestion only when you have verified at least one concrete cleanup condition:
-  - the materialized thread explicitly completed the requested work and the relevant project state still reflects that result;
-  - the materialized thread or current project state proves the suggestion is obsolete, impossible, duplicate, or no longer useful;
-  - the user explicitly asked to remove or stop tracking that suggestion.
-* Do not null a materialized suggestion merely because a thread exists, because the thread is inactive, or because you assume someone probably handled it.
-* If completion is uncertain, omit the materialized suggestion from the patch and explain the uncertainty in the private summary instead.
-* Workbench ignores non-null patch objects for materialized suggestions.
-
-Checkpoint memory rules:
-
-* Use the previous private summary as memory, not as authority.
-* If the previous summary contains checkpointThreadId and checkpointCommit, treat them as a lead and try to diff against that exact checkpoint.
-* Compare the checkpoint diff with the current git diff map and any current working-tree evidence you inspect.
-* Prefer whichever diff context is smaller and more relevant for suggestion maintenance.
-* If old summary memory or checkpoint diff conflicts with current scratchpad, code, diff, or thread state, current reality wins.
-* Before returning the final JSON, after any scratchpad edits and after deciding suggestions, create a new Workbench diff checkpoint as your final tool action if checkpoint tools are available.
-* In the final JSON summary, include checkpointThreadId, checkpointCommit, and createdAt for the new checkpoint when available.
-* The summary may be very long if that helps the next collaborator run. Include deferred ideas, stale-memory corrections, checkpoint interpretation, and useful reasoning there instead of flooding visible suggestions.
-
-Bad suggestion prompt example:
-\"Polish the related follow-ups. Update the assets if appropriate, check the sizing, and keep unrelated work in separate suggestions.\"
-
-Good suggestion prompt example:
-\"Update the related UI assets in one focused pass. Replace the known placeholder asset and verify the related asset dimensions against their metadata. If an asset mapping is uncertain, make that verification explicit before changing callers.\"
-
-Workbench hides the final response in the Collaboration view; the scratchpad is the user-facing source of truth.
-
-The TypeScript block below is explanatory only. Return valid JSON matching this TypeScript-described shape. Do not include markdown fences, comments, explanations, or trailing commas in the response.
+Return valid JSON only. Do not include markdown fences, comments, explanations, or trailing commas.
 
 \`\`\`ts
-type SuggestionsPatch = Record<string, Suggestion | null>;
-
-interface Suggestion {
-  /** Short user-facing title for the suggested dedicated thread. */
-  title: string;
-
-  /**
-   * Self-contained editable prompt the user could hand to a fresh Workbench thread.
-   *
-   * Include:
-   * - the concrete desired outcome
-   * - relevant scratchpad/TODO/project context
-   * - adjacent work that affects judgment
-   * - task-specific constraints not already supplied by project instructions
-   * - only the most useful Workbench-clickable file links when anchors help
-   *
-   * Do not repeat generic agent/project instructions or exhaustive file lists.
-   */
-  prompt: string;
-
-  /** Scratchpad image ids that should be attached when starting this suggestion thread. Use ids listed above only. */
-  scratchpadImageIds?: string[];
-
-  /** User-facing preview text. Required for non-null suggestions; explain current value and grouping in two or three sentences. */
-  rationale?: string;
+interface WorkbenchCollaborationResponse {
+  summary: string;
+  posts: Record<string, WorkbenchCollaborationPostPatch | null>;
 }
 
-interface WorkbenchCollaborationResponse {
-  /** Private memory for the next collaborator run. May be long; include checkpoint breadcrumbs, deferred leads, and stale-memory corrections when useful. */
-  summary: string;
-
-  /**
-   * Patch for Workbench-owned suggestions.
-   *
-   * Use stable slug-like IDs.
-   * Omit still-good suggestions.
-   * Add or update only suggestions that do not have materializedThreadId.
-   * Set obsolete active suggestions to null.
-   * Set verified-cleanup materialized suggestions to null.
-   * Do not return non-null objects for materialized suggestions; Workbench ignores them.
-   */
-  suggestions: SuggestionsPatch;
+interface WorkbenchCollaborationPostPatch {
+  parentId?: string;
+  body: string;
+  prompt?: string;
 }
 \`\`\`
 
-Example JSON shape:
-{
-  "summary": "short private summary for Workbench",
-  "suggestions": {
-    "stable-suggestion-id": {
-      "title": "short suggestion title",
-      "rationale": "why this is coherent now",
-      "prompt": "dedicated thread prompt"
-    },
-    "obsolete-suggestion-id": null
-  }
-}
+Examples:
+
+{"summary":"Created one reply.","posts":{"agent-follow-up":{"parentId":"some-user-leaf","body":"This is the collaborator reply."}}}
+{"summary":"Updated one current leaf.","posts":{"agent-existing-leaf":{"body":"Updated latest text."}}}
+{"summary":"Removed an obsolete leaf.","posts":{"agent-obsolete-leaf":null}}
 `;
 }
 
-function applySuggestionPatchToRegistry (
-  registry: WorkbenchCollaborationThreadRegistry,
-  thread: ThreadPayload,
-): WorkbenchCollaborationThreadRegistry {
-  const result = findWorkbenchCollaborationSuggestionPatch(thread);
-  if (!result) {
-    return registry;
-  }
-  if (result.signature && result.signature === registry.lastAppliedSuggestionPatchSignature) {
-    return registry;
-  }
-
-  const dismissedSuggestionIds = new Set(registry.dismissedSuggestionIds);
-  const filteredPatch: WorkbenchCollaborationSuggestionPatch = {};
-  for (const [suggestionId, entry] of Object.entries(result.suggestions)) {
-    if (entry && dismissedSuggestionIds.has(suggestionId)) {
-      continue;
-    }
-    if (entry === null) {
-      dismissedSuggestionIds.add(suggestionId);
-    }
-
-    filteredPatch[suggestionId] = entry;
-  }
-
-  const suggestions = applyWorkbenchCollaborationSuggestionPatch(
-    registry.suggestions,
-    filteredPatch,
-    Date.now(),
-  );
-  if (
-    suggestions === registry.suggestions
-    && result.summary === registry.lastRunSummary
-    && result.signature === registry.lastAppliedSuggestionPatchSignature
-  ) {
-    return registry;
-  }
-
+function applyCollaboratorDraftSettings(draftThread: ThreadPayload, settingsThread: ThreadPayload) {
   return {
-    ...registry,
-    dismissedSuggestionIds: Array.from(dismissedSuggestionIds),
-    lastAppliedSuggestionPatchSignature: result.signature,
-    lastRunSummary: result.summary,
-    suggestions,
+    ...draftThread,
+    agentPath: settingsThread.agentPath,
+    model: settingsThread.model,
+    reasoningEffort: settingsThread.reasoningEffort,
+    serviceTier: settingsThread.harness === "codex" ? settingsThread.serviceTier : null,
   };
 }
 
-export default function WorkbenchCollaborationView ({
-  collaborationThreadRegistry,
-  collaborationMaterializedSuggestionThreadSummaries,
+export default function WorkbenchCollaborationView({
+  activeDrag,
+  collaborationState,
   collaborationThreadSummaries,
   composerSpellCheck,
   controls,
-  editorFontClassName,
+  editorFontClassName: _editorFontClassName,
   fontSizeRem,
   harness,
   isMobile,
   isProjectLoading,
-  livePendingUserInputRequestsByThreadId,
-  onCollaborationThreadRegistryChange,
-  onCompactThread,
   onClaimAutoWake,
-  onDraftHarnessChange,
-  onListModels,
-  onPauseThread,
+  onCollaborationStateChange,
+  onOpenThreadFromPromptPost,
+  onPointerDrop,
+  onPostPointerDragStart,
   onReadThread,
-  onResumeThread,
   onSendMessage,
-  onStopThread,
-  onSubmitUserInputRequest,
-  onThreadAgentChange,
-  onThreadCodeBlockWrapChange,
-  onThreadComposerDraftChange,
-  onThreadComposerDraftClear,
-  onThreadModelChange,
-  onThreadQuestionnaireDraftChange,
-  onThreadQuestionnaireDraftClear,
-  onThreadReasoningEffortChange,
-  onThreadSavedComposerDraftDelete,
-  onThreadSavedComposerDraftSave,
-  onThreadSeen,
-  onThreadServiceTierChange,
-  onOpenThreadFromSuggestion,
   onStartThreadFromPrompt,
+  projectChanges,
   projectFileCandidates,
   projectFileIndexId,
   projectFileLinkRoots,
-  projectFilePaths,
-  projectChanges,
   projectId,
   projectRootPath,
-  projectRoots,
   rateLimits,
   scratchpadPath,
   scratchpadWritableRoot,
-  threadCodeBlockWrap,
-  threadComposerDraftsByThreadId,
   threadDocuments,
-  threadQuestionnaireDraftsByKey,
   threadSavedComposerDrafts,
+  ...threadViewProps
 }: WorkbenchCollaborationViewProps) {
-  const [selectedThreadId, setSelectedThreadId] = useState(collaborationThreadRegistry.currentThreadId || collaborationThreadRegistry.threadIds[0] || "");
+  const [selectedRunThreadId, setSelectedRunThreadId] = useState(collaborationState.runThreadIds[0] ?? "");
   const [collaboratorThread, setCollaboratorThread] = useState<ThreadPayload | null>(null);
   const [collaboratorDraftThread, setCollaboratorDraftThread] = useState<ThreadPayload | null>(null);
-  const [collaboratorDraftComposerDraft, setCollaboratorDraftComposerDraft] = useState<CollaborationComposerDraft | null>(null);
+  const [collaboratorDraftComposerDraft, setCollaboratorDraftComposerDraft] = useState<WorkbenchThreadComposerDraft | null>(null);
+  const [promptDraftThreadsByPostId, setPromptDraftThreadsByPostId] = useState<Record<string, ThreadPayload | undefined>>({});
+  const [promptComposerDraftsByPostId, setPromptComposerDraftsByPostId] = useState<Record<string, WorkbenchThreadComposerDraft | undefined>>({});
+  const [promptStartErrorsByPostId, setPromptStartErrorsByPostId] = useState<Record<string, string | undefined>>({});
   const [collaboratorError, setCollaboratorError] = useState("");
-  const [collaboratorRunStatus, setCollaboratorRunStatus] = useState<CollaboratorRunStatus>("idle");
-  const [isAutoWakeLeader, setIsAutoWakeLeader] = useState(false);
-  const [isLoadingThread, setIsLoadingThread] = useState(false);
-  const [isSendingControlPrompt, setIsSendingControlPrompt] = useState(false);
+  const [collaboratorWarnings, setCollaboratorWarnings] = useState<string[]>([]);
+  const [collaboratorStatus, setCollaboratorStatus] = useState<CollaboratorRunStatus>("idle");
+  const [isLoadingRunThread, setIsLoadingRunThread] = useState(false);
   const [mobilePane, setMobilePane] = useState<"scratchpad" | "collaborator">("scratchpad");
   const [collaborationLayout, setCollaborationLayout] = useState(() => readStoredWorkbenchCollaborationLayout(projectId));
   const [pendingAutoWakeActivityAt, setPendingAutoWakeActivityAt] = useState<number | null>(null);
-  const centralCollaboratorThread = selectedThreadId
-    ? getThreadDocumentFromSnapshot(threadDocuments, selectedThreadId)
-    : null;
-  const effectiveCollaboratorThread = centralCollaboratorThread ?? collaboratorThread;
   const [autoWakeNow, setAutoWakeNow] = useState(() => Date.now());
-  const [openSuggestionIds, setOpenSuggestionIds] = useState<Record<string, boolean | undefined>>({});
-  const [suggestionDraftThreadsById, setSuggestionDraftThreadsById] = useState<Record<string, ThreadPayload | undefined>>({});
-  const [suggestionStartErrorsById, setSuggestionStartErrorsById] = useState<Record<string, string | undefined>>({});
-  const [scratchpadContent, setScratchpadContent] = useState("");
-  const [resolvedScratchpadImageAssetsById, setResolvedScratchpadImageAssetsById] = useState<Record<string, ResolvedScratchpadImageAsset | undefined>>({});
-  const collaboratorThreadRef = useRef<ThreadPayload | null>(null);
-  const collaborationThreadRegistryRef = useRef(collaborationThreadRegistry);
+  const [isAutoWakeLeader, setIsAutoWakeLeader] = useState(false);
+  const [revisionPostId, setRevisionPostId] = useState<string | null>(null);
+  const stateRef = useRef(normalizeWorkbenchCollaborationState(collaborationState));
+  const attemptedScratchpadImportKeyRef = useRef("");
   const collaboratorDraftProjectIdRef = useRef(projectId);
   const hydrationGenerationRef = useRef(0);
   const isSendingControlPromptRef = useRef(false);
-  const autoWakeOwnerIdRef = useRef(typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  const observedProjectDiffMapRef = useRef({ projectDiffMap: "", projectId: "" });
-  const projectDiffMapObserverReadyRef = useRef(false);
-  const summariesById = useMemo(() => new Map(collaborationThreadSummaries.map((thread) => [thread.id, thread])), [collaborationThreadSummaries]);
-  const hasActiveCollaboratorRun = useMemo(
-    () => collaborationThreadSummaries.some((thread) => isThreadStatusActive(thread.status)),
-    [collaborationThreadSummaries],
-  );
-  const materializedSuggestionSummariesByThreadId = useMemo(
-    () => new Map(collaborationMaterializedSuggestionThreadSummaries.map((thread) => [thread.id, thread])),
-    [collaborationMaterializedSuggestionThreadSummaries],
-  );
-  const collaborationSuggestions = useMemo(() => (
-    Object.values(collaborationThreadRegistry.suggestions)
-      .sort((left, right) => right.updatedAt - left.updatedAt || left.title.localeCompare(right.title))
-  ), [collaborationThreadRegistry.suggestions]);
-  const visibleSuggestions = collaborationSuggestions;
-  const scratchpadImages = useMemo(() => extractCollaborationScratchpadImages(scratchpadContent), [scratchpadContent]);
-  const projectDiffMap = useMemo(() => formatProjectDiffMapForPrompt(projectChanges), [projectChanges]);
-  const materializedSuggestionsForPrompt = useMemo(() => (
-    formatMaterializedSuggestionsForPrompt(
-      collaborationSuggestions,
-      materializedSuggestionSummariesByThreadId,
-    )
-  ), [collaborationSuggestions, materializedSuggestionSummariesByThreadId]);
-  const suggestionComposerWorkspaceRoots = useMemo(() => (
-    projectFileLinkRoots ?? (projectRoots.length > 1
-      ? projectRoots.map((root) => ({ id: root.id, rootPath: root.rootPath }))
-      : [])
-  ), [projectFileLinkRoots, projectRoots]);
-  const fileLinkingInfo = useMemo(() => formatFileLinkingInfoForPrompt(suggestionComposerWorkspaceRoots), [suggestionComposerWorkspaceRoots]);
-  const suggestionComposerHighlightSources = useMemo(() => buildInlineMentionCandidates({
-    files: projectFileCandidates,
-    filesIdentity: projectFileIndexId,
-    projectRootPath,
-    skills: [],
-    threadCwdPath: projectRootPath,
-    workspaceRoots: suggestionComposerWorkspaceRoots,
-  }), [projectFileCandidates, projectFileIndexId, projectRootPath, suggestionComposerWorkspaceRoots]);
-  const collaboratorDraftHasContent = Boolean(collaboratorDraftComposerDraft?.text.trim() || collaboratorDraftComposerDraft?.attachments.length);
+  const ownerIdRef = useRef(`collaboration:${projectId}:${Math.random().toString(36).slice(2)}`);
 
   useEffect(() => {
-    if (!scratchpadImages.length) {
-      setResolvedScratchpadImageAssetsById({});
-      return;
-    }
-
-    let cancelled = false;
-    void fetch(COLLABORATION_SCRATCHPAD_ASSET_API_PATH, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        action: "resolve",
-        hrefs: scratchpadImages.map((image) => image.href),
-        path: scratchpadPath,
-        projectId,
-      }),
-    }).then(async (response) => {
-      if (!response.ok) {
-        throw new Error("Unable to resolve scratchpad image assets.");
-      }
-
-      return await response.json() as { assets?: ResolvedScratchpadImageAsset[] };
-    }).then((payload) => {
-      if (cancelled) {
-        return;
-      }
-
-      const assetsByHref = new Map((payload.assets ?? []).map((asset) => [asset.href, asset]));
-      setResolvedScratchpadImageAssetsById(Object.fromEntries(
-        scratchpadImages.map((image) => [image.id, assetsByHref.get(image.href)]),
-      ));
-    }).catch(() => {
-      if (!cancelled) {
-        setResolvedScratchpadImageAssetsById({});
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [projectId, scratchpadImages, scratchpadPath]);
-
-  const createScratchpadImageInputs = useCallback((imageIds: readonly string[] = scratchpadImages.map((image) => image.id)): UserInput[] => (
-    imageIds
-      .map((imageId) => resolvedScratchpadImageAssetsById[imageId]?.absolutePath ?? "")
-      .filter((path) => Boolean(path))
-      .map((path) => ({
-        type: "localImage" as const,
-        path,
-      }))
-  ), [resolvedScratchpadImageAssetsById, scratchpadImages]);
-
-  const resolveSuggestionAttachments = useCallback((suggestion: Pick<WorkbenchCollaborationSuggestion, "scratchpadImageIds">): WorkbenchThreadComposerAttachmentDraft[] => (
-    (suggestion.scratchpadImageIds ?? [])
-      .map((imageId) => {
-        const asset = resolvedScratchpadImageAssetsById[imageId];
-        return asset
-          ? {
-            id: imageId,
-            url: asset.assetUrl,
-          }
-          : null;
-      })
-      .filter((attachment): attachment is WorkbenchThreadComposerAttachmentDraft => attachment !== null)
-  ), [resolvedScratchpadImageAssetsById]);
-  const resetPendingAutoWakeActivity = useCallback(() => {
-    const now = Date.now();
-    setAutoWakeNow(now);
-    setPendingAutoWakeActivityAt(now);
-  }, []);
-  const clearPendingAutoWakeActivity = useCallback(() => {
-    setPendingAutoWakeActivityAt(null);
-  }, []);
-
-  useEffect(() => {
-    if (collaboratorDraftHasContent) {
-      clearPendingAutoWakeActivity();
-    }
-  }, [clearPendingAutoWakeActivity, collaboratorDraftHasContent]);
-
-  useEffect(() => {
-    const observed = observedProjectDiffMapRef.current;
-    if (isProjectLoading || observed.projectId !== projectId) {
-      observedProjectDiffMapRef.current = { projectDiffMap, projectId };
-      projectDiffMapObserverReadyRef.current = !isProjectLoading;
-      return;
-    }
-
-    if (!projectDiffMapObserverReadyRef.current) {
-      observedProjectDiffMapRef.current = { projectDiffMap, projectId };
-      projectDiffMapObserverReadyRef.current = true;
-      return;
-    }
-
-    if (observed.projectDiffMap !== projectDiffMap) {
-      observedProjectDiffMapRef.current = { projectDiffMap, projectId };
-      resetPendingAutoWakeActivity();
-    }
-  }, [isProjectLoading, projectDiffMap, projectId, resetPendingAutoWakeActivity]);
-
-  useEffect(() => {
-    if (pendingAutoWakeActivityAt === null) {
-      return;
-    }
-
-    const intervalId = window.setInterval(() => {
-      setAutoWakeNow(Date.now());
-    }, 1000);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [pendingAutoWakeActivityAt]);
+    stateRef.current = normalizeWorkbenchCollaborationState(collaborationState);
+  }, [collaborationState]);
 
   useEffect(() => {
     setCollaborationLayout(readStoredWorkbenchCollaborationLayout(projectId));
+    setPromptDraftThreadsByPostId({});
+    setPromptComposerDraftsByPostId({});
+    setPromptStartErrorsByPostId({});
   }, [projectId]);
+
+  useEffect(() => {
+    setSelectedRunThreadId((current) => current && collaborationState.runThreadIds.includes(current)
+      ? current
+      : collaborationState.runThreadIds[0] || "");
+  }, [collaborationState.runThreadIds]);
 
   const setAndStoreCollaborationLayout = useCallback((nextLayout: typeof collaborationLayout) => {
     setCollaborationLayout(nextLayout);
@@ -728,7 +342,14 @@ export default function WorkbenchCollaborationView ({
 
   const focusCollaborationPanel = useCallback((panelId: string) => {
     setCollaborationLayout((current) => {
-      const nextLayout = WorkbenchMainLayout.focusPanel(current, panelId);
+      if (current.focusedPanelId === panelId) {
+        return current;
+      }
+
+      const nextLayout = {
+        ...current,
+        focusedPanelId: panelId,
+      };
       writeStoredWorkbenchCollaborationLayout(projectId, nextLayout);
       return nextLayout;
     });
@@ -741,32 +362,248 @@ export default function WorkbenchCollaborationView ({
       return nextLayout;
     });
   }, [projectId]);
-  const scratchpadClientOptions = useMemo<Partial<Omit<WorkbenchFilePanelClientOptions, "clearThreadSelection" | "draftStore" | "emitExplorerStateChange" | "expandProjectPath" | "getProjectChangeSummary" | "getProjectId" | "refreshProject" | "surfaces">>>(() => ({
-    autoRefreshCleanFile: false,
-    autoRefreshCleanFileDelayMs: SCRATCHPAD_AUTO_REFRESH_DELAY_MS,
-    autoSave: true,
-    autoSaveDelayMs: SCRATCHPAD_AUTOSAVE_DELAY_MS,
-    documentProfile: "collaborationScratchpad",
-    fileApiPath: "/api/collaboration/scratchpad",
-    keepEverythingOnSave: true,
-    onContentChange: (content) => {
-      setScratchpadContent(content);
-      resetPendingAutoWakeActivity();
-    },
-    refreshProjectOnSave: false,
-  }), [resetPendingAutoWakeActivity]);
+
+  const summariesById = useMemo(() => new Map(collaborationThreadSummaries.map((summary) => [summary.id, summary])), [collaborationThreadSummaries]);
+  const activeDragPayload = activeDrag?.payload ?? null;
+  const composerWorkspaceRoots = projectFileLinkRoots ?? [];
+  const highlightSources = useMemo(() => buildInlineMentionCandidates({
+    files: projectFileCandidates,
+    filesIdentity: projectFileIndexId,
+    projectRootPath,
+    skills: [],
+    workspaceRoots: composerWorkspaceRoots,
+  }), [composerWorkspaceRoots, projectFileCandidates, projectFileIndexId, projectRootPath]);
+  const projectDiffMap = useMemo(() => formatProjectDiffMapForPrompt(projectChanges), [projectChanges]);
+  const fileLinkingInfo = useMemo(() => formatFileLinkingInfoForPrompt(projectFileLinkRoots ?? []), [projectFileLinkRoots]);
+  const snapshotRunThread = selectedRunThreadId ? getThreadDocumentFromSnapshot(threadDocuments, selectedRunThreadId) : null;
+  const effectiveRunThread = snapshotRunThread ?? collaboratorThread;
+  const currentRunSummary = selectedRunThreadId ? summariesById.get(selectedRunThreadId) ?? null : null;
+  const currentRunPendingUserInputRequest = selectedRunThreadId
+    ? threadViewProps.livePendingUserInputRequestsByThreadId[selectedRunThreadId] ?? null
+    : null;
+  const shouldRenderCurrentRunThread = Boolean(
+    effectiveRunThread
+    && effectiveRunThread.id === selectedRunThreadId
+    && (
+      isThreadStatusActive(effectiveRunThread.status)
+      || Boolean(currentRunSummary && isThreadStatusActive(currentRunSummary.status))
+      || Boolean(currentRunPendingUserInputRequest)
+    ),
+  );
+  const shouldShowRunThreadLoading = Boolean(
+    isLoadingRunThread
+    && selectedRunThreadId
+    && !shouldRenderCurrentRunThread
+    && (
+      currentRunPendingUserInputRequest
+      || (currentRunSummary && isThreadStatusActive(currentRunSummary.status))
+    ),
+  );
+  const collaboratorDraftHasContent = Boolean(collaboratorDraftComposerDraft?.text.trim() || collaboratorDraftComposerDraft?.attachments.length);
+  const autoWakeCountdownMs = pendingAutoWakeActivityAt === null
+    ? null
+    : Math.max(0, pendingAutoWakeActivityAt + WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS - autoWakeNow);
+  const autoWakeProgressPercent = autoWakeCountdownMs === null
+    ? 0
+    : ((WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS - autoWakeCountdownMs) / WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS) * 100;
+  const isAutoWakePaused = collaborationState.autoWakeEnabled && collaboratorDraftHasContent;
+  const isAutoWakeToggleDisabled = !controls || (!collaborationState.autoWakeEnabled && collaboratorDraftHasContent);
+  const collaboratorStatusLabel = isAutoWakePaused
+    ? "Auto-run is paused while the collaborator note has unsent text."
+    : collaboratorStatus === "starting"
+      ? "Starting collaborator run..."
+      : collaboratorStatus === "running"
+        ? "Collaborator run is active."
+        : collaboratorStatus === "hydrating"
+          ? "Loading collaborator thread..."
+          : collaboratorStatus === "failed"
+            ? "Collaborator needs attention."
+            : collaborationState.runThreadIds.length
+              ? "Ready to continue maintaining the discussion tree."
+              : "Start the collaborator when you want it to read the discussion and project state.";
+  const revisionPost = revisionPostId ? collaborationState.posts[revisionPostId] ?? null : null;
+
+  const publishStateIfChanged = useCallback((nextState: WorkbenchCollaborationState) => {
+    const normalizedState = normalizeWorkbenchCollaborationState(nextState);
+    if (areDeeplyEqual(stateRef.current, normalizedState)) {
+      return;
+    }
+
+    stateRef.current = normalizedState;
+    onCollaborationStateChange(normalizedState);
+  }, [onCollaborationStateChange]);
+
+  useEffect(() => {
+    if (!scratchpadPath || collaborationState.posts[COLLABORATION_IMPORTED_SCRATCHPAD_POST_ID]) {
+      return;
+    }
+
+    const importKey = `${projectId}:${scratchpadPath}`;
+    if (attemptedScratchpadImportKeyRef.current === importKey) {
+      return;
+    }
+
+    attemptedScratchpadImportKeyRef.current = importKey;
+    let cancelled = false;
+    void fetch(`/api/collaboration/scratchpad?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(scratchpadPath)}`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) {
+          return null;
+        }
+
+        return await response.json().catch(() => null) as { content?: unknown } | null;
+      })
+      .then((payload) => {
+        if (cancelled || typeof payload?.content !== "string" || !payload.content.trim()) {
+          return;
+        }
+
+        publishStateIfChanged(ensureImportedScratchpadPost(stateRef.current, payload.content));
+      })
+      .catch(() => {
+        // Scratchpad import is best-effort; the threaded view remains usable without legacy notes.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [collaborationState.posts, projectId, publishStateIfChanged, scratchpadPath]);
+
+  useEffect(() => {
+    if (!collaborationState.autoWakeEnabled || pendingAutoWakeActivityAt === null) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      setAutoWakeNow(Date.now());
+    }, 1000);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [collaborationState.autoWakeEnabled, pendingAutoWakeActivityAt]);
+
+  useEffect(() => {
+    for (const runThreadId of collaborationState.runThreadIds) {
+      const thread = getThreadDocumentFromSnapshot(threadDocuments, runThreadId);
+      const patch = thread ? findWorkbenchCollaborationPostPatch(thread) : null;
+      if (!patch || patch.signature === collaborationState.lastAppliedPostPatchSignature) {
+        continue;
+      }
+
+      const result = applyWorkbenchCollaborationPostPatch(collaborationState, patch);
+      setCollaboratorWarnings(result.warnings);
+      publishStateIfChanged(result.state);
+      break;
+    }
+  }, [collaborationState, publishStateIfChanged, threadDocuments]);
+
+  useEffect(() => {
+    if (!selectedRunThreadId || !isThreadStatusActive(effectiveRunThread?.status ?? "")) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void onReadThread(selectedRunThreadId, undefined, { hydration: COLLABORATOR_THREAD_HYDRATION });
+    }, COLLABORATOR_THREAD_ACTIVE_REFRESH_INTERVAL_MS);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [effectiveRunThread?.status, onReadThread, selectedRunThreadId]);
+
+  useEffect(() => {
+    if (!selectedRunThreadId || isThreadStatusActive(effectiveRunThread?.status ?? "")) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void onReadThread(selectedRunThreadId, undefined, { hydration: COLLABORATOR_THREAD_HYDRATION });
+    }, COLLABORATOR_THREAD_IDLE_REFRESH_INTERVAL_MS);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [effectiveRunThread?.status, onReadThread, selectedRunThreadId]);
+
+  const rememberCollaboratorThread = useCallback((thread: ThreadPayload, options: { replaceThreadId?: string } = {}) => {
+    const runThreadIds = [
+      thread.id,
+      ...stateRef.current.runThreadIds.filter((threadId) => threadId !== thread.id && threadId !== options.replaceThreadId),
+    ];
+    publishStateIfChanged({
+      ...stateRef.current,
+      runThreadIds,
+    });
+    setSelectedRunThreadId(thread.id);
+  }, [publishStateIfChanged]);
+
+  const hydrateCollaboratorThread = useCallback(async (threadId: string, options: { showLoading?: boolean; showMissingError?: boolean } = {}) => {
+    if (!threadId || threadId.startsWith("draft:")) {
+      return null;
+    }
+
+    const generation = ++hydrationGenerationRef.current;
+    if (options.showLoading !== false) {
+      setIsLoadingRunThread(true);
+    }
+    setCollaboratorError("");
+
+    const payload = await onReadThread(threadId, undefined, {
+      hydration: COLLABORATOR_THREAD_HYDRATION,
+    }).catch((error) => {
+      if (options.showMissingError !== false && hydrationGenerationRef.current === generation) {
+        setCollaboratorError(error instanceof Error ? error.message : "Unable to read this collaborator thread.");
+      }
+      return null;
+    });
+
+    if (hydrationGenerationRef.current !== generation) {
+      return null;
+    }
+
+    setIsLoadingRunThread(false);
+    if (payload) {
+      setCollaboratorThread(payload);
+      setCollaboratorStatus(isThreadStatusActive(payload.status) ? "running" : "idle");
+      return payload;
+    }
+
+    if (options.showMissingError !== false) {
+      setCollaboratorStatus("failed");
+      setCollaboratorError("The collaborator thread started, but its saved history is still unavailable.");
+    }
+    return null;
+  }, [onReadThread]);
+
+  useEffect(() => {
+    if (!selectedRunThreadId) {
+      setCollaboratorThread(null);
+      return;
+    }
+
+    if (selectedRunThreadId.startsWith("draft:")) {
+      return;
+    }
+
+    if (effectiveRunThread?.id === selectedRunThreadId) {
+      return;
+    }
+
+    void hydrateCollaboratorThread(selectedRunThreadId);
+
+    return () => {
+      hydrationGenerationRef.current += 1;
+    };
+  }, [effectiveRunThread?.id, hydrateCollaboratorThread, selectedRunThreadId]);
 
   const createCollaboratorDraftThread = useCallback((settingsThread?: ThreadPayload | null) => {
     if (!controls) {
       return null;
     }
 
-    const draftThread = controls.createThreadDraft(settingsThread?.harness ?? harness, {
+    const draft = controls.createThreadDraft(settingsThread?.harness ?? harness, {
       select: false,
       threadId: createDraftCollaboratorThreadId(projectId),
     });
     collaboratorDraftProjectIdRef.current = projectId;
-    return settingsThread ? applyCollaboratorDraftSettings(draftThread, settingsThread) : draftThread;
+    return settingsThread ? applyCollaboratorDraftSettings(draft, settingsThread) : draft;
   }, [controls, harness, projectId]);
 
   useEffect(() => {
@@ -779,490 +616,208 @@ export default function WorkbenchCollaborationView ({
     if (collaboratorDraftProjectIdRef.current !== projectId) {
       setCollaboratorDraftComposerDraft(null);
     }
-    setCollaboratorDraftThread((current) => {
-      if (current && collaboratorDraftProjectIdRef.current === projectId) {
-        return current;
-      }
-
-      return createCollaboratorDraftThread();
-    });
+    setCollaboratorDraftThread((current) => current && collaboratorDraftProjectIdRef.current === projectId
+      ? current
+      : createCollaboratorDraftThread());
   }, [controls, createCollaboratorDraftThread, projectId]);
 
-  useEffect(() => {
-    if (!controls) {
-      setSuggestionDraftThreadsById({});
-      return;
-    }
-
-    setSuggestionDraftThreadsById((current) => {
-      const next: Record<string, ThreadPayload | undefined> = {};
-      let changed = false;
-      for (const suggestion of collaborationSuggestions) {
-        if (suggestion.materializedThreadId) {
-          continue;
-        }
-
-        const existing = current[suggestion.id];
-        next[suggestion.id] = existing?.harness === harness
-          ? existing
-          : controls.createThreadDraft(harness, {
-            select: false,
-            threadId: createSuggestionDraftThreadId(projectId, suggestion.id),
-          });
-        if (next[suggestion.id] !== existing) {
-          changed = true;
-        }
-      }
-
-      if (Object.keys(current).length !== Object.keys(next).length) {
-        changed = true;
-      }
-
-      return changed ? next : current;
-    });
-  }, [collaborationSuggestions, controls, harness, projectId]);
-
-  useEffect(() => {
-    collaboratorThreadRef.current = effectiveCollaboratorThread;
-  }, [effectiveCollaboratorThread]);
-
-  useEffect(() => {
-    collaborationThreadRegistryRef.current = collaborationThreadRegistry;
-  }, [collaborationThreadRegistry]);
-
-  useEffect(() => {
-    const nextSelectedThreadId = collaborationThreadRegistry.currentThreadId || collaborationThreadRegistry.threadIds[0] || "";
-    setSelectedThreadId(nextSelectedThreadId);
-  }, [collaborationThreadRegistry.currentThreadId, collaborationThreadRegistry.threadIds]);
-
-  useEffect(() => {
-    const leader = new ActiveTabRefreshLeader({
-      onLeadershipChange: setIsAutoWakeLeader,
-      storageKey: `workbench:collaboration:${projectId}:leader`,
-    });
-    return () => {
-      leader.dispose();
-    };
-  }, [projectId]);
-
-  const publishRegistryIfChanged = useCallback((nextRegistry: WorkbenchCollaborationThreadRegistry) => {
-    if (areDeeplyEqual(collaborationThreadRegistryRef.current, nextRegistry)) {
-      return;
-    }
-
-    collaborationThreadRegistryRef.current = nextRegistry;
-    onCollaborationThreadRegistryChange(nextRegistry);
-  }, [onCollaborationThreadRegistryChange]);
-
-  const rememberCollaboratorThread = useCallback((thread: ThreadPayload, options: { replaceThreadId?: string; select?: boolean } = {}) => {
-    const nextThreadIds = [
-      thread.id,
-      ...collaborationThreadRegistry.threadIds.filter((threadId) => threadId !== thread.id && threadId !== options.replaceThreadId),
-    ];
-    const nextCurrentThreadId = options.select === false
-      ? collaborationThreadRegistry.currentThreadId || nextThreadIds[0] || ""
-      : thread.id;
-    const nextRegistry = applySuggestionPatchToRegistry({
-      ...collaborationThreadRegistry,
-      currentThreadId: nextCurrentThreadId,
-      threadIds: nextThreadIds,
-    }, thread);
-    setCollaboratorThread(thread);
-    setSelectedThreadId(nextCurrentThreadId);
-    publishRegistryIfChanged(nextRegistry);
-  }, [collaborationThreadRegistry, publishRegistryIfChanged]);
-
-  const publishSuggestionPatchFromThread = useCallback((thread: ThreadPayload) => {
-    const existingThreadIds = collaborationThreadRegistry.threadIds.filter((threadId) => !threadId.startsWith("draft:collaboration:"));
-    const baseThreadIds = existingThreadIds.includes(thread.id)
-      ? existingThreadIds
-      : [thread.id, ...existingThreadIds];
-    const baseRegistry = {
-      ...collaborationThreadRegistry,
-      currentThreadId: collaborationThreadRegistry.currentThreadId.startsWith("draft:collaboration:")
-        ? thread.id
-        : collaborationThreadRegistry.currentThreadId || thread.id,
-      threadIds: baseThreadIds,
-    };
-    const nextRegistry = applySuggestionPatchToRegistry(baseRegistry, thread);
-    publishRegistryIfChanged(nextRegistry);
-  }, [collaborationThreadRegistry, publishRegistryIfChanged]);
-
-  const hydrateCollaboratorThread = useCallback(async (threadId: string, options: { attempts?: number; showLoading?: boolean; showMissingError?: boolean } = {}) => {
-    if (!threadId || threadId.startsWith("draft:")) {
-      return null;
-    }
-
-    const generation = ++hydrationGenerationRef.current;
-    const attempts = Math.max(1, options.attempts ?? 1);
-    if (options.showLoading !== false) {
-      setIsLoadingThread(true);
-    }
-    setCollaboratorError("");
-
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
-      const payload = await onReadThread(threadId, harness, {
-        hydration: COLLABORATOR_THREAD_HYDRATION,
-      }).catch((error) => {
-        if (options.showMissingError !== false && hydrationGenerationRef.current === generation) {
-          setCollaboratorError(error instanceof Error ? error.message : "Unable to read this collaborator thread.");
-        }
-        return null;
-      });
-
-      if (hydrationGenerationRef.current !== generation) {
-        return null;
-      }
-
-      if (payload) {
-        setCollaboratorThread(payload);
-        publishSuggestionPatchFromThread(payload);
-        setCollaboratorRunStatus(isThreadStatusActive(payload.status) ? "running" : "idle");
-        setIsLoadingThread(false);
-        return payload;
-      }
-
-      if (attempt < attempts) {
-        setCollaboratorRunStatus("hydrating");
-        await waitForCollaboratorHydrationDelay();
-      }
-    }
-
-    if (options.showMissingError !== false && hydrationGenerationRef.current === generation) {
-      setIsLoadingThread(false);
-      setCollaboratorRunStatus("failed");
-      setCollaboratorError("The collaborator thread started, but its saved history is still unavailable. Try Run now again in a moment.");
-    } else if (hydrationGenerationRef.current === generation) {
-      setIsLoadingThread(false);
-    }
-    return null;
-  }, [harness, onReadThread, publishSuggestionPatchFromThread]);
-
-  useEffect(() => {
-    if (!selectedThreadId) {
-      setCollaboratorThread(null);
-      return;
-    }
-
-    if (selectedThreadId.startsWith("draft:")) {
-      return;
-    }
-
-    if (effectiveCollaboratorThread?.id === selectedThreadId) {
-      return;
-    }
-
-    void hydrateCollaboratorThread(selectedThreadId);
-
-    return () => {
-      hydrationGenerationRef.current += 1;
-    };
-  }, [effectiveCollaboratorThread?.id, hydrateCollaboratorThread, selectedThreadId]);
-
-  const sendControlPrompt = useCallback(async (thread: ThreadPayload, mode: "bootstrap" | "wake", options: { additionalInput?: UserInput[]; replaceThreadId?: string; throwOnError?: boolean } = {}) => {
+  const sendControlPrompt = useCallback(async (
+    thread: ThreadPayload,
+    mode: "bootstrap" | "wake",
+    options: {
+      additionalInput?: UserInput[];
+      replaceThreadId?: string;
+      throwOnError?: boolean;
+    } = {},
+  ) => {
     if (isSendingControlPromptRef.current) {
       return thread;
     }
 
     isSendingControlPromptRef.current = true;
-    setIsSendingControlPrompt(true);
-    clearPendingAutoWakeActivity();
-    setCollaboratorRunStatus(mode === "bootstrap" ? "starting" : "running");
+    const additionalUserMessage = options.additionalInput
+      ?.flatMap((input) => input.type === "text" ? [input.text] : [])
+      .join("\n")
+      .trim();
+    const prompt = buildCollaboratorControlPrompt({
+      additionalUserMessage,
+      diffMap: projectDiffMap,
+      fileLinkingInfo,
+      mode,
+      previousSummary: stateRef.current.lastRunSummary,
+      scratchpadPath,
+      state: stateRef.current,
+    });
+    const input = [
+      createTextInput(prompt),
+      ...(options.additionalInput ?? []).filter((entry) => entry.type !== "text"),
+    ];
+    const sendOptions: WorkbenchSendThreadMessageOptions = {
+      additionalWritableRoots: scratchpadWritableRoot ? [scratchpadWritableRoot] : [],
+      onThreadMaterialized: (materializedThread) => {
+        rememberCollaboratorThread(materializedThread, { replaceThreadId: options.replaceThreadId });
+        setCollaboratorStatus("hydrating");
+        void hydrateCollaboratorThread(materializedThread.id, {
+          showLoading: false,
+          showMissingError: false,
+        });
+      },
+      selectThread: false,
+    };
+
+    setCollaboratorStatus("running");
     setCollaboratorError("");
     try {
-      const additionalText = options.additionalInput?.find((input): input is Extract<UserInput, { type: "text" }> => input.type === "text")?.text.trim() ?? "";
-      const additionalNonTextInput = options.additionalInput?.filter((input) => input.type !== "text") ?? [];
-      const scratchpadImageInput = createScratchpadImageInputs();
-      const payload = await onSendMessage(thread, [
-        createTextInput(buildCollaboratorControlPrompt({
-          additionalUserMessage: additionalText,
-          diffMap: projectDiffMap,
-          fileLinkingInfo,
-          materializedSuggestions: materializedSuggestionsForPrompt,
-          mode,
-          previousSummary: collaborationThreadRegistry.lastRunSummary,
-          scratchpadImages,
-          scratchpadPath,
-          suggestions: collaborationSuggestions,
-        })),
-        ...scratchpadImageInput,
-        ...additionalNonTextInput,
-      ], {
-        additionalWritableRoots: scratchpadWritableRoot ? [scratchpadWritableRoot] : undefined,
-        onThreadMaterialized: (materializedThread) => {
-          rememberCollaboratorThread(materializedThread, {
-            replaceThreadId: options.replaceThreadId,
-          });
-          setCollaboratorRunStatus("hydrating");
-          void hydrateCollaboratorThread(materializedThread.id, {
-            attempts: COLLABORATOR_THREAD_HYDRATION_RETRY_ATTEMPTS,
-            showLoading: false,
-          });
-        },
-        selectThread: false,
-        workflowIds: ["collaborator"],
-      });
-      if (payload) {
-        rememberCollaboratorThread(payload, {
-          replaceThreadId: options.replaceThreadId,
-        });
-        setCollaboratorRunStatus(isThreadStatusActive(payload.status) ? "running" : "idle");
-      } else if (!thread.isDraft) {
+      const sentThread = await onSendMessage(thread, input, sendOptions);
+      if (sentThread) {
+        rememberCollaboratorThread(sentThread, { replaceThreadId: options.replaceThreadId });
+        setCollaboratorStatus(isThreadStatusActive(sentThread.status) ? "running" : "idle");
+        return sentThread;
+      }
+      if (!thread.isDraft) {
         void hydrateCollaboratorThread(thread.id, {
-          attempts: COLLABORATOR_THREAD_HYDRATION_RETRY_ATTEMPTS,
           showLoading: false,
+          showMissingError: false,
         });
       }
-      return payload ?? thread;
+      setCollaboratorStatus("idle");
+      return thread;
     } catch (error) {
-      setCollaboratorRunStatus("failed");
-      setCollaboratorError(error instanceof Error ? error.message : "Unable to wake the collaborator.");
+      setCollaboratorStatus("failed");
+      const message = error instanceof Error ? error.message : "Unable to start the collaborator run.";
+      setCollaboratorError(message);
       if (options.throwOnError) {
         throw error;
       }
       return thread;
     } finally {
       isSendingControlPromptRef.current = false;
-      setIsSendingControlPrompt(false);
     }
-  }, [clearPendingAutoWakeActivity, collaborationSuggestions, collaborationThreadRegistry.lastRunSummary, createScratchpadImageInputs, fileLinkingInfo, hydrateCollaboratorThread, materializedSuggestionsForPrompt, onSendMessage, projectDiffMap, rememberCollaboratorThread, scratchpadImages, scratchpadPath, scratchpadWritableRoot]);
+  }, [fileLinkingInfo, hydrateCollaboratorThread, onSendMessage, projectDiffMap, rememberCollaboratorThread, scratchpadPath, scratchpadWritableRoot]);
 
-  const startCollaboratorRun = useCallback(async (mode: "bootstrap" | "wake" = collaborationThreadRegistry.threadIds.length ? "wake" : "bootstrap") => {
+  const startCollaboratorRun = useCallback(async (mode: "bootstrap" | "wake" = stateRef.current.runThreadIds.length ? "wake" : "bootstrap") => {
     if (!controls) {
+      setCollaboratorError("Workbench controls are not ready.");
       return;
     }
 
     const settingsThread = collaboratorDraftThread ?? createCollaboratorDraftThread();
     if (!settingsThread) {
+      setCollaboratorError("Collaborator draft is not ready.");
       return;
     }
 
     const draftThread = createCollaboratorDraftThread(settingsThread);
     if (!draftThread) {
+      setCollaboratorError("Collaborator draft is not ready.");
       return;
     }
 
+    setCollaboratorStatus("starting");
     rememberCollaboratorThread(draftThread);
-    const result = await sendControlPrompt(draftThread, mode, {
-      replaceThreadId: draftThread.id,
-    });
+    const result = await sendControlPrompt(draftThread, mode, { replaceThreadId: draftThread.id });
     if (result.id !== draftThread.id || !result.isDraft) {
       setCollaboratorDraftThread(createCollaboratorDraftThread(settingsThread));
+      setCollaboratorDraftComposerDraft(null);
     }
-  }, [collaborationThreadRegistry.threadIds.length, collaboratorDraftThread, controls, createCollaboratorDraftThread, rememberCollaboratorThread, sendControlPrompt]);
-
-  const runCollaboratorNow = useCallback(async () => {
-    await startCollaboratorRun();
-  }, [startCollaboratorRun]);
+  }, [collaboratorDraftThread, controls, createCollaboratorDraftThread, rememberCollaboratorThread, sendControlPrompt]);
 
   useEffect(() => {
-    if (!collaborationThreadRegistry.autoWakeEnabled || !isAutoWakeLeader || pendingAutoWakeActivityAt === null || collaboratorDraftHasContent) {
-      return;
-    }
-
-    const delayMs = Math.max(0, WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS - (Date.now() - pendingAutoWakeActivityAt));
-    const timeoutId = window.setTimeout(async () => {
-      if (hasActiveCollaboratorRun || isSendingControlPromptRef.current || collaboratorDraftHasContent) {
-        resetPendingAutoWakeActivity();
-        return;
-      }
-
-      const claim = await onClaimAutoWake(projectId, autoWakeOwnerIdRef.current).catch(() => null);
-      if (!claim) {
-        resetPendingAutoWakeActivity();
-        return;
-      }
-
-      publishRegistryIfChanged(claim.registry);
-      if (!claim.acquired) {
-        clearPendingAutoWakeActivity();
-        return;
-      }
-
-      await startCollaboratorRun(claim.registry.threadIds.length ? "wake" : "bootstrap");
-    }, delayMs);
-
+    const leader = new ActiveTabRefreshLeader({
+      onLeadershipChange: setIsAutoWakeLeader,
+      storageKey: "workbench-collaboration-auto-wake",
+    });
     return () => {
-      window.clearTimeout(timeoutId);
+      leader.dispose();
     };
-  }, [
-    clearPendingAutoWakeActivity,
-    collaborationThreadRegistry.autoWakeEnabled,
-    collaboratorDraftHasContent,
-    hasActiveCollaboratorRun,
-    isAutoWakeLeader,
-    onClaimAutoWake,
-    pendingAutoWakeActivityAt,
-    projectId,
-    publishRegistryIfChanged,
-    resetPendingAutoWakeActivity,
-    startCollaboratorRun,
-  ]);
-
-  useEffect(() => {
-    const thread = effectiveCollaboratorThread;
-    if (!thread || thread.isDraft) {
-      return;
-    }
-
-    const intervalId = window.setInterval(() => {
-      void hydrateCollaboratorThread(thread.id, {
-        showMissingError: false,
-        showLoading: false,
-      });
-    }, isThreadStatusActive(thread.status) ? COLLABORATOR_THREAD_ACTIVE_REFRESH_INTERVAL_MS : COLLABORATOR_THREAD_IDLE_REFRESH_INTERVAL_MS);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [effectiveCollaboratorThread, hydrateCollaboratorThread]);
-
-  const selectCollaboratorThread = useCallback((threadId: string) => {
-    setSelectedThreadId(threadId);
-    publishRegistryIfChanged({
-      ...collaborationThreadRegistry,
-      currentThreadId: threadId,
-    });
-  }, [collaborationThreadRegistry, publishRegistryIfChanged]);
-
-  const toggleAutoWake = useCallback(() => {
-    const nextAutoWakeEnabled = !collaborationThreadRegistry.autoWakeEnabled;
-    if (!nextAutoWakeEnabled) {
-      clearPendingAutoWakeActivity();
-    }
-
-    publishRegistryIfChanged({
-      ...collaborationThreadRegistry,
-      autoWakeEnabled: nextAutoWakeEnabled,
-    });
-  }, [clearPendingAutoWakeActivity, collaborationThreadRegistry, publishRegistryIfChanged]);
-
-  const dismissSuggestion = useCallback((suggestionId: string) => {
-    setOpenSuggestionIds((current) => {
-      if (!(suggestionId in current)) {
-        return current;
-      }
-
-      const next = { ...current };
-      delete next[suggestionId];
-      return next;
-    });
-    const { [suggestionId]: _removedSuggestion, ...nextSuggestions } = collaborationThreadRegistry.suggestions;
-    void _removedSuggestion;
-    const dismissedSuggestionIds = collaborationThreadRegistry.dismissedSuggestionIds.includes(suggestionId)
-      ? collaborationThreadRegistry.dismissedSuggestionIds
-      : [...collaborationThreadRegistry.dismissedSuggestionIds, suggestionId];
-    publishRegistryIfChanged({
-      ...collaborationThreadRegistry,
-      dismissedSuggestionIds,
-      suggestions: nextSuggestions,
-    });
-  }, [collaborationThreadRegistry, publishRegistryIfChanged]);
-
-  const openSuggestion = useCallback((suggestionId: string) => {
-    setOpenSuggestionIds((current) => current[suggestionId] ? current : {
-      ...current,
-      [suggestionId]: true,
-    });
   }, []);
 
-  const collapseSuggestion = useCallback((suggestionId: string) => {
-    setOpenSuggestionIds((current) => {
-      if (!current[suggestionId]) {
-        return current;
-      }
+  useEffect(() => {
+    if (!collaborationState.autoWakeEnabled || !isAutoWakeLeader || pendingAutoWakeActivityAt === null || collaboratorDraftHasContent) {
+      return;
+    }
 
-      return {
-        ...current,
-        [suggestionId]: false,
+    const delay = pendingAutoWakeActivityAt + WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS - Date.now();
+    if (delay > 0) {
+      const timeout = window.setTimeout(() => {
+        setAutoWakeNow(Date.now());
+      }, delay);
+      return () => {
+        window.clearTimeout(timeout);
       };
-    });
-  }, []);
-
-  const updateSuggestionDraft = useCallback((suggestionId: string, draft: CollaborationComposerDraft) => {
-    const suggestion = collaborationThreadRegistry.suggestions[suggestionId];
-    const scratchpadImageIds = draft.attachments
-      .map((attachment) => attachment.id)
-      .filter((imageId) => Boolean(resolvedScratchpadImageAssetsById[imageId]));
-    if (
-      !suggestion
-      || suggestion.materializedThreadId
-      || (
-        suggestion.prompt === draft.text
-        && areDeeplyEqual(suggestion.scratchpadImageIds ?? [], scratchpadImageIds)
-      )
-    ) {
-      return;
     }
 
-    publishRegistryIfChanged({
-      ...collaborationThreadRegistry,
-      suggestions: {
-        ...collaborationThreadRegistry.suggestions,
-        [suggestionId]: {
-          ...suggestion,
-          prompt: draft.text,
-          ...(scratchpadImageIds.length ? { scratchpadImageIds } : { scratchpadImageIds: undefined }),
-          updatedAt: Date.now(),
-        },
-      },
-    });
-  }, [collaborationThreadRegistry, publishRegistryIfChanged, resolvedScratchpadImageAssetsById]);
+    let cancelled = false;
+    void onClaimAutoWake(projectId, ownerIdRef.current)
+      .then(async (result) => {
+        if (cancelled) {
+          return;
+        }
+        publishStateIfChanged(result.state);
+        if (result.acquired) {
+          setPendingAutoWakeActivityAt(null);
+          await startCollaboratorRun("wake");
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setCollaboratorError(error instanceof Error ? error.message : "Unable to claim Collaboration auto-run.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [collaborationState.autoWakeEnabled, collaboratorDraftHasContent, isAutoWakeLeader, onClaimAutoWake, pendingAutoWakeActivityAt, projectId, publishStateIfChanged, startCollaboratorRun]);
 
-  const materializeSuggestion = useCallback((suggestion: WorkbenchCollaborationSuggestion, threadId: string) => {
-    setOpenSuggestionIds((current) => {
-      if (!(suggestion.id in current)) {
-        return current;
-      }
+  const mutateState = useCallback((mutator: (state: WorkbenchCollaborationState) => WorkbenchCollaborationState) => {
+    const nextState = mutator(stateRef.current);
+    publishStateIfChanged(nextState);
+    setPendingAutoWakeActivityAt(Date.now());
+  }, [publishStateIfChanged]);
 
-      const next = { ...current };
-      delete next[suggestion.id];
-      return next;
-    });
-    setSuggestionStartErrorsById((current) => {
-      if (!current[suggestion.id]) {
-        return current;
-      }
+  const ensurePromptDraftThread = useCallback((post: WorkbenchCollaborationPost) => {
+    if (!controls) {
+      setCollaboratorError("Workbench controls are not ready.");
+      return null;
+    }
 
-      const next = { ...current };
-      delete next[suggestion.id];
-      return next;
-    });
-    publishRegistryIfChanged({
-      ...collaborationThreadRegistry,
-      suggestions: {
-        ...collaborationThreadRegistry.suggestions,
-        [suggestion.id]: {
-          ...suggestion,
-          materializedThreadId: threadId,
-          updatedAt: Date.now(),
-        },
-      },
-    });
-  }, [collaborationThreadRegistry, publishRegistryIfChanged]);
+    const existing = promptDraftThreadsByPostId[post.id];
+    if (existing) {
+      return existing;
+    }
 
-  const markSuggestionStartFailed = useCallback((suggestionId: string, error: string) => {
-    setSuggestionStartErrorsById((current) => ({
+    const draftThread = controls.createThreadDraft(harness, {
+      select: false,
+      threadId: createPromptDraftThreadId(projectId, post.id),
+    });
+    setPromptDraftThreadsByPostId((current) => ({
       ...current,
-      [suggestionId]: error,
+      [post.id]: draftThread,
     }));
-  }, []);
+    setPromptComposerDraftsByPostId((current) => current[post.id] ? current : {
+      ...current,
+      [post.id]: {
+        attachments: [],
+        text: post.prompt ?? "",
+        updatedAt: post.updatedAt,
+      },
+    });
+    setPromptStartErrorsByPostId((current) => {
+      if (!current[post.id]) {
+        return current;
+      }
 
-  const readSuggestionIdFromComposerThreadId = useCallback((threadId: string) => (
-    threadId.startsWith("draft:collaboration-suggestion:")
-      ? threadId.split(":").at(-1) ?? ""
-      : ""
-  ), []);
+      const next = { ...current };
+      delete next[post.id];
+      return next;
+    });
+    return draftThread;
+  }, [controls, harness, projectId, promptDraftThreadsByPostId]);
 
-  const updateSuggestionDraftThread = useCallback((threadId: string, update: (thread: ThreadPayload) => ThreadPayload) => {
-    const suggestionId = readSuggestionIdFromComposerThreadId(threadId);
-    if (!suggestionId) {
-      return;
-    }
-
-    setSuggestionDraftThreadsById((current) => {
-      const existing = current[suggestionId];
-      if (!existing) {
+  const updatePromptDraftThread = useCallback((postId: string, threadId: string, update: (thread: ThreadPayload) => ThreadPayload) => {
+    setPromptDraftThreadsByPostId((current) => {
+      const existing = current[postId];
+      if (!existing || existing.id !== threadId) {
         return current;
       }
 
@@ -1271,75 +826,119 @@ export default function WorkbenchCollaborationView ({
         ? current
         : {
           ...current,
-          [suggestionId]: nextThread,
+          [postId]: nextThread,
         };
     });
-  }, [readSuggestionIdFromComposerThreadId]);
+  }, []);
 
-  const handleSuggestionComposerDraftChange = useCallback((threadId: string, draft: Parameters<ThreadViewProps["onThreadComposerDraftChange"]>[1]) => {
-    const suggestionId = readSuggestionIdFromComposerThreadId(threadId);
-    if (!suggestionId) {
-      return;
-    }
-
-    updateSuggestionDraft(suggestionId, draft);
-  }, [readSuggestionIdFromComposerThreadId, updateSuggestionDraft]);
-
-  const handleSuggestionComposerDraftClear = useCallback(() => { }, []);
-
-  const handleCollaboratorSendMessage = useCallback(async (
-    thread: ThreadPayload,
-    input: Parameters<ThreadViewProps["onSendMessage"]>[1],
-    options?: WorkbenchSendThreadMessageOptions,
-  ) => {
-    const payload = await onSendMessage(thread, input, {
-      ...options,
-      selectThread: false,
-    });
-    if (payload) {
-      rememberCollaboratorThread(payload);
-      setCollaboratorRunStatus(isThreadStatusActive(payload.status) ? "running" : "idle");
-    }
-    return payload;
-  }, [onSendMessage, rememberCollaboratorThread]);
-
-  const handleCollaboratorStopThread = useCallback(async (thread: ThreadPayload) => {
-    const payload = await onStopThread(thread);
-    if (payload) {
-      rememberCollaboratorThread(payload);
-      setCollaboratorRunStatus(isThreadStatusActive(payload.status) ? "running" : "idle");
-    }
-    return payload;
-  }, [onStopThread, rememberCollaboratorThread]);
-
-  const handleCollaboratorPauseThread = useCallback(async (thread: ThreadPayload) => {
-    const payload = await onPauseThread(thread);
-    if (payload) {
-      rememberCollaboratorThread(payload);
-      setCollaboratorRunStatus(isThreadStatusActive(payload.status) ? "running" : "idle");
-    }
-    return payload;
-  }, [onPauseThread, rememberCollaboratorThread]);
-
-  const handleCollaboratorResumeThread = useCallback(async (thread: ThreadPayload) => {
-    const payload = await onResumeThread(thread);
-    if (payload) {
-      rememberCollaboratorThread(payload);
-      setCollaboratorRunStatus(isThreadStatusActive(payload.status) ? "running" : "idle");
-    }
-    return payload;
-  }, [onResumeThread, rememberCollaboratorThread]);
-
-  const updateCollaboratorDraftThread = useCallback((update: (thread: ThreadPayload) => ThreadPayload) => {
-    setCollaboratorDraftThread((current) => {
-      if (!current) {
+  const handlePromptDraftChange = useCallback((postId: string, draft: WorkbenchThreadComposerDraft) => {
+    setPromptComposerDraftsByPostId((current) => ({
+      ...current,
+      [postId]: draft,
+    }));
+    setPromptStartErrorsByPostId((current) => {
+      if (!current[postId]) {
         return current;
       }
 
-      const nextThread = update(current);
-      return nextThread === current ? current : nextThread;
+      const next = { ...current };
+      delete next[postId];
+      return next;
     });
   }, []);
+
+  const handlePromptDraftClear = useCallback((postId: string) => {
+    setPromptComposerDraftsByPostId((current) => {
+      if (!current[postId]) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[postId];
+      return next;
+    });
+  }, []);
+
+  const handleCreatePost = useCallback((parentId: string | null, draft: WorkbenchCollaborationPostDraft) => {
+    mutateState((state) => createCollaborationPost(state, parentId, draft));
+  }, [mutateState]);
+
+  const handleEditPost = useCallback((postId: string, draft: WorkbenchCollaborationPostDraft) => {
+    mutateState((state) => updateCollaborationPost(state, postId, draft));
+  }, [mutateState]);
+
+  const handleDeletePost = useCallback((postId: string) => {
+    mutateState((state) => deleteCollaborationSubtree(state, postId));
+  }, [mutateState]);
+
+  const handleRestoreRevision = useCallback((postId: string, revisionId: string) => {
+    mutateState((state) => restoreCollaborationPostRevision(state, postId, revisionId));
+    setRevisionPostId(null);
+  }, [mutateState]);
+
+  const handleMovePost = useCallback((postId: string, intent: CollaborationPostDropIntent) => {
+    mutateState((state) => moveCollaborationPost(state, postId, intent));
+    onPointerDrop();
+  }, [mutateState, onPointerDrop]);
+
+  const handleStartPromptThread = useCallback(async (postId: string, input: UserInput[], draftThread: ThreadPayload) => {
+    const submittedPrompt = getPromptTextFromInput(input);
+    const result = await onStartThreadFromPrompt(input, draftThread);
+    if (result.status === "failed") {
+      setPromptStartErrorsByPostId((current) => ({
+        ...current,
+        [postId]: result.error,
+      }));
+      return;
+    }
+
+    mutateState((state) => {
+      const post = state.posts[postId];
+      if (!post) {
+        return state;
+      }
+
+      return normalizeWorkbenchCollaborationState({
+        ...state,
+        posts: {
+          ...state.posts,
+          [postId]: {
+            ...post,
+            prompt: submittedPrompt || post.prompt,
+            promptThreadId: result.threadId,
+            updatedAt: Date.now(),
+          },
+        },
+      });
+    });
+    setPromptDraftThreadsByPostId((current) => {
+      if (!current[postId]) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[postId];
+      return next;
+    });
+    setPromptComposerDraftsByPostId((current) => {
+      if (!current[postId]) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[postId];
+      return next;
+    });
+    setPromptStartErrorsByPostId((current) => {
+      if (!current[postId]) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[postId];
+      return next;
+    });
+  }, [mutateState, onStartThreadFromPrompt]);
 
   const cycleCollaboratorDraftHarness = useCallback(() => {
     if (!controls) {
@@ -1358,525 +957,315 @@ export default function WorkbenchCollaborationView ({
     });
   }, [controls, harness, projectId]);
 
-  const handleCollaboratorDraftComposerChange = useCallback((threadId: string, draft: CollaborationComposerDraft) => {
-    if (threadId !== collaboratorDraftThread?.id) {
-      return;
-    }
+  const collaboratorComposerThread = collaboratorDraftThread;
+  const collaboratorComposer = collaboratorComposerThread ? (
+    <ThreadComposer
+      key={collaboratorComposerThread.id}
+      composerSpellCheck={composerSpellCheck}
+      highlightSources={highlightSources}
+      knownSkills={[]}
+      onListModels={threadViewProps.onListModels}
+      onPauseThread={() => { }}
+      onResumeThread={() => { }}
+      onSendMessage={async (threadId, input) => {
+        if (threadId !== collaboratorComposerThread.id) {
+          throw new Error("Collaborator draft is not ready.");
+        }
 
-    setCollaboratorDraftComposerDraft(draft);
-  }, [collaboratorDraftThread?.id]);
+        const draftThread = createCollaboratorDraftThread(collaboratorComposerThread);
+        if (!draftThread) {
+          throw new Error("Collaborator draft is not ready.");
+        }
 
-  const handleCollaboratorDraftComposerClear = useCallback((threadId: string) => {
-    if (threadId !== collaboratorDraftThread?.id) {
-      return;
-    }
-
-    setCollaboratorDraftComposerDraft(null);
-  }, [collaboratorDraftThread?.id]);
-
-  const handleCollaboratorDraftSendMessage = useCallback(async (threadId: string, input: UserInput[]) => {
-    if (!collaboratorDraftThread || threadId !== collaboratorDraftThread.id) {
-      throw new Error("Collaborator draft is not ready.");
-    }
-
-    const draftThread = createCollaboratorDraftThread(collaboratorDraftThread);
-    if (!draftThread) {
-      throw new Error("Collaborator draft is not ready.");
-    }
-
-    const mode = collaborationThreadRegistry.threadIds.length ? "wake" : "bootstrap";
-    rememberCollaboratorThread(draftThread);
-    await sendControlPrompt(draftThread, mode, {
-      additionalInput: input,
-      replaceThreadId: draftThread.id,
-      throwOnError: true,
-    });
-    setCollaboratorDraftThread(createCollaboratorDraftThread(collaboratorDraftThread));
-    setCollaboratorDraftComposerDraft(null);
-  }, [collaborationThreadRegistry.threadIds.length, collaboratorDraftThread, createCollaboratorDraftThread, rememberCollaboratorThread, sendControlPrompt]);
-
-  const collaboratorHistory = collaborationThreadRegistry.threadIds;
-  const currentCollaboratorThreadId = selectedThreadId || collaboratorHistory[0] || "";
-  const currentCollaboratorSummary = currentCollaboratorThreadId ? summariesById.get(currentCollaboratorThreadId) ?? null : null;
-  const currentCollaboratorPendingUserInputRequest = currentCollaboratorThreadId
-    ? livePendingUserInputRequestsByThreadId[currentCollaboratorThreadId] ?? null
-    : null;
-  const shouldRenderCurrentCollaboratorThread = Boolean(
-    effectiveCollaboratorThread
-    && effectiveCollaboratorThread.id === currentCollaboratorThreadId
-    && (
-      isThreadStatusActive(effectiveCollaboratorThread.status)
-      || Boolean(currentCollaboratorSummary && isThreadStatusActive(currentCollaboratorSummary.status))
-      || Boolean(currentCollaboratorPendingUserInputRequest)
-    ),
-  );
-  const shouldShowCollaboratorThreadLoading = Boolean(
-    isLoadingThread
-    && currentCollaboratorThreadId
-    && !shouldRenderCurrentCollaboratorThread
-    && (
-      currentCollaboratorPendingUserInputRequest
-      || (currentCollaboratorSummary && isThreadStatusActive(currentCollaboratorSummary.status))
-    ),
-  );
-  const recentCollaboratorThreadIds = [...collaboratorHistory.slice(0, 3)].reverse();
-  const collaboratorStatusLabel = collaboratorRunStatus === "starting"
-    ? "Starting collaborator..."
-    : collaboratorRunStatus === "hydrating"
-      ? "Waiting for collaborator thread..."
-      : collaboratorRunStatus === "running"
-        ? "Collaborator running..."
-        : collaboratorRunStatus === "failed"
-          ? "Collaborator needs attention"
-          : "Ready";
-  const autoWakeCountdownMs = pendingAutoWakeActivityAt === null
-    ? null
-    : Math.max(0, WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS - (autoWakeNow - pendingAutoWakeActivityAt));
-  const autoWakeProgressPercent = autoWakeCountdownMs === null
-    ? 0
-    : ((WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS - autoWakeCountdownMs) / WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS) * 100;
-  const isAutoWakeToggleDisabled = !controls || (!collaborationThreadRegistry.autoWakeEnabled && collaboratorDraftHasContent);
-
-  function renderScratchpadPanel (isFocused: boolean, onFocus: () => void) {
-    return (
-      <WorkbenchFilePanel
-        clientOptions={scratchpadClientOptions}
-        contained
-        controls={controls}
-        editorFontClassName={editorFontClassName}
-        fontSizeRem={fontSizeRem}
-        isFocused={isFocused}
-        onFocus={onFocus}
-        path={scratchpadPath}
-        showManualFileActions={false}
-        spellCheck
-        titleLabel="Scratchpad"
+        rememberCollaboratorThread(draftThread);
+        await sendControlPrompt(draftThread, stateRef.current.runThreadIds.length ? "wake" : "bootstrap", {
+          additionalInput: input,
+          replaceThreadId: draftThread.id,
+          throwOnError: true,
+        });
+        setCollaboratorDraftThread(createCollaboratorDraftThread(collaboratorComposerThread));
+        setCollaboratorDraftComposerDraft(null);
+      }}
+      onStopThread={() => { }}
+      onSubmitUserInputRequest={threadViewProps.onSubmitUserInputRequest}
+      onThreadAgentChange={(threadId, agentPath) => {
+        if (threadId !== collaboratorComposerThread.id) {
+          return;
+        }
+        setCollaboratorDraftThread((current) => current ? { ...current, agentPath } : current);
+      }}
+      onThreadComposerDraftChange={(threadId, draft) => {
+        if (threadId !== collaboratorComposerThread.id) {
+          return;
+        }
+        setCollaboratorDraftComposerDraft(draft);
+      }}
+      onThreadComposerDraftClear={(threadId) => {
+        if (threadId !== collaboratorComposerThread.id) {
+          return;
+        }
+        setCollaboratorDraftComposerDraft(null);
+      }}
+      onThreadModelChange={(threadId, model) => {
+        if (threadId !== collaboratorComposerThread.id) {
+          return;
+        }
+        setCollaboratorDraftThread((current) => current ? { ...current, model } : current);
+      }}
+      onThreadQuestionnaireDraftChange={threadViewProps.onThreadQuestionnaireDraftChange}
+      onThreadQuestionnaireDraftClear={threadViewProps.onThreadQuestionnaireDraftClear}
+      onThreadReasoningEffortChange={(threadId, reasoningEffort) => {
+        if (threadId !== collaboratorComposerThread.id) {
+          return;
+        }
+        setCollaboratorDraftThread((current) => current ? { ...current, reasoningEffort } : current);
+      }}
+      onThreadSavedComposerDraftDelete={threadViewProps.onThreadSavedComposerDraftDelete}
+      onThreadSavedComposerDraftSave={threadViewProps.onThreadSavedComposerDraftSave}
+      onThreadServiceTierChange={(threadId, serviceTier) => {
+        if (threadId !== collaboratorComposerThread.id) {
+          return;
+        }
+        setCollaboratorDraftThread((current) => current ? { ...current, serviceTier } : current);
+      }}
+      pendingUserInputRequest={null}
+      projectId={projectId}
+      projectRootPath={projectRootPath}
+      rateLimits={rateLimits}
+      sendLabel="Run with note"
+      thread={collaboratorComposerThread}
+      threadComposerDraft={collaboratorDraftComposerDraft}
+      threadQuestionnaireDraft={null}
+      threadSavedComposerDrafts={threadSavedComposerDrafts}
+      workspaceRoots={composerWorkspaceRoots}
+    >
+      <ThreadRateLimits
+        canToggleHarness={collaboratorComposerThread.isDraft}
+        harness={collaboratorComposerThread.harness}
+        onHarnessToggle={cycleCollaboratorDraftHarness}
+        rateLimits={rateLimits}
       />
-    );
-  }
+    </ThreadComposer>
+  ) : (
+    <p className="m-0 text-[0.86rem] leading-6 text-muted">Collaborator is not ready.</p>
+  );
 
-  function renderCollaboratorPanel () {
-    return (
-      <div className="min-h-full min-w-0 px-5 py-5 md:px-6">
-        <div className="mb-6 border-b border-[color-mix(in_srgb,var(--text)_10%,transparent)] pb-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0">
-              <p className="m-0 text-[0.78rem] font-medium uppercase tracking-[0.08em] text-muted">Collaborator</p>
-              <p className="mt-1 mb-0 text-[0.84rem] leading-5 text-muted">{collaboratorStatusLabel}</p>
-            </div>
-            <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
-              <button
-                type="button"
-                aria-pressed={collaborationThreadRegistry.autoWakeEnabled}
-                title={collaboratorDraftHasContent ? "Auto-run is paused while the collaborator composer has unsent text." : "Toggle collaborator auto-run"}
-                className="inline-flex h-9 items-center gap-2 rounded-full px-2.5 text-[0.82rem] font-medium text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:cursor-not-allowed disabled:opacity-45"
-                disabled={isAutoWakeToggleDisabled}
-                onClick={toggleAutoWake}
-              >
-                <span
-                  aria-hidden="true"
-                  className={joinClasses(
-                    "inline-flex size-4 shrink-0 rounded-[0.28rem] border transition",
-                    collaborationThreadRegistry.autoWakeEnabled
-                      ? "border-[color-mix(in_srgb,var(--text)_40%,transparent)] bg-[color-mix(in_srgb,var(--text)_86%,var(--bg)_14%)]"
-                      : "border-[color-mix(in_srgb,var(--text)_22%,transparent)] bg-transparent",
-                  )}
-                />
-                <span>{collaboratorDraftHasContent ? "Auto-run paused" : "Auto-run"}</span>
-                {collaborationThreadRegistry.autoWakeEnabled && autoWakeCountdownMs !== null ? (
-                  <span className="inline-flex shrink-0 items-center text-muted">
-                    <WorkbenchProgressWheel percent={autoWakeProgressPercent} />
-                  </span>
-                ) : null}
-              </button>
-              <PrimaryButton
-                type="button"
-                disabled={!controls || isSendingControlPrompt}
-                onClick={() => {
-                  void runCollaboratorNow();
-                }}
-              >
-                {isSendingControlPrompt ? "Running..." : collaboratorHistory.length ? "Run now" : "Start collaborator"}
-              </PrimaryButton>
-            </div>
-          </div>
-          <div className="mt-4 flex flex-col gap-3">
-            {visibleSuggestions.length ? visibleSuggestions.map((suggestion) => {
-              const isSuggestionOpen = Boolean(openSuggestionIds[suggestion.id]);
-              const materializedThreadId = suggestion.materializedThreadId;
-              if (materializedThreadId) {
-                return (
-                  <CollaborationSuggestionCard
-                    key={suggestion.id}
-                    isDimmed
-                    isOpen={isSuggestionOpen}
-                    onCollapse={() => {
-                      collapseSuggestion(suggestion.id);
-                    }}
-                    onDismiss={() => {
-                      dismissSuggestion(suggestion.id);
-                    }}
-                    onOpen={() => {
-                      openSuggestion(suggestion.id);
-                    }}
-                    rationale={suggestion.rationale}
-                    title={suggestion.title}
-                  >
-                    <p className="mb-0 whitespace-pre-wrap px-1 pr-18 text-[0.9rem] leading-6 text-muted">{suggestion.prompt}</p>
-                    <div className="mt-3 flex justify-end px-1">
-                      <PrimaryButton
-                        type="button"
-                        onClick={() => {
-                          onOpenThreadFromSuggestion(materializedThreadId);
-                        }}
-                      >
-                        Go to thread
-                      </PrimaryButton>
-                    </div>
-                  </CollaborationSuggestionCard>
-                );
-              }
+  const handleCollaboratorSendMessage = useCallback(async (
+    thread: ThreadPayload,
+    input: Parameters<ThreadViewProps["onSendMessage"]>[1],
+    options?: WorkbenchSendThreadMessageOptions,
+  ) => {
+    const payload = await onSendMessage(thread, input, {
+      ...options,
+      selectThread: false,
+    });
+    if (payload) {
+      rememberCollaboratorThread(payload);
+      setCollaboratorStatus(isThreadStatusActive(payload.status) ? "running" : "idle");
+    }
+    return payload;
+  }, [onSendMessage, rememberCollaboratorThread]);
 
-              const suggestionComposerThread = suggestionDraftThreadsById[suggestion.id];
-              const suggestionStartError = suggestionStartErrorsById[suggestion.id];
-              return suggestionComposerThread ? (
-                <CollaborationSuggestionCard
-                  key={suggestion.id}
-                  isOpen={isSuggestionOpen}
-                  onCollapse={() => {
-                    collapseSuggestion(suggestion.id);
-                  }}
-                  onDismiss={() => {
-                    dismissSuggestion(suggestion.id);
-                  }}
-                  onOpen={() => {
-                    openSuggestion(suggestion.id);
-                  }}
-                  rationale={suggestion.rationale}
-                  title={suggestion.title}
-                >
-                  <ThreadComposer
-                    autoExpandSavedDraftShelf={false}
-                    composerSpellCheck={composerSpellCheck}
-                    header={(
-                      <div className="pr-18">
-                        <h3 className="m-0 text-[0.98rem] font-semibold leading-5 text-text">{suggestion.title}</h3>
-                        {suggestion.rationale ? (
-                          <p className="mt-1 mb-0 text-[0.84rem] leading-5 text-muted">{suggestion.rationale}</p>
-                        ) : null}
-                      </div>
-                    )}
-                    highlightSources={suggestionComposerHighlightSources}
-                    knownSkills={[]}
-                    layout="inline"
-                    onListModels={onListModels}
-                    onPauseThread={() => { }}
-                    onResumeThread={() => { }}
-                    onSendMessage={async (_threadId, input) => {
-                      const result = await onStartThreadFromPrompt(input, suggestionComposerThread);
-                      if (result.status === "started") {
-                        materializeSuggestion(suggestion, result.threadId);
-                        return;
-                      }
+  const handleCollaboratorStopThread = useCallback(async (thread: ThreadPayload) => {
+    const payload = await threadViewProps.onStopThread(thread);
+    if (payload) {
+      rememberCollaboratorThread(payload);
+      setCollaboratorStatus(isThreadStatusActive(payload.status) ? "running" : "idle");
+    }
+    return payload;
+  }, [rememberCollaboratorThread, threadViewProps]);
 
-                      markSuggestionStartFailed(suggestion.id, result.error);
-                    }}
-                    onStopThread={() => { }}
-                    onSubmitUserInputRequest={onSubmitUserInputRequest}
-                    onThreadAgentChange={(threadId, agentPath) => {
-                      updateSuggestionDraftThread(threadId, (thread) => ({ ...thread, agentPath }));
-                    }}
-                    onThreadComposerDraftChange={handleSuggestionComposerDraftChange}
-                    onThreadComposerDraftClear={handleSuggestionComposerDraftClear}
-                    onThreadModelChange={(threadId, model) => {
-                      updateSuggestionDraftThread(threadId, (thread) => ({ ...thread, model }));
-                    }}
-                    onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
-                    onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
-                    onThreadReasoningEffortChange={(threadId, reasoningEffort) => {
-                      updateSuggestionDraftThread(threadId, (thread) => ({ ...thread, reasoningEffort }));
-                    }}
-                    onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
-                    onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
-                    onThreadServiceTierChange={(threadId, serviceTier) => {
-                      updateSuggestionDraftThread(threadId, (thread) => ({ ...thread, serviceTier }));
-                    }}
-                    pendingUserInputRequest={null}
-                    projectId={projectId}
-                    projectRootPath={projectRootPath}
-                    rateLimits={rateLimits}
-                    sendLabel="Start"
-                    showSavedDraftControls={false}
-                    thread={suggestionComposerThread}
-                    threadComposerDraft={{
-                      attachments: resolveSuggestionAttachments(suggestion),
-                      text: suggestion.prompt,
-                      updatedAt: suggestion.updatedAt,
-                    }}
-                    threadQuestionnaireDraft={null}
-                    threadSavedComposerDrafts={[]}
-                    workspaceRoots={suggestionComposerWorkspaceRoots}
-                  />
-                  {suggestionStartError ? (
-                    <p className="mt-2 mb-0 px-1 text-[0.84rem] leading-5 text-danger">{suggestionStartError}</p>
-                  ) : null}
-                </CollaborationSuggestionCard>
-              ) : (
-                <CollaborationSuggestionCard
-                  key={suggestion.id}
-                  isOpen={isSuggestionOpen}
-                  onCollapse={() => {
-                    collapseSuggestion(suggestion.id);
-                  }}
-                  onDismiss={() => {
-                    dismissSuggestion(suggestion.id);
-                  }}
-                  onOpen={() => {
-                    openSuggestion(suggestion.id);
-                  }}
-                  rationale={suggestion.rationale}
-                  title={suggestion.title}
-                >
-                  <p className="m-0 px-1 py-4 text-[0.86rem] leading-6 text-muted">Preparing suggestion composer...</p>
-                </CollaborationSuggestionCard>
-              );
-            }) : (
-              <div className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4">
-                <p className="m-0 text-[0.95rem] font-semibold text-text">No suggestions yet</p>
-                <p className="mt-1 mb-0 text-[0.86rem] leading-6 text-muted">Run the collaborator when you want it to read the scratchpad and project state.</p>
-              </div>
-            )}
-          </div>
-        </div>
+  const handleCollaboratorPauseThread = useCallback(async (thread: ThreadPayload) => {
+    const payload = await threadViewProps.onPauseThread(thread);
+    if (payload) {
+      rememberCollaboratorThread(payload);
+      setCollaboratorStatus(isThreadStatusActive(payload.status) ? "running" : "idle");
+    }
+    return payload;
+  }, [rememberCollaboratorThread, threadViewProps]);
 
-        {recentCollaboratorThreadIds.length ? (
-          <section className="mb-5 space-y-3">
-            <p className="m-0 text-[0.78rem] font-medium uppercase tracking-[0.08em] text-muted">Recent collaborator runs</p>
-            <div className="space-y-3">
-              {recentCollaboratorThreadIds.map((threadId) => {
-                const summary = summariesById.get(threadId) ?? null;
-                const isOpen = currentCollaboratorThreadId === threadId;
-                return (
-                  <ThreadDisclosure
-                    key={threadId}
-                    className="py-0.5"
-                    contentClassName="-mt-2 pl-[1.6rem] md:pl-[1.85rem]"
-                    open={isOpen}
-                    onToggle={(event) => {
-                      if (event.currentTarget.open) {
-                        selectCollaboratorThread(threadId);
-                      }
-                    }}
-                    summary={(
-                      <span className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
-                        <span className="max-w-full truncate font-semibold text-text">{getThreadLabel(threadId, summariesById)}</span>
-                        <span className="text-[0.84rem] font-normal text-muted">{formatCollaboratorRunRelativeTime(summary, Date.now())}</span>
-                      </span>
-                    )}
-                    summaryClassName="text-[0.92rem] leading-6"
-                  >
-                    {isOpen && shouldShowCollaboratorThreadLoading ? (
-                      <p className="m-0 text-[0.86rem] leading-6 text-muted">Loading collaborator thread...</p>
-                    ) : isOpen && effectiveCollaboratorThread?.id === threadId ? (
-                      shouldRenderCurrentCollaboratorThread ? (
-                        <ThreadView
-                          composerSpellCheck={composerSpellCheck}
-                          contained
-                          fontSizeRem={fontSizeRem}
-                          hideWorkbenchControlAgentMessages
-                          hideFinalAgentMessage
-                          hideWorkbenchControlUserMessages
-                          livePendingUserInputRequestsByThreadId={livePendingUserInputRequestsByThreadId}
-                          onCompactThread={onCompactThread}
-                          onDraftHarnessChange={onDraftHarnessChange}
-                          onListModels={onListModels}
-                          onReadThread={onReadThread}
-                          onPauseThread={handleCollaboratorPauseThread}
-                          onResumeThread={handleCollaboratorResumeThread}
-                          onSendMessage={handleCollaboratorSendMessage}
-                          onStopThread={handleCollaboratorStopThread}
-                          onSubmitUserInputRequest={onSubmitUserInputRequest}
-                          onThreadAgentChange={onThreadAgentChange}
-                          onThreadCodeBlockWrapChange={onThreadCodeBlockWrapChange}
-                          onThreadComposerDraftChange={onThreadComposerDraftChange}
-                          onThreadComposerDraftClear={onThreadComposerDraftClear}
-                          onThreadModelChange={onThreadModelChange}
-                          onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
-                          onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
-                          onThreadReasoningEffortChange={onThreadReasoningEffortChange}
-                          onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
-                          onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
-                          onThreadSeen={onThreadSeen}
-                          onThreadServiceTierChange={onThreadServiceTierChange}
-                          projectFileCandidates={projectFileCandidates}
-                          projectFileIndexId={projectFileIndexId}
-                          projectFileLinkRoots={projectFileLinkRoots}
-                          projectFilePaths={projectFilePaths}
-                          projectId={projectId}
-                          projectRootPath={projectRootPath}
-                          projectRoots={projectRoots}
-                          rateLimits={rateLimits}
-                          thread={effectiveCollaboratorThread}
-                          threadCodeBlockWrap={threadCodeBlockWrap}
-                          threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
-                          threadDocuments={threadDocuments}
-                          threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
-                          threadSavedComposerDrafts={threadSavedComposerDrafts}
-                        />
-                      ) : (
-                        <ThreadThreadContent
-                          emptyMessage="No collaborator activity was captured yet."
-                          flattenCompletedWork
-                          hideFinalAgentMessage
-                          hideFirstTurnTopBorder
-                          hideWorkbenchControlAgentMessages
-                          hideWorkbenchControlUserMessages
-                          inlineMentionSources={suggestionComposerHighlightSources}
-                          knownSkills={[]}
-                          projectFilePaths={projectFilePaths}
-                          projectId={projectId}
-                          projectRoots={projectRoots}
-                          projectRootPath={projectRootPath}
-                          thread={effectiveCollaboratorThread}
-                          threadCwdPath={effectiveCollaboratorThread.cwd}
-                        />
-                      )
-                    ) : (
-                      <p className="m-0 text-[0.86rem] leading-6 text-muted">Select this run to load its transcript.</p>
-                    )}
-                  </ThreadDisclosure>
-                );
-              })}
-            </div>
-          </section>
-        ) : null}
+  const handleCollaboratorResumeThread = useCallback(async (thread: ThreadPayload) => {
+    const payload = await threadViewProps.onResumeThread(thread);
+    if (payload) {
+      rememberCollaboratorThread(payload);
+      setCollaboratorStatus(isThreadStatusActive(payload.status) ? "running" : "idle");
+    }
+    return payload;
+  }, [rememberCollaboratorThread, threadViewProps]);
 
-        <details className="mb-4" open={!visibleSuggestions.length}>
-          <summary className="cursor-pointer list-none text-[0.78rem] font-medium uppercase tracking-[0.08em] text-muted marker:hidden">
-            Collaborator run details
-          </summary>
-          <div className="mt-3 space-y-3">
-            {currentCollaboratorThreadId ? (
-              <p className="m-0 text-[0.84rem] leading-6 text-muted">
-                Current run: {getThreadLabel(currentCollaboratorThreadId, summariesById)}
-              </p>
-            ) : null}
-            {collaborationThreadRegistry.lastRunSummary ? (
-              <details className="pt-1">
-                <summary className="cursor-pointer list-none text-[0.78rem] font-medium text-muted marker:hidden">
-                  Last private run summary
-                </summary>
-                <p className="mt-2 mb-0 whitespace-pre-wrap text-[0.84rem] leading-6 text-muted">{collaborationThreadRegistry.lastRunSummary}</p>
-              </details>
-            ) : null}
-          </div>
-        </details>
-        {collaboratorError ? (
-          <p className="mb-3 border-b border-[color-mix(in_srgb,var(--danger)_28%,transparent)] pb-3 text-[0.84rem] leading-5 text-danger">
-            {collaboratorError}
-          </p>
-        ) : null}
-        {!shouldRenderCurrentCollaboratorThread && collaboratorDraftThread ? (
-          <ThreadComposer
-            key={collaboratorDraftThread.id}
-            composerSpellCheck={composerSpellCheck}
-            highlightSources={suggestionComposerHighlightSources}
-            knownSkills={[]}
-            onListModels={onListModels}
-            onPauseThread={() => { }}
-            onResumeThread={() => { }}
-            onSendMessage={handleCollaboratorDraftSendMessage}
-            onStopThread={() => { }}
-            onSubmitUserInputRequest={onSubmitUserInputRequest}
-            onThreadAgentChange={(threadId, agentPath) => {
-              if (threadId === collaboratorDraftThread.id) {
-                updateCollaboratorDraftThread((thread) => ({ ...thread, agentPath }));
-              }
-            }}
-            onThreadComposerDraftChange={handleCollaboratorDraftComposerChange}
-            onThreadComposerDraftClear={handleCollaboratorDraftComposerClear}
-            onThreadModelChange={(threadId, model) => {
-              if (threadId === collaboratorDraftThread.id) {
-                updateCollaboratorDraftThread((thread) => ({ ...thread, model }));
-              }
-            }}
-            onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
-            onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
-            onThreadReasoningEffortChange={(threadId, reasoningEffort) => {
-              if (threadId === collaboratorDraftThread.id) {
-                updateCollaboratorDraftThread((thread) => ({ ...thread, reasoningEffort }));
-              }
-            }}
-            onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
-            onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
-            onThreadServiceTierChange={(threadId, serviceTier) => {
-              if (threadId === collaboratorDraftThread.id) {
-                updateCollaboratorDraftThread((thread) => ({ ...thread, serviceTier }));
-              }
-            }}
-            pendingUserInputRequest={null}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            rateLimits={rateLimits}
-            sendLabel="Run with note"
-            thread={collaboratorDraftThread}
-            threadComposerDraft={collaboratorDraftComposerDraft}
-            threadQuestionnaireDraft={null}
-            threadSavedComposerDrafts={threadSavedComposerDrafts}
-            workspaceRoots={suggestionComposerWorkspaceRoots}
-          >
-            <ThreadRateLimits
-              canToggleHarness={collaboratorDraftThread.isDraft}
-              harness={collaboratorDraftThread.harness}
-              onHarnessToggle={cycleCollaboratorDraftHarness}
-              rateLimits={rateLimits}
-            />
-          </ThreadComposer>
-        ) : !shouldRenderCurrentCollaboratorThread ? (
-          <div className="py-8">
-            <p className="m-0 text-[0.95rem] font-semibold text-text">Collaborator is not ready</p>
-            <p className="mt-1 mb-0 text-[0.86rem] leading-6 text-muted">Run the collaborator when the Workbench controls are ready.</p>
-          </div>
-        ) : null}
+  const activeRunContent = effectiveRunThread ? (
+    shouldRenderCurrentRunThread ? (
+      <ThreadView
+        {...threadViewProps}
+        composerSpellCheck={composerSpellCheck}
+        contained
+        fontSizeRem={fontSizeRem}
+        hideFinalAgentMessage
+        hideWorkbenchControlAgentMessages
+        hideWorkbenchControlUserMessages
+        onPauseThread={handleCollaboratorPauseThread}
+        onReadThread={onReadThread}
+        onResumeThread={handleCollaboratorResumeThread}
+        onSendMessage={handleCollaboratorSendMessage}
+        onStopThread={handleCollaboratorStopThread}
+        projectId={projectId}
+        projectFileCandidates={projectFileCandidates}
+        projectFileIndexId={projectFileIndexId}
+        projectFileLinkRoots={projectFileLinkRoots}
+        projectRootPath={projectRootPath}
+        rateLimits={rateLimits}
+        thread={effectiveRunThread}
+        threadDocuments={threadDocuments}
+        threadSavedComposerDrafts={threadSavedComposerDrafts}
+      />
+    ) : (
+      <ThreadThreadContent
+        emptyMessage="No collaborator activity was captured yet."
+        flattenCompletedWork
+        hideFinalAgentMessage
+        hideFirstTurnTopBorder
+        hideWorkbenchControlAgentMessages
+        hideWorkbenchControlUserMessages
+        inlineMentionSources={highlightSources}
+        knownSkills={[]}
+        projectFilePaths={threadViewProps.projectFilePaths}
+        projectId={projectId}
+        projectRoots={threadViewProps.projectRoots}
+        projectRootPath={projectRootPath}
+        thread={effectiveRunThread}
+        threadCwdPath={effectiveRunThread.cwd}
+      />
+    )
+  ) : (
+    <p className="m-0 text-[0.84rem] leading-6 text-muted">{shouldShowRunThreadLoading || collaboratorStatus === "hydrating" ? "Loading collaborator thread..." : "Select this run to load its transcript."}</p>
+  );
+
+  const runPanel = (
+    <CollaborationRunPanel
+      activeRunContent={activeRunContent}
+      autoWakeCountdownMs={autoWakeCountdownMs}
+      autoWakeEnabled={collaborationState.autoWakeEnabled}
+      autoWakeProgressPercent={autoWakeProgressPercent}
+      collaboratorComposer={shouldRenderCurrentRunThread ? null : collaboratorComposer}
+      collaboratorStatus={collaboratorStatus}
+      collaboratorStatusLabel={collaboratorStatusLabel}
+      error={[collaboratorError, ...collaboratorWarnings].filter(Boolean).join("\n")}
+      isAutoWakePaused={isAutoWakePaused}
+      isAutoWakeToggleDisabled={isAutoWakeToggleDisabled}
+      isRunDisabled={!controls || isProjectLoading}
+      lastRunSummary={collaborationState.lastRunSummary}
+      recentRunIds={[...collaborationState.runThreadIds].reverse()}
+      selectedRunThreadId={selectedRunThreadId}
+      summariesById={summariesById}
+      onRunNow={() => {
+        void startCollaboratorRun();
+      }}
+      onSelectRunThread={(threadId) => {
+        setSelectedRunThreadId(threadId);
+        setCollaboratorStatus("hydrating");
+        void hydrateCollaboratorThread(threadId);
+      }}
+      onToggleAutoRun={() => {
+        publishStateIfChanged({
+          ...stateRef.current,
+          autoWakeEnabled: !stateRef.current.autoWakeEnabled,
+        });
+        setPendingAutoWakeActivityAt(Date.now());
+      }}
+    />
+  );
+
+  const threadedPanel = (
+    <CollaborationThreadedView
+      activeDrag={activeDragPayload}
+      composerSpellCheck={composerSpellCheck}
+      harness={harness}
+      highlightSources={highlightSources}
+      projectId={projectId}
+      projectRootPath={projectRootPath}
+      promptComposerDraftsByPostId={promptComposerDraftsByPostId}
+      promptDraftThreadsByPostId={promptDraftThreadsByPostId}
+      promptStartErrorsByPostId={promptStartErrorsByPostId}
+      rateLimits={rateLimits}
+      state={collaborationState}
+      workspaceRoots={composerWorkspaceRoots}
+      onCreatePost={handleCreatePost}
+      onDeletePost={handleDeletePost}
+      onEditPost={handleEditPost}
+      onEnsurePromptDraftThread={ensurePromptDraftThread}
+      onMovePost={handleMovePost}
+      onOpenPromptThread={onOpenThreadFromPromptPost}
+      onOpenRevisionHistory={setRevisionPostId}
+      onPostPointerDragStart={onPostPointerDragStart}
+      onPromptDraftChange={handlePromptDraftChange}
+      onPromptDraftClear={handlePromptDraftClear}
+      onStartPromptThread={handleStartPromptThread}
+      onSubmitUserInputRequest={threadViewProps.onSubmitUserInputRequest}
+      onThreadAgentChange={(postId, threadId, agentPath) => {
+        updatePromptDraftThread(postId, threadId, (thread) => ({ ...thread, agentPath }));
+      }}
+      onThreadModelChange={(postId, threadId, model) => {
+        updatePromptDraftThread(postId, threadId, (thread) => ({ ...thread, model }));
+      }}
+      onThreadQuestionnaireDraftChange={threadViewProps.onThreadQuestionnaireDraftChange}
+      onThreadQuestionnaireDraftClear={threadViewProps.onThreadQuestionnaireDraftClear}
+      onThreadReasoningEffortChange={(postId, threadId, reasoningEffort) => {
+        updatePromptDraftThread(postId, threadId, (thread) => ({ ...thread, reasoningEffort }));
+      }}
+      onThreadSavedComposerDraftDelete={threadViewProps.onThreadSavedComposerDraftDelete}
+      onThreadSavedComposerDraftSave={threadViewProps.onThreadSavedComposerDraftSave}
+      onThreadServiceTierChange={(postId, threadId, serviceTier) => {
+        updatePromptDraftThread(postId, threadId, (thread) => ({ ...thread, serviceTier }));
+      }}
+      onListModels={threadViewProps.onListModels}
+    />
+  );
+
+  const content = isMobile ? (
+    <div className="h-full min-h-0">
+      <div className="flex gap-2 px-4 pt-4" role="tablist" aria-label="Collaboration panes">
+        <button
+          type="button"
+          aria-selected={mobilePane === "scratchpad"}
+          className={joinClasses(
+            "rounded-lg px-3 py-2 text-[0.84rem] font-semibold transition",
+            mobilePane === "scratchpad"
+              ? "bg-accent-soft text-accent"
+              : "text-muted hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text",
+          )}
+          onClick={() => {
+            setMobilePane("scratchpad");
+          }}
+        >
+          Discussion
+        </button>
+        <button
+          type="button"
+          aria-selected={mobilePane === "collaborator"}
+          className={joinClasses(
+            "rounded-lg px-3 py-2 text-[0.84rem] font-semibold transition",
+            mobilePane === "collaborator"
+              ? "bg-accent-soft text-accent"
+              : "text-muted hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text",
+          )}
+          onClick={() => {
+            setMobilePane("collaborator");
+          }}
+        >
+          Collaborator
+        </button>
       </div>
-    );
-  }
-
-  if (isMobile) {
-    return (
-      <div className="h-full min-h-0">
-        <div className="flex gap-2 px-4 pt-4" role="tablist" aria-label="Collaboration panes">
-          {(["scratchpad", "collaborator"] as const).map((pane) => (
-            <button
-              key={pane}
-              type="button"
-              aria-selected={mobilePane === pane}
-              className={joinClasses(
-                "rounded-lg px-3 py-2 text-[0.84rem] font-semibold capitalize transition",
-                mobilePane === pane ? "bg-accent-soft text-accent" : "text-muted hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text",
-              )}
-              onClick={() => {
-                setMobilePane(pane);
-              }}
-            >
-              {pane}
-            </button>
-          ))}
-        </div>
-        {mobilePane === "scratchpad" ? (
-          <section className="min-h-0 min-w-0 overflow-hidden px-4 py-4">
-            {renderScratchpadPanel(true, () => { })}
-          </section>
-        ) : (
-          <section className="explorer-scrollbar min-h-0 min-w-0 overflow-y-auto">
-            {renderCollaboratorPanel()}
-          </section>
-        )}
-      </div>
-    );
-  }
-
-  return (
+      {mobilePane === "scratchpad" ? (
+        <section className="h-[calc(100%-3.25rem)] min-h-0 min-w-0 overflow-hidden">
+          {threadedPanel}
+        </section>
+      ) : (
+        <section className="explorer-scrollbar h-[calc(100%-3.25rem)] min-h-0 min-w-0 overflow-y-auto">
+          {runPanel}
+        </section>
+      )}
+    </div>
+  ) : (
     <div className="h-full min-h-0 min-w-0">
       <WorkbenchMainLayoutView
         activeDrag={null}
@@ -1887,12 +1276,21 @@ export default function WorkbenchCollaborationView ({
         onSplitResize={resizeCollaborationSplit}
         renderPanel={({ isFocused, panelId, target }) => {
           if (target.kind === "collaborationScratchpad") {
-            return renderScratchpadPanel(isFocused, () => {
-              focusCollaborationPanel(panelId);
-            });
+            return (
+              <div
+                className="h-full min-h-0"
+                onPointerDown={() => {
+                  if (!isFocused) {
+                    focusCollaborationPanel(panelId);
+                  }
+                }}
+              >
+                {threadedPanel}
+              </div>
+            );
           }
           if (target.kind === "collaborationCollaborator") {
-            return renderCollaboratorPanel();
+            return runPanel;
           }
 
           return (
@@ -1903,5 +1301,22 @@ export default function WorkbenchCollaborationView ({
         }}
       />
     </div>
+  );
+
+  return (
+    <>
+      {content}
+      <CollaborationRevisionHistoryDialog
+        post={revisionPost}
+        onClose={() => {
+          setRevisionPostId(null);
+        }}
+        onRestore={(revisionId) => {
+          if (revisionPost) {
+            handleRestoreRevision(revisionPost.id, revisionId);
+          }
+        }}
+      />
+    </>
   );
 }

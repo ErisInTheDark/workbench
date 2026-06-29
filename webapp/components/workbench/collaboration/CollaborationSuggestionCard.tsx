@@ -18,6 +18,8 @@ export default function CollaborationSuggestionCard ({
   onDismiss,
   onOpen,
   rationale,
+  showCollapse = true,
+  showDismiss = true,
   title,
 }: {
   children: ReactNode;
@@ -27,6 +29,8 @@ export default function CollaborationSuggestionCard ({
   onDismiss: () => void;
   onOpen: () => void;
   rationale?: string;
+  showCollapse?: boolean;
+  showDismiss?: boolean;
   title: string;
 }) {
   const openFromCard = () => {
@@ -60,7 +64,7 @@ export default function CollaborationSuggestionCard ({
       onKeyDown={handleCardKeyDown}
     >
       <div className="absolute top-2.5 right-2.5 z-10 flex items-center gap-1">
-        {isOpen ? (
+        {isOpen && showCollapse ? (
           <button
             type="button"
             aria-label="Collapse suggestion"
@@ -76,6 +80,7 @@ export default function CollaborationSuggestionCard ({
             </svg>
           </button>
         ) : null}
+        {showDismiss ? (
         <button
           type="button"
           aria-label="Dismiss suggestion"
@@ -90,6 +95,7 @@ export default function CollaborationSuggestionCard ({
             <path d="M4.25 4.25l7.5 7.5M11.75 4.25l-7.5 7.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" />
           </svg>
         </button>
+        ) : null}
       </div>
       {!isOpen ? (
         <div className="px-1 pr-18">

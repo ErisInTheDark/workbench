@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - runtime/dynamic: force Collaboration registry reads and writes onto Node.js without static caching. Keywords: collaboration, registry, node.
- * - GET/PUT/POST: read, merge-save, and claim activity-gated auto-wake for a project Collaboration registry. Keywords: collaboration, registry, auto-wake.
+ * - runtime/dynamic: force Collaboration state reads and writes onto Node.js without static caching. Keywords: collaboration, state, node.
+ * - GET/PUT/POST: read, merge-save, and claim activity-gated auto-wake for a project Collaboration state. Keywords: collaboration, state, auto-wake.
  */
 
 import fs from "node:fs/promises";
@@ -10,14 +10,15 @@ import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 
 import { projectRoot, resolveProjectRoot } from "../../../../lib/project";
+import type { WorkbenchCollaborationState } from "../../../../lib/types";
+import { WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS } from "../../../../lib/workbench/collaboration/collaboration-registry";
 import {
-  EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY,
-  WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS,
-  createWorkbenchCollaborationRegistryRelativePath,
-  mergeWorkbenchCollaborationThreadRegistry,
-  normalizeWorkbenchCollaborationThreadRegistry,
-} from "../../../../lib/workbench/collaboration/collaboration-registry";
-import type { WorkbenchCollaborationThreadRegistry } from "../../../../lib/types";
+  EMPTY_WORKBENCH_COLLABORATION_STATE,
+  createWorkbenchCollaborationStateRelativePath,
+  mergeWorkbenchCollaborationState,
+  normalizeWorkbenchCollaborationState,
+  normalizeWorkbenchCollaborationThreadRegistryFromState,
+} from "../../../../lib/workbench/collaboration/collaboration-state";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,9 +30,9 @@ interface AutoWakeLease {
   readonly ownerId: string;
 }
 
-interface CollaborationRegistryDiskFile {
+interface CollaborationStateDiskFile {
   readonly autoWakeLease: AutoWakeLease | null;
-  readonly registry: WorkbenchCollaborationThreadRegistry;
+  readonly state: WorkbenchCollaborationState;
 }
 
 function normalizeAutoWakeLease(value: unknown): AutoWakeLease | null {
@@ -50,34 +51,40 @@ function normalizeAutoWakeLease(value: unknown): AutoWakeLease | null {
     : null;
 }
 
-function normalizeDiskFile(value: unknown): CollaborationRegistryDiskFile {
+function normalizeDiskFile(value: unknown): CollaborationStateDiskFile {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {
       autoWakeLease: null,
-      registry: EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY,
+      state: EMPTY_WORKBENCH_COLLABORATION_STATE,
     };
   }
 
   const candidate = value as Record<string, unknown>;
   return {
     autoWakeLease: normalizeAutoWakeLease(candidate.autoWakeLease),
-    registry: normalizeWorkbenchCollaborationThreadRegistry("registry" in candidate ? candidate.registry : candidate),
+    state: normalizeWorkbenchCollaborationState(
+      "state" in candidate
+        ? candidate.state
+        : "registry" in candidate
+          ? candidate.registry
+          : candidate,
+    ),
   };
 }
 
-function resolveRegistryFile(projectId: string) {
-  const relativePath = createWorkbenchCollaborationRegistryRelativePath(projectId);
+function resolveStateFile(projectId: string) {
+  const relativePath = createWorkbenchCollaborationStateRelativePath(projectId);
   const absolutePath = path.resolve(projectRoot, relativePath);
   const normalizedProjectRoot = path.resolve(projectRoot);
   if (absolutePath !== normalizedProjectRoot && !absolutePath.startsWith(`${normalizedProjectRoot}${path.sep}`)) {
-    throw new Error("Collaboration registry path is outside Workbench storage.");
+    throw new Error("Collaboration state path is outside Workbench storage.");
   }
 
   return absolutePath;
 }
 
-async function readDiskFile(projectId: string): Promise<CollaborationRegistryDiskFile> {
-  const absolutePath = resolveRegistryFile(projectId);
+async function readDiskFile(projectId: string): Promise<CollaborationStateDiskFile> {
+  const absolutePath = resolveStateFile(projectId);
   try {
     const parsed = JSON.parse(await fs.readFile(absolutePath, "utf8")) as unknown;
     return normalizeDiskFile(parsed);
@@ -85,7 +92,7 @@ async function readDiskFile(projectId: string): Promise<CollaborationRegistryDis
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return {
         autoWakeLease: null,
-        registry: EMPTY_WORKBENCH_COLLABORATION_THREAD_REGISTRY,
+        state: EMPTY_WORKBENCH_COLLABORATION_STATE,
       };
     }
 
@@ -93,18 +100,20 @@ async function readDiskFile(projectId: string): Promise<CollaborationRegistryDis
   }
 }
 
-async function writeDiskFile(projectId: string, file: CollaborationRegistryDiskFile) {
-  const absolutePath = resolveRegistryFile(projectId);
+async function writeDiskFile(projectId: string, file: CollaborationStateDiskFile) {
+  const absolutePath = resolveStateFile(projectId);
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+  const state = normalizeWorkbenchCollaborationState(file.state);
   await fs.writeFile(absolutePath, `${JSON.stringify({
     autoWakeLease: file.autoWakeLease,
-    registry: normalizeWorkbenchCollaborationThreadRegistry(file.registry),
+    state,
   }, null, 2)}\n`, "utf8");
 }
 
-function registryResponse(registry: WorkbenchCollaborationThreadRegistry, init?: ResponseInit) {
+function stateResponse(state: WorkbenchCollaborationState, init?: ResponseInit) {
   return NextResponse.json({
-    registry,
+    registry: normalizeWorkbenchCollaborationThreadRegistryFromState(state),
+    state,
   }, {
     ...init,
     headers: {
@@ -118,26 +127,26 @@ export async function GET(request: NextRequest) {
   try {
     const resolvedProject = await resolveProjectRoot(request.nextUrl.searchParams.get("projectId"));
     const file = await readDiskFile(resolvedProject.id);
-    return registryResponse(file.registry);
+    return stateResponse(file.state);
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to read the Collaboration registry." }, { status: 400 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to read the Collaboration state." }, { status: 400 });
   }
 }
 
 export async function PUT(request: NextRequest) {
   try {
-    const { projectId, registry } = await request.json();
+    const { projectId, registry, state } = await request.json();
     const resolvedProject = await resolveProjectRoot(projectId);
-    const incomingRegistry = normalizeWorkbenchCollaborationThreadRegistry(registry);
+    const incomingState = normalizeWorkbenchCollaborationState(state ?? registry);
     const currentFile = await readDiskFile(resolvedProject.id);
-    const mergedRegistry = mergeWorkbenchCollaborationThreadRegistry(currentFile.registry, incomingRegistry);
+    const mergedState = mergeWorkbenchCollaborationState(currentFile.state, incomingState);
     await writeDiskFile(resolvedProject.id, {
       autoWakeLease: currentFile.autoWakeLease,
-      registry: mergedRegistry,
+      state: mergedState,
     });
-    return registryResponse(mergedRegistry);
+    return stateResponse(mergedState);
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to save the Collaboration registry." }, { status: 400 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to save the Collaboration state." }, { status: 400 });
   }
 }
 
@@ -145,7 +154,7 @@ export async function POST(request: NextRequest) {
   try {
     const { action, ownerId, projectId } = await request.json();
     if (action !== "claimAutoWake") {
-      return NextResponse.json({ error: "Unsupported Collaboration registry action." }, { status: 400 });
+      return NextResponse.json({ error: "Unsupported Collaboration state action." }, { status: 400 });
     }
 
     const normalizedOwnerId = typeof ownerId === "string" ? ownerId.trim() : "";
@@ -159,11 +168,12 @@ export async function POST(request: NextRequest) {
     const activeLease = currentFile.autoWakeLease && currentFile.autoWakeLease.expiresAt > now
       ? currentFile.autoWakeLease
       : null;
-    const tooSoon = now - currentFile.registry.lastAutoWakeAt < WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS;
-    if (!currentFile.registry.autoWakeEnabled || tooSoon || (activeLease && activeLease.ownerId !== normalizedOwnerId)) {
+    const tooSoon = now - currentFile.state.lastAutoWakeAt < WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS;
+    if (!currentFile.state.autoWakeEnabled || tooSoon || (activeLease && activeLease.ownerId !== normalizedOwnerId)) {
       return NextResponse.json({
         acquired: false,
-        registry: currentFile.registry,
+        registry: normalizeWorkbenchCollaborationThreadRegistryFromState(currentFile.state),
+        state: currentFile.state,
       }, {
         headers: {
           "Cache-Control": "no-store",
@@ -171,8 +181,8 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const nextRegistry = {
-      ...currentFile.registry,
+    const nextState = {
+      ...currentFile.state,
       lastAutoWakeAt: now,
     };
     await writeDiskFile(resolvedProject.id, {
@@ -180,11 +190,12 @@ export async function POST(request: NextRequest) {
         expiresAt: now + AUTO_WAKE_LEASE_TTL_MS,
         ownerId: normalizedOwnerId,
       },
-      registry: nextRegistry,
+      state: nextState,
     });
     return NextResponse.json({
       acquired: true,
-      registry: nextRegistry,
+      registry: normalizeWorkbenchCollaborationThreadRegistryFromState(nextState),
+      state: nextState,
     }, {
       headers: {
         "Cache-Control": "no-store",

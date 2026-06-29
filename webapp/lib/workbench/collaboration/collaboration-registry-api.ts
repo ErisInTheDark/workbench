@@ -1,41 +1,56 @@
 /*
  * Exports:
- * - claimWorkbenchCollaborationAutoWake: ask the disk registry to reserve one auto-wake run. Keywords: collaboration, auto-wake, lease, API.
- * - readWorkbenchCollaborationThreadRegistry: load a project Collaboration registry from disk. Keywords: collaboration, registry, API.
- * - writeWorkbenchCollaborationThreadRegistry: persist a project Collaboration registry to disk. Keywords: collaboration, registry, API.
+ * - claimWorkbenchCollaborationAutoWake: compatibility auto-wake helper returning a v1 registry projection. Keywords: collaboration, auto-wake, lease, API.
+ * - claimWorkbenchCollaborationStateAutoWake: ask the disk state to reserve one auto-wake run. Keywords: collaboration, auto-wake, state, API.
+ * - readWorkbenchCollaborationState: load project Collaboration threaded state from disk. Keywords: collaboration, state, API.
+ * - readWorkbenchCollaborationThreadRegistry: compatibility v1 registry reader. Keywords: collaboration, registry, API.
+ * - writeWorkbenchCollaborationState: persist project Collaboration threaded state. Keywords: collaboration, state, API.
+ * - writeWorkbenchCollaborationThreadRegistry: compatibility v1 registry writer. Keywords: collaboration, registry, API.
  */
 
-import type { WorkbenchCollaborationThreadRegistry } from "../../types";
+import type {
+  WorkbenchCollaborationState,
+  WorkbenchCollaborationThreadRegistry,
+} from "../../types";
 import { normalizeWorkbenchCollaborationThreadRegistry } from "./collaboration-registry";
+import {
+  normalizeWorkbenchCollaborationState,
+  normalizeWorkbenchCollaborationThreadRegistryFromState,
+} from "./collaboration-state";
 
-interface RegistryResponse {
-  registry?: unknown;
+interface CollaborationStateResponse {
   error?: string;
+  registry?: unknown;
+  state?: unknown;
 }
 
-interface AutoWakeResponse extends RegistryResponse {
+interface AutoWakeResponse extends CollaborationStateResponse {
   acquired?: boolean;
 }
 
-function readError(payload: RegistryResponse, fallback: string) {
+function readError(payload: CollaborationStateResponse, fallback: string) {
   return typeof payload.error === "string" && payload.error.trim()
     ? payload.error
     : fallback;
 }
 
-export async function readWorkbenchCollaborationThreadRegistry(projectId: string) {
-  const response = await fetch(`/api/collaboration/registry?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" });
-  const payload = await response.json().catch(() => ({})) as RegistryResponse;
-  if (!response.ok) {
-    throw new Error(readError(payload, "Unable to read the Collaboration registry."));
-  }
-
-  return normalizeWorkbenchCollaborationThreadRegistry(payload.registry);
+function readPayloadState(payload: CollaborationStateResponse) {
+  return normalizeWorkbenchCollaborationState(payload.state ?? payload.registry);
 }
 
-export async function writeWorkbenchCollaborationThreadRegistry(
+export async function readWorkbenchCollaborationState(projectId: string) {
+  const response = await fetch(`/api/collaboration/registry?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" });
+  const payload = await response.json().catch(() => ({})) as CollaborationStateResponse;
+  if (!response.ok) {
+    throw new Error(readError(payload, "Unable to read the Collaboration state."));
+  }
+
+  return readPayloadState(payload);
+}
+
+export async function writeWorkbenchCollaborationState(
   projectId: string,
-  registry: WorkbenchCollaborationThreadRegistry,
+  state: WorkbenchCollaborationState,
 ) {
   const response = await fetch("/api/collaboration/registry", {
     method: "PUT",
@@ -44,18 +59,18 @@ export async function writeWorkbenchCollaborationThreadRegistry(
     },
     body: JSON.stringify({
       projectId,
-      registry,
+      state,
     }),
   });
-  const payload = await response.json().catch(() => ({})) as RegistryResponse;
+  const payload = await response.json().catch(() => ({})) as CollaborationStateResponse;
   if (!response.ok) {
-    throw new Error(readError(payload, "Unable to save the Collaboration registry."));
+    throw new Error(readError(payload, "Unable to save the Collaboration state."));
   }
 
-  return normalizeWorkbenchCollaborationThreadRegistry(payload.registry);
+  return readPayloadState(payload);
 }
 
-export async function claimWorkbenchCollaborationAutoWake(
+export async function claimWorkbenchCollaborationStateAutoWake(
   projectId: string,
   ownerId: string,
 ) {
@@ -77,6 +92,43 @@ export async function claimWorkbenchCollaborationAutoWake(
 
   return {
     acquired: payload.acquired === true,
-    registry: normalizeWorkbenchCollaborationThreadRegistry(payload.registry),
+    state: readPayloadState(payload),
+  };
+}
+
+export async function readWorkbenchCollaborationThreadRegistry(projectId: string) {
+  return normalizeWorkbenchCollaborationThreadRegistryFromState(await readWorkbenchCollaborationState(projectId));
+}
+
+export async function writeWorkbenchCollaborationThreadRegistry(
+  projectId: string,
+  registry: WorkbenchCollaborationThreadRegistry,
+) {
+  const response = await fetch("/api/collaboration/registry", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      projectId,
+      registry: normalizeWorkbenchCollaborationThreadRegistry(registry),
+    }),
+  });
+  const payload = await response.json().catch(() => ({})) as CollaborationStateResponse;
+  if (!response.ok) {
+    throw new Error(readError(payload, "Unable to save the Collaboration registry."));
+  }
+
+  return normalizeWorkbenchCollaborationThreadRegistryFromState(readPayloadState(payload));
+}
+
+export async function claimWorkbenchCollaborationAutoWake(
+  projectId: string,
+  ownerId: string,
+) {
+  const result = await claimWorkbenchCollaborationStateAutoWake(projectId, ownerId);
+  return {
+    acquired: result.acquired,
+    registry: normalizeWorkbenchCollaborationThreadRegistryFromState(result.state),
   };
 }

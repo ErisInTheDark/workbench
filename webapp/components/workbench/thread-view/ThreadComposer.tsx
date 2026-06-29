@@ -324,6 +324,7 @@ function ThreadSavedDraftShelf ({
 export default function ThreadComposer ({
   children,
   composerSpellCheck,
+  controlsMode = "thread",
   header,
   layout = "thread",
   onListModels,
@@ -351,6 +352,8 @@ export default function ThreadComposer ({
   savedDraftShelfPortalHost,
   sendLabel = "Send",
   showSavedDraftControls = true,
+  surface = "card",
+  leadingActions,
   trailingActions,
   threadQuestionnaireDraft,
   threadComposerDraft,
@@ -362,6 +365,7 @@ export default function ThreadComposer ({
 }: {
   children?: ReactNode;
   composerSpellCheck: boolean;
+  controlsMode?: "comment" | "thread";
   header?: ReactNode;
   layout?: "thread" | "inline";
   onListModels: (harness: ThreadPayload["harness"]) => Promise<WorkbenchModelOption[]>;
@@ -393,6 +397,8 @@ export default function ThreadComposer ({
   savedDraftShelfPortalHost?: HTMLElement | null;
   sendLabel?: string;
   showSavedDraftControls?: boolean;
+  surface?: "bare" | "card";
+  leadingActions?: ReactNode;
   trailingActions?: ReactNode;
   threadQuestionnaireDraft: WorkbenchQuestionnaireDraft | null;
   threadComposerDraft: WorkbenchThreadComposerDraft | null;
@@ -433,6 +439,7 @@ export default function ThreadComposer ({
 
   onThreadComposerDraftChangeRef.current = onThreadComposerDraftChange;
   onThreadComposerDraftClearRef.current = onThreadComposerDraftClear;
+  const isCommentMode = controlsMode === "comment";
   const trimmedValue = value.trim();
   const isAttaching = pendingAttachmentReads > 0;
   const hasPendingUserInputRequest = pendingUserInputRequest !== null;
@@ -491,13 +498,14 @@ export default function ThreadComposer ({
     ?? modelOptionForControls?.defaultReasoningEffort
     ?? supportedReasoningEfforts[0]
     ?? null;
-  const showsReasoningEffortControl = Boolean(modelOptionForControls?.supportsReasoningEffort && currentReasoningEffort);
-  const showsFastModeControl = thread.harness === "codex" && Boolean(modelOptionForControls?.supportsFastMode);
+  const showsThreadControls = !isCommentMode;
+  const showsReasoningEffortControl = showsThreadControls && Boolean(modelOptionForControls?.supportsReasoningEffort && currentReasoningEffort);
+  const showsFastModeControl = showsThreadControls && thread.harness === "codex" && Boolean(modelOptionForControls?.supportsFastMode);
   const isFastModeEnabled = thread.serviceTier === "fast";
-  const isAgentPickerOpen = activePicker === "agent";
-  const isModelPickerOpen = activePicker === "model";
+  const isAgentPickerOpen = showsThreadControls && activePicker === "agent";
+  const isModelPickerOpen = showsThreadControls && activePicker === "model";
   const isPickerOpen = activePicker !== null;
-  const showStopButton = isActiveThread || isStopping;
+  const showStopButton = !isCommentMode && (isActiveThread || isStopping);
   const selectedAgent = availableAgents.find((agent) => areWorkbenchAgentPathsEqual(agent.path, thread.agentPath)) ?? null;
   const agentButtonLabel = selectedAgent?.name
     ?? getWorkbenchAgentPathLabel(thread.agentPath)
@@ -604,6 +612,13 @@ export default function ThreadComposer ({
   }, [autoExpandSavedDraftShelf, threadSavedComposerDrafts.length]);
 
   useEffect(() => {
+    if (isCommentMode) {
+      setAvailableAgents([]);
+      setAgentsError("");
+      setIsLoadingAgents(false);
+      return;
+    }
+
     let cancelled = false;
     setIsLoadingAgents(true);
     void fetch(`/api/agents?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" }).then(async (response) => {
@@ -633,9 +648,14 @@ export default function ThreadComposer ({
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [isCommentMode, projectId]);
 
   useEffect(() => {
+    if (isCommentMode) {
+      setAvailableModels([]);
+      return;
+    }
+
     let cancelled = false;
     setAvailableModels([]);
     void onListModels(thread.harness).then((models) => {
@@ -651,10 +671,10 @@ export default function ThreadComposer ({
     return () => {
       cancelled = true;
     };
-  }, [onListModels, thread.harness]);
+  }, [isCommentMode, onListModels, thread.harness]);
 
   useEffect(() => {
-    if (!isModelPickerOpen) {
+    if (isCommentMode || !isModelPickerOpen) {
       return;
     }
 
@@ -682,7 +702,7 @@ export default function ThreadComposer ({
     return () => {
       cancelled = true;
     };
-  }, [isModelPickerOpen, onListModels, thread.harness]);
+  }, [isCommentMode, isModelPickerOpen, onListModels, thread.harness]);
 
   const buildSavedDraftFromComposer = useCallback((): WorkbenchThreadSavedComposerDraft | null => {
     if (!value.trim() && attachments.length === 0) {
@@ -953,7 +973,7 @@ export default function ThreadComposer ({
         )}
         onSubmit={handleSubmit}
       >
-        <div className="rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-3">
+        <div className={surface === "card" ? "rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-3" : "p-0"}>
           {header ? (
             <div className="mb-3 px-1">
               {header}
@@ -982,48 +1002,17 @@ export default function ThreadComposer ({
               }}
             />
           ) : null}
-          {!showQuestionnairePanel && attachments.length ? (
-            <div className="mb-3 flex flex-wrap gap-3 px-1">
-              {attachments.map((attachment, index) => (
-                <div key={attachment.id} className="relative h-24 w-24">
-                  <ThreadLightboxImage
-                    alt={`Attached image ${index + 1}`}
-                    buttonClassName="h-full w-full rounded-[0.95rem]"
-                    imageClassName="h-full w-full object-cover"
-                    src={attachment.url}
-                  />
-                  <button
-                    type="button"
-                    aria-label={`Remove attached image ${index + 1}`}
-                    title="Remove attached image"
-                    className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text shadow-sm transition hover:bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                    onClick={() => {
-                      setAttachments((current) => current.filter((currentAttachment) => currentAttachment.id !== attachment.id));
-                    }}
-                  >
-                    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
-                      <path
-                        d="M4 4l8 8M12 4l-8 8"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeLinecap="round"
-                        strokeWidth="1.8"
-                      />
-                    </svg>
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : null}
           <div className="block" hidden={showQuestionnairePanel}>
-            <span className="sr-only">Message thread</span>
+            <span className="sr-only">{isCommentMode ? "Write comment" : "Message thread"}</span>
             <div hidden={isPickerOpen}>
               <PlaintextEditable
                 id={`thread-composer:${thread.id}`}
-                ariaLabel="Message thread"
+                ariaLabel={isCommentMode ? "Write comment" : "Message thread"}
                 className="thread-plaintext-editable min-h-[5.75rem] w-full border-0 bg-transparent px-1 py-1 text-[0.96em] leading-[1.65] text-text outline-none"
                 disabled={isInputDisabled}
-                placeholder={isThreadStateBroken
+                placeholder={isCommentMode
+                  ? "Write a comment..."
+                  : isThreadStateBroken
                   ? "New messages are disabled for this thread."
                   : isCopilotAuthRequired
                     ? "Sign in to Copilot CLI to send messages."
@@ -1103,22 +1092,52 @@ export default function ThreadComposer ({
               }}
             />
           ) : !showQuestionnairePanel ? (
-            <div className={joinClasses(
-              "mt-3 flex flex-wrap items-center gap-3",
-              helperText ? "justify-between" : "justify-end",
-            )}>
-              <div className="flex items-center gap-2">
+            <div className="mt-3 flex flex-wrap items-end gap-3">
+              <div className="min-w-0 flex-1">
                 {questionnaireToggleButton}
+                {attachments.length ? (
+                  <div className="flex flex-wrap gap-3 px-1">
+                    {attachments.map((attachment, index) => (
+                      <div key={attachment.id} className="relative h-24 w-24">
+                        <ThreadLightboxImage
+                          alt={`Attached image ${index + 1}`}
+                          buttonClassName="h-full w-full rounded-[0.95rem]"
+                          imageClassName="h-full w-full object-cover"
+                          src={attachment.url}
+                        />
+                        <button
+                          type="button"
+                          aria-label={`Remove attached image ${index + 1}`}
+                          title="Remove attached image"
+                          className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text shadow-sm transition hover:bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+                          onClick={() => {
+                            setAttachments((current) => current.filter((currentAttachment) => currentAttachment.id !== attachment.id));
+                          }}
+                        >
+                          <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
+                            <path
+                              d="M4 4l8 8M12 4l-8 8"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeLinecap="round"
+                              strokeWidth="1.8"
+                            />
+                          </svg>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 {helperText ? (
                   <p className={joinClasses(
-                    "m-0 text-[0.78em] leading-[1.6]",
+                    attachments.length ? "mt-2 mb-0 px-1 text-[0.78em] leading-[1.6]" : "m-0 px-1 text-[0.78em] leading-[1.6]",
                     isThreadStateBroken ? "text-danger" : "text-muted",
                   )}>
                     {helperText}
                   </p>
                 ) : null}
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center justify-end gap-2">
                 {showSavedDraftControls ? (
                   <button
                     type="button"
@@ -1136,6 +1155,7 @@ export default function ThreadComposer ({
                     <ArchiveTrayIcon />
                   </button>
                 ) : null}
+                {showsThreadControls ? (
                 <div className="inline-flex items-stretch overflow-hidden rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-[0.78em] font-medium text-text">
                   <button
                     type="button"
@@ -1198,6 +1218,8 @@ export default function ThreadComposer ({
                     {agentButtonLabel}
                   </button>
                 </div>
+                ) : null}
+                {leadingActions}
                 <PrimaryButton
                   type="submit"
                   disabled={(!trimmedValue && !attachments.length) || isSendDisabled}

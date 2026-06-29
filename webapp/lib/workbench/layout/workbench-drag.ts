@@ -20,4 +20,8 @@ export type WorkbenchDragPayload =
   | {
     readonly harness: WorkbenchHarness;
     readonly type: "new-thread";
+  }
+  | {
+    readonly postId: string;
+    readonly type: "collaboration-post";
   };
