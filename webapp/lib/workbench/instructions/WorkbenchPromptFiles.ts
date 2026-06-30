@@ -54,6 +54,7 @@ import { WORKBENCH_INJECTION_TEMPLATES } from "./instruction-injections";
 export interface WorkbenchPromptContext {
   readonly agentPath?: string | null;
   readonly harness?: WorkbenchHarness | null;
+  readonly instructionInjections?: Readonly<Record<string, string>>;
   readonly projectId?: string | null;
   readonly roots?: readonly WorkbenchProjectRoot[];
   readonly threadId?: string | null;
@@ -326,11 +327,17 @@ async function buildWorkflowInjection(context: WorkbenchPromptContext) {
   const selectedWorkflows = activeWorkflowIds.size
     ? workflows.filter((workflow) => activeWorkflowIds.has(workflow.key))
     : [];
+  const workflowScopedInjections: Record<string, string> = {
+    "workbench.rendering": WORKBENCH_INJECTION_TEMPLATES["workbench.rendering"].injection,
+    "workbench.tools": WORKBENCH_INJECTION_TEMPLATES["workbench.tools"].injection,
+    "workspace.roots": buildWorkspaceRootsInjection(context),
+    ...(context.instructionInjections ?? {}),
+  };
   const workflowContent = selectedWorkflows.length
     ? selectedWorkflows.map((workflow) => [
       `## ${workflow.key}`,
       `Source: ${workflow.path}`,
-      workflow.content,
+      expandInstructionInjections(workflow.content, workflowScopedInjections),
     ].join("\n")).join("\n\n")
     : "No active Workbench workflow is selected for this thread.";
 
@@ -594,6 +601,7 @@ This collaboration-mode overlay must not replace the active Workbench workflow, 
 `,
     WORKBENCH_INJECTION_TEMPLATES["workbench.tools"].injection,
     WORKBENCH_INJECTION_TEMPLATES["workbench.rendering"].injection,
+    buildWorkspaceRootsInjection(context),
     workflowInjection,
     buildWorkbenchCheckpointInstructions(context),
     buildThreadTitleInstructions(context),

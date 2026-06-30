@@ -4,130 +4,30 @@
  * - GET/PUT/POST: read, merge-save, and claim activity-gated auto-wake for a project Collaboration state. Keywords: collaboration, state, auto-wake.
  */
 
-import fs from "node:fs/promises";
-import path from "node:path";
-
 import { NextRequest, NextResponse } from "next/server";
 
-import { projectRoot, resolveProjectRoot } from "../../../../lib/project";
-import type { WorkbenchCollaborationState } from "../../../../lib/types";
+import { resolveProjectRoot } from "../../../../lib/project";
 import { WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS } from "../../../../lib/workbench/collaboration/collaboration-registry";
 import {
-  EMPTY_WORKBENCH_COLLABORATION_STATE,
-  createWorkbenchCollaborationStateRelativePath,
   mergeWorkbenchCollaborationState,
   normalizeWorkbenchCollaborationState,
   normalizeWorkbenchCollaborationThreadRegistryFromState,
 } from "../../../../lib/workbench/collaboration/collaboration-state";
+import {
+  AUTO_WAKE_LEASE_TTL_MS,
+  createCollaborationStateResponse,
+  readCollaborationStateDiskFile,
+  writeCollaborationStateDiskFile,
+} from "../collaboration-state-file";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const AUTO_WAKE_LEASE_TTL_MS = WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS * 2;
-
-interface AutoWakeLease {
-  readonly expiresAt: number;
-  readonly ownerId: string;
-}
-
-interface CollaborationStateDiskFile {
-  readonly autoWakeLease: AutoWakeLease | null;
-  readonly state: WorkbenchCollaborationState;
-}
-
-function normalizeAutoWakeLease(value: unknown): AutoWakeLease | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-
-  const candidate = value as Record<string, unknown>;
-  const ownerId = typeof candidate.ownerId === "string" ? candidate.ownerId.trim() : "";
-  const expiresAt = typeof candidate.expiresAt === "number" && Number.isFinite(candidate.expiresAt)
-    ? Math.max(0, Math.trunc(candidate.expiresAt))
-    : 0;
-
-  return ownerId && expiresAt
-    ? { expiresAt, ownerId }
-    : null;
-}
-
-function normalizeDiskFile(value: unknown): CollaborationStateDiskFile {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {
-      autoWakeLease: null,
-      state: EMPTY_WORKBENCH_COLLABORATION_STATE,
-    };
-  }
-
-  const candidate = value as Record<string, unknown>;
-  return {
-    autoWakeLease: normalizeAutoWakeLease(candidate.autoWakeLease),
-    state: normalizeWorkbenchCollaborationState(
-      "state" in candidate
-        ? candidate.state
-        : "registry" in candidate
-          ? candidate.registry
-          : candidate,
-    ),
-  };
-}
-
-function resolveStateFile(projectId: string) {
-  const relativePath = createWorkbenchCollaborationStateRelativePath(projectId);
-  const absolutePath = path.resolve(projectRoot, relativePath);
-  const normalizedProjectRoot = path.resolve(projectRoot);
-  if (absolutePath !== normalizedProjectRoot && !absolutePath.startsWith(`${normalizedProjectRoot}${path.sep}`)) {
-    throw new Error("Collaboration state path is outside Workbench storage.");
-  }
-
-  return absolutePath;
-}
-
-async function readDiskFile(projectId: string): Promise<CollaborationStateDiskFile> {
-  const absolutePath = resolveStateFile(projectId);
-  try {
-    const parsed = JSON.parse(await fs.readFile(absolutePath, "utf8")) as unknown;
-    return normalizeDiskFile(parsed);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return {
-        autoWakeLease: null,
-        state: EMPTY_WORKBENCH_COLLABORATION_STATE,
-      };
-    }
-
-    throw error;
-  }
-}
-
-async function writeDiskFile(projectId: string, file: CollaborationStateDiskFile) {
-  const absolutePath = resolveStateFile(projectId);
-  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-  const state = normalizeWorkbenchCollaborationState(file.state);
-  await fs.writeFile(absolutePath, `${JSON.stringify({
-    autoWakeLease: file.autoWakeLease,
-    state,
-  }, null, 2)}\n`, "utf8");
-}
-
-function stateResponse(state: WorkbenchCollaborationState, init?: ResponseInit) {
-  return NextResponse.json({
-    registry: normalizeWorkbenchCollaborationThreadRegistryFromState(state),
-    state,
-  }, {
-    ...init,
-    headers: {
-      "Cache-Control": "no-store",
-      ...init?.headers,
-    },
-  });
-}
-
 export async function GET(request: NextRequest) {
   try {
     const resolvedProject = await resolveProjectRoot(request.nextUrl.searchParams.get("projectId"));
-    const file = await readDiskFile(resolvedProject.id);
-    return stateResponse(file.state);
+    const file = await readCollaborationStateDiskFile(resolvedProject.id);
+    return createCollaborationStateResponse(file.state);
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to read the Collaboration state." }, { status: 400 });
   }
@@ -138,13 +38,13 @@ export async function PUT(request: NextRequest) {
     const { projectId, registry, state } = await request.json();
     const resolvedProject = await resolveProjectRoot(projectId);
     const incomingState = normalizeWorkbenchCollaborationState(state ?? registry);
-    const currentFile = await readDiskFile(resolvedProject.id);
+    const currentFile = await readCollaborationStateDiskFile(resolvedProject.id, { allowCorruptRecovery: true });
     const mergedState = mergeWorkbenchCollaborationState(currentFile.state, incomingState);
-    await writeDiskFile(resolvedProject.id, {
+    await writeCollaborationStateDiskFile(resolvedProject.id, {
       autoWakeLease: currentFile.autoWakeLease,
       state: mergedState,
     });
-    return stateResponse(mergedState);
+    return createCollaborationStateResponse(mergedState);
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to save the Collaboration state." }, { status: 400 });
   }
@@ -163,7 +63,7 @@ export async function POST(request: NextRequest) {
     }
 
     const resolvedProject = await resolveProjectRoot(projectId);
-    const currentFile = await readDiskFile(resolvedProject.id);
+    const currentFile = await readCollaborationStateDiskFile(resolvedProject.id);
     const now = Date.now();
     const activeLease = currentFile.autoWakeLease && currentFile.autoWakeLease.expiresAt > now
       ? currentFile.autoWakeLease
@@ -185,7 +85,7 @@ export async function POST(request: NextRequest) {
       ...currentFile.state,
       lastAutoWakeAt: now,
     };
-    await writeDiskFile(resolvedProject.id, {
+    await writeCollaborationStateDiskFile(resolvedProject.id, {
       autoWakeLease: {
         expiresAt: now + AUTO_WAKE_LEASE_TTL_MS,
         ownerId: normalizedOwnerId,

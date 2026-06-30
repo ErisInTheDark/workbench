@@ -3,6 +3,7 @@
  * - COLLABORATION_IMPORTED_SCRATCHPAD_POST_ID: deterministic id for migrated scratchpad content. Keywords: collaboration, scratchpad, migration.
  * - EMPTY_WORKBENCH_COLLABORATION_STATE: canonical empty threaded Collaboration state. Keywords: collaboration, state, defaults.
  * - WORKBENCH_COLLABORATION_STATE_VERSION: current Collaboration state version. Keywords: collaboration, version.
+ * - createWorkbenchCollaborationAgentPostId: create an opaque agent post id. Keywords: collaboration, post, agent, id.
  * - createWorkbenchCollaborationPostId: create an opaque user post id. Keywords: collaboration, post, id.
  * - createWorkbenchCollaborationRevisionId: create an opaque revision id. Keywords: collaboration, revision, id.
  * - createWorkbenchCollaborationStateRelativePath: build the project-scoped disk state path. Keywords: collaboration, state, disk.
@@ -33,6 +34,7 @@ export const COLLABORATION_IMPORTED_SCRATCHPAD_POST_ID = "imported-scratchpad";
 export const EMPTY_WORKBENCH_COLLABORATION_STATE: WorkbenchCollaborationState = {
   autoWakeEnabled: false,
   lastAppliedPostPatchSignature: "",
+  lastAppliedRunMemorySignature: "",
   lastAutoWakeAt: 0,
   lastRunMemory: "",
   posts: {},
@@ -62,6 +64,14 @@ export function createWorkbenchCollaborationPostId() {
   }
 
   return `user:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+}
+
+export function createWorkbenchCollaborationAgentPostId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `agent:${crypto.randomUUID()}`;
+  }
+
+  return `agent:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 }
 
 export function createWorkbenchCollaborationRevisionId() {
@@ -444,6 +454,7 @@ function normalizeStateFromLegacyRegistry(value: unknown): WorkbenchCollaboratio
   return normalizeWorkbenchCollaborationState({
     autoWakeEnabled: candidate.autoWakeEnabled,
     lastAppliedPostPatchSignature: candidate.lastAppliedSuggestionPatchSignature,
+    lastAppliedRunMemorySignature: candidate.lastAppliedRunMemorySignature,
     lastAutoWakeAt: candidate.lastAutoWakeAt,
     lastRunMemory: candidate.lastRunMemory ?? candidate.lastRunSummary,
     posts,
@@ -477,6 +488,7 @@ export function normalizeWorkbenchCollaborationState(value: unknown): WorkbenchC
   return {
     autoWakeEnabled: candidate.autoWakeEnabled === true,
     lastAppliedPostPatchSignature: normalizeTrimmedText(candidate.lastAppliedPostPatchSignature),
+    lastAppliedRunMemorySignature: normalizeTrimmedText(candidate.lastAppliedRunMemorySignature),
     lastAutoWakeAt: normalizeTimestamp(candidate.lastAutoWakeAt),
     lastRunMemory: normalizeTrimmedText(candidate.lastRunMemory) || normalizeTrimmedText(candidate.lastRunSummary),
     posts: tree.posts,
@@ -538,6 +550,7 @@ export function mergeWorkbenchCollaborationState(
   return normalizeWorkbenchCollaborationState({
     autoWakeEnabled: normalizedIncoming.autoWakeEnabled,
     lastAppliedPostPatchSignature: normalizedIncoming.lastAppliedPostPatchSignature || normalizedBase.lastAppliedPostPatchSignature,
+    lastAppliedRunMemorySignature: normalizedIncoming.lastAppliedRunMemorySignature || normalizedBase.lastAppliedRunMemorySignature,
     lastAutoWakeAt: Math.max(normalizedBase.lastAutoWakeAt, normalizedIncoming.lastAutoWakeAt),
     lastRunMemory: normalizedIncoming.lastRunMemory || normalizedBase.lastRunMemory,
     posts,

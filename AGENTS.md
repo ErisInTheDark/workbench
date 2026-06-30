@@ -22,6 +22,7 @@
 - KEEP SHARED CODE IN SYNC. Never write shared code, such as client/server code, with `any`/`unknown` types, always use shared types and keep the two sides synchronised.
 - UPDATE GUIDANCE. Keep`AGENTS.md` or nearby project guidance up-to-date when the webapp's structure or operating workflow changes materially. Confirm the changes with the user.
 - UPDATE INSTRUCTION SOURCES, NOT GENERATED FILES. For Workbench-owned prompts/workflows, edit the source under `webapp/lib/workbench/instructions/` instead of generated files in the Workbench library. Confirm the source-to-generated path before planning.
+- COLLABORATION ENDPOINT EXCEPTION. When a Workbench collaborator-maintenance control prompt explicitly authorizes the dedicated Collaboration post endpoint, the collaborator may call only that endpoint for visible Collaboration post create/update/delete work. This does not allow arbitrary webapp endpoint calls.
 
 
 ## DO NOT

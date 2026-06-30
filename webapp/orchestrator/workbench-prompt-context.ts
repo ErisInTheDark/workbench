@@ -19,6 +19,22 @@ function asString(value: unknown) {
   return typeof value === "string" ? value : null;
 }
 
+function readInstructionInjections(value: unknown) {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const injections: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(record)) {
+    if (typeof entry === "string") {
+      injections[key] = entry;
+    }
+  }
+
+  return Object.keys(injections).length ? injections : undefined;
+}
+
 function readWorkbenchHarness(value: unknown): WorkbenchHarness | null {
   switch (value) {
     case "codex":
@@ -63,6 +79,7 @@ export function readWorkbenchPromptContext(message: JsonRpcRequest): WorkbenchPr
   return {
     agentPath: asString(value.agentPath),
     harness: readWorkbenchHarness(value.harness),
+    instructionInjections: readInstructionInjections(value.instructionInjections),
     projectId: asString(value.projectId),
     roots,
     threadId: asString(value.threadId),

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchCollaborationView: own threaded Collaboration state, tags, collaborator runs, prompt materialization, and tree UI wiring. Keywords: collaboration, threaded, posts, tags, runs.
- * - Local helpers: format tree context, create collaborator drafts, and coordinate run patch application. Keywords: collaboration, prompt, patches, auto-wake.
+ * - Local helpers: format tree context, create collaborator drafts, and coordinate endpoint mutation plus run memory. Keywords: collaboration, prompt, endpoint, memory, auto-wake.
  */
 "use client";
 
@@ -23,6 +23,7 @@ import type {
 import {
   COLLABORATION_IMPORTED_SCRATCHPAD_POST_ID,
   ensureImportedScratchpadPost,
+  mergeWorkbenchCollaborationState,
   normalizeWorkbenchCollaborationState,
 } from "../../../lib/workbench/collaboration/collaboration-state";
 import {
@@ -31,9 +32,9 @@ import {
 } from "../../../lib/workbench/collaboration/collaboration-layout";
 import { WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS } from "../../../lib/workbench/collaboration/collaboration-registry";
 import {
-  applyWorkbenchCollaborationPostPatch,
-  findWorkbenchCollaborationPostPatch,
-} from "../../../lib/workbench/collaboration/collaboration-post-patches";
+  readWorkbenchCollaborationState,
+  writeWorkbenchCollaborationState,
+} from "../../../lib/workbench/collaboration/collaboration-registry-api";
 import {
   createCollaborationStateTag,
   createCollaborationPost,
@@ -56,7 +57,6 @@ import {
   buildInlineMentionCandidates,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
 import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
-import { WORKBENCH_FILE_LINK_INSTRUCTIONS } from "../../../lib/workbench/thread/workbench-file-link-instructions";
 import WorkbenchMainLayout from "../../../lib/workbench/layout/workbench-layout";
 import WorkbenchMainLayoutView from "../layout/WorkbenchMainLayoutView";
 import { ThreadThreadContent } from "../thread-view/thread-view-items";
@@ -141,18 +141,6 @@ function formatProjectDiffMapForPrompt(changes: Record<string, ChangeSummary>) {
     : "No reported git changes.";
 }
 
-function formatFileLinkingInfoForPrompt(workspaceRoots: readonly { id: string; openPathMode?: string; rootPath: string }[]) {
-  const rootLines = workspaceRoots.length
-    ? workspaceRoots.map((root) => `- ${root.id}: ${root.rootPath}${root.openPathMode ? ` (${root.openPathMode})` : ""}`).join("\n")
-    : "- single-root project: use project-relative paths";
-
-  return [
-    WORKBENCH_FILE_LINK_INSTRUCTIONS,
-    "Available file-link roots:",
-    rootLines,
-  ].join("\n");
-}
-
 function formatPostForPrompt(state: WorkbenchCollaborationState, postId: string, depth = 0): string[] {
   const post = state.posts[postId];
   if (!post) {
@@ -185,87 +173,66 @@ function formatTreeForPrompt(state: WorkbenchCollaborationState) {
   return state.rootPostIds.flatMap((postId) => formatPostForPrompt(state, postId)).join("\n");
 }
 
-function buildCollaboratorControlPrompt({
-  additionalUserMessage,
+function formatTagsForPrompt(state: WorkbenchCollaborationState) {
+  return state.tags.length
+    ? state.tags.map((tag) => `- ${tag}`).join("\n")
+    : "No tags have been created yet.";
+}
+
+function buildCollaborationInstructionInjections({
   diffMap,
-  fileLinkingInfo,
-  mode,
   previousMemory,
-  scratchpadPath,
+  projectId,
   state,
 }: {
-  additionalUserMessage?: string;
   diffMap: string;
-  fileLinkingInfo: string;
-  mode: "bootstrap" | "wake";
   previousMemory: string;
-  scratchpadPath: string;
+  projectId: string;
   state: WorkbenchCollaborationState;
 }) {
-  return `<!-- workbench-collaboration-control -->
-${additionalUserMessage ? `
-Additional user message:
-${additionalUserMessage}
-` : ""}
+  const collaborationPostEndpoint = typeof window === "undefined"
+    ? "/api/collaboration/posts"
+    : `${window.location.origin}/api/collaboration/posts`;
 
-Mode: ${mode}.
-Former scratchpad path, if this project still references old notes: ${scratchpadPath}
-
-Previous private Workbench memory:
-${previousMemory || "None."}
-
-Current git diff map:
-${diffMap}
-
-Workbench file-linking information:
-${fileLinkingInfo}
-
-Current project tags:
-${state.tags.length ? state.tags.map((tag) => `- ${tag}`).join("\n") : "No tags have been created yet."}
-
-Current Workbench-owned threaded discussion tree:
-${formatTreeForPrompt(state)}
-
-Threaded Collaboration rules:
-
-* Workbench owns the visible discussion tree. Real agent transcripts are run records, not the editable source of truth for posts.
-* You receive the latest visible post version only. Do not assume revision history.
-* You may create new agent posts only under user-authored leaf posts marked as eligible user leaf parents.
-* You may edit or null-delete only agent-authored leaf posts marked as editable agent leaves.
-* Once a user replies under an agent post, that agent post is no longer editable by you.
-* You are allowed to communicate in the visible tree. A useful agent post may be a researched note, clarification request, duplicate or stale finding, "too vague to prompt safely" explanation, proposed next decision, or prompt-bearing dedicated-thread suggestion.
-* Prompt-bearing posts are local thread suggestions. Use \`prompt\` only when a fresh normal Workbench thread can make concrete progress from the prompt alone.
-* Post tags are user-owned organization metadata included for context. Do not add, edit, or remove tags in your JSON response.
-* Respect tags and obvious organization signals. If a post is clearly tagged or categorized as parked, ignored, archived, reference-only, done, or otherwise non-actionable, leave it unchanged unless current evidence says it needs attention.
-* For every non-null post patch, base the change on current evidence from the visible branch, diff map, relevant files or notes, materialized run state, or tags/categories. Do not create generic research errands.
-* Keep useful user-facing rationale in the post body. Put executable isolated instructions in \`prompt\`.
-* If a post is too vague, stale, broad, or under-evidenced for a useful fresh-thread prompt, prefer a visible reply that says what is missing, what you checked, and what would make it actionable.
-* Do not use a fixed quota or cap for replies or prompt-bearing posts. Create as many or as few post changes as current evidence justifies, including zero.
-* If nothing useful should change, return an empty \`posts\` object and memory that explains the no-op when helpful.
-* \`memory\` is private next-run memory, not a terse changelog. Use it for evidence inspected, post changes made, unchanged or ignored candidates, open uncertainties, and useful next leads.
-
-Return valid JSON only. Do not include markdown fences, comments, explanations, or trailing commas.
-
-\`\`\`ts
-interface WorkbenchCollaborationResponse {
-  memory: string;
-  posts: Record<string, WorkbenchCollaborationPostPatch | null>;
+  return {
+    "collaboration.diff-map": diffMap,
+    "collaboration.post-endpoint": collaborationPostEndpoint,
+    "collaboration.previous-memory": previousMemory || "None.",
+    "collaboration.project-id": projectId,
+    "collaboration.tags": formatTagsForPrompt(state),
+    "collaboration.tree": formatTreeForPrompt(state),
+  };
 }
 
-interface WorkbenchCollaborationPostPatch {
-  parentId?: string;
-  body: string;
-  prompt?: string;
+function createRunMemorySignature(thread: ThreadPayload, turnIndex: number, itemIndex: number, text: string) {
+  let hash = 5381;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash << 5) + hash) ^ text.charCodeAt(index);
+  }
+
+  return `${thread.id}:${turnIndex}:${itemIndex}:${(hash >>> 0).toString(36)}`;
 }
-\`\`\`
 
-Examples:
+function findLatestCollaboratorRunMemory(thread: ThreadPayload) {
+  for (let turnIndex = thread.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
+    const turn = thread.turns[turnIndex];
+    for (let itemIndex = turn.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+      const item = turn.items[itemIndex];
+      if (item.type !== "agentMessage") {
+        continue;
+      }
 
-{"memory":"Evidence inspected: visible branch user-vague-branch and current diff map. Post changes made: replied with agent-needs-scope because the branch lacked owner, area, outcome, and failure evidence. Left unchanged: tagged reference branches. Open uncertainties: user still needs to clarify intended behavior or relevant evidence before a prompt-bearing post would help.","posts":{"agent-needs-scope":{"parentId":"user-vague-branch","body":"This is too vague to turn into a useful dedicated-thread prompt yet. I checked the visible branch and current diff map, but there is no concrete owner, file area, expected outcome, or failure mode. Please clarify the intended behavior, relevant area, or evidence before a prompt-bearing post would help."}}}
-{"memory":"Evidence inspected: visible branch user-actionable-branch, current diff map, and named visible context. Post changes made: created agent-focused-follow-up with an isolated prompt because the branch named a concrete concern and likely owner boundary. Left unchanged: unrelated parked branches. Open uncertainties: the dedicated thread still needs to verify whether the issue is actionable.","posts":{"agent-focused-follow-up":{"parentId":"user-actionable-branch","body":"The current evidence points to one concrete follow-up: the branch names a specific concern, the current context shows a likely owner boundary, and there is enough detail for a dedicated thread to inspect it without reading this Collaboration history. A separate thread should verify the owner, preserve intended behavior, and return either a focused plan or a no-op finding.","prompt":"Investigate the concrete issue described in the parent post. Start from the current project context, the current worktree diff, and any files or symbols named in the visible discussion. Determine the likely owner, expected behavior, relevant constraints, and whether the issue is still actionable. If a change is warranted, return a concrete plan with exact edit files, behavior changes, risks, and validation; if not, explain the evidence that makes it a no-op. Do not rely on Collaboration history."}}}
-{"memory":"Evidence inspected: editable leaf agent-existing-leaf, linked materialized thread, and current diff map. Post changes made: updated the leaf with a duplicate/stale finding instead of creating another prompt. Open uncertainties: wait for the materialized thread to land or for the user to request a separate review.","posts":{"agent-existing-leaf":{"body":"This is already covered by the materialized thread linked above, and the current diff shows the same owner area is still in progress. I am leaving the duplicate prompt path unchanged until that thread lands or the user asks for a separate review."}}}
-{"memory":"Evidence inspected: editable leaf agent-obsolete-leaf and current tree state. Post changes made: removed the obsolete leaf because the suggestion was superseded. Open uncertainties: none for this branch.","posts":{"agent-obsolete-leaf":null}}
-`;
+      const memory = item.text.trim();
+      if (memory) {
+        return {
+          memory,
+          signature: createRunMemorySignature(thread, turnIndex, itemIndex, item.text),
+        };
+      }
+    }
+  }
+
+  return null;
 }
 
 function applyCollaboratorDraftSettings(draftThread: ThreadPayload, settingsThread: ThreadPayload) {
@@ -390,7 +357,6 @@ export default function WorkbenchCollaborationView({
     workspaceRoots: composerWorkspaceRoots,
   }), [composerWorkspaceRoots, projectFileCandidates, projectFileIndexId, projectRootPath]);
   const projectDiffMap = useMemo(() => formatProjectDiffMapForPrompt(projectChanges), [projectChanges]);
-  const fileLinkingInfo = useMemo(() => formatFileLinkingInfoForPrompt(projectFileLinkRoots ?? []), [projectFileLinkRoots]);
   const snapshotRunThread = selectedRunThreadId ? getThreadDocumentFromSnapshot(threadDocuments, selectedRunThreadId) : null;
   const effectiveRunThread = snapshotRunThread ?? collaboratorThread;
   const currentRunSummary = selectedRunThreadId ? summariesById.get(selectedRunThreadId) ?? null : null;
@@ -500,17 +466,32 @@ export default function WorkbenchCollaborationView({
   useEffect(() => {
     for (const runThreadId of collaborationState.runThreadIds) {
       const thread = getThreadDocumentFromSnapshot(threadDocuments, runThreadId);
-      const patch = thread ? findWorkbenchCollaborationPostPatch(thread) : null;
-      if (!patch || patch.signature === collaborationState.lastAppliedPostPatchSignature) {
+      if (!thread || isThreadStatusActive(thread.status)) {
         continue;
       }
 
-      const result = applyWorkbenchCollaborationPostPatch(collaborationState, patch);
-      setCollaboratorWarnings(result.warnings);
-      publishStateIfChanged(result.state);
+      const memory = findLatestCollaboratorRunMemory(thread);
+      const currentState = stateRef.current;
+      if (!memory || memory.signature === currentState.lastAppliedRunMemorySignature) {
+        continue;
+      }
+
+      setCollaboratorWarnings((current) => current.length ? [] : current);
+      publishStateIfChanged({
+        ...currentState,
+        lastAppliedRunMemorySignature: memory.signature,
+        lastRunMemory: memory.memory,
+      });
+      void readWorkbenchCollaborationState(projectId)
+        .then((diskState) => {
+          publishStateIfChanged(mergeWorkbenchCollaborationState(diskState, stateRef.current));
+        })
+        .catch(() => {
+          // Browser-local memory remains useful if the endpoint state refresh is unavailable.
+        });
       break;
     }
-  }, [collaborationState, publishStateIfChanged, threadDocuments]);
+  }, [collaborationState.runThreadIds, projectId, publishStateIfChanged, threadDocuments]);
 
   useEffect(() => {
     if (!selectedRunThreadId || !isThreadStatusActive(effectiveRunThread?.status ?? "")) {
@@ -637,9 +618,8 @@ export default function WorkbenchCollaborationView({
       : createCollaboratorDraftThread());
   }, [controls, createCollaboratorDraftThread, projectId]);
 
-  const sendControlPrompt = useCallback(async (
+  const sendCollaboratorRun = useCallback(async (
     thread: ThreadPayload,
-    mode: "bootstrap" | "wake",
     options: {
       additionalInput?: UserInput[];
       replaceThreadId?: string;
@@ -651,25 +631,28 @@ export default function WorkbenchCollaborationView({
     }
 
     isSendingControlPromptRef.current = true;
-    const additionalUserMessage = options.additionalInput
-      ?.flatMap((input) => input.type === "text" ? [input.text] : [])
-      .join("\n")
-      .trim();
-    const prompt = buildCollaboratorControlPrompt({
-      additionalUserMessage,
+    let stateForPrompt = stateRef.current;
+    try {
+      stateForPrompt = await writeWorkbenchCollaborationState(projectId, stateForPrompt);
+      publishStateIfChanged(stateForPrompt);
+    } catch (error) {
+      setCollaboratorWarnings([error instanceof Error
+        ? `Unable to sync Collaboration state before the run: ${error.message}`
+        : "Unable to sync Collaboration state before the run."]);
+    }
+
+    const instructionInjections = buildCollaborationInstructionInjections({
       diffMap: projectDiffMap,
-      fileLinkingInfo,
-      mode,
-      previousMemory: stateRef.current.lastRunMemory,
-      scratchpadPath,
-      state: stateRef.current,
+      previousMemory: stateForPrompt.lastRunMemory,
+      projectId,
+      state: stateForPrompt,
     });
-    const input = [
-      createTextInput(prompt),
-      ...(options.additionalInput ?? []).filter((entry) => entry.type !== "text"),
-    ];
+    const input = options.additionalInput?.length
+      ? options.additionalInput
+      : [createTextInput("Run the collaborator workflow with the injected Collaboration context.")];
     const sendOptions: WorkbenchSendThreadMessageOptions = {
       additionalWritableRoots: scratchpadWritableRoot ? [scratchpadWritableRoot] : [],
+      instructionInjections,
       onThreadMaterialized: (materializedThread) => {
         rememberCollaboratorThread(materializedThread, { replaceThreadId: options.replaceThreadId });
         setCollaboratorStatus("hydrating");
@@ -709,9 +692,9 @@ export default function WorkbenchCollaborationView({
     } finally {
       isSendingControlPromptRef.current = false;
     }
-  }, [fileLinkingInfo, hydrateCollaboratorThread, onSendMessage, projectDiffMap, rememberCollaboratorThread, scratchpadPath, scratchpadWritableRoot]);
+  }, [hydrateCollaboratorThread, onSendMessage, projectDiffMap, projectId, publishStateIfChanged, rememberCollaboratorThread, scratchpadWritableRoot]);
 
-  const startCollaboratorRun = useCallback(async (mode: "bootstrap" | "wake" = stateRef.current.runThreadIds.length ? "wake" : "bootstrap") => {
+  const startCollaboratorRun = useCallback(async () => {
     if (!controls) {
       setCollaboratorError("Workbench controls are not ready.");
       return;
@@ -731,12 +714,12 @@ export default function WorkbenchCollaborationView({
 
     setCollaboratorStatus("starting");
     rememberCollaboratorThread(draftThread);
-    const result = await sendControlPrompt(draftThread, mode, { replaceThreadId: draftThread.id });
+    const result = await sendCollaboratorRun(draftThread, { replaceThreadId: draftThread.id });
     if (result.id !== draftThread.id || !result.isDraft) {
       setCollaboratorDraftThread(createCollaboratorDraftThread(settingsThread));
       setCollaboratorDraftComposerDraft(null);
     }
-  }, [collaboratorDraftThread, controls, createCollaboratorDraftThread, rememberCollaboratorThread, sendControlPrompt]);
+  }, [collaboratorDraftThread, controls, createCollaboratorDraftThread, rememberCollaboratorThread, sendCollaboratorRun]);
 
   useEffect(() => {
     const leader = new ActiveTabRefreshLeader({
@@ -772,7 +755,7 @@ export default function WorkbenchCollaborationView({
         publishStateIfChanged(result.state);
         if (result.acquired) {
           setPendingAutoWakeActivityAt(null);
-          await startCollaboratorRun("wake");
+          await startCollaboratorRun();
         }
       })
       .catch((error) => {
@@ -1010,7 +993,7 @@ export default function WorkbenchCollaborationView({
         }
 
         rememberCollaboratorThread(draftThread);
-        await sendControlPrompt(draftThread, stateRef.current.runThreadIds.length ? "wake" : "bootstrap", {
+        await sendCollaboratorRun(draftThread, {
           additionalInput: input,
           replaceThreadId: draftThread.id,
           throwOnError: true,

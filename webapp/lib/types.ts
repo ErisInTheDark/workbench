@@ -159,6 +159,7 @@ export interface WorkbenchReadThreadOptions {
 
 export interface WorkbenchSendThreadMessageOptions {
   additionalWritableRoots?: string[];
+  instructionInjections?: Record<string, string>;
   onThreadMaterialized?: (thread: ThreadPayload) => void;
   selectThread?: boolean;
   workflowIds?: string[];
@@ -390,6 +391,7 @@ export interface WorkbenchCollaborationPost {
 export interface WorkbenchCollaborationState {
   autoWakeEnabled: boolean;
   lastAppliedPostPatchSignature: string;
+  lastAppliedRunMemorySignature: string;
   lastAutoWakeAt: number;
   lastRunMemory: string;
   posts: Record<string, WorkbenchCollaborationPost>;
@@ -399,15 +401,50 @@ export interface WorkbenchCollaborationState {
   version: 2;
 }
 
-export interface WorkbenchCollaborationPostPatch {
+export type WorkbenchCollaborationPostMutationAction = "create" | "delete" | "update";
+
+export interface WorkbenchCollaborationPostCreateRequest {
+  action: "create";
   body: string;
-  parentId?: string;
+  parentId: string;
+  postId?: string;
   prompt?: string;
 }
 
-export interface WorkbenchCollaborationResponse {
-  memory: string;
-  posts: Record<string, WorkbenchCollaborationPostPatch | null>;
+export interface WorkbenchCollaborationPostUpdateRequest {
+  action: "update";
+  body: string;
+  postId: string;
+  prompt?: string | null;
+}
+
+export interface WorkbenchCollaborationPostDeleteRequest {
+  action: "delete";
+  postId: string;
+}
+
+export type WorkbenchCollaborationPostMutationRequest =
+  | WorkbenchCollaborationPostCreateRequest
+  | WorkbenchCollaborationPostDeleteRequest
+  | WorkbenchCollaborationPostUpdateRequest;
+
+export interface WorkbenchCollaborationPostEndpointUsage {
+  endpoint: string;
+  rules: string[];
+}
+
+export interface WorkbenchCollaborationPostEndpointStateResponse {
+  projectId: string;
+  state: WorkbenchCollaborationState;
+  usage: WorkbenchCollaborationPostEndpointUsage;
+}
+
+export interface WorkbenchCollaborationPostMutationResponse extends WorkbenchCollaborationPostEndpointStateResponse {
+  action: WorkbenchCollaborationPostMutationAction;
+  message: string;
+  ok: true;
+  post?: WorkbenchCollaborationPost;
+  postId?: string;
 }
 
 export interface WorkbenchControls {

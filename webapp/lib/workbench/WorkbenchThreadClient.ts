@@ -2483,11 +2483,13 @@ function WorkbenchThreadClient(
     threadId: string,
     agentPath: string | null,
     workbenchOrigin: string | null,
+    instructionInjections: Record<string, string> | undefined = undefined,
     workflowIds: readonly string[] | undefined = undefined,
   ) {
     return {
       agentPath: normalizeWorkbenchAgentPath(agentPath),
       harness,
+      ...(instructionInjections ? { instructionInjections } : {}),
       projectId: state.projectId,
       roots: state.projectRoots,
       threadId,
@@ -3558,7 +3560,7 @@ function WorkbenchThreadClient(
       const startedThreadResponse = await sendBridgeRequest<CodexThreadSessionResponse>(harness, {
         method: threadStartRequest.method,
         ...(shouldSendWorkbenchPromptContext(harness)
-          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.workflowIds) }
+          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds) }
           : {}),
         params: harness === "copilot"
           ? {
@@ -3616,7 +3618,7 @@ function WorkbenchThreadClient(
           threadId: resolvedThreadId,
         } as ThreadResumeParams & { agentPath?: string; cwd?: string; model?: string; serviceTier?: string | null; threadId: string; workbenchOrigin?: string },
         ...(shouldSendWorkbenchPromptContext(harness)
-          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.workflowIds) }
+          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds) }
           : {}),
         workbenchThreadHydration: { mode: "latest" },
       });
@@ -3663,7 +3665,7 @@ function WorkbenchThreadClient(
         steerResponse = await sendBridgeRequest<TurnSteerResponse>(harness, {
           method: "turn/steer",
           ...(shouldSendWorkbenchPromptContext(harness)
-            ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.workflowIds) }
+            ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds) }
             : {}),
             params: {
               ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
@@ -3707,7 +3709,7 @@ function WorkbenchThreadClient(
       const turnStartResponse = await sendBridgeRequest<TurnStartResponse>(harness, {
         method: "turn/start",
         ...(shouldSendWorkbenchPromptContext(harness)
-          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.workflowIds) }
+          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds) }
           : {}),
         params: {
           ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
@@ -3757,7 +3759,7 @@ function WorkbenchThreadClient(
             serviceTier: selectedServiceTier,
             threadId: resolvedThreadId,
           } as ThreadResumeParams & { model?: string; serviceTier?: string | null; threadId: string },
-          [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext("codex", resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.workflowIds),
+          [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext("codex", resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds),
           workbenchThreadHydration: { mode: "latest" },
         });
         refreshedThread = mergeLiveStreamingThreadSnapshot(toThreadPayload(
