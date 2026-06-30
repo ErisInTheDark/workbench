@@ -49,6 +49,19 @@ function getCollapsedPostPreviewText (post: WorkbenchCollaborationPost) {
   return post.body.split(/\r?\n/).find((line) => line.trim())?.trim() || "Empty post";
 }
 
+function postBranchHasSuggestedPrompt (state: WorkbenchCollaborationState, postId: string): boolean {
+  const post = state.posts[postId];
+  if (!post) {
+    return false;
+  }
+
+  if (post.prompt || post.promptThreadId) {
+    return true;
+  }
+
+  return post.childIds.some((childId) => postBranchHasSuggestedPrompt(state, childId));
+}
+
 function shouldIgnorePostDragStart (event: ReactPointerEvent<HTMLElement>) {
   if (event.button !== 0 || !(event.target instanceof HTMLElement)) {
     return true;
@@ -93,6 +106,19 @@ function SuggestedPromptButton ({ onClick }: { onClick: () => void }) {
   );
 }
 
+function BranchSuggestionIndicator () {
+  return (
+    <span
+      role="img"
+      aria-label="This branch contains a suggested prompt"
+      title="This branch contains a suggested prompt"
+      className="inline-flex size-8 items-center justify-center rounded-full text-accent/85"
+    >
+      <SparkleIcon className="size-3.5" />
+    </span>
+  );
+}
+
 function PostReplyButton ({ onClick }: { onClick: () => void }) {
   return (
     <button
@@ -133,6 +159,7 @@ export default function CollaborationPostNode ({
   onPromptDraftChange,
   onPromptDraftClear,
   onRemovePostTag,
+  onSetPostCollapsed,
   onStartPromptThread,
   onTagPost,
   onThreadAgentChange,
@@ -171,6 +198,7 @@ export default function CollaborationPostNode ({
   onPromptDraftChange: CollaborationPromptComposerProps["onDraftChange"];
   onPromptDraftClear: CollaborationPromptComposerProps["onDraftClear"];
   onRemovePostTag: (postId: string, tag: string) => void;
+  onSetPostCollapsed: (postId: string, isCollapsed: boolean) => void;
   onStartPromptThread: CollaborationPromptComposerProps["onStartPromptThread"];
   onTagPost: (postId: string, tag: string) => void;
   onThreadAgentChange: CollaborationPromptComposerProps["onThreadAgentChange"];
@@ -187,13 +215,14 @@ export default function CollaborationPostNode ({
   const [isEditingPost, setIsEditingPost] = useState(false);
   const [isPromptOpen, setIsPromptOpen] = useState(false);
   const [isReplying, setIsReplying] = useState(false);
-  const [isCollapsed, setIsCollapsed] = useState(false);
   const childPosts = useMemo(() => post.childIds.map((childId) => state.posts[childId]).filter((child): child is WorkbenchCollaborationPost => Boolean(child)), [post.childIds, state.posts]);
   const authorLabel = post.author === "agent" ? "Agent" : "User";
   const canDragPost = !isEditingPost && !isPromptOpen && !isReplying;
   const promptDraftThread = promptDraftThreadsByPostId[post.id] ?? null;
   const isPromptPost = Boolean(post.prompt || post.promptThreadId);
   const hasUnmaterializedSuggestedPrompt = Boolean(post.prompt && !post.promptThreadId);
+  const hasSuggestedPromptInBranch = useMemo(() => postBranchHasSuggestedPrompt(state, post.id), [post.id, state]);
+  const isCollapsed = post.isCollapsed === true;
   const canToggleCollapsed = !isEditingPost && !isPromptOpen && !isReplying;
 
   const openPromptComposer = () => {
@@ -204,7 +233,7 @@ export default function CollaborationPostNode ({
     onEnsurePromptDraftThread(post);
 
     if (!isEditingPost) {
-      setIsCollapsed(false);
+      onSetPostCollapsed(post.id, false);
       setIsPromptOpen(true);
     }
   };
@@ -214,7 +243,7 @@ export default function CollaborationPostNode ({
       return;
     }
 
-    setIsCollapsed((current) => !current);
+    onSetPostCollapsed(post.id, !isCollapsed);
   };
 
   const renderedPostBody = (
@@ -370,7 +399,7 @@ export default function CollaborationPostNode ({
                 onDeletePost(post.id);
               }}
               onEdit={() => {
-                setIsCollapsed(false);
+                onSetPostCollapsed(post.id, false);
                 setIsEditingPost(true);
               }}
               onOpenHistory={() => {
@@ -397,6 +426,7 @@ export default function CollaborationPostNode ({
               }}
             />
           )}
+          preMenuAction={hasSuggestedPromptInBranch ? <BranchSuggestionIndicator /> : null}
           updatedAt={post.updatedAt}
           onClick={toggleCollapsed}
           onPointerDown={(event) => {
@@ -471,6 +501,7 @@ export default function CollaborationPostNode ({
                     onPromptDraftChange={onPromptDraftChange}
                     onPromptDraftClear={onPromptDraftClear}
                     onRemovePostTag={onRemovePostTag}
+                    onSetPostCollapsed={onSetPostCollapsed}
                     onStartPromptThread={onStartPromptThread}
                     onTagPost={onTagPost}
                     onSubmitUserInputRequest={onSubmitUserInputRequest}

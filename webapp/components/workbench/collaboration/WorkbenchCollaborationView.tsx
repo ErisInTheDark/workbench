@@ -43,6 +43,7 @@ import {
   moveCollaborationPost,
   removeCollaborationPostTag,
   restoreCollaborationPostRevision,
+  setCollaborationPostCollapsed,
   tagCollaborationPost,
   updateCollaborationPost,
   type CollaborationPostDropIntent,
@@ -903,6 +904,10 @@ export default function WorkbenchCollaborationView({
     setRevisionPostId(null);
   }, [mutateState]);
 
+  const handleSetPostCollapsed = useCallback((postId: string, isCollapsed: boolean) => {
+    mutateState((state) => setCollaborationPostCollapsed(state, postId, isCollapsed));
+  }, [mutateState]);
+
   const handleMovePost = useCallback((postId: string, intent: CollaborationPostDropIntent) => {
     mutateState((state) => moveCollaborationPost(state, postId, intent));
     onPointerDrop();
@@ -1228,6 +1233,7 @@ export default function WorkbenchCollaborationView({
       onPromptDraftChange={handlePromptDraftChange}
       onPromptDraftClear={handlePromptDraftClear}
       onRemovePostTag={handleRemovePostTag}
+      onSetPostCollapsed={handleSetPostCollapsed}
       onStartPromptThread={handleStartPromptThread}
       onTagPost={handleTagPost}
       onSubmitUserInputRequest={threadViewProps.onSubmitUserInputRequest}

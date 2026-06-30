@@ -46,6 +46,7 @@ export default function CollaborationPostSurface ({
   isPromptPost = false,
   menuAction,
   metadata,
+  preMenuAction,
   primaryAction,
   updatedAt,
   onClick,
@@ -62,6 +63,7 @@ export default function CollaborationPostSurface ({
   isPromptPost?: boolean;
   menuAction: ReactNode;
   metadata?: ReactNode;
+  preMenuAction?: ReactNode;
   primaryAction?: ReactNode;
   updatedAt: number;
   onClick?: () => void;
@@ -69,6 +71,7 @@ export default function CollaborationPostSurface ({
 }) {
   const isUserPost = author === "user";
   const hasPrimaryAction = Boolean(primaryAction);
+  const hasPreMenuAction = Boolean(preMenuAction);
   const handleClick = (event: MouseEvent<HTMLElement>) => {
     if (!isClickable || isInteractiveTarget(event.target)) {
       return;
@@ -107,7 +110,8 @@ export default function CollaborationPostSurface ({
           {metadata ? <div className="min-w-0 shrink">{metadata}</div> : null}
           <span className="min-w-0 flex-1 truncate">{collapsedPreviewText || "Empty post"}</span>
         </div>
-        <div className="shrink-0 opacity-100" data-collaboration-no-drag="true">
+        <div className="flex shrink-0 items-center gap-1 opacity-100" data-collaboration-no-drag="true">
+          {preMenuAction}
           {menuAction}
         </div>
       </div>
@@ -144,11 +148,12 @@ export default function CollaborationPostSurface ({
         <div
           className={joinClasses(
             "flex shrink-0 items-center gap-1 opacity-100 md:transition md:group-hover/post-surface:opacity-100 md:focus-within:opacity-100",
-            hasPrimaryAction ? "md:opacity-100" : "md:opacity-0",
+            hasPrimaryAction || hasPreMenuAction ? "md:opacity-100" : "md:opacity-0",
           )}
           data-collaboration-no-drag="true"
         >
           {primaryAction}
+          {preMenuAction}
           {menuAction}
         </div>
       </div>

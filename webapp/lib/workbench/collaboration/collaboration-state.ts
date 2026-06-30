@@ -220,6 +220,7 @@ function normalizePost(value: unknown, fallbackId: string): WorkbenchCollaborati
     childIds: normalizeStringArray(candidate.childIds).map(normalizeWorkbenchCollaborationPatchId).filter(Boolean),
     createdAt,
     id,
+    ...(candidate.isCollapsed === true ? { isCollapsed: true } : {}),
     parentId,
     revisions,
     tags,
@@ -267,19 +268,37 @@ function normalizeTree(posts: Record<string, WorkbenchCollaborationPost>, rootPo
     Object.entries(posts).map(([postId, post]) => [postId, { ...post, childIds: [] }]),
   ) as Record<string, WorkbenchCollaborationPost>;
   const rootIds = orderUniqueKnownPostIds(rootPostIds, nextPosts);
+  const rootIdSet = new Set(rootIds);
   const referencedChildIds = new Set<string>();
+
+  const appendChild = (parentId: string, childId: string) => {
+    const parent = nextPosts[parentId];
+    const child = nextPosts[childId];
+    if (!parent || !child || childId === parentId || rootIdSet.has(childId) || referencedChildIds.has(childId)) {
+      return;
+    }
+
+    referencedChildIds.add(childId);
+    nextPosts[parent.id] = {
+      ...parent,
+      childIds: [...parent.childIds, childId],
+    };
+  };
+
+  for (const parent of Object.values(posts)) {
+    for (const rawChildId of parent.childIds) {
+      const childId = normalizeWorkbenchCollaborationPatchId(rawChildId);
+      if (nextPosts[childId]?.parentId === parent.id) {
+        appendChild(parent.id, childId);
+      }
+    }
+  }
 
   for (const post of Object.values(posts)) {
     const parent = post.parentId ? nextPosts[post.parentId] : null;
-    if (!parent || post.id === post.parentId || referencedChildIds.has(post.id)) {
-      continue;
+    if (parent) {
+      appendChild(parent.id, post.id);
     }
-
-    referencedChildIds.add(post.id);
-    nextPosts[parent.id] = {
-      ...parent,
-      childIds: [...parent.childIds, post.id],
-    };
   }
 
   for (const postId of Object.keys(nextPosts)) {

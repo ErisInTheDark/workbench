@@ -378,6 +378,7 @@ export interface WorkbenchCollaborationPost {
   childIds: string[];
   createdAt: number;
   id: string;
+  isCollapsed?: boolean;
   parentId: string | null;
   prompt?: string;
   promptThreadId?: string;

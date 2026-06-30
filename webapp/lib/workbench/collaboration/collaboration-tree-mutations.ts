@@ -10,6 +10,7 @@
  * - moveCollaborationPost: move a post before, after, or inside another post. Keywords: collaboration, tree, reorder.
  * - removeCollaborationPostTag: remove a tag assignment from a Collaboration post. Keywords: collaboration, post, tag.
  * - restoreCollaborationPostRevision: restore a prior visible version and append a restore revision. Keywords: collaboration, revisions.
+ * - setCollaborationPostCollapsed: persist expanded or collapsed UI state for a post. Keywords: collaboration, post, collapse, expand.
  * - tagCollaborationPost: assign a project-level tag to a Collaboration post. Keywords: collaboration, post, tag.
  * - updateCollaborationPost: update visible post content and append previous state revision. Keywords: collaboration, edit, revisions.
  */
@@ -251,6 +252,30 @@ export function restoreCollaborationPostRevision(
         ],
         updatedAt: now,
       },
+    },
+  });
+}
+
+export function setCollaborationPostCollapsed(
+  state: WorkbenchCollaborationState,
+  postId: string,
+  isCollapsed: boolean,
+) {
+  const normalizedState = normalizeWorkbenchCollaborationState(state);
+  const post = normalizedState.posts[postId];
+  if (!post || (post.isCollapsed === true) === isCollapsed) {
+    return normalizedState;
+  }
+
+  const nextPost = {
+    ...post,
+    isCollapsed: isCollapsed ? true : undefined,
+  };
+  return normalizeWorkbenchCollaborationState({
+    ...normalizedState,
+    posts: {
+      ...normalizedState.posts,
+      [postId]: nextPost,
     },
   });
 }

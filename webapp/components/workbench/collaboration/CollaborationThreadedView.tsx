@@ -52,6 +52,7 @@ export default function CollaborationThreadedView ({
   onPromptDraftChange,
   onPromptDraftClear,
   onRemovePostTag,
+  onSetPostCollapsed,
   onStartPromptThread,
   onTagPost,
   onSubmitUserInputRequest,
@@ -89,6 +90,7 @@ export default function CollaborationThreadedView ({
   onPromptDraftChange: CollaborationPromptComposerProps["onDraftChange"];
   onPromptDraftClear: CollaborationPromptComposerProps["onDraftClear"];
   onRemovePostTag: (postId: string, tag: string) => void;
+  onSetPostCollapsed: (postId: string, isCollapsed: boolean) => void;
   onStartPromptThread: CollaborationPromptComposerProps["onStartPromptThread"];
   onTagPost: (postId: string, tag: string) => void;
   onSubmitUserInputRequest: CollaborationPromptComposerProps["onSubmitUserInputRequest"];
@@ -158,6 +160,7 @@ export default function CollaborationThreadedView ({
                 onPromptDraftChange={onPromptDraftChange}
                 onPromptDraftClear={onPromptDraftClear}
                 onRemovePostTag={onRemovePostTag}
+                onSetPostCollapsed={onSetPostCollapsed}
                 onStartPromptThread={onStartPromptThread}
                 onTagPost={onTagPost}
                 onSubmitUserInputRequest={onSubmitUserInputRequest}
