@@ -14,29 +14,28 @@ import type {
   WorkbenchHarness,
   WorkbenchThreadComposerDraft,
 } from "../../../lib/types";
-import type { WorkbenchDragPayload } from "../../../lib/workbench/layout/workbench-drag";
 import type {
   CollaborationPostDropIntent,
   WorkbenchCollaborationPostDraft,
 } from "../../../lib/workbench/collaboration/collaboration-tree-mutations";
-import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
+import type { WorkbenchDragPayload } from "../../../lib/workbench/layout/workbench-drag";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
+import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
+import PrimaryButton from "../PrimaryButton";
+import ThreadMarkdown from "../thread-view/ThreadMarkdown";
 import CollaborationPostComposer from "./CollaborationPostComposer";
 import CollaborationPostMenuButton from "./CollaborationPostMenuButton";
 import CollaborationPostSurface from "./CollaborationPostSurface";
 import CollaborationPromptComposer from "./CollaborationPromptComposer";
 import CollaborationTreeDropController from "./CollaborationTreeDropController";
-import PrimaryButton from "../PrimaryButton";
-import ThreadMarkdown from "../thread-view/ThreadMarkdown";
 
-type CollaborationPostMode = "edit-post" | "prompt" | "reply" | null;
 type CollaborationPromptComposerProps = ComponentProps<typeof CollaborationPromptComposer>;
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
-function draftFromPost(post: WorkbenchCollaborationPost): WorkbenchThreadComposerDraft {
+function draftFromPost (post: WorkbenchCollaborationPost): WorkbenchThreadComposerDraft {
   return {
     attachments: post.attachments ?? [],
     text: post.body,
@@ -44,7 +43,7 @@ function draftFromPost(post: WorkbenchCollaborationPost): WorkbenchThreadCompose
   };
 }
 
-function shouldIgnorePostDragStart(event: ReactPointerEvent<HTMLElement>) {
+function shouldIgnorePostDragStart (event: ReactPointerEvent<HTMLElement>) {
   if (event.button !== 0 || !(event.target instanceof HTMLElement)) {
     return true;
   }
@@ -75,7 +74,7 @@ function PostReplyButton ({ onClick }: { onClick: () => void }) {
   return (
     <button
       type="button"
-      className="inline-flex h-7 items-center rounded-full px-2 text-[0.78rem] font-medium text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+      className="inline-flex relative pb-1 items-center [border-bottom-right-radius:calc(var(--spacing)*3.5)] [border-bottom-left-radius:calc(var(--spacing)*3.5)] px-2 text-[0.78rem] font-medium text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
       data-collaboration-no-drag="true"
       onClick={onClick}
     >
@@ -157,13 +156,14 @@ export default function CollaborationPostNode ({
   onListModels: CollaborationPromptComposerProps["onListModels"];
   onSubmitUserInputRequest: CollaborationPromptComposerProps["onSubmitUserInputRequest"];
 }) {
-  const [mode, setMode] = useState<CollaborationPostMode>(null);
+  const [isEditingPost, setIsEditingPost] = useState(false);
+  const [isPromptOpen, setIsPromptOpen] = useState(false);
+  const [isReplying, setIsReplying] = useState(false);
   const childPosts = useMemo(() => post.childIds.map((childId) => state.posts[childId]).filter((child): child is WorkbenchCollaborationPost => Boolean(child)), [post.childIds, state.posts]);
   const authorLabel = post.author === "agent" ? "Agent" : "User";
-  const canDragPost = mode !== "edit-post" && mode !== "prompt";
+  const canDragPost = !isEditingPost && !isPromptOpen;
   const promptDraftThread = promptDraftThreadsByPostId[post.id] ?? null;
   const isPromptPost = Boolean(post.prompt);
-  const isPromptOpen = mode === "prompt";
 
   const openPromptComposer = () => {
     if (!post.prompt) {
@@ -174,11 +174,13 @@ export default function CollaborationPostNode ({
       onEnsurePromptDraftThread(post);
     }
 
-    setMode("prompt");
+    if (!isEditingPost) {
+      setIsPromptOpen(true);
+    }
   };
 
   const primaryAction = isPromptOpen ? (
-    <CollapsePromptButton onClick={() => { setMode(null); }} />
+    <CollapsePromptButton onClick={() => { setIsPromptOpen(false); }} />
   ) : null;
 
   const renderedPostBody = (
@@ -207,7 +209,7 @@ export default function CollaborationPostNode ({
     </>
   );
 
-  const bodyContent = mode === "edit-post" ? (
+  const bodyContent = isEditingPost ? (
     <div data-collaboration-no-drag="true">
       <CollaborationPostComposer
         composerSpellCheck={composerSpellCheck}
@@ -221,14 +223,14 @@ export default function CollaborationPostNode ({
         surface="bare"
         workspaceRoots={workspaceRoots}
         onCancel={() => {
-          setMode(null);
+          setIsEditingPost(false);
         }}
         onSubmit={(draft) => {
           onEditPost(post.id, {
             ...draft,
             prompt: post.prompt,
           });
-          setMode(null);
+          setIsEditingPost(false);
         }}
       />
     </div>
@@ -271,7 +273,7 @@ export default function CollaborationPostNode ({
               onListModels={onListModels}
               onStartPromptThread={async (postId, input, thread) => {
                 await onStartPromptThread(postId, input, thread);
-                setMode(null);
+                setIsPromptOpen(false);
               }}
               onSubmitUserInputRequest={onSubmitUserInputRequest}
               onThreadAgentChange={onThreadAgentChange}
@@ -305,15 +307,12 @@ export default function CollaborationPostNode ({
           depth > 0 && "pl-4 md:pl-5",
         )}
       >
-        {depth > 0 ? (
-          <div className="absolute bottom-2 left-1 top-2 w-px rounded-full bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
-        ) : null}
         <CollaborationPostSurface
           author={post.author}
           authorLabel={authorLabel}
           canDrag={canDragPost}
-          isActive={mode !== null}
-          isClickable={isPromptPost && mode !== "edit-post" && mode !== "prompt"}
+          isActive={isEditingPost || isPromptOpen || isReplying}
+          isClickable={isPromptPost && !isEditingPost && !isPromptOpen}
           isPromptPost={isPromptPost}
           menuAction={(
             <CollaborationPostMenuButton
@@ -322,7 +321,7 @@ export default function CollaborationPostNode ({
                 onDeletePost(post.id);
               }}
               onEdit={() => {
-                setMode("edit-post");
+                setIsEditingPost(true);
               }}
               onOpenHistory={() => {
                 onOpenRevisionHistory(post.id);
@@ -347,80 +346,82 @@ export default function CollaborationPostNode ({
         >
           {bodyContent}
         </CollaborationPostSurface>
-        {mode !== "edit-post" && mode !== "reply" ? (
-          <div className="mt-1 px-3" data-collaboration-no-drag="true">
-            <PostReplyButton
-              onClick={() => {
-                setMode("reply");
-              }}
-            />
-          </div>
-        ) : null}
-        {mode === "reply" ? (
-          <div className="mt-1 pl-4 md:pl-5" data-collaboration-no-drag="true">
-            <CollaborationPostComposer
-              composerSpellCheck={composerSpellCheck}
-              harness={harness}
-              highlightSources={highlightSources}
-              id={`collaboration-reply:${post.id}`}
-              label="Reply"
-              projectId={projectId}
-              projectRootPath={projectRootPath}
-              workspaceRoots={workspaceRoots}
-              onCancel={() => {
-                setMode(null);
-              }}
-              onSubmit={(draft) => {
-                onCreatePost(post.id, draft);
-                setMode(null);
-              }}
-            />
-          </div>
-        ) : null}
-        {childPosts.length ? (
-          <div className="mt-1">
-            {childPosts.map((childPost) => (
-              <CollaborationPostNode
-                key={childPost.id}
-                activeDrag={activeDrag}
+        <div className="relative before:block before:absolute before:-top-5 before:bottom-0 before:[border-left:3px_solid_color-mix(in_srgb,var(--text)_4%,transparent)] before:[mask-image:linear-gradient(to_bottom,transparent_0%,black_calc(var(--spacing)_*_4),black_calc(100%_-_var(--spacing)_*_2),transparent_100%)]">
+          {!isReplying ? (
+            <div className="flex px-3" data-collaboration-no-drag="true">
+              <PostReplyButton
+                onClick={() => {
+                  setIsReplying(true);
+                }}
+              />
+            </div>
+          ) : null}
+          {isReplying ? (
+            <div className="mt-1 pl-4 md:pl-5" data-collaboration-no-drag="true">
+              <CollaborationPostComposer
                 composerSpellCheck={composerSpellCheck}
-                depth={depth + 1}
                 harness={harness}
                 highlightSources={highlightSources}
-                post={childPost}
+                id={`collaboration-reply:${post.id}`}
+                label="Reply"
                 projectId={projectId}
                 projectRootPath={projectRootPath}
-                promptComposerDraftsByPostId={promptComposerDraftsByPostId}
-                promptDraftThreadsByPostId={promptDraftThreadsByPostId}
-                promptStartErrorsByPostId={promptStartErrorsByPostId}
-                rateLimits={rateLimits}
-                state={state}
                 workspaceRoots={workspaceRoots}
-                onCreatePost={onCreatePost}
-                onDeletePost={onDeletePost}
-                onEditPost={onEditPost}
-                onEnsurePromptDraftThread={onEnsurePromptDraftThread}
-                onMovePost={onMovePost}
-                onOpenPromptThread={onOpenPromptThread}
-                onOpenRevisionHistory={onOpenRevisionHistory}
-                onPostPointerDragStart={onPostPointerDragStart}
-                onPromptDraftChange={onPromptDraftChange}
-                onPromptDraftClear={onPromptDraftClear}
-                onStartPromptThread={onStartPromptThread}
-                onSubmitUserInputRequest={onSubmitUserInputRequest}
-                onThreadAgentChange={onThreadAgentChange}
-                onThreadModelChange={onThreadModelChange}
-                onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
-                onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
-                onThreadReasoningEffortChange={onThreadReasoningEffortChange}
-                onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
-                onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
-                onThreadServiceTierChange={onThreadServiceTierChange}
-                onListModels={onListModels}
+                onCancel={() => {
+                  setIsReplying(false);
+                }}
+                onSubmit={(draft) => {
+                  onCreatePost(post.id, draft);
+                  setIsReplying(false);
+                }}
               />
-            ))}
-          </div>
-        ) : null}
+            </div>
+          ) : null}
+          {childPosts.length ? (
+            <div className="mt-1">
+              {childPosts.map((childPost) => (
+                <CollaborationPostNode
+                  key={childPost.id}
+                  activeDrag={activeDrag}
+                  composerSpellCheck={composerSpellCheck}
+                  depth={depth + 1}
+                  harness={harness}
+                  highlightSources={highlightSources}
+                  post={childPost}
+                  projectId={projectId}
+                  projectRootPath={projectRootPath}
+                  promptComposerDraftsByPostId={promptComposerDraftsByPostId}
+                  promptDraftThreadsByPostId={promptDraftThreadsByPostId}
+                  promptStartErrorsByPostId={promptStartErrorsByPostId}
+                  rateLimits={rateLimits}
+                  state={state}
+                  workspaceRoots={workspaceRoots}
+                  onCreatePost={onCreatePost}
+                  onDeletePost={onDeletePost}
+                  onEditPost={onEditPost}
+                  onEnsurePromptDraftThread={onEnsurePromptDraftThread}
+                  onMovePost={onMovePost}
+                  onOpenPromptThread={onOpenPromptThread}
+                  onOpenRevisionHistory={onOpenRevisionHistory}
+                  onPostPointerDragStart={onPostPointerDragStart}
+                  onPromptDraftChange={onPromptDraftChange}
+                  onPromptDraftClear={onPromptDraftClear}
+                  onStartPromptThread={onStartPromptThread}
+                  onSubmitUserInputRequest={onSubmitUserInputRequest}
+                  onThreadAgentChange={onThreadAgentChange}
+                  onThreadModelChange={onThreadModelChange}
+                  onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
+                  onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
+                  onThreadReasoningEffortChange={onThreadReasoningEffortChange}
+                  onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
+                  onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
+                  onThreadServiceTierChange={onThreadServiceTierChange}
+                  onListModels={onListModels}
+                />
+              ))}
+            </div>
+          ) : null}
+        </div>
       </article>
     </CollaborationTreeDropController>
   );

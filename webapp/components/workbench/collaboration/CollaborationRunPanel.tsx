@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default CollaborationRunPanel: render Collaboration auto-run controls, recent runs, active run, and run composer. Keywords: collaboration, runs, auto-run.
+ * - Local helpers: format run timestamps and render loading run skeletons. Keywords: collaboration, run history, skeleton.
  */
 "use client";
 
@@ -12,11 +13,7 @@ import ThreadScrollAnchorController from "../thread-view/ThreadScrollAnchorContr
 import ThreadDisclosure from "../thread-view/ThreadDisclosure";
 import WorkbenchProgressWheel from "../WorkbenchProgressWheel";
 
-function formatRelativeRunTime(summary: ThreadSummary | null, now: number) {
-  if (!summary) {
-    return "saved run";
-  }
-
+function formatRelativeRunTime(summary: ThreadSummary, now: number) {
   const elapsedSeconds = Math.max(0, Math.floor((now - summary.updatedAt * 1000) / 1000));
   if (elapsedSeconds < 45) {
     return "just now";
@@ -33,6 +30,28 @@ function formatRelativeRunTime(summary: ThreadSummary | null, now: number) {
   }
 
   return `${Math.floor(elapsedHours / 24)}d ago`;
+}
+
+function RunSummarySkeleton () {
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-2" aria-label="Loading collaborator run">
+      <span className="h-3 w-32 rounded-full bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" />
+      <span className="h-3 w-14 rounded-full bg-[color-mix(in_srgb,var(--text)_7%,transparent)]" />
+    </span>
+  );
+}
+
+function InlineRunSummarySkeleton () {
+  return (
+    <span className="ml-1 inline-flex translate-y-[0.08rem] items-center gap-2" aria-label="Loading current collaborator run">
+      <span className="h-3 w-28 rounded-full bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" />
+      <span className="h-3 w-12 rounded-full bg-[color-mix(in_srgb,var(--text)_7%,transparent)]" />
+    </span>
+  );
+}
+
+function getRunSummaryTitle(summary: ThreadSummary) {
+  return summary.name || summary.preview || "Collaborator run";
 }
 
 export default function CollaborationRunPanel ({
@@ -83,6 +102,7 @@ export default function CollaborationRunPanel ({
   }
   const historyScrollController = historyScrollControllerRef.current;
   const historySignature = recentRunIds.join("\0");
+  const selectedRunSummary = selectedRunThreadId ? summariesById.get(selectedRunThreadId) ?? null : null;
 
   useEffect(() => {
     historyScrollController.resetForThreadSwitch();
@@ -152,10 +172,12 @@ export default function CollaborationRunPanel ({
                     }
                   }}
                   summary={(
-                    <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-                      <span className="max-w-full truncate font-semibold text-text">{summary?.name || summary?.preview || threadId.replace(/^draft:collaboration:/, "Draft ")}</span>
-                      <span className="text-[0.78rem] font-normal text-muted">{formatRelativeRunTime(summary, Date.now())}</span>
-                    </span>
+                    summary ? (
+                      <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+                        <span className="max-w-full truncate font-semibold text-text">{getRunSummaryTitle(summary)}</span>
+                        <span className="text-[0.78rem] font-normal text-muted">{formatRelativeRunTime(summary, Date.now())}</span>
+                      </span>
+                    ) : <RunSummarySkeleton />
                   )}
                 >
                   {isOpen ? activeRunContent : (
@@ -175,7 +197,7 @@ export default function CollaborationRunPanel ({
         <div className="mt-3 space-y-3">
           {selectedRunThreadId ? (
             <p className="m-0 text-[0.84rem] leading-6 text-muted">
-              Current run: {summariesById.get(selectedRunThreadId)?.name || summariesById.get(selectedRunThreadId)?.preview || selectedRunThreadId.replace(/^draft:collaboration:/, "Draft ")}
+              Current run: {selectedRunSummary ? getRunSummaryTitle(selectedRunSummary) : <InlineRunSummarySkeleton />}
             </p>
           ) : null}
           {lastRunSummary ? (

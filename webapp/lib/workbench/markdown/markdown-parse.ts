@@ -804,6 +804,55 @@ function isCodeFenceCloseLine(line: string, opener: ParsedCodeFenceOpenLine) {
   return !!match && match[1] === opener.indent && match[2].length >= opener.fenceLength;
 }
 
+function isMarkdownCodeFenceLanguage(language: string) {
+  return language === "md" || language === "markdown";
+}
+
+function shouldTreatCodeFenceCloseCandidateAsContent(
+  lines: string[],
+  index: number,
+  opener: ParsedCodeFenceOpenLine,
+) {
+  if (!isMarkdownCodeFenceLanguage(opener.language)) {
+    return false;
+  }
+
+  const nextNonBlankIndex = findNextNonBlankLine(lines, index + 1);
+  return nextNonBlankIndex !== -1 && isCodeFenceCloseLine(lines[nextNonBlankIndex], opener);
+}
+
+function collectCodeFenceLines(
+  lines: string[],
+  startIndex: number,
+  opener: ParsedCodeFenceOpenLine,
+) {
+  const codeLines: string[] = [];
+  let index = startIndex;
+
+  while (index < lines.length) {
+    if (isCodeFenceCloseLine(lines[index], opener)) {
+      if (shouldTreatCodeFenceCloseCandidateAsContent(lines, index, opener)) {
+        codeLines.push(lines[index]);
+        index += 1;
+        continue;
+      }
+
+      return {
+        codeLines,
+        nextIndex: index + 1,
+      };
+    }
+
+    codeLines.push(lines[index]);
+    index += 1;
+  }
+
+  return {
+    codeLines,
+    nextIndex: index,
+  };
+}
+
 function parseListLine(line: string) {
   const expandedLine = line.replaceAll("\t", "  ");
   const match = expandedLine.match(/^(\s*)([-*+]|\d+[.)])(?:(\s+)(.*))?$/);
@@ -853,9 +902,20 @@ function parseListItemChildren(
 ) {
   const childLines: string[] = [];
   let index = startIndex;
+  let codeFenceOpener: ParsedCodeFenceOpenLine | null = null;
 
   while (index < lines.length) {
     const line = lines[index];
+
+    if (codeFenceOpener) {
+      const strippedLine = stripIndent(line, contentIndent);
+      childLines.push(strippedLine);
+      if (isCodeFenceCloseLine(strippedLine, codeFenceOpener)) {
+        codeFenceOpener = null;
+      }
+      index += 1;
+      continue;
+    }
 
     if (!line.trim()) {
       const nextNonBlankIndex = findNextNonBlankLine(lines, index + 1);
@@ -877,7 +937,9 @@ function parseListItemChildren(
       break;
     }
 
-    childLines.push(stripIndent(line, contentIndent));
+    const strippedLine = stripIndent(line, contentIndent);
+    childLines.push(strippedLine);
+    codeFenceOpener = parseCodeFenceOpenLine(strippedLine);
     index += 1;
   }
 
@@ -1216,19 +1278,10 @@ function parseBlocksFromLines(lines: string[], options: MarkdownParseOptions = {
       maybePushCommentBreak(blocks, blankLineCount, "code");
       maybePushStandardBreak(blocks, blankLineCount, "code");
       blankLineCount = 0;
-      const codeLines = [];
-      index += 1;
+      const fencedCode = collectCodeFenceLines(lines, index + 1, fence);
 
-      while (index < lines.length && !isCodeFenceCloseLine(lines[index], fence)) {
-        codeLines.push(lines[index]);
-        index += 1;
-      }
-
-      if (index < lines.length) {
-        index += 1;
-      }
-
-      blocks.push({ type: "code", language: fence.language, text: codeLines.join("\n") });
+      blocks.push({ type: "code", language: fence.language, text: fencedCode.codeLines.join("\n") });
+      index = fencedCode.nextIndex;
       continue;
     }
 
