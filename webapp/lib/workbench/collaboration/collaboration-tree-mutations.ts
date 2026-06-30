@@ -2,12 +2,15 @@
  * Exports:
  * - canMoveCollaborationPost: report whether a post can move to a drop intent. Keywords: collaboration, tree, move.
  * - createCollaborationPost: add a root or child post. Keywords: collaboration, tree, create.
+ * - createCollaborationStateTag: add a project-level Collaboration tag. Keywords: collaboration, tag, create.
  * - deleteCollaborationSubtree: hard-delete a user-selected post subtree. Keywords: collaboration, tree, delete.
  * - hardDeleteCollaborationAgentLeaf: hard-delete an editable agent leaf. Keywords: collaboration, agent, delete.
  * - isCollaborationLeafPost: report whether a post has no children. Keywords: collaboration, leaf.
  * - isEditableAgentLeafPost: report whether collaborator can edit/delete a post. Keywords: collaboration, agent, leaf.
  * - moveCollaborationPost: move a post before, after, or inside another post. Keywords: collaboration, tree, reorder.
+ * - removeCollaborationPostTag: remove a tag assignment from a Collaboration post. Keywords: collaboration, post, tag.
  * - restoreCollaborationPostRevision: restore a prior visible version and append a restore revision. Keywords: collaboration, revisions.
+ * - tagCollaborationPost: assign a project-level tag to a Collaboration post. Keywords: collaboration, post, tag.
  * - updateCollaborationPost: update visible post content and append previous state revision. Keywords: collaboration, edit, revisions.
  */
 
@@ -21,6 +24,7 @@ import type {
 import {
   createWorkbenchCollaborationPostId,
   createWorkbenchCollaborationRevisionId,
+  normalizeWorkbenchCollaborationTag,
   normalizeWorkbenchCollaborationState,
 } from "./collaboration-state";
 
@@ -37,6 +41,20 @@ export interface WorkbenchCollaborationPostDraft {
 
 function withoutId(ids: readonly string[], postId: string) {
   return ids.filter((id) => id !== postId);
+}
+
+function tagKey(tag: string) {
+  return tag.toLocaleLowerCase();
+}
+
+function hasTag(tags: readonly string[], tag: string) {
+  const key = tagKey(tag);
+  return tags.some((candidate) => tagKey(candidate) === key);
+}
+
+function withoutTag(tags: readonly string[], tag: string) {
+  const key = tagKey(tag);
+  return tags.filter((candidate) => tagKey(candidate) !== key);
 }
 
 function insertAround(ids: readonly string[], targetId: string, postId: string, placement: "after" | "before") {
@@ -152,6 +170,7 @@ export function createCollaborationPost(
     parentId,
     prompt: draft.prompt?.trim() ? draft.prompt.trim() : undefined,
     revisions: [],
+    tags: [],
     updatedAt: now,
   };
   const posts = {
@@ -337,5 +356,84 @@ export function moveCollaborationPost(
     ...normalizedState,
     posts: nextPosts,
     rootPostIds,
+  });
+}
+
+export function createCollaborationStateTag(
+  state: WorkbenchCollaborationState,
+  tag: string,
+) {
+  const normalizedState = normalizeWorkbenchCollaborationState(state);
+  const normalizedTag = normalizeWorkbenchCollaborationTag(tag);
+  if (!normalizedTag || hasTag(normalizedState.tags, normalizedTag)) {
+    return normalizedState;
+  }
+
+  return normalizeWorkbenchCollaborationState({
+    ...normalizedState,
+    tags: [...normalizedState.tags, normalizedTag],
+  });
+}
+
+export function tagCollaborationPost(
+  state: WorkbenchCollaborationState,
+  postId: string,
+  tag: string,
+  now = Date.now(),
+) {
+  const normalizedState = normalizeWorkbenchCollaborationState(state);
+  const post = normalizedState.posts[postId];
+  const normalizedTag = normalizeWorkbenchCollaborationTag(tag);
+  if (!post || !normalizedTag) {
+    return normalizedState;
+  }
+
+  const stateTags = hasTag(normalizedState.tags, normalizedTag)
+    ? normalizedState.tags
+    : [...normalizedState.tags, normalizedTag];
+  if (hasTag(post.tags, normalizedTag)) {
+    return normalizeWorkbenchCollaborationState({
+      ...normalizedState,
+      tags: stateTags,
+    });
+  }
+
+  return normalizeWorkbenchCollaborationState({
+    ...normalizedState,
+    posts: {
+      ...normalizedState.posts,
+      [postId]: {
+        ...post,
+        tags: [...post.tags, normalizedTag],
+        updatedAt: now,
+      },
+    },
+    tags: stateTags,
+  });
+}
+
+export function removeCollaborationPostTag(
+  state: WorkbenchCollaborationState,
+  postId: string,
+  tag: string,
+  now = Date.now(),
+) {
+  const normalizedState = normalizeWorkbenchCollaborationState(state);
+  const post = normalizedState.posts[postId];
+  const normalizedTag = normalizeWorkbenchCollaborationTag(tag);
+  if (!post || !normalizedTag || !hasTag(post.tags, normalizedTag)) {
+    return normalizedState;
+  }
+
+  return normalizeWorkbenchCollaborationState({
+    ...normalizedState,
+    posts: {
+      ...normalizedState.posts,
+      [postId]: {
+        ...post,
+        tags: withoutTag(post.tags, normalizedTag),
+        updatedAt: now,
+      },
+    },
   });
 }

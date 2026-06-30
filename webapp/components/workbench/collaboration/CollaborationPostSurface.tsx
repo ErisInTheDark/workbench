@@ -1,17 +1,17 @@
 /*
  * Exports:
- * - default CollaborationPostSurface: render expanded and collapsed Collaboration post surfaces. Keywords: collaboration, post, surface, suggestion, collapse.
+ * - default CollaborationPostSurface: render expanded and collapsed Collaboration post surfaces with header metadata. Keywords: collaboration, post, surface, suggestion, collapse, metadata.
  * - Local helpers: class joining, relative time formatting, and interaction target detection. Keywords: classes, time, click, drag, collapse.
  */
 "use client";
 
-import type { KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import type { KeyboardEvent, MouseEvent, ReactNode, PointerEvent as ReactPointerEvent } from "react";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
-function formatPostRelativeTime(updatedAt: number, now = Date.now()) {
+function formatPostRelativeTime (updatedAt: number, now = Date.now()) {
   const elapsedSeconds = Math.max(0, Math.floor((now - updatedAt) / 1000));
   if (elapsedSeconds < 45) {
     return "just now";
@@ -30,7 +30,7 @@ function formatPostRelativeTime(updatedAt: number, now = Date.now()) {
   return `${Math.floor(elapsedHours / 24)}d ago`;
 }
 
-function isInteractiveTarget(target: EventTarget | null) {
+function isInteractiveTarget (target: EventTarget | null) {
   return target instanceof HTMLElement && Boolean(target.closest("button,a,input,textarea,select,[contenteditable='true'],[role='button'],[data-collaboration-no-drag='true']"));
 }
 
@@ -45,6 +45,7 @@ export default function CollaborationPostSurface ({
   isCollapsed = false,
   isPromptPost = false,
   menuAction,
+  metadata,
   primaryAction,
   updatedAt,
   onClick,
@@ -60,6 +61,7 @@ export default function CollaborationPostSurface ({
   isCollapsed?: boolean;
   isPromptPost?: boolean;
   menuAction: ReactNode;
+  metadata?: ReactNode;
   primaryAction?: ReactNode;
   updatedAt: number;
   onClick?: () => void;
@@ -90,7 +92,7 @@ export default function CollaborationPostSurface ({
         tabIndex={isClickable ? 0 : undefined}
         aria-expanded={isClickable ? false : undefined}
         className={joinClasses(
-          "group/post-surface flex min-w-0 items-center gap-2 rounded-[0.85rem] px-3 py-1.5 text-[0.82rem] leading-5 text-muted transition",
+          "group/post-surface flex min-w-0 items-center gap-2 rounded-[0.85rem] px-3 text-[0.82rem] leading-5 text-muted transition",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
           canDrag && "cursor-grab active:cursor-grabbing",
           isClickable && "cursor-pointer hover:text-text",
@@ -99,10 +101,10 @@ export default function CollaborationPostSurface ({
         onKeyDown={handleKeyDown}
         onPointerDown={onPointerDown}
       >
-        <div className="flex min-w-0 flex-1 items-baseline gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <span className="shrink-0 font-medium text-text">{authorLabel}</span>
           <time className="shrink-0 opacity-55" dateTime={new Date(updatedAt).toISOString()}>{formatPostRelativeTime(updatedAt)}</time>
-          <span className="shrink-0 opacity-55" aria-hidden="true">—</span>
+          {metadata ? <div className="min-w-0 shrink">{metadata}</div> : null}
           <span className="min-w-0 flex-1 truncate">{collapsedPreviewText || "Empty post"}</span>
         </div>
         <div className="shrink-0 opacity-100" data-collaboration-no-drag="true">
@@ -133,10 +135,11 @@ export default function CollaborationPostSurface ({
     >
       <div className="mb-0.5 flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="m-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.74rem] font-medium text-muted">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[0.74rem] font-medium text-muted">
             <span>{authorLabel}</span>
             <time className="opacity-55" dateTime={new Date(updatedAt).toISOString()}>{formatPostRelativeTime(updatedAt)}</time>
-          </p>
+            {metadata}
+          </div>
         </div>
         <div
           className={joinClasses(

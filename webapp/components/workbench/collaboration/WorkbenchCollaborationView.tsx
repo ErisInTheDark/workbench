@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchCollaborationView: own threaded Collaboration state, collaborator runs, prompt materialization, and tree UI wiring. Keywords: collaboration, threaded, posts, runs.
+ * - default WorkbenchCollaborationView: own threaded Collaboration state, tags, collaborator runs, prompt materialization, and tree UI wiring. Keywords: collaboration, threaded, posts, tags, runs.
  * - Local helpers: format tree context, create collaborator drafts, and coordinate run patch application. Keywords: collaboration, prompt, patches, auto-wake.
  */
 "use client";
@@ -35,12 +35,15 @@ import {
   findWorkbenchCollaborationPostPatch,
 } from "../../../lib/workbench/collaboration/collaboration-post-patches";
 import {
+  createCollaborationStateTag,
   createCollaborationPost,
   deleteCollaborationSubtree,
   isCollaborationLeafPost,
   isEditableAgentLeafPost,
   moveCollaborationPost,
+  removeCollaborationPostTag,
   restoreCollaborationPostRevision,
+  tagCollaborationPost,
   updateCollaborationPost,
   type CollaborationPostDropIntent,
   type WorkbenchCollaborationPostDraft,
@@ -161,6 +164,7 @@ function formatPostForPrompt(state: WorkbenchCollaborationState, postId: string,
     `${indent}  author: ${post.author}`,
     `${indent}  editable agent leaf: ${isEditableAgentLeafPost(state, post.id) ? "yes" : "no"}`,
     `${indent}  eligible user leaf parent: ${post.author === "user" && isCollaborationLeafPost(state, post.id) ? "yes" : "no"}`,
+    `${indent}  tags: ${post.tags.length ? post.tags.join(", ") : "none"}`,
     ...(post.promptThreadId ? [`${indent}  materialized prompt thread id: ${post.promptThreadId}`] : []),
     ...(post.prompt ? [`${indent}  prompt: ${post.prompt}`] : []),
     `${indent}  body: ${post.body.replace(/\n/g, "\n" + indent + "    ")}`,
@@ -215,6 +219,9 @@ ${diffMap}
 Workbench file-linking information:
 ${fileLinkingInfo}
 
+Current project tags:
+${state.tags.length ? state.tags.map((tag) => `- ${tag}`).join("\n") : "No tags have been created yet."}
+
 Current Workbench-owned threaded discussion tree:
 ${formatTreeForPrompt(state)}
 
@@ -226,6 +233,7 @@ Threaded Collaboration rules:
 * You may edit or null-delete only agent-authored leaf posts marked as editable agent leaves.
 * Once a user replies under an agent post, that agent post is no longer editable by you.
 * Prompt-bearing posts are local thread suggestions. Use \`prompt\` only when starting a normal Workbench thread would be useful.
+* Post tags are user-owned organization metadata included for context. Do not add, edit, or remove tags in your JSON response.
 * Keep useful context in the post body. Use \`prompt\` for the dedicated thread prompt only.
 * If nothing useful should change, return an empty \`posts\` object and a summary.
 
@@ -863,8 +871,20 @@ export default function WorkbenchCollaborationView({
     mutateState((state) => createCollaborationPost(state, parentId, draft));
   }, [mutateState]);
 
+  const handleCreateTag = useCallback((tag: string) => {
+    mutateState((state) => createCollaborationStateTag(state, tag));
+  }, [mutateState]);
+
   const handleEditPost = useCallback((postId: string, draft: WorkbenchCollaborationPostDraft) => {
     mutateState((state) => updateCollaborationPost(state, postId, draft));
+  }, [mutateState]);
+
+  const handleTagPost = useCallback((postId: string, tag: string) => {
+    mutateState((state) => tagCollaborationPost(state, postId, tag));
+  }, [mutateState]);
+
+  const handleRemovePostTag = useCallback((postId: string, tag: string) => {
+    mutateState((state) => removeCollaborationPostTag(state, postId, tag));
   }, [mutateState]);
 
   const handleDeletePost = useCallback((postId: string) => {
@@ -1190,6 +1210,7 @@ export default function WorkbenchCollaborationView({
       state={collaborationState}
       workspaceRoots={composerWorkspaceRoots}
       onCreatePost={handleCreatePost}
+      onCreateTag={handleCreateTag}
       onDeletePost={handleDeletePost}
       onEditPost={handleEditPost}
       onEnsurePromptDraftThread={ensurePromptDraftThread}
@@ -1199,7 +1220,9 @@ export default function WorkbenchCollaborationView({
       onPostPointerDragStart={onPostPointerDragStart}
       onPromptDraftChange={handlePromptDraftChange}
       onPromptDraftClear={handlePromptDraftClear}
+      onRemovePostTag={handleRemovePostTag}
       onStartPromptThread={handleStartPromptThread}
+      onTagPost={handleTagPost}
       onSubmitUserInputRequest={threadViewProps.onSubmitUserInputRequest}
       onThreadAgentChange={(postId, threadId, agentPath) => {
         updatePromptDraftThread(postId, threadId, (thread) => ({ ...thread, agentPath }));

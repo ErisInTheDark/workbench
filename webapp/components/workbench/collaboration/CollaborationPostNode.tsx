@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default CollaborationPostNode: render one recursive Collaboration post branch with single-surface post, collapsed, prompt, edit, and reply modes. Keywords: collaboration, post, tree, recursive, prompt, collapse.
+ * - default CollaborationPostNode: render one recursive Collaboration post branch with tags, collapsed, prompt, edit, and reply modes. Keywords: collaboration, post, tree, recursive, prompt, collapse, tags.
  * - Local helpers: draft conversion, collapsed previews, action buttons, and drag-start filtering. Keywords: collaboration, composer, drag, prompt, collapse.
  */
 "use client";
@@ -28,6 +28,7 @@ import CollaborationPostComposer from "./CollaborationPostComposer";
 import CollaborationPostMenuButton from "./CollaborationPostMenuButton";
 import CollaborationPostSurface from "./CollaborationPostSurface";
 import CollaborationPromptComposer from "./CollaborationPromptComposer";
+import CollaborationTagList from "./CollaborationTagList";
 import CollaborationTreeDropController from "./CollaborationTreeDropController";
 
 type CollaborationPromptComposerProps = ComponentProps<typeof CollaborationPromptComposer>;
@@ -131,7 +132,9 @@ export default function CollaborationPostNode ({
   onPostPointerDragStart,
   onPromptDraftChange,
   onPromptDraftClear,
+  onRemovePostTag,
   onStartPromptThread,
+  onTagPost,
   onThreadAgentChange,
   onThreadModelChange,
   onThreadQuestionnaireDraftChange,
@@ -167,7 +170,9 @@ export default function CollaborationPostNode ({
   onPostPointerDragStart: (event: ReactPointerEvent<HTMLElement>, post: WorkbenchCollaborationPost) => void;
   onPromptDraftChange: CollaborationPromptComposerProps["onDraftChange"];
   onPromptDraftClear: CollaborationPromptComposerProps["onDraftClear"];
+  onRemovePostTag: (postId: string, tag: string) => void;
   onStartPromptThread: CollaborationPromptComposerProps["onStartPromptThread"];
+  onTagPost: (postId: string, tag: string) => void;
   onThreadAgentChange: CollaborationPromptComposerProps["onThreadAgentChange"];
   onThreadModelChange: CollaborationPromptComposerProps["onThreadModelChange"];
   onThreadQuestionnaireDraftChange: CollaborationPromptComposerProps["onThreadQuestionnaireDraftChange"];
@@ -378,6 +383,20 @@ export default function CollaborationPostNode ({
               }}
             />
           )}
+          metadata={(
+            <CollaborationTagList
+              allTags={state.tags}
+              assignedTags={post.tags}
+              label={`Tags for ${authorLabel} post`}
+              variant="post"
+              onAddTag={(tag) => {
+                onTagPost(post.id, tag);
+              }}
+              onRemoveTag={(tag) => {
+                onRemovePostTag(post.id, tag);
+              }}
+            />
+          )}
           updatedAt={post.updatedAt}
           onClick={toggleCollapsed}
           onPointerDown={(event) => {
@@ -451,7 +470,9 @@ export default function CollaborationPostNode ({
                     onPostPointerDragStart={onPostPointerDragStart}
                     onPromptDraftChange={onPromptDraftChange}
                     onPromptDraftClear={onPromptDraftClear}
+                    onRemovePostTag={onRemovePostTag}
                     onStartPromptThread={onStartPromptThread}
+                    onTagPost={onTagPost}
                     onSubmitUserInputRequest={onSubmitUserInputRequest}
                     onThreadAgentChange={onThreadAgentChange}
                     onThreadModelChange={onThreadModelChange}

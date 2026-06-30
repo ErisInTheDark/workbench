@@ -10,6 +10,7 @@
  * - mergeWorkbenchCollaborationState: merge local and persisted Collaboration state. Keywords: collaboration, state, merge.
  * - normalizeWorkbenchCollaborationPatchId: normalize collaborator-supplied post ids. Keywords: collaboration, patch, id.
  * - normalizeWorkbenchCollaborationState: normalize or migrate persisted Collaboration state. Keywords: collaboration, state, migration.
+ * - normalizeWorkbenchCollaborationTag: normalize user-visible Collaboration tag labels. Keywords: collaboration, tag, label.
  * - normalizeWorkbenchCollaborationThreadRegistryFromState: temporary v1 registry projection. Keywords: collaboration, registry, compatibility.
  */
 
@@ -37,6 +38,7 @@ export const EMPTY_WORKBENCH_COLLABORATION_STATE: WorkbenchCollaborationState = 
   posts: {},
   rootPostIds: [],
   runThreadIds: [],
+  tags: [],
   version: WORKBENCH_COLLABORATION_STATE_VERSION,
 };
 
@@ -88,6 +90,49 @@ function normalizeStringArray(value: unknown) {
   return Array.isArray(value)
     ? Array.from(new Set(value.filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim())).map((entry) => entry.trim())))
     : [];
+}
+
+export function normalizeWorkbenchCollaborationTag(value: unknown) {
+  return typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
+}
+
+function normalizeTagArray(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const tags: string[] = [];
+  const seenKeys = new Set<string>();
+  for (const entry of value) {
+    const tag = normalizeWorkbenchCollaborationTag(entry);
+    const key = tag.toLocaleLowerCase();
+    if (!tag || seenKeys.has(key)) {
+      continue;
+    }
+
+    seenKeys.add(key);
+    tags.push(tag);
+  }
+
+  return tags;
+}
+
+function mergeUniqueTags(...tagLists: readonly string[][]) {
+  const tags: string[] = [];
+  const seenKeys = new Set<string>();
+  for (const list of tagLists) {
+    for (const tag of normalizeTagArray(list)) {
+      const key = tag.toLocaleLowerCase();
+      if (seenKeys.has(key)) {
+        continue;
+      }
+
+      seenKeys.add(key);
+      tags.push(tag);
+    }
+  }
+
+  return tags;
 }
 
 function normalizeAttachments(value: unknown): WorkbenchThreadComposerAttachmentDraft[] | undefined {
@@ -161,6 +206,7 @@ function normalizePost(value: unknown, fallbackId: string): WorkbenchCollaborati
   const prompt = normalizeTrimmedText(candidate.prompt);
   const promptThreadId = normalizeTrimmedText(candidate.promptThreadId);
   const attachments = normalizeAttachments(candidate.attachments);
+  const tags = normalizeTagArray(candidate.tags);
   const revisions = Array.isArray(candidate.revisions)
     ? candidate.revisions.flatMap((revision) => {
       const normalizedRevision = normalizeRevision(revision);
@@ -176,6 +222,7 @@ function normalizePost(value: unknown, fallbackId: string): WorkbenchCollaborati
     id,
     parentId,
     revisions,
+    tags,
     updatedAt,
     ...(prompt ? { prompt } : {}),
     ...(promptThreadId ? { promptThreadId } : {}),
@@ -353,6 +400,7 @@ function createPostFromLegacySuggestion(suggestion: WorkbenchCollaborationSugges
     parentId: null,
     prompt: suggestion.prompt,
     revisions: [],
+    tags: [],
     updatedAt: suggestion.updatedAt,
     ...(suggestion.materializedThreadId ? { promptThreadId: suggestion.materializedThreadId } : {}),
   };
@@ -382,6 +430,7 @@ function normalizeStateFromLegacyRegistry(value: unknown): WorkbenchCollaboratio
     posts,
     rootPostIds: suggestions.map((suggestion) => suggestion.id),
     runThreadIds,
+    tags: [],
     version: WORKBENCH_COLLABORATION_STATE_VERSION,
   });
 }
@@ -405,6 +454,7 @@ export function normalizeWorkbenchCollaborationState(value: unknown): WorkbenchC
 
   const posts = normalizePosts(candidate.posts);
   const tree = normalizeTree(posts, normalizeStringArray(candidate.rootPostIds));
+  const postTags = Object.values(tree.posts).flatMap((post) => post.tags);
   return {
     autoWakeEnabled: candidate.autoWakeEnabled === true,
     lastAppliedPostPatchSignature: normalizeTrimmedText(candidate.lastAppliedPostPatchSignature),
@@ -413,6 +463,7 @@ export function normalizeWorkbenchCollaborationState(value: unknown): WorkbenchC
     posts: tree.posts,
     rootPostIds: tree.rootPostIds,
     runThreadIds: normalizeStringArray(candidate.runThreadIds),
+    tags: mergeUniqueTags(normalizeTagArray(candidate.tags), postTags),
     version: WORKBENCH_COLLABORATION_STATE_VERSION,
   };
 }
@@ -434,6 +485,7 @@ export function ensureImportedScratchpadPost(
     id: COLLABORATION_IMPORTED_SCRATCHPAD_POST_ID,
     parentId: null,
     revisions: [],
+    tags: [],
     updatedAt: now,
   };
   return normalizeWorkbenchCollaborationState({
@@ -472,6 +524,7 @@ export function mergeWorkbenchCollaborationState(
     posts,
     rootPostIds: mergeUniqueStrings(normalizedIncoming.rootPostIds, normalizedBase.rootPostIds),
     runThreadIds: mergeUniqueStrings(normalizedIncoming.runThreadIds, normalizedBase.runThreadIds),
+    tags: mergeUniqueTags(normalizedIncoming.tags, normalizedBase.tags),
     version: WORKBENCH_COLLABORATION_STATE_VERSION,
   });
 }

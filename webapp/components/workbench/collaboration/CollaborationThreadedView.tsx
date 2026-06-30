@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default CollaborationThreadedView: render Collaboration post roots, root composer, and empty state inside the discussion panel. Keywords: collaboration, threaded view, tree.
+ * - default CollaborationThreadedView: render Collaboration tags, post roots, root composer, and empty state inside the discussion panel. Keywords: collaboration, threaded view, tree, tags.
  */
 "use client";
 
@@ -23,6 +23,7 @@ import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/mark
 import CollaborationPostComposer from "./CollaborationPostComposer";
 import CollaborationPostNode from "./CollaborationPostNode";
 import CollaborationPromptComposer from "./CollaborationPromptComposer";
+import CollaborationTagList from "./CollaborationTagList";
 
 type CollaborationPromptComposerProps = ComponentProps<typeof CollaborationPromptComposer>;
 
@@ -40,6 +41,7 @@ export default function CollaborationThreadedView ({
   state,
   workspaceRoots,
   onCreatePost,
+  onCreateTag,
   onDeletePost,
   onEditPost,
   onEnsurePromptDraftThread,
@@ -49,7 +51,9 @@ export default function CollaborationThreadedView ({
   onPostPointerDragStart,
   onPromptDraftChange,
   onPromptDraftClear,
+  onRemovePostTag,
   onStartPromptThread,
+  onTagPost,
   onSubmitUserInputRequest,
   onThreadAgentChange,
   onThreadModelChange,
@@ -74,6 +78,7 @@ export default function CollaborationThreadedView ({
   state: WorkbenchCollaborationState;
   workspaceRoots: readonly WorkspaceFileLinkRoot[];
   onCreatePost: (parentId: string | null, draft: WorkbenchCollaborationPostDraft) => void;
+  onCreateTag: (tag: string) => void;
   onDeletePost: (postId: string) => void;
   onEditPost: (postId: string, draft: WorkbenchCollaborationPostDraft) => void;
   onEnsurePromptDraftThread: (post: WorkbenchCollaborationPost) => ThreadPayload | null;
@@ -83,7 +88,9 @@ export default function CollaborationThreadedView ({
   onPostPointerDragStart: (event: ReactPointerEvent<HTMLElement>, post: WorkbenchCollaborationPost) => void;
   onPromptDraftChange: CollaborationPromptComposerProps["onDraftChange"];
   onPromptDraftClear: CollaborationPromptComposerProps["onDraftClear"];
+  onRemovePostTag: (postId: string, tag: string) => void;
   onStartPromptThread: CollaborationPromptComposerProps["onStartPromptThread"];
+  onTagPost: (postId: string, tag: string) => void;
   onSubmitUserInputRequest: CollaborationPromptComposerProps["onSubmitUserInputRequest"];
   onThreadAgentChange: CollaborationPromptComposerProps["onThreadAgentChange"];
   onThreadModelChange: CollaborationPromptComposerProps["onThreadModelChange"];
@@ -100,6 +107,15 @@ export default function CollaborationThreadedView ({
   return (
     <div className="explorer-scrollbar h-full min-h-0 overflow-y-auto">
       <div className="flex min-h-full w-full flex-col gap-5 px-5 py-5 md:px-6">
+        <section className="flex flex-col gap-1">
+          <p className="m-0 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-muted/70">Tags</p>
+          <CollaborationTagList
+            allTags={state.tags}
+            label="Project Collaboration tags"
+            variant="catalog"
+            onCreateTag={onCreateTag}
+          />
+        </section>
         <CollaborationPostComposer
           composerSpellCheck={composerSpellCheck}
           harness={harness}
@@ -141,7 +157,9 @@ export default function CollaborationThreadedView ({
                 onPostPointerDragStart={onPostPointerDragStart}
                 onPromptDraftChange={onPromptDraftChange}
                 onPromptDraftClear={onPromptDraftClear}
+                onRemovePostTag={onRemovePostTag}
                 onStartPromptThread={onStartPromptThread}
+                onTagPost={onTagPost}
                 onSubmitUserInputRequest={onSubmitUserInputRequest}
                 onThreadAgentChange={onThreadAgentChange}
                 onThreadModelChange={onThreadModelChange}

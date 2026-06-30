@@ -382,6 +382,7 @@ export interface WorkbenchCollaborationPost {
   prompt?: string;
   promptThreadId?: string;
   revisions: WorkbenchCollaborationPostRevision[];
+  tags: string[];
   updatedAt: number;
 }
 
@@ -393,6 +394,7 @@ export interface WorkbenchCollaborationState {
   posts: Record<string, WorkbenchCollaborationPost>;
   rootPostIds: string[];
   runThreadIds: string[];
+  tags: string[];
   version: 2;
 }
 
