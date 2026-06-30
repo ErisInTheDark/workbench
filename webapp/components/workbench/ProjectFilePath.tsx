@@ -14,6 +14,7 @@ import {
   projectFilePathLocationClassName,
   projectFilePathMissingClassName,
   projectFilePathPillClassName,
+  projectFilePathStaticClassName,
   type ProjectFilePathDisambiguationIndex,
   type ProjectFilePathDisplayOptions,
 } from "../../lib/workbench/project/project-file-path";
@@ -36,6 +37,7 @@ type ProjectFilePathProps = ProjectFilePathDisplayOptions & {
   openPath?: string | null;
   path: string;
   projectId?: string | null;
+  targetType?: "directory" | "file";
 };
 
 const ProjectFilePathDisplayContext = createContext<ProjectFilePathDisplayContextValue | null>(null);
@@ -78,6 +80,7 @@ export default function ProjectFilePath ({
   openPath = null,
   path,
   projectId = null,
+  targetType = "file",
 }: ProjectFilePathProps) {
   const context = useContext(ProjectFilePathDisplayContext);
   const usesInheritedDisambiguation = Boolean(
@@ -102,9 +105,12 @@ export default function ProjectFilePath ({
     disambiguationPaths: resolvedDisambiguationPaths,
     label,
     lineNumber,
+    targetType,
   });
-  const isFileControl = (typeof projectId === "string" && projectId.trim().length > 0)
-    || (typeof absolutePath === "string" && absolutePath.trim().length > 0);
+  const isFileControl = targetType === "file" && (
+    (typeof projectId === "string" && projectId.trim().length > 0)
+    || (typeof absolutePath === "string" && absolutePath.trim().length > 0)
+  );
   const content = (
     <>
       {display.rootPrefix ? (
@@ -120,6 +126,7 @@ export default function ProjectFilePath ({
   const controlClassName = joinClasses(
     projectFilePathPillClassName,
     !exists && projectFilePathMissingClassName,
+    exists && targetType === "directory" && projectFilePathStaticClassName,
     exists && (interactive || isFileControl) && projectFilePathInteractiveClassName,
     className,
   );
@@ -147,10 +154,12 @@ export default function ProjectFilePath ({
       className={joinClasses(
         projectFilePathPillClassName,
         !exists && projectFilePathMissingClassName,
+        exists && targetType === "directory" && projectFilePathStaticClassName,
         exists && interactive && projectFilePathInteractiveClassName,
         className,
       )}
       data-project-file-missing-path={exists ? undefined : "true"}
+      data-project-folder-path={exists && targetType === "directory" ? "true" : undefined}
       title={display.title}
     >
       {content}

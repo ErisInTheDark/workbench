@@ -46,6 +46,7 @@ export interface InlineMentionHighlight {
   lineNumber?: number | null;
   path: string;
   start: number;
+  targetType: "directory" | "file" | "skill";
   text: string;
   title: string;
 }
@@ -1235,6 +1236,7 @@ function resolveIndexedFileMention(value: string, sources: InlineMentionHighligh
     candidate,
     columnNumber: parsedValue.columnNumber,
     lineNumber: parsedValue.lineNumber,
+    targetType: "file" as const,
   };
 }
 
@@ -1298,6 +1300,7 @@ function resolveFileMention(value: string, sources: InlineMentionHighlightSource
     },
     columnNumber: resolvedTarget.columnNumber,
     lineNumber: resolvedTarget.lineNumber,
+    targetType: resolvedTarget.targetType,
   };
 }
 
@@ -1321,6 +1324,7 @@ function resolveToken(token: ParsedInlineMentionToken, sources: InlineMentionHig
         columnNumber: null,
         end: getTokenResolutionEnd(token, consumedLength),
         lineNumber: null,
+        targetType: "skill" as const,
         value,
       };
     }
@@ -1334,6 +1338,7 @@ function resolveToken(token: ParsedInlineMentionToken, sources: InlineMentionHig
         columnNumber: match.columnNumber,
         end: getTokenResolutionEnd(token, consumedLength),
         lineNumber: match.lineNumber,
+        targetType: match.targetType,
         value,
       };
     }
@@ -1802,10 +1807,13 @@ export function buildInlineMentionHighlights(
       lineNumber: resolution.lineNumber,
       path: resolution.candidate.path,
       start: token.start,
+      targetType: resolution.targetType,
       text: text.slice(token.start, resolution.end),
       title: resolution.candidate.kind === "skill"
         ? `Known skill: ${resolution.candidate.label}`
-        : `Project file: ${resolution.candidate.path}`,
+        : resolution.targetType === "directory"
+          ? `Project folder: ${resolution.candidate.path}/`
+          : `Project file: ${resolution.candidate.path}`,
     });
   }
 

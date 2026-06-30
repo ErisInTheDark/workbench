@@ -3,9 +3,10 @@
  * - ProjectFilePathLocation: optional line and column metadata for displayed project paths. Keywords: project path, line, column.
  * - ProjectFilePathDisplay: derived label, basename, title, and location suffix for a project path pill. Keywords: project path, display, basename.
  * - ProjectFilePathDisambiguationIndex: prepared shortest-path lookup index for project file path labels. Keywords: project path, display, index.
- * - ProjectFilePathDisplayOptions: optional label override, disambiguation paths/key, and location metadata for project path pills. Keywords: project path, label, line, column.
+ * - ProjectFilePathDisplayOptions: optional label override, target type, disambiguation paths/key, and location metadata for project path pills. Keywords: project path, label, folder, line, column.
  * - projectFilePathPillClassName: shared rounded pill classes for project path rendering. Keywords: project path, pill, classes.
  * - projectFilePathInteractiveClassName: shared interactive hover/focus classes for clickable project path pills. Keywords: project path, interactive, classes.
+ * - projectFilePathStaticClassName: shared border-only classes for non-clickable project path pills. Keywords: project path, folder, non-clickable, classes.
  * - projectFilePathMissingClassName: shared border-only classes for non-clickable missing project path pills. Keywords: project path, missing file, classes.
  * - projectFilePathLabelClassName: shared classes for the visible filename text. Keywords: project path, label, classes.
  * - projectFilePathLocationClassName: shared low-contrast classes for line and column suffixes. Keywords: project path, location, classes.
@@ -58,6 +59,7 @@ interface ProjectFilePathDisambiguationInterner {
 
 const DISAMBIGUATION_INDEX_CONTENT_CACHE_LIMIT = 4;
 const disambiguationIndexCache = new WeakMap<readonly string[], ProjectFilePathDisambiguationIndex>();
+const directoryDisambiguationPathsCache = new WeakMap<readonly string[], string[]>();
 const disambiguationIndexKeyCache: ProjectFilePathDisambiguationKeyCacheEntry[] = [];
 const disambiguationIndexContentCache: ProjectFilePathDisambiguationContentCacheEntry[] = [];
 
@@ -79,6 +81,7 @@ export interface ProjectFilePathDisplayOptions extends ProjectFilePathLocation {
   disambiguationKey?: string;
   disambiguationPaths?: readonly string[];
   label?: string | null;
+  targetType?: "directory" | "file";
 }
 
 export const projectFilePathPillClassName = [
@@ -93,9 +96,13 @@ export const projectFilePathInteractiveClassName = [
   "focus-visible:bg-[color-mix(in_srgb,var(--text)_10%,transparent)] focus-visible:outline-none",
 ].join(" ");
 
-export const projectFilePathMissingClassName = [
+export const projectFilePathStaticClassName = [
   "border border-[color-mix(in_srgb,var(--text)_24%,transparent)]",
   "!bg-transparent hover:!bg-transparent",
+].join(" ");
+
+export const projectFilePathMissingClassName = [
+  projectFilePathStaticClassName,
   "text-[color:color-mix(in_srgb,var(--text)_82%,transparent)]",
 ].join(" ");
 
@@ -142,6 +149,53 @@ function parseWorkspaceQualifiedDisplayPath(path: string) {
   return rootId && relativePath
     ? { relativePath, rootId }
     : null;
+}
+
+function formatWorkspaceQualifiedDisplayPath(rootId: string, relativePath: string) {
+  return `${rootId}:${relativePath.replace(/^\/+/, "")}`;
+}
+
+function getProjectFileDirectoryPrefixes(path: string) {
+  const normalizedPath = normalizeWorkbenchPath(path);
+  const workspacePath = parseWorkspaceQualifiedDisplayPath(normalizedPath);
+  const rootId = workspacePath?.rootId ?? null;
+  const relativePath = workspacePath?.relativePath || normalizedPath;
+  const segments = getProjectFilePathSegments(relativePath);
+  const prefixes: string[] = [];
+  for (let depth = 1; depth < segments.length; depth += 1) {
+    const prefix = getProjectFilePathSuffixFromSegments(segments.slice(0, depth), depth);
+    prefixes.push(rootId ? formatWorkspaceQualifiedDisplayPath(rootId, prefix) : prefix);
+  }
+
+  return prefixes;
+}
+
+function getDirectoryDisambiguationPaths(disambiguationPaths: readonly string[]) {
+  const cachedPaths = directoryDisambiguationPathsCache.get(disambiguationPaths);
+  if (cachedPaths) {
+    return cachedPaths;
+  }
+
+  const pathsByLookupKey = new Map<string, string>();
+  for (const path of disambiguationPaths) {
+    for (const directoryPath of getProjectFileDirectoryPrefixes(path)) {
+      const workspacePath = parseWorkspaceQualifiedDisplayPath(directoryPath);
+      const relativePath = workspacePath?.relativePath || directoryPath;
+      pathsByLookupKey.set(
+        getDisambiguationLookupKey(workspacePath?.rootId ?? null, relativePath),
+        directoryPath,
+      );
+    }
+  }
+
+  const directoryPaths = Array.from(pathsByLookupKey.values());
+  directoryDisambiguationPathsCache.set(disambiguationPaths, directoryPaths);
+  return directoryPaths;
+}
+
+function formatDirectoryDisplayLabel(label: string) {
+  const withoutTrailingSlash = label.replace(/\/+$/, "");
+  return withoutTrailingSlash ? `${withoutTrailingSlash}/` : "/";
 }
 
 function getProjectFilePathSuffix(path: string, depth: number) {
@@ -549,6 +603,7 @@ export function getProjectFilePathDisplay(
     disambiguationKey,
     disambiguationPaths = [],
     lineNumber = null,
+    targetType = "file",
   }: ProjectFilePathDisplayOptions = {},
 ): ProjectFilePathDisplay {
   const normalizedPath = normalizeWorkbenchPath(path);
@@ -556,11 +611,14 @@ export function getProjectFilePathDisplay(
   const displayPath = workspacePath?.relativePath || normalizedPath || path;
   const pathSegments = displayPath.split("/").filter(Boolean);
   const fileName = pathSegments[pathSegments.length - 1] || displayPath;
+  const displayDisambiguationPaths = targetType === "directory"
+    ? getDirectoryDisambiguationPaths(disambiguationPaths)
+    : disambiguationPaths;
   const displayLabel = getShortestDisambiguatedProjectFilePath(
     displayPath,
-    disambiguationPaths,
-    disambiguationKey,
-    disambiguationIndex,
+    displayDisambiguationPaths,
+    targetType === "directory" && disambiguationKey ? `directories:${disambiguationKey}` : disambiguationKey,
+    targetType === "directory" ? undefined : disambiguationIndex,
     workspacePath?.rootId ?? null,
   );
   const rootPrefix = workspacePath && !label?.startsWith(`${workspacePath.rootId}:`)
@@ -572,7 +630,9 @@ export function getProjectFilePathDisplay(
 
   return {
     fileName,
-    label: label ?? displayLabel,
+    label: targetType === "directory"
+      ? formatDirectoryDisplayLabel(label ?? displayLabel)
+      : label ?? displayLabel,
     locationSuffix,
     rootPrefix,
     title: normalizedPath || path,

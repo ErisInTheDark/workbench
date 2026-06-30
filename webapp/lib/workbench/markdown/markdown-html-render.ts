@@ -10,6 +10,7 @@ import {
     projectFilePathLocationClassName,
     projectFilePathMissingClassName,
     projectFilePathPillClassName,
+    projectFilePathStaticClassName,
 } from "../project/project-file-path";
 import {
     parseBlockCommentBody,
@@ -41,6 +42,7 @@ function renderProjectFileLink(url: string, relativePath: string, {
   label = null,
   lineNumber = null,
   openPath = relativePath,
+  targetType = "file",
 }: {
   absolutePath?: string | null;
   columnNumber?: number | null;
@@ -48,11 +50,14 @@ function renderProjectFileLink(url: string, relativePath: string, {
   label?: string | null;
   lineNumber?: number | null;
   openPath?: string;
+  targetType?: "directory" | "file";
 } = {}) {
-  const display = getProjectFilePathDisplay(relativePath, { columnNumber, label, lineNumber });
+  const display = getProjectFilePathDisplay(relativePath, { columnNumber, label, lineNumber, targetType });
   const className = [
     projectFilePathPillClassName,
-    exists ? projectFilePathInteractiveClassName : projectFilePathMissingClassName,
+    exists && targetType === "file" ? projectFilePathInteractiveClassName : "",
+    exists && targetType === "directory" ? projectFilePathStaticClassName : "",
+    exists ? "" : projectFilePathMissingClassName,
   ].join(" ");
   const content = (display.rootPrefix
     ? `<span class="${escapeHtml(projectFilePathLocationClassName)}">${escapeHtml(display.rootPrefix)}</span>`
@@ -64,6 +69,10 @@ function renderProjectFileLink(url: string, relativePath: string, {
 
   if (!exists) {
     return `<span class="${escapeHtml(className)}" data-project-file-missing-path="true" title="${escapeHtml(display.title)}">${content}</span>`;
+  }
+
+  if (targetType === "directory") {
+    return `<span class="${escapeHtml(className)}" data-project-folder-path="true" title="${escapeHtml(display.title)}">${content}</span>`;
   }
 
   return `<a href="${escapeHtml(url)}" class="${escapeHtml(className)}" data-project-file-path="true" data-project-file-relative-path="${escapeHtml(openPath)}"${absolutePath ? ` data-project-file-absolute-path="${escapeHtml(absolutePath)}"` : ""} title="${escapeHtml(display.title)}">`
@@ -115,6 +124,7 @@ function renderInlineHtml(nodes: ParsedInlineNode[]) {
           label: node.label,
           lineNumber: node.lineNumber,
           openPath: node.openPath,
+          targetType: node.targetType,
         });
         break;
     }

@@ -83,6 +83,7 @@ export type ParsedInlineNode =
     openPath: string;
     projectId: string | null;
     relativePath: string;
+    targetType: "directory" | "file";
   };
 
 export interface MarkdownParseOptions {
@@ -435,6 +436,7 @@ function createProjectFileLinkNode(url: string, relativePath: string, {
   lineNumber = null,
   openPath = relativePath,
   projectId = null,
+  targetType = "file",
 }: {
   absolutePath?: string | null;
   columnNumber?: number | null;
@@ -443,6 +445,7 @@ function createProjectFileLinkNode(url: string, relativePath: string, {
   lineNumber?: number | null;
   openPath?: string;
   projectId?: string | null;
+  targetType?: "directory" | "file";
 } = {}): Extract<ParsedInlineNode, { type: "projectFileLink" }> {
   return {
     absolutePath,
@@ -454,6 +457,7 @@ function createProjectFileLinkNode(url: string, relativePath: string, {
     openPath,
     projectId,
     relativePath,
+    targetType,
     type: "projectFileLink",
   };
 }
@@ -506,6 +510,7 @@ function parseExplicitProjectFileMention(markdown: string, index: number, option
       absolutePath: resolvedFileLink.absolutePath,
       openPath: resolvedFileLink.openPath,
       projectId: resolvedFileLink.projectId,
+      targetType: resolvedFileLink.targetType,
     }),
   };
 }
@@ -670,6 +675,7 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
               absolutePath: resolvedFileLink.absolutePath,
               openPath: resolvedFileLink.openPath,
               projectId: resolvedFileLink.projectId,
+              targetType: resolvedFileLink.targetType,
             }));
             index = urlEnd + 1;
             continue;
@@ -706,6 +712,7 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
           absolutePath: plaintextFileLink.absolutePath,
           openPath: plaintextFileLink.openPath,
           projectId: plaintextFileLink.projectId,
+          targetType: plaintextFileLink.targetType,
         }));
         index = plaintextFileLink.end;
         continue;

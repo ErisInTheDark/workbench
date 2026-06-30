@@ -169,6 +169,7 @@ function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string, 
             openPath={node.openPath}
             path={node.relativePath}
             projectId={node.projectId ?? options.projectId}
+            targetType={node.targetType}
           />
         );
       }

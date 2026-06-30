@@ -22,6 +22,7 @@ export interface ParsedPlaintextProjectFileLink {
   projectId: string | null;
   relativePath: string;
   start: number;
+  targetType: "directory" | "file";
 }
 
 const TRAILING_PUNCTUATION_PATTERN = /[.,;!?)}\]]+$/;

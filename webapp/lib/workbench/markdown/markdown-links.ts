@@ -2,6 +2,7 @@
  * Exports:
  * - normalizeWorkbenchPath: normalize local paths to forward-slash form for display and comparison. Keywords: path, normalize, local.
  * - normalizeMarkdownHref: unwrap markdown link destinations and normalize Windows absolute-path prefixes. Keywords: markdown, href, normalize.
+ * - ProjectFileLinkTargetType: resolved project link kind for file and directory display. Keywords: project file, folder, target type.
  * - parseCodexFileLinkHref: parse absolute local file links with optional `:line[:column]` suffixes. Keywords: codex, file link, line number, column.
  * - resolveProjectFileLinkTarget: resolve absolute, relative, suffix, or explicit missing project file references. Keywords: project file, absolute link, missing file, resolver.
  * - appendCodexFileLinkLocation: append missing `:line[:column]` suffixes to codex file-link labels. Keywords: codex, file link, label, location.
@@ -17,7 +18,10 @@ export interface ProjectFileLinkTarget {
   openPath: string;
   projectId: string | null;
   relativePath: string;
+  targetType: ProjectFileLinkTargetType;
 }
+
+export type ProjectFileLinkTargetType = "directory" | "file";
 
 export interface WorkspaceFileLinkRoot {
   id: string;
@@ -27,6 +31,7 @@ export interface WorkspaceFileLinkRoot {
 }
 
 const uniqueCandidatePathsCache = new WeakMap<readonly string[], string[]>();
+const candidateDirectoryPathsCache = new WeakMap<readonly string[], string[]>();
 
 export function normalizeWorkbenchPath(value: string) {
   let normalizedValue = String(value ?? "").trim();
@@ -176,11 +181,61 @@ function findWorkspaceRootByPath(workspaceRoots: readonly WorkspaceFileLinkRoot[
   return bestMatch;
 }
 
+function getProjectPathPrefixes(path: string) {
+  const normalizedPath = normalizeWorkbenchPath(path);
+  const workspacePath = parseWorkspaceRootRelativePath(normalizedPath);
+  const rootId = workspacePath?.rootId ?? null;
+  const relativePath = workspacePath?.relativePath ?? normalizedPath;
+  const segments = relativePath.split("/").filter(Boolean);
+  const prefixes: string[] = [];
+  for (let depth = 1; depth < segments.length; depth += 1) {
+    const prefix = segments.slice(0, depth).join("/");
+    prefixes.push(rootId ? formatWorkspaceRootRelativePath(rootId, prefix) : prefix);
+  }
+
+  return prefixes;
+}
+
+function getCandidateDirectoryPaths(candidatePaths: readonly string[]) {
+  const cachedPaths = candidateDirectoryPathsCache.get(candidatePaths);
+  if (cachedPaths) {
+    return cachedPaths;
+  }
+
+  const directoryPathsByComparablePath = new Map<string, string>();
+  for (const candidatePath of candidatePaths) {
+    for (const directoryPath of getProjectPathPrefixes(candidatePath)) {
+      directoryPathsByComparablePath.set(normalizeComparableProjectPath(directoryPath), directoryPath);
+    }
+  }
+
+  const directoryPaths = Array.from(directoryPathsByComparablePath.values());
+  candidateDirectoryPathsCache.set(candidatePaths, directoryPaths);
+  return directoryPaths;
+}
+
+function getCandidatePathType(path: string, candidatePaths: readonly string[]): ProjectFileLinkTargetType | null {
+  const comparablePath = normalizeComparableProjectPath(path);
+  if (getUniqueCandidatePaths(candidatePaths).some((filePath) => normalizeComparableProjectPath(filePath) === comparablePath)) {
+    return "file";
+  }
+
+  if (getCandidateDirectoryPaths(candidatePaths).some((directoryPath) => normalizeComparableProjectPath(directoryPath) === comparablePath)) {
+    return "directory";
+  }
+
+  return null;
+}
+
 function resolveWorkspaceAbsoluteFileLinkTarget(
   absoluteTarget: NonNullable<ReturnType<typeof parseCodexFileLinkHref>>,
+  candidatePaths: readonly string[],
   workspaceRoots: readonly WorkspaceFileLinkRoot[],
 ): ProjectFileLinkTarget | null {
   const rootMatch = findWorkspaceRootByPath(workspaceRoots, absoluteTarget.absolutePath);
+  const targetType = rootMatch?.relativePath
+    ? getCandidatePathType(formatWorkspaceRootRelativePath(rootMatch.root.id, rootMatch.relativePath), candidatePaths) ?? "file"
+    : "directory";
   return rootMatch
     ? {
       absolutePath: rootMatch.root.openPathMode === "absolute" ? absoluteTarget.absolutePath : null,
@@ -190,12 +245,14 @@ function resolveWorkspaceAbsoluteFileLinkTarget(
       openPath: formatWorkspaceRootOpenPath(rootMatch.root, rootMatch.relativePath, absoluteTarget.absolutePath),
       projectId: rootMatch.root.projectId ?? null,
       relativePath: formatWorkspaceRootRelativePath(rootMatch.root.id, rootMatch.relativePath),
+      targetType,
     }
     : null;
 }
 
 function resolveExplicitWorkspaceFileLinkTarget(
   value: string,
+  candidatePaths: readonly string[],
   workspaceRoots: readonly WorkspaceFileLinkRoot[],
 ): ProjectFileLinkTarget | null {
   const parsedValue = parseWorkspaceRootRelativePath(value);
@@ -205,6 +262,8 @@ function resolveExplicitWorkspaceFileLinkTarget(
 
   const root = findWorkspaceRootById(workspaceRoots, parsedValue.rootId);
   const openPath = root ? formatWorkspaceRootOpenPath(root, parsedValue.relativePath, "") : "";
+  const relativePath = root ? formatWorkspaceRootRelativePath(root.id, parsedValue.relativePath) : "";
+  const targetType = getCandidatePathType(relativePath, candidatePaths) ?? "file";
   return root
     ? {
       absolutePath: root.openPathMode === "absolute" ? openPath : null,
@@ -213,7 +272,8 @@ function resolveExplicitWorkspaceFileLinkTarget(
       lineNumber: parsedValue.lineNumber,
       openPath,
       projectId: root.projectId ?? null,
-      relativePath: formatWorkspaceRootRelativePath(root.id, parsedValue.relativePath),
+      relativePath,
+      targetType,
     }
     : null;
 }
@@ -246,9 +306,9 @@ function resolvePreferredWorkspaceRootFileLinkTarget(
     : normalizedPath;
   const candidatePath = formatWorkspaceRootRelativePath(rootMatch.root.id, targetRootRelativePath);
   const openPath = formatWorkspaceRootOpenPath(rootMatch.root, targetRootRelativePath, "");
-  const comparableCandidatePath = normalizeComparableProjectPath(candidatePath);
-  const exists = getUniqueCandidatePaths(candidatePaths).some((filePath) => normalizeComparableProjectPath(filePath) === comparableCandidatePath);
-  return allowWithoutCandidate || exists
+  const targetType = getCandidatePathType(candidatePath, candidatePaths);
+  const exists = targetType !== null;
+  return exists || allowWithoutCandidate && isCompleteProjectRelativeFilePath(targetRootRelativePath)
     ? {
       absolutePath: rootMatch.root.openPathMode === "absolute" ? openPath : null,
       columnNumber: parsedValue.columnNumber,
@@ -257,6 +317,7 @@ function resolvePreferredWorkspaceRootFileLinkTarget(
       openPath,
       projectId: rootMatch.root.projectId ?? null,
       relativePath: candidatePath,
+      targetType: targetType ?? "file",
     }
     : null;
 }
@@ -311,6 +372,7 @@ function resolveRelativeProjectFileLinkTarget(
       openPath: exactMatches[0],
       projectId: null,
       relativePath: exactMatches[0],
+      targetType: "file",
     };
   }
 
@@ -329,7 +391,45 @@ function resolveRelativeProjectFileLinkTarget(
       openPath: workspaceRootRelativeMatches[0],
       projectId: null,
       relativePath: workspaceRootRelativeMatches[0],
+      targetType: "file",
     };
+  }
+
+  if (parsedValue.lineNumber === null && parsedValue.columnNumber === null) {
+    const directoryExactMatches = getCandidateDirectoryPaths(candidatePaths).filter((candidatePath) => (
+      normalizeComparableProjectPath(candidatePath) === comparablePath
+    ));
+    if (directoryExactMatches.length === 1) {
+      return {
+        absolutePath: null,
+        columnNumber: null,
+        exists: true,
+        lineNumber: null,
+        openPath: directoryExactMatches[0],
+        projectId: null,
+        relativePath: directoryExactMatches[0],
+        targetType: "directory",
+      };
+    }
+
+    const workspaceRootRelativeDirectoryMatches = getCandidateDirectoryPaths(candidatePaths).filter((candidatePath) => {
+      const parsedCandidatePath = parseWorkspaceRootRelativePath(candidatePath);
+      return parsedCandidatePath
+        ? normalizeComparableProjectPath(parsedCandidatePath.relativePath) === comparablePath
+        : false;
+    });
+    if (workspaceRootRelativeDirectoryMatches.length === 1) {
+      return {
+        absolutePath: null,
+        columnNumber: null,
+        exists: true,
+        lineNumber: null,
+        openPath: workspaceRootRelativeDirectoryMatches[0],
+        projectId: null,
+        relativePath: workspaceRootRelativeDirectoryMatches[0],
+        targetType: "directory",
+      };
+    }
   }
 
   if (!allowSuffixMatch) {
@@ -348,6 +448,31 @@ function resolveRelativeProjectFileLinkTarget(
       openPath: suffixMatches[0],
       projectId: null,
       relativePath: suffixMatches[0],
+      targetType: "file",
+    }
+    : parsedValue.lineNumber === null && parsedValue.columnNumber === null
+      ? resolveRelativeProjectDirectorySuffixLinkTarget(normalizedPath, candidatePaths)
+      : null;
+}
+
+function resolveRelativeProjectDirectorySuffixLinkTarget(
+  normalizedPath: string,
+  candidatePaths: readonly string[],
+): ProjectFileLinkTarget | null {
+  const comparablePath = normalizeComparableProjectPath(normalizedPath);
+  const suffixMatches = getCandidateDirectoryPaths(candidatePaths).filter((candidatePath) => (
+    normalizeComparableProjectPath(candidatePath).endsWith(`/${comparablePath}`)
+  ));
+  return suffixMatches.length === 1
+    ? {
+      absolutePath: null,
+      columnNumber: null,
+      exists: true,
+      lineNumber: null,
+      openPath: suffixMatches[0],
+      projectId: null,
+      relativePath: suffixMatches[0],
+      targetType: "directory",
     }
     : null;
 }
@@ -384,6 +509,7 @@ function resolveMissingProjectRelativeFileLinkTarget(value: string): ProjectFile
     openPath: normalizedPath,
     projectId: null,
     relativePath: normalizedPath,
+    targetType: "file",
   };
 }
 
@@ -408,12 +534,15 @@ export function resolveProjectFileLinkTarget(
   const normalizedValue = normalizeMarkdownHref(value);
   const absoluteTarget = parseCodexFileLinkHref(normalizedValue);
   if (absoluteTarget) {
-    const workspaceRelativePath = resolveWorkspaceAbsoluteFileLinkTarget(absoluteTarget, workspaceRoots);
+    const workspaceRelativePath = resolveWorkspaceAbsoluteFileLinkTarget(absoluteTarget, candidatePaths, workspaceRoots);
     if (workspaceRelativePath) {
       return workspaceRelativePath;
     }
 
     const relativePath = toProjectRelativeFilePath(absoluteTarget.absolutePath, projectRootPath);
+    const targetType = relativePath
+      ? getCandidatePathType(relativePath, candidatePaths) ?? "file"
+      : "file";
     return relativePath
       ? {
         absolutePath: null,
@@ -423,6 +552,7 @@ export function resolveProjectFileLinkTarget(
         openPath: relativePath,
         projectId: null,
         relativePath,
+        targetType,
       }
       : {
         absolutePath: absoluteTarget.absolutePath,
@@ -432,10 +562,11 @@ export function resolveProjectFileLinkTarget(
         openPath: absoluteTarget.absolutePath,
         projectId: null,
         relativePath: absoluteTarget.absolutePath,
+        targetType: "file",
       };
   }
 
-  const explicitWorkspaceTarget = resolveExplicitWorkspaceFileLinkTarget(normalizedValue, workspaceRoots);
+  const explicitWorkspaceTarget = resolveExplicitWorkspaceFileLinkTarget(normalizedValue, candidatePaths, workspaceRoots);
   if (explicitWorkspaceTarget) {
     return explicitWorkspaceTarget;
   }
