@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default CollaborationPostNode: render one recursive Collaboration post branch with single-surface post, prompt, edit, and reply modes. Keywords: collaboration, post, tree, recursive, prompt.
- * - Local helpers: draft conversion, action buttons, and drag-start filtering. Keywords: collaboration, composer, drag, prompt.
+ * - default CollaborationPostNode: render one recursive Collaboration post branch with single-surface post, collapsed, prompt, edit, and reply modes. Keywords: collaboration, post, tree, recursive, prompt, collapse.
+ * - Local helpers: draft conversion, collapsed previews, action buttons, and drag-start filtering. Keywords: collaboration, composer, drag, prompt, collapse.
  */
 "use client";
 
@@ -23,6 +23,7 @@ import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/mark
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
 import PrimaryButton from "../PrimaryButton";
 import ThreadMarkdown from "../thread-view/ThreadMarkdown";
+import { ReplyArrowIcon, SparkleIcon } from "../workbench-icons";
 import CollaborationPostComposer from "./CollaborationPostComposer";
 import CollaborationPostMenuButton from "./CollaborationPostMenuButton";
 import CollaborationPostSurface from "./CollaborationPostSurface";
@@ -41,6 +42,10 @@ function draftFromPost (post: WorkbenchCollaborationPost): WorkbenchThreadCompos
     text: post.body,
     updatedAt: post.updatedAt,
   };
+}
+
+function getCollapsedPostPreviewText (post: WorkbenchCollaborationPost) {
+  return post.body.split(/\r?\n/).find((line) => line.trim())?.trim() || "Empty post";
 }
 
 function shouldIgnorePostDragStart (event: ReactPointerEvent<HTMLElement>) {
@@ -70,14 +75,32 @@ function CollapsePromptButton ({ onClick }: { onClick: () => void }) {
   );
 }
 
+function SuggestedPromptButton ({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-[0.78rem] font-semibold text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+      data-collaboration-no-drag="true"
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
+    >
+      <SparkleIcon className="size-3.5" />
+      Suggested prompt
+    </button>
+  );
+}
+
 function PostReplyButton ({ onClick }: { onClick: () => void }) {
   return (
     <button
       type="button"
-      className="inline-flex relative pb-1 items-center [border-bottom-right-radius:calc(var(--spacing)*3.5)] [border-bottom-left-radius:calc(var(--spacing)*3.5)] px-2 text-[0.78rem] font-medium text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+      className="inline-flex relative items-center gap-1.5 pb-1 [border-bottom-right-radius:calc(var(--spacing)*3.5)] [border-bottom-left-radius:calc(var(--spacing)*3.5)] px-2 text-[0.78rem] font-medium text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
       data-collaboration-no-drag="true"
       onClick={onClick}
     >
+      <ReplyArrowIcon className="size-3.5" />
       Reply
     </button>
   );
@@ -159,29 +182,35 @@ export default function CollaborationPostNode ({
   const [isEditingPost, setIsEditingPost] = useState(false);
   const [isPromptOpen, setIsPromptOpen] = useState(false);
   const [isReplying, setIsReplying] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(false);
   const childPosts = useMemo(() => post.childIds.map((childId) => state.posts[childId]).filter((child): child is WorkbenchCollaborationPost => Boolean(child)), [post.childIds, state.posts]);
   const authorLabel = post.author === "agent" ? "Agent" : "User";
-  const canDragPost = !isEditingPost && !isPromptOpen;
+  const canDragPost = !isEditingPost && !isPromptOpen && !isReplying;
   const promptDraftThread = promptDraftThreadsByPostId[post.id] ?? null;
-  const isPromptPost = Boolean(post.prompt);
+  const isPromptPost = Boolean(post.prompt || post.promptThreadId);
+  const hasUnmaterializedSuggestedPrompt = Boolean(post.prompt && !post.promptThreadId);
+  const canToggleCollapsed = !isEditingPost && !isPromptOpen && !isReplying;
 
   const openPromptComposer = () => {
-    if (!post.prompt) {
+    if (!post.prompt || post.promptThreadId) {
       return;
     }
 
-    if (!post.promptThreadId) {
-      onEnsurePromptDraftThread(post);
-    }
+    onEnsurePromptDraftThread(post);
 
     if (!isEditingPost) {
+      setIsCollapsed(false);
       setIsPromptOpen(true);
     }
   };
 
-  const primaryAction = isPromptOpen ? (
-    <CollapsePromptButton onClick={() => { setIsPromptOpen(false); }} />
-  ) : null;
+  const toggleCollapsed = () => {
+    if (!canToggleCollapsed) {
+      return;
+    }
+
+    setIsCollapsed((current) => !current);
+  };
 
   const renderedPostBody = (
     <>
@@ -204,6 +233,20 @@ export default function CollaborationPostNode ({
               src={attachment.url}
             />
           ))}
+        </div>
+      ) : null}
+      {post.promptThreadId ? (
+        <div className="mt-3 flex justify-end" data-collaboration-no-drag="true">
+          <PrimaryButton
+            type="button"
+            onClick={() => {
+              if (post.promptThreadId) {
+                onOpenPromptThread(post.promptThreadId);
+              }
+            }}
+          >
+            Open thread
+          </PrimaryButton>
         </div>
       ) : null}
     </>
@@ -234,65 +277,64 @@ export default function CollaborationPostNode ({
         }}
       />
     </div>
-  ) : isPromptOpen && post.prompt ? (
+  ) : isPromptOpen && post.prompt && !post.promptThreadId ? (
     <>
       {renderedPostBody}
-      {post.promptThreadId ? (
-        <div className="mt-3 flex justify-end" data-collaboration-no-drag="true">
-          <PrimaryButton
-            type="button"
-            onClick={() => {
-              if (post.promptThreadId) {
-                onOpenPromptThread(post.promptThreadId);
-              }
-            }}
-          >
-            Open thread
-          </PrimaryButton>
+      <div className="relative mt-2 pl-[0.9rem]">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute bottom-[3.25rem] left-0 top-1 w-[0.18rem] rounded-full bg-[color-mix(in_srgb,var(--text)_14%,transparent)]"
+        />
+        <div className="relative" data-collaboration-no-drag="true">
+          <div className="min-w-0">
+            {promptDraftThread ? (
+              <CollaborationPromptComposer
+                composerSpellCheck={composerSpellCheck}
+                draft={promptComposerDraftsByPostId[post.id] ?? null}
+                error={promptStartErrorsByPostId[post.id] ?? ""}
+                highlightSources={highlightSources}
+                post={post}
+                projectId={projectId}
+                projectRootPath={projectRootPath}
+                rateLimits={rateLimits}
+                thread={promptDraftThread}
+                workspaceRoots={workspaceRoots}
+                onDraftChange={onPromptDraftChange}
+                onDraftClear={onPromptDraftClear}
+                onListModels={onListModels}
+                onStartPromptThread={async (postId, input, thread) => {
+                  await onStartPromptThread(postId, input, thread);
+                  setIsPromptOpen(false);
+                }}
+                onSubmitUserInputRequest={onSubmitUserInputRequest}
+                onThreadAgentChange={onThreadAgentChange}
+                onThreadModelChange={onThreadModelChange}
+                onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
+                onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
+                onThreadReasoningEffortChange={onThreadReasoningEffortChange}
+                onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
+                onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
+                onThreadServiceTierChange={onThreadServiceTierChange}
+              />
+            ) : (
+              <p className="m-0 px-1 py-4 text-[0.86rem] leading-6 text-muted">Preparing prompt composer...</p>
+            )}
+          </div>
+          <div className="absolute right-0 top-0 z-10">
+            <CollapsePromptButton onClick={() => { setIsPromptOpen(false); }} />
+          </div>
         </div>
-      ) : (
-        <div className="relative mt-2 pl-[0.9rem]">
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute bottom-[3.25rem] left-0 top-1 w-[0.18rem] rounded-full bg-[color-mix(in_srgb,var(--text)_14%,transparent)]"
-          />
-          {promptDraftThread ? (
-            <CollaborationPromptComposer
-              composerSpellCheck={composerSpellCheck}
-              draft={promptComposerDraftsByPostId[post.id] ?? null}
-              error={promptStartErrorsByPostId[post.id] ?? ""}
-              highlightSources={highlightSources}
-              post={post}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
-              rateLimits={rateLimits}
-              thread={promptDraftThread}
-              workspaceRoots={workspaceRoots}
-              onDraftChange={onPromptDraftChange}
-              onDraftClear={onPromptDraftClear}
-              onListModels={onListModels}
-              onStartPromptThread={async (postId, input, thread) => {
-                await onStartPromptThread(postId, input, thread);
-                setIsPromptOpen(false);
-              }}
-              onSubmitUserInputRequest={onSubmitUserInputRequest}
-              onThreadAgentChange={onThreadAgentChange}
-              onThreadModelChange={onThreadModelChange}
-              onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
-              onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
-              onThreadReasoningEffortChange={onThreadReasoningEffortChange}
-              onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
-              onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
-              onThreadServiceTierChange={onThreadServiceTierChange}
-            />
-          ) : (
-            <p className="m-0 px-1 py-4 text-[0.86rem] leading-6 text-muted">Preparing prompt composer...</p>
-          )}
-        </div>
-      )}
+      </div>
     </>
   ) : (
-    renderedPostBody
+    <>
+      {renderedPostBody}
+      {hasUnmaterializedSuggestedPrompt ? (
+        <div className="mt-2 flex justify-end" data-collaboration-no-drag="true">
+          <SuggestedPromptButton onClick={openPromptComposer} />
+        </div>
+      ) : null}
+    </>
   );
 
   return (
@@ -311,8 +353,10 @@ export default function CollaborationPostNode ({
           author={post.author}
           authorLabel={authorLabel}
           canDrag={canDragPost}
+          collapsedPreviewText={getCollapsedPostPreviewText(post)}
           isActive={isEditingPost || isPromptOpen || isReplying}
-          isClickable={isPromptPost && !isEditingPost && !isPromptOpen}
+          isClickable={canToggleCollapsed}
+          isCollapsed={isCollapsed}
           isPromptPost={isPromptPost}
           menuAction={(
             <CollaborationPostMenuButton
@@ -321,6 +365,7 @@ export default function CollaborationPostNode ({
                 onDeletePost(post.id);
               }}
               onEdit={() => {
+                setIsCollapsed(false);
                 setIsEditingPost(true);
               }}
               onOpenHistory={() => {
@@ -333,9 +378,8 @@ export default function CollaborationPostNode ({
               }}
             />
           )}
-          primaryAction={primaryAction}
           updatedAt={post.updatedAt}
-          onClick={openPromptComposer}
+          onClick={toggleCollapsed}
           onPointerDown={(event) => {
             if (!canDragPost || shouldIgnorePostDragStart(event)) {
               return;
@@ -346,82 +390,84 @@ export default function CollaborationPostNode ({
         >
           {bodyContent}
         </CollaborationPostSurface>
-        <div className="relative before:block before:absolute before:-top-5 before:bottom-0 before:[border-left:3px_solid_color-mix(in_srgb,var(--text)_4%,transparent)] before:[mask-image:linear-gradient(to_bottom,transparent_0%,black_calc(var(--spacing)_*_4),black_calc(100%_-_var(--spacing)_*_2),transparent_100%)]">
-          {!isReplying ? (
-            <div className="flex px-3" data-collaboration-no-drag="true">
-              <PostReplyButton
-                onClick={() => {
-                  setIsReplying(true);
-                }}
-              />
-            </div>
-          ) : null}
-          {isReplying ? (
-            <div className="mt-1 pl-4 md:pl-5" data-collaboration-no-drag="true">
-              <CollaborationPostComposer
-                composerSpellCheck={composerSpellCheck}
-                harness={harness}
-                highlightSources={highlightSources}
-                id={`collaboration-reply:${post.id}`}
-                label="Reply"
-                projectId={projectId}
-                projectRootPath={projectRootPath}
-                workspaceRoots={workspaceRoots}
-                onCancel={() => {
-                  setIsReplying(false);
-                }}
-                onSubmit={(draft) => {
-                  onCreatePost(post.id, draft);
-                  setIsReplying(false);
-                }}
-              />
-            </div>
-          ) : null}
-          {childPosts.length ? (
-            <div className="mt-1">
-              {childPosts.map((childPost) => (
-                <CollaborationPostNode
-                  key={childPost.id}
-                  activeDrag={activeDrag}
+        {!isCollapsed ? (
+          <div className="relative before:block before:absolute before:-top-5 before:bottom-0 before:[border-left:3px_solid_color-mix(in_srgb,var(--text)_4%,transparent)] before:[mask-image:linear-gradient(to_bottom,transparent_0%,black_calc(var(--spacing)_*_4),black_calc(100%_-_var(--spacing)_*_2),transparent_100%)]">
+            {!isReplying ? (
+              <div className="flex px-3" data-collaboration-no-drag="true">
+                <PostReplyButton
+                  onClick={() => {
+                    setIsReplying(true);
+                  }}
+                />
+              </div>
+            ) : null}
+            {isReplying ? (
+              <div className="mt-1 pl-4 md:pl-5" data-collaboration-no-drag="true">
+                <CollaborationPostComposer
                   composerSpellCheck={composerSpellCheck}
-                  depth={depth + 1}
                   harness={harness}
                   highlightSources={highlightSources}
-                  post={childPost}
+                  id={`collaboration-reply:${post.id}`}
+                  label="Reply"
                   projectId={projectId}
                   projectRootPath={projectRootPath}
-                  promptComposerDraftsByPostId={promptComposerDraftsByPostId}
-                  promptDraftThreadsByPostId={promptDraftThreadsByPostId}
-                  promptStartErrorsByPostId={promptStartErrorsByPostId}
-                  rateLimits={rateLimits}
-                  state={state}
                   workspaceRoots={workspaceRoots}
-                  onCreatePost={onCreatePost}
-                  onDeletePost={onDeletePost}
-                  onEditPost={onEditPost}
-                  onEnsurePromptDraftThread={onEnsurePromptDraftThread}
-                  onMovePost={onMovePost}
-                  onOpenPromptThread={onOpenPromptThread}
-                  onOpenRevisionHistory={onOpenRevisionHistory}
-                  onPostPointerDragStart={onPostPointerDragStart}
-                  onPromptDraftChange={onPromptDraftChange}
-                  onPromptDraftClear={onPromptDraftClear}
-                  onStartPromptThread={onStartPromptThread}
-                  onSubmitUserInputRequest={onSubmitUserInputRequest}
-                  onThreadAgentChange={onThreadAgentChange}
-                  onThreadModelChange={onThreadModelChange}
-                  onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
-                  onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
-                  onThreadReasoningEffortChange={onThreadReasoningEffortChange}
-                  onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
-                  onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
-                  onThreadServiceTierChange={onThreadServiceTierChange}
-                  onListModels={onListModels}
+                  onCancel={() => {
+                    setIsReplying(false);
+                  }}
+                  onSubmit={(draft) => {
+                    onCreatePost(post.id, draft);
+                    setIsReplying(false);
+                  }}
                 />
-              ))}
-            </div>
-          ) : null}
-        </div>
+              </div>
+            ) : null}
+            {childPosts.length ? (
+              <div className="mt-1">
+                {childPosts.map((childPost) => (
+                  <CollaborationPostNode
+                    key={childPost.id}
+                    activeDrag={activeDrag}
+                    composerSpellCheck={composerSpellCheck}
+                    depth={depth + 1}
+                    harness={harness}
+                    highlightSources={highlightSources}
+                    post={childPost}
+                    projectId={projectId}
+                    projectRootPath={projectRootPath}
+                    promptComposerDraftsByPostId={promptComposerDraftsByPostId}
+                    promptDraftThreadsByPostId={promptDraftThreadsByPostId}
+                    promptStartErrorsByPostId={promptStartErrorsByPostId}
+                    rateLimits={rateLimits}
+                    state={state}
+                    workspaceRoots={workspaceRoots}
+                    onCreatePost={onCreatePost}
+                    onDeletePost={onDeletePost}
+                    onEditPost={onEditPost}
+                    onEnsurePromptDraftThread={onEnsurePromptDraftThread}
+                    onMovePost={onMovePost}
+                    onOpenPromptThread={onOpenPromptThread}
+                    onOpenRevisionHistory={onOpenRevisionHistory}
+                    onPostPointerDragStart={onPostPointerDragStart}
+                    onPromptDraftChange={onPromptDraftChange}
+                    onPromptDraftClear={onPromptDraftClear}
+                    onStartPromptThread={onStartPromptThread}
+                    onSubmitUserInputRequest={onSubmitUserInputRequest}
+                    onThreadAgentChange={onThreadAgentChange}
+                    onThreadModelChange={onThreadModelChange}
+                    onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
+                    onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
+                    onThreadReasoningEffortChange={onThreadReasoningEffortChange}
+                    onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
+                    onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
+                    onThreadServiceTierChange={onThreadServiceTierChange}
+                    onListModels={onListModels}
+                  />
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </article>
     </CollaborationTreeDropController>
   );

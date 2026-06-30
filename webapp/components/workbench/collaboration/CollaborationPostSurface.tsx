@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default CollaborationPostSurface: render the single updated suggestion-card-style surface for Collaboration posts. Keywords: collaboration, post, surface, suggestion.
- * - Local helpers: class joining, relative time formatting, and interaction target detection. Keywords: classes, time, click, drag.
+ * - default CollaborationPostSurface: render expanded and collapsed Collaboration post surfaces. Keywords: collaboration, post, surface, suggestion, collapse.
+ * - Local helpers: class joining, relative time formatting, and interaction target detection. Keywords: classes, time, click, drag, collapse.
  */
 "use client";
 
@@ -39,8 +39,10 @@ export default function CollaborationPostSurface ({
   authorLabel,
   canDrag,
   children,
+  collapsedPreviewText = "",
   isActive = false,
   isClickable = false,
+  isCollapsed = false,
   isPromptPost = false,
   menuAction,
   primaryAction,
@@ -52,8 +54,10 @@ export default function CollaborationPostSurface ({
   authorLabel: string;
   canDrag: boolean;
   children: ReactNode;
+  collapsedPreviewText?: string;
   isActive?: boolean;
   isClickable?: boolean;
+  isCollapsed?: boolean;
   isPromptPost?: boolean;
   menuAction: ReactNode;
   primaryAction?: ReactNode;
@@ -80,10 +84,38 @@ export default function CollaborationPostSurface ({
     onClick?.();
   };
 
+  if (isCollapsed) {
+    return (
+      <div
+        tabIndex={isClickable ? 0 : undefined}
+        aria-expanded={isClickable ? false : undefined}
+        className={joinClasses(
+          "group/post-surface flex min-w-0 items-center gap-2 rounded-[0.85rem] px-3 py-1.5 text-[0.82rem] leading-5 text-muted transition",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
+          canDrag && "cursor-grab active:cursor-grabbing",
+          isClickable && "cursor-pointer hover:text-text",
+        )}
+        onClick={handleClick}
+        onKeyDown={handleKeyDown}
+        onPointerDown={onPointerDown}
+      >
+        <div className="flex min-w-0 flex-1 items-baseline gap-2">
+          <span className="shrink-0 font-medium text-text">{authorLabel}</span>
+          <time className="shrink-0 opacity-55" dateTime={new Date(updatedAt).toISOString()}>{formatPostRelativeTime(updatedAt)}</time>
+          <span className="shrink-0 opacity-55" aria-hidden="true">—</span>
+          <span className="min-w-0 flex-1 truncate">{collapsedPreviewText || "Empty post"}</span>
+        </div>
+        <div className="shrink-0 opacity-100" data-collaboration-no-drag="true">
+          {menuAction}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       tabIndex={isClickable ? 0 : undefined}
-      aria-expanded={isClickable ? isActive : undefined}
+      aria-expanded={isClickable ? true : undefined}
       className={joinClasses(
         "group/post-surface rounded-[1.15rem] px-3 py-2 transition",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",

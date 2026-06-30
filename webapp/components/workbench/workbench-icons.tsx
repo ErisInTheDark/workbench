@@ -18,7 +18,7 @@
  * - PreviewIcon: render the thread codeblock preview toggle icon. Keywords: workbench, icon, thread, code, preview.
  * - CopyIcon: render thread copy action icons for context menus and code blocks. Keywords: workbench, icon, thread, copy.
  * - CheckIcon: render the thread codeblock copied confirmation icon. Keywords: workbench, icon, thread, code, copied.
- * - SparkleIcon: render the shared creation sparkle icon. Keywords: workbench, icon, create, sparkle.
+ * - SparkleIcon/ReplyArrowIcon: render shared creation and reply action icons. Keywords: workbench, icon, create, sparkle, reply.
  * - FileAddIcon/FileDeleteIcon/FileUpdateIcon/FileMoveIcon: render thread file-change kind icons. Keywords: workbench, icon, file change, add, delete, update, move.
  */
 import type { WorkbenchHarness } from "../../lib/types";
@@ -284,6 +284,15 @@ export function SparkleIcon ({ className = "size-4" }: IconProps) {
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className={className}>
       <path d="M11 3.25L12.35 7.2L16.25 8.5L12.35 9.8L11 13.75L9.65 9.8L5.75 8.5L9.65 7.2L11 3.25Z" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M5 12.5L5.65 14.35L7.5 15L5.65 15.65L5 17.5L4.35 15.65L2.5 15L4.35 14.35L5 12.5Z" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function ReplyArrowIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
+      <path d="M8 5.25L4.25 9L8 12.75" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4.75 9H11.75C14 9 15.75 10.75 15.75 13V15" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
