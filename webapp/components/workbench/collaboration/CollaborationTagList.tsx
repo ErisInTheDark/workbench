@@ -18,6 +18,11 @@ function getTagKey(tag: string) {
   return tag.toLocaleLowerCase();
 }
 
+function hasTag(tags: readonly string[], tag: string) {
+  const key = getTagKey(tag);
+  return tags.some((candidate) => getTagKey(candidate) === key);
+}
+
 function TagPill ({
   canRemove = false,
   tag,
@@ -32,16 +37,22 @@ function TagPill ({
       className={joinClasses(
         "group/tag relative inline-flex min-w-0 items-center rounded-full px-2 py-0.5 text-[0.72rem] font-medium leading-5",
         "bg-[color-mix(in_srgb,var(--text)_5%,transparent)] text-muted",
-        canRemove && "pr-5",
       )}
     >
-      <span className="min-w-0 truncate">{tag}</span>
+      <span
+        className={joinClasses(
+          "min-w-0 truncate",
+          canRemove && "transition-opacity group-hover/tag:opacity-35 group-focus-within/tag:opacity-35",
+        )}
+      >
+        {tag}
+      </span>
       {canRemove ? (
         <button
           type="button"
           aria-label={`Remove ${tag} tag`}
           title={`Remove ${tag}`}
-          className="absolute inset-y-0 right-0 inline-flex w-5 items-center justify-center rounded-full text-muted opacity-0 transition hover:bg-[color-mix(in_srgb,var(--text)_8%,transparent)] hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft group-hover/tag:opacity-100"
+          className="absolute inset-0 inline-flex items-center justify-center rounded-full text-muted opacity-0 transition hover:bg-[color-mix(in_srgb,var(--text)_8%,transparent)] hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft group-hover/tag:opacity-100"
           onClick={(event) => {
             event.stopPropagation();
             onRemove?.(tag);
@@ -77,6 +88,9 @@ export default function CollaborationTagList ({
   const [isAdding, setIsAdding] = useState(false);
   const editableRef = useRef<HTMLSpanElement | null>(null);
   const visibleTags = variant === "post" ? assignedTags ?? [] : allTags;
+  const availableTags = variant === "post"
+    ? allTags.filter((tag) => !hasTag(visibleTags, tag))
+    : [];
   const canRemove = variant === "post" && Boolean(onRemoveTag);
   const placeholder = variant === "post" ? "Tag post" : "New tag";
 
@@ -145,7 +159,7 @@ export default function CollaborationTagList ({
       )) : variant === "catalog" ? (
         <span className="text-[0.74rem] font-medium text-muted/75">No tags yet</span>
       ) : null}
-      {isAdding ? (
+      {isAdding && variant === "catalog" ? (
         <form
           className="inline-flex h-6 min-w-0 max-w-[13rem] items-center rounded-full bg-[color-mix(in_srgb,var(--text)_6%,transparent)] pl-2 pr-0.5"
           onSubmit={handleSubmit}
@@ -179,12 +193,32 @@ export default function CollaborationTagList ({
             <TagCheckIcon className="size-3.5" />
           </button>
         </form>
+      ) : isAdding ? (
+        <div className="inline-flex max-w-full flex-wrap items-center gap-1.5">
+          {availableTags.length ? availableTags.map((tag) => (
+            <button
+              key={getTagKey(tag)}
+              type="button"
+              className="inline-flex min-w-0 items-center rounded-full border border-[color-mix(in_srgb,var(--text)_18%,transparent)] px-2 py-0.5 text-[0.72rem] font-medium leading-5 text-muted transition hover:border-[color-mix(in_srgb,var(--accent)_45%,transparent)] hover:bg-accent-soft hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+              onClick={(event) => {
+                event.stopPropagation();
+                onAddTag?.(tag);
+                setIsAdding(false);
+              }}
+            >
+              <span className="min-w-0 truncate">{tag}</span>
+            </button>
+          )) : (
+            <span className="text-[0.72rem] font-medium text-muted/70">No available tags</span>
+          )}
+        </div>
       ) : (
         <button
           type="button"
           aria-label={variant === "post" ? "Add tag to post" : "Create tag"}
-          title={variant === "post" ? "Add tag to post" : "Create tag"}
-          className="inline-flex size-6 items-center justify-center rounded-full text-[0.8rem] font-semibold text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+          title={variant === "post" && !availableTags.length ? "No available tags" : variant === "post" ? "Add tag to post" : "Create tag"}
+          disabled={variant === "post" && !availableTags.length}
+          className="inline-flex size-6 items-center justify-center rounded-full text-[0.8rem] font-semibold text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted"
           onClick={(event) => {
             event.stopPropagation();
             setIsAdding((current) => !current);
