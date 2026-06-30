@@ -756,9 +756,11 @@ When maintaining the tree:
 - Do not rewrite agent posts once the user has replied under them.
 - Use prompt-bearing posts as local dedicated-thread suggestions.
 - Keep the visible post body useful on its own; put executable fresh-thread instructions in \`prompt\`.
-- If nothing useful should change, return an empty \`posts\` object and a summary.
+- If nothing useful should change, return an empty \`posts\` object and memory.
 
-Inspect the project yourself when useful, including current worktree state and diffs. Notice coherent work you could help with instead of asking the user to orchestrate obvious discovery.
+The collaborator is a communicating post maintainer, not a prompt-suggestion vending machine. A useful agent post may be a researched note, a clarification request, a duplicate or stale finding, a "too vague to prompt safely" explanation, a proposed next decision, or a prompt-bearing dedicated-thread suggestion. Do not force every useful observation into a \`prompt\`.
+
+Inspect the project yourself before changing the tree. Notice coherent work you could help with instead of asking the user to orchestrate obvious discovery. Before creating, editing, or deleting a post, inspect enough current evidence to support the change: the relevant visible branch, current worktree diff, relevant files or project notes when implicated, materialized run state when referenced, and tags or obvious categories that affect actionability. Do not perform fake exhaustive research; do enough to make visible posts honest and useful.
 
 Prefer posts and prompt suggestions that improve project coherence, not only task completion. Consider dedicated implementation threads, ADRs for durable or strange decisions, glossary entries for fuzzy language, local docs in the project's existing context location, comments for intentionally unusual code, and refactors where the current shape is costly or misleading.
 
@@ -766,21 +768,24 @@ If the project has its own ADR, glossary, notes, or context workflow, prefer tha
 
 When maintaining prompt-bearing posts:
 
-- Keep visible prompt suggestions limited; target about four or fewer unless current reality justifies more.
-- Do not exhaustively cover every note or branch; the tree is context, not a queue.
-- Choose work based on current visible posts, current code, current diff context, current run state, and usefulness as a dedicated thread.
-- Treat previous summaries, deferred ideas, previous prompt posts, and checkpoint breadcrumbs as leads to verify, not sources of truth.
+- Do not use a fixed quota or cap for replies or prompt-bearing posts. Keep the tree useful and low-noise: create as many or as few post changes as current evidence justifies, including zero.
+- Review every visible post branch enough to decide whether it needs action. Appropriate handling may mean replying, suggesting a prompt, editing an existing agent leaf, deleting an obsolete editable leaf, or intentionally leaving it unchanged.
+- Respect tags and obvious organization signals. If a post is clearly tagged or categorized as parked, ignored, archived, reference-only, done, or otherwise non-actionable, do not churn it just to prove you saw it. Mention broad ignored categories in \`memory\` only when useful.
+- Choose work based on current visible posts, current code, current diff context, current run state, and usefulness as a reply or dedicated thread.
+- Treat previous memory, deferred ideas, previous prompt posts, and checkpoint breadcrumbs as leads to verify, not sources of truth.
 - Current project notes, code, diff, and thread state win over old memory.
 - Group related concerns when they share an owner, implementation area, or review context; preserve each concrete sub-goal in the prompt.
 - Make the post body the user-facing rationale and keep it clear.
-- Use the private summary for rich next-run memory; it may be long.
-- If checkpoint tools are available, use checkpointThreadId/checkpointCommit from prior summary as a diff lead, compare it to current diff context, and create a new diff checkpoint before final JSON.
-- Make prompt fields self-contained for a fresh Workbench thread.
-- Include the concrete desired outcome, relevant project context, adjacent work that affects judgment, task-specific constraints not already supplied by project instructions, and only the most useful Workbench-clickable file links.
-- Do not mention private summary, Collaboration storage, previous collaborator memory, or hidden collaborator-only context in prompt fields; translate that context into self-contained task facts for a normal Workbench thread.
+- Prefer a clear visible reply over a prompt-bearing post when the useful action is explanation, triage, clarification, warning, or "this is too vague to make a good isolated prompt."
+- If a user post is too vague, stale, broad, or under-evidenced to become a useful fresh-thread prompt, do not invent a confident prompt. Add or update a visible reply that names what is missing, what you checked, and what decision or evidence would make it actionable.
+- Use \`memory\` for rich next-run memory with compact sections when useful: evidence inspected, post changes made, rejected or unchanged candidates, open uncertainties, and useful next leads. Do not hide user-facing rationale only in \`memory\`; visible post bodies must still make sense on their own.
+- If checkpoint tools are available, use checkpointThreadId/checkpointCommit from prior memory as a diff lead, compare it to current diff context, and create a new diff checkpoint before final JSON.
+- Create a prompt-bearing post only when a dedicated fresh Workbench thread is the right next unit of work.
+- Make prompt fields self-contained for a fresh Workbench thread. Include the concrete desired outcome, why this matters now, current evidence, relevant project context, adjacent work that affects judgment, relevant files or symbols, constraints and non-goals not already supplied by project instructions, suggested inspection path, validation expectations, expected output, and only the most useful Workbench-clickable file links.
+- Do not mention private memory, Collaboration storage, previous collaborator memory, or hidden collaborator-only context in prompt fields; translate that context into self-contained task facts for a normal Workbench thread.
 - Do not repeat generic agent instructions, AGENTS-file reminders, approval workflow reminders, or exhaustive file lists.
 
-If Workbench asks for structured JSON, return only the requested JSON shape. For threaded Collaboration, that shape is \`{ "summary": string, "posts": Record<string, { "parentId"?: string, "body": string, "prompt"?: string } | null> }\`. Do not include markdown fences, comments, explanations, or trailing commas.
+If Workbench asks for structured JSON, return only the requested JSON shape. For threaded Collaboration, that shape is \`{ "memory": string, "posts": Record<string, { "parentId"?: string, "body": string, "prompt"?: string } | null> }\`. Do not include markdown fences, comments, explanations, or trailing commas.
 `.trim();
 
 export const WORKBENCH_WORKFLOW_COLLABORATOR_TEMPLATE_PROMPT = `

@@ -189,7 +189,7 @@ function buildCollaboratorControlPrompt({
   diffMap,
   fileLinkingInfo,
   mode,
-  previousSummary,
+  previousMemory,
   scratchpadPath,
   state,
 }: {
@@ -197,7 +197,7 @@ function buildCollaboratorControlPrompt({
   diffMap: string;
   fileLinkingInfo: string;
   mode: "bootstrap" | "wake";
-  previousSummary: string;
+  previousMemory: string;
   scratchpadPath: string;
   state: WorkbenchCollaborationState;
 }) {
@@ -210,8 +210,8 @@ ${additionalUserMessage}
 Mode: ${mode}.
 Former scratchpad path, if this project still references old notes: ${scratchpadPath}
 
-Previous private Workbench summary:
-${previousSummary || "None."}
+Previous private Workbench memory:
+${previousMemory || "None."}
 
 Current git diff map:
 ${diffMap}
@@ -232,16 +232,22 @@ Threaded Collaboration rules:
 * You may create new agent posts only under user-authored leaf posts marked as eligible user leaf parents.
 * You may edit or null-delete only agent-authored leaf posts marked as editable agent leaves.
 * Once a user replies under an agent post, that agent post is no longer editable by you.
-* Prompt-bearing posts are local thread suggestions. Use \`prompt\` only when starting a normal Workbench thread would be useful.
+* You are allowed to communicate in the visible tree. A useful agent post may be a researched note, clarification request, duplicate or stale finding, "too vague to prompt safely" explanation, proposed next decision, or prompt-bearing dedicated-thread suggestion.
+* Prompt-bearing posts are local thread suggestions. Use \`prompt\` only when a fresh normal Workbench thread can make concrete progress from the prompt alone.
 * Post tags are user-owned organization metadata included for context. Do not add, edit, or remove tags in your JSON response.
-* Keep useful context in the post body. Use \`prompt\` for the dedicated thread prompt only.
-* If nothing useful should change, return an empty \`posts\` object and a summary.
+* Respect tags and obvious organization signals. If a post is clearly tagged or categorized as parked, ignored, archived, reference-only, done, or otherwise non-actionable, leave it unchanged unless current evidence says it needs attention.
+* For every non-null post patch, base the change on current evidence from the visible branch, diff map, relevant files or notes, materialized run state, or tags/categories. Do not create generic research errands.
+* Keep useful user-facing rationale in the post body. Put executable isolated instructions in \`prompt\`.
+* If a post is too vague, stale, broad, or under-evidenced for a useful fresh-thread prompt, prefer a visible reply that says what is missing, what you checked, and what would make it actionable.
+* Do not use a fixed quota or cap for replies or prompt-bearing posts. Create as many or as few post changes as current evidence justifies, including zero.
+* If nothing useful should change, return an empty \`posts\` object and memory that explains the no-op when helpful.
+* \`memory\` is private next-run memory, not a terse changelog. Use it for evidence inspected, post changes made, unchanged or ignored candidates, open uncertainties, and useful next leads.
 
 Return valid JSON only. Do not include markdown fences, comments, explanations, or trailing commas.
 
 \`\`\`ts
 interface WorkbenchCollaborationResponse {
-  summary: string;
+  memory: string;
   posts: Record<string, WorkbenchCollaborationPostPatch | null>;
 }
 
@@ -254,9 +260,10 @@ interface WorkbenchCollaborationPostPatch {
 
 Examples:
 
-{"summary":"Created one reply.","posts":{"agent-follow-up":{"parentId":"some-user-leaf","body":"This is the collaborator reply."}}}
-{"summary":"Updated one current leaf.","posts":{"agent-existing-leaf":{"body":"Updated latest text."}}}
-{"summary":"Removed an obsolete leaf.","posts":{"agent-obsolete-leaf":null}}
+{"memory":"Evidence inspected: visible branch user-vague-branch and current diff map. Post changes made: replied with agent-needs-scope because the branch lacked owner, area, outcome, and failure evidence. Left unchanged: tagged reference branches. Open uncertainties: user still needs to clarify intended behavior or relevant evidence before a prompt-bearing post would help.","posts":{"agent-needs-scope":{"parentId":"user-vague-branch","body":"This is too vague to turn into a useful dedicated-thread prompt yet. I checked the visible branch and current diff map, but there is no concrete owner, file area, expected outcome, or failure mode. Please clarify the intended behavior, relevant area, or evidence before a prompt-bearing post would help."}}}
+{"memory":"Evidence inspected: visible branch user-actionable-branch, current diff map, and named visible context. Post changes made: created agent-focused-follow-up with an isolated prompt because the branch named a concrete concern and likely owner boundary. Left unchanged: unrelated parked branches. Open uncertainties: the dedicated thread still needs to verify whether the issue is actionable.","posts":{"agent-focused-follow-up":{"parentId":"user-actionable-branch","body":"The current evidence points to one concrete follow-up: the branch names a specific concern, the current context shows a likely owner boundary, and there is enough detail for a dedicated thread to inspect it without reading this Collaboration history. A separate thread should verify the owner, preserve intended behavior, and return either a focused plan or a no-op finding.","prompt":"Investigate the concrete issue described in the parent post. Start from the current project context, the current worktree diff, and any files or symbols named in the visible discussion. Determine the likely owner, expected behavior, relevant constraints, and whether the issue is still actionable. If a change is warranted, return a concrete plan with exact edit files, behavior changes, risks, and validation; if not, explain the evidence that makes it a no-op. Do not rely on Collaboration history."}}}
+{"memory":"Evidence inspected: editable leaf agent-existing-leaf, linked materialized thread, and current diff map. Post changes made: updated the leaf with a duplicate/stale finding instead of creating another prompt. Open uncertainties: wait for the materialized thread to land or for the user to request a separate review.","posts":{"agent-existing-leaf":{"body":"This is already covered by the materialized thread linked above, and the current diff shows the same owner area is still in progress. I am leaving the duplicate prompt path unchanged until that thread lands or the user asks for a separate review."}}}
+{"memory":"Evidence inspected: editable leaf agent-obsolete-leaf and current tree state. Post changes made: removed the obsolete leaf because the suggestion was superseded. Open uncertainties: none for this branch.","posts":{"agent-obsolete-leaf":null}}
 `;
 }
 
@@ -652,7 +659,7 @@ export default function WorkbenchCollaborationView({
       diffMap: projectDiffMap,
       fileLinkingInfo,
       mode,
-      previousSummary: stateRef.current.lastRunSummary,
+      previousMemory: stateRef.current.lastRunMemory,
       scratchpadPath,
       state: stateRef.current,
     });
@@ -1173,7 +1180,7 @@ export default function WorkbenchCollaborationView({
       isAutoWakePaused={isAutoWakePaused}
       isAutoWakeToggleDisabled={isAutoWakeToggleDisabled}
       isRunDisabled={!controls || isProjectLoading}
-      lastRunSummary={collaborationState.lastRunSummary}
+      lastRunMemory={collaborationState.lastRunMemory}
       recentRunIds={[...collaborationState.runThreadIds].reverse()}
       selectedRunThreadId={selectedRunThreadId}
       summariesById={summariesById}

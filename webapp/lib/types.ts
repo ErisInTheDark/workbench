@@ -390,7 +390,7 @@ export interface WorkbenchCollaborationState {
   autoWakeEnabled: boolean;
   lastAppliedPostPatchSignature: string;
   lastAutoWakeAt: number;
-  lastRunSummary: string;
+  lastRunMemory: string;
   posts: Record<string, WorkbenchCollaborationPost>;
   rootPostIds: string[];
   runThreadIds: string[];
@@ -405,8 +405,8 @@ export interface WorkbenchCollaborationPostPatch {
 }
 
 export interface WorkbenchCollaborationResponse {
+  memory: string;
   posts: Record<string, WorkbenchCollaborationPostPatch | null>;
-  summary: string;
 }
 
 export interface WorkbenchControls {

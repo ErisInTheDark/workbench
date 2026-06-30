@@ -24,9 +24,9 @@ import {
 export type WorkbenchCollaborationPostPatchMap = Record<string, WorkbenchCollaborationPostPatch | null>;
 
 export interface WorkbenchCollaborationPostPatchResult {
+  readonly memory: string;
   readonly posts: WorkbenchCollaborationPostPatchMap;
   readonly signature: string;
-  readonly summary: string;
 }
 
 export interface WorkbenchCollaborationPostPatchApplyResult {
@@ -115,9 +115,9 @@ export function parseWorkbenchCollaborationPostPatch(value: string): WorkbenchCo
   }
 
   return {
+    memory: normalizeText(candidate.memory) || normalizeText(candidate.summary),
     posts,
     signature: "",
-    summary: normalizeText(candidate.summary),
   };
 }
 
@@ -236,7 +236,7 @@ export function applyWorkbenchCollaborationPostPatch(
     state: normalizeWorkbenchCollaborationState({
       ...nextState,
       lastAppliedPostPatchSignature: result.signature || nextState.lastAppliedPostPatchSignature,
-      lastRunSummary: result.summary || nextState.lastRunSummary,
+      lastRunMemory: result.memory || nextState.lastRunMemory,
     }),
     warnings,
   };

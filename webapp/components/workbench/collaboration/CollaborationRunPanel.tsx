@@ -66,7 +66,7 @@ export default function CollaborationRunPanel ({
   isAutoWakePaused,
   isAutoWakeToggleDisabled,
   isRunDisabled,
-  lastRunSummary,
+  lastRunMemory,
   recentRunIds,
   selectedRunThreadId,
   summariesById,
@@ -85,7 +85,7 @@ export default function CollaborationRunPanel ({
   isAutoWakePaused: boolean;
   isAutoWakeToggleDisabled: boolean;
   isRunDisabled: boolean;
-  lastRunSummary: string;
+  lastRunMemory: string;
   recentRunIds: readonly string[];
   selectedRunThreadId: string;
   summariesById: Map<string, ThreadSummary>;
@@ -200,12 +200,12 @@ export default function CollaborationRunPanel ({
               Current run: {selectedRunSummary ? getRunSummaryTitle(selectedRunSummary) : <InlineRunSummarySkeleton />}
             </p>
           ) : null}
-          {lastRunSummary ? (
+          {lastRunMemory ? (
             <details className="pt-1">
               <summary className="cursor-pointer list-none text-[0.78rem] font-medium text-muted marker:hidden">
-                Last private run summary
+                Last private run memory
               </summary>
-              <p className="mt-2 mb-0 whitespace-pre-wrap text-[0.84rem] leading-6 text-muted">{lastRunSummary}</p>
+              <p className="mt-2 mb-0 whitespace-pre-wrap text-[0.84rem] leading-6 text-muted">{lastRunMemory}</p>
             </details>
           ) : null}
         </div>
