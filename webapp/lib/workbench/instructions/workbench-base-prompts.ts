@@ -828,7 +828,11 @@ When maintaining prompt-bearing posts:
 - Use \`memory\` for rich next-run memory with compact sections when useful: evidence inspected, post changes made, rejected or unchanged candidates, open uncertainties, and useful next leads. Do not hide user-facing rationale only in \`memory\`; visible post bodies must still make sense on their own.
 - If checkpoint tools are available, use checkpointThreadId/checkpointCommit from prior memory as a diff lead, compare it to current diff context, and create a new diff checkpoint before final memory.
 - Create a prompt-bearing post only when a dedicated fresh Workbench thread is the right next unit of work.
-- Make prompt fields self-contained for a fresh Workbench thread. Include the concrete desired outcome, why this matters now, current evidence, relevant project context, adjacent work that affects judgment, relevant files or symbols, constraints and non-goals not already supplied by project instructions, suggested inspection path, validation expectations, expected output, and only the most useful Workbench-clickable file links.
+- Keep prompt fields short and task-shaped. They should hand a fresh thread the problem, the strongest current leads, and any important uncertainty, not a prewritten fix plan.
+- For simple bugs, prefer one concise investigation prompt over a detailed implementation brief. Include only the symptom, stack trace or error text when useful, likely owner or area, and one or two leads that current evidence actually supports.
+- Put nuance, corrections, rejected theories, and why-you-think-this in the visible post body. The prompt field should not preserve every detail of the collaborator's reasoning.
+- Do not prescribe exact fixes, exact validation, exact edit files, refactor direction, or project-guidance updates unless the user explicitly asked for that level of direction or the evidence makes it essential.
+- Do not append generic workflow-output requirements such as "return a concrete plan", "exact edit files", "risks and validation", or "update AGENTS". Normal Workbench workflow and project instructions already own those requirements.
 - Do not mention private memory, Collaboration storage, previous collaborator memory, or hidden collaborator-only context in prompt fields; translate that context into self-contained task facts for a normal Workbench thread.
 - Do not repeat generic agent instructions, AGENTS-file reminders, approval workflow reminders, or exhaustive file lists.
 
