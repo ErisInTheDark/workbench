@@ -561,7 +561,6 @@ export default function WorkbenchCollaborationView({
       isAutoWakePaused={runController.isAutoWakePaused}
       isAutoWakeToggleDisabled={runController.isAutoWakeToggleDisabled}
       isRunDisabled={runController.isRunDisabled}
-      lastRunMemory={collaborationState.lastRunMemory}
       recentRunIds={runController.recentRunIds}
       selectedRunThreadId={runController.selectedRunThreadId}
       summariesById={runController.summariesById}

@@ -44,15 +44,6 @@ function RunSummarySkeleton () {
   );
 }
 
-function InlineRunSummarySkeleton () {
-  return (
-    <span className="ml-1 inline-flex translate-y-[0.08rem] items-center gap-2" aria-label="Loading current collaborator run">
-      <span className="h-3 w-28 rounded-full bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" />
-      <span className="h-3 w-12 rounded-full bg-[color-mix(in_srgb,var(--text)_7%,transparent)]" />
-    </span>
-  );
-}
-
 function getRunSummaryTitle(summary: ThreadSummary) {
   return summary.name || summary.preview || "Collaborator run";
 }
@@ -69,7 +60,6 @@ export default function CollaborationRunPanel ({
   isAutoWakePaused,
   isAutoWakeToggleDisabled,
   isRunDisabled,
-  lastRunMemory,
   recentRunIds,
   selectedRunThreadId,
   summariesById,
@@ -88,7 +78,6 @@ export default function CollaborationRunPanel ({
   isAutoWakePaused: boolean;
   isAutoWakeToggleDisabled: boolean;
   isRunDisabled: boolean;
-  lastRunMemory: string;
   recentRunIds: readonly string[];
   selectedRunThreadId: string;
   summariesById: Map<string, ThreadSummary>;
@@ -114,8 +103,8 @@ export default function CollaborationRunPanel ({
     recentRunIds.slice(0, clampedVisibleRunCount).reverse()
   ), [clampedVisibleRunCount, recentRunIds]);
   const visibleRunSignature = visibleRunIds.join("\0");
+  const hasRecentRuns = recentRunIds.length > 0;
   const hasOlderRuns = clampedVisibleRunCount < recentRunIds.length;
-  const selectedRunSummary = selectedRunThreadId ? summariesById.get(selectedRunThreadId) ?? null : null;
 
   useEffect(() => {
     setVisibleRunCount((current) => Math.min(
@@ -215,7 +204,7 @@ export default function CollaborationRunPanel ({
   }, [historyScrollController, newestRunId, visibleRunSignature]);
 
   return (
-    <section className="min-h-full min-w-0 px-5 py-5 md:px-6">
+    <section className={`min-w-0 max-w-full overflow-x-hidden px-5 py-5 md:px-6${hasRecentRuns ? " grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto_auto]" : " min-h-full"}`}>
       <div className="mb-6 border-b border-[color-mix(in_srgb,var(--text)_10%,transparent)] pb-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
@@ -255,11 +244,10 @@ export default function CollaborationRunPanel ({
           </div>
         </div>
       </div>
-      {recentRunIds.length ? (
-        <section className="mb-5 space-y-3">
-          <p className="m-0 text-[0.78rem] font-medium uppercase tracking-[0.08em] text-muted">Recent collaborator runs</p>
+      {hasRecentRuns ? (
+        <section className="relative min-h-0" aria-label="Recent collaborator runs">
           <div
-            className="explorer-scrollbar max-h-[32rem] space-y-3 overflow-y-auto pr-1"
+            className="explorer-scrollbar absolute inset-0 max-w-full space-y-3 overflow-x-hidden overflow-y-auto pr-1"
             data-thread-scroll-target="true"
           >
             {hasOlderRuns ? (
@@ -298,26 +286,6 @@ export default function CollaborationRunPanel ({
           </div>
         </section>
       ) : null}
-      <details className="mb-4" open={!recentRunIds.length}>
-        <summary className="cursor-pointer list-none text-[0.78rem] font-medium uppercase tracking-[0.08em] text-muted marker:hidden">
-          Collaborator run details
-        </summary>
-        <div className="mt-3 space-y-3">
-          {selectedRunThreadId ? (
-            <p className="m-0 text-[0.84rem] leading-6 text-muted">
-              Current run: {selectedRunSummary ? getRunSummaryTitle(selectedRunSummary) : <InlineRunSummarySkeleton />}
-            </p>
-          ) : null}
-          {lastRunMemory ? (
-            <details className="pt-1">
-              <summary className="cursor-pointer list-none text-[0.78rem] font-medium text-muted marker:hidden">
-                Last private run memory
-              </summary>
-              <p className="mt-2 mb-0 whitespace-pre-wrap text-[0.84rem] leading-6 text-muted">{lastRunMemory}</p>
-            </details>
-          ) : null}
-        </div>
-      </details>
       {error ? (
         <p className="mb-3 border-b border-[color-mix(in_srgb,var(--danger)_28%,transparent)] pb-3 text-[0.84rem] leading-5 text-danger">
           {error}

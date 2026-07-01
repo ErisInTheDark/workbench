@@ -50,6 +50,12 @@ function joinClasses(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
+function isPanelScrollOwnedByContent(target: WorkbenchPanelTarget) {
+  return target.kind === "thread"
+    || target.kind === "collaborationCollaborator"
+    || target.kind === "collaborationScratchpad";
+}
+
 function getDropPlacementFromPoint(panel: HTMLElement, clientX: number, clientY: number): WorkbenchDropPlacement {
   const rect = panel.getBoundingClientRect();
   const x = clientX - rect.left;
@@ -287,7 +293,7 @@ export default function WorkbenchMainLayoutView ({
         key={node.id}
         className={joinClasses(
           "explorer-scrollbar relative h-full min-h-0 min-w-0 overflow-x-hidden border border-[color-mix(in_srgb,var(--text)_10%,transparent)]",
-          node.target.kind === "thread" ? "overflow-hidden" : "overflow-y-auto",
+          isPanelScrollOwnedByContent(node.target) ? "overflow-hidden" : "overflow-y-auto",
         )}
         data-panel-id={node.id}
         onClick={() => {

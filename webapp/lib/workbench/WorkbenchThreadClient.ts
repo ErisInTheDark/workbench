@@ -47,6 +47,7 @@ import { getCurrentInProgressTurn, getCurrentTurn } from "../codex/thread-state"
 import type {
     ThreadPayload,
     ThreadSummary,
+    WorkbenchCollaborationState,
     WorkbenchReadThreadOptions,
     WorkbenchHarness,
     WorkbenchModelOption,
@@ -162,6 +163,7 @@ export interface WorkbenchThreadSnapshot {
 export type WorkbenchThreadListener = (snapshot: WorkbenchThreadSnapshot) => void;
 
 export interface WorkbenchThreadClientOptions {
+  onCollaborationStateUpdated?: (projectId: string, state: WorkbenchCollaborationState) => void;
   onStatusMessage?: (message: string) => void;
   onThreadStarted?: (thread: ThreadPayload) => void;
 }
@@ -3356,6 +3358,7 @@ function WorkbenchThreadClient(
       case "process/exited":
       case "questionnaire/requested":
       case "questionnaire/resolved":
+      case "collaboration/state/updated":
       case "model/rerouted":
       case "model/verification":
       case "thread/realtime/started":
@@ -3980,6 +3983,11 @@ function WorkbenchThreadClient(
     handling: CodexAppServerNotificationHandling,
     harness: WorkbenchHarness,
   ) {
+    if (notification.method === "collaboration/state/updated") {
+      options.onCollaborationStateUpdated?.(notification.params.projectId, notification.params.state);
+      return;
+    }
+
     if (notification.method === "questionnaire/requested") {
       if (upsertPendingUserInputRequest(
         notification.params.threadId,

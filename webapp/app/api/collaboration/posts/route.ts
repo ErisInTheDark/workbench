@@ -29,6 +29,7 @@ import {
   readCollaborationStateDiskFile,
   writeCollaborationStateDiskFile,
 } from "../collaboration-state-file";
+import { notifyCollaborationStateUpdated } from "../collaboration-state-notifications";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -263,6 +264,7 @@ export async function POST(request: NextRequest) {
       autoWakeLease: currentFile.autoWakeLease,
       state: nextState,
     });
+    await notifyCollaborationStateUpdated(request, resolvedProject.id, nextState);
 
     return NextResponse.json(createMutationResponse(
       resolvedProject.id,

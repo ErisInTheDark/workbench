@@ -889,6 +889,24 @@ export default function Workbench () {
               ));
             });
           },
+          onCollaborationStateUpdated: (projectId, state) => {
+            scheduleWorkbenchStateUpdate(() => {
+              setCollaborationStatesByProjectId((current) => {
+                const existing = current[projectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
+                const mergedState = mergeWorkbenchCollaborationState(existing, state);
+                if (areCollaborationStatesEqual(existing, mergedState)) {
+                  return current;
+                }
+
+                const next = {
+                  ...current,
+                  [projectId]: mergedState,
+                };
+                writeStoredCollaborationStates(next);
+                return next;
+              });
+            });
+          },
           onRateLimitsChange: (nextRateLimits) => {
             scheduleWorkbenchStateUpdate(() => {
               setRateLimits(nextRateLimits);

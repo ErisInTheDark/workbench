@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default CollaborationPostNode: render one recursive Collaboration post branch with tags, collapsed, prompt, edit, and reply modes. Keywords: collaboration, post, tree, recursive, prompt, collapse, tags.
- * - Local helpers: draft conversion, collapsed previews, action buttons, and drag-start filtering. Keywords: collaboration, composer, drag, prompt, collapse.
+ * - Local helpers: draft conversion, branch prompt summaries, collapsed previews, action buttons, and drag-start filtering. Keywords: collaboration, composer, drag, prompt, collapse, thread.
  */
 "use client";
 
@@ -49,17 +49,37 @@ function getCollapsedPostPreviewText (post: WorkbenchCollaborationPost) {
   return post.body.split(/\r?\n/).find((line) => line.trim())?.trim() || "Empty post";
 }
 
-function postBranchHasSuggestedPrompt (state: WorkbenchCollaborationState, postId: string): boolean {
+type PostBranchPromptSummary = {
+  hasSuggestedPrompt: boolean;
+  singlePromptThreadId: string | null;
+};
+
+function collectPostBranchPromptThreadIds (state: WorkbenchCollaborationState, postId: string, promptThreadIds: Set<string>): boolean {
   const post = state.posts[postId];
   if (!post) {
     return false;
   }
 
-  if (post.prompt || post.promptThreadId) {
-    return true;
+  let hasSuggestedPrompt = Boolean(post.prompt || post.promptThreadId);
+  if (post.promptThreadId) {
+    promptThreadIds.add(post.promptThreadId);
   }
 
-  return post.childIds.some((childId) => postBranchHasSuggestedPrompt(state, childId));
+  for (const childId of post.childIds) {
+    hasSuggestedPrompt = collectPostBranchPromptThreadIds(state, childId, promptThreadIds) || hasSuggestedPrompt;
+  }
+
+  return hasSuggestedPrompt;
+}
+
+function getPostBranchPromptSummary (state: WorkbenchCollaborationState, postId: string): PostBranchPromptSummary {
+  const promptThreadIds = new Set<string>();
+  const hasSuggestedPrompt = collectPostBranchPromptThreadIds(state, postId, promptThreadIds);
+  const singlePromptThreadId = promptThreadIds.values().next().value ?? null;
+  return {
+    hasSuggestedPrompt,
+    singlePromptThreadId: promptThreadIds.size === 1 ? singlePromptThreadId : null,
+  };
 }
 
 function shouldIgnorePostDragStart (event: ReactPointerEvent<HTMLElement>) {
@@ -116,6 +136,28 @@ function BranchSuggestionIndicator () {
     >
       <SparkleIcon className="size-3.5" />
     </span>
+  );
+}
+
+function BranchOpenThreadButton ({
+  onOpenPromptThread,
+  threadId,
+}: {
+  onOpenPromptThread: (threadId: string) => void;
+  threadId: string;
+}) {
+  return (
+    <PrimaryButton
+      type="button"
+      className="h-8 px-3 py-0 text-[0.78rem]"
+      data-collaboration-no-drag="true"
+      onClick={(event) => {
+        event.stopPropagation();
+        onOpenPromptThread(threadId);
+      }}
+    >
+      Open thread
+    </PrimaryButton>
   );
 }
 
@@ -221,7 +263,7 @@ export default function CollaborationPostNode ({
   const promptDraftThread = promptDraftThreadsByPostId[post.id] ?? null;
   const isPromptPost = Boolean(post.prompt || post.promptThreadId);
   const hasUnmaterializedSuggestedPrompt = Boolean(post.prompt && !post.promptThreadId);
-  const hasSuggestedPromptInBranch = useMemo(() => postBranchHasSuggestedPrompt(state, post.id), [post.id, state]);
+  const branchPromptSummary = useMemo(() => getPostBranchPromptSummary(state, post.id), [post.id, state]);
   const isCollapsed = post.isCollapsed === true;
   const canToggleCollapsed = !isEditingPost && !isReplying;
 
@@ -426,7 +468,12 @@ export default function CollaborationPostNode ({
               }}
             />
           )}
-          preMenuAction={hasSuggestedPromptInBranch ? <BranchSuggestionIndicator /> : null}
+          preMenuAction={branchPromptSummary.singlePromptThreadId ? (
+            <BranchOpenThreadButton
+              threadId={branchPromptSummary.singlePromptThreadId}
+              onOpenPromptThread={onOpenPromptThread}
+            />
+          ) : branchPromptSummary.hasSuggestedPrompt ? <BranchSuggestionIndicator /> : null}
           updatedAt={post.updatedAt}
           onClick={toggleCollapsed}
           onPointerDown={(event) => {

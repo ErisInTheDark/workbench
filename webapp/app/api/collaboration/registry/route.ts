@@ -19,6 +19,7 @@ import {
   readCollaborationStateDiskFile,
   writeCollaborationStateDiskFile,
 } from "../collaboration-state-file";
+import { notifyCollaborationStateUpdated } from "../collaboration-state-notifications";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,6 +45,7 @@ export async function PUT(request: NextRequest) {
       autoWakeLease: currentFile.autoWakeLease,
       state: mergedState,
     });
+    await notifyCollaborationStateUpdated(request, resolvedProject.id, mergedState);
     return createCollaborationStateResponse(mergedState);
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to save the Collaboration state." }, { status: 400 });
@@ -92,6 +94,7 @@ export async function POST(request: NextRequest) {
       },
       state: nextState,
     });
+    await notifyCollaborationStateUpdated(request, resolvedProject.id, nextState);
     return NextResponse.json({
       acquired: true,
       registry: normalizeWorkbenchCollaborationThreadRegistryFromState(nextState),

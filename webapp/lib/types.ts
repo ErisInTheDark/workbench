@@ -484,6 +484,7 @@ export interface WorkbenchBindings {
   onCurrentThreadChange?: (thread: ThreadPayload | null) => void;
   onThreadDocumentsChange?: (snapshot: WorkbenchThreadDocumentSnapshot) => void;
   onPendingUserInputRequestsChange?: (requestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>) => void;
+  onCollaborationStateUpdated?: (projectId: string, state: WorkbenchCollaborationState) => void;
   onRateLimitsChange?: (rateLimits: RateLimitSnapshot | null) => void;
   onControlsReady?: (controls: WorkbenchControls) => void;
 }

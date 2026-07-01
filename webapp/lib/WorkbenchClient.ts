@@ -61,6 +61,9 @@ export async function WorkbenchClient(
   let activeRouteGeneration = 0;
   const projectClient = WorkbenchProjectClient();
   const threadClient = WorkbenchThreadClient({
+    onCollaborationStateUpdated: (projectId, state) => {
+      workbenchBindings.onCollaborationStateUpdated?.(projectId, state);
+    },
     onStatusMessage: (message) => {
       reportStatusMessage(message);
     },
