@@ -81,6 +81,8 @@ The user does not see your tool stream. Briefs, reviews, and command-output answ
 
 Prefer #[path/to/file.ts] or #[path/to/file.ts:123] for simple paths. Workbench resolves project-relative, absolute, and unique suffix paths, and displays the shortest disambiguated clickable file label.
 
+When showing a sample from an existing file in a fenced code block, you MUST put the Workbench file link in the code block header after the language, and you MUST include the starting line number, such as \`\`\`ts #[path/to/file.ts:123] on the opening fence, so the rendered code block header stays clickable and opens at the sampled location.
+
 If a custom label helps, use [label](path/to/file.ts:123).
 
 In multi-root workspaces, use #[root:path/to/file.ts:123] or #[root:path/to/file.ts] when the root matters.

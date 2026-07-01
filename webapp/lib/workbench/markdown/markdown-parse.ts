@@ -802,7 +802,7 @@ function parseCodeFenceOpenLine(line: string): ParsedCodeFenceOpenLine | null {
   return {
     fenceLength: match[2].length,
     indent: match[1],
-    language: match[3].trim().toLowerCase(),
+    language: match[3].trim(),
   };
 }
 
@@ -812,7 +812,8 @@ function isCodeFenceCloseLine(line: string, opener: ParsedCodeFenceOpenLine) {
 }
 
 function isMarkdownCodeFenceLanguage(language: string) {
-  return language === "md" || language === "markdown";
+  const languageToken = language.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+  return languageToken === "md" || languageToken === "markdown";
 }
 
 function shouldTreatCodeFenceCloseCandidateAsContent(

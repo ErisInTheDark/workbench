@@ -63,6 +63,12 @@ const SVG_PREVIEW_SRC_DOC_STYLE = [
   "*,::before,::after{box-sizing:border-box;}",
   "svg{display:block;max-width:100%;max-height:100vh;}",
 ].join("");
+const CODE_BLOCK_HEADER_FILE_LINK_PATTERN = /(^|\s)#\[([^\]\r\n]+)\](?=\s|$)/;
+
+interface ThreadCodeBlockHeader {
+  fileLink: Extract<ParsedInlineNode, { type: "projectFileLink" }> | null;
+  language: string;
+}
 
 function createSvgCodeBlockPreviewSrcDoc (svgSource: string) {
   return [
@@ -395,8 +401,38 @@ function renderThreadTableBlock (
   );
 }
 
+function getCodeBlockLanguageToken(language: string) {
+  return language.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+}
+
 function isSvgCodeBlockLanguage (language: string) {
-  return language.split(/\s+/)[0] === "svg";
+  return getCodeBlockLanguageToken(language) === "svg";
+}
+
+function parseThreadCodeBlockHeader(language: string, options: MarkdownParseOptions): ThreadCodeBlockHeader {
+  const match = CODE_BLOCK_HEADER_FILE_LINK_PATTERN.exec(language);
+  if (!match) {
+    return {
+      fileLink: null,
+      language: language.trim(),
+    };
+  }
+
+  const nodes = parseInlineMarkdown(match[0].trim(), options);
+  const fileLink = nodes.length === 1 && nodes[0]?.type === "projectFileLink"
+    ? nodes[0]
+    : null;
+  if (!fileLink) {
+    return {
+      fileLink: null,
+      language: language.trim(),
+    };
+  }
+
+  return {
+    fileLink,
+    language: `${language.slice(0, match.index)}${match[1] ?? ""}${language.slice(match.index + match[0].length)}`.trim(),
+  };
 }
 
 function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, keyPrefix: string) {
@@ -442,7 +478,9 @@ function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, k
     case "hr":
       return <hr className="[margin-inline:10%] my-8 [border-color:color-mix(var(--text),var(--shell-fade-bg)_70%)]" key={keyPrefix} />;
     case "code": {
-      const isSvgCodeBlock = isSvgCodeBlockLanguage(block.language);
+      const header = parseThreadCodeBlockHeader(block.language, options);
+      const language = header.language;
+      const isSvgCodeBlock = isSvgCodeBlockLanguage(language);
       return (
         <div
           className={`${BLOCK_SPACING_CLASS} max-w-full overflow-hidden rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)]`}
@@ -451,8 +489,9 @@ function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, k
           key={keyPrefix}
         >
           <div className="flex min-h-[2.05rem] items-center justify-between gap-2 border-b border-[color-mix(in_srgb,var(--text)_8%,transparent)] px-[0.65rem] py-[0.28rem]">
-            <span className="min-w-0 truncate pl-[0.15rem] font-mono text-[0.72em] leading-none text-muted">
-              {block.language || "code"}
+            <span className="flex min-w-0 items-center gap-1.5 pl-[0.15rem] font-mono text-[0.72em] leading-none text-muted">
+              <span className="min-w-0 truncate">{language || "code"}</span>
+              {header.fileLink ? renderThreadInlineNodes([header.fileLink], `${keyPrefix}-header-file`, options) : null}
             </span>
             <div className="flex shrink-0 items-center gap-1">
               <button
@@ -499,7 +538,7 @@ function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, k
           <div className="relative min-h-[2.8rem]" data-thread-codeblock-body="true">
             <pre
               className="max-w-full overflow-x-auto whitespace-pre px-[0.95rem] py-[0.8rem]"
-              data-language={block.language}
+              data-language={language}
               data-thread-codeblock-pre="true"
             >
               <code className="block w-max min-w-full rounded-none bg-transparent p-0 font-mono text-[0.94em]" data-thread-codeblock-code="true">{block.text}</code>
