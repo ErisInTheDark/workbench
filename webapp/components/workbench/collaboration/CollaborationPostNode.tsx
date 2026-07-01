@@ -223,7 +223,7 @@ export default function CollaborationPostNode ({
   const hasUnmaterializedSuggestedPrompt = Boolean(post.prompt && !post.promptThreadId);
   const hasSuggestedPromptInBranch = useMemo(() => postBranchHasSuggestedPrompt(state, post.id), [post.id, state]);
   const isCollapsed = post.isCollapsed === true;
-  const canToggleCollapsed = !isEditingPost && !isPromptOpen && !isReplying;
+  const canToggleCollapsed = !isEditingPost && !isReplying;
 
   const openPromptComposer = () => {
     if (!post.prompt || post.promptThreadId) {
