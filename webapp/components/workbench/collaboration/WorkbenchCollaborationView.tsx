@@ -1,14 +1,13 @@
 /*
  * Exports:
- * - default WorkbenchCollaborationView: own threaded Collaboration state, tags, collaborator runs, prompt materialization, and tree UI wiring. Keywords: collaboration, threaded, posts, tags, runs.
- * - Local helpers: format tree context, create collaborator drafts, and coordinate endpoint mutation plus run memory. Keywords: collaboration, prompt, endpoint, memory, auto-wake.
+ * - default WorkbenchCollaborationView: compose threaded Collaboration state, tags, prompt materialization, collaborator runs, and tree UI wiring. Keywords: collaboration, threaded, posts, tags, runs.
+ * - Local helpers: create prompt drafts and coordinate post prompt materialization. Keywords: collaboration, prompt, endpoint.
  */
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type PointerEvent as ReactPointerEvent } from "react";
 
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
-import { createTextInput } from "../../../lib/codex/protocol";
 import type {
   ChangeSummary,
   ThreadPayload,
@@ -17,30 +16,21 @@ import type {
   WorkbenchCollaborationState,
   WorkbenchControls,
   WorkbenchHarness,
-  WorkbenchSendThreadMessageOptions,
   WorkbenchThreadComposerDraft,
 } from "../../../lib/types";
 import {
   COLLABORATION_IMPORTED_SCRATCHPAD_POST_ID,
   ensureImportedScratchpadPost,
-  mergeWorkbenchCollaborationState,
   normalizeWorkbenchCollaborationState,
 } from "../../../lib/workbench/collaboration/collaboration-state";
 import {
   readStoredWorkbenchCollaborationLayout,
   writeStoredWorkbenchCollaborationLayout,
 } from "../../../lib/workbench/collaboration/collaboration-layout";
-import { WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS } from "../../../lib/workbench/collaboration/collaboration-registry";
-import {
-  readWorkbenchCollaborationState,
-  writeWorkbenchCollaborationState,
-} from "../../../lib/workbench/collaboration/collaboration-registry-api";
 import {
   createCollaborationStateTag,
   createCollaborationPost,
   deleteCollaborationSubtree,
-  isCollaborationLeafPost,
-  isEditableAgentLeafPost,
   moveCollaborationPost,
   removeCollaborationPostTag,
   restoreCollaborationPostRevision,
@@ -52,30 +42,21 @@ import {
 } from "../../../lib/workbench/collaboration/collaboration-tree-mutations";
 import { areDeeplyEqual } from "../../../lib/workbench/deep-equality";
 import type { WorkbenchDragPayload } from "../../../lib/workbench/layout/workbench-drag";
-import ActiveTabRefreshLeader from "../../../lib/workbench/state/ActiveTabRefreshLeader";
 import {
   buildInlineMentionCandidates,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
-import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
 import WorkbenchMainLayout from "../../../lib/workbench/layout/workbench-layout";
 import WorkbenchMainLayoutView from "../layout/WorkbenchMainLayoutView";
 import { ThreadThreadContent } from "../thread-view/thread-view-items";
 import ThreadComposer from "../thread-view/ThreadComposer";
 import ThreadRateLimits from "../thread-view/ThreadRateLimits";
 import ThreadView from "../thread-view/ThreadView";
+import CollaborationRunController from "./CollaborationRunController";
 import CollaborationRevisionHistoryDialog from "./CollaborationRevisionHistoryDialog";
 import CollaborationRunPanel from "./CollaborationRunPanel";
 import CollaborationThreadedView from "./CollaborationThreadedView";
 
 type ThreadViewProps = ComponentProps<typeof ThreadView>;
-
-const COLLABORATOR_THREAD_HYDRATION = { mode: "legacyFull" as const };
-const COLLABORATOR_THREAD_ACTIVE_REFRESH_INTERVAL_MS = 1500;
-const COLLABORATOR_THREAD_IDLE_REFRESH_INTERVAL_MS = 10000;
-const COLLABORATOR_WORKFLOW_IDS = ["collaborator"] as const;
-const THREAD_HARNESSES: readonly WorkbenchHarness[] = ["codex", "copilot", "opencode"];
-
-type CollaboratorRunStatus = "failed" | "hydrating" | "idle" | "running" | "starting";
 
 type WorkbenchCollaborationPromptStartResult =
   | {
@@ -113,19 +94,10 @@ interface WorkbenchCollaborationViewProps extends Omit<ThreadViewProps, "contain
   scratchpadWritableRoot: string;
 }
 
-function createDraftCollaboratorThreadId(projectId: string) {
-  const safeProjectId = projectId.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "project";
-  return `draft:collaboration:${safeProjectId}:${Date.now()}`;
-}
-
 function createPromptDraftThreadId(projectId: string, postId: string) {
   const safeProjectId = projectId.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "project";
   const safePostId = postId.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "post";
   return `draft:collaboration-prompt:${safeProjectId}:${safePostId}`;
-}
-
-function isThreadStatusActive(status: string) {
-  return status === "active" || status.startsWith("active:");
 }
 
 function getPromptTextFromInput(input: readonly UserInput[]) {
@@ -133,117 +105,6 @@ function getPromptTextFromInput(input: readonly UserInput[]) {
     .flatMap((entry) => entry.type === "text" ? [entry.text] : [])
     .join("\n")
     .trim();
-}
-
-function formatProjectDiffMapForPrompt(changes: Record<string, ChangeSummary>) {
-  const entries = Object.entries(changes).sort(([leftPath], [rightPath]) => leftPath.localeCompare(rightPath));
-  return entries.length
-    ? entries.map(([path, change]) => `- ${path}: +${change.additions} -${change.deletions}`).join("\n")
-    : "No reported git changes.";
-}
-
-function formatPostForPrompt(state: WorkbenchCollaborationState, postId: string, depth = 0): string[] {
-  const post = state.posts[postId];
-  if (!post) {
-    return [];
-  }
-
-  const indent = "  ".repeat(depth);
-  const lines = [
-    `${indent}- id: ${post.id}`,
-    `${indent}  author: ${post.author}`,
-    `${indent}  editable agent leaf: ${isEditableAgentLeafPost(state, post.id) ? "yes" : "no"}`,
-    `${indent}  eligible user leaf parent: ${post.author === "user" && isCollaborationLeafPost(state, post.id) ? "yes" : "no"}`,
-    `${indent}  tags: ${post.tags.length ? post.tags.join(", ") : "none"}`,
-    ...(post.promptThreadId ? [`${indent}  materialized prompt thread id: ${post.promptThreadId}`] : []),
-    ...(post.prompt ? [`${indent}  prompt: ${post.prompt}`] : []),
-    `${indent}  body: ${post.body.replace(/\n/g, "\n" + indent + "    ")}`,
-  ];
-  for (const childId of post.childIds) {
-    lines.push(...formatPostForPrompt(state, childId, depth + 1));
-  }
-
-  return lines;
-}
-
-function formatTreeForPrompt(state: WorkbenchCollaborationState) {
-  if (!state.rootPostIds.length) {
-    return "No visible posts yet.";
-  }
-
-  return state.rootPostIds.flatMap((postId) => formatPostForPrompt(state, postId)).join("\n");
-}
-
-function formatTagsForPrompt(state: WorkbenchCollaborationState) {
-  return state.tags.length
-    ? state.tags.map((tag) => `- ${tag}`).join("\n")
-    : "No tags have been created yet.";
-}
-
-function buildCollaborationInstructionInjections({
-  diffMap,
-  previousMemory,
-  projectId,
-  state,
-}: {
-  diffMap: string;
-  previousMemory: string;
-  projectId: string;
-  state: WorkbenchCollaborationState;
-}) {
-  const collaborationPostEndpoint = typeof window === "undefined"
-    ? "/api/collaboration/posts"
-    : `${window.location.origin}/api/collaboration/posts`;
-
-  return {
-    "collaboration.diff-map": diffMap,
-    "collaboration.post-endpoint": collaborationPostEndpoint,
-    "collaboration.previous-memory": previousMemory || "None.",
-    "collaboration.project-id": projectId,
-    "collaboration.tags": formatTagsForPrompt(state),
-    "collaboration.tree": formatTreeForPrompt(state),
-  };
-}
-
-function createRunMemorySignature(thread: ThreadPayload, turnIndex: number, itemIndex: number, text: string) {
-  let hash = 5381;
-  for (let index = 0; index < text.length; index += 1) {
-    hash = ((hash << 5) + hash) ^ text.charCodeAt(index);
-  }
-
-  return `${thread.id}:${turnIndex}:${itemIndex}:${(hash >>> 0).toString(36)}`;
-}
-
-function findLatestCollaboratorRunMemory(thread: ThreadPayload) {
-  for (let turnIndex = thread.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
-    const turn = thread.turns[turnIndex];
-    for (let itemIndex = turn.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
-      const item = turn.items[itemIndex];
-      if (item.type !== "agentMessage") {
-        continue;
-      }
-
-      const memory = item.text.trim();
-      if (memory) {
-        return {
-          memory,
-          signature: createRunMemorySignature(thread, turnIndex, itemIndex, item.text),
-        };
-      }
-    }
-  }
-
-  return null;
-}
-
-function applyCollaboratorDraftSettings(draftThread: ThreadPayload, settingsThread: ThreadPayload) {
-  return {
-    ...draftThread,
-    agentPath: settingsThread.agentPath,
-    model: settingsThread.model,
-    reasoningEffort: settingsThread.reasoningEffort,
-    serviceTier: settingsThread.harness === "codex" ? settingsThread.serviceTier : null,
-  };
 }
 
 export default function WorkbenchCollaborationView({
@@ -278,29 +139,14 @@ export default function WorkbenchCollaborationView({
   threadSavedComposerDrafts,
   ...threadViewProps
 }: WorkbenchCollaborationViewProps) {
-  const [selectedRunThreadId, setSelectedRunThreadId] = useState(collaborationState.runThreadIds[0] ?? "");
-  const [collaboratorThread, setCollaboratorThread] = useState<ThreadPayload | null>(null);
-  const [collaboratorDraftThread, setCollaboratorDraftThread] = useState<ThreadPayload | null>(null);
-  const [collaboratorDraftComposerDraft, setCollaboratorDraftComposerDraft] = useState<WorkbenchThreadComposerDraft | null>(null);
   const [promptDraftThreadsByPostId, setPromptDraftThreadsByPostId] = useState<Record<string, ThreadPayload | undefined>>({});
   const [promptComposerDraftsByPostId, setPromptComposerDraftsByPostId] = useState<Record<string, WorkbenchThreadComposerDraft | undefined>>({});
   const [promptStartErrorsByPostId, setPromptStartErrorsByPostId] = useState<Record<string, string | undefined>>({});
-  const [collaboratorError, setCollaboratorError] = useState("");
-  const [collaboratorWarnings, setCollaboratorWarnings] = useState<string[]>([]);
-  const [collaboratorStatus, setCollaboratorStatus] = useState<CollaboratorRunStatus>("idle");
-  const [isLoadingRunThread, setIsLoadingRunThread] = useState(false);
   const [mobilePane, setMobilePane] = useState<"scratchpad" | "collaborator">("scratchpad");
   const [collaborationLayout, setCollaborationLayout] = useState(() => readStoredWorkbenchCollaborationLayout(projectId));
-  const [pendingAutoWakeActivityAt, setPendingAutoWakeActivityAt] = useState<number | null>(null);
-  const [autoWakeNow, setAutoWakeNow] = useState(() => Date.now());
-  const [isAutoWakeLeader, setIsAutoWakeLeader] = useState(false);
   const [revisionPostId, setRevisionPostId] = useState<string | null>(null);
   const stateRef = useRef(normalizeWorkbenchCollaborationState(collaborationState));
   const attemptedScratchpadImportKeyRef = useRef("");
-  const collaboratorDraftProjectIdRef = useRef(projectId);
-  const hydrationGenerationRef = useRef(0);
-  const isSendingControlPromptRef = useRef(false);
-  const ownerIdRef = useRef(`collaboration:${projectId}:${Math.random().toString(36).slice(2)}`);
 
   useEffect(() => {
     stateRef.current = normalizeWorkbenchCollaborationState(collaborationState);
@@ -312,12 +158,6 @@ export default function WorkbenchCollaborationView({
     setPromptComposerDraftsByPostId({});
     setPromptStartErrorsByPostId({});
   }, [projectId]);
-
-  useEffect(() => {
-    setSelectedRunThreadId((current) => current && collaborationState.runThreadIds.includes(current)
-      ? current
-      : collaborationState.runThreadIds[0] || "");
-  }, [collaborationState.runThreadIds]);
 
   const setAndStoreCollaborationLayout = useCallback((nextLayout: typeof collaborationLayout) => {
     setCollaborationLayout(nextLayout);
@@ -347,7 +187,6 @@ export default function WorkbenchCollaborationView({
     });
   }, [projectId]);
 
-  const summariesById = useMemo(() => new Map(collaborationThreadSummaries.map((summary) => [summary.id, summary])), [collaborationThreadSummaries]);
   const activeDragPayload = activeDrag?.payload ?? null;
   const composerWorkspaceRoots = projectFileLinkRoots ?? [];
   const highlightSources = useMemo(() => buildInlineMentionCandidates({
@@ -357,55 +196,6 @@ export default function WorkbenchCollaborationView({
     skills: [],
     workspaceRoots: composerWorkspaceRoots,
   }), [composerWorkspaceRoots, projectFileCandidates, projectFileIndexId, projectRootPath]);
-  const projectDiffMap = useMemo(() => formatProjectDiffMapForPrompt(projectChanges), [projectChanges]);
-  const snapshotRunThread = selectedRunThreadId ? getThreadDocumentFromSnapshot(threadDocuments, selectedRunThreadId) : null;
-  const effectiveRunThread = snapshotRunThread ?? collaboratorThread;
-  const currentRunSummary = selectedRunThreadId ? summariesById.get(selectedRunThreadId) ?? null : null;
-  const currentRunPendingUserInputRequest = selectedRunThreadId
-    ? threadViewProps.livePendingUserInputRequestsByThreadId[selectedRunThreadId] ?? null
-    : null;
-  const shouldRenderCurrentRunThread = Boolean(
-    effectiveRunThread
-    && effectiveRunThread.id === selectedRunThreadId
-    && (
-      isThreadStatusActive(effectiveRunThread.status)
-      || Boolean(currentRunSummary && isThreadStatusActive(currentRunSummary.status))
-      || Boolean(currentRunPendingUserInputRequest)
-    ),
-  );
-  const shouldShowRunThreadLoading = Boolean(
-    isLoadingRunThread
-    && selectedRunThreadId
-    && !shouldRenderCurrentRunThread
-    && (
-      currentRunPendingUserInputRequest
-      || (currentRunSummary && isThreadStatusActive(currentRunSummary.status))
-    ),
-  );
-  const collaboratorDraftHasContent = Boolean(collaboratorDraftComposerDraft?.text.trim() || collaboratorDraftComposerDraft?.attachments.length);
-  const autoWakeCountdownMs = pendingAutoWakeActivityAt === null
-    ? null
-    : Math.max(0, pendingAutoWakeActivityAt + WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS - autoWakeNow);
-  const autoWakeProgressPercent = autoWakeCountdownMs === null
-    ? 0
-    : ((WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS - autoWakeCountdownMs) / WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS) * 100;
-  const isAutoWakePaused = collaborationState.autoWakeEnabled && collaboratorDraftHasContent;
-  const isAutoWakeToggleDisabled = !controls || (!collaborationState.autoWakeEnabled && collaboratorDraftHasContent);
-  const collaboratorStatusLabel = isAutoWakePaused
-    ? "Auto-run is paused while the collaborator note has unsent text."
-    : collaboratorStatus === "starting"
-      ? "Starting collaborator run..."
-      : collaboratorStatus === "running"
-        ? "Collaborator run is active."
-        : collaboratorStatus === "hydrating"
-          ? "Loading collaborator thread..."
-          : collaboratorStatus === "failed"
-            ? "Collaborator needs attention."
-            : collaborationState.runThreadIds.length
-              ? "Ready to continue maintaining the discussion tree."
-              : "Start the collaborator when you want it to read the discussion and project state.";
-  const revisionPost = revisionPostId ? collaborationState.posts[revisionPostId] ?? null : null;
-
   const publishStateIfChanged = useCallback((nextState: WorkbenchCollaborationState) => {
     const normalizedState = normalizeWorkbenchCollaborationState(nextState);
     if (areDeeplyEqual(stateRef.current, normalizedState)) {
@@ -415,6 +205,31 @@ export default function WorkbenchCollaborationView({
     stateRef.current = normalizedState;
     onCollaborationStateChange(normalizedState);
   }, [onCollaborationStateChange]);
+
+  const getCurrentCollaborationState = useCallback(() => stateRef.current, []);
+
+  const runController = CollaborationRunController({
+    collaborationState,
+    collaborationThreadSummaries,
+    controls,
+    getCurrentCollaborationState,
+    harness,
+    isProjectLoading,
+    livePendingUserInputRequestsByThreadId: threadViewProps.livePendingUserInputRequestsByThreadId,
+    onClaimAutoWake,
+    onPauseThread: threadViewProps.onPauseThread,
+    onReadThread,
+    onResumeThread: threadViewProps.onResumeThread,
+    onSendMessage,
+    onStopThread: threadViewProps.onStopThread,
+    projectChanges,
+    projectId,
+    publishStateIfChanged,
+    scratchpadWritableRoot,
+    threadDocuments,
+  });
+  const { recordCollaborationActivity } = runController;
+  const revisionPost = revisionPostId ? collaborationState.posts[revisionPostId] ?? null : null;
 
   useEffect(() => {
     if (!scratchpadPath || collaborationState.posts[COLLABORATION_IMPORTED_SCRATCHPAD_POST_ID]) {
@@ -451,334 +266,18 @@ export default function WorkbenchCollaborationView({
     };
   }, [collaborationState.posts, projectId, publishStateIfChanged, scratchpadPath]);
 
-  useEffect(() => {
-    if (!collaborationState.autoWakeEnabled || pendingAutoWakeActivityAt === null) {
-      return;
-    }
-
-    const interval = window.setInterval(() => {
-      setAutoWakeNow(Date.now());
-    }, 1000);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [collaborationState.autoWakeEnabled, pendingAutoWakeActivityAt]);
-
-  useEffect(() => {
-    for (const runThreadId of collaborationState.runThreadIds) {
-      const thread = getThreadDocumentFromSnapshot(threadDocuments, runThreadId);
-      if (!thread || isThreadStatusActive(thread.status)) {
-        continue;
-      }
-
-      const memory = findLatestCollaboratorRunMemory(thread);
-      const currentState = stateRef.current;
-      if (!memory || memory.signature === currentState.lastAppliedRunMemorySignature) {
-        continue;
-      }
-
-      setCollaboratorWarnings((current) => current.length ? [] : current);
-      publishStateIfChanged({
-        ...currentState,
-        lastAppliedRunMemorySignature: memory.signature,
-        lastRunMemory: memory.memory,
-      });
-      void readWorkbenchCollaborationState(projectId)
-        .then((diskState) => {
-          publishStateIfChanged(mergeWorkbenchCollaborationState(diskState, stateRef.current));
-        })
-        .catch(() => {
-          // Browser-local memory remains useful if the endpoint state refresh is unavailable.
-        });
-      break;
-    }
-  }, [collaborationState.runThreadIds, projectId, publishStateIfChanged, threadDocuments]);
-
-  useEffect(() => {
-    if (!selectedRunThreadId || !isThreadStatusActive(effectiveRunThread?.status ?? "")) {
-      return;
-    }
-
-    const interval = window.setInterval(() => {
-      void onReadThread(selectedRunThreadId, undefined, { hydration: COLLABORATOR_THREAD_HYDRATION });
-    }, COLLABORATOR_THREAD_ACTIVE_REFRESH_INTERVAL_MS);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [effectiveRunThread?.status, onReadThread, selectedRunThreadId]);
-
-  useEffect(() => {
-    if (!selectedRunThreadId || isThreadStatusActive(effectiveRunThread?.status ?? "")) {
-      return;
-    }
-
-    const interval = window.setInterval(() => {
-      void onReadThread(selectedRunThreadId, undefined, { hydration: COLLABORATOR_THREAD_HYDRATION });
-    }, COLLABORATOR_THREAD_IDLE_REFRESH_INTERVAL_MS);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [effectiveRunThread?.status, onReadThread, selectedRunThreadId]);
-
-  const rememberCollaboratorThread = useCallback((thread: ThreadPayload, options: { replaceThreadId?: string } = {}) => {
-    const runThreadIds = [
-      thread.id,
-      ...stateRef.current.runThreadIds.filter((threadId) => threadId !== thread.id && threadId !== options.replaceThreadId),
-    ];
-    publishStateIfChanged({
-      ...stateRef.current,
-      runThreadIds,
-    });
-    setSelectedRunThreadId(thread.id);
-  }, [publishStateIfChanged]);
-
-  const hydrateCollaboratorThread = useCallback(async (threadId: string, options: { showLoading?: boolean; showMissingError?: boolean } = {}) => {
-    if (!threadId || threadId.startsWith("draft:")) {
-      return null;
-    }
-
-    const generation = ++hydrationGenerationRef.current;
-    if (options.showLoading !== false) {
-      setIsLoadingRunThread(true);
-    }
-    setCollaboratorError("");
-
-    const payload = await onReadThread(threadId, undefined, {
-      hydration: COLLABORATOR_THREAD_HYDRATION,
-    }).catch((error) => {
-      if (options.showMissingError !== false && hydrationGenerationRef.current === generation) {
-        setCollaboratorError(error instanceof Error ? error.message : "Unable to read this collaborator thread.");
-      }
-      return null;
-    });
-
-    if (hydrationGenerationRef.current !== generation) {
-      return null;
-    }
-
-    setIsLoadingRunThread(false);
-    if (payload) {
-      setCollaboratorThread(payload);
-      setCollaboratorStatus(isThreadStatusActive(payload.status) ? "running" : "idle");
-      return payload;
-    }
-
-    if (options.showMissingError !== false) {
-      setCollaboratorStatus("failed");
-      setCollaboratorError("The collaborator thread started, but its saved history is still unavailable.");
-    }
-    return null;
-  }, [onReadThread]);
-
-  useEffect(() => {
-    if (!selectedRunThreadId) {
-      setCollaboratorThread(null);
-      return;
-    }
-
-    if (selectedRunThreadId.startsWith("draft:")) {
-      return;
-    }
-
-    if (effectiveRunThread?.id === selectedRunThreadId) {
-      return;
-    }
-
-    void hydrateCollaboratorThread(selectedRunThreadId);
-
-    return () => {
-      hydrationGenerationRef.current += 1;
-    };
-  }, [effectiveRunThread?.id, hydrateCollaboratorThread, selectedRunThreadId]);
-
-  const createCollaboratorDraftThread = useCallback((settingsThread?: ThreadPayload | null) => {
-    if (!controls) {
-      return null;
-    }
-
-    const draft = controls.createThreadDraft(settingsThread?.harness ?? harness, {
-      select: false,
-      threadId: createDraftCollaboratorThreadId(projectId),
-    });
-    collaboratorDraftProjectIdRef.current = projectId;
-    return settingsThread ? applyCollaboratorDraftSettings(draft, settingsThread) : draft;
-  }, [controls, harness, projectId]);
-
-  useEffect(() => {
-    if (!controls) {
-      setCollaboratorDraftThread(null);
-      setCollaboratorDraftComposerDraft(null);
-      return;
-    }
-
-    if (collaboratorDraftProjectIdRef.current !== projectId) {
-      setCollaboratorDraftComposerDraft(null);
-    }
-    setCollaboratorDraftThread((current) => current && collaboratorDraftProjectIdRef.current === projectId
-      ? current
-      : createCollaboratorDraftThread());
-  }, [controls, createCollaboratorDraftThread, projectId]);
-
-  const sendCollaboratorRun = useCallback(async (
-    thread: ThreadPayload,
-    options: {
-      additionalInput?: UserInput[];
-      replaceThreadId?: string;
-      throwOnError?: boolean;
-    } = {},
-  ) => {
-    if (isSendingControlPromptRef.current) {
-      return thread;
-    }
-
-    isSendingControlPromptRef.current = true;
-    let stateForPrompt = stateRef.current;
-    try {
-      stateForPrompt = await writeWorkbenchCollaborationState(projectId, stateForPrompt);
-      publishStateIfChanged(stateForPrompt);
-    } catch (error) {
-      setCollaboratorWarnings([error instanceof Error
-        ? `Unable to sync Collaboration state before the run: ${error.message}`
-        : "Unable to sync Collaboration state before the run."]);
-    }
-
-    const instructionInjections = buildCollaborationInstructionInjections({
-      diffMap: projectDiffMap,
-      previousMemory: stateForPrompt.lastRunMemory,
-      projectId,
-      state: stateForPrompt,
-    });
-    const input = options.additionalInput?.length
-      ? options.additionalInput
-      : [createTextInput("Run the collaborator workflow with the injected Collaboration context.")];
-    const sendOptions: WorkbenchSendThreadMessageOptions = {
-      additionalWritableRoots: scratchpadWritableRoot ? [scratchpadWritableRoot] : [],
-      instructionInjections,
-      onThreadMaterialized: (materializedThread) => {
-        rememberCollaboratorThread(materializedThread, { replaceThreadId: options.replaceThreadId });
-        setCollaboratorStatus("hydrating");
-        void hydrateCollaboratorThread(materializedThread.id, {
-          showLoading: false,
-          showMissingError: false,
-        });
-      },
-      selectThread: false,
-      workflowIds: [...COLLABORATOR_WORKFLOW_IDS],
-    };
-
-    setCollaboratorStatus("running");
-    setCollaboratorError("");
-    try {
-      const sentThread = await onSendMessage(thread, input, sendOptions);
-      if (sentThread) {
-        rememberCollaboratorThread(sentThread, { replaceThreadId: options.replaceThreadId });
-        setCollaboratorStatus(isThreadStatusActive(sentThread.status) ? "running" : "idle");
-        return sentThread;
-      }
-      if (!thread.isDraft) {
-        void hydrateCollaboratorThread(thread.id, {
-          showLoading: false,
-          showMissingError: false,
-        });
-      }
-      setCollaboratorStatus("idle");
-      return thread;
-    } catch (error) {
-      setCollaboratorStatus("failed");
-      const message = error instanceof Error ? error.message : "Unable to start the collaborator run.";
-      setCollaboratorError(message);
-      if (options.throwOnError) {
-        throw error;
-      }
-      return thread;
-    } finally {
-      isSendingControlPromptRef.current = false;
-    }
-  }, [hydrateCollaboratorThread, onSendMessage, projectDiffMap, projectId, publishStateIfChanged, rememberCollaboratorThread, scratchpadWritableRoot]);
-
-  const startCollaboratorRun = useCallback(async () => {
-    if (!controls) {
-      setCollaboratorError("Workbench controls are not ready.");
-      return;
-    }
-
-    const settingsThread = collaboratorDraftThread ?? createCollaboratorDraftThread();
-    if (!settingsThread) {
-      setCollaboratorError("Collaborator draft is not ready.");
-      return;
-    }
-
-    const draftThread = createCollaboratorDraftThread(settingsThread);
-    if (!draftThread) {
-      setCollaboratorError("Collaborator draft is not ready.");
-      return;
-    }
-
-    setCollaboratorStatus("starting");
-    rememberCollaboratorThread(draftThread);
-    const result = await sendCollaboratorRun(draftThread, { replaceThreadId: draftThread.id });
-    if (result.id !== draftThread.id || !result.isDraft) {
-      setCollaboratorDraftThread(createCollaboratorDraftThread(settingsThread));
-      setCollaboratorDraftComposerDraft(null);
-    }
-  }, [collaboratorDraftThread, controls, createCollaboratorDraftThread, rememberCollaboratorThread, sendCollaboratorRun]);
-
-  useEffect(() => {
-    const leader = new ActiveTabRefreshLeader({
-      onLeadershipChange: setIsAutoWakeLeader,
-      storageKey: "workbench-collaboration-auto-wake",
-    });
-    return () => {
-      leader.dispose();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!collaborationState.autoWakeEnabled || !isAutoWakeLeader || pendingAutoWakeActivityAt === null || collaboratorDraftHasContent) {
-      return;
-    }
-
-    const delay = pendingAutoWakeActivityAt + WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS - Date.now();
-    if (delay > 0) {
-      const timeout = window.setTimeout(() => {
-        setAutoWakeNow(Date.now());
-      }, delay);
-      return () => {
-        window.clearTimeout(timeout);
-      };
-    }
-
-    let cancelled = false;
-    void onClaimAutoWake(projectId, ownerIdRef.current)
-      .then(async (result) => {
-        if (cancelled) {
-          return;
-        }
-        publishStateIfChanged(result.state);
-        if (result.acquired) {
-          setPendingAutoWakeActivityAt(null);
-          await startCollaboratorRun();
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setCollaboratorError(error instanceof Error ? error.message : "Unable to claim Collaboration auto-run.");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [collaborationState.autoWakeEnabled, collaboratorDraftHasContent, isAutoWakeLeader, onClaimAutoWake, pendingAutoWakeActivityAt, projectId, publishStateIfChanged, startCollaboratorRun]);
-
   const mutateState = useCallback((mutator: (state: WorkbenchCollaborationState) => WorkbenchCollaborationState) => {
     const nextState = mutator(stateRef.current);
     publishStateIfChanged(nextState);
-    setPendingAutoWakeActivityAt(Date.now());
-  }, [publishStateIfChanged]);
+    recordCollaborationActivity();
+  }, [publishStateIfChanged, recordCollaborationActivity]);
 
   const ensurePromptDraftThread = useCallback((post: WorkbenchCollaborationPost) => {
     if (!controls) {
-      setCollaboratorError("Workbench controls are not ready.");
+      setPromptStartErrorsByPostId((current) => ({
+        ...current,
+        [post.id]: "Workbench controls are not ready.",
+      }));
       return null;
     }
 
@@ -957,24 +456,7 @@ export default function WorkbenchCollaborationView({
     });
   }, [mutateState, onStartThreadFromPrompt]);
 
-  const cycleCollaboratorDraftHarness = useCallback(() => {
-    if (!controls) {
-      return;
-    }
-
-    setCollaboratorDraftThread((current) => {
-      const currentHarness = current?.harness ?? harness;
-      const currentIndex = THREAD_HARNESSES.indexOf(currentHarness);
-      const nextHarness = THREAD_HARNESSES[(currentIndex + 1) % THREAD_HARNESSES.length] ?? "codex";
-      collaboratorDraftProjectIdRef.current = projectId;
-      return controls.createThreadDraft(nextHarness, {
-        select: false,
-        threadId: createDraftCollaboratorThreadId(projectId),
-      });
-    });
-  }, [controls, harness, projectId]);
-
-  const collaboratorComposerThread = collaboratorDraftThread;
+  const collaboratorComposerThread = runController.collaboratorDraftThread;
   const collaboratorComposer = collaboratorComposerThread ? (
     <ThreadComposer
       key={collaboratorComposerThread.id}
@@ -984,74 +466,26 @@ export default function WorkbenchCollaborationView({
       onListModels={threadViewProps.onListModels}
       onPauseThread={() => { }}
       onResumeThread={() => { }}
-      onSendMessage={async (threadId, input) => {
-        if (threadId !== collaboratorComposerThread.id) {
-          throw new Error("Collaborator draft is not ready.");
-        }
-
-        const draftThread = createCollaboratorDraftThread(collaboratorComposerThread);
-        if (!draftThread) {
-          throw new Error("Collaborator draft is not ready.");
-        }
-
-        rememberCollaboratorThread(draftThread);
-        await sendCollaboratorRun(draftThread, {
-          additionalInput: input,
-          replaceThreadId: draftThread.id,
-          throwOnError: true,
-        });
-        setCollaboratorDraftThread(createCollaboratorDraftThread(collaboratorComposerThread));
-        setCollaboratorDraftComposerDraft(null);
-      }}
+      onSendMessage={runController.sendComposerMessage}
       onStopThread={() => { }}
       onSubmitUserInputRequest={threadViewProps.onSubmitUserInputRequest}
-      onThreadAgentChange={(threadId, agentPath) => {
-        if (threadId !== collaboratorComposerThread.id) {
-          return;
-        }
-        setCollaboratorDraftThread((current) => current ? { ...current, agentPath } : current);
-      }}
-      onThreadComposerDraftChange={(threadId, draft) => {
-        if (threadId !== collaboratorComposerThread.id) {
-          return;
-        }
-        setCollaboratorDraftComposerDraft(draft);
-      }}
-      onThreadComposerDraftClear={(threadId) => {
-        if (threadId !== collaboratorComposerThread.id) {
-          return;
-        }
-        setCollaboratorDraftComposerDraft(null);
-      }}
-      onThreadModelChange={(threadId, model) => {
-        if (threadId !== collaboratorComposerThread.id) {
-          return;
-        }
-        setCollaboratorDraftThread((current) => current ? { ...current, model } : current);
-      }}
+      onThreadAgentChange={runController.setCollaboratorDraftAgent}
+      onThreadComposerDraftChange={runController.setCollaboratorDraftComposerDraft}
+      onThreadComposerDraftClear={runController.clearCollaboratorDraft}
+      onThreadModelChange={runController.setCollaboratorDraftModel}
       onThreadQuestionnaireDraftChange={threadViewProps.onThreadQuestionnaireDraftChange}
       onThreadQuestionnaireDraftClear={threadViewProps.onThreadQuestionnaireDraftClear}
-      onThreadReasoningEffortChange={(threadId, reasoningEffort) => {
-        if (threadId !== collaboratorComposerThread.id) {
-          return;
-        }
-        setCollaboratorDraftThread((current) => current ? { ...current, reasoningEffort } : current);
-      }}
+      onThreadReasoningEffortChange={runController.setCollaboratorDraftReasoningEffort}
       onThreadSavedComposerDraftDelete={threadViewProps.onThreadSavedComposerDraftDelete}
       onThreadSavedComposerDraftSave={threadViewProps.onThreadSavedComposerDraftSave}
-      onThreadServiceTierChange={(threadId, serviceTier) => {
-        if (threadId !== collaboratorComposerThread.id) {
-          return;
-        }
-        setCollaboratorDraftThread((current) => current ? { ...current, serviceTier } : current);
-      }}
+      onThreadServiceTierChange={runController.setCollaboratorDraftServiceTier}
       pendingUserInputRequest={null}
       projectId={projectId}
       projectRootPath={projectRootPath}
       rateLimits={rateLimits}
       sendLabel="Run with note"
       thread={collaboratorComposerThread}
-      threadComposerDraft={collaboratorDraftComposerDraft}
+      threadComposerDraft={runController.collaboratorDraftComposerDraft}
       threadQuestionnaireDraft={null}
       threadSavedComposerDrafts={threadSavedComposerDrafts}
       workspaceRoots={composerWorkspaceRoots}
@@ -1059,7 +493,7 @@ export default function WorkbenchCollaborationView({
       <ThreadRateLimits
         canToggleHarness={collaboratorComposerThread.isDraft}
         harness={collaboratorComposerThread.harness}
-        onHarnessToggle={cycleCollaboratorDraftHarness}
+        onHarnessToggle={runController.cycleCollaboratorDraftHarness}
         rateLimits={rateLimits}
       />
     </ThreadComposer>
@@ -1067,51 +501,8 @@ export default function WorkbenchCollaborationView({
     <p className="m-0 text-[0.86rem] leading-6 text-muted">Collaborator is not ready.</p>
   );
 
-  const handleCollaboratorSendMessage = useCallback(async (
-    thread: ThreadPayload,
-    input: Parameters<ThreadViewProps["onSendMessage"]>[1],
-    options?: WorkbenchSendThreadMessageOptions,
-  ) => {
-    const payload = await onSendMessage(thread, input, {
-      ...options,
-      selectThread: false,
-    });
-    if (payload) {
-      rememberCollaboratorThread(payload);
-      setCollaboratorStatus(isThreadStatusActive(payload.status) ? "running" : "idle");
-    }
-    return payload;
-  }, [onSendMessage, rememberCollaboratorThread]);
-
-  const handleCollaboratorStopThread = useCallback(async (thread: ThreadPayload) => {
-    const payload = await threadViewProps.onStopThread(thread);
-    if (payload) {
-      rememberCollaboratorThread(payload);
-      setCollaboratorStatus(isThreadStatusActive(payload.status) ? "running" : "idle");
-    }
-    return payload;
-  }, [rememberCollaboratorThread, threadViewProps]);
-
-  const handleCollaboratorPauseThread = useCallback(async (thread: ThreadPayload) => {
-    const payload = await threadViewProps.onPauseThread(thread);
-    if (payload) {
-      rememberCollaboratorThread(payload);
-      setCollaboratorStatus(isThreadStatusActive(payload.status) ? "running" : "idle");
-    }
-    return payload;
-  }, [rememberCollaboratorThread, threadViewProps]);
-
-  const handleCollaboratorResumeThread = useCallback(async (thread: ThreadPayload) => {
-    const payload = await threadViewProps.onResumeThread(thread);
-    if (payload) {
-      rememberCollaboratorThread(payload);
-      setCollaboratorStatus(isThreadStatusActive(payload.status) ? "running" : "idle");
-    }
-    return payload;
-  }, [rememberCollaboratorThread, threadViewProps]);
-
-  const activeRunContent = effectiveRunThread ? (
-    shouldRenderCurrentRunThread ? (
+  const activeRunContent = runController.effectiveRunThread ? (
+    runController.shouldRenderCurrentRunThread ? (
       <ThreadView
         {...threadViewProps}
         composerSpellCheck={composerSpellCheck}
@@ -1120,18 +511,18 @@ export default function WorkbenchCollaborationView({
         hideFinalAgentMessage
         hideWorkbenchControlAgentMessages
         hideWorkbenchControlUserMessages
-        onPauseThread={handleCollaboratorPauseThread}
+        onPauseThread={runController.pauseRunThread}
         onReadThread={onReadThread}
-        onResumeThread={handleCollaboratorResumeThread}
-        onSendMessage={handleCollaboratorSendMessage}
-        onStopThread={handleCollaboratorStopThread}
+        onResumeThread={runController.resumeRunThread}
+        onSendMessage={runController.sendRunMessage}
+        onStopThread={runController.stopRunThread}
         projectId={projectId}
         projectFileCandidates={projectFileCandidates}
         projectFileIndexId={projectFileIndexId}
         projectFileLinkRoots={projectFileLinkRoots}
         projectRootPath={projectRootPath}
         rateLimits={rateLimits}
-        thread={effectiveRunThread}
+        thread={runController.effectiveRunThread}
         threadDocuments={threadDocuments}
         threadSavedComposerDrafts={threadSavedComposerDrafts}
       />
@@ -1149,46 +540,36 @@ export default function WorkbenchCollaborationView({
         projectId={projectId}
         projectRoots={threadViewProps.projectRoots}
         projectRootPath={projectRootPath}
-        thread={effectiveRunThread}
-        threadCwdPath={effectiveRunThread.cwd}
+        thread={runController.effectiveRunThread}
+        threadCwdPath={runController.effectiveRunThread.cwd}
       />
     )
   ) : (
-    <p className="m-0 text-[0.84rem] leading-6 text-muted">{shouldShowRunThreadLoading || collaboratorStatus === "hydrating" ? "Loading collaborator thread..." : "Select this run to load its transcript."}</p>
+    <p className="m-0 text-[0.84rem] leading-6 text-muted">{runController.shouldShowRunThreadLoading || runController.collaboratorStatus === "hydrating" ? "Loading collaborator thread..." : "Select this run to load its transcript."}</p>
   );
 
   const runPanel = (
     <CollaborationRunPanel
       activeRunContent={activeRunContent}
-      autoWakeCountdownMs={autoWakeCountdownMs}
+      autoWakeCountdownMs={runController.autoWakeCountdownMs}
       autoWakeEnabled={collaborationState.autoWakeEnabled}
-      autoWakeProgressPercent={autoWakeProgressPercent}
-      collaboratorComposer={shouldRenderCurrentRunThread ? null : collaboratorComposer}
-      collaboratorStatus={collaboratorStatus}
-      collaboratorStatusLabel={collaboratorStatusLabel}
-      error={[collaboratorError, ...collaboratorWarnings].filter(Boolean).join("\n")}
-      isAutoWakePaused={isAutoWakePaused}
-      isAutoWakeToggleDisabled={isAutoWakeToggleDisabled}
-      isRunDisabled={!controls || isProjectLoading}
+      autoWakeProgressPercent={runController.autoWakeProgressPercent}
+      collaboratorComposer={runController.shouldRenderCurrentRunThread ? null : collaboratorComposer}
+      collaboratorStatus={runController.collaboratorStatus}
+      collaboratorStatusLabel={runController.collaboratorStatusLabel}
+      error={[runController.collaboratorError, ...runController.collaboratorWarnings].filter(Boolean).join("\n")}
+      isAutoWakePaused={runController.isAutoWakePaused}
+      isAutoWakeToggleDisabled={runController.isAutoWakeToggleDisabled}
+      isRunDisabled={runController.isRunDisabled}
       lastRunMemory={collaborationState.lastRunMemory}
-      recentRunIds={[...collaborationState.runThreadIds].reverse()}
-      selectedRunThreadId={selectedRunThreadId}
-      summariesById={summariesById}
+      recentRunIds={runController.recentRunIds}
+      selectedRunThreadId={runController.selectedRunThreadId}
+      summariesById={runController.summariesById}
       onRunNow={() => {
-        void startCollaboratorRun();
+        void runController.startCollaboratorRun();
       }}
-      onSelectRunThread={(threadId) => {
-        setSelectedRunThreadId(threadId);
-        setCollaboratorStatus("hydrating");
-        void hydrateCollaboratorThread(threadId);
-      }}
-      onToggleAutoRun={() => {
-        publishStateIfChanged({
-          ...stateRef.current,
-          autoWakeEnabled: !stateRef.current.autoWakeEnabled,
-        });
-        setPendingAutoWakeActivityAt(Date.now());
-      }}
+      onSelectRunThread={runController.selectRunThread}
+      onToggleAutoRun={runController.toggleAutoRun}
     />
   );
 

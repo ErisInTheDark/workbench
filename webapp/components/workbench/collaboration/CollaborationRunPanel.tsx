@@ -1,17 +1,20 @@
 /*
  * Exports:
- * - default CollaborationRunPanel: render Collaboration auto-run controls, recent runs, active run, and run composer. Keywords: collaboration, runs, auto-run.
- * - Local helpers: format run timestamps and render loading run skeletons. Keywords: collaboration, run history, skeleton.
+ * - default CollaborationRunPanel: render Collaboration auto-run controls, lazy recent runs, active run, and run composer. Keywords: collaboration, runs, auto-run, lazy history.
+ * - Local helpers: format run timestamps, render loading run skeletons, and preserve run-history scroll. Keywords: collaboration, run history, skeleton, scroll.
  */
 "use client";
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { ThreadSummary } from "../../../lib/types";
 import PrimaryButton from "../PrimaryButton";
-import ThreadScrollAnchorController from "../thread-view/ThreadScrollAnchorController";
+import ThreadScrollAnchorController, { type ThreadScrollSnapshot } from "../thread-view/ThreadScrollAnchorController";
 import ThreadDisclosure from "../thread-view/ThreadDisclosure";
 import WorkbenchProgressWheel from "../WorkbenchProgressWheel";
+
+const INITIAL_VISIBLE_RUN_COUNT = 8;
+const RUN_HISTORY_REVEAL_COUNT = 8;
 
 function formatRelativeRunTime(summary: ThreadSummary, now: number) {
   const elapsedSeconds = Math.max(0, Math.floor((now - summary.updatedAt * 1000) / 1000));
@@ -95,19 +98,121 @@ export default function CollaborationRunPanel ({
 }) {
   const isRunning = collaboratorStatus === "running" || collaboratorStatus === "starting";
   const runButtonLabel = isRunning ? "Running..." : recentRunIds.length ? "Run now" : "Start collaborator";
+  const [visibleRunCount, setVisibleRunCount] = useState(() => Math.min(INITIAL_VISIBLE_RUN_COUNT, recentRunIds.length));
+  const historyTopSentinelRef = useRef<HTMLDivElement | null>(null);
   const historyBottomRef = useRef<HTMLDivElement | null>(null);
   const historyScrollControllerRef = useRef<ReturnType<typeof ThreadScrollAnchorController> | null>(null);
+  const pendingPrependSnapshotRef = useRef<ThreadScrollSnapshot | null>(null);
+  const previousNewestRunIdRef = useRef("");
   if (!historyScrollControllerRef.current) {
     historyScrollControllerRef.current = ThreadScrollAnchorController();
   }
   const historyScrollController = historyScrollControllerRef.current;
-  const historySignature = recentRunIds.join("\0");
+  const newestRunId = recentRunIds[0] ?? "";
+  const clampedVisibleRunCount = Math.min(visibleRunCount, recentRunIds.length);
+  const visibleRunIds = useMemo(() => (
+    recentRunIds.slice(0, clampedVisibleRunCount).reverse()
+  ), [clampedVisibleRunCount, recentRunIds]);
+  const visibleRunSignature = visibleRunIds.join("\0");
+  const hasOlderRuns = clampedVisibleRunCount < recentRunIds.length;
   const selectedRunSummary = selectedRunThreadId ? summariesById.get(selectedRunThreadId) ?? null : null;
 
   useEffect(() => {
-    historyScrollController.resetForThreadSwitch();
-    historyScrollController.scrollRootToBottom(historyBottomRef.current);
-  }, [historyScrollController, historySignature, selectedRunThreadId]);
+    setVisibleRunCount((current) => Math.min(
+      recentRunIds.length,
+      Math.max(Math.min(INITIAL_VISIBLE_RUN_COUNT, recentRunIds.length), current),
+    ));
+  }, [recentRunIds.length]);
+
+  const revealOlderRuns = useCallback(() => {
+    if (!hasOlderRuns) {
+      return;
+    }
+
+    const scrollTarget = historyScrollController.findScrollTarget(historyTopSentinelRef.current ?? historyBottomRef.current);
+    if (scrollTarget && historyScrollController.isNearTop(scrollTarget)) {
+      pendingPrependSnapshotRef.current = historyScrollController.captureSnapshot(historyTopSentinelRef.current ?? historyBottomRef.current);
+      historyScrollController.setStickToBottom(false);
+    }
+
+    setVisibleRunCount((current) => Math.min(recentRunIds.length, current + RUN_HISTORY_REVEAL_COUNT));
+  }, [hasOlderRuns, historyScrollController, recentRunIds.length]);
+
+  useEffect(() => {
+    const sentinel = historyTopSentinelRef.current;
+    const scrollTarget = historyScrollController.findScrollTarget(sentinel ?? historyBottomRef.current);
+    if (!sentinel || !scrollTarget || !hasOlderRuns) {
+      return;
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        revealOlderRuns();
+      }
+    }, {
+      root: scrollTarget instanceof HTMLElement ? scrollTarget : null,
+      rootMargin: "160px 0px 0px 0px",
+      threshold: 0.1,
+    });
+    observer.observe(sentinel);
+    return () => {
+      observer.disconnect();
+    };
+  }, [hasOlderRuns, historyScrollController, revealOlderRuns, visibleRunSignature]);
+
+  useEffect(() => {
+    const scrollTarget = historyScrollController.findScrollTarget(historyBottomRef.current);
+    if (!scrollTarget) {
+      return;
+    }
+
+    const updateHistoryStickiness = () => {
+      historyScrollController.updateFromScroll(scrollTarget);
+      if (historyScrollController.isNearTop(scrollTarget)) {
+        revealOlderRuns();
+      }
+    };
+    historyScrollController.syncObservedScrollTop(scrollTarget);
+    scrollTarget.addEventListener("scroll", updateHistoryStickiness, { passive: true });
+    return () => {
+      scrollTarget.removeEventListener("scroll", updateHistoryStickiness);
+    };
+  }, [historyScrollController, revealOlderRuns]);
+
+  useEffect(() => {
+    if (!hasOlderRuns) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      const scrollTarget = historyScrollController.findScrollTarget(historyTopSentinelRef.current ?? historyBottomRef.current);
+      if (scrollTarget && historyScrollController.isNearTop(scrollTarget)) {
+        revealOlderRuns();
+      }
+    });
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [hasOlderRuns, historyScrollController, revealOlderRuns, visibleRunSignature]);
+
+  useLayoutEffect(() => {
+    const pendingSnapshot = pendingPrependSnapshotRef.current;
+    if (pendingSnapshot) {
+      pendingPrependSnapshotRef.current = null;
+      historyScrollController.restoreSnapshotAfterPrepend(pendingSnapshot);
+      return;
+    }
+
+    const isInitialHistoryPosition = previousNewestRunIdRef.current === "";
+    const didNewestRunChange = previousNewestRunIdRef.current !== newestRunId;
+    if (didNewestRunChange) {
+      previousNewestRunIdRef.current = newestRunId;
+    }
+
+    if (isInitialHistoryPosition || historyScrollController.shouldStickToBottom()) {
+      historyScrollController.scrollRootToBottom(historyBottomRef.current);
+    }
+  }, [historyScrollController, newestRunId, visibleRunSignature]);
 
   return (
     <section className="min-h-full min-w-0 px-5 py-5 md:px-6">
@@ -157,7 +262,10 @@ export default function CollaborationRunPanel ({
             className="explorer-scrollbar max-h-[32rem] space-y-3 overflow-y-auto pr-1"
             data-thread-scroll-target="true"
           >
-            {recentRunIds.map((threadId) => {
+            {hasOlderRuns ? (
+              <div ref={historyTopSentinelRef} className="h-px" aria-hidden="true" />
+            ) : null}
+            {visibleRunIds.map((threadId) => {
               const summary = summariesById.get(threadId) ?? null;
               const isOpen = selectedRunThreadId === threadId;
               return (
