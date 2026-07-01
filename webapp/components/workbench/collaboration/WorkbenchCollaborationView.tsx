@@ -72,6 +72,7 @@ type ThreadViewProps = ComponentProps<typeof ThreadView>;
 const COLLABORATOR_THREAD_HYDRATION = { mode: "legacyFull" as const };
 const COLLABORATOR_THREAD_ACTIVE_REFRESH_INTERVAL_MS = 1500;
 const COLLABORATOR_THREAD_IDLE_REFRESH_INTERVAL_MS = 10000;
+const COLLABORATOR_WORKFLOW_IDS = ["collaborator"] as const;
 const THREAD_HARNESSES: readonly WorkbenchHarness[] = ["codex", "copilot", "opencode"];
 
 type CollaboratorRunStatus = "failed" | "hydrating" | "idle" | "running" | "starting";
@@ -662,6 +663,7 @@ export default function WorkbenchCollaborationView({
         });
       },
       selectThread: false,
+      workflowIds: [...COLLABORATOR_WORKFLOW_IDS],
     };
 
     setCollaboratorStatus("running");

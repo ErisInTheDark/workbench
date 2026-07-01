@@ -29,6 +29,8 @@ import type { CopilotThreadState } from "./copilot-thread-state";
 import { appendCopilotEventLog, log, logError } from "./process-helpers";
 import type { OrchestratorReloadableModules } from "./reloadable-modules";
 import { isWorkbenchPauseControlRequest, WORKBENCH_PAUSE_CONTROL_KIND } from "../lib/workbench/thread/thread-pause-control";
+import type { WorkbenchPromptContext } from "../lib/workbench/instructions/WorkbenchPromptFiles";
+import { readWorkbenchPromptContext } from "./workbench-prompt-context";
 
 type CopilotAccountGetQuotaResult = Awaited<ReturnType<CopilotClient["rpc"]["account"]["getQuota"]>>;
 type CopilotAccountQuotaSnapshot = NonNullable<CopilotAccountGetQuotaResult["quotaSnapshots"]>[string];
@@ -79,6 +81,13 @@ function asRecord(value: unknown) {
 
 function asString(value: unknown) {
   return typeof value === "string" ? value : null;
+}
+
+function joinSystemMessageSections(sections: Array<string | null | undefined>) {
+  return sections
+    .map((section) => section?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function asBoolean(value: unknown) {
@@ -351,6 +360,7 @@ export class CopilotBridge {
   async handleRequest(message: JsonRpcRequest): Promise<JsonRpcResponse> {
     const requestId = message.id ?? null;
     const method = typeof message.method === "string" ? message.method : null;
+    const promptContext = readWorkbenchPromptContext(message);
     if (!method) {
       return this.errorResponse(requestId, -32600, "Invalid JSON-RPC request.");
     }
@@ -375,7 +385,7 @@ export class CopilotBridge {
 
           return {
             id: requestId,
-            result: await this.readThread(threadId, model, effort, agentPath, workbenchOrigin, projectId),
+            result: await this.readThread(threadId, model, effort, agentPath, workbenchOrigin, projectId, promptContext),
           };
         }
         case "thread/start": {
@@ -386,6 +396,7 @@ export class CopilotBridge {
             this.readWorkbenchOrigin(message.params),
             this.readProjectId(message.params),
             this.readCwd(message.params),
+            promptContext,
           );
           this.onNotification({
             method: "thread/started",
@@ -420,7 +431,7 @@ export class CopilotBridge {
             return this.errorResponse(requestId, -32602, "Missing turn/start params.");
           }
 
-          await this.sendToSession(threadId, input, "enqueue", model, effort, agentPath, workbenchOrigin, projectId, this.readCwd(message.params));
+          await this.sendToSession(threadId, input, "enqueue", model, effort, agentPath, workbenchOrigin, projectId, this.readCwd(message.params), promptContext);
           return { id: requestId, result: { ok: true } };
         }
         case "turn/steer": {
@@ -435,7 +446,7 @@ export class CopilotBridge {
             return this.errorResponse(requestId, -32602, "Missing turn/steer params.");
           }
 
-          await this.sendToSession(threadId, input, "immediate", model, effort, agentPath, workbenchOrigin, projectId, this.readCwd(message.params));
+          await this.sendToSession(threadId, input, "immediate", model, effort, agentPath, workbenchOrigin, projectId, this.readCwd(message.params), promptContext);
           return { id: requestId, result: { ok: true } };
         }
         case "turn/interrupt": {
@@ -654,24 +665,47 @@ export class CopilotBridge {
     ];
   }
 
-  private async createSessionSystemMessage(threadId: string, workbenchOrigin: string | null) {
+  private async createSessionSystemMessage(
+    threadId: string,
+    workbenchOrigin: string | null,
+    promptContext: WorkbenchPromptContext | null = null,
+  ) {
     const { buildThreadTitleBootstrapInstructions, buildThreadTitleRouteUrl } = this.getReloadableModules().threadBootstrap;
     const { buildWorkbenchLibraryBootstrapInstructions } = this.getReloadableModules().workbenchLibrary;
     const routeUrl = workbenchOrigin?.trim()
       ? buildThreadTitleRouteUrl(workbenchOrigin)
       : null;
-    const workbenchLibraryInstructions = await buildWorkbenchLibraryBootstrapInstructions();
-    const content = [
+    const promptInstructions = promptContext
+      ? await this.getReloadableModules().workbenchPromptFiles.buildWorkbenchPromptInstructions({
+        ...promptContext,
+        harness: "copilot",
+        threadId: promptContext.threadId ?? threadId,
+      })
+      : null;
+    const workbenchInstructions = promptInstructions
+      ? joinSystemMessageSections([
+        `
+Workbench is providing this Copilot session with Workbench-owned instructions.
+
+Treat the Workbench instructions below as active for this session. If Copilot-provided defaults are also visible, follow the Workbench instructions whenever they conflict.
+`.trim(),
+        promptInstructions.baseInstructions,
+        promptInstructions.developerInstructions,
+      ])
+      : null;
+    const workbenchLibraryInstructions = promptInstructions ? null : await buildWorkbenchLibraryBootstrapInstructions();
+    const content = joinSystemMessageSections([
       USER_INPUT_TOOL_SYSTEM_MESSAGE,
+      workbenchInstructions,
       workbenchLibraryInstructions,
-      routeUrl
+      !promptInstructions && routeUrl
         ? buildThreadTitleBootstrapInstructions({
           harness: "copilot",
           routeUrl,
           threadId,
         })
         : null,
-    ].filter(Boolean).join("\n\n");
+    ]);
 
     return {
       content,
@@ -781,6 +815,7 @@ export class CopilotBridge {
     workbenchOrigin: string | null,
     projectId: string | null,
     cwd: string | null,
+    promptContext: WorkbenchPromptContext | null,
   ) {
     const client = await this.ensureClient();
     const sessionId = randomUUID();
@@ -795,7 +830,7 @@ export class CopilotBridge {
       onPermissionRequest: approveAll,
       sessionId,
       streaming: true,
-      systemMessage: await this.createSessionSystemMessage(sessionId, workbenchOrigin),
+      systemMessage: await this.createSessionSystemMessage(sessionId, workbenchOrigin, promptContext),
       tools: this.createSessionTools(sessionId),
       workingDirectory: selectedCwd,
     });
@@ -845,8 +880,9 @@ export class CopilotBridge {
     agentPath: string | null,
     workbenchOrigin: string | null,
     projectId: string | null,
+    promptContext: WorkbenchPromptContext | null,
   ) {
-    const { session, state } = await this.ensureThreadState(threadId, model, reasoningEffort, agentPath, workbenchOrigin, projectId);
+    const { session, state } = await this.ensureThreadState(threadId, model, reasoningEffort, agentPath, workbenchOrigin, projectId, null, promptContext);
     const { cloneThread } = this.getReloadableModules().copilotThreadState;
     return {
       model: await this.readSessionModel(session, model),
@@ -864,6 +900,7 @@ export class CopilotBridge {
     workbenchOrigin: string | null = null,
     projectId: string | null = null,
     cwd: string | null = null,
+    promptContext: WorkbenchPromptContext | null = null,
   ) {
     const normalizedReasoningEffort = toCopilotReasoningEffort(reasoningEffort);
     const selectedAgent = await this.resolveAgentSelection(agentPath, projectId);
@@ -894,7 +931,7 @@ export class CopilotBridge {
       ...(normalizedReasoningEffort ? { reasoningEffort: normalizedReasoningEffort } : {}),
       onPermissionRequest: approveAll,
       streaming: true,
-      systemMessage: await this.createSessionSystemMessage(threadId, workbenchOrigin),
+      systemMessage: await this.createSessionSystemMessage(threadId, workbenchOrigin, promptContext),
       tools: this.createSessionTools(threadId),
       workingDirectory: selectedCwd,
     });
@@ -954,8 +991,9 @@ export class CopilotBridge {
     workbenchOrigin: string | null,
     projectId: string | null,
     cwd: string | null,
+    promptContext: WorkbenchPromptContext | null,
   ) {
-    const { session } = await this.ensureThreadState(threadId, model, reasoningEffort, agentPath, workbenchOrigin, projectId, cwd);
+    const { session } = await this.ensureThreadState(threadId, model, reasoningEffort, agentPath, workbenchOrigin, projectId, cwd, promptContext);
 
     const prompt = this.getReloadableModules().copilotThreadState.formatPromptFromInput(input);
     if (!prompt) {
