@@ -242,15 +242,22 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     background-color: color-mix(in srgb, var(--text) 16%, transparent);
   }
 
-  .thread-composer-sticky-shell {
-    background: color-mix(in srgb, var(--shell-fade-bg), transparent 20%);
-    border-radius: 1.15rem;
+  .thread-composer-sticky-host {
     bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
     container-name: thread-composer-sticky;
     container-type: scroll-state;
     margin-top: 1.5rem;
     position: sticky;
     z-index: 20;
+  }
+
+  .thread-composer-sticky-host[data-collapsed="true"] {
+    min-height: var(--thread-composer-expanded-height, 0px);
+  }
+
+  .thread-composer-sticky-shell {
+    background: color-mix(in srgb, var(--shell-fade-bg), transparent 20%);
+    border-radius: 1.15rem;
   }
 
   .thread-composer-sticky-surface {
@@ -302,6 +309,13 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
 
     .thread-composer-sticky-surface {
       border: 1px solid color-mix(in srgb, var(--text), transparent 80%);
+    }
+
+    .thread-composer-sticky-host[data-collapsed="true"] .thread-composer-sticky-shell {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      left: 0;
     }
 
     .thread-composer-sticky-surface[data-collapsed="true"] .thread-composer-sticky-expanded {
