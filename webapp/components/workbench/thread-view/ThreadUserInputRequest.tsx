@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default ThreadUserInputRequest: render live and historical questionnaire requests. Keywords: questionnaire, custom input, thread.
+ * - getThreadUserInputRequestPreviewText: derive compact questionnaire text for composer previews. Keywords: questionnaire, preview, sticky composer.
  * - Local helpers: question display normalization, answered value derivation, and submit handling. Keywords: options, answers, drafts.
  */
 "use client";
@@ -84,6 +85,27 @@ function shouldUseCompactSingleQuestionDisplay (request: WorkbenchUserInputReque
 
   return isGenericCodexQuestionnaireRequest(request)
     || (!request.summary.trim() && request.title.trim() === questionText);
+}
+
+export function getThreadUserInputRequestPreviewText (request: WorkbenchUserInputRequest) {
+  const compactQuestion = shouldUseCompactSingleQuestionDisplay(request)
+    ? request.questions[0] ?? null
+    : null;
+  const requestTitle = compactQuestion?.question.trim() || request.title.trim();
+  const requestSummary = compactQuestion ? "" : request.summary.trim();
+  const titleAndSummary = [requestTitle, requestSummary].filter(Boolean).join(" ");
+
+  if (titleAndSummary) {
+    return titleAndSummary;
+  }
+
+  const firstQuestion = request.questions[0] ?? null;
+  if (!firstQuestion) {
+    return "Questionnaire";
+  }
+
+  const { questionText, headerText } = formatQuestionDisplay(firstQuestion, 0);
+  return questionText.trim() || headerText.trim() || "Questionnaire";
 }
 
 function deriveAnsweredValues (

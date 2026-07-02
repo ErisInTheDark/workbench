@@ -1,11 +1,11 @@
 /*
  * Exports:
  * - default ThreadComposer: render thread composer controls, message input, attachments, and questionnaire handoff. Keywords: composer, thread, questionnaire, model, agent.
- * - Local helpers: attachment reading, saved draft shelf rendering, pending questionnaire submission options, and compact composer icons. Keywords: attachments, saved drafts, user input, controls.
+ * - Local helpers: attachment reading, sticky composer preview rendering, saved draft shelf rendering, pending questionnaire submission options, and compact composer icons. Keywords: attachments, saved drafts, user input, controls, sticky composer.
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
@@ -40,14 +40,27 @@ import {
 import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
 import { isWorkbenchSyntheticSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import PrimaryButton from "../PrimaryButton";
+import ChevronIcon from "../ChevronIcon";
 import PlaintextEditable, { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./PlaintextEditable";
 import ThreadAgentPicker from "./ThreadAgentPicker";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 import ThreadModelPicker from "./ThreadModelPicker";
-import ThreadUserInputRequest from "./ThreadUserInputRequest";
+import ThreadUserInputRequest, { getThreadUserInputRequestPreviewText } from "./ThreadUserInputRequest";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
+}
+
+function isCollapsedPreviewInteractiveTarget (
+  currentTarget: HTMLElement,
+  target: EventTarget | null,
+) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  const interactiveTarget = target.closest("button,a,input,textarea,select,[contenteditable='true']");
+  return Boolean(interactiveTarget && interactiveTarget !== currentTarget);
 }
 
 function LightningBoltIcon () {
@@ -353,6 +366,7 @@ export default function ThreadComposer ({
   sendLabel = "Send",
   showSavedDraftControls = true,
   surface = "card",
+  stickyMode = false,
   leadingActions,
   trailingActions,
   threadQuestionnaireDraft,
@@ -398,6 +412,7 @@ export default function ThreadComposer ({
   sendLabel?: string;
   showSavedDraftControls?: boolean;
   surface?: "bare" | "card";
+  stickyMode?: boolean;
   leadingActions?: ReactNode;
   trailingActions?: ReactNode;
   threadQuestionnaireDraft: WorkbenchQuestionnaireDraft | null;
@@ -432,6 +447,7 @@ export default function ThreadComposer ({
   const [isResuming, setIsResuming] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [isSavedDraftShelfExpanded, setIsSavedDraftShelfExpanded] = useState(false);
+  const [isStickyComposerCollapsed, setIsStickyComposerCollapsed] = useState(false);
   const hydratedDraftKeyRef = useRef("");
   const savedDraftShelfRef = useRef<HTMLDivElement>(null);
   const onThreadComposerDraftChangeRef = useRef(onThreadComposerDraftChange);
@@ -505,6 +521,17 @@ export default function ThreadComposer ({
   const isAgentPickerOpen = showsThreadControls && activePicker === "agent";
   const isModelPickerOpen = showsThreadControls && activePicker === "model";
   const isPickerOpen = activePicker !== null;
+  const composerPlaceholder = isCommentMode
+    ? "Write a comment..."
+    : isThreadStateBroken
+    ? "New messages are disabled for this thread."
+    : isCopilotAuthRequired
+      ? "Sign in to Copilot CLI to send messages."
+      : isActiveThread
+        ? "Message the current turn..."
+        : thread.isDraft
+          ? "Start a new thread..."
+          : "Continue this thread...";
   const showStopButton = !isCommentMode && (isActiveThread || isStopping);
   const selectedAgent = availableAgents.find((agent) => areWorkbenchAgentPathsEqual(agent.path, thread.agentPath)) ?? null;
   const agentButtonLabel = selectedAgent?.name
@@ -564,6 +591,7 @@ export default function ThreadComposer ({
     setAgentsError("");
     setModelsError("");
     setIsQuestionnaireVisible(Boolean(visiblePendingUserInputRequest));
+    setIsStickyComposerCollapsed(false);
   }, [thread.id, visiblePendingUserInputRequest?.request.id]);
 
   useEffect(() => {
@@ -963,17 +991,69 @@ export default function ThreadComposer ({
     />
   );
 
-  return (
-    <>
+  const questionnairePreviewText = visiblePendingUserInputRequest
+    ? getThreadUserInputRequestPreviewText(visiblePendingUserInputRequest.request)
+    : "";
+  const stickyPreviewKind = questionnairePreviewText
+    ? "questionnaire"
+    : trimmedValue
+      ? "draft"
+      : "placeholder";
+  const stickyPreviewText = (
+    questionnairePreviewText || trimmedValue || composerPlaceholder
+  ).replace(/\s+/g, " ").trim();
+  const collapsedAttachmentPreviews = attachments.slice(0, 3);
+  const hiddenAttachmentCount = Math.max(0, attachments.length - collapsedAttachmentPreviews.length);
+  const stickyCollapseLabel = isStickyComposerCollapsed ? "Expand composer" : "Collapse composer";
+  const stickyCollapseButton = (
+    <button
+      type="button"
+      aria-expanded={!isStickyComposerCollapsed}
+      aria-label={stickyCollapseLabel}
+      title={stickyCollapseLabel}
+      className="inline-flex size-9 items-center justify-center rounded-full text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+      onClick={() => {
+        setIsStickyComposerCollapsed((current) => !current);
+      }}
+    >
+      <ChevronIcon
+        className={joinClasses(
+          "size-4 transition-transform",
+          isStickyComposerCollapsed ? "-rotate-90" : "rotate-90",
+        )}
+      />
+    </button>
+  );
+  const handleCollapsedPreviewClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (isCollapsedPreviewInteractiveTarget(event.currentTarget, event.target)) {
+      return;
+    }
+
+    setIsStickyComposerCollapsed(false);
+  };
+  const handleCollapsedPreviewKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+
+    if (isCollapsedPreviewInteractiveTarget(event.currentTarget, event.target)) {
+      return;
+    }
+
+    event.preventDefault();
+    setIsStickyComposerCollapsed(false);
+  };
+  const effectiveSurface = stickyMode ? "bare" : surface;
+  const composerForm = (
       <form
         className={joinClasses(
-          layout === "thread"
+          layout === "thread" && !stickyMode
             ? "mt-6 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4"
             : "m-0",
         )}
         onSubmit={handleSubmit}
       >
-        <div className={surface === "card" ? "rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-3" : "p-0"}>
+        <div className={effectiveSurface === "card" ? "rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-3" : "p-0"}>
           {header ? (
             <div className="mb-3 px-1">
               {header}
@@ -1010,17 +1090,7 @@ export default function ThreadComposer ({
                 ariaLabel={isCommentMode ? "Write comment" : "Message thread"}
                 className="thread-plaintext-editable min-h-[5.75rem] w-full border-0 bg-transparent px-1 py-1 text-[0.96em] leading-[1.65] text-text outline-none"
                 disabled={isInputDisabled}
-                placeholder={isCommentMode
-                  ? "Write a comment..."
-                  : isThreadStateBroken
-                  ? "New messages are disabled for this thread."
-                  : isCopilotAuthRequired
-                    ? "Sign in to Copilot CLI to send messages."
-                    : isActiveThread
-                      ? "Message the current turn..."
-                      : thread.isDraft
-                        ? "Start a new thread..."
-                        : "Continue this thread..."}
+                placeholder={composerPlaceholder}
                 highlights={composerHighlights}
                 mentionSources={highlightSources}
                 mentionSuggestionsPlacement="above"
@@ -1092,42 +1162,40 @@ export default function ThreadComposer ({
               }}
             />
           ) : !showQuestionnairePanel ? (
-            <div className="mt-3 flex flex-wrap items-end gap-3">
-              <div className="min-w-0 flex-1">
-                {questionnaireToggleButton}
-                {attachments.length ? (
-                  <div className="flex flex-wrap gap-3 px-1">
-                    {attachments.map((attachment, index) => (
-                      <div key={attachment.id} className="relative h-24 w-24">
-                        <ThreadLightboxImage
-                          alt={`Attached image ${index + 1}`}
-                          buttonClassName="h-full w-full rounded-[0.95rem]"
-                          imageClassName="h-full w-full object-cover"
-                          src={attachment.url}
-                        />
-                        <button
-                          type="button"
-                          aria-label={`Remove attached image ${index + 1}`}
-                          title="Remove attached image"
-                          className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text shadow-sm transition hover:bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                          onClick={() => {
-                            setAttachments((current) => current.filter((currentAttachment) => currentAttachment.id !== attachment.id));
-                          }}
-                        >
-                          <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
-                            <path
-                              d="M4 4l8 8M12 4l-8 8"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeLinecap="round"
-                              strokeWidth="1.8"
-                            />
-                          </svg>
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
+            <div className="mt-3 space-y-3">
+              {attachments.length ? (
+                <div className="flex flex-wrap gap-3 px-1">
+                  {attachments.map((attachment, index) => (
+                    <div key={attachment.id} className="relative h-24 w-24">
+                      <ThreadLightboxImage
+                        alt={`Attached image ${index + 1}`}
+                        buttonClassName="h-full w-full rounded-[0.95rem]"
+                        imageClassName="h-full w-full object-cover"
+                        src={attachment.url}
+                      />
+                      <button
+                        type="button"
+                        aria-label={`Remove attached image ${index + 1}`}
+                        title="Remove attached image"
+                        className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text shadow-sm transition hover:bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+                        onClick={() => {
+                          setAttachments((current) => current.filter((currentAttachment) => currentAttachment.id !== attachment.id));
+                        }}
+                      >
+                        <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
+                          <path
+                            d="M4 4l8 8M12 4l-8 8"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeWidth="1.8"
+                          />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
                 {helperText ? (
                   <p className={joinClasses(
                     attachments.length ? "mt-2 mb-0 px-1 text-[0.78em] leading-[1.6]" : "m-0 px-1 text-[0.78em] leading-[1.6]",
@@ -1136,8 +1204,11 @@ export default function ThreadComposer ({
                     {helperText}
                   </p>
                 ) : null}
-              </div>
-              <div className="flex flex-wrap items-center justify-end gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  {questionnaireToggleButton}
+                </div>
+                <div className="flex flex-wrap items-center justify-end gap-2">
                 {showSavedDraftControls ? (
                   <button
                     type="button"
@@ -1230,6 +1301,7 @@ export default function ThreadComposer ({
                 {trailingActions}
                 {pauseButton}
                 {stopButton}
+                </div>
               </div>
             </div>
           ) : null}
@@ -1238,6 +1310,67 @@ export default function ThreadComposer ({
           <p className="mt-2 mb-0 text-[0.84em] leading-[1.6] text-danger">{error}</p>
         ) : null}
       </form>
+  );
+  const composerContent = stickyMode ? (
+    <div className="thread-composer-sticky-shell">
+      <div
+        className="thread-composer-sticky-surface"
+        data-collapsed={isStickyComposerCollapsed ? "true" : "false"}
+      >
+        <div className="thread-composer-sticky-expanded">
+          <div className="thread-composer-sticky-collapse-button-slot">
+            {stickyCollapseButton}
+          </div>
+          <div className="min-w-0">
+            {composerForm}
+          </div>
+        </div>
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label="Expand composer"
+          className="thread-composer-sticky-collapsed"
+          onClick={handleCollapsedPreviewClick}
+          onKeyDown={handleCollapsedPreviewKeyDown}
+        >
+          <span className="thread-composer-sticky-collapsed-chevron" aria-hidden="true">
+            <ChevronIcon className="size-4 -rotate-90" />
+          </span>
+          <span className="thread-composer-sticky-collapsed-text" data-preview-kind={stickyPreviewKind}>
+            {stickyPreviewText}
+          </span>
+          {collapsedAttachmentPreviews.length ? (
+            <span className="thread-composer-sticky-collapsed-attachments">
+              {collapsedAttachmentPreviews.map((attachment, index) => (
+                <span
+                  key={attachment.id}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                  }}
+                >
+                  <ThreadLightboxImage
+                    alt={`Attached image ${index + 1}`}
+                    buttonClassName="size-10 rounded-[0.75rem]"
+                    imageClassName="h-full w-full object-cover"
+                    src={attachment.url}
+                  />
+                </span>
+              ))}
+              {hiddenAttachmentCount ? (
+                <span className="inline-flex size-10 items-center justify-center rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] text-[0.76em] font-medium text-muted">
+                  +{hiddenAttachmentCount}
+                </span>
+              ) : null}
+            </span>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  ) : composerForm;
+
+  return (
+    <>
+      {composerContent}
       {children}
       {showSavedDraftControls
         ? useSavedDraftShelfPortal

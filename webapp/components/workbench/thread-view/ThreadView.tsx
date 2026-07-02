@@ -27,16 +27,16 @@ import type {
   WorkbenchThreadTurnHistoryEntry,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
-import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import { areDeeplyEqual } from "../../../lib/workbench/deep-equality";
 import { writeTextToClipboard } from "../../../lib/workbench/dom/clipboard";
-import type { ProjectTreeFileCandidate } from "../../../lib/workbench/project/ProjectTreeFileIndex";
+import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import {
   createProjectFilePathDisambiguationIndexCooperatively,
   readCachedProjectFilePathDisambiguationIndex,
   writeProjectFilePathDisambiguationIndexCache,
   type ProjectFilePathDisambiguationIndex,
 } from "../../../lib/workbench/project/project-file-path";
+import type { ProjectTreeFileCandidate } from "../../../lib/workbench/project/ProjectTreeFileIndex";
 import {
   persistThreadLiveActivityOpen,
   readStoredThreadLiveActivityOpen,
@@ -49,12 +49,14 @@ import {
   type BuildInlineMentionCandidatesOptions,
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
-import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
 import {
   getCollabAgentThreadIds,
   getThreadAgentTabLabel,
 } from "../../../lib/workbench/thread/thread-collab-agents";
+import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
+import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
 import { ThreadQuestionBadge, ThreadUnreadBadge as ThreadUnreadBadgeView } from "../ThreadStatusBadges";
+import { ThreadThreadContent, ThreadTurnDetails, ThreadTurnLoadingSkeleton } from "./thread-view-items";
 import ThreadAgentName from "./ThreadAgentName";
 import ThreadComposer from "./ThreadComposer";
 import ThreadContextStatus from "./ThreadContextStatus";
@@ -68,8 +70,6 @@ import {
   isThreadWebSearchPlaceholder,
   ThreadWebSearchActionRow,
 } from "./ThreadWebSearchItem";
-import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
-import { ThreadThreadContent, ThreadTurnDetails, ThreadTurnLoadingSkeleton } from "./thread-view-items";
 
 const SUBTHREAD_POLL_INTERVAL_MS = 1500;
 const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
@@ -434,7 +434,7 @@ function getLiveThreadActivity ({
   };
 }
 
-function useBackgroundInlineMentionSources({
+function useBackgroundInlineMentionSources ({
   files,
   filesIdentity,
   projectRootPath,
@@ -488,12 +488,12 @@ function useBackgroundInlineMentionSources({
         threadCwdPath,
         workspaceRoots,
       }, budget),
-      commit(result) {
+      commit (result) {
         if (generationRef.current === generation) {
           setSources(result);
         }
       },
-      onError(error) {
+      onError (error) {
         console.error("Failed to rebuild inline mention sources", error);
       },
       sliceMs: THREAD_VIEW_BACKGROUND_REBUILD_SLICE_MS,
@@ -503,7 +503,7 @@ function useBackgroundInlineMentionSources({
   return sources;
 }
 
-function useBackgroundProjectFilePathDisambiguationIndex(
+function useBackgroundProjectFilePathDisambiguationIndex (
   disambiguationPaths: readonly string[],
   disambiguationKey: string,
 ): ProjectFilePathDisambiguationIndex | null {
@@ -523,17 +523,17 @@ function useBackgroundProjectFilePathDisambiguationIndex(
 
     threadViewBackgroundRebuildQueue.enqueue({
       key: "thread-view:project-file-path-disambiguation",
-      async run(budget) {
+      async run (budget) {
         const index = await createProjectFilePathDisambiguationIndexCooperatively(disambiguationPaths, budget);
         writeProjectFilePathDisambiguationIndexCache(disambiguationPaths, disambiguationKey, index);
         return index;
       },
-      commit(result) {
+      commit (result) {
         if (generationRef.current === generation) {
           setDisambiguationIndex(result);
         }
       },
-      onError(error) {
+      onError (error) {
         console.error("Failed to rebuild project file path disambiguation index", error);
       },
       sliceMs: THREAD_VIEW_BACKGROUND_REBUILD_SLICE_MS,
@@ -1451,6 +1451,24 @@ export default memo(function ThreadView ({
   }, [livePendingUserInputRequestsByThreadId, seenItemCountsByThreadId, thread.id]);
 
   const mainThreadBadge = getTabBadge(thread.id, thread);
+  const composerStatus = activeThread ? (
+    <ThreadRateLimits
+      canToggleHarness={activeThread.isDraft}
+      harness={activeThread.harness}
+      onHarnessToggle={() => {
+        const harnesses: WorkbenchHarness[] = ["codex", "copilot", "opencode"];
+        const currentIndex = harnesses.indexOf(activeThread.harness);
+        onDraftHarnessChange(harnesses[(currentIndex + 1) % harnesses.length] ?? "codex");
+      }}
+      rateLimits={rateLimits}
+      trailingContent={(
+        <ThreadContextStatus
+          onCompactThread={onCompactThread}
+          thread={activeThread}
+        />
+      )}
+    />
+  ) : null;
   const composer = activeThread ? (
     <ThreadComposer
       key={activeThread.id}
@@ -1485,6 +1503,7 @@ export default memo(function ThreadView ({
       rateLimits={rateLimits}
       autoExpandSavedDraftShelf={!isDraftThreadView}
       savedDraftShelfPortalHost={isDraftThreadView ? draftSavedDraftShelfPortalHost : null}
+      stickyMode={!isDraftThreadView}
       threadComposerDraft={threadComposerDraftsByThreadId[activeThread.id] ?? null}
       threadQuestionnaireDraft={activePendingUserInputRequest
         ? threadQuestionnaireDraftsByKey[`${activeThread.id}:${activePendingUserInputRequest.requestKey}`] ?? null
@@ -1494,22 +1513,7 @@ export default memo(function ThreadView ({
       knownSkills={workbenchSkills}
       thread={activeThread}
     >
-      <ThreadRateLimits
-        canToggleHarness={activeThread.isDraft}
-        harness={activeThread.harness}
-        onHarnessToggle={() => {
-          const harnesses: WorkbenchHarness[] = ["codex", "copilot", "opencode"];
-          const currentIndex = harnesses.indexOf(activeThread.harness);
-          onDraftHarnessChange(harnesses[(currentIndex + 1) % harnesses.length] ?? "codex");
-        }}
-        rateLimits={rateLimits}
-        trailingContent={(
-          <ThreadContextStatus
-            onCompactThread={onCompactThread}
-            thread={activeThread}
-          />
-        )}
-      />
+      {isDraftThreadView ? composerStatus : null}
     </ThreadComposer>
   ) : null;
 
@@ -1532,246 +1536,251 @@ export default memo(function ThreadView ({
         onClick={handleThreadViewClick}
         style={{ fontSize: `${fontSizeRem}rem` }}
       >
-      {isDraftThreadView ? (
-        <>
-          <div className={joinClasses(
-            "flex w-full items-center",
-            contained ? "min-h-0 py-4" : "min-h-[calc(100dvh-8rem)]",
-          )}>
-            <div className="w-full">
-              <header className="pb-4">
-                <h2 className="m-0 text-[1.55em] font-semibold leading-[1.1] tracking-tight text-text">
-                  Create new thread
-                </h2>
-              </header>
-              {composer}
+        {isDraftThreadView ? (
+          <>
+            <div className={joinClasses(
+              "flex w-full items-center",
+              contained ? "min-h-0 py-4" : "min-h-[calc(100dvh-8rem)]",
+            )}>
+              <div className="w-full">
+                <header className="pb-4">
+                  <h2 className="m-0 text-[1.55em] font-semibold leading-[1.1] tracking-tight text-text">
+                    Create new thread
+                  </h2>
+                </header>
+                {composer}
+              </div>
             </div>
-          </div>
-          <div
-            ref={setDraftSavedDraftShelfPortalHost}
-            className="mt-4 min-h-0 overflow-visible"
-          />
-        </>
-      ) : null}
+            <div
+              ref={setDraftSavedDraftShelfPortalHost}
+              className="mt-4 min-h-0 overflow-visible"
+            />
+          </>
+        ) : null}
 
-      <div hidden={isDraftThreadView}>
-        {activeThread ? (
-          visibleHistoryEntries.length ? (
-            <>
-              {canLoadPreviousTurn ? (
-                <div ref={historySentinelRef} className="h-px" aria-hidden="true" />
-              ) : null}
-              {visibleHistoryEntries.map((entry) => {
-                const turn = loadedTurnsById.get(entry.turnId);
-                const isPreviousTurnLoading = Boolean(
-                  firstVisibleLoadedEntry
-                  && loadingPreviousTurnKeys[`${activeThread.id}:${firstVisibleLoadedEntry.turnId}`],
-                );
-                return turn ? (
-                  <ThreadTurnDetails
-                    key={entry.turnId}
-                    hiddenCollabAgentToolCallItemIds={turn.id === currentTurn?.id ? hiddenCollabAgentToolCallItemIds : EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS}
-                    hiddenDynamicToolCallItemIds={turn.id === currentTurn?.id ? hiddenDynamicToolCallItemIds : EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS}
-                    hideFinalAgentMessage={hideFinalAgentMessage}
-                    hideWorkbenchControlAgentMessages={hideWorkbenchControlAgentMessages}
-                    hideWorkbenchControlUserMessages={hideWorkbenchControlUserMessages}
-                    inlineMentionSources={inlineMentionSources}
-                    knownSkills={workbenchSkills}
-                    threadCwdPath={activeThread.cwd}
-                    threadId={activeThread.id}
-                    projectFilePaths={projectFilePaths}
-                    projectId={projectId}
-                    projectRootPath={projectRootPath}
-                    relatedThreadsById={relatedThreadsById}
-                    turn={turn}
-                    workspaceRoots={workspaceFileLinkRoots}
-                    hiddenReasoningItemId={turn.id === currentTurn?.id && liveActivity?.kind === "reasoning" ? liveActivity.hiddenItemId : null}
-                    hiddenWebSearchItemIds={turn.id === currentTurn?.id && liveActivity?.kind === "webSearch" ? liveActivity.hiddenItemIds : undefined}
-                  />
-                ) : isPreviousTurnLoading ? (
-                  <ThreadTurnLoadingSkeleton
-                    key={entry.turnId}
-                    entry={entry}
-                    isLoading
-                  />
-                ) : null;
-              })}
-            </>
+        <div hidden={isDraftThreadView}>
+          {activeThread ? (
+            visibleHistoryEntries.length ? (
+              <>
+                {canLoadPreviousTurn ? (
+                  <div ref={historySentinelRef} className="h-px" aria-hidden="true" />
+                ) : null}
+                {visibleHistoryEntries.map((entry) => {
+                  const turn = loadedTurnsById.get(entry.turnId);
+                  const isPreviousTurnLoading = Boolean(
+                    firstVisibleLoadedEntry
+                    && loadingPreviousTurnKeys[`${activeThread.id}:${firstVisibleLoadedEntry.turnId}`],
+                  );
+                  return turn ? (
+                    <ThreadTurnDetails
+                      key={entry.turnId}
+                      hiddenCollabAgentToolCallItemIds={turn.id === currentTurn?.id ? hiddenCollabAgentToolCallItemIds : EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS}
+                      hiddenDynamicToolCallItemIds={turn.id === currentTurn?.id ? hiddenDynamicToolCallItemIds : EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS}
+                      hideFinalAgentMessage={hideFinalAgentMessage}
+                      hideWorkbenchControlAgentMessages={hideWorkbenchControlAgentMessages}
+                      hideWorkbenchControlUserMessages={hideWorkbenchControlUserMessages}
+                      inlineMentionSources={inlineMentionSources}
+                      knownSkills={workbenchSkills}
+                      threadCwdPath={activeThread.cwd}
+                      threadId={activeThread.id}
+                      projectFilePaths={projectFilePaths}
+                      projectId={projectId}
+                      projectRootPath={projectRootPath}
+                      relatedThreadsById={relatedThreadsById}
+                      turn={turn}
+                      workspaceRoots={workspaceFileLinkRoots}
+                      hiddenReasoningItemId={turn.id === currentTurn?.id && liveActivity?.kind === "reasoning" ? liveActivity.hiddenItemId : null}
+                      hiddenWebSearchItemIds={turn.id === currentTurn?.id && liveActivity?.kind === "webSearch" ? liveActivity.hiddenItemIds : undefined}
+                    />
+                  ) : isPreviousTurnLoading ? (
+                    <ThreadTurnLoadingSkeleton
+                      key={entry.turnId}
+                      entry={entry}
+                      isLoading
+                    />
+                  ) : null;
+                })}
+              </>
+            ) : (
+              !activeThread.isDraft ? (
+                <p className="m-0 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-4 text-[0.92em] leading-[1.6] text-muted">
+                  No turns were returned for this thread yet.
+                </p>
+              ) : null
+            )
           ) : (
-            !activeThread.isDraft ? (
-              <p className="m-0 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-4 text-[0.92em] leading-[1.6] text-muted">
-                No turns were returned for this thread yet.
-              </p>
-            ) : null
-          )
-        ) : (
-          <div className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-4">
-            <p className="m-0 text-[0.92em] leading-[1.6] text-muted">Loading subagent thread...</p>
-          </div>
-        )}
-      </div>
-      {liveActivity ? (
-        <div className="py-4" aria-live="polite">
-          {liveActivity.kind === "webSearch" ? (
-            liveActivity.contextItems.length ? (
+            <div className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-4">
+              <p className="m-0 text-[0.92em] leading-[1.6] text-muted">Loading subagent thread...</p>
+            </div>
+          )}
+        </div>
+        {liveActivity ? (
+          <div className="py-4" aria-live="polite">
+            {liveActivity.kind === "webSearch" ? (
+              liveActivity.contextItems.length ? (
+                <ThreadDisclosure
+                  contentClassName="mt-2 space-y-1 pl-6"
+                  open={isLiveActivityOpen}
+                  onToggle={(event) => {
+                    const nextIsOpen = event.currentTarget.open;
+                    setIsLiveActivityOpen(nextIsOpen);
+                    persistThreadLiveActivityOpen(nextIsOpen);
+                  }}
+                  summary={<span className="thread-thinking-text">{liveActivity.title}</span>}
+                  summaryClassName="text-[0.92em] font-medium leading-[1.6]"
+                >
+                  {liveActivity.contextItems.map((item) => (
+                    <p key={item.id} className="m-0 text-[0.92em] leading-[1.6] text-muted">
+                      <ThreadWebSearchActionRow item={item} />
+                    </p>
+                  ))}
+                </ThreadDisclosure>
+              ) : (
+                <p className="thread-thinking-text m-0 text-[0.92em] font-medium leading-[1.6]">
+                  {liveActivity.title}
+                </p>
+              )
+            ) : liveActivity.kind === "reasoning" && liveActivity.body ? (
               <ThreadDisclosure
-                contentClassName="mt-2 space-y-1 pl-6"
+                contentClassName="mt-2"
                 open={isLiveActivityOpen}
                 onToggle={(event) => {
                   const nextIsOpen = event.currentTarget.open;
                   setIsLiveActivityOpen(nextIsOpen);
                   persistThreadLiveActivityOpen(nextIsOpen);
                 }}
-                summary={<span className="thread-thinking-text">{liveActivity.title}</span>}
                 summaryClassName="text-[0.92em] font-medium leading-[1.6]"
+                summary={<span className="thread-thinking-text">{liveActivity.title}</span>}
               >
-                {liveActivity.contextItems.map((item) => (
-                  <p key={item.id} className="m-0 text-[0.92em] leading-[1.6] text-muted">
-                    <ThreadWebSearchActionRow item={item} />
-                  </p>
-                ))}
+                <ThreadMarkdown
+                  className="text-[0.8em] text-muted"
+                  inlineMentionSources={inlineMentionSources}
+                  markdown={liveActivity.body}
+                  threadCwdPath={activeThread.cwd}
+                  projectFilePaths={projectFilePaths}
+                  projectId={projectId}
+                  projectRootPath={projectRootPath}
+                  workspaceRoots={workspaceFileLinkRoots}
+                />
               </ThreadDisclosure>
-            ) : (
+            ) : liveActivity.kind === "reasoning" ? (
               <p className="thread-thinking-text m-0 text-[0.92em] font-medium leading-[1.6]">
                 {liveActivity.title}
               </p>
-            )
-          ) : liveActivity.kind === "reasoning" && liveActivity.body ? (
-            <ThreadDisclosure
-              contentClassName="mt-2"
-              open={isLiveActivityOpen}
-              onToggle={(event) => {
-                const nextIsOpen = event.currentTarget.open;
-                setIsLiveActivityOpen(nextIsOpen);
-                persistThreadLiveActivityOpen(nextIsOpen);
-              }}
-              summaryClassName="text-[0.92em] font-medium leading-[1.6]"
-              summary={<span className="thread-thinking-text">{liveActivity.title}</span>}
-            >
-              <ThreadMarkdown
-                className="text-[0.8em] text-muted"
-                inlineMentionSources={inlineMentionSources}
-                markdown={liveActivity.body}
-                threadCwdPath={activeThread.cwd}
-                projectFilePaths={projectFilePaths}
-                projectId={projectId}
-                projectRootPath={projectRootPath}
-                workspaceRoots={workspaceFileLinkRoots}
-              />
-            </ThreadDisclosure>
-          ) : liveActivity.kind === "reasoning" ? (
-            <p className="thread-thinking-text m-0 text-[0.92em] font-medium leading-[1.6]">
-              {liveActivity.title}
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {liveActivity.waits.map((wait) => {
-                const liveSubagentThread = relatedThreadsById[wait.receiverThreadId] ?? null;
-                const summary = (
-                  <span>
-                    <span className="thread-thinking-text">waiting for</span>{" "}
-                    <ThreadAgentName
-                      fallbackKey={wait.receiverThreadId}
-                      thread={liveSubagentThread}
-                    />
-                  </span>
-                );
-                if (!liveSubagentThread?.turns.length) {
-                  return (
-                    <p key={`${wait.hiddenItemId}:${wait.receiverThreadId}`} className="m-0 text-[0.92em] font-medium leading-[1.6]">
-                      {summary}
-                    </p>
-                  );
-                }
-
-                return (
-                  <ThreadDisclosure
-                    key={`${wait.hiddenItemId}:${wait.receiverThreadId}`}
-                    contentClassName="mt-2"
-                    open={isLiveActivityOpen}
-                    onToggle={(event) => {
-                      const nextIsOpen = event.currentTarget.open;
-                      setIsLiveActivityOpen(nextIsOpen);
-                      persistThreadLiveActivityOpen(nextIsOpen);
-                    }}
-                    summary={summary}
-                    summaryClassName="text-[0.92em] font-medium leading-[1.6]"
-                  >
-                    <ThreadPreviewFrame height="22rem" scale={0.9}>
-                      <ThreadThreadContent
-                        inlineMentionSources={inlineMentionSources}
-                        knownSkills={workbenchSkills}
-                        projectFilePaths={projectFilePaths}
-                        projectId={projectId}
-                        projectRoots={projectRoots}
-                        projectRootPath={projectRootPath}
-                        relatedThreadsById={relatedThreadsById}
+            ) : (
+              <div className="space-y-3">
+                {liveActivity.waits.map((wait) => {
+                  const liveSubagentThread = relatedThreadsById[wait.receiverThreadId] ?? null;
+                  const summary = (
+                    <span>
+                      <span className="thread-thinking-text">waiting for</span>{" "}
+                      <ThreadAgentName
+                        fallbackKey={wait.receiverThreadId}
                         thread={liveSubagentThread}
                       />
-                    </ThreadPreviewFrame>
-                  </ThreadDisclosure>
+                    </span>
+                  );
+                  if (!liveSubagentThread?.turns.length) {
+                    return (
+                      <p key={`${wait.hiddenItemId}:${wait.receiverThreadId}`} className="m-0 text-[0.92em] font-medium leading-[1.6]">
+                        {summary}
+                      </p>
+                    );
+                  }
+
+                  return (
+                    <ThreadDisclosure
+                      key={`${wait.hiddenItemId}:${wait.receiverThreadId}`}
+                      contentClassName="mt-2"
+                      open={isLiveActivityOpen}
+                      onToggle={(event) => {
+                        const nextIsOpen = event.currentTarget.open;
+                        setIsLiveActivityOpen(nextIsOpen);
+                        persistThreadLiveActivityOpen(nextIsOpen);
+                      }}
+                      summary={summary}
+                      summaryClassName="text-[0.92em] font-medium leading-[1.6]"
+                    >
+                      <ThreadPreviewFrame height="22rem" scale={0.9}>
+                        <ThreadThreadContent
+                          inlineMentionSources={inlineMentionSources}
+                          knownSkills={workbenchSkills}
+                          projectFilePaths={projectFilePaths}
+                          projectId={projectId}
+                          projectRoots={projectRoots}
+                          projectRootPath={projectRootPath}
+                          relatedThreadsById={relatedThreadsById}
+                          thread={liveSubagentThread}
+                        />
+                      </ThreadPreviewFrame>
+                    </ThreadDisclosure>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ) : null}
+        {tabDefinitions.length ? (
+          <div className="mt-6">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className={joinClasses(
+                  "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[0.78em] font-medium leading-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
+                  activeThreadId === thread.id
+                    ? "border-[color-mix(in_srgb,var(--text)_18%,transparent)] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] text-text"
+                    : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] text-muted hover:text-text",
+                )}
+                onClick={() => {
+                  handleSubthreadSelection(thread.id);
+                }}
+              >
+                <span>Main agent</span>
+                {mainThreadBadge.isQuestion ? <ThreadQuestionBadge /> : mainThreadBadge.unreadBadge ? <ThreadUnreadBadgeView badge={mainThreadBadge.unreadBadge} /> : null}
+              </button>
+              <span className="text-[0.84em] text-muted" aria-hidden="true">|</span>
+              {tabDefinitions.map((tab) => {
+                const tabThread = relatedThreadsById[tab.id];
+                const badge = getTabBadge(tab.id, tabThread);
+
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    aria-busy={tab.isLoading}
+                    className={joinClasses(
+                      "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[0.78em] font-medium leading-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
+                      activeThreadId === tab.id
+                        ? "border-[color-mix(in_srgb,var(--text)_18%,transparent)] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] text-text"
+                        : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] text-muted hover:text-text",
+                      tab.isLoading && activeThreadId !== tab.id && "opacity-70",
+                    )}
+                    onClick={() => {
+                      handleSubthreadSelection(tab.id);
+                    }}
+                  >
+                    <ThreadAgentName
+                      fallbackKey={tab.id}
+                      thread={tabThread}
+                    />
+                    {tab.suffix ? <span className="text-muted">{tab.suffix}</span> : null}
+                    {badge.isQuestion ? <ThreadQuestionBadge /> : badge.unreadBadge ? <ThreadUnreadBadgeView badge={badge.unreadBadge} /> : null}
+                  </button>
                 );
               })}
             </div>
-          )}
-        </div>
-      ) : null}
-      {tabDefinitions.length ? (
-        <div className="mt-6">
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              className={joinClasses(
-                "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[0.78em] font-medium leading-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
-                activeThreadId === thread.id
-                  ? "border-[color-mix(in_srgb,var(--text)_18%,transparent)] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] text-text"
-                  : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] text-muted hover:text-text",
-              )}
-              onClick={() => {
-                handleSubthreadSelection(thread.id);
-              }}
-            >
-              <span>Main agent</span>
-              {mainThreadBadge.isQuestion ? <ThreadQuestionBadge /> : mainThreadBadge.unreadBadge ? <ThreadUnreadBadgeView badge={mainThreadBadge.unreadBadge} /> : null}
-            </button>
-            <span className="text-[0.84em] text-muted" aria-hidden="true">|</span>
-            {tabDefinitions.map((tab) => {
-              const tabThread = relatedThreadsById[tab.id];
-              const badge = getTabBadge(tab.id, tabThread);
-
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  aria-busy={tab.isLoading}
-                  className={joinClasses(
-                    "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[0.78em] font-medium leading-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
-                    activeThreadId === tab.id
-                      ? "border-[color-mix(in_srgb,var(--text)_18%,transparent)] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] text-text"
-                      : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] text-muted hover:text-text",
-                    tab.isLoading && activeThreadId !== tab.id && "opacity-70",
-                  )}
-                  onClick={() => {
-                    handleSubthreadSelection(tab.id);
-                  }}
-                >
-                  <ThreadAgentName
-                    fallbackKey={tab.id}
-                    thread={tabThread}
-                  />
-                  {tab.suffix ? <span className="text-muted">{tab.suffix}</span> : null}
-                  {badge.isQuestion ? <ThreadQuestionBadge /> : badge.unreadBadge ? <ThreadUnreadBadgeView badge={badge.unreadBadge} /> : null}
-                </button>
-              );
-            })}
           </div>
-        </div>
-      ) : null}
-      {activeThread && !isDraftThreadView ? (
-        <>
-          {composer}
-        </>
-      ) : null}
+        ) : null}
+        {activeThread && !isDraftThreadView ? (
+          <>
+            {composer}
+            {composerStatus ? (
+              <div>
+                {composerStatus}
+              </div>
+            ) : null}
+          </>
+        ) : null}
         <div aria-hidden="true" className="h-px w-full" />
       </div>
     </ProjectFilePathDisplayProvider>
