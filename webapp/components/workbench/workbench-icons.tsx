@@ -12,6 +12,7 @@
  * - GearIcon: render the settings navigation icon. Keywords: workbench, icon, settings.
  * - CollaborationIcon: render the collaboration navigation icon. Keywords: workbench, icon, collaboration.
  * - ReloadIcon: render the local runtime reload icon. Keywords: workbench, icon, reload.
+ * - StopIcon/PauseIcon/PlayIcon: render shared thread turn control icons. Keywords: workbench, icon, thread, stop, pause, play.
  * - PinIcon: render the pinned thread icon. Keywords: workbench, icon, thread, pin.
  * - ArchiveIcon: render the thread archive context menu icon. Keywords: workbench, icon, thread, archive.
  * - WrapTextIcon: render the thread codeblock line-wrap toggle icon. Keywords: workbench, icon, thread, code, wrap.
@@ -220,6 +221,31 @@ export function ReloadIcon () {
       <path d="M3.75 3.75V6.75H6.75" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M3.75 10.75A6.25 6.25 0 0 0 14.7 14.88L16.25 13.25" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M16.25 16.25V13.25H13.25" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function StopIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} aria-hidden="true">
+      <rect x="2.5" y="2.5" width="11" height="11" rx="1.9" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function PauseIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} aria-hidden="true">
+      <rect x="4" y="2.75" width="2.6" height="10.5" rx="1" fill="currentColor" />
+      <rect x="9.4" y="2.75" width="2.6" height="10.5" rx="1" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function PlayIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} aria-hidden="true">
+      <path d="M5 3.5v9l7-4.5-7-4.5z" fill="currentColor" />
     </svg>
   );
 }

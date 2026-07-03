@@ -99,15 +99,25 @@ function WorkbenchContextMenuSurface ({
       }
     }
 
+    function handleScrollIntent(event: TouchEvent | WheelEvent) {
+      if (menuRef.current?.contains(event.target as Node)) {
+        return;
+      }
+
+      onClose();
+    }
+
     window.addEventListener("pointerdown", handlePointerDown, true);
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("resize", onClose);
-    window.addEventListener("scroll", onClose, true);
+    window.addEventListener("touchmove", handleScrollIntent, { capture: true, passive: true });
+    window.addEventListener("wheel", handleScrollIntent, { capture: true, passive: true });
     return () => {
       window.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("resize", onClose);
-      window.removeEventListener("scroll", onClose, true);
+      window.removeEventListener("touchmove", handleScrollIntent, true);
+      window.removeEventListener("wheel", handleScrollIntent, true);
     };
   }, [onClose]);
 

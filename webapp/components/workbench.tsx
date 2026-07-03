@@ -171,6 +171,7 @@ import {
   SidebarCollapseIcon,
   SidebarExpandIcon,
   SparkleIcon,
+  StopIcon,
   ZoomInIcon,
   ZoomOutIcon
 } from "./workbench/workbench-icons";
@@ -424,6 +425,12 @@ function mosaicContainsThreadTarget(node: WorkbenchMosaicNode | null, threadId: 
   }
 
   return node.children.some((child) => mosaicContainsThreadTarget(child, threadId));
+}
+
+function isThreadSummaryActive(thread: ThreadSummary) {
+  return thread.status === "active"
+    || thread.status.startsWith("active:")
+    || Boolean(thread.unreadBadge?.hasActiveTurn);
 }
 
 function getPanelTargetMosaicNode(target: WorkbenchPanelTarget): WorkbenchMosaicNode | null {
@@ -1531,10 +1538,23 @@ export default function Workbench () {
       return nextPreferences;
     });
   }, [activeProjectId]);
+  const stopSidebarThread = useCallback(async (thread: ThreadSummary) => {
+    if (!controls) {
+      return;
+    }
+
+    const payload = await controls.readThread(thread.id, thread.harness);
+    if (!payload) {
+      return;
+    }
+
+    await controls.stopThread(payload);
+  }, [controls]);
   const getThreadContextMenu = useCallback((thread: ThreadSummary): WorkbenchContextMenuDefinition => {
     const threadKey = createWorkbenchThreadPreferenceKey(thread);
     const label = thread.name || thread.preview || thread.id;
     const isPinned = pinnedSidebarThreadKeySet.has(threadKey);
+    const isActive = isThreadSummaryActive(thread);
 
     return {
       id: `thread:${threadKey}`,
@@ -1560,6 +1580,14 @@ export default function Workbench () {
             }));
           },
         },
+        ...(isActive ? [{
+          icon: <StopIcon className="size-4" />,
+          id: "stop",
+          label: "Stop thread",
+          onSelect: () => {
+            void stopSidebarThread(thread);
+          },
+        }] : []),
         {
           icon: <ArchiveIcon className="size-4" />,
           id: "archive",
@@ -1575,7 +1603,7 @@ export default function Workbench () {
       ],
       label: `Thread actions for ${label}`,
     };
-  }, [pinnedSidebarThreadKeySet, updateThreadSidebarPreferences]);
+  }, [pinnedSidebarThreadKeySet, stopSidebarThread, updateThreadSidebarPreferences]);
   const handleWorkbenchProjectFileLinkClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
     if (event.button !== 0) {
       return;

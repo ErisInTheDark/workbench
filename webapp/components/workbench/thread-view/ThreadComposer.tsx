@@ -41,6 +41,7 @@ import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thre
 import { isWorkbenchSyntheticSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import PrimaryButton from "../PrimaryButton";
 import ChevronIcon from "../ChevronIcon";
+import { PauseIcon, PlayIcon, StopIcon } from "../workbench-icons";
 import PlaintextEditable, { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./PlaintextEditable";
 import ThreadAgentPicker from "./ThreadAgentPicker";
 import ThreadLightboxImage from "./ThreadLightboxImage";
@@ -89,23 +90,6 @@ function ArrowUpIcon () {
     <svg viewBox="0 0 20 20" className="h-4.5 w-4.5" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8">
       <path d="M10 15.75V4.25" strokeLinecap="round" />
       <path d="M5.75 8.5L10 4.25l4.25 4.25" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function PauseIcon () {
-  return (
-    <svg viewBox="0 0 16 16" className="h-4.5 w-4.5" aria-hidden="true">
-      <rect x="4" y="2.75" width="2.6" height="10.5" rx="1" fill="currentColor" />
-      <rect x="9.4" y="2.75" width="2.6" height="10.5" rx="1" fill="currentColor" />
-    </svg>
-  );
-}
-
-function PlayIcon () {
-  return (
-    <svg viewBox="0 0 16 16" className="h-4.5 w-4.5" aria-hidden="true">
-      <path d="M5 3.5v9l7-4.5-7-4.5z" fill="currentColor" />
     </svg>
   );
 }
@@ -1053,7 +1037,7 @@ export default function ThreadComposer ({
         void (hiddenPauseRequest ? resume() : pause());
       }}
     >
-      {hiddenPauseRequest ? <PlayIcon /> : <PauseIcon />}
+      {hiddenPauseRequest ? <PlayIcon className="h-4.5 w-4.5" /> : <PauseIcon className="h-4.5 w-4.5" />}
     </PrimaryButton>
   ) : null;
 
@@ -1068,9 +1052,7 @@ export default function ThreadComposer ({
         void stop();
       }}
     >
-      <svg viewBox="0 0 16 16" className="h-4.5 w-4.5" aria-hidden="true">
-        <rect x="2.5" y="2.5" width="11" height="11" rx="1.9" fill="currentColor" />
-      </svg>
+      <StopIcon className="h-4.5 w-4.5" />
     </PrimaryButton>
   ) : null;
   const questionnaireToggleButton = hasVisiblePendingUserInputRequest ? (
