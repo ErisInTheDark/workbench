@@ -2,6 +2,7 @@
  * Exports:
  * - claimWorkbenchCollaborationAutoWake: compatibility auto-wake helper returning a v1 registry projection. Keywords: collaboration, auto-wake, lease, API.
  * - claimWorkbenchCollaborationStateAutoWake: ask the disk state to reserve one auto-wake run. Keywords: collaboration, auto-wake, state, API.
+ * - mutateWorkbenchCollaborationAdminPost: apply a Workbench UI-admin Collaboration post mutation. Keywords: collaboration, admin posts, mutation, API.
  * - readWorkbenchCollaborationState: load project Collaboration threaded state from disk. Keywords: collaboration, state, API.
  * - readWorkbenchCollaborationThreadRegistry: compatibility v1 registry reader. Keywords: collaboration, registry, API.
  * - writeWorkbenchCollaborationState: persist project Collaboration threaded state. Keywords: collaboration, state, API.
@@ -11,6 +12,9 @@
 import type {
   WorkbenchCollaborationState,
   WorkbenchCollaborationThreadRegistry,
+  WorkbenchCollaborationAdminPostMutation,
+  WorkbenchCollaborationAdminPostMutationRequest,
+  WorkbenchCollaborationAdminPostMutationResponse,
 } from "../../types";
 import { normalizeWorkbenchCollaborationThreadRegistry } from "./collaboration-registry";
 import {
@@ -94,6 +98,31 @@ export async function claimWorkbenchCollaborationStateAutoWake(
     acquired: payload.acquired === true,
     state: readPayloadState(payload),
   };
+}
+
+export async function mutateWorkbenchCollaborationAdminPost(
+  projectId: string,
+  state: WorkbenchCollaborationState,
+  mutation: WorkbenchCollaborationAdminPostMutation,
+) {
+  const body: WorkbenchCollaborationAdminPostMutationRequest = {
+    mutation,
+    projectId,
+    state,
+  };
+  const response = await fetch("/api/collaboration/admin-posts", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({})) as Partial<WorkbenchCollaborationAdminPostMutationResponse> & CollaborationStateResponse;
+  if (!response.ok) {
+    throw new Error(readError(payload, "Unable to mutate the Collaboration posts."));
+  }
+
+  return readPayloadState(payload);
 }
 
 export async function readWorkbenchCollaborationThreadRegistry(projectId: string) {

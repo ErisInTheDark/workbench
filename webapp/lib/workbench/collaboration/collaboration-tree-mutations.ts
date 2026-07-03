@@ -7,6 +7,7 @@
  * - hardDeleteCollaborationAgentLeaf: hard-delete an editable agent leaf. Keywords: collaboration, agent, delete.
  * - isCollaborationLeafPost: report whether a post has no children. Keywords: collaboration, leaf.
  * - isEditableAgentLeafPost: report whether collaborator can edit/delete a post. Keywords: collaboration, agent, leaf.
+ * - materializeCollaborationPostPromptThread: attach a started prompt thread to a post. Keywords: collaboration, prompt, thread, materialize.
  * - moveCollaborationPost: move a post before, after, or inside another post. Keywords: collaboration, tree, reorder.
  * - removeCollaborationPostTag: remove a tag assignment from a Collaboration post. Keywords: collaboration, post, tag.
  * - restoreCollaborationPostRevision: restore a prior visible version and append a restore revision. Keywords: collaboration, revisions.
@@ -276,6 +277,35 @@ export function setCollaborationPostCollapsed(
     posts: {
       ...normalizedState.posts,
       [postId]: nextPost,
+    },
+  });
+}
+
+export function materializeCollaborationPostPromptThread(
+  state: WorkbenchCollaborationState,
+  postId: string,
+  prompt: string,
+  promptThreadId: string,
+  now = Date.now(),
+) {
+  const normalizedState = normalizeWorkbenchCollaborationState(state);
+  const post = normalizedState.posts[postId];
+  const normalizedPrompt = prompt.trim();
+  const normalizedPromptThreadId = promptThreadId.trim();
+  if (!post || !normalizedPromptThreadId) {
+    return normalizedState;
+  }
+
+  return normalizeWorkbenchCollaborationState({
+    ...normalizedState,
+    posts: {
+      ...normalizedState.posts,
+      [postId]: {
+        ...post,
+        prompt: normalizedPrompt || post.prompt,
+        promptThreadId: normalizedPromptThreadId,
+        updatedAt: now,
+      },
     },
   });
 }

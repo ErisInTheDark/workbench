@@ -14,15 +14,20 @@ import type {
   ThreadSummary,
   WorkbenchCollaborationPost,
   WorkbenchCollaborationState,
+  WorkbenchCollaborationAdminPostMutation,
   WorkbenchControls,
   WorkbenchHarness,
   WorkbenchThreadComposerDraft,
 } from "../../../lib/types";
 import {
   COLLABORATION_IMPORTED_SCRATCHPAD_POST_ID,
+  createWorkbenchCollaborationPostId,
   ensureImportedScratchpadPost,
   normalizeWorkbenchCollaborationState,
 } from "../../../lib/workbench/collaboration/collaboration-state";
+import {
+  mutateWorkbenchCollaborationAdminPost,
+} from "../../../lib/workbench/collaboration/collaboration-registry-api";
 import {
   readStoredWorkbenchCollaborationLayout,
   writeStoredWorkbenchCollaborationLayout,
@@ -31,6 +36,7 @@ import {
   createCollaborationStateTag,
   createCollaborationPost,
   deleteCollaborationSubtree,
+  materializeCollaborationPostPromptThread,
   moveCollaborationPost,
   removeCollaborationPostTag,
   restoreCollaborationPostRevision,
@@ -83,7 +89,7 @@ interface WorkbenchCollaborationViewProps extends Omit<ThreadViewProps, "contain
   isMobile: boolean;
   isProjectLoading: boolean;
   onClaimAutoWake: (projectId: string, ownerId: string) => Promise<{ acquired: boolean; state: WorkbenchCollaborationState }>;
-  onCollaborationStateChange: (state: WorkbenchCollaborationState) => void;
+  onCollaborationStateChange: (state: WorkbenchCollaborationState, options?: { persist?: boolean }) => void;
   onOpenThreadFromPromptPost: (threadId: string) => void;
   onPointerDrop: () => void;
   onPostPointerDragStart: (event: ReactPointerEvent<HTMLElement>, post: WorkbenchCollaborationPost) => void;
@@ -146,6 +152,8 @@ export default function WorkbenchCollaborationView({
   const [collaborationLayout, setCollaborationLayout] = useState(() => readStoredWorkbenchCollaborationLayout(projectId));
   const [revisionPostId, setRevisionPostId] = useState<string | null>(null);
   const stateRef = useRef(normalizeWorkbenchCollaborationState(collaborationState));
+  const adminPostMutationQueueRef = useRef<Promise<WorkbenchCollaborationState>>(Promise.resolve(stateRef.current));
+  const adminPostMutationSerialRef = useRef(0);
   const attemptedScratchpadImportKeyRef = useRef("");
 
   useEffect(() => {
@@ -154,6 +162,8 @@ export default function WorkbenchCollaborationView({
 
   useEffect(() => {
     setCollaborationLayout(readStoredWorkbenchCollaborationLayout(projectId));
+    adminPostMutationQueueRef.current = Promise.resolve(stateRef.current);
+    adminPostMutationSerialRef.current += 1;
     setPromptDraftThreadsByPostId({});
     setPromptComposerDraftsByPostId({});
     setPromptStartErrorsByPostId({});
@@ -196,14 +206,14 @@ export default function WorkbenchCollaborationView({
     skills: [],
     workspaceRoots: composerWorkspaceRoots,
   }), [composerWorkspaceRoots, projectFileCandidates, projectFileIndexId, projectRootPath]);
-  const publishStateIfChanged = useCallback((nextState: WorkbenchCollaborationState) => {
+  const publishStateIfChanged = useCallback((nextState: WorkbenchCollaborationState, options?: { persist?: boolean }) => {
     const normalizedState = normalizeWorkbenchCollaborationState(nextState);
     if (areDeeplyEqual(stateRef.current, normalizedState)) {
       return;
     }
 
     stateRef.current = normalizedState;
-    onCollaborationStateChange(normalizedState);
+    onCollaborationStateChange(normalizedState, options);
   }, [onCollaborationStateChange]);
 
   const getCurrentCollaborationState = useCallback(() => stateRef.current, []);
@@ -266,11 +276,32 @@ export default function WorkbenchCollaborationView({
     };
   }, [collaborationState.posts, projectId, publishStateIfChanged, scratchpadPath]);
 
-  const mutateState = useCallback((mutator: (state: WorkbenchCollaborationState) => WorkbenchCollaborationState) => {
-    const nextState = mutator(stateRef.current);
-    publishStateIfChanged(nextState);
+  const mutateAdminPostState = useCallback((
+    mutation: WorkbenchCollaborationAdminPostMutation,
+    mutator: (state: WorkbenchCollaborationState) => WorkbenchCollaborationState,
+  ) => {
+    const baseState = stateRef.current;
+    const optimisticState = mutator(baseState);
+    const serial = adminPostMutationSerialRef.current + 1;
+    adminPostMutationSerialRef.current = serial;
+    publishStateIfChanged(optimisticState, { persist: false });
     recordCollaborationActivity();
-  }, [publishStateIfChanged, recordCollaborationActivity]);
+    const nextMutation = adminPostMutationQueueRef.current
+      .catch(() => stateRef.current)
+      .then((serverBaseState) => mutateWorkbenchCollaborationAdminPost(projectId, serverBaseState, mutation));
+    adminPostMutationQueueRef.current = nextMutation
+      .then((savedState) => {
+        if (serial === adminPostMutationSerialRef.current) {
+          publishStateIfChanged(savedState, { persist: false });
+        }
+        return savedState;
+      })
+      .catch(() => {
+        // Browser-local Collaboration state remains usable when admin post mutation persistence is unavailable.
+        return optimisticState;
+      });
+    void adminPostMutationQueueRef.current;
+  }, [projectId, publishStateIfChanged, recordCollaborationActivity]);
 
   const ensurePromptDraftThread = useCallback((post: WorkbenchCollaborationPost) => {
     if (!controls) {
@@ -360,42 +391,82 @@ export default function WorkbenchCollaborationView({
   }, []);
 
   const handleCreatePost = useCallback((parentId: string | null, draft: WorkbenchCollaborationPostDraft) => {
-    mutateState((state) => createCollaborationPost(state, parentId, draft));
-  }, [mutateState]);
+    const postId = createWorkbenchCollaborationPostId();
+    mutateAdminPostState({
+      action: "createPost",
+      attachments: draft.attachments,
+      body: draft.body,
+      parentId,
+      postId,
+      prompt: draft.prompt,
+    }, (state) => createCollaborationPost(state, parentId, draft, { id: postId }));
+  }, [mutateAdminPostState]);
 
   const handleCreateTag = useCallback((tag: string) => {
-    mutateState((state) => createCollaborationStateTag(state, tag));
-  }, [mutateState]);
+    mutateAdminPostState({
+      action: "createTag",
+      tag,
+    }, (state) => createCollaborationStateTag(state, tag));
+  }, [mutateAdminPostState]);
 
   const handleEditPost = useCallback((postId: string, draft: WorkbenchCollaborationPostDraft) => {
-    mutateState((state) => updateCollaborationPost(state, postId, draft));
-  }, [mutateState]);
+    mutateAdminPostState({
+      action: "updatePost",
+      attachments: draft.attachments,
+      body: draft.body,
+      postId,
+      prompt: draft.prompt,
+    }, (state) => updateCollaborationPost(state, postId, draft));
+  }, [mutateAdminPostState]);
 
   const handleTagPost = useCallback((postId: string, tag: string) => {
-    mutateState((state) => tagCollaborationPost(state, postId, tag));
-  }, [mutateState]);
+    mutateAdminPostState({
+      action: "tagPost",
+      postId,
+      tag,
+    }, (state) => tagCollaborationPost(state, postId, tag));
+  }, [mutateAdminPostState]);
 
   const handleRemovePostTag = useCallback((postId: string, tag: string) => {
-    mutateState((state) => removeCollaborationPostTag(state, postId, tag));
-  }, [mutateState]);
+    mutateAdminPostState({
+      action: "removePostTag",
+      postId,
+      tag,
+    }, (state) => removeCollaborationPostTag(state, postId, tag));
+  }, [mutateAdminPostState]);
 
   const handleDeletePost = useCallback((postId: string) => {
-    mutateState((state) => deleteCollaborationSubtree(state, postId));
-  }, [mutateState]);
+    mutateAdminPostState({
+      action: "deletePost",
+      postId,
+    }, (state) => deleteCollaborationSubtree(state, postId));
+  }, [mutateAdminPostState]);
 
   const handleRestoreRevision = useCallback((postId: string, revisionId: string) => {
-    mutateState((state) => restoreCollaborationPostRevision(state, postId, revisionId));
+    mutateAdminPostState({
+      action: "restorePostRevision",
+      postId,
+      revisionId,
+    }, (state) => restoreCollaborationPostRevision(state, postId, revisionId));
     setRevisionPostId(null);
-  }, [mutateState]);
+  }, [mutateAdminPostState]);
 
   const handleSetPostCollapsed = useCallback((postId: string, isCollapsed: boolean) => {
-    mutateState((state) => setCollaborationPostCollapsed(state, postId, isCollapsed));
-  }, [mutateState]);
+    mutateAdminPostState({
+      action: "setPostCollapsed",
+      isCollapsed,
+      postId,
+    }, (state) => setCollaborationPostCollapsed(state, postId, isCollapsed));
+  }, [mutateAdminPostState]);
 
   const handleMovePost = useCallback((postId: string, intent: CollaborationPostDropIntent) => {
-    mutateState((state) => moveCollaborationPost(state, postId, intent));
+    mutateAdminPostState({
+      action: "movePost",
+      intent,
+      postId,
+    }, (state) => moveCollaborationPost(state, postId, intent));
     onPointerDrop();
-  }, [mutateState, onPointerDrop]);
+  }, [mutateAdminPostState, onPointerDrop]);
 
   const handleStartPromptThread = useCallback(async (postId: string, input: UserInput[], draftThread: ThreadPayload) => {
     const submittedPrompt = getPromptTextFromInput(input);
@@ -408,25 +479,12 @@ export default function WorkbenchCollaborationView({
       return;
     }
 
-    mutateState((state) => {
-      const post = state.posts[postId];
-      if (!post) {
-        return state;
-      }
-
-      return normalizeWorkbenchCollaborationState({
-        ...state,
-        posts: {
-          ...state.posts,
-          [postId]: {
-            ...post,
-            prompt: submittedPrompt || post.prompt,
-            promptThreadId: result.threadId,
-            updatedAt: Date.now(),
-          },
-        },
-      });
-    });
+    mutateAdminPostState({
+      action: "materializePromptThread",
+      postId,
+      prompt: submittedPrompt,
+      promptThreadId: result.threadId,
+    }, (state) => materializeCollaborationPostPromptThread(state, postId, submittedPrompt, result.threadId));
     setPromptDraftThreadsByPostId((current) => {
       if (!current[postId]) {
         return current;
@@ -454,7 +512,7 @@ export default function WorkbenchCollaborationView({
       delete next[postId];
       return next;
     });
-  }, [mutateState, onStartThreadFromPrompt]);
+  }, [mutateAdminPostState, onStartThreadFromPrompt]);
 
   const collaboratorComposerThread = runController.collaboratorDraftThread;
   const collaboratorComposer = collaboratorComposerThread ? (

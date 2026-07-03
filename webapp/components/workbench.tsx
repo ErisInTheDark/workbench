@@ -2824,7 +2824,7 @@ export default function Workbench () {
     }
   };
 
-  const handleCollaborationStateChange = useCallback((state: WorkbenchCollaborationState) => {
+  const handleCollaborationStateChange = useCallback((state: WorkbenchCollaborationState, options?: { persist?: boolean }) => {
     if (!activeProjectId) {
       return;
     }
@@ -2843,6 +2843,10 @@ export default function Workbench () {
       writeStoredCollaborationStates(next);
       return next;
     });
+    if (options?.persist === false) {
+      return;
+    }
+
     void writeWorkbenchCollaborationState(activeProjectId, normalizedState)
       .then((savedState) => {
         setCollaborationStatesByProjectId((current) => {

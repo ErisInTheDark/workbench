@@ -447,6 +447,80 @@ export interface WorkbenchCollaborationPostMutationResponse extends WorkbenchCol
   postId?: string;
 }
 
+export type WorkbenchCollaborationAdminPostMoveIntent =
+  | { type: "after"; targetPostId: string }
+  | { type: "before"; targetPostId: string }
+  | { type: "inside"; targetPostId: string };
+
+export type WorkbenchCollaborationAdminPostMutation =
+  | {
+    action: "createPost";
+    attachments?: WorkbenchThreadComposerAttachmentDraft[];
+    body: string;
+    parentId: string | null;
+    postId: string;
+    prompt?: string;
+  }
+  | {
+    action: "createTag";
+    tag: string;
+  }
+  | {
+    action: "deletePost";
+    postId: string;
+  }
+  | {
+    action: "materializePromptThread";
+    postId: string;
+    prompt: string;
+    promptThreadId: string;
+  }
+  | {
+    action: "movePost";
+    intent: WorkbenchCollaborationAdminPostMoveIntent;
+    postId: string;
+  }
+  | {
+    action: "removePostTag";
+    postId: string;
+    tag: string;
+  }
+  | {
+    action: "restorePostRevision";
+    postId: string;
+    revisionId: string;
+  }
+  | {
+    action: "setPostCollapsed";
+    isCollapsed: boolean;
+    postId: string;
+  }
+  | {
+    action: "tagPost";
+    postId: string;
+    tag: string;
+  }
+  | {
+    action: "updatePost";
+    attachments?: WorkbenchThreadComposerAttachmentDraft[];
+    body: string;
+    postId: string;
+    prompt?: string;
+  };
+
+export interface WorkbenchCollaborationAdminPostMutationRequest {
+  mutation: WorkbenchCollaborationAdminPostMutation;
+  projectId: string;
+  state: WorkbenchCollaborationState;
+}
+
+export interface WorkbenchCollaborationAdminPostMutationResponse {
+  mutation: WorkbenchCollaborationAdminPostMutation;
+  ok: true;
+  projectId: string;
+  state: WorkbenchCollaborationState;
+}
+
 export interface WorkbenchControls {
   applyRoute: (route: WorkbenchRoute) => Promise<WorkbenchRouteLoadResult>;
   createThreadDraft: (harness: WorkbenchHarness, options?: { select?: boolean; threadId?: string }) => ThreadPayload;
