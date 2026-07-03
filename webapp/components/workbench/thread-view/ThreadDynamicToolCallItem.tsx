@@ -34,8 +34,6 @@ const INLINE_CODE_CLASS = "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7
 const GENERIC_CODEX_QUESTIONNAIRE_TITLE = "Follow-up questions";
 const GENERIC_CODEX_QUESTIONNAIRE_SUMMARY = "Codex needs your input before it can continue.";
 const MAX_QUESTIONNAIRE_SUMMARY_LABELS = 3;
-const MAX_QUESTIONNAIRE_TRANSCRIPT_PAIRS = 3;
-const MAX_QUESTIONNAIRE_TRANSCRIPT_TEXT_LENGTH = 520;
 
 function asRecord (value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -284,13 +282,6 @@ function renderQuestionnaireHistorySummary (request: WorkbenchUserInputRequest |
   );
 }
 
-function truncateQuestionnaireTranscriptText (value: string) {
-  const trimmedValue = value.trim();
-  return trimmedValue.length > MAX_QUESTIONNAIRE_TRANSCRIPT_TEXT_LENGTH
-    ? `${trimmedValue.slice(0, MAX_QUESTIONNAIRE_TRANSCRIPT_TEXT_LENGTH - 3).trimEnd()}...`
-    : trimmedValue;
-}
-
 function getQuestionnairePromptText (request: WorkbenchUserInputRequest, question: WorkbenchUserInputQuestion, index: number) {
   const questionText = question.question.trim();
   if (request.questions.length === 1) {
@@ -336,14 +327,13 @@ function buildQuestionnaireTranscriptPairs (request: WorkbenchUserInputRequest, 
     }
 
     return {
-      answerMarkdown: truncateQuestionnaireTranscriptText(answerMarkdown),
+      answerMarkdown,
       promptText: getQuestionnairePromptText(request, question, index),
     };
   }).filter((pair): pair is { answerMarkdown: string; promptText: string } => pair !== null);
 }
 
 function ThreadQuestionnaireTranscriptPreview ({
-  hiddenCount,
   inlineMentionSources,
   pairs,
   threadCwdPath,
@@ -352,7 +342,6 @@ function ThreadQuestionnaireTranscriptPreview ({
   projectRootPath,
   workspaceRoots,
 }: {
-  hiddenCount: number;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   pairs: Array<{ answerMarkdown: string; promptText: string }>;
   threadCwdPath?: string;
@@ -388,11 +377,6 @@ function ThreadQuestionnaireTranscriptPreview ({
           </div>
         </div>
       ))}
-      {hiddenCount > 0 ? (
-        <div className="ml-auto text-[0.78em] leading-[1.5] text-muted">
-          +{hiddenCount} more
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -419,17 +403,14 @@ function ThreadQuestionnaireHistorySummary ({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const transcriptPairs = request ? buildQuestionnaireTranscriptPairs(request, response) : [];
-  const visiblePairs = transcriptPairs.slice(0, MAX_QUESTIONNAIRE_TRANSCRIPT_PAIRS);
-  const hiddenCount = Math.max(0, transcriptPairs.length - visiblePairs.length);
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
       <div className="min-w-0">{renderQuestionnaireHistorySummary(request)}</div>
       {!isOpen ? (
         <ThreadQuestionnaireTranscriptPreview
-          hiddenCount={hiddenCount}
           inlineMentionSources={inlineMentionSources}
-          pairs={visiblePairs}
+          pairs={transcriptPairs}
           threadCwdPath={threadCwdPath}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
