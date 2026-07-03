@@ -276,6 +276,8 @@ export default function CollaborationRunController({
   const ownerIdRef = useRef(`collaboration:${projectId}:${Math.random().toString(36).slice(2)}`);
 
   const summariesById = useMemo(() => new Map(collaborationThreadSummaries.map((summary) => [summary.id, summary])), [collaborationThreadSummaries]);
+  const runThreadIds = collaborationState.runThreadIds;
+  const runThreadIdSignature = runThreadIds.join("\0");
   const projectDiffMap = useMemo(() => formatProjectDiffMapForPrompt(projectChanges), [projectChanges]);
   const snapshotRunThread = selectedRunThreadId ? getThreadDocumentFromSnapshot(threadDocuments, selectedRunThreadId) : null;
   const effectiveRunThread = snapshotRunThread ?? collaboratorThread;
@@ -324,15 +326,15 @@ export default function CollaborationRunController({
           ? "Loading collaborator thread..."
           : collaboratorStatus === "failed"
             ? "Collaborator needs attention."
-            : collaborationState.runThreadIds.length
+            : runThreadIds.length
               ? "Ready to continue maintaining the discussion tree."
               : "Start the collaborator when you want it to read the discussion and project state.";
 
   useEffect(() => {
-    setSelectedRunThreadId((current) => current && collaborationState.runThreadIds.includes(current)
+    setSelectedRunThreadId((current) => current && runThreadIds.includes(current)
       ? current
-      : collaborationState.runThreadIds[0] || "");
-  }, [collaborationState.runThreadIds]);
+      : runThreadIds[0] || "");
+  }, [runThreadIdSignature]);
 
   useEffect(() => {
     if (!collaborationState.autoWakeEnabled || pendingAutoWakeActivityAt === null) {
@@ -348,7 +350,7 @@ export default function CollaborationRunController({
   }, [collaborationState.autoWakeEnabled, pendingAutoWakeActivityAt]);
 
   useEffect(() => {
-    for (const runThreadId of collaborationState.runThreadIds) {
+    for (const runThreadId of runThreadIds) {
       const thread = getThreadDocumentFromSnapshot(threadDocuments, runThreadId);
       if (!thread || isThreadStatusActive(thread.status)) {
         continue;
@@ -375,7 +377,7 @@ export default function CollaborationRunController({
         });
       break;
     }
-  }, [collaborationState.runThreadIds, getCurrentCollaborationState, projectId, publishStateIfChanged, threadDocuments]);
+  }, [getCurrentCollaborationState, projectId, publishStateIfChanged, runThreadIdSignature, threadDocuments]);
 
   useEffect(() => {
     if (!selectedRunThreadId || !isThreadStatusActive(effectiveRunThread?.status ?? "")) {
@@ -769,7 +771,7 @@ export default function CollaborationRunController({
     isAutoWakePaused,
     isAutoWakeToggleDisabled,
     isRunDisabled: !controls || isProjectLoading,
-    recentRunIds: collaborationState.runThreadIds,
+    recentRunIds: runThreadIds,
     selectedRunThreadId,
     shouldRenderCurrentRunThread,
     shouldShowRunThreadLoading,

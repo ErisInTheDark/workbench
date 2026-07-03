@@ -43,6 +43,7 @@ import {
   setCollaborationPostCollapsed,
   tagCollaborationPost,
   updateCollaborationPost,
+  updateCollaborationPostPrompt,
   type CollaborationPostDropIntent,
   type WorkbenchCollaborationPostDraft,
 } from "../../../lib/workbench/collaboration/collaboration-tree-mutations";
@@ -155,6 +156,8 @@ export default function WorkbenchCollaborationView({
   const adminPostMutationQueueRef = useRef<Promise<WorkbenchCollaborationState>>(Promise.resolve(stateRef.current));
   const adminPostMutationSerialRef = useRef(0);
   const attemptedScratchpadImportKeyRef = useRef("");
+  const promptSaveTimeoutsByPostIdRef = useRef<Record<string, number | undefined>>({});
+  const promptSaveValuesByPostIdRef = useRef<Record<string, string | undefined>>({});
 
   useEffect(() => {
     stateRef.current = normalizeWorkbenchCollaborationState(collaborationState);
@@ -164,10 +167,25 @@ export default function WorkbenchCollaborationView({
     setCollaborationLayout(readStoredWorkbenchCollaborationLayout(projectId));
     adminPostMutationQueueRef.current = Promise.resolve(stateRef.current);
     adminPostMutationSerialRef.current += 1;
+    for (const timeoutId of Object.values(promptSaveTimeoutsByPostIdRef.current)) {
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+      }
+    }
+    promptSaveTimeoutsByPostIdRef.current = {};
+    promptSaveValuesByPostIdRef.current = {};
     setPromptDraftThreadsByPostId({});
     setPromptComposerDraftsByPostId({});
     setPromptStartErrorsByPostId({});
   }, [projectId]);
+
+  useEffect(() => () => {
+    for (const timeoutId of Object.values(promptSaveTimeoutsByPostIdRef.current)) {
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+      }
+    }
+  }, []);
 
   const setAndStoreCollaborationLayout = useCallback((nextLayout: typeof collaborationLayout) => {
     setCollaborationLayout(nextLayout);
@@ -362,11 +380,52 @@ export default function WorkbenchCollaborationView({
     });
   }, []);
 
+  const clearScheduledPromptSave = useCallback((postId: string) => {
+    const timeoutId = promptSaveTimeoutsByPostIdRef.current[postId];
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+    }
+    delete promptSaveTimeoutsByPostIdRef.current[postId];
+    delete promptSaveValuesByPostIdRef.current[postId];
+  }, []);
+
+  const schedulePromptSave = useCallback((postId: string, prompt: string) => {
+    const normalizedPrompt = prompt.trim();
+    const currentPrompt = stateRef.current.posts[postId]?.prompt?.trim() ?? "";
+    if (!normalizedPrompt || normalizedPrompt === currentPrompt) {
+      clearScheduledPromptSave(postId);
+      return;
+    }
+
+    const existingTimeoutId = promptSaveTimeoutsByPostIdRef.current[postId];
+    if (existingTimeoutId !== undefined) {
+      window.clearTimeout(existingTimeoutId);
+    }
+
+    promptSaveValuesByPostIdRef.current[postId] = normalizedPrompt;
+    promptSaveTimeoutsByPostIdRef.current[postId] = window.setTimeout(() => {
+      delete promptSaveTimeoutsByPostIdRef.current[postId];
+      const promptToSave = promptSaveValuesByPostIdRef.current[postId]?.trim() ?? "";
+      delete promptSaveValuesByPostIdRef.current[postId];
+      const post = stateRef.current.posts[postId];
+      if (!post || !promptToSave || post.prompt?.trim() === promptToSave) {
+        return;
+      }
+
+      mutateAdminPostState({
+        action: "updatePostPrompt",
+        postId,
+        prompt: promptToSave,
+      }, (state) => updateCollaborationPostPrompt(state, postId, promptToSave));
+    }, 500);
+  }, [clearScheduledPromptSave, mutateAdminPostState]);
+
   const handlePromptDraftChange = useCallback((postId: string, draft: WorkbenchThreadComposerDraft) => {
     setPromptComposerDraftsByPostId((current) => ({
       ...current,
       [postId]: draft,
     }));
+    schedulePromptSave(postId, draft.text);
     setPromptStartErrorsByPostId((current) => {
       if (!current[postId]) {
         return current;
@@ -376,7 +435,7 @@ export default function WorkbenchCollaborationView({
       delete next[postId];
       return next;
     });
-  }, []);
+  }, [schedulePromptSave]);
 
   const handlePromptDraftClear = useCallback((postId: string) => {
     setPromptComposerDraftsByPostId((current) => {
@@ -388,7 +447,8 @@ export default function WorkbenchCollaborationView({
       delete next[postId];
       return next;
     });
-  }, []);
+    clearScheduledPromptSave(postId);
+  }, [clearScheduledPromptSave]);
 
   const handleCreatePost = useCallback((parentId: string | null, draft: WorkbenchCollaborationPostDraft) => {
     const postId = createWorkbenchCollaborationPostId();
@@ -476,9 +536,10 @@ export default function WorkbenchCollaborationView({
         ...current,
         [postId]: result.error,
       }));
-      return;
+      throw new Error(result.error);
     }
 
+    clearScheduledPromptSave(postId);
     mutateAdminPostState({
       action: "materializePromptThread",
       postId,

@@ -14,6 +14,7 @@
  * - setCollaborationPostCollapsed: persist expanded or collapsed UI state for a post. Keywords: collaboration, post, collapse, expand.
  * - tagCollaborationPost: assign a project-level tag to a Collaboration post. Keywords: collaboration, post, tag.
  * - updateCollaborationPost: update visible post content and append previous state revision. Keywords: collaboration, edit, revisions.
+ * - updateCollaborationPostPrompt: update only a post's suggested prompt without creating a visible-body revision. Keywords: collaboration, prompt, save.
  */
 
 import type {
@@ -220,6 +221,32 @@ export function updateCollaborationPost(
           ...post.revisions,
           createRevision(post, options.revisionSource ?? post.author, now),
         ],
+      },
+    },
+  });
+}
+
+export function updateCollaborationPostPrompt(
+  state: WorkbenchCollaborationState,
+  postId: string,
+  prompt: string,
+  now = Date.now(),
+) {
+  const normalizedState = normalizeWorkbenchCollaborationState(state);
+  const post = normalizedState.posts[postId];
+  const normalizedPrompt = prompt.trim();
+  if (!post || !normalizedPrompt || post.prompt === normalizedPrompt) {
+    return normalizedState;
+  }
+
+  return normalizeWorkbenchCollaborationState({
+    ...normalizedState,
+    posts: {
+      ...normalizedState.posts,
+      [postId]: {
+        ...post,
+        prompt: normalizedPrompt,
+        updatedAt: now,
       },
     },
   });

@@ -26,6 +26,7 @@ import {
   setCollaborationPostCollapsed,
   tagCollaborationPost,
   updateCollaborationPost,
+  updateCollaborationPostPrompt,
 } from "../../../../lib/workbench/collaboration/collaboration-tree-mutations";
 import {
   readCollaborationStateDiskFile,
@@ -207,6 +208,20 @@ function parseMutation(value: unknown): WorkbenchCollaborationAdminPostMutation 
     };
   }
 
+  if (action === "updatePostPrompt") {
+    const postId = normalizeText(value.postId).trim();
+    const prompt = normalizeText(value.prompt).trim();
+    if (!postId || !prompt) {
+      throw new Error("A postId and prompt are required to update a Collaboration post prompt.");
+    }
+
+    return {
+      action,
+      postId,
+      prompt,
+    };
+  }
+
   throw new Error("Unsupported Collaboration admin post mutation action.");
 }
 
@@ -262,6 +277,8 @@ function applyMutation(
         body: mutation.body,
         prompt: mutation.prompt,
       });
+    case "updatePostPrompt":
+      return updateCollaborationPostPrompt(state, mutation.postId, mutation.prompt);
   }
 }
 

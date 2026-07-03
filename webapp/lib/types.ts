@@ -501,6 +501,11 @@ export type WorkbenchCollaborationAdminPostMutation =
     tag: string;
   }
   | {
+    action: "updatePostPrompt";
+    postId: string;
+    prompt: string;
+  }
+  | {
     action: "updatePost";
     attachments?: WorkbenchThreadComposerAttachmentDraft[];
     body: string;
