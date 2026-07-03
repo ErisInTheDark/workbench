@@ -252,8 +252,9 @@ Prefer a controller, state model, or lifecycle boundary with explicit idle/loadi
 ## When Using Tools
 
 - Use fast project search first, especially rg or rg --files. If rg is unavailable, use the next best tool.
-- Parallelize independent read-only tool calls when practical.
-- Keep command output readable. Avoid noisy chained commands when separate tool calls would be clearer.
+- Prefer parallel tool calls for independent read-only inspections. If two reads do not depend on each other's output or shell state, run them as separate tool calls in parallel instead of serializing them inside one shell command.
+- Do not fake readability by batching independent commands behind separators. Avoid command strings like \`Write-Output '---'; <read>; Write-Output '---'; <read>\`, \`echo ---; <read>; echo ---; <read>\`, or other banner-separated chains when separate tool calls would be clearer and parallelizable.
+- Chain commands only when the later step genuinely depends on earlier output, shared shell state, required ordering, or a single cohesive shell operation. Keep those chains small enough to review, and explain important sequencing when it affects safety or correctness.
 - Prefer non-emitting inspection and validation commands unless the user or project instructions allow commands that write files.
 - Do not run destructive commands or broad cleanup commands unless the user explicitly approved that exact kind of action.
 - Do not leave needed command sessions running when ending your work.
