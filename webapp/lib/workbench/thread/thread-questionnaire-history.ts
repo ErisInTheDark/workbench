@@ -219,6 +219,7 @@ function resolveQuestionnaireHistoryAnchor(
   nextItems: ThreadItem[],
   baseItems: ThreadItem[],
   entry: WorkbenchQuestionnaireHistoryEntry,
+  itemsView: ThreadPayload["turns"][number]["itemsView"],
 ): QuestionnaireHistoryAnchorResolution {
   if (entry.insertAfterItemId) {
     const anchorIndex = nextItems.findIndex((item) => item.id === entry.insertAfterItemId);
@@ -226,7 +227,9 @@ function resolveQuestionnaireHistoryAnchor(
       return { index: anchorIndex, type: "resolved" };
     }
 
-    return { type: "defer" };
+    if (itemsView !== "full") {
+      return { type: "defer" };
+    }
   }
 
   if (
@@ -255,6 +258,7 @@ function resolveQuestionnaireHistoryAnchor(
 function applyQuestionnaireHistoryToItems(
   items: ThreadItem[],
   entries: WorkbenchQuestionnaireHistoryEntry[],
+  itemsView: ThreadPayload["turns"][number]["itemsView"],
 ) {
   const syntheticItemsById = collectSyntheticQuestionnaireHistoryItems(items);
   const baseItems = stripQuestionnaireHistoryOverlayItems(items, entries);
@@ -265,7 +269,7 @@ function applyQuestionnaireHistoryToItems(
       entry,
       syntheticItemsById.get(createSyntheticQuestionnaireHistoryItemId(entry.threadId, entry.requestKey)) ?? null,
     );
-    const anchorResolution = resolveQuestionnaireHistoryAnchor(nextItems, baseItems, entry);
+    const anchorResolution = resolveQuestionnaireHistoryAnchor(nextItems, baseItems, entry, itemsView);
 
     if (anchorResolution.type === "resolved") {
       nextItems.splice(anchorResolution.index + 1, 0, syntheticItem);
@@ -307,7 +311,7 @@ export function applyQuestionnaireHistoryToThread(
 
   let didChange = false;
   const nextTurns = thread.turns.map((turn) => {
-    const nextItems = applyQuestionnaireHistoryToItems(turn.items, entriesByTurnId.get(turn.id) ?? []);
+    const nextItems = applyQuestionnaireHistoryToItems(turn.items, entriesByTurnId.get(turn.id) ?? [], turn.itemsView);
     if (nextItems === turn.items) {
       return turn;
     }

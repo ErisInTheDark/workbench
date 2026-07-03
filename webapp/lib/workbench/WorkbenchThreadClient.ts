@@ -2401,7 +2401,7 @@ function WorkbenchThreadClient(
         },
       });
       const entries = response.data ?? [];
-      if (setQuestionnaireHistoryEntries(threadId, entries)) {
+      if (setQuestionnaireHistoryEntries(threadId, entries) || entries.length) {
         reapplyCurrentThreadQuestionnaireHistory(threadId);
       }
       return entries;

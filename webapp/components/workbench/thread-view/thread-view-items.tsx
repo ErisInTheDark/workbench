@@ -164,6 +164,45 @@ function isFinalAgentMessageBlock (block: ThreadRenderableBlock, finalAgentMessa
     && block.item.id === finalAgentMessageId;
 }
 
+function isGenericSnapshotItemId(itemId: string) {
+  return /^item-\d+$/u.test(itemId);
+}
+
+function getNarrativeTextForSnapshotDedupe(item: ThreadItem) {
+  switch (item.type) {
+    case "agentMessage":
+    case "plan":
+      return item.text;
+    case "reasoning":
+      return [...item.summary, ...item.content].join("\n");
+    default:
+      return null;
+  }
+}
+
+function normalizeNarrativeTextForSnapshotDedupe(value: string) {
+  return value
+    .replace(/\s+/gu, " ")
+    .replace(/[^\p{L}\p{N}\s#`./:-]+/gu, "")
+    .trim()
+    .toLowerCase();
+}
+
+function getNarrativeSnapshotDedupeKey(item: ThreadItem) {
+  const text = getNarrativeTextForSnapshotDedupe(item);
+  if (!text) {
+    return null;
+  }
+
+  const normalizedText = normalizeNarrativeTextForSnapshotDedupe(text);
+  return normalizedText.length >= 40 ? normalizedText.slice(0, 120) : null;
+}
+
+function isGenericSnapshotNarrativeArtifact(item: ThreadItem) {
+  return isGenericSnapshotItemId(item.id)
+    && (item.type === "agentMessage" || item.type === "plan" || item.type === "reasoning");
+}
+
 function getWorkedSummary (turn: Turn) {
   return turn.durationMs === null
     ? "Worked"
@@ -181,6 +220,8 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
   let pendingReasoning: ReasoningItem[] = [];
   let pendingWebSearches: WebSearchItem[] = [];
   const hasSyntheticQuestionnaireHistory = items.some(isSyntheticQuestionnaireHistoryItem);
+  const narrativeSnapshotDedupeKeys = new Set<string>();
+  let hasSeenContextCompaction = false;
 
   const flushPendingCommands = () => {
     if (!pendingCommands.length) {
@@ -231,6 +272,22 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
   };
 
   for (const item of items) {
+    const narrativeSnapshotDedupeKey = getNarrativeSnapshotDedupeKey(item);
+    if (
+      hasSeenContextCompaction
+      && narrativeSnapshotDedupeKey
+      && isGenericSnapshotNarrativeArtifact(item)
+      && narrativeSnapshotDedupeKeys.has(narrativeSnapshotDedupeKey)
+    ) {
+      continue;
+    }
+    if (narrativeSnapshotDedupeKey) {
+      narrativeSnapshotDedupeKeys.add(narrativeSnapshotDedupeKey);
+    }
+    if (item.type === "contextCompaction") {
+      hasSeenContextCompaction = true;
+    }
+
     if (item.type === "agentMessage" && !item.text.trim()) {
       continue;
     }
