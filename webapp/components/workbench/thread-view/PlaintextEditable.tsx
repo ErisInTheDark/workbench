@@ -7,7 +7,8 @@
  */
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CompositionEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CompositionEvent, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 import {
   buildInlineMentionSuggestions,
@@ -26,6 +27,8 @@ function normalizePlaintextEditableValue (value: string) {
 }
 
 const MOBILE_TEXT_INPUT_MEDIA_QUERY = "(hover: none) and (pointer: coarse)";
+const INLINE_MENTION_SUGGESTIONS_VIEWPORT_GUTTER_PX = 8;
+const INLINE_MENTION_SUGGESTIONS_ANCHOR_GAP_PX = 8;
 
 export function isMobileTextInputEnvironment () {
   return typeof window !== "undefined"
@@ -132,6 +135,37 @@ function renderHighlightContent (value: string, highlights: InlineMentionHighlig
   return content.length ? content : "\u00a0";
 }
 
+function getInlineMentionSuggestionsPortalStyle (
+  anchor: HTMLElement,
+  placement: "above" | "below",
+): CSSProperties {
+  const anchorRect = anchor.getBoundingClientRect();
+  const viewportWidth = window.visualViewport?.width ?? document.documentElement.clientWidth ?? window.innerWidth;
+  const availableWidth = Math.max(
+    0,
+    viewportWidth - INLINE_MENTION_SUGGESTIONS_VIEWPORT_GUTTER_PX * 2,
+  );
+  const width = Math.min(Math.max(anchorRect.width, 0), availableWidth);
+  const maxLeft = Math.max(
+    INLINE_MENTION_SUGGESTIONS_VIEWPORT_GUTTER_PX,
+    viewportWidth - width - INLINE_MENTION_SUGGESTIONS_VIEWPORT_GUTTER_PX,
+  );
+  const left = Math.min(
+    Math.max(anchorRect.left, INLINE_MENTION_SUGGESTIONS_VIEWPORT_GUTTER_PX),
+    maxLeft,
+  );
+  const top = placement === "above"
+    ? anchorRect.top - INLINE_MENTION_SUGGESTIONS_ANCHOR_GAP_PX
+    : anchorRect.bottom + INLINE_MENTION_SUGGESTIONS_ANCHOR_GAP_PX;
+
+  return {
+    left,
+    top,
+    transform: placement === "above" ? "translateY(-100%)" : undefined,
+    width,
+  };
+}
+
 function InlineMentionSuggestionsPopup ({
   activeIndex,
   onSelect,
@@ -228,9 +262,12 @@ export default function PlaintextEditable ({
   value: string;
 }) {
   const elementRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
   const [caretOffset, setCaretOffset] = useState<number | null>(null);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
+  const [suggestionsPortalHost, setSuggestionsPortalHost] = useState<HTMLElement | null>(null);
+  const [suggestionsPortalStyle, setSuggestionsPortalStyle] = useState<CSSProperties | null>(null);
   const suggestions = useMemo(() => (
     mentionSources && !readOnly && !disabled
       ? buildInlineMentionSuggestions(value, caretOffset, mentionSources)
@@ -238,9 +275,38 @@ export default function PlaintextEditable ({
   ), [caretOffset, disabled, mentionSources, readOnly, value]);
   const activeSuggestion = suggestions[activeSuggestionIndex] ?? suggestions[0] ?? null;
 
+  useEffect(() => {
+    setSuggestionsPortalHost(document.body);
+  }, []);
+
   useLayoutEffect(() => {
     setActiveSuggestionIndex(0);
   }, [suggestions.length, suggestions[0]?.replacementText]);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!suggestions.length || !container) {
+      setSuggestionsPortalStyle(null);
+      return;
+    }
+
+    const updateSuggestionsPortalStyle = () => {
+      setSuggestionsPortalStyle(getInlineMentionSuggestionsPortalStyle(container, mentionSuggestionsPlacement));
+    };
+
+    updateSuggestionsPortalStyle();
+    window.addEventListener("resize", updateSuggestionsPortalStyle);
+    window.addEventListener("scroll", updateSuggestionsPortalStyle, true);
+    window.visualViewport?.addEventListener("resize", updateSuggestionsPortalStyle);
+    window.visualViewport?.addEventListener("scroll", updateSuggestionsPortalStyle);
+
+    return () => {
+      window.removeEventListener("resize", updateSuggestionsPortalStyle);
+      window.removeEventListener("scroll", updateSuggestionsPortalStyle, true);
+      window.visualViewport?.removeEventListener("resize", updateSuggestionsPortalStyle);
+      window.visualViewport?.removeEventListener("scroll", updateSuggestionsPortalStyle);
+    };
+  }, [caretOffset, mentionSuggestionsPlacement, suggestions.length, suggestions[0]?.replacementText, value]);
 
   useLayoutEffect(() => {
     const element = elementRef.current;
@@ -279,9 +345,10 @@ export default function PlaintextEditable ({
   const suggestionsPopup = suggestions.length ? (
     <div
       className={joinClasses(
-        "absolute right-0 left-0 z-30",
-        mentionSuggestionsPlacement === "above" ? "bottom-full mb-2" : "top-full mt-2",
+        "fixed z-[80]",
+        !suggestionsPortalStyle && "invisible",
       )}
+      style={suggestionsPortalStyle ?? undefined}
     >
       <InlineMentionSuggestionsPopup
         activeIndex={activeSuggestionIndex}
@@ -290,82 +357,86 @@ export default function PlaintextEditable ({
       />
     </div>
   ) : null;
+  const suggestionsPopupPortal = suggestionsPopup && suggestionsPortalHost
+    ? createPortal(suggestionsPopup, suggestionsPortalHost)
+    : null;
 
   return (
-    <div className="relative">
-      {mentionSuggestionsPlacement === "above" ? suggestionsPopup : null}
-      <div
-        aria-hidden="true"
-        className={joinClasses(
-          className,
-          "pointer-events-none absolute inset-0 z-20 !text-transparent",
-          "!m-0",
-          "whitespace-pre-wrap break-words [overflow-wrap:anywhere]",
-          "[&_*]:!text-transparent",
-          highlights.length === 0 && "hidden",
-        )}
-      >
-        {renderHighlightContent(value, highlights)}
+    <>
+      <div ref={containerRef} className="relative">
+        <div
+          aria-hidden="true"
+          className={joinClasses(
+            className,
+            "pointer-events-none absolute inset-0 z-20 !text-transparent",
+            "!m-0",
+            "whitespace-pre-wrap break-words [overflow-wrap:anywhere]",
+            "[&_*]:!text-transparent",
+            highlights.length === 0 && "hidden",
+          )}
+        >
+          {renderHighlightContent(value, highlights)}
+        </div>
+        <div
+          id={id}
+          ref={elementRef}
+          aria-disabled={disabled || undefined}
+          aria-label={ariaLabel}
+          aria-multiline="true"
+          aria-readonly={readOnly || undefined}
+          className={joinClasses(className, "relative z-10")}
+          contentEditable={readOnly || disabled ? false : "plaintext-only"}
+          data-empty={value ? "false" : "true"}
+          data-placeholder={placeholder ?? ""}
+          role="textbox"
+          spellCheck={spellCheck}
+          suppressContentEditableWarning
+          tabIndex={readOnly || disabled ? -1 : 0}
+          onCompositionEnd={(event) => {
+            isComposingRef.current = false;
+            updateCaretOffset();
+            onCompositionEnd?.(event);
+          }}
+          onCompositionStart={(event) => {
+            isComposingRef.current = true;
+            onCompositionStart?.(event);
+          }}
+          onInput={(event) => {
+            setCaretOffset(getEditableCaretOffset(event.currentTarget));
+            onChange?.(normalizePlaintextEditableValue(event.currentTarget.innerText));
+          }}
+          onKeyDown={(event) => {
+            if (activeSuggestion && !event.nativeEvent.isComposing) {
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                const direction = event.key === "ArrowDown" ? 1 : -1;
+                setActiveSuggestionIndex((current) => (
+                  (current + direction + suggestions.length) % suggestions.length
+                ));
+                return;
+              }
+
+              if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey && !isMobileTextInputEnvironment())) {
+                event.preventDefault();
+                acceptSuggestion(activeSuggestion);
+                return;
+              }
+
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setCaretOffset(null);
+                return;
+              }
+            }
+
+            onKeyDown?.(event);
+          }}
+          onPaste={onPaste}
+          onClick={updateCaretOffset}
+          onKeyUp={updateCaretOffset}
+        />
       </div>
-      <div
-        id={id}
-        ref={elementRef}
-        aria-disabled={disabled || undefined}
-        aria-label={ariaLabel}
-        aria-multiline="true"
-        aria-readonly={readOnly || undefined}
-        className={joinClasses(className, "relative z-10")}
-        contentEditable={readOnly || disabled ? false : "plaintext-only"}
-        data-empty={value ? "false" : "true"}
-        data-placeholder={placeholder ?? ""}
-        role="textbox"
-        spellCheck={spellCheck}
-        suppressContentEditableWarning
-        tabIndex={readOnly || disabled ? -1 : 0}
-        onCompositionEnd={(event) => {
-          isComposingRef.current = false;
-          updateCaretOffset();
-          onCompositionEnd?.(event);
-        }}
-        onCompositionStart={(event) => {
-          isComposingRef.current = true;
-          onCompositionStart?.(event);
-        }}
-        onInput={(event) => {
-          setCaretOffset(getEditableCaretOffset(event.currentTarget));
-          onChange?.(normalizePlaintextEditableValue(event.currentTarget.innerText));
-        }}
-        onKeyDown={(event) => {
-          if (activeSuggestion && !event.nativeEvent.isComposing) {
-            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-              event.preventDefault();
-              const direction = event.key === "ArrowDown" ? 1 : -1;
-              setActiveSuggestionIndex((current) => (
-                (current + direction + suggestions.length) % suggestions.length
-              ));
-              return;
-            }
-
-            if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey && !isMobileTextInputEnvironment())) {
-              event.preventDefault();
-              acceptSuggestion(activeSuggestion);
-              return;
-            }
-
-            if (event.key === "Escape") {
-              event.preventDefault();
-              setCaretOffset(null);
-              return;
-            }
-          }
-
-          onKeyDown?.(event);
-        }}
-        onPaste={onPaste}
-        onClick={updateCaretOffset}
-        onKeyUp={updateCaretOffset}
-      />
-      {mentionSuggestionsPlacement === "below" ? suggestionsPopup : null}
-    </div>
+      {suggestionsPopupPortal}
+    </>
   );
 }
