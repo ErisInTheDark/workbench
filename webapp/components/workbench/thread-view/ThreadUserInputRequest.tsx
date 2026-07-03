@@ -2,19 +2,22 @@
  * Exports:
  * - default ThreadUserInputRequest: render live and historical questionnaire requests. Keywords: questionnaire, custom input, thread.
  * - getThreadUserInputRequestPreviewText: derive compact questionnaire text for composer previews. Keywords: questionnaire, preview, sticky composer.
- * - Local helpers: question display normalization, answered value derivation, and submit handling. Keywords: options, answers, drafts.
+ * - Local helpers: question display normalization, answered value derivation, pasted image attachments, and submit handling. Keywords: options, answers, drafts, images.
  */
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
 
 import type {
   WorkbenchUserInputQuestion,
   WorkbenchQuestionnaireDraft,
   WorkbenchSkillSummary,
+  WorkbenchThreadComposerAttachmentDraft,
   WorkbenchUserInputRequest,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
+import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
+import { readClipboardImageDataUrls } from "../../../lib/workbench/dom/clipboard";
 import {
   buildInlineMentionHighlights,
   type InlineMentionHighlightSources,
@@ -29,6 +32,7 @@ import { getThreadCommandDisplay } from "../../../lib/workbench/thread/thread-co
 import PrimaryButton from "../PrimaryButton";
 import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
 import PlaintextEditable, { isMobileTextInputEnvironment } from "./PlaintextEditable";
+import ThreadLightboxImage from "./ThreadLightboxImage";
 import { ThreadCommandSummary } from "./thread-view-primitives";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
@@ -41,6 +45,14 @@ const EMPTY_HISTORY_CUSTOM_TEXT_SPACER_CLASS = "w-full min-h-[2.45rem] rounded-l
 const GENERIC_CODEX_QUESTIONNAIRE_TITLE = "Follow-up questions";
 const GENERIC_CODEX_QUESTIONNAIRE_SUMMARY = "Codex needs your input before it can continue.";
 const APPROVAL_OPTION_REQUIRED_MESSAGE = "Choose one of the approval options before submitting.";
+
+function createAttachmentId () {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `questionnaire-attachment:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+}
 
 function normalizeHeaderText (value: string | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
@@ -151,7 +163,7 @@ type InteractiveThreadUserInputRequestProps = {
   mode: "live";
   onDraftChange: (draft: WorkbenchQuestionnaireDraft) => void;
   onDraftClear: () => void;
-  onSubmit: (response: WorkbenchUserInputResponse) => Promise<void>;
+  onSubmit: (response: WorkbenchUserInputResponse, supplementalInput?: UserInput[]) => Promise<void>;
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
   request: WorkbenchUserInputRequest;
@@ -225,8 +237,10 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
   const onInteractiveDraftClear = interactiveProps?.onDraftClear;
   const [selectedValues, setSelectedValues] = useState<Record<string, string[]>>(interactiveDraft?.selectedValues ?? {});
   const [customValues, setCustomValues] = useState<Record<string, string>>(interactiveDraft?.customValues ?? {});
+  const [attachments, setAttachments] = useState<WorkbenchThreadComposerAttachmentDraft[]>(interactiveDraft?.attachments ?? []);
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingAttachmentReads, setPendingAttachmentReads] = useState(0);
   const hydratedDraftKeyRef = useRef("");
   const hydratedRequestIdRef = useRef("");
   const onInteractiveDraftChangeRef = useRef(onInteractiveDraftChange);
@@ -234,6 +248,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
 
   onInteractiveDraftChangeRef.current = onInteractiveDraftChange;
   onInteractiveDraftClearRef.current = onInteractiveDraftClear;
+  const isAttaching = pendingAttachmentReads > 0;
 
   useEffect(() => {
     if (isHistoryMode) {
@@ -247,18 +262,21 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
       hydratedDraftKeyRef.current = draftKey;
       setSelectedValues(interactiveDraft?.selectedValues ?? {});
       setCustomValues(interactiveDraft?.customValues ?? {});
+      setAttachments(interactiveDraft?.attachments ?? []);
     } else if (hydratedDraftKeyRef.current !== draftKey) {
       hydratedDraftKeyRef.current = draftKey;
       const hasLocalDraft = hasSelectedDraftValues(selectedValues)
-        || Object.values(customValues).some((value) => value.trim());
+        || Object.values(customValues).some((value) => value.trim())
+        || attachments.length > 0;
       if (!hasLocalDraft) {
         setSelectedValues(interactiveDraft?.selectedValues ?? {});
         setCustomValues(interactiveDraft?.customValues ?? {});
+        setAttachments(interactiveDraft?.attachments ?? []);
       }
     }
     setError("");
     setIsSubmitting(false);
-  }, [customValues, interactiveDraft, isHistoryMode, request.id, selectedValues]);
+  }, [attachments.length, customValues, interactiveDraft, isHistoryMode, request.id, selectedValues]);
 
   useEffect(() => {
     if (isHistoryMode) {
@@ -268,12 +286,13 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
     const timeoutId = window.setTimeout(() => {
       const hasSelectedValues = hasSelectedDraftValues(selectedValues);
       const hasCustomValues = Object.values(customValues).some((value) => value.trim());
-      if (!hasSelectedValues && !hasCustomValues) {
+      if (!hasSelectedValues && !hasCustomValues && attachments.length === 0) {
         onInteractiveDraftClearRef.current?.();
         return;
       }
 
       onInteractiveDraftChangeRef.current?.({
+        attachments,
         customValues,
         selectedValues,
         updatedAt: Date.now(),
@@ -283,18 +302,19 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [customValues, isHistoryMode, selectedValues]);
+  }, [attachments, customValues, isHistoryMode, selectedValues]);
 
   const resetAnswers = () => {
     setSelectedValues({});
     setCustomValues({});
+    setAttachments([]);
     setError("");
     setIsSubmitting(false);
     onInteractiveDraftClearRef.current?.();
   };
 
   const handleSubmit = async () => {
-    if (isHistoryMode || isSubmitting) {
+    if (isHistoryMode || isSubmitting || isAttaching) {
       return;
     }
 
@@ -317,10 +337,14 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
       return;
     }
 
+    const supplementalInput: UserInput[] = attachments.map((attachment) => ({
+      type: "image",
+      url: attachment.url,
+    }));
     setIsSubmitting(true);
     setError("");
     try {
-      await interactiveProps?.onSubmit(response);
+      await interactiveProps?.onSubmit(response, supplementalInput.length ? supplementalInput : undefined);
       onInteractiveDraftClearRef.current?.();
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : "Unable to submit that response.");
@@ -328,8 +352,36 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
     }
   };
 
+  const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
+    if (isHistoryMode) {
+      return;
+    }
+
+    const hasImage = Array.from(event.clipboardData.items).some((item) => item.type.startsWith("image/"));
+    if (!hasImage) {
+      return;
+    }
+
+    event.preventDefault();
+    setError("");
+    setPendingAttachmentReads((count) => count + 1);
+    void (async () => {
+      try {
+        const nextAttachments = (await readClipboardImageDataUrls(event.clipboardData.items)).map((image) => ({
+          id: createAttachmentId(),
+          url: image.url,
+        }));
+        setAttachments((current) => [...current, ...nextAttachments]);
+      } catch (pasteError) {
+        setError(pasteError instanceof Error ? pasteError.message : "Unable to attach the pasted image.");
+      } finally {
+        setPendingAttachmentReads((count) => Math.max(0, count - 1));
+      }
+    })();
+  };
+
   const handleLastQuestionKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (isHistoryMode || isSubmitting || event.key !== "Enter" || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) {
+    if (isHistoryMode || isSubmitting || isAttaching || event.key !== "Enter" || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) {
       return;
     }
 
@@ -524,6 +576,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                       }
                     }}
                     onKeyDown={isLastQuestion ? handleLastQuestionKeyDown : undefined}
+                    onPaste={handlePaste}
                   />
                 )}
               </div>
@@ -531,6 +584,46 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
           );
         })}
       </div>
+      {!isHistoryMode && (attachments.length || isAttaching) ? (
+        <div className="space-y-2">
+          {attachments.length ? (
+            <div className="flex flex-wrap gap-3">
+              {attachments.map((attachment, index) => (
+                <div key={attachment.id} className="relative h-24 w-24">
+                  <ThreadLightboxImage
+                    alt={`Questionnaire attached image ${index + 1}`}
+                    buttonClassName="h-full w-full rounded-[0.95rem]"
+                    imageClassName="h-full w-full object-cover"
+                    src={attachment.url}
+                  />
+                  <button
+                    type="button"
+                    aria-label={`Remove questionnaire attached image ${index + 1}`}
+                    title="Remove attached image"
+                    className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text shadow-sm transition hover:bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+                    onClick={() => {
+                      setAttachments((current) => current.filter((currentAttachment) => currentAttachment.id !== attachment.id));
+                    }}
+                  >
+                    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
+                      <path
+                        d="M4 4l8 8M12 4l-8 8"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeWidth="1.8"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {isAttaching ? (
+            <p className="m-0 text-[0.78em] leading-[1.6] text-muted">Attaching pasted image...</p>
+          ) : null}
+        </div>
+      ) : null}
       </div>
 
       {!isHistoryMode ? (
@@ -544,10 +637,10 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
               onClick={() => {
                 void handleSubmit();
               }}
-              disabled={isSubmitting}
+              disabled={isSubmitting || isAttaching}
               className="justify-self-end text-[0.84em]"
             >
-              {isSubmitting ? "Submitting..." : request.submitLabel}
+              {isSubmitting ? "Submitting..." : isAttaching ? "Attaching..." : request.submitLabel}
             </PrimaryButton>
             {interactiveProps?.actions}
           </div>

@@ -54,6 +54,23 @@ export function createThreadSavedComposerDraftRecordKey(projectId: string, draft
   return `${projectId}/@/saved-thread-draft/${draftId}`;
 }
 
+function normalizeAttachments(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((attachment) => {
+    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
+      return [];
+    }
+
+    const attachmentCandidate = attachment as { id?: unknown; url?: unknown };
+    return typeof attachmentCandidate.id === "string" && typeof attachmentCandidate.url === "string"
+      ? [{ id: attachmentCandidate.id, url: attachmentCandidate.url }]
+      : [];
+  });
+}
+
 function normalizePersistedRecord(record: unknown): PersistedThreadComposerDraftRecord | null {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     return null;
@@ -71,19 +88,8 @@ function normalizePersistedRecord(record: unknown): PersistedThreadComposerDraft
     return null;
   }
 
-  const attachments = candidate.attachments.flatMap((attachment) => {
-    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
-      return [];
-    }
-
-    const attachmentCandidate = attachment as { id?: unknown; url?: unknown };
-    return typeof attachmentCandidate.id === "string" && typeof attachmentCandidate.url === "string"
-      ? [{ id: attachmentCandidate.id, url: attachmentCandidate.url }]
-      : [];
-  });
-
   return {
-    attachments,
+    attachments: normalizeAttachments(candidate.attachments),
     key: candidate.key,
     projectId: candidate.projectId,
     text: candidate.text,
@@ -110,19 +116,8 @@ function normalizeSavedComposerRecord(record: unknown): PersistedThreadSavedComp
     return null;
   }
 
-  const attachments = candidate.attachments.flatMap((attachment) => {
-    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
-      return [];
-    }
-
-    const attachmentCandidate = attachment as { id?: unknown; url?: unknown };
-    return typeof attachmentCandidate.id === "string" && typeof attachmentCandidate.url === "string"
-      ? [{ id: attachmentCandidate.id, url: attachmentCandidate.url }]
-      : [];
-  });
-
   return {
-    attachments,
+    attachments: normalizeAttachments(candidate.attachments),
     createdAt: Math.trunc(candidate.createdAt),
     id: candidate.id,
     key: candidate.key,
@@ -182,6 +177,7 @@ function normalizeQuestionnaireRecord(record: unknown): PersistedThreadQuestionn
   }
 
   return {
+    attachments: normalizeAttachments(candidate.attachments),
     customValues: normalizeStringRecord(candidate.customValues),
     key: candidate.key,
     projectId: candidate.projectId,

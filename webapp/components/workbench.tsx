@@ -973,6 +973,7 @@ export default function Workbench () {
       ));
       setThreadQuestionnaireDraftsByKey(Object.fromEntries(
         questionnaireRecords.map((record) => [`${record.threadId}:${record.requestKey}`, {
+          attachments: record.attachments,
           customValues: record.customValues,
           selectedValues: record.selectedValues,
           updatedAt: record.updatedAt,

@@ -1194,11 +1194,14 @@ export default function ThreadComposer ({
                   request={visiblePendingUserInputRequest.request}
                   workspaceRoots={workspaceRoots}
                   mode="live"
-                  onSubmit={async (response) => {
+                  onSubmit={async (response, supplementalInput) => {
                     await onSubmitUserInputRequest(
                       thread.id,
                       response,
-                      buildPendingUserInputRequestSubmissionOptions(thread, visiblePendingUserInputRequest),
+                      {
+                        ...buildPendingUserInputRequestSubmissionOptions(thread, visiblePendingUserInputRequest),
+                        ...(supplementalInput?.length ? { supplementalInput } : {}),
+                      },
                     );
                   }}
                 />

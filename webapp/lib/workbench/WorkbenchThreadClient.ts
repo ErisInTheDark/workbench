@@ -3944,18 +3944,18 @@ function WorkbenchThreadClient(
     );
   }
 
-  async function sendApprovalSupplementalSteer(
+  async function sendQuestionnaireSupplementalSteer(
     pendingRequest: WorkbenchPendingUserInputRequest,
-    text: string,
+    input: UserInput[] | string,
   ) {
-    const normalizedInput = normalizeThreadMessageInput(text);
+    const normalizedInput = normalizeThreadMessageInput(input);
     if (!normalizedInput.length) {
       return;
     }
 
     const turnId = getPendingUserInputRequestTurnId(pendingRequest);
     if (!turnId) {
-      throw new Error("Unable to send approval custom text because the pending turn could not be found.");
+      throw new Error("Unable to send questionnaire supplemental input because the pending turn could not be found.");
     }
 
     const workbenchOrigin = readLocalWorkbenchOrigin();
@@ -3996,8 +3996,12 @@ function WorkbenchThreadClient(
     }
 
     const supplementalApprovalSteerText = getWorkbenchApprovalSupplementalSteerText(pendingRequest.request, response);
-    if (supplementalApprovalSteerText) {
-      await sendApprovalSupplementalSteer(pendingRequest, supplementalApprovalSteerText);
+    const supplementalInput = [
+      ...(supplementalApprovalSteerText ? [createTextInput(supplementalApprovalSteerText)] : []),
+      ...(options.supplementalInput ?? []),
+    ];
+    if (supplementalInput.length) {
+      await sendQuestionnaireSupplementalSteer(pendingRequest, supplementalInput);
     }
 
     const submitResult = await sendBridgeRequest<{ ok: boolean; warning?: string }>(pendingRequest.harness, {
@@ -4028,7 +4032,7 @@ function WorkbenchThreadClient(
         reapplyCurrentThreadQuestionnaireHistory(threadId);
       }
     } else {
-      if (supplementalApprovalSteerText && pendingRequest.harness === "codex") {
+      if (supplementalInput.length && pendingRequest.harness === "codex") {
         await readCompletedThreadWorkbenchHistory(threadId);
         reconcileCurrentThreadFromReadWhenIdle(threadId, pendingRequest.harness);
       } else {

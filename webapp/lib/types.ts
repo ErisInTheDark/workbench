@@ -182,6 +182,7 @@ export interface WorkbenchThreadSavedComposerDraft extends WorkbenchThreadCompos
 }
 
 export interface WorkbenchQuestionnaireDraft {
+  attachments: WorkbenchThreadComposerAttachmentDraft[];
   customValues: Record<string, string>;
   selectedValues: Record<string, string[]>;
   updatedAt: number;
@@ -241,6 +242,7 @@ export interface WorkbenchSubmitUserInputRequestOptions {
   turnId?: string | null;
   insertAfterItemId?: string | null;
   insertAfterItemIndex?: number | null;
+  supplementalInput?: UserInput[];
 }
 
 export interface WorkbenchPendingUserInputRequest {
