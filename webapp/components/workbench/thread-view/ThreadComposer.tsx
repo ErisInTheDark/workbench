@@ -447,10 +447,15 @@ export default function ThreadComposer ({
   const [isResuming, setIsResuming] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [isSavedDraftShelfExpanded, setIsSavedDraftShelfExpanded] = useState(false);
+  const [isStickyComposerArmed, setIsStickyComposerArmed] = useState(false);
+  const [stickyComposerMotionState, setStickyComposerMotionState] = useState<"idle" | "entering" | "leaving">("idle");
   const [isStickyComposerCollapsed, setIsStickyComposerCollapsed] = useState(false);
   const [stickyExpandedHeightPx, setStickyExpandedHeightPx] = useState(0);
   const hydratedDraftKeyRef = useRef("");
+  const previousStickyComposerArmedRef = useRef(false);
+  const stickyTopSentinelRef = useRef<HTMLDivElement>(null);
   const stickySurfaceRef = useRef<HTMLDivElement>(null);
+  const stickyExpandedRef = useRef<HTMLDivElement>(null);
   const savedDraftShelfRef = useRef<HTMLDivElement>(null);
   const onThreadComposerDraftChangeRef = useRef(onThreadComposerDraftChange);
   const onThreadComposerDraftClearRef = useRef(onThreadComposerDraftClear);
@@ -593,7 +598,6 @@ export default function ThreadComposer ({
     setAgentsError("");
     setModelsError("");
     setIsQuestionnaireVisible(Boolean(visiblePendingUserInputRequest));
-    setIsStickyComposerCollapsed(false);
   }, [thread.id, visiblePendingUserInputRequest?.request.id]);
 
   useEffect(() => {
@@ -704,29 +708,114 @@ export default function ThreadComposer ({
   }, [isCommentMode, onListModels, thread.harness]);
 
   useEffect(() => {
-    if (!stickyMode || isStickyComposerCollapsed || typeof ResizeObserver === "undefined") {
+    if (!stickyMode) {
+      setIsStickyComposerArmed(false);
       return;
     }
 
-    const element = stickySurfaceRef.current;
-    if (!element) {
+    const sentinelElement = stickyTopSentinelRef.current;
+    if (!sentinelElement) {
+      setIsStickyComposerArmed(true);
+      return;
+    }
+
+    let frameId: number | null = null;
+    const updateArmedState = () => {
+      frameId = null;
+      setIsStickyComposerArmed(sentinelElement.getBoundingClientRect().top > window.innerHeight);
+    };
+
+    const requestUpdateArmedState = () => {
+      if (frameId !== null) {
+        return;
+      }
+
+      frameId = window.requestAnimationFrame(updateArmedState);
+    };
+
+    updateArmedState();
+
+    window.addEventListener("scroll", requestUpdateArmedState, { passive: true });
+    window.addEventListener("resize", requestUpdateArmedState);
+    return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+
+      window.removeEventListener("scroll", requestUpdateArmedState);
+      window.removeEventListener("resize", requestUpdateArmedState);
+    };
+  }, [stickyMode, thread.id]);
+
+  useEffect(() => {
+    if (!stickyMode) {
+      return;
+    }
+
+    const sentinelElement = stickyTopSentinelRef.current;
+    if (!sentinelElement) {
+      return;
+    }
+
+    setIsStickyComposerArmed(sentinelElement.getBoundingClientRect().top > window.innerHeight);
+  }, [stickyMode, thread]);
+
+  useEffect(() => {
+    if (!stickyMode) {
+      previousStickyComposerArmedRef.current = false;
+      setStickyComposerMotionState("idle");
+      return;
+    }
+
+    const previousIsArmed = previousStickyComposerArmedRef.current;
+    if (previousIsArmed === isStickyComposerArmed) {
+      return;
+    }
+
+    previousStickyComposerArmedRef.current = isStickyComposerArmed;
+    setStickyComposerMotionState(isStickyComposerArmed ? "entering" : "leaving");
+    const timeoutId = window.setTimeout(() => {
+      setStickyComposerMotionState("idle");
+    }, 240);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [isStickyComposerArmed, stickyMode]);
+
+  useEffect(() => {
+    if (!stickyMode || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const expandedElement = stickyExpandedRef.current;
+    const surfaceElement = stickySurfaceRef.current;
+    if (!expandedElement || !surfaceElement) {
       return;
     }
 
     const updateHeight = () => {
-      const nextHeight = element.getBoundingClientRect().height;
+      const surfaceStyle = window.getComputedStyle(surfaceElement);
+      const verticalPadding = (
+        (Number.parseFloat(surfaceStyle.paddingTop) || 0) +
+        (Number.parseFloat(surfaceStyle.paddingBottom) || 0)
+      );
+      const nextHeight = expandedElement.getBoundingClientRect().height + verticalPadding;
       setStickyExpandedHeightPx((currentHeight) => (
         Math.abs(currentHeight - nextHeight) < 0.5 ? currentHeight : nextHeight
       ));
     };
     updateHeight();
+    const frameId = window.requestAnimationFrame(updateHeight);
 
     const observer = new ResizeObserver(updateHeight);
-    observer.observe(element);
+    observer.observe(expandedElement);
+    observer.observe(surfaceElement);
     return () => {
+      window.cancelAnimationFrame(frameId);
       observer.disconnect();
     };
-  }, [stickyMode, isStickyComposerCollapsed, showQuestionnairePanel, isPickerOpen, attachments.length, helperText, value, visiblePendingUserInputRequest?.request.id]);
+  }, [stickyMode, isStickyComposerArmed, isStickyComposerCollapsed, showQuestionnairePanel, isPickerOpen, attachments.length, helperText, value, visiblePendingUserInputRequest?.request.id]);
 
   useEffect(() => {
     if (isCommentMode || !isModelPickerOpen) {
@@ -1074,6 +1163,19 @@ export default function ThreadComposer ({
   const stickyHostStyle = stickyExpandedHeightPx > 0
     ? { "--thread-composer-expanded-height": `${stickyExpandedHeightPx}px` } as CSSProperties
     : undefined;
+  const showComposerControlRow = !showQuestionnairePanel && !isModelPickerOpen && !isAgentPickerOpen;
+  const hasNormalComposerSupplementalContent = attachments.length > 0 || Boolean(helperText);
+  const activeComposerMode = showQuestionnairePanel
+    ? "questionnaire"
+    : isModelPickerOpen
+      ? "model"
+      : isAgentPickerOpen
+        ? "agent"
+        : "composer";
+  const isComposerPanelActive = activeComposerMode === "composer";
+  const isQuestionnairePanelActive = activeComposerMode === "questionnaire";
+  const isModelPickerPanelActive = activeComposerMode === "model";
+  const isAgentPickerPanelActive = activeComposerMode === "agent";
   const composerForm = (
       <form
         className={joinClasses(
@@ -1089,32 +1191,44 @@ export default function ThreadComposer ({
               {header}
             </div>
           ) : null}
-          {showQuestionnairePanel && visiblePendingUserInputRequest ? (
-            <ThreadUserInputRequest
-              actions={stopButton}
-              draft={threadQuestionnaireDraft}
-              highlightSources={highlightSources}
-              knownSkills={knownSkills}
-              leadingActions={questionnaireToggleButton}
-              spellCheck={composerSpellCheck}
-              onDraftChange={handleQuestionnaireDraftChange}
-              onDraftClear={handleQuestionnaireDraftClear}
-              projectRootPath={projectRootPath}
-              request={visiblePendingUserInputRequest.request}
-              workspaceRoots={workspaceRoots}
-              mode="live"
-              onSubmit={async (response) => {
-                await onSubmitUserInputRequest(
-                  thread.id,
-                  response,
-                  buildPendingUserInputRequestSubmissionOptions(thread, visiblePendingUserInputRequest),
-                );
-              }}
-            />
-          ) : null}
-          <div className="block" hidden={showQuestionnairePanel}>
-            <span className="sr-only">{isCommentMode ? "Write comment" : "Message thread"}</span>
-            <div hidden={isPickerOpen}>
+          <div className="thread-composer-mode-stack" data-active-mode={activeComposerMode}>
+            {visiblePendingUserInputRequest ? (
+              <div
+                aria-hidden={!isQuestionnairePanelActive}
+                className="thread-composer-mode-panel thread-composer-sticky-questionnaire-frame"
+                data-active={isQuestionnairePanelActive ? "true" : "false"}
+                inert={!isQuestionnairePanelActive}
+              >
+                <ThreadUserInputRequest
+                  actions={stopButton}
+                  draft={threadQuestionnaireDraft}
+                  highlightSources={highlightSources}
+                  knownSkills={knownSkills}
+                  leadingActions={questionnaireToggleButton}
+                  spellCheck={composerSpellCheck}
+                  onDraftChange={handleQuestionnaireDraftChange}
+                  onDraftClear={handleQuestionnaireDraftClear}
+                  projectRootPath={projectRootPath}
+                  request={visiblePendingUserInputRequest.request}
+                  workspaceRoots={workspaceRoots}
+                  mode="live"
+                  onSubmit={async (response) => {
+                    await onSubmitUserInputRequest(
+                      thread.id,
+                      response,
+                      buildPendingUserInputRequestSubmissionOptions(thread, visiblePendingUserInputRequest),
+                    );
+                  }}
+                />
+              </div>
+            ) : null}
+            <div
+              aria-hidden={!isComposerPanelActive}
+              className="thread-composer-mode-panel thread-composer-sticky-form-content"
+              data-active={isComposerPanelActive ? "true" : "false"}
+              inert={!isComposerPanelActive}
+            >
+              <span className="sr-only">{isCommentMode ? "Write comment" : "Message thread"}</span>
               <PlaintextEditable
                 id={`thread-composer:${thread.id}`}
                 ariaLabel={isCommentMode ? "Write comment" : "Message thread"}
@@ -1141,200 +1255,218 @@ export default function ThreadComposer ({
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
               />
-            </div>
-          </div>
-          {!showQuestionnairePanel && isModelPickerOpen ? (
-            <ThreadModelPicker
-              appliesOnNextTurnOnly={thread.harness === "codex" && isActiveThread}
-              deprioritizedModelIds={deprioritizedModelIds}
-              error={modelsError}
-              harness={thread.harness}
-              isLoading={isLoadingModels}
-              models={availableModels}
-              selectedModelId={selectedModel}
-              onClose={() => {
-                setActivePicker(null);
-              }}
-              onSelectModel={(model) => {
-                onThreadModelChange(thread.id, model.id);
-                if (!model.supportsFastMode && isFastModeEnabled) {
-                  onThreadServiceTierChange(thread.id, null);
-                }
-                setModelsError("");
-                setActivePicker(null);
-              }}
-              onToggleModelPriority={(modelId) => {
-                setDeprioritizedModelIdsByHarness((current) => {
-                  const currentIds = current[thread.harness] ?? [];
-                  const nextIds = currentIds.includes(modelId)
-                    ? currentIds.filter((id) => id !== modelId)
-                    : [...currentIds, modelId];
-
-                  return {
-                    ...current,
-                    [thread.harness]: nextIds,
-                  };
-                });
-              }}
-            />
-          ) : !showQuestionnairePanel && isAgentPickerOpen ? (
-            <ThreadAgentPicker
-              agents={availableAgents}
-              error={agentsError}
-              isLoading={isLoadingAgents}
-              selectedAgentPath={thread.agentPath}
-              onClose={() => {
-                setActivePicker(null);
-              }}
-              onSelectAgent={(agentPath) => {
-                onThreadAgentChange(thread.id, agentPath);
-                setActivePicker(null);
-              }}
-            />
-          ) : !showQuestionnairePanel ? (
-            <div className="mt-3 space-y-3">
-              {attachments.length ? (
-                <div className="flex flex-wrap gap-3 px-1">
-                  {attachments.map((attachment, index) => (
-                    <div key={attachment.id} className="relative h-24 w-24">
-                      <ThreadLightboxImage
-                        alt={`Attached image ${index + 1}`}
-                        buttonClassName="h-full w-full rounded-[0.95rem]"
-                        imageClassName="h-full w-full object-cover"
-                        src={attachment.url}
-                      />
-                      <button
-                        type="button"
-                        aria-label={`Remove attached image ${index + 1}`}
-                        title="Remove attached image"
-                        className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text shadow-sm transition hover:bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                        onClick={() => {
-                          setAttachments((current) => current.filter((currentAttachment) => currentAttachment.id !== attachment.id));
-                        }}
-                      >
-                        <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
-                          <path
-                            d="M4 4l8 8M12 4l-8 8"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeLinecap="round"
-                            strokeWidth="1.8"
+              {hasNormalComposerSupplementalContent ? (
+                <div className="mt-3 space-y-3">
+                  {attachments.length ? (
+                    <div className="flex flex-wrap gap-3 px-1">
+                      {attachments.map((attachment, index) => (
+                        <div key={attachment.id} className="relative h-24 w-24">
+                          <ThreadLightboxImage
+                            alt={`Attached image ${index + 1}`}
+                            buttonClassName="h-full w-full rounded-[0.95rem]"
+                            imageClassName="h-full w-full object-cover"
+                            src={attachment.url}
                           />
-                        </svg>
-                      </button>
+                          <button
+                            type="button"
+                            aria-label={`Remove attached image ${index + 1}`}
+                            title="Remove attached image"
+                            className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text shadow-sm transition hover:bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+                            onClick={() => {
+                              setAttachments((current) => current.filter((currentAttachment) => currentAttachment.id !== attachment.id));
+                            }}
+                          >
+                            <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
+                              <path
+                                d="M4 4l8 8M12 4l-8 8"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeLinecap="round"
+                                strokeWidth="1.8"
+                              />
+                            </svg>
+                          </button>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  ) : null}
+                    {helperText ? (
+                      <p className={joinClasses(
+                        attachments.length ? "mt-2 mb-0 px-1 text-[0.78em] leading-[1.6]" : "m-0 px-1 text-[0.78em] leading-[1.6]",
+                        isThreadStateBroken ? "text-danger" : "text-muted",
+                      )}>
+                        {helperText}
+                      </p>
+                    ) : null}
                 </div>
               ) : null}
-                {helperText ? (
-                  <p className={joinClasses(
-                    attachments.length ? "mt-2 mb-0 px-1 text-[0.78em] leading-[1.6]" : "m-0 px-1 text-[0.78em] leading-[1.6]",
-                    isThreadStateBroken ? "text-danger" : "text-muted",
-                  )}>
-                    {helperText}
-                  </p>
-                ) : null}
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  {questionnaireToggleButton}
-                </div>
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                {showSavedDraftControls ? (
-                  <button
-                    type="button"
-                    aria-label="Save message draft for later"
-                    title="Save message draft for later"
-                    disabled={isSaveDraftDisabled}
-                    className={joinClasses(
-                      "inline-flex size-10 items-center justify-center rounded-full border transition",
-                      "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-muted hover:text-text",
-                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
-                      isSaveDraftDisabled && "cursor-not-allowed opacity-45",
-                    )}
-                    onClick={saveCurrentComposerForLater}
-                  >
-                    <ArchiveTrayIcon />
-                  </button>
-                ) : null}
-                {showsThreadControls ? (
-                <div className="inline-flex items-stretch overflow-hidden rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-[0.78em] font-medium text-text">
-                  <button
-                    type="button"
-                    className="px-3 py-2 transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
-                    onClick={() => {
-                      setActivePicker("model");
-                    }}
-                  >
-                    {modelButtonLabel}
-                  </button>
-                  {showsReasoningEffortControl ? (
-                    <>
-                      <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
+              {showComposerControlRow ? (
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    {questionnaireToggleButton}
+                  </div>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    {showSavedDraftControls ? (
                       <button
                         type="button"
-                        className="px-2.5 py-2 capitalize transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
-                        title="Left click to increase effort. Right click to decrease effort."
-                        onClick={() => {
-                          cycleReasoningEffort(1);
-                        }}
-                        onContextMenu={(event) => {
-                          event.preventDefault();
-                          cycleReasoningEffort(-1);
-                        }}
-                      >
-                        {currentReasoningEffort}
-                      </button>
-                    </>
-                  ) : null}
-                  {showsFastModeControl ? (
-                    <>
-                      <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
-                      <button
-                        type="button"
-                        aria-label={isFastModeEnabled ? "Turn fast mode off" : "Turn fast mode on"}
-                        aria-pressed={isFastModeEnabled}
+                        aria-label="Save message draft for later"
+                        title="Save message draft for later"
+                        disabled={isSaveDraftDisabled}
                         className={joinClasses(
-                          "inline-flex items-center justify-center px-2.5 py-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft",
-                          isFastModeEnabled
-                            ? "text-text hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)]"
-                            : "text-muted opacity-40 hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:opacity-65",
+                          "inline-flex size-10 items-center justify-center rounded-full border transition",
+                          "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-muted hover:text-text",
+                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
+                          isSaveDraftDisabled && "cursor-not-allowed opacity-45",
                         )}
-                        title={isFastModeEnabled ? "Fast mode is on" : "Fast mode is off"}
+                        onClick={saveCurrentComposerForLater}
+                      >
+                        <ArchiveTrayIcon />
+                      </button>
+                    ) : null}
+                    {showsThreadControls ? (
+                    <div className="inline-flex items-stretch overflow-hidden rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-[0.78em] font-medium text-text">
+                      <button
+                        type="button"
+                        className="px-3 py-2 transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
                         onClick={() => {
-                          onThreadServiceTierChange(thread.id, isFastModeEnabled ? null : "fast");
+                          setActivePicker("model");
                         }}
                       >
-                        <LightningBoltIcon />
+                        {modelButtonLabel}
                       </button>
-                    </>
-                  ) : null}
-                  <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
-                  <button
-                    type="button"
-                    className="px-3 py-2 transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
-                    onClick={() => {
-                      setActivePicker("agent");
-                    }}
-                  >
-                    {agentButtonLabel}
-                  </button>
+                      {showsReasoningEffortControl ? (
+                        <>
+                          <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
+                          <button
+                            type="button"
+                            className="px-2.5 py-2 capitalize transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
+                            title="Left click to increase effort. Right click to decrease effort."
+                            onClick={() => {
+                              cycleReasoningEffort(1);
+                            }}
+                            onContextMenu={(event) => {
+                              event.preventDefault();
+                              cycleReasoningEffort(-1);
+                            }}
+                          >
+                            {currentReasoningEffort}
+                          </button>
+                        </>
+                      ) : null}
+                      {showsFastModeControl ? (
+                        <>
+                          <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
+                          <button
+                            type="button"
+                            aria-label={isFastModeEnabled ? "Turn fast mode off" : "Turn fast mode on"}
+                            aria-pressed={isFastModeEnabled}
+                            className={joinClasses(
+                              "inline-flex items-center justify-center px-2.5 py-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft",
+                              isFastModeEnabled
+                                ? "text-text hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)]"
+                                : "text-muted opacity-40 hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:opacity-65",
+                            )}
+                            title={isFastModeEnabled ? "Fast mode is on" : "Fast mode is off"}
+                            onClick={() => {
+                              onThreadServiceTierChange(thread.id, isFastModeEnabled ? null : "fast");
+                            }}
+                          >
+                            <LightningBoltIcon />
+                          </button>
+                        </>
+                      ) : null}
+                      <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
+                      <button
+                        type="button"
+                        className="px-3 py-2 transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
+                        onClick={() => {
+                          setActivePicker("agent");
+                        }}
+                      >
+                        {agentButtonLabel}
+                      </button>
+                    </div>
+                    ) : null}
+                    {leadingActions}
+                    <PrimaryButton
+                      type="submit"
+                      disabled={(!trimmedValue && !attachments.length) || isSendDisabled}
+                      className="text-[0.84em]"
+                    >
+                      {isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : sendLabel}
+                    </PrimaryButton>
+                    {trailingActions}
+                    {pauseButton}
+                    {stopButton}
+                  </div>
                 </div>
-                ) : null}
-                {leadingActions}
-                <PrimaryButton
-                  type="submit"
-                  disabled={(!trimmedValue && !attachments.length) || isSendDisabled}
-                  className="text-[0.84em]"
-                >
-                  {isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : sendLabel}
-                </PrimaryButton>
-                {trailingActions}
-                {pauseButton}
-                {stopButton}
-                </div>
-              </div>
+              ) : null}
             </div>
-          ) : null}
+            {showsThreadControls ? (
+              <>
+                <div
+                  aria-hidden={!isModelPickerPanelActive}
+                  className="thread-composer-mode-panel"
+                  data-active={isModelPickerPanelActive ? "true" : "false"}
+                  inert={!isModelPickerPanelActive}
+                >
+                  <ThreadModelPicker
+                    appliesOnNextTurnOnly={thread.harness === "codex" && isActiveThread}
+                    deprioritizedModelIds={deprioritizedModelIds}
+                    error={modelsError}
+                    harness={thread.harness}
+                    isLoading={isLoadingModels}
+                    models={availableModels}
+                    selectedModelId={selectedModel}
+                    onClose={() => {
+                      setActivePicker(null);
+                    }}
+                    onSelectModel={(model) => {
+                      onThreadModelChange(thread.id, model.id);
+                      if (!model.supportsFastMode && isFastModeEnabled) {
+                        onThreadServiceTierChange(thread.id, null);
+                      }
+                      setModelsError("");
+                      setActivePicker(null);
+                    }}
+                    onToggleModelPriority={(modelId) => {
+                      setDeprioritizedModelIdsByHarness((current) => {
+                        const currentIds = current[thread.harness] ?? [];
+                        const nextIds = currentIds.includes(modelId)
+                          ? currentIds.filter((id) => id !== modelId)
+                          : [...currentIds, modelId];
+
+                        return {
+                          ...current,
+                          [thread.harness]: nextIds,
+                        };
+                      });
+                    }}
+                  />
+                </div>
+                <div
+                  aria-hidden={!isAgentPickerPanelActive}
+                  className="thread-composer-mode-panel"
+                  data-active={isAgentPickerPanelActive ? "true" : "false"}
+                  inert={!isAgentPickerPanelActive}
+                >
+                  <ThreadAgentPicker
+                    agents={availableAgents}
+                    error={agentsError}
+                    isLoading={isLoadingAgents}
+                    selectedAgentPath={thread.agentPath}
+                    onClose={() => {
+                      setActivePicker(null);
+                    }}
+                    onSelectAgent={(agentPath) => {
+                      onThreadAgentChange(thread.id, agentPath);
+                      setActivePicker(null);
+                    }}
+                  />
+                </div>
+              </>
+            ) : null}
+          </div>
         </div>
         {error ? (
           <p className="mt-2 mb-0 text-[0.84em] leading-[1.6] text-danger">{error}</p>
@@ -1342,18 +1474,23 @@ export default function ThreadComposer ({
       </form>
   );
   const composerContent = stickyMode ? (
-    <div
-      className="thread-composer-sticky-host"
-      data-collapsed={isStickyComposerCollapsed ? "true" : "false"}
-      style={stickyHostStyle}
-    >
+    <>
+      <div ref={stickyTopSentinelRef} className="thread-composer-sticky-top-sentinel" aria-hidden="true" />
+      <div
+        className="thread-composer-sticky-host"
+        data-collapsed={isStickyComposerCollapsed ? "true" : "false"}
+        data-sticky-armed={isStickyComposerArmed ? "true" : "false"}
+        data-sticky-motion={stickyComposerMotionState}
+        style={stickyHostStyle}
+      >
+      <div className="thread-composer-sticky-spacer" aria-hidden="true" />
       <div className="thread-composer-sticky-shell">
         <div
           ref={stickySurfaceRef}
           className="thread-composer-sticky-surface"
           data-collapsed={isStickyComposerCollapsed ? "true" : "false"}
         >
-          <div className="thread-composer-sticky-expanded">
+          <div ref={stickyExpandedRef} className="thread-composer-sticky-expanded">
             <div className="thread-composer-sticky-collapse-button-slot">
               {stickyCollapseButton}
             </div>
@@ -1402,7 +1539,8 @@ export default function ThreadComposer ({
           </div>
         </div>
       </div>
-    </div>
+      </div>
+    </>
   ) : composerForm;
 
   return (

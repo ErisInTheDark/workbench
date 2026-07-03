@@ -242,41 +242,122 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     background-color: color-mix(in srgb, var(--text) 16%, transparent);
   }
 
-  .thread-composer-sticky-host {
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
-    container-name: thread-composer-sticky;
-    container-type: scroll-state;
-    margin-top: 1.5rem;
-    position: sticky;
-    z-index: 20;
+  .thread-composer-sticky-top-sentinel {
+    height: 1px;
+    margin-bottom: -1px;
+    pointer-events: none;
   }
 
-  .thread-composer-sticky-host[data-collapsed="true"] {
-    min-height: var(--thread-composer-expanded-height, 0px);
+  .thread-composer-sticky-host {
+    --thread-composer-motion-duration: 220ms;
+    --thread-composer-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
+    container-name: thread-composer-sticky;
+    container-type: scroll-state;
+    interpolate-size: allow-keywords;
+    margin-top: 1.5rem;
+    position: relative;
+  }
+
+  .thread-composer-sticky-host[data-sticky-armed="true"] {
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
+    position: sticky;
+    z-index: 20;
   }
 
   .thread-composer-sticky-shell {
     background: color-mix(in srgb, var(--shell-fade-bg), transparent 20%);
     border-radius: 1.15rem;
+    transition:
+      opacity var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
+      transform var(--thread-composer-motion-duration) var(--thread-composer-motion-ease);
   }
 
   .thread-composer-sticky-surface {
     background: color-mix(in srgb, var(--text) 4%, transparent);
     border-radius: 1.15rem;
+    display: grid;
     padding: 0.75rem;
+    position: relative;
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
+    transition:
+      border-color var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
+      padding var(--thread-composer-motion-duration) var(--thread-composer-motion-ease);
+  }
+
+  .thread-composer-mode-stack {
+    display: grid;
+    interpolate-size: allow-keywords;
+    position: relative;
+  }
+
+  .thread-composer-mode-panel {
+    display: none;
+    grid-area: 1 / 1;
+    inset: 0;
+    min-width: 0;
+    opacity: 0;
+    overflow: clip;
+    position: absolute;
+    transform: translateY(0.45rem) scale(0.985);
+    transition:
+      opacity var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
+      transform var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
+      display var(--thread-composer-motion-duration) allow-discrete;
+    transition-behavior: allow-discrete;
+  }
+
+  .thread-composer-mode-panel[data-active="true"] {
+    display: block;
+    inset: auto;
+    opacity: 1;
+    position: relative;
+    transform: translateY(0) scale(1);
+  }
+
+  @starting-style {
+    .thread-composer-mode-panel[data-active="true"] {
+      opacity: 0;
+      transform: translateY(0.45rem) scale(0.985);
+    }
+
+    .thread-composer-sticky-host[data-sticky-motion="leaving"] .thread-composer-mode-panel[data-active="true"] {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  .thread-composer-sticky-spacer {
+    display: none;
   }
 
   .thread-composer-sticky-expanded {
     display: grid;
     gap: 0.75rem;
+    grid-area: 1 / 1;
     grid-template-columns: minmax(0, 1fr);
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    transition:
+      opacity var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
+      transform var(--thread-composer-motion-duration) var(--thread-composer-motion-ease);
+    transition-behavior: allow-discrete;
   }
 
   .thread-composer-sticky-collapse-button-slot,
   .thread-composer-sticky-collapsed {
     display: none;
+  }
+
+  .thread-composer-sticky-collapsed {
+    grid-area: 1 / 1;
+    opacity: 0;
+    transform: translateY(0.35rem) scale(0.985);
+    transition:
+      opacity var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
+      transform var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
+      display var(--thread-composer-motion-duration) allow-discrete;
+    transition-behavior: allow-discrete;
   }
 
   .thread-composer-sticky-collapsed-text {
@@ -298,7 +379,28 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     gap: 0.35rem;
   }
 
+  @keyframes thread-composer-sticky-enter {
+    from {
+      opacity: 0.72;
+      transform: translateY(0.6rem) scale(0.985);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  .thread-composer-sticky-host[data-sticky-motion="entering"] .thread-composer-sticky-shell {
+    animation: thread-composer-sticky-enter var(--thread-composer-motion-duration) var(--thread-composer-motion-ease) both;
+  }
+
   @container thread-composer-sticky scroll-state(stuck: block-end) {
+    .thread-composer-sticky-host[data-sticky-armed="true"] .thread-composer-sticky-shell {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
     .thread-composer-sticky-collapse-button-slot {
       display: block;
     }
@@ -311,6 +413,23 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
       border: 1px solid color-mix(in srgb, var(--text), transparent 80%);
     }
 
+    .thread-composer-sticky-form-content,
+    .thread-composer-sticky-questionnaire-frame .thread-user-input-request-content {
+      max-height: min(52dvh, calc(100dvh - env(safe-area-inset-bottom, 0px) - 11rem));
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding-right: 0.15rem;
+      scrollbar-gutter: stable;
+      transition:
+        max-height var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
+        opacity var(--thread-composer-motion-duration) var(--thread-composer-motion-ease);
+    }
+
+    .thread-composer-sticky-host[data-collapsed="true"] .thread-composer-sticky-spacer {
+      display: block;
+      height: var(--thread-composer-expanded-height, 0px);
+    }
+
     .thread-composer-sticky-host[data-collapsed="true"] .thread-composer-sticky-shell {
       position: absolute;
       right: 0;
@@ -319,7 +438,16 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     }
 
     .thread-composer-sticky-surface[data-collapsed="true"] .thread-composer-sticky-expanded {
-      display: none;
+      position: absolute;
+      inset: 0.75rem;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(-0.25rem) scale(0.985);
+      transition:
+        opacity var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
+        transform var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
+        visibility 0s linear var(--thread-composer-motion-duration);
+      visibility: hidden;
     }
 
     .thread-composer-sticky-surface[data-collapsed="true"] .thread-composer-sticky-collapsed {
@@ -332,7 +460,16 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
       grid-template-columns: auto minmax(0, 1fr) auto;
       line-height: 1.45;
       min-height: 2.8rem;
+      opacity: 1;
       outline: none;
+      transform: translateY(0) scale(1);
+    }
+
+    @starting-style {
+      .thread-composer-sticky-surface[data-collapsed="true"] .thread-composer-sticky-collapsed {
+        opacity: 0;
+        transform: translateY(0.35rem) scale(0.985);
+      }
     }
 
     .thread-composer-sticky-surface[data-collapsed="true"] .thread-composer-sticky-collapsed:focus-visible {
@@ -850,6 +987,18 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     .thread-thinking-text {
       animation: none;
       background-position: 50% 50%;
+    }
+
+    .thread-composer-sticky-host,
+    .thread-composer-sticky-shell,
+    .thread-composer-sticky-surface,
+    .thread-composer-mode-panel,
+    .thread-composer-sticky-expanded,
+    .thread-composer-sticky-collapsed,
+    .thread-composer-sticky-form-content,
+    .thread-composer-sticky-questionnaire-frame .thread-user-input-request-content {
+      animation: none;
+      transition: none;
     }
   }
 

@@ -333,7 +333,8 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
   };
 
   return (
-    <div className="space-y-4 px-1 py-1">
+    <div className="thread-user-input-request space-y-4 px-1 py-1">
+      <div className="thread-user-input-request-content space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-2">
           <div className="space-y-1">
@@ -521,9 +522,10 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
           );
         })}
       </div>
+      </div>
 
       {!isHistoryMode ? (
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="thread-user-input-request-actions flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             {interactiveProps?.leadingActions}
           </div>
