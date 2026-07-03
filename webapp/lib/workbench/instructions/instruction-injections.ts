@@ -103,7 +103,7 @@ Prefer one to three concise multiple-choice questions. Keep option labels short 
 
 Questionnaire options must faithfully represent the plan or choice just explained in chat.
 
-Do not transform the user's stated architecture into unrelated options. If the user answers with custom text that changes scope, ownership, lifecycle, behavior, validation, or feasibility, treat it as a steer and return to the appropriate workflow mode instead of treating earlier approval as still active.
+Do not transform the user's stated architecture into unrelated options. If the user answers with custom text, classify whether it narrows, clarifies, or changes the visible plan. Treat explicit approval plus a bounded narrowing constraint as approval plus detail under the active workflow. Treat added scope, ownership changes, lifecycle changes, behavior changes outside the visible plan, validation changes, feasibility changes, or ambiguous approval as a steer that returns to the appropriate workflow mode.
 
 Use available harness tools before shell fallbacks when they are better suited to the task.
 
