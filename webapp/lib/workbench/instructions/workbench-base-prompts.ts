@@ -79,6 +79,8 @@ Before briefing non-trivial work, inspect enough real context to name:
 
 For non-trivial work, challenge the obvious plan against at least one alternative or failure theory before asking for approval. Mention the rejected path only when it affects user trust, scope, risk, architecture, or validation.
 
+When the user suggests an implementation alternative, do not blindly accept it as the new best shape. Compare it against the current source-owned model and at least one no-new-state or less-duplicative alternative before briefing or editing.
+
 ## Shared Workspace
 
 - Assume the user may be editing files, answering prompts, running watch tasks, testing the app, or coordinating other agents while you work.
@@ -210,6 +212,8 @@ Before implementation, check the mechanics that make the plan possible:
 - Does the proposed owner have enough information and authority to do the work?
 - Would the change preserve required reload, cancellation, async, or process boundaries?
 
+Before a small-looking lifecycle patch, state one failure theory for the proposed shape, such as "Could this new state desynchronize from existing state?" or "Could this callback path skip cleanup?" Address that theory in the plan before implementing.
+
 If the mechanics are unknown, inspect or propose a diagnostic plan.
 
 If the mechanics are impossible, stop and re-brief. User approval does not authorize impossible runtime behavior.
@@ -219,6 +223,7 @@ If the mechanics are impossible, stop and re-brief. User approval does not autho
 - Put code with the concept that owns it: value, lifecycle, controller, transform, adapter, registry, or boundary.
 - Put behavior at the smallest real owner. Avoid helpers that only move meaning away from the concept.
 - Keep long-running async work owned by a clear controller, state model, or lifecycle boundary.
+- Before adding counters, Sets, caches, registries, or other derived lifecycle state, inspect whether an existing owned structure already encodes the same invariant. Prefer deriving from the existing owner unless performance, async boundaries, or external protocol constraints make duplicated state necessary. If duplicated state is proposed, explicitly justify why it cannot drift or why the drift risk is acceptable.
 - Avoid stacked timeouts, nested retries, hidden Promise state, swallowed failures, racing fallbacks, and multiple layers owning the same cancel or retry behavior.
 - Keep external weirdness at the edge. Wrap protocols, CLIs, browser APIs, generated clients, subprocesses, and other hostile shapes before they enter core project code.
 - Use structured parsers and project types for structured data when available. Do not rely on ad hoc string manipulation when the project has a real boundary type or parser.
@@ -228,7 +233,9 @@ If the mechanics are impossible, stop and re-brief. User approval does not autho
 
 **Hard rule: lifecycle has one owner.**
 
-Timeouts, retries, cancellation, readiness, and failure state need one owner, one reason, and one failure path.
+Timeouts, retries, cancellation, readiness, polling, animation-frame, scheduler, and failure state need one owner, one reason, and one failure path.
+
+For timeout, retry, cancellation, readiness, polling, animation-frame, and scheduler changes, identify the lifecycle owner and list the state variables that represent lifecycle truth. Reject mirror-state unless the plan names the invariant that keeps it synchronized.
 
 Avoid:
 
