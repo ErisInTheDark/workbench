@@ -19,6 +19,11 @@ import {
   buildInlineMentionHighlights,
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
+import {
+  hasWorkbenchApprovalDecisionSelection,
+  isWorkbenchApprovalDecisionQuestion,
+  isWorkbenchApprovalRequest,
+} from "../../../lib/workbench/thread/thread-user-input-requests";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import { getThreadCommandDisplay } from "../../../lib/workbench/thread/thread-command-matchers";
 import PrimaryButton from "../PrimaryButton";
@@ -35,8 +40,7 @@ const MAX_HEADER_WORDS = 5;
 const EMPTY_HISTORY_CUSTOM_TEXT_SPACER_CLASS = "w-full min-h-[2.45rem] rounded-lg px-3 py-2";
 const GENERIC_CODEX_QUESTIONNAIRE_TITLE = "Follow-up questions";
 const GENERIC_CODEX_QUESTIONNAIRE_SUMMARY = "Codex needs your input before it can continue.";
-const APPROVAL_DECISION_QUESTION_ID = "decision";
-const APPROVAL_OPTION_LABELS = new Set(["Allow once", "Allow for session", "Decline"]);
+const APPROVAL_OPTION_REQUIRED_MESSAGE = "Choose one of the approval options before submitting.";
 
 function normalizeHeaderText (value: string | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
@@ -135,8 +139,7 @@ function isSingleChoiceQuestion (
     return true;
   }
 
-  return question.id === APPROVAL_DECISION_QUESTION_ID
-    && question.options.some((option) => APPROVAL_OPTION_LABELS.has(option.label));
+  return isWorkbenchApprovalDecisionQuestion(question);
 }
 
 type InteractiveThreadUserInputRequestProps = {
@@ -308,10 +311,16 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
       };
     }
 
+    const response = { answers };
+    if (isWorkbenchApprovalRequest(request) && !hasWorkbenchApprovalDecisionSelection(request, response)) {
+      setError(APPROVAL_OPTION_REQUIRED_MESSAGE);
+      return;
+    }
+
     setIsSubmitting(true);
     setError("");
     try {
-      await interactiveProps?.onSubmit({ answers });
+      await interactiveProps?.onSubmit(response);
       onInteractiveDraftClearRef.current?.();
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : "Unable to submit that response.");

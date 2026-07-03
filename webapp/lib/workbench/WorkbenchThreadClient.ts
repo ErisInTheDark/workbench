@@ -93,6 +93,11 @@ import {
     WORKBENCH_PAUSE_CONTROL_KIND,
 } from "./thread/thread-pause-control";
 import { applySteerHistoryToThread, isSyntheticSteerHistoryItem } from "./thread/thread-steer-history";
+import {
+    getWorkbenchApprovalSupplementalSteerText,
+    hasWorkbenchApprovalDecisionSelection,
+    isWorkbenchApprovalRequest,
+} from "./thread/thread-user-input-requests";
 
 const THREAD_REFRESH_TASK_ID = "thread-refresh";
 const THREAD_LIST_REFRESH_TASK_ID = "thread-list-refresh";
@@ -3913,6 +3918,69 @@ function WorkbenchThreadClient(
     return refreshedThread ?? thread;
   }
 
+  function getPendingUserInputRequestThread(pendingRequest: WorkbenchPendingUserInputRequest) {
+    if (state.currentThread?.id === pendingRequest.threadId && state.currentThread.harness === pendingRequest.harness) {
+      return state.currentThread;
+    }
+
+    const document = threadDocuments.getDocumentByThreadId(pendingRequest.threadId);
+    return document?.harness === pendingRequest.harness ? document : null;
+  }
+
+  function getPendingUserInputRequestTurnId(pendingRequest: WorkbenchPendingUserInputRequest) {
+    const pendingTurnId = pendingRequest.turnId?.trim();
+    if (pendingTurnId) {
+      return pendingTurnId;
+    }
+
+    const thread = getPendingUserInputRequestThread(pendingRequest);
+    return thread ? getCurrentInProgressTurn(thread)?.id ?? null : null;
+  }
+
+  function getPendingUserInputRequestAgentPath(pendingRequest: WorkbenchPendingUserInputRequest) {
+    return normalizeWorkbenchAgentPath(
+      getPendingUserInputRequestThread(pendingRequest)?.agentPath
+        ?? readStoredHarnessAgent(pendingRequest.harness),
+    );
+  }
+
+  async function sendApprovalSupplementalSteer(
+    pendingRequest: WorkbenchPendingUserInputRequest,
+    text: string,
+  ) {
+    const normalizedInput = normalizeThreadMessageInput(text);
+    if (!normalizedInput.length) {
+      return;
+    }
+
+    const turnId = getPendingUserInputRequestTurnId(pendingRequest);
+    if (!turnId) {
+      throw new Error("Unable to send approval custom text because the pending turn could not be found.");
+    }
+
+    const workbenchOrigin = readLocalWorkbenchOrigin();
+    const agentPath = getPendingUserInputRequestAgentPath(pendingRequest);
+    await sendBridgeRequest<TurnSteerResponse | { ok?: boolean }>(pendingRequest.harness, {
+      method: "turn/steer",
+      ...(shouldSendWorkbenchPromptContext(pendingRequest.harness)
+        ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(pendingRequest.harness, pendingRequest.threadId, agentPath, workbenchOrigin) }
+        : {}),
+      params: {
+        ...(agentPath && pendingRequest.harness === "copilot" ? { agentPath } : {}),
+        ...(state.projectId && pendingRequest.harness === "copilot" ? { projectId: state.projectId } : {}),
+        ...(state.projectRootPath && pendingRequest.harness !== "codex" ? { cwd: state.projectRootPath } : {}),
+        ...(workbenchOrigin && pendingRequest.harness !== "codex" ? { workbenchOrigin } : {}),
+        expectedTurnId: turnId,
+        input: normalizedInput,
+        threadId: pendingRequest.threadId,
+      } as { agentPath?: string; cwd?: string; expectedTurnId: string; input: UserInput[]; projectId?: string; threadId: string; workbenchOrigin?: string },
+    });
+
+    if (pendingRequest.harness === "codex") {
+      await readCompletedSteerHistory(pendingRequest.threadId);
+    }
+  }
+
   async function submitPendingUserInputRequest(
     threadId: string,
     response: WorkbenchUserInputResponse,
@@ -3921,6 +3989,15 @@ function WorkbenchThreadClient(
     const pendingRequest = state.pendingUserInputRequestsByThreadId.get(threadId);
     if (!pendingRequest) {
       throw new Error("There is no pending question for this thread.");
+    }
+
+    if (isWorkbenchApprovalRequest(pendingRequest.request) && !hasWorkbenchApprovalDecisionSelection(pendingRequest.request, response)) {
+      throw new Error("Choose one of the approval options before submitting.");
+    }
+
+    const supplementalApprovalSteerText = getWorkbenchApprovalSupplementalSteerText(pendingRequest.request, response);
+    if (supplementalApprovalSteerText) {
+      await sendApprovalSupplementalSteer(pendingRequest, supplementalApprovalSteerText);
     }
 
     const submitResult = await sendBridgeRequest<{ ok: boolean; warning?: string }>(pendingRequest.harness, {
@@ -3951,7 +4028,12 @@ function WorkbenchThreadClient(
         reapplyCurrentThreadQuestionnaireHistory(threadId);
       }
     } else {
-      await readCompletedQuestionnaireHistoryAndReconcileIdleCurrentThread(threadId, pendingRequest.harness);
+      if (supplementalApprovalSteerText && pendingRequest.harness === "codex") {
+        await readCompletedThreadWorkbenchHistory(threadId);
+        reconcileCurrentThreadFromReadWhenIdle(threadId, pendingRequest.harness);
+      } else {
+        await readCompletedQuestionnaireHistoryAndReconcileIdleCurrentThread(threadId, pendingRequest.harness);
+      }
     }
   }
 
