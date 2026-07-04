@@ -21,7 +21,16 @@ type EnsureOpenCodeWorkbenchConfigDirectoryOptions = {
 
 type CopyConfigDirectoryContentsResult = {
   copied: boolean;
+  metadata: OpenCodeConfigDirectoryMetadata | null;
   unavailableReason: string | null;
+};
+
+type OpenCodeConfigDirectoryMetadata = {
+  hasBunLock: boolean;
+  hasNodeModules: boolean;
+  hasPackageJson: boolean;
+  hasPackageLock: boolean;
+  topLevelEntryCount: number;
 };
 
 function joinInstructionSections(sections: Array<string | null | undefined>) {
@@ -100,6 +109,17 @@ function nodeErrorCode(error: unknown) {
     : null;
 }
 
+function summarizeConfigDirectoryEntries(entries: Dirent[]): OpenCodeConfigDirectoryMetadata {
+  const names = new Set(entries.map((entry) => entry.name));
+  return {
+    hasBunLock: names.has("bun.lock"),
+    hasNodeModules: names.has("node_modules"),
+    hasPackageJson: names.has("package.json"),
+    hasPackageLock: names.has("package-lock.json"),
+    topLevelEntryCount: entries.length,
+  };
+}
+
 async function copyConfigDirectoryContents(
   sourceDirectory: string,
   destinationDirectory: string,
@@ -112,6 +132,7 @@ async function copyConfigDirectoryContents(
     if (code === "ENOENT" || code === "ENOTDIR" || code === "EACCES" || code === "EPERM") {
       return {
         copied: false,
+        metadata: null,
         unavailableReason: code,
       };
     }
@@ -128,6 +149,7 @@ async function copyConfigDirectoryContents(
   }
   return {
     copied: true,
+    metadata: summarizeConfigDirectoryEntries(entries),
     unavailableReason: null,
   };
 }
@@ -140,13 +162,14 @@ export async function ensureOpenCodeWorkbenchConfigDirectory(
   await fs.rm(configDirectory, { force: true, recursive: true });
   await fs.mkdir(configDirectory, { recursive: true });
   const baseConfigCopy = isSameDirectory(baseConfigDirectory, configDirectory)
-    ? { copied: false, unavailableReason: "self" }
+    ? { copied: false, metadata: null, unavailableReason: "self" }
     : await copyConfigDirectoryContents(baseConfigDirectory, configDirectory);
   const pluginPath = path.join(configDirectory, WORKBENCH_OPENCODE_PLUGIN_FILE);
   await fs.mkdir(path.dirname(pluginPath), { recursive: true });
   await fs.writeFile(pluginPath, buildOpenCodeSystemReplacementPluginSource(), "utf8");
   return {
     baseConfigDirectory,
+    baseConfigMetadata: baseConfigCopy.metadata,
     configDirectory,
     copiedBaseConfig: baseConfigCopy.copied,
     unavailableBaseConfigReason: baseConfigCopy.unavailableReason,

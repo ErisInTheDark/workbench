@@ -67,6 +67,7 @@ type PendingQuestion = {
 type OpenCodeBridgeState = {
   hadClient: boolean;
   liveThreadState: OpenCodeLiveThreadState;
+  managedServerFailure: OpenCodeManagedServerFailure | null;
   pendingPermissions: Map<string, PendingPermission>;
   pendingQuestions: Map<string, PendingQuestion>;
   server: OpenCodeServerHandle | null;
@@ -76,14 +77,31 @@ type OpenCodeBridgeState = {
 
 type OpenCodeSdkModule = typeof import("@opencode-ai/sdk/v2");
 
+type OpenCodeManagedServerFailure = {
+  failedAt: number;
+  loggedSuppressionAt: number | null;
+  message: string;
+  retryMode: "cooldown" | "disabled";
+};
+
+const DEFAULT_OPENCODE_SERVER_RETRY_COOLDOWN_MS = 30_000;
+const OPENCODE_SERVER_RETRY_SUPPRESSION_LOG_MS = 5_000;
 const EXTERNAL_OPENCODE_SERVER_URL = process.env.OPENCODE_SERVER_URL?.trim() || null;
 const OPENCODE_SERVER_HOSTNAME = process.env.OPENCODE_SERVER_HOSTNAME?.trim() || "127.0.0.1";
 const OPENCODE_SERVER_PORT = Number.parseInt(process.env.OPENCODE_SERVER_PORT ?? "4096", 10);
 const OPENCODE_SERVER_START_TIMEOUT_MS = Number.parseInt(process.env.OPENCODE_SERVER_START_TIMEOUT_MS ?? "7000", 10);
+const OPENCODE_SERVER_RETRY_COOLDOWN_MS = normalizePositiveInteger(
+  Number.parseInt(process.env.OPENCODE_SERVER_RETRY_COOLDOWN_MS ?? "", 10),
+  DEFAULT_OPENCODE_SERVER_RETRY_COOLDOWN_MS,
+);
 const OPENCODE_EVENT_SNAPSHOT_REFRESH_DELAY_MS = 150;
 const DEFAULT_OPENCODE_THREAD_TITLE = "New OpenCode thread";
 
 let openCodeSdkPromise: Promise<OpenCodeSdkModule> | null = null;
+
+function normalizePositiveInteger(value: number, fallback: number) {
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
 
 function loadOpenCodeSdk() {
   openCodeSdkPromise ??= import("@opencode-ai/sdk/v2");
@@ -186,6 +204,46 @@ function readSdkErrorMessage(error: unknown) {
   return asString(data?.message)
     ?? asString(record?.message)
     ?? "OpenCode SDK request failed.";
+}
+
+function formatManagedOpenCodeStartupError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (isMissingOpenCodeExecutableMessage(message)) {
+    return `${message} Workbench could not find the OpenCode executable while starting the managed OpenCode server. Verify that \`opencode --version\` works in the Workbench dev environment, or set OPENCODE_SERVER_URL to an already-running OpenCode server.`;
+  }
+  return message;
+}
+
+function isMissingOpenCodeExecutableMessage(message: string) {
+  return /\bENOENT\b/u.test(message) && /\bopencode\b/iu.test(message);
+}
+
+function isPassiveOpenCodeAvailabilityMethod(method: string) {
+  return method === "model/list" || method === "questionnaire/list" || method === "thread/list";
+}
+
+function emptyPassiveOpenCodeAvailabilityResult() {
+  return { data: [] };
+}
+
+function describeOpenCodeConfigMetadata(metadata: {
+  hasBunLock: boolean;
+  hasNodeModules: boolean;
+  hasPackageJson: boolean;
+  hasPackageLock: boolean;
+  topLevelEntryCount: number;
+} | null) {
+  if (!metadata) {
+    return "no readable base config metadata";
+  }
+
+  const notableEntries = [
+    metadata.hasNodeModules ? "node_modules" : null,
+    metadata.hasPackageJson ? "package.json" : null,
+    metadata.hasPackageLock ? "package-lock.json" : null,
+    metadata.hasBunLock ? "bun.lock" : null,
+  ].filter((entry): entry is string => Boolean(entry));
+  return `${metadata.topLevelEntryCount} top-level entries${notableEntries.length ? ` including ${notableEntries.join(", ")}` : ""}`;
 }
 
 function requestDirectory(params: unknown, fallback: string) {
@@ -304,6 +362,7 @@ export class OpenCodeBridge {
   private eventAbortController: AbortController | null = null;
   private eventPumpPromise: Promise<void> | null = null;
   private liveThreadState: OpenCodeLiveThreadState;
+  private managedServerFailure: OpenCodeManagedServerFailure | null = null;
   private pendingPermissions = new Map<string, PendingPermission>();
   private pendingQuestions = new Map<string, PendingQuestion>();
   private server: OpenCodeServerHandle | null = null;
@@ -319,6 +378,7 @@ export class OpenCodeBridge {
     this.client = null;
     this.liveThreadState = initialState?.liveThreadState
       ?? getReloadableModules().opencodeLiveThreadState.createOpenCodeLiveThreadState();
+    this.managedServerFailure = initialState?.managedServerFailure ?? null;
     this.pendingPermissions = initialState?.pendingPermissions ?? new Map();
     this.pendingQuestions = initialState?.pendingQuestions ?? new Map();
     this.server = initialState?.server ?? null;
@@ -343,6 +403,7 @@ export class OpenCodeBridge {
     this.pendingPermissions.clear();
     this.pendingQuestions.clear();
     this.liveThreadState = this.getReloadableModules().opencodeLiveThreadState.createOpenCodeLiveThreadState();
+    this.managedServerFailure = null;
     for (const timer of this.snapshotRefreshTimers.values()) {
       clearTimeout(timer);
     }
@@ -369,6 +430,7 @@ export class OpenCodeBridge {
     const state: OpenCodeBridgeState = {
       hadClient: Boolean(this.client),
       liveThreadState: this.liveThreadState,
+      managedServerFailure: this.managedServerFailure,
       pendingPermissions: this.pendingPermissions,
       pendingQuestions: this.pendingQuestions,
       server: this.server,
@@ -378,6 +440,7 @@ export class OpenCodeBridge {
 
     this.client = null;
     this.liveThreadState = this.getReloadableModules().opencodeLiveThreadState.createOpenCodeLiveThreadState();
+    this.managedServerFailure = null;
     this.pendingPermissions = new Map();
     this.pendingQuestions = new Map();
     this.server = null;
@@ -395,6 +458,10 @@ export class OpenCodeBridge {
     }
 
     try {
+      if (isPassiveOpenCodeAvailabilityMethod(method) && this.isManagedServerDisabled()) {
+        return okResponse(requestId, emptyPassiveOpenCodeAvailabilityResult());
+      }
+
       switch (method) {
         case "thread/list":
           return okResponse(requestId, await this.listThreads(requestDirectories(message.params, this.projectRoot)));
@@ -438,12 +505,68 @@ export class OpenCodeBridge {
           return errorResponse(requestId, -32601, `Unsupported OpenCode bridge method: ${method}`);
       }
     } catch (error) {
+      if (isPassiveOpenCodeAvailabilityMethod(method) && this.isManagedServerDisabled()) {
+        return okResponse(requestId, emptyPassiveOpenCodeAvailabilityResult());
+      }
+
       return errorResponse(
         requestId,
         -32000,
         error instanceof Error ? error.message : "OpenCode bridge request failed.",
       );
     }
+  }
+
+  private getManagedServerCooldownError() {
+    if (!this.managedServerFailure) {
+      return null;
+    }
+
+    if (this.managedServerFailure.retryMode === "disabled") {
+      if (
+        !this.managedServerFailure.loggedSuppressionAt
+        || Date.now() - this.managedServerFailure.loggedSuppressionAt >= OPENCODE_SERVER_RETRY_SUPPRESSION_LOG_MS
+      ) {
+        this.managedServerFailure.loggedSuppressionAt = Date.now();
+        logError("opencode-bridge", `managed server startup disabled: ${this.managedServerFailure.message}`);
+      }
+
+      return `${this.managedServerFailure.message} OpenCode is optional and will stay disabled for this Workbench orchestrator process until it is restarted with a working OpenCode executable or OPENCODE_SERVER_URL.`;
+    }
+
+    const now = Date.now();
+    const retryAt = this.managedServerFailure.failedAt + OPENCODE_SERVER_RETRY_COOLDOWN_MS;
+    const remainingMs = retryAt - now;
+    if (remainingMs <= 0) {
+      this.managedServerFailure = null;
+      return null;
+    }
+
+    if (
+      !this.managedServerFailure.loggedSuppressionAt
+      || now - this.managedServerFailure.loggedSuppressionAt >= OPENCODE_SERVER_RETRY_SUPPRESSION_LOG_MS
+    ) {
+      this.managedServerFailure.loggedSuppressionAt = now;
+      logError(
+        "opencode-bridge",
+        `managed server startup retry suppressed for ${Math.ceil(remainingMs / 1000)}s: ${this.managedServerFailure.message}`,
+      );
+    }
+
+    return `${this.managedServerFailure.message} Retry suppressed for ${Math.ceil(remainingMs / 1000)}s to avoid repeatedly rebuilding the Workbench OpenCode temp config.`;
+  }
+
+  private isManagedServerDisabled() {
+    return this.managedServerFailure?.retryMode === "disabled";
+  }
+
+  private rememberManagedServerFailure(message: string) {
+    this.managedServerFailure = {
+      failedAt: Date.now(),
+      loggedSuppressionAt: null,
+      message,
+      retryMode: isMissingOpenCodeExecutableMessage(message) ? "disabled" : "cooldown",
+    };
   }
 
   private async ensureClient(_directory = this.projectRoot) {
@@ -485,6 +608,11 @@ export class OpenCodeBridge {
   }
 
   private async startManagedServer() {
+    const cooldownError = this.getManagedServerCooldownError();
+    if (cooldownError) {
+      throw new Error(cooldownError);
+    }
+
     const { createOpencodeServer } = await loadOpenCodeSdk();
     const previousConfigDirectory = process.env.OPENCODE_CONFIG_DIR;
     const workbenchConfig = await this.getReloadableModules().opencodeWorkbenchInstructions.ensureOpenCodeWorkbenchConfigDirectory({
@@ -497,14 +625,25 @@ export class OpenCodeBridge {
         ? `using Workbench OpenCode config overlay from ${workbenchConfig.baseConfigDirectory}`
         : `using Workbench OpenCode config without base config; ${workbenchConfig.baseConfigDirectory} was unavailable (${workbenchConfig.unavailableBaseConfigReason ?? "unknown"})`,
     );
+    if (workbenchConfig.copiedBaseConfig) {
+      log(
+        "opencode-bridge",
+        `copied OpenCode base config metadata: ${describeOpenCodeConfigMetadata(workbenchConfig.baseConfigMetadata)}`,
+      );
+    }
 
-    let server: OpenCodeServerHandle;
+    let server: OpenCodeServerHandle | null = null;
     try {
       server = await createOpencodeServer({
         hostname: OPENCODE_SERVER_HOSTNAME,
         port: Number.isFinite(OPENCODE_SERVER_PORT) ? OPENCODE_SERVER_PORT : 4096,
         timeout: Number.isFinite(OPENCODE_SERVER_START_TIMEOUT_MS) ? OPENCODE_SERVER_START_TIMEOUT_MS : 7000,
       });
+    } catch (error) {
+      const message = formatManagedOpenCodeStartupError(error);
+      this.rememberManagedServerFailure(message);
+      logError("opencode-bridge", `managed server startup failed: ${message}`);
+      throw new Error(message);
     } finally {
       if (previousConfigDirectory === undefined) {
         delete process.env.OPENCODE_CONFIG_DIR;
@@ -513,7 +652,12 @@ export class OpenCodeBridge {
       }
     }
 
+    if (!server) {
+      throw new Error("OpenCode managed server startup failed without an error.");
+    }
+
     this.server = server;
+    this.managedServerFailure = null;
     return normalizeOpenCodeBaseUrl(server.url);
   }
 
