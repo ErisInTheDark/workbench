@@ -1,5 +1,5 @@
-@import "tailwindcss";
 @import url("https://fonts.googleapis.com/css2?family=Sour+Gummy:wght@400;500;600;700&display=swap");
+@import "tailwindcss";
 
 @font-face {
   font-family: "Workbench Comic Code Light";
@@ -279,7 +279,6 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     padding: 0.75rem;
     position: relative;
     backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
     transition:
       border-color var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
       padding var(--thread-composer-motion-duration) var(--thread-composer-motion-ease);

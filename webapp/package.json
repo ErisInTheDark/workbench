@@ -16,6 +16,7 @@
     "tailwindcss": "4.2.2",
     "tsx": "4.21.0",
     "@github/copilot-sdk": "0.3.0",
+    "@github/copilot": "1.0.68",
     "@opencode-ai/sdk": "1.17.11"
   },
   "devDependencies": {

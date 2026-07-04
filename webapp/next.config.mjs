@@ -3,7 +3,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const appDirectory = fileURLToPath(new URL(".", import.meta.url));
 
-function toDevtoolsFileUrl(info) {
+function toDevtoolsFileUrl (info) {
   const resourcePath = typeof info.absoluteResourcePath === "string" && info.absoluteResourcePath
     ? info.absoluteResourcePath
     : typeof info.resourcePath === "string" && info.resourcePath
@@ -20,7 +20,8 @@ function toDevtoolsFileUrl(info) {
 
 /** @type {import("next").NextConfig} */
 const nextConfig = {
-  webpack(config, { dev, isServer }) {
+  turbopack: {},
+  webpack (config, { dev, isServer }) {
     if (!dev || isServer) {
       return config;
     }
