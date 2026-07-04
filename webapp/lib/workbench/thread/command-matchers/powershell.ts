@@ -842,13 +842,15 @@ function readPowerShellNumberedLineRange(stageText: string, variableName: string
     || !Number.isFinite(loopBound)
     || !Number.isFinite(endIndex)
     || endIndex < startIndex
-    || !new RegExp(`\\$${escapeRegExp(variableName)}\\s*\\[\\s*\\$${escapeRegExp(indexVariableName)}\\s*\\]`, "i").test(body)
   ) {
     return null;
   }
 
-  const usesOneBasedDisplay = new RegExp(`\\$${escapeRegExp(indexVariableName)}\\s*\\+\\s*1`, "i").test(body);
-  const lineOffset = usesOneBasedDisplay ? 1 : 0;
+  const lineOffset = getPowerShellTupleLoopLineOffset(body, variableName, indexVariableName);
+  if (lineOffset === null) {
+    return null;
+  }
+
   return {
     endLine: endIndex + lineOffset,
     startLine: startIndex + lineOffset,
@@ -857,6 +859,7 @@ function readPowerShellNumberedLineRange(stageText: string, variableName: string
 
 function readPowerShellNumberedLineRanges(commandText: string, variableName: string) {
   const ranges: ParsedPowerShellLineRange[] = [];
+  const rangeAssignments = new Map<string, ParsedPowerShellLineRange[]>();
   let remainingCommand: string | null = commandText;
 
   while (remainingCommand) {
@@ -865,7 +868,14 @@ function readPowerShellNumberedLineRanges(commandText: string, variableName: str
       break;
     }
 
-    const lineRanges = readPowerShellNumberedLineRangeSet(nextStage.text, variableName);
+    const rangeAssignment = readPowerShellTupleRangeAssignment(nextStage.text);
+    if (rangeAssignment) {
+      rangeAssignments.set(rangeAssignment.variableName.toLowerCase(), rangeAssignment.ranges);
+      remainingCommand = nextStage.remainingCommand ?? null;
+      continue;
+    }
+
+    const lineRanges = readPowerShellNumberedLineRangeSet(nextStage.text, variableName, rangeAssignments);
     if (!lineRanges) {
       break;
     }
@@ -884,7 +894,20 @@ function readPowerShellNumberedLineRanges(commandText: string, variableName: str
   };
 }
 
-function readPowerShellNumberedLineRangeSet(stageText: string, variableName: string) {
+function readPowerShellNumberedLineRangeSet(
+  stageText: string,
+  variableName: string,
+  rangeAssignments: ReadonlyMap<string, ParsedPowerShellLineRange[]>,
+) {
+  const assignedTupleRanges = readPowerShellForEachAssignedTupleLineRanges(
+    stageText,
+    variableName,
+    rangeAssignments,
+  );
+  if (assignedTupleRanges) {
+    return assignedTupleRanges;
+  }
+
   const tupleRanges = readPowerShellForEachTupleLineRanges(stageText, variableName);
   if (tupleRanges) {
     return tupleRanges;
@@ -892,6 +915,23 @@ function readPowerShellNumberedLineRangeSet(stageText: string, variableName: str
 
   const lineRange = readPowerShellNumberedLineRange(stageText, variableName);
   return lineRange ? [lineRange] : null;
+}
+
+function readPowerShellTupleRangeAssignment(stageText: string) {
+  const assignmentMatch = unwrapPowerShellStageText(stageText).match(/^\$([A-Za-z_][\w]*)\s*=\s*(@\([\s\S]*\))\s*$/);
+  if (!assignmentMatch?.[1] || !assignmentMatch[2]) {
+    return null;
+  }
+
+  const ranges = readPowerShellNumericTupleRanges(assignmentMatch[2]);
+  if (!ranges) {
+    return null;
+  }
+
+  return {
+    ranges,
+    variableName: assignmentMatch[1],
+  };
 }
 
 function readPowerShellVariableLineRange(stageText: string, variableName: string) {
@@ -956,6 +996,196 @@ function readPowerShellForEachTupleLineRanges(stageText: string, variableName: s
     endLine: (comparisonOperator === "-lt" ? endLine - 1 : endLine) + lineOffset,
     startLine: startLine + lineOffset,
   }));
+}
+
+function readPowerShellForEachAssignedTupleLineRanges(
+  stageText: string,
+  variableName: string,
+  rangeAssignments: ReadonlyMap<string, ParsedPowerShellLineRange[]>,
+) {
+  const normalizedStageText = unwrapPowerShellStageText(stageText);
+  const foreachMatch = normalizedStageText.match(
+    /^foreach\s*\(\s*\$([A-Za-z_][\w]*)\s+in\s+\$([A-Za-z_][\w]*)\s*\)\s*\{([\s\S]+)\}\s*$/i,
+  );
+  if (!foreachMatch?.[1] || !foreachMatch[2] || !foreachMatch[3]) {
+    return null;
+  }
+
+  const rangeVariableName = foreachMatch[1];
+  const assignedRanges = rangeAssignments.get(foreachMatch[2].toLowerCase());
+  if (!assignedRanges) {
+    return null;
+  }
+
+  return readPowerShellForEachTupleLoopRanges(
+    foreachMatch[3],
+    variableName,
+    rangeVariableName,
+    assignedRanges,
+  );
+}
+
+function readPowerShellForEachTupleLoopRanges(
+  bodyText: string,
+  contentVariableName: string,
+  rangeVariableName: string,
+  ranges: ParsedPowerShellLineRange[],
+) {
+  const forMatch = bodyText.match(/^([\s\S]*?)\bfor\s*\(([\s\S]*?)\)\s*\{([\s\S]+)\}\s*(?:;[\s\S]*)?$/i);
+  if (!forMatch || forMatch[1] === undefined || !forMatch[2] || !forMatch[3]) {
+    return null;
+  }
+
+  const tupleAliases = readPowerShellTupleAliasAssignments(forMatch[1], rangeVariableName);
+  if (!tupleAliases) {
+    return null;
+  }
+
+  const forSegments = forMatch[2].split(";").map((segment) => segment.trim());
+  if (forSegments.length !== 3 || !forSegments[0] || !forSegments[1] || !forSegments[2]) {
+    return null;
+  }
+
+  const startMatch = forSegments[0].match(/^\$([A-Za-z_][\w]*)\s*=\s*([\s\S]+)$/);
+  if (!startMatch?.[1] || !startMatch[2]) {
+    return null;
+  }
+
+  const indexVariableName = startMatch[1];
+  const startTupleIndex = readPowerShellTupleIndexExpression(startMatch[2], rangeVariableName, tupleAliases);
+  if (startTupleIndex !== 0 || !isPowerShellIncrementExpression(forSegments[2], indexVariableName)) {
+    return null;
+  }
+
+  const condition = readPowerShellTupleLoopCondition(
+    forSegments[1],
+    indexVariableName,
+    contentVariableName,
+    rangeVariableName,
+    tupleAliases,
+  );
+  if (!condition || condition.endTupleIndex !== 1) {
+    return null;
+  }
+
+  const lineOffset = getPowerShellTupleLoopLineOffset(forMatch[3], contentVariableName, indexVariableName);
+  if (lineOffset === null) {
+    return null;
+  }
+
+  return ranges.map(({ endLine, startLine }) => ({
+    endLine: (condition.comparisonOperator === "-lt" ? endLine - 1 : endLine) + lineOffset,
+    startLine: startLine + lineOffset,
+  }));
+}
+
+function readPowerShellTupleAliasAssignments(prefixText: string, rangeVariableName: string) {
+  const aliases = new Map<string, number>();
+  let remainingPrefix: string | null = prefixText.trim();
+
+  while (remainingPrefix) {
+    const nextStage = consumeNextCommandStage(remainingPrefix, "powershell");
+    if (!nextStage) {
+      return null;
+    }
+
+    const statement = nextStage.text.trim();
+    if (!statement) {
+      remainingPrefix = nextStage.remainingCommand ?? null;
+      continue;
+    }
+
+    const assignmentMatch = statement.match(
+      new RegExp(`^\\$([A-Za-z_][\\w]*)\\s*=\\s*\\$${escapeRegExp(rangeVariableName)}\\s*\\[\\s*([01])\\s*\\]\\s*$`, "i"),
+    );
+    if (!assignmentMatch?.[1] || !assignmentMatch[2]) {
+      return null;
+    }
+
+    aliases.set(assignmentMatch[1].toLowerCase(), Number(assignmentMatch[2]));
+    remainingPrefix = nextStage.remainingCommand ?? null;
+  }
+
+  return aliases;
+}
+
+function readPowerShellTupleIndexExpression(
+  expression: string,
+  rangeVariableName: string,
+  tupleAliases: ReadonlyMap<string, number>,
+) {
+  const normalizedExpression = expression.trim();
+  const directMatch = normalizedExpression.match(
+    new RegExp(`^\\$${escapeRegExp(rangeVariableName)}\\s*\\[\\s*([01])\\s*\\]$`, "i"),
+  );
+  if (directMatch?.[1]) {
+    return Number(directMatch[1]);
+  }
+
+  const aliasMatch = normalizedExpression.match(/^\$([A-Za-z_][\w]*)$/);
+  if (!aliasMatch?.[1]) {
+    return null;
+  }
+
+  return tupleAliases.get(aliasMatch[1].toLowerCase()) ?? null;
+}
+
+function isPowerShellIncrementExpression(expression: string, variableName: string) {
+  const variablePattern = escapeRegExp(variableName);
+  return new RegExp(`^\\$${variablePattern}\\s*(?:\\+\\+|\\+=\\s*1)$`, "i").test(expression.trim());
+}
+
+function readPowerShellTupleLoopCondition(
+  expression: string,
+  indexVariableName: string,
+  contentVariableName: string,
+  rangeVariableName: string,
+  tupleAliases: ReadonlyMap<string, number>,
+) {
+  const variablePattern = escapeRegExp(indexVariableName);
+  const contentVariablePattern = escapeRegExp(contentVariableName);
+  const conditionMatch = expression.trim().match(
+    new RegExp(`^\\$${variablePattern}\\s*(-l[et])\\s*([\\s\\S]+?)(?:\\s+-and\\s+\\$${variablePattern}\\s*-le\\s*\\$${contentVariablePattern}\\.Length)?\\s*$`, "i"),
+  );
+  if (!conditionMatch?.[1] || !conditionMatch[2]) {
+    return null;
+  }
+
+  const endTupleIndex = readPowerShellTupleIndexExpression(conditionMatch[2], rangeVariableName, tupleAliases);
+  if (endTupleIndex === null) {
+    return null;
+  }
+
+  return {
+    comparisonOperator: conditionMatch[1].toLowerCase(),
+    endTupleIndex,
+  };
+}
+
+function getPowerShellTupleLoopLineOffset(
+  bodyText: string,
+  contentVariableName: string,
+  indexVariableName: string,
+) {
+  const contentVariablePattern = escapeRegExp(contentVariableName);
+  const indexVariablePattern = escapeRegExp(indexVariableName);
+  const oneBasedIndexPattern = new RegExp(
+    `\\$${contentVariablePattern}\\s*\\[\\s*\\$${indexVariablePattern}\\s*-\\s*1\\s*\\]`,
+    "i",
+  );
+  if (oneBasedIndexPattern.test(bodyText)) {
+    return 0;
+  }
+
+  const zeroBasedIndexPattern = new RegExp(
+    `\\$${contentVariablePattern}\\s*\\[\\s*\\$${indexVariablePattern}\\s*\\]`,
+    "i",
+  );
+  if (!zeroBasedIndexPattern.test(bodyText)) {
+    return null;
+  }
+
+  return new RegExp(`\\$${indexVariablePattern}\\s*\\+\\s*1`, "i").test(bodyText) ? 1 : 0;
 }
 
 function readPowerShellNumericTupleRanges(value: string) {
