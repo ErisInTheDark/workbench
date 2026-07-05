@@ -5,7 +5,7 @@
 
 import { CommandMatcher } from "./core";
 import { buildCommandPathPart } from "./helpers";
-import type { CommandMatcherDefinition } from "./types";
+import type { CommandMatcherDefinition, ThreadCommandDisplayPart } from "./types";
 
 export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
@@ -68,6 +68,59 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
             pathPart,
           ]
           : [CommandMatcher.Text(listsUntrackedFiles ? "List untracked files" : "List tracked files")],
+      });
+    },
+  }),
+  CommandMatcher({
+    id: "git-show",
+    match: (context) => {
+      if (!/^git\s+show(?:\s|$)/i.test(context.stage.text)) {
+        return null;
+      }
+
+      const targetPath = getGitShowPath(context.stage.text);
+      const pathPart = targetPath
+        ? buildCommandPathPart(targetPath, context)
+        : null;
+
+      return CommandMatcher.Result({
+        summaryStats: { gitDiffChecks: 1 },
+        summaryParts: pathPart
+          ? [
+            CommandMatcher.Text("Git show for "),
+            pathPart,
+          ]
+          : [CommandMatcher.Text("Git show")],
+      });
+    },
+  }),
+  CommandMatcher({
+    id: "git-blame",
+    match: (context) => {
+      if (!/^git\s+blame(?:\s|$)/i.test(context.stage.text)) {
+        return null;
+      }
+
+      const lineRange = getGitBlameLineRange(context.stage.text);
+      const targetPath = getGitBlamePath(context.stage.text);
+      const pathPart = targetPath
+        ? buildCommandPathPart(targetPath, context)
+        : null;
+      const summaryParts: ThreadCommandDisplayPart[] = [
+        CommandMatcher.Text(lineRange ? `Git blame lines ${lineRange} of ` : "Git blame"),
+      ];
+
+      if (pathPart) {
+        if (!lineRange) {
+          summaryParts.push(CommandMatcher.Text(" "));
+        }
+
+        summaryParts.push(pathPart);
+      }
+
+      return CommandMatcher.Result({
+        summaryStats: { readFiles: 1 },
+        summaryParts,
       });
     },
   }),
@@ -146,6 +199,62 @@ function tokenizeGitDiffPaths(pathText: string) {
   return tokenizeGitArguments(pathText);
 }
 
+function getGitShowPath(stageText: string) {
+  const tokens = tokenizeGitArguments(stageText.replace(/^git\s+show(?:\s+|$)/i, ""));
+  const separatorIndex = tokens.indexOf("--");
+  if (separatorIndex >= 0) {
+    return tokens.slice(separatorIndex + 1).filter(Boolean).at(-1) ?? null;
+  }
+
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    const token = tokens[index] ?? "";
+    if (token.startsWith("-")) {
+      continue;
+    }
+
+    const pathFromRevision = readGitRevisionPath(token);
+    if (pathFromRevision) {
+      return pathFromRevision;
+    }
+  }
+
+  return null;
+}
+
+function getGitBlameLineRange(stageText: string) {
+  const tokens = tokenizeGitArguments(stageText.replace(/^git\s+blame(?:\s+|$)/i, ""));
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index] ?? "";
+    const inlineRange = token.match(/^-L(\d+)\s*,\s*(\d+)$/i);
+    if (inlineRange?.[1] && inlineRange[2]) {
+      return `${inlineRange[1]}-${inlineRange[2]}`;
+    }
+
+    if (token.toLowerCase() !== "-l") {
+      continue;
+    }
+
+    const rangeToken = tokens[index + 1] ?? "";
+    const range = rangeToken.match(/^(\d+)\s*,\s*(\d+)$/);
+    if (range?.[1] && range[2]) {
+      return `${range[1]}-${range[2]}`;
+    }
+  }
+
+  return null;
+}
+
+function getGitBlamePath(stageText: string) {
+  const tokens = tokenizeGitArguments(stageText.replace(/^git\s+blame(?:\s+|$)/i, ""));
+  const separatorIndex = tokens.indexOf("--");
+  if (separatorIndex >= 0) {
+    return tokens.slice(separatorIndex + 1).filter(Boolean).at(-1) ?? null;
+  }
+
+  return getGitPositionalArguments(tokens, getGitBlameValueFlags()).at(-1) ?? null;
+}
+
 function getGitLsFilesPath(stageText: string) {
   const argumentText = stageText.replace(/^git\s+ls-files(?:\s+|$)/i, "");
   const argumentsList = tokenizeGitArguments(argumentText);
@@ -175,6 +284,53 @@ function formatGitLsFilesPathPrefix({
   }
 
   return looksLikeTrackedFilePath(path) ? "Check tracked file " : "List tracked files under ";
+}
+
+function readGitRevisionPath(token: string) {
+  const colonIndex = token.indexOf(":");
+  if (colonIndex < 0) {
+    return null;
+  }
+
+  const path = token.slice(colonIndex + 1).trim();
+  return path && !/^[0-9]+$/.test(path) ? path : null;
+}
+
+function getGitPositionalArguments(tokens: string[], valueFlags: Set<string>) {
+  const positionalArguments: string[] = [];
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index] ?? "";
+    if (!token || token === "--") {
+      continue;
+    }
+
+    if (token.startsWith("--")) {
+      const [flagName] = token.split("=", 1);
+      if (valueFlags.has(flagName.toLowerCase()) && !token.includes("=")) {
+        index += 1;
+      }
+
+      continue;
+    }
+
+    if (token.startsWith("-") && token.length > 1) {
+      const shortFlag = token.slice(0, 2).toLowerCase();
+      if (valueFlags.has(shortFlag) && token.length === 2) {
+        index += 1;
+      }
+
+      continue;
+    }
+
+    positionalArguments.push(token);
+  }
+
+  return positionalArguments;
+}
+
+function getGitBlameValueFlags() {
+  return new Set(["-l", "--contents", "--encoding", "--ignore-rev", "--ignore-revs-file"]);
 }
 
 function looksLikeTrackedFilePath(path: string | null) {
