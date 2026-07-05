@@ -10,11 +10,9 @@ import { resolveProjectRoot } from "../../../../lib/project";
 import type {
   WorkbenchCollaborationState,
   WorkbenchCollaborationAdminPostMutation,
-  WorkbenchCollaborationAdminPostMutationRequest,
   WorkbenchCollaborationAdminPostMutationResponse,
   WorkbenchThreadComposerAttachmentDraft,
 } from "../../../../lib/types";
-import { normalizeWorkbenchCollaborationState } from "../../../../lib/workbench/collaboration/collaboration-state";
 import {
   createCollaborationPost,
   createCollaborationStateTag,
@@ -225,7 +223,7 @@ function parseMutation(value: unknown): WorkbenchCollaborationAdminPostMutation 
   throw new Error("Unsupported Collaboration admin post mutation action.");
 }
 
-function parseRequest(value: unknown): WorkbenchCollaborationAdminPostMutationRequest {
+function parseRequest(value: unknown) {
   if (!isRecord(value)) {
     throw new Error("A Collaboration admin post mutation request object is required.");
   }
@@ -238,7 +236,6 @@ function parseRequest(value: unknown): WorkbenchCollaborationAdminPostMutationRe
   return {
     mutation: parseMutation(value.mutation),
     projectId,
-    state: normalizeWorkbenchCollaborationState(value.state),
   };
 }
 
@@ -300,7 +297,7 @@ export async function POST(request: NextRequest) {
     const mutationRequest = parseRequest(await request.json());
     const resolvedProject = await resolveProjectRoot(mutationRequest.projectId);
     const currentFile = await readCollaborationStateDiskFile(resolvedProject.id, { allowCorruptRecovery: true });
-    const nextState = applyMutation(mutationRequest.state, mutationRequest.mutation);
+    const nextState = applyMutation(currentFile.state, mutationRequest.mutation);
 
     await writeCollaborationStateDiskFile(resolvedProject.id, {
       autoWakeLease: currentFile.autoWakeLease,

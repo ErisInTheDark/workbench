@@ -306,7 +306,7 @@ export default function WorkbenchCollaborationView({
     recordCollaborationActivity();
     const nextMutation = adminPostMutationQueueRef.current
       .catch(() => stateRef.current)
-      .then((serverBaseState) => mutateWorkbenchCollaborationAdminPost(projectId, serverBaseState, mutation));
+      .then(() => mutateWorkbenchCollaborationAdminPost(projectId, mutation));
     adminPostMutationQueueRef.current = nextMutation
       .then((savedState) => {
         if (serial === adminPostMutationSerialRef.current) {

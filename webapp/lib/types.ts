@@ -758,7 +758,6 @@ export type WorkbenchCollaborationAdminPostMutation =
 export interface WorkbenchCollaborationAdminPostMutationRequest {
   mutation: WorkbenchCollaborationAdminPostMutation;
   projectId: string;
-  state: WorkbenchCollaborationState;
 }
 
 export interface WorkbenchCollaborationAdminPostMutationResponse {

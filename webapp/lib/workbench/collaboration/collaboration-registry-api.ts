@@ -102,13 +102,11 @@ export async function claimWorkbenchCollaborationStateAutoWake(
 
 export async function mutateWorkbenchCollaborationAdminPost(
   projectId: string,
-  state: WorkbenchCollaborationState,
   mutation: WorkbenchCollaborationAdminPostMutation,
 ) {
   const body: WorkbenchCollaborationAdminPostMutationRequest = {
     mutation,
     projectId,
-    state,
   };
   const response = await fetch("/api/collaboration/admin-posts", {
     method: "POST",
