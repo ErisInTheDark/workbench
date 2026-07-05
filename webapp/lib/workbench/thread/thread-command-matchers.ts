@@ -14,6 +14,7 @@
  */
 
 import type { CommandAction } from "../../codex/generated/app-server/v2/CommandAction";
+import { BROWSE_WEB_REQUEST_COMMAND_MATCHERS } from "./command-matchers/browse-web-requests";
 import { CMD_COMMAND_MATCHERS } from "./command-matchers/cmd";
 import { COPILOT_COMMAND_MATCHERS } from "./command-matchers/copilot-tool-calls";
 import { CommandMatcher, runThreadCommandMatchers } from "./command-matchers/core";
@@ -167,7 +168,12 @@ export function getThreadCommandDisplay({
     workspaceRoots,
   };
   const matchedDisplay = runThreadCommandMatchers(context, {
-    commonMatchers: [...COPILOT_COMMAND_MATCHERS, ...GIT_CHECKPOINT_COMMAND_MATCHERS, ...COMMON_COMMAND_MATCHERS],
+    commonMatchers: [
+      ...COPILOT_COMMAND_MATCHERS,
+      ...GIT_CHECKPOINT_COMMAND_MATCHERS,
+      ...BROWSE_WEB_REQUEST_COMMAND_MATCHERS,
+      ...COMMON_COMMAND_MATCHERS,
+    ],
     shellMatchers: getShellCommandMatchers(context.shellGroup),
   });
 

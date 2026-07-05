@@ -403,6 +403,57 @@ function buildThreadTitleInstructions(context: WorkbenchPromptContext) {
   });
 }
 
+function buildWorkbenchBrowseInstructions(context: WorkbenchPromptContext) {
+  const workbenchOrigin = context.workbenchOrigin?.trim();
+  if (!workbenchOrigin) {
+    return null;
+  }
+
+  const threadId = context.threadId?.trim();
+  const browseRouteUrl = new URL("/api/browse", workbenchOrigin).toString();
+  const currentThreadId = threadId && threadId !== "new" && !threadId.startsWith("draft:")
+    ? threadId
+    : null;
+  const threadIdGuidance = currentThreadId
+    ? `Use this thread id for Browse requests from this turn: \`${currentThreadId}\`.`
+    : "A current thread id is not available yet. Wait until the thread is materialized before using Browse requests, because Browse requests require a `threadId`.";
+  return `
+## Workbench Browse API
+
+Workbench may expose a disabled-by-default local Browse command endpoint:
+
+\`\`\`text
+${browseRouteUrl}
+\`\`\`
+
+When this section is present, it is explicit permission to call only this Browse endpoint for browser automation tasks or Browse diagnostics. It is not permission to call arbitrary Workbench webapp endpoints.
+
+The \`/browse\` Workbench Skill, when present, owns the browser-testing workflow. This section only provides the current thread's concrete Browse API endpoint and dynamic route details.
+
+${threadIdGuidance}
+
+The endpoint runs project-local Browse outside the agent shell sandbox, but only when the user enabled **Enable raw browse commands** in Workbench Settings. If disabled, it returns HTTP 403 and you must ask the user to enable it before using it.
+
+Prefer typed Browse API requests. Send a JSON request with \`action\`, the current \`threadId\`, and a named \`session\` for browser actions:
+
+\`\`\`powershell
+$body = @{ action = 'open'; threadId = '${currentThreadId ?? "<current-thread-id>"}'; session = 'research'; url = 'https://example.com'; mode = 'headless' } | ConvertTo-Json -Compress
+Invoke-RestMethod -Method Post -Uri '${browseRouteUrl}' -ContentType 'application/json' -Body $body
+\`\`\`
+
+\`\`\`bash
+curl -s -X POST '${browseRouteUrl}' -H 'Content-Type: application/json' -d '{"action":"open","threadId":"${currentThreadId ?? "<current-thread-id>"}","session":"research","url":"https://example.com","mode":"headless"}'
+\`\`\`
+
+Typed actions include \`doctor\`, \`status\`, \`open\`, \`snapshot\`, \`click\`, \`fill\`, \`type\`, \`key\`, \`select\`, \`wait\`, \`get\`, \`is\`, \`eval\`, \`highlight\`, \`back\`, \`forward\`, \`reload\`, \`screenshot\`, \`refs\`, \`viewport\`, \`stop\`, and \`cleanup\`.
+
+Use the \`/browse\` skill for sequencing, retry, headed/headless, screenshot, and cleanup decisions.
+
+To take a screenshot, use the typed \`screenshot\` action with the current \`threadId\` and named \`session\`. Workbench makes screenshots visible to both the agent and the user.
+
+`.trim();
+}
+
 function buildWorkbenchCheckpointInstructions(context: WorkbenchPromptContext) {
   const threadId = context.threadId?.trim();
   const workbenchOrigin = context.workbenchOrigin?.trim();
@@ -567,6 +618,7 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
   const developerInstructions = joinInstructionSections([
     buildWorkbenchSkillsDeveloperInstructions(skillManifest),
     buildInstructionPackSections(instructionPacks),
+    buildWorkbenchBrowseInstructions(context),
     buildWorkbenchCheckpointInstructions(context),
     buildThreadTitleInstructions(context),
   ]);
@@ -603,6 +655,7 @@ This collaboration-mode overlay must not replace the active Workbench workflow, 
     WORKBENCH_INJECTION_TEMPLATES["workbench.rendering"].injection,
     buildWorkspaceRootsInjection(context),
     workflowInjection,
+    buildWorkbenchBrowseInstructions(context),
     buildWorkbenchCheckpointInstructions(context),
     buildThreadTitleInstructions(context),
   ]);

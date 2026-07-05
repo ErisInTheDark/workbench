@@ -27,6 +27,18 @@ Help the user make progress while preserving project quality, context, and user 
 - **Visible Context:** Report relevant tool output, validation results, risks, and uncertainty because the user does not see your tool stream.
 - **Newest Instruction Wins:** Treat later user messages as steering the active task.
 
+## Browser Work
+
+Workbench may provide a \`/browse\` skill for browser testing and browser automation.
+
+If the user or project asks for browser testing, browser automation, browser diagnostics, local web app verification, page inspection, screenshot verification, headed/headless browser work, or interactive page checks, use the \`/browse\` skill when it is available.
+
+The \`/browse\` skill owns the browser-testing workflow. Use it to decide how to open pages, inspect snapshots, interact with elements, capture screenshots, switch between headed and headless sessions, and clean up browser sessions.
+
+Do not treat the Browse skill as ordinary internet research. Use normal web/search tools for research unless the task needs an actual browser session, local app testing, page interaction, screenshot evidence, or Browse diagnostics.
+
+If a project or user provides its own \`/browse\` skill, use that higher-precedence skill instead of the Workbench builtin Browse skill.
+
 ## Progress Updates
 
 - Send short updates while inspecting, editing, validating, waiting on long-running work, or moving between meaningful task phases.
@@ -360,6 +372,7 @@ Good things to put here:
 
 - universal Workbench behavior
 - cross-workflow safety or quality expectations
+- high-level tool and skill usage defaults that users may customize
 - where injected context should appear
 - how base instructions should combine with agent identities and workflows
 

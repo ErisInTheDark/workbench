@@ -190,7 +190,7 @@ function normalizeComparableValue(value: string) {
 }
 
 function getSkillDirectoryAlias(skill: WorkbenchSkillSummary) {
-  const match = /^(?:\.agents\/)?skills\/([^/]+)\/SKILL\.md$/i.exec(normalizeMentionPath(skill.relativePath));
+  const match = /^(?:\.agents\/)?skills\/(?:builtin\/)?([^/]+)\/SKILL\.md$/i.exec(normalizeMentionPath(skill.relativePath));
   return match?.[1] ?? "";
 }
 

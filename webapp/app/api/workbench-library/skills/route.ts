@@ -5,8 +5,8 @@ import { containsExactGuidanceText, readCodexGlobalGuidance } from "../../../../
 import { listProjectSkillDefinitions } from "../../../../lib/project";
 import {
   buildWorkbenchLibraryBootstrapInstructions,
+  listActiveWorkbenchSkillDefinitions,
   listWorkbenchLibraryInstructions,
-  listWorkbenchLibrarySkillDefinitions,
 } from "../../../../lib/workbench-library";
 import type { WorkbenchSkillDefinition } from "../../../../lib/types";
 
@@ -25,12 +25,12 @@ function summarizeSkill(skill: WorkbenchSkillDefinition) {
 export async function GET(request: NextRequest) {
   try {
     const projectId = request.nextUrl.searchParams.get("projectId");
-    const [librarySkills, projectSkills, instructionPacks] = await Promise.all([
-      listWorkbenchLibrarySkillDefinitions(),
+    const [projectSkills, instructionPacks] = await Promise.all([
       projectId ? listProjectSkillDefinitions(projectId) : Promise.resolve([]),
       listWorkbenchLibraryInstructions(),
     ]);
-    const data = [...projectSkills, ...librarySkills].map(summarizeSkill);
+    const activeSkills = await listActiveWorkbenchSkillDefinitions(projectSkills);
+    const data = activeSkills.map(summarizeSkill);
     const codexGlobalGuidance = await readCodexGlobalGuidance();
     const globallyPresentInstructionPacks = instructionPacks
       .filter((instructionPack) => containsExactGuidanceText(codexGlobalGuidance, instructionPack.content))

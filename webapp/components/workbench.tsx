@@ -14,6 +14,8 @@ import type {
   WorkbenchControls,
   WorkbenchFileOpenTarget,
   WorkbenchHarness,
+  WorkbenchLocalCapabilitySettings,
+  WorkbenchLocalCapabilitySettingsResponse,
   WorkbenchPendingUserInputRequest,
   WorkbenchProjectOption,
   WorkbenchQuestionnaireDraft,
@@ -228,6 +230,9 @@ const SETTINGS_ORDER: WorkbenchSettingKey[] = [
   "threadCodeBlockWrap",
   "editorFontSize",
 ];
+const DEFAULT_LOCAL_CAPABILITY_SETTINGS: WorkbenchLocalCapabilitySettings = {
+  browseRawCommandsEnabled: false,
+};
 const COLLABORATION_STATE_STORAGE_KEY = "workbench:collaboration:thread-states";
 
 function readStoredCollaborationStates() {
@@ -593,6 +598,9 @@ export default function Workbench () {
 
     return readGlobalWorkbenchSettings();
   });
+  const [localCapabilitySettings, setLocalCapabilitySettings] = useState<WorkbenchLocalCapabilitySettings>(DEFAULT_LOCAL_CAPABILITY_SETTINGS);
+  const [isLocalCapabilitySettingsLoading, setIsLocalCapabilitySettingsLoading] = useState(false);
+  const [localCapabilitySettingsError, setLocalCapabilitySettingsError] = useState("");
   const [projectSettingsByProjectId, setProjectSettingsByProjectId] = useState<Record<string, WorkbenchProjectSettings>>({});
   const [createDialogParentPath, setCreateDialogParentPath] = useState("");
   const [createEntryName, setCreateEntryName] = useState("");
@@ -1166,6 +1174,79 @@ export default function Workbench () {
     event.preventDefault();
     closeProjectPicker();
   }, [closeProjectPicker]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsLocalCapabilitySettingsLoading(true);
+    setLocalCapabilitySettingsError("");
+    void fetch("/api/workbench-settings", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Unable to load local capabilities (${response.status}).`);
+        }
+        return await response.json() as WorkbenchLocalCapabilitySettingsResponse;
+      })
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        setLocalCapabilitySettings(payload.localCapabilities);
+      })
+      .catch((error: Error) => {
+        if (cancelled) {
+          return;
+        }
+        setLocalCapabilitySettings(DEFAULT_LOCAL_CAPABILITY_SETTINGS);
+        setLocalCapabilitySettingsError(error.message);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLocalCapabilitySettingsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const updateBrowseRawCommandsEnabled = useCallback((enabled: boolean) => {
+    const previousSettings = localCapabilitySettings;
+    setLocalCapabilitySettings((current) => ({
+      ...current,
+      browseRawCommandsEnabled: enabled,
+    }));
+    setIsLocalCapabilitySettingsLoading(true);
+    setLocalCapabilitySettingsError("");
+    void fetch("/api/workbench-settings", {
+      body: JSON.stringify({
+        localCapabilities: {
+          browseRawCommandsEnabled: enabled,
+        },
+      }),
+      cache: "no-store",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      method: "PUT",
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Unable to update local capabilities (${response.status}).`);
+        }
+        return await response.json() as WorkbenchLocalCapabilitySettingsResponse;
+      })
+      .then((payload) => {
+        setLocalCapabilitySettings(payload.localCapabilities);
+      })
+      .catch((error: Error) => {
+        setLocalCapabilitySettings(previousSettings);
+        setLocalCapabilitySettingsError(error.message);
+      })
+      .finally(() => {
+        setIsLocalCapabilitySettingsLoading(false);
+      });
+  }, [localCapabilitySettings]);
 
   const updateGlobalSetting = useCallback(<K extends WorkbenchSettingKey> (key: K, value: WorkbenchGlobalSettings[K]) => {
     setGlobalSettings((current) => {
@@ -2588,6 +2669,30 @@ export default function Workbench () {
     );
   };
 
+  const renderLocalCapabilitySettings = () => (
+    <section className="space-y-3 rounded-[0.85rem] py-1">
+      <div className="min-w-0">
+        <h3 className="m-0 text-[0.98rem] font-semibold leading-tight text-text">Local command capabilities</h3>
+        <p className="mt-1 mb-0 text-[0.82rem] leading-6 text-muted">
+          Dangerous local server capabilities. These settings are stored server-side so API routes can enforce them.
+        </p>
+      </div>
+      <WorkbenchOptionCard
+        description="Allow Workbench agents to call /api/browse to run the project-local browse CLI outside the sandbox. Default off."
+        disabled={isLocalCapabilitySettingsLoading}
+        isChecked={localCapabilitySettings.browseRawCommandsEnabled}
+        isSingleChoice={false}
+        label="Enable raw browse commands"
+        onClick={() => {
+          updateBrowseRawCommandsEnabled(!localCapabilitySettings.browseRawCommandsEnabled);
+        }}
+      />
+      {localCapabilitySettingsError ? (
+        <p className="m-0 text-[0.78rem] leading-5 text-danger">{localCapabilitySettingsError}</p>
+      ) : null}
+    </section>
+  );
+
   const renderProjectSettingRow = (key: WorkbenchSettingKey) => {
     const definition = WORKBENCH_SETTING_DEFINITIONS[key];
     const override = projectSettings[key];
@@ -3360,7 +3465,12 @@ export default function Workbench () {
 
                   <div className="space-y-7" role="tabpanel">
                     {settingsScope === "global"
-                      ? SETTINGS_ORDER.map((key) => renderGlobalSettingRow(key))
+                      ? (
+                        <>
+                          {SETTINGS_ORDER.map((key) => renderGlobalSettingRow(key))}
+                          {renderLocalCapabilitySettings()}
+                        </>
+                      )
                       : SETTINGS_ORDER.map((key) => renderProjectSettingRow(key))}
                   </div>
                 </section>

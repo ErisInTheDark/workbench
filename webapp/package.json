@@ -9,15 +9,16 @@
     "typecheck": "pnpm exec tsc --noEmit && pnpm exec tsc --noEmit -p orchestrator"
   },
   "dependencies": {
+    "@github/copilot": "1.0.68",
+    "@github/copilot-sdk": "0.3.0",
+    "@opencode-ai/sdk": "1.17.11",
     "@tailwindcss/postcss": "4.2.2",
+    "browse": "^0.9.1",
     "next": "15.3.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "tailwindcss": "4.2.2",
-    "tsx": "4.21.0",
-    "@github/copilot-sdk": "0.3.0",
-    "@github/copilot": "1.0.68",
-    "@opencode-ai/sdk": "1.17.11"
+    "tsx": "4.21.0"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

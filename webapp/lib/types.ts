@@ -25,6 +25,246 @@ export interface OrchestratorReloadResponse {
   error: string | null;
 }
 
+export interface WorkbenchLocalCapabilitySettings {
+  browseRawCommandsEnabled: boolean;
+}
+
+export interface WorkbenchLocalCapabilitySettingsResponse {
+  localCapabilities: WorkbenchLocalCapabilitySettings;
+}
+
+export interface WorkbenchLocalCapabilitySettingsUpdateRequest {
+  localCapabilities: Partial<WorkbenchLocalCapabilitySettings>;
+}
+
+export interface WorkbenchBrowseCommandRequest {
+  args: string[];
+  cwd?: string | null;
+  projectId?: string | null;
+  stdin?: string | null;
+  threadId: string;
+  timeoutMs?: number | null;
+}
+
+export interface WorkbenchBrowseCommandResponse {
+  assetUrl?: string;
+  disabled?: boolean;
+  durationMs: number;
+  error?: string;
+  exitCode: number | null;
+  ok: boolean;
+  stderr: string;
+  steered?: boolean;
+  steerTurnId?: string;
+  stdout: string;
+  timedOut?: boolean;
+}
+
+export type WorkbenchBrowseSessionMode = "headed" | "headless";
+
+export type WorkbenchBrowseAgentWaitState = "commit" | "domcontentloaded" | "load" | "networkidle";
+
+export type WorkbenchBrowseAgentWaitSelectorState = "attached" | "detached" | "hidden" | "visible";
+
+export type WorkbenchBrowseAgentAction =
+  | WorkbenchBrowseAgentBackRequest
+  | WorkbenchBrowseAgentClickRequest
+  | WorkbenchBrowseAgentCleanupRequest
+  | WorkbenchBrowseAgentDoctorRequest
+  | WorkbenchBrowseAgentEvalRequest
+  | WorkbenchBrowseAgentFillRequest
+  | WorkbenchBrowseAgentForwardRequest
+  | WorkbenchBrowseAgentGetRequest
+  | WorkbenchBrowseAgentHighlightRequest
+  | WorkbenchBrowseAgentIsRequest
+  | WorkbenchBrowseAgentKeyRequest
+  | WorkbenchBrowseAgentOpenRequest
+  | WorkbenchBrowseAgentRefsRequest
+  | WorkbenchBrowseAgentReloadRequest
+  | WorkbenchBrowseAgentScreenshotRequest
+  | WorkbenchBrowseAgentSelectRequest
+  | WorkbenchBrowseAgentSnapshotRequest
+  | WorkbenchBrowseAgentStatusRequest
+  | WorkbenchBrowseAgentStopRequest
+  | WorkbenchBrowseAgentTypeRequest
+  | WorkbenchBrowseAgentViewportRequest
+  | WorkbenchBrowseAgentWaitRequest;
+
+export interface WorkbenchBrowseAgentBaseRequest {
+  action: WorkbenchBrowseAgentActionName;
+  cwd?: string | null;
+  projectId?: string | null;
+  threadId: string;
+  timeoutMs?: number | null;
+}
+
+export type WorkbenchBrowseAgentActionName =
+  | "back"
+  | "cleanup"
+  | "click"
+  | "doctor"
+  | "eval"
+  | "fill"
+  | "forward"
+  | "get"
+  | "highlight"
+  | "is"
+  | "key"
+  | "open"
+  | "refs"
+  | "reload"
+  | "screenshot"
+  | "select"
+  | "snapshot"
+  | "status"
+  | "stop"
+  | "type"
+  | "viewport"
+  | "wait";
+
+export interface WorkbenchBrowseAgentSessionRequest extends WorkbenchBrowseAgentBaseRequest {
+  session?: string | null;
+}
+
+export interface WorkbenchBrowseAgentBrowserRequest extends WorkbenchBrowseAgentSessionRequest {
+  local?: boolean | null;
+  mode?: WorkbenchBrowseSessionMode | null;
+}
+
+export interface WorkbenchBrowseAgentDoctorRequest extends WorkbenchBrowseAgentSessionRequest {
+  action: "doctor";
+  json?: boolean | null;
+}
+
+export interface WorkbenchBrowseAgentStatusRequest extends WorkbenchBrowseAgentSessionRequest {
+  action: "status";
+}
+
+export interface WorkbenchBrowseAgentOpenRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "open";
+  url: string;
+  wait?: WorkbenchBrowseAgentWaitState | null;
+}
+
+export interface WorkbenchBrowseAgentSnapshotRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "snapshot";
+  compact?: boolean | null;
+  filter?: string | null;
+  maxDepth?: number | null;
+}
+
+export interface WorkbenchBrowseAgentClickRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "click";
+  selector: string;
+}
+
+export interface WorkbenchBrowseAgentFillRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "fill";
+  pressEnter?: boolean | null;
+  selector: string;
+  value: string;
+}
+
+export interface WorkbenchBrowseAgentEvalRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "eval";
+  expression: string;
+}
+
+export interface WorkbenchBrowseAgentGetRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "get";
+  selector?: string | null;
+  what: "box" | "checked" | "html" | "markdown" | "text" | "title" | "url" | "value" | "visible";
+}
+
+export interface WorkbenchBrowseAgentHighlightRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "highlight";
+  durationMs?: number | null;
+  selector: string;
+}
+
+export interface WorkbenchBrowseAgentIsRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "is";
+  check: "checked" | "visible";
+  selector: string;
+}
+
+export interface WorkbenchBrowseAgentTypeRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "type";
+  delayMs?: number | null;
+  mistakes?: boolean | null;
+  text: string;
+}
+
+export interface WorkbenchBrowseAgentKeyRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "key";
+  key: string;
+}
+
+export interface WorkbenchBrowseAgentSelectRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "select";
+  selector: string;
+  value: string;
+}
+
+export interface WorkbenchBrowseAgentWaitRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "wait";
+  argument?: string | null;
+  state?: WorkbenchBrowseAgentWaitSelectorState | null;
+  type: "load" | "selector" | "timeout";
+}
+
+export interface WorkbenchBrowseAgentNavigationRequest extends WorkbenchBrowseAgentBrowserRequest {
+  wait?: WorkbenchBrowseAgentWaitState | null;
+}
+
+export interface WorkbenchBrowseAgentBackRequest extends WorkbenchBrowseAgentNavigationRequest {
+  action: "back";
+}
+
+export interface WorkbenchBrowseAgentForwardRequest extends WorkbenchBrowseAgentNavigationRequest {
+  action: "forward";
+}
+
+export interface WorkbenchBrowseAgentReloadRequest extends WorkbenchBrowseAgentNavigationRequest {
+  action: "reload";
+}
+
+export interface WorkbenchBrowseAgentScreenshotRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "screenshot";
+  animations?: "allow" | "disabled" | null;
+  fullPage?: boolean | null;
+  type?: "jpeg" | "png" | null;
+}
+
+export interface WorkbenchBrowseAgentRefsRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "refs";
+}
+
+export interface WorkbenchBrowseAgentViewportRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "viewport";
+  height: number;
+  scale?: number | null;
+  width: number;
+}
+
+export interface WorkbenchBrowseAgentStopRequest extends WorkbenchBrowseAgentSessionRequest {
+  action: "stop";
+  force?: boolean | null;
+}
+
+export interface WorkbenchBrowseAgentCleanupRequest extends WorkbenchBrowseAgentBaseRequest {
+  action: "cleanup";
+  force?: boolean | null;
+  sessions?: string[] | null;
+}
+
+export interface WorkbenchBrowseAgentResponse extends WorkbenchBrowseCommandResponse {
+  action?: WorkbenchBrowseAgentActionName;
+  args?: string[];
+  cleanupResults?: WorkbenchBrowseCommandResponse[];
+  session?: string;
+}
+
 export interface WorkbenchAgentOption {
   name: string;
   description: string;

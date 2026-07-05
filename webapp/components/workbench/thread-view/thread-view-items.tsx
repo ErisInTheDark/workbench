@@ -22,6 +22,10 @@ import {
 } from "../../../lib/workbench/thread/thread-collab-agents";
 import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
 import {
+  getAgentScreenshotSteerImages,
+  isAgentScreenshotSteerUserMessage,
+} from "../../../lib/workbench/thread/thread-steer-markers";
+import {
   getThreadCommandBlockDisplay,
   getThreadCommandDisplay,
   isGitCheckpointDiffMatcherClaim,
@@ -529,6 +533,16 @@ function ThreadUserMessageItem ({
   startedAt: number | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  if (isAgentScreenshotSteerUserMessage(item)) {
+    return (
+      <ThreadAgentScreenshotSteerItem
+        item={item}
+        showStartedAt={showStartedAt}
+        startedAt={startedAt}
+      />
+    );
+  }
+
   const steerState = getSteerUserMessageState(item);
   const isDecoratedSteer = steerState !== null;
   const steerMessageClass = steerState ? ` thread-${steerState}-steer-message px-0.5 py-0.5` : "";
@@ -553,6 +567,37 @@ function ThreadUserMessageItem ({
         </div>
       </div>
       {showStartedAt ? <ThreadMessageTimestamp align="right" className="mt-1" timestampSeconds={startedAt} /> : null}
+    </section>
+  );
+}
+
+function ThreadAgentScreenshotSteerItem ({
+  item,
+  showStartedAt,
+  startedAt,
+}: {
+  item: Extract<ThreadItem, { type: "userMessage" }>;
+  showStartedAt: boolean;
+  startedAt: number | null;
+}) {
+  const images = getAgentScreenshotSteerImages(item);
+  if (!images.length) {
+    return null;
+  }
+
+  return (
+    <section className="flex flex-col items-start py-2" data-thread-user-message-state="agent-screenshot-steer">
+      <div className="w-full max-w-[42rem] space-y-2">
+        {images.map((image, index) => (
+          <ThreadUserImage
+            key={`${item.id}:agent-screenshot:${index}`}
+            alt="Agent-captured screenshot"
+            className="max-w-[28rem]"
+            src={image.url}
+          />
+        ))}
+      </div>
+      {showStartedAt ? <ThreadMessageTimestamp className="mt-1" timestampSeconds={startedAt} /> : null}
     </section>
   );
 }

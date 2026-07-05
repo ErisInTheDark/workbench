@@ -5,7 +5,7 @@
  * - parseFrontmatterBlock: parse simple markdown frontmatter fields. Keywords: frontmatter, markdown, metadata.
  * - ensureWorkbenchLibrary: create the library root and standard folders. Keywords: workbench library, mkdir, scaffold.
  * - isExcludedWorkbenchLibraryFile: test whether a library file is documentation or a template ignored by scanners. Keywords: template, exclusion, scan.
- * - listWorkbenchLibrarySkills/listWorkbenchLibrarySkillDefinitions: discover Workbench Skill metadata and full file content from nested SKILL.md files. Keywords: skills, manifest, discovery.
+ * - listWorkbenchLibrarySkills/listWorkbenchLibrarySkillDefinitions/listActiveWorkbenchSkillDefinitions: discover active Workbench Skill metadata and full file content with builtin shadowing. Keywords: skills, manifest, discovery, builtin.
  * - listWorkbenchLibraryAgents/readWorkbenchLibraryAgentDefinition: discover and load library agent files. Keywords: agent, prompt, library.
  * - listWorkbenchLibraryInstructions: discover cached universal Workbench instruction packs. Keywords: instructions, universal, bootstrap, fingerprint.
  * - WorkbenchLibraryBootstrapInstructionsOptions: controls duplicate instruction-pack filtering. Keywords: bootstrap, dedupe, codex.
@@ -21,6 +21,7 @@ import {
   WORKBENCH_LIBRARY_PROJECT_ID,
   workbenchLibraryRoot,
 } from "./workbench-library-paths";
+import { WORKBENCH_BUILTIN_SKILLS } from "./workbench/instructions/workbench-builtin-skills";
 import { WORKBENCH_SKILL_TRIGGER_AND_PRECEDENCE_INSTRUCTIONS } from "./workbench/instructions/workbench-skill-precedence";
 
 export { WORKBENCH_LIBRARY_PROJECT_ID, workbenchLibraryRoot };
@@ -209,9 +210,36 @@ async function writeFileIfMissing(relativePath: string, content: string) {
   }
 }
 
+async function writeGeneratedFile(relativePath: string, content: string) {
+  const absolutePath = safeResolveLibraryPath(relativePath);
+  const normalizedContent = `${content.trim()}\n`;
+  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+  const currentContent = await readTextFile(absolutePath);
+  if (currentContent !== null && `${currentContent.trim()}\n` === normalizedContent) {
+    return;
+  }
+
+  await fs.writeFile(absolutePath, normalizedContent, "utf8");
+}
+
+async function writeBuiltinSkills() {
+  await Promise.all(WORKBENCH_BUILTIN_SKILLS.map((skill) => (
+    writeGeneratedFile(skill.relativePath, skill.content)
+  )));
+}
+
 async function isDirectoryEmpty(directoryPath: string) {
   try {
     return (await fs.readdir(directoryPath)).length === 0;
+  } catch {
+    return true;
+  }
+}
+
+async function isUserSkillDirectoryEmpty() {
+  try {
+    const entries = await fs.readdir(path.join(workbenchLibraryRoot, "skills"), { withFileTypes: true });
+    return entries.every((entry) => entry.name === "builtin");
   } catch {
     return true;
   }
@@ -224,12 +252,14 @@ export async function ensureWorkbenchLibrary() {
   )));
   await writeFileIfMissing(README_FILE_NAME, readmeTemplate);
 
-  if (await isDirectoryEmpty(path.join(workbenchLibraryRoot, "skills"))) {
+  if (await isUserSkillDirectoryEmpty()) {
     await Promise.all([
       writeFileIfMissing("skills/example/SKILL.template.md", skillTemplate),
       writeFileIfMissing("skills/example/references/notes.template.md", skillReferenceTemplate),
     ]);
   }
+
+  await writeBuiltinSkills();
 
   if (await isDirectoryEmpty(path.join(workbenchLibraryRoot, "agents"))) {
     await writeFileIfMissing("agents/example.template.md", agentTemplate);
@@ -240,48 +270,46 @@ export async function ensureWorkbenchLibrary() {
   }
 }
 
-export async function listWorkbenchLibrarySkills(): Promise<WorkbenchSkillSummary[]> {
-  await ensureWorkbenchLibrary();
-  let entries;
-  try {
-    entries = await fs.readdir(path.join(workbenchLibraryRoot, "skills"), { withFileTypes: true });
-  } catch {
-    return [];
-  }
-
-  const skills: WorkbenchSkillSummary[] = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory() || isExcludedWorkbenchLibraryFile(entry.name)) {
-      continue;
-    }
-
-    const relativePath = normalizeRelativePath(path.join("skills", entry.name, "SKILL.md"));
-    if (isExcludedWorkbenchLibraryFile(relativePath)) {
-      continue;
-    }
-
-    const content = await readTextFile(safeResolveLibraryPath(relativePath));
-    if (!content) {
-      continue;
-    }
-
-    const frontmatter = parseFrontmatterBlock(content);
-    skills.push({
-      description: frontmatter?.get("description") ?? "",
-      name: frontmatter?.get("name") ?? entry.name,
-      path: normalizeRelativePath(safeResolveLibraryPath(relativePath)),
-      relativePath,
-    });
-  }
-
-  return skills.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+function createSkillSummary(skill: WorkbenchSkillDefinition): WorkbenchSkillSummary {
+  return {
+    description: skill.description,
+    name: skill.name,
+    path: skill.path,
+    relativePath: skill.relativePath,
+  };
 }
 
-export async function listWorkbenchLibrarySkillDefinitions(): Promise<WorkbenchSkillDefinition[]> {
-  await ensureWorkbenchLibrary();
+function createSkillShadowKey(skill: Pick<WorkbenchSkillSummary, "name" | "relativePath">) {
+  const normalizedRelativePath = normalizeRelativePath(skill.relativePath);
+  const match = /^(?:\.agents\/)?skills\/(?:builtin\/)?([^/]+)\/SKILL\.md$/i.exec(normalizedRelativePath);
+  return (match?.[1] ?? skill.name).trim().toLocaleLowerCase();
+}
+
+function applySkillShadowing(skillGroups: readonly (readonly WorkbenchSkillDefinition[])[]) {
+  const seenKeys = new Set<string>();
+  const activeSkills: WorkbenchSkillDefinition[] = [];
+  for (const group of skillGroups) {
+    for (const skill of group) {
+      const key = createSkillShadowKey(skill);
+      if (!key || seenKeys.has(key)) {
+        continue;
+      }
+
+      seenKeys.add(key);
+      activeSkills.push(skill);
+    }
+  }
+
+  return activeSkills;
+}
+
+async function readWorkbenchLibrarySkillDefinitionsFromDirectory(
+  directoryPath: string,
+  relativeDirectory: string,
+): Promise<WorkbenchSkillDefinition[]> {
   let entries;
   try {
-    entries = await fs.readdir(path.join(workbenchLibraryRoot, "skills"), { withFileTypes: true });
+    entries = await fs.readdir(directoryPath, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -292,7 +320,7 @@ export async function listWorkbenchLibrarySkillDefinitions(): Promise<WorkbenchS
       continue;
     }
 
-    const relativePath = normalizeRelativePath(path.join("skills", entry.name, "SKILL.md"));
+    const relativePath = normalizeRelativePath(path.join(relativeDirectory, entry.name, "SKILL.md"));
     if (isExcludedWorkbenchLibraryFile(relativePath)) {
       continue;
     }
@@ -314,6 +342,46 @@ export async function listWorkbenchLibrarySkillDefinitions(): Promise<WorkbenchS
   }
 
   return skills.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+}
+
+async function listWorkbenchUserSkillDefinitions(): Promise<WorkbenchSkillDefinition[]> {
+  await ensureWorkbenchLibrary();
+  const skills = await readWorkbenchLibrarySkillDefinitionsFromDirectory(
+    path.join(workbenchLibraryRoot, "skills"),
+    "skills",
+  );
+  return skills.filter((skill) => !normalizeRelativePath(skill.relativePath).toLocaleLowerCase().startsWith("skills/builtin/"));
+}
+
+async function listWorkbenchBuiltinSkillDefinitions(): Promise<WorkbenchSkillDefinition[]> {
+  await ensureWorkbenchLibrary();
+  return await readWorkbenchLibrarySkillDefinitionsFromDirectory(
+    path.join(workbenchLibraryRoot, "skills", "builtin"),
+    "skills/builtin",
+  );
+}
+
+export async function listWorkbenchLibrarySkills(): Promise<WorkbenchSkillSummary[]> {
+  const definitions = await listWorkbenchLibrarySkillDefinitions();
+  return definitions.map(createSkillSummary);
+}
+
+export async function listWorkbenchLibrarySkillDefinitions(): Promise<WorkbenchSkillDefinition[]> {
+  const [userSkills, builtinSkills] = await Promise.all([
+    listWorkbenchUserSkillDefinitions(),
+    listWorkbenchBuiltinSkillDefinitions(),
+  ]);
+  return applySkillShadowing([userSkills, builtinSkills]);
+}
+
+export async function listActiveWorkbenchSkillDefinitions(
+  projectSkills: readonly WorkbenchSkillDefinition[] = [],
+): Promise<WorkbenchSkillDefinition[]> {
+  const [userSkills, builtinSkills] = await Promise.all([
+    listWorkbenchUserSkillDefinitions(),
+    listWorkbenchBuiltinSkillDefinitions(),
+  ]);
+  return applySkillShadowing([projectSkills, userSkills, builtinSkills]);
 }
 
 export async function listWorkbenchLibraryAgents(): Promise<WorkbenchAgentOption[]> {
@@ -481,8 +549,8 @@ function buildDetectedSkillInstructions(skills: WorkbenchSkillDefinition[]) {
 }
 
 export async function buildWorkbenchSkillManifestInstructions(projectSkills: WorkbenchSkillDefinition[] = []) {
-  const librarySkills = await listWorkbenchLibrarySkillDefinitions();
-  return buildDetectedSkillInstructions([...projectSkills, ...librarySkills]);
+  const activeSkills = await listActiveWorkbenchSkillDefinitions(projectSkills);
+  return buildDetectedSkillInstructions(activeSkills);
 }
 
 export interface WorkbenchLibraryBootstrapInstructionsOptions {

@@ -11,7 +11,10 @@ Skill precedence only resolves duplicate or equivalent triggered skills from mul
 Before reading duplicate or equivalent triggered skills, choose the highest-precedence applicable source. Read and apply only that source, and do not read, merge, or apply lower-precedence copies unless the user explicitly requests a specific source or path. Apply this precedence from highest to lowest:
 
 1. project skills
-2. user \`.workbench\` folder skills
+2. user \`.workbench/skills/<name>\` skills
 3. user \`.agents\` folder skills
-4. any other skills, using whatever other precedence instructions are present
+4. Workbench builtin skills under \`.workbench/skills/builtin/<name>\`
+5. any other skills, using whatever other precedence instructions are present
+
+Generated Workbench builtin skills are fallback defaults. A project skill or user Workbench skill with the same skill name, slash command, or path intent shadows the builtin skill.
 `.trim();
