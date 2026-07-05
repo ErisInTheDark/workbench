@@ -1415,6 +1415,11 @@ function summarizeWhereObjectFilter(parsedStage: ParsedPowerShellStage) {
     return null;
   }
 
+  const comparisonFilter = summarizeWhereObjectComparisonFilter(normalizedScript);
+  if (comparisonFilter) {
+    return comparisonFilter;
+  }
+
   const rawMatch = normalizedScript.match(/\$_(?:\.[A-Za-z_][\w]*)*\s+-(notmatch|match)\s+([\s\S]+)$/i);
   if (!rawMatch?.[1] || !rawMatch[2]) {
     return null;
@@ -1436,6 +1441,57 @@ function summarizeWhereObjectFilter(parsedStage: ParsedPowerShellStage) {
     mode,
     pattern,
   } as const;
+}
+
+function summarizeWhereObjectComparisonFilter(normalizedScript: string) {
+  const patterns: string[] = [];
+  const seenPatterns = new Set<string>();
+
+  for (const rawSegment of splitPowerShellConditionByTopLevelOr(normalizedScript)) {
+    const segment = stripBalancedWrappingParentheses(rawSegment.trim());
+    const comparisonMatch = segment.match(/^\$_(?:\.[A-Za-z_][\w]*)+\s+-[ci]?(eq|like)\s+([\s\S]+)$/i);
+    if (!comparisonMatch?.[1] || !comparisonMatch[2]) {
+      return null;
+    }
+
+    const literalValue = readSimplePowerShellComparisonLiteral(comparisonMatch[2].trim());
+    if (!literalValue) {
+      return null;
+    }
+
+    const pattern = formatWhereObjectPattern(literalValue, "include");
+    if (!pattern || !/[A-Za-z0-9*?]/.test(pattern)) {
+      return null;
+    }
+
+    const patternKey = pattern.toLowerCase();
+    if (seenPatterns.has(patternKey)) {
+      continue;
+    }
+
+    seenPatterns.add(patternKey);
+    patterns.push(pattern);
+  }
+
+  if (!patterns.length) {
+    return null;
+  }
+
+  return {
+    mode: "include",
+    pattern: patterns.join(", "),
+  } as const;
+}
+
+function readSimplePowerShellComparisonLiteral(rawExpression: string) {
+  const quotedValue = unwrapPowerShellQuotedTextOnce(rawExpression);
+  if (quotedValue !== null) {
+    return quotedValue;
+  }
+
+  return /^[^\s|&;{}()]+$/.test(rawExpression) && !rawExpression.startsWith("$")
+    ? rawExpression
+    : null;
 }
 
 function formatWhereObjectPattern(pattern: string, mode: "exclude" | "include") {

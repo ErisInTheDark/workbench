@@ -54,6 +54,7 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         return null;
       }
 
+      const listsUntrackedFiles = isGitLsFilesUntrackedListing(context.stage.text);
       const path = getGitLsFilesPath(context.stage.text);
       const pathPart = path
         ? buildCommandPathPart(path, context)
@@ -63,10 +64,23 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         summaryStats: { listedFiles: 1 },
         summaryParts: pathPart
           ? [
-            CommandMatcher.Text(looksLikeTrackedFilePath(path) ? "Check tracked file " : "List tracked files under "),
+            CommandMatcher.Text(formatGitLsFilesPathPrefix({ listsUntrackedFiles, path })),
             pathPart,
           ]
-          : [CommandMatcher.Text("List tracked files")],
+          : [CommandMatcher.Text(listsUntrackedFiles ? "List untracked files" : "List tracked files")],
+      });
+    },
+  }),
+  CommandMatcher({
+    id: "git-diff-name-only",
+    match: ({ stage }) => {
+      if (!/^git\s+diff(?:\s|$)/i.test(stage.text) || !/(?:^|\s)--name-only(?:\s|$)/i.test(stage.text)) {
+        return null;
+      }
+
+      return CommandMatcher.Result({
+        summaryStats: { gitDiffChecks: 1 },
+        summaryParts: [CommandMatcher.Text("List changed files")],
       });
     },
   }),
@@ -141,6 +155,26 @@ function getGitLsFilesPath(stageText: string) {
     : argumentsList.filter((token) => !token.startsWith("-"));
 
   return pathTokens.at(-1) ?? null;
+}
+
+function isGitLsFilesUntrackedListing(stageText: string) {
+  const argumentText = stageText.replace(/^git\s+ls-files(?:\s+|$)/i, "");
+  const argumentsList = tokenizeGitArguments(argumentText);
+  return argumentsList.some((argument) => argument === "--others" || argument === "-o");
+}
+
+function formatGitLsFilesPathPrefix({
+  listsUntrackedFiles,
+  path,
+}: {
+  listsUntrackedFiles: boolean;
+  path: string;
+}) {
+  if (listsUntrackedFiles) {
+    return looksLikeTrackedFilePath(path) ? "Check untracked file " : "List untracked files under ";
+  }
+
+  return looksLikeTrackedFilePath(path) ? "Check tracked file " : "List tracked files under ";
 }
 
 function looksLikeTrackedFilePath(path: string | null) {
