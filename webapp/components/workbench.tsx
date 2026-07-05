@@ -221,7 +221,6 @@ const DEFAULT_RELOAD_REQUEST: OrchestratorReloadRequest = {
 };
 const SETTINGS_ORDER: WorkbenchSettingKey[] = [
   "theme",
-  "collaborationScratchpadPath",
   "editorFontFamily",
   "editorSpellCheck",
   "composerSpellCheck",
@@ -1105,11 +1104,8 @@ export default function Workbench () {
     ? projectSettingsByProjectId[explorer.currentProjectId] ?? createDefaultProjectWorkbenchSettings()
     : createDefaultProjectWorkbenchSettings();
   const resolvedSettings = resolveWorkbenchSettings(globalSettings, projectSettings);
-  const collaborationScratchpadPath = resolvedSettings.collaborationScratchpadPath.trim()
-    || createWorkbenchCollaborationScratchpadRelativePath(activeProjectId);
-  const collaborationScratchpadWritableRoot = resolvedSettings.collaborationScratchpadPath.trim()
-    ? ""
-    : createWorkbenchCollaborationScratchpadWritableRoot(explorer.workbenchStorageRootPath, activeProjectId);
+  const collaborationScratchpadPath = createWorkbenchCollaborationScratchpadRelativePath(activeProjectId);
+  const collaborationScratchpadWritableRoot = createWorkbenchCollaborationScratchpadWritableRoot(explorer.workbenchStorageRootPath, activeProjectId);
   const showUnopenableFiles = resolvedSettings.showUnopenableFiles;
   const visibleTree = useMemo(
     () => {
@@ -2589,33 +2585,6 @@ export default function Workbench () {
           label={definition.label}
           onClick={() => {
             onChange(!value);
-          }}
-        />
-      );
-    }
-
-    if (definition.type === "text" && typeof value === "string") {
-      return (
-        <input
-          type="text"
-          className="w-full rounded-lg border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-transparent px-3 py-2 text-[0.9rem] leading-6 text-text outline-none transition focus:border-accent focus:ring-2 focus:ring-accent-soft disabled:opacity-45"
-          disabled={disabled}
-          value={value}
-          onChange={(event) => {
-            onChange(event.currentTarget.value);
-          }}
-        />
-      );
-    }
-
-    if (definition.type === "textarea" && typeof value === "string") {
-      return (
-        <textarea
-          className="explorer-scrollbar min-h-56 w-full resize-y rounded-lg border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-transparent px-3 py-2 font-mono text-[0.82rem] leading-6 text-text outline-none transition focus:border-accent focus:ring-2 focus:ring-accent-soft disabled:opacity-45"
-          disabled={disabled}
-          value={value}
-          onChange={(event) => {
-            onChange(event.currentTarget.value);
           }}
         />
       );
