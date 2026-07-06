@@ -14,7 +14,6 @@ minimumReleaseAgeExclude:
   - "@github/copilot-darwin-arm64"
   - "@github/copilot-linuxmusl-arm64"
 overrides:
-  '@github/copilot@<=1.0.42': '>=1.0.43'
   esbuild@>=0.27.3 <0.28.1: '>=0.28.1'
   next@>=10.0.0 <15.5.10: '>=15.5.10'
   next@>=10.0.0 <15.5.14: '>=15.5.14'
