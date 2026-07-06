@@ -673,6 +673,7 @@ export default function WorkbenchCollaborationView({
       autoWakeCountdownMs={runController.autoWakeCountdownMs}
       autoWakeEnabled={collaborationState.autoWakeEnabled}
       autoWakeProgressPercent={runController.autoWakeProgressPercent}
+      canContinueSelectedRunThread={runController.canContinueSelectedRunThread}
       collaboratorComposer={runController.shouldRenderCurrentRunThread ? null : collaboratorComposer}
       collaboratorStatus={runController.collaboratorStatus}
       collaboratorStatusLabel={runController.collaboratorStatusLabel}
@@ -683,6 +684,7 @@ export default function WorkbenchCollaborationView({
       recentRunIds={runController.recentRunIds}
       selectedRunThreadId={runController.selectedRunThreadId}
       summariesById={runController.summariesById}
+      onContinueSelectedRunThread={runController.continueSelectedRunThread}
       onRunNow={() => {
         void runController.startCollaboratorRun();
       }}

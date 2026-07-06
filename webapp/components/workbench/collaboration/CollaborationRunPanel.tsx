@@ -53,6 +53,7 @@ export default function CollaborationRunPanel ({
   autoWakeCountdownMs,
   autoWakeEnabled,
   autoWakeProgressPercent,
+  canContinueSelectedRunThread,
   collaboratorComposer,
   collaboratorStatus,
   collaboratorStatusLabel,
@@ -63,6 +64,7 @@ export default function CollaborationRunPanel ({
   recentRunIds,
   selectedRunThreadId,
   summariesById,
+  onContinueSelectedRunThread,
   onRunNow,
   onSelectRunThread,
   onToggleAutoRun,
@@ -71,6 +73,7 @@ export default function CollaborationRunPanel ({
   autoWakeCountdownMs: number | null;
   autoWakeEnabled: boolean;
   autoWakeProgressPercent: number;
+  canContinueSelectedRunThread: boolean;
   collaboratorComposer: ReactNode | null;
   collaboratorStatus: "failed" | "hydrating" | "idle" | "running" | "starting";
   collaboratorStatusLabel: string;
@@ -81,6 +84,7 @@ export default function CollaborationRunPanel ({
   recentRunIds: readonly string[];
   selectedRunThreadId: string;
   summariesById: Map<string, ThreadSummary>;
+  onContinueSelectedRunThread: () => void;
   onRunNow: () => void;
   onSelectRunThread: (threadId: string) => void;
   onToggleAutoRun: () => void;
@@ -276,7 +280,21 @@ export default function CollaborationRunPanel ({
                     ) : <RunSummarySkeleton />
                   )}
                 >
-                  {isOpen ? activeRunContent : (
+                  {isOpen ? (
+                    <>
+                      {activeRunContent}
+                      {canContinueSelectedRunThread ? (
+                        <div className="mt-4 flex justify-end">
+                          <PrimaryButton
+                            type="button"
+                            onClick={onContinueSelectedRunThread}
+                          >
+                            Continue
+                          </PrimaryButton>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
                     <p className="m-0 text-[0.84rem] leading-6 text-muted">Select this run to load its transcript.</p>
                   )}
                 </ThreadDisclosure>

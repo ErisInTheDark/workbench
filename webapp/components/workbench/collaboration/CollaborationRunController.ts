@@ -28,12 +28,8 @@ import {
   isCollaborationLeafPost,
   isEditableAgentLeafPost,
 } from "../../../lib/workbench/collaboration/collaboration-tree-mutations";
-import {
-  mergeWorkbenchCollaborationState,
-} from "../../../lib/workbench/collaboration/collaboration-state";
 import { WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS } from "../../../lib/workbench/collaboration/collaboration-registry";
 import {
-  readWorkbenchCollaborationState,
   writeWorkbenchCollaborationState,
 } from "../../../lib/workbench/collaboration/collaboration-registry-api";
 import ActiveTabRefreshLeader from "../../../lib/workbench/state/ActiveTabRefreshLeader";
@@ -71,6 +67,7 @@ export interface CollaborationRunControllerOptions {
 export interface CollaborationRunControllerState {
   autoWakeCountdownMs: number | null;
   autoWakeProgressPercent: number;
+  canContinueSelectedRunThread: boolean;
   collaboratorDraftComposerDraft: WorkbenchThreadComposerDraft | null;
   collaboratorDraftThread: ThreadPayload | null;
   collaboratorError: string;
@@ -90,6 +87,7 @@ export interface CollaborationRunControllerState {
   clearCollaboratorDraft: (threadId: string) => void;
   cycleCollaboratorDraftHarness: () => void;
   recordCollaborationActivity: () => void;
+  continueSelectedRunThread: () => void;
   selectRunThread: (threadId: string) => void;
   sendComposerMessage: (threadId: string, input: UserInput[]) => Promise<void>;
   sendRunMessage: (thread: ThreadPayload, input: UserInput[], options?: WorkbenchSendThreadMessageOptions) => Promise<ThreadPayload | null>;
@@ -173,46 +171,19 @@ function buildCollaborationInstructionInjections({
   const collaborationPostEndpoint = typeof window === "undefined"
     ? "/api/collaboration/posts"
     : `${window.location.origin}/api/collaboration/posts`;
+  const collaborationMemoryEndpoint = typeof window === "undefined"
+    ? "/api/collaboration/memory"
+    : `${window.location.origin}/api/collaboration/memory`;
 
   return {
     "collaboration.diff-map": diffMap,
+    "collaboration.memory-endpoint": collaborationMemoryEndpoint,
     "collaboration.post-endpoint": collaborationPostEndpoint,
     "collaboration.previous-memory": previousMemory || "None.",
     "collaboration.project-id": projectId,
     "collaboration.tags": formatTagsForPrompt(state),
     "collaboration.tree": formatTreeForPrompt(state),
   };
-}
-
-function createRunMemorySignature(thread: ThreadPayload, turnIndex: number, itemIndex: number, text: string) {
-  let hash = 5381;
-  for (let index = 0; index < text.length; index += 1) {
-    hash = ((hash << 5) + hash) ^ text.charCodeAt(index);
-  }
-
-  return `${thread.id}:${turnIndex}:${itemIndex}:${(hash >>> 0).toString(36)}`;
-}
-
-function findLatestCollaboratorRunMemory(thread: ThreadPayload) {
-  for (let turnIndex = thread.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
-    const turn = thread.turns[turnIndex];
-    for (let itemIndex = turn.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
-      const item = turn.items[itemIndex];
-      if (item.type !== "agentMessage") {
-        continue;
-      }
-
-      const memory = item.text.trim();
-      if (memory) {
-        return {
-          memory,
-          signature: createRunMemorySignature(thread, turnIndex, itemIndex, item.text),
-        };
-      }
-    }
-  }
-
-  return null;
 }
 
 function applyCollaboratorDraftSettings(draftThread: ThreadPayload, settingsThread: ThreadPayload) {
@@ -260,6 +231,7 @@ export default function CollaborationRunController({
   threadDocuments,
 }: CollaborationRunControllerOptions): CollaborationRunControllerState {
   const [selectedRunThreadId, setSelectedRunThreadId] = useState(collaborationState.runThreadIds[0] ?? "");
+  const [continuedRunThreadId, setContinuedRunThreadId] = useState("");
   const [collaboratorThread, setCollaboratorThread] = useState<ThreadPayload | null>(null);
   const [collaboratorDraftThread, setCollaboratorDraftThread] = useState<ThreadPayload | null>(null);
   const [collaboratorDraftComposerDraft, setCollaboratorDraftComposerDraftState] = useState<WorkbenchThreadComposerDraft | null>(null);
@@ -285,7 +257,7 @@ export default function CollaborationRunController({
   const currentRunPendingUserInputRequest = selectedRunThreadId
     ? livePendingUserInputRequestsByThreadId[selectedRunThreadId] ?? null
     : null;
-  const selectedRunIsActive = Boolean(
+  const selectedRunIsReallyActive = Boolean(
     effectiveRunThread
     && effectiveRunThread.id === selectedRunThreadId
     && (
@@ -293,6 +265,18 @@ export default function CollaborationRunController({
       || Boolean(currentRunSummary && isThreadStatusActive(currentRunSummary.status))
       || Boolean(currentRunPendingUserInputRequest)
     ),
+  );
+  const selectedRunIsContinued = Boolean(
+    continuedRunThreadId
+    && continuedRunThreadId === selectedRunThreadId
+    && effectiveRunThread
+    && effectiveRunThread.id === selectedRunThreadId,
+  );
+  const selectedRunIsActive = selectedRunIsReallyActive || selectedRunIsContinued;
+  const canContinueSelectedRunThread = Boolean(
+    effectiveRunThread
+    && effectiveRunThread.id === selectedRunThreadId
+    && !selectedRunIsActive,
   );
   const shouldRenderCurrentRunThread = selectedRunIsActive;
   const shouldShowRunThreadLoading = Boolean(
@@ -337,6 +321,18 @@ export default function CollaborationRunController({
   }, [runThreadIdSignature]);
 
   useEffect(() => {
+    if (continuedRunThreadId && continuedRunThreadId !== selectedRunThreadId) {
+      setContinuedRunThreadId("");
+    }
+  }, [continuedRunThreadId, selectedRunThreadId]);
+
+  useEffect(() => {
+    if (selectedRunIsReallyActive && continuedRunThreadId === selectedRunThreadId) {
+      setContinuedRunThreadId("");
+    }
+  }, [continuedRunThreadId, selectedRunIsReallyActive, selectedRunThreadId]);
+
+  useEffect(() => {
     if (!collaborationState.autoWakeEnabled || pendingAutoWakeActivityAt === null) {
       return;
     }
@@ -348,36 +344,6 @@ export default function CollaborationRunController({
       window.clearInterval(interval);
     };
   }, [collaborationState.autoWakeEnabled, pendingAutoWakeActivityAt]);
-
-  useEffect(() => {
-    for (const runThreadId of runThreadIds) {
-      const thread = getThreadDocumentFromSnapshot(threadDocuments, runThreadId);
-      if (!thread || isThreadStatusActive(thread.status)) {
-        continue;
-      }
-
-      const memory = findLatestCollaboratorRunMemory(thread);
-      const currentState = getCurrentCollaborationState();
-      if (!memory || memory.signature === currentState.lastAppliedRunMemorySignature) {
-        continue;
-      }
-
-      setCollaboratorWarnings((current) => current.length ? [] : current);
-      publishStateIfChanged({
-        ...currentState,
-        lastAppliedRunMemorySignature: memory.signature,
-        lastRunMemory: memory.memory,
-      });
-      void readWorkbenchCollaborationState(projectId)
-        .then((diskState) => {
-          publishStateIfChanged(mergeWorkbenchCollaborationState(diskState, getCurrentCollaborationState()));
-        })
-        .catch(() => {
-          // Browser-local memory remains useful if the endpoint state refresh is unavailable.
-        });
-      break;
-    }
-  }, [getCurrentCollaborationState, projectId, publishStateIfChanged, runThreadIdSignature, threadDocuments]);
 
   useEffect(() => {
     if (!selectedRunThreadId || !isThreadStatusActive(effectiveRunThread?.status ?? "")) {
@@ -657,12 +623,24 @@ export default function CollaborationRunController({
   }, [collaborationState.autoWakeEnabled, collaboratorDraftHasContent, isAutoWakeLeader, onClaimAutoWake, pendingAutoWakeActivityAt, projectId, publishStateIfChanged, startCollaboratorRun]);
 
   const selectRunThread = useCallback((threadId: string) => {
+    if (threadId !== selectedRunThreadId) {
+      setContinuedRunThreadId("");
+    }
     setSelectedRunThreadId(threadId);
     if (!threadId.startsWith("draft:")) {
       setCollaboratorPhase("hydrating");
       void hydrateCollaboratorThread(threadId);
     }
-  }, [hydrateCollaboratorThread]);
+  }, [hydrateCollaboratorThread, selectedRunThreadId]);
+
+  const continueSelectedRunThread = useCallback(() => {
+    if (!canContinueSelectedRunThread || !selectedRunThreadId) {
+      return;
+    }
+
+    setContinuedRunThreadId(selectedRunThreadId);
+    setCollaboratorPhase("idle");
+  }, [canContinueSelectedRunThread, selectedRunThreadId]);
 
   const toggleAutoRun = useCallback(() => {
     const currentState = getCurrentCollaborationState();
@@ -760,6 +738,7 @@ export default function CollaborationRunController({
   return {
     autoWakeCountdownMs,
     autoWakeProgressPercent,
+    canContinueSelectedRunThread,
     collaboratorDraftComposerDraft,
     collaboratorDraftThread,
     collaboratorError,
@@ -783,6 +762,7 @@ export default function CollaborationRunController({
       setCollaboratorDraftComposerDraftState(null);
     },
     cycleCollaboratorDraftHarness,
+    continueSelectedRunThread,
     pauseRunThread,
     recordCollaborationActivity,
     resumeRunThread,

@@ -54,7 +54,20 @@ type PostBranchPromptSummary = {
   singlePromptThreadId: string | null;
 };
 
-function collectPostBranchPromptThreadIds (state: WorkbenchCollaborationState, postId: string, promptThreadIds: Set<string>): boolean {
+function hasPostBranchPrompt (state: WorkbenchCollaborationState, postId: string): boolean {
+  const post = state.posts[postId];
+  if (!post) {
+    return false;
+  }
+
+  if (post.prompt || post.promptThreadId) {
+    return true;
+  }
+
+  return post.childIds.some((childId) => hasPostBranchPrompt(state, childId));
+}
+
+function collectLinearPostBranchPromptThreadIds (state: WorkbenchCollaborationState, postId: string, promptThreadIds: Set<string>): boolean {
   const post = state.posts[postId];
   if (!post) {
     return false;
@@ -65,8 +78,14 @@ function collectPostBranchPromptThreadIds (state: WorkbenchCollaborationState, p
     promptThreadIds.add(post.promptThreadId);
   }
 
-  for (const childId of post.childIds) {
-    hasSuggestedPrompt = collectPostBranchPromptThreadIds(state, childId, promptThreadIds) || hasSuggestedPrompt;
+  if (post.childIds.length > 1) {
+    promptThreadIds.clear();
+    return hasPostBranchPrompt(state, post.id);
+  }
+
+  const childId = post.childIds[0];
+  if (childId) {
+    hasSuggestedPrompt = collectLinearPostBranchPromptThreadIds(state, childId, promptThreadIds) || hasSuggestedPrompt;
   }
 
   return hasSuggestedPrompt;
@@ -74,7 +93,7 @@ function collectPostBranchPromptThreadIds (state: WorkbenchCollaborationState, p
 
 function getPostBranchPromptSummary (state: WorkbenchCollaborationState, postId: string): PostBranchPromptSummary {
   const promptThreadIds = new Set<string>();
-  const hasSuggestedPrompt = collectPostBranchPromptThreadIds(state, postId, promptThreadIds);
+  const hasSuggestedPrompt = collectLinearPostBranchPromptThreadIds(state, postId, promptThreadIds);
   const singlePromptThreadId = promptThreadIds.values().next().value ?? null;
   return {
     hasSuggestedPrompt,

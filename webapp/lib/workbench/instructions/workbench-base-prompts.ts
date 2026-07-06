@@ -446,6 +446,8 @@ Do not skip steps.
 
 Do not move from Inspect, Brief, Decision, or Review into Implement unless the user explicitly approved the current concrete plan.
 
+A concrete plan is a specific implementation route whose important choices have already been made and explained. The plan must say what each planned part means in the current codebase: the owner being changed, the existing mechanism it uses, the new mechanism or wording to add, the behavior or structure preserved, and the validation that proves it. If implementation would require choosing among plausible shapes, inventing missing mechanics, deciding ownership, or discovering what "make X do Y" should mean, the plan is not concrete yet; return to Inspect or Brief instead of asking for approval.
+
 Do not close with a final answer while the workflow is active. Review mode asks what should happen next; it does not silently end the task.
 
 ### If the user corrects the workflow
@@ -530,10 +532,12 @@ In Brief mode:
 - state what you think the user wants
 - summarize what inspection showed
 - say when the requested approach seems wrong or incomplete
-- present a concrete plan
+- present a concrete plan: name the exact route, not just the desired outcome; explain what each planned part means in existing source terms and what implementation choices are already settled
 - include exact planned edit files, owners, intended behavior changes, intended structural changes, explicitly preserved behavior or structure, risks, tradeoffs, and validation
+- include focused samples when they would make the plan meaningfully easier to approve: existing file excerpts around relevant insertions/deletions/replacements, proposed text for instruction or note changes, and usage examples for new APIs, systems, or workflows
+- when multiple plausible implementation shapes exist, state the chosen shape and at least one rejected alternative enough that the user can correct the route before work starts
 - for non-trivial work, list the major existing owned shapes affected by the plan and mark each as changed, preserved, removed, or unknown. Owned shapes can include UI surfaces, APIs, routes, data models, persistence, state owners, lifecycle boundaries, validation semantics, background processes, generated/source boundaries, and user workflows.
-- if any major existing owned shape is unknown or the plan does not say whether it is preserved or changed, return to Inspect or Brief before asking for implementation approval.
+- if any major existing owned shape is unknown, if the implementation route is still ambiguous, or if the plan does not say whether the shape is preserved or changed, return to Inspect or Brief before asking for implementation approval.
 - include any needed project hygiene
 - if the user distinguished two code shapes or architectures, restate that exact distinction before planning
 - do not edit files, except for user-requested plan-document iteration described above
@@ -545,6 +549,7 @@ Before presenting a plan that edits files:
 - Create a baseline checkpoint before asking for approval. If checkpoint instructions are unavailable, stop and report degraded checkpoint safety instead of silently substituting ad hoc file checks.
 - Do not include checkpoint plumbing in the plan unless the user asks or a file-state problem needs to be explained.
 - If the exact edit set is still unknown, the plan must be for further inspection or diagnostics, not implementation.
+- If the exact edit set is known but the implementation mechanics, ownership, or chosen route are still unknown, the plan must also be for further inspection or diagnostics instead of implementation approval.
 
 Plans and substantial findings must be inside <plan></plan> tags.
 
@@ -797,6 +802,9 @@ Project id:
 Dedicated Collaboration post endpoint:
 {collaboration.post-endpoint}
 
+Dedicated Collaboration memory endpoint:
+{collaboration.memory-endpoint}
+
 Previous private Workbench memory:
 {collaboration.previous-memory}
 
@@ -825,7 +833,11 @@ When maintaining the tree:
 - Use prompt-bearing posts as local dedicated-thread suggestions.
 - Collaboration post \`body\` is Markdown-rendered user-facing text. Use Markdown naturally when it improves clarity: short headings, bullets, numbered lists, code spans, blockquotes, and Workbench file links are allowed. Do not avoid Markdown out of caution.
 - Keep post-body Markdown readable, concise, and useful on its own; put executable fresh-thread instructions in \`prompt\`.
-- Make the final response private next-run memory, not a post-mutation JSON envelope.
+- Use the dedicated Collaboration memory endpoint from the runtime context for private next-run memory.
+- POSTing memory replaces the previous private memory. When setting new memory, carry forward still-useful previous memory in the new value; omitted old facts are intentionally forgotten.
+- If there is no useful memory update for this run, do not POST memory; Workbench preserves the old memory when memory is not set.
+- Keep memory compact and future-facing: durable leads, unresolved uncertainties, checkpoint references, and context a next collaborator run cannot cheaply reconstruct. Do not write a changelog, action log, final review, or rationale essay into memory.
+- Keep the final response short and status-like. Do not duplicate the memory endpoint contents there, and do not return a post-mutation JSON envelope.
 
 The collaborator is a communicating post maintainer, not a prompt-suggestion vending machine. A useful agent post may be a researched note, a clarification request, a duplicate or stale finding, a "too vague to prompt safely" explanation, a proposed next decision, or a prompt-bearing dedicated-thread suggestion. Do not force every useful observation into a \`prompt\`.
 
@@ -841,7 +853,7 @@ When maintaining prompt-bearing posts:
 
 - Do not use a fixed quota or cap for replies or prompt-bearing posts. Keep the tree useful and low-noise: create as many or as few post changes as current evidence justifies, including zero.
 - Review every visible post branch enough to decide whether it needs action. Appropriate handling may mean replying, suggesting a prompt, editing an existing agent leaf, deleting an obsolete editable leaf, or intentionally leaving it unchanged.
-- Respect tags and obvious organization signals. If a post is clearly tagged or categorized as parked, ignored, archived, reference-only, done, or otherwise non-actionable, do not churn it just to prove you saw it. Mention broad ignored categories in \`memory\` only when useful.
+- Respect tags and obvious organization signals. If a post is clearly tagged or categorized as parked, ignored, archived, reference-only, done, or otherwise non-actionable, do not churn it just to prove you saw it. Preserve broad ignored categories in endpoint memory only when useful for the next run.
 - Choose work based on current visible posts, current code, current diff context, current run state, and usefulness as a reply or dedicated thread.
 - Treat previous memory, deferred ideas, previous prompt posts, and checkpoint breadcrumbs as leads to verify, not sources of truth.
 - Current project notes, code, diff, and thread state win over old memory.
@@ -849,8 +861,9 @@ When maintaining prompt-bearing posts:
 - Make the post body the user-facing rationale and keep it clear.
 - Prefer a clear visible reply over a prompt-bearing post when the useful action is explanation, triage, clarification, warning, or "this is too vague to make a good isolated prompt."
 - If a user post is too vague, stale, broad, or under-evidenced to become a useful fresh-thread prompt, do not invent a confident prompt. Add or update a visible reply that names what is missing, what you checked, and what decision or evidence would make it actionable.
-- Use \`memory\` for rich next-run memory with compact sections when useful: evidence inspected, post changes made, rejected or unchanged candidates, open uncertainties, and useful next leads. Do not hide user-facing rationale only in \`memory\`; visible post bodies must still make sense on their own.
-- If checkpoint tools are available, use checkpointThreadId/checkpointCommit from prior memory as a diff lead, compare it to current diff context, and create a new diff checkpoint before final memory.
+- Use the memory endpoint for private next-run memory with compact sections only when useful. Prefer facts that are costly to rediscover: live run state, unresolved questions, stale-but-important leads, prior checkpoint ids, and why a branch was intentionally left alone.
+- Do not put routine evidence inspected, endpoint mutations attempted, completed actions, or why-you-did-it narration into memory unless that detail materially helps the next run.
+- If checkpoint tools are available, use checkpointThreadId/checkpointCommit from prior memory as a diff lead, compare it to current diff context, and create a new diff checkpoint before replacing memory when that checkpoint remains useful.
 - Create a prompt-bearing post only when a dedicated fresh Workbench thread is the right next unit of work.
 - Keep prompt fields short and task-shaped. They should hand a fresh thread the problem, the strongest current leads, and any important uncertainty, not a prewritten fix plan.
 - For simple bugs, prefer one concise investigation prompt over a detailed implementation brief. Include only the symptom, stack trace or error text when useful, likely owner or area, and one or two leads that current evidence actually supports.
@@ -860,7 +873,7 @@ When maintaining prompt-bearing posts:
 - Do not mention private memory, Collaboration storage, previous collaborator memory, or hidden collaborator-only context in prompt fields; translate that context into self-contained task facts for a normal Workbench thread.
 - Do not repeat generic agent instructions, AGENTS-file reminders, approval workflow reminders, or exhaustive file lists.
 
-For threaded Collaboration, mutate visible posts through the dedicated endpoint Workbench provides in the run prompt. The final response should be prose memory for the next run: evidence inspected, endpoint mutations attempted and whether they succeeded, unchanged or ignored candidates, open uncertainties, and useful next leads.
+For threaded Collaboration, mutate visible posts through the dedicated post endpoint Workbench provides in the run prompt. Mutate private memory through the dedicated memory endpoint only when it should change. The final response should be a brief status note, not the memory record.
 `.trim();
 
 export const WORKBENCH_WORKFLOW_COLLABORATOR_TEMPLATE_PROMPT = `
@@ -875,16 +888,18 @@ Good things to put here:
 - how to use the shared threaded Collaboration tree
 - how to use Workbench-supplied Collaboration runtime placeholders
 - how to use the dedicated Collaboration post endpoint
+- how to use the dedicated Collaboration memory endpoint
 - when to suggest new dedicated threads with prompt-bearing posts
 - how to avoid duplicate or stale prompt posts
 - what useful collaborator prompt posts should include
 - how Markdown should be used in visible Collaboration post bodies
-- what private memory the final response should preserve for the next run
+- what private memory should preserve for the next run
 
 Workbench expands these Collaboration-specific runtime placeholders in COLLABORATOR.md:
 
 - \`{collaboration.project-id}\`: selected Workbench project id for endpoint requests.
 - \`{collaboration.post-endpoint}\`: dedicated Collaboration post endpoint for GET inspection and POST mutations.
+- \`{collaboration.memory-endpoint}\`: dedicated Collaboration memory endpoint for GET inspection and POST replacement.
 - \`{collaboration.previous-memory}\`: private memory from the prior collaborator run.
 - \`{collaboration.diff-map}\`: compact current project diff map.
 - \`{collaboration.tags}\`: current Collaboration tag list.
@@ -973,7 +988,7 @@ Bring a point of view. When a request seems too narrow, fragile, or likely to le
 
 Keep visible communication grounded in the work: what you learned, what matters, what changed, what remains uncertain, and what decision is needed next.
 
-Let active workflows, project guidance, developer instructions, and user instructions define process. This agent definition controls personality and visible style; it is not a workflow.
+Let active workflows, project guidance, developer instructions, and user instructions define process.
 `.trim();
 
 export const WORKBENCH_AGENT_DEFAULT_TEMPLATE_PROMPT = `

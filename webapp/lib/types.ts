@@ -689,6 +689,29 @@ export interface WorkbenchCollaborationPostMutationResponse extends WorkbenchCol
   postId?: string;
 }
 
+export interface WorkbenchCollaborationMemoryEndpointUsage {
+  endpoint: string;
+  rules: string[];
+}
+
+export interface WorkbenchCollaborationMemorySetRequest {
+  memory?: string | null;
+  projectId: string;
+}
+
+export interface WorkbenchCollaborationMemoryStateResponse {
+  memory: string;
+  projectId: string;
+  state: WorkbenchCollaborationState;
+  usage: WorkbenchCollaborationMemoryEndpointUsage;
+}
+
+export interface WorkbenchCollaborationMemoryMutationResponse extends WorkbenchCollaborationMemoryStateResponse {
+  message: string;
+  ok: true;
+  preserved: boolean;
+}
+
 export type WorkbenchCollaborationAdminPostMoveIntent =
   | { type: "after"; targetPostId: string }
   | { type: "before"; targetPostId: string }
