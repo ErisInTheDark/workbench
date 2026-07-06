@@ -60,6 +60,7 @@ import type {
     WorkbenchStoredThreadUnreadState,
     WorkbenchSubmitUserInputRequestOptions,
     WorkbenchThreadDocumentSnapshot,
+    WorkbenchThreadContextReadResponse,
     WorkbenchThreadTurnHistoryEntry,
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
@@ -2728,6 +2729,13 @@ function WorkbenchThreadClient(
     refreshFinalVisibleThreadForOverlay(threadId);
   }
 
+  function setThreadContextReadEntries(threadId: string, response: WorkbenchThreadContextReadResponse) {
+    const browseChanged = setBrowseScreenshotEntries(threadId, response.browseScreenshotEntries);
+    const questionnaireChanged = setQuestionnaireHistoryEntries(threadId, response.questionnaireEntries);
+    const steerChanged = setSteerHistoryEntries(threadId, response.steerEntries);
+    return browseChanged || questionnaireChanged || steerChanged;
+  }
+
   async function readCompletedQuestionnaireHistory(threadId: string, options: { refreshProjection?: boolean } = {}) {
     try {
       const response = await sendBridgeRequest<{ data?: WorkbenchQuestionnaireHistoryEntry[] }>("codex", {
@@ -2895,18 +2903,30 @@ function WorkbenchThreadClient(
         }
       }
 
-      const response = await sendBridgeRequest<ThreadReadResponse>(harness, {
-        method: "thread/read",
-        params: {
-          includeTurns: true,
-          ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
-          ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
-          ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
-          ...(workbenchOrigin && harness !== "codex" ? { workbenchOrigin } : {}),
-          threadId,
-        },
-        workbenchThreadHydration: hydration,
-      });
+      const contextResponse = harness === "codex"
+        ? await sendBridgeRequest<WorkbenchThreadContextReadResponse>(harness, {
+          method: "thread/context/read",
+          params: {
+            includeTurns: true,
+            threadId,
+          },
+          workbenchThreadHydration: hydration,
+        })
+        : null;
+      const response = contextResponse
+        ? { thread: contextResponse.thread } satisfies ThreadReadResponse
+        : await sendBridgeRequest<ThreadReadResponse>(harness, {
+          method: "thread/read",
+          params: {
+            includeTurns: true,
+            ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
+            ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
+            ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
+            ...(workbenchOrigin && harness !== "codex" ? { workbenchOrigin } : {}),
+            threadId,
+          },
+          workbenchThreadHydration: hydration,
+        });
 
       const projectRootPaths = getProjectRootPaths(state);
       if (projectRootPaths.length && !isProjectCodexThread(response.thread, projectRootPaths)) {
@@ -2924,8 +2944,8 @@ function WorkbenchThreadClient(
           ? getPreferredThreadServiceTier(threadId, harness) ?? resumedThread?.serviceTier
           : resumedThread?.serviceTier ?? getPreferredThreadServiceTier(threadId, harness)
         : null;
-      if (harness === "codex") {
-        void readCompletedThreadWorkbenchHistory(threadId);
+      if (contextResponse) {
+        setThreadContextReadEntries(threadId, contextResponse);
       }
       return mergeLiveStreamingThreadSnapshot(toThreadPayload(
         response.thread,
@@ -2955,15 +2975,27 @@ function WorkbenchThreadClient(
   async function readCurrentThread(threadId: string, harness: WorkbenchHarness, options: WorkbenchReadThreadOptions = {}) {
     const hydration = options.hydration ?? { mode: "latest" as const };
     try {
-      const response = await sendBridgeRequest<ThreadReadResponse>(harness, {
-        method: "thread/read",
-        params: {
-          includeTurns: true,
-          ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
-          threadId,
-        },
-        workbenchThreadHydration: hydration,
-      });
+      const contextResponse = harness === "codex"
+        ? await sendBridgeRequest<WorkbenchThreadContextReadResponse>(harness, {
+          method: "thread/context/read",
+          params: {
+            includeTurns: true,
+            threadId,
+          },
+          workbenchThreadHydration: hydration,
+        })
+        : null;
+      const response = contextResponse
+        ? { thread: contextResponse.thread } satisfies ThreadReadResponse
+        : await sendBridgeRequest<ThreadReadResponse>(harness, {
+          method: "thread/read",
+          params: {
+            includeTurns: true,
+            ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
+            threadId,
+          },
+          workbenchThreadHydration: hydration,
+        });
 
       const projectRootPaths = getProjectRootPaths(state);
       if (projectRootPaths.length && !isProjectCodexThread(response.thread, projectRootPaths)) {
@@ -2972,8 +3004,8 @@ function WorkbenchThreadClient(
       }
 
       const nextModel = getThreadModel(threadId);
-      if (harness === "codex") {
-        void readCompletedThreadWorkbenchHistory(threadId);
+      if (contextResponse) {
+        setThreadContextReadEntries(threadId, contextResponse);
       }
       return mergeLiveStreamingThreadSnapshot(toThreadPayload(
         response.thread,

@@ -16,11 +16,13 @@ import type { RequestPermissionProfile } from "../lib/codex/generated/app-server
 import type { ToolRequestUserInputParams } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputParams";
 import type { ToolRequestUserInputQuestion } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputQuestion";
 import type { ToolRequestUserInputResponse } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputResponse";
+import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type {
     WorkbenchApprovalCommandContext,
     WorkbenchBrowseScreenshotEntry,
     WorkbenchCollaborationState,
     WorkbenchQuestionnaireHistoryEntry,
+    WorkbenchThreadContextReadResponse,
     WorkbenchThreadHydrationRequest,
     WorkbenchUserInputQuestion,
     WorkbenchUserInputRequest,
@@ -1155,6 +1157,11 @@ export default class CodexStdioBridge {
             id: requestId,
             result: await this.listBrowseScreenshotEntries(message.params),
           };
+        case "thread/context/read":
+          return {
+            id: requestId,
+            result: await this.readThreadContext(message),
+          };
         case "browse/screenshot/record":
           return {
             id: requestId,
@@ -1815,6 +1822,50 @@ export default class CodexStdioBridge {
 
     return {
       data: await this.ensureTranscriptStore().listBrowseScreenshotEntries(threadId),
+    };
+  }
+
+  private async readThreadContext(message: JsonRpcRequest): Promise<WorkbenchThreadContextReadResponse> {
+    const record = asRecord(message.params);
+    const threadId = asString(record?.threadId)?.trim() ?? "";
+    if (!threadId) {
+      throw new Error("Missing thread/context/read thread id.");
+    }
+
+    const hydration = readThreadHydration(message);
+    const readParams = {
+      ...(record ?? {}),
+      includeTurns: record?.includeTurns ?? true,
+      threadId,
+    };
+    const readRequest: JsonRpcRequest = {
+      method: "thread/read",
+      params: readParams,
+      ...(hydration ? { [WORKBENCH_THREAD_HYDRATION_FIELD]: hydration } : {}),
+    };
+    const readResponse = await this.request(readRequest, { internal: true });
+    if (readResponse.error) {
+      throw new Error(readResponse.error.message);
+    }
+
+    const result = asRecord(readResponse.result);
+    const thread = asRecord(result?.thread) as Thread | null;
+    if (!thread?.id) {
+      throw new Error("thread/context/read did not receive a readable thread.");
+    }
+
+    const transcriptStore = this.ensureTranscriptStore();
+    const [browseScreenshotEntries, questionnaireEntries, steerEntries] = await Promise.all([
+      transcriptStore.listBrowseScreenshotEntries(thread.id),
+      transcriptStore.listQuestionnaireHistory(thread.id),
+      transcriptStore.listSteerHistory(thread.id),
+    ]);
+
+    return {
+      browseScreenshotEntries,
+      questionnaireEntries,
+      steerEntries,
+      thread,
     };
   }
 

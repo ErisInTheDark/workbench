@@ -1,5 +1,6 @@
 import type { RateLimitSnapshot } from "./codex/generated/app-server/v2/RateLimitSnapshot";
 import type { CommandAction } from "./codex/generated/app-server/v2/CommandAction";
+import type { Thread } from "./codex/generated/app-server/v2/Thread";
 import type { ThreadTokenUsage } from "./codex/generated/app-server/v2/ThreadTokenUsage";
 import type { Turn } from "./codex/generated/app-server/v2/Turn";
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
@@ -581,6 +582,20 @@ export interface WorkbenchSteerHistoryEntry {
   requestId: string | null;
   canonicalItemId: string | null;
   error: string | null;
+}
+
+export interface WorkbenchThreadContextReadResponse {
+  browseScreenshotEntries: WorkbenchBrowseScreenshotEntry[];
+  questionnaireEntries: WorkbenchQuestionnaireHistoryEntry[];
+  steerEntries: WorkbenchSteerHistoryEntry[];
+  thread: Thread;
+}
+
+export interface WorkbenchThreadContextBundle {
+  browseScreenshotEntries: WorkbenchBrowseScreenshotEntry[];
+  questionnaireEntries: WorkbenchQuestionnaireHistoryEntry[];
+  steerEntries: WorkbenchSteerHistoryEntry[];
+  thread: ThreadPayload;
 }
 
 export interface FileNode {

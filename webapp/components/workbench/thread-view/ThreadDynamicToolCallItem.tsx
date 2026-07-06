@@ -16,6 +16,11 @@ import type {
 } from "../../../lib/types";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
+import {
+  buildQuestionnaireTranscriptPairs,
+  getQuestionnaireTopicLabel,
+  getSingleQuestionnaireSummaryLabel,
+} from "../../../lib/workbench/thread/thread-questionnaire-transcript";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadMarkdown from "./ThreadMarkdown";
@@ -31,8 +36,6 @@ const COPILOT_TASK_TOOL_NAME = "task";
 const COPILOT_DYNAMIC_TOOL_METADATA_KEY = "__copilotWorkbench";
 const JSON_BLOCK_CLASS = "m-0 max-w-full overflow-x-auto whitespace-pre rounded-[0.9rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text";
 const INLINE_CODE_CLASS = "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-[0.34em] py-[0.08em] font-mono text-[0.78em] leading-[1.6] text-text";
-const GENERIC_CODEX_QUESTIONNAIRE_TITLE = "Follow-up questions";
-const GENERIC_CODEX_QUESTIONNAIRE_SUMMARY = "Codex needs your input before it can continue.";
 const MAX_QUESTIONNAIRE_SUMMARY_LABELS = 3;
 
 function asRecord (value: unknown) {
@@ -195,40 +198,6 @@ function parseQuestionnaireResponse (item: DynamicToolCallItem) {
   }
 }
 
-function normalizeQuestionnaireSummaryLabel (value: string) {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function truncateQuestionnaireSummaryLabel (value: string) {
-  const normalizedValue = normalizeQuestionnaireSummaryLabel(value);
-  return normalizedValue.length > 80 ? `${normalizedValue.slice(0, 77).trimEnd()}...` : normalizedValue;
-}
-
-function isGenericCodexQuestionnaireRequest (request: WorkbenchUserInputRequest) {
-  return request.title.trim() === GENERIC_CODEX_QUESTIONNAIRE_TITLE
-    && request.summary.trim() === GENERIC_CODEX_QUESTIONNAIRE_SUMMARY;
-}
-
-function getSingleQuestionnaireSummaryLabel (request: WorkbenchUserInputRequest) {
-  const questionText = request.questions[0]?.question.trim() ?? "";
-  const title = request.title.trim();
-
-  if (questionText && (isGenericCodexQuestionnaireRequest(request) || !title || title === GENERIC_CODEX_QUESTIONNAIRE_TITLE)) {
-    return truncateQuestionnaireSummaryLabel(questionText);
-  }
-
-  return truncateQuestionnaireSummaryLabel(title || questionText || "User input request");
-}
-
-function getQuestionnaireTopicLabel (question: WorkbenchUserInputQuestion, index: number) {
-  const header = normalizeQuestionnaireSummaryLabel(question.header).replace(/[?.!:]+$/u, "");
-  if (header) {
-    return header.toLowerCase();
-  }
-
-  return truncateQuestionnaireSummaryLabel(question.question || `question ${index + 1}`).toLowerCase();
-}
-
 function renderQuestionnaireTopicList (labels: string[], hiddenCount: number) {
   const nodes: ReactNode[] = [];
 
@@ -280,57 +249,6 @@ function renderQuestionnaireHistorySummary (request: WorkbenchUserInputRequest |
       {renderQuestionnaireTopicList(visibleLabels, hiddenCount)}
     </>
   );
-}
-
-function getQuestionnairePromptText (request: WorkbenchUserInputRequest, question: WorkbenchUserInputQuestion, index: number) {
-  const questionText = question.question.trim();
-  if (request.questions.length === 1) {
-    const singleSummaryLabel = getSingleQuestionnaireSummaryLabel(request);
-    if (questionText && singleSummaryLabel === truncateQuestionnaireSummaryLabel(questionText)) {
-      return "";
-    }
-  }
-
-  return questionText
-    || normalizeQuestionnaireSummaryLabel(question.header)
-    || `Question ${index + 1}`;
-}
-
-function getQuestionnaireAnswerMarkdown (question: WorkbenchUserInputQuestion, response: WorkbenchUserInputResponse) {
-  const answers = response.answers[question.id]?.answers
-    .map((answer) => answer.trim())
-    .filter(Boolean) ?? [];
-  if (!answers.length) {
-    return "";
-  }
-
-  const optionDescriptionsByLabel = new Map(question.options.map((option) => [option.label, option.description.trim()]));
-  return answers.map((answer) => {
-    const description = optionDescriptionsByLabel.get(answer);
-    if (typeof description === "string") {
-      return description ? `### ${answer}\n\n${description}` : answer;
-    }
-
-    return answer;
-  }).join("\n\n");
-}
-
-function buildQuestionnaireTranscriptPairs (request: WorkbenchUserInputRequest, response: WorkbenchUserInputResponse | null) {
-  if (!response) {
-    return [];
-  }
-
-  return request.questions.map((question, index) => {
-    const answerMarkdown = getQuestionnaireAnswerMarkdown(question, response);
-    if (!answerMarkdown) {
-      return null;
-    }
-
-    return {
-      answerMarkdown,
-      promptText: getQuestionnairePromptText(request, question, index),
-    };
-  }).filter((pair): pair is { answerMarkdown: string; promptText: string } => pair !== null);
 }
 
 function ThreadQuestionnaireTranscriptPreview ({

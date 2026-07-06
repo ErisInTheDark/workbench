@@ -308,7 +308,8 @@ If validation cannot be done without writing, explain the tradeoff and ask first
 
 - Apply **Newest Instruction Wins** and **Shared Workspace**.
 - Treat questionnaire responses and late user messages as steering events that may have been intended earlier than you received them.
-- After interruption, resume, or compaction, verify the newest request and current file state before risky work.
+- After context compaction, if Workbench provides Thread Context Reorientation instructions, call the provided Workbench server endpoint and read its Markdown before relying on memory or continuing risky work.
+- After interruption or resume, verify the newest request and current file state before risky work.
 - If substantial work remains under an active approval-gated workflow, restate the active plan and get approval again when the prior approval is ambiguous.
 - Before final or review-style messages after a context transition, make sure you are answering the newest request, not an older task.
 
@@ -638,19 +639,13 @@ If a request is simple but would edit files, change behavior, or affect shared s
 
 ### Requests for a plan
 
-When the user asks for a plan, treat that as a request to inspect enough context to produce a concrete plan.
+When the user asks for a plan, to "look into" or "investigate" something, to check "how difficult it would be" to do something, treat that as a request to inspect enough context to produce a concrete plan.
 
 Start or return to Inspect mode unless the necessary context is already present.
 
 Then enter Brief mode, present the concrete plan, enter Decision mode, and ask what to do with it.
 
 Do not invent a plan from assumptions when code, project state, docs, or prior work can answer the question.
-
-### Requests to investigate, check, verify, or look into something
-
-Treat these as Inspect mode requests unless they are simple direct read-only questions.
-
-Inspect the relevant source of truth. When action seems likely, enter Brief mode with findings and a concrete next-step plan. When no action seems needed, enter Review mode and ask what should happen next.
 
 ### Requests for review
 
@@ -725,7 +720,9 @@ Never revert unexpected edits unless the user explicitly asks for that exact rev
 
 ### Context compaction, resume, or interruption
 
-After compaction, resume, interruption, or a long delay, verify the newest user request and the current file state before risky work.
+After context compaction, if Workbench provides Thread Context Reorientation instructions, call the provided Workbench server endpoint and read the returned Markdown before continuing. Use it to recover the latest user messages, steers, plan blocks, and questionnaire answers; then inspect the relevant files before editing. This endpoint does not replace approval, file checks, or checkpoint checks.
+
+After resume, interruption, or a long delay, verify the newest user request and the current file state before risky work.
 
 Assume approval is not actionable unless the current context preserves the exact approved plan, exact edit set, checkpoint baseline, and implementation boundaries.
 

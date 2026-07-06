@@ -439,6 +439,41 @@ This section does not authorize arbitrary Workbench webapp endpoint calls. Use t
 `.trim();
 }
 
+function buildWorkbenchThreadContextReorientationInstructions(context: WorkbenchPromptContext) {
+  const threadId = context.threadId?.trim();
+  const workbenchOrigin = context.workbenchOrigin?.trim();
+  if (!threadId || threadId === "new" || threadId.startsWith("draft:") || !workbenchOrigin) {
+    return null;
+  }
+
+  const routeUrl = buildWorkbenchThreadContextRouteUrl(workbenchOrigin, threadId);
+  const powerShellRouteUrl = escapePowerShellSingleQuotedString(routeUrl);
+
+  return `
+## Workbench Thread Context Reorientation
+
+After context compaction, call this Workbench server endpoint before continuing:
+
+\`\`\`text
+GET ${routeUrl}
+\`\`\`
+
+Use the returned Markdown to recover the latest user messages, steers, plan blocks, and questionnaire answers; then inspect the relevant files before editing. This endpoint is authorized only against the Workbench server for post-compaction reorientation and does not replace approval, file checks, or checkpoint checks.
+
+PowerShell:
+
+\`\`\`powershell
+Invoke-RestMethod -Method Get -Uri '${powerShellRouteUrl}'
+\`\`\`
+
+Bash:
+
+\`\`\`bash
+curl -s '${routeUrl}'
+\`\`\`
+`.trim();
+}
+
 function buildWorkbenchCheckpointInstructions(context: WorkbenchPromptContext) {
   const threadId = context.threadId?.trim();
   const workbenchOrigin = context.workbenchOrigin?.trim();
@@ -531,6 +566,10 @@ function buildGitCheckpointRouteUrl(workbenchOrigin: string) {
   return `${workbenchOrigin.replace(/\/+$/g, "")}/api/git-checkpoint`;
 }
 
+function buildWorkbenchThreadContextRouteUrl(workbenchOrigin: string, threadId: string) {
+  return `${workbenchOrigin.replace(/\/+$/g, "")}/api/thread-context/${encodeURIComponent(threadId)}`;
+}
+
 function escapePowerShellSingleQuotedString(value: string) {
   return value.replace(/'/g, "''");
 }
@@ -605,6 +644,7 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
     buildWorkbenchSkillsDeveloperInstructions(skillManifest),
     buildInstructionPackSections(instructionPacks),
     browseInstructions,
+    buildWorkbenchThreadContextReorientationInstructions(context),
     buildWorkbenchCheckpointInstructions(context),
     buildThreadTitleInstructions(context),
   ]);
@@ -643,6 +683,7 @@ This collaboration-mode overlay must not replace the active Workbench workflow, 
     buildWorkspaceRootsInjection(context),
     workflowInjection,
     browseInstructions,
+    buildWorkbenchThreadContextReorientationInstructions(context),
     buildWorkbenchCheckpointInstructions(context),
     buildThreadTitleInstructions(context),
   ]);
