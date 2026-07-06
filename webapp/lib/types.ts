@@ -670,6 +670,11 @@ export type WorkbenchCollaborationPostMutationRequest =
   | WorkbenchCollaborationPostDeleteRequest
   | WorkbenchCollaborationPostUpdateRequest;
 
+export type WorkbenchCollaborationPostEndpointMutationRequest = WorkbenchCollaborationPostMutationRequest & {
+  cwd: string;
+  projectId?: string | null;
+};
+
 export interface WorkbenchCollaborationPostEndpointUsage {
   endpoint: string;
   rules: string[];
@@ -695,8 +700,9 @@ export interface WorkbenchCollaborationMemoryEndpointUsage {
 }
 
 export interface WorkbenchCollaborationMemorySetRequest {
+  cwd: string;
   memory?: string | null;
-  projectId: string;
+  projectId?: string | null;
 }
 
 export interface WorkbenchCollaborationMemoryStateResponse {

@@ -19,6 +19,7 @@ import {
   writeCollaborationStateDiskFile,
 } from "../collaboration-state-file";
 import { notifyCollaborationStateUpdated } from "../collaboration-state-notifications";
+import { resolveAgentEndpointProjectFromCwd } from "../../../../lib/workbench/project/agent-endpoint-project";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,8 +27,8 @@ export const dynamic = "force-dynamic";
 const ENDPOINT_USAGE: WorkbenchCollaborationMemoryEndpointUsage = {
   endpoint: "/api/collaboration/memory",
   rules: [
-    "GET with projectId to inspect the current private collaborator memory.",
-    "POST with projectId and non-empty memory to replace private memory for the next collaborator run.",
+    "GET with cwd to inspect the current private collaborator memory.",
+    "POST with cwd and non-empty memory to replace private memory for the next collaborator run.",
     "POST with missing or empty memory preserves the existing private memory.",
     "Memory is private next-run context for the collaborator, not visible Collaboration tree content.",
     "When replacing memory, carry forward still-useful previous memory because the endpoint stores one replacement value.",
@@ -64,12 +65,14 @@ function parseMemoryRequest(value: unknown): WorkbenchCollaborationMemorySetRequ
   }
 
   const candidate = value as Record<string, unknown>;
+  const cwd = typeof candidate.cwd === "string" ? candidate.cwd.trim() : "";
   const projectId = typeof candidate.projectId === "string" ? candidate.projectId.trim() : "";
-  if (!projectId) {
-    throw new Error("A projectId is required.");
+  if (!cwd && !projectId) {
+    throw new Error("A cwd is required.");
   }
 
   return {
+    cwd,
     memory: typeof candidate.memory === "string" ? candidate.memory : null,
     projectId,
   };
@@ -79,9 +82,30 @@ function normalizeMemory(value: string | null | undefined) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+async function resolveCollaborationMemoryProject({
+  cwd,
+  projectId,
+}: {
+  cwd?: string | null;
+  projectId?: string | null;
+}) {
+  if (cwd) {
+    return (await resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Collaboration memory" })).project;
+  }
+
+  if (projectId) {
+    return await resolveProjectRoot(projectId);
+  }
+
+  throw new Error("Collaboration memory requires a cwd.");
+}
+
 export async function GET(request: NextRequest) {
   try {
-    const resolvedProject = await resolveProjectRoot(request.nextUrl.searchParams.get("projectId"));
+    const resolvedProject = await resolveCollaborationMemoryProject({
+      cwd: request.nextUrl.searchParams.get("cwd"),
+      projectId: request.nextUrl.searchParams.get("projectId"),
+    });
     const file = await readCollaborationStateDiskFile(resolvedProject.id);
     return NextResponse.json(stateResponse(resolvedProject.id, file.state), {
       headers: {
@@ -96,7 +120,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const memoryRequest = parseMemoryRequest(await request.json());
-    const resolvedProject = await resolveProjectRoot(memoryRequest.projectId);
+    const resolvedProject = await resolveCollaborationMemoryProject(memoryRequest);
     const currentFile = await readCollaborationStateDiskFile(resolvedProject.id, { allowCorruptRecovery: true });
     const memory = normalizeMemory(memoryRequest.memory);
     if (!memory) {

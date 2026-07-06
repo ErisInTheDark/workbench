@@ -16,7 +16,8 @@ import {
   restoreGitCheckpoint,
   type GitCheckpointPurpose,
 } from "../../../lib/git-checkpoints";
-import { discoverProjects, isPathWithinRoot, resolveProjectRoot, type ResolvedProject } from "../../../lib/project";
+import { resolveProjectRoot } from "../../../lib/project";
+import { resolveAgentEndpointProjectFromCwd } from "../../../lib/workbench/project/agent-endpoint-project";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,58 +50,11 @@ async function resolveCheckpointCwd({
   cwd: string;
   projectId: string;
 }) {
-  const resolvedProject = await resolveCheckpointProject({
-    cwd,
-    projectId,
-  });
-  const resolvedCwd = path.resolve(cwd || resolvedProject.root);
-  const owningRoot = resolvedProject.roots.find((root) => isPathWithinRoot(resolvedCwd, root.root));
-  if (!owningRoot) {
-    throw new Error(projectId
-      ? "Checkpoint cwd must be inside the selected Workbench project."
-      : "Checkpoint cwd must be inside a discovered Workbench project.");
+  if (cwd) {
+    return (await resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Checkpoint" })).cwd;
   }
 
-  return resolvedCwd;
-}
-
-async function resolveCheckpointProject({
-  cwd,
-  projectId,
-}: {
-  cwd: string;
-  projectId: string;
-}): Promise<ResolvedProject> {
-  if (projectId || !cwd) {
-    return await resolveProjectRoot(projectId);
-  }
-
-  const resolvedCwd = path.resolve(cwd);
-  const discoveredProjectId = await findDiscoveredProjectIdForCwd(resolvedCwd);
-  if (!discoveredProjectId) {
-    throw new Error("Checkpoint cwd must be inside a discovered Workbench project.");
-  }
-
-  return await resolveProjectRoot(discoveredProjectId);
-}
-
-async function findDiscoveredProjectIdForCwd(resolvedCwd: string) {
-  const firstPassMatch = findProjectRootMatch(await discoverProjects(), resolvedCwd);
-  if (firstPassMatch) {
-    return firstPassMatch.projectId;
-  }
-
-  return findProjectRootMatch(await discoverProjects({ refresh: true }), resolvedCwd)?.projectId ?? null;
-}
-
-function findProjectRootMatch(projects: Awaited<ReturnType<typeof discoverProjects>>, resolvedCwd: string) {
-  return projects
-    .flatMap((project) => project.roots.map((root) => ({
-      projectId: project.id,
-      rootPath: path.resolve(root.rootPath),
-    })))
-    .filter((candidate) => isPathWithinRoot(resolvedCwd, candidate.rootPath))
-    .sort((left, right) => right.rootPath.length - left.rootPath.length)[0] ?? null;
+  return path.resolve((await resolveProjectRoot(projectId)).root);
 }
 
 function jsonResponse(payload: unknown) {

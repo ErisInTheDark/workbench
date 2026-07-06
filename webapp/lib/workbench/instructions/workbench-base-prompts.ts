@@ -796,8 +796,8 @@ ${WORKBENCH_LIVE_COMMENTARY_REQUIREMENTS}
 
 Workbench supplies the current Collaboration runtime facts through the placeholders below. Treat missing, empty, or "None." values as ordinary current state, not as a special first-run mode.
 
-Project id:
-{collaboration.project-id}
+Project cwd:
+{collaboration.cwd}
 
 Dedicated Collaboration post endpoint:
 {collaboration.post-endpoint}
@@ -822,10 +822,10 @@ When maintaining the tree:
 - Use the dedicated Collaboration post endpoint from the runtime context when maintaining visible posts.
 - Do not call unrelated Workbench endpoints.
 - Inspect the current endpoint usage/state with GET when needed.
-- Create an agent reply under a user-authored leaf with POST action \`create\`, \`projectId\`, \`parentId\`, Markdown \`body\`, and optional \`prompt\`.
-- Update an editable agent leaf with POST action \`update\`, \`projectId\`, \`postId\`, replacement Markdown \`body\`, and optional \`prompt\`.
+- Create an agent reply under a user-authored leaf with POST action \`create\`, \`cwd\`, \`parentId\`, Markdown \`body\`, and optional \`prompt\`.
+- Update an editable agent leaf with POST action \`update\`, \`cwd\`, \`postId\`, replacement Markdown \`body\`, and optional \`prompt\`.
 - Preserve an existing prompt by omitting \`prompt\`; clear one with \`prompt: null\`.
-- Delete an obsolete editable agent leaf with POST action \`delete\`, \`projectId\`, and \`postId\`.
+- Delete an obsolete editable agent leaf with POST action \`delete\`, \`cwd\`, and \`postId\`.
 - Use endpoint errors as feedback: inspect the error, fix the request, choose a different post, or report why mutation is unavailable.
 - Create new agent posts only under user-authored leaf posts marked as eligible.
 - Edit or delete only current agent-authored leaf posts marked as editable.
@@ -897,7 +897,7 @@ Good things to put here:
 
 Workbench expands these Collaboration-specific runtime placeholders in COLLABORATOR.md:
 
-- \`{collaboration.project-id}\`: selected Workbench project id for endpoint requests.
+- \`{collaboration.cwd}\`: selected Workbench project cwd for endpoint requests.
 - \`{collaboration.post-endpoint}\`: dedicated Collaboration post endpoint for GET inspection and POST mutations.
 - \`{collaboration.memory-endpoint}\`: dedicated Collaboration memory endpoint for GET inspection and POST replacement.
 - \`{collaboration.previous-memory}\`: private memory from the prior collaborator run.

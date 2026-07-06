@@ -21,7 +21,7 @@ import type { TurnSteerResponse } from "../../../lib/codex/generated/app-server/
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import { getCurrentInProgressTurn, hasThreadActiveFlag } from "../../../lib/codex/thread-state";
 import { isCodexJsonRpcFailure } from "../../../lib/codex/protocol";
-import { appRoot, isPathWithinRoot, resolveProjectRoot } from "../../../lib/project";
+import { appRoot, resolveProjectRoot } from "../../../lib/project";
 import { projectRoot } from "../../../lib/project";
 import type {
   WorkbenchBrowseAgentAction,
@@ -32,6 +32,7 @@ import type {
 } from "../../../lib/types";
 import WorkbenchBrowseSessionRegistry from "../../../lib/workbench/browse/WorkbenchBrowseSessionRegistry";
 import { normalizeWorkbenchBrowseAgentRequest } from "../../../lib/workbench/browse/browse-agent-requests";
+import { resolveAgentEndpointProjectFromCwd } from "../../../lib/workbench/project/agent-endpoint-project";
 import WorkbenchServerSettings from "../../../lib/workbench/settings/WorkbenchServerSettings";
 import { createAgentScreenshotSteerText } from "../../../lib/workbench/thread/thread-steer-markers";
 
@@ -142,14 +143,11 @@ async function resolveBrowseEntrypoint() {
 }
 
 async function resolveBrowseCwd(request: WorkbenchBrowseCommandRequest) {
-  const resolvedProject = await resolveProjectRoot(request.projectId);
-  const requestedCwd = request.cwd ? path.resolve(request.cwd) : resolvedProject.root;
-  const owningRoot = resolvedProject.roots.find((root) => isPathWithinRoot(requestedCwd, root.root));
-  if (!owningRoot) {
-    throw new Error("Browse cwd must be inside the selected Workbench project.");
+  if (request.cwd) {
+    return (await resolveAgentEndpointProjectFromCwd(request.cwd, { endpointName: "Browse" })).cwd;
   }
 
-  return requestedCwd;
+  return path.resolve((await resolveProjectRoot(request.projectId)).root);
 }
 
 function hasBrowseFlag(args: readonly string[], flag: string) {

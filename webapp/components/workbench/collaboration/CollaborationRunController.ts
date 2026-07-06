@@ -158,14 +158,14 @@ function formatTagsForPrompt(state: WorkbenchCollaborationState) {
 }
 
 function buildCollaborationInstructionInjections({
+  cwd,
   diffMap,
   previousMemory,
-  projectId,
   state,
 }: {
+  cwd: string;
   diffMap: string;
   previousMemory: string;
-  projectId: string;
   state: WorkbenchCollaborationState;
 }) {
   const collaborationPostEndpoint = typeof window === "undefined"
@@ -177,10 +177,10 @@ function buildCollaborationInstructionInjections({
 
   return {
     "collaboration.diff-map": diffMap,
+    "collaboration.cwd": cwd,
     "collaboration.memory-endpoint": collaborationMemoryEndpoint,
     "collaboration.post-endpoint": collaborationPostEndpoint,
     "collaboration.previous-memory": previousMemory || "None.",
-    "collaboration.project-id": projectId,
     "collaboration.tags": formatTagsForPrompt(state),
     "collaboration.tree": formatTreeForPrompt(state),
   };
@@ -495,9 +495,9 @@ export default function CollaborationRunController({
     }
 
     const instructionInjections = buildCollaborationInstructionInjections({
+      cwd: thread.cwd,
       diffMap: projectDiffMap,
       previousMemory: stateForPrompt.lastRunMemory,
-      projectId,
       state: stateForPrompt,
     });
     const input = options.additionalInput?.length

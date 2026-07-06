@@ -30,6 +30,7 @@ import {
   writeCollaborationStateDiskFile,
 } from "../collaboration-state-file";
 import { notifyCollaborationStateUpdated } from "../collaboration-state-notifications";
+import { resolveAgentEndpointProjectFromCwd } from "../../../../lib/workbench/project/agent-endpoint-project";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,16 +38,17 @@ export const dynamic = "force-dynamic";
 const ENDPOINT_USAGE: WorkbenchCollaborationPostEndpointUsage = {
   endpoint: "/api/collaboration/posts",
   rules: [
-    "GET with projectId to inspect current Collaboration state before mutating.",
-    "POST create with projectId, action=create, parentId, body, optional postId, optional prompt.",
-    "POST update with projectId, action=update, postId, body, optional prompt; omit prompt to preserve it, send prompt=null to clear it.",
-    "POST delete with projectId, action=delete, postId.",
+    "GET with cwd to inspect current Collaboration state before mutating.",
+    "POST create with cwd, action=create, parentId, body, optional postId, optional prompt.",
+    "POST update with cwd, action=update, postId, body, optional prompt; omit prompt to preserve it, send prompt=null to clear it.",
+    "POST delete with cwd, action=delete, postId.",
     "Create is allowed only under user-authored leaf posts.",
     "Update and delete are allowed only for agent-authored leaf posts.",
   ],
 };
 
 interface ParsedMutationRequest {
+  readonly cwd: string;
   readonly projectId: string;
   readonly request: WorkbenchCollaborationPostMutationRequest;
 }
@@ -77,16 +79,35 @@ function normalizeOptionalPostId(value: unknown) {
     : "";
 }
 
+async function resolveCollaborationAgentProject({
+  cwd,
+  projectId,
+}: {
+  cwd: string;
+  projectId: string;
+}) {
+  if (cwd) {
+    return (await resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Collaboration post" })).project;
+  }
+
+  if (projectId) {
+    return await resolveProjectRoot(projectId);
+  }
+
+  throw new Error("Collaboration post requires a cwd.");
+}
+
 function parseMutationRequest(value: unknown): ParsedMutationRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("A Collaboration post mutation request object is required.");
   }
 
   const candidate = value as Record<string, unknown>;
+  const cwd = typeof candidate.cwd === "string" ? candidate.cwd.trim() : "";
   const projectId = typeof candidate.projectId === "string" ? candidate.projectId.trim() : "";
   const action = typeof candidate.action === "string" ? candidate.action.trim() : "";
-  if (!projectId) {
-    throw new Error("A projectId is required.");
+  if (!cwd && !projectId) {
+    throw new Error("A cwd is required.");
   }
 
   if (action === "create") {
@@ -102,6 +123,7 @@ function parseMutationRequest(value: unknown): ParsedMutationRequest {
     }
 
     return {
+      cwd,
       projectId,
       request: {
         action,
@@ -125,6 +147,7 @@ function parseMutationRequest(value: unknown): ParsedMutationRequest {
     }
 
     return {
+      cwd,
       projectId,
       request: {
         action,
@@ -142,6 +165,7 @@ function parseMutationRequest(value: unknown): ParsedMutationRequest {
     }
 
     return {
+      cwd,
       projectId,
       request: {
         action,
@@ -227,7 +251,10 @@ function deletePost(state: WorkbenchCollaborationState, request: Extract<Workben
 
 export async function GET(request: NextRequest) {
   try {
-    const resolvedProject = await resolveProjectRoot(request.nextUrl.searchParams.get("projectId"));
+    const resolvedProject = await resolveCollaborationAgentProject({
+      cwd: request.nextUrl.searchParams.get("cwd")?.trim() ?? "",
+      projectId: request.nextUrl.searchParams.get("projectId")?.trim() ?? "",
+    });
     const file = await readCollaborationStateDiskFile(resolvedProject.id);
     return NextResponse.json(stateResponse(resolvedProject.id, file.state), {
       headers: {
@@ -242,7 +269,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const mutation = parseMutationRequest(await request.json());
-    const resolvedProject = await resolveProjectRoot(mutation.projectId);
+    const resolvedProject = await resolveCollaborationAgentProject(mutation);
     const currentFile = await readCollaborationStateDiskFile(resolvedProject.id, { allowCorruptRecovery: true });
     const currentState = currentFile.state;
     let nextState = currentState;

@@ -434,15 +434,15 @@ ${threadIdGuidance}
 
 The endpoint runs project-local Browse outside the agent shell sandbox, but only when the user enabled **Enable raw browse commands** in Workbench Settings. If disabled, it returns HTTP 403 and you must ask the user to enable it before using it.
 
-Prefer typed Browse API requests. Send a JSON request with \`action\`, the current \`threadId\`, and a named \`session\` for browser actions:
+Prefer typed Browse API requests. Send a JSON request with \`action\`, the current \`threadId\`, the current shell \`cwd\`, and a named \`session\` for browser actions:
 
 \`\`\`powershell
-$body = @{ action = 'open'; threadId = '${currentThreadId ?? "<current-thread-id>"}'; session = 'research'; url = 'https://example.com'; mode = 'headless' } | ConvertTo-Json -Compress
+$body = @{ action = 'open'; threadId = '${currentThreadId ?? "<current-thread-id>"}'; cwd = (Get-Location).Path; session = 'research'; url = 'https://example.com'; mode = 'headless' } | ConvertTo-Json -Compress
 Invoke-RestMethod -Method Post -Uri '${browseRouteUrl}' -ContentType 'application/json' -Body $body
 \`\`\`
 
 \`\`\`bash
-curl -s -X POST '${browseRouteUrl}' -H 'Content-Type: application/json' -d '{"action":"open","threadId":"${currentThreadId ?? "<current-thread-id>"}","session":"research","url":"https://example.com","mode":"headless"}'
+curl -s -X POST '${browseRouteUrl}' -H 'Content-Type: application/json' -d '{"action":"open","threadId":"${currentThreadId ?? "<current-thread-id>"}","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'","session":"research","url":"https://example.com","mode":"headless"}'
 \`\`\`
 
 Typed actions include \`doctor\`, \`status\`, \`open\`, \`snapshot\`, \`click\`, \`fill\`, \`type\`, \`key\`, \`select\`, \`wait\`, \`get\`, \`is\`, \`eval\`, \`highlight\`, \`back\`, \`forward\`, \`reload\`, \`screenshot\`, \`refs\`, \`viewport\`, \`stop\`, and \`cleanup\`.
