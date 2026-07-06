@@ -261,6 +261,7 @@ export interface WorkbenchBrowseAgentCleanupRequest extends WorkbenchBrowseAgent
 
 export interface WorkbenchBrowseAgentSequenceRequest {
   actions: WorkbenchBrowseAgentAction[];
+  streamProgress?: boolean | null;
   summary?: string | null;
   stopOnError?: boolean | null;
 }
@@ -279,6 +280,34 @@ export interface WorkbenchBrowseAgentSequenceResponse {
   results: WorkbenchBrowseAgentResponse[];
   stoppedAtIndex: number | null;
 }
+
+export type WorkbenchBrowseAgentSequenceProgressEvent =
+  | {
+      durationMs: number;
+      ok: boolean;
+      results: WorkbenchBrowseAgentResponse[];
+      stoppedAtIndex: number | null;
+      type: "browse-sequence-complete";
+    }
+  | {
+      startedAt: number;
+      summary?: string | null;
+      totalActions: number;
+      type: "browse-sequence-start";
+    }
+  | {
+      action: WorkbenchBrowseAgentActionName;
+      index: number;
+      result: WorkbenchBrowseAgentResponse;
+      type: "browse-action-complete";
+    }
+  | {
+      action: WorkbenchBrowseAgentActionName;
+      index: number;
+      session?: string | null;
+      startedAt: number;
+      type: "browse-action-start";
+    };
 
 export interface WorkbenchBrowseScreenshotEntry {
   action: WorkbenchBrowseAgentActionName;

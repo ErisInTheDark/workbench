@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ThreadDisclosure: render a styled details/summary disclosure with controlled or uncontrolled open state. Keywords: thread, disclosure, chevron.
- * - ThreadDisclosureStaticRow: render a disclosure-aligned non-expandable row with a dot marker. Keywords: thread, disclosure, static row, dot.
+ * - ThreadDisclosureStaticRow: render a disclosure-aligned non-expandable row with a dot or supplied marker. Keywords: thread, disclosure, static row, marker.
  * - Local helpers: joinClasses for compact className composition. Keywords: css, class names.
  */
 "use client";
@@ -20,6 +20,9 @@ type ThreadDisclosureProps = Omit<ComponentPropsWithoutRef<"details">, "children
   contentClassName?: string;
   defaultOpen?: boolean;
   initialOpen?: boolean;
+  leading?: ReactNode;
+  leadingClassName?: string;
+  leadingLabel?: string;
   renderContent?: () => ReactNode;
   summary: ReactNode;
   summaryClassName?: string;
@@ -42,6 +45,9 @@ export default function ThreadDisclosure ({
   contentClassName,
   defaultOpen,
   initialOpen = false,
+  leading,
+  leadingClassName,
+  leadingLabel,
   onToggle,
   open,
   renderContent,
@@ -135,6 +141,16 @@ export default function ThreadDisclosure ({
             chevronClassName,
           )}
         />
+        {leading ? (
+          <span
+            className={joinClasses("flex size-[1.1rem] shrink-0 items-center justify-center", leadingClassName)}
+            aria-hidden={leadingLabel ? undefined : "true"}
+            aria-label={leadingLabel}
+            role={leadingLabel ? "img" : undefined}
+          >
+            {leading}
+          </span>
+        ) : null}
         <div className="min-w-0 flex-1">{summary}</div>
       </summary>
       {hasMountedContent ? (
@@ -146,12 +162,16 @@ export default function ThreadDisclosure ({
 
 export function ThreadDisclosureStaticRow ({
   className,
+  marker,
   markerClassName,
+  markerLabel,
   summary,
   summaryClassName,
 }: {
   className?: string;
+  marker?: ReactNode;
   markerClassName?: string;
+  markerLabel?: string;
   summary: ReactNode;
   summaryClassName?: string;
 }) {
@@ -163,13 +183,17 @@ export function ThreadDisclosureStaticRow ({
           summaryClassName,
         )}
       >
-        <span className="flex size-[1.1rem] shrink-0 items-center justify-center" aria-hidden="true">
-          <span
-            className={joinClasses(
-              "size-[0.3rem] rounded-full bg-current opacity-45",
-              markerClassName,
-            )}
-          />
+        <span
+          className={joinClasses("flex size-[1.1rem] shrink-0 items-center justify-center", markerClassName)}
+          aria-hidden={markerLabel ? undefined : "true"}
+          aria-label={markerLabel}
+          role={markerLabel ? "img" : undefined}
+        >
+          {marker ?? (
+            <span
+              className="size-[0.3rem] rounded-full bg-current opacity-45"
+            />
+          )}
         </span>
         <div className="min-w-0 flex-1">{summary}</div>
       </div>

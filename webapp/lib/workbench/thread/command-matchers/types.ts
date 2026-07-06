@@ -6,6 +6,7 @@
  * - CommandSeparatorDisplayPart: structured stage-separator part for procedural command summaries. Keywords: thread, command, summary, separator.
  * - ThreadCommandDisplayPart: structured text/path part for rendering command summaries with file pills. Keywords: thread, command, summary, path.
  * - ThreadCommandDetailResultKind: semantic detail result kinds for polished command substep rows. Keywords: thread, command, detail, result.
+ * - ThreadCommandDetailState: lifecycle state for command substep rows. Keywords: thread, command, detail, queued, progress.
  * - ThreadCommandDetailTarget: semantic target metadata for polished command substep rows. Keywords: thread, command, detail, target.
  * - ThreadCommandDetailRow: optional row rendered inside command disclosures for structured command substeps. Keywords: thread, command, details, sequence.
  * - ThreadCommandSummaryStats: aggregate command-summary counts for grouped command labels. Keywords: thread, command, summary, aggregate.
@@ -53,7 +54,7 @@ export interface CommandTextDisplayPart {
   clamp?: boolean;
   text: string;
   type: "text";
-  variant?: "code" | "plain";
+  variant?: "code" | "plain" | "primary";
 }
 
 export interface CommandSkillDisplayPart {
@@ -70,6 +71,8 @@ export type ThreadCommandDisplayPart =
 
 export type ThreadCommandDetailResultKind = "duration" | "error" | "result" | "text";
 
+export type ThreadCommandDetailState = "completed" | "failed" | "inProgress" | "queued";
+
 export interface ThreadCommandDetailTarget {
   kind: "code" | "text" | "url";
   text: string;
@@ -83,7 +86,9 @@ export interface ThreadCommandDetailRow {
   durationMs?: number | null;
   id: string;
   imageUrl?: string | null;
+  imageUrls?: readonly string[] | null;
   label?: string | null;
+  state?: ThreadCommandDetailState | null;
   summaryParts: ThreadCommandDisplayPart[];
   target?: ThreadCommandDetailTarget | null;
 }

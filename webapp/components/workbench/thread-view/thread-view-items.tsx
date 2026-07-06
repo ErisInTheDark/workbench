@@ -63,6 +63,7 @@ import ThreadWebSearchItem, {
   ThreadWebSearchSequence,
 } from "./ThreadWebSearchItem";
 import { createThreadTurnCompactionRenderPlan } from "./thread-turn-compaction-sections";
+import { CheckIcon, ClockIcon, PlayIcon, WarningIcon } from "../workbench-icons";
 
 const THREAD_DETAIL_INLINE_CODE_CLASS = "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-[0.34em] py-[0.08em] font-mono text-[0.88em] leading-[1.6] text-text";
 
@@ -1180,37 +1181,54 @@ function shouldRenderFramedDetailTarget(row: ThreadCommandDetailRow) {
   return row.label === "Evaluate" && row.target?.kind === "code";
 }
 
+function hasCommandDetailResultBlock(row: ThreadCommandDetailRow) {
+  return shouldRenderFramedDetailTarget(row);
+}
+
 function ThreadCommandDetailImageBlock({
   row,
 }: {
   row: ThreadCommandDetailRow;
 }) {
-  if (!row.imageUrl) {
+  const imageUrls = [
+    ...(row.imageUrl ? [row.imageUrl] : []),
+    ...(row.imageUrls ?? []),
+  ].filter((imageUrl, index, values) => imageUrl && values.indexOf(imageUrl) === index);
+  if (!imageUrls.length) {
     return null;
   }
 
   return (
-    <div className="max-w-[28rem] pl-6 pt-1">
-      <ThreadUserImage
-        alt={`${row.label ?? "Browse"} screenshot`}
-        className="max-w-[28rem]"
-        src={row.imageUrl}
-      />
+    <div className="max-w-[28rem] space-y-2 pl-6 pt-1">
+      {imageUrls.map((imageUrl, index) => (
+        <ThreadUserImage
+          alt={`${row.label ?? "Browse"} screenshot`}
+          className="max-w-[28rem]"
+          key={`${row.id}:image:${index}:${imageUrl}`}
+          src={imageUrl}
+        />
+      ))}
     </div>
   );
 }
 
+function hasCommandDetailImageBlock(row: ThreadCommandDetailRow) {
+  return Boolean(row.imageUrl || row.imageUrls?.length);
+}
+
 function getDetailRowSummary(row: ThreadCommandDetailRow): ThreadCommandDetailRow {
-  if (!shouldRenderFramedDetailTarget(row)) {
+  const shouldHideCompletedWaitTarget = row.label === "Wait" && row.durationMs !== null;
+  const shouldHideFramedTarget = shouldRenderFramedDetailTarget(row);
+  if (!shouldHideCompletedWaitTarget && !shouldHideFramedTarget) {
     return row;
   }
 
   return {
     ...row,
-    detailKind: row.detailKind === "result" ? undefined : row.detailKind,
-    detailLabel: row.detailKind === "result" ? null : row.detailLabel,
-    detailText: row.detailKind === "result" ? null : row.detailText,
-    target: null,
+    detailKind: shouldHideFramedTarget && row.detailKind === "result" ? undefined : row.detailKind,
+    detailLabel: shouldHideFramedTarget && row.detailKind === "result" ? null : row.detailLabel,
+    detailText: shouldHideFramedTarget && row.detailKind === "result" ? null : row.detailText,
+    target: shouldHideCompletedWaitTarget || shouldHideFramedTarget ? null : row.target,
   };
 }
 
@@ -1228,37 +1246,138 @@ function ThreadCommandDetailRows ({
   }
   const contexts = Array.from(new Set(rows.map((row) => row.contextText?.trim()).filter(Boolean)));
   const hideSharedContext = contexts.length === 1 && rows.length > 1;
+  const expandableRowIndexes = rows
+    .map((row, index) => hasCommandDetailResultBlock(row) || hasCommandDetailImageBlock(row) ? index : -1)
+    .filter((index) => index >= 0);
+  const defaultOpenRowIndex = expandableRowIndexes.find((index) => rows[index]?.state === "inProgress")
+    ?? expandableRowIndexes.at(-1)
+    ?? -1;
 
   return (
     <div className="space-y-0.5">
-      {rows.map((row) => (
-        <div className="space-y-1" key={row.id}>
+      {rows.map((row, index) => {
+        const summary = <ThreadStructuredCommandDetailRow hideSharedContext={hideSharedContext} projectFilePaths={projectFilePaths} projectId={projectId} row={getDetailRowSummary(row)} />;
+        const hasExpandableContent = hasCommandDetailResultBlock(row) || hasCommandDetailImageBlock(row);
+        return (
+          <div className="space-y-1" key={row.id}>
+            {hasExpandableContent ? (
+              <ThreadDisclosure
+                className="py-1"
+                contentClassName="space-y-1"
+                defaultOpen={index === defaultOpenRowIndex}
+                leading={renderCommandDetailStateIcon(row)}
+                leadingClassName={getCommandDetailStateMarkerClassName(row)}
+                leadingLabel={getCommandDetailStateLabel(row)}
+                summary={summary}
+                summaryClassName="text-[0.9em] leading-[1.55]"
+              >
+                <>
+                  <ThreadCommandDetailResultBlock row={row} />
+                  <ThreadCommandDetailImageBlock row={row} />
+                </>
+              </ThreadDisclosure>
+            ) : (
           <ThreadDisclosureStaticRow
             className="py-1"
-            summary={<ThreadStructuredCommandDetailRow hideSharedContext={hideSharedContext} projectFilePaths={projectFilePaths} projectId={projectId} row={getDetailRowSummary(row)} />}
+            summary={summary}
             summaryClassName="text-[0.9em] leading-[1.55]"
           />
-          <ThreadCommandDetailResultBlock row={row} />
-          <ThreadCommandDetailImageBlock row={row} />
-        </div>
-      ))}
+            )}
+          </div>
+        );
+      })}
     </div>
   );
+}
+
+function renderCommandDetailStateIcon(row: ThreadCommandDetailRow) {
+  switch (row.state) {
+    case "queued":
+      return <ClockIcon className="size-[0.9rem]" />;
+    case "inProgress":
+      return <PlayIcon className="size-[0.85rem]" />;
+    case "completed":
+      return <CheckIcon className="size-[0.95rem]" />;
+    case "failed":
+      return <WarningIcon className="size-[0.95rem]" />;
+    default:
+      return null;
+  }
+}
+
+function getCommandDetailStateMarkerClassName(row: ThreadCommandDetailRow) {
+  switch (row.state) {
+    case "queued":
+      return "text-muted opacity-60";
+    case "inProgress":
+      return "text-accent";
+    case "completed":
+      return "text-muted";
+    case "failed":
+      return "text-danger";
+    default:
+      return undefined;
+  }
+}
+
+function getCommandDetailStateLabel(row: ThreadCommandDetailRow) {
+  switch (row.state) {
+    case "queued":
+      return "Queued";
+    case "inProgress":
+      return "In progress";
+    case "completed":
+      return "Completed";
+    case "failed":
+      return "Failed";
+    default:
+      return undefined;
+  }
+}
+
+function getDefaultBrowseDetailRowState(
+  rows: readonly ThreadCommandDetailRow[],
+  outputRows: readonly Partial<ThreadCommandDetailRow>[],
+  commandStatus: CommandItem["status"],
+  index: number,
+) {
+  const explicitState = outputRows[index]?.state;
+  if (explicitState) {
+    return explicitState;
+  }
+
+  if (commandStatus === "completed") {
+    return "completed";
+  }
+
+  if (commandStatus === "failed") {
+    return index === rows.length - 1 ? "failed" : "completed";
+  }
+
+  if (commandStatus === "inProgress") {
+    const activeIndex = outputRows.findIndex((row) => row.state === "inProgress");
+    if (activeIndex >= 0) {
+      return index < activeIndex ? "completed" : index === activeIndex ? "inProgress" : "queued";
+    }
+
+    const completedCount = outputRows.filter((row) => row.state === "completed" || row.state === "failed").length;
+    return index < completedCount ? "completed" : index === completedCount ? "inProgress" : "queued";
+  }
+
+  return rows[index]?.state ?? null;
 }
 
 function mergeCommandDetailRowsWithBrowseOutput(
   rows: ThreadCommandDetailRow[] | undefined,
   output: string | null,
   browseScreenshotEntries: readonly WorkbenchBrowseScreenshotEntry[] = [],
+  commandStatus: CommandItem["status"] = "completed",
 ) {
   if (!rows?.length) {
     return [];
   }
 
   const outputRows = parseBrowseSequenceCommandOutput(output);
-  if (!outputRows.length && !browseScreenshotEntries.length) {
-    return rows;
-  }
 
   return rows.map((row, index) => {
     const durationMs = row.durationMs ?? outputRows[index]?.durationMs ?? null;
@@ -1274,6 +1393,7 @@ function mergeCommandDetailRowsWithBrowseOutput(
       detailText: row.detailText ?? outputRows[index]?.detailText ?? null,
       durationMs: shouldSuppressDuplicateWaitDuration ? null : durationMs,
       imageUrl: row.imageUrl ?? browseScreenshotEntries.find((entry) => entry.actionIndex === index)?.assetUrl ?? null,
+      state: row.state ?? getDefaultBrowseDetailRowState(rows, outputRows, commandStatus, index),
     };
   });
 }
@@ -1342,6 +1462,7 @@ function ThreadCommandExecutionDetails ({
       commandDisplay.detailRows,
       item.aggregatedOutput,
       browseScreenshotEntries.filter((entry) => entry.commandItemId === item.id),
+      item.status,
     )
     : commandDisplay.detailRows ?? [];
   const metaParts = [];

@@ -27,6 +27,7 @@ import type {
   WorkbenchBrowseAgentAction,
   WorkbenchBrowseAgentResponse,
   WorkbenchBrowseAgentSequenceRequest,
+  WorkbenchBrowseAgentSequenceProgressEvent,
   WorkbenchBrowseAgentSequenceResponse,
   WorkbenchBrowseCommandRequest,
   WorkbenchBrowseCommandResponse,
@@ -139,6 +140,45 @@ function browseAgentSequenceResponse(payload: WorkbenchBrowseAgentSequenceRespon
     headers: {
       "Cache-Control": "no-store",
       ...init?.headers,
+    },
+  });
+}
+
+function browseAgentSequenceProgressResponse(
+  runSequence: (emitProgress: (event: WorkbenchBrowseAgentSequenceProgressEvent) => void) => Promise<void>,
+) {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    async start(controller) {
+      const emitProgress = (event: WorkbenchBrowseAgentSequenceProgressEvent) => {
+        controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+      };
+
+      try {
+        await runSequence(emitProgress);
+      } catch (error) {
+        emitProgress({
+          durationMs: 0,
+          ok: false,
+          results: [{
+            durationMs: 0,
+            error: error instanceof Error ? error.message : "Unable to run Browse sequence.",
+            exitCode: null,
+            ok: false,
+            stderr: "",
+            stdout: "",
+          }],
+          stoppedAtIndex: null,
+          type: "browse-sequence-complete",
+        });
+      } finally {
+        controller.close();
+      }
+    },
+  }), {
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/x-ndjson; charset=utf-8",
     },
   });
 }
@@ -469,11 +509,14 @@ async function runBrowseCommandAndMaybeSteerScreenshot(
   }
 
   const image = parseScreenshotBase64(result.stdout);
-  const assetUrl = await writeScreenshotTranscriptAsset(payload.threadId, image);
+  await writeScreenshotTranscriptAsset(payload.threadId, image);
   const steerTurnId = await steerScreenshotAsset(request, payload.threadId, createScreenshotDataUrl(image));
   return {
     ...result,
-    assetUrl,
+    stdout: JSON.stringify({
+      screenshot: "captured",
+      steered: true,
+    }, null, 2),
     steered: true,
     steerTurnId,
   };
@@ -597,15 +640,40 @@ async function runBrowseAgentCommand(
 async function runBrowseAgentCommandSequence(
   request: NextRequest,
   payload: WorkbenchBrowseAgentSequenceRequest,
+  {
+    emitProgress,
+  }: {
+    emitProgress?: (event: WorkbenchBrowseAgentSequenceProgressEvent) => void;
+  } = {},
 ): Promise<WorkbenchBrowseAgentSequenceResponse> {
   const startedAt = Date.now();
   const stopOnError = payload.stopOnError !== false;
   const results: WorkbenchBrowseAgentResponse[] = [];
   let stoppedAtIndex: number | null = null;
 
+  emitProgress?.({
+    startedAt,
+    summary: payload.summary?.trim() || null,
+    totalActions: payload.actions.length,
+    type: "browse-sequence-start",
+  });
+
   for (const [index, action] of payload.actions.entries()) {
+    emitProgress?.({
+      action: action.action,
+      index,
+      session: "session" in action ? action.session ?? null : null,
+      startedAt: Date.now(),
+      type: "browse-action-start",
+    });
     const result = await runBrowseAgentCommand(request, action, { actionIndex: index });
     results.push(result);
+    emitProgress?.({
+      action: result.action ?? action.action,
+      index,
+      result,
+      type: "browse-action-complete",
+    });
     if (!result.ok && stopOnError) {
       stoppedAtIndex = index;
       break;
@@ -613,13 +681,18 @@ async function runBrowseAgentCommandSequence(
   }
 
   const ok = results.length === payload.actions.length && results.every((result) => result.ok);
-  return {
+  const sequenceResponse = {
     durationMs: Date.now() - startedAt,
     error: ok ? undefined : results.find((result) => !result.ok)?.error ?? "A Browse action failed.",
     ok,
     results,
     stoppedAtIndex,
   };
+  emitProgress?.({
+    ...sequenceResponse,
+    type: "browse-sequence-complete",
+  });
+  return sequenceResponse;
 }
 
 async function runBrowseAgentCleanupCommand(
@@ -811,19 +884,6 @@ function ensureBrowseSessionCleanupPoller() {
 export async function POST(request: NextRequest) {
   const startedAt = Date.now();
   try {
-    const settings = new WorkbenchServerSettings();
-    const localCapabilities = await settings.readLocalCapabilities();
-    if (!localCapabilities.browseRawCommandsEnabled) {
-      return browseCommandResponse({
-        disabled: true,
-        durationMs: Date.now() - startedAt,
-        error: "Workbench Browse API requests are disabled. Enable raw Browse commands in Workbench Settings before calling /api/browse.",
-        exitCode: null,
-        ok: false,
-        stderr: "",
-        stdout: "",
-      }, { status: 403 });
-    }
     ensureBrowseSessionCleanupPoller();
 
     const requestBody = await request.json().catch(() => null);
@@ -838,10 +898,19 @@ export async function POST(request: NextRequest) {
         }, { status: 400 });
       }
 
-      return browseAgentSequenceResponse(await runBrowseAgentCommandSequence(request, {
+      const sequenceRequest = {
         actions: requestBody.actions as WorkbenchBrowseAgentAction[],
+        streamProgress: requestBody.streamProgress === true,
+        summary: normalizeString(requestBody.summary) || null,
         stopOnError: requestBody.stopOnError === false ? false : true,
-      }));
+      } satisfies WorkbenchBrowseAgentSequenceRequest;
+      if (sequenceRequest.streamProgress) {
+        return browseAgentSequenceProgressResponse(async (emitProgress) => {
+          await runBrowseAgentCommandSequence(request, sequenceRequest, { emitProgress });
+        });
+      }
+
+      return browseAgentSequenceResponse(await runBrowseAgentCommandSequence(request, sequenceRequest));
     }
 
     if (Array.isArray(requestBody)) {
@@ -857,6 +926,7 @@ export async function POST(request: NextRequest) {
 
       return browseAgentSequenceResponse(await runBrowseAgentCommandSequence(request, {
         actions: requestBody as WorkbenchBrowseAgentAction[],
+        streamProgress: false,
         stopOnError: true,
       }));
     }
@@ -875,6 +945,20 @@ export async function POST(request: NextRequest) {
         stderr: "",
         stdout: "",
       }, { status: 400 });
+    }
+
+    const settings = new WorkbenchServerSettings();
+    const localCapabilities = await settings.readLocalCapabilities();
+    if (!localCapabilities.browseRawCommandsEnabled) {
+      return browseCommandResponse({
+        disabled: true,
+        durationMs: Date.now() - startedAt,
+        error: "Raw Browse CLI-args passthrough is disabled. Use typed Browse API actions, or ask the user to enable raw Browse commands in Workbench Settings before sending raw args.",
+        exitCode: null,
+        ok: false,
+        stderr: "",
+        stdout: "",
+      }, { status: 403 });
     }
 
     return browseCommandResponse(await runBrowseCommandAndMaybeSteerScreenshot(request, payload));

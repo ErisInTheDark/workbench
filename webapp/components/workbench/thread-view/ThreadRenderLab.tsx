@@ -23,57 +23,42 @@ type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
 type WebSearchItem = Extract<ThreadItem, { type: "webSearch" }>;
 
-const SAMPLE_THREAD_ITEMS_TEXT = JSON.stringify([
+function buildSampleThreadItemsText({
+  browseApiUrl = "http://127.0.0.1:<workbench-port>/api/browse",
+  threadLabUrl = "http://localhost:<workbench-port>/agent/thread-lab",
+}: {
+  browseApiUrl?: string;
+  threadLabUrl?: string;
+} = {}) {
+  return JSON.stringify([
   {
-    command: "$body = @{ summary = 'verify hydrated lab renders pasted command items'; actions = @(@{ action = 'stop'; session = 'thread-lab-check'; force = $true }, @{ action = 'open'; session = 'thread-lab-check'; url = 'http://127.0.0.1:3002/agent/thread-lab'; mode = 'headless' }, @{ action = 'wait'; session = 'thread-lab-check'; type = 'timeout'; argument = '3000' }, @{ action = 'eval'; session = 'thread-lab-check'; expression = 'document.body.innerText.slice(0, 200)' }) } | ConvertTo-Json -Depth 8 -Compress; Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:3002/api/browse' -ContentType 'application/json' -Body $body",
+    command: `$body = @{ summary = 'verify hydrated lab renders pasted command items'; streamProgress = $true; actions = @(@{ action = 'stop'; threadId = 'thread-lab-sample'; session = 'thread-lab-check'; force = $true }, @{ action = 'open'; threadId = 'thread-lab-sample'; session = 'thread-lab-check'; url = '${threadLabUrl}'; mode = 'headless' }, @{ action = 'wait'; threadId = 'thread-lab-sample'; session = 'thread-lab-check'; type = 'timeout'; argument = '3000' }, @{ action = 'eval'; threadId = 'thread-lab-sample'; session = 'thread-lab-check'; expression = 'document.body.innerText.slice(0, 200)' }) } | ConvertTo-Json -Depth 8 -Compress; Invoke-RestMethod -Method Post -Uri '${browseApiUrl}' -ContentType 'application/json' -Body $body`,
     cwd: "c:/git/web/workbench",
     status: "inProgress",
+    aggregatedOutput: [
+      JSON.stringify({ startedAt: 1760000000000, summary: "verify hydrated lab renders pasted command items", totalActions: 4, type: "browse-sequence-start" }),
+      JSON.stringify({ action: "stop", index: 0, result: { action: "stop", durationMs: 120, exitCode: 0, ok: true, stderr: "", stdout: "" }, type: "browse-action-complete" }),
+      JSON.stringify({ action: "open", index: 1, result: { action: "open", durationMs: 1010, exitCode: 0, ok: true, stderr: "", stdout: JSON.stringify({ title: "Workbench", url: threadLabUrl }, null, 2) }, type: "browse-action-complete" }),
+      JSON.stringify({ action: "wait", index: 2, session: "thread-lab-check", startedAt: 1760000001130, type: "browse-action-start" }),
+    ].join("\n"),
   },
   {
-    command: "$body = @{ summary = 'verify hydrated lab renders pasted command items'; actions = @(@{ action = 'open'; session = 'thread-lab-check'; url = 'http://127.0.0.1:3002/agent/thread-lab'; mode = 'headless' }, @{ action = 'wait'; session = 'thread-lab-check'; type = 'timeout'; argument = '3000' }, @{ action = 'eval'; session = 'thread-lab-check'; expression = 'document.body.innerText.slice(0, 200)' }) } | ConvertTo-Json -Depth 8 -Compress; Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:3002/api/browse' -ContentType 'application/json' -Body $body",
+    command: `$body = @{ summary = 'verify hydrated lab renders pasted command items'; streamProgress = $true; actions = @(@{ action = 'open'; threadId = 'thread-lab-sample'; session = 'thread-lab-check'; url = '${threadLabUrl}'; mode = 'headless' }, @{ action = 'wait'; threadId = 'thread-lab-sample'; session = 'thread-lab-check'; type = 'timeout'; argument = '3000' }, @{ action = 'eval'; threadId = 'thread-lab-sample'; session = 'thread-lab-check'; expression = 'document.body.innerText.slice(0, 200)' }) } | ConvertTo-Json -Depth 8 -Compress; Invoke-RestMethod -Method Post -Uri '${browseApiUrl}' -ContentType 'application/json' -Body $body`,
     cwd: "c:/git/web/workbench",
     durationMs: 8920,
-    aggregatedOutput: JSON.stringify({
-      durationMs: 8920,
-      ok: true,
-      results: [
-        {
-          action: "open",
-          args: ["open", "http://127.0.0.1:3002/agent/thread-lab", "--session", "thread-lab-check", "--local", "--headless"],
-          durationMs: 1810,
-          exitCode: 0,
-          ok: true,
-          stderr: "",
-          stdout: JSON.stringify({
-            title: "Workbench",
-            url: "http://127.0.0.1:3002/agent/thread-lab",
-          }, null, 2),
-        },
-        {
-          action: "wait",
-          args: ["wait", "timeout", "3000", "--session", "thread-lab-check", "--local"],
-          durationMs: 3005,
-          exitCode: 0,
-          ok: true,
-          stderr: "",
-          stdout: JSON.stringify({ waited: true }, null, 2),
-        },
-        {
-          action: "eval",
-          args: ["eval", "document.body.innerText.slice(0, 200)", "--session", "thread-lab-check", "--local"],
-          durationMs: 420,
-          exitCode: 0,
-          ok: true,
-          stderr: "",
-          stdout: JSON.stringify({
-            result: "Thread render lab\\n\\nPaste a full thread payload, a { thread } response...",
-          }, null, 2),
-        },
-      ],
-      stoppedAtIndex: null,
-    }, null, 2),
+    aggregatedOutput: [
+      JSON.stringify({ startedAt: 1760000000000, summary: "verify hydrated lab renders pasted command items", totalActions: 3, type: "browse-sequence-start" }),
+      JSON.stringify({ action: "open", index: 0, session: "thread-lab-check", startedAt: 1760000000001, type: "browse-action-start" }),
+      JSON.stringify({ action: "open", index: 0, result: { action: "open", args: ["open", threadLabUrl, "--session", "thread-lab-check", "--local", "--headless"], durationMs: 1810, exitCode: 0, ok: true, stderr: "", stdout: JSON.stringify({ title: "Workbench", url: threadLabUrl }, null, 2) }, type: "browse-action-complete" }),
+      JSON.stringify({ action: "wait", index: 1, session: "thread-lab-check", startedAt: 1760000001812, type: "browse-action-start" }),
+      JSON.stringify({ action: "wait", index: 1, result: { action: "wait", args: ["wait", "timeout", "3000", "--session", "thread-lab-check", "--local"], durationMs: 3005, exitCode: 0, ok: true, stderr: "", stdout: JSON.stringify({ waited: true }, null, 2) }, type: "browse-action-complete" }),
+      JSON.stringify({ action: "eval", index: 2, session: "thread-lab-check", startedAt: 1760000004819, type: "browse-action-start" }),
+      JSON.stringify({ action: "eval", index: 2, result: { action: "eval", args: ["eval", "document.body.innerText.slice(0, 200)", "--session", "thread-lab-check", "--local"], durationMs: 420, exitCode: 0, ok: true, stderr: "", stdout: JSON.stringify({ result: "Thread render lab\\n\\nPaste a full thread payload, a { thread } response..." }, null, 2) }, type: "browse-action-complete" }),
+      JSON.stringify({ durationMs: 8920, ok: true, results: [], stoppedAtIndex: null, type: "browse-sequence-complete" }),
+    ].join("\n"),
   },
-], null, 2);
+  ], null, 2);
+}
 
 function isJsonObject(value: JsonValue): value is JsonObject {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -92,6 +77,20 @@ function readNumber(record: JsonObject, key: string) {
 function readStringArray(record: JsonObject, key: string) {
   const value = record[key];
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+function buildThreadLabSampleRoutes() {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  const threadLabUrl = new URL("/agent/thread-lab", window.location.href);
+  threadLabUrl.hostname = "localhost";
+  const browseApiUrl = new URL("/api/browse", window.location.href);
+  return {
+    browseApiUrl: browseApiUrl.toString(),
+    threadLabUrl: threadLabUrl.toString(),
+  };
 }
 
 function normalizeBrowseScreenshotEntry(value: JsonValue): WorkbenchBrowseScreenshotEntry | null {
@@ -426,14 +425,19 @@ function parseThreadRenderInput(text: string): { error: string; thread: ThreadPa
 }
 
 export default function ThreadRenderLab() {
-  const [inputText, setInputText] = useState(SAMPLE_THREAD_ITEMS_TEXT);
+  const [inputText, setInputText] = useState(() => buildSampleThreadItemsText());
   const [hasMounted, setHasMounted] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const sampleText = useMemo(() => buildSampleThreadItemsText(buildThreadLabSampleRoutes()), [hasMounted]);
   const parsedInput = useMemo(() => parseThreadRenderInput(inputText), [inputText]);
 
   useEffect(() => {
     setHasMounted(true);
   }, []);
+
+  useEffect(() => {
+    setInputText((currentText) => currentText === buildSampleThreadItemsText() ? sampleText : currentText);
+  }, [sampleText]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -467,7 +471,7 @@ export default function ThreadRenderLab() {
                 type="button"
                 className="rounded-full px-3 py-1.5 text-[0.78rem] font-medium text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_7%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
                 onClick={() => {
-                  setInputText(SAMPLE_THREAD_ITEMS_TEXT);
+                  setInputText(sampleText);
                 }}
               >
                 Reset sample

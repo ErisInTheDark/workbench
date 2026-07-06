@@ -2647,7 +2647,7 @@ export default function Workbench () {
         </p>
       </div>
       <WorkbenchOptionCard
-        description="Allow Workbench agents to call /api/browse to run the project-local browse CLI outside the sandbox. Default off."
+        description="Allow Workbench agents to send raw browse CLI args through /api/browse. Typed Browse API actions stay available. Default off."
         disabled={isLocalCapabilitySettingsLoading}
         isChecked={localCapabilitySettings.browseRawCommandsEnabled}
         isSingleChoice={false}

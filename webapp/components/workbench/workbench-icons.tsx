@@ -12,7 +12,7 @@
  * - GearIcon: render the settings navigation icon. Keywords: workbench, icon, settings.
  * - CollaborationIcon: render the collaboration navigation icon. Keywords: workbench, icon, collaboration.
  * - ReloadIcon: render the local runtime reload icon. Keywords: workbench, icon, reload.
- * - StopIcon/PauseIcon/PlayIcon: render shared thread turn control icons. Keywords: workbench, icon, thread, stop, pause, play.
+ * - StopIcon/PauseIcon/PlayIcon/ClockIcon/WarningIcon: render shared thread turn and command-status icons. Keywords: workbench, icon, thread, stop, pause, play, progress.
  * - PinIcon: render the pinned thread icon. Keywords: workbench, icon, thread, pin.
  * - ArchiveIcon: render the thread archive context menu icon. Keywords: workbench, icon, thread, archive.
  * - WrapTextIcon: render the thread codeblock line-wrap toggle icon. Keywords: workbench, icon, thread, code, wrap.
@@ -246,6 +246,25 @@ export function PlayIcon ({ className = "size-4" }: IconProps) {
   return (
     <svg viewBox="0 0 16 16" className={className} aria-hidden="true">
       <path d="M5 3.5v9l7-4.5-7-4.5z" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function ClockIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} fill="none" stroke="currentColor" strokeWidth="1.55" aria-hidden="true">
+      <circle cx="8" cy="8" r="5.25" />
+      <path d="M8 4.85V8.2L10.25 9.55" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function WarningIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} fill="none" stroke="currentColor" strokeWidth="1.55" aria-hidden="true">
+      <path d="M8 2.7L14 13.3H2L8 2.7Z" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8 6.25V9.2" strokeLinecap="round" />
+      <path d="M8 11.45H8.01" strokeLinecap="round" />
     </svg>
   );
 }

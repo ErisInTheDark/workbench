@@ -47,13 +47,19 @@ export const BROWSE_WEB_REQUEST_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
 ];
 
 function buildBrowseRequestSummaryParts(summary: BrowseRequestSummary): ThreadCommandDisplayPart[] {
-  const parts: ThreadCommandDisplayPart[] = [
-    CommandMatcher.Text(summary.summaryText
-      ? `Browse: ${summary.summaryText}`
-      : summary.totalActions
-        ? `Browse: run ${summary.totalActions} ${pluralize(summary.totalActions, "action")}`
-      : `Browse: ${formatBrowseAction(summary.action)}`),
-  ];
+  const parts: ThreadCommandDisplayPart[] = [];
+  if (summary.summaryText) {
+    parts.push(CommandMatcher.Text("Browse: "));
+    parts.push({
+      text: summary.summaryText,
+      type: "text",
+      variant: "primary",
+    });
+  } else {
+    parts.push(CommandMatcher.Text(summary.totalActions
+      ? `Browse: run ${summary.totalActions} ${pluralize(summary.totalActions, "action")}`
+      : `Browse: ${formatBrowseAction(summary.action)}`));
+  }
 
   if (!summary.summaryText && summary.target) {
     parts.push(CommandMatcher.Text(" "));
@@ -62,11 +68,11 @@ function buildBrowseRequestSummaryParts(summary: BrowseRequestSummary): ThreadCo
 
   if (!summary.summaryText && summary.session) {
     parts.push(CommandMatcher.Text(" in session "));
-    parts.push(CommandMatcher.Text(summary.session));
+    parts.push(CommandMatcher.Code(summary.session));
   }
   if (summary.summaryText && summary.session) {
     parts.push(CommandMatcher.Text(" in "));
-    parts.push(CommandMatcher.Text(summary.session));
+    parts.push(CommandMatcher.Code(summary.session));
   }
 
   return parts;
@@ -689,7 +695,14 @@ export function isBrowseWebRequestMatcherClaim(value: string | null | undefined)
   return value?.split(",").some((claim) => claim.trim() === "browse.web-request") ?? false;
 }
 
-export function parseBrowseSequenceCommandOutput(output: string | null | undefined): Array<Partial<Pick<ThreadCommandDetailRow, "detailKind" | "detailLabel" | "detailText" | "durationMs">>> {
+type BrowseSequenceOutputRow = Partial<Pick<ThreadCommandDetailRow, "detailKind" | "detailLabel" | "detailText" | "durationMs" | "state">>;
+
+export function parseBrowseSequenceCommandOutput(output: string | null | undefined): BrowseSequenceOutputRow[] {
+  const progressRows = parseBrowseSequenceProgressOutput(output ?? "");
+  if (progressRows.length) {
+    return progressRows;
+  }
+
   const jsonText = readFirstJsonObject(output ?? "");
   if (!jsonText) {
     return [];
@@ -703,23 +716,87 @@ export function parseBrowseSequenceCommandOutput(output: string | null | undefin
 
     if (!Array.isArray(parsed.results)) {
       return typeof parsed.action === "string"
-        ? [formatBrowseSequenceResult(parsed)]
+        ? [formatBrowseSequenceResult(parsed, { complete: true })]
         : [];
     }
 
-    return parsed.results.map(formatBrowseSequenceResult);
+    return parsed.results.map((result) => formatBrowseSequenceResult(result, { complete: true }));
   } catch {
     return [];
   }
 }
 
-function formatBrowseSequenceResult(result: unknown): Partial<Pick<ThreadCommandDetailRow, "detailKind" | "detailLabel" | "detailText" | "durationMs">> {
+function parseBrowseSequenceProgressOutput(output: string): BrowseSequenceOutputRow[] {
+  const events = output
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map(parseJsonObject)
+    .filter(isRecord);
+  if (!events.some((event) => typeof event.type === "string" && event.type.startsWith("browse-"))) {
+    return [];
+  }
+
+  const rows: BrowseSequenceOutputRow[] = [];
+  const ensureRow = (index: number) => {
+    while (rows.length <= index) {
+      rows.push({ state: "queued" });
+    }
+    return rows[index];
+  };
+
+  for (const event of events) {
+    const type = typeof event.type === "string" ? event.type : "";
+    if (type === "browse-sequence-start") {
+      const totalActions = typeof event.totalActions === "number" && Number.isFinite(event.totalActions)
+        ? Math.max(0, Math.trunc(event.totalActions))
+        : 0;
+      for (let index = 0; index < totalActions; index += 1) {
+        ensureRow(index).state ??= "queued";
+      }
+      continue;
+    }
+
+    const index = typeof event.index === "number" && Number.isFinite(event.index)
+      ? Math.trunc(event.index)
+      : -1;
+    if (index < 0) {
+      if (type === "browse-sequence-complete" && Array.isArray(event.results)) {
+        event.results.forEach((result, resultIndex) => {
+          rows[resultIndex] = {
+            ...ensureRow(resultIndex),
+            ...formatBrowseSequenceResult(result, { complete: true }),
+          };
+        });
+      }
+      continue;
+    }
+
+    if (type === "browse-action-start") {
+      ensureRow(index).state = "inProgress";
+      continue;
+    }
+
+    if (type === "browse-action-complete") {
+      rows[index] = {
+        ...ensureRow(index),
+        ...formatBrowseSequenceResult(event.result, { complete: true }),
+      };
+    }
+  }
+
+  return rows;
+}
+
+function formatBrowseSequenceResult(result: unknown, { complete = false }: { complete?: boolean } = {}): BrowseSequenceOutputRow {
   if (!isRecord(result)) {
-    return {};
+    return complete ? { state: "completed" } : {};
   }
 
   const action = typeof result.action === "string" ? result.action : "";
   const error = typeof result.error === "string" ? result.error.trim() : "";
+  const ok = typeof result.ok === "boolean" ? result.ok : !error;
+  const state = complete ? (ok && !error ? "completed" : "failed") : undefined;
   const durationMs = typeof result.durationMs === "number" && Number.isFinite(result.durationMs)
     ? result.durationMs
     : null;
@@ -729,6 +806,7 @@ function formatBrowseSequenceResult(result: unknown): Partial<Pick<ThreadCommand
       detailLabel: "error",
       detailText: error,
       durationMs,
+      state,
     };
   }
 
@@ -740,11 +818,12 @@ function formatBrowseSequenceResult(result: unknown): Partial<Pick<ThreadCommand
       detailLabel: evalOutput ? "result" : null,
       detailText: evalOutput,
       durationMs,
+      state,
     };
   }
 
   if (action === "wait") {
-    return { durationMs };
+    return { durationMs, state };
   }
 
   if (action === "get" || action === "is") {
@@ -755,6 +834,7 @@ function formatBrowseSequenceResult(result: unknown): Partial<Pick<ThreadCommand
       detailLabel: value ? "result" : null,
       detailText: value,
       durationMs,
+      state,
     };
   }
 
@@ -766,10 +846,11 @@ function formatBrowseSequenceResult(result: unknown): Partial<Pick<ThreadCommand
       detailLabel: title ? "title" : null,
       detailText: title,
       durationMs,
+      state,
     };
   }
 
-  return { durationMs };
+  return { durationMs, state };
 }
 
 function readEvalStdoutResult(stdout: string) {

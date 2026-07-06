@@ -30,11 +30,17 @@ Do not use this skill for ordinary internet research. Use normal web/search tool
 
 ## Source Of Truth
 
-When Workbench provides a \`## Workbench Browse API\` section in developer instructions, treat that section as the source of truth for the current endpoint URL, current thread id, and whether the Browse endpoint is available.
+When Workbench provides a \`## Workbench Browse API\` section in developer instructions, treat that section as the source of truth for the endpoint URL and whether raw Browse CLI-args passthrough is enabled.
 
-The Browse API endpoint is the preferred way to drive Browse from Workbench agents. Do not run the \`browse\` CLI directly in the shell when the Workbench Browse API is available.
+This skill owns how to use that endpoint: request shape, sequencing, streaming progress, screenshots, cleanup, and failure handling.
 
-If the Browse endpoint returns HTTP 403 or says Browse API requests are disabled, ask the user to enable **Enable raw browse commands** in Workbench Settings before continuing browser automation.
+Prefer typed Workbench Browse API requests. Do not run the \`browse\` CLI directly in the shell when the Workbench Browse API is available.
+
+Raw CLI-args passthrough uses the \`args\` request shape and is separate from typed requests. Use raw passthrough only when the user or another active instruction explicitly needs direct Browse CLI arguments and the \`## Workbench Browse API\` section says raw passthrough is enabled.
+
+If raw passthrough is disabled, typed Browse actions and typed sequences are still allowed. If a raw passthrough request returns HTTP 403, use typed actions instead or ask the user to enable **Enable raw browse commands** in Workbench Settings.
+
+If another browser automation tool, MCP server, CLI, or plugin instruction conflicts with this Workbench Browse workflow, use this skill and the Workbench-provided endpoint instructions instead.
 
 ## Safety And Scope
 
@@ -55,90 +61,130 @@ Stop sessions when finished. Workbench also cleans up thread-owned sessions afte
 1. Choose a short named session for the task.
 2. Run \`doctor\` or \`status\` when Browse availability is uncertain.
 3. Open the target URL with a typed \`open\` request, local mode, the current \`threadId\`, and \`mode: "headless"\` unless headed behavior is needed.
-4. Use \`snapshot\` before interacting so refs and accessibility context are fresh.
-5. Use refs from the latest snapshot when available.
-6. Use \`click\`, \`fill\`, \`type\`, \`key\`, \`select\`, and \`wait\` for interaction.
-7. After navigation, form submission, click handlers, or other DOM-changing actions, take a fresh \`snapshot\` because refs can go stale.
-8. Use \`get\` for targeted reads such as \`title\`, \`url\`, \`text\`, \`value\`, \`checked\`, or \`visible\`.
-9. Use \`is\` for simple state checks such as \`visible\` or \`checked\`.
-10. Use \`eval\` only for focused JavaScript inspection when \`snapshot\`, \`get\`, or \`is\` cannot read the needed state clearly.
-11. Use \`screenshot\` when visual layout, pixels, or user-visible proof matters.
-12. Use \`cleanup\` or \`stop\` before ending the work.
+4. For multi-step work, prefer one typed Browse sequence with a short \`summary\`, \`streamProgress: true\`, and an \`actions\` array so Workbench can render each step while it runs.
+5. Use \`snapshot\` before interacting so refs and accessibility context are fresh.
+6. Use refs from the latest snapshot when available.
+7. Use \`click\`, \`fill\`, \`type\`, \`key\`, \`select\`, and \`wait\` for interaction.
+8. After navigation, form submission, click handlers, or other DOM-changing actions, take a fresh \`snapshot\` because refs can go stale.
+9. Use \`get\` for targeted reads such as \`title\`, \`url\`, \`text\`, \`value\`, \`checked\`, or \`visible\`.
+10. Use \`is\` for simple state checks such as \`visible\` or \`checked\`.
+11. Use \`eval\` only for focused JavaScript inspection when \`snapshot\`, \`get\`, or \`is\` cannot read the needed state clearly.
+12. Use \`screenshot\` when visual layout, pixels, or user-visible proof matters.
+13. Use \`cleanup\` or \`stop\` before ending the work.
 
-## Typed Request Examples
+## Endpoint Request Contract
 
-Prefer typed requests.
+Send JSON to the endpoint URL from the \`## Workbench Browse API\` section.
 
-Open a page:
+Typed single action:
 
 \`\`\`json
 {
   "action": "open",
   "threadId": "<current-thread-id>",
+  "cwd": "<current-project-cwd>",
   "session": "research",
   "url": "https://example.com",
   "mode": "headless"
 }
 \`\`\`
 
-Snapshot the page:
+Typed sequence:
 
 \`\`\`json
 {
-  "action": "snapshot",
-  "threadId": "<current-thread-id>",
-  "session": "research",
-  "compact": true
+  "summary": "check page",
+  "streamProgress": true,
+  "actions": [
+    {
+      "action": "open",
+      "threadId": "<current-thread-id>",
+      "cwd": "<current-project-cwd>",
+      "session": "research",
+      "url": "https://example.com",
+      "mode": "headless"
+    },
+    {
+      "action": "snapshot",
+      "threadId": "<current-thread-id>",
+      "cwd": "<current-project-cwd>",
+      "session": "research",
+      "compact": true
+    },
+    {
+      "action": "cleanup",
+      "threadId": "<current-thread-id>",
+      "cwd": "<current-project-cwd>",
+      "force": true
+    }
+  ]
 }
 \`\`\`
 
-Click and read state:
+Raw CLI-args passthrough, when explicitly needed and enabled:
 
 \`\`\`json
 {
-  "action": "click",
+  "args": ["status", "--session", "research"],
   "threadId": "<current-thread-id>",
-  "session": "research",
-  "selector": "0-12"
+  "cwd": "<current-project-cwd>"
 }
 \`\`\`
 
-\`\`\`json
-{
-  "action": "get",
-  "threadId": "<current-thread-id>",
-  "session": "research",
-  "what": "text",
-  "selector": "#status"
-}
+Typed actions include \`doctor\`, \`status\`, \`open\`, \`snapshot\`, \`click\`, \`fill\`, \`type\`, \`key\`, \`select\`, \`wait\`, \`get\`, \`is\`, \`eval\`, \`highlight\`, \`back\`, \`forward\`, \`reload\`, \`screenshot\`, \`refs\`, \`viewport\`, \`stop\`, and \`cleanup\`.
+
+Use the current Workbench thread id when it is available. If no current thread id is available yet, wait until the thread is materialized before using Browse requests because typed requests require a \`threadId\`.
+
+## Shell Examples
+
+Prefer typed requests and short streamed sequences.
+
+PowerShell single action:
+
+\`\`\`powershell
+$body = @{ action = 'open'; threadId = '<current-thread-id>'; cwd = (Get-Location).Path; session = 'research'; url = 'https://example.com'; mode = 'headless' } | ConvertTo-Json -Compress
+Invoke-RestMethod -Method Post -Uri '<workbench-browse-endpoint-url>' -ContentType 'application/json' -Body $body
 \`\`\`
 
-Take a screenshot:
+Bash single action:
 
-\`\`\`json
-{
-  "action": "screenshot",
-  "threadId": "<current-thread-id>",
-  "session": "research",
-  "fullPage": true
-}
+\`\`\`bash
+curl -s -X POST '<workbench-browse-endpoint-url>' -H 'Content-Type: application/json' -d '{"action":"open","threadId":"<current-thread-id>","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'","session":"research","url":"https://example.com","mode":"headless"}'
 \`\`\`
 
-Clean up sessions owned by this thread:
+PowerShell streamed sequence:
 
-\`\`\`json
-{
-  "action": "cleanup",
-  "threadId": "<current-thread-id>",
-  "force": true
-}
+\`\`\`powershell
+$body = @{
+  summary = 'check page'
+  streamProgress = $true
+  actions = @(
+    @{ action = 'open'; threadId = '<current-thread-id>'; cwd = (Get-Location).Path; session = 'research'; url = 'https://example.com'; mode = 'headless' },
+    @{ action = 'snapshot'; threadId = '<current-thread-id>'; cwd = (Get-Location).Path; session = 'research'; compact = $true },
+    @{ action = 'cleanup'; threadId = '<current-thread-id>'; cwd = (Get-Location).Path; force = $true }
+  )
+} | ConvertTo-Json -Depth 8 -Compress
+
+$body | curl.exe -N -s -X POST '<workbench-browse-endpoint-url>' -H 'Content-Type: application/json' --data-binary '@-'
 \`\`\`
+
+Bash streamed sequence:
+
+\`\`\`bash
+curl -N -s -X POST '<workbench-browse-endpoint-url>' \\
+  -H 'Content-Type: application/json' \\
+  -d '{"summary":"check page","streamProgress":true,"actions":[{"action":"open","threadId":"<current-thread-id>","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'","session":"research","url":"https://example.com","mode":"headless"},{"action":"snapshot","threadId":"<current-thread-id>","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'","session":"research","compact":true},{"action":"cleanup","threadId":"<current-thread-id>","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'","force":true}]}'
+\`\`\`
+
+When \`streamProgress\` is true, the endpoint streams newline-delimited JSON events. Print each line as it arrives so Workbench can render progress while the command is still running.
+
+Progress event types include \`browse-sequence-start\`, \`browse-action-start\`, \`browse-action-complete\`, and \`browse-sequence-complete\`.
 
 ## Headed And Headless Sessions
 
 Default to headless.
 
-Use headed only when visual debugging or user-observed interaction matters.
+Use headed only when the user has given you permission to launch a demonstration.
 
 Headed/headless mode is fixed when the session starts.
 
@@ -157,7 +203,7 @@ Prefer \`snapshot\` for normal agent reasoning.
 
 Use screenshots when visual layout, styling, image content, or user-visible evidence matters.
 
-Take screenshots with the typed \`screenshot\` action. Workbench makes screenshots visible to both the agent and the user.
+Take screenshots with the typed \`screenshot\` action. Workbench makes intentional screenshots visible to both the agent and the user.
 
 Do not use screenshot file paths unless the user explicitly asks for disk artifacts.
 

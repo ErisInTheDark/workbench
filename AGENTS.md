@@ -6,6 +6,12 @@
 - `webapp/app/api/` contains server routes for tree, file, and Codex operations; keep their contracts aligned with `webapp/lib/types.ts`.
 - `webapp/orchestrator/` coordinates local Next.js development together with the Codex and Copilot bridge paths.
 
+## Validation for agent thread rendering
+
+- Validation of the running workbench UI can be done via Browse. Use the `localhost` hostname rather than `127.0.0.1`, use whatever port you're provided.
+- `/agent/thread/<threadId>` to view a specific thread (chrome free)
+- `/agent/thread-lab` provides a render lab for pasted thread payloads, turns, thread items, command strings, and simplified command objects. It is the preferred manual surface for command matcher rendering checks.
+
 # Constraints
 
 ## DO

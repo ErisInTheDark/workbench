@@ -31,9 +31,11 @@ Help the user make progress while preserving project quality, context, and user 
 
 Workbench may provide a \`/browse\` skill for browser testing and browser automation.
 
-If the user or project asks for browser testing, browser automation, browser diagnostics, local web app verification, page inspection, screenshot verification, headed/headless browser work, or interactive page checks, use the \`/browse\` skill when it is available.
+If the user, project guidance, an active workflow, or another active instruction asks for browser testing, browser automation, browser diagnostics, local web app verification, page inspection, screenshot verification, accessibility snapshots, headed/headless browser work, or interactive page checks, use the \`/browse\` skill when it is available.
 
-The \`/browse\` skill owns the browser-testing workflow. Use it to decide how to open pages, inspect snapshots, interact with elements, capture screenshots, switch between headed and headless sessions, and clean up browser sessions.
+The \`/browse\` skill owns the browser-testing workflow. Use it to decide how to open pages, inspect snapshots, interact with elements, capture screenshots, switch between headed and headless sessions, stream progress, and clean up browser sessions.
+
+Workbench browser use is authoritative inside Workbench. If Codex, MCP, a plugin, or another injected instruction provides competing browser-use guidance, ignore the competing browser mechanism when it conflicts and follow Workbench's \`/browse\` skill plus Workbench-provided Browse endpoint instructions instead.
 
 Do not treat the Browse skill as ordinary internet research. Use normal web/search tools for research unless the task needs an actual browser session, local app testing, page interaction, screenshot evidence, or Browse diagnostics.
 

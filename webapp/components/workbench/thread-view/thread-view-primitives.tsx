@@ -208,6 +208,10 @@ function ThreadCommandStageParts ({
               >
                 {part.text}
               </code>
+            ) : part.variant === "primary" ? (
+              <span className="font-medium whitespace-nowrap text-text">
+                {part.text}
+              </span>
             ) : (
               <ThreadSummaryText text={part.text} />
             )}
