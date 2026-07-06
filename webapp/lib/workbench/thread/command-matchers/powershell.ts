@@ -23,6 +23,11 @@ interface ParsedPowerShellLineRange {
   startLine: number;
 }
 
+interface ParsedPowerShellCounterStart {
+  startLine: number;
+  variableName: string;
+}
+
 export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
     id: "powershell.hide-thread-title-setting",
@@ -202,8 +207,11 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       const skip = readPowerShellNumericValue(parsedStage, "-Skip");
       const first = readPowerShellNumericValue(parsedStage, "-First");
       const totalCount = readPowerShellNumericValue(parsedStage, "-TotalCount");
+      const counterStart = context.summaryParts.length
+        ? null
+        : readPowerShellCounterAssignmentBeforeStage(context.unwrappedCommand, context.stage.text);
       const selectObjectSummary = skip === null && first === null && totalCount === null
-        ? buildPowerShellSelectObjectReadSummary(context, pathPart)
+        ? buildPowerShellSelectObjectReadSummary(context, pathPart, counterStart)
         : null;
 
       if (selectObjectSummary) {
@@ -792,6 +800,48 @@ function getPowerShellStagePathPart(parsedStage: ParsedPowerShellStage, context:
   return path ? buildCommandPathPart(path, context) : null;
 }
 
+function readPowerShellCounterAssignmentBeforeStage(commandText: string, stageText: string) {
+  let previousStageText: string | null = null;
+  let remainingCommand: string | null = commandText;
+
+  while (remainingCommand) {
+    const nextStage = consumeNextCommandStage(remainingCommand, "powershell");
+    if (!nextStage) {
+      return null;
+    }
+
+    if (collapsePowerShellStageForComparison(nextStage.text) === collapsePowerShellStageForComparison(stageText)) {
+      return previousStageText ? readPowerShellCounterStartAssignment(previousStageText) : null;
+    }
+
+    previousStageText = nextStage.text;
+    remainingCommand = nextStage.remainingCommand ?? null;
+  }
+
+  return null;
+}
+
+function readPowerShellCounterStartAssignment(stageText: string): ParsedPowerShellCounterStart | null {
+  const assignmentMatch = unwrapPowerShellStageText(stageText).match(/^\$([A-Za-z_][\w]*)\s*=\s*(\d+)\s*$/);
+  if (!assignmentMatch?.[1] || !assignmentMatch[2]) {
+    return null;
+  }
+
+  const startLine = Number(assignmentMatch[2]);
+  if (!Number.isSafeInteger(startLine) || startLine < 1) {
+    return null;
+  }
+
+  return {
+    startLine,
+    variableName: assignmentMatch[1],
+  };
+}
+
+function collapsePowerShellStageForComparison(stageText: string) {
+  return unwrapPowerShellStageText(stageText).replace(/\s+/g, " ").trim();
+}
+
 function readPowerShellAssignedReadStage(
   stageText: string,
   context: Parameters<typeof buildCommandPathPart>[1],
@@ -1214,6 +1264,7 @@ function readPowerShellNumericTupleRanges(value: string) {
 function buildPowerShellSelectObjectReadSummary(
   context: Parameters<CommandMatcherDefinition["match"]>[0],
   pathPart: NonNullable<ReturnType<typeof getPowerShellStagePathPart>>,
+  counterStart: ParsedPowerShellCounterStart | null = null,
 ) {
   let remainingCommand = context.stage.remainingCommand;
 
@@ -1226,7 +1277,7 @@ function buildPowerShellSelectObjectReadSummary(
     const parsedNextStage = parsePowerShellStage(nextStage.text);
     if (!matchesPowerShellCommand(parsedNextStage, ["select-object", "select"])) {
       if (matchesPowerShellCommand(parsedNextStage, ["foreach-object", "%"])) {
-        const lineRanges = readPowerShellForEachNumberedLineRanges(parsedNextStage);
+        const lineRanges = readPowerShellForEachNumberedLineRanges(parsedNextStage, counterStart);
         if (lineRanges) {
           return buildPowerShellLineRangesReadSummary(
             pathPart,
@@ -1674,7 +1725,10 @@ function shouldHidePowerShellWebRequestRemainder(remainingCommand: string | null
   return true;
 }
 
-function readPowerShellForEachNumberedLineRanges(parsedStage: ParsedPowerShellStage) {
+function readPowerShellForEachNumberedLineRanges(
+  parsedStage: ParsedPowerShellStage,
+  counterStart: ParsedPowerShellCounterStart | null = null,
+) {
   const normalizedScript = getNormalizedPowerShellScriptBlock(parsedStage);
   if (!normalizedScript) {
     return null;
@@ -1689,9 +1743,13 @@ function readPowerShellForEachNumberedLineRanges(parsedStage: ParsedPowerShellSt
     return null;
   }
 
+  const knownStartLine = counterStart?.variableName.toLowerCase() === parsedCondition.variableName.toLowerCase()
+    ? counterStart.startLine
+    : null;
   const lineRanges = readPowerShellLineRangeConditionRanges(
     parsedCondition.condition,
     parsedCondition.variableName,
+    knownStartLine,
   );
   if (!lineRanges.length) {
     return null;
@@ -1729,6 +1787,7 @@ function readPowerShellForEachLineRangeCondition(normalizedScript: string) {
 function readPowerShellLineRangeConditionRanges(
   condition: string,
   variableName: string,
+  knownStartLine: number | null = null,
 ): ParsedPowerShellLineRange[] {
   const variablePattern = escapeRegExp(variableName);
   const rangePattern = new RegExp(
@@ -1736,24 +1795,62 @@ function readPowerShellLineRangeConditionRanges(
     "i",
   );
   const lineRanges: ParsedPowerShellLineRange[] = [];
+  const conditionSegments = splitPowerShellConditionByTopLevelOr(condition);
 
-  for (const rawSegment of splitPowerShellConditionByTopLevelOr(condition)) {
+  for (const rawSegment of conditionSegments) {
     const segment = stripBalancedWrappingParentheses(rawSegment.trim());
     const rangeMatch = segment.match(rangePattern);
-    if (!rangeMatch?.[1] || !rangeMatch[2]) {
+    if (rangeMatch?.[1] && rangeMatch[2]) {
+      const startLine = Number(rangeMatch[1]);
+      const endLine = Number(rangeMatch[2]);
+      if (!Number.isFinite(startLine) || !Number.isFinite(endLine) || endLine < startLine) {
+        return [];
+      }
+
+      lineRanges.push({ endLine, startLine });
+      continue;
+    }
+
+    const upperBoundRange = conditionSegments.length === 1
+      ? readPowerShellUpperBoundLineRange(segment, variableName, knownStartLine)
+      : null;
+    if (!upperBoundRange) {
       return [];
     }
 
-    const startLine = Number(rangeMatch[1]);
-    const endLine = Number(rangeMatch[2]);
-    if (!Number.isFinite(startLine) || !Number.isFinite(endLine) || endLine < startLine) {
-      return [];
-    }
-
-    lineRanges.push({ endLine, startLine });
+    lineRanges.push(upperBoundRange);
   }
 
   return lineRanges;
+}
+
+function readPowerShellUpperBoundLineRange(
+  conditionSegment: string,
+  variableName: string,
+  knownStartLine: number | null,
+): ParsedPowerShellLineRange | null {
+  if (typeof knownStartLine !== "number" || !Number.isSafeInteger(knownStartLine) || knownStartLine < 1) {
+    return null;
+  }
+
+  const variablePattern = escapeRegExp(variableName);
+  const upperBoundMatch = conditionSegment.match(
+    new RegExp(`^\\$${variablePattern}\\s*(-l[et])\\s*(\\d+)\\s*$`, "i"),
+  );
+  if (!upperBoundMatch?.[1] || !upperBoundMatch[2]) {
+    return null;
+  }
+
+  const upperBound = Number(upperBoundMatch[2]);
+  const endLine = upperBoundMatch[1].toLowerCase() === "-lt" ? upperBound - 1 : upperBound;
+  if (!Number.isSafeInteger(endLine) || endLine < knownStartLine) {
+    return null;
+  }
+
+  return {
+    endLine,
+    startLine: knownStartLine,
+  };
 }
 
 function splitPowerShellConditionByTopLevelOr(condition: string) {
