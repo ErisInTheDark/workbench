@@ -127,7 +127,7 @@ export async function WorkbenchClient(
       emitPendingUserInputRequestsChange();
     }
 
-    if (!areDeeplyEqual(lastSnapshot.threadDocuments, snapshot.threadDocuments)) {
+    if (lastSnapshot.threadDocuments !== snapshot.threadDocuments) {
       emitThreadDocumentsChange(snapshot.threadDocuments);
     }
 
@@ -331,6 +331,7 @@ export async function WorkbenchClient(
       && left.forkedFromId === right.forkedFromId
       && left.agentNickname === right.agentNickname
       && left.agentRole === right.agentRole
+      && areDeeplyEqual(left.browseScreenshotEntries ?? [], right.browseScreenshotEntries ?? [])
       && areDeeplyEqual(left.tokenUsage, right.tokenUsage)
       && areDeeplyEqual(left.turnHistory, right.turnHistory)
       && areTurnListsEquivalent(left.turns, right.turns)

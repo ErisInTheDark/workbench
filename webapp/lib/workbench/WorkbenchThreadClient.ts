@@ -88,6 +88,11 @@ import {
 import ThreadDocumentStore from "./state/ThreadDocumentStore";
 import { getTurnRenderSignature } from "./thread/thread-item-signature";
 import { applyQuestionnaireHistoryToThread, isSyntheticQuestionnaireHistoryItem } from "./thread/thread-questionnaire-history";
+import ThreadCanonicalLayer from "./thread/ThreadCanonicalLayer";
+import ThreadRenderPipeline from "./thread/ThreadRenderPipeline";
+import ThreadStreamingReconciler from "./thread/ThreadStreamingReconciler";
+import ThreadVisibleLayer from "./thread/ThreadVisibleLayer";
+import ThreadWorkbenchOverlayLayer from "./thread/ThreadWorkbenchOverlayLayer";
 import {
     createWorkbenchPauseControlInput,
     createWorkbenchPauseResumeResponse,
@@ -235,6 +240,38 @@ interface OptimisticUserMessageEntry {
 
 type OptimisticUserMessagePlacement = "initial" | "steer";
 type OptimisticUserMessageStatus = "pending" | "sent" | "interrupted" | "failed";
+
+interface ThreadSourceRecord {
+  canonicalRevision: number;
+  key: string;
+  liveRevision: number;
+  thread: ThreadPayload;
+}
+
+interface ThreadOverlayRevisionRecord {
+  key: string;
+  optimisticRevision: number;
+  questionnaireForceProjectionEpoch: number;
+  questionnaireRevision: number;
+  screenshotRevision: number;
+  steerRevision: number;
+}
+
+interface ThreadStablePreferenceRecord {
+  agentNickname: string | null;
+  agentPath: string | null;
+  agentRole: string | null;
+  model: string | null;
+  reasoningEffort: string | null;
+  revision: number;
+  serviceTier: string | null;
+  tokenUsage: ThreadPayload["tokenUsage"];
+}
+
+interface ThreadStatusRecord {
+  revision: number;
+  status: string | null;
+}
 
 type CodexThreadSessionResponse = {
   model?: string | null;
@@ -644,7 +681,26 @@ function WorkbenchThreadClient(
   const threadDocuments = ThreadDocumentStore({
     areDocumentsEquivalent: areThreadPayloadsEquivalent,
   });
-  const clientCreatedStreamingItemKeys = new Set<string>();
+  const threadSourcesByKey = new Map<string, ThreadSourceRecord>();
+  const overlayRevisionsByKey = new Map<string, ThreadOverlayRevisionRecord>();
+  const stablePreferencesByKey = new Map<string, ThreadStablePreferenceRecord>();
+  const statusRecordsByKey = new Map<string, ThreadStatusRecord>();
+  const streamingReconciler = new ThreadStreamingReconciler();
+  let selectedThreadKey = "";
+  const threadRenderPipeline = new ThreadRenderPipeline({
+    canonicalLayer: new ThreadCanonicalLayer({
+      normalizeCanonicalThread: (thread) => prepareCanonicalThreadSource(thread) ?? thread,
+    }),
+    overlayLayer: new ThreadWorkbenchOverlayLayer({
+      applyBrowseScreenshotOverlay: (thread) => applyPersistedBrowseScreenshotEntries(thread) ?? thread,
+      applyOptimisticOverlay: (thread) => applyOptimisticUserMessageOverlay(thread) ?? thread,
+      applyQuestionnaireOverlay: (thread) => applyPersistedQuestionnaireHistory(thread) ?? thread,
+      applyStablePreferenceOverlay: (thread) => projectStableThreadMetadata(thread),
+      applyStatusOverlay: (thread) => projectThreadStatus(thread),
+      applySteerOverlay: (thread) => applyPersistedSteerHistory(thread) ?? thread,
+    }),
+    visibleLayer: new ThreadVisibleLayer(),
+  });
   const optimisticUserMessagesByTurnKey = new Map<string, OptimisticUserMessageEntry[]>();
   const threadUnreadRefreshInFlightKeys = new Set<string>();
   const latestTurnStartedAtByThreadKey = new Map<string, number>();
@@ -889,6 +945,13 @@ function WorkbenchThreadClient(
     state.hasLoadedThreads = false;
     state.isLoading = Boolean(getProjectRootPaths(state).length);
     threadDocuments.clear();
+    threadSourcesByKey.clear();
+    overlayRevisionsByKey.clear();
+    stablePreferencesByKey.clear();
+    statusRecordsByKey.clear();
+    selectedThreadKey = "";
+    threadRenderPipeline.clear();
+    streamingReconciler.clearClientCreatedItemKeys();
     emit();
   }
 
@@ -927,22 +990,345 @@ function WorkbenchThreadClient(
         : thread;
   }
 
-  function normalizeThreadDocument(
-    thread: ThreadPayload | null,
-    {
-      preserveStableServiceTier = true,
-      pruneStreamingDuplicates = true,
-    }: {
-      preserveStableServiceTier?: boolean;
-      pruneStreamingDuplicates?: boolean;
-    } = {},
+  function getOverlayRevisionRecord(key: string) {
+    let record = overlayRevisionsByKey.get(key);
+    if (!record) {
+      record = {
+        key,
+        optimisticRevision: 0,
+        questionnaireForceProjectionEpoch: 0,
+        questionnaireRevision: 0,
+        screenshotRevision: 0,
+        steerRevision: 0,
+      };
+      overlayRevisionsByKey.set(key, record);
+    }
+    return record;
+  }
+
+  function getOverlayKeysForThreadId(threadId: string) {
+    if (selectedThreadKey) {
+      const selectedSource = threadSourcesByKey.get(selectedThreadKey);
+      if (selectedSource?.thread.id === threadId) {
+        return [selectedThreadKey];
+      }
+    }
+
+    const matchingKeys = Array.from(threadSourcesByKey.values())
+      .filter((source) => source.thread.id === threadId)
+      .map((source) => source.key);
+    if (matchingKeys.length === 1) {
+      return matchingKeys;
+    }
+
+    if (matchingKeys.length > 1) {
+      return [];
+    }
+
+    return [getThreadStateKey("codex", threadId)];
+  }
+
+  function bumpOverlayRevisionForKey(key: string, revisionKey: keyof Omit<ThreadOverlayRevisionRecord, "key">) {
+    const record = getOverlayRevisionRecord(key);
+    record[revisionKey] += 1;
+    threadRenderPipeline.invalidate(key);
+  }
+
+  function bumpOverlayRevision(threadId: string, revisionKey: keyof Omit<ThreadOverlayRevisionRecord, "key">) {
+    for (const key of getOverlayKeysForThreadId(threadId)) {
+      bumpOverlayRevisionForKey(key, revisionKey);
+    }
+  }
+
+  function getOverlayRevisionRecordForSource(source: ThreadSourceRecord) {
+    return getOverlayRevisionRecord(source.key);
+  }
+
+  function prepareCanonicalThreadSource(thread: ThreadPayload | null) {
+    return normalizeThreadPayloadItems(thread ? ensureThreadHistory(thread) : thread);
+  }
+
+  function getThreadSourceKey(thread: Pick<ThreadPayload, "harness" | "id">) {
+    return getThreadStateKey(thread.harness, thread.id);
+  }
+
+  function getOrCreateStablePreferenceRecord(thread: ThreadPayload) {
+    const key = getThreadSourceKey(thread);
+    let record = stablePreferencesByKey.get(key);
+    if (!record) {
+      record = {
+        agentNickname: null,
+        agentPath: null,
+        agentRole: null,
+        model: null,
+        reasoningEffort: null,
+        revision: 0,
+        serviceTier: null,
+        tokenUsage: null,
+      };
+      stablePreferencesByKey.set(key, record);
+    }
+    return record;
+  }
+
+  function captureStablePreferenceSource(thread: ThreadPayload) {
+    const record = getOrCreateStablePreferenceRecord(thread);
+    const tokenUsage = thread.tokenUsage ?? readStoredThreadTokenUsage(thread.harness, thread.id);
+    if (
+      record.agentNickname === (thread.agentNickname ?? null)
+      && record.agentPath === (thread.agentPath ?? null)
+      && record.agentRole === (thread.agentRole ?? null)
+      && record.model === (thread.model ?? null)
+      && record.reasoningEffort === (thread.reasoningEffort ?? null)
+      && record.serviceTier === (thread.serviceTier ?? null)
+      && areDeeplyEqual(record.tokenUsage, tokenUsage)
+    ) {
+      return record;
+    }
+
+    record.agentNickname = thread.agentNickname ?? null;
+    record.agentPath = thread.agentPath ?? null;
+    record.agentRole = thread.agentRole ?? null;
+    record.model = thread.model ?? null;
+    record.reasoningEffort = thread.reasoningEffort ?? null;
+    record.serviceTier = thread.serviceTier ?? null;
+    record.tokenUsage = tokenUsage ?? null;
+    record.revision += 1;
+    return record;
+  }
+
+  function getStablePreferenceRevision(key: string) {
+    return stablePreferencesByKey.get(key)?.revision ?? 0;
+  }
+
+  function updateStablePreferenceSource(
+    thread: Pick<ThreadPayload, "harness" | "id">,
+    updater: (record: ThreadStablePreferenceRecord) => void,
   ) {
-    const stableThread = normalizeThreadPayloadItems(preserveStableServiceTier ? mergeStableThreadMetadata(thread ? ensureThreadHistory(thread) : thread) : thread ? ensureThreadHistory(thread) : thread);
-    const storedTokenUsageThread = stableThread ? applyStoredThreadTokenUsage(stableThread) : stableThread;
-    const nextThread = applyOptimisticUserMessageOverlay(applyPersistedBrowseScreenshotEntries(applyPersistedSteerHistory(applyPersistedQuestionnaireHistory(storedTokenUsageThread))));
-    return pruneStreamingDuplicates
-      ? pruneThreadStreamingDuplicates(nextThread)
+    const key = getThreadSourceKey(thread);
+    const source = threadSourcesByKey.get(key);
+    if (!source) {
+      return false;
+    }
+
+    const record = getOrCreateStablePreferenceRecord(source.thread);
+    const snapshot = { ...record };
+    updater(record);
+    if (
+      snapshot.agentNickname === record.agentNickname
+      && snapshot.agentPath === record.agentPath
+      && snapshot.agentRole === record.agentRole
+      && snapshot.model === record.model
+      && snapshot.reasoningEffort === record.reasoningEffort
+      && snapshot.serviceTier === record.serviceTier
+      && areDeeplyEqual(snapshot.tokenUsage, record.tokenUsage)
+    ) {
+      return false;
+    }
+
+    record.revision += 1;
+    threadRenderPipeline.invalidate(key);
+    if (key === selectedThreadKey) {
+      flushSelectedThreadRendering();
+    } else {
+      const previousSnapshot = threadDocuments.getSnapshot();
+      materializeFinalVisibleThread(key);
+      if (previousSnapshot !== threadDocuments.getSnapshot()) {
+        emit();
+      }
+    }
+    return true;
+  }
+
+  function updateThreadSourceFields(
+    thread: Pick<ThreadPayload, "harness" | "id">,
+    fields: Partial<Omit<ThreadPayload, "turns">>,
+  ) {
+    const key = getThreadSourceKey(thread);
+    const source = threadSourcesByKey.get(key);
+    if (!source) {
+      return false;
+    }
+
+    source.thread = {
+      ...source.thread,
+      ...fields,
+    };
+    source.canonicalRevision += 1;
+    threadRenderPipeline.invalidate(key);
+    if (key === selectedThreadKey) {
+      flushSelectedThreadRendering();
+    } else {
+      const previousSnapshot = threadDocuments.getSnapshot();
+      materializeFinalVisibleThread(key);
+      if (previousSnapshot !== threadDocuments.getSnapshot()) {
+        emit();
+      }
+    }
+    return true;
+  }
+
+  function projectStableThreadMetadata(thread: ThreadPayload) {
+    const record = stablePreferencesByKey.get(getThreadSourceKey(thread));
+    if (!record) {
+      return applyStoredThreadTokenUsage(thread);
+    }
+
+    const nextThread = {
+      ...thread,
+      agentNickname: thread.agentNickname ?? record.agentNickname,
+      agentPath: thread.agentPath ?? record.agentPath,
+      agentRole: thread.agentRole ?? record.agentRole,
+      model: thread.model ?? record.model,
+      reasoningEffort: thread.reasoningEffort ?? record.reasoningEffort,
+      serviceTier: thread.serviceTier ?? record.serviceTier,
+      tokenUsage: thread.tokenUsage ?? record.tokenUsage,
+    };
+    return nextThread.agentNickname === thread.agentNickname
+      && nextThread.agentPath === thread.agentPath
+      && nextThread.agentRole === thread.agentRole
+      && nextThread.model === thread.model
+      && nextThread.reasoningEffort === thread.reasoningEffort
+      && nextThread.serviceTier === thread.serviceTier
+      && nextThread.tokenUsage === thread.tokenUsage
+      ? thread
       : nextThread;
+  }
+
+  function setThreadStatusSource(thread: Pick<ThreadPayload, "harness" | "id">, status: string | null) {
+    const key = getThreadSourceKey(thread);
+    const existing = statusRecordsByKey.get(key);
+    if (existing?.status === status) {
+      return existing;
+    }
+
+    const record = {
+      revision: (existing?.revision ?? 0) + 1,
+      status,
+    };
+    statusRecordsByKey.set(key, record);
+    threadRenderPipeline.invalidate(key);
+    return record;
+  }
+
+  function getStatusRevision(key: string) {
+    return statusRecordsByKey.get(key)?.revision ?? 0;
+  }
+
+  function projectThreadStatus(thread: ThreadPayload) {
+    const status = statusRecordsByKey.get(getThreadSourceKey(thread))?.status;
+    return status && status !== thread.status ? { ...thread, status } : thread;
+  }
+
+  function writeThreadSource(thread: ThreadPayload) {
+    const sourceThread = prepareCanonicalThreadSource(thread) ?? thread;
+    const key = getThreadSourceKey(sourceThread);
+    const existing = threadSourcesByKey.get(key);
+    captureStablePreferenceSource(sourceThread);
+    setThreadStatusSource(sourceThread, sourceThread.status);
+    if (existing?.thread === sourceThread) {
+      return existing;
+    }
+
+    const record = {
+      canonicalRevision: (existing?.canonicalRevision ?? 0) + 1,
+      key,
+      liveRevision: existing?.liveRevision ?? 0,
+      thread: sourceThread,
+    };
+    threadSourcesByKey.set(key, record);
+    threadRenderPipeline.invalidate(key);
+    return record;
+  }
+
+  function projectThreadSource(record: ThreadSourceRecord) {
+    const overlayRevision = getOverlayRevisionRecordForSource(record);
+    return threadRenderPipeline.render({
+      canonicalRevision: record.canonicalRevision,
+      key: record.key,
+      optimisticRevision: overlayRevision.optimisticRevision,
+      publicRevision: 0,
+      questionnaireForceProjectionEpoch: overlayRevision.questionnaireForceProjectionEpoch,
+      questionnaireRevision: overlayRevision.questionnaireRevision,
+      rawThread: record.thread,
+      screenshotRevision: overlayRevision.screenshotRevision,
+      selected: record.key === selectedThreadKey,
+      stablePreferenceRevision: getStablePreferenceRevision(record.key),
+      statusRevision: getStatusRevision(record.key),
+      steerRevision: overlayRevision.steerRevision,
+    });
+  }
+
+  function materializeFinalVisibleThread(key: string, options: { select?: boolean } = {}) {
+    const record = threadSourcesByKey.get(key);
+    if (!record) {
+      if (options.select) {
+        threadDocuments.selectDocumentKey("");
+      }
+      return null;
+    }
+
+    const finalVisibleThread = projectThreadSource(record);
+    threadDocuments.materializeFinalVisibleDocument(key, finalVisibleThread, { select: options.select });
+    return finalVisibleThread;
+  }
+
+  function refreshFinalVisibleThreadForOverlay(threadId: string) {
+    const previousSnapshot = threadDocuments.getSnapshot();
+    let didFlushSelectedThread = false;
+    for (const key of getOverlayKeysForThreadId(threadId)) {
+      if (key === selectedThreadKey) {
+        didFlushSelectedThread = true;
+        flushSelectedThreadRendering();
+      } else {
+        materializeFinalVisibleThread(key);
+      }
+    }
+
+    if (previousSnapshot !== threadDocuments.getSnapshot() && !didFlushSelectedThread) {
+      emit();
+    }
+  }
+
+  function setProjectedCurrentThread(nextThread: ThreadPayload | null) {
+    const unreadStateChanged = nextThread ? markThreadPayloadSeen(nextThread) : false;
+    if (areThreadPayloadsEquivalent(state.currentThread, nextThread)) {
+      if (unreadStateChanged) {
+        state.threads = state.threads.map(buildThreadSummaryWithUnreadBadge);
+        emit();
+      }
+      return;
+    }
+
+    const previousThread = state.currentThread;
+    if (!previousThread || !nextThread || previousThread.id !== nextThread.id || previousThread.harness !== nextThread.harness) {
+      streamingReconciler.clearClientCreatedItemKeys();
+    }
+    state.currentThread = nextThread;
+    state.currentThreadId = nextThread?.id ?? "";
+    emit();
+    scheduleActiveTurnRateLimitRefresh();
+
+    if (!nextThread) {
+      setRateLimits(null);
+      return;
+    }
+
+    if (!previousThread || previousThread.id !== nextThread.id || previousThread.harness !== nextThread.harness) {
+      setRateLimits(null);
+      void refreshRateLimits(nextThread.harness);
+    }
+  }
+
+  function flushSelectedThreadRendering() {
+    if (!selectedThreadKey) {
+      threadDocuments.selectDocumentKey("");
+      setProjectedCurrentThread(null);
+      return;
+    }
+
+    const projectedThread = materializeFinalVisibleThread(selectedThreadKey, { select: true });
+    setProjectedCurrentThread(projectedThread);
   }
 
   function upsertThreadDocument(
@@ -950,18 +1336,19 @@ function WorkbenchThreadClient(
     options: {
       emitChange?: boolean;
       preserveStableServiceTier?: boolean;
-      pruneStreamingDuplicates?: boolean;
       select?: boolean;
     } = {},
   ) {
-    const document = normalizeThreadDocument(thread, options) ?? thread;
-    const result = threadDocuments.upsertDocument(document, {
-      select: options.select,
-    });
-    if (options.emitChange && (result.didChange || result.didSelectionChange)) {
+    const source = writeThreadSource(thread);
+    if (options.select) {
+      selectedThreadKey = source.key;
+    }
+    const previousSnapshot = threadDocuments.getSnapshot();
+    const document = materializeFinalVisibleThread(source.key, { select: options.select }) ?? source.thread;
+    if (options.emitChange && previousSnapshot !== threadDocuments.getSnapshot()) {
       emit();
     }
-    return result.document;
+    return document;
   }
 
   function areCurrentTurnsEquivalent(left: ThreadPayload | null, right: ThreadPayload | null) {
@@ -1021,29 +1408,11 @@ function WorkbenchThreadClient(
       && left.forkedFromId === right.forkedFromId
       && left.agentNickname === right.agentNickname
       && left.agentRole === right.agentRole
+      && areDeeplyEqual(left.browseScreenshotEntries ?? [], right.browseScreenshotEntries ?? [])
       && areDeeplyEqual(left.tokenUsage, right.tokenUsage)
       && areDeeplyEqual(left.turnHistory, right.turnHistory)
       && areTurnListsEquivalent(left.turns, right.turns)
       && areCurrentTurnsEquivalent(left, right);
-  }
-
-  function mergeStableThreadMetadata(thread: ThreadPayload | null) {
-    if (!thread || state.currentThread?.id !== thread.id || state.currentThread.harness !== thread.harness) {
-      return thread;
-    }
-
-    const currentThread = state.currentThread;
-    return {
-      ...thread,
-      agentNickname: thread.agentNickname ?? currentThread.agentNickname,
-      agentPath: thread.agentPath ?? currentThread.agentPath,
-      agentRole: thread.agentRole ?? currentThread.agentRole,
-      model: thread.model ?? currentThread.model,
-      name: thread.name ?? currentThread.name,
-      reasoningEffort: thread.reasoningEffort ?? currentThread.reasoningEffort,
-      serviceTier: thread.serviceTier ?? currentThread.serviceTier,
-      tokenUsage: thread.tokenUsage ?? currentThread.tokenUsage,
-    };
   }
 
   function applyStoredThreadTokenUsage(thread: ThreadPayload) {
@@ -1241,51 +1610,20 @@ function WorkbenchThreadClient(
 
   function setCurrentThread(
     thread: ThreadPayload | null,
-    {
-      preserveStableServiceTier = true,
-      pruneStreamingDuplicates = true,
-    }: {
+    _options: {
       preserveStableServiceTier?: boolean;
-      pruneStreamingDuplicates?: boolean;
     } = {},
   ) {
-    const normalizedThread = normalizeThreadDocument(thread, {
-      preserveStableServiceTier,
-      pruneStreamingDuplicates,
-    });
-    const nextThread = normalizedThread
-      ? threadDocuments.upsertDocument(normalizedThread, { select: true }).document
-      : null;
-    if (!nextThread) {
-      threadDocuments.selectDocument(null);
-    }
-    const unreadStateChanged = nextThread ? markThreadPayloadSeen(nextThread) : false;
-    if (areThreadPayloadsEquivalent(state.currentThread, nextThread)) {
-      if (unreadStateChanged) {
-        state.threads = state.threads.map(buildThreadSummaryWithUnreadBadge);
-        emit();
-      }
+    if (!thread) {
+      selectedThreadKey = "";
+      flushSelectedThreadRendering();
       return;
     }
 
-    const previousThread = state.currentThread;
-    if (!previousThread || !nextThread || previousThread.id !== nextThread.id || previousThread.harness !== nextThread.harness) {
-      clientCreatedStreamingItemKeys.clear();
-    }
-    state.currentThread = nextThread;
-    state.currentThreadId = nextThread?.id ?? "";
-    emit();
-    scheduleActiveTurnRateLimitRefresh();
-
-    if (!nextThread) {
-      setRateLimits(null);
-      return;
-    }
-
-    if (!previousThread || previousThread.id !== nextThread.id || previousThread.harness !== nextThread.harness) {
-      setRateLimits(null);
-      void refreshRateLimits(nextThread.harness);
-    }
+    const sourceThread = prepareCanonicalThreadSource(thread);
+    const source = writeThreadSource(sourceThread ?? thread);
+    selectedThreadKey = source.key;
+    flushSelectedThreadRendering();
   }
 
   function updateCurrentThread(
@@ -1424,23 +1762,23 @@ function WorkbenchThreadClient(
     const clientKey = getThreadItemKey(turnId, clientItemId);
     const canonicalKey = getThreadItemKey(turnId, canonicalItemId);
     if (clientKey === canonicalKey) {
-      clientCreatedStreamingItemKeys.delete(clientKey);
+      streamingReconciler.forgetStreamingItemKey(clientKey);
       return;
     }
 
-    clientCreatedStreamingItemKeys.delete(clientKey);
+    streamingReconciler.forgetStreamingItemKey(clientKey);
   }
 
   function forgetStreamingItemKey(turnId: string, itemId: string) {
     const itemKey = getThreadItemKey(turnId, itemId);
-    clientCreatedStreamingItemKeys.delete(itemKey);
+    streamingReconciler.forgetStreamingItemKey(itemKey);
   }
 
   function shouldPreferIncomingStreamingItem(turnId: string, incomingItem: ThreadItem, existingItem: ThreadItem) {
     const incomingKey = getThreadItemKey(turnId, incomingItem.id);
     const existingKey = getThreadItemKey(turnId, existingItem.id);
-    const incomingIsClientCreated = clientCreatedStreamingItemKeys.has(incomingKey);
-    const existingIsClientCreated = clientCreatedStreamingItemKeys.has(existingKey);
+    const incomingIsClientCreated = streamingReconciler.hasClientCreatedItemKey(incomingKey);
+    const existingIsClientCreated = streamingReconciler.hasClientCreatedItemKey(existingKey);
     if (incomingIsClientCreated !== existingIsClientCreated) {
       return existingIsClientCreated;
     }
@@ -1453,15 +1791,15 @@ function WorkbenchThreadClient(
       const itemKey = getThreadItemKey(turnId, item.id);
       const candidateKey = getThreadItemKey(turnId, candidate.id);
       return (
-        clientCreatedStreamingItemKeys.has(itemKey)
-        || clientCreatedStreamingItemKeys.has(candidateKey)
+        streamingReconciler.hasClientCreatedItemKey(itemKey)
+        || streamingReconciler.hasClientCreatedItemKey(candidateKey)
       ) && isStructurallyMatchingStreamingItem(item, candidate);
     }
 
     if (isThreadStateChangeLikeAgentMessage(item) || isThreadStateChangeLikeAgentMessage(candidate)) {
       const itemKey = getThreadItemKey(turnId, item.id);
       const candidateKey = getThreadItemKey(turnId, candidate.id);
-      return clientCreatedStreamingItemKeys.has(itemKey) !== clientCreatedStreamingItemKeys.has(candidateKey)
+      return streamingReconciler.hasClientCreatedItemKey(itemKey) !== streamingReconciler.hasClientCreatedItemKey(candidateKey)
         && isStructurallyMatchingStreamingItem(item, candidate);
     }
 
@@ -1503,28 +1841,6 @@ function WorkbenchThreadClient(
     return changed ? nextItems : items;
   }
 
-  function pruneThreadStreamingDuplicates(thread: ThreadPayload | null) {
-    if (!thread) {
-      return null;
-    }
-
-    let changed = false;
-    const turns = thread.turns.map((turn) => {
-      const nextItems = pruneDuplicateStreamingItems(turn.id, turn.items);
-      if (nextItems === turn.items) {
-        return turn;
-      }
-
-      changed = true;
-      return {
-        ...turn,
-        items: nextItems,
-      };
-    });
-
-    return changed ? { ...thread, turns } : thread;
-  }
-
   function getOptimisticTurnKey(harness: WorkbenchHarness, threadId: string, turnId: string) {
     return `${harness}:${threadId}:${turnId}`;
   }
@@ -1560,6 +1876,7 @@ function WorkbenchThreadClient(
       ...(optimisticUserMessagesByTurnKey.get(turnKey) ?? []),
       entry,
     ]);
+    bumpOverlayRevision(threadId, "optimisticRevision");
     return entry.item;
   }
 
@@ -1600,6 +1917,7 @@ function WorkbenchThreadClient(
     } else {
       optimisticUserMessagesByTurnKey.delete(turnKey);
     }
+    bumpOverlayRevision(threadId, "optimisticRevision");
     return true;
   }
 
@@ -1657,11 +1975,18 @@ function WorkbenchThreadClient(
     }
 
     optimisticUserMessagesByTurnKey.set(turnKey, nextEntries);
+    bumpOverlayRevision(threadId, "optimisticRevision");
     return true;
   }
 
   function refreshCurrentThreadOptimisticUserMessages() {
-    return updateCurrentThread((thread) => applyOptimisticUserMessageOverlay(thread) ?? thread);
+    const threadId = state.currentThread?.id;
+    if (!threadId) {
+      return false;
+    }
+
+    refreshFinalVisibleThreadForOverlay(threadId);
+    return true;
   }
 
   function countCanonicalUserMessageMatches(items: ThreadItem[], input: UserInput[]) {
@@ -1877,6 +2202,15 @@ function WorkbenchThreadClient(
       return incomingTurn;
     }
 
+    if (
+      incomingTurn.itemsView === "full"
+      && incomingTurn.status !== "inProgress"
+      && liveTurn.status !== "inProgress"
+      && !streamingReconciler.hasClientCreatedItemForTurn(incomingTurn.id)
+    ) {
+      return incomingTurn;
+    }
+
     const liveItemsById = new Map(liveTurn.items.map((item) => [item.id, item]));
     const preserveAllUnmatchedLiveItems = shouldPreserveUnmatchedLiveTurnItems(incomingTurn, liveTurn);
     const preserveToolItemsFromThinnerTurn = incomingTurn.itemsView === "full"
@@ -1887,7 +2221,7 @@ function WorkbenchThreadClient(
       if (!liveItem) {
         for (const [liveItemId, candidateLiveItem] of liveItemsById) {
           if (
-            clientCreatedStreamingItemKeys.has(getThreadItemKey(incomingTurn.id, liveItemId))
+            streamingReconciler.hasClientCreatedItemKey(getThreadItemKey(incomingTurn.id, liveItemId))
             && isStructurallyMatchingStreamingItem(item, candidateLiveItem)
           ) {
             matchedLiveItem = candidateLiveItem;
@@ -1917,7 +2251,7 @@ function WorkbenchThreadClient(
   }
 
   function mergeLiveStreamingThreadSnapshot(incomingThread: ThreadPayload) {
-    const liveThread = state.currentThread;
+    const liveThread = threadSourcesByKey.get(getThreadSourceKey(incomingThread))?.thread ?? null;
     if (!liveThread || liveThread.id !== incomingThread.id || liveThread.harness !== incomingThread.harness) {
       return ensureThreadHistory(incomingThread);
     }
@@ -2020,11 +2354,8 @@ function WorkbenchThreadClient(
     if (state.currentThread?.id === threadId) {
       const nextStatus = removeThreadActiveFlag(state.currentThread.status, "waitingOnUserInput");
       if (nextStatus !== state.currentThread.status) {
-        state.currentThread = {
-          ...state.currentThread,
-          status: nextStatus,
-        };
-        threadDocuments.upsertDocument(state.currentThread, { select: true });
+        setThreadStatusSource(state.currentThread, nextStatus);
+        refreshFinalVisibleThreadForOverlay(threadId);
         changed = true;
       }
     }
@@ -2054,11 +2385,8 @@ function WorkbenchThreadClient(
     if (state.currentThread?.id === threadId) {
       const nextStatus = addThreadActiveFlag(state.currentThread.status, "waitingOnUserInput");
       if (nextStatus !== state.currentThread.status) {
-        state.currentThread = {
-          ...state.currentThread,
-          status: nextStatus,
-        };
-        threadDocuments.upsertDocument(state.currentThread, { select: true });
+        setThreadStatusSource(state.currentThread, nextStatus);
+        refreshFinalVisibleThreadForOverlay(threadId);
         changed = true;
       }
     }
@@ -2198,7 +2526,7 @@ function WorkbenchThreadClient(
 
   function getThreadModel(threadId: string) {
     if (state.currentThread?.id === threadId) {
-      return state.currentThread.model;
+      return stablePreferencesByKey.get(getThreadSourceKey(state.currentThread))?.model ?? state.currentThread.model;
     }
 
     return null;
@@ -2206,7 +2534,7 @@ function WorkbenchThreadClient(
 
   function getThreadReasoningEffort(threadId: string) {
     if (state.currentThread?.id === threadId) {
-      return state.currentThread.reasoningEffort;
+      return stablePreferencesByKey.get(getThreadSourceKey(state.currentThread))?.reasoningEffort ?? state.currentThread.reasoningEffort;
     }
 
     return null;
@@ -2214,7 +2542,7 @@ function WorkbenchThreadClient(
 
   function getThreadServiceTier(threadId: string) {
     if (state.currentThread?.id === threadId) {
-      return state.currentThread.serviceTier;
+      return stablePreferencesByKey.get(getThreadSourceKey(state.currentThread))?.serviceTier ?? state.currentThread.serviceTier;
     }
 
     return null;
@@ -2319,30 +2647,12 @@ function WorkbenchThreadClient(
     } else {
       state.questionnaireHistoryByThreadId.delete(threadId);
     }
+    bumpOverlayRevision(threadId, "questionnaireRevision");
     return true;
   }
 
-  function reapplyCurrentThreadQuestionnaireHistory(threadId: string) {
-    const document = threadDocuments.getDocumentByThreadId(threadId);
-    if (document && (document.harness === "codex" || document.harness === "opencode")) {
-      const nextDocument = upsertThreadDocument(document, {
-        select: state.currentThread?.id === threadId && state.currentThread.harness === document.harness,
-      });
-      if (state.currentThread?.id === threadId && state.currentThread.harness === nextDocument.harness) {
-        setCurrentThread(nextDocument);
-        return;
-      }
-      emit();
-    }
-
-    if (
-      state.currentThread?.id !== threadId
-      || (state.currentThread.harness !== "codex" && state.currentThread.harness !== "opencode")
-    ) {
-      return;
-    }
-
-    setCurrentThread(state.currentThread);
+  function refreshFinalVisibleQuestionnaireHistory(threadId: string) {
+    refreshFinalVisibleThreadForOverlay(threadId);
   }
 
   function recordLocalQuestionnaireHistoryEntry(
@@ -2390,27 +2700,12 @@ function WorkbenchThreadClient(
     } else {
       state.steerHistoryByThreadId.delete(threadId);
     }
+    bumpOverlayRevision(threadId, "steerRevision");
     return true;
   }
 
-  function reapplyCurrentThreadSteerHistory(threadId: string) {
-    const document = threadDocuments.getDocumentByThreadId(threadId);
-    if (document?.harness === "codex") {
-      const nextDocument = upsertThreadDocument(document, {
-        select: state.currentThread?.id === threadId && state.currentThread.harness === document.harness,
-      });
-      if (state.currentThread?.id === threadId && state.currentThread.harness === nextDocument.harness) {
-        setCurrentThread(nextDocument);
-        return;
-      }
-      emit();
-    }
-
-    if (state.currentThread?.id !== threadId || state.currentThread.harness !== "codex") {
-      return;
-    }
-
-    setCurrentThread(state.currentThread);
+  function refreshFinalVisibleSteerHistory(threadId: string) {
+    refreshFinalVisibleThreadForOverlay(threadId);
   }
 
   function setBrowseScreenshotEntries(threadId: string, entries: WorkbenchBrowseScreenshotEntry[]) {
@@ -2425,30 +2720,15 @@ function WorkbenchThreadClient(
     } else {
       state.browseScreenshotEntriesByThreadId.delete(threadId);
     }
+    bumpOverlayRevision(threadId, "screenshotRevision");
     return true;
   }
 
-  function reapplyCurrentThreadBrowseScreenshotEntries(threadId: string) {
-    const document = threadDocuments.getDocumentByThreadId(threadId);
-    if (document?.harness === "codex") {
-      const nextDocument = upsertThreadDocument(document, {
-        select: state.currentThread?.id === threadId && state.currentThread.harness === document.harness,
-      });
-      if (state.currentThread?.id === threadId && state.currentThread.harness === nextDocument.harness) {
-        setCurrentThread(nextDocument);
-        return;
-      }
-      emit();
-    }
-
-    if (state.currentThread?.id !== threadId || state.currentThread.harness !== "codex") {
-      return;
-    }
-
-    setCurrentThread(state.currentThread);
+  function refreshFinalVisibleBrowseScreenshotEntries(threadId: string) {
+    refreshFinalVisibleThreadForOverlay(threadId);
   }
 
-  async function readCompletedQuestionnaireHistory(threadId: string) {
+  async function readCompletedQuestionnaireHistory(threadId: string, options: { refreshProjection?: boolean } = {}) {
     try {
       const response = await sendBridgeRequest<{ data?: WorkbenchQuestionnaireHistoryEntry[] }>("codex", {
         method: "questionnaire/history/list",
@@ -2457,13 +2737,17 @@ function WorkbenchThreadClient(
         },
       });
       const entries = response.data ?? [];
-      if (setQuestionnaireHistoryEntries(threadId, entries) || entries.length) {
-        reapplyCurrentThreadQuestionnaireHistory(threadId);
+      const changed = setQuestionnaireHistoryEntries(threadId, entries);
+      if (!changed && entries.length) {
+        bumpOverlayRevision(threadId, "questionnaireForceProjectionEpoch");
+      }
+      if ((options.refreshProjection ?? true) && (changed || entries.length)) {
+        refreshFinalVisibleQuestionnaireHistory(threadId);
       }
       return entries;
     } catch {
-      if (setQuestionnaireHistoryEntries(threadId, [])) {
-        reapplyCurrentThreadQuestionnaireHistory(threadId);
+      if (setQuestionnaireHistoryEntries(threadId, []) && (options.refreshProjection ?? true)) {
+        refreshFinalVisibleQuestionnaireHistory(threadId);
       }
       return [];
     }
@@ -2491,7 +2775,7 @@ function WorkbenchThreadClient(
     return entries;
   }
 
-  async function readCompletedSteerHistory(threadId: string) {
+  async function readCompletedSteerHistory(threadId: string, options: { refreshProjection?: boolean } = {}) {
     try {
       const response = await sendBridgeRequest<{ data?: WorkbenchSteerHistoryEntry[] }>("codex", {
         method: "steer/history/list",
@@ -2500,19 +2784,19 @@ function WorkbenchThreadClient(
         },
       });
       const entries = response.data ?? [];
-      if (setSteerHistoryEntries(threadId, entries)) {
-        reapplyCurrentThreadSteerHistory(threadId);
+      if (setSteerHistoryEntries(threadId, entries) && (options.refreshProjection ?? true)) {
+        refreshFinalVisibleSteerHistory(threadId);
       }
       return entries;
     } catch {
-      if (setSteerHistoryEntries(threadId, [])) {
-        reapplyCurrentThreadSteerHistory(threadId);
+      if (setSteerHistoryEntries(threadId, []) && (options.refreshProjection ?? true)) {
+        refreshFinalVisibleSteerHistory(threadId);
       }
       return [];
     }
   }
 
-  async function readBrowseScreenshotEntries(threadId: string) {
+  async function readBrowseScreenshotEntries(threadId: string, options: { refreshProjection?: boolean } = {}) {
     try {
       const response = await sendBridgeRequest<{ data?: WorkbenchBrowseScreenshotEntry[] }>("codex", {
         method: "browse/screenshot/list",
@@ -2521,13 +2805,13 @@ function WorkbenchThreadClient(
         },
       });
       const entries = response.data ?? [];
-      if (setBrowseScreenshotEntries(threadId, entries)) {
-        reapplyCurrentThreadBrowseScreenshotEntries(threadId);
+      if (setBrowseScreenshotEntries(threadId, entries) && (options.refreshProjection ?? true)) {
+        refreshFinalVisibleBrowseScreenshotEntries(threadId);
       }
       return entries;
     } catch {
-      if (setBrowseScreenshotEntries(threadId, [])) {
-        reapplyCurrentThreadBrowseScreenshotEntries(threadId);
+      if (setBrowseScreenshotEntries(threadId, []) && (options.refreshProjection ?? true)) {
+        refreshFinalVisibleBrowseScreenshotEntries(threadId);
       }
       return [];
     }
@@ -2535,10 +2819,11 @@ function WorkbenchThreadClient(
 
   async function readCompletedThreadWorkbenchHistory(threadId: string) {
     const [browseScreenshotEntries, questionnaireEntries, steerEntries] = await Promise.all([
-      readBrowseScreenshotEntries(threadId),
-      readCompletedQuestionnaireHistory(threadId),
-      readCompletedSteerHistory(threadId),
+      readBrowseScreenshotEntries(threadId, { refreshProjection: false }),
+      readCompletedQuestionnaireHistory(threadId, { refreshProjection: false }),
+      readCompletedSteerHistory(threadId, { refreshProjection: false }),
     ]);
+    refreshFinalVisibleThreadForOverlay(threadId);
     return {
       browseScreenshotEntries,
       questionnaireEntries,
@@ -2642,7 +2927,7 @@ function WorkbenchThreadClient(
       if (harness === "codex") {
         void readCompletedThreadWorkbenchHistory(threadId);
       }
-      return normalizeThreadDocument(mergeLiveStreamingThreadSnapshot(toThreadPayload(
+      return mergeLiveStreamingThreadSnapshot(toThreadPayload(
         response.thread,
         harness,
         nextModel,
@@ -2651,7 +2936,7 @@ function WorkbenchThreadClient(
           : readStoredHarnessModelEffort(harness, nextModel) ?? resumedThread?.reasoningEffort ?? null,
         nextServiceTier,
         selectedAgentPath,
-      )));
+      ));
     } catch (error) {
       if (harness === "codex" && isTransientRolloutReadError(error)) {
         if (!options.suppressStatusMessage) {
@@ -2690,7 +2975,7 @@ function WorkbenchThreadClient(
       if (harness === "codex") {
         void readCompletedThreadWorkbenchHistory(threadId);
       }
-      return normalizeThreadDocument(mergeLiveStreamingThreadSnapshot(toThreadPayload(
+      return mergeLiveStreamingThreadSnapshot(toThreadPayload(
         response.thread,
         harness,
         nextModel,
@@ -2699,7 +2984,7 @@ function WorkbenchThreadClient(
         state.currentThread?.id === threadId
           ? state.currentThread.agentPath
           : readStoredHarnessAgent(harness),
-      )));
+      ));
     } catch (error) {
       if (harness === "codex" && isTransientRolloutReadError(error)) {
         emitStatusMessage(FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE);
@@ -3072,7 +3357,7 @@ function WorkbenchThreadClient(
     turnId: string,
     updater: (items: ThreadItem[]) => ThreadItem[] | null,
     {
-      pruneStreamingDuplicates = true,
+      pruneStreamingDuplicates = false,
     }: {
       pruneStreamingDuplicates?: boolean;
     } = {},
@@ -3106,7 +3391,7 @@ function WorkbenchThreadClient(
           turns,
         }
         : null;
-    }, { pruneStreamingDuplicates });
+    }, { pruneStreamingDuplicates: false });
   }
 
   function upsertThreadItem(turnId: string, incomingItem: ThreadItem) {
@@ -3126,7 +3411,7 @@ function WorkbenchThreadClient(
         let matchedClientItem: ThreadItem | null = null;
         const nextItems = items.filter((item) => {
           const itemKey = getThreadItemKey(turnId, item.id);
-          if (!clientCreatedStreamingItemKeys.has(itemKey) || !isStructurallyMatchingStreamingItem(compactedIncomingItem, item)) {
+          if (!streamingReconciler.hasClientCreatedItemKey(itemKey) || !isStructurallyMatchingStreamingItem(compactedIncomingItem, item)) {
             return true;
           }
 
@@ -3251,7 +3536,7 @@ function WorkbenchThreadClient(
           return null;
         }
 
-        clientCreatedStreamingItemKeys.add(itemKey);
+        streamingReconciler.addClientCreatedItemKey(itemKey);
         return [...items, nextItem];
       }
 
@@ -3296,7 +3581,7 @@ function WorkbenchThreadClient(
       });
 
       return updated ? nextItems : null;
-    });
+    }, { pruneStreamingDuplicates: false });
   }
 
   function appendIndexedText(values: string[], index: number, delta: string) {
@@ -4104,7 +4389,7 @@ function WorkbenchThreadClient(
         insertAfterItemIndex: options.insertAfterItemIndex ?? null,
         turnId: options.turnId ?? pendingRequest.turnId,
       })) {
-        reapplyCurrentThreadQuestionnaireHistory(threadId);
+        refreshFinalVisibleQuestionnaireHistory(threadId);
       }
     } else {
       if (supplementalInput.length && pendingRequest.harness === "codex") {
@@ -4219,6 +4504,8 @@ function WorkbenchThreadClient(
       return;
     }
 
+    selectedThreadKey = "";
+    threadDocuments.selectDocumentKey("");
     state.currentThreadId = "";
     state.currentThread = null;
     setRateLimits(null);
@@ -4235,9 +4522,14 @@ function WorkbenchThreadClient(
     }
 
     persistHarnessModel(state.currentThread.harness, model);
-    updateCurrentThreadFields({
+    const reasoningEffort = resolvePreferredReasoningEffort(state.currentThread.harness, model);
+    updateStablePreferenceSource(state.currentThread, (record) => {
+      record.model = model;
+      record.reasoningEffort = reasoningEffort;
+    });
+    updateThreadSourceFields(state.currentThread, {
       model,
-      reasoningEffort: resolvePreferredReasoningEffort(state.currentThread.harness, model),
+      reasoningEffort,
     });
   }
 
@@ -4248,7 +4540,10 @@ function WorkbenchThreadClient(
 
     const normalizedAgentPath = normalizeWorkbenchAgentPath(agentPath);
     persistHarnessAgent(state.currentThread.harness, normalizedAgentPath);
-    updateCurrentThreadFields({ agentPath: normalizedAgentPath });
+    updateStablePreferenceSource(state.currentThread, (record) => {
+      record.agentPath = normalizedAgentPath;
+    });
+    updateThreadSourceFields(state.currentThread, { agentPath: normalizedAgentPath });
   }
 
   function setCurrentThreadReasoningEffort(threadId: string, effort: string | null) {
@@ -4257,7 +4552,10 @@ function WorkbenchThreadClient(
     }
 
     persistHarnessModelEffort(state.currentThread.harness, state.currentThread.model, effort);
-    updateCurrentThreadFields({ reasoningEffort: effort });
+    updateStablePreferenceSource(state.currentThread, (record) => {
+      record.reasoningEffort = effort;
+    });
+    updateThreadSourceFields(state.currentThread, { reasoningEffort: effort });
   }
 
   async function compactThread(thread: ThreadPayload) {
@@ -4296,10 +4594,10 @@ function WorkbenchThreadClient(
 
     const nextServiceTier = serviceTier === "fast" ? "fast" : null;
     persistHarnessServiceTier(state.currentThread.harness, nextServiceTier);
-    updateCurrentThread((thread) => ({
-      ...thread,
-      serviceTier: nextServiceTier,
-    }), { preserveStableServiceTier: false });
+    updateStablePreferenceSource(state.currentThread, (record) => {
+      record.serviceTier = nextServiceTier;
+    });
+    updateThreadSourceFields(state.currentThread, { serviceTier: nextServiceTier });
   }
 
   function setDraftThreadHarness(harness: WorkbenchHarness) {

@@ -33,7 +33,9 @@ export interface ThreadDocumentStore {
   getSelectedDocument: () => ThreadPayload | null;
   getSelectedThreadKey: () => string;
   getSnapshot: () => ThreadDocumentStoreSnapshot;
+  materializeFinalVisibleDocument: (key: string, thread: ThreadPayload, options?: { select?: boolean }) => ThreadDocumentStoreUpsertResult;
   selectDocument: (thread: ThreadPayload | null) => boolean;
+  selectDocumentKey: (key: string) => boolean;
   subscribe: (listener: ThreadDocumentStoreListener) => () => void;
   upsertDocument: (thread: ThreadPayload, options?: { select?: boolean }) => ThreadDocumentStoreUpsertResult;
 }
@@ -48,17 +50,30 @@ function ThreadDocumentStore({
   const documentsByKey = new Map<string, ThreadPayload>();
   const keysByThreadId = new Map<string, string>();
   const listeners = new Set<ThreadDocumentStoreListener>();
+  let snapshot: ThreadDocumentStoreSnapshot = {
+    documentsByKey: {},
+    keysByThreadId: {},
+    selectedThreadKey: "",
+  };
   let selectedThreadKey = "";
+  let snapshotDirty = false;
 
   function getSnapshot(): ThreadDocumentStoreSnapshot {
-    return {
+    if (!snapshotDirty) {
+      return snapshot;
+    }
+
+    snapshot = {
       documentsByKey: Object.fromEntries(documentsByKey.entries()),
       keysByThreadId: Object.fromEntries(keysByThreadId.entries()),
       selectedThreadKey,
     };
+    snapshotDirty = false;
+    return snapshot;
   }
 
   function emit() {
+    snapshotDirty = true;
     const snapshot = getSnapshot();
     for (const listener of listeners) {
       listener(snapshot);
@@ -78,17 +93,33 @@ function ThreadDocumentStore({
     return selectedThreadKey ? getDocumentByKey(selectedThreadKey) : null;
   }
 
+  function selectDocumentKey(key: string) {
+    if (selectedThreadKey === key) {
+      return false;
+    }
+
+    selectedThreadKey = key;
+    emit();
+    return true;
+  }
+
   function selectDocument(thread: ThreadPayload | null) {
     const nextSelectedThreadKey = thread ? createThreadDocumentKeyForThread(thread) : "";
+    let didDocumentChange = false;
     if (thread) {
       const existing = documentsByKey.get(nextSelectedThreadKey) ?? null;
       if (!areDocumentsEquivalent(existing, thread)) {
         documentsByKey.set(nextSelectedThreadKey, thread);
         keysByThreadId.set(thread.id, nextSelectedThreadKey);
+        didDocumentChange = true;
       }
     }
 
     if (selectedThreadKey === nextSelectedThreadKey) {
+      if (didDocumentChange) {
+        emit();
+        return true;
+      }
       return false;
     }
 
@@ -117,7 +148,32 @@ function ThreadDocumentStore({
       return selectedThreadKey;
     },
     getSnapshot,
+    materializeFinalVisibleDocument(key, thread, options = {}) {
+      const existing = documentsByKey.get(key) ?? null;
+      const didChange = !areDocumentsEquivalent(existing, thread);
+      if (didChange) {
+        documentsByKey.set(key, thread);
+        keysByThreadId.set(thread.id, key);
+      }
+
+      const nextSelectedThreadKey = options.select ? key : selectedThreadKey;
+      const didSelectionChange = selectedThreadKey !== nextSelectedThreadKey;
+      if (didSelectionChange) {
+        selectedThreadKey = nextSelectedThreadKey;
+      }
+
+      if (didChange || didSelectionChange) {
+        emit();
+      }
+
+      return {
+        didChange,
+        didSelectionChange,
+        document: documentsByKey.get(key) ?? thread,
+      };
+    },
     selectDocument,
+    selectDocumentKey,
     subscribe(listener) {
       listeners.add(listener);
       return () => {
