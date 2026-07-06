@@ -5,6 +5,7 @@ import type { Turn } from "./codex/generated/app-server/v2/Turn";
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
 import type { WorkbenchRoute } from "./workbench/navigation/workbench-route";
 import type { ProjectTreeFileCandidate } from "./workbench/project/ProjectTreeFileIndex";
+import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread-item-timeline";
 
 export type WorkbenchHarness = "codex" | "copilot" | "opencode";
 export type OrchestratorReloadScope = "codex-bridge" | "next-dev" | "opencode-bridge" | "orchestrator-logic";
@@ -409,6 +410,7 @@ export interface WorkbenchThreadTurnHistoryEntry {
   durationMs: number | null;
   itemCount: number;
   itemIds?: string[];
+  itemTimeline?: WorkbenchThreadItemTimelineEntry[];
   loadState: WorkbenchThreadTurnLoadState;
   startedAt: number | null;
   status: Turn["status"] | null;

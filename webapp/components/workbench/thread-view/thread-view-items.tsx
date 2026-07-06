@@ -14,6 +14,7 @@ import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import { getCurrentTurn } from "../../../lib/codex/thread-state";
 import type { ThreadPayload, WorkbenchBrowseScreenshotEntry, WorkbenchSkillSummary, WorkbenchThreadTurnHistoryEntry } from "../../../lib/types";
+import type { WorkbenchThreadItemTimelineEntry } from "../../../lib/workbench/thread/thread-item-timeline";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
 import {
@@ -61,6 +62,7 @@ import ThreadWebSearchItem, {
   isThreadWebSearchPlaceholder,
   ThreadWebSearchSequence,
 } from "./ThreadWebSearchItem";
+import { createThreadTurnCompactionRenderPlan } from "./thread-turn-compaction-sections";
 
 const THREAD_DETAIL_INLINE_CODE_CLASS = "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-[0.34em] py-[0.08em] font-mono text-[0.88em] leading-[1.6] text-text";
 
@@ -215,14 +217,18 @@ function isGenericSnapshotNarrativeArtifact(item: ThreadItem) {
     && (item.type === "agentMessage" || item.type === "plan" || item.type === "reasoning");
 }
 
-function getWorkedSummary (turn: Turn) {
-  return turn.durationMs === null
+function getWorkedSummaryForDuration(durationMs: number | null) {
+  return durationMs === null
     ? "Worked"
     : (
       <span>
-        Worked for <ThreadDurationText durationMs={turn.durationMs} />
+        Worked for <ThreadDurationText durationMs={durationMs} />
       </span>
     );
+}
+
+function getWorkedSummary (turn: Turn) {
+  return getWorkedSummaryForDuration(turn.durationMs);
 }
 
 function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThreadItemIds = {}): ThreadRenderableBlock[] {
@@ -1688,6 +1694,7 @@ function ThreadTurnDetailsComponent ({
   hiddenReasoningItemId = null,
   hiddenWebSearchItemIds = [],
   inlineMentionSources = null,
+  itemTimeline = [],
   knownSkills = [],
   threadCwdPath,
   threadId,
@@ -1709,6 +1716,7 @@ function ThreadTurnDetailsComponent ({
   hiddenReasoningItemId?: string | null;
   hiddenWebSearchItemIds?: readonly string[];
   inlineMentionSources?: InlineMentionHighlightSources | null;
+  itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
   knownSkills?: WorkbenchSkillSummary[];
   threadCwdPath?: string;
   threadId: string;
@@ -1729,30 +1737,37 @@ function ThreadTurnDetailsComponent ({
     ? new Set(hiddenWebSearchItemIds)
     : null;
   const isWorkbenchControlTurn = turn.items.some((item) => item.type === "userMessage" && isWorkbenchControlUserMessage(item));
-  const blocks = buildRenderableBlocks(turn.items, {
+  const hiddenItemIds = {
     collabAgentToolCallIds: hiddenCollabAgentToolCallIds,
     controlAgentMessages: hideWorkbenchControlAgentMessages && isWorkbenchControlTurn,
     controlUserMessages: hideWorkbenchControlUserMessages,
     dynamicToolCallIds: hiddenDynamicToolCallIds,
     reasoningItemId: hiddenReasoningItemId,
     webSearchItemIds: hiddenWebSearchIds,
-  });
+  } satisfies HiddenThreadItemIds;
   const finalAgentMessageId = getFinalAgentMessageId(turn);
   const isCompleted = turn.status === "completed";
-  const primaryUserBlock = isCompleted
-    ? blocks.find((block) => isUserMessageBlock(block)) ?? null
+  const primaryUserItem = turn.items.find((item) => item.type === "userMessage") ?? null;
+  const finalAgentItem = finalAgentMessageId
+    ? turn.items.find((item) => item.id === finalAgentMessageId) ?? null
     : null;
-  const finalAgentBlocks = isCompleted
-    ? hideFinalAgentMessage ? [] : blocks.filter((block) => isFinalAgentMessageBlock(block, finalAgentMessageId))
-    : [];
-  const workedBlocks = isCompleted
-    ? blocks.filter((block) => block !== primaryUserBlock && !isFinalAgentMessageBlock(block, finalAgentMessageId))
-    : blocks;
-  if (isCompleted && hideFinalAgentMessage && hideWorkbenchControlUserMessages && !primaryUserBlock && !workedBlocks.length && !finalAgentBlocks.length) {
-    return null;
-  }
+  const pinnedCompactionItemIds = new Set([
+    primaryUserItem?.id,
+    hideFinalAgentMessage ? null : finalAgentItem?.id,
+  ].filter((itemId): itemId is string => Boolean(itemId)));
+  const compactionRenderPlan = createThreadTurnCompactionRenderPlan({
+    itemTimeline,
+    items: turn.items,
+    pinnedItemIds: pinnedCompactionItemIds,
+  });
+  const turnBrowseScreenshotEntries = browseScreenshotEntries.filter((entry) => entry.turnId === turn.id);
 
-  const renderBlock = (block: ThreadRenderableBlock, index: number) => (
+  const renderBlock = (
+    block: ThreadRenderableBlock,
+    index: number,
+    blockList: ThreadRenderableBlock[],
+    primaryUserBlock: ThreadRenderableBlock | null,
+  ) => (
     <ThreadRenderableBlockView
       key={block.kind === "commandSequence"
         ? `commands:${block.items[0]?.id ?? index}`
@@ -1764,10 +1779,10 @@ function ThreadTurnDetailsComponent ({
               ? `webSearches:${block.items[0]?.id ?? index}`
               : `item:${block.item.id}`}
       block={block}
-      browseScreenshotEntries={browseScreenshotEntries.filter((entry) => entry.turnId === turn.id)}
+      browseScreenshotEntries={turnBrowseScreenshotEntries}
       finalAgentMessageId={finalAgentMessageId}
       inlineMentionSources={inlineMentionSources}
-      isMostRecentBlock={block === blocks[blocks.length - 1]}
+      isMostRecentBlock={block === blockList[blockList.length - 1]}
       knownSkills={knownSkills}
       primaryUserBlock={primaryUserBlock}
       threadCwdPath={threadCwdPath}
@@ -1783,40 +1798,163 @@ function ThreadTurnDetailsComponent ({
     />
   );
 
+  const buildBlocksForItems = (items: ThreadItem[]) => buildRenderableBlocks(items, hiddenItemIds);
+  const renderBlocks = (
+    blocks: ThreadRenderableBlock[],
+    primaryUserBlock: ThreadRenderableBlock | null,
+  ) => blocks.map((block, index) => renderBlock(block, index, blocks, primaryUserBlock));
+  const renderItems = (
+    items: ThreadItem[],
+    primaryUserBlock: ThreadRenderableBlock | null,
+  ) => renderBlocks(buildBlocksForItems(items), primaryUserBlock);
+
+  if (compactionRenderPlan) {
+    const primaryUserBlocks = primaryUserItem ? buildBlocksForItems([primaryUserItem]) : [];
+    const primaryUserBlock = primaryUserBlocks.find((block) => isUserMessageBlock(block)) ?? null;
+    const finalAgentBlocks = isCompleted && finalAgentItem && !hideFinalAgentMessage
+      ? buildBlocksForItems([finalAgentItem]).filter((block) => isFinalAgentMessageBlock(block, finalAgentMessageId))
+      : [];
+    const hasWorkedContent = Boolean(compactionRenderPlan.collapsedEarlierSection || compactionRenderPlan.visibleItems.length);
+    if (isCompleted && hideFinalAgentMessage && hideWorkbenchControlUserMessages && !primaryUserBlock && !hasWorkedContent && !finalAgentBlocks.length) {
+      return null;
+    }
+
+    const renderCollapsedEarlierSection = () => {
+      const collapsedSection = compactionRenderPlan.collapsedEarlierSection;
+      if (!collapsedSection) {
+        return null;
+      }
+
+      return (
+        <ThreadDisclosure
+          key={collapsedSection.id}
+          className="py-2"
+          contentClassName="mt-2 space-y-2 pl-6"
+          renderContent={() => (
+            <div className="space-y-2">
+              {renderItems(collapsedSection.items, primaryUserBlock)}
+            </div>
+          )}
+          summary={getWorkedSummaryForDuration(collapsedSection.durationMs)}
+          summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+        />
+      );
+    };
+
+    const renderCompactionWorkContent = () => {
+      const visibleWorkBlocks = buildBlocksForItems(compactionRenderPlan.visibleItems);
+      return (
+        <div className="space-y-2">
+          {renderCollapsedEarlierSection()}
+          {visibleWorkBlocks.length ? renderBlocks(visibleWorkBlocks, primaryUserBlock) : null}
+          {!compactionRenderPlan.collapsedEarlierSection && !visibleWorkBlocks.length ? (
+            <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No intermediate work captured.</p>
+          ) : null}
+        </div>
+      );
+    };
+
+    return (
+      <section className={hideTopBorder ? "py-3" : "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-3"}>
+        {isCompleted && flattenCompletedWork ? (
+          <div className="space-y-2">
+            {primaryUserBlock ? renderBlock(primaryUserBlock, 0, primaryUserBlocks, primaryUserBlock) : null}
+            {renderCompactionWorkContent()}
+            {renderBlocks(finalAgentBlocks, primaryUserBlock)}
+          </div>
+        ) : isCompleted ? (
+          <div className="space-y-2">
+            {primaryUserBlock ? renderBlock(primaryUserBlock, 0, primaryUserBlocks, primaryUserBlock) : null}
+            <ThreadDisclosure
+              className="py-2"
+              contentClassName="mt-2 space-y-2 pl-6"
+              renderContent={renderCompactionWorkContent}
+              summary={getWorkedSummary(turn)}
+              summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+            />
+            {renderBlocks(finalAgentBlocks, primaryUserBlock)}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {primaryUserBlock ? renderBlock(primaryUserBlock, 0, primaryUserBlocks, primaryUserBlock) : null}
+            {hasWorkedContent ? renderCompactionWorkContent() : null}
+          </div>
+        )}
+      </section>
+    );
+  }
+
+  if (isCompleted && !flattenCompletedWork) {
+    const primaryUserBlocks = primaryUserItem ? buildBlocksForItems([primaryUserItem]) : [];
+    const primaryUserBlock = primaryUserBlocks.find((block) => isUserMessageBlock(block)) ?? null;
+    const finalAgentBlocks = finalAgentItem && !hideFinalAgentMessage
+      ? buildBlocksForItems([finalAgentItem]).filter((block) => isFinalAgentMessageBlock(block, finalAgentMessageId))
+      : [];
+    const completedPinnedItemIds = new Set([
+      primaryUserItem?.id,
+      finalAgentItem?.id,
+    ].filter((itemId): itemId is string => Boolean(itemId)));
+    const workedItems = turn.items.filter((item) => !completedPinnedItemIds.has(item.id));
+    if (hideFinalAgentMessage && hideWorkbenchControlUserMessages && !primaryUserBlock && !workedItems.length && !finalAgentBlocks.length) {
+      return null;
+    }
+
+    const renderCompletedWorkedContent = () => {
+      const workedBlocks = buildBlocksForItems(workedItems);
+      return (
+        <div className="space-y-2">
+          {workedBlocks.length ? renderBlocks(workedBlocks, primaryUserBlock) : (
+            <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No intermediate work captured.</p>
+          )}
+        </div>
+      );
+    };
+
+    return (
+      <section className={hideTopBorder ? "py-3" : "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-3"}>
+        <div className="space-y-2">
+          {primaryUserBlock ? renderBlock(primaryUserBlock, 0, primaryUserBlocks, primaryUserBlock) : null}
+          <ThreadDisclosure
+            className="py-2"
+            contentClassName="mt-2 space-y-2 pl-6"
+            renderContent={renderCompletedWorkedContent}
+            summary={getWorkedSummary(turn)}
+            summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+          />
+          {renderBlocks(finalAgentBlocks, primaryUserBlock)}
+        </div>
+      </section>
+    );
+  }
+
+  const blocks = buildRenderableBlocks(turn.items, hiddenItemIds);
+  const primaryUserBlock = isCompleted
+    ? blocks.find((block) => isUserMessageBlock(block)) ?? null
+    : null;
+  const finalAgentBlocks = isCompleted
+    ? hideFinalAgentMessage ? [] : blocks.filter((block) => isFinalAgentMessageBlock(block, finalAgentMessageId))
+    : [];
+  const workedBlocks = isCompleted
+    ? blocks.filter((block) => block !== primaryUserBlock && !isFinalAgentMessageBlock(block, finalAgentMessageId))
+    : blocks;
+  if (isCompleted && hideFinalAgentMessage && hideWorkbenchControlUserMessages && !primaryUserBlock && !workedBlocks.length && !finalAgentBlocks.length) {
+    return null;
+  }
+
   return (
     <section className={hideTopBorder ? "py-3" : "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-3"}>
       {isCompleted && flattenCompletedWork ? (
         <div className="space-y-2">
-          {primaryUserBlock ? renderBlock(primaryUserBlock, 0) : null}
-          {workedBlocks.map(renderBlock)}
-          {finalAgentBlocks.map(renderBlock)}
-        </div>
-      ) : isCompleted ? (
-        <div className="space-y-2">
-          {primaryUserBlock ? renderBlock(primaryUserBlock, 0) : null}
-          <ThreadDisclosure
-            className="py-2"
-            contentClassName="mt-2 space-y-2 pl-6"
-            summary={getWorkedSummary(turn)}
-            summaryClassName="text-[0.92em] leading-[1.6] text-muted"
-          >
-            <div className="space-y-2">
-              {workedBlocks.length ? workedBlocks.map(renderBlock) : (
-                <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No intermediate work captured.</p>
-              )}
-            </div>
-          </ThreadDisclosure>
-          {finalAgentBlocks.map(renderBlock)}
-          {/* {!primaryUserBlock && !finalAgentBlocks.length && !blocks.length ? (
-            <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No captured items.</p>
-          ) : null} */}
+          {primaryUserBlock ? renderBlock(primaryUserBlock, 0, blocks, primaryUserBlock) : null}
+          {renderBlocks(workedBlocks, primaryUserBlock)}
+          {renderBlocks(finalAgentBlocks, primaryUserBlock)}
         </div>
       ) : (
         <div className="space-y-2">
           {/* <p className="m-0 text-[0.67em] uppercase tracking-[0.18em] text-muted">
             {humanizeThreadLabel(turn.status)}
           </p> */}
-          {workedBlocks.length ? workedBlocks.map(renderBlock) : (
+          {workedBlocks.length ? renderBlocks(workedBlocks, primaryUserBlock) : (
             <></> // <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No captured items.</p>
           )}
         </div>
@@ -1841,6 +1979,7 @@ function areThreadTurnDetailsPropsEqual (
     && left.hiddenWebSearchItemIds === right.hiddenWebSearchItemIds
     && left.browseScreenshotEntries === right.browseScreenshotEntries
     && left.inlineMentionSources === right.inlineMentionSources
+    && left.itemTimeline === right.itemTimeline
     && left.knownSkills === right.knownSkills
     && left.threadCwdPath === right.threadCwdPath
     && left.threadId === right.threadId
@@ -1918,6 +2057,7 @@ export function ThreadThreadContent ({
     durationMs: turn.durationMs,
     itemCount: turn.items.length,
     itemIds: turn.items.map((item) => item.id),
+    itemTimeline: undefined,
     loadState: "loaded" as const,
     startedAt: turn.startedAt,
     status: turn.status,
@@ -1942,6 +2082,7 @@ export function ThreadThreadContent ({
             hiddenReasoningItemId={hiddenReasoningItemId}
             hiddenWebSearchItemIds={hiddenWebSearchItemIds}
             inlineMentionSources={inlineMentionSources}
+            itemTimeline={entry.itemTimeline}
             knownSkills={knownSkills}
             threadCwdPath={threadCwdPath ?? thread.cwd}
             threadId={thread.id}

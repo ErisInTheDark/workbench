@@ -180,6 +180,7 @@ function getVisibleHistoryEntries (thread: ThreadPayload) {
       durationMs: turn.durationMs,
       itemCount: turn.items.length,
       itemIds: turn.items.map((item) => item.id),
+      itemTimeline: undefined,
       loadState: "loaded" as const,
       startedAt: turn.startedAt,
       status: turn.status,
@@ -1592,6 +1593,7 @@ export default memo(function ThreadView ({
                       workspaceRoots={workspaceFileLinkRoots}
                       hiddenReasoningItemId={turn.id === currentTurn?.id && liveActivity?.kind === "reasoning" ? liveActivity.hiddenItemId : null}
                       hiddenWebSearchItemIds={turn.id === currentTurn?.id && liveActivity?.kind === "webSearch" ? liveActivity.hiddenItemIds : undefined}
+                      itemTimeline={entry.itemTimeline}
                     />
                   ) : isPreviousTurnLoading ? (
                     <ThreadTurnLoadingSkeleton

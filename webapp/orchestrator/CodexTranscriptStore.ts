@@ -13,6 +13,7 @@ import type { JsonValue } from "../lib/codex/generated/app-server/serde_json/Jso
 import { appendCommandOutputDelta, compactCommandOutputPayload } from "../lib/codex/thread-command-output";
 import { areUserInputsEquivalentForUserMessageDedupe, normalizeThreadItems } from "../lib/codex/thread-item-normalization";
 import type { WorkbenchBrowseScreenshotEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadHydrationRequest, WorkbenchThreadTurnHistoryEntry } from "../lib/types";
+import { normalizeWorkbenchThreadItemTimeline } from "../lib/workbench/thread/thread-item-timeline";
 import AtomicJsonStore from "./AtomicJsonStore";
 import { hydrateThreadWithStoredTurns } from "./codex-transcript-hydration";
 import { shouldPersistRawNotificationToJournal } from "./codex-transcript-event-routing";
@@ -366,12 +367,15 @@ function createTurnHistoryEntry(
   entry: CodexTranscriptThreadFile["turnIndex"][number],
   loadedTurnIds: Set<string>,
   missingTurnIds: Set<string>,
+  itemTimeline?: CodexTranscriptTurnFile["itemTimeline"],
 ): WorkbenchThreadTurnHistoryEntry {
+  const normalizedItemTimeline = normalizeWorkbenchThreadItemTimeline(itemTimeline);
   return {
     completedAt: entry.completedAt,
     durationMs: null,
     itemCount: entry.itemCount,
     ...(entry.itemIds ? { itemIds: entry.itemIds } : {}),
+    ...(normalizedItemTimeline.length ? { itemTimeline: normalizedItemTimeline } : {}),
     loadState: missingTurnIds.has(entry.turnId)
       ? "missing"
       : loadedTurnIds.has(entry.turnId)
@@ -1285,15 +1289,16 @@ export default class CodexTranscriptStore {
     const turnIndex = mergeTurnIndexes(storedThreadFile?.turnIndex ?? [], thread.turns, thread);
 
     if (hydration?.mode === "legacyFull") {
-      const storedTurns = orderTurnFilesByThreadIndex(storedThreadFile ?? createThreadFile(thread.id), await this.readTurnFiles(thread.id, {
+      const storedTurnFiles = orderTurnFilesByThreadIndex(storedThreadFile ?? createThreadFile(thread.id), await this.readTurnFiles(thread.id, {
         repair,
         turnIds: turnIndex.map((entry) => entry.turnId),
       }))
-        .filter((file) => file.turn !== null)
-        .map((file) => ({
-          itemTimeline: file.itemTimeline,
-          turn: file.turn!,
-        }));
+        .filter((file) => file.turn !== null);
+      const itemTimelineByTurnId = new Map(storedTurnFiles.map((file) => [file.turnId, file.itemTimeline]));
+      const storedTurns = storedTurnFiles.map((file) => ({
+        itemTimeline: file.itemTimeline,
+        turn: file.turn!,
+      }));
       const legacyThread = hydrateThreadWithStoredTurns(thread, storedTurns);
       const compactedLegacyThread = compactCommandOutputPayload(legacyThread);
       return {
@@ -1302,6 +1307,7 @@ export default class CodexTranscriptStore {
           entry,
           new Set(compactedLegacyThread.turns.map((turn) => turn.id)),
           new Set(),
+          itemTimelineByTurnId.get(entry.turnId),
         )),
       };
     }
@@ -1317,6 +1323,7 @@ export default class CodexTranscriptStore {
     const selectedStoredTurnFiles = requestedTurnId
       ? [await this.readTurnFile(thread.id, requestedTurnId, { repair })].filter((file): file is CodexTranscriptTurnFile => file !== null)
       : [];
+    const itemTimelineByTurnId = new Map(selectedStoredTurnFiles.map((file) => [file.turnId, file.itemTimeline]));
     const storedTurns = selectedStoredTurnFiles
       .filter((file) => file.turn !== null)
       .map((file) => ({
@@ -1332,7 +1339,12 @@ export default class CodexTranscriptStore {
 
     return {
       ...hydratedThread,
-      workbenchTurnHistory: turnIndex.map((entry) => createTurnHistoryEntry(entry, loadedTurnIds, missingTurnIds)),
+      workbenchTurnHistory: turnIndex.map((entry) => createTurnHistoryEntry(
+        entry,
+        loadedTurnIds,
+        missingTurnIds,
+        itemTimelineByTurnId.get(entry.turnId),
+      )),
     };
   }
 

@@ -13,6 +13,7 @@ import type { SessionSource } from "./generated/app-server/v2/SessionSource";
 import type { Thread } from "./generated/app-server/v2/Thread";
 import type { ThreadStatus } from "./generated/app-server/v2/ThreadStatus";
 import type { ThreadTokenUsage } from "./generated/app-server/v2/ThreadTokenUsage";
+import { normalizeWorkbenchThreadItemTimeline } from "../workbench/thread/thread-item-timeline";
 
 function normalizeAbsolutePathForComparison(filePath: string) {
   const normalized = String(filePath ?? "")
@@ -183,17 +184,48 @@ function createTurnHistoryFromLoadedTurns(turns: Thread["turns"]): WorkbenchThre
 function readWorkbenchTurnHistory(thread: Thread) {
   const value = (thread as Thread & { workbenchTurnHistory?: unknown }).workbenchTurnHistory;
   return Array.isArray(value)
-    ? value.filter(isWorkbenchThreadTurnHistoryEntry)
+    ? value
+      .map(normalizeWorkbenchThreadTurnHistoryEntry)
+      .filter((entry): entry is WorkbenchThreadTurnHistoryEntry => Boolean(entry))
     : null;
 }
 
-function isWorkbenchThreadTurnHistoryEntry(value: unknown): value is WorkbenchThreadTurnHistoryEntry {
+function asNullableNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : undefined;
+}
+
+function normalizeWorkbenchThreadTurnHistoryEntry(value: unknown): WorkbenchThreadTurnHistoryEntry | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
+    return null;
   }
 
   const record = value as Record<string, unknown>;
-  return typeof record.turnId === "string"
-    && typeof record.itemCount === "number"
-    && (record.loadState === "loaded" || record.loadState === "missing" || record.loadState === "unloaded");
+  if (
+    typeof record.turnId !== "string"
+    || typeof record.itemCount !== "number"
+    || !Number.isFinite(record.itemCount)
+    || (record.loadState !== "loaded" && record.loadState !== "missing" && record.loadState !== "unloaded")
+  ) {
+    return null;
+  }
+
+  const itemIds = normalizeStringArray(record.itemIds);
+  const itemTimeline = normalizeWorkbenchThreadItemTimeline(record.itemTimeline);
+  return {
+    completedAt: asNullableNumber(record.completedAt),
+    durationMs: asNullableNumber(record.durationMs),
+    itemCount: record.itemCount,
+    ...(itemIds ? { itemIds } : {}),
+    ...(itemTimeline.length ? { itemTimeline } : {}),
+    loadState: record.loadState,
+    startedAt: asNullableNumber(record.startedAt),
+    status: typeof record.status === "string" ? record.status as WorkbenchThreadTurnHistoryEntry["status"] : null,
+    turnId: record.turnId,
+  };
 }

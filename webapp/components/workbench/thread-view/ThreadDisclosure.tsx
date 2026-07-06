@@ -16,10 +16,11 @@ function joinClasses (...values: Array<string | undefined>) {
 
 type ThreadDisclosureProps = Omit<ComponentPropsWithoutRef<"details">, "children"> & {
   chevronClassName?: string;
-  children: ReactNode;
+  children?: ReactNode;
   contentClassName?: string;
   defaultOpen?: boolean;
   initialOpen?: boolean;
+  renderContent?: () => ReactNode;
   summary: ReactNode;
   summaryClassName?: string;
 };
@@ -43,6 +44,7 @@ export default function ThreadDisclosure ({
   initialOpen = false,
   onToggle,
   open,
+  renderContent,
   summary,
   summaryClassName,
   ...props
@@ -136,7 +138,7 @@ export default function ThreadDisclosure ({
         <div className="min-w-0 flex-1">{summary}</div>
       </summary>
       {hasMountedContent ? (
-        <div className={joinClasses("min-w-0 max-w-full", contentClassName)}>{children}</div>
+        <div className={joinClasses("min-w-0 max-w-full", contentClassName)}>{renderContent ? renderContent() : children}</div>
       ) : null}
     </details>
   );
