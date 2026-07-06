@@ -3,6 +3,7 @@
  * - CodexAppServerNotification: typed app-server notification union. Keywords: codex, app-server, notification, event.
  * - CodexAppServerNotificationHandling: normalized handling metadata for app-server notifications. Keywords: codex, event, refresh, scope.
  * - WorkbenchCollaborationStateUpdatedNotification: Workbench-owned Collaboration state update notification. Keywords: collaboration, state, notification.
+ * - WorkbenchBrowseScreenshotRecordedNotification: Workbench-owned Browse screenshot sidecar notification. Keywords: browse, screenshot, transcript.
  * - classifyCodexAppServerNotification: exhaustively map documented notification method ids to workbench handling hints. Keywords: switch, no default, exhaustive.
  * - isCodexAppServerNotification: identify JSON-RPC app-server notifications from incoming WebSocket messages. Keywords: websocket, method, params.
  */
@@ -36,8 +37,17 @@ export interface WorkbenchCollaborationStateUpdatedNotification {
   };
 }
 
+export interface WorkbenchBrowseScreenshotRecordedNotification {
+  method: "browse/screenshot/recorded";
+  params: {
+    threadId: string;
+    turnId: string;
+  };
+}
+
 export type CodexAppServerNotification =
   | ServerNotification
+  | WorkbenchBrowseScreenshotRecordedNotification
   | WorkbenchCollaborationStateUpdatedNotification
   | WorkbenchQuestionnaireRequestedNotification
   | WorkbenchQuestionnaireResolvedNotification;
@@ -153,6 +163,7 @@ export function classifyCodexAppServerNotification(
 
     case "questionnaire/requested":
     case "questionnaire/resolved":
+    case "browse/screenshot/recorded":
     case "collaboration/state/updated":
       return createHandling(notification, "workbench");
 

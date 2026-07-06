@@ -13,7 +13,7 @@ import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/Thre
 import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import { getCurrentTurn } from "../../../lib/codex/thread-state";
-import type { ThreadPayload, WorkbenchSkillSummary, WorkbenchThreadTurnHistoryEntry } from "../../../lib/types";
+import type { ThreadPayload, WorkbenchBrowseScreenshotEntry, WorkbenchSkillSummary, WorkbenchThreadTurnHistoryEntry } from "../../../lib/types";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
 import {
@@ -28,20 +28,26 @@ import {
 import {
   getThreadCommandBlockDisplay,
   getThreadCommandDisplay,
+  isBrowseWebRequestMatcherClaim,
   isGitCheckpointDiffMatcherClaim,
+  parseBrowseSequenceCommandOutput,
   parseGitCheckpointDiffArtifactId,
   parseGitCheckpointDiffOutput,
+  type ThreadCommandDetailRow,
+  type ThreadCommandDetailTarget,
 } from "../../../lib/workbench/thread/thread-command-matchers";
 import {
+  formatThreadDuration,
   formatThreadTimestamp,
   humanizeThreadLabel,
   ThreadCommandSummary,
+  truncateThreadText,
 } from "./thread-view-primitives";
 import ThreadAgentName from "./ThreadAgentName";
 import ThreadCheckpointDiffItem from "./ThreadCheckpointDiffItem";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
 import ThreadContextCompactionItem from "./ThreadContextCompactionItem";
-import ThreadDisclosure from "./ThreadDisclosure";
+import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
 import ThreadFileChangeItem from "./ThreadFileChangeItem";
@@ -55,6 +61,8 @@ import ThreadWebSearchItem, {
   isThreadWebSearchPlaceholder,
   ThreadWebSearchSequence,
 } from "./ThreadWebSearchItem";
+
+const THREAD_DETAIL_INLINE_CODE_CLASS = "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-[0.34em] py-[0.08em] font-mono text-[0.88em] leading-[1.6] text-text";
 
 type CommandItem = Extract<ThreadItem, { type: "commandExecution" }>;
 type FileChangeItem = Extract<ThreadItem, { type: "fileChange" }>;
@@ -1014,7 +1022,280 @@ function ThreadReasoningSequence ({
   );
 }
 
+function formatThreadDetailUrlLabel(url: string) {
+  try {
+    const parsedUrl = new URL(url);
+    const path = `${parsedUrl.pathname}${parsedUrl.search}`.replace(/\/$/, "");
+    return truncateThreadText(`${parsedUrl.host}${path || ""}`, 96);
+  } catch {
+    return truncateThreadText(url, 96);
+  }
+}
+
+function ThreadCommandDetailTargetView({ target }: { target: ThreadCommandDetailTarget }) {
+  if (target.kind === "url") {
+    return (
+      <a
+        className="min-w-0 break-all text-accent underline-offset-3 hover:underline focus-visible:underline focus-visible:outline-none"
+        href={target.text}
+        rel="noreferrer"
+        target="_blank"
+        title={target.text}
+      >
+        {formatThreadDetailUrlLabel(target.text)}
+      </a>
+    );
+  }
+
+  if (target.kind === "code") {
+    return (
+      <code className={`${THREAD_DETAIL_INLINE_CODE_CLASS} inline-block max-w-full overflow-hidden text-ellipsis whitespace-nowrap align-bottom`} title={target.text}>
+        {target.text}
+      </code>
+    );
+  }
+
+  return <span className="min-w-0 break-words font-medium text-text">{target.text}</span>;
+}
+
+function ThreadCommandDetailMeta({ row }: { row: ThreadCommandDetailRow }) {
+  const hasDuration = typeof row.durationMs === "number";
+  const hasDetailText = Boolean(row.detailText?.trim());
+  if (!hasDuration && !hasDetailText) {
+    return null;
+  }
+
+  return (
+    <span className="inline-flex min-w-0 max-w-full items-baseline gap-x-1.5 text-[0.78em] text-muted">
+      {hasDuration ? <ThreadDurationText durationMs={row.durationMs ?? null} /> : null}
+      {hasDuration && hasDetailText ? <span aria-hidden="true">·</span> : null}
+      {hasDetailText ? (
+        <span className="inline-flex min-w-0 max-w-full items-baseline gap-x-1">
+          {row.detailLabel ? <span>{row.detailLabel}:</span> : null}
+          <span
+            className={`min-w-0 max-w-[36rem] truncate ${row.detailKind === "error" ? "text-danger" : "text-muted"}`}
+            title={row.detailText ?? undefined}
+          >
+            {row.detailText}
+          </span>
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function ThreadStructuredCommandDetailRow({
+  hideSharedContext,
+  projectFilePaths,
+  projectId,
+  row,
+}: {
+  hideSharedContext: boolean;
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+  row: ThreadCommandDetailRow;
+}) {
+  if (!row.label && !row.target) {
+    return (
+      <ThreadCommandSummary
+        display={{
+          claimedBy: "command-detail-row",
+          omitFromDisplay: false,
+          shell: null,
+          showShell: false,
+          summaryKind: "matched",
+          summaryParts: row.summaryParts,
+          summaryStats: {
+            deletedPaths: 0,
+            gitCheckpointCreates: 0,
+            gitCheckpointDiffs: 0,
+            gitCheckpointRestores: 0,
+            gitDiffChecks: 0,
+            gitStatusChecks: 0,
+            listedFiles: 0,
+            otherCommands: 0,
+            pathChecks: 0,
+            readFiles: 0,
+            searchedFiles: 0,
+            skillLoads: 0,
+            typescriptBuilds: 0,
+            typescriptValidations: 0,
+            webRequests: 0,
+          },
+          summaryText: "",
+        }}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+      />
+    );
+  }
+
+  return (
+    <span className="inline-flex min-w-0 max-w-full flex-wrap items-baseline gap-x-2 gap-y-1 align-bottom">
+      {row.label ? <span className="shrink-0 text-muted">{row.label}</span> : null}
+      {row.target ? <ThreadCommandDetailTargetView target={row.target} /> : null}
+      {row.contextText && !hideSharedContext ? (
+        <span className="min-w-0 text-muted">
+          in <span className="font-medium text-text">{row.contextText}</span>
+        </span>
+      ) : null}
+      <ThreadCommandDetailMeta row={row} />
+    </span>
+  );
+}
+
+function ThreadCommandDetailResultBlock({
+  row,
+}: {
+  row: ThreadCommandDetailRow;
+}) {
+  if (!shouldRenderFramedDetailTarget(row)) {
+    return null;
+  }
+
+  const output = row.detailKind === "result" && row.detailText?.trim()
+    ? row.detailText
+    : undefined;
+
+  return (
+    <div className="max-w-[46rem] pl-6 pt-1">
+      <ThreadCodeDisplay
+        header={<ThreadCommandHeader command={row.target.text} surface="framed" />}
+        output={output}
+        preview
+        previewHeight="10rem"
+        variant="plain"
+      />
+    </div>
+  );
+}
+
+function shouldRenderFramedDetailTarget(row: ThreadCommandDetailRow) {
+  return row.label === "Evaluate" && row.target?.kind === "code";
+}
+
+function ThreadCommandDetailImageBlock({
+  row,
+}: {
+  row: ThreadCommandDetailRow;
+}) {
+  if (!row.imageUrl) {
+    return null;
+  }
+
+  return (
+    <div className="max-w-[28rem] pl-6 pt-1">
+      <ThreadUserImage
+        alt={`${row.label ?? "Browse"} screenshot`}
+        className="max-w-[28rem]"
+        src={row.imageUrl}
+      />
+    </div>
+  );
+}
+
+function getDetailRowSummary(row: ThreadCommandDetailRow): ThreadCommandDetailRow {
+  if (!shouldRenderFramedDetailTarget(row)) {
+    return row;
+  }
+
+  return {
+    ...row,
+    detailKind: row.detailKind === "result" ? undefined : row.detailKind,
+    detailLabel: row.detailKind === "result" ? null : row.detailLabel,
+    detailText: row.detailKind === "result" ? null : row.detailText,
+    target: null,
+  };
+}
+
+function ThreadCommandDetailRows ({
+  rows,
+  projectFilePaths,
+  projectId,
+}: {
+  rows: ThreadCommandDetailRow[];
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+}) {
+  if (!rows.length) {
+    return null;
+  }
+  const contexts = Array.from(new Set(rows.map((row) => row.contextText?.trim()).filter(Boolean)));
+  const hideSharedContext = contexts.length === 1 && rows.length > 1;
+
+  return (
+    <div className="space-y-0.5">
+      {rows.map((row) => (
+        <div className="space-y-1" key={row.id}>
+          <ThreadDisclosureStaticRow
+            className="py-1"
+            summary={<ThreadStructuredCommandDetailRow hideSharedContext={hideSharedContext} projectFilePaths={projectFilePaths} projectId={projectId} row={getDetailRowSummary(row)} />}
+            summaryClassName="text-[0.9em] leading-[1.55]"
+          />
+          <ThreadCommandDetailResultBlock row={row} />
+          <ThreadCommandDetailImageBlock row={row} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function mergeCommandDetailRowsWithBrowseOutput(
+  rows: ThreadCommandDetailRow[] | undefined,
+  output: string | null,
+  browseScreenshotEntries: readonly WorkbenchBrowseScreenshotEntry[] = [],
+) {
+  if (!rows?.length) {
+    return [];
+  }
+
+  const outputRows = parseBrowseSequenceCommandOutput(output);
+  if (!outputRows.length && !browseScreenshotEntries.length) {
+    return rows;
+  }
+
+  return rows.map((row, index) => {
+    const durationMs = row.durationMs ?? outputRows[index]?.durationMs ?? null;
+    const shouldSuppressDuplicateWaitDuration = row.label === "Wait"
+      && row.target?.kind === "text"
+      && durationMs !== null
+      && formatThreadDuration(durationMs) === row.target.text;
+
+    return {
+      ...row,
+      detailKind: row.detailKind ?? outputRows[index]?.detailKind,
+      detailLabel: row.detailLabel ?? outputRows[index]?.detailLabel ?? null,
+      detailText: row.detailText ?? outputRows[index]?.detailText ?? null,
+      durationMs: shouldSuppressDuplicateWaitDuration ? null : durationMs,
+      imageUrl: row.imageUrl ?? browseScreenshotEntries.find((entry) => entry.actionIndex === index)?.assetUrl ?? null,
+    };
+  });
+}
+
+function isBrowseWebRequestCommandItem({
+  item,
+  knownSkills,
+  projectRootPath,
+  workspaceRoots,
+}: {
+  item: CommandItem;
+  knownSkills?: WorkbenchSkillSummary[];
+  projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+}) {
+  const display = getThreadCommandDisplay({
+    command: item.command,
+    commandActions: item.commandActions,
+    cwd: item.cwd,
+    knownSkills,
+    projectRootPath,
+    workspaceRoots,
+  });
+  return isBrowseWebRequestMatcherClaim(display.claimedBy);
+}
+
 function ThreadCommandExecutionDetails ({
+  browseScreenshotEntries = [],
   isMostRecent = false,
   item,
   knownSkills,
@@ -1024,6 +1305,7 @@ function ThreadCommandExecutionDetails ({
   threadId,
   workspaceRoots,
 }: {
+  browseScreenshotEntries?: readonly WorkbenchBrowseScreenshotEntry[];
   isMostRecent?: boolean;
   item: CommandItem;
   knownSkills?: WorkbenchSkillSummary[];
@@ -1049,6 +1331,13 @@ function ThreadCommandExecutionDetails ({
     : null;
   const shouldRenderCheckpointDiff = checkpointDiffChanges !== null
     && (!item.aggregatedOutput?.trim() || Boolean(checkpointDiffArtifactId) || checkpointDiffChanges.length > 0);
+  const commandDetailRows = isBrowseWebRequestMatcherClaim(commandDisplay.claimedBy)
+    ? mergeCommandDetailRowsWithBrowseOutput(
+      commandDisplay.detailRows,
+      item.aggregatedOutput,
+      browseScreenshotEntries.filter((entry) => entry.commandItemId === item.id),
+    )
+    : commandDisplay.detailRows ?? [];
   const metaParts = [];
 
   if (item.status !== "completed") {
@@ -1106,12 +1395,19 @@ function ThreadCommandExecutionDetails ({
             Shell: <span className="font-mono text-text">{commandDisplay.shell}</span>
           </p>
         ) : null*/}
-        {commandDisplay.cwdDisplay ? (
+        {commandDisplay.cwdDisplay && !commandDisplay.hideCommandCwd ? (
           <p className="m-0 text-[0.78em] leading-[1.6] text-muted">
             Working dir: <span className="break-all font-mono text-text">{commandDisplay.cwdDisplay}</span>
           </p>
         ) : null}
-        {shouldRenderCheckpointDiff ? (
+        {commandDetailRows.length ? (
+          <ThreadCommandDetailRows
+            rows={commandDetailRows}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+          />
+        ) : null}
+        {commandDisplay.hideCommandOutput ? null : shouldRenderCheckpointDiff ? (
           <ThreadCheckpointDiffItem
             cwd={item.cwd}
             output={item.aggregatedOutput ?? ""}
@@ -1142,6 +1438,7 @@ function ThreadCommandExecutionDetails ({
 }
 
 function ThreadCommandSequence ({
+  browseScreenshotEntries = [],
   isMostRecent,
   items,
   knownSkills,
@@ -1151,6 +1448,7 @@ function ThreadCommandSequence ({
   threadId,
   workspaceRoots,
 }: {
+  browseScreenshotEntries?: readonly WorkbenchBrowseScreenshotEntry[];
   isMostRecent: boolean;
   items: CommandItem[];
   knownSkills?: WorkbenchSkillSummary[];
@@ -1161,7 +1459,34 @@ function ThreadCommandSequence ({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   if (items.length === 1) {
-    return <ThreadCommandExecutionDetails isMostRecent={isMostRecent} item={items[0]} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
+    return <ThreadCommandExecutionDetails browseScreenshotEntries={browseScreenshotEntries} isMostRecent={isMostRecent} item={items[0]} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
+  }
+
+  const allBrowseRequests = items.every((item) => isBrowseWebRequestCommandItem({
+    item,
+    knownSkills,
+    projectRootPath,
+    workspaceRoots,
+  }));
+  if (allBrowseRequests) {
+    return (
+      <div className="space-y-1">
+        {items.map((item, index) => (
+          <ThreadCommandExecutionDetails
+            browseScreenshotEntries={browseScreenshotEntries}
+            isMostRecent={isMostRecent && index === items.length - 1}
+            item={item}
+            key={item.id}
+            knownSkills={knownSkills}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            threadId={threadId}
+            workspaceRoots={workspaceRoots}
+          />
+        ))}
+      </div>
+    );
   }
 
   const commandBlockDisplay = getThreadCommandBlockDisplay({
@@ -1186,6 +1511,7 @@ function ThreadCommandSequence ({
       <>
         {items.map((item, index) => (
           <ThreadCommandExecutionDetails
+            browseScreenshotEntries={browseScreenshotEntries}
             isMostRecent={isMostRecent && index === items.length - 1}
             item={item}
             key={item.id}
@@ -1219,6 +1545,7 @@ function ThreadFallbackItem ({ item }: { item: NonGroupedItem }) {
 
 function ThreadRenderableBlockView ({
   block,
+  browseScreenshotEntries,
   finalAgentMessageId,
   inlineMentionSources,
   isMostRecentBlock,
@@ -1236,6 +1563,7 @@ function ThreadRenderableBlockView ({
   workspaceRoots,
 }: {
   block: ThreadRenderableBlock;
+  browseScreenshotEntries?: readonly WorkbenchBrowseScreenshotEntry[];
   finalAgentMessageId: string | null;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecentBlock: boolean;
@@ -1253,7 +1581,7 @@ function ThreadRenderableBlockView ({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   if (block.kind === "commandSequence") {
-    return <ThreadCommandSequence isMostRecent={isMostRecentBlock} items={block.items} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
+    return <ThreadCommandSequence browseScreenshotEntries={browseScreenshotEntries} isMostRecent={isMostRecentBlock} items={block.items} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
   }
 
   if (block.kind === "fileChangeSequence") {
@@ -1349,6 +1677,7 @@ function ThreadRenderableBlockView ({
 }
 
 function ThreadTurnDetailsComponent ({
+  browseScreenshotEntries = [],
   flattenCompletedWork = false,
   hiddenCollabAgentToolCallItemIds = [],
   hiddenDynamicToolCallItemIds = [],
@@ -1369,6 +1698,7 @@ function ThreadTurnDetailsComponent ({
   turn,
   workspaceRoots,
 }: {
+  browseScreenshotEntries?: readonly WorkbenchBrowseScreenshotEntry[];
   flattenCompletedWork?: boolean;
   hiddenCollabAgentToolCallItemIds?: readonly string[];
   hiddenDynamicToolCallItemIds?: readonly string[];
@@ -1434,6 +1764,7 @@ function ThreadTurnDetailsComponent ({
               ? `webSearches:${block.items[0]?.id ?? index}`
               : `item:${block.item.id}`}
       block={block}
+      browseScreenshotEntries={browseScreenshotEntries.filter((entry) => entry.turnId === turn.id)}
       finalAgentMessageId={finalAgentMessageId}
       inlineMentionSources={inlineMentionSources}
       isMostRecentBlock={block === blocks[blocks.length - 1]}
@@ -1508,6 +1839,7 @@ function areThreadTurnDetailsPropsEqual (
     && left.hideWorkbenchControlUserMessages === right.hideWorkbenchControlUserMessages
     && left.hiddenReasoningItemId === right.hiddenReasoningItemId
     && left.hiddenWebSearchItemIds === right.hiddenWebSearchItemIds
+    && left.browseScreenshotEntries === right.browseScreenshotEntries
     && left.inlineMentionSources === right.inlineMentionSources
     && left.knownSkills === right.knownSkills
     && left.threadCwdPath === right.threadCwdPath
@@ -1521,6 +1853,7 @@ function areThreadTurnDetailsPropsEqual (
 export const ThreadTurnDetails = memo(ThreadTurnDetailsComponent, areThreadTurnDetailsPropsEqual);
 
 export function ThreadThreadContent ({
+  browseScreenshotEntries = [],
   emptyMessage = "No subagent activity was captured yet.",
   flattenCompletedWork = false,
   hiddenCollabAgentToolCallItemIds = [],
@@ -1541,6 +1874,7 @@ export function ThreadThreadContent ({
   relatedThreadsById = {},
   thread,
 }: {
+  browseScreenshotEntries?: readonly WorkbenchBrowseScreenshotEntry[];
   emptyMessage?: string;
   flattenCompletedWork?: boolean;
   hiddenCollabAgentToolCallItemIds?: readonly string[];
@@ -1597,6 +1931,7 @@ export function ThreadThreadContent ({
         return turn ? (
           <ThreadTurnDetails
             key={entry.turnId}
+            browseScreenshotEntries={browseScreenshotEntries}
             flattenCompletedWork={flattenCompletedWork}
             hiddenCollabAgentToolCallItemIds={hiddenCollabAgentToolCallItemIds}
             hiddenDynamicToolCallItemIds={hiddenDynamicToolCallItemIds}

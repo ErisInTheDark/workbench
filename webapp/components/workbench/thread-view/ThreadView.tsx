@@ -1574,6 +1574,7 @@ export default memo(function ThreadView ({
                   return turn ? (
                     <ThreadTurnDetails
                       key={entry.turnId}
+                      browseScreenshotEntries={activeThread.browseScreenshotEntries ?? []}
                       hiddenCollabAgentToolCallItemIds={turn.id === currentTurn?.id ? hiddenCollabAgentToolCallItemIds : EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS}
                       hiddenDynamicToolCallItemIds={turn.id === currentTurn?.id ? hiddenDynamicToolCallItemIds : EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS}
                       hideFinalAgentMessage={hideFinalAgentMessage}
@@ -1703,6 +1704,7 @@ export default memo(function ThreadView ({
                     >
                       <ThreadPreviewFrame height="22rem" scale={0.9}>
                         <ThreadThreadContent
+                          browseScreenshotEntries={liveSubagentThread.browseScreenshotEntries ?? []}
                           inlineMentionSources={inlineMentionSources}
                           knownSkills={workbenchSkills}
                           projectFilePaths={projectFilePaths}

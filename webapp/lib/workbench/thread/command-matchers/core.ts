@@ -15,6 +15,7 @@ import type {
     CommandMatcherDefinition,
     CommandMatcherResult,
     ParsedCommandDisplayContext,
+    ThreadCommandDetailRow,
     ThreadCommandDisplayPart,
 } from "./types";
 
@@ -65,6 +66,9 @@ export const CommandMatcher: CommandMatcherBuilder = Object.assign(
     },
     Result({
       hide = false,
+      detailRows,
+      hideCommandCwd = false,
+      hideCommandOutput = false,
       omitFromDisplay = false,
       remainingCommand,
       stop = false,
@@ -72,7 +76,10 @@ export const CommandMatcher: CommandMatcherBuilder = Object.assign(
       summaryStats,
     }: CommandMatcherResult) {
       return {
+        detailRows,
         hide,
+        hideCommandCwd,
+        hideCommandOutput,
         omitFromDisplay,
         remainingCommand,
         stop,
@@ -112,8 +119,11 @@ export function runThreadCommandMatchers(
   const claimedMatcherIds: string[] = [];
   const matchers = [...commonMatchers, ...shellMatchers];
   const summaryParts: ThreadCommandDisplayPart[] = [];
+  const detailRows: ThreadCommandDetailRow[] = [];
   const summaryStats = createEmptyCommandSummaryStats();
   let hadUnmatchedRemainder = false;
+  let hideCommandCwd = false;
+  let hideCommandOutput = false;
   let omitFromDisplay = false;
   let remainingCommand: string | null = context.unwrappedCommand;
 
@@ -155,6 +165,8 @@ export function runThreadCommandMatchers(
     }
 
     const shouldRenderSummaryParts = !matchedResult.hide && matchedResult.summaryParts.length > 0;
+    hideCommandCwd ||= matchedResult.hideCommandCwd === true;
+    hideCommandOutput ||= matchedResult.hideCommandOutput === true;
     omitFromDisplay ||= matchedResult.omitFromDisplay === true;
 
     if (shouldRenderSummaryParts && summaryParts.length) {
@@ -163,6 +175,9 @@ export function runThreadCommandMatchers(
 
     if (shouldRenderSummaryParts) {
       summaryParts.push(...matchedResult.summaryParts);
+    }
+    if (matchedResult.detailRows?.length) {
+      detailRows.push(...matchedResult.detailRows);
     }
     mergeCommandSummaryStats(summaryStats, matchedResult.summaryStats);
     claimedMatcherIds.push(matchedId ?? "unknown");
@@ -185,6 +200,9 @@ export function runThreadCommandMatchers(
 
   return {
     claimedBy: claimedMatcherIds.join(",") || null,
+    detailRows: detailRows.length ? detailRows : undefined,
+    hideCommandCwd: hideCommandCwd || undefined,
+    hideCommandOutput: hideCommandOutput || undefined,
     omitFromDisplay,
     showShell: hadUnmatchedRemainder,
     summaryParts,

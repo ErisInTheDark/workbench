@@ -18,6 +18,7 @@ import type { ToolRequestUserInputQuestion } from "../lib/codex/generated/app-se
 import type { ToolRequestUserInputResponse } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputResponse";
 import type {
     WorkbenchApprovalCommandContext,
+    WorkbenchBrowseScreenshotEntry,
     WorkbenchCollaborationState,
     WorkbenchQuestionnaireHistoryEntry,
     WorkbenchThreadHydrationRequest,
@@ -1149,6 +1150,16 @@ export default class CodexStdioBridge {
             id: requestId,
             result: await this.listSteerHistory(message.params),
           };
+        case "browse/screenshot/list":
+          return {
+            id: requestId,
+            result: await this.listBrowseScreenshotEntries(message.params),
+          };
+        case "browse/screenshot/record":
+          return {
+            id: requestId,
+            result: await this.recordBrowseScreenshotEntry(message.params),
+          };
         case "questionnaire/respond":
           return {
             id: requestId,
@@ -1793,6 +1804,63 @@ export default class CodexStdioBridge {
     return {
       data: await this.ensureTranscriptStore().listSteerHistory(threadId),
     };
+  }
+
+  private async listBrowseScreenshotEntries(params: unknown) {
+    const record = asRecord(params);
+    const threadId = asString(record?.threadId)?.trim() ?? "";
+    if (!threadId) {
+      throw new Error("Missing browse/screenshot/list thread id.");
+    }
+
+    return {
+      data: await this.ensureTranscriptStore().listBrowseScreenshotEntries(threadId),
+    };
+  }
+
+  private async recordBrowseScreenshotEntry(params: unknown) {
+    const record = asRecord(params);
+    const action = asString(record?.action);
+    const actionIndex = asNumber(record?.actionIndex);
+    const assetUrl = asString(record?.assetUrl);
+    const entryKey = asString(record?.entryKey);
+    const recordedAt = asNumber(record?.recordedAt);
+    const session = asString(record?.session);
+    const threadId = asString(record?.threadId);
+    const turnId = asString(record?.turnId);
+    if (
+      !action
+      || actionIndex === null
+      || !assetUrl
+      || !entryKey
+      || recordedAt === null
+      || !session
+      || !threadId
+      || !turnId
+    ) {
+      throw new Error("Missing browse/screenshot/record params.");
+    }
+
+    const entry: WorkbenchBrowseScreenshotEntry = {
+      action: action as WorkbenchBrowseScreenshotEntry["action"],
+      actionIndex,
+      assetUrl,
+      commandItemId: asString(record?.commandItemId) ?? null,
+      entryKey,
+      recordedAt,
+      session,
+      threadId,
+      turnId,
+    };
+    await this.ensureTranscriptStore().recordBrowseScreenshotEntry(entry);
+    this.onNotification({
+      method: "browse/screenshot/recorded",
+      params: {
+        threadId,
+        turnId,
+      },
+    });
+    return { ok: true };
   }
 
   private readQuestionnaireResponse(params: unknown) {

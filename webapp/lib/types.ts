@@ -258,11 +258,37 @@ export interface WorkbenchBrowseAgentCleanupRequest extends WorkbenchBrowseAgent
   sessions?: string[] | null;
 }
 
+export interface WorkbenchBrowseAgentSequenceRequest {
+  actions: WorkbenchBrowseAgentAction[];
+  summary?: string | null;
+  stopOnError?: boolean | null;
+}
+
 export interface WorkbenchBrowseAgentResponse extends WorkbenchBrowseCommandResponse {
   action?: WorkbenchBrowseAgentActionName;
   args?: string[];
   cleanupResults?: WorkbenchBrowseCommandResponse[];
   session?: string;
+}
+
+export interface WorkbenchBrowseAgentSequenceResponse {
+  durationMs: number;
+  error?: string;
+  ok: boolean;
+  results: WorkbenchBrowseAgentResponse[];
+  stoppedAtIndex: number | null;
+}
+
+export interface WorkbenchBrowseScreenshotEntry {
+  action: WorkbenchBrowseAgentActionName;
+  actionIndex: number;
+  assetUrl: string;
+  commandItemId: string | null;
+  entryKey: string;
+  recordedAt: number;
+  session: string;
+  threadId: string;
+  turnId: string;
 }
 
 export interface WorkbenchAgentOption {
@@ -359,6 +385,7 @@ export interface ThreadUnreadBadge {
 }
 
 export interface ThreadPayload extends ThreadSummary {
+  browseScreenshotEntries?: WorkbenchBrowseScreenshotEntry[];
   model: string | null;
   reasoningEffort: string | null;
   serviceTier: string | null;

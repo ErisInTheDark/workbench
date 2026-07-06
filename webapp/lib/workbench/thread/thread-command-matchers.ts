@@ -3,9 +3,11 @@
  * - CommandMatcher: builder namespace for command-summary matchers, results, and summary parts. Keywords: thread, command, matcher, builder.
  * - ThreadCommandSummaryDisplay: shared summary-display shape for single-command and grouped command labels. Keywords: thread, command, summary, aggregate.
  * - ThreadCommandDisplayPart: structured text/path part for rendering command summaries with file pills. Keywords: thread, command, summary, path.
+ * - ThreadCommandDetailRow/ThreadCommandDetailTarget: structured detail rows rendered inside command disclosures. Keywords: thread, command, details, sequence.
  * - ThreadCommandSummaryStats: aggregate command-summary counts for grouped command labels. Keywords: thread, command, summary, aggregate.
  * - ThreadCommandDisplay: parsed command-summary metadata for thread command rendering. Keywords: thread, command, summary, shell, omit.
  * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text. Keywords: path, command, relative, display.
+ * - isBrowseWebRequestMatcherClaim/parseBrowseSequenceCommandOutput: detect and parse Browse request command output. Keywords: browse, sequence, command.
  * - isGitCheckpointDiffMatcherClaim: detect checkpoint diff matcher ids for specialized command-output rendering. Keywords: thread, command, checkpoint, diff.
  * - parseGitCheckpointDiffArtifactId: parse compact checkpoint diff output for a stored full-diff artifact id. Keywords: checkpoint, diff, artifact.
  * - parseGitCheckpointDiffOutput: parse checkpoint diff command output into file-change display entries. Keywords: checkpoint, diff, file change.
@@ -14,7 +16,11 @@
  */
 
 import type { CommandAction } from "../../codex/generated/app-server/v2/CommandAction";
-import { BROWSE_WEB_REQUEST_COMMAND_MATCHERS } from "./command-matchers/browse-web-requests";
+import {
+  BROWSE_WEB_REQUEST_COMMAND_MATCHERS,
+  isBrowseWebRequestMatcherClaim,
+  parseBrowseSequenceCommandOutput,
+} from "./command-matchers/browse-web-requests";
 import { CMD_COMMAND_MATCHERS } from "./command-matchers/cmd";
 import { COPILOT_COMMAND_MATCHERS } from "./command-matchers/copilot-tool-calls";
 import { CommandMatcher, runThreadCommandMatchers } from "./command-matchers/core";
@@ -47,6 +53,8 @@ import type {
     ParsedCommandDisplayContext,
     ThreadCommandDisplay,
     ThreadCommandDisplayPart,
+    ThreadCommandDetailRow,
+    ThreadCommandDetailTarget,
     ThreadCommandSummaryDisplay,
     ThreadCommandSummaryStats,
 } from "./command-matchers/types";
@@ -138,10 +146,12 @@ const COMMAND_BLOCK_SUMMARY_CATEGORIES: Array<{
 ];
 
 export { CommandMatcher, formatThreadCommandPath };
-export { isGitCheckpointDiffMatcherClaim, parseGitCheckpointDiffArtifactId, parseGitCheckpointDiffOutput };
+export { isBrowseWebRequestMatcherClaim, isGitCheckpointDiffMatcherClaim, parseBrowseSequenceCommandOutput, parseGitCheckpointDiffArtifactId, parseGitCheckpointDiffOutput };
 export type {
     ThreadCommandDisplay,
     ThreadCommandDisplayPart,
+    ThreadCommandDetailRow,
+    ThreadCommandDetailTarget,
     ThreadCommandSummaryDisplay,
     ThreadCommandSummaryStats
 };

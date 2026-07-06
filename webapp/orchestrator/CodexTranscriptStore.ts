@@ -12,7 +12,7 @@ import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type { JsonValue } from "../lib/codex/generated/app-server/serde_json/JsonValue";
 import { appendCommandOutputDelta, compactCommandOutputPayload } from "../lib/codex/thread-command-output";
 import { areUserInputsEquivalentForUserMessageDedupe, normalizeThreadItems } from "../lib/codex/thread-item-normalization";
-import type { WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadHydrationRequest, WorkbenchThreadTurnHistoryEntry } from "../lib/types";
+import type { WorkbenchBrowseScreenshotEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadHydrationRequest, WorkbenchThreadTurnHistoryEntry } from "../lib/types";
 import AtomicJsonStore from "./AtomicJsonStore";
 import { hydrateThreadWithStoredTurns } from "./codex-transcript-hydration";
 import { shouldPersistRawNotificationToJournal } from "./codex-transcript-event-routing";
@@ -98,6 +98,20 @@ function sortSteerEntries(entries: WorkbenchSteerHistoryEntry[]) {
   return [...entries].sort((left, right) => {
     if (left.attemptedAt !== right.attemptedAt) {
       return left.attemptedAt - right.attemptedAt;
+    }
+
+    return left.entryKey.localeCompare(right.entryKey);
+  });
+}
+
+function sortBrowseScreenshotEntries(entries: WorkbenchBrowseScreenshotEntry[]) {
+  return [...entries].sort((left, right) => {
+    if (left.recordedAt !== right.recordedAt) {
+      return left.recordedAt - right.recordedAt;
+    }
+
+    if (left.actionIndex !== right.actionIndex) {
+      return left.actionIndex - right.actionIndex;
     }
 
     return left.entryKey.localeCompare(right.entryKey);
@@ -407,6 +421,7 @@ function getPreviousTurnId(entries: CodexTranscriptThreadFile["turnIndex"], befo
 
 function createTurnFile(threadId: string, turnId: string): CodexTranscriptTurnFile {
   return {
+    browseScreenshotEntries: [],
     itemOrder: [],
     itemTimeline: [],
     lastTouchedAt: now(),
@@ -650,6 +665,7 @@ function normalizeTurnFileSnapshot(file: CodexTranscriptTurnFile) {
   if (!file.turn) {
     return {
       ...file,
+      browseScreenshotEntries: file.browseScreenshotEntries ?? [],
       itemOrder: file.itemOrder ?? [],
       itemTimeline: normalizeTurnTimeline(file),
       questionnaireEntries: file.questionnaireEntries ?? [],
@@ -661,6 +677,7 @@ function normalizeTurnFileSnapshot(file: CodexTranscriptTurnFile) {
   if (!normalizedTurn) {
     return {
       ...file,
+      browseScreenshotEntries: file.browseScreenshotEntries ?? [],
       questionnaireEntries: file.questionnaireEntries ?? [],
       steerEntries: file.steerEntries ?? [],
     };
@@ -676,6 +693,7 @@ function normalizeTurnFileSnapshot(file: CodexTranscriptTurnFile) {
 
   return {
     ...file,
+    browseScreenshotEntries: file.browseScreenshotEntries ?? [],
     itemOrder: normalizedTurn.items.map((item) => item.id),
     itemTimeline: cleanedTimeline,
     questionnaireEntries: file.questionnaireEntries ?? [],
@@ -1129,6 +1147,19 @@ export default class CodexTranscriptStore {
     await this.touchThread(entry.threadId, null);
   }
 
+  async recordBrowseScreenshotEntry(entry: WorkbenchBrowseScreenshotEntry) {
+    await this.ready();
+    await this.updateTurnFile(entry.threadId, entry.turnId, (file) => ({
+      ...file,
+      browseScreenshotEntries: sortBrowseScreenshotEntries([
+        ...(file.browseScreenshotEntries ?? []).filter((existingEntry) => existingEntry.entryKey !== entry.entryKey),
+        entry,
+      ]),
+      lastTouchedAt: now(),
+    }));
+    await this.touchThread(entry.threadId, null);
+  }
+
   async updateSteerHistoryEntryStatus(
     threadId: string,
     turnId: string,
@@ -1170,6 +1201,12 @@ export default class CodexTranscriptStore {
     await this.ready();
     const turnFiles = await this.readTurnFiles(threadId);
     return sortQuestionnaireEntries(turnFiles.flatMap((file) => file.questionnaireEntries));
+  }
+
+  async listBrowseScreenshotEntries(threadId: string) {
+    await this.ready();
+    const turnFiles = await this.readTurnFiles(threadId);
+    return sortBrowseScreenshotEntries(turnFiles.flatMap((file) => file.browseScreenshotEntries ?? []));
   }
 
   async hydrateThreadResponse(

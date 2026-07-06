@@ -6,7 +6,7 @@
  */
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
-import type { WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry } from "../lib/types";
+import type { WorkbenchBrowseScreenshotEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry } from "../lib/types";
 
 export type SerializableJson =
   | null
@@ -59,6 +59,7 @@ export interface CodexTranscriptTurnTimelineEntry {
 }
 
 export interface CodexTranscriptTurnFile {
+  browseScreenshotEntries: WorkbenchBrowseScreenshotEntry[];
   itemOrder: string[];
   itemTimeline: CodexTranscriptTurnTimelineEntry[];
   lastTouchedAt: number;

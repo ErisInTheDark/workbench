@@ -5,6 +5,9 @@
  * - CommandPathDisplayPart: structured path part for rendering command summaries with file pills. Keywords: thread, command, summary, path.
  * - CommandSeparatorDisplayPart: structured stage-separator part for procedural command summaries. Keywords: thread, command, summary, separator.
  * - ThreadCommandDisplayPart: structured text/path part for rendering command summaries with file pills. Keywords: thread, command, summary, path.
+ * - ThreadCommandDetailResultKind: semantic detail result kinds for polished command substep rows. Keywords: thread, command, detail, result.
+ * - ThreadCommandDetailTarget: semantic target metadata for polished command substep rows. Keywords: thread, command, detail, target.
+ * - ThreadCommandDetailRow: optional row rendered inside command disclosures for structured command substeps. Keywords: thread, command, details, sequence.
  * - ThreadCommandSummaryStats: aggregate command-summary counts for grouped command labels. Keywords: thread, command, summary, aggregate.
  * - ThreadCommandSummaryDisplay: shared summary-display metadata for single-command and grouped command labels. Keywords: thread, command, summary, shell.
  * - ThreadCommandDisplay: parsed command-summary metadata for single thread command rendering. Keywords: thread, command, summary, shell, omit.
@@ -65,6 +68,26 @@ export type ThreadCommandDisplayPart =
   | CommandPathDisplayPart
   | CommandSeparatorDisplayPart;
 
+export type ThreadCommandDetailResultKind = "duration" | "error" | "result" | "text";
+
+export interface ThreadCommandDetailTarget {
+  kind: "code" | "text" | "url";
+  text: string;
+}
+
+export interface ThreadCommandDetailRow {
+  contextText?: string | null;
+  detailKind?: ThreadCommandDetailResultKind;
+  detailLabel?: string | null;
+  detailText?: string | null;
+  durationMs?: number | null;
+  id: string;
+  imageUrl?: string | null;
+  label?: string | null;
+  summaryParts: ThreadCommandDisplayPart[];
+  target?: ThreadCommandDetailTarget | null;
+}
+
 export interface ThreadCommandSummaryStats {
   deletedPaths: number;
   gitCheckpointCreates: number;
@@ -85,6 +108,9 @@ export interface ThreadCommandSummaryStats {
 
 export interface ThreadCommandSummaryDisplay {
   claimedBy: string | null;
+  detailRows?: ThreadCommandDetailRow[];
+  hideCommandCwd?: boolean;
+  hideCommandOutput?: boolean;
   omitFromDisplay: boolean;
   shell: CommandShell;
   showShell: boolean;
@@ -127,6 +153,9 @@ export interface CommandMatcherContext extends ParsedCommandDisplayContext {
 }
 
 export interface CommandMatcherResult {
+  detailRows?: ThreadCommandDetailRow[];
+  hideCommandCwd?: boolean;
+  hideCommandOutput?: boolean;
   hide?: boolean;
   omitFromDisplay?: boolean;
   remainingCommand?: string | null;

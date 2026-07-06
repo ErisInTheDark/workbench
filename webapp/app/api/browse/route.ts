@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - runtime/dynamic: force raw browse command execution onto the Node.js runtime without static caching. Keywords: browse, api, command, node runtime.
- * - POST: run typed Workbench Browse actions or raw project-local browse CLI arguments and optionally steer completed screenshots into the active Codex turn. Keywords: browse, typed action, raw command, local capability, screenshot, steer.
+ * - POST: run typed Workbench Browse actions, action sequences, or raw project-local browse CLI arguments and optionally steer completed screenshots into the active Codex turn. Keywords: browse, typed action, sequence, raw command, local capability, screenshot, steer.
  */
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -26,6 +26,8 @@ import { projectRoot } from "../../../lib/project";
 import type {
   WorkbenchBrowseAgentAction,
   WorkbenchBrowseAgentResponse,
+  WorkbenchBrowseAgentSequenceRequest,
+  WorkbenchBrowseAgentSequenceResponse,
   WorkbenchBrowseCommandRequest,
   WorkbenchBrowseCommandResponse,
   WorkbenchHarness,
@@ -44,6 +46,7 @@ const MAX_BROWSE_TIMEOUT_MS = 10 * 60_000;
 const MAX_BROWSE_ARGS = 128;
 const MAX_BROWSE_ARG_LENGTH = 16_384;
 const MAX_BROWSE_STDIN_LENGTH = 2 * 1024 * 1024;
+const MAX_BROWSE_AGENT_SEQUENCE_ACTIONS = 50;
 const BROWSE_SCREENSHOT_ASSET_THREAD_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const BROWSE_SCREENSHOT_DATA_URL_PATTERN = /^data:(image\/(?:png|jpeg|jpg|webp|gif));base64,([a-z0-9+/=\s]+)$/iu;
 const BROWSE_SCREENSHOT_BASE64_PATTERN = /^[a-z0-9+/=\s]+$/iu;
@@ -121,6 +124,16 @@ function normalizeBrowseRequest(value: unknown): WorkbenchBrowseCommandRequest |
 }
 
 function browseCommandResponse(payload: WorkbenchBrowseCommandResponse, init?: ResponseInit) {
+  return NextResponse.json(payload, {
+    ...init,
+    headers: {
+      "Cache-Control": "no-store",
+      ...init?.headers,
+    },
+  });
+}
+
+function browseAgentSequenceResponse(payload: WorkbenchBrowseAgentSequenceResponse, init?: ResponseInit) {
   return NextResponse.json(payload, {
     ...init,
     headers: {
@@ -246,6 +259,10 @@ interface ScreenshotImagePayload {
   payload: string;
 }
 
+interface StoredScreenshotAsset {
+  assetUrl: string;
+}
+
 function parseScreenshotBase64(stdout: string): ScreenshotImagePayload {
   const parsed = JSON.parse(stdout) as unknown;
   if (!isRecord(parsed) || typeof parsed.base64 !== "string") {
@@ -308,8 +325,58 @@ async function writeScreenshotTranscriptAsset(threadId: string, image: Screensho
   return `/api/transcript-assets/codex/${encodeURIComponent(threadId)}/${encodeURIComponent(fileName)}`;
 }
 
+async function captureBrowseSessionScreenshotAsset(
+  request: WorkbenchBrowseCommandRequest,
+): Promise<StoredScreenshotAsset | null> {
+  const sessionIndex = request.args.findIndex((arg) => arg === "--session");
+  const session = sessionIndex >= 0 ? request.args[sessionIndex + 1] : "";
+  if (!session) {
+    return null;
+  }
+
+  const screenshotResult = await runBrowseCommand({
+    args: ["screenshot", "--base64", "--session", session],
+    cwd: request.cwd ?? null,
+    projectId: request.projectId ?? null,
+    threadId: request.threadId,
+    timeoutMs: request.timeoutMs ?? null,
+  });
+  if (!screenshotResult.ok) {
+    return null;
+  }
+
+  const image = parseScreenshotBase64(screenshotResult.stdout);
+  return {
+    assetUrl: await writeScreenshotTranscriptAsset(request.threadId, image),
+  };
+}
+
+function findLatestBrowseCommandItemId(response: ThreadReadResponse) {
+  const turn = getCurrentInProgressTurn(response.thread) ?? response.thread.turns.at(-1) ?? null;
+  if (!turn) {
+    return null;
+  }
+
+  for (let index = turn.items.length - 1; index >= 0; index -= 1) {
+    const item = turn.items[index];
+    if (
+      item.type === "commandExecution"
+      && item.status === "inProgress"
+      && item.command.includes("/api/browse")
+    ) {
+      return item.id;
+    }
+  }
+
+  return null;
+}
+
 function getCurrentInProgressTurnId(response: ThreadReadResponse) {
   return getCurrentInProgressTurn(response.thread)?.id ?? null;
+}
+
+function getAutomaticBrowseScreenshotTurnId(response: ThreadReadResponse) {
+  return getCurrentInProgressTurn(response.thread)?.id ?? response.thread.turns.at(-1)?.id ?? null;
 }
 
 async function readActiveThreadForScreenshot(request: NextRequest, threadId: string) {
@@ -326,7 +393,7 @@ async function readActiveThreadForScreenshot(request: NextRequest, threadId: str
       });
       const turnId = getCurrentInProgressTurnId(response);
       if (turnId) {
-        return { harness, turnId };
+        return { commandItemId: findLatestBrowseCommandItemId(response), harness, turnId };
       }
     } catch (error) {
       lastError = error;
@@ -337,6 +404,29 @@ async function readActiveThreadForScreenshot(request: NextRequest, threadId: str
     throw new Error(`Unable to steer screenshot because the target thread has no active turn. Last thread lookup error: ${lastError.message}`);
   }
   throw new Error("Unable to steer screenshot because the target thread has no active turn.");
+}
+
+async function readThreadForAutomaticBrowseScreenshot(request: NextRequest, threadId: string) {
+  for (const harness of VALID_HARNESSES) {
+    try {
+      const response = await sendServerWorkbenchBridgeRequest<ThreadReadResponse>(request, harness, {
+        method: "thread/read",
+        params: {
+          includeTurns: true,
+          threadId,
+        },
+        workbenchThreadHydration: { mode: "latest" },
+      });
+      const turnId = getAutomaticBrowseScreenshotTurnId(response);
+      if (turnId) {
+        return { commandItemId: findLatestBrowseCommandItemId(response), harness, turnId };
+      }
+    } catch {
+      // Try the next harness; automatic screenshots are best-effort transcript metadata.
+    }
+  }
+
+  return null;
 }
 
 async function steerScreenshotAsset(
@@ -389,9 +479,64 @@ async function runBrowseCommandAndMaybeSteerScreenshot(
   };
 }
 
+function shouldAutoCaptureScreenshot(action: WorkbenchBrowseAgentAction["action"]) {
+  return action === "open"
+    || action === "click"
+    || action === "fill"
+    || action === "type"
+    || action === "key"
+    || action === "select"
+    || action === "wait"
+    || action === "back"
+    || action === "eval"
+    || action === "forward"
+    || action === "highlight"
+    || action === "reload"
+    || action === "viewport";
+}
+
+async function recordAutomaticBrowseScreenshot(
+  request: NextRequest,
+  {
+    action,
+    actionIndex,
+    commandItemId,
+    session,
+    threadId,
+    turnId,
+    assetUrl,
+  }: {
+    action: WorkbenchBrowseAgentAction["action"];
+    actionIndex: number;
+    commandItemId: string | null;
+    session: string;
+    threadId: string;
+    turnId: string;
+    assetUrl: string;
+  },
+) {
+  await sendServerWorkbenchBridgeRequest(request, "codex", {
+    method: "browse/screenshot/record",
+    params: {
+      action,
+      actionIndex,
+      assetUrl,
+      commandItemId,
+      entryKey: createHash("sha256")
+        .update([threadId, turnId, commandItemId ?? "", session, action, String(actionIndex), assetUrl].join("\0"))
+        .digest("hex"),
+      recordedAt: Date.now(),
+      session,
+      threadId,
+      turnId,
+    },
+  });
+}
+
 async function runBrowseAgentCommand(
   request: NextRequest,
   payload: WorkbenchBrowseAgentAction,
+  { actionIndex = 0 }: { actionIndex?: number } = {},
 ): Promise<WorkbenchBrowseAgentResponse> {
   const startedAt = Date.now();
   const normalized = normalizeWorkbenchBrowseAgentRequest(payload);
@@ -411,7 +556,24 @@ async function runBrowseAgentCommand(
     return runBrowseAgentCleanupCommand(normalized.command, registry, startedAt);
   }
 
+  const activeThread = shouldAutoCaptureScreenshot(normalized.command.action)
+    ? await readThreadForAutomaticBrowseScreenshot(request, normalized.command.commandRequest.threadId)
+    : null;
   const result = await runBrowseCommandAndMaybeSteerScreenshot(request, normalized.command.commandRequest);
+  if (result.ok && activeThread && normalized.command.session && shouldAutoCaptureScreenshot(normalized.command.action)) {
+    const autoScreenshot = await captureBrowseSessionScreenshotAsset(normalized.command.commandRequest).catch(() => null);
+    if (autoScreenshot) {
+      await recordAutomaticBrowseScreenshot(request, {
+        action: normalized.command.action,
+        actionIndex,
+        assetUrl: autoScreenshot.assetUrl,
+        commandItemId: activeThread.commandItemId,
+        session: normalized.command.session,
+        threadId: normalized.command.commandRequest.threadId,
+        turnId: activeThread.turnId,
+      }).catch(() => undefined);
+    }
+  }
   if (result.ok && normalized.command.session) {
     if (normalized.command.action === "stop") {
       await registry.forget(normalized.command.session);
@@ -429,6 +591,34 @@ async function runBrowseAgentCommand(
     action: normalized.command.action,
     args: normalized.command.commandRequest.args,
     session: normalized.command.session ?? undefined,
+  };
+}
+
+async function runBrowseAgentCommandSequence(
+  request: NextRequest,
+  payload: WorkbenchBrowseAgentSequenceRequest,
+): Promise<WorkbenchBrowseAgentSequenceResponse> {
+  const startedAt = Date.now();
+  const stopOnError = payload.stopOnError !== false;
+  const results: WorkbenchBrowseAgentResponse[] = [];
+  let stoppedAtIndex: number | null = null;
+
+  for (const [index, action] of payload.actions.entries()) {
+    const result = await runBrowseAgentCommand(request, action, { actionIndex: index });
+    results.push(result);
+    if (!result.ok && stopOnError) {
+      stoppedAtIndex = index;
+      break;
+    }
+  }
+
+  const ok = results.length === payload.actions.length && results.every((result) => result.ok);
+  return {
+    durationMs: Date.now() - startedAt,
+    error: ok ? undefined : results.find((result) => !result.ok)?.error ?? "A Browse action failed.",
+    ok,
+    results,
+    stoppedAtIndex,
   };
 }
 
@@ -637,6 +827,40 @@ export async function POST(request: NextRequest) {
     ensureBrowseSessionCleanupPoller();
 
     const requestBody = await request.json().catch(() => null);
+    if (isRecord(requestBody) && Array.isArray(requestBody.actions)) {
+      if (requestBody.actions.length > MAX_BROWSE_AGENT_SEQUENCE_ACTIONS) {
+        return browseAgentSequenceResponse({
+          durationMs: Date.now() - startedAt,
+          error: `Browse action sequences can include at most ${MAX_BROWSE_AGENT_SEQUENCE_ACTIONS} actions.`,
+          ok: false,
+          results: [],
+          stoppedAtIndex: null,
+        }, { status: 400 });
+      }
+
+      return browseAgentSequenceResponse(await runBrowseAgentCommandSequence(request, {
+        actions: requestBody.actions as WorkbenchBrowseAgentAction[],
+        stopOnError: requestBody.stopOnError === false ? false : true,
+      }));
+    }
+
+    if (Array.isArray(requestBody)) {
+      if (requestBody.length > MAX_BROWSE_AGENT_SEQUENCE_ACTIONS) {
+        return browseAgentSequenceResponse({
+          durationMs: Date.now() - startedAt,
+          error: `Browse action sequences can include at most ${MAX_BROWSE_AGENT_SEQUENCE_ACTIONS} actions.`,
+          ok: false,
+          results: [],
+          stoppedAtIndex: null,
+        }, { status: 400 });
+      }
+
+      return browseAgentSequenceResponse(await runBrowseAgentCommandSequence(request, {
+        actions: requestBody as WorkbenchBrowseAgentAction[],
+        stopOnError: true,
+      }));
+    }
+
     if (isRecord(requestBody) && typeof requestBody.action === "string") {
       return browseCommandResponse(await runBrowseAgentCommand(request, requestBody as unknown as WorkbenchBrowseAgentAction));
     }

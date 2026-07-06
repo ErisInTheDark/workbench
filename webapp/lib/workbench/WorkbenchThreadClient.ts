@@ -47,6 +47,7 @@ import { getCurrentInProgressTurn, getCurrentTurn } from "../codex/thread-state"
 import type {
     ThreadPayload,
     ThreadSummary,
+    WorkbenchBrowseScreenshotEntry,
     WorkbenchCollaborationState,
     WorkbenchReadThreadOptions,
     WorkbenchHarness,
@@ -148,6 +149,7 @@ export interface WorkbenchThreadState {
   questionnaireHistoryByThreadId: Map<string, WorkbenchQuestionnaireHistoryEntry[]>;
   rateLimits: RateLimitSnapshot | null;
   rateLimitsByHarness: Map<WorkbenchHarness, RateLimitSnapshot | null>;
+  browseScreenshotEntriesByThreadId: Map<string, WorkbenchBrowseScreenshotEntry[]>;
   steerHistoryByThreadId: Map<string, WorkbenchSteerHistoryEntry[]>;
   threadUnreadStateByKey: Map<string, WorkbenchStoredThreadUnreadState>;
   threads: ThreadSummary[];
@@ -257,6 +259,7 @@ function createInitialThreadState(): WorkbenchThreadState {
     questionnaireHistoryByThreadId: new Map(),
     rateLimits: null,
     rateLimitsByHarness: new Map(),
+    browseScreenshotEntriesByThreadId: new Map(),
     steerHistoryByThreadId: new Map(),
     threadUnreadStateByKey: new Map(),
     threads: [],
@@ -911,6 +914,19 @@ function WorkbenchThreadClient(
     );
   }
 
+  function applyPersistedBrowseScreenshotEntries(thread: ThreadPayload | null) {
+    if (!thread || thread.harness !== "codex") {
+      return thread;
+    }
+
+    const browseScreenshotEntries = state.browseScreenshotEntriesByThreadId.get(thread.id) ?? [];
+    return browseScreenshotEntries.length
+      ? { ...thread, browseScreenshotEntries }
+      : thread.browseScreenshotEntries?.length
+        ? { ...thread, browseScreenshotEntries: [] }
+        : thread;
+  }
+
   function normalizeThreadDocument(
     thread: ThreadPayload | null,
     {
@@ -923,7 +939,7 @@ function WorkbenchThreadClient(
   ) {
     const stableThread = normalizeThreadPayloadItems(preserveStableServiceTier ? mergeStableThreadMetadata(thread ? ensureThreadHistory(thread) : thread) : thread ? ensureThreadHistory(thread) : thread);
     const storedTokenUsageThread = stableThread ? applyStoredThreadTokenUsage(stableThread) : stableThread;
-    const nextThread = applyOptimisticUserMessageOverlay(applyPersistedSteerHistory(applyPersistedQuestionnaireHistory(storedTokenUsageThread)));
+    const nextThread = applyOptimisticUserMessageOverlay(applyPersistedBrowseScreenshotEntries(applyPersistedSteerHistory(applyPersistedQuestionnaireHistory(storedTokenUsageThread))));
     return pruneStreamingDuplicates
       ? pruneThreadStreamingDuplicates(nextThread)
       : nextThread;
@@ -2397,6 +2413,41 @@ function WorkbenchThreadClient(
     setCurrentThread(state.currentThread);
   }
 
+  function setBrowseScreenshotEntries(threadId: string, entries: WorkbenchBrowseScreenshotEntry[]) {
+    const nextEntries = entries.filter((entry) => entry.threadId === threadId);
+    const existingEntries = state.browseScreenshotEntriesByThreadId.get(threadId) ?? [];
+    if (areDeeplyEqual(existingEntries, nextEntries)) {
+      return false;
+    }
+
+    if (nextEntries.length) {
+      state.browseScreenshotEntriesByThreadId.set(threadId, nextEntries);
+    } else {
+      state.browseScreenshotEntriesByThreadId.delete(threadId);
+    }
+    return true;
+  }
+
+  function reapplyCurrentThreadBrowseScreenshotEntries(threadId: string) {
+    const document = threadDocuments.getDocumentByThreadId(threadId);
+    if (document?.harness === "codex") {
+      const nextDocument = upsertThreadDocument(document, {
+        select: state.currentThread?.id === threadId && state.currentThread.harness === document.harness,
+      });
+      if (state.currentThread?.id === threadId && state.currentThread.harness === nextDocument.harness) {
+        setCurrentThread(nextDocument);
+        return;
+      }
+      emit();
+    }
+
+    if (state.currentThread?.id !== threadId || state.currentThread.harness !== "codex") {
+      return;
+    }
+
+    setCurrentThread(state.currentThread);
+  }
+
   async function readCompletedQuestionnaireHistory(threadId: string) {
     try {
       const response = await sendBridgeRequest<{ data?: WorkbenchQuestionnaireHistoryEntry[] }>("codex", {
@@ -2461,12 +2512,35 @@ function WorkbenchThreadClient(
     }
   }
 
+  async function readBrowseScreenshotEntries(threadId: string) {
+    try {
+      const response = await sendBridgeRequest<{ data?: WorkbenchBrowseScreenshotEntry[] }>("codex", {
+        method: "browse/screenshot/list",
+        params: {
+          threadId,
+        },
+      });
+      const entries = response.data ?? [];
+      if (setBrowseScreenshotEntries(threadId, entries)) {
+        reapplyCurrentThreadBrowseScreenshotEntries(threadId);
+      }
+      return entries;
+    } catch {
+      if (setBrowseScreenshotEntries(threadId, [])) {
+        reapplyCurrentThreadBrowseScreenshotEntries(threadId);
+      }
+      return [];
+    }
+  }
+
   async function readCompletedThreadWorkbenchHistory(threadId: string) {
-    const [questionnaireEntries, steerEntries] = await Promise.all([
+    const [browseScreenshotEntries, questionnaireEntries, steerEntries] = await Promise.all([
+      readBrowseScreenshotEntries(threadId),
       readCompletedQuestionnaireHistory(threadId),
       readCompletedSteerHistory(threadId),
     ]);
     return {
+      browseScreenshotEntries,
       questionnaireEntries,
       steerEntries,
     };
@@ -3363,6 +3437,7 @@ function WorkbenchThreadClient(
       case "process/exited":
       case "questionnaire/requested":
       case "questionnaire/resolved":
+      case "browse/screenshot/recorded":
       case "collaboration/state/updated":
       case "model/rerouted":
       case "model/verification":
@@ -4105,6 +4180,11 @@ function WorkbenchThreadClient(
 
     if (notification.method === "account/rateLimits/updated") {
       void refreshRateLimits(harness);
+      return;
+    }
+
+    if (notification.method === "browse/screenshot/recorded") {
+      void readBrowseScreenshotEntries(notification.params.threadId);
       return;
     }
 
