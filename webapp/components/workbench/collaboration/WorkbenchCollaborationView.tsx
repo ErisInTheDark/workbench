@@ -114,6 +114,34 @@ function getPromptTextFromInput(input: readonly UserInput[]) {
     .trim();
 }
 
+interface PromptDraftSource {
+  postUpdatedAt: number;
+  prompt: string;
+}
+
+function createPromptComposerDraftFromPost(post: WorkbenchCollaborationPost): WorkbenchThreadComposerDraft {
+  return {
+    attachments: [],
+    text: post.prompt ?? "",
+    updatedAt: post.updatedAt,
+  };
+}
+
+function createPromptDraftSourceFromPost(post: WorkbenchCollaborationPost): PromptDraftSource {
+  return {
+    postUpdatedAt: post.updatedAt,
+    prompt: post.prompt?.trim() ?? "",
+  };
+}
+
+function doesPromptDraftTextMatchSource(draft: WorkbenchThreadComposerDraft, source: PromptDraftSource) {
+  return draft.text.trim() === source.prompt;
+}
+
+function canReplacePromptDraftFromSource(draft: WorkbenchThreadComposerDraft, source: PromptDraftSource) {
+  return !draft.attachments.length && doesPromptDraftTextMatchSource(draft, source);
+}
+
 export default function WorkbenchCollaborationView({
   activeDrag,
   collaborationState,
@@ -158,6 +186,7 @@ export default function WorkbenchCollaborationView({
   const attemptedScratchpadImportKeyRef = useRef("");
   const promptSaveTimeoutsByPostIdRef = useRef<Record<string, number | undefined>>({});
   const promptSaveValuesByPostIdRef = useRef<Record<string, string | undefined>>({});
+  const promptDraftSourcesByPostIdRef = useRef<Record<string, PromptDraftSource | undefined>>({});
 
   useEffect(() => {
     stateRef.current = normalizeWorkbenchCollaborationState(collaborationState);
@@ -174,6 +203,7 @@ export default function WorkbenchCollaborationView({
     }
     promptSaveTimeoutsByPostIdRef.current = {};
     promptSaveValuesByPostIdRef.current = {};
+    promptDraftSourcesByPostIdRef.current = {};
     setPromptDraftThreadsByPostId({});
     setPromptComposerDraftsByPostId({});
     setPromptStartErrorsByPostId({});
@@ -332,6 +362,18 @@ export default function WorkbenchCollaborationView({
 
     const existing = promptDraftThreadsByPostId[post.id];
     if (existing) {
+      setPromptComposerDraftsByPostId((current) => {
+        if (current[post.id]) {
+          promptDraftSourcesByPostIdRef.current[post.id] ??= createPromptDraftSourceFromPost(post);
+          return current;
+        }
+
+        promptDraftSourcesByPostIdRef.current[post.id] = createPromptDraftSourceFromPost(post);
+        return {
+          ...current,
+          [post.id]: createPromptComposerDraftFromPost(post),
+        };
+      });
       return existing;
     }
 
@@ -343,13 +385,17 @@ export default function WorkbenchCollaborationView({
       ...current,
       [post.id]: draftThread,
     }));
-    setPromptComposerDraftsByPostId((current) => current[post.id] ? current : {
-      ...current,
-      [post.id]: {
-        attachments: [],
-        text: post.prompt ?? "",
-        updatedAt: post.updatedAt,
-      },
+    setPromptComposerDraftsByPostId((current) => {
+      if (current[post.id]) {
+        promptDraftSourcesByPostIdRef.current[post.id] ??= createPromptDraftSourceFromPost(post);
+        return current;
+      }
+
+      promptDraftSourcesByPostIdRef.current[post.id] = createPromptDraftSourceFromPost(post);
+      return {
+        ...current,
+        [post.id]: createPromptComposerDraftFromPost(post),
+      };
     });
     setPromptStartErrorsByPostId((current) => {
       if (!current[post.id]) {
@@ -389,6 +435,46 @@ export default function WorkbenchCollaborationView({
     delete promptSaveValuesByPostIdRef.current[postId];
   }, []);
 
+  useEffect(() => {
+    setPromptComposerDraftsByPostId((current) => {
+      let next = current;
+
+      for (const [postId, draft] of Object.entries(current)) {
+        if (!draft) {
+          continue;
+        }
+
+        const post = collaborationState.posts[postId];
+        if (!post?.prompt || post.promptThreadId) {
+          continue;
+        }
+
+        const nextSource = createPromptDraftSourceFromPost(post);
+        const currentSource = promptDraftSourcesByPostIdRef.current[postId];
+        if (
+          currentSource
+          && currentSource.prompt === nextSource.prompt
+          && currentSource.postUpdatedAt === nextSource.postUpdatedAt
+        ) {
+          continue;
+        }
+
+        if (currentSource && canReplacePromptDraftFromSource(draft, currentSource)) {
+          if (next === current) {
+            next = { ...current };
+          }
+
+          next[postId] = createPromptComposerDraftFromPost(post);
+          clearScheduledPromptSave(postId);
+        }
+
+        promptDraftSourcesByPostIdRef.current[postId] = nextSource;
+      }
+
+      return next;
+    });
+  }, [clearScheduledPromptSave, collaborationState.posts]);
+
   const schedulePromptSave = useCallback((postId: string, prompt: string) => {
     const normalizedPrompt = prompt.trim();
     const currentPrompt = stateRef.current.posts[postId]?.prompt?.trim() ?? "";
@@ -425,7 +511,17 @@ export default function WorkbenchCollaborationView({
       ...current,
       [postId]: draft,
     }));
-    schedulePromptSave(postId, draft.text);
+    const fallbackPost = stateRef.current.posts[postId];
+    const source = promptDraftSourcesByPostIdRef.current[postId]
+      ?? (fallbackPost ? createPromptDraftSourceFromPost(fallbackPost) : undefined);
+    if (source && !promptDraftSourcesByPostIdRef.current[postId]) {
+      promptDraftSourcesByPostIdRef.current[postId] = source;
+    }
+    if (source && doesPromptDraftTextMatchSource(draft, source)) {
+      clearScheduledPromptSave(postId);
+    } else {
+      schedulePromptSave(postId, draft.text);
+    }
     setPromptStartErrorsByPostId((current) => {
       if (!current[postId]) {
         return current;
@@ -447,6 +543,7 @@ export default function WorkbenchCollaborationView({
       delete next[postId];
       return next;
     });
+    delete promptDraftSourcesByPostIdRef.current[postId];
     clearScheduledPromptSave(postId);
   }, [clearScheduledPromptSave]);
 
@@ -546,6 +643,7 @@ export default function WorkbenchCollaborationView({
       prompt: submittedPrompt,
       promptThreadId: result.threadId,
     }, (state) => materializeCollaborationPostPromptThread(state, postId, submittedPrompt, result.threadId));
+    delete promptDraftSourcesByPostIdRef.current[postId];
     setPromptDraftThreadsByPostId((current) => {
       if (!current[postId]) {
         return current;

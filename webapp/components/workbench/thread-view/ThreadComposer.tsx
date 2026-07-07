@@ -110,12 +110,39 @@ interface ComposerImageAttachment {
   url: string;
 }
 
+interface HydratedComposerDraftSnapshot {
+  attachments: ComposerImageAttachment[];
+  draftKey: string;
+  text: string;
+}
+
 function createAttachmentId () {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
   }
 
   return `attachment:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+}
+
+function cloneComposerImageAttachments(attachments: readonly ComposerImageAttachment[]) {
+  return attachments.map((attachment) => ({
+    id: attachment.id,
+    url: attachment.url,
+  }));
+}
+
+function areComposerImageAttachmentsEqual(
+  left: readonly ComposerImageAttachment[],
+  right: readonly ComposerImageAttachment[],
+) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((attachment, index) => {
+    const candidate = right[index];
+    return Boolean(candidate && attachment.id === candidate.id && attachment.url === candidate.url);
+  });
 }
 
 function createSavedDraftId () {
@@ -435,7 +462,13 @@ export default function ThreadComposer ({
   const [stickyComposerMotionState, setStickyComposerMotionState] = useState<"idle" | "entering" | "leaving">("idle");
   const [isStickyComposerCollapsed, setIsStickyComposerCollapsed] = useState(false);
   const [stickyExpandedHeightPx, setStickyExpandedHeightPx] = useState(0);
-  const hydratedDraftKeyRef = useRef("");
+  const hydratedDraftSnapshotRef = useRef<HydratedComposerDraftSnapshot | null>(threadComposerDraft
+    ? {
+      attachments: cloneComposerImageAttachments(threadComposerDraft.attachments),
+      draftKey: `${thread.id}:${threadComposerDraft.updatedAt}`,
+      text: threadComposerDraft.text,
+    }
+    : null);
   const previousStickyComposerArmedRef = useRef(false);
   const stickyTopSentinelRef = useRef<HTMLDivElement>(null);
   const stickySurfaceRef = useRef<HTMLDivElement>(null);
@@ -541,18 +574,30 @@ export default function ThreadComposer ({
 
   useEffect(() => {
     const draftKey = `${thread.id}:${threadComposerDraft?.updatedAt ?? 0}`;
-    if (hydratedDraftKeyRef.current === draftKey) {
+    const hydratedDraftSnapshot = hydratedDraftSnapshotRef.current;
+    if (hydratedDraftSnapshot?.draftKey === draftKey) {
       return;
     }
 
-    hydratedDraftKeyRef.current = draftKey;
-    if ((value.trim() || attachments.length) && threadComposerDraft) {
+    const isStillAtHydratedDraft = Boolean(
+      hydratedDraftSnapshot
+      && value === hydratedDraftSnapshot.text
+      && areComposerImageAttachmentsEqual(attachments, hydratedDraftSnapshot.attachments),
+    );
+    if ((value.trim() || attachments.length) && threadComposerDraft && !isStillAtHydratedDraft) {
       return;
     }
 
-    setValue(threadComposerDraft?.text ?? "");
-    setAttachments(threadComposerDraft?.attachments ?? []);
-  }, [attachments.length, thread.id, threadComposerDraft, value]);
+    const nextText = threadComposerDraft?.text ?? "";
+    const nextAttachments = cloneComposerImageAttachments(threadComposerDraft?.attachments ?? []);
+    hydratedDraftSnapshotRef.current = {
+      attachments: nextAttachments,
+      draftKey,
+      text: nextText,
+    };
+    setValue(nextText);
+    setAttachments(nextAttachments);
+  }, [attachments, thread.id, threadComposerDraft, value]);
 
   useEffect(() => {
     if (hasPendingUserInputRequest) {
