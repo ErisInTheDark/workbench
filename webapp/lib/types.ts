@@ -64,6 +64,65 @@ export interface WorkbenchBrowseCommandResponse {
 
 export type WorkbenchBrowseSessionMode = "headed" | "headless";
 
+export type WorkbenchBrowseSessionLifecycleState =
+  | "orphan"
+  | "running"
+  | "stale"
+  | "stopped"
+  | "unknown";
+
+export type WorkbenchBrowseSessionSource =
+  | "registry"
+  | "registry-and-runtime"
+  | "runtime";
+
+export interface WorkbenchBrowseSessionSummary {
+  browserConnected: boolean | null;
+  cwd: string | null;
+  inactiveSince: string | null;
+  initialized: boolean | null;
+  lastActionAt: string | null;
+  mode: WorkbenchBrowseSessionMode | null;
+  name: string;
+  pid: number | null;
+  projectId: string | null;
+  projectRootPath: string | null;
+  source: WorkbenchBrowseSessionSource;
+  state: WorkbenchBrowseSessionLifecycleState;
+  statusError: string | null;
+  threadId: string | null;
+}
+
+export interface WorkbenchBrowseSessionListRequest {
+  cwd?: string | null;
+  includeRuntime?: boolean | null;
+  projectId?: string | null;
+  threadId?: string | null;
+  timeoutMs?: number | null;
+}
+
+export interface WorkbenchBrowseSessionListResponse {
+  generatedAt: string;
+  projectId: string | null;
+  sessions: WorkbenchBrowseSessionSummary[];
+}
+
+export interface WorkbenchBrowseSessionControlRequest {
+  action: "forget" | "stop";
+  cwd?: string | null;
+  force?: boolean | null;
+  projectId?: string | null;
+  session: string;
+  threadId?: string | null;
+  timeoutMs?: number | null;
+}
+
+export interface WorkbenchBrowseSessionControlResponse {
+  result: WorkbenchBrowseCommandResponse | null;
+  session: WorkbenchBrowseSessionSummary | null;
+  stopped: boolean;
+}
+
 export type WorkbenchBrowseAgentWaitState = "commit" | "domcontentloaded" | "load" | "networkidle";
 
 export type WorkbenchBrowseAgentWaitSelectorState = "attached" | "detached" | "hidden" | "visible";
@@ -85,6 +144,7 @@ export type WorkbenchBrowseAgentAction =
   | WorkbenchBrowseAgentReloadRequest
   | WorkbenchBrowseAgentScreenshotRequest
   | WorkbenchBrowseAgentSelectRequest
+  | WorkbenchBrowseAgentSessionsRequest
   | WorkbenchBrowseAgentSnapshotRequest
   | WorkbenchBrowseAgentStatusRequest
   | WorkbenchBrowseAgentStopRequest
@@ -117,6 +177,7 @@ export type WorkbenchBrowseAgentActionName =
   | "reload"
   | "screenshot"
   | "select"
+  | "sessions"
   | "snapshot"
   | "status"
   | "stop"
@@ -206,6 +267,11 @@ export interface WorkbenchBrowseAgentSelectRequest extends WorkbenchBrowseAgentB
   action: "select";
   selector: string;
   value: string;
+}
+
+export interface WorkbenchBrowseAgentSessionsRequest extends WorkbenchBrowseAgentBaseRequest {
+  action: "sessions";
+  includeRuntime?: boolean | null;
 }
 
 export interface WorkbenchBrowseAgentWaitRequest extends WorkbenchBrowseAgentBrowserRequest {

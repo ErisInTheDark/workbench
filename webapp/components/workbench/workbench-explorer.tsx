@@ -4,6 +4,7 @@
  * - FileVisibilityIcon: render the eye glyph used by the explorer file-visibility toggle. Keywords: workbench, explorer, icon, visibility.
  * - SidebarLoadingSkeleton: render animated placeholder rows for loading sidebar sections. Keywords: sidebar, loading, skeleton.
  * - ThreadsList: render the thread list in the workbench sidebar, including the create-thread row. Keywords: workbench, threads, sidebar, create.
+ * - BrowseSessionsList: render active Browse sessions in the workbench sidebar. Keywords: workbench, browse, sessions, sidebar.
  * - ExplorerTree: render the recursive project tree with current, modified, and create-entry state. Keywords: workbench, explorer, tree.
  * - Local helpers: support modified markers, change summaries, and recursive directory state. Keywords: recursion, tree state, helpers.
  */
@@ -15,6 +16,7 @@ import type {
   ChangeSummary,
   ThreadSummary,
   TreeNode,
+  WorkbenchBrowseSessionSummary,
   WorkbenchControls,
 } from "../../lib/types";
 import type { WorkbenchDragPayload } from "../../lib/workbench/layout/workbench-drag";
@@ -29,7 +31,7 @@ import {
   workbenchThreadListButtonClassName,
   workbenchThreadListLabelClassName,
 } from "./workbench-class-names";
-import { HarnessIcon, PinIcon, SparkleIcon } from "./workbench-icons";
+import { BrowserSessionIcon, HarnessIcon, PinIcon, SparkleIcon } from "./workbench-icons";
 
 const DEFAULT_VISIBLE_THREAD_COUNT = 5;
 
@@ -279,6 +281,81 @@ export function ThreadsList ({
       ) : null}
     </div>
   );
+}
+
+export function BrowseSessionsList ({
+  getSessionContextMenu,
+  isLoading,
+  onRefresh,
+  sessions,
+}: {
+  getSessionContextMenu?: (session: WorkbenchBrowseSessionSummary) => WorkbenchContextMenuDefinition | null;
+  isLoading: boolean;
+  onRefresh: () => void;
+  sessions: WorkbenchBrowseSessionSummary[];
+}) {
+  if (isLoading) {
+    return <SidebarLoadingSkeleton ariaLabel="Loading Browse sessions" rows={3} />;
+  }
+
+  if (!sessions.length) {
+    return (
+      <div className="space-y-1 pr-2 md:pr-4.5">
+        <p className="m-0 px-2 text-[0.84rem] leading-6 text-muted">No active Browse sessions.</p>
+        <button
+          type="button"
+          className={`${workbenchThreadListButtonClassName} text-muted`}
+          onClick={onRefresh}
+        >
+          <span className="inline-flex min-w-0 items-center gap-2">
+            <BrowserSessionIcon className="size-4 shrink-0" />
+            <span className={workbenchThreadListLabelClassName}>Refresh sessions</span>
+          </span>
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <ul className="m-0 space-y-1 p-0">
+      {sessions.map((session) => {
+        const detail = formatBrowseSessionDetail(session);
+        const title = `${session.name}${detail ? ` — ${detail}` : ""}`;
+        const isProblemState = session.state === "orphan" || session.state === "stale" || session.state === "unknown";
+
+        return (
+          <li key={session.name} className="m-0 list-none">
+            <ContextMenuCapability menu={getSessionContextMenu?.(session) ?? null}>
+              <ThreadListRow
+                active={isProblemState}
+                onClick={onRefresh}
+                title={title}
+              >
+                <span className="flex w-full min-w-0 items-center justify-between gap-3">
+                  <span className="inline-flex min-w-0 items-center gap-2">
+                    <BrowserSessionIcon className="size-4 shrink-0" />
+                    <span className="min-w-0">
+                      <span className={`${workbenchThreadListLabelClassName}${isProblemState ? " font-semibold" : ""}`}>{session.name}</span>
+                      {detail ? <span className="block truncate text-[0.75rem] leading-4 text-muted">{detail}</span> : null}
+                    </span>
+                  </span>
+                </span>
+              </ThreadListRow>
+            </ContextMenuCapability>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function formatBrowseSessionDetail(session: WorkbenchBrowseSessionSummary) {
+  const parts = [
+    session.mode,
+    session.threadId ? `thread ${session.threadId.slice(0, 8)}` : null,
+    session.state,
+  ].filter((part): part is string => Boolean(part));
+  return parts.join(" · ");
 }
 
 function hasModifiedDescendant (node: TreeNode, modifiedPaths: Set<string>): boolean {

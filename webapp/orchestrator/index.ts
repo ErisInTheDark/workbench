@@ -5,6 +5,10 @@ import path from "node:path";
 import { WebSocketServer } from "next/dist/compiled/ws";
 
 import { createInitializeCapabilities, createInitializeRequest } from "../lib/codex/protocol";
+import { CodexAppServerClient } from "../lib/codex/app-server-client";
+import { isCodexJsonRpcFailure } from "../lib/codex/protocol";
+import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
+import { getCurrentInProgressTurn, hasThreadActiveFlag } from "../lib/codex/thread-state";
 import type {
   OrchestratorReloadRequest,
   OrchestratorReloadResponse,
@@ -98,6 +102,7 @@ let reloadableModules = loadOrchestratorReloadableModules();
 let shuttingDown = false;
 let codexBridge: CodexStdioBridge;
 let opencodeBridge: OpenCodeBridge;
+let browseSessionCleanupSupervisor = createBrowseSessionCleanupSupervisor();
 let upstreamMessageQueue: Promise<void> = Promise.resolve();
 let codexBridgeReloadPromise: Promise<void> | null = null;
 let opencodeBridgeReloadPromise: Promise<void> | null = null;
@@ -274,6 +279,8 @@ function finalizeReloadResponse(
 }
 
 async function stopAllChildren() {
+  browseSessionCleanupSupervisor.dispose();
+
   for (const entry of processes.values()) {
     if (entry.child && !entry.child.killed) {
       killProcessTree(entry.child.pid);
@@ -321,8 +328,74 @@ function restartChild(spec: ProcessSpec) {
 }
 
 function reloadOrchestratorLogic() {
+  browseSessionCleanupSupervisor.dispose();
   reloadableModules = reloadOrchestratorReloadableModules();
+  browseSessionCleanupSupervisor = createBrowseSessionCleanupSupervisor();
+  browseSessionCleanupSupervisor.start();
   log("orchestrator", "reloaded orchestrator helper modules");
+}
+
+function normalizeBridgeUrl(url: string) {
+  const parsedUrl = new URL(url.replace("://0.0.0.0", "://127.0.0.1"));
+  parsedUrl.pathname = "";
+  parsedUrl.search = "";
+  parsedUrl.hash = "";
+  return parsedUrl.toString().replace(/\/$/u, "");
+}
+
+async function sendBackgroundBridgeRequest<TResponse>(
+  harness: HarnessKind,
+  bridgeRequest: { id?: number; method: string; params?: unknown } & Record<string, unknown>,
+) {
+  const client = new CodexAppServerClient();
+  try {
+    await client.connect(normalizeBridgeUrl(CODEX_BRIDGE_URL));
+    const response = await client.sendRequest<TResponse>({
+      ...bridgeRequest,
+      workbenchHarness: harness,
+    });
+    if (isCodexJsonRpcFailure(response)) {
+      const detail = response.error.data ? ` ${JSON.stringify(response.error.data)}` : "";
+      throw new Error(`${response.error.message}${detail}`);
+    }
+
+    return response.result;
+  } finally {
+    client.close();
+  }
+}
+
+function isThreadActiveForBrowseCleanup(thread: ThreadReadResponse["thread"]) {
+  return getCurrentInProgressTurn(thread) !== null
+    || hasThreadActiveFlag(thread.status, "waitingOnUserInput")
+    || hasThreadActiveFlag(thread.status, "waitingOnApproval");
+}
+
+async function readThreadActiveForBrowseCleanup(threadId: string) {
+  for (const harness of ["codex", "copilot", "opencode"] as const satisfies readonly HarnessKind[]) {
+    try {
+      const response = await sendBackgroundBridgeRequest<ThreadReadResponse>(harness, {
+        method: "thread/read",
+        params: {
+          includeTurns: true,
+          threadId,
+        },
+        workbenchThreadHydration: { mode: "latest" },
+      });
+      return isThreadActiveForBrowseCleanup(response.thread);
+    } catch {
+      // Try the next harness; preserve sessions if no harness can read the thread.
+    }
+  }
+
+  return null;
+}
+
+function createBrowseSessionCleanupSupervisor() {
+  const Supervisor = reloadableModules.browseSessionCleanupSupervisor.default;
+  return new Supervisor({
+    readThreadActive: readThreadActiveForBrowseCleanup,
+  });
 }
 
 async function ensureWorkbenchPromptFiles() {
@@ -826,6 +899,7 @@ async function startOrchestrator() {
   log("orchestrator", `starting bridge at ${CODEX_BRIDGE_URL} and Next.js on port ${NEXT_PORT}`);
   await ensureWorkbenchPromptFiles();
   startBridgeServer();
+  browseSessionCleanupSupervisor.start();
   for (const spec of specs) {
     startChild(spec);
   }

@@ -111,6 +111,7 @@ The typed route currently covers:
 
 - `doctor`
 - `status`
+- `sessions`
 - `open`
 - `snapshot`
 - `click`
@@ -133,6 +134,13 @@ The typed route currently covers:
 - `cleanup`
 
 Typed browser actions require named sessions and local sessions. This is deliberate so future agents do not collide through the default Browse session or accidentally switch to remote Browserbase behavior.
+
+Current Browse session-management shape:
+
+- Workbench now synthesizes local session listing through `action: "sessions"` on `POST /api/browse`; this is not upstream `browse cloud sessions list`.
+- Workbench also exposes `GET /api/browse/sessions` and `POST /api/browse/sessions` for Workbench UI/session management. Future agents should prefer the `/browse` skill contract and typed `/api/browse` actions unless they have explicit permission to call the session-management route.
+- Durable session truth lives in `.workbench/runtime/browse-sessions.json` via `WorkbenchBrowseSessionRegistry`, and records include `threadId`, `projectId`, `cwd`, `projectRootPath`, `mode`, `lastActionAt`, and `inactiveSince`.
+- Runtime file discovery is a recovery/listability aid for local Browse session artifacts, not an omniscient replacement for durable Workbench ownership.
 
 ## Command visibility requirement
 
@@ -185,12 +193,21 @@ Updated builtin-skill/API ownership:
 
 - Typed `/api/browse` requests require a top-level `threadId`.
 - Workbench records that `threadId` on sessions it owns.
+- Workbench records project/cwd ownership on sessions it owns so the project sidebar can show only sessions belonging to the current project.
 - `cleanup` without explicit sessions cleans sessions owned by the supplied `threadId`, not the entire registry.
-- A Browse cleanup poller may stop thread-owned sessions only after the owning thread has been inactive for 30+ minutes.
+- Browse cleanup is owned by the long-lived orchestrator `BrowseSessionCleanupSupervisor`, not by a stateless Next route module timer.
+- The supervisor may stop thread-owned sessions only after the owning thread has been inactive for 30+ minutes.
 - A thread waiting on questionnaire/user input or approval is still active.
 - Legacy sessions without `threadId` are not auto-cleaned by the thread-owned poller; they can still be cleaned explicitly.
 - Typed screenshots always steer into the active thread turn and do not expose agent-configurable screenshot text.
 - Agents should not be taught raw Browse args as the normal path. Raw command support is diagnostics/backcompat noise, not the future-agent API.
+
+Updated sidebar ownership:
+
+- The Workbench project sidebar has a `Browse sessions` section in the persisted sidebar section order.
+- Existing saved sidebar section orders append the new `browseSessions` id instead of being reset.
+- The section lists Workbench-known sessions for the active project and exposes context menu actions for copying the session name, stopping, force stopping, and forgetting a stale registry record.
+- UI polling is only display refresh. Cleanup policy and lifecycle truth stay with the orchestrator supervisor/controller.
 
 ## Builtin Browse skill ownership
 
@@ -226,8 +243,12 @@ Current status:
 Known files from current inspection:
 
 - `webapp/app/api/browse/route.ts` — existing raw Browse endpoint and screenshot steer handling
+- `webapp/app/api/browse/sessions/route.ts` — Workbench UI/session management list and stop/forget route
 - `webapp/lib/workbench/browse/browse-agent-requests.ts` — typed Browse action-to-args mapper
-- `webapp/lib/workbench/browse/WorkbenchBrowseSessionRegistry.ts` — Workbench-owned Browse session registry and cleanup owner
+- `webapp/lib/workbench/browse/WorkbenchBrowseCli.ts` — shared Browse CLI process runner and runtime artifact discovery helper
+- `webapp/lib/workbench/browse/WorkbenchBrowseSessionController.ts` — shared Browse session list/stop/cleanup controller
+- `webapp/lib/workbench/browse/WorkbenchBrowseSessionRegistry.ts` — Workbench-owned durable Browse session registry
+- `webapp/orchestrator/BrowseSessionCleanupSupervisor.ts` — orchestrator-owned inactive-thread cleanup timer
 - `webapp/lib/workbench/thread/thread-steer-markers.ts` — screenshot steer sentinel helpers
 - `webapp/components/workbench/thread-view/thread-view-items.tsx` — thread rendering for screenshot steers
 - `webapp/lib/workbench/thread/thread-command-matchers.ts` — command matcher entrypoint
@@ -250,18 +271,21 @@ Prefer validation that does not disturb watch tasks or generate files:
 
 - `pnpm typecheck` from `webapp` is allowed by project guidance and should be the default code validation
 - focused API probes through `http://127.0.0.1:3002/api/browse` are allowed by the user for Browse work
+- focused session-management probes through `http://127.0.0.1:3002/api/browse/sessions` are allowed by the user for the Browse session UI/listing work
 - use Browse `doctor --json` or `status` before retrying failed Browse commands
 - do not retry identical failing Browse commands unchanged
 - stop named Browse sessions after probes
-- if a change requires orchestrator reload or restart to test, ask the user via questionnaire
+- if a change requires orchestrator reload or restart to test, ask the user unless the current thread has already granted that exact reload/restart permission
 
 Useful live probe pattern:
 
-1. `doctor --json` or `status`
-2. open `https://example.com` in a named local headless session
-3. snapshot the session
-4. take a typed screenshot with the current `threadId` if visual proof is useful
-5. stop the session with force if needed
+1. list sessions through `action: "sessions"` or `GET /api/browse/sessions`
+2. `doctor --json` or `status`
+3. open `https://example.com` in a named local headless session
+4. confirm the named session appears in the session list with project/cwd ownership
+5. snapshot the session
+6. take a typed screenshot with the current `threadId` if visual proof is useful
+7. stop the session with force if needed, preferably through the session-management route when validating sidebar behavior
 
 Completed live probe on 2026-07-05:
 
@@ -344,7 +368,7 @@ Completion status:
 - What is causing the transient visible command prompt windows during Browse request execution, and can Workbench suppress them reliably?
 - Is there already a shared type home for Workbench local endpoint request bodies?
 - Does Browse expose a reliable status/list sessions command, or only stop/session-scoped commands? Current answer: `status` and `stop` are session-scoped; no obvious `list all sessions` command was found in `browse --help`.
-- Can Workbench safely kill all Browse sessions, or only named sessions it knows about? Current answer: Workbench can safely clean up typed sessions it recorded, plus explicit session lists supplied by agents.
+- Can Workbench safely kill all Browse sessions, or only named sessions it knows about? Current answer: Workbench can safely clean up typed sessions it recorded, plus explicit session lists supplied by agents; runtime-only orphan candidates can be surfaced for diagnosis but should be treated more carefully than durable owned records.
 - Where should durable agent guidance live so future agents see it without editing generated instruction output?
 - Should the raw Browse endpoint stay disabled behind the same setting while typed safe requests are allowed separately, or should all Browse routes share the same setting?
 

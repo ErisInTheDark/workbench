@@ -4,24 +4,16 @@
  * - POST: run typed Workbench Browse actions, action sequences, or raw project-local browse CLI arguments and optionally steer completed screenshots into the active Codex turn. Keywords: browse, typed action, sequence, raw command, local capability, screenshot, steer.
  */
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { NextRequest, NextResponse } from "next/server";
 
-import { CodexAppServerClient } from "../../../lib/codex/app-server-client";
-import {
-  DEFAULT_CODEX_APP_SERVER_URL,
-  getCodexAppServerUrl,
-} from "../../../lib/codex/config";
 import { sendServerWorkbenchBridgeRequest } from "../../../lib/codex/server-bridge";
 import type { ThreadReadResponse } from "../../../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import type { TurnSteerResponse } from "../../../lib/codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
-import { getCurrentInProgressTurn, hasThreadActiveFlag } from "../../../lib/codex/thread-state";
-import { isCodexJsonRpcFailure } from "../../../lib/codex/protocol";
-import { appRoot, resolveProjectRoot } from "../../../lib/project";
+import { getCurrentInProgressTurn } from "../../../lib/codex/thread-state";
 import { projectRoot } from "../../../lib/project";
 import type {
   WorkbenchBrowseAgentAction,
@@ -33,9 +25,9 @@ import type {
   WorkbenchBrowseCommandResponse,
   WorkbenchHarness,
 } from "../../../lib/types";
-import WorkbenchBrowseSessionRegistry from "../../../lib/workbench/browse/WorkbenchBrowseSessionRegistry";
+import WorkbenchBrowseCli from "../../../lib/workbench/browse/WorkbenchBrowseCli";
+import WorkbenchBrowseSessionController from "../../../lib/workbench/browse/WorkbenchBrowseSessionController";
 import { normalizeWorkbenchBrowseAgentRequest } from "../../../lib/workbench/browse/browse-agent-requests";
-import { resolveAgentEndpointProjectFromCwd } from "../../../lib/workbench/project/agent-endpoint-project";
 import WorkbenchServerSettings from "../../../lib/workbench/settings/WorkbenchServerSettings";
 import { createAgentScreenshotSteerText } from "../../../lib/workbench/thread/thread-steer-markers";
 
@@ -51,11 +43,9 @@ const MAX_BROWSE_AGENT_SEQUENCE_ACTIONS = 50;
 const BROWSE_SCREENSHOT_ASSET_THREAD_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const BROWSE_SCREENSHOT_DATA_URL_PATTERN = /^data:(image\/(?:png|jpeg|jpg|webp|gif));base64,([a-z0-9+/=\s]+)$/iu;
 const BROWSE_SCREENSHOT_BASE64_PATTERN = /^[a-z0-9+/=\s]+$/iu;
-const BROWSE_SESSION_CLEANUP_POLL_MS = 3 * 60_000;
-const BROWSE_SESSION_INACTIVE_CLEANUP_MS = 30 * 60_000;
 const VALID_HARNESSES: readonly WorkbenchHarness[] = ["codex", "copilot", "opencode"];
-let browseCleanupPoller: NodeJS.Timeout | null = null;
-let browseCleanupPollInFlight = false;
+const browseCli = new WorkbenchBrowseCli();
+const browseSessionController = new WorkbenchBrowseSessionController({ cli: browseCli });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -183,26 +173,6 @@ function browseAgentSequenceProgressResponse(
   });
 }
 
-async function resolveBrowseEntrypoint() {
-  const entrypoint = path.join(appRoot, "lib", "workbench", "browse", "run-browse-cli.mjs");
-  const browseEntrypoint = path.join(appRoot, "node_modules", "browse", "bin", "run.js");
-  try {
-    await fs.access(entrypoint);
-    await fs.access(browseEntrypoint);
-  } catch {
-    throw new Error("The project-local browse CLI entrypoint was not found. Install the browse dependency in webapp before using /api/browse.");
-  }
-  return entrypoint;
-}
-
-async function resolveBrowseCwd(request: WorkbenchBrowseCommandRequest) {
-  if (request.cwd) {
-    return (await resolveAgentEndpointProjectFromCwd(request.cwd, { endpointName: "Browse" })).cwd;
-  }
-
-  return path.resolve((await resolveProjectRoot(request.projectId)).root);
-}
-
 function hasBrowseFlag(args: readonly string[], flag: string) {
   return args.some((arg) => arg === flag);
 }
@@ -220,78 +190,7 @@ function normalizeScreenshotSteerArgs(args: readonly string[]) {
 }
 
 async function runBrowseCommand(request: WorkbenchBrowseCommandRequest): Promise<WorkbenchBrowseCommandResponse> {
-  const startedAt = Date.now();
-  const browseEntrypoint = await resolveBrowseEntrypoint();
-  const cwd = await resolveBrowseCwd(request);
-  const timeoutMs = request.timeoutMs ?? DEFAULT_BROWSE_TIMEOUT_MS;
-
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [browseEntrypoint, ...request.args], {
-      cwd,
-      env: {
-        ...process.env,
-        BROWSERBASE_TELEMETRY_DISABLED: "1",
-        BROWSE_DISABLE_UPDATE_CHECK: "1",
-      },
-      shell: false,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill();
-    }, timeoutMs);
-
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.once("error", (error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      resolve({
-        durationMs: Date.now() - startedAt,
-        error: error.message,
-        exitCode: null,
-        ok: false,
-        stderr,
-        stdout,
-        timedOut,
-      });
-    });
-    child.once("close", (exitCode) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      resolve({
-        durationMs: Date.now() - startedAt,
-        error: timedOut ? `browse command timed out after ${timeoutMs}ms.` : undefined,
-        exitCode,
-        ok: exitCode === 0 && !timedOut,
-        stderr,
-        stdout,
-        timedOut: timedOut || undefined,
-      });
-    });
-
-    if (request.stdin) {
-      child.stdin.end(request.stdin);
-    } else {
-      child.stdin.end();
-    }
-  });
+  return await browseCli.run(request);
 }
 
 interface ScreenshotImagePayload {
@@ -582,6 +481,24 @@ async function runBrowseAgentCommand(
   { actionIndex = 0 }: { actionIndex?: number } = {},
 ): Promise<WorkbenchBrowseAgentResponse> {
   const startedAt = Date.now();
+  if (payload.action === "sessions") {
+    const listResponse = await browseSessionController.listSessions({
+      cwd: payload.cwd ?? null,
+      includeRuntime: payload.includeRuntime,
+      projectId: payload.projectId ?? null,
+      threadId: null,
+      timeoutMs: payload.timeoutMs ?? null,
+    });
+    return {
+      action: "sessions",
+      durationMs: Date.now() - startedAt,
+      exitCode: 0,
+      ok: true,
+      stderr: "",
+      stdout: JSON.stringify(listResponse, null, 2),
+    };
+  }
+
   const normalized = normalizeWorkbenchBrowseAgentRequest(payload);
   if (normalized.ok === false) {
     return {
@@ -594,11 +511,12 @@ async function runBrowseAgentCommand(
     };
   }
 
-  const registry = new WorkbenchBrowseSessionRegistry();
   if (normalized.command.action === "cleanup") {
-    return runBrowseAgentCleanupCommand(normalized.command, registry, startedAt);
+    void startedAt;
+    return await browseSessionController.cleanupThreadSessions(normalized.command);
   }
 
+  const executionContext = await browseCli.resolveExecutionContext(normalized.command.commandRequest);
   const activeThread = shouldAutoCaptureScreenshot(normalized.command.action)
     ? await readThreadForAutomaticBrowseScreenshot(request, normalized.command.commandRequest.threadId)
     : null;
@@ -619,11 +537,14 @@ async function runBrowseAgentCommand(
   }
   if (result.ok && normalized.command.session) {
     if (normalized.command.action === "stop") {
-      await registry.forget(normalized.command.session);
+      await browseSessionController.forgetSession(normalized.command.session);
     } else {
-      await registry.remember({
+      await browseSessionController.rememberSession({
+        cwd: executionContext.cwd,
         mode: normalized.command.mode,
         name: normalized.command.session,
+        projectId: executionContext.projectId,
+        projectRootPath: executionContext.projectRootPath,
         threadId: normalized.command.commandRequest.threadId,
       });
     }
@@ -695,197 +616,9 @@ async function runBrowseAgentCommandSequence(
   return sequenceResponse;
 }
 
-async function runBrowseAgentCleanupCommand(
-  command: {
-    action: "cleanup";
-    cwd?: string | null;
-    force: boolean;
-    projectId?: string | null;
-    sessions: string[] | null;
-    threadId: string;
-    timeoutMs?: number | null;
-  },
-  registry: WorkbenchBrowseSessionRegistry,
-  startedAt: number,
-): Promise<WorkbenchBrowseAgentResponse> {
-  const registeredSessions = command.sessions ?? (await registry.list())
-    .filter((session) => session.threadId === command.threadId)
-    .map((session) => session.name);
-  const sessions = [...new Set(registeredSessions)];
-  const cleanupResults: WorkbenchBrowseCommandResponse[] = [];
-
-  for (const session of sessions) {
-    const args = ["stop", "--session", session];
-    if (command.force) {
-      args.push("--force");
-    }
-    const result = await runBrowseCommand({
-      args,
-      cwd: command.cwd ?? null,
-      projectId: command.projectId ?? null,
-      threadId: command.threadId,
-      timeoutMs: command.timeoutMs ?? null,
-    });
-    cleanupResults.push(result);
-    if (result.ok) {
-      await registry.forget(session);
-    }
-  }
-
-  const ok = cleanupResults.every((result) => result.ok);
-  return {
-    action: "cleanup",
-    cleanupResults,
-    durationMs: Date.now() - startedAt,
-    exitCode: ok ? 0 : null,
-    ok,
-    stderr: cleanupResults.map((result) => result.stderr).filter(Boolean).join("\n"),
-    stdout: JSON.stringify({
-      cleanedSessions: cleanupResults.filter((result) => result.ok).length,
-      sessions,
-    }, null, 2),
-  };
-}
-
-function normalizeWebSocketUrl(url: string) {
-  const parsedUrl = new URL(url);
-  parsedUrl.pathname = "";
-  parsedUrl.search = "";
-  parsedUrl.hash = "";
-  return parsedUrl.toString().replace(/\/$/u, "");
-}
-
-function getBackgroundBridgeUrls() {
-  return Array.from(new Set([
-    getCodexAppServerUrl().replace("://0.0.0.0", "://127.0.0.1"),
-    DEFAULT_CODEX_APP_SERVER_URL,
-  ].map(normalizeWebSocketUrl)));
-}
-
-async function sendBackgroundBridgeRequest<TResponse>(
-  harness: WorkbenchHarness,
-  bridgeRequest: { id?: number; method: string; params?: unknown } & Record<string, unknown>,
-) {
-  let lastError: unknown = null;
-  for (const candidateUrl of getBackgroundBridgeUrls()) {
-    const client = new CodexAppServerClient();
-    try {
-      await client.connect(candidateUrl);
-      const response = await client.sendRequest<TResponse>({
-        ...bridgeRequest,
-        workbenchHarness: harness,
-      });
-      if (isCodexJsonRpcFailure(response)) {
-        const detail = response.error.data ? ` ${JSON.stringify(response.error.data)}` : "";
-        throw new Error(`${response.error.message}${detail}`);
-      }
-
-      client.close();
-      return response.result;
-    } catch (error) {
-      lastError = error;
-      client.close();
-    }
-  }
-
-  throw lastError instanceof Error
-    ? lastError
-    : new Error("Unable to reach the local Codex bridge.");
-}
-
-function isThreadActiveForBrowseCleanup(thread: ThreadReadResponse["thread"]) {
-  return getCurrentInProgressTurn(thread) !== null
-    || hasThreadActiveFlag(thread.status, "waitingOnUserInput")
-    || hasThreadActiveFlag(thread.status, "waitingOnApproval");
-}
-
-async function readThreadActiveForBrowseCleanup(threadId: string) {
-  for (const harness of VALID_HARNESSES) {
-    try {
-      const response = await sendBackgroundBridgeRequest<ThreadReadResponse>(harness, {
-        method: "thread/read",
-        params: {
-          includeTurns: true,
-          threadId,
-        },
-        workbenchThreadHydration: { mode: "latest" },
-      });
-      return isThreadActiveForBrowseCleanup(response.thread);
-    } catch {
-      // Try the next harness; preserve sessions if no harness can read the thread.
-    }
-  }
-
-  return null;
-}
-
-async function pollBrowseSessionCleanup() {
-  if (browseCleanupPollInFlight) {
-    return;
-  }
-
-  browseCleanupPollInFlight = true;
-  try {
-    const registry = new WorkbenchBrowseSessionRegistry();
-    const threadIds = await registry.listOwnedThreadIds();
-    for (const threadId of threadIds) {
-      const active = await readThreadActiveForBrowseCleanup(threadId);
-      if (active === null) {
-        continue;
-      }
-
-      if (active) {
-        await registry.markThreadActive(threadId);
-      } else {
-        await registry.markThreadInactive(threadId);
-      }
-    }
-
-    const staleSessions = await registry.listStaleInactiveSessions({
-      olderThanMs: BROWSE_SESSION_INACTIVE_CLEANUP_MS,
-    });
-    for (const session of staleSessions) {
-      if (!session.threadId) {
-        continue;
-      }
-
-      const result = await runBrowseCommand({
-        args: ["stop", "--session", session.name, "--force"],
-        cwd: null,
-        projectId: null,
-        threadId: session.threadId,
-        timeoutMs: DEFAULT_BROWSE_TIMEOUT_MS,
-      });
-      if (result.ok) {
-        await registry.forget(session.name);
-      }
-    }
-  } finally {
-    browseCleanupPollInFlight = false;
-  }
-}
-
-function ensureBrowseSessionCleanupPoller() {
-  if (browseCleanupPoller) {
-    return;
-  }
-
-  browseCleanupPoller = setInterval(() => {
-    void pollBrowseSessionCleanup().catch(() => {
-      // Best-effort background cleanup must not disturb foreground Browse requests.
-    });
-  }, BROWSE_SESSION_CLEANUP_POLL_MS);
-  browseCleanupPoller.unref?.();
-  void pollBrowseSessionCleanup().catch(() => {
-    // Best-effort background cleanup must not disturb foreground Browse requests.
-  });
-}
-
 export async function POST(request: NextRequest) {
   const startedAt = Date.now();
   try {
-    ensureBrowseSessionCleanupPoller();
-
     const requestBody = await request.json().catch(() => null);
     if (isRecord(requestBody) && Array.isArray(requestBody.actions)) {
       if (requestBody.actions.length > MAX_BROWSE_AGENT_SEQUENCE_ACTIONS) {

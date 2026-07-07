@@ -12,6 +12,9 @@ import type {
   ExplorerSnapshot, FilePayload, OpenFileInEditorRequest, OrchestratorReloadRequest, OrchestratorReloadResponse, ThreadPayload, ThreadSummary, TreeNode,
   WorkbenchCollaborationState,
   WorkbenchControls,
+  WorkbenchBrowseSessionControlResponse,
+  WorkbenchBrowseSessionListResponse,
+  WorkbenchBrowseSessionSummary,
   WorkbenchFileOpenTarget,
   WorkbenchHarness,
   WorkbenchLocalCapabilitySettings,
@@ -154,6 +157,7 @@ import {
   WorkbenchDialog,
 } from "./workbench/workbench-dialogs";
 import {
+  BrowseSessionsList,
   ExplorerTree,
   FileVisibilityIcon,
   NewEntryIcon,
@@ -600,6 +604,9 @@ export default function Workbench () {
   const [localCapabilitySettings, setLocalCapabilitySettings] = useState<WorkbenchLocalCapabilitySettings>(DEFAULT_LOCAL_CAPABILITY_SETTINGS);
   const [isLocalCapabilitySettingsLoading, setIsLocalCapabilitySettingsLoading] = useState(false);
   const [localCapabilitySettingsError, setLocalCapabilitySettingsError] = useState("");
+  const [browseSessions, setBrowseSessions] = useState<WorkbenchBrowseSessionSummary[]>([]);
+  const [isBrowseSessionsLoading, setIsBrowseSessionsLoading] = useState(false);
+  const [browseSessionsError, setBrowseSessionsError] = useState("");
   const [projectSettingsByProjectId, setProjectSettingsByProjectId] = useState<Record<string, WorkbenchProjectSettings>>({});
   const [createDialogParentPath, setCreateDialogParentPath] = useState("");
   const [createEntryName, setCreateEntryName] = useState("");
@@ -1002,6 +1009,54 @@ export default function Workbench () {
   const currentProject = explorer.projects.find((project) => project.id === explorer.currentProjectId) ?? null;
   const activeProjectId = explorer.currentProjectId || route.projectId;
   const collaborationState = collaborationStatesByProjectId[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
+  const refreshBrowseSessions = useCallback(async (projectId = activeProjectId) => {
+    if (!projectId) {
+      setBrowseSessions([]);
+      setBrowseSessionsError("");
+      return;
+    }
+
+    setIsBrowseSessionsLoading(true);
+    setBrowseSessionsError("");
+    try {
+      const response = await fetch(`/api/browse/sessions?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: "Unable to load Browse sessions." }));
+        throw new Error(error.error);
+      }
+
+      const payload = await response.json() as WorkbenchBrowseSessionListResponse;
+      setBrowseSessions(payload.sessions);
+    } catch (error) {
+      setBrowseSessionsError(error instanceof Error ? error.message : "Unable to load Browse sessions.");
+    } finally {
+      setIsBrowseSessionsLoading(false);
+    }
+  }, [activeProjectId]);
+  useEffect(() => {
+    if (!activeProjectId) {
+      setBrowseSessions([]);
+      setBrowseSessionsError("");
+      return;
+    }
+
+    let cancelled = false;
+    const refresh = async () => {
+      if (cancelled) {
+        return;
+      }
+      await refreshBrowseSessions(activeProjectId);
+    };
+    void refresh();
+    const timer = window.setInterval(() => {
+      void refresh();
+    }, 30_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeProjectId, refreshBrowseSessions]);
   const collaborationThreadIdSet = useMemo(() => new Set(collaborationState.runThreadIds), [collaborationState.runThreadIds]);
   const archivedSidebarThreadKeySet = useMemo(() => new Set(threadSidebarPreferences.archivedThreadKeys), [threadSidebarPreferences.archivedThreadKeys]);
   const pinnedSidebarThreadKeySet = useMemo(() => new Set(threadSidebarPreferences.pinnedThreadKeys), [threadSidebarPreferences.pinnedThreadKeys]);
@@ -1557,6 +1612,75 @@ export default function Workbench () {
       label: `Thread actions for ${label}`,
     };
   }, [pinnedSidebarThreadKeySet, stopSidebarThread, updateThreadSidebarPreferences]);
+  const updateBrowseSession = useCallback(async (session: WorkbenchBrowseSessionSummary, action: "forget" | "stop", options: { force?: boolean } = {}) => {
+    if (!activeProjectId) {
+      return;
+    }
+
+    const response = await fetch("/api/browse/sessions", {
+      body: JSON.stringify({
+        action,
+        force: options.force === true,
+        projectId: activeProjectId,
+        session: session.name,
+      }),
+      cache: "no-store",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: "Unable to update Browse session." }));
+      setBrowseSessionsError(error.error);
+      return;
+    }
+
+    const payload = await response.json() as WorkbenchBrowseSessionControlResponse;
+    if (payload.result?.ok === false) {
+      setBrowseSessionsError(payload.result.error ?? "Unable to stop Browse session.");
+    }
+    await refreshBrowseSessions(activeProjectId);
+  }, [activeProjectId, refreshBrowseSessions]);
+  const getBrowseSessionContextMenu = useCallback((session: WorkbenchBrowseSessionSummary): WorkbenchContextMenuDefinition => ({
+    id: `browse-session:${session.name}`,
+    items: [
+      {
+        icon: <CopyIcon className="size-4" />,
+        id: "copy-session",
+        label: "Copy session name",
+        onSelect: () => {
+          void writeTextToClipboard(session.name);
+        },
+      },
+      {
+        icon: <StopIcon className="size-4" />,
+        id: "stop-session",
+        label: "Stop session",
+        onSelect: () => {
+          void updateBrowseSession(session, "stop");
+        },
+      },
+      {
+        icon: <StopIcon className="size-4" />,
+        id: "force-stop-session",
+        label: "Force stop session",
+        onSelect: () => {
+          void updateBrowseSession(session, "stop", { force: true });
+        },
+        tone: "danger",
+      },
+      {
+        icon: <ArchiveIcon className="size-4" />,
+        id: "forget-session",
+        label: "Forget record",
+        onSelect: () => {
+          void updateBrowseSession(session, "forget");
+        },
+      },
+    ],
+    label: `Browse session actions for ${session.name}`,
+  }), [updateBrowseSession]);
   const handleWorkbenchProjectFileLinkClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
     if (event.button !== 0) {
       return;
@@ -3164,6 +3288,55 @@ export default function Workbench () {
                       />
                     </nav>
                   )}
+                </section>
+                <section
+                  className={`relative space-y-2 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "browseSessions" ? " opacity-45" : ""}`}
+                  {...getSidebarSectionDragProps("browseSessions")}
+                  onPointerDown={(event) => {
+                    beginWorkbenchPointerDrag(event, { sectionId: "browseSessions", type: "sidebar-section" });
+                  }}
+                  onPointerMove={() => {
+                    if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "browseSessions") {
+                      setSidebarDropTargetId("browseSessions");
+                    }
+                  }}
+                  onPointerUp={() => {
+                    if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "browseSessions") {
+                      moveSidebarSection(activeWorkbenchDrag.payload.sectionId, "browseSessions");
+                      endWorkbenchPointerDrag();
+                    }
+                  }}
+                >
+                  {sidebarDropTargetId === "browseSessions" ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
+                  <div className="flex items-center justify-between gap-3 pr-2 md:pr-4.5">
+                    <p className="m-0 text-base font-semibold leading-tight">Browse sessions</p>
+                    <button
+                      type="button"
+                      aria-label="Refresh Browse sessions"
+                      title="Refresh Browse sessions"
+                      className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}`}
+                      disabled={!activeProjectId || isBrowseSessionsLoading}
+                      onClick={() => {
+                        void refreshBrowseSessions();
+                      }}
+                    >
+                      <ReloadIcon />
+                      <span className="sr-only">Refresh Browse sessions</span>
+                    </button>
+                  </div>
+                  <BrowseSessionsList
+                    getSessionContextMenu={getBrowseSessionContextMenu}
+                    isLoading={isBrowseSessionsLoading}
+                    onRefresh={() => {
+                      void refreshBrowseSessions();
+                    }}
+                    sessions={browseSessions}
+                  />
+                  {browseSessionsError ? (
+                    <p className="m-0 pr-2 text-[0.84rem] leading-6 text-danger">
+                      {browseSessionsError}
+                    </p>
+                  ) : null}
                 </section>
                 <div
                   className="relative h-5 shrink-0"

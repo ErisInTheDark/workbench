@@ -11,12 +11,13 @@ import WorkbenchMainLayout, { type WorkbenchMainLayout as WorkbenchMainLayoutSta
 const MAIN_LAYOUT_STORAGE_KEY = "workbench:main-layout:v1";
 const SIDEBAR_ORDER_STORAGE_KEY = "workbench:sidebar-section-order:v1";
 
-export type WorkbenchSidebarSectionId = "project" | "threads" | "files";
+export type WorkbenchSidebarSectionId = "browseSessions" | "project" | "threads" | "files";
 
 export const DEFAULT_WORKBENCH_SIDEBAR_SECTION_ORDER: readonly WorkbenchSidebarSectionId[] = [
   "project",
   "threads",
   "files",
+  "browseSessions",
 ];
 
 function getProjectStorageKey(baseKey: string, projectId: string) {

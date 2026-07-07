@@ -10,10 +10,13 @@ import { projectRoot } from "../../project";
 import type { WorkbenchBrowseSessionMode } from "../../types";
 
 export interface WorkbenchBrowseSessionRecord {
+  cwd: string | null;
   inactiveSince: string | null;
   lastActionAt: string;
   mode: WorkbenchBrowseSessionMode | null;
   name: string;
+  projectId: string | null;
+  projectRootPath: string | null;
   threadId: string | null;
 }
 
@@ -35,6 +38,20 @@ export default class WorkbenchBrowseSessionRegistry {
   async list() {
     const state = await this.readState();
     return [...state.sessions].sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  async listByProjectId(projectId: string) {
+    const state = await this.readState();
+    return state.sessions
+      .filter((session) => session.projectId === projectId)
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  async listByThreadId(threadId: string) {
+    const state = await this.readState();
+    return state.sessions
+      .filter((session) => session.threadId === threadId)
+      .sort((left, right) => left.name.localeCompare(right.name));
   }
 
   async listOwnedThreadIds() {
@@ -69,28 +86,58 @@ export default class WorkbenchBrowseSessionRegistry {
   }
 
   async remember({
+    cwd,
     mode,
     name,
+    projectId,
+    projectRootPath,
     threadId,
   }: {
+    cwd: string | null;
     mode: WorkbenchBrowseSessionMode | null;
     name: string;
+    projectId: string | null;
+    projectRootPath: string | null;
     threadId: string;
   }) {
     const state = await this.readState();
     const now = new Date().toISOString();
     const existing = state.sessions.find((session) => session.name === name);
     const nextRecord = {
+      cwd: cwd ?? existing?.cwd ?? null,
       inactiveSince: null,
       lastActionAt: now,
       mode: mode ?? existing?.mode ?? null,
       name,
+      projectId: projectId ?? existing?.projectId ?? null,
+      projectRootPath: projectRootPath ?? existing?.projectRootPath ?? null,
       threadId,
     };
     const sessions = existing
       ? state.sessions.map((session) => session.name === name ? nextRecord : session)
       : [...state.sessions, nextRecord];
     await this.writeState({ sessions });
+  }
+
+  async touchSession(sessionName: string) {
+    const state = await this.readState();
+    const now = new Date().toISOString();
+    let changed = false;
+    const sessions = state.sessions.map((session) => {
+      if (session.name !== sessionName) {
+        return session;
+      }
+
+      changed = true;
+      return {
+        ...session,
+        lastActionAt: now,
+      };
+    });
+
+    if (changed) {
+      await this.writeState({ sessions });
+    }
   }
 
   private async updateThreadActivity(threadId: string, { active }: { active: boolean }) {
@@ -133,10 +180,13 @@ export default class WorkbenchBrowseSessionRegistry {
         sessions: parsedState.sessions
           .filter(isSessionRecord)
           .map((session) => ({
+            cwd: session.cwd ?? null,
             inactiveSince: session.inactiveSince ?? null,
             lastActionAt: session.lastActionAt,
             mode: session.mode,
             name: session.name,
+            projectId: session.projectId ?? null,
+            projectRootPath: session.projectRootPath ?? null,
             threadId: session.threadId ?? null,
           })),
       };
@@ -159,6 +209,9 @@ function isSessionRecord(value: Partial<WorkbenchBrowseSessionRecord> | null | u
   return typeof value?.name === "string"
     && typeof value.lastActionAt === "string"
     && (value.mode === null || value.mode === "headed" || value.mode === "headless")
+    && (value.cwd === undefined || value.cwd === null || typeof value.cwd === "string")
+    && (value.projectId === undefined || value.projectId === null || typeof value.projectId === "string")
+    && (value.projectRootPath === undefined || value.projectRootPath === null || typeof value.projectRootPath === "string")
     && (value.threadId === undefined || value.threadId === null || typeof value.threadId === "string")
     && (value.inactiveSince === undefined || value.inactiveSince === null || typeof value.inactiveSince === "string");
 }

@@ -19,6 +19,7 @@ interface BrowseRequestSummary {
 }
 
 const BROWSE_ROUTE_PATTERN = /https?:\/\/127\.0\.0\.1:3002\/api\/browse\b|https?:\/\/localhost:3002\/api\/browse\b|['"`]\/api\/browse['"`]/i;
+const BROWSE_SESSIONS_ROUTE_PATTERN = /(?:https?:\/\/(?:127\.0\.0\.1|localhost):3002)?\/api\/browse\/sessions\b/i;
 
 export const BROWSE_WEB_REQUEST_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
@@ -134,6 +135,8 @@ function formatBrowseActionLabel(action: string | null | undefined) {
       return "Viewport";
     case "screenshot":
       return "Screenshot";
+    case "sessions":
+      return "Sessions";
     case "cleanup":
       return "Clean up";
     case "stop":
@@ -170,6 +173,15 @@ function readBrowseRequestSummary(commandText: string): BrowseRequestSummary | n
   const argsSummary = readPowerShellArgsBrowseRequestSummary(commandText);
   if (argsSummary) {
     return argsSummary;
+  }
+
+  if (BROWSE_SESSIONS_ROUTE_PATTERN.test(commandText)) {
+    return {
+      action: "sessions",
+      isBrowseRequest: true,
+      session: readUrlQueryValue(commandText, "session"),
+      target: readUrlQueryValue(commandText, "projectId"),
+    };
   }
 
   return { action: "request", session: null, target: null };
@@ -473,6 +485,7 @@ type BrowseJsonAction = {
   expression?: string;
   force?: boolean;
   key?: string;
+  projectId?: string;
   selector?: string;
   session?: string;
   state?: string;
@@ -494,6 +507,7 @@ type BrowseJsonBody =
       expression?: string;
       force?: boolean;
       session?: string;
+      projectId?: string;
       url?: string;
       selector?: string;
       key?: string;
@@ -548,6 +562,20 @@ function readPowerShellStringAssignment(commandText: string, variableName: strin
   return assignmentMatch?.[2]?.trim() ?? null;
 }
 
+function readUrlQueryValue(commandText: string, fieldName: string) {
+  const match = commandText.match(new RegExp(`[?&]${escapeRegExp(fieldName)}=([^\\s'"&#]+)`, "i"));
+  const encodedValue = match?.[1];
+  if (!encodedValue) {
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(encodedValue.replace(/\+/g, " ")).trim() || null;
+  } catch {
+    return encodedValue.trim() || null;
+  }
+}
+
 function formatBrowseAction(action: string) {
   switch (action) {
     case "doctor":
@@ -588,6 +616,8 @@ function formatBrowseAction(action: string) {
       return "set viewport";
     case "screenshot":
       return "screenshot";
+    case "sessions":
+      return "list sessions";
     case "cleanup":
       return "clean up sessions";
     case "stop":
@@ -684,6 +714,7 @@ function readBrowseActionTarget(action: BrowseJsonAction) {
   return action.url
     ?? action.selector
     ?? action.key
+    ?? action.projectId
     ?? action.what
     ?? action.check
     ?? action.expression

@@ -13,10 +13,10 @@ import type { FileChangeRequestApprovalParams } from "../lib/codex/generated/app
 import type { GrantedPermissionProfile } from "../lib/codex/generated/app-server/v2/GrantedPermissionProfile";
 import type { PermissionsRequestApprovalParams } from "../lib/codex/generated/app-server/v2/PermissionsRequestApprovalParams";
 import type { RequestPermissionProfile } from "../lib/codex/generated/app-server/v2/RequestPermissionProfile";
+import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { ToolRequestUserInputParams } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputParams";
 import type { ToolRequestUserInputQuestion } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputQuestion";
 import type { ToolRequestUserInputResponse } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputResponse";
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type {
     WorkbenchApprovalCommandContext,
     WorkbenchBrowseScreenshotEntry,
@@ -30,9 +30,9 @@ import type {
 } from "../lib/types";
 import { normalizeWorkbenchCollaborationState } from "../lib/workbench/collaboration/collaboration-state";
 import {
-  buildWorkbenchCollaborationDeveloperInstructions,
-  buildWorkbenchPromptInstructions,
-  type WorkbenchPromptInstructions,
+    buildWorkbenchCollaborationDeveloperInstructions,
+    buildWorkbenchPromptInstructions,
+    type WorkbenchPromptInstructions,
 } from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import { isWorkbenchPauseControlRequest, WORKBENCH_PAUSE_CONTROL_KIND } from "../lib/workbench/thread/thread-pause-control";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";

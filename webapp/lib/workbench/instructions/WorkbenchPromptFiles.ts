@@ -411,6 +411,7 @@ async function buildWorkbenchBrowseInstructions(context: WorkbenchPromptContext)
   }
 
   const browseRouteUrl = new URL("/api/browse", workbenchOrigin).toString();
+  const browseSessionsRouteUrl = new URL("/api/browse/sessions", workbenchOrigin).toString();
   let rawCommandStatus = "Raw Browse CLI-args passthrough is currently disabled.";
   try {
     const settings = new WorkbenchServerSettings();
@@ -433,9 +434,15 @@ Endpoint URL:
 ${browseRouteUrl}
 \`\`\`
 
+Browse session management endpoint URL:
+
+\`\`\`text
+${browseSessionsRouteUrl}
+\`\`\`
+
 ${rawCommandStatus}
 
-This section does not authorize arbitrary Workbench webapp endpoint calls. Use the \`/browse\` skill for the browser workflow and request contract.
+This section does not authorize arbitrary Workbench webapp endpoint calls. Use the \`/browse\` skill for the browser workflow and request contract, including when listing or stopping Workbench-known Browse sessions.
 `.trim();
 }
 

@@ -11,6 +11,7 @@
  * - PanelCloseIcon: render the mosaic panel close control. Keywords: workbench, icon, panel, close.
  * - GearIcon: render the settings navigation icon. Keywords: workbench, icon, settings.
  * - CollaborationIcon: render the collaboration navigation icon. Keywords: workbench, icon, collaboration.
+ * - BrowserSessionIcon: render the Browse session sidebar icon. Keywords: workbench, icon, browse, session.
  * - ReloadIcon: render the local runtime reload icon. Keywords: workbench, icon, reload.
  * - StopIcon/PauseIcon/PlayIcon/ClockIcon/WarningIcon: render shared thread turn and command-status icons. Keywords: workbench, icon, thread, stop, pause, play, progress.
  * - PinIcon: render the pinned thread icon. Keywords: workbench, icon, thread, pin.
@@ -210,6 +211,18 @@ export function CollaborationIcon () {
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
       <path d="M4.25 4.75H15.75V13.25H8.25L4.25 16.25V4.75Z" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M7.25 8H12.75M7.25 10.5H10.75" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function BrowserSessionIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
+      <rect x="3.25" y="4.25" width="13.5" height="10.75" rx="1.8" />
+      <path d="M3.25 7.5H16.75" strokeLinecap="round" />
+      <path d="M6 5.9H6.01M8 5.9H8.01" strokeLinecap="round" />
+      <path d="M7 11.25H10.75" strokeLinecap="round" />
+      <path d="M12.6 10.1L14.1 11.6L12.6 13.1" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

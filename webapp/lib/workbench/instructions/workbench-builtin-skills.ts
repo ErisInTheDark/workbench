@@ -131,7 +131,9 @@ Raw CLI-args passthrough, when explicitly needed and enabled:
 }
 \`\`\`
 
-Typed actions include \`doctor\`, \`status\`, \`open\`, \`snapshot\`, \`click\`, \`fill\`, \`type\`, \`key\`, \`select\`, \`wait\`, \`get\`, \`is\`, \`eval\`, \`highlight\`, \`back\`, \`forward\`, \`reload\`, \`screenshot\`, \`refs\`, \`viewport\`, \`stop\`, and \`cleanup\`.
+Typed actions include \`doctor\`, \`status\`, \`sessions\`, \`open\`, \`snapshot\`, \`click\`, \`fill\`, \`type\`, \`key\`, \`select\`, \`wait\`, \`get\`, \`is\`, \`eval\`, \`highlight\`, \`back\`, \`forward\`, \`reload\`, \`screenshot\`, \`refs\`, \`viewport\`, \`stop\`, and \`cleanup\`.
+
+Use \`sessions\` to list Workbench-known local Browse sessions for the current project/cwd when cleanup state is uncertain. It is Workbench-synthesized from the durable session registry plus Browse runtime files because the upstream local Browse CLI does not expose a local all-sessions list command.
 
 Use the current Workbench thread id when it is available. If no current thread id is available yet, wait until the thread is materialized before using Browse requests because typed requests require a \`threadId\`.
 
@@ -227,7 +229,9 @@ Stop named sessions when finished.
 
 Use \`cleanup\` for sessions owned by the current thread.
 
-Use explicit \`sessions\` cleanup when you created or inherited specific session names.
+Use explicit \`cleanup\` session lists when you created or inherited specific session names.
+
+Users can also manage Workbench-known Browse sessions from the current project's sidebar.
 
 Never leave headed sessions open unless the user asks you to keep them open.
 `.trim(),
