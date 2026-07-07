@@ -7,6 +7,7 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
+import { ReactScan } from "../components/ReactScan";
 import "./globals.css";
 
 const THEME_BOOTSTRAP_SCRIPT = `
@@ -38,9 +39,10 @@ export const viewport: Viewport = {
   width: "device-width",
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default function RootLayout ({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <ReactScan />
       <body suppressHydrationWarning>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }} />
         {children}
