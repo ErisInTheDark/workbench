@@ -1118,7 +1118,31 @@ export default class CodexStdioBridge {
   }
 
   async handleBridgeRequest(message: JsonRpcRequest): Promise<JsonRpcResponse | null> {
+    if (message.method === "thread/context/read") {
+      return await this.handleThreadContextReadRequest(message);
+    }
+
     return await this.enqueueOperation(() => this.handleBridgeRequestImmediately(message));
+  }
+
+  private async handleThreadContextReadRequest(message: JsonRpcRequest): Promise<JsonRpcResponse> {
+    const requestId = message.id ?? null;
+
+    try {
+      this.assertAcceptingWork();
+      return {
+        id: requestId,
+        result: await this.readThreadContext(message),
+      };
+    } catch (error) {
+      return {
+        id: requestId,
+        error: {
+          code: -32000,
+          message: error instanceof Error ? error.message : "Codex user-input bridge request failed.",
+        },
+      };
+    }
   }
 
   private async handleBridgeRequestImmediately(message: JsonRpcRequest): Promise<JsonRpcResponse | null> {
@@ -1156,11 +1180,6 @@ export default class CodexStdioBridge {
           return {
             id: requestId,
             result: await this.listBrowseScreenshotEntries(message.params),
-          };
-        case "thread/context/read":
-          return {
-            id: requestId,
-            result: await this.readThreadContext(message),
           };
         case "browse/screenshot/record":
           return {
