@@ -13,6 +13,7 @@ import type {
   ThreadPayload,
   ThreadUnreadBadge,
   WorkbenchHarness,
+  WorkbenchBrowseScreenshotEntry,
   WorkbenchModelOption,
   WorkbenchPendingUserInputRequest,
   WorkbenchProjectRoot,
@@ -76,6 +77,7 @@ const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
 const MAX_VISIBLE_HISTORY_ENTRIES = 8;
 const EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS: readonly string[] = [];
 const EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS: readonly string[] = [];
+const EMPTY_BROWSE_SCREENSHOT_ENTRIES: readonly WorkbenchBrowseScreenshotEntry[] = [];
 const EMPTY_PROJECT_FILE_CANDIDATES: readonly ProjectTreeFileCandidate[] = [];
 const THREAD_VIEW_BACKGROUND_REBUILD_SLICE_MS = 20;
 const threadViewBackgroundRebuildQueue = new CooperativeRebuildQueue();
@@ -163,6 +165,31 @@ function useStableRelatedThreadsById ({
 
 function countThreadItems (thread: Pick<ThreadPayload, "turns">) {
   return thread.turns.reduce((total, turn) => total + turn.items.length, 0);
+}
+
+function getThreadSeenBoundarySignature (thread: Pick<ThreadPayload, "harness" | "id" | "status" | "turnHistory" | "turns" | "updatedAt">) {
+  const latestTurn = thread.turns.at(-1);
+  const latestItem = latestTurn?.items.at(-1);
+  const latestHistoryEntry = thread.turnHistory.at(-1);
+  const latestHistoryItemId = latestHistoryEntry?.itemIds?.at(-1) ?? "";
+  return [
+    thread.harness,
+    thread.id,
+    thread.status,
+    thread.updatedAt,
+    thread.turns.length,
+    latestTurn?.id ?? "",
+    latestTurn?.status ?? "",
+    latestTurn?.items.length ?? 0,
+    latestItem?.id ?? "",
+    latestItem?.type ?? "",
+    thread.turnHistory.length,
+    latestHistoryEntry?.turnId ?? "",
+    latestHistoryEntry?.status ?? "",
+    latestHistoryEntry?.loadState ?? "",
+    latestHistoryEntry?.itemCount ?? 0,
+    latestHistoryItemId,
+  ].join("|");
 }
 
 function orderTurnsByHistory (turns: ThreadPayload["turns"], history: WorkbenchThreadTurnHistoryEntry[]) {
@@ -720,6 +747,8 @@ export default memo(function ThreadView ({
   const activeThread = activeThreadId === thread.id
     ? getThreadDocumentFromSnapshot(threadDocuments, thread.id) ?? thread
     : relatedThreadsById[activeThreadId] ?? null;
+  const activeThreadIdentity = activeThread ? `${activeThread.harness}:${activeThread.id}` : "";
+  const activeThreadBrowseScreenshotEntries = activeThread?.browseScreenshotEntries ?? EMPTY_BROWSE_SCREENSHOT_ENTRIES;
   const activeHarnessUserInputRequest = activeThread
     ? livePendingUserInputRequestsByThreadId[activeThread.id] ?? null
     : null;
@@ -782,6 +811,7 @@ export default memo(function ThreadView ({
       activePendingUserInputRequest?.requestKey ?? "",
     ].join("|");
   }, [activePendingUserInputRequest?.requestKey, activeThread, liveActivity?.kind, visibleHistorySignature]);
+  const threadSeenBoundarySignature = useMemo(() => getThreadSeenBoundarySignature(thread), [thread]);
   const workspaceFileLinkRoots = useMemo(() => (
     projectFileLinkRoots ?? (projectRoots && projectRoots.length > 1
       ? projectRoots.map((root) => ({ id: root.id, rootPath: root.rootPath }))
@@ -1166,7 +1196,7 @@ export default memo(function ThreadView ({
     ) {
       scheduleScrollToBottom({ force: didSwitchActiveThread });
     }
-  }, [activeThread, activeThreadContentSignature, isDraftThreadView, projectId, scheduleScrollToBottom, scrollAnchorController]);
+  }, [activeThreadIdentity, activeThreadContentSignature, isDraftThreadView, projectId, scheduleScrollToBottom, scrollAnchorController]);
 
   useEffect(() => {
     const root = threadViewRef.current;
@@ -1189,7 +1219,7 @@ export default memo(function ThreadView ({
 
   useEffect(() => {
     onThreadSeen(thread);
-  }, [onThreadSeen, thread]);
+  }, [onThreadSeen, threadSeenBoundarySignature]);
 
   useEffect(() => () => {
     if (bottomScrollFrameRef.current !== null) {
@@ -1621,7 +1651,7 @@ export default memo(function ThreadView ({
                   return turn ? (
                     <ThreadTurnDetails
                       key={entry.turnId}
-                      browseScreenshotEntries={activeThread.browseScreenshotEntries ?? []}
+                      browseScreenshotEntries={activeThreadBrowseScreenshotEntries}
                       hiddenCollabAgentToolCallItemIds={turn.id === currentTurn?.id ? hiddenCollabAgentToolCallItemIds : EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS}
                       hiddenDynamicToolCallItemIds={turn.id === currentTurn?.id ? hiddenDynamicToolCallItemIds : EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS}
                       hideFinalAgentMessage={hideFinalAgentMessage}
@@ -1752,7 +1782,7 @@ export default memo(function ThreadView ({
                     >
                       <ThreadPreviewFrame height="22rem" scale={0.9}>
                         <ThreadThreadContent
-                          browseScreenshotEntries={liveSubagentThread.browseScreenshotEntries ?? []}
+                          browseScreenshotEntries={liveSubagentThread.browseScreenshotEntries ?? EMPTY_BROWSE_SCREENSHOT_ENTRIES}
                           inlineMentionSources={inlineMentionSources}
                           knownSkills={workbenchSkills}
                           projectFilePaths={projectFilePaths}

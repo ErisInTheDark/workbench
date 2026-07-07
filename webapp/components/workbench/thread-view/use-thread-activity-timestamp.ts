@@ -7,7 +7,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { ThreadPayload, ThreadSummary } from "../../../lib/types";
-import { getTurnRenderSignature } from "../../../lib/workbench/thread/thread-item-signature";
 
 function getFallbackActivityTimestampMs(...threads: Array<ThreadPayload | ThreadSummary | null | undefined>) {
   let timestampMs = 0;
@@ -27,7 +26,19 @@ function getThreadActivitySignature(thread: ThreadPayload | ThreadSummary | null
     return "";
   }
 
-  return thread.turns.map((turn) => getTurnRenderSignature(turn)).join("\n\n");
+  const latestTurn = thread.turns.at(-1);
+  const latestItem = latestTurn?.items.at(-1);
+  return [
+    thread.harness,
+    thread.id,
+    thread.status,
+    thread.turns.length,
+    latestTurn?.id ?? "",
+    latestTurn?.status ?? "",
+    latestTurn?.items.length ?? 0,
+    latestItem?.id ?? "",
+    latestItem?.type ?? "",
+  ].join("|");
 }
 
 export default function useThreadActivityTimestamp(

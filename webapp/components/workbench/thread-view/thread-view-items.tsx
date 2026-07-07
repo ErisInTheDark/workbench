@@ -7,7 +7,7 @@
  */
 "use client";
 
-import { memo, useMemo, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
 
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
@@ -15,6 +15,7 @@ import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserI
 import { getCurrentTurn } from "../../../lib/codex/thread-state";
 import type { ThreadPayload, WorkbenchBrowseScreenshotEntry, WorkbenchSkillSummary, WorkbenchThreadTurnHistoryEntry } from "../../../lib/types";
 import type { WorkbenchThreadItemTimelineEntry } from "../../../lib/workbench/thread/thread-item-timeline";
+import { getThreadItemRenderSignature } from "../../../lib/workbench/thread/thread-item-signature";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
 import {
@@ -66,6 +67,8 @@ import { createThreadTurnCompactionRenderPlan } from "./thread-turn-compaction-s
 import { CheckIcon, ClockIcon, PlayIcon, WarningIcon } from "../workbench-icons";
 
 const THREAD_DETAIL_INLINE_CODE_CLASS = "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-[0.34em] py-[0.08em] font-mono text-[0.88em] leading-[1.6] text-text";
+const LIVE_RENDER_BLOCK_TAIL_ITEM_COUNT = 8;
+const EMPTY_BROWSE_SCREENSHOT_ENTRIES: readonly WorkbenchBrowseScreenshotEntry[] = [];
 
 type CommandItem = Extract<ThreadItem, { type: "commandExecution" }>;
 type FileChangeItem = Extract<ThreadItem, { type: "fileChange" }>;
@@ -399,6 +402,72 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
   flushPendingFileChanges();
   flushPendingWebSearches();
   return blocks;
+}
+
+interface StableRenderableBlockEntry {
+  block: ThreadRenderableBlock;
+  signature: string;
+}
+
+function getRenderableBlockItems(block: ThreadRenderableBlock): readonly ThreadItem[] {
+  switch (block.kind) {
+    case "commandSequence":
+    case "fileChangeSequence":
+    case "reasoningSequence":
+    case "webSearchSequence":
+      return block.items;
+    case "item":
+      return [block.item];
+  }
+}
+
+function getRenderableBlockItemCount(block: ThreadRenderableBlock) {
+  return getRenderableBlockItems(block).length;
+}
+
+function getRenderableBlockSignature(block: ThreadRenderableBlock) {
+  return [
+    block.kind,
+    ...getRenderableBlockItems(block).map((item) => getThreadItemRenderSignature(item)),
+  ].join("\n");
+}
+
+function getStabilizableRenderableBlockFlags(blocks: readonly ThreadRenderableBlock[]) {
+  const flags = blocks.map(() => true);
+  let liveTailItemCount = 0;
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    if (liveTailItemCount >= LIVE_RENDER_BLOCK_TAIL_ITEM_COUNT) {
+      break;
+    }
+
+    flags[index] = false;
+    liveTailItemCount += getRenderableBlockItemCount(blocks[index]);
+  }
+  return flags;
+}
+
+function useStableRenderableBlocks(blocks: ThreadRenderableBlock[]) {
+  const previousEntriesRef = useRef<StableRenderableBlockEntry[]>([]);
+  const stableEntries = useMemo(() => {
+    const previousEntriesBySignature = new Map(previousEntriesRef.current.map((entry) => [entry.signature, entry]));
+    const stabilizableFlags = getStabilizableRenderableBlockFlags(blocks);
+    return blocks.map((block, index): StableRenderableBlockEntry => {
+      const signature = getRenderableBlockSignature(block);
+      const previousEntry = stabilizableFlags[index]
+        ? previousEntriesBySignature.get(signature) ?? null
+        : null;
+      return {
+        block: previousEntry?.block ?? block,
+        signature,
+      };
+    });
+  }, [blocks]);
+
+  useEffect(() => {
+    previousEntriesRef.current = stableEntries;
+  }, [stableEntries]);
+
+  return useMemo(() => stableEntries.map((entry) => entry.block), [stableEntries]);
 }
 
 function isHiddenCommandExecution (command: string) {
@@ -1421,7 +1490,7 @@ function isBrowseWebRequestCommandItem({
 }
 
 function ThreadCommandExecutionDetails ({
-  browseScreenshotEntries = [],
+  browseScreenshotEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   isMostRecent = false,
   item,
   knownSkills,
@@ -1567,7 +1636,7 @@ function ThreadCommandExecutionDetails ({
 }
 
 function ThreadCommandSequence ({
-  browseScreenshotEntries = [],
+  browseScreenshotEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   isMostRecent,
   items,
   knownSkills,
@@ -1689,7 +1758,7 @@ function ThreadFallbackItem ({ item }: { item: NonGroupedItem }) {
   );
 }
 
-function ThreadRenderableBlockView ({
+function ThreadRenderableBlockViewComponent ({
   block,
   browseScreenshotEntries,
   finalAgentMessageId,
@@ -1822,8 +1891,28 @@ function ThreadRenderableBlockView ({
   }
 }
 
+const ThreadRenderableBlockView = memo(ThreadRenderableBlockViewComponent, (left, right) => (
+  left.block === right.block
+  && left.browseScreenshotEntries === right.browseScreenshotEntries
+  && left.finalAgentMessageId === right.finalAgentMessageId
+  && (left.inlineMentionSources?.cacheKey ?? "") === (right.inlineMentionSources?.cacheKey ?? "")
+  && left.isMostRecentBlock === right.isMostRecentBlock
+  && left.knownSkills === right.knownSkills
+  && left.primaryUserBlock === right.primaryUserBlock
+  && left.threadCwdPath === right.threadCwdPath
+  && left.threadId === right.threadId
+  && left.projectFilePaths === right.projectFilePaths
+  && left.projectId === right.projectId
+  && left.projectRootPath === right.projectRootPath
+  && left.relatedThreadsById === right.relatedThreadsById
+  && left.turnCompletedAt === right.turnCompletedAt
+  && left.turnStartedAt === right.turnStartedAt
+  && left.turnStatus === right.turnStatus
+  && left.workspaceRoots === right.workspaceRoots
+));
+
 function ThreadTurnDetailsComponent ({
-  browseScreenshotEntries = [],
+  browseScreenshotEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   flattenCompletedWork = false,
   hiddenCollabAgentToolCallItemIds = [],
   hiddenDynamicToolCallItemIds = [],
@@ -1923,7 +2012,8 @@ function ThreadTurnDetailsComponent ({
   const turnBrowseScreenshotEntries = useMemo(() => (
     browseScreenshotEntries.filter((entry) => entry.turnId === turn.id)
   ), [browseScreenshotEntries, turn.id]);
-  const allBlocks = useMemo(() => buildRenderableBlocks(turn.items, hiddenItemIds), [hiddenItemIds, turn.items]);
+  const renderableBlocks = useMemo(() => buildRenderableBlocks(turn.items, hiddenItemIds), [hiddenItemIds, turn.items]);
+  const allBlocks = useStableRenderableBlocks(renderableBlocks);
 
   const renderBlock = (
     block: ThreadRenderableBlock,
@@ -2155,7 +2245,7 @@ function areThreadTurnDetailsPropsEqual (
 export const ThreadTurnDetails = memo(ThreadTurnDetailsComponent, areThreadTurnDetailsPropsEqual);
 
 export function ThreadThreadContent ({
-  browseScreenshotEntries = [],
+  browseScreenshotEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   emptyMessage = "No subagent activity was captured yet.",
   flattenCompletedWork = false,
   hiddenCollabAgentToolCallItemIds = [],

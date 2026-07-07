@@ -152,7 +152,7 @@ export default function WorkbenchThreadPanel ({
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [readPanelThread, thread]);
+  }, [readPanelThread, thread?.id, thread?.isDraft, thread?.status]);
 
   if (!thread) {
     return (
