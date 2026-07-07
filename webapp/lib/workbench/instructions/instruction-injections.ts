@@ -67,7 +67,7 @@ export const WORKBENCH_RENDERING_INJECTION = injectionTemplate(
 Use Workbench-visible markdown in normal chat. When a workflow or skill requires a mode change, represent it with exactly one standalone tag line:
 <set-state mode="Mode Name" />
 
-When presenting plans, briefs, reviews, or substantial findings, put the user-visible markdown inside <plan></plan> tags. Do not hide the plan inside a questionnaire.
+When presenting implementation plans, Brief-mode approval artifacts, or other approval-gated future-work proposals, put the user-visible markdown inside <plan></plan> tags. Do not wrap Review-mode summaries, completed-work reports, validation reports, or read-only findings in <plan> tags. Do not hide the plan inside a questionnaire.
 
 If a workflow asks for a plan and then approval, present the plan first, then switch to the approval/decision mode, then ask for approval. If you discover that more inspection is needed after switching modes, switch back to the inspection mode before using tools.
 

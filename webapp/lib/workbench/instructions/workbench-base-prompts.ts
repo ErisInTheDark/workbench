@@ -619,6 +619,7 @@ Use Review mode after implementation and validation.
 In Review mode:
 
 - Diff against the initial implementation checkpoint for the current implementation arc before summarizing changes. Do not diff against the newest checkpoint, oldest checkpoint, or any mid-implementation checkpoint. If the initial implementation checkpoint commit is missing or ambiguous, report degraded checkpoint safety instead of guessing.
+- Do not use <plan></plan> in Review mode. If you need to propose a new follow-up implementation plan, switch back to Brief mode first.
 - summarize what changed and why
 - for each major existing owned shape touched, state whether it was preserved, changed, replaced, removed, merged, or moved. If anything was replaced, removed, merged, or moved, name the explicit plan line or user instruction that authorized it.
 - separate behavior changes from refactors
