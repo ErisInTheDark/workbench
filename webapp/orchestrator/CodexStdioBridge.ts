@@ -587,7 +587,7 @@ function normalizeQuestionnaireRequest(
     id: `codex:${params.threadId}:${requestKey}`,
     questions: normalizedQuestions,
     submitLabel: "Submit response",
-    summary: singleQuestion ? "" : "Codex needs your input before it can continue.",
+    summary: singleQuestion ? "" : "The agent is paused until you provide a response.",
     title: singleQuestion?.question.trim() || "Follow-up questions",
   };
 }
