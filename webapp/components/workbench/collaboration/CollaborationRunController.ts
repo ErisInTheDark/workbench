@@ -37,7 +37,6 @@ import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thr
 
 const COLLABORATOR_THREAD_HYDRATION: WorkbenchReadThreadOptions["hydration"] = { mode: "legacyFull" };
 const COLLABORATOR_THREAD_ACTIVE_REFRESH_INTERVAL_MS = 1500;
-const COLLABORATOR_THREAD_IDLE_REFRESH_INTERVAL_MS = 10000;
 const COLLABORATOR_WORKFLOW_IDS = ["collaborator"] as const;
 const THREAD_HARNESSES: readonly WorkbenchHarness[] = ["codex", "copilot", "opencode"];
 
@@ -110,6 +109,20 @@ function createDraftCollaboratorThreadId(projectId: string) {
 
 function isThreadStatusActive(status: string) {
   return status === "active" || status.startsWith("active:");
+}
+
+function getAutoSelectedRunThreadId(
+  runThreadIds: readonly string[],
+  summariesById: ReadonlyMap<string, ThreadSummary>,
+  livePendingUserInputRequestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>,
+) {
+  return runThreadIds.find((threadId) => (
+    !threadId.startsWith("draft:")
+    && (
+      isThreadStatusActive(summariesById.get(threadId)?.status ?? "")
+      || Boolean(livePendingUserInputRequestsByThreadId[threadId])
+    )
+  )) ?? "";
 }
 
 function formatProjectDiffMapForPrompt(changes: Record<string, ChangeSummary>) {
@@ -230,7 +243,7 @@ export default function CollaborationRunController({
   scratchpadWritableRoot,
   threadDocuments,
 }: CollaborationRunControllerOptions): CollaborationRunControllerState {
-  const [selectedRunThreadId, setSelectedRunThreadId] = useState(collaborationState.runThreadIds[0] ?? "");
+  const [selectedRunThreadId, setSelectedRunThreadId] = useState("");
   const [continuedRunThreadId, setContinuedRunThreadId] = useState("");
   const [collaboratorThread, setCollaboratorThread] = useState<ThreadPayload | null>(null);
   const [collaboratorDraftThread, setCollaboratorDraftThread] = useState<ThreadPayload | null>(null);
@@ -317,8 +330,8 @@ export default function CollaborationRunController({
   useEffect(() => {
     setSelectedRunThreadId((current) => current && runThreadIds.includes(current)
       ? current
-      : runThreadIds[0] || "");
-  }, [runThreadIdSignature]);
+      : getAutoSelectedRunThreadId(runThreadIds, summariesById, livePendingUserInputRequestsByThreadId));
+  }, [livePendingUserInputRequestsByThreadId, runThreadIdSignature, runThreadIds, summariesById]);
 
   useEffect(() => {
     if (continuedRunThreadId && continuedRunThreadId !== selectedRunThreadId) {
@@ -346,7 +359,7 @@ export default function CollaborationRunController({
   }, [collaborationState.autoWakeEnabled, pendingAutoWakeActivityAt]);
 
   useEffect(() => {
-    if (!selectedRunThreadId || !isThreadStatusActive(effectiveRunThread?.status ?? "")) {
+    if (!selectedRunThreadId || !selectedRunIsActive) {
       return;
     }
 
@@ -356,20 +369,7 @@ export default function CollaborationRunController({
     return () => {
       window.clearInterval(interval);
     };
-  }, [effectiveRunThread?.status, onReadThread, selectedRunThreadId]);
-
-  useEffect(() => {
-    if (!selectedRunThreadId || isThreadStatusActive(effectiveRunThread?.status ?? "")) {
-      return;
-    }
-
-    const interval = window.setInterval(() => {
-      void onReadThread(selectedRunThreadId, undefined, { hydration: COLLABORATOR_THREAD_HYDRATION });
-    }, COLLABORATOR_THREAD_IDLE_REFRESH_INTERVAL_MS);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [effectiveRunThread?.status, onReadThread, selectedRunThreadId]);
+  }, [onReadThread, selectedRunIsActive, selectedRunThreadId]);
 
   const rememberCollaboratorThread = useCallback((thread: ThreadPayload, options: { replaceThreadId?: string } = {}) => {
     const currentState = getCurrentCollaborationState();
@@ -629,9 +629,8 @@ export default function CollaborationRunController({
     setSelectedRunThreadId(threadId);
     if (!threadId.startsWith("draft:")) {
       setCollaboratorPhase("hydrating");
-      void hydrateCollaboratorThread(threadId);
     }
-  }, [hydrateCollaboratorThread, selectedRunThreadId]);
+  }, [selectedRunThreadId]);
 
   const continueSelectedRunThread = useCallback(() => {
     if (!canContinueSelectedRunThread || !selectedRunThreadId) {

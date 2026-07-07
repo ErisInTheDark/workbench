@@ -29,6 +29,7 @@ import {
   createWorkbenchCollaborationRevisionId,
   normalizeWorkbenchCollaborationTag,
   normalizeWorkbenchCollaborationState,
+  touchWorkbenchCollaborationState,
 } from "./collaboration-state";
 
 export type CollaborationPostDropIntent =
@@ -187,11 +188,11 @@ export function createCollaborationPost(
     } : {}),
   };
 
-  return normalizeWorkbenchCollaborationState({
+  return touchWorkbenchCollaborationState(normalizeWorkbenchCollaborationState({
     ...normalizedState,
     posts,
     rootPostIds: parent ? normalizedState.rootPostIds : [...normalizedState.rootPostIds, id],
-  });
+  }), now);
 }
 
 export function updateCollaborationPost(
@@ -211,7 +212,7 @@ export function updateCollaborationPost(
 
   const now = options.now ?? Date.now();
   const nextPost = applyDraftToPost(post, draft, now);
-  return normalizeWorkbenchCollaborationState({
+  return touchWorkbenchCollaborationState(normalizeWorkbenchCollaborationState({
     ...normalizedState,
     posts: {
       ...normalizedState.posts,
@@ -223,7 +224,7 @@ export function updateCollaborationPost(
         ],
       },
     },
-  });
+  }), now);
 }
 
 export function updateCollaborationPostPrompt(
@@ -239,7 +240,7 @@ export function updateCollaborationPostPrompt(
     return normalizedState;
   }
 
-  return normalizeWorkbenchCollaborationState({
+  return touchWorkbenchCollaborationState(normalizeWorkbenchCollaborationState({
     ...normalizedState,
     posts: {
       ...normalizedState.posts,
@@ -249,7 +250,7 @@ export function updateCollaborationPostPrompt(
         updatedAt: now,
       },
     },
-  });
+  }), now);
 }
 
 export function restoreCollaborationPostRevision(
@@ -265,7 +266,7 @@ export function restoreCollaborationPostRevision(
     return normalizedState;
   }
 
-  return normalizeWorkbenchCollaborationState({
+  return touchWorkbenchCollaborationState(normalizeWorkbenchCollaborationState({
     ...normalizedState,
     posts: {
       ...normalizedState.posts,
@@ -281,7 +282,7 @@ export function restoreCollaborationPostRevision(
         updatedAt: now,
       },
     },
-  });
+  }), now);
 }
 
 export function setCollaborationPostCollapsed(
@@ -299,13 +300,13 @@ export function setCollaborationPostCollapsed(
     ...post,
     isCollapsed: isCollapsed ? true : undefined,
   };
-  return normalizeWorkbenchCollaborationState({
+  return touchWorkbenchCollaborationState(normalizeWorkbenchCollaborationState({
     ...normalizedState,
     posts: {
       ...normalizedState.posts,
       [postId]: nextPost,
     },
-  });
+  }));
 }
 
 export function materializeCollaborationPostPromptThread(
@@ -323,7 +324,7 @@ export function materializeCollaborationPostPromptThread(
     return normalizedState;
   }
 
-  return normalizeWorkbenchCollaborationState({
+  return touchWorkbenchCollaborationState(normalizeWorkbenchCollaborationState({
     ...normalizedState,
     posts: {
       ...normalizedState.posts,
@@ -334,7 +335,7 @@ export function materializeCollaborationPostPromptThread(
         updatedAt: now,
       },
     },
-  });
+  }), now);
 }
 
 export function deleteCollaborationSubtree(state: WorkbenchCollaborationState, postId: string) {
@@ -354,11 +355,11 @@ export function deleteCollaborationSubtree(state: WorkbenchCollaborationState, p
       }]),
   );
 
-  return normalizeWorkbenchCollaborationState({
+  return touchWorkbenchCollaborationState(normalizeWorkbenchCollaborationState({
     ...normalizedState,
     posts,
     rootPostIds: normalizedState.rootPostIds.filter((rootPostId) => !deleteIds.has(rootPostId)),
-  });
+  }));
 }
 
 export function hardDeleteCollaborationAgentLeaf(state: WorkbenchCollaborationState, postId: string) {
@@ -434,11 +435,11 @@ export function moveCollaborationPost(
     }
   }
 
-  return normalizeWorkbenchCollaborationState({
+  return touchWorkbenchCollaborationState(normalizeWorkbenchCollaborationState({
     ...normalizedState,
     posts: nextPosts,
     rootPostIds,
-  });
+  }));
 }
 
 export function createCollaborationStateTag(
@@ -451,10 +452,10 @@ export function createCollaborationStateTag(
     return normalizedState;
   }
 
-  return normalizeWorkbenchCollaborationState({
+  return touchWorkbenchCollaborationState(normalizeWorkbenchCollaborationState({
     ...normalizedState,
     tags: [...normalizedState.tags, normalizedTag],
-  });
+  }));
 }
 
 export function tagCollaborationPost(
@@ -474,13 +475,13 @@ export function tagCollaborationPost(
     ? normalizedState.tags
     : [...normalizedState.tags, normalizedTag];
   if (hasTag(post.tags, normalizedTag)) {
-    return normalizeWorkbenchCollaborationState({
+    return touchWorkbenchCollaborationState(normalizeWorkbenchCollaborationState({
       ...normalizedState,
       tags: stateTags,
-    });
+    }), now);
   }
 
-  return normalizeWorkbenchCollaborationState({
+  return touchWorkbenchCollaborationState(normalizeWorkbenchCollaborationState({
     ...normalizedState,
     posts: {
       ...normalizedState.posts,
@@ -491,7 +492,7 @@ export function tagCollaborationPost(
       },
     },
     tags: stateTags,
-  });
+  }), now);
 }
 
 export function removeCollaborationPostTag(
@@ -507,7 +508,7 @@ export function removeCollaborationPostTag(
     return normalizedState;
   }
 
-  return normalizeWorkbenchCollaborationState({
+  return touchWorkbenchCollaborationState(normalizeWorkbenchCollaborationState({
     ...normalizedState,
     posts: {
       ...normalizedState.posts,
@@ -517,5 +518,5 @@ export function removeCollaborationPostTag(
         updatedAt: now,
       },
     },
-  });
+  }), now);
 }

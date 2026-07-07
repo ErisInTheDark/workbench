@@ -779,6 +779,7 @@ export interface WorkbenchCollaborationState {
   rootPostIds: string[];
   runThreadIds: string[];
   tags: string[];
+  updatedAt: number;
   version: 2;
 }
 

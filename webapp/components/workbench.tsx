@@ -37,8 +37,8 @@ import {
 } from "../lib/workbench/collaboration/collaboration-registry-api";
 import {
   EMPTY_WORKBENCH_COLLABORATION_STATE,
-  mergeWorkbenchCollaborationState,
   normalizeWorkbenchCollaborationState,
+  selectLatestWorkbenchCollaborationState,
 } from "../lib/workbench/collaboration/collaboration-state";
 import { areDeeplyEqual } from "../lib/workbench/deep-equality";
 import { useWorkbenchRoute } from "../lib/workbench/navigation/use-workbench-route";
@@ -811,14 +811,14 @@ export default function Workbench () {
             scheduleWorkbenchStateUpdate(() => {
               setCollaborationStatesByProjectId((current) => {
                 const existing = current[projectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
-                const mergedState = mergeWorkbenchCollaborationState(existing, state);
-                if (areCollaborationStatesEqual(existing, mergedState)) {
+                const nextState = selectLatestWorkbenchCollaborationState(existing, state);
+                if (areCollaborationStatesEqual(existing, nextState)) {
                   return current;
                 }
 
                 const next = {
                   ...current,
-                  [projectId]: mergedState,
+                  [projectId]: nextState,
                 };
                 writeStoredCollaborationStates(next);
                 return next;
@@ -1094,10 +1094,7 @@ export default function Workbench () {
 
         const localState = collaborationStatesByProjectId[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
         const mergedState = hasCollaborationStateData(localState)
-          ? {
-            ...mergeWorkbenchCollaborationState(diskState, localState),
-            autoWakeEnabled: diskState.autoWakeEnabled || localState.autoWakeEnabled,
-          }
+          ? selectLatestWorkbenchCollaborationState(diskState, localState)
           : diskState;
         setCollaborationStatesByProjectId((current) => {
           const existing = current[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
@@ -1113,7 +1110,7 @@ export default function Workbench () {
           return next;
         });
 
-        if (!areCollaborationStatesEqual(diskState, mergedState)) {
+        if (mergedState.updatedAt > diskState.updatedAt && !areCollaborationStatesEqual(diskState, mergedState)) {
           const savedState = await writeWorkbenchCollaborationState(activeProjectId, mergedState);
           if (cancelled || collaborationRegistryHydrationGenerationRef.current !== generation) {
             return;

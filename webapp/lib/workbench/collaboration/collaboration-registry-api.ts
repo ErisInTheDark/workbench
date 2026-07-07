@@ -20,6 +20,7 @@ import { normalizeWorkbenchCollaborationThreadRegistry } from "./collaboration-r
 import {
   normalizeWorkbenchCollaborationState,
   normalizeWorkbenchCollaborationThreadRegistryFromState,
+  touchWorkbenchCollaborationState,
 } from "./collaboration-state";
 
 interface CollaborationStateResponse {
@@ -56,14 +57,16 @@ export async function writeWorkbenchCollaborationState(
   projectId: string,
   state: WorkbenchCollaborationState,
 ) {
+  const baseState = normalizeWorkbenchCollaborationState(state);
   const response = await fetch("/api/collaboration/registry", {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
+      baseUpdatedAt: baseState.updatedAt,
       projectId,
-      state,
+      state: touchWorkbenchCollaborationState(baseState),
     }),
   });
   const payload = await response.json().catch(() => ({})) as CollaborationStateResponse;

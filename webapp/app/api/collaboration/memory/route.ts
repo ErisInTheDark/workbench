@@ -15,6 +15,9 @@ import type {
   WorkbenchCollaborationState,
 } from "../../../../lib/types";
 import {
+  touchWorkbenchCollaborationState,
+} from "../../../../lib/workbench/collaboration/collaboration-state";
+import {
   readCollaborationStateDiskFile,
   writeCollaborationStateDiskFile,
 } from "../collaboration-state-file";
@@ -131,11 +134,11 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const nextState: WorkbenchCollaborationState = {
+    const nextState: WorkbenchCollaborationState = touchWorkbenchCollaborationState({
       ...currentFile.state,
       lastAppliedRunMemorySignature: `memory-endpoint:${Date.now().toString(36)}`,
       lastRunMemory: memory,
-    };
+    });
     await writeCollaborationStateDiskFile(resolvedProject.id, {
       autoWakeLease: currentFile.autoWakeLease,
       state: nextState,

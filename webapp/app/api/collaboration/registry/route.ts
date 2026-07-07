@@ -9,9 +9,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveProjectRoot } from "../../../../lib/project";
 import { WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS } from "../../../../lib/workbench/collaboration/collaboration-registry";
 import {
-  mergeWorkbenchCollaborationState,
   normalizeWorkbenchCollaborationState,
   normalizeWorkbenchCollaborationThreadRegistryFromState,
+  selectLatestWorkbenchCollaborationState,
+  touchWorkbenchCollaborationState,
 } from "../../../../lib/workbench/collaboration/collaboration-state";
 import {
   AUTO_WAKE_LEASE_TTL_MS,
@@ -23,6 +24,12 @@ import { notifyCollaborationStateUpdated } from "../collaboration-state-notifica
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+function normalizeRevisionTimestamp(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.trunc(value))
+    : 0;
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -36,17 +43,20 @@ export async function GET(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
-    const { projectId, registry, state } = await request.json();
+    const { baseUpdatedAt, projectId, registry, state } = await request.json();
     const resolvedProject = await resolveProjectRoot(projectId);
     const incomingState = normalizeWorkbenchCollaborationState(state ?? registry);
     const currentFile = await readCollaborationStateDiskFile(resolvedProject.id, { allowCorruptRecovery: true });
-    const mergedState = mergeWorkbenchCollaborationState(currentFile.state, incomingState);
+    const incomingBaseUpdatedAt = normalizeRevisionTimestamp(baseUpdatedAt);
+    const nextState = incomingBaseUpdatedAt < currentFile.state.updatedAt
+      ? currentFile.state
+      : selectLatestWorkbenchCollaborationState(currentFile.state, incomingState);
     await writeCollaborationStateDiskFile(resolvedProject.id, {
       autoWakeLease: currentFile.autoWakeLease,
-      state: mergedState,
+      state: nextState,
     });
-    await notifyCollaborationStateUpdated(request, resolvedProject.id, mergedState);
-    return createCollaborationStateResponse(mergedState);
+    await notifyCollaborationStateUpdated(request, resolvedProject.id, nextState);
+    return createCollaborationStateResponse(nextState);
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to save the Collaboration state." }, { status: 400 });
   }
@@ -83,10 +93,10 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const nextState = {
+    const nextState = touchWorkbenchCollaborationState({
       ...currentFile.state,
       lastAutoWakeAt: now,
-    };
+    }, now);
     await writeCollaborationStateDiskFile(resolvedProject.id, {
       autoWakeLease: {
         expiresAt: now + AUTO_WAKE_LEASE_TTL_MS,

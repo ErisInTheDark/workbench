@@ -8,11 +8,12 @@
  * - createWorkbenchCollaborationRevisionId: create an opaque revision id. Keywords: collaboration, revision, id.
  * - createWorkbenchCollaborationStateRelativePath: build the project-scoped disk state path. Keywords: collaboration, state, disk.
  * - ensureImportedScratchpadPost: add one imported scratchpad root post when content exists. Keywords: collaboration, scratchpad, import.
- * - mergeWorkbenchCollaborationState: merge local and persisted Collaboration state. Keywords: collaboration, state, merge.
  * - normalizeWorkbenchCollaborationPatchId: normalize collaborator-supplied post ids. Keywords: collaboration, patch, id.
  * - normalizeWorkbenchCollaborationState: normalize or migrate persisted Collaboration state. Keywords: collaboration, state, migration.
  * - normalizeWorkbenchCollaborationTag: normalize user-visible Collaboration tag labels. Keywords: collaboration, tag, label.
  * - normalizeWorkbenchCollaborationThreadRegistryFromState: temporary v1 registry projection. Keywords: collaboration, registry, compatibility.
+ * - selectLatestWorkbenchCollaborationState: choose the authoritative newer Collaboration snapshot. Keywords: collaboration, state, revision.
+ * - touchWorkbenchCollaborationState: stamp a Collaboration state mutation with a monotonic local revision time. Keywords: collaboration, state, revision.
  */
 
 import type {
@@ -41,6 +42,7 @@ export const EMPTY_WORKBENCH_COLLABORATION_STATE: WorkbenchCollaborationState = 
   rootPostIds: [],
   runThreadIds: [],
   tags: [],
+  updatedAt: 0,
   version: WORKBENCH_COLLABORATION_STATE_VERSION,
 };
 
@@ -94,6 +96,10 @@ function normalizeTimestamp(value: unknown) {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.max(0, Math.trunc(value))
     : 0;
+}
+
+function maxTimestamp(...values: readonly number[]) {
+  return values.reduce((max, value) => Math.max(max, normalizeTimestamp(value)), 0);
 }
 
 function normalizeStringArray(value: unknown) {
@@ -333,6 +339,10 @@ function normalizeTree(posts: Record<string, WorkbenchCollaborationPost>, rootPo
   };
 }
 
+function getLatestPostTimestamp(posts: Record<string, WorkbenchCollaborationPost>) {
+  return Object.values(posts).reduce((latest, post) => Math.max(latest, post.updatedAt, post.createdAt), 0);
+}
+
 function normalizeSuggestion(value: unknown): WorkbenchCollaborationSuggestion | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -461,6 +471,7 @@ function normalizeStateFromLegacyRegistry(value: unknown): WorkbenchCollaboratio
     rootPostIds: suggestions.map((suggestion) => suggestion.id),
     runThreadIds,
     tags: [],
+    updatedAt: maxTimestamp(normalizeTimestamp(candidate.updatedAt), getLatestPostTimestamp(posts), normalizeTimestamp(candidate.lastAutoWakeAt)),
     version: WORKBENCH_COLLABORATION_STATE_VERSION,
   });
 }
@@ -485,16 +496,23 @@ export function normalizeWorkbenchCollaborationState(value: unknown): WorkbenchC
   const posts = normalizePosts(candidate.posts);
   const tree = normalizeTree(posts, normalizeStringArray(candidate.rootPostIds));
   const postTags = Object.values(tree.posts).flatMap((post) => post.tags);
+  const lastAutoWakeAt = normalizeTimestamp(candidate.lastAutoWakeAt);
+  const updatedAt = maxTimestamp(
+    normalizeTimestamp(candidate.updatedAt),
+    getLatestPostTimestamp(tree.posts),
+    lastAutoWakeAt,
+  );
   return {
     autoWakeEnabled: candidate.autoWakeEnabled === true,
     lastAppliedPostPatchSignature: normalizeTrimmedText(candidate.lastAppliedPostPatchSignature),
     lastAppliedRunMemorySignature: normalizeTrimmedText(candidate.lastAppliedRunMemorySignature),
-    lastAutoWakeAt: normalizeTimestamp(candidate.lastAutoWakeAt),
+    lastAutoWakeAt,
     lastRunMemory: normalizeTrimmedText(candidate.lastRunMemory) || normalizeTrimmedText(candidate.lastRunSummary),
     posts: tree.posts,
     rootPostIds: tree.rootPostIds,
     runThreadIds: normalizeStringArray(candidate.runThreadIds),
     tags: mergeUniqueTags(normalizeTagArray(candidate.tags), postTags),
+    updatedAt,
     version: WORKBENCH_COLLABORATION_STATE_VERSION,
   };
 }
@@ -529,36 +547,32 @@ export function ensureImportedScratchpadPost(
   });
 }
 
-function mergeUniqueStrings(left: readonly string[], right: readonly string[]) {
-  return Array.from(new Set([...left, ...right].filter((value) => Boolean(value.trim()))));
+export function touchWorkbenchCollaborationState(
+  state: WorkbenchCollaborationState,
+  now = Date.now(),
+): WorkbenchCollaborationState {
+  const normalizedState = normalizeWorkbenchCollaborationState(state);
+  return {
+    ...normalizedState,
+    updatedAt: Math.max(normalizedState.updatedAt, normalizeTimestamp(now)),
+  };
 }
 
-export function mergeWorkbenchCollaborationState(
-  base: WorkbenchCollaborationState,
+export function selectLatestWorkbenchCollaborationState(
+  current: WorkbenchCollaborationState,
   incoming: WorkbenchCollaborationState,
 ): WorkbenchCollaborationState {
-  const normalizedBase = normalizeWorkbenchCollaborationState(base);
+  const normalizedCurrent = normalizeWorkbenchCollaborationState(current);
   const normalizedIncoming = normalizeWorkbenchCollaborationState(incoming);
-  const posts = { ...normalizedBase.posts };
-  for (const [postId, incomingPost] of Object.entries(normalizedIncoming.posts)) {
-    const existingPost = posts[postId];
-    if (!existingPost || incomingPost.updatedAt >= existingPost.updatedAt || !areDeeplyEqual(existingPost, incomingPost)) {
-      posts[postId] = !existingPost || incomingPost.updatedAt >= existingPost.updatedAt ? incomingPost : existingPost;
-    }
+  if (normalizedIncoming.updatedAt > normalizedCurrent.updatedAt) {
+    return normalizedIncoming;
   }
-
-  return normalizeWorkbenchCollaborationState({
-    autoWakeEnabled: normalizedIncoming.autoWakeEnabled,
-    lastAppliedPostPatchSignature: normalizedIncoming.lastAppliedPostPatchSignature || normalizedBase.lastAppliedPostPatchSignature,
-    lastAppliedRunMemorySignature: normalizedIncoming.lastAppliedRunMemorySignature || normalizedBase.lastAppliedRunMemorySignature,
-    lastAutoWakeAt: Math.max(normalizedBase.lastAutoWakeAt, normalizedIncoming.lastAutoWakeAt),
-    lastRunMemory: normalizedIncoming.lastRunMemory || normalizedBase.lastRunMemory,
-    posts,
-    rootPostIds: mergeUniqueStrings(normalizedIncoming.rootPostIds, normalizedBase.rootPostIds),
-    runThreadIds: mergeUniqueStrings(normalizedIncoming.runThreadIds, normalizedBase.runThreadIds),
-    tags: mergeUniqueTags(normalizedIncoming.tags, normalizedBase.tags),
-    version: WORKBENCH_COLLABORATION_STATE_VERSION,
-  });
+  if (normalizedCurrent.updatedAt > normalizedIncoming.updatedAt) {
+    return normalizedCurrent;
+  }
+  return areDeeplyEqual(normalizedCurrent, normalizedIncoming)
+    ? normalizedCurrent
+    : normalizedIncoming;
 }
 
 export function normalizeWorkbenchCollaborationThreadRegistryFromState(
