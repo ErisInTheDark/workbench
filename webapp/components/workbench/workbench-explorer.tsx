@@ -10,7 +10,7 @@
  */
 "use client";
 
-import { useEffect, useState, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type PointerEvent, type ReactNode } from "react";
 
 import type {
   ChangeSummary,
@@ -133,31 +133,6 @@ function ExplorerFileSpacer () {
       aria-hidden="true"
     />
   );
-}
-
-function getNodeChangeSummary (node: TreeNode, changes: Record<string, ChangeSummary>): ChangeSummary | null {
-  if (node.type === "file") {
-    return changes[node.path] ?? null;
-  }
-
-  let additions = 0;
-  let deletions = 0;
-
-  for (const child of node.children) {
-    const summary = getNodeChangeSummary(child, changes);
-    if (!summary) {
-      continue;
-    }
-
-    additions += summary.additions;
-    deletions += summary.deletions;
-  }
-
-  if (!additions && !deletions) {
-    return null;
-  }
-
-  return { additions, deletions };
 }
 
 function ExplorerChangeSummary ({ summary }: { summary: ChangeSummary | null }) {
@@ -353,12 +328,67 @@ function formatBrowseSessionDetail(session: WorkbenchBrowseSessionSummary) {
   return parts.join(" · ");
 }
 
-function hasModifiedDescendant (node: TreeNode, modifiedPaths: Set<string>): boolean {
-  if (node.type === "file") {
-    return modifiedPaths.has(node.path);
+interface ExplorerTreeDerivedState {
+  changeSummariesByPath: ReadonlyMap<string, ChangeSummary>;
+  modifiedPathsWithDescendants: ReadonlySet<string>;
+}
+
+function buildExplorerTreeDerivedState (
+  nodes: TreeNode[],
+  changes: Record<string, ChangeSummary>,
+  modifiedPaths: Set<string>,
+): ExplorerTreeDerivedState {
+  const changeSummariesByPath = new Map<string, ChangeSummary>();
+  const modifiedPathsWithDescendants = new Set<string>();
+
+  const visit = (node: TreeNode): ChangeSummary | null => {
+    if (node.type === "file") {
+      const summary = changes[node.path] ?? null;
+      if (summary) {
+        changeSummariesByPath.set(node.path, summary);
+      }
+      if (modifiedPaths.has(node.path)) {
+        modifiedPathsWithDescendants.add(node.path);
+      }
+      return summary;
+    }
+
+    let additions = 0;
+    let deletions = 0;
+    let isModified = modifiedPaths.has(node.path);
+
+    for (const child of node.children) {
+      const summary = visit(child);
+      if (summary) {
+        additions += summary.additions;
+        deletions += summary.deletions;
+      }
+      if (modifiedPathsWithDescendants.has(child.path)) {
+        isModified = true;
+      }
+    }
+
+    if (isModified) {
+      modifiedPathsWithDescendants.add(node.path);
+    }
+
+    if (!additions && !deletions) {
+      return null;
+    }
+
+    const summary = { additions, deletions };
+    changeSummariesByPath.set(node.path, summary);
+    return summary;
+  };
+
+  for (const node of nodes) {
+    visit(node);
   }
 
-  return node.children.some((child) => hasModifiedDescendant(child, modifiedPaths));
+  return {
+    changeSummariesByPath,
+    modifiedPathsWithDescendants,
+  };
 }
 
 interface ExplorerTreeProps {
@@ -368,6 +398,7 @@ interface ExplorerTreeProps {
   expandedDirectories: Set<string>;
   isFileOpenable?: (path: string) => boolean;
   getFileDragPayload?: (path: string) => WorkbenchDragPayload | null;
+  derivedState?: ExplorerTreeDerivedState;
   modifiedPaths: Set<string>;
   nested?: boolean;
   nodes: TreeNode[];
@@ -380,6 +411,7 @@ export function ExplorerTree ({
   changes,
   controls,
   currentPath,
+  derivedState,
   expandedDirectories,
   isFileOpenable,
   getFileDragPayload,
@@ -390,6 +422,10 @@ export function ExplorerTree ({
   onFilePointerDragStart,
   onOpenFile,
 }: ExplorerTreeProps) {
+  const treeDerivedState = useMemo(() => (
+    derivedState ?? buildExplorerTreeDerivedState(nodes, changes, modifiedPaths)
+  ), [changes, derivedState, modifiedPaths, nodes]);
+
   return (
     <ul
       className={`m-0 p-0${nested ? " ml-4" : ""}`}
@@ -397,9 +433,9 @@ export function ExplorerTree ({
     >
       {nodes.map((node) => {
         if (node.type === "directory") {
-          const changeSummary = getNodeChangeSummary(node, changes);
+          const changeSummary = treeDerivedState.changeSummariesByPath.get(node.path) ?? null;
           const isExpanded = expandedDirectories.has(node.path);
-          const isModified = hasModifiedDescendant(node, modifiedPaths);
+          const isModified = treeDerivedState.modifiedPathsWithDescendants.has(node.path);
 
           return (
             <li
@@ -449,6 +485,7 @@ export function ExplorerTree ({
                   changes={changes}
                   controls={controls}
                   currentPath={currentPath}
+                  derivedState={treeDerivedState}
                   expandedDirectories={expandedDirectories}
                   getFileDragPayload={getFileDragPayload}
                   isFileOpenable={isFileOpenable}
@@ -464,9 +501,9 @@ export function ExplorerTree ({
           );
         }
 
-        const changeSummary = getNodeChangeSummary(node, changes);
+        const changeSummary = treeDerivedState.changeSummariesByPath.get(node.path) ?? null;
         const isOpenable = isFileOpenable?.(node.path) ?? true;
-        const isModified = modifiedPaths.has(node.path);
+        const isModified = treeDerivedState.modifiedPathsWithDescendants.has(node.path);
         const isCurrent = node.path === currentPath;
         const disabledTitle = `${node.name} can't be opened in the workbench`;
 

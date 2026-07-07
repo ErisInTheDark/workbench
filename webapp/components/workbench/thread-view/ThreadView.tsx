@@ -106,8 +106,59 @@ interface PendingPreviousTurnScrollRestore {
   snapshot: ThreadScrollSnapshot;
 }
 
+type RelatedThreadRecord = Record<string, ThreadPayload | undefined>;
+
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
+}
+
+function areRelatedThreadRecordsShallowEqual (left: RelatedThreadRecord, right: RelatedThreadRecord) {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+
+  for (const key of leftKeys) {
+    if (!Object.prototype.hasOwnProperty.call(right, key) || left[key] !== right[key]) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function useStableRelatedThreadsById ({
+  subagentThreadIds,
+  subthreadsById,
+  threadDocuments,
+}: {
+  subagentThreadIds: readonly string[];
+  subthreadsById: Record<string, ThreadPayload>;
+  threadDocuments: WorkbenchThreadDocumentSnapshot;
+}) {
+  const previousRef = useRef<RelatedThreadRecord>({});
+
+  const candidateThreadsById = useMemo(() => {
+    const nextThreadsById: RelatedThreadRecord = { ...subthreadsById };
+    for (const threadId of subagentThreadIds) {
+      const documentThread = getThreadDocumentFromSnapshot(threadDocuments, threadId);
+      if (documentThread) {
+        nextThreadsById[threadId] = documentThread;
+      }
+    }
+
+    return nextThreadsById;
+  }, [subagentThreadIds, subthreadsById, threadDocuments]);
+  const stableThreadsById = areRelatedThreadRecordsShallowEqual(previousRef.current, candidateThreadsById)
+    ? previousRef.current
+    : candidateThreadsById;
+
+  useLayoutEffect(() => {
+    previousRef.current = stableThreadsById;
+  }, [stableThreadsById]);
+
+  return stableThreadsById;
 }
 
 function countThreadItems (thread: Pick<ThreadPayload, "turns">) {
@@ -661,16 +712,11 @@ export default memo(function ThreadView ({
   }
   const scrollAnchorController = scrollAnchorControllerRef.current;
   const subagentThreadIds = useMemo(() => getCollabAgentThreadIds(thread.turns), [thread.turns]);
-  const relatedThreadsById = useMemo(() => {
-    const nextThreadsById = { ...subthreadsById };
-    for (const threadId of subagentThreadIds) {
-      const documentThread = getThreadDocumentFromSnapshot(threadDocuments, threadId);
-      if (documentThread) {
-        nextThreadsById[threadId] = documentThread;
-      }
-    }
-    return nextThreadsById;
-  }, [subagentThreadIds, subthreadsById, threadDocuments]);
+  const relatedThreadsById = useStableRelatedThreadsById({
+    subagentThreadIds,
+    subthreadsById,
+    threadDocuments,
+  });
   const activeThread = activeThreadId === thread.id
     ? getThreadDocumentFromSnapshot(threadDocuments, thread.id) ?? thread
     : relatedThreadsById[activeThreadId] ?? null;

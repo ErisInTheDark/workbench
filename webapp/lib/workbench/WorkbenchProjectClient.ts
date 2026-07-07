@@ -9,6 +9,7 @@
  */
 
 import type { ChangeSummary, CreateEntryPayload, ProjectSnapshot, TreeNode, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchProjectsPayload } from "../types";
+import { areDeeplyEqual } from "./deep-equality";
 import ProjectTreeFileIndex, { type ProjectTreeFileCandidate, type ProjectTreeFileIndex as ProjectTreeFileIndexRecord } from "./project/ProjectTreeFileIndex";
 import { persistExpandedDirectories, readStoredExpandedDirectories } from "./state/browser-state";
 
@@ -92,8 +93,10 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
   const listeners = new Set<WorkbenchProjectListener>();
   const state = createInitialProjectState();
   let projectLoadGeneration = 0;
+  let snapshotDirty = true;
+  let snapshot: WorkbenchProjectSnapshot | null = null;
 
-  function getSnapshot(): WorkbenchProjectSnapshot {
+  function buildSnapshot(): WorkbenchProjectSnapshot {
     return {
       changes: { ...state.changes },
       currentProjectId: state.currentProjectId,
@@ -112,7 +115,22 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
     };
   }
 
+  function markSnapshotDirty() {
+    snapshotDirty = true;
+  }
+
+  function getSnapshot(): WorkbenchProjectSnapshot {
+    if (!snapshotDirty && snapshot) {
+      return snapshot;
+    }
+
+    snapshot = buildSnapshot();
+    snapshotDirty = false;
+    return snapshot;
+  }
+
   function emit() {
+    markSnapshotDirty();
     const snapshot = getSnapshot();
     for (const listener of listeners) {
       listener(snapshot);
@@ -120,6 +138,22 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
   }
 
   function applyProjectSnapshot(payload: ProjectSnapshot) {
+    const nextHasLoadedProject = true;
+    const nextIsLoading = false;
+    const didChange = state.currentProjectId !== payload.projectId
+      || state.root !== payload.root
+      || state.rootPath !== payload.rootPath
+      || state.workbenchStorageRootPath !== payload.workbenchStorageRootPath
+      || state.hasLoadedProject !== nextHasLoadedProject
+      || state.isLoading !== nextIsLoading
+      || !areDeeplyEqual(state.roots, payload.roots)
+      || !areDeeplyEqual(state.tree, payload.tree)
+      || !areDeeplyEqual(state.changes, payload.changes);
+
+    if (!didChange) {
+      return false;
+    }
+
     state.currentProjectId = payload.projectId;
     state.root = payload.root;
     state.rootPath = payload.rootPath;
@@ -128,8 +162,10 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
     state.workbenchStorageRootPath = payload.workbenchStorageRootPath;
     state.fileIndex = ProjectTreeFileIndex.fromTree(state.tree, state.fileIndex);
     state.changes = { ...payload.changes };
-    state.hasLoadedProject = true;
-    state.isLoading = false;
+    state.hasLoadedProject = nextHasLoadedProject;
+    state.isLoading = nextIsLoading;
+    markSnapshotDirty();
+    return true;
   }
 
   function applyProjectOption(project: WorkbenchProjectOption, options: { loading?: boolean } = {}) {
@@ -153,14 +189,30 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
     }
 
     const payload = await response.json() as WorkbenchProjectsPayload;
+    if (areDeeplyEqual(state.projects, payload.data)) {
+      return false;
+    }
+
     state.projects = payload.data;
+    markSnapshotDirty();
+    return true;
   }
 
   async function refreshProject({ refreshProjectList = true }: { refreshProjectList?: boolean } = {}) {
+    let didProjectListChange = false;
     if (refreshProjectList) {
-      await refreshProjects();
+      didProjectListChange = await refreshProjects();
     }
     if (!state.currentProjectId) {
+      const didChange = state.root !== "No projects"
+        || state.rootPath !== ""
+        || state.roots.length > 0
+        || state.tree.length > 0
+        || state.fileIndex !== ProjectTreeFileIndex.empty
+        || Object.keys(state.changes).length > 0
+        || !state.hasLoadedProject
+        || state.isLoading;
+
       state.root = "No projects";
       state.rootPath = "";
       state.roots = [];
@@ -169,7 +221,9 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
       state.changes = {};
       state.hasLoadedProject = true;
       state.isLoading = false;
-      emit();
+      if (didProjectListChange || didChange) {
+        emit();
+      }
       return {
         changes: {},
         projectId: "",
@@ -187,6 +241,7 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
     const shouldShowLoading = !state.hasLoadedProject;
     if (shouldShowLoading && !state.isLoading) {
       state.isLoading = true;
+      markSnapshotDirty();
       emit();
     }
 
@@ -202,12 +257,15 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
         return payload;
       }
 
-      applyProjectSnapshot(payload);
-      emit();
+      const didProjectChange = applyProjectSnapshot(payload);
+      if (didProjectListChange || didProjectChange) {
+        emit();
+      }
       return payload;
     } catch (error) {
-      if (refreshGeneration === projectLoadGeneration) {
+      if (refreshGeneration === projectLoadGeneration && state.isLoading) {
         state.isLoading = false;
+        markSnapshotDirty();
         emit();
       }
       throw error;
@@ -260,13 +318,19 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
       emit();
     }
 
-    await refreshProjects();
+    const didRefreshProjectsChange = await refreshProjects();
     const project = state.projects.find((candidate) => candidate.id === projectId);
     if (!project) {
+      if (didRefreshProjectsChange) {
+        emit();
+      }
       return false;
     }
 
     if (state.currentProjectId === projectId && !state.isLoading) {
+      if (didRefreshProjectsChange) {
+        emit();
+      }
       return true;
     }
 
@@ -278,11 +342,13 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
   }
 
   async function selectInitialProject() {
-    await refreshProjects();
+    const didRefreshProjectsChange = await refreshProjects();
     const initialProject = state.projects.find((project) => project.id === state.currentProjectId) ?? state.projects[0] ?? null;
     if (!state.currentProjectId && initialProject) {
       applyProjectOption(initialProject, { loading: true });
       state.expandedDirectories = new Set(readStoredExpandedDirectories(state.currentProjectId));
+      emit();
+    } else if (didRefreshProjectsChange) {
       emit();
     }
     if (state.currentProjectId) {

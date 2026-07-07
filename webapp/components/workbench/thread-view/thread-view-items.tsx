@@ -7,7 +7,7 @@
  */
 "use client";
 
-import { memo, type ReactNode } from "react";
+import { memo, useMemo, type ReactNode } from "react";
 
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
@@ -1441,14 +1441,14 @@ function ThreadCommandExecutionDetails ({
   threadId: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const commandDisplay = getThreadCommandDisplay({
+  const commandDisplay = useMemo(() => getThreadCommandDisplay({
     command: item.command,
     commandActions: item.commandActions,
     cwd: item.cwd,
     knownSkills,
     projectRootPath,
     workspaceRoots,
-  });
+  }), [item.command, item.commandActions, item.cwd, knownSkills, projectRootPath, workspaceRoots]);
   const checkpointDiffChanges = isGitCheckpointDiffMatcherClaim(commandDisplay.claimedBy)
     ? parseGitCheckpointDiffOutput(item.aggregatedOutput ?? "")
     : null;
@@ -1457,14 +1457,16 @@ function ThreadCommandExecutionDetails ({
     : null;
   const shouldRenderCheckpointDiff = checkpointDiffChanges !== null
     && (!item.aggregatedOutput?.trim() || Boolean(checkpointDiffArtifactId) || checkpointDiffChanges.length > 0);
-  const commandDetailRows = isBrowseWebRequestMatcherClaim(commandDisplay.claimedBy)
-    ? mergeCommandDetailRowsWithBrowseOutput(
-      commandDisplay.detailRows,
-      item.aggregatedOutput,
-      browseScreenshotEntries.filter((entry) => entry.commandItemId === item.id),
-      item.status,
-    )
-    : commandDisplay.detailRows ?? [];
+  const commandDetailRows = useMemo(() => (
+    isBrowseWebRequestMatcherClaim(commandDisplay.claimedBy)
+      ? mergeCommandDetailRowsWithBrowseOutput(
+        commandDisplay.detailRows,
+        item.aggregatedOutput,
+        browseScreenshotEntries.filter((entry) => entry.commandItemId === item.id),
+        item.status,
+      )
+      : commandDisplay.detailRows ?? []
+  ), [browseScreenshotEntries, commandDisplay.claimedBy, commandDisplay.detailRows, item.aggregatedOutput, item.id, item.status]);
   const metaParts = [];
 
   if (item.status !== "completed") {
@@ -1585,16 +1587,40 @@ function ThreadCommandSequence ({
   threadId: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  const allBrowseRequests = useMemo(() => {
+    if (items.length <= 1) {
+      return false;
+    }
+
+    return items.every((item) => isBrowseWebRequestCommandItem({
+      item,
+      knownSkills,
+      projectRootPath,
+      workspaceRoots,
+    }));
+  }, [items, knownSkills, projectRootPath, workspaceRoots]);
+  const commandBlockItems = useMemo(() => items.map((item) => ({
+    command: item.command,
+    commandActions: item.commandActions,
+    cwd: item.cwd,
+  })), [items]);
+  const commandBlockDisplay = useMemo(() => {
+    if (items.length <= 1 || allBrowseRequests) {
+      return null;
+    }
+
+    return getThreadCommandBlockDisplay({
+      items: commandBlockItems,
+      knownSkills,
+      projectRootPath,
+      workspaceRoots,
+    });
+  }, [allBrowseRequests, commandBlockItems, items.length, knownSkills, projectRootPath, workspaceRoots]);
+
   if (items.length === 1) {
     return <ThreadCommandExecutionDetails browseScreenshotEntries={browseScreenshotEntries} isMostRecent={isMostRecent} item={items[0]} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
   }
 
-  const allBrowseRequests = items.every((item) => isBrowseWebRequestCommandItem({
-    item,
-    knownSkills,
-    projectRootPath,
-    workspaceRoots,
-  }));
   if (allBrowseRequests) {
     return (
       <div className="space-y-1">
@@ -1616,16 +1642,9 @@ function ThreadCommandSequence ({
     );
   }
 
-  const commandBlockDisplay = getThreadCommandBlockDisplay({
-    items: items.map((item) => ({
-      command: item.command,
-      commandActions: item.commandActions,
-      cwd: item.cwd,
-    })),
-    knownSkills,
-    projectRootPath,
-    workspaceRoots,
-  });
+  if (!commandBlockDisplay) {
+    return null;
+  }
 
   return (
     <ThreadDisclosure
@@ -1848,40 +1867,63 @@ function ThreadTurnDetailsComponent ({
   turn: Turn;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const hiddenCollabAgentToolCallIds = hiddenCollabAgentToolCallItemIds.length
-    ? new Set(hiddenCollabAgentToolCallItemIds)
-    : null;
-  const hiddenDynamicToolCallIds = hiddenDynamicToolCallItemIds.length
-    ? new Set(hiddenDynamicToolCallItemIds)
-    : null;
-  const hiddenWebSearchIds = hiddenWebSearchItemIds.length
-    ? new Set(hiddenWebSearchItemIds)
-    : null;
-  const isWorkbenchControlTurn = turn.items.some((item) => item.type === "userMessage" && isWorkbenchControlUserMessage(item));
-  const hiddenItemIds = {
+  const hiddenCollabAgentToolCallIds = useMemo(() => (
+    hiddenCollabAgentToolCallItemIds.length
+      ? new Set(hiddenCollabAgentToolCallItemIds)
+      : null
+  ), [hiddenCollabAgentToolCallItemIds]);
+  const hiddenDynamicToolCallIds = useMemo(() => (
+    hiddenDynamicToolCallItemIds.length
+      ? new Set(hiddenDynamicToolCallItemIds)
+      : null
+  ), [hiddenDynamicToolCallItemIds]);
+  const hiddenWebSearchIds = useMemo(() => (
+    hiddenWebSearchItemIds.length
+      ? new Set(hiddenWebSearchItemIds)
+      : null
+  ), [hiddenWebSearchItemIds]);
+  const isWorkbenchControlTurn = useMemo(() => (
+    turn.items.some((item) => item.type === "userMessage" && isWorkbenchControlUserMessage(item))
+  ), [turn.items]);
+  const hiddenItemIds = useMemo(() => ({
     collabAgentToolCallIds: hiddenCollabAgentToolCallIds,
     controlAgentMessages: hideWorkbenchControlAgentMessages && isWorkbenchControlTurn,
     controlUserMessages: hideWorkbenchControlUserMessages,
     dynamicToolCallIds: hiddenDynamicToolCallIds,
     reasoningItemId: hiddenReasoningItemId,
     webSearchItemIds: hiddenWebSearchIds,
-  } satisfies HiddenThreadItemIds;
-  const finalAgentMessageId = getFinalAgentMessageId(turn);
+  } satisfies HiddenThreadItemIds), [
+    hiddenCollabAgentToolCallIds,
+    hiddenDynamicToolCallIds,
+    hiddenReasoningItemId,
+    hiddenWebSearchIds,
+    hideWorkbenchControlAgentMessages,
+    hideWorkbenchControlUserMessages,
+    isWorkbenchControlTurn,
+  ]);
+  const finalAgentMessageId = useMemo(() => getFinalAgentMessageId(turn), [turn.items]);
   const isCompleted = turn.status === "completed";
-  const primaryUserItem = turn.items.find((item) => item.type === "userMessage") ?? null;
-  const finalAgentItem = finalAgentMessageId
-    ? turn.items.find((item) => item.id === finalAgentMessageId) ?? null
-    : null;
-  const pinnedCompactionItemIds = new Set([
+  const primaryUserItem = useMemo(() => (
+    turn.items.find((item) => item.type === "userMessage") ?? null
+  ), [turn.items]);
+  const finalAgentItem = useMemo(() => (
+    finalAgentMessageId
+      ? turn.items.find((item) => item.id === finalAgentMessageId) ?? null
+      : null
+  ), [finalAgentMessageId, turn.items]);
+  const pinnedCompactionItemIds = useMemo(() => new Set([
     primaryUserItem?.id,
     hideFinalAgentMessage ? null : finalAgentItem?.id,
-  ].filter((itemId): itemId is string => Boolean(itemId)));
-  const compactionRenderPlan = createThreadTurnCompactionRenderPlan({
+  ].filter((itemId): itemId is string => Boolean(itemId))), [finalAgentItem?.id, hideFinalAgentMessage, primaryUserItem?.id]);
+  const compactionRenderPlan = useMemo(() => createThreadTurnCompactionRenderPlan({
     itemTimeline,
     items: turn.items,
     pinnedItemIds: pinnedCompactionItemIds,
-  });
-  const turnBrowseScreenshotEntries = browseScreenshotEntries.filter((entry) => entry.turnId === turn.id);
+  }), [itemTimeline, pinnedCompactionItemIds, turn.items]);
+  const turnBrowseScreenshotEntries = useMemo(() => (
+    browseScreenshotEntries.filter((entry) => entry.turnId === turn.id)
+  ), [browseScreenshotEntries, turn.id]);
+  const allBlocks = useMemo(() => buildRenderableBlocks(turn.items, hiddenItemIds), [hiddenItemIds, turn.items]);
 
   const renderBlock = (
     block: ThreadRenderableBlock,
@@ -2048,7 +2090,7 @@ function ThreadTurnDetailsComponent ({
     );
   }
 
-  const blocks = buildRenderableBlocks(turn.items, hiddenItemIds);
+  const blocks = allBlocks;
   const primaryUserBlock = isCompleted
     ? blocks.find((block) => isUserMessageBlock(block)) ?? null
     : null;

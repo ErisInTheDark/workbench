@@ -49,6 +49,34 @@ type MountedWorkbenchControls = WorkbenchControls & {
   ) => ReturnType<typeof WorkbenchFilePanelClient>;
 };
 
+function areExplorerSnapshotsEquivalent(left: ExplorerSnapshot | null, right: ExplorerSnapshot) {
+  if (!left) {
+    return false;
+  }
+
+  return left.currentProjectId === right.currentProjectId
+    && left.root === right.root
+    && left.rootPath === right.rootPath
+    && left.projectFileIndexId === right.projectFileIndexId
+    && left.projectFileIndexKey === right.projectFileIndexKey
+    && left.isProjectLoading === right.isProjectLoading
+    && left.isThreadsLoading === right.isThreadsLoading
+    && left.currentPath === right.currentPath
+    && left.currentThreadId === right.currentThreadId
+    && left.threadsError === right.threadsError
+    && left.fontSize === right.fontSize
+    && left.workbenchStorageRootPath === right.workbenchStorageRootPath
+    && left.projectFileCandidates === right.projectFileCandidates
+    && left.projectFilePaths === right.projectFilePaths
+    && (left.projects === right.projects || areDeeplyEqual(left.projects, right.projects))
+    && (left.roots === right.roots || areDeeplyEqual(left.roots, right.roots))
+    && (left.tree === right.tree || areDeeplyEqual(left.tree, right.tree))
+    && (left.threads === right.threads || areDeeplyEqual(left.threads, right.threads))
+    && (left.changes === right.changes || areDeeplyEqual(left.changes, right.changes))
+    && (left.expandedDirectories === right.expandedDirectories || areDeeplyEqual(left.expandedDirectories, right.expandedDirectories))
+    && (left.locallyModifiedPaths === right.locallyModifiedPaths || areDeeplyEqual(left.locallyModifiedPaths, right.locallyModifiedPaths));
+}
+
 export async function WorkbenchClient(
   bindings: WorkbenchBindings & { dom?: WorkbenchDomSurfaces | null } = {},
 ): Promise<() => void> {
@@ -56,6 +84,7 @@ export async function WorkbenchClient(
 
   const coordinatorLifecycle = new LifecycleScope();
   let explorerStateChangeScheduled = false;
+  let lastEmittedExplorerSnapshot: ExplorerSnapshot | null = null;
   let reportStatusMessage = (_message: string) => {};
   let activeRoute: WorkbenchRoute = workbenchBindings.initialRoute ?? createProjectRoute("");
   let activeRouteGeneration = 0;
@@ -212,7 +241,13 @@ export async function WorkbenchClient(
   }
 
   function flushExplorerStateChange() {
-    workbenchBindings.onExplorerStateChange?.(getExplorerSnapshot());
+    const snapshot = getExplorerSnapshot();
+    if (areExplorerSnapshotsEquivalent(lastEmittedExplorerSnapshot, snapshot)) {
+      return;
+    }
+
+    lastEmittedExplorerSnapshot = snapshot;
+    workbenchBindings.onExplorerStateChange?.(snapshot);
   }
 
   function emitExplorerStateChange() {
