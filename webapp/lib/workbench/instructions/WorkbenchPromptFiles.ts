@@ -443,6 +443,8 @@ ${browseSessionsRouteUrl}
 ${rawCommandStatus}
 
 This section does not authorize arbitrary Workbench webapp endpoint calls. Use the \`/browse\` skill for the browser workflow and request contract, including when listing or stopping Workbench-known Browse sessions.
+
+Browse endpoint calls must stay isolated and auditable: a shell command that calls \`/api/browse\` or \`/api/browse/sessions\` may contain only one typed Browse request or one typed Browse sequence. Do not bundle Browse calls with unrelated endpoint calls, file inspection, page-data transformation, branching, or follow-up scripts in the same command. If Browse output needs processing, run the Browse call visibly first, then run a separate follow-up command using the visible result.
 `.trim();
 }
 

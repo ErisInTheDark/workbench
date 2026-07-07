@@ -11,6 +11,7 @@ import type { CommandMatcherDefinition, ThreadCommandDetailRow, ThreadCommandDis
 interface BrowseRequestSummary {
   action: string;
   detailRows?: ThreadCommandDetailRow[];
+  hideCommandOutput?: boolean;
   isBrowseRequest?: boolean;
   session: string | null;
   summaryText?: string | null;
@@ -19,6 +20,7 @@ interface BrowseRequestSummary {
 }
 
 const BROWSE_ROUTE_PATTERN = /https?:\/\/127\.0\.0\.1:3002\/api\/browse\b|https?:\/\/localhost:3002\/api\/browse\b|['"`]\/api\/browse['"`]/i;
+const BROWSE_ENDPOINT_REFERENCE_PATTERN = /(?:https?:\/\/(?:127\.0\.0\.1|localhost):3002)?\/api\/browse(?:\/sessions)?\b|['"`]\/api\/browse(?:\/sessions)?['"`]/gi;
 const BROWSE_SESSIONS_ROUTE_PATTERN = /(?:https?:\/\/(?:127\.0\.0\.1|localhost):3002)?\/api\/browse\/sessions\b/i;
 
 export const BROWSE_WEB_REQUEST_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
@@ -37,7 +39,7 @@ export const BROWSE_WEB_REQUEST_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       return CommandMatcher.Result({
         detailRows: summary.detailRows,
         hideCommandCwd: summary.isBrowseRequest === true,
-        hideCommandOutput: summary.isBrowseRequest === true,
+        hideCommandOutput: summary.hideCommandOutput ?? summary.isBrowseRequest === true,
         remainingCommand: null,
         stop: true,
         summaryParts: buildBrowseRequestSummaryParts(summary),
@@ -160,6 +162,11 @@ function isBrowseActionTargetCode(action: string | null | undefined) {
 }
 
 function readBrowseRequestSummary(commandText: string): BrowseRequestSummary | null {
+  const mixedScriptSummary = readMixedBrowseScriptSummary(commandText);
+  if (mixedScriptSummary) {
+    return mixedScriptSummary;
+  }
+
   const jsonSummary = readJsonBrowseRequestSummary(commandText);
   if (jsonSummary) {
     return jsonSummary;
@@ -185,6 +192,30 @@ function readBrowseRequestSummary(commandText: string): BrowseRequestSummary | n
   }
 
   return { action: "request", session: null, target: null };
+}
+
+function readMixedBrowseScriptSummary(commandText: string): BrowseRequestSummary | null {
+  const endpointReferences = countBrowseEndpointReferences(commandText);
+  if (endpointReferences < 2) {
+    return null;
+  }
+
+  const actions = readPowerShellHashtableSequenceActions(commandText);
+  const uniqueSessions = Array.from(new Set(actions.map((action) => action.session).filter((session): session is string => Boolean(session))));
+  return {
+    action: "request",
+    detailRows: actions.length ? actions.map(buildBrowseActionDetailRow) : undefined,
+    hideCommandOutput: false,
+    isBrowseRequest: true,
+    session: uniqueSessions.length === 1 ? uniqueSessions[0] : formatSessionList(uniqueSessions),
+    summaryText: "run mixed script",
+    target: null,
+    totalActions: actions.length || endpointReferences,
+  };
+}
+
+function countBrowseEndpointReferences(commandText: string) {
+  return [...commandText.matchAll(new RegExp(BROWSE_ENDPOINT_REFERENCE_PATTERN.source, "gi"))].length;
 }
 
 function readJsonBrowseRequestSummary(commandText: string): BrowseRequestSummary | null {

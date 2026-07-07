@@ -56,6 +56,14 @@ Use named sessions for non-trivial work so parallel agents do not collide throug
 
 Stop sessions when finished. Workbench also cleans up thread-owned sessions after their owning thread has been inactive long enough, but agents should still clean up intentionally.
 
+## Browse Command Isolation
+
+Browse endpoint calls must be isolated and auditable.
+
+A shell command that calls \`/api/browse\` or \`/api/browse/sessions\` must contain only one typed Browse request or one typed Browse sequence. Do not wrap Browse calls inside larger PowerShell, Bash, or other shell scripts that also inspect files, transform page data, branch on results, call unrelated endpoints, or perform follow-up cleanup outside the typed Browse action/sequence.
+
+If page data or Browse endpoint output needs additional processing, first run the Browse call visibly. Then run a separate follow-up command or script using the visible result. Do not smuggle page-derived data processing into the same shell command as the Browse request.
+
 ## Default Workflow
 
 1. Choose a short named session for the task.
@@ -139,7 +147,7 @@ Use the current Workbench thread id when it is available. If no current thread i
 
 ## Shell Examples
 
-Prefer typed requests and short streamed sequences.
+Prefer isolated typed requests and short streamed sequences. Do not combine these examples with extra shell logic; run follow-up processing as a separate visible command.
 
 PowerShell single action:
 
