@@ -3289,55 +3289,41 @@ export default function Workbench () {
                     </nav>
                   )}
                 </section>
-                <section
-                  className={`relative space-y-2 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "browseSessions" ? " opacity-45" : ""}`}
-                  {...getSidebarSectionDragProps("browseSessions")}
-                  onPointerDown={(event) => {
-                    beginWorkbenchPointerDrag(event, { sectionId: "browseSessions", type: "sidebar-section" });
-                  }}
-                  onPointerMove={() => {
-                    if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "browseSessions") {
-                      setSidebarDropTargetId("browseSessions");
-                    }
-                  }}
-                  onPointerUp={() => {
-                    if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "browseSessions") {
-                      moveSidebarSection(activeWorkbenchDrag.payload.sectionId, "browseSessions");
-                      endWorkbenchPointerDrag();
-                    }
-                  }}
-                >
-                  {sidebarDropTargetId === "browseSessions" ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
-                  <div className="flex items-center justify-between gap-3 pr-2 md:pr-4.5">
-                    <p className="m-0 text-base font-semibold leading-tight">Browse sessions</p>
-                    <button
-                      type="button"
-                      aria-label="Refresh Browse sessions"
-                      title="Refresh Browse sessions"
-                      className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}`}
-                      disabled={!activeProjectId || isBrowseSessionsLoading}
-                      onClick={() => {
-                        void refreshBrowseSessions();
-                      }}
-                    >
-                      <ReloadIcon />
-                      <span className="sr-only">Refresh Browse sessions</span>
-                    </button>
-                  </div>
-                  <BrowseSessionsList
-                    getSessionContextMenu={getBrowseSessionContextMenu}
-                    isLoading={isBrowseSessionsLoading}
-                    onRefresh={() => {
-                      void refreshBrowseSessions();
+                {browseSessions.length ? (
+                  <section
+                    className={`relative space-y-2 pt-6 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "browseSessions" ? " opacity-45" : ""}`}
+                    {...getSidebarSectionDragProps("browseSessions")}
+                    onPointerDown={(event) => {
+                      beginWorkbenchPointerDrag(event, { sectionId: "browseSessions", type: "sidebar-section" });
                     }}
-                    sessions={browseSessions}
-                  />
-                  {browseSessionsError ? (
-                    <p className="m-0 pr-2 text-[0.84rem] leading-6 text-danger">
-                      {browseSessionsError}
-                    </p>
-                  ) : null}
-                </section>
+                    onPointerMove={() => {
+                      if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "browseSessions") {
+                        setSidebarDropTargetId("browseSessions");
+                      }
+                    }}
+                    onPointerUp={() => {
+                      if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "browseSessions") {
+                        moveSidebarSection(activeWorkbenchDrag.payload.sectionId, "browseSessions");
+                        endWorkbenchPointerDrag();
+                      }
+                    }}
+                  >
+                    {sidebarDropTargetId === "browseSessions" ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
+                    <div className="flex items-center justify-between gap-3 pr-2 md:pr-4.5">
+                      <p className="m-0 text-base font-semibold leading-tight">Browse sessions</p>
+                    </div>
+                    <BrowseSessionsList
+                      getSessionContextMenu={getBrowseSessionContextMenu}
+                      isLoading={isBrowseSessionsLoading}
+                      sessions={browseSessions}
+                    />
+                    {browseSessionsError ? (
+                      <p className="m-0 pr-2 text-[0.84rem] leading-6 text-danger">
+                        {browseSessionsError}
+                      </p>
+                    ) : null}
+                  </section>
+                ) : null}
                 <div
                   className="relative h-5 shrink-0"
                   style={{ order: sidebarSectionOrder.length }}

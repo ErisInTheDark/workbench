@@ -86,14 +86,26 @@ function ThreadListRow ({
 }: {
   active?: boolean;
   children: ReactNode;
-  onClick: () => void;
+  onClick?: () => void;
   title: string;
 }) {
+  const className = `${workbenchThreadListButtonClassName}${active ? " text-accent" : " text-muted"}`;
+  if (!onClick) {
+    return (
+      <div
+        title={title}
+        className={className}
+      >
+        {children}
+      </div>
+    );
+  }
+
   return (
     <button
       type="button"
       title={title}
-      className={`${workbenchThreadListButtonClassName}${active ? " text-accent" : " text-muted"}`}
+      className={className}
       onClick={onClick}
     >
       {children}
@@ -286,34 +298,18 @@ export function ThreadsList ({
 export function BrowseSessionsList ({
   getSessionContextMenu,
   isLoading,
-  onRefresh,
   sessions,
 }: {
   getSessionContextMenu?: (session: WorkbenchBrowseSessionSummary) => WorkbenchContextMenuDefinition | null;
   isLoading: boolean;
-  onRefresh: () => void;
   sessions: WorkbenchBrowseSessionSummary[];
 }) {
-  if (isLoading) {
+  if (isLoading && !sessions.length) {
     return <SidebarLoadingSkeleton ariaLabel="Loading Browse sessions" rows={3} />;
   }
 
   if (!sessions.length) {
-    return (
-      <div className="space-y-1 pr-2 md:pr-4.5">
-        <p className="m-0 px-2 text-[0.84rem] leading-6 text-muted">No active Browse sessions.</p>
-        <button
-          type="button"
-          className={`${workbenchThreadListButtonClassName} text-muted`}
-          onClick={onRefresh}
-        >
-          <span className="inline-flex min-w-0 items-center gap-2">
-            <BrowserSessionIcon className="size-4 shrink-0" />
-            <span className={workbenchThreadListLabelClassName}>Refresh sessions</span>
-          </span>
-        </button>
-      </div>
-    );
+    return null;
   }
 
   return (
@@ -328,7 +324,6 @@ export function BrowseSessionsList ({
             <ContextMenuCapability menu={getSessionContextMenu?.(session) ?? null}>
               <ThreadListRow
                 active={isProblemState}
-                onClick={onRefresh}
                 title={title}
               >
                 <span className="flex w-full min-w-0 items-center justify-between gap-3">
