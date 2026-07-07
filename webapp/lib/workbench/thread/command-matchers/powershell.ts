@@ -28,6 +28,11 @@ interface ParsedPowerShellCounterStart {
   variableName: string;
 }
 
+interface ParsedPowerShellNumericAssignment {
+  value: number;
+  variableName: string;
+}
+
 export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
     id: "powershell.hide-thread-title-setting",
@@ -387,6 +392,64 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
             CommandMatcher.Code(whereObjectFilter.pattern),
           ],
       });
+    },
+  }),
+  CommandMatcher({
+    id: "powershell.sort-object",
+    match: (context) => {
+      const parsedStage = parsePowerShellStage(context.stage.text);
+      if (!matchesPowerShellCommand(parsedStage, ["sort-object", "sort"])) {
+        return null;
+      }
+
+      const propertyName = formatPowerShellSortProperty(parsedStage);
+      if (!propertyName) {
+        return null;
+      }
+
+      const direction = hasPowerShellTruthyFlag(parsedStage, "-Descending")
+        ? " descending"
+        : hasPowerShellTruthyFlag(parsedStage, "-Ascending")
+          ? " ascending"
+          : "";
+
+      return CommandMatcher.Result({
+        summaryStats: { otherCommands: 1 },
+        summaryParts: [
+          CommandMatcher.Text(`Sort by ${propertyName}${direction}`),
+        ],
+      });
+    },
+  }),
+  CommandMatcher({
+    id: "powershell.select-object-limit",
+    match: (context) => {
+      const parsedStage = parsePowerShellStage(context.stage.text);
+      if (!matchesPowerShellCommand(parsedStage, ["select-object", "select"])) {
+        return null;
+      }
+
+      const first = readPowerShellNumericValue(parsedStage, "-First");
+      if (first !== null) {
+        return CommandMatcher.Result({
+          summaryStats: { otherCommands: 1 },
+          summaryParts: [
+            CommandMatcher.Text(`Take first ${first}`),
+          ],
+        });
+      }
+
+      const last = readPowerShellNumericValue(parsedStage, "-Last");
+      if (last !== null) {
+        return CommandMatcher.Result({
+          summaryStats: { otherCommands: 1 },
+          summaryParts: [
+            CommandMatcher.Text(`Take last ${last}`),
+          ],
+        });
+      }
+
+      return null;
     },
   }),
   CommandMatcher({
@@ -867,7 +930,11 @@ function readPowerShellAssignedReadStage(
   };
 }
 
-function readPowerShellNumberedLineRange(stageText: string, variableName: string) {
+function readPowerShellNumberedLineRange(
+  stageText: string,
+  variableName: string,
+  numericAssignments: ReadonlyMap<string, number>,
+) {
   const normalizedStageText = unwrapPowerShellStageText(stageText);
   const directRange = readPowerShellVariableLineRange(normalizedStageText, variableName);
   if (directRange) {
@@ -875,16 +942,20 @@ function readPowerShellNumberedLineRange(stageText: string, variableName: string
   }
 
   const loopMatch = normalizedStageText.match(
-    /^for\s*\(\s*\$([A-Za-z_][\w]*)\s*=\s*(\d+)\s*;\s*\$\1\s*(-l[et])\s*(\d+)\s*;\s*\$\1\s*\+\+\s*\)\s*\{([\s\S]+)\}$/i,
+    /^for\s*\(\s*\$([A-Za-z_][\w]*)\s*=\s*([^;]+?)\s*;\s*\$\1\s*(-l[et])\s*([^;]+?)\s*;\s*\$\1\s*\+\+\s*\)\s*\{([\s\S]+)\}$/i,
   );
   if (!loopMatch?.[1] || !loopMatch[2] || !loopMatch[3] || !loopMatch[4] || !loopMatch[5]) {
     return null;
   }
 
   const indexVariableName = loopMatch[1];
-  const startIndex = Number(loopMatch[2]);
+  const startIndex = readPowerShellNumericExpression(loopMatch[2], numericAssignments);
   const comparisonOperator = loopMatch[3].toLowerCase();
-  const loopBound = Number(loopMatch[4]);
+  const loopBound = readPowerShellNumericExpression(loopMatch[4], numericAssignments);
+  if (startIndex === null || loopBound === null) {
+    return null;
+  }
+
   const endIndex = comparisonOperator === "-lt" ? loopBound - 1 : loopBound;
   const body = loopMatch[5];
   if (
@@ -909,6 +980,7 @@ function readPowerShellNumberedLineRange(stageText: string, variableName: string
 
 function readPowerShellNumberedLineRanges(commandText: string, variableName: string) {
   const ranges: ParsedPowerShellLineRange[] = [];
+  const numericAssignments = new Map<string, number>();
   const rangeAssignments = new Map<string, ParsedPowerShellLineRange[]>();
   let remainingCommand: string | null = commandText;
 
@@ -925,7 +997,19 @@ function readPowerShellNumberedLineRanges(commandText: string, variableName: str
       continue;
     }
 
-    const lineRanges = readPowerShellNumberedLineRangeSet(nextStage.text, variableName, rangeAssignments);
+    const numericAssignment = readPowerShellNumericAssignment(nextStage.text);
+    if (numericAssignment) {
+      numericAssignments.set(numericAssignment.variableName.toLowerCase(), numericAssignment.value);
+      remainingCommand = nextStage.remainingCommand ?? null;
+      continue;
+    }
+
+    const lineRanges = readPowerShellNumberedLineRangeSet(
+      nextStage.text,
+      variableName,
+      rangeAssignments,
+      numericAssignments,
+    );
     if (!lineRanges) {
       break;
     }
@@ -948,6 +1032,7 @@ function readPowerShellNumberedLineRangeSet(
   stageText: string,
   variableName: string,
   rangeAssignments: ReadonlyMap<string, ParsedPowerShellLineRange[]>,
+  numericAssignments: ReadonlyMap<string, number>,
 ) {
   const assignedTupleRanges = readPowerShellForEachAssignedTupleLineRanges(
     stageText,
@@ -963,8 +1048,43 @@ function readPowerShellNumberedLineRangeSet(
     return tupleRanges;
   }
 
-  const lineRange = readPowerShellNumberedLineRange(stageText, variableName);
+  const lineRange = readPowerShellNumberedLineRange(stageText, variableName, numericAssignments);
   return lineRange ? [lineRange] : null;
+}
+
+function readPowerShellNumericAssignment(stageText: string): ParsedPowerShellNumericAssignment | null {
+  const assignmentMatch = unwrapPowerShellStageText(stageText).match(/^\$([A-Za-z_][\w]*)\s*=\s*(\d+)\s*$/);
+  if (!assignmentMatch?.[1] || !assignmentMatch[2]) {
+    return null;
+  }
+
+  const value = Number(assignmentMatch[2]);
+  if (!Number.isSafeInteger(value)) {
+    return null;
+  }
+
+  return {
+    value,
+    variableName: assignmentMatch[1],
+  };
+}
+
+function readPowerShellNumericExpression(
+  expression: string,
+  numericAssignments: ReadonlyMap<string, number>,
+) {
+  const normalizedExpression = unwrapPowerShellStageText(expression).trim();
+  if (/^\d+$/.test(normalizedExpression)) {
+    const value = Number(normalizedExpression);
+    return Number.isSafeInteger(value) ? value : null;
+  }
+
+  const variableMatch = normalizedExpression.match(/^\$([A-Za-z_][\w]*)$/);
+  if (!variableMatch?.[1]) {
+    return null;
+  }
+
+  return numericAssignments.get(variableMatch[1].toLowerCase()) ?? null;
 }
 
 function readPowerShellTupleRangeAssignment(stageText: string) {
@@ -1458,6 +1578,22 @@ function splitPowerShellList(value: string | null) {
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+function formatPowerShellSortProperty(parsedStage: ParsedPowerShellStage) {
+  const rawPropertyName = readPowerShellNamedValue(parsedStage, ["-Property"])
+    ?? getPowerShellPositionalArguments(parsedStage)[0]
+    ?? null;
+  if (!rawPropertyName || rawPropertyName.startsWith("$") || rawPropertyName.startsWith("{")) {
+    return null;
+  }
+
+  const normalizedPropertyName = formatPatternForDisplay(rawPropertyName)
+    .replace(/^['"`]+|['"`]+$/g, "")
+    .trim();
+  return /^[A-Za-z_][\w.:-]*$/.test(normalizedPropertyName)
+    ? normalizedPropertyName
+    : null;
 }
 
 function summarizeWhereObjectFilter(parsedStage: ParsedPowerShellStage) {
