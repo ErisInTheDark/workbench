@@ -57,7 +57,7 @@ import {
 import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
 import { ThreadQuestionBadge, ThreadUnreadBadge as ThreadUnreadBadgeView } from "../ThreadStatusBadges";
-import { ThreadThreadContent, ThreadTurnDetails, ThreadTurnLoadingSkeleton } from "./thread-view-items";
+import { ThreadThreadContent, ThreadTurnDetails, ThreadTurnLoadingSkeleton, useStableBrowseScreenshotEntriesByTurn } from "./thread-view-items";
 import ThreadAgentName from "./ThreadAgentName";
 import ThreadComposer from "./ThreadComposer";
 import ThreadContextStatus from "./ThreadContextStatus";
@@ -749,6 +749,7 @@ export default memo(function ThreadView ({
     : relatedThreadsById[activeThreadId] ?? null;
   const activeThreadIdentity = activeThread ? `${activeThread.harness}:${activeThread.id}` : "";
   const activeThreadBrowseScreenshotEntries = activeThread?.browseScreenshotEntries ?? EMPTY_BROWSE_SCREENSHOT_ENTRIES;
+  const activeThreadBrowseScreenshotEntriesByTurnId = useStableBrowseScreenshotEntriesByTurn(activeThreadBrowseScreenshotEntries);
   const activeHarnessUserInputRequest = activeThread
     ? livePendingUserInputRequestsByThreadId[activeThread.id] ?? null
     : null;
@@ -1651,7 +1652,7 @@ export default memo(function ThreadView ({
                   return turn ? (
                     <ThreadTurnDetails
                       key={entry.turnId}
-                      browseScreenshotEntries={activeThreadBrowseScreenshotEntries}
+                      browseScreenshotEntries={activeThreadBrowseScreenshotEntriesByTurnId.get(entry.turnId) ?? EMPTY_BROWSE_SCREENSHOT_ENTRIES}
                       hiddenCollabAgentToolCallItemIds={turn.id === currentTurn?.id ? hiddenCollabAgentToolCallItemIds : EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS}
                       hiddenDynamicToolCallItemIds={turn.id === currentTurn?.id ? hiddenDynamicToolCallItemIds : EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS}
                       hideFinalAgentMessage={hideFinalAgentMessage}

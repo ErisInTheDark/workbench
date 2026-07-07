@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - getThreadItemRenderSignature: bounded signature for rendered thread item content. Keywords: thread, render, equality.
+ * - getThreadItemsRenderChunkSignature: bounded signature for a render chunk made from one or more thread items. Keywords: thread, render, chunk, equality.
  * - getTurnRenderSignature: bounded signature for rendered turn metadata and item order/content. Keywords: turn, equality, hydration.
  */
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem";
@@ -93,6 +94,10 @@ export function getThreadItemRenderSignature(item: ThreadItem) {
   });
 }
 
+export function getThreadItemsRenderChunkSignature(items: readonly ThreadItem[]) {
+  return items.map((item) => getThreadItemRenderSignature(item)).join("\n");
+}
+
 export function getTurnRenderSignature(turn: Turn) {
   return [
     turn.id,
@@ -102,6 +107,6 @@ export function getTurnRenderSignature(turn: Turn) {
     turn.completedAt ?? "",
     turn.durationMs ?? "",
     stableStringify(turn.error),
-    turn.items.map((item) => getThreadItemRenderSignature(item)).join("\n"),
+    getThreadItemsRenderChunkSignature(turn.items),
   ].join("\n");
 }

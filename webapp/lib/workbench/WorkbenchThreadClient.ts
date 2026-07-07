@@ -179,6 +179,7 @@ export interface WorkbenchThreadClientOptions {
   onCollaborationStateUpdated?: (projectId: string, state: WorkbenchCollaborationState) => void;
   onStatusMessage?: (message: string) => void;
   onThreadStarted?: (thread: ThreadPayload) => void;
+  shouldRunNotificationThreadListRefresh?: () => boolean;
 }
 
 interface WorkbenchThreadClient {
@@ -3648,6 +3649,28 @@ function WorkbenchThreadClient(
         : false;
   }
 
+  function getNotificationTargetThreadId(notification: CodexAppServerNotification) {
+    return "threadId" in notification.params
+      ? notification.params.threadId
+      : "thread" in notification.params
+        ? notification.params.thread.id
+        : null;
+  }
+
+  function doesNotificationTargetKnownThread(
+    notification: CodexAppServerNotification,
+    harness: WorkbenchHarness,
+  ) {
+    const threadId = getNotificationTargetThreadId(notification);
+    if (!threadId) {
+      return false;
+    }
+
+    return state.currentThread?.harness === harness && state.currentThreadId === threadId
+      ? true
+      : threadSourcesByKey.has(getThreadStateKey(harness, threadId));
+  }
+
   function applyCodexNotificationToCurrentThread(
     notification: CodexAppServerNotification,
     harness: WorkbenchHarness,
@@ -4433,8 +4456,17 @@ function WorkbenchThreadClient(
     }
   }
 
-  function scheduleCodexNotificationRefresh(handling: CodexAppServerNotificationHandling) {
-    if (handling.refreshThread && state.currentThreadId && !lifecycle.has(THREAD_REFRESH_TASK_ID)) {
+  function scheduleCodexNotificationRefresh(
+    notification: CodexAppServerNotification,
+    handling: CodexAppServerNotificationHandling,
+    harness: WorkbenchHarness,
+  ) {
+    if (
+      handling.refreshThread
+      && state.currentThreadId
+      && doesNotificationTargetCurrentThread(notification, harness)
+      && !lifecycle.has(THREAD_REFRESH_TASK_ID)
+    ) {
       // Notification-triggered refresh stays local to the thread client; the coordinator owns only recurring refresh policy.
       lifecycle.scheduleOnce(THREAD_REFRESH_TASK_ID, CODEX_NOTIFICATION_THREAD_REFRESH_DELAY_MS, () => {
         if (disposed || !state.currentThreadId) {
@@ -4445,7 +4477,11 @@ function WorkbenchThreadClient(
       });
     }
 
-    if (handling.refreshThreads && !lifecycle.has(THREAD_LIST_REFRESH_TASK_ID)) {
+    if (
+      handling.refreshThreads
+      && (options.shouldRunNotificationThreadListRefresh?.() ?? true)
+      && !lifecycle.has(THREAD_LIST_REFRESH_TASK_ID)
+    ) {
       lifecycle.scheduleOnce(THREAD_LIST_REFRESH_TASK_ID, CODEX_NOTIFICATION_THREAD_LIST_REFRESH_DELAY_MS, () => {
         if (disposed) {
           return;
@@ -4491,7 +4527,9 @@ function WorkbenchThreadClient(
       if (clearedPendingRequest || clearedWaitingFlag) {
         emit();
       }
-      void readCompletedQuestionnaireHistoryAndReconcileIdleCurrentThread(notification.params.threadId, harness);
+      if (doesNotificationTargetKnownThread(notification, harness)) {
+        void readCompletedQuestionnaireHistoryAndReconcileIdleCurrentThread(notification.params.threadId, harness);
+      }
       return;
     }
 
@@ -4501,7 +4539,9 @@ function WorkbenchThreadClient(
     }
 
     if (notification.method === "browse/screenshot/recorded") {
-      void readBrowseScreenshotEntries(notification.params.threadId);
+      if (doesNotificationTargetKnownThread(notification, harness)) {
+        void readBrowseScreenshotEntries(notification.params.threadId);
+      }
       return;
     }
 
@@ -4511,16 +4551,21 @@ function WorkbenchThreadClient(
     if (
       harness === "codex"
       && (
-        notification.method === "turn/completed"
+      notification.method === "turn/completed"
         || (notification.method === "item/completed" && notification.params.item.type === "userMessage")
       )
+      && doesNotificationTargetKnownThread(notification, harness)
     ) {
       void readCompletedSteerHistory(notification.params.threadId);
     }
-    if (harness === "codex" && notification.method === "turn/completed") {
+    if (
+      harness === "codex"
+      && notification.method === "turn/completed"
+      && doesNotificationTargetKnownThread(notification, harness)
+    ) {
       void readCompletedQuestionnaireHistoryAndReconcileIdleCurrentThread(notification.params.threadId, harness);
     }
-    scheduleCodexNotificationRefresh(handling);
+    scheduleCodexNotificationRefresh(notification, handling, harness);
   }
 
   const unsubscribeCodexNotifications = codexClient.onNotification((notification, handling, harness) => {

@@ -89,6 +89,8 @@ export async function WorkbenchClient(
   let activeRoute: WorkbenchRoute = workbenchBindings.initialRoute ?? createProjectRoute("");
   let activeRouteGeneration = 0;
   const projectClient = WorkbenchProjectClient();
+  let hasAutoRefreshLeaderState = false;
+  let isAutoRefreshLeader = false;
   const threadClient = WorkbenchThreadClient({
     onCollaborationStateUpdated: (projectId, state) => {
       workbenchBindings.onCollaborationStateUpdated?.(projectId, state);
@@ -102,6 +104,7 @@ export async function WorkbenchClient(
       }
       emitExplorerStateChange();
     },
+    shouldRunNotificationThreadListRefresh: () => !hasAutoRefreshLeaderState || isAutoRefreshLeader,
   });
   const initialThreadSnapshot = threadClient.getSnapshot();
   const sessionState = SessionState({
@@ -708,6 +711,8 @@ export async function WorkbenchClient(
   function startAutoRefresh() {
     const leader = new ActiveTabRefreshLeader({
       onLeadershipChange: (isLeader) => {
+        hasAutoRefreshLeaderState = true;
+        isAutoRefreshLeader = isLeader;
         if (!isLeader) {
           stopAutoRefresh();
           return;
@@ -721,6 +726,8 @@ export async function WorkbenchClient(
     coordinatorLifecycle.addUnsubscribe(() => {
       leader.dispose();
     });
+    hasAutoRefreshLeaderState = true;
+    isAutoRefreshLeader = leader.current;
     if (leader.current) {
       scheduleAutoRefresh();
     }

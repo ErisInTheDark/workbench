@@ -3,6 +3,7 @@
  * - ThreadTurnDetails: render one thread turn with grouped commands and typed item sections. Keywords: workbench, thread, turn.
  * - ThreadThreadContent: render all turns for one thread payload without composer chrome. Keywords: workbench, thread, subagent, preview.
  * - ThreadTurnLoadingSkeleton: render a lightweight placeholder for unloaded lazy-history turns. Keywords: workbench, thread, lazy history, skeleton.
+ * - useStableBrowseScreenshotEntriesByTurn: preserve turn-owned screenshot chunk arrays across thread-level sidecar refreshes. Keywords: browse, screenshot, render, chunk.
  * - Local helpers: summarize inputs, group command, reasoning, file, and web-search sequences, and render the supported thread item variants. Keywords: thread items, command sequence, reasoning, rendering.
  */
 "use client";
@@ -15,7 +16,7 @@ import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserI
 import { getCurrentTurn } from "../../../lib/codex/thread-state";
 import type { ThreadPayload, WorkbenchBrowseScreenshotEntry, WorkbenchSkillSummary, WorkbenchThreadTurnHistoryEntry } from "../../../lib/types";
 import type { WorkbenchThreadItemTimelineEntry } from "../../../lib/workbench/thread/thread-item-timeline";
-import { getThreadItemRenderSignature } from "../../../lib/workbench/thread/thread-item-signature";
+import { getThreadItemsRenderChunkSignature } from "../../../lib/workbench/thread/thread-item-signature";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
 import {
@@ -406,6 +407,17 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
 
 interface StableRenderableBlockEntry {
   block: ThreadRenderableBlock;
+  blockKey: string;
+  signature: string;
+}
+
+interface StableBrowseScreenshotEntriesByTurnResult {
+  cacheEntriesByTurnId: Map<string, StableBrowseScreenshotEntriesByTurnEntry>;
+  entriesByTurnId: Map<string, readonly WorkbenchBrowseScreenshotEntry[]>;
+}
+
+interface StableBrowseScreenshotEntriesByTurnEntry {
+  entries: readonly WorkbenchBrowseScreenshotEntry[];
   signature: string;
 }
 
@@ -425,10 +437,17 @@ function getRenderableBlockItemCount(block: ThreadRenderableBlock) {
   return getRenderableBlockItems(block).length;
 }
 
+function getRenderableBlockKey(block: ThreadRenderableBlock) {
+  return [
+    block.kind,
+    ...getRenderableBlockItems(block).map((item) => item.id),
+  ].join(":");
+}
+
 function getRenderableBlockSignature(block: ThreadRenderableBlock) {
   return [
     block.kind,
-    ...getRenderableBlockItems(block).map((item) => getThreadItemRenderSignature(item)),
+    getThreadItemsRenderChunkSignature(getRenderableBlockItems(block)),
   ].join("\n");
 }
 
@@ -449,14 +468,17 @@ function getStabilizableRenderableBlockFlags(blocks: readonly ThreadRenderableBl
 function useStableRenderableBlocks(blocks: ThreadRenderableBlock[]) {
   const previousEntriesRef = useRef<StableRenderableBlockEntry[]>([]);
   const stableEntries = useMemo(() => {
-    const previousEntriesBySignature = new Map(previousEntriesRef.current.map((entry) => [entry.signature, entry]));
+    const previousEntriesByBlockKey = new Map(previousEntriesRef.current.map((entry) => [entry.blockKey, entry]));
     const stabilizableFlags = getStabilizableRenderableBlockFlags(blocks);
     return blocks.map((block, index): StableRenderableBlockEntry => {
+      const blockKey = getRenderableBlockKey(block);
       const signature = getRenderableBlockSignature(block);
-      const previousEntry = stabilizableFlags[index]
-        ? previousEntriesBySignature.get(signature) ?? null
+      const matchingPreviousEntry = previousEntriesByBlockKey.get(blockKey) ?? null;
+      const previousEntry = stabilizableFlags[index] && matchingPreviousEntry?.signature === signature
+        ? matchingPreviousEntry
         : null;
       return {
+        blockKey,
         block: previousEntry?.block ?? block,
         signature,
       };
@@ -468,6 +490,61 @@ function useStableRenderableBlocks(blocks: ThreadRenderableBlock[]) {
   }, [stableEntries]);
 
   return useMemo(() => stableEntries.map((entry) => entry.block), [stableEntries]);
+}
+
+function getBrowseScreenshotEntryChunkSignature(entry: WorkbenchBrowseScreenshotEntry) {
+  return [
+    entry.entryKey,
+    entry.turnId,
+    entry.commandItemId ?? "",
+    entry.recordedAt,
+    entry.assetUrl,
+    entry.action,
+    entry.actionIndex,
+  ].join("\n");
+}
+
+function getBrowseScreenshotEntriesChunkSignature(entries: readonly WorkbenchBrowseScreenshotEntry[]) {
+  return entries.map(getBrowseScreenshotEntryChunkSignature).join("\n---\n");
+}
+
+export function useStableBrowseScreenshotEntriesByTurn(
+  entries: readonly WorkbenchBrowseScreenshotEntry[] = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
+) {
+  const previousEntriesRef = useRef<Map<string, StableBrowseScreenshotEntriesByTurnEntry>>(new Map());
+  const stableResult = useMemo((): StableBrowseScreenshotEntriesByTurnResult => {
+    const groupedEntriesByTurnId = new Map<string, WorkbenchBrowseScreenshotEntry[]>();
+    for (const entry of entries) {
+      const turnEntries = groupedEntriesByTurnId.get(entry.turnId) ?? [];
+      turnEntries.push(entry);
+      groupedEntriesByTurnId.set(entry.turnId, turnEntries);
+    }
+
+    const cacheEntriesByTurnId = new Map<string, StableBrowseScreenshotEntriesByTurnEntry>();
+    const entriesByTurnId = new Map<string, readonly WorkbenchBrowseScreenshotEntry[]>();
+    for (const [turnId, turnEntries] of groupedEntriesByTurnId) {
+      const signature = getBrowseScreenshotEntriesChunkSignature(turnEntries);
+      const previousEntry = previousEntriesRef.current.get(turnId);
+      const stableEntries = previousEntry?.signature === signature ? previousEntry.entries : turnEntries;
+      const cacheEntry = {
+        entries: stableEntries,
+        signature,
+      };
+      cacheEntriesByTurnId.set(turnId, cacheEntry);
+      entriesByTurnId.set(turnId, stableEntries);
+    }
+
+    return {
+      cacheEntriesByTurnId,
+      entriesByTurnId,
+    };
+  }, [entries]);
+
+  useEffect(() => {
+    previousEntriesRef.current = stableResult.cacheEntriesByTurnId;
+  }, [stableResult]);
+
+  return stableResult.entriesByTurnId;
 }
 
 function isHiddenCommandExecution (command: string) {
@@ -2009,9 +2086,7 @@ function ThreadTurnDetailsComponent ({
     items: turn.items,
     pinnedItemIds: pinnedCompactionItemIds,
   }), [itemTimeline, pinnedCompactionItemIds, turn.items]);
-  const turnBrowseScreenshotEntries = useMemo(() => (
-    browseScreenshotEntries.filter((entry) => entry.turnId === turn.id)
-  ), [browseScreenshotEntries, turn.id]);
+  const turnBrowseScreenshotEntries = browseScreenshotEntries;
   const renderableBlocks = useMemo(() => buildRenderableBlocks(turn.items, hiddenItemIds), [hiddenItemIds, turn.items]);
   const allBlocks = useStableRenderableBlocks(renderableBlocks);
 
@@ -2287,6 +2362,8 @@ export function ThreadThreadContent ({
   relatedThreadsById?: RelatedThreadsById;
   thread: ThreadPayload | null | undefined;
 }) {
+  const browseScreenshotEntriesByTurnId = useStableBrowseScreenshotEntriesByTurn(browseScreenshotEntries);
+
   if (!thread) {
     return <ThreadContentLoadingSkeleton />;
   }
@@ -2324,7 +2401,7 @@ export function ThreadThreadContent ({
         return turn ? (
           <ThreadTurnDetails
             key={entry.turnId}
-            browseScreenshotEntries={browseScreenshotEntries}
+            browseScreenshotEntries={browseScreenshotEntriesByTurnId.get(entry.turnId) ?? EMPTY_BROWSE_SCREENSHOT_ENTRIES}
             flattenCompletedWork={flattenCompletedWork}
             hiddenCollabAgentToolCallItemIds={hiddenCollabAgentToolCallItemIds}
             hiddenDynamicToolCallItemIds={hiddenDynamicToolCallItemIds}
