@@ -77,6 +77,8 @@ export function normalizeWorkbenchBrowseAgentRequest(value: WorkbenchBrowseAgent
       return normalizeCommand(value, buildSnapshotArgs(value));
     case "click":
       return normalizeCommand(value, buildSelectorArgs("click", value));
+    case "cursor":
+      return normalizeCommand(value, buildBrowserArgs("cursor", value));
     case "fill":
       return normalizeCommand(value, buildFillArgs(value));
     case "eval":
@@ -93,6 +95,12 @@ export function normalizeWorkbenchBrowseAgentRequest(value: WorkbenchBrowseAgent
       return normalizeCommand(value, buildKeyArgs(value));
     case "mouseClick":
       return normalizeCommand(value, buildMouseClickArgs(value));
+    case "mouseDrag":
+      return normalizeCommand(value, buildMouseDragArgs(value));
+    case "mouseHover":
+      return normalizeCommand(value, buildMouseHoverArgs(value));
+    case "mouseScroll":
+      return normalizeCommand(value, buildMouseScrollArgs(value));
     case "select":
       return normalizeCommand(value, buildSelectArgs(value));
     case "wait":
@@ -388,6 +396,99 @@ function buildMouseClickArgs(request: Extract<WorkbenchBrowseAgentAction, { acti
   return args;
 }
 
+function buildMouseHoverArgs(request: Extract<WorkbenchBrowseAgentAction, { action: "mouseHover" }>) {
+  const x = normalizeCoordinate(request.x, "Browse mouseHover requires a finite x coordinate.");
+  const y = normalizeCoordinate(request.y, "Browse mouseHover requires a finite y coordinate.");
+  if (!x.ok) {
+    return { error: x.error };
+  }
+  if (!y.ok) {
+    return { error: y.error };
+  }
+
+  const args = ["mouse", "hover", String(x.value), String(y.value)];
+  const sessionError = appendBrowserSessionArgs(args, request);
+  if (sessionError) {
+    return sessionError;
+  }
+  if (request.returnXPath) {
+    args.push("--return-xpath");
+  }
+  return args;
+}
+
+function buildMouseDragArgs(request: Extract<WorkbenchBrowseAgentAction, { action: "mouseDrag" }>) {
+  const fromX = normalizeCoordinate(request.fromX, "Browse mouseDrag requires a finite fromX coordinate.");
+  const fromY = normalizeCoordinate(request.fromY, "Browse mouseDrag requires a finite fromY coordinate.");
+  const toX = normalizeCoordinate(request.toX, "Browse mouseDrag requires a finite toX coordinate.");
+  const toY = normalizeCoordinate(request.toY, "Browse mouseDrag requires a finite toY coordinate.");
+  if (!fromX.ok) {
+    return { error: fromX.error };
+  }
+  if (!fromY.ok) {
+    return { error: fromY.error };
+  }
+  if (!toX.ok) {
+    return { error: toX.error };
+  }
+  if (!toY.ok) {
+    return { error: toY.error };
+  }
+
+  const args = ["mouse", "drag", String(fromX.value), String(fromY.value), String(toX.value), String(toY.value)];
+  const sessionError = appendBrowserSessionArgs(args, request);
+  if (sessionError) {
+    return sessionError;
+  }
+
+  const button = normalizeOptionalChoice(request.button, BROWSE_AGENT_ALLOWED_MOUSE_BUTTONS, "Browse mouseDrag button must be left, middle, or right.");
+  if (!button.ok) {
+    return { error: button.error };
+  }
+  if (button.value) {
+    args.push("--button", button.value);
+  }
+  if (isPositiveInteger(request.delayMs)) {
+    args.push("--delay", String(Math.trunc(request.delayMs)));
+  }
+  if (request.returnXPath) {
+    args.push("--return-xpath");
+  }
+  if (isPositiveInteger(request.steps)) {
+    args.push("--steps", String(Math.trunc(request.steps)));
+  }
+  return args;
+}
+
+function buildMouseScrollArgs(request: Extract<WorkbenchBrowseAgentAction, { action: "mouseScroll" }>) {
+  const x = normalizeCoordinate(request.x, "Browse mouseScroll requires a finite x coordinate.");
+  const y = normalizeCoordinate(request.y, "Browse mouseScroll requires a finite y coordinate.");
+  const deltaX = normalizeCoordinate(request.deltaX, "Browse mouseScroll requires a finite deltaX value.");
+  const deltaY = normalizeCoordinate(request.deltaY, "Browse mouseScroll requires a finite deltaY value.");
+  if (!x.ok) {
+    return { error: x.error };
+  }
+  if (!y.ok) {
+    return { error: y.error };
+  }
+  if (!deltaX.ok) {
+    return { error: deltaX.error };
+  }
+  if (!deltaY.ok) {
+    return { error: deltaY.error };
+  }
+
+  const args = ["mouse", "scroll", String(x.value), String(y.value), String(deltaX.value), String(deltaY.value)];
+  const sessionError = appendBrowserSessionArgs(args, request);
+  if (sessionError) {
+    return sessionError;
+  }
+  if (request.returnXPath) {
+    args.push("--return-xpath");
+  }
+  return args;
+}
+
 function buildSelectArgs(request: Extract<WorkbenchBrowseAgentAction, { action: "select" }>) {
   const selector = normalizeRequiredSelectorOrRef(request, "Browse select requires a selector or snapshot ref.");
   const value = normalizeRequiredString(request.value, BROWSE_AGENT_TEXT_MAX_LENGTH, "Browse select requires a value.");
@@ -503,7 +604,7 @@ function buildSessionOnlyArgs(
   return sessionError ?? args;
 }
 
-function buildBrowserArgs(command: "refs", request: WorkbenchBrowseAgentBrowserRequest) {
+function buildBrowserArgs(command: "cursor" | "refs", request: WorkbenchBrowseAgentBrowserRequest) {
   const args = [command];
   const sessionError = appendBrowserSessionArgs(args, request);
   return sessionError ?? args;

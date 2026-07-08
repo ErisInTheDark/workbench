@@ -129,6 +129,48 @@ Typed sequence:
 }
 \`\`\`
 
+BrowseMD inline script:
+
+\`\`\`json
+{
+  "script": "open http://localhost:3000 --headless\\nsnapshot compact\\nclick @0-4\\nscreenshot",
+  "threadId": "<current-thread-id>",
+  "cwd": "<current-project-cwd>",
+  "session": "research",
+  "streamProgress": true
+}
+\`\`\`
+
+BrowseMD project script:
+
+\`\`\`json
+{
+  "scriptPath": "check-homepage.browsemd",
+  "threadId": "<current-thread-id>",
+  "cwd": "<current-project-cwd>",
+  "session": "research",
+  "streamProgress": true
+}
+\`\`\`
+
+Project BrowseMD scripts live directly under \`.workbench/browse/*.browsemd\` in the Workbench project root that owns the request \`cwd\`. Use \`scriptPath\` for reusable project-local Browse fragments. Do not pass absolute paths, nested paths, or \`..\` path segments.
+
+BrowseMD is a deterministic CLI-like markdown format that compiles to typed Browse action sequences. Normal lines are Browse-ish commands such as \`open <url>\`, \`snapshot compact\`, \`click @0-4\`, \`fill 'input[name=q]' "hello"\`, \`wait timeout 1000\`, \`move cursor 240 320\`, \`mouse drag 100 100 400 400 --steps 20\`, \`screenshot\`, and \`cleanup --force\`. JavaScript fenced blocks with \`js\` or \`javascript\` compile to \`eval\` actions:
+
+\`\`\`\`md
+open http://localhost:3000 --headless
+snapshot compact
+click @0-4
+
+\`\`\`js
+document.title
+\`\`\`
+
+screenshot
+\`\`\`\`
+
+BrowseMD still follows the same Browse safety workflow: use named sessions, prefer local browser sessions, treat refs as stale after DOM-changing actions, and stop or clean up sessions when finished.
+
 Raw CLI-args passthrough, when explicitly needed and enabled:
 
 \`\`\`json
@@ -139,7 +181,7 @@ Raw CLI-args passthrough, when explicitly needed and enabled:
 }
 \`\`\`
 
-Typed actions include \`doctor\`, \`status\`, \`sessions\`, \`open\`, \`snapshot\`, \`click\`, \`fill\`, \`type\`, \`key\`, \`mouseClick\`, \`select\`, \`wait\`, \`get\`, \`is\`, \`eval\`, \`highlight\`, \`back\`, \`forward\`, \`reload\`, \`screenshot\`, \`refs\`, \`viewport\`, \`stop\`, and \`cleanup\`.
+Typed actions include \`doctor\`, \`status\`, \`sessions\`, \`open\`, \`snapshot\`, \`click\`, \`fill\`, \`type\`, \`key\`, \`cursor\`, \`mouseClick\`, \`mouseHover\`, \`mouseDrag\`, \`mouseScroll\`, \`select\`, \`wait\`, \`get\`, \`is\`, \`eval\`, \`highlight\`, \`back\`, \`forward\`, \`reload\`, \`screenshot\`, \`refs\`, \`viewport\`, \`stop\`, and \`cleanup\`.
 
 Common typed shapes:
 

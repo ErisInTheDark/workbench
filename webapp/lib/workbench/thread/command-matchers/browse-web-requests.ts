@@ -109,6 +109,8 @@ function formatBrowseActionLabel(action: string | null | undefined) {
       return "Snapshot";
     case "click":
       return "Click";
+    case "cursor":
+      return "Cursor";
     case "fill":
       return "Fill";
     case "type":
@@ -118,6 +120,12 @@ function formatBrowseActionLabel(action: string | null | undefined) {
     case "mouseClick":
     case "mouse":
       return "Mouse click";
+    case "mouseDrag":
+      return "Mouse drag";
+    case "mouseHover":
+      return "Mouse hover";
+    case "mouseScroll":
+      return "Mouse scroll";
     case "select":
       return "Select";
     case "wait":
@@ -162,7 +170,10 @@ function isBrowseActionTargetCode(action: string | null | undefined) {
     || action === "eval"
     || action === "get"
     || action === "is"
-    || action === "mouseClick";
+    || action === "mouseClick"
+    || action === "mouseDrag"
+    || action === "mouseHover"
+    || action === "mouseScroll";
 }
 
 function readBrowseRequestSummary(commandText: string): BrowseRequestSummary | null {
@@ -241,6 +252,10 @@ function readJsonBrowseRequestSummary(commandText: string): BrowseRequestSummary
     return summarizeBrowseSequence(parsed.actions, parsed.summary ?? parsed.description ?? null);
   }
 
+  if (parsed.script || parsed.scriptPath) {
+    return summarizeBrowseScriptRequest(parsed);
+  }
+
   if (parsed.action) {
     return {
       action: parsed.action,
@@ -250,7 +265,7 @@ function readJsonBrowseRequestSummary(commandText: string): BrowseRequestSummary
       target: parsed.url
         ?? parsed.selector
         ?? parsed.ref
-        ?? formatMouseClickCoordinates(parsed)
+        ?? formatMouseCoordinates(parsed)
         ?? parsed.key
         ?? parsed.what
         ?? parsed.check
@@ -284,7 +299,7 @@ function readPowerShellHashtableBrowseRequestSummary(commandText: string): Brows
     target: readPowerShellHashtableField(commandText, "url", commandText)
       ?? readPowerShellHashtableField(commandText, "selector", commandText)
       ?? readPowerShellHashtableField(commandText, "ref", commandText)
-      ?? formatMouseClickCoordinates(parsedAction)
+      ?? formatMouseCoordinates(parsedAction)
       ?? readPowerShellHashtableField(commandText, "key", commandText)
       ?? readPowerShellHashtableField(commandText, "what", commandText)
       ?? readPowerShellHashtableField(commandText, "check", commandText)
@@ -392,14 +407,20 @@ function readPowerShellHashtableBrowseAction(
     check: readPowerShellHashtableField(blockText, "check", commandText) ?? undefined,
     expression: readPowerShellHashtableField(blockText, "expression", commandText) ?? undefined,
     force: readPowerShellHashtableBooleanField(blockText, "force"),
+    fromX: readPowerShellHashtableNumberField(blockText, "fromX"),
+    fromY: readPowerShellHashtableNumberField(blockText, "fromY"),
     key: readPowerShellHashtableField(blockText, "key", commandText) ?? undefined,
     ms: readPowerShellHashtableNumberField(blockText, "ms"),
+    deltaX: readPowerShellHashtableNumberField(blockText, "deltaX"),
+    deltaY: readPowerShellHashtableNumberField(blockText, "deltaY"),
     ref: readPowerShellHashtableField(blockText, "ref", commandText) ?? undefined,
     returnXPath: readPowerShellHashtableBooleanField(blockText, "returnXPath"),
     selector: readPowerShellHashtableField(blockText, "selector", commandText) ?? undefined,
     session: readPowerShellHashtableField(blockText, "session", commandText) ?? undefined,
     state: readPowerShellHashtableField(blockText, "state", commandText) ?? undefined,
     type: readPowerShellHashtableField(blockText, "type", commandText) ?? undefined,
+    toX: readPowerShellHashtableNumberField(blockText, "toX"),
+    toY: readPowerShellHashtableNumberField(blockText, "toY"),
     url: readPowerShellHashtableField(blockText, "url", commandText) ?? undefined,
     value: readPowerShellHashtableField(blockText, "value", commandText) ?? undefined,
     what: readPowerShellHashtableField(blockText, "what", commandText) ?? undefined,
@@ -456,12 +477,24 @@ function getBrowseArgsTarget(args: string[]) {
     case "type":
       return args[1] ?? null;
     case "mouse":
-      return args[1] === "click" && args[2] && args[3] && !args[2].startsWith("-") && !args[3].startsWith("-")
-        ? `${args[2]},${args[3]}`
-        : null;
+      return formatMouseArgsTarget(args);
     default:
       return null;
   }
+}
+
+function formatMouseArgsTarget(args: string[]) {
+  const subcommand = args[1];
+  if ((subcommand === "click" || subcommand === "hover") && args[2] && args[3] && !args[2].startsWith("-") && !args[3].startsWith("-")) {
+    return `${args[2]},${args[3]}`;
+  }
+  if (subcommand === "drag" && args[2] && args[3] && args[4] && args[5]) {
+    return `${args[2]},${args[3]} -> ${args[4]},${args[5]}`;
+  }
+  if (subcommand === "scroll" && args[2] && args[3] && args[4] && args[5]) {
+    return `${args[2]},${args[3]} scroll ${args[4]},${args[5]}`;
+  }
+  return null;
 }
 
 function readBrowseArgValue(args: string[], flag: string) {
@@ -543,8 +576,12 @@ type BrowseJsonAction = {
   args?: string[];
   argument?: string;
   check?: string;
+  deltaX?: number;
+  deltaY?: number;
   expression?: string;
   force?: boolean;
+  fromX?: number;
+  fromY?: number;
   key?: string;
   ms?: number;
   projectId?: string;
@@ -554,6 +591,8 @@ type BrowseJsonAction = {
   session?: string;
   state?: string;
   type?: string;
+  toX?: number;
+  toY?: number;
   url?: string;
   value?: string;
   what?: string;
@@ -570,8 +609,12 @@ type BrowseJsonBody =
       args?: string[];
       check?: string;
       description?: string;
+      deltaX?: number;
+      deltaY?: number;
       expression?: string;
       force?: boolean;
+      fromX?: number;
+      fromY?: number;
       ms?: number;
       ref?: string;
       returnXPath?: boolean;
@@ -581,7 +624,11 @@ type BrowseJsonBody =
       selector?: string;
       key?: string;
       sessions?: string[];
+      script?: string;
+      scriptPath?: string;
       summary?: string;
+      toX?: number;
+      toY?: number;
       what?: string;
       x?: number;
       y?: number;
@@ -659,6 +706,8 @@ function formatBrowseAction(action: string) {
       return "snapshot";
     case "click":
       return "click";
+    case "cursor":
+      return "show cursor";
     case "fill":
       return "fill";
     case "type":
@@ -668,6 +717,12 @@ function formatBrowseAction(action: string) {
     case "mouseClick":
     case "mouse":
       return "mouse click";
+    case "mouseDrag":
+      return "mouse drag";
+    case "mouseHover":
+      return "mouse hover";
+    case "mouseScroll":
+      return "mouse scroll";
     case "select":
       return "select";
     case "wait":
@@ -705,6 +760,41 @@ function formatBrowseAction(action: string) {
 
 function formatSessionList(sessions: string[] | null | undefined) {
   return sessions?.length ? sessions.join(", ") : null;
+}
+
+function summarizeBrowseScriptRequest(parsed: Extract<BrowseJsonBody, { script?: string; scriptPath?: string }>): BrowseRequestSummary {
+  const scriptPath = typeof parsed.scriptPath === "string" ? parsed.scriptPath.trim() : "";
+  const summary = typeof parsed.summary === "string" ? parsed.summary.trim() : "";
+  const estimatedActions = typeof parsed.script === "string" ? estimateBrowseMarkdownActionCount(parsed.script) : null;
+  return {
+    action: "script",
+    hideCommandOutput: false,
+    isBrowseRequest: true,
+    session: parsed.session ?? null,
+    summaryText: summary || (scriptPath ? `run BrowseMD ${scriptPath}` : "run inline BrowseMD"),
+    target: scriptPath || null,
+    totalActions: estimatedActions ?? undefined,
+  };
+}
+
+function estimateBrowseMarkdownActionCount(script: string) {
+  let actions = 0;
+  let inFence = false;
+  for (const line of script.replace(/\r\n?/gu, "\n").split("\n")) {
+    const trimmedLine = line.trim();
+    if (/^```/u.test(trimmedLine)) {
+      if (!inFence) {
+        actions += 1;
+      }
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence || !trimmedLine || trimmedLine.startsWith("# ") || trimmedLine.startsWith("## ") || trimmedLine.startsWith("// ")) {
+      continue;
+    }
+    actions += 1;
+  }
+  return actions || null;
 }
 
 function summarizeBrowseSequence(actions: BrowseJsonAction[], summaryText: string | null): BrowseRequestSummary | null {
@@ -786,9 +876,9 @@ function readBrowseActionTarget(action: BrowseJsonAction) {
     return getBrowseArgsTarget(action.args);
   }
 
-  const mouseClickCoordinates = formatMouseClickCoordinates(action);
-  if (mouseClickCoordinates) {
-    return mouseClickCoordinates;
+  const mouseCoordinates = formatMouseCoordinates(action);
+  if (mouseCoordinates) {
+    return mouseCoordinates;
   }
 
   return action.url
@@ -803,10 +893,29 @@ function readBrowseActionTarget(action: BrowseJsonAction) {
     ?? null;
 }
 
-function formatMouseClickCoordinates(action: BrowseJsonAction) {
-  return action.action === "mouseClick" && typeof action.x === "number" && typeof action.y === "number"
-    ? `${action.x},${action.y}`
-    : null;
+function formatMouseCoordinates(action: BrowseJsonAction) {
+  if ((action.action === "mouseClick" || action.action === "mouseHover") && typeof action.x === "number" && typeof action.y === "number") {
+    return `${action.x},${action.y}`;
+  }
+  if (
+    action.action === "mouseDrag"
+    && typeof action.fromX === "number"
+    && typeof action.fromY === "number"
+    && typeof action.toX === "number"
+    && typeof action.toY === "number"
+  ) {
+    return `${action.fromX},${action.fromY} -> ${action.toX},${action.toY}`;
+  }
+  if (
+    action.action === "mouseScroll"
+    && typeof action.x === "number"
+    && typeof action.y === "number"
+    && typeof action.deltaX === "number"
+    && typeof action.deltaY === "number"
+  ) {
+    return `${action.x},${action.y} scroll ${action.deltaX},${action.deltaY}`;
+  }
+  return null;
 }
 
 function formatWaitMilliseconds(action: BrowseJsonAction) {

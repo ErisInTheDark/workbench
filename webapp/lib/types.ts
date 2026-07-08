@@ -131,6 +131,7 @@ export type WorkbenchBrowseAgentAction =
   | WorkbenchBrowseAgentBackRequest
   | WorkbenchBrowseAgentClickRequest
   | WorkbenchBrowseAgentCleanupRequest
+  | WorkbenchBrowseAgentCursorRequest
   | WorkbenchBrowseAgentDoctorRequest
   | WorkbenchBrowseAgentEvalRequest
   | WorkbenchBrowseAgentFillRequest
@@ -140,6 +141,9 @@ export type WorkbenchBrowseAgentAction =
   | WorkbenchBrowseAgentIsRequest
   | WorkbenchBrowseAgentKeyRequest
   | WorkbenchBrowseAgentMouseClickRequest
+  | WorkbenchBrowseAgentMouseDragRequest
+  | WorkbenchBrowseAgentMouseHoverRequest
+  | WorkbenchBrowseAgentMouseScrollRequest
   | WorkbenchBrowseAgentOpenRequest
   | WorkbenchBrowseAgentRefsRequest
   | WorkbenchBrowseAgentReloadRequest
@@ -166,6 +170,7 @@ export type WorkbenchBrowseAgentActionName =
   | "cleanup"
   | "click"
   | "doctor"
+  | "cursor"
   | "eval"
   | "fill"
   | "forward"
@@ -174,6 +179,9 @@ export type WorkbenchBrowseAgentActionName =
   | "is"
   | "key"
   | "mouseClick"
+  | "mouseDrag"
+  | "mouseHover"
+  | "mouseScroll"
   | "open"
   | "refs"
   | "reload"
@@ -279,6 +287,38 @@ export interface WorkbenchBrowseAgentMouseClickRequest extends WorkbenchBrowseAg
   y: number;
 }
 
+export interface WorkbenchBrowseAgentMouseHoverRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "mouseHover";
+  returnXPath?: boolean | null;
+  x: number;
+  y: number;
+}
+
+export interface WorkbenchBrowseAgentMouseDragRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "mouseDrag";
+  button?: "left" | "middle" | "right" | null;
+  delayMs?: number | null;
+  fromX: number;
+  fromY: number;
+  returnXPath?: boolean | null;
+  steps?: number | null;
+  toX: number;
+  toY: number;
+}
+
+export interface WorkbenchBrowseAgentMouseScrollRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "mouseScroll";
+  deltaX: number;
+  deltaY: number;
+  returnXPath?: boolean | null;
+  x: number;
+  y: number;
+}
+
+export interface WorkbenchBrowseAgentCursorRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "cursor";
+}
+
 export interface WorkbenchBrowseAgentSelectRequest extends WorkbenchBrowseAgentBrowserRequest {
   action: "select";
   ref?: string | null;
@@ -349,6 +389,31 @@ export interface WorkbenchBrowseAgentSequenceRequest {
   streamProgress?: boolean | null;
   summary?: string | null;
   stopOnError?: boolean | null;
+}
+
+export type WorkbenchBrowseAgentScriptRequest =
+  | WorkbenchBrowseAgentScriptFileRequest
+  | WorkbenchBrowseAgentScriptInlineRequest;
+
+export interface WorkbenchBrowseAgentScriptBaseRequest {
+  cwd: string;
+  mode?: WorkbenchBrowseSessionMode | null;
+  session?: string | null;
+  streamProgress?: boolean | null;
+  summary?: string | null;
+  stopOnError?: boolean | null;
+  threadId: string;
+  timeoutMs?: number | null;
+}
+
+export interface WorkbenchBrowseAgentScriptInlineRequest extends WorkbenchBrowseAgentScriptBaseRequest {
+  script: string;
+  scriptPath?: never;
+}
+
+export interface WorkbenchBrowseAgentScriptFileRequest extends WorkbenchBrowseAgentScriptBaseRequest {
+  script?: never;
+  scriptPath: string;
 }
 
 export interface WorkbenchBrowseAgentResponse extends WorkbenchBrowseCommandResponse {

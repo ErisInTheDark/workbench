@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - runtime/dynamic: force raw browse command execution onto the Node.js runtime without static caching. Keywords: browse, api, command, node runtime.
- * - POST: run typed Workbench Browse actions, action sequences, or raw project-local browse CLI arguments and optionally steer completed screenshots into the active Codex turn. Keywords: browse, typed action, sequence, raw command, local capability, screenshot, steer.
+ * - POST: run typed Workbench Browse actions, BrowseMD scripts, action sequences, or raw project-local browse CLI arguments and optionally steer completed screenshots into the active Codex turn. Keywords: browse, browsemd, typed action, sequence, raw command, local capability, screenshot, steer.
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
@@ -14,20 +14,24 @@ import type { ThreadReadResponse } from "../../../lib/codex/generated/app-server
 import type { TurnSteerResponse } from "../../../lib/codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import { getCurrentInProgressTurn } from "../../../lib/codex/thread-state";
-import { projectRoot } from "../../../lib/project";
+import { projectRoot, safeResolveProjectPath } from "../../../lib/project";
 import type {
   WorkbenchBrowseAgentAction,
   WorkbenchBrowseAgentResponse,
+  WorkbenchBrowseAgentScriptRequest,
   WorkbenchBrowseAgentSequenceRequest,
   WorkbenchBrowseAgentSequenceProgressEvent,
   WorkbenchBrowseAgentSequenceResponse,
   WorkbenchBrowseCommandRequest,
   WorkbenchBrowseCommandResponse,
   WorkbenchHarness,
+  WorkbenchBrowseSessionMode,
 } from "../../../lib/types";
 import WorkbenchBrowseCli from "../../../lib/workbench/browse/WorkbenchBrowseCli";
 import WorkbenchBrowseSessionController from "../../../lib/workbench/browse/WorkbenchBrowseSessionController";
 import { normalizeWorkbenchBrowseAgentRequest } from "../../../lib/workbench/browse/browse-agent-requests";
+import { compileWorkbenchBrowseMarkdown } from "../../../lib/workbench/browse/browse-markdown";
+import { resolveAgentEndpointProjectFromCwd } from "../../../lib/workbench/project/agent-endpoint-project";
 import WorkbenchServerSettings from "../../../lib/workbench/settings/WorkbenchServerSettings";
 import { createAgentScreenshotSteerText } from "../../../lib/workbench/thread/thread-steer-markers";
 
@@ -39,10 +43,12 @@ const MAX_BROWSE_TIMEOUT_MS = 10 * 60_000;
 const MAX_BROWSE_ARGS = 128;
 const MAX_BROWSE_ARG_LENGTH = 16_384;
 const MAX_BROWSE_STDIN_LENGTH = 2 * 1024 * 1024;
+const MAX_BROWSE_MARKDOWN_SCRIPT_LENGTH = 2 * 1024 * 1024;
 const MAX_BROWSE_AGENT_SEQUENCE_ACTIONS = 50;
 const BROWSE_SCREENSHOT_ASSET_THREAD_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const BROWSE_SCREENSHOT_DATA_URL_PATTERN = /^data:(image\/(?:png|jpeg|jpg|webp|gif));base64,([a-z0-9+/=\s]+)$/iu;
 const BROWSE_SCREENSHOT_BASE64_PATTERN = /^[a-z0-9+/=\s]+$/iu;
+const BROWSE_MARKDOWN_FILE_NAME_PATTERN = /^[A-Za-z0-9_.-]+\.browsemd$/u;
 const VALID_HARNESSES: readonly WorkbenchHarness[] = ["codex", "copilot", "opencode"];
 const browseCli = new WorkbenchBrowseCli();
 const browseSessionController = new WorkbenchBrowseSessionController({ cli: browseCli });
@@ -112,6 +118,85 @@ function normalizeBrowseRequest(value: unknown): WorkbenchBrowseCommandRequest |
     threadId,
     timeoutMs: normalizePositiveInteger(value.timeoutMs, DEFAULT_BROWSE_TIMEOUT_MS, MAX_BROWSE_TIMEOUT_MS),
   };
+}
+
+function normalizeMode(value: unknown): WorkbenchBrowseSessionMode | null {
+  return value === "headed" || value === "headless" ? value : null;
+}
+
+function normalizeBrowseMarkdownRequest(value: Record<string, unknown>): WorkbenchBrowseAgentScriptRequest | null {
+  const threadId = normalizeThreadId(value.threadId);
+  const cwd = normalizeString(value.cwd);
+  if (!threadId || !cwd) {
+    return null;
+  }
+
+  const script = typeof value.script === "string" ? value.script : null;
+  const scriptPath = typeof value.scriptPath === "string" ? normalizeString(value.scriptPath) : null;
+  if ((script ? 1 : 0) + (scriptPath ? 1 : 0) !== 1) {
+    return null;
+  }
+  if (script !== null && script.length > MAX_BROWSE_MARKDOWN_SCRIPT_LENGTH) {
+    return null;
+  }
+
+  const base = {
+    cwd,
+    mode: normalizeMode(value.mode),
+    session: normalizeString(value.session) || null,
+    streamProgress: value.streamProgress === true,
+    summary: normalizeString(value.summary) || null,
+    stopOnError: value.stopOnError === false ? false : true,
+    threadId,
+    timeoutMs: normalizePositiveInteger(value.timeoutMs, DEFAULT_BROWSE_TIMEOUT_MS, MAX_BROWSE_TIMEOUT_MS),
+  };
+
+  return script !== null
+    ? { ...base, script }
+    : { ...base, scriptPath: scriptPath ?? "" };
+}
+
+function normalizeBrowseMarkdownFileName(value: string) {
+  const normalizedPath = value.replace(/\\/gu, "/").replace(/^\/+/u, "").trim();
+  if (!normalizedPath || normalizedPath.includes("/") || normalizedPath === "." || normalizedPath === ".." || normalizedPath.includes("..")) {
+    return null;
+  }
+  const fileName = normalizedPath.endsWith(".browsemd") ? normalizedPath : `${normalizedPath}.browsemd`;
+  return BROWSE_MARKDOWN_FILE_NAME_PATTERN.test(fileName) ? fileName : null;
+}
+
+async function readBrowseMarkdownFile(request: WorkbenchBrowseAgentScriptRequest) {
+  if (!("scriptPath" in request)) {
+    return request.script;
+  }
+
+  const fileName = normalizeBrowseMarkdownFileName(request.scriptPath);
+  if (!fileName) {
+    throw new Error("BrowseMD scriptPath must name a .browsemd file directly inside .workbench/browse.");
+  }
+
+  const resolution = await resolveAgentEndpointProjectFromCwd(request.cwd, { endpointName: "BrowseMD" });
+  const scriptsDirectoryPath = path.join(resolution.root.root, ".workbench", "browse");
+  const scriptFilePath = safeResolveProjectPath(scriptsDirectoryPath, fileName);
+  const script = await fs.readFile(scriptFilePath, "utf8");
+  if (script.length > MAX_BROWSE_MARKDOWN_SCRIPT_LENGTH) {
+    throw new Error("BrowseMD script file is too large.");
+  }
+  return script;
+}
+
+async function compileBrowseMarkdownRequest(request: WorkbenchBrowseAgentScriptRequest) {
+  const script = await readBrowseMarkdownFile(request);
+  return compileWorkbenchBrowseMarkdown(script, {
+    cwd: request.cwd,
+    mode: request.mode ?? null,
+    session: request.session ?? null,
+    streamProgress: request.streamProgress ?? false,
+    summary: request.summary ?? ("scriptPath" in request ? request.scriptPath : null),
+    stopOnError: request.stopOnError ?? true,
+    threadId: request.threadId,
+    timeoutMs: request.timeoutMs ?? null,
+  });
 }
 
 function browseCommandResponse(payload: WorkbenchBrowseCommandResponse, init?: ResponseInit) {
@@ -424,10 +509,14 @@ async function runBrowseCommandAndMaybeSteerScreenshot(
 function shouldAutoCaptureScreenshot(action: WorkbenchBrowseAgentAction["action"]) {
   return action === "open"
     || action === "click"
+    || action === "cursor"
     || action === "fill"
     || action === "type"
     || action === "key"
     || action === "mouseClick"
+    || action === "mouseDrag"
+    || action === "mouseHover"
+    || action === "mouseScroll"
     || action === "select"
     || action === "wait"
     || action === "back"
@@ -621,6 +710,50 @@ export async function POST(request: NextRequest) {
   const startedAt = Date.now();
   try {
     const requestBody = await request.json().catch(() => null);
+    if (isRecord(requestBody) && ("script" in requestBody || "scriptPath" in requestBody)) {
+      const scriptRequest = normalizeBrowseMarkdownRequest(requestBody);
+      if (!scriptRequest) {
+        return browseAgentSequenceResponse({
+          durationMs: Date.now() - startedAt,
+          error: "A valid BrowseMD request requires exactly one of script or scriptPath, plus cwd and threadId.",
+          ok: false,
+          results: [],
+          stoppedAtIndex: null,
+        }, { status: 400 });
+      }
+
+      let sequenceRequest: WorkbenchBrowseAgentSequenceRequest;
+      try {
+        sequenceRequest = await compileBrowseMarkdownRequest(scriptRequest);
+      } catch (error) {
+        return browseAgentSequenceResponse({
+          durationMs: Date.now() - startedAt,
+          error: error instanceof Error ? error.message : "Unable to compile BrowseMD script.",
+          ok: false,
+          results: [],
+          stoppedAtIndex: null,
+        }, { status: 400 });
+      }
+
+      if (sequenceRequest.actions.length > MAX_BROWSE_AGENT_SEQUENCE_ACTIONS) {
+        return browseAgentSequenceResponse({
+          durationMs: Date.now() - startedAt,
+          error: `Browse action sequences can include at most ${MAX_BROWSE_AGENT_SEQUENCE_ACTIONS} actions.`,
+          ok: false,
+          results: [],
+          stoppedAtIndex: null,
+        }, { status: 400 });
+      }
+
+      if (sequenceRequest.streamProgress) {
+        return browseAgentSequenceProgressResponse(async (emitProgress) => {
+          await runBrowseAgentCommandSequence(request, sequenceRequest, { emitProgress });
+        });
+      }
+
+      return browseAgentSequenceResponse(await runBrowseAgentCommandSequence(request, sequenceRequest));
+    }
+
     if (isRecord(requestBody) && Array.isArray(requestBody.actions)) {
       if (requestBody.actions.length > MAX_BROWSE_AGENT_SEQUENCE_ACTIONS) {
         return browseAgentSequenceResponse({
