@@ -4139,7 +4139,7 @@ function WorkbenchThreadClient(
         ...(codexFirstTurnCollaborationMode
           ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext("codex", resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds, "threadUtilities") }
           : harness === "opencode"
-          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds, "threadUtilities") }
+          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds) }
           : {}),
         params: {
           ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
