@@ -1,3 +1,13 @@
+/*
+ * Exports:
+ * - startOrchestrator side effect: starts the Workbench bridge server, managed Next.js dev server, Browse cleanup supervisor, and bridge integrations. Keywords: orchestrator, next-dev, codex, copilot, opencode.
+ *
+ * Helpers:
+ * - HTTP reload helpers: parse, proxy, queue, and report orchestrator reload scopes. Keywords: reload, next-dev, bridge.
+ * - Child process helpers: start, restart, and schedule managed process lifecycles. Keywords: process, restart, child.
+ * - Bridge helpers: route websocket JSON-RPC messages across Codex, Copilot, and OpenCode harnesses. Keywords: websocket, harness, rpc.
+ * - Health helpers: supervise the Next.js dev server and restart it after repeated 5xx health probes. Keywords: watchdog, turbopack, 500.
+ */
 import { spawn } from "node:child_process";
 import http from "node:http";
 import path from "node:path";
@@ -41,6 +51,11 @@ const DEFAULT_CODEX_BRIDGE_URL = "ws://0.0.0.0:4500";
 const CODEX_BRIDGE_URL = process.env.CODEX_APP_SERVER_URL ?? DEFAULT_CODEX_BRIDGE_URL;
 const NEXT_PORT = process.env.PORT ?? "3002";
 const RESTART_DELAY_MS = 1000;
+const NEXT_DEV_HEALTH_PATH = "/api/next-dev-health";
+const NEXT_DEV_HEALTH_INTERVAL_MS = 5000;
+const NEXT_DEV_HEALTH_REQUEST_TIMEOUT_MS = 2000;
+const NEXT_DEV_HEALTH_RESTART_COOLDOWN_MS = 30000;
+const NEXT_DEV_HEALTH_SERVER_ERROR_THRESHOLD = 3;
 const ORCHESTRATOR_RELOAD_PATH = "/orchestrator/reload";
 const CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS = 5000;
 const ORCHESTRATOR_RELOAD_SCOPE_VALUES = new Set<OrchestratorReloadScope>([
@@ -104,6 +119,7 @@ let shuttingDown = false;
 let codexBridge: CodexStdioBridge;
 let opencodeBridge: OpenCodeBridge;
 let browseSessionCleanupSupervisor = createBrowseSessionCleanupSupervisor();
+let nextDevHealthSupervisor = createNextDevHealthSupervisor();
 let upstreamMessageQueue: Promise<void> = Promise.resolve();
 let codexBridgeReloadPromise: Promise<void> | null = null;
 let opencodeBridgeReloadPromise: Promise<void> | null = null;
@@ -281,6 +297,7 @@ function finalizeReloadResponse(
 
 async function stopAllChildren() {
   browseSessionCleanupSupervisor.dispose();
+  nextDevHealthSupervisor.dispose();
 
   for (const entry of processes.values()) {
     if (entry.child && !entry.child.killed) {
@@ -330,9 +347,12 @@ function restartChild(spec: ProcessSpec) {
 
 function reloadOrchestratorLogic() {
   browseSessionCleanupSupervisor.dispose();
+  nextDevHealthSupervisor.dispose();
   reloadableModules = reloadOrchestratorReloadableModules();
   browseSessionCleanupSupervisor = createBrowseSessionCleanupSupervisor();
+  nextDevHealthSupervisor = createNextDevHealthSupervisor();
   browseSessionCleanupSupervisor.start();
+  nextDevHealthSupervisor.start();
   log("orchestrator", "reloaded orchestrator helper modules");
 }
 
@@ -397,6 +417,34 @@ function createBrowseSessionCleanupSupervisor() {
   return new Supervisor({
     readThreadActive: readThreadActiveForBrowseCleanup,
   });
+}
+
+function createNextDevHealthSupervisor() {
+  const Supervisor = reloadableModules.nextDevHealthSupervisor.default;
+  return new Supervisor({
+    healthUrl: new URL(NEXT_DEV_HEALTH_PATH, `http://localhost:${NEXT_PORT}`).toString(),
+    intervalMs: NEXT_DEV_HEALTH_INTERVAL_MS,
+    isRestartPending: () => Boolean(processes.get("next-dev")?.restartTimer),
+    isShuttingDown: () => shuttingDown,
+    log: (message) => log("next-dev-health", message),
+    logError: (message) => logError("next-dev-health", message),
+    requestTimeoutMs: NEXT_DEV_HEALTH_REQUEST_TIMEOUT_MS,
+    restartCooldownMs: NEXT_DEV_HEALTH_RESTART_COOLDOWN_MS,
+    restartNextDev: restartNextDevFromWatchdog,
+    serverErrorThreshold: NEXT_DEV_HEALTH_SERVER_ERROR_THRESHOLD,
+  });
+}
+
+function restartNextDevFromWatchdog(reason: string) {
+  const nextSpec = findProcessSpec("next-dev");
+  if (!nextSpec) {
+    logError("next-dev-health", "Next.js dev process is not registered with the orchestrator.");
+    return false;
+  }
+
+  const result = restartChild(nextSpec);
+  log("next-dev-health", `${reason}; ${result} Next.js dev restart`);
+  return true;
 }
 
 async function ensureWorkbenchPromptFiles() {
@@ -910,6 +958,7 @@ async function startOrchestrator() {
   for (const spec of specs) {
     startChild(spec);
   }
+  nextDevHealthSupervisor.start();
 }
 
 void startOrchestrator().catch((error) => {

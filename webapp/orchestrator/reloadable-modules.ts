@@ -7,6 +7,7 @@
 
 export type OrchestratorReloadableModules = {
   browseSessionCleanupSupervisor: Pick<typeof import("./BrowseSessionCleanupSupervisor"), "default">;
+  nextDevHealthSupervisor: Pick<typeof import("./NextDevHealthSupervisor"), "default">;
   copilotThreadState: Pick<typeof import("./copilot-thread-state"),
     "applyCopilotEvent"
     | "cloneThread"
@@ -44,6 +45,7 @@ export type OrchestratorReloadableModules = {
 
 const RELOADABLE_MODULE_SPECIFIERS = [
   "./BrowseSessionCleanupSupervisor",
+  "./NextDevHealthSupervisor",
   "./copilot-thread-state",
   "./opencode-live-thread-state",
   "./opencode-thread-state",
@@ -83,6 +85,7 @@ function collectCacheSubtree(moduleId: string, visited = new Set<string>()) {
 export function loadOrchestratorReloadableModules(): OrchestratorReloadableModules {
   return {
     browseSessionCleanupSupervisor: requireTyped<OrchestratorReloadableModules["browseSessionCleanupSupervisor"]>("./BrowseSessionCleanupSupervisor"),
+    nextDevHealthSupervisor: requireTyped<OrchestratorReloadableModules["nextDevHealthSupervisor"]>("./NextDevHealthSupervisor"),
     copilotThreadState: requireTyped<OrchestratorReloadableModules["copilotThreadState"]>("./copilot-thread-state"),
     opencodeLiveThreadState: requireTyped<OrchestratorReloadableModules["opencodeLiveThreadState"]>("./opencode-live-thread-state"),
     opencodeThreadState: requireTyped<OrchestratorReloadableModules["opencodeThreadState"]>("./opencode-thread-state"),
