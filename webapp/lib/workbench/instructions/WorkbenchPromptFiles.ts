@@ -425,6 +425,7 @@ async function buildWorkbenchBrowseInstructions(context: WorkbenchPromptContext)
     rawCommandStatus = "Raw Browse CLI-args passthrough status could not be read; assume it is disabled unless the user confirms otherwise.";
   }
 
+  // NOTE: Do not put explanations about using the browse endpoint here, this is just meant to note that it exists and be meta direction pointing towards the built-in skill.
   return `
 ## Workbench Browse API
 

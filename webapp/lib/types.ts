@@ -139,6 +139,7 @@ export type WorkbenchBrowseAgentAction =
   | WorkbenchBrowseAgentHighlightRequest
   | WorkbenchBrowseAgentIsRequest
   | WorkbenchBrowseAgentKeyRequest
+  | WorkbenchBrowseAgentMouseClickRequest
   | WorkbenchBrowseAgentOpenRequest
   | WorkbenchBrowseAgentRefsRequest
   | WorkbenchBrowseAgentReloadRequest
@@ -172,6 +173,7 @@ export type WorkbenchBrowseAgentActionName =
   | "highlight"
   | "is"
   | "key"
+  | "mouseClick"
   | "open"
   | "refs"
   | "reload"
@@ -218,13 +220,15 @@ export interface WorkbenchBrowseAgentSnapshotRequest extends WorkbenchBrowseAgen
 
 export interface WorkbenchBrowseAgentClickRequest extends WorkbenchBrowseAgentBrowserRequest {
   action: "click";
-  selector: string;
+  ref?: string | null;
+  selector?: string | null;
 }
 
 export interface WorkbenchBrowseAgentFillRequest extends WorkbenchBrowseAgentBrowserRequest {
   action: "fill";
   pressEnter?: boolean | null;
-  selector: string;
+  ref?: string | null;
+  selector?: string | null;
   value: string;
 }
 
@@ -235,6 +239,7 @@ export interface WorkbenchBrowseAgentEvalRequest extends WorkbenchBrowseAgentBro
 
 export interface WorkbenchBrowseAgentGetRequest extends WorkbenchBrowseAgentBrowserRequest {
   action: "get";
+  ref?: string | null;
   selector?: string | null;
   what: "box" | "checked" | "html" | "markdown" | "text" | "title" | "url" | "value" | "visible";
 }
@@ -242,13 +247,15 @@ export interface WorkbenchBrowseAgentGetRequest extends WorkbenchBrowseAgentBrow
 export interface WorkbenchBrowseAgentHighlightRequest extends WorkbenchBrowseAgentBrowserRequest {
   action: "highlight";
   durationMs?: number | null;
-  selector: string;
+  ref?: string | null;
+  selector?: string | null;
 }
 
 export interface WorkbenchBrowseAgentIsRequest extends WorkbenchBrowseAgentBrowserRequest {
   action: "is";
   check: "checked" | "visible";
-  selector: string;
+  ref?: string | null;
+  selector?: string | null;
 }
 
 export interface WorkbenchBrowseAgentTypeRequest extends WorkbenchBrowseAgentBrowserRequest {
@@ -263,9 +270,19 @@ export interface WorkbenchBrowseAgentKeyRequest extends WorkbenchBrowseAgentBrow
   key: string;
 }
 
+export interface WorkbenchBrowseAgentMouseClickRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "mouseClick";
+  button?: "left" | "middle" | "right" | null;
+  clickCount?: number | null;
+  returnXPath?: boolean | null;
+  x: number;
+  y: number;
+}
+
 export interface WorkbenchBrowseAgentSelectRequest extends WorkbenchBrowseAgentBrowserRequest {
   action: "select";
-  selector: string;
+  ref?: string | null;
+  selector?: string | null;
   value: string;
 }
 
@@ -277,6 +294,7 @@ export interface WorkbenchBrowseAgentSessionsRequest extends WorkbenchBrowseAgen
 export interface WorkbenchBrowseAgentWaitRequest extends WorkbenchBrowseAgentBrowserRequest {
   action: "wait";
   argument?: string | null;
+  ms?: number | null;
   state?: WorkbenchBrowseAgentWaitSelectorState | null;
   type: "load" | "selector" | "timeout";
 }

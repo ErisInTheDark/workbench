@@ -22,6 +22,7 @@ const DEFAULT_BROWSE_TIMEOUT_MS = 120_000;
 const DEFAULT_BROWSE_STATUS_TIMEOUT_MS = 5_000;
 const MAX_BROWSE_TIMEOUT_MS = 10 * 60_000;
 const BROWSE_RUNTIME_SESSION_FILE_PATTERN = /^(.+)\.(?:lock|pid|sock)$/u;
+const WORKBENCH_BROWSE_DOWNLOADS_PATH_ENV = "WORKBENCH_BROWSE_DOWNLOADS_PATH";
 
 export default class WorkbenchBrowseCli {
   async listRuntimeSessionNames() {
@@ -101,6 +102,7 @@ export default class WorkbenchBrowseCli {
           ...process.env,
           BROWSERBASE_TELEMETRY_DISABLED: "1",
           BROWSE_DISABLE_UPDATE_CHECK: "1",
+          [WORKBENCH_BROWSE_DOWNLOADS_PATH_ENV]: executionContext.cwd,
         },
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],

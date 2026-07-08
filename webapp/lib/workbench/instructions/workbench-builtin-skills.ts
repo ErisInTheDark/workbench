@@ -71,12 +71,12 @@ If page data or Browse endpoint output needs additional processing, first run th
 3. Open the target URL with a typed \`open\` request, local mode, the current \`threadId\`, and \`mode: "headless"\` unless headed behavior is needed.
 4. For multi-step work, prefer one typed Browse sequence with a short \`summary\`, \`streamProgress: true\`, and an \`actions\` array so Workbench can render each step while it runs.
 5. Use \`snapshot\` before interacting so refs and accessibility context are fresh.
-6. Use refs from the latest snapshot when available.
-7. Use \`click\`, \`fill\`, \`type\`, \`key\`, \`select\`, and \`wait\` for interaction.
-8. After navigation, form submission, click handlers, or other DOM-changing actions, take a fresh \`snapshot\` because refs can go stale.
+6. Use refs from the latest snapshot when available. Typed selector actions accept either \`selector: "@0-12"\` or \`ref: "0-12"\`; when using \`ref\`, omit the leading \`@\` or include it, both are accepted.
+7. Use \`click\`, \`fill\`, \`type\`, \`key\`, \`select\`, \`mouseClick\`, and \`wait\` for interaction.
+8. After navigation, form submission, click handlers, raw coordinate clicks, or other DOM-changing actions, take a fresh \`snapshot\` because refs can go stale. Treat \`clicked: true\` as delivery proof, not UI-state proof.
 9. Use \`get\` for targeted reads such as \`title\`, \`url\`, \`text\`, \`value\`, \`checked\`, or \`visible\`.
 10. Use \`is\` for simple state checks such as \`visible\` or \`checked\`.
-11. Use \`eval\` only for focused JavaScript inspection when \`snapshot\`, \`get\`, or \`is\` cannot read the needed state clearly.
+11. Use \`eval\` only for focused JavaScript inspection when \`snapshot\`, \`get\`, or \`is\` cannot read the needed state clearly. The typed field is \`expression\`, not \`script\`.
 12. Use \`screenshot\` when visual layout, pixels, or user-visible proof matters.
 13. Use \`cleanup\` or \`stop\` before ending the work.
 
@@ -139,7 +139,25 @@ Raw CLI-args passthrough, when explicitly needed and enabled:
 }
 \`\`\`
 
-Typed actions include \`doctor\`, \`status\`, \`sessions\`, \`open\`, \`snapshot\`, \`click\`, \`fill\`, \`type\`, \`key\`, \`select\`, \`wait\`, \`get\`, \`is\`, \`eval\`, \`highlight\`, \`back\`, \`forward\`, \`reload\`, \`screenshot\`, \`refs\`, \`viewport\`, \`stop\`, and \`cleanup\`.
+Typed actions include \`doctor\`, \`status\`, \`sessions\`, \`open\`, \`snapshot\`, \`click\`, \`fill\`, \`type\`, \`key\`, \`mouseClick\`, \`select\`, \`wait\`, \`get\`, \`is\`, \`eval\`, \`highlight\`, \`back\`, \`forward\`, \`reload\`, \`screenshot\`, \`refs\`, \`viewport\`, \`stop\`, and \`cleanup\`.
+
+Common typed shapes:
+
+\`\`\`json
+{ "action": "click", "threadId": "<current-thread-id>", "cwd": "<current-project-cwd>", "session": "research", "ref": "0-12" }
+\`\`\`
+
+\`\`\`json
+{ "action": "mouseClick", "threadId": "<current-thread-id>", "cwd": "<current-project-cwd>", "session": "research", "x": 240, "y": 320, "returnXPath": true }
+\`\`\`
+
+\`\`\`json
+{ "action": "wait", "threadId": "<current-thread-id>", "cwd": "<current-project-cwd>", "session": "research", "type": "timeout", "ms": 1000 }
+\`\`\`
+
+\`\`\`json
+{ "action": "eval", "threadId": "<current-thread-id>", "cwd": "<current-project-cwd>", "session": "research", "expression": "document.title" }
+\`\`\`
 
 Use \`sessions\` to list Workbench-known local Browse sessions for the current project/cwd when cleanup state is uncertain. It is Workbench-synthesized from the durable session registry plus Browse runtime files because the upstream local Browse CLI does not expose a local all-sessions list command.
 
@@ -207,6 +225,8 @@ To switch a session between headed and headless:
 
 If opening a headed session may visibly affect the user's desktop, tell the user first or ask before proceeding when appropriate.
 
+\`doctor\` reports Browse availability and the current session target when one exists; it does not switch an existing session between headed and headless. Use \`sessions\` or \`status\` for lifecycle truth, then stop and reopen when the mode is wrong.
+
 ## Screenshots
 
 Prefer \`snapshot\` for normal agent reasoning.
@@ -216,6 +236,14 @@ Use screenshots when visual layout, styling, image content, or user-visible evid
 Take screenshots with the typed \`screenshot\` action. Workbench makes intentional screenshots visible to both the agent and the user.
 
 Do not use screenshot file paths unless the user explicitly asks for disk artifacts.
+
+## Clipboard And Downloads
+
+Browser clipboard reads can hang or be blocked by page permissions. After an intentional copy action, prefer safe verification metrics and short snippets, and be ready to use an OS clipboard check when the user has authorized local inspection.
+
+Workbench sets the download directory for managed local Browse sessions to the agent request's resolved cwd when the browser session starts. Existing sessions keep the download directory they launched with; stop and reopen a named session when you need the current cwd to apply. CDP-attached, remote, or non-Workbench Browse sessions may have different download behavior.
+
+Browse does not currently expose a first-class typed download result. After intentionally triggering a download, verify it with a user-safe cwd check using a timestamp marker and report only file name, size, time, and short content metrics unless the user asks for more.
 
 ## Failure Handling
 
@@ -233,7 +261,7 @@ If a session is stuck or mode-incompatible, stop it with \`force: true\` and reo
 
 ## Cleanup Rule
 
-Stop named sessions when finished.
+Stop named sessions when finished. During active investigation, keep the named session alive if you still need page state; do not clean up just because one action completed.
 
 Use \`cleanup\` for sessions owned by the current thread.
 

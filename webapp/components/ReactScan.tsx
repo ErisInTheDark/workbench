@@ -7,6 +7,9 @@ export function ReactScan (): JSX.Element {
 		if (process.env.NEXT_PUBLIC_DISABLE_REACT_SCAN) {
 			return;
 		}
+		if (window.location.pathname.startsWith("/agent/thread")) {
+			return;
+		}
 
 		void import("react-scan").then(({ scan }) => {
 			scan({

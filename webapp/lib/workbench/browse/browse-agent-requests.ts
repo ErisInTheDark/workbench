@@ -24,6 +24,7 @@ const BROWSE_AGENT_ALLOWED_SELECTOR_STATES = new Set(["attached", "detached", "h
 const BROWSE_AGENT_ALLOWED_WAIT_TYPES = new Set(["load", "selector", "timeout"]);
 const BROWSE_AGENT_ALLOWED_GET_VALUES = new Set(["box", "checked", "html", "markdown", "text", "title", "url", "value", "visible"]);
 const BROWSE_AGENT_ALLOWED_IS_CHECKS = new Set(["checked", "visible"]);
+const BROWSE_AGENT_ALLOWED_MOUSE_BUTTONS = new Set(["left", "middle", "right"]);
 
 type WorkbenchBrowseNonCleanupAgentAction = Exclude<WorkbenchBrowseAgentAction, WorkbenchBrowseAgentCleanupRequest>;
 
@@ -90,6 +91,8 @@ export function normalizeWorkbenchBrowseAgentRequest(value: WorkbenchBrowseAgent
       return normalizeCommand(value, buildTypeArgs(value));
     case "key":
       return normalizeCommand(value, buildKeyArgs(value));
+    case "mouseClick":
+      return normalizeCommand(value, buildMouseClickArgs(value));
     case "select":
       return normalizeCommand(value, buildSelectArgs(value));
     case "wait":
@@ -241,17 +244,17 @@ function buildSnapshotArgs(request: Extract<WorkbenchBrowseAgentAction, { action
 }
 
 function buildSelectorArgs(command: "click", request: Extract<WorkbenchBrowseAgentAction, { action: "click" }>) {
-  const selector = normalizeRequiredString(request.selector, BROWSE_AGENT_SELECTOR_MAX_LENGTH, `Browse ${command} requires a selector or snapshot ref.`);
-  if (!selector.ok) {
-    return { error: selector.error };
+  const target = normalizeRequiredSelectorOrRef(request, `Browse ${command} requires a selector or snapshot ref.`);
+  if (!target.ok) {
+    return { error: target.error };
   }
-  const args = [command, selector.value];
+  const args = [command, target.value];
   const sessionError = appendBrowserSessionArgs(args, request);
   return sessionError ?? args;
 }
 
 function buildFillArgs(request: Extract<WorkbenchBrowseAgentAction, { action: "fill" }>) {
-  const selector = normalizeRequiredString(request.selector, BROWSE_AGENT_SELECTOR_MAX_LENGTH, "Browse fill requires a selector or snapshot ref.");
+  const selector = normalizeRequiredSelectorOrRef(request, "Browse fill requires a selector or snapshot ref.");
   const value = normalizeRequiredString(request.value, BROWSE_AGENT_TEXT_MAX_LENGTH, "Browse fill requires a value.");
   if (!selector.ok) {
     return { error: selector.error };
@@ -286,7 +289,7 @@ function buildGetArgs(request: Extract<WorkbenchBrowseAgentAction, { action: "ge
     return { error: what.error };
   }
   const args = ["get", what.value];
-  const selector = normalizeOptionalString(request.selector, BROWSE_AGENT_SELECTOR_MAX_LENGTH);
+  const selector = normalizeOptionalSelectorOrRef(request);
   if (selector) {
     args.push(selector);
   }
@@ -295,7 +298,7 @@ function buildGetArgs(request: Extract<WorkbenchBrowseAgentAction, { action: "ge
 }
 
 function buildHighlightArgs(request: Extract<WorkbenchBrowseAgentAction, { action: "highlight" }>) {
-  const selector = normalizeRequiredString(request.selector, BROWSE_AGENT_SELECTOR_MAX_LENGTH, "Browse highlight requires a selector or snapshot ref.");
+  const selector = normalizeRequiredSelectorOrRef(request, "Browse highlight requires a selector or snapshot ref.");
   if (!selector.ok) {
     return { error: selector.error };
   }
@@ -312,7 +315,7 @@ function buildHighlightArgs(request: Extract<WorkbenchBrowseAgentAction, { actio
 
 function buildIsArgs(request: Extract<WorkbenchBrowseAgentAction, { action: "is" }>) {
   const check = normalizeRequiredChoice(request.check, BROWSE_AGENT_ALLOWED_IS_CHECKS, "Browse is requires a valid state check.");
-  const selector = normalizeRequiredString(request.selector, BROWSE_AGENT_SELECTOR_MAX_LENGTH, "Browse is requires a selector or snapshot ref.");
+  const selector = normalizeRequiredSelectorOrRef(request, "Browse is requires a selector or snapshot ref.");
   if (!check.ok) {
     return { error: check.error };
   }
@@ -353,8 +356,40 @@ function buildKeyArgs(request: Extract<WorkbenchBrowseAgentAction, { action: "ke
   return sessionError ?? args;
 }
 
+function buildMouseClickArgs(request: Extract<WorkbenchBrowseAgentAction, { action: "mouseClick" }>) {
+  const x = normalizeCoordinate(request.x, "Browse mouseClick requires a finite x coordinate.");
+  const y = normalizeCoordinate(request.y, "Browse mouseClick requires a finite y coordinate.");
+  if (!x.ok) {
+    return { error: x.error };
+  }
+  if (!y.ok) {
+    return { error: y.error };
+  }
+
+  const args = ["mouse", "click", String(x.value), String(y.value)];
+  const sessionError = appendBrowserSessionArgs(args, request);
+  if (sessionError) {
+    return sessionError;
+  }
+
+  const button = normalizeOptionalChoice(request.button, BROWSE_AGENT_ALLOWED_MOUSE_BUTTONS, "Browse mouseClick button must be left, middle, or right.");
+  if (!button.ok) {
+    return { error: button.error };
+  }
+  if (button.value) {
+    args.push("--button", button.value);
+  }
+  if (isPositiveInteger(request.clickCount)) {
+    args.push("--click-count", String(Math.trunc(request.clickCount)));
+  }
+  if (request.returnXPath) {
+    args.push("--return-xpath");
+  }
+  return args;
+}
+
 function buildSelectArgs(request: Extract<WorkbenchBrowseAgentAction, { action: "select" }>) {
-  const selector = normalizeRequiredString(request.selector, BROWSE_AGENT_SELECTOR_MAX_LENGTH, "Browse select requires a selector or snapshot ref.");
+  const selector = normalizeRequiredSelectorOrRef(request, "Browse select requires a selector or snapshot ref.");
   const value = normalizeRequiredString(request.value, BROWSE_AGENT_TEXT_MAX_LENGTH, "Browse select requires a value.");
   if (!selector.ok) {
     return { error: selector.error };
@@ -373,7 +408,9 @@ function buildWaitArgs(request: Extract<WorkbenchBrowseAgentAction, { action: "w
     return { error: waitType.error };
   }
   const args = ["wait", waitType.value];
-  const argument = normalizeOptionalString(request.argument, BROWSE_AGENT_SELECTOR_MAX_LENGTH);
+  const argument = waitType.value === "timeout" && isPositiveInteger(request.ms)
+    ? String(Math.trunc(request.ms))
+    : normalizeOptionalString(request.argument, BROWSE_AGENT_SELECTOR_MAX_LENGTH);
   if (argument) {
     args.push(argument);
   }
@@ -538,6 +575,29 @@ function normalizeRequiredString(value: unknown, maxLength: number, error: strin
     : { error, ok: false as const };
 }
 
+function normalizeRequiredSelectorOrRef(
+  request: { ref?: string | null; selector?: string | null },
+  error: string,
+) {
+  const target = normalizeOptionalSelectorOrRef(request);
+  return target
+    ? { ok: true as const, value: target }
+    : { error, ok: false as const };
+}
+
+function normalizeOptionalSelectorOrRef(request: { ref?: string | null; selector?: string | null }) {
+  const selector = normalizeOptionalString(request.selector, BROWSE_AGENT_SELECTOR_MAX_LENGTH);
+  if (selector) {
+    return selector;
+  }
+
+  const ref = normalizeOptionalString(request.ref, BROWSE_AGENT_SELECTOR_MAX_LENGTH);
+  if (!ref) {
+    return null;
+  }
+  return ref.startsWith("@") ? ref : `@${ref}`;
+}
+
 function normalizeOptionalString(value: unknown, maxLength: number) {
   const normalizedValue = String(value ?? "").trim();
   if (!normalizedValue || normalizedValue.includes("\0") || normalizedValue.length > maxLength) {
@@ -570,6 +630,13 @@ function normalizeOptionalChoice<T extends string>(
 
 function isPositiveInteger(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function normalizeCoordinate(value: unknown, error: string) {
+  const numberValue = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numberValue)
+    ? { ok: true as const, value: Math.round(numberValue) }
+    : { error, ok: false as const };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

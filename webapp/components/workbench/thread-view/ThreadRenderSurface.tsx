@@ -49,6 +49,7 @@ export default function ThreadRenderSurface({
     >
       <ThreadThreadContent
         browseScreenshotEntries={thread?.browseScreenshotEntries ?? []}
+        defaultOpenCompletedWork
         emptyMessage={emptyMessage}
         flattenCompletedWork={flattenCompletedWork}
         hideWorkbenchControlAgentMessages

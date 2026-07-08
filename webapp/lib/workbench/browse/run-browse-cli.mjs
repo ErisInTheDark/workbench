@@ -1,8 +1,9 @@
 /*
  * Runtime wrapper:
  * - Forces child_process spawn/exec helpers to default windowsHide=true before Browse loads.
+ * - Injects Workbench-owned local Browse download directory defaults before Browse loads.
  * - Runs the project-local Browse oclif entrypoint without patching node_modules.
- * Keywords: browse, cli, windows, hidden, daemon.
+ * Keywords: browse, cli, windows, hidden, daemon, downloads.
  */
 import childProcess from "node:child_process";
 import { createRequire, syncBuiltinESMExports } from "node:module";
@@ -75,6 +76,11 @@ globalThis.oclif = {
 const require = createRequire(import.meta.url);
 const browseBinPath = require.resolve("browse/bin/run.js");
 const browseRequire = createRequire(pathToFileURL(browseBinPath));
+const browsePackageJsonPath = browseRequire.resolve("browse/package.json");
+const browsePackageRoot = path.dirname(browsePackageJsonPath);
+const sessionManagerModule = await import(pathToFileURL(path.join(browsePackageRoot, "dist", "lib", "driver", "session-manager.js")).href);
+patchBrowseDownloadsPath(sessionManagerModule);
+
 const { execute } = await import(pathToFileURL(browseRequire.resolve("@oclif/core")).href);
 await execute({ dir: pathToFileURL(browseBinPath).href });
 
@@ -120,4 +126,32 @@ function shouldAllowHeadedBrowserWindows(argv) {
   } catch {
     return false;
   }
+}
+
+function patchBrowseDownloadsPath(sessionManagerModule) {
+  const downloadsPath = process.env.WORKBENCH_BROWSE_DOWNLOADS_PATH?.trim();
+  if (!downloadsPath) {
+    return;
+  }
+
+  const prototype = sessionManagerModule.DriverSessionManager?.prototype;
+  if (!prototype || typeof prototype.stagehandOptions !== "function") {
+    return;
+  }
+
+  const originalStagehandOptions = prototype.stagehandOptions;
+  prototype.stagehandOptions = async function stagehandOptionsWithWorkbenchDownloadsPath(...args) {
+    const options = await originalStagehandOptions.apply(this, args);
+    const [target] = args;
+
+    if (target?.kind === "managed-local" && options?.env === "LOCAL") {
+      options.localBrowserLaunchOptions = {
+        ...(options.localBrowserLaunchOptions ?? {}),
+        acceptDownloads: true,
+        downloadsPath,
+      };
+    }
+
+    return options;
+  };
 }

@@ -115,6 +115,9 @@ function formatBrowseActionLabel(action: string | null | undefined) {
       return "Type";
     case "key":
       return "Press key";
+    case "mouseClick":
+    case "mouse":
+      return "Mouse click";
     case "select":
       return "Select";
     case "wait":
@@ -158,7 +161,8 @@ function isBrowseActionTargetCode(action: string | null | undefined) {
     || action === "highlight"
     || action === "eval"
     || action === "get"
-    || action === "is";
+    || action === "is"
+    || action === "mouseClick";
 }
 
 function readBrowseRequestSummary(commandText: string): BrowseRequestSummary | null {
@@ -245,10 +249,13 @@ function readJsonBrowseRequestSummary(commandText: string): BrowseRequestSummary
       session: parsed.session ?? null,
       target: parsed.url
         ?? parsed.selector
+        ?? parsed.ref
+        ?? formatMouseClickCoordinates(parsed)
         ?? parsed.key
         ?? parsed.what
         ?? parsed.check
         ?? parsed.expression
+        ?? formatWaitMilliseconds(parsed)
         ?? parsed.argument
         ?? formatSessionList(parsed.sessions),
     };
@@ -267,18 +274,22 @@ function readPowerShellHashtableBrowseRequestSummary(commandText: string): Brows
   if (!action) {
     return null;
   }
+  const parsedAction = readPowerShellHashtableBrowseAction(commandText, commandText) ?? { action };
 
   return {
     action,
-    detailRows: [buildBrowseActionDetailRow(readPowerShellHashtableBrowseAction(commandText, commandText) ?? { action }, 0)],
+    detailRows: [buildBrowseActionDetailRow(parsedAction, 0)],
     isBrowseRequest: true,
     session: readPowerShellHashtableField(commandText, "session", commandText),
     target: readPowerShellHashtableField(commandText, "url", commandText)
       ?? readPowerShellHashtableField(commandText, "selector", commandText)
+      ?? readPowerShellHashtableField(commandText, "ref", commandText)
+      ?? formatMouseClickCoordinates(parsedAction)
       ?? readPowerShellHashtableField(commandText, "key", commandText)
       ?? readPowerShellHashtableField(commandText, "what", commandText)
       ?? readPowerShellHashtableField(commandText, "check", commandText)
       ?? readPowerShellHashtableField(commandText, "expression", commandText)
+      ?? formatWaitMilliseconds(parsedAction)
       ?? readPowerShellHashtableField(commandText, "argument", commandText)
       ?? readPowerShellHashtableArrayField(commandText, "sessions", commandText),
   };
@@ -382,6 +393,9 @@ function readPowerShellHashtableBrowseAction(
     expression: readPowerShellHashtableField(blockText, "expression", commandText) ?? undefined,
     force: readPowerShellHashtableBooleanField(blockText, "force"),
     key: readPowerShellHashtableField(blockText, "key", commandText) ?? undefined,
+    ms: readPowerShellHashtableNumberField(blockText, "ms"),
+    ref: readPowerShellHashtableField(blockText, "ref", commandText) ?? undefined,
+    returnXPath: readPowerShellHashtableBooleanField(blockText, "returnXPath"),
     selector: readPowerShellHashtableField(blockText, "selector", commandText) ?? undefined,
     session: readPowerShellHashtableField(blockText, "session", commandText) ?? undefined,
     state: readPowerShellHashtableField(blockText, "state", commandText) ?? undefined,
@@ -389,6 +403,8 @@ function readPowerShellHashtableBrowseAction(
     url: readPowerShellHashtableField(blockText, "url", commandText) ?? undefined,
     value: readPowerShellHashtableField(blockText, "value", commandText) ?? undefined,
     what: readPowerShellHashtableField(blockText, "what", commandText) ?? undefined,
+    x: readPowerShellHashtableNumberField(blockText, "x"),
+    y: readPowerShellHashtableNumberField(blockText, "y"),
   };
 }
 
@@ -413,6 +429,7 @@ function summarizeBrowseArgs(args: string[] | null | undefined): BrowseRequestSu
   return {
     action,
     detailRows: [buildBrowseActionDetailRow({ action, args: normalizedArgs }, 0)],
+    hideCommandOutput: false,
     isBrowseRequest: true,
     session: readBrowseArgValue(normalizedArgs, "--session") ?? readBrowseArgValue(normalizedArgs, "-s"),
     target: getBrowseArgsTarget(normalizedArgs),
@@ -438,6 +455,10 @@ function getBrowseArgsTarget(args: string[]) {
     case "press":
     case "type":
       return args[1] ?? null;
+    case "mouse":
+      return args[1] === "click" && args[2] && args[3] && !args[2].startsWith("-") && !args[3].startsWith("-")
+        ? `${args[2]},${args[3]}`
+        : null;
     default:
       return null;
   }
@@ -500,6 +521,15 @@ function readPowerShellHashtableBooleanField(
   return undefined;
 }
 
+function readPowerShellHashtableNumberField(
+  hashtableText: string,
+  fieldName: string,
+) {
+  const fieldMatch = hashtableText.match(new RegExp(`(?:^|[;{])\\s*${escapeRegExp(fieldName)}\\s*=\\s*(-?\\d+(?:\\.\\d+)?)`, "i"));
+  const numberValue = Number(fieldMatch?.[1]);
+  return Number.isFinite(numberValue) ? numberValue : undefined;
+}
+
 function parseJsonBrowseBody(jsonText: string) {
   try {
     return JSON.parse(jsonText) as BrowseJsonBody;
@@ -516,7 +546,10 @@ type BrowseJsonAction = {
   expression?: string;
   force?: boolean;
   key?: string;
+  ms?: number;
   projectId?: string;
+  ref?: string;
+  returnXPath?: boolean;
   selector?: string;
   session?: string;
   state?: string;
@@ -524,6 +557,8 @@ type BrowseJsonAction = {
   url?: string;
   value?: string;
   what?: string;
+  x?: number;
+  y?: number;
 };
 
 type BrowseJsonBody =
@@ -537,6 +572,9 @@ type BrowseJsonBody =
       description?: string;
       expression?: string;
       force?: boolean;
+      ms?: number;
+      ref?: string;
+      returnXPath?: boolean;
       session?: string;
       projectId?: string;
       url?: string;
@@ -545,6 +583,8 @@ type BrowseJsonBody =
       sessions?: string[];
       summary?: string;
       what?: string;
+      x?: number;
+      y?: number;
     };
 
 function readPowerShellHashtableArrayField(
@@ -625,6 +665,9 @@ function formatBrowseAction(action: string) {
       return "type";
     case "key":
       return "press key";
+    case "mouseClick":
+    case "mouse":
+      return "mouse click";
     case "select":
       return "select";
     case "wait":
@@ -730,8 +773,9 @@ function formatBrowseSequenceTarget(
 
 function readBrowseActionTarget(action: BrowseJsonAction) {
   if (action.action === "wait") {
-    if (action.type === "timeout" && action.argument) {
-      return formatDurationArgument(action.argument);
+    const timeoutMs = formatWaitMilliseconds(action);
+    if (action.type === "timeout" && timeoutMs) {
+      return timeoutMs;
     }
     if (action.argument && action.state) {
       return `${action.argument} ${action.state}`;
@@ -742,8 +786,14 @@ function readBrowseActionTarget(action: BrowseJsonAction) {
     return getBrowseArgsTarget(action.args);
   }
 
+  const mouseClickCoordinates = formatMouseClickCoordinates(action);
+  if (mouseClickCoordinates) {
+    return mouseClickCoordinates;
+  }
+
   return action.url
     ?? action.selector
+    ?? action.ref
     ?? action.key
     ?? action.projectId
     ?? action.what
@@ -751,6 +801,21 @@ function readBrowseActionTarget(action: BrowseJsonAction) {
     ?? action.expression
     ?? action.argument
     ?? null;
+}
+
+function formatMouseClickCoordinates(action: BrowseJsonAction) {
+  return action.action === "mouseClick" && typeof action.x === "number" && typeof action.y === "number"
+    ? `${action.x},${action.y}`
+    : null;
+}
+
+function formatWaitMilliseconds(action: BrowseJsonAction) {
+  const milliseconds = typeof action.ms === "number" && Number.isFinite(action.ms)
+    ? action.ms
+    : action.argument;
+  return milliseconds === undefined || milliseconds === null
+    ? null
+    : formatDurationArgument(String(milliseconds));
 }
 
 export function isBrowseWebRequestMatcherClaim(value: string | null | undefined) {
@@ -763,6 +828,11 @@ export function parseBrowseSequenceCommandOutput(output: string | null | undefin
   const progressRows = parseBrowseSequenceProgressOutput(output ?? "");
   if (progressRows.length) {
     return progressRows;
+  }
+
+  const powershellRows = parsePowerShellBrowseObjectOutput(output ?? "");
+  if (powershellRows.length) {
+    return powershellRows;
   }
 
   const jsonText = readFirstJsonObject(output ?? "");
@@ -912,7 +982,32 @@ function formatBrowseSequenceResult(result: unknown, { complete = false }: { com
     };
   }
 
-  return { durationMs, state };
+  const stdout = typeof result.stdout === "string" ? result.stdout : "";
+  const genericOutput = readGenericStdoutResult(stdout);
+  return {
+    detailKind: genericOutput ? "result" : undefined,
+    detailLabel: genericOutput ? "result" : null,
+    detailText: genericOutput,
+    durationMs,
+    state,
+  };
+}
+
+function parsePowerShellBrowseObjectOutput(output: string): BrowseSequenceOutputRow[] {
+  const error = readPowerShellObjectStringField(output, "error");
+  const ok = readPowerShellObjectBooleanField(output, "ok");
+  const durationMs = readPowerShellObjectNumberField(output, "durationMs");
+  const stdout = readPowerShellObjectStdout(output);
+  if (error || ok !== null || durationMs !== null || stdout) {
+    return [{
+      detailKind: error ? "error" : stdout ? "result" : undefined,
+      detailLabel: error ? "error" : stdout ? "result" : null,
+      detailText: error ?? stdout,
+      durationMs,
+      state: ok === false || error ? "failed" : "completed",
+    }];
+  }
+  return [];
 }
 
 function readEvalStdoutResult(stdout: string) {
@@ -957,6 +1052,40 @@ function parseJsonObject(value: string) {
   } catch {
     return null;
   }
+}
+
+function readPowerShellObjectStringField(output: string, fieldName: string) {
+  const match = output.match(new RegExp(`(?:^|\\r?\\n)\\s*${escapeRegExp(fieldName)}\\s*:\\s*(.*)`, "i"));
+  const value = match?.[1]?.trim();
+  return value || null;
+}
+
+function readPowerShellObjectBooleanField(output: string, fieldName: string) {
+  const value = readPowerShellObjectStringField(output, fieldName)?.toLowerCase();
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  return null;
+}
+
+function readPowerShellObjectNumberField(output: string, fieldName: string) {
+  const value = readPowerShellObjectStringField(output, fieldName);
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function readPowerShellObjectStdout(output: string) {
+  const match = output.match(/(?:^|\r?\n)\s*stdout\s*:\s*([\s\S]*?)(?=\r?\n\s*(?:action|args|session|steered|steerTurnId|timedOut)\s*:|\s*$)/i);
+  const value = match?.[1]?.trim();
+  if (!value) {
+    return null;
+  }
+
+  const compactJson = readGenericStdoutResult(value);
+  return compactJson ?? collapseWhitespace(value).slice(0, 400);
 }
 
 function formatCompactJsonValue(value: unknown) {

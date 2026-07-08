@@ -1989,6 +1989,7 @@ const ThreadRenderableBlockView = memo(ThreadRenderableBlockViewComponent, (left
 ));
 
 function ThreadTurnDetailsComponent ({
+  defaultOpenCompletedWork = false,
   browseScreenshotEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   flattenCompletedWork = false,
   hiddenCollabAgentToolCallItemIds = [],
@@ -2011,6 +2012,7 @@ function ThreadTurnDetailsComponent ({
   turn,
   workspaceRoots,
 }: {
+  defaultOpenCompletedWork?: boolean;
   browseScreenshotEntries?: readonly WorkbenchBrowseScreenshotEntry[];
   flattenCompletedWork?: boolean;
   hiddenCollabAgentToolCallItemIds?: readonly string[];
@@ -2196,6 +2198,7 @@ function ThreadTurnDetailsComponent ({
             <ThreadDisclosure
               className="py-2"
               contentClassName="mt-2 space-y-2 pl-6"
+              defaultOpen={defaultOpenCompletedWork}
               renderContent={renderCompactionWorkContent}
               summary={getWorkedSummary(turn)}
               summaryClassName="text-[0.92em] leading-[1.6] text-muted"
@@ -2245,6 +2248,7 @@ function ThreadTurnDetailsComponent ({
           <ThreadDisclosure
             className="py-2"
             contentClassName="mt-2 space-y-2 pl-6"
+            defaultOpen={defaultOpenCompletedWork}
             renderContent={renderCompletedWorkedContent}
             summary={getWorkedSummary(turn)}
             summaryClassName="text-[0.92em] leading-[1.6] text-muted"
@@ -2296,6 +2300,7 @@ function areThreadTurnDetailsPropsEqual (
   right: Readonly<Parameters<typeof ThreadTurnDetailsComponent>[0]>,
 ) {
   return left.turn === right.turn
+    && left.defaultOpenCompletedWork === right.defaultOpenCompletedWork
     && left.flattenCompletedWork === right.flattenCompletedWork
     && left.hiddenCollabAgentToolCallItemIds === right.hiddenCollabAgentToolCallItemIds
     && left.hiddenDynamicToolCallItemIds === right.hiddenDynamicToolCallItemIds
@@ -2321,6 +2326,7 @@ export const ThreadTurnDetails = memo(ThreadTurnDetailsComponent, areThreadTurnD
 
 export function ThreadThreadContent ({
   browseScreenshotEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
+  defaultOpenCompletedWork = false,
   emptyMessage = "No subagent activity was captured yet.",
   flattenCompletedWork = false,
   hiddenCollabAgentToolCallItemIds = [],
@@ -2342,6 +2348,7 @@ export function ThreadThreadContent ({
   thread,
 }: {
   browseScreenshotEntries?: readonly WorkbenchBrowseScreenshotEntry[];
+  defaultOpenCompletedWork?: boolean;
   emptyMessage?: string;
   flattenCompletedWork?: boolean;
   hiddenCollabAgentToolCallItemIds?: readonly string[];
@@ -2402,6 +2409,7 @@ export function ThreadThreadContent ({
           <ThreadTurnDetails
             key={entry.turnId}
             browseScreenshotEntries={browseScreenshotEntriesByTurnId.get(entry.turnId) ?? EMPTY_BROWSE_SCREENSHOT_ENTRIES}
+            defaultOpenCompletedWork={defaultOpenCompletedWork}
             flattenCompletedWork={flattenCompletedWork}
             hiddenCollabAgentToolCallItemIds={hiddenCollabAgentToolCallItemIds}
             hiddenDynamicToolCallItemIds={hiddenDynamicToolCallItemIds}
