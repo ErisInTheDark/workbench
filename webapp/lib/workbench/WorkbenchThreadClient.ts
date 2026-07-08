@@ -28,6 +28,7 @@ import type { TurnStartResponse } from "../codex/generated/app-server/v2/TurnSta
 import type { TurnSteerResponse } from "../codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "../codex/generated/app-server/v2/UserInput";
 import {
+    createQuestionnaireCollaborationMode,
     createTextInput,
     createThreadStartRequest,
     isCodexJsonRpcFailure,
@@ -4122,14 +4123,28 @@ function WorkbenchThreadClient(
         refreshCurrentThreadOptimisticUserMessages();
       }
     } else {
+      const codexFirstTurnCollaborationMode = shouldBypassCodexDraftBootstrap && harness === "codex"
+        ? (() => {
+          const collaborationModel = selectedModel ?? resumedThread.model;
+          return collaborationModel
+            ? createQuestionnaireCollaborationMode(
+              collaborationModel,
+              selectedReasoningEffort ?? null,
+            )
+            : null;
+        })()
+        : null;
       const turnStartResponse = await sendBridgeRequest<TurnStartResponse>(harness, {
         method: "turn/start",
-        ...(harness === "opencode"
+        ...(codexFirstTurnCollaborationMode
+          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext("codex", resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds, "threadUtilities") }
+          : harness === "opencode"
           ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds, "threadUtilities") }
           : {}),
         params: {
           ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
           ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
+          ...(codexFirstTurnCollaborationMode ? { collaborationMode: codexFirstTurnCollaborationMode } : {}),
           input: normalizedInput,
           ...(selectedReasoningEffort ? { effort: selectedReasoningEffort } : {}),
           ...(selectedModel ? { model: selectedModel } : {}),
@@ -4139,6 +4154,7 @@ function WorkbenchThreadClient(
           threadId: resolvedThreadId,
         } as TurnStartParams & {
           agentPath?: string;
+          collaborationMode?: ReturnType<typeof createQuestionnaireCollaborationMode>;
           cwd?: string;
         },
       });
