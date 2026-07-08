@@ -173,6 +173,37 @@ function normalizePluginEntries(value: unknown) {
     : [...value, WORKBENCH_OPENCODE_PLUGIN_CONFIG_ENTRY];
 }
 
+function overlayWorkbenchPermissionConfig(value: unknown) {
+  if (typeof value === "string") {
+    return {
+      "*": value,
+      skill: "deny",
+      task: "deny",
+      todowrite: "deny",
+    };
+  }
+
+  if (isRecord(value)) {
+    return {
+      ...value,
+      skill: "deny",
+      task: "deny",
+      todowrite: "deny",
+    };
+  }
+
+  return {
+    skill: "deny",
+    task: "deny",
+    todowrite: "deny",
+  };
+}
+
+function overlayWorkbenchOpenCodeConfig(config: Record<string, unknown>) {
+  config.plugin = normalizePluginEntries(config.plugin);
+  config.permission = overlayWorkbenchPermissionConfig(config.permission);
+}
+
 async function tryRegisterWorkbenchPlugin(configPath: string) {
   let rawConfig: string;
   try {
@@ -186,7 +217,7 @@ async function tryRegisterWorkbenchPlugin(configPath: string) {
 
   const parsedConfig = JSON.parse(rawConfig) as unknown;
   const config = isRecord(parsedConfig) ? parsedConfig : {};
-  config.plugin = normalizePluginEntries(config.plugin);
+  overlayWorkbenchOpenCodeConfig(config);
   await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
   return true;
 }
@@ -205,6 +236,11 @@ async function registerWorkbenchPlugin(configDirectory: string) {
     configPaths[0],
     `${JSON.stringify({
       $schema: "https://opencode.ai/config.json",
+      permission: {
+        skill: "deny",
+        task: "deny",
+        todowrite: "deny",
+      },
       plugin: [WORKBENCH_OPENCODE_PLUGIN_CONFIG_ENTRY],
     }, null, 2)}\n`,
     "utf8",
