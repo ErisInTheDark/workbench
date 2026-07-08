@@ -14,6 +14,7 @@ const VALID_RELOAD_SCOPES = new Set<OrchestratorReloadScope>([
   "codex-bridge",
   "next-dev",
   "opencode-bridge",
+  "opencode-server",
   "orchestrator-logic",
 ]);
 

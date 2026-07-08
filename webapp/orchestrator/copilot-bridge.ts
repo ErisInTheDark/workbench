@@ -675,14 +675,31 @@ export class CopilotBridge {
     const routeUrl = workbenchOrigin?.trim()
       ? buildThreadTitleRouteUrl(workbenchOrigin)
       : null;
-    const promptInstructions = promptContext
-      ? await this.getReloadableModules().workbenchPromptFiles.buildWorkbenchPromptInstructions({
+    const resolvedPromptContext = promptContext
+      ? {
         ...promptContext,
-        harness: "copilot",
+        harness: "copilot" as const,
         threadId: promptContext.threadId ?? threadId,
+      }
+      : null;
+    const threadUtilityInstructions = resolvedPromptContext?.instructionScope === "threadUtilities"
+      ? await this.getReloadableModules().workbenchPromptFiles.buildWorkbenchThreadUtilityDeveloperInstructions(resolvedPromptContext)
+      : null;
+    const promptInstructions = resolvedPromptContext && resolvedPromptContext.instructionScope !== "threadUtilities"
+      ? await this.getReloadableModules().workbenchPromptFiles.buildWorkbenchPromptInstructions({
+        ...resolvedPromptContext,
       })
       : null;
-    const workbenchInstructions = promptInstructions
+    const workbenchInstructions = threadUtilityInstructions
+      ? joinSystemMessageSections([
+        `
+Workbench is providing this Copilot session with Workbench-owned thread utility instructions.
+
+Use only the Workbench utility instructions below from this scoped packet. Do not infer or activate any Workbench workflow from this utility context.
+`.trim(),
+        threadUtilityInstructions,
+      ])
+      : promptInstructions
       ? joinSystemMessageSections([
         `
 Workbench is providing this Copilot session with Workbench-owned instructions.
@@ -693,7 +710,7 @@ Treat the Workbench instructions below as active for this session. If Copilot-pr
         promptInstructions.developerInstructions,
       ])
       : null;
-    const workbenchLibraryInstructions = promptInstructions ? null : await buildWorkbenchLibraryBootstrapInstructions();
+    const workbenchLibraryInstructions = resolvedPromptContext ? null : await buildWorkbenchLibraryBootstrapInstructions();
     const content = joinSystemMessageSections([
       USER_INPUT_TOOL_SYSTEM_MESSAGE,
       workbenchInstructions,

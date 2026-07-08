@@ -46,6 +46,10 @@ function readWorkbenchHarness(value: unknown): WorkbenchHarness | null {
   }
 }
 
+function readInstructionScope(value: unknown): WorkbenchPromptContext["instructionScope"] {
+  return value === "threadUtilities" ? value : undefined;
+}
+
 function readWorkbenchProjectRoot(value: unknown): WorkbenchProjectRoot | null {
   const record = asRecord(value);
   return typeof record?.id === "string"
@@ -79,6 +83,7 @@ export function readWorkbenchPromptContext(message: JsonRpcRequest): WorkbenchPr
   return {
     agentPath: asString(value.agentPath),
     harness: readWorkbenchHarness(value.harness),
+    instructionScope: readInstructionScope(value.instructionScope),
     instructionInjections: readInstructionInjections(value.instructionInjections),
     projectId: asString(value.projectId),
     roots,

@@ -37,6 +37,7 @@ export type OrchestratorReloadableModules = {
     | "ensureOpenCodeWorkbenchConfigDirectory">;
   workbenchPromptFiles: Pick<typeof import("../lib/workbench/instructions/WorkbenchPromptFiles"),
     "buildWorkbenchPromptInstructions"
+    | "buildWorkbenchThreadUtilityDeveloperInstructions"
     | "ensureWorkbenchPromptFiles">;
   workbenchLibrary: Pick<typeof import("../lib/workbench-library"), "buildWorkbenchLibraryBootstrapInstructions">;
 };

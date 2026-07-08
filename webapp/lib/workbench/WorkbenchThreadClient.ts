@@ -2864,10 +2864,12 @@ function WorkbenchThreadClient(
     workbenchOrigin: string | null,
     instructionInjections: Record<string, string> | undefined = undefined,
     workflowIds: readonly string[] | undefined = undefined,
+    instructionScope: "full" | "threadUtilities" = "full",
   ) {
     return {
       agentPath: normalizeWorkbenchAgentPath(agentPath),
       harness,
+      ...(instructionScope !== "full" ? { instructionScope } : {}),
       ...(instructionInjections ? { instructionInjections } : {}),
       projectId: state.projectId,
       roots: state.projectRoots,
@@ -4043,6 +4045,9 @@ function WorkbenchThreadClient(
           ...(harness === "codex" ? { serviceTier: selectedServiceTier } : {}),
           threadId: resolvedThreadId,
         } as ThreadResumeParams & { agentPath?: string; cwd?: string; model?: string; serviceTier?: string | null; threadId: string },
+        ...(harness !== "opencode" && shouldSendWorkbenchPromptContext(harness, sendOptions)
+          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds, "threadUtilities") }
+          : {}),
         workbenchThreadHydration: { mode: "latest" },
       });
       const readableThread = toThreadPayload(readableThreadResponse.thread, harness);
@@ -4087,6 +4092,9 @@ function WorkbenchThreadClient(
       try {
         steerResponse = await sendBridgeRequest<TurnSteerResponse>(harness, {
           method: "turn/steer",
+          ...(harness === "opencode"
+            ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds, "threadUtilities") }
+            : {}),
           params: {
             ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
             ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
@@ -4116,6 +4124,9 @@ function WorkbenchThreadClient(
     } else {
       const turnStartResponse = await sendBridgeRequest<TurnStartResponse>(harness, {
         method: "turn/start",
+        ...(harness === "opencode"
+          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds, "threadUtilities") }
+          : {}),
         params: {
           ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
           ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
@@ -4160,6 +4171,7 @@ function WorkbenchThreadClient(
             serviceTier: selectedServiceTier,
             threadId: resolvedThreadId,
           } as ThreadResumeParams & { model?: string; serviceTier?: string | null; threadId: string },
+          [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext("codex", resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds, "threadUtilities"),
           workbenchThreadHydration: { mode: "latest" },
         });
         refreshedThread = mergeLiveStreamingThreadSnapshot(toThreadPayload(
@@ -4267,8 +4279,8 @@ function WorkbenchThreadClient(
     const workbenchOrigin = readLocalWorkbenchOrigin();
     await sendBridgeRequest<TurnSteerResponse>(thread.harness, {
       method: "turn/steer",
-      ...(shouldSendWorkbenchPromptContext(thread.harness)
-        ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(thread.harness, thread.id, thread.agentPath, workbenchOrigin) }
+      ...(thread.harness === "opencode"
+        ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(thread.harness, thread.id, thread.agentPath, workbenchOrigin, undefined, undefined, "threadUtilities") }
         : {}),
       params: {
         ...(thread.agentPath && thread.harness === "copilot" ? { agentPath: thread.agentPath } : {}),
@@ -4349,8 +4361,8 @@ function WorkbenchThreadClient(
     const agentPath = getPendingUserInputRequestAgentPath(pendingRequest);
     await sendBridgeRequest<TurnSteerResponse | { ok?: boolean }>(pendingRequest.harness, {
       method: "turn/steer",
-      ...(shouldSendWorkbenchPromptContext(pendingRequest.harness)
-        ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(pendingRequest.harness, pendingRequest.threadId, agentPath, workbenchOrigin) }
+      ...(pendingRequest.harness === "opencode"
+        ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(pendingRequest.harness, pendingRequest.threadId, agentPath, workbenchOrigin, undefined, undefined, "threadUtilities") }
         : {}),
       params: {
         ...(agentPath && pendingRequest.harness === "copilot" ? { agentPath } : {}),

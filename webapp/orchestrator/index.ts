@@ -47,6 +47,7 @@ const ORCHESTRATOR_RELOAD_SCOPE_VALUES = new Set<OrchestratorReloadScope>([
   "codex-bridge",
   "next-dev",
   "opencode-bridge",
+  "opencode-server",
   "orchestrator-logic",
 ]);
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
@@ -557,14 +558,14 @@ async function runAfterOpenCodeBridgeReload<TValue>(task: () => TValue | Promise
   return await task();
 }
 
-async function reloadOpenCodeBridge() {
+async function reloadOpenCodeBridge({ restartManagedServer = false }: { restartManagedServer?: boolean } = {}) {
   if (opencodeBridgeReloadPromise) {
     await opencodeBridgeReloadPromise;
     return;
   }
 
   const reloadPromise = (async () => {
-    const state = await opencodeBridge.detachForReload();
+    const state = await opencodeBridge.detachForReload({ restartManagedServer });
     const { OpenCodeBridge: ReloadedOpenCodeBridge } = reloadOpenCodeBridgeModule();
     opencodeBridge = new ReloadedOpenCodeBridge({
       getReloadableModules: () => reloadableModules,
@@ -574,7 +575,12 @@ async function reloadOpenCodeBridge() {
       },
       projectRoot: PROJECT_ROOT,
     });
-    log("opencode-bridge", "reloaded bridge code without restarting OpenCode server");
+    log(
+      "opencode-bridge",
+      restartManagedServer
+        ? "reloaded bridge code and restarted managed OpenCode server"
+        : "reloaded bridge code without restarting OpenCode server",
+    );
   })();
 
   opencodeBridgeReloadPromise = reloadPromise;
@@ -592,11 +598,12 @@ function queueReload(scopes: OrchestratorReloadScope[]) {
   setImmediate(() => {
     void (async () => {
       try {
-        if (scopes.includes("orchestrator-logic")) {
+        const shouldRestartOpenCodeServer = scopes.includes("opencode-server");
+        if (scopes.includes("orchestrator-logic") || shouldRestartOpenCodeServer) {
           reloadOrchestratorLogic();
         }
 
-        if (scopes.includes("orchestrator-logic") || scopes.includes("codex-bridge") || scopes.includes("opencode-bridge")) {
+        if (scopes.includes("orchestrator-logic") || scopes.includes("codex-bridge") || scopes.includes("opencode-bridge") || shouldRestartOpenCodeServer) {
           await ensureWorkbenchPromptFiles();
         }
 
@@ -604,8 +611,8 @@ function queueReload(scopes: OrchestratorReloadScope[]) {
           await reloadCodexBridge();
         }
 
-        if (scopes.includes("opencode-bridge")) {
-          await reloadOpenCodeBridge();
+        if (scopes.includes("opencode-bridge") || shouldRestartOpenCodeServer) {
+          await reloadOpenCodeBridge({ restartManagedServer: shouldRestartOpenCodeServer });
         }
 
         if (scopes.includes("next-dev")) {

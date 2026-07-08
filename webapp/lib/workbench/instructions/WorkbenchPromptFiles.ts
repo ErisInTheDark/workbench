@@ -4,6 +4,7 @@
  * - WorkbenchPromptInstructions: resolved base and developer instruction payload. Keywords: prompt, baseInstructions, developerInstructions.
  * - ensureWorkbenchPromptFiles: write generated Workbench prompt files and scaffold prompt folders. Keywords: AGENTS, workflows, default agent.
  * - buildWorkbenchPromptInstructions: resolve fresh prompt files and expand Workbench injections for a Codex thread. Keywords: prompt, injections, app-server.
+ * - buildWorkbenchThreadUtilityDeveloperInstructions: resolve workflow-free Workbench endpoint instructions. Keywords: checkpoints, thread title, thread context.
  * - buildWorkbenchCollaborationDeveloperInstructions: build Workbench-owned questionnaire collaboration instructions. Keywords: collaboration mode, plan mode, request_user_input.
  * - default WorkbenchPromptFiles: prompt-file owner namespace. Keywords: prompt, owner, generated files.
  */
@@ -55,6 +56,7 @@ import {
 export interface WorkbenchPromptContext {
   readonly agentPath?: string | null;
   readonly harness?: WorkbenchHarness | null;
+  readonly instructionScope?: "full" | "threadUtilities";
   readonly instructionInjections?: Readonly<Record<string, string>>;
   readonly projectId?: string | null;
   readonly roots?: readonly WorkbenchProjectRoot[];
@@ -664,6 +666,20 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
   };
 }
 
+export async function buildWorkbenchThreadUtilityDeveloperInstructions(
+  context: WorkbenchPromptContext = {},
+): Promise<string | null> {
+  await ensureWorkbenchPromptFiles();
+
+  const browseInstructions = await buildWorkbenchBrowseInstructions(context);
+  return joinInstructionSections([
+    browseInstructions,
+    buildWorkbenchThreadContextReorientationInstructions(context),
+    buildWorkbenchCheckpointInstructions(context),
+    buildThreadTitleInstructions(context),
+  ]);
+}
+
 export async function buildWorkbenchCollaborationDeveloperInstructions(
   context: WorkbenchPromptContext = {},
 ): Promise<string | null> {
@@ -701,6 +717,7 @@ This collaboration-mode overlay must not replace the active Workbench workflow, 
 const WorkbenchPromptFiles = {
   buildWorkbenchCollaborationDeveloperInstructions,
   buildWorkbenchPromptInstructions,
+  buildWorkbenchThreadUtilityDeveloperInstructions,
   ensureWorkbenchPromptFiles,
 };
 

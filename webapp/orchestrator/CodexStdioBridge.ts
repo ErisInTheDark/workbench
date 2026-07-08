@@ -31,6 +31,7 @@ import type {
 import { normalizeWorkbenchCollaborationState } from "../lib/workbench/collaboration/collaboration-state";
 import {
     buildWorkbenchPromptInstructions,
+    buildWorkbenchThreadUtilityDeveloperInstructions,
     type WorkbenchPromptInstructions,
 } from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import { isWorkbenchPauseControlRequest, WORKBENCH_PAUSE_CONTROL_KIND } from "../lib/workbench/thread/thread-pause-control";
@@ -359,6 +360,21 @@ function buildWorkbenchOwnedPromptParams(
       developer_instructions: "",
     },
     personality: "none",
+  };
+}
+
+function buildWorkbenchOwnedDeveloperInstructionParams(
+  params: Record<string, unknown>,
+  developerInstructions: string | null,
+) {
+  const existingConfig = asRecord(params.config);
+  return {
+    ...params,
+    developerInstructions,
+    config: {
+      ...existingConfig,
+      developer_instructions: "",
+    },
   };
 }
 
@@ -1274,6 +1290,14 @@ export default class CodexStdioBridge {
     }
 
     const params = asMutableParamsRecord(message.params);
+    if (promptContext.instructionScope === "threadUtilities") {
+      const developerInstructions = await buildWorkbenchThreadUtilityDeveloperInstructions(promptContext);
+      return {
+        ...message,
+        params: buildWorkbenchOwnedDeveloperInstructionParams(params, developerInstructions),
+      };
+    }
+
     const promptInstructions = await buildWorkbenchPromptInstructions(promptContext);
     return {
       ...message,

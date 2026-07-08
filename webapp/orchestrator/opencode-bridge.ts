@@ -36,6 +36,10 @@ type OpenCodeBridgeOptions = {
   projectRoot: string;
 };
 
+type OpenCodeBridgeReloadOptions = {
+  restartManagedServer?: boolean;
+};
+
 type OpenCodeServerHandle = {
   close: () => void;
   url: string;
@@ -415,7 +419,7 @@ export class OpenCodeBridge {
     this.server = null;
   }
 
-  async detachForReload(): Promise<OpenCodeBridgeState> {
+  async detachForReload({ restartManagedServer = false }: OpenCodeBridgeReloadOptions = {}): Promise<OpenCodeBridgeState> {
     await this.startPromise?.catch(() => undefined);
     this.startPromise = null;
     this.eventAbortController?.abort();
@@ -426,14 +430,19 @@ export class OpenCodeBridge {
       clearTimeout(timer);
     }
     this.snapshotRefreshTimers.clear();
+    const hadClient = Boolean(this.client || this.server);
+    const server = restartManagedServer ? null : this.server;
+    if (restartManagedServer) {
+      this.server?.close();
+    }
 
     const state: OpenCodeBridgeState = {
-      hadClient: Boolean(this.client),
+      hadClient,
       liveThreadState: this.liveThreadState,
       managedServerFailure: this.managedServerFailure,
       pendingPermissions: this.pendingPermissions,
       pendingQuestions: this.pendingQuestions,
-      server: this.server,
+      server,
       sessionDirectories: this.sessionDirectories,
       sessionStatuses: this.sessionStatuses,
     };
@@ -967,10 +976,21 @@ export class OpenCodeBridge {
   private async buildTurnSystemPrompt(message: JsonRpcRequest, threadId: string, params: unknown) {
     const promptContext = readWorkbenchPromptContext(message);
     if (promptContext) {
-      const instructions = await this.getReloadableModules().workbenchPromptFiles.buildWorkbenchPromptInstructions({
+      const resolvedPromptContext = {
         ...promptContext,
-        harness: "opencode",
+        harness: "opencode" as const,
         threadId: promptContext.threadId ?? threadId,
+      };
+      if (resolvedPromptContext.instructionScope === "threadUtilities") {
+        const developerInstructions = await this.getReloadableModules().workbenchPromptFiles.buildWorkbenchThreadUtilityDeveloperInstructions(resolvedPromptContext);
+        return this.getReloadableModules().opencodeWorkbenchInstructions.buildOpenCodeWorkbenchSystemPrompt({
+          baseInstructions: null,
+          developerInstructions,
+        });
+      }
+
+      const instructions = await this.getReloadableModules().workbenchPromptFiles.buildWorkbenchPromptInstructions({
+        ...resolvedPromptContext,
       });
       return this.getReloadableModules().opencodeWorkbenchInstructions.buildOpenCodeWorkbenchSystemPrompt(instructions);
     }

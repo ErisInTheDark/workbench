@@ -14,6 +14,7 @@ const WORKBENCH_OPENCODE_SYSTEM_BEGIN = "<<<WORKBENCH_OPENCODE_SYSTEM_REPLACEMEN
 const WORKBENCH_OPENCODE_SYSTEM_END = "<<<WORKBENCH_OPENCODE_SYSTEM_REPLACEMENT_END_V1>>>";
 const WORKBENCH_OPENCODE_CONFIG_DIR_NAME = "workbench-opencode";
 const WORKBENCH_OPENCODE_PLUGIN_FILE = "plugins/workbench-system-replacement.js";
+const WORKBENCH_OPENCODE_PLUGIN_CONFIG_ENTRY = `./${WORKBENCH_OPENCODE_PLUGIN_FILE}`;
 
 type EnsureOpenCodeWorkbenchConfigDirectoryOptions = {
   baseConfigDirectory?: string | null;
@@ -154,6 +155,62 @@ async function copyConfigDirectoryContents(
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizePluginEntries(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [WORKBENCH_OPENCODE_PLUGIN_CONFIG_ENTRY];
+  }
+
+  const hasWorkbenchPlugin = value.some((entry) => (
+    entry === WORKBENCH_OPENCODE_PLUGIN_CONFIG_ENTRY
+    || (Array.isArray(entry) && entry[0] === WORKBENCH_OPENCODE_PLUGIN_CONFIG_ENTRY)
+  ));
+  return hasWorkbenchPlugin
+    ? value
+    : [...value, WORKBENCH_OPENCODE_PLUGIN_CONFIG_ENTRY];
+}
+
+async function tryRegisterWorkbenchPlugin(configPath: string) {
+  let rawConfig: string;
+  try {
+    rawConfig = await fs.readFile(configPath, "utf8");
+  } catch (error) {
+    if (nodeErrorCode(error) === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+
+  const parsedConfig = JSON.parse(rawConfig) as unknown;
+  const config = isRecord(parsedConfig) ? parsedConfig : {};
+  config.plugin = normalizePluginEntries(config.plugin);
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  return true;
+}
+
+async function registerWorkbenchPlugin(configDirectory: string) {
+  const configPaths = [
+    path.join(configDirectory, "opencode.json"),
+    path.join(configDirectory, "opencode.jsonc"),
+  ];
+  const results = await Promise.allSettled(configPaths.map(tryRegisterWorkbenchPlugin));
+  if (results.some((result) => result.status === "fulfilled" && result.value)) {
+    return;
+  }
+
+  await fs.writeFile(
+    configPaths[0],
+    `${JSON.stringify({
+      $schema: "https://opencode.ai/config.json",
+      plugin: [WORKBENCH_OPENCODE_PLUGIN_CONFIG_ENTRY],
+    }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
 export async function ensureOpenCodeWorkbenchConfigDirectory(
   options: EnsureOpenCodeWorkbenchConfigDirectoryOptions = {},
 ) {
@@ -167,6 +224,7 @@ export async function ensureOpenCodeWorkbenchConfigDirectory(
   const pluginPath = path.join(configDirectory, WORKBENCH_OPENCODE_PLUGIN_FILE);
   await fs.mkdir(path.dirname(pluginPath), { recursive: true });
   await fs.writeFile(pluginPath, buildOpenCodeSystemReplacementPluginSource(), "utf8");
+  await registerWorkbenchPlugin(configDirectory);
   return {
     baseConfigDirectory,
     baseConfigMetadata: baseConfigCopy.metadata,
