@@ -462,6 +462,7 @@ export default function ThreadComposer ({
   const [stickyComposerMotionState, setStickyComposerMotionState] = useState<"idle" | "entering" | "leaving">("idle");
   const [isStickyComposerCollapsed, setIsStickyComposerCollapsed] = useState(false);
   const [stickyExpandedHeightPx, setStickyExpandedHeightPx] = useState(0);
+  const acknowledgedDraftKeyRef = useRef(`${thread.id}:${threadComposerDraft?.updatedAt ?? 0}`);
   const hydratedDraftSnapshotRef = useRef<HydratedComposerDraftSnapshot | null>(threadComposerDraft
     ? {
       attachments: cloneComposerImageAttachments(threadComposerDraft.attachments),
@@ -574,10 +575,11 @@ export default function ThreadComposer ({
 
   useEffect(() => {
     const draftKey = `${thread.id}:${threadComposerDraft?.updatedAt ?? 0}`;
-    const hydratedDraftSnapshot = hydratedDraftSnapshotRef.current;
-    if (hydratedDraftSnapshot?.draftKey === draftKey) {
+    if (acknowledgedDraftKeyRef.current === draftKey) {
       return;
     }
+
+    const hydratedDraftSnapshot = hydratedDraftSnapshotRef.current;
 
     const isStillAtHydratedDraft = Boolean(
       hydratedDraftSnapshot
@@ -585,11 +587,13 @@ export default function ThreadComposer ({
       && areComposerImageAttachmentsEqual(attachments, hydratedDraftSnapshot.attachments),
     );
     if ((value.trim() || attachments.length) && threadComposerDraft && !isStillAtHydratedDraft) {
+      acknowledgedDraftKeyRef.current = draftKey;
       return;
     }
 
     const nextText = threadComposerDraft?.text ?? "";
     const nextAttachments = cloneComposerImageAttachments(threadComposerDraft?.attachments ?? []);
+    acknowledgedDraftKeyRef.current = draftKey;
     hydratedDraftSnapshotRef.current = {
       attachments: nextAttachments,
       draftKey,
