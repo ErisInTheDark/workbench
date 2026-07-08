@@ -679,7 +679,7 @@ export class OpenCodeBridge {
     this.eventAbortController = abortController;
     this.eventPumpPromise = (async () => {
       try {
-        const events = await client.event.subscribe({ directory: this.projectRoot }, { signal: abortController.signal });
+        const events = await client.v2.event.subscribe({ signal: abortController.signal });
         for await (const event of events.stream) {
           this.handleEvent(event);
         }
