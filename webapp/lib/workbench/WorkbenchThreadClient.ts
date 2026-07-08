@@ -28,7 +28,6 @@ import type { TurnStartResponse } from "../codex/generated/app-server/v2/TurnSta
 import type { TurnSteerResponse } from "../codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "../codex/generated/app-server/v2/UserInput";
 import {
-    createQuestionnaireCollaborationMode,
     createTextInput,
     createThreadStartRequest,
     isCodexJsonRpcFailure,
@@ -4040,14 +4039,10 @@ function WorkbenchThreadClient(
           ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
           ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
           ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
-          ...(workbenchOrigin && harness !== "codex" ? { workbenchOrigin } : {}),
           ...(selectedModel ? { model: selectedModel } : {}),
           ...(harness === "codex" ? { serviceTier: selectedServiceTier } : {}),
           threadId: resolvedThreadId,
-        } as ThreadResumeParams & { agentPath?: string; cwd?: string; model?: string; serviceTier?: string | null; threadId: string; workbenchOrigin?: string },
-        ...(shouldSendWorkbenchPromptContext(harness, sendOptions)
-          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds) }
-          : {}),
+        } as ThreadResumeParams & { agentPath?: string; cwd?: string; model?: string; serviceTier?: string | null; threadId: string },
         workbenchThreadHydration: { mode: "latest" },
       });
       const readableThread = toThreadPayload(readableThreadResponse.thread, harness);
@@ -4092,18 +4087,14 @@ function WorkbenchThreadClient(
       try {
         steerResponse = await sendBridgeRequest<TurnSteerResponse>(harness, {
           method: "turn/steer",
-          ...(shouldSendWorkbenchPromptContext(harness, sendOptions)
-            ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds) }
-            : {}),
-            params: {
-              ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
-              ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
-              ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
-              ...(workbenchOrigin && harness !== "codex" ? { workbenchOrigin } : {}),
+          params: {
+            ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
+            ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
+            ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
             expectedTurnId: currentInProgressTurn.id,
             input: normalizedInput,
             threadId: resolvedThreadId,
-          } as { agentPath?: string; cwd?: string; expectedTurnId: string; input: UserInput[]; threadId: string; workbenchOrigin?: string },
+          } as { agentPath?: string; cwd?: string; expectedTurnId: string; input: UserInput[]; threadId: string },
         });
       } catch (error) {
         updateOptimisticUserMessageStatus(harness, resolvedThreadId, optimisticTurnId, pendingSteerItem.id, "failed");
@@ -4123,27 +4114,11 @@ function WorkbenchThreadClient(
         refreshCurrentThreadOptimisticUserMessages();
       }
     } else {
-      const codexCollaborationMode = harness === "codex"
-        ? (() => {
-          const collaborationModel = selectedModel ?? resumedThread.model;
-          return collaborationModel
-            ? createQuestionnaireCollaborationMode(
-              collaborationModel,
-              selectedReasoningEffort ?? null,
-            )
-            : null;
-        })()
-        : null;
       const turnStartResponse = await sendBridgeRequest<TurnStartResponse>(harness, {
         method: "turn/start",
-        ...(shouldSendWorkbenchPromptContext(harness, sendOptions)
-          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds) }
-          : {}),
         params: {
           ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
           ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
-          ...(workbenchOrigin && harness !== "codex" ? { workbenchOrigin } : {}),
-          ...(codexCollaborationMode ? { collaborationMode: codexCollaborationMode } : {}),
           input: normalizedInput,
           ...(selectedReasoningEffort ? { effort: selectedReasoningEffort } : {}),
           ...(selectedModel ? { model: selectedModel } : {}),
@@ -4153,9 +4128,7 @@ function WorkbenchThreadClient(
           threadId: resolvedThreadId,
         } as TurnStartParams & {
           agentPath?: string;
-          collaborationMode?: ReturnType<typeof createQuestionnaireCollaborationMode>;
           cwd?: string;
-          workbenchOrigin?: string;
         },
       });
       optimisticTurnId = turnStartResponse.turn.id;
@@ -4187,7 +4160,6 @@ function WorkbenchThreadClient(
             serviceTier: selectedServiceTier,
             threadId: resolvedThreadId,
           } as ThreadResumeParams & { model?: string; serviceTier?: string | null; threadId: string },
-          [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext("codex", resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds),
           workbenchThreadHydration: { mode: "latest" },
         });
         refreshedThread = mergeLiveStreamingThreadSnapshot(toThreadPayload(

@@ -30,7 +30,6 @@ import type {
 } from "../lib/types";
 import { normalizeWorkbenchCollaborationState } from "../lib/workbench/collaboration/collaboration-state";
 import {
-    buildWorkbenchCollaborationDeveloperInstructions,
     buildWorkbenchPromptInstructions,
     type WorkbenchPromptInstructions,
 } from "../lib/workbench/instructions/WorkbenchPromptFiles";
@@ -339,10 +338,6 @@ function isPromptAugmentedThreadMethod(method: string | null) {
   return method === "thread/start" || method === "thread/resume" || method === "thread/fork";
 }
 
-function isPromptAugmentedTurnMethod(method: string | null) {
-  return method === "turn/start";
-}
-
 function asMutableParamsRecord(params: unknown) {
   return params && typeof params === "object" && !Array.isArray(params)
     ? params as Record<string, unknown>
@@ -364,28 +359,6 @@ function buildWorkbenchOwnedPromptParams(
       developer_instructions: "",
     },
     personality: "none",
-  };
-}
-
-function buildWorkbenchOwnedCollaborationParams(
-  params: Record<string, unknown>,
-  developerInstructions: string | null,
-) {
-  const collaborationMode = asRecord(params.collaborationMode);
-  if (!collaborationMode) {
-    return params;
-  }
-
-  const settings = asRecord(collaborationMode.settings) ?? {};
-  return {
-    ...params,
-    collaborationMode: {
-      ...collaborationMode,
-      settings: {
-        ...settings,
-        developer_instructions: developerInstructions,
-      },
-    },
   };
 }
 
@@ -1291,7 +1264,7 @@ export default class CodexStdioBridge {
   }
 
   private async withWorkbenchPromptInstructions(message: JsonRpcRequest, method: string | null): Promise<JsonRpcRequest> {
-    if (!isPromptAugmentedThreadMethod(method) && !isPromptAugmentedTurnMethod(method)) {
+    if (!isPromptAugmentedThreadMethod(method)) {
       return message;
     }
 
@@ -1301,14 +1274,6 @@ export default class CodexStdioBridge {
     }
 
     const params = asMutableParamsRecord(message.params);
-    if (isPromptAugmentedTurnMethod(method)) {
-      const developerInstructions = await buildWorkbenchCollaborationDeveloperInstructions(promptContext);
-      return {
-        ...message,
-        params: buildWorkbenchOwnedCollaborationParams(params, developerInstructions),
-      };
-    }
-
     const promptInstructions = await buildWorkbenchPromptInstructions(promptContext);
     return {
       ...message,
