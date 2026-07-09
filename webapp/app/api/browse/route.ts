@@ -4,7 +4,9 @@
  * - POST: run typed Workbench Browse actions, BrowseMD scripts, action sequences, or raw project-local browse CLI arguments and optionally steer completed screenshots into the active Codex turn. Keywords: browse, browsemd, typed action, sequence, raw command, local capability, screenshot, steer.
  */
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import { NextRequest, NextResponse } from "next/server";
@@ -14,7 +16,7 @@ import type { ThreadReadResponse } from "../../../lib/codex/generated/app-server
 import type { TurnSteerResponse } from "../../../lib/codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import { getCurrentInProgressTurn } from "../../../lib/codex/thread-state";
-import { projectRoot, safeResolveProjectPath } from "../../../lib/project";
+import { normalizeRelativePath, projectRoot, safeResolveProjectPath } from "../../../lib/project";
 import type {
   WorkbenchBrowseAgentAction,
   WorkbenchBrowseAgentResponse,
@@ -30,7 +32,7 @@ import type {
 import WorkbenchBrowseCli from "../../../lib/workbench/browse/WorkbenchBrowseCli";
 import WorkbenchBrowseSessionController from "../../../lib/workbench/browse/WorkbenchBrowseSessionController";
 import { normalizeWorkbenchBrowseAgentRequest } from "../../../lib/workbench/browse/browse-agent-requests";
-import { compileWorkbenchBrowseMarkdown } from "../../../lib/workbench/browse/browse-markdown";
+import { compileWorkbenchBrowseMarkdown, tokenizeWorkbenchBrowseMarkdownLine } from "../../../lib/workbench/browse/browse-markdown";
 import { resolveAgentEndpointProjectFromCwd } from "../../../lib/workbench/project/agent-endpoint-project";
 import WorkbenchServerSettings from "../../../lib/workbench/settings/WorkbenchServerSettings";
 import { createAgentScreenshotSteerText } from "../../../lib/workbench/thread/thread-steer-markers";
@@ -49,7 +51,9 @@ const BROWSE_SCREENSHOT_ASSET_THREAD_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const BROWSE_SCREENSHOT_DATA_URL_PATTERN = /^data:(image\/(?:png|jpeg|jpg|webp|gif));base64,([a-z0-9+/=\s]+)$/iu;
 const BROWSE_SCREENSHOT_BASE64_PATTERN = /^[a-z0-9+/=\s]+$/iu;
 const BROWSE_MARKDOWN_FILE_NAME_PATTERN = /^[A-Za-z0-9_.-]+\.browsemd$/u;
+const BROWSE_MARKDOWN_VARIABLE_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const VALID_HARNESSES: readonly WorkbenchHarness[] = ["codex", "copilot", "opencode"];
+const BROWSE_MARKDOWN_FILE_COMMANDS = new Set(["cat", "cp", "echo", "grep", "jq", "ls", "mkdir", "mv", "printf", "pwd", "rm"]);
 const browseCli = new WorkbenchBrowseCli();
 const browseSessionController = new WorkbenchBrowseSessionController({ cli: browseCli });
 
@@ -165,9 +169,39 @@ function normalizeBrowseMarkdownFileName(value: string) {
   return BROWSE_MARKDOWN_FILE_NAME_PATTERN.test(fileName) ? fileName : null;
 }
 
-async function readBrowseMarkdownFile(request: WorkbenchBrowseAgentScriptRequest) {
+interface BrowseMarkdownRuntimeContext {
+  cwd: string;
+  projectRootPath: string;
+  request: NextRequest;
+  scriptRequest: WorkbenchBrowseAgentScriptRequest;
+  variables: Map<string, string>;
+}
+
+interface BrowseMarkdownCommandResult extends WorkbenchBrowseCommandResponse {
+  outputRedirected?: boolean;
+}
+
+interface BrowseMarkdownStatement {
+  lineNumber: number;
+  text: string;
+}
+
+function normalizeBrowseMarkdownIncludeName(value: string) {
+  const normalizedPath = value.replace(/\\/gu, "/").replace(/^\/+/u, "").trim();
+  if (!normalizedPath || normalizedPath === "." || normalizedPath.includes("..")) {
+    return null;
+  }
+  return normalizedPath.endsWith(".browsemd") ? normalizedPath : `${normalizedPath}.browsemd`;
+}
+
+async function readBrowseMarkdownSource(request: WorkbenchBrowseAgentScriptRequest) {
+  const resolution = await resolveAgentEndpointProjectFromCwd(request.cwd, { endpointName: "BrowseMD" });
   if (!("scriptPath" in request)) {
-    return request.script;
+    return {
+      baseDirectoryPath: resolution.cwd,
+      projectRootPath: resolution.root.root,
+      script: request.script,
+    };
   }
 
   const fileName = normalizeBrowseMarkdownFileName(request.scriptPath);
@@ -175,28 +209,505 @@ async function readBrowseMarkdownFile(request: WorkbenchBrowseAgentScriptRequest
     throw new Error("BrowseMD scriptPath must name a .browsemd file directly inside .workbench/browse.");
   }
 
-  const resolution = await resolveAgentEndpointProjectFromCwd(request.cwd, { endpointName: "BrowseMD" });
   const scriptsDirectoryPath = path.join(resolution.root.root, ".workbench", "browse");
   const scriptFilePath = safeResolveProjectPath(scriptsDirectoryPath, fileName);
   const script = await fs.readFile(scriptFilePath, "utf8");
   if (script.length > MAX_BROWSE_MARKDOWN_SCRIPT_LENGTH) {
     throw new Error("BrowseMD script file is too large.");
   }
-  return script;
+  return {
+    baseDirectoryPath: path.dirname(scriptFilePath),
+    projectRootPath: resolution.root.root,
+    script,
+  };
 }
 
-async function compileBrowseMarkdownRequest(request: WorkbenchBrowseAgentScriptRequest) {
-  const script = await readBrowseMarkdownFile(request);
-  return compileWorkbenchBrowseMarkdown(script, {
-    cwd: request.cwd,
-    mode: request.mode ?? null,
-    session: request.session ?? null,
-    streamProgress: request.streamProgress ?? false,
-    summary: request.summary ?? ("scriptPath" in request ? request.scriptPath : null),
-    stopOnError: request.stopOnError ?? true,
-    threadId: request.threadId,
-    timeoutMs: request.timeoutMs ?? null,
+function isPathInside(parentPath: string, childPath: string) {
+  const relativePath = path.relative(parentPath, childPath);
+  return !relativePath || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
+}
+
+async function resolveBrowseMarkdownIncludePath(
+  request: WorkbenchBrowseAgentScriptRequest,
+  currentBaseDirectoryPath: string,
+  includeTarget: string,
+) {
+  const target = includeTarget.trim();
+  const resolution = await resolveAgentEndpointProjectFromCwd(request.cwd, { endpointName: "BrowseMD" });
+  if (target.startsWith("~/")) {
+    const includeName = normalizeBrowseMarkdownIncludeName(target.slice(2));
+    if (!includeName) {
+      throw new Error(`Invalid BrowseMD include target: ${includeTarget}`);
+    }
+    return path.join(os.homedir(), ".workbench", "browse", includeName);
+  }
+
+  const projectMatch = /^([^:]+):(.+)$/u.exec(target);
+  if (projectMatch) {
+    const rootName = projectMatch[1]?.trim() ?? "";
+    const includeName = normalizeBrowseMarkdownIncludeName(projectMatch[2] ?? "");
+    const root = resolution.project.roots.find((candidate) => candidate.id === rootName || candidate.name === rootName);
+    if (!root || !includeName) {
+      throw new Error(`BrowseMD include target ${includeTarget} does not match a root in the current workspace.`);
+    }
+    return path.join(root.root, ".workbench", "browse", includeName);
+  }
+
+  const includeName = normalizeBrowseMarkdownIncludeName(target);
+  if (!includeName) {
+    throw new Error(`Invalid BrowseMD include target: ${includeTarget}`);
+  }
+  if (target.startsWith(".") || target.includes("/")) {
+    const includePath = path.resolve(currentBaseDirectoryPath, includeName);
+    if (!resolution.project.roots.some((root) => isPathInside(root.root, includePath))) {
+      throw new Error(`BrowseMD include ${includeTarget} resolved outside the current workspace.`);
+    }
+    return includePath;
+  }
+
+  return path.join(resolution.root.root, ".workbench", "browse", includeName);
+}
+
+async function expandBrowseMarkdownIncludes(
+  request: WorkbenchBrowseAgentScriptRequest,
+  script: string,
+  baseDirectoryPath: string,
+  stack: string[] = [],
+) {
+  const outputLines: string[] = [];
+  const lines = script.replace(/\r\n?/gu, "\n").split("\n");
+  for (const [index, line] of lines.entries()) {
+    const includeMatch = line.trim().match(/^@include\s+(.+)$/u);
+    if (!includeMatch) {
+      outputLines.push(line);
+      continue;
+    }
+
+    const includePath = await resolveBrowseMarkdownIncludePath(request, baseDirectoryPath, includeMatch[1] ?? "");
+    const includeKey = normalizeRelativePath(path.resolve(includePath));
+    if (stack.includes(includeKey)) {
+      throw new Error(`BrowseMD include cycle detected at ${includeKey}.`);
+    }
+    let includeScript = "";
+    try {
+      includeScript = await fs.readFile(includePath, "utf8");
+    } catch (error) {
+      throw new Error(`Unable to read BrowseMD include on line ${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    outputLines.push(await expandBrowseMarkdownIncludes(request, includeScript, path.dirname(includePath), [...stack, includeKey]));
+  }
+  return outputLines.join("\n");
+}
+
+function readBrowseMarkdownStatements(script: string) {
+  const statements: BrowseMarkdownStatement[] = [];
+  const lines = script.replace(/\r\n?/gu, "\n").split("\n");
+  let fenceStartLine: number | null = null;
+  let fenceLines: string[] = [];
+  for (const [index, line] of lines.entries()) {
+    const lineNumber = index + 1;
+    if (fenceStartLine !== null) {
+      fenceLines.push(line);
+      if (/^```+\s*$/u.test(line.trim())) {
+        statements.push({ lineNumber: fenceStartLine, text: fenceLines.join("\n") });
+        fenceStartLine = null;
+        fenceLines = [];
+      }
+      continue;
+    }
+
+    if (/^```+\s*(?:js|javascript)\s*$/iu.test(line.trim())) {
+      fenceStartLine = lineNumber;
+      fenceLines = [line];
+      continue;
+    }
+
+    const trimmedLine = line.trim();
+    if (!trimmedLine || trimmedLine === "---" || trimmedLine.startsWith("# ") || trimmedLine.startsWith("## ") || trimmedLine.startsWith("### ") || trimmedLine.startsWith("// ")) {
+      continue;
+    }
+    statements.push({ lineNumber, text: line });
+  }
+
+  if (fenceStartLine !== null) {
+    throw new Error(`BrowseMD line ${fenceStartLine}: Unclosed fenced code block.`);
+  }
+  return statements;
+}
+
+function splitBrowseMarkdownPipeline(line: string) {
+  return splitBrowseMarkdownOutsideQuotes(line, "|").map((segment) => segment.trim()).filter(Boolean);
+}
+
+function splitBrowseMarkdownOutsideQuotes(line: string, separator: string) {
+  const segments: string[] = [];
+  let segment = "";
+  let quote: string | null = null;
+  let escaped = false;
+  for (const character of line) {
+    if (escaped) {
+      segment += character;
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      segment += character;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      segment += character;
+      if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === "\"" || character === "`") {
+      segment += character;
+      quote = character;
+      continue;
+    }
+    if (character === separator) {
+      segments.push(segment);
+      segment = "";
+      continue;
+    }
+    segment += character;
+  }
+  segments.push(segment);
+  return segments;
+}
+
+function expandBrowseMarkdownVariables(line: string, variables: ReadonlyMap<string, string>) {
+  return line.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/gu, (_match, bracedName: string | undefined, bareName: string | undefined) => {
+    const name = bracedName ?? bareName ?? "";
+    return variables.get(name) ?? "";
   });
+}
+
+function parseBrowseMarkdownAssignment(line: string) {
+  const match = line.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)=\$\(([\s\S]*)\)$/u);
+  return match ? { command: match[2]?.trim() ?? "", name: match[1] ?? "" } : null;
+}
+
+function serializeBrowseMarkdownTokens(tokens: readonly string[]) {
+  return tokens.map((token) => {
+    if (!token || /[\s"'`\\]/u.test(token)) {
+      return `"${token.replace(/\\/gu, "\\\\").replace(/"/gu, "\\\"")}"`;
+    }
+    return token;
+  }).join(" ");
+}
+
+function removeBrowseMarkdownRedirections(tokens: string[]) {
+  let outputPath: string | null = null;
+  let append = false;
+  let inputPath: string | null = null;
+  const commandTokens: string[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index] ?? "";
+    if (token === ">" || token === ">>" || token === "<") {
+      const target = tokens[index + 1]?.trim();
+      if (!target) {
+        throw new Error(`BrowseMD redirection ${token} requires a file path.`);
+      }
+      if (token === "<") {
+        inputPath = target;
+      } else {
+        outputPath = target;
+        append = token === ">>";
+      }
+      index += 1;
+      continue;
+    }
+    commandTokens.push(token);
+  }
+  return { append, commandTokens, inputPath, outputPath };
+}
+
+function resolveBrowseMarkdownWorkspacePath(context: BrowseMarkdownRuntimeContext, targetPath: string) {
+  if (path.isAbsolute(targetPath) || targetPath.includes("\0")) {
+    throw new Error("BrowseMD file commands require project-relative paths.");
+  }
+  const absolutePath = path.resolve(context.cwd, targetPath);
+  if (!isPathInside(context.projectRootPath, absolutePath)) {
+    throw new Error(`BrowseMD path escapes the project root: ${targetPath}`);
+  }
+  return absolutePath;
+}
+
+async function runBrowseMarkdownProcess(command: string, args: string[], stdin: string, cwd: string, timeoutMs: number) {
+  const startedAt = Date.now();
+  return await new Promise<WorkbenchBrowseCommandResponse>((resolve) => {
+    const child = spawn(command, args, {
+      cwd,
+      shell: false,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, timeoutMs);
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.once("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolve({ durationMs: Date.now() - startedAt, error: error.message, exitCode: null, ok: false, stderr, stdout, timedOut });
+    });
+    child.once("close", (exitCode) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolve({ durationMs: Date.now() - startedAt, error: timedOut ? `${command} timed out after ${timeoutMs}ms.` : undefined, exitCode, ok: exitCode === 0 && !timedOut, stderr, stdout, timedOut: timedOut || undefined });
+    });
+    child.stdin.end(stdin);
+  });
+}
+
+async function runBrowseMarkdownFileCommand(
+  context: BrowseMarkdownRuntimeContext,
+  command: string,
+  args: string[],
+  stdin: string,
+): Promise<WorkbenchBrowseCommandResponse> {
+  const startedAt = Date.now();
+  const ok = (stdout = "", stderr = "") => ({ durationMs: Date.now() - startedAt, exitCode: 0, ok: true, stderr, stdout });
+  const fail = (message: string) => ({ durationMs: Date.now() - startedAt, error: message, exitCode: 1, ok: false, stderr: `${message}\n`, stdout: "" });
+  try {
+    switch (command) {
+      case "echo":
+        return ok(`${args.join(" ")}\n`);
+      case "printf":
+        return ok((args[0] ?? "").replace(/\\n/gu, "\n"));
+      case "pwd":
+        return ok(`${context.cwd}\n`);
+      case "cat": {
+        if (!args.length) {
+          return ok(stdin);
+        }
+        const contents = await Promise.all(args.map(async (arg) => await fs.readFile(resolveBrowseMarkdownWorkspacePath(context, arg), "utf8")));
+        return ok(contents.join(""));
+      }
+      case "ls": {
+        const directoryPath = resolveBrowseMarkdownWorkspacePath(context, args[0] ?? ".");
+        const entries = await fs.readdir(directoryPath);
+        return ok(`${entries.sort((left, right) => left.localeCompare(right)).join("\n")}${entries.length ? "\n" : ""}`);
+      }
+      case "mkdir":
+        await fs.mkdir(resolveBrowseMarkdownWorkspacePath(context, args.at(-1) ?? ""), { recursive: args.includes("-p") });
+        return ok();
+      case "cp": {
+        if (args.length < 2) {
+          return fail("cp requires source and destination.");
+        }
+        await fs.copyFile(resolveBrowseMarkdownWorkspacePath(context, args[0] ?? ""), resolveBrowseMarkdownWorkspacePath(context, args[1] ?? ""));
+        return ok();
+      }
+      case "mv": {
+        if (args.length < 2) {
+          return fail("mv requires source and destination.");
+        }
+        await fs.rename(resolveBrowseMarkdownWorkspacePath(context, args[0] ?? ""), resolveBrowseMarkdownWorkspacePath(context, args[1] ?? ""));
+        return ok();
+      }
+      case "rm": {
+        const targets = args.filter((arg) => !arg.startsWith("-"));
+        if (!targets.length) {
+          return fail("rm requires at least one target.");
+        }
+        for (const target of targets) {
+          const absoluteTarget = resolveBrowseMarkdownWorkspacePath(context, target);
+          const relativeTarget = normalizeRelativePath(path.relative(context.projectRootPath, absoluteTarget));
+          const status = await runBrowseMarkdownProcess("git", ["-C", context.projectRootPath, "status", "--porcelain", "--", relativeTarget], "", context.projectRootPath, 10_000);
+          if (!status.ok || !status.stdout.trim().split(/\r?\n/u).every((line) => line.startsWith("?? "))) {
+            return fail(`rm only supports untracked files: ${target}`);
+          }
+          await fs.rm(absoluteTarget, { force: true, recursive: args.includes("-r") || args.includes("-rf") || args.includes("-fr") });
+        }
+        return ok();
+      }
+      case "grep":
+      case "jq":
+        return await runBrowseMarkdownProcess(command, args, stdin, context.cwd, 30_000);
+      default:
+        return fail(`Unsupported BrowseMD file command: ${command}`);
+    }
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function runBrowseMarkdownBrowseCommand(
+  context: BrowseMarkdownRuntimeContext,
+  line: string,
+  actionIndex: number,
+) {
+  const sequence = compileWorkbenchBrowseMarkdown(line, {
+    cwd: context.scriptRequest.cwd,
+    mode: context.scriptRequest.mode ?? null,
+    session: context.scriptRequest.session ?? null,
+    streamProgress: false,
+    summary: null,
+    stopOnError: true,
+    threadId: context.scriptRequest.threadId,
+    timeoutMs: context.scriptRequest.timeoutMs ?? null,
+  });
+  if (sequence.actions.length !== 1) {
+    return {
+      durationMs: 0,
+      error: "BrowseMD pipeline segments must compile to exactly one Browse command.",
+      exitCode: 1,
+      ok: false,
+      stderr: "BrowseMD pipeline segments must compile to exactly one Browse command.\n",
+      stdout: "",
+    };
+  }
+  return await runBrowseAgentCommand(context.request, sequence.actions[0] as WorkbenchBrowseAgentAction, { actionIndex });
+}
+
+async function runBrowseMarkdownPipeline(
+  context: BrowseMarkdownRuntimeContext,
+  line: string,
+  actionIndex: number,
+) {
+  const expandedLine = expandBrowseMarkdownVariables(line, context.variables);
+  const segments = splitBrowseMarkdownPipeline(expandedLine);
+  let stdin = "";
+  let finalResult: BrowseMarkdownCommandResult = { durationMs: 0, exitCode: 0, ok: true, stderr: "", stdout: "" };
+  for (const [segmentIndex, segment] of segments.entries()) {
+    const tokens = tokenizeWorkbenchBrowseMarkdownLine(segment, actionIndex + 1);
+    const { append, commandTokens, inputPath, outputPath } = removeBrowseMarkdownRedirections(tokens);
+    if (inputPath) {
+      stdin = await fs.readFile(resolveBrowseMarkdownWorkspacePath(context, inputPath), "utf8");
+    }
+    const executableTokens = commandTokens[0]?.toLowerCase() === "browse" ? commandTokens.slice(1) : commandTokens;
+    const command = executableTokens[0]?.toLowerCase() ?? "";
+    const args = executableTokens.slice(1);
+    finalResult = BROWSE_MARKDOWN_FILE_COMMANDS.has(command)
+      ? await runBrowseMarkdownFileCommand(context, command, args, stdin)
+      : await runBrowseMarkdownBrowseCommand(context, serializeBrowseMarkdownTokens(executableTokens), actionIndex);
+    if (!finalResult.ok) {
+      return finalResult;
+    }
+    stdin = finalResult.stdout;
+    if (segmentIndex === segments.length - 1 && outputPath) {
+      const resolvedOutputPath = resolveBrowseMarkdownWorkspacePath(context, outputPath);
+      await fs.mkdir(path.dirname(resolvedOutputPath), { recursive: true });
+      if (append) {
+        await fs.appendFile(resolvedOutputPath, finalResult.stdout);
+      } else {
+        await fs.writeFile(resolvedOutputPath, finalResult.stdout);
+      }
+      finalResult = { ...finalResult, outputRedirected: true, stdout: "" };
+    }
+  }
+  return finalResult;
+}
+
+function isBrowseMarkdownHelpStatement(statement: BrowseMarkdownStatement) {
+  const tokens = tokenizeWorkbenchBrowseMarkdownLine(statement.text, statement.lineNumber);
+  return tokens.some((token) => token === "--help" || token === "-h");
+}
+
+async function runBrowseMarkdownHelpStatement(context: BrowseMarkdownRuntimeContext, statement: BrowseMarkdownStatement) {
+  const tokens = tokenizeWorkbenchBrowseMarkdownLine(statement.text, statement.lineNumber);
+  const args = tokens[0]?.toLowerCase() === "browse" ? tokens.slice(1) : tokens;
+  return await runBrowseCommand({
+    args,
+    cwd: context.scriptRequest.cwd,
+    threadId: context.scriptRequest.threadId,
+    timeoutMs: context.scriptRequest.timeoutMs ?? null,
+  });
+}
+
+async function runBrowseMarkdownRequest(request: NextRequest, scriptRequest: WorkbenchBrowseAgentScriptRequest): Promise<WorkbenchBrowseCommandResponse> {
+  const startedAt = Date.now();
+  const source = await readBrowseMarkdownSource(scriptRequest);
+  const script = await expandBrowseMarkdownIncludes(scriptRequest, source.script, source.baseDirectoryPath);
+  if (script.length > MAX_BROWSE_MARKDOWN_SCRIPT_LENGTH) {
+    throw new Error("BrowseMD script is too large after includes.");
+  }
+  const statements = readBrowseMarkdownStatements(script);
+  if (!statements.length) {
+    throw new Error("BrowseMD script did not contain any commands.");
+  }
+  if (statements.length > MAX_BROWSE_AGENT_SEQUENCE_ACTIONS) {
+    throw new Error(`BrowseMD scripts can include at most ${MAX_BROWSE_AGENT_SEQUENCE_ACTIONS} commands after includes.`);
+  }
+
+  const context: BrowseMarkdownRuntimeContext = {
+    cwd: scriptRequest.cwd,
+    projectRootPath: source.projectRootPath,
+    request,
+    scriptRequest,
+    variables: new Map(),
+  };
+  const helpStatements = statements.filter(isBrowseMarkdownHelpStatement);
+  if (helpStatements.length) {
+    if (statements.length !== helpStatements.length) {
+      throw new Error("BrowseMD help mode cannot be mixed with side-effectful commands.");
+    }
+    const helpResults = await Promise.all(helpStatements.map(async (statement) => await runBrowseMarkdownHelpStatement(context, statement)));
+    const ok = helpResults.every((result) => result.ok);
+    return {
+      durationMs: Date.now() - startedAt,
+      error: ok ? undefined : helpResults.find((result) => !result.ok)?.error ?? "Browse help failed.",
+      exitCode: ok ? 0 : 1,
+      ok,
+      stderr: helpResults.map((result) => result.stderr).join(""),
+      stdout: helpResults.map((result) => result.stdout).join(""),
+    };
+  }
+
+  let stdout = "";
+  let stderr = "";
+  for (const [index, statement] of statements.entries()) {
+    const assignment = parseBrowseMarkdownAssignment(statement.text);
+    const result = assignment
+      ? await runBrowseMarkdownPipeline(context, assignment.command, index)
+      : await runBrowseMarkdownPipeline(context, statement.text, index);
+    stderr += result.stderr;
+    if (!result.ok) {
+      return {
+        durationMs: Date.now() - startedAt,
+        error: result.error ?? `BrowseMD line ${statement.lineNumber} failed.`,
+        exitCode: result.exitCode ?? 1,
+        ok: false,
+        stderr,
+        stdout,
+      };
+    }
+    if (assignment) {
+      if (!BROWSE_MARKDOWN_VARIABLE_PATTERN.test(assignment.name)) {
+        throw new Error(`Invalid BrowseMD variable name: ${assignment.name}`);
+      }
+      context.variables.set(assignment.name, result.stdout.replace(/\r?\n$/u, ""));
+    } else if (!result.outputRedirected) {
+      stdout += result.stdout;
+    }
+  }
+  return {
+    durationMs: Date.now() - startedAt,
+    exitCode: 0,
+    ok: true,
+    stderr,
+    stdout,
+  };
 }
 
 function browseCommandResponse(payload: WorkbenchBrowseCommandResponse, init?: ResponseInit) {
@@ -399,7 +910,7 @@ function getCurrentInProgressTurnId(response: ThreadReadResponse) {
   return getCurrentInProgressTurn(response.thread)?.id ?? null;
 }
 
-function getAutomaticBrowseScreenshotTurnId(response: ThreadReadResponse) {
+function getAutomaticBrowseResultTurnId(response: ThreadReadResponse) {
   return getCurrentInProgressTurn(response.thread)?.id ?? response.thread.turns.at(-1)?.id ?? null;
 }
 
@@ -430,7 +941,7 @@ async function readActiveThreadForScreenshot(request: NextRequest, threadId: str
   throw new Error("Unable to steer screenshot because the target thread has no active turn.");
 }
 
-async function readThreadForAutomaticBrowseScreenshot(request: NextRequest, threadId: string) {
+async function readThreadForAutomaticBrowseResult(request: NextRequest, threadId: string) {
   for (const harness of VALID_HARNESSES) {
     try {
       const response = await sendServerWorkbenchBridgeRequest<ThreadReadResponse>(request, harness, {
@@ -441,12 +952,12 @@ async function readThreadForAutomaticBrowseScreenshot(request: NextRequest, thre
         },
         workbenchThreadHydration: { mode: "latest" },
       });
-      const turnId = getAutomaticBrowseScreenshotTurnId(response);
+      const turnId = getAutomaticBrowseResultTurnId(response);
       if (turnId) {
         return { commandItemId: findLatestBrowseCommandItemId(response), harness, turnId };
       }
     } catch {
-      // Try the next harness; automatic screenshots are best-effort transcript metadata.
+      // Try the next harness; automatic Browse result rows are best-effort transcript metadata.
     }
   }
 
@@ -527,12 +1038,50 @@ function shouldAutoCaptureScreenshot(action: WorkbenchBrowseAgentAction["action"
     || action === "viewport";
 }
 
-async function recordAutomaticBrowseScreenshot(
+function truncateBrowseResultDetail(value: string) {
+  const trimmedValue = value.trim();
+  return trimmedValue.length > 4000 ? `${trimmedValue.slice(0, 3997)}...` : trimmedValue;
+}
+
+function getBrowseResultDetail(result: WorkbenchBrowseAgentResponse) {
+  if (!result.ok) {
+    return {
+      detailKind: "error",
+      detailLabel: result.error ? "Error" : "stderr",
+      detailText: truncateBrowseResultDetail(result.error || result.stderr || "Browse command failed."),
+    } as const;
+  }
+
+  if (result.stdout.trim()) {
+    return {
+      detailKind: "result",
+      detailLabel: "stdout",
+      detailText: truncateBrowseResultDetail(result.stdout),
+    } as const;
+  }
+
+  if (result.stderr.trim()) {
+    return {
+      detailKind: "text",
+      detailLabel: "stderr",
+      detailText: truncateBrowseResultDetail(result.stderr),
+    } as const;
+  }
+
+  return {
+    detailKind: null,
+    detailLabel: null,
+    detailText: null,
+  };
+}
+
+async function recordAutomaticBrowseResult(
   request: NextRequest,
   {
     action,
     actionIndex,
     commandItemId,
+    result,
     session,
     threadId,
     turnId,
@@ -540,25 +1089,32 @@ async function recordAutomaticBrowseScreenshot(
   }: {
     action: WorkbenchBrowseAgentAction["action"];
     actionIndex: number;
+    result: WorkbenchBrowseAgentResponse;
     commandItemId: string | null;
-    session: string;
+    session: string | null;
     threadId: string;
     turnId: string;
-    assetUrl: string;
+    assetUrl: string | null;
   },
 ) {
+  const detail = getBrowseResultDetail(result);
   await sendServerWorkbenchBridgeRequest(request, "codex", {
-    method: "browse/screenshot/record",
+    method: "browse/result/record",
     params: {
       action,
       actionIndex,
       assetUrl,
       commandItemId,
+      detailKind: detail.detailKind,
+      detailLabel: detail.detailLabel,
+      detailText: detail.detailText,
+      durationMs: result.durationMs,
       entryKey: createHash("sha256")
-        .update([threadId, turnId, commandItemId ?? "", session, action, String(actionIndex), assetUrl].join("\0"))
+        .update([threadId, turnId, commandItemId ?? "", session ?? "", action, String(actionIndex)].join("\0"))
         .digest("hex"),
       recordedAt: Date.now(),
       session,
+      state: result.ok ? "completed" : "failed",
       threadId,
       turnId,
     },
@@ -607,23 +1163,22 @@ async function runBrowseAgentCommand(
   }
 
   const executionContext = await browseCli.resolveExecutionContext(normalized.command.commandRequest);
-  const activeThread = shouldAutoCaptureScreenshot(normalized.command.action)
-    ? await readThreadForAutomaticBrowseScreenshot(request, normalized.command.commandRequest.threadId)
-    : null;
+  const activeThread = await readThreadForAutomaticBrowseResult(request, normalized.command.commandRequest.threadId);
   const result = await runBrowseCommandAndMaybeSteerScreenshot(request, normalized.command.commandRequest);
-  if (result.ok && activeThread && normalized.command.session && shouldAutoCaptureScreenshot(normalized.command.action)) {
-    const autoScreenshot = await captureBrowseSessionScreenshotAsset(normalized.command.commandRequest).catch(() => null);
-    if (autoScreenshot) {
-      await recordAutomaticBrowseScreenshot(request, {
-        action: normalized.command.action,
-        actionIndex,
-        assetUrl: autoScreenshot.assetUrl,
-        commandItemId: activeThread.commandItemId,
-        session: normalized.command.session,
-        threadId: normalized.command.commandRequest.threadId,
-        turnId: activeThread.turnId,
-      }).catch(() => undefined);
-    }
+  const autoScreenshot = result.ok && normalized.command.session && shouldAutoCaptureScreenshot(normalized.command.action)
+    ? await captureBrowseSessionScreenshotAsset(normalized.command.commandRequest).catch(() => null)
+    : null;
+  if (activeThread) {
+    await recordAutomaticBrowseResult(request, {
+      action: normalized.command.action,
+      actionIndex,
+      assetUrl: autoScreenshot?.assetUrl ?? result.assetUrl ?? null,
+      commandItemId: activeThread.commandItemId,
+      result,
+      session: normalized.command.session ?? null,
+      threadId: normalized.command.commandRequest.threadId,
+      turnId: activeThread.turnId,
+    }).catch(() => undefined);
   }
   if (result.ok && normalized.command.session) {
     if (normalized.command.action === "stop") {
@@ -713,45 +1268,28 @@ export async function POST(request: NextRequest) {
     if (isRecord(requestBody) && ("script" in requestBody || "scriptPath" in requestBody)) {
       const scriptRequest = normalizeBrowseMarkdownRequest(requestBody);
       if (!scriptRequest) {
-        return browseAgentSequenceResponse({
+        return browseCommandResponse({
           durationMs: Date.now() - startedAt,
+          exitCode: null,
           error: "A valid BrowseMD request requires exactly one of script or scriptPath, plus cwd and threadId.",
           ok: false,
-          results: [],
-          stoppedAtIndex: null,
+          stderr: "",
+          stdout: "",
         }, { status: 400 });
       }
 
-      let sequenceRequest: WorkbenchBrowseAgentSequenceRequest;
       try {
-        sequenceRequest = await compileBrowseMarkdownRequest(scriptRequest);
+        return browseCommandResponse(await runBrowseMarkdownRequest(request, scriptRequest));
       } catch (error) {
-        return browseAgentSequenceResponse({
+        return browseCommandResponse({
           durationMs: Date.now() - startedAt,
+          exitCode: null,
           error: error instanceof Error ? error.message : "Unable to compile BrowseMD script.",
           ok: false,
-          results: [],
-          stoppedAtIndex: null,
+          stderr: "",
+          stdout: "",
         }, { status: 400 });
       }
-
-      if (sequenceRequest.actions.length > MAX_BROWSE_AGENT_SEQUENCE_ACTIONS) {
-        return browseAgentSequenceResponse({
-          durationMs: Date.now() - startedAt,
-          error: `Browse action sequences can include at most ${MAX_BROWSE_AGENT_SEQUENCE_ACTIONS} actions.`,
-          ok: false,
-          results: [],
-          stoppedAtIndex: null,
-        }, { status: 400 });
-      }
-
-      if (sequenceRequest.streamProgress) {
-        return browseAgentSequenceProgressResponse(async (emitProgress) => {
-          await runBrowseAgentCommandSequence(request, sequenceRequest, { emitProgress });
-        });
-      }
-
-      return browseAgentSequenceResponse(await runBrowseAgentCommandSequence(request, sequenceRequest));
     }
 
     if (isRecord(requestBody) && Array.isArray(requestBody.actions)) {

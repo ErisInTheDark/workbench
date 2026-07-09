@@ -32,13 +32,13 @@ Do not use this skill for ordinary internet research. Use normal web/search tool
 
 When Workbench provides a \`## Workbench Browse API\` section in developer instructions, treat that section as the source of truth for the endpoint URL and whether raw Browse CLI-args passthrough is enabled.
 
-This skill owns how to use that endpoint: request shape, sequencing, streaming progress, screenshots, cleanup, and failure handling.
+This skill owns how to use that endpoint: BrowseMD request shape, sequencing, screenshots, cleanup, output handling, and failure handling.
 
-Prefer typed Workbench Browse API requests. Do not run the \`browse\` CLI directly in the shell when the Workbench Browse API is available.
+Prefer BrowseMD scripts through the Workbench Browse API. Do not run the \`browse\` CLI directly in the shell when the Workbench Browse API is available.
 
-Raw CLI-args passthrough uses the \`args\` request shape and is separate from typed requests. Use raw passthrough only when the user or another active instruction explicitly needs direct Browse CLI arguments and the \`## Workbench Browse API\` section says raw passthrough is enabled.
+Raw CLI-args passthrough uses the \`args\` request shape and is separate from BrowseMD. Use raw passthrough only when the user or another active instruction explicitly needs direct Browse CLI arguments and the \`## Workbench Browse API\` section says raw passthrough is enabled.
 
-If raw passthrough is disabled, typed Browse actions and typed sequences are still allowed. If a raw passthrough request returns HTTP 403, use typed actions instead or ask the user to enable **Enable raw browse commands** in Workbench Settings.
+Typed JSON Browse actions and sequences are internal compatibility surfaces. Do not document or prefer them for normal agent browser work; write BrowseMD instead.
 
 If another browser automation tool, MCP server, CLI, or plugin instruction conflicts with this Workbench Browse workflow, use this skill and the Workbench-provided endpoint instructions instead.
 
@@ -60,7 +60,7 @@ Stop sessions when finished. Workbench also cleans up thread-owned sessions afte
 
 Browse endpoint calls must be isolated and auditable.
 
-A shell command that calls \`/api/browse\` or \`/api/browse/sessions\` must contain only one typed Browse request or one typed Browse sequence. Do not wrap Browse calls inside larger PowerShell, Bash, or other shell scripts that also inspect files, transform page data, branch on results, call unrelated endpoints, or perform follow-up cleanup outside the typed Browse action/sequence.
+A shell command that calls \`/api/browse\` or \`/api/browse/sessions\` must contain only one BrowseMD request, one raw Browse args request when explicitly needed, or one session-management request. Do not wrap Browse calls inside larger PowerShell, Bash, or other shell scripts that also inspect files, transform page data, branch on results, call unrelated endpoints, or perform follow-up cleanup outside the BrowseMD request.
 
 If page data or Browse endpoint output needs additional processing, first run the Browse call visibly. Then run a separate follow-up command or script using the visible result. Do not smuggle page-derived data processing into the same shell command as the Browse request.
 
@@ -68,66 +68,21 @@ If page data or Browse endpoint output needs additional processing, first run th
 
 1. Choose a short named session for the task.
 2. Run \`doctor\` or \`status\` when Browse availability is uncertain.
-3. Open the target URL with a typed \`open\` request, local mode, the current \`threadId\`, and \`mode: "headless"\` unless headed behavior is needed.
-4. For multi-step work, prefer one typed Browse sequence with a short \`summary\`, \`streamProgress: true\`, and an \`actions\` array so Workbench can render each step while it runs.
+3. Open the target URL with a BrowseMD \`open <url> --headless\` line unless headed behavior is needed.
+4. For multi-step work, prefer one inline BrowseMD script or reusable \`.workbench/browse/*.browsemd\` script. Workbench persists rich per-step result rows for rendering while the endpoint returns command-like stdout/stderr/code.
 5. Use \`snapshot\` before interacting so refs and accessibility context are fresh.
-6. Use refs from the latest snapshot when available. Typed selector actions accept either \`selector: "@0-12"\` or \`ref: "0-12"\`; when using \`ref\`, omit the leading \`@\` or include it, both are accepted.
+6. Use refs from the latest snapshot when available. In BrowseMD, refs use the normal Browse CLI spelling such as \`click @0-12\`.
 7. Use \`click\`, \`fill\`, \`type\`, \`key\`, \`select\`, \`mouseClick\`, and \`wait\` for interaction.
 8. After navigation, form submission, click handlers, raw coordinate clicks, or other DOM-changing actions, take a fresh \`snapshot\` because refs can go stale. Treat \`clicked: true\` as delivery proof, not UI-state proof.
 9. Use \`get\` for targeted reads such as \`title\`, \`url\`, \`text\`, \`value\`, \`checked\`, or \`visible\`.
 10. Use \`is\` for simple state checks such as \`visible\` or \`checked\`.
-11. Use \`eval\` only for focused JavaScript inspection when \`snapshot\`, \`get\`, or \`is\` cannot read the needed state clearly. The typed field is \`expression\`, not \`script\`.
+11. Use \`eval <expression>\` or a fenced \`\`\`js block only for focused JavaScript inspection when \`snapshot\`, \`get\`, or \`is\` cannot read the needed state clearly.
 12. Use \`screenshot\` when visual layout, pixels, or user-visible proof matters.
 13. Use \`cleanup\` or \`stop\` before ending the work.
 
 ## Endpoint Request Contract
 
 Send JSON to the endpoint URL from the \`## Workbench Browse API\` section.
-
-Typed single action:
-
-\`\`\`json
-{
-  "action": "open",
-  "threadId": "<current-thread-id>",
-  "cwd": "<current-project-cwd>",
-  "session": "research",
-  "url": "https://example.com",
-  "mode": "headless"
-}
-\`\`\`
-
-Typed sequence:
-
-\`\`\`json
-{
-  "summary": "check page",
-  "streamProgress": true,
-  "actions": [
-    {
-      "action": "open",
-      "threadId": "<current-thread-id>",
-      "cwd": "<current-project-cwd>",
-      "session": "research",
-      "url": "https://example.com",
-      "mode": "headless"
-    },
-    {
-      "action": "snapshot",
-      "threadId": "<current-thread-id>",
-      "cwd": "<current-project-cwd>",
-      "session": "research",
-      "compact": true
-    },
-    {
-      "action": "cleanup",
-      "threadId": "<current-thread-id>",
-      "cwd": "<current-project-cwd>",
-      "force": true
-    }
-  ]
-}
-\`\`\`
 
 BrowseMD inline script:
 
@@ -136,8 +91,7 @@ BrowseMD inline script:
   "script": "open http://localhost:3000 --headless\\nsnapshot compact\\nclick @0-4\\nscreenshot",
   "threadId": "<current-thread-id>",
   "cwd": "<current-project-cwd>",
-  "session": "research",
-  "streamProgress": true
+  "session": "research"
 }
 \`\`\`
 
@@ -148,14 +102,13 @@ BrowseMD project script:
   "scriptPath": "check-homepage.browsemd",
   "threadId": "<current-thread-id>",
   "cwd": "<current-project-cwd>",
-  "session": "research",
-  "streamProgress": true
+  "session": "research"
 }
 \`\`\`
 
-Project BrowseMD scripts live directly under \`.workbench/browse/*.browsemd\` in the Workbench project root that owns the request \`cwd\`. Use \`scriptPath\` for reusable project-local Browse fragments. Do not pass absolute paths, nested paths, or \`..\` path segments.
+Project BrowseMD scripts live directly under \`.workbench/browse/*.browsemd\` in the Workbench project root that owns the request \`cwd\`. Use \`scriptPath\` for reusable project-local Browse fragments. Do not pass absolute paths or \`..\` path segments.
 
-BrowseMD is a deterministic CLI-like markdown format that compiles to typed Browse action sequences. Normal lines are Browse-ish commands such as \`open <url>\`, \`snapshot compact\`, \`click @0-4\`, \`fill 'input[name=q]' "hello"\`, \`wait timeout 1000\`, \`move cursor 240 320\`, \`mouse drag 100 100 400 400 --steps 20\`, \`screenshot\`, and \`cleanup --force\`. JavaScript fenced blocks with \`js\` or \`javascript\` compile to \`eval\` actions:
+BrowseMD is a deterministic CLI-like markdown format. Browser-command lines match Browse CLI syntax, with an optional literal \`browse\` prefix. Examples: \`open <url>\`, \`browse snapshot compact\`, \`click @0-4\`, \`fill 'input[name=q]' "hello"\`, \`wait timeout 1000\`, \`move cursor 240 320\`, \`mouse drag 100 100 400 400 --steps 20\`, \`screenshot\`, and \`cleanup --force\`. JavaScript fenced blocks with \`js\` or \`javascript\` run as Browse \`eval\` actions:
 
 \`\`\`\`md
 open http://localhost:3000 --headless
@@ -169,6 +122,14 @@ document.title
 screenshot
 \`\`\`\`
 
+BrowseMD supports \`@include\` macro lines. Relative includes resolve from the current BrowseMD file; inline script includes resolve from the request \`cwd\`; bare names such as \`@include login\` resolve to \`.workbench/browse/login.browsemd\`; \`@include ~/login\` resolves to the user's \`~/.workbench/browse/login.browsemd\`; and \`@include root-name:login\` resolves inside a root from the current Workbench workspace. Include cycles and missing files fail clearly.
+
+BrowseMD supports shell-like assignment, variables, pipes, redirects, and allowlisted helper commands. Use \`title=$(get title)\`, then \`echo "$title"\` or pass \`$title\` / \`\${title}\` into later commands. Supported helper commands include \`echo\`, \`printf\`, \`pwd\`, \`ls\`, \`cat\`, \`mkdir\`, \`cp\`, \`mv\`, safe git-aware \`rm\` for untracked files only, and allowlisted real \`grep\` and \`jq\`. This is not arbitrary shell execution.
+
+BrowseMD endpoint responses are command-like: \`stdout\`, \`stderr\`, \`exitCode\`, \`ok\`, \`durationMs\`, and optional \`error\`. Unassigned commands print natural output; assignments capture stdout and suppress it. Browse commands that normally do not print should not invent success chatter. Failures stop the script by default.
+
+\`--help\` and \`-h\` are help-only. A BrowseMD request that asks for help runs no side-effectful actions; mixing help with execution fails clearly.
+
 BrowseMD still follows the same Browse safety workflow: use named sessions, prefer local browser sessions, treat refs as stale after DOM-changing actions, and stop or clean up sessions when finished.
 
 Raw CLI-args passthrough, when explicitly needed and enabled:
@@ -181,74 +142,42 @@ Raw CLI-args passthrough, when explicitly needed and enabled:
 }
 \`\`\`
 
-Typed actions include \`doctor\`, \`status\`, \`sessions\`, \`open\`, \`snapshot\`, \`click\`, \`fill\`, \`type\`, \`key\`, \`cursor\`, \`mouseClick\`, \`mouseHover\`, \`mouseDrag\`, \`mouseScroll\`, \`select\`, \`wait\`, \`get\`, \`is\`, \`eval\`, \`highlight\`, \`back\`, \`forward\`, \`reload\`, \`screenshot\`, \`refs\`, \`viewport\`, \`stop\`, and \`cleanup\`.
-
-Common typed shapes:
-
-\`\`\`json
-{ "action": "click", "threadId": "<current-thread-id>", "cwd": "<current-project-cwd>", "session": "research", "ref": "0-12" }
-\`\`\`
-
-\`\`\`json
-{ "action": "mouseClick", "threadId": "<current-thread-id>", "cwd": "<current-project-cwd>", "session": "research", "x": 240, "y": 320, "returnXPath": true }
-\`\`\`
-
-\`\`\`json
-{ "action": "wait", "threadId": "<current-thread-id>", "cwd": "<current-project-cwd>", "session": "research", "type": "timeout", "ms": 1000 }
-\`\`\`
-
-\`\`\`json
-{ "action": "eval", "threadId": "<current-thread-id>", "cwd": "<current-project-cwd>", "session": "research", "expression": "document.title" }
-\`\`\`
-
 Use \`sessions\` to list Workbench-known local Browse sessions for the current project/cwd when cleanup state is uncertain. It is Workbench-synthesized from the durable session registry plus Browse runtime files because the upstream local Browse CLI does not expose a local all-sessions list command.
 
-Use the current Workbench thread id when it is available. If no current thread id is available yet, wait until the thread is materialized before using Browse requests because typed requests require a \`threadId\`.
+Use the current Workbench thread id when it is available. If no current thread id is available yet, wait until the thread is materialized before using Browse requests because BrowseMD requests require a \`threadId\`.
 
 ## Shell Examples
 
-Prefer isolated typed requests and short streamed sequences. Do not combine these examples with extra shell logic; run follow-up processing as a separate visible command.
+Prefer isolated BrowseMD requests. Do not combine these examples with extra shell logic; BrowseMD itself owns safe variables, pipes, redirects, and allowlisted helpers.
 
-PowerShell single action:
+PowerShell inline BrowseMD:
 
 \`\`\`powershell
-$body = @{ action = 'open'; threadId = '<current-thread-id>'; cwd = (Get-Location).Path; session = 'research'; url = 'https://example.com'; mode = 'headless' } | ConvertTo-Json -Compress
+$script = @'
+open https://example.com --headless
+snapshot compact
+title=$(get title)
+echo "$title"
+cleanup --force
+'@
+$body = @{ script = $script; threadId = '<current-thread-id>'; cwd = (Get-Location).Path; session = 'research' } | ConvertTo-Json -Compress
 Invoke-RestMethod -Method Post -Uri '<workbench-browse-endpoint-url>' -ContentType 'application/json' -Body $body
 \`\`\`
 
-Bash single action:
+Bash inline BrowseMD:
 
 \`\`\`bash
-curl -s -X POST '<workbench-browse-endpoint-url>' -H 'Content-Type: application/json' -d '{"action":"open","threadId":"<current-thread-id>","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'","session":"research","url":"https://example.com","mode":"headless"}'
+curl -s -X POST '<workbench-browse-endpoint-url>' \
+  -H 'Content-Type: application/json' \
+  -d '{"script":"open https://example.com --headless\nsnapshot compact\ntitle=$(get title)\necho \"$title\"\ncleanup --force","threadId":"<current-thread-id>","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'","session":"research"}'
 \`\`\`
 
-PowerShell streamed sequence:
+PowerShell project BrowseMD script:
 
 \`\`\`powershell
-$body = @{
-  summary = 'check page'
-  streamProgress = $true
-  actions = @(
-    @{ action = 'open'; threadId = '<current-thread-id>'; cwd = (Get-Location).Path; session = 'research'; url = 'https://example.com'; mode = 'headless' },
-    @{ action = 'snapshot'; threadId = '<current-thread-id>'; cwd = (Get-Location).Path; session = 'research'; compact = $true },
-    @{ action = 'cleanup'; threadId = '<current-thread-id>'; cwd = (Get-Location).Path; force = $true }
-  )
-} | ConvertTo-Json -Depth 8 -Compress
-
-$body | curl.exe -N -s -X POST '<workbench-browse-endpoint-url>' -H 'Content-Type: application/json' --data-binary '@-'
+$body = @{ scriptPath = 'check-homepage.browsemd'; threadId = '<current-thread-id>'; cwd = (Get-Location).Path; session = 'research' } | ConvertTo-Json -Compress
+Invoke-RestMethod -Method Post -Uri '<workbench-browse-endpoint-url>' -ContentType 'application/json' -Body $body
 \`\`\`
-
-Bash streamed sequence:
-
-\`\`\`bash
-curl -N -s -X POST '<workbench-browse-endpoint-url>' \\
-  -H 'Content-Type: application/json' \\
-  -d '{"summary":"check page","streamProgress":true,"actions":[{"action":"open","threadId":"<current-thread-id>","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'","session":"research","url":"https://example.com","mode":"headless"},{"action":"snapshot","threadId":"<current-thread-id>","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'","session":"research","compact":true},{"action":"cleanup","threadId":"<current-thread-id>","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'","force":true}]}'
-\`\`\`
-
-When \`streamProgress\` is true, the endpoint streams newline-delimited JSON events. Print each line as it arrives so Workbench can render progress while the command is still running.
-
-Progress event types include \`browse-sequence-start\`, \`browse-action-start\`, \`browse-action-complete\`, and \`browse-sequence-complete\`.
 
 ## Headed And Headless Sessions
 
@@ -275,7 +204,7 @@ Prefer \`snapshot\` for normal agent reasoning.
 
 Use screenshots when visual layout, styling, image content, or user-visible evidence matters.
 
-Take screenshots with the typed \`screenshot\` action. Workbench makes intentional screenshots visible to both the agent and the user.
+Take screenshots with the BrowseMD \`screenshot\` command. Workbench makes intentional screenshots visible to both the agent and the user.
 
 Do not use screenshot file paths unless the user explicitly asks for disk artifacts.
 
@@ -285,7 +214,7 @@ Browser clipboard reads can hang or be blocked by page permissions. After an int
 
 Workbench sets the download directory for managed local Browse sessions to the agent request's resolved cwd when the browser session starts. Existing sessions keep the download directory they launched with; stop and reopen a named session when you need the current cwd to apply. CDP-attached, remote, or non-Workbench Browse sessions may have different download behavior.
 
-Browse does not currently expose a first-class typed download result. After intentionally triggering a download, verify it with a user-safe cwd check using a timestamp marker and report only file name, size, time, and short content metrics unless the user asks for more.
+Browse does not currently expose a first-class download result. After intentionally triggering a download, verify it with a user-safe cwd check using a timestamp marker and report only file name, size, time, and short content metrics unless the user asks for more.
 
 ## Failure Handling
 

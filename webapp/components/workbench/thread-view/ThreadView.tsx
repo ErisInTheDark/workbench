@@ -13,7 +13,7 @@ import type {
   ThreadPayload,
   ThreadUnreadBadge,
   WorkbenchHarness,
-  WorkbenchBrowseScreenshotEntry,
+  WorkbenchBrowseResultEntry,
   WorkbenchModelOption,
   WorkbenchPendingUserInputRequest,
   WorkbenchProjectRoot,
@@ -57,7 +57,7 @@ import {
 import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
 import { ThreadQuestionBadge, ThreadUnreadBadge as ThreadUnreadBadgeView } from "../ThreadStatusBadges";
-import { ThreadThreadContent, ThreadTurnDetails, ThreadTurnLoadingSkeleton, useStableBrowseScreenshotEntriesByTurn } from "./thread-view-items";
+import { ThreadThreadContent, ThreadTurnDetails, ThreadTurnLoadingSkeleton, useStableBrowseResultEntriesByTurn } from "./thread-view-items";
 import ThreadAgentName from "./ThreadAgentName";
 import ThreadComposer from "./ThreadComposer";
 import ThreadContextStatus from "./ThreadContextStatus";
@@ -77,7 +77,7 @@ const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
 const MAX_VISIBLE_HISTORY_ENTRIES = 8;
 const EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS: readonly string[] = [];
 const EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS: readonly string[] = [];
-const EMPTY_BROWSE_SCREENSHOT_ENTRIES: readonly WorkbenchBrowseScreenshotEntry[] = [];
+const EMPTY_BROWSE_RESULT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
 const EMPTY_PROJECT_FILE_CANDIDATES: readonly ProjectTreeFileCandidate[] = [];
 const THREAD_VIEW_BACKGROUND_REBUILD_SLICE_MS = 20;
 const threadViewBackgroundRebuildQueue = new CooperativeRebuildQueue();
@@ -748,8 +748,8 @@ export default memo(function ThreadView ({
     ? getThreadDocumentFromSnapshot(threadDocuments, thread.id) ?? thread
     : relatedThreadsById[activeThreadId] ?? null;
   const activeThreadIdentity = activeThread ? `${activeThread.harness}:${activeThread.id}` : "";
-  const activeThreadBrowseScreenshotEntries = activeThread?.browseScreenshotEntries ?? EMPTY_BROWSE_SCREENSHOT_ENTRIES;
-  const activeThreadBrowseScreenshotEntriesByTurnId = useStableBrowseScreenshotEntriesByTurn(activeThreadBrowseScreenshotEntries);
+  const activeThreadBrowseResultEntries = activeThread?.browseResultEntries ?? EMPTY_BROWSE_RESULT_ENTRIES;
+  const activeThreadBrowseResultEntriesByTurnId = useStableBrowseResultEntriesByTurn(activeThreadBrowseResultEntries);
   const activeHarnessUserInputRequest = activeThread
     ? livePendingUserInputRequestsByThreadId[activeThread.id] ?? null
     : null;
@@ -1652,7 +1652,7 @@ export default memo(function ThreadView ({
                   return turn ? (
                     <ThreadTurnDetails
                       key={entry.turnId}
-                      browseScreenshotEntries={activeThreadBrowseScreenshotEntriesByTurnId.get(entry.turnId) ?? EMPTY_BROWSE_SCREENSHOT_ENTRIES}
+                      browseResultEntries={activeThreadBrowseResultEntriesByTurnId.get(entry.turnId) ?? EMPTY_BROWSE_RESULT_ENTRIES}
                       hiddenCollabAgentToolCallItemIds={turn.id === currentTurn?.id ? hiddenCollabAgentToolCallItemIds : EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS}
                       hiddenDynamicToolCallItemIds={turn.id === currentTurn?.id ? hiddenDynamicToolCallItemIds : EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS}
                       hideFinalAgentMessage={hideFinalAgentMessage}
@@ -1783,7 +1783,7 @@ export default memo(function ThreadView ({
                     >
                       <ThreadPreviewFrame height="22rem" scale={0.9}>
                         <ThreadThreadContent
-                          browseScreenshotEntries={liveSubagentThread.browseScreenshotEntries ?? EMPTY_BROWSE_SCREENSHOT_ENTRIES}
+                          browseResultEntries={liveSubagentThread.browseResultEntries ?? EMPTY_BROWSE_RESULT_ENTRIES}
                           inlineMentionSources={inlineMentionSources}
                           knownSkills={workbenchSkills}
                           projectFilePaths={projectFilePaths}

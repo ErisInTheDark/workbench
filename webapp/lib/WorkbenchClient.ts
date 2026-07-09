@@ -369,7 +369,7 @@ export async function WorkbenchClient(
       && left.forkedFromId === right.forkedFromId
       && left.agentNickname === right.agentNickname
       && left.agentRole === right.agentRole
-      && areDeeplyEqual(left.browseScreenshotEntries ?? [], right.browseScreenshotEntries ?? [])
+      && areDeeplyEqual(left.browseResultEntries ?? [], right.browseResultEntries ?? [])
       && areDeeplyEqual(left.tokenUsage, right.tokenUsage)
       && areDeeplyEqual(left.turnHistory, right.turnHistory)
       && areTurnListsEquivalent(left.turns, right.turns)

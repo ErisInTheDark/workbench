@@ -38,6 +38,7 @@
 - DO NOT add file-specific duplicate components, utilities, or types when a shared home already exists.
 - DO NOT leave a single-component file in `webapp/components/` on a mismatched filename or named export.
 - DO NOT leave API contracts or state flow half-migrated.
+- DO NOT leave the Workbench webapp compile-broken, route-broken, or unable to serve agent workflow/checkpoint endpoints while waiting for user input. For shared contracts, thread rendering, app routes, instruction-generation, or other app-core changes, work in compile-safe vertical slices and preserve compatibility until all consumers are migrated. If a plan gap is discovered after edits, restore app health within the already-approved scope before asking for more direction.
 - DO NOT run any `pnpm` script except `typecheck`.
 - DO NOT call the webapp endpoints yourself without EXPLICIT permission from the user.
 - DO NOT run `tsx` to test your code.

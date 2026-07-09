@@ -33,8 +33,6 @@ import {
     createThreadStartRequest,
     isCodexJsonRpcFailure,
 } from "../codex/protocol";
-import { areDeeplyEqual } from "./deep-equality";
-import { appendCommandOutputDelta, compactCommandExecutionItemOutput } from "../codex/thread-command-output";
 import {
     formatThreadStatus,
     getCodexThreadCwdFilterPathsForRoots,
@@ -42,34 +40,35 @@ import {
     toThreadPayload,
     toThreadSummary,
 } from "../codex/thread-adapter";
+import { appendCommandOutputDelta, compactCommandExecutionItemOutput } from "../codex/thread-command-output";
 import { areUserInputsEquivalentForUserMessageDedupe, normalizeThreadItems } from "../codex/thread-item-normalization";
 import { getCurrentInProgressTurn, getCurrentTurn } from "../codex/thread-state";
 import type {
     ThreadPayload,
     ThreadSummary,
-    WorkbenchBrowseScreenshotEntry,
+    WorkbenchBrowseResultEntry,
     WorkbenchCollaborationState,
-    WorkbenchReadThreadOptions,
     WorkbenchHarness,
     WorkbenchModelOption,
     WorkbenchPendingUserInputRequest,
     WorkbenchProjectRoot,
     WorkbenchQuestionnaireHistoryEntry,
+    WorkbenchReadThreadOptions,
     WorkbenchSendThreadMessageOptions,
     WorkbenchSteerHistoryEntry,
     WorkbenchStoredThreadUnreadState,
     WorkbenchSubmitUserInputRequestOptions,
-    WorkbenchThreadDocumentSnapshot,
     WorkbenchThreadContextReadResponse,
+    WorkbenchThreadDocumentSnapshot,
     WorkbenchThreadTurnHistoryEntry,
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
 } from "../types";
+import { normalizeWorkbenchAgentPath } from "./agent-paths";
+import { areDeeplyEqual } from "./deep-equality";
 import {
     getThreadStateChangeTagText as getNormalizedThreadStateChangeTagText,
 } from "./markdown/markdown-parse";
-import { normalizeWorkbenchAgentPath } from "./agent-paths";
-import LifecycleScope from "./state/LifecycleScope";
 import {
     clearStoredThreadTokenUsage,
     persistHarnessAgent,
@@ -86,25 +85,26 @@ import {
     readStoredThreadTokenUsage,
     readStoredThreadUnreadState,
 } from "./state/browser-state";
+import LifecycleScope from "./state/LifecycleScope";
 import ThreadDocumentStore from "./state/ThreadDocumentStore";
 import { getTurnRenderSignature } from "./thread/thread-item-signature";
-import { applyQuestionnaireHistoryToThread, isSyntheticQuestionnaireHistoryItem } from "./thread/thread-questionnaire-history";
-import ThreadCanonicalLayer from "./thread/ThreadCanonicalLayer";
-import ThreadRenderPipeline from "./thread/ThreadRenderPipeline";
-import ThreadStreamingReconciler from "./thread/ThreadStreamingReconciler";
-import ThreadVisibleLayer from "./thread/ThreadVisibleLayer";
-import ThreadWorkbenchOverlayLayer from "./thread/ThreadWorkbenchOverlayLayer";
 import {
     createWorkbenchPauseControlInput,
     createWorkbenchPauseResumeResponse,
     WORKBENCH_PAUSE_CONTROL_KIND,
 } from "./thread/thread-pause-control";
+import { applyQuestionnaireHistoryToThread, isSyntheticQuestionnaireHistoryItem } from "./thread/thread-questionnaire-history";
 import { applySteerHistoryToThread, isSyntheticSteerHistoryItem } from "./thread/thread-steer-history";
 import {
     getWorkbenchApprovalSupplementalSteerText,
     hasWorkbenchApprovalDecisionSelection,
     isWorkbenchApprovalRequest,
 } from "./thread/thread-user-input-requests";
+import ThreadCanonicalLayer from "./thread/ThreadCanonicalLayer";
+import ThreadRenderPipeline from "./thread/ThreadRenderPipeline";
+import ThreadStreamingReconciler from "./thread/ThreadStreamingReconciler";
+import ThreadVisibleLayer from "./thread/ThreadVisibleLayer";
+import ThreadWorkbenchOverlayLayer from "./thread/ThreadWorkbenchOverlayLayer";
 
 const THREAD_REFRESH_TASK_ID = "thread-refresh";
 const THREAD_LIST_REFRESH_TASK_ID = "thread-list-refresh";
@@ -155,7 +155,7 @@ export interface WorkbenchThreadState {
   questionnaireHistoryByThreadId: Map<string, WorkbenchQuestionnaireHistoryEntry[]>;
   rateLimits: RateLimitSnapshot | null;
   rateLimitsByHarness: Map<WorkbenchHarness, RateLimitSnapshot | null>;
-  browseScreenshotEntriesByThreadId: Map<string, WorkbenchBrowseScreenshotEntry[]>;
+  browseResultEntriesByThreadId: Map<string, WorkbenchBrowseResultEntry[]>;
   steerHistoryByThreadId: Map<string, WorkbenchSteerHistoryEntry[]>;
   threadUnreadStateByKey: Map<string, WorkbenchStoredThreadUnreadState>;
   threads: ThreadSummary[];
@@ -243,6 +243,12 @@ interface OptimisticUserMessageEntry {
 type OptimisticUserMessagePlacement = "initial" | "steer";
 type OptimisticUserMessageStatus = "pending" | "sent" | "interrupted" | "failed";
 
+interface SuppressedThreadReadFailure {
+  harness: WorkbenchHarness;
+  message: string;
+  transientRollout: boolean;
+}
+
 interface ThreadSourceRecord {
   canonicalRevision: number;
   key: string;
@@ -255,7 +261,7 @@ interface ThreadOverlayRevisionRecord {
   optimisticRevision: number;
   questionnaireForceProjectionEpoch: number;
   questionnaireRevision: number;
-  screenshotRevision: number;
+  browseResultRevision: number;
   steerRevision: number;
 }
 
@@ -298,7 +304,7 @@ function createInitialThreadState(): WorkbenchThreadState {
     questionnaireHistoryByThreadId: new Map(),
     rateLimits: null,
     rateLimitsByHarness: new Map(),
-    browseScreenshotEntriesByThreadId: new Map(),
+    browseResultEntriesByThreadId: new Map(),
     steerHistoryByThreadId: new Map(),
     threadUnreadStateByKey: new Map(),
     threads: [],
@@ -694,7 +700,7 @@ function WorkbenchThreadClient(
       normalizeCanonicalThread: (thread) => prepareCanonicalThreadSource(thread) ?? thread,
     }),
     overlayLayer: new ThreadWorkbenchOverlayLayer({
-      applyBrowseScreenshotOverlay: (thread) => applyPersistedBrowseScreenshotEntries(thread) ?? thread,
+      applyBrowseResultOverlay: (thread) => applyPersistedBrowseResultEntries(thread) ?? thread,
       applyOptimisticOverlay: (thread) => applyOptimisticUserMessageOverlay(thread) ?? thread,
       applyQuestionnaireOverlay: (thread) => applyPersistedQuestionnaireHistory(thread) ?? thread,
       applyStablePreferenceOverlay: (thread) => projectStableThreadMetadata(thread),
@@ -979,16 +985,16 @@ function WorkbenchThreadClient(
     );
   }
 
-  function applyPersistedBrowseScreenshotEntries(thread: ThreadPayload | null) {
+  function applyPersistedBrowseResultEntries(thread: ThreadPayload | null) {
     if (!thread || thread.harness !== "codex") {
       return thread;
     }
 
-    const browseScreenshotEntries = state.browseScreenshotEntriesByThreadId.get(thread.id) ?? [];
-    return browseScreenshotEntries.length
-      ? { ...thread, browseScreenshotEntries }
-      : thread.browseScreenshotEntries?.length
-        ? { ...thread, browseScreenshotEntries: [] }
+    const browseResultEntries = state.browseResultEntriesByThreadId.get(thread.id) ?? [];
+    return browseResultEntries.length
+      ? { ...thread, browseResultEntries }
+      : thread.browseResultEntries?.length
+        ? { ...thread, browseResultEntries: [] }
         : thread;
   }
 
@@ -1000,7 +1006,7 @@ function WorkbenchThreadClient(
         optimisticRevision: 0,
         questionnaireForceProjectionEpoch: 0,
         questionnaireRevision: 0,
-        screenshotRevision: 0,
+        browseResultRevision: 0,
         steerRevision: 0,
       };
       overlayRevisionsByKey.set(key, record);
@@ -1253,7 +1259,7 @@ function WorkbenchThreadClient(
       questionnaireForceProjectionEpoch: overlayRevision.questionnaireForceProjectionEpoch,
       questionnaireRevision: overlayRevision.questionnaireRevision,
       rawThread: record.thread,
-      screenshotRevision: overlayRevision.screenshotRevision,
+      browseResultRevision: overlayRevision.browseResultRevision,
       selected: record.key === selectedThreadKey,
       stablePreferenceRevision: getStablePreferenceRevision(record.key),
       statusRevision: getStatusRevision(record.key),
@@ -1410,7 +1416,7 @@ function WorkbenchThreadClient(
       && left.forkedFromId === right.forkedFromId
       && left.agentNickname === right.agentNickname
       && left.agentRole === right.agentRole
-      && areDeeplyEqual(left.browseScreenshotEntries ?? [], right.browseScreenshotEntries ?? [])
+      && areDeeplyEqual(left.browseResultEntries ?? [], right.browseResultEntries ?? [])
       && areDeeplyEqual(left.tokenUsage, right.tokenUsage)
       && areDeeplyEqual(left.turnHistory, right.turnHistory)
       && areTurnListsEquivalent(left.turns, right.turns)
@@ -2710,28 +2716,28 @@ function WorkbenchThreadClient(
     refreshFinalVisibleThreadForOverlay(threadId);
   }
 
-  function setBrowseScreenshotEntries(threadId: string, entries: WorkbenchBrowseScreenshotEntry[]) {
+  function setBrowseResultEntries(threadId: string, entries: WorkbenchBrowseResultEntry[] = []) {
     const nextEntries = entries.filter((entry) => entry.threadId === threadId);
-    const existingEntries = state.browseScreenshotEntriesByThreadId.get(threadId) ?? [];
+    const existingEntries = state.browseResultEntriesByThreadId.get(threadId) ?? [];
     if (areDeeplyEqual(existingEntries, nextEntries)) {
       return false;
     }
 
     if (nextEntries.length) {
-      state.browseScreenshotEntriesByThreadId.set(threadId, nextEntries);
+      state.browseResultEntriesByThreadId.set(threadId, nextEntries);
     } else {
-      state.browseScreenshotEntriesByThreadId.delete(threadId);
+      state.browseResultEntriesByThreadId.delete(threadId);
     }
-    bumpOverlayRevision(threadId, "screenshotRevision");
+    bumpOverlayRevision(threadId, "browseResultRevision");
     return true;
   }
 
-  function refreshFinalVisibleBrowseScreenshotEntries(threadId: string) {
+  function refreshFinalVisibleBrowseResultEntries(threadId: string) {
     refreshFinalVisibleThreadForOverlay(threadId);
   }
 
   function setThreadContextReadEntries(threadId: string, response: WorkbenchThreadContextReadResponse) {
-    const browseChanged = setBrowseScreenshotEntries(threadId, response.browseScreenshotEntries);
+    const browseChanged = setBrowseResultEntries(threadId, response.browseResultEntries);
     const questionnaireChanged = setQuestionnaireHistoryEntries(threadId, response.questionnaireEntries);
     const steerChanged = setSteerHistoryEntries(threadId, response.steerEntries);
     return browseChanged || questionnaireChanged || steerChanged;
@@ -2805,36 +2811,36 @@ function WorkbenchThreadClient(
     }
   }
 
-  async function readBrowseScreenshotEntries(threadId: string, options: { refreshProjection?: boolean } = {}) {
+  async function readBrowseResultEntries(threadId: string, options: { refreshProjection?: boolean } = {}) {
     try {
-      const response = await sendBridgeRequest<{ data?: WorkbenchBrowseScreenshotEntry[] }>("codex", {
-        method: "browse/screenshot/list",
+      const response = await sendBridgeRequest<{ data?: WorkbenchBrowseResultEntry[] }>("codex", {
+        method: "browse/result/list",
         params: {
           threadId,
         },
       });
       const entries = response.data ?? [];
-      if (setBrowseScreenshotEntries(threadId, entries) && (options.refreshProjection ?? true)) {
-        refreshFinalVisibleBrowseScreenshotEntries(threadId);
+      if (setBrowseResultEntries(threadId, entries) && (options.refreshProjection ?? true)) {
+        refreshFinalVisibleBrowseResultEntries(threadId);
       }
       return entries;
     } catch {
-      if (setBrowseScreenshotEntries(threadId, []) && (options.refreshProjection ?? true)) {
-        refreshFinalVisibleBrowseScreenshotEntries(threadId);
+      if (setBrowseResultEntries(threadId, []) && (options.refreshProjection ?? true)) {
+        refreshFinalVisibleBrowseResultEntries(threadId);
       }
       return [];
     }
   }
 
   async function readCompletedThreadWorkbenchHistory(threadId: string) {
-    const [browseScreenshotEntries, questionnaireEntries, steerEntries] = await Promise.all([
-      readBrowseScreenshotEntries(threadId, { refreshProjection: false }),
+    const [browseResultEntries, questionnaireEntries, steerEntries] = await Promise.all([
+      readBrowseResultEntries(threadId, { refreshProjection: false }),
       readCompletedQuestionnaireHistory(threadId, { refreshProjection: false }),
       readCompletedSteerHistory(threadId, { refreshProjection: false }),
     ]);
     refreshFinalVisibleThreadForOverlay(threadId);
     return {
-      browseScreenshotEntries,
+      browseResultEntries,
       questionnaireEntries,
       steerEntries,
     };
@@ -2880,7 +2886,14 @@ function WorkbenchThreadClient(
     };
   }
 
-  async function fetchThreadPayload(threadId: string, harness: WorkbenchHarness, options: WorkbenchReadThreadOptions & { suppressStatusMessage?: boolean } = {}) {
+  async function fetchThreadPayload(
+    threadId: string,
+    harness: WorkbenchHarness,
+    options: WorkbenchReadThreadOptions & {
+      onSuppressedFailure?: (failure: SuppressedThreadReadFailure) => void;
+      suppressStatusMessage?: boolean;
+    } = {},
+  ) {
     const hydration = options.hydration ?? { mode: "latest" as const };
     try {
       const selectedAgentPath = state.currentThread?.id === threadId
@@ -2933,8 +2946,11 @@ function WorkbenchThreadClient(
 
       const projectRootPaths = getProjectRootPaths(state);
       if (projectRootPaths.length && !isProjectCodexThread(response.thread, projectRootPaths)) {
+        const message = `That ${harness} thread doesn't belong to this project.`;
         if (!options.suppressStatusMessage) {
-          emitStatusMessage(`That ${harness} thread doesn't belong to this project.`);
+          emitStatusMessage(message);
+        } else {
+          options.onSuppressedFailure?.({ harness, message, transientRollout: false });
         }
         return null;
       }
@@ -2964,12 +2980,17 @@ function WorkbenchThreadClient(
       if (harness === "codex" && isTransientRolloutReadError(error)) {
         if (!options.suppressStatusMessage) {
           emitStatusMessage(FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE);
+        } else {
+          options.onSuppressedFailure?.({ harness, message: FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE, transientRollout: true });
         }
         return null;
       }
 
+      const message = error instanceof Error ? error.message : `Unable to open ${harness} thread.`;
       if (!options.suppressStatusMessage) {
-        emitStatusMessage(error instanceof Error ? error.message : `Unable to open ${harness} thread.`);
+        emitStatusMessage(message);
+      } else {
+        options.onSuppressedFailure?.({ harness, message, transientRollout: false });
       }
       return null;
     }
@@ -3050,9 +3071,13 @@ function WorkbenchThreadClient(
       return await fetchThreadPayload(threadId, harness, options);
     }
 
+    const failures: SuppressedThreadReadFailure[] = [];
     for (const candidateHarness of getThreadHarnessCandidates(threadId)) {
       const payload = await fetchThreadPayload(threadId, candidateHarness, {
         ...options,
+        onSuppressedFailure: (failure) => {
+          failures.push(failure);
+        },
         suppressStatusMessage: true,
       });
       if (payload) {
@@ -3060,7 +3085,13 @@ function WorkbenchThreadClient(
       }
     }
 
-    emitStatusMessage(`Thread not found: ${threadId}`);
+    const actionableFailure = failures.find((failure) => !failure.transientRollout) ?? failures[0] ?? null;
+    const message = actionableFailure
+      ? `Unable to open ${actionableFailure.harness} thread ${threadId}: ${actionableFailure.message}`
+      : `Thread not found: ${threadId}`;
+    state.threadsError = message;
+    emitStatusMessage(message);
+    emit();
     return null;
   }
 
@@ -3779,7 +3810,7 @@ function WorkbenchThreadClient(
       case "process/exited":
       case "questionnaire/requested":
       case "questionnaire/resolved":
-      case "browse/screenshot/recorded":
+      case "browse/result/recorded":
       case "collaboration/state/updated":
       case "model/rerouted":
       case "model/verification":
@@ -4538,9 +4569,9 @@ function WorkbenchThreadClient(
       return;
     }
 
-    if (notification.method === "browse/screenshot/recorded") {
+    if (notification.method === "browse/result/recorded") {
       if (doesNotificationTargetKnownThread(notification, harness)) {
-        void readBrowseScreenshotEntries(notification.params.threadId);
+        void readBrowseResultEntries(notification.params.threadId);
       }
       return;
     }

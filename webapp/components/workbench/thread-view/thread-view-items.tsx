@@ -3,7 +3,7 @@
  * - ThreadTurnDetails: render one thread turn with grouped commands and typed item sections. Keywords: workbench, thread, turn.
  * - ThreadThreadContent: render all turns for one thread payload without composer chrome. Keywords: workbench, thread, subagent, preview.
  * - ThreadTurnLoadingSkeleton: render a lightweight placeholder for unloaded lazy-history turns. Keywords: workbench, thread, lazy history, skeleton.
- * - useStableBrowseScreenshotEntriesByTurn: preserve turn-owned screenshot chunk arrays across thread-level sidecar refreshes. Keywords: browse, screenshot, render, chunk.
+ * - useStableBrowseResultEntriesByTurn: preserve turn-owned result chunk arrays across thread-level sidecar refreshes. Keywords: browse, screenshot, render, chunk.
  * - Local helpers: summarize inputs, group command, reasoning, file, and web-search sequences, and render the supported thread item variants. Keywords: thread items, command sequence, reasoning, rendering.
  */
 "use client";
@@ -14,7 +14,7 @@ import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/Thre
 import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import { getCurrentTurn } from "../../../lib/codex/thread-state";
-import type { ThreadPayload, WorkbenchBrowseScreenshotEntry, WorkbenchSkillSummary, WorkbenchThreadTurnHistoryEntry } from "../../../lib/types";
+import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchSkillSummary, WorkbenchThreadTurnHistoryEntry } from "../../../lib/types";
 import type { WorkbenchThreadItemTimelineEntry } from "../../../lib/workbench/thread/thread-item-timeline";
 import { getThreadItemsRenderChunkSignature } from "../../../lib/workbench/thread/thread-item-signature";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
@@ -69,7 +69,7 @@ import { CheckIcon, ClockIcon, PlayIcon, WarningIcon } from "../workbench-icons"
 
 const THREAD_DETAIL_INLINE_CODE_CLASS = "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-[0.34em] py-[0.08em] font-mono text-[0.88em] leading-[1.6] text-text";
 const LIVE_RENDER_BLOCK_TAIL_ITEM_COUNT = 8;
-const EMPTY_BROWSE_SCREENSHOT_ENTRIES: readonly WorkbenchBrowseScreenshotEntry[] = [];
+const EMPTY_BROWSE_SCREENSHOT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
 
 type CommandItem = Extract<ThreadItem, { type: "commandExecution" }>;
 type FileChangeItem = Extract<ThreadItem, { type: "fileChange" }>;
@@ -411,13 +411,13 @@ interface StableRenderableBlockEntry {
   signature: string;
 }
 
-interface StableBrowseScreenshotEntriesByTurnResult {
-  cacheEntriesByTurnId: Map<string, StableBrowseScreenshotEntriesByTurnEntry>;
-  entriesByTurnId: Map<string, readonly WorkbenchBrowseScreenshotEntry[]>;
+interface StableBrowseResultEntriesByTurnResult {
+  cacheEntriesByTurnId: Map<string, StableBrowseResultEntriesByTurnEntry>;
+  entriesByTurnId: Map<string, readonly WorkbenchBrowseResultEntry[]>;
 }
 
-interface StableBrowseScreenshotEntriesByTurnEntry {
-  entries: readonly WorkbenchBrowseScreenshotEntry[];
+interface StableBrowseResultEntriesByTurnEntry {
+  entries: readonly WorkbenchBrowseResultEntry[];
   signature: string;
 }
 
@@ -492,7 +492,7 @@ function useStableRenderableBlocks(blocks: ThreadRenderableBlock[]) {
   return useMemo(() => stableEntries.map((entry) => entry.block), [stableEntries]);
 }
 
-function getBrowseScreenshotEntryChunkSignature(entry: WorkbenchBrowseScreenshotEntry) {
+function getBrowseResultEntryChunkSignature(entry: WorkbenchBrowseResultEntry) {
   return [
     entry.entryKey,
     entry.turnId,
@@ -504,26 +504,26 @@ function getBrowseScreenshotEntryChunkSignature(entry: WorkbenchBrowseScreenshot
   ].join("\n");
 }
 
-function getBrowseScreenshotEntriesChunkSignature(entries: readonly WorkbenchBrowseScreenshotEntry[]) {
-  return entries.map(getBrowseScreenshotEntryChunkSignature).join("\n---\n");
+function getBrowseResultEntriesChunkSignature(entries: readonly WorkbenchBrowseResultEntry[]) {
+  return entries.map(getBrowseResultEntryChunkSignature).join("\n---\n");
 }
 
-export function useStableBrowseScreenshotEntriesByTurn(
-  entries: readonly WorkbenchBrowseScreenshotEntry[] = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
+export function useStableBrowseResultEntriesByTurn(
+  entries: readonly WorkbenchBrowseResultEntry[] = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
 ) {
-  const previousEntriesRef = useRef<Map<string, StableBrowseScreenshotEntriesByTurnEntry>>(new Map());
-  const stableResult = useMemo((): StableBrowseScreenshotEntriesByTurnResult => {
-    const groupedEntriesByTurnId = new Map<string, WorkbenchBrowseScreenshotEntry[]>();
+  const previousEntriesRef = useRef<Map<string, StableBrowseResultEntriesByTurnEntry>>(new Map());
+  const stableResult = useMemo((): StableBrowseResultEntriesByTurnResult => {
+    const groupedEntriesByTurnId = new Map<string, WorkbenchBrowseResultEntry[]>();
     for (const entry of entries) {
       const turnEntries = groupedEntriesByTurnId.get(entry.turnId) ?? [];
       turnEntries.push(entry);
       groupedEntriesByTurnId.set(entry.turnId, turnEntries);
     }
 
-    const cacheEntriesByTurnId = new Map<string, StableBrowseScreenshotEntriesByTurnEntry>();
-    const entriesByTurnId = new Map<string, readonly WorkbenchBrowseScreenshotEntry[]>();
+    const cacheEntriesByTurnId = new Map<string, StableBrowseResultEntriesByTurnEntry>();
+    const entriesByTurnId = new Map<string, readonly WorkbenchBrowseResultEntry[]>();
     for (const [turnId, turnEntries] of groupedEntriesByTurnId) {
-      const signature = getBrowseScreenshotEntriesChunkSignature(turnEntries);
+      const signature = getBrowseResultEntriesChunkSignature(turnEntries);
       const previousEntry = previousEntriesRef.current.get(turnId);
       const stableEntries = previousEntry?.signature === signature ? previousEntry.entries : turnEntries;
       const cacheEntry = {
@@ -1516,7 +1516,7 @@ function getDefaultBrowseDetailRowState(
 function mergeCommandDetailRowsWithBrowseOutput(
   rows: ThreadCommandDetailRow[] | undefined,
   output: string | null,
-  browseScreenshotEntries: readonly WorkbenchBrowseScreenshotEntry[] = [],
+  browseResultEntries: readonly WorkbenchBrowseResultEntry[] = [],
   commandStatus: CommandItem["status"] = "completed",
 ) {
   if (!rows?.length) {
@@ -1524,9 +1524,14 @@ function mergeCommandDetailRowsWithBrowseOutput(
   }
 
   const outputRows = parseBrowseSequenceCommandOutput(output);
+  const sidecarRows = new Map<number, WorkbenchBrowseResultEntry>();
+  for (const entry of browseResultEntries) {
+    sidecarRows.set(entry.actionIndex, entry);
+  }
 
   return rows.map((row, index) => {
-    const durationMs = row.durationMs ?? outputRows[index]?.durationMs ?? null;
+    const sidecarRow = sidecarRows.get(index);
+    const durationMs = row.durationMs ?? sidecarRow?.durationMs ?? outputRows[index]?.durationMs ?? null;
     const shouldSuppressDuplicateWaitDuration = row.label === "Wait"
       && row.target?.kind === "text"
       && durationMs !== null
@@ -1534,12 +1539,12 @@ function mergeCommandDetailRowsWithBrowseOutput(
 
     return {
       ...row,
-      detailKind: row.detailKind ?? outputRows[index]?.detailKind,
-      detailLabel: row.detailLabel ?? outputRows[index]?.detailLabel ?? null,
-      detailText: row.detailText ?? outputRows[index]?.detailText ?? null,
+      detailKind: row.detailKind ?? sidecarRow?.detailKind ?? outputRows[index]?.detailKind,
+      detailLabel: row.detailLabel ?? sidecarRow?.detailLabel ?? outputRows[index]?.detailLabel ?? null,
+      detailText: row.detailText ?? sidecarRow?.detailText ?? outputRows[index]?.detailText ?? null,
       durationMs: shouldSuppressDuplicateWaitDuration ? null : durationMs,
-      imageUrl: row.imageUrl ?? browseScreenshotEntries.find((entry) => entry.actionIndex === index)?.assetUrl ?? null,
-      state: row.state ?? getDefaultBrowseDetailRowState(rows, outputRows, commandStatus, index),
+      imageUrl: row.imageUrl ?? sidecarRow?.assetUrl ?? null,
+      state: row.state ?? sidecarRow?.state ?? getDefaultBrowseDetailRowState(rows, outputRows, commandStatus, index),
     };
   });
 }
@@ -1567,7 +1572,7 @@ function isBrowseWebRequestCommandItem({
 }
 
 function ThreadCommandExecutionDetails ({
-  browseScreenshotEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
+  browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   isMostRecent = false,
   item,
   knownSkills,
@@ -1577,7 +1582,7 @@ function ThreadCommandExecutionDetails ({
   threadId,
   workspaceRoots,
 }: {
-  browseScreenshotEntries?: readonly WorkbenchBrowseScreenshotEntry[];
+  browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   isMostRecent?: boolean;
   item: CommandItem;
   knownSkills?: WorkbenchSkillSummary[];
@@ -1608,11 +1613,11 @@ function ThreadCommandExecutionDetails ({
       ? mergeCommandDetailRowsWithBrowseOutput(
         commandDisplay.detailRows,
         item.aggregatedOutput,
-        browseScreenshotEntries.filter((entry) => entry.commandItemId === item.id),
+        browseResultEntries.filter((entry) => entry.commandItemId === item.id),
         item.status,
       )
       : commandDisplay.detailRows ?? []
-  ), [browseScreenshotEntries, commandDisplay.claimedBy, commandDisplay.detailRows, item.aggregatedOutput, item.id, item.status]);
+  ), [browseResultEntries, commandDisplay.claimedBy, commandDisplay.detailRows, item.aggregatedOutput, item.id, item.status]);
   const metaParts = [];
 
   if (item.status !== "completed") {
@@ -1713,7 +1718,7 @@ function ThreadCommandExecutionDetails ({
 }
 
 function ThreadCommandSequence ({
-  browseScreenshotEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
+  browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   isMostRecent,
   items,
   knownSkills,
@@ -1723,7 +1728,7 @@ function ThreadCommandSequence ({
   threadId,
   workspaceRoots,
 }: {
-  browseScreenshotEntries?: readonly WorkbenchBrowseScreenshotEntry[];
+  browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   isMostRecent: boolean;
   items: CommandItem[];
   knownSkills?: WorkbenchSkillSummary[];
@@ -1764,7 +1769,7 @@ function ThreadCommandSequence ({
   }, [allBrowseRequests, commandBlockItems, items.length, knownSkills, projectRootPath, workspaceRoots]);
 
   if (items.length === 1) {
-    return <ThreadCommandExecutionDetails browseScreenshotEntries={browseScreenshotEntries} isMostRecent={isMostRecent} item={items[0]} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
+    return <ThreadCommandExecutionDetails browseResultEntries={browseResultEntries} isMostRecent={isMostRecent} item={items[0]} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
   }
 
   if (allBrowseRequests) {
@@ -1772,7 +1777,7 @@ function ThreadCommandSequence ({
       <div className="space-y-1">
         {items.map((item, index) => (
           <ThreadCommandExecutionDetails
-            browseScreenshotEntries={browseScreenshotEntries}
+            browseResultEntries={browseResultEntries}
             isMostRecent={isMostRecent && index === items.length - 1}
             item={item}
             key={item.id}
@@ -1803,7 +1808,7 @@ function ThreadCommandSequence ({
       <>
         {items.map((item, index) => (
           <ThreadCommandExecutionDetails
-            browseScreenshotEntries={browseScreenshotEntries}
+            browseResultEntries={browseResultEntries}
             isMostRecent={isMostRecent && index === items.length - 1}
             item={item}
             key={item.id}
@@ -1837,7 +1842,7 @@ function ThreadFallbackItem ({ item }: { item: NonGroupedItem }) {
 
 function ThreadRenderableBlockViewComponent ({
   block,
-  browseScreenshotEntries,
+  browseResultEntries,
   finalAgentMessageId,
   inlineMentionSources,
   isMostRecentBlock,
@@ -1855,7 +1860,7 @@ function ThreadRenderableBlockViewComponent ({
   workspaceRoots,
 }: {
   block: ThreadRenderableBlock;
-  browseScreenshotEntries?: readonly WorkbenchBrowseScreenshotEntry[];
+  browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   finalAgentMessageId: string | null;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecentBlock: boolean;
@@ -1873,7 +1878,7 @@ function ThreadRenderableBlockViewComponent ({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   if (block.kind === "commandSequence") {
-    return <ThreadCommandSequence browseScreenshotEntries={browseScreenshotEntries} isMostRecent={isMostRecentBlock} items={block.items} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
+    return <ThreadCommandSequence browseResultEntries={browseResultEntries} isMostRecent={isMostRecentBlock} items={block.items} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
   }
 
   if (block.kind === "fileChangeSequence") {
@@ -1970,7 +1975,7 @@ function ThreadRenderableBlockViewComponent ({
 
 const ThreadRenderableBlockView = memo(ThreadRenderableBlockViewComponent, (left, right) => (
   left.block === right.block
-  && left.browseScreenshotEntries === right.browseScreenshotEntries
+  && left.browseResultEntries === right.browseResultEntries
   && left.finalAgentMessageId === right.finalAgentMessageId
   && (left.inlineMentionSources?.cacheKey ?? "") === (right.inlineMentionSources?.cacheKey ?? "")
   && left.isMostRecentBlock === right.isMostRecentBlock
@@ -1990,7 +1995,7 @@ const ThreadRenderableBlockView = memo(ThreadRenderableBlockViewComponent, (left
 
 function ThreadTurnDetailsComponent ({
   defaultOpenCompletedWork = false,
-  browseScreenshotEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
+  browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   flattenCompletedWork = false,
   hiddenCollabAgentToolCallItemIds = [],
   hiddenDynamicToolCallItemIds = [],
@@ -2013,7 +2018,7 @@ function ThreadTurnDetailsComponent ({
   workspaceRoots,
 }: {
   defaultOpenCompletedWork?: boolean;
-  browseScreenshotEntries?: readonly WorkbenchBrowseScreenshotEntry[];
+  browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   flattenCompletedWork?: boolean;
   hiddenCollabAgentToolCallItemIds?: readonly string[];
   hiddenDynamicToolCallItemIds?: readonly string[];
@@ -2088,7 +2093,7 @@ function ThreadTurnDetailsComponent ({
     items: turn.items,
     pinnedItemIds: pinnedCompactionItemIds,
   }), [itemTimeline, pinnedCompactionItemIds, turn.items]);
-  const turnBrowseScreenshotEntries = browseScreenshotEntries;
+  const turnBrowseResultEntries = browseResultEntries;
   const renderableBlocks = useMemo(() => buildRenderableBlocks(turn.items, hiddenItemIds), [hiddenItemIds, turn.items]);
   const allBlocks = useStableRenderableBlocks(renderableBlocks);
 
@@ -2109,7 +2114,7 @@ function ThreadTurnDetailsComponent ({
               ? `webSearches:${block.items[0]?.id ?? index}`
               : `item:${block.item.id}`}
       block={block}
-      browseScreenshotEntries={turnBrowseScreenshotEntries}
+      browseResultEntries={turnBrowseResultEntries}
       finalAgentMessageId={finalAgentMessageId}
       inlineMentionSources={inlineMentionSources}
       isMostRecentBlock={block === blockList[blockList.length - 1]}
@@ -2310,7 +2315,7 @@ function areThreadTurnDetailsPropsEqual (
     && left.hideWorkbenchControlUserMessages === right.hideWorkbenchControlUserMessages
     && left.hiddenReasoningItemId === right.hiddenReasoningItemId
     && left.hiddenWebSearchItemIds === right.hiddenWebSearchItemIds
-    && left.browseScreenshotEntries === right.browseScreenshotEntries
+    && left.browseResultEntries === right.browseResultEntries
     && left.inlineMentionSources === right.inlineMentionSources
     && left.itemTimeline === right.itemTimeline
     && left.knownSkills === right.knownSkills
@@ -2325,7 +2330,7 @@ function areThreadTurnDetailsPropsEqual (
 export const ThreadTurnDetails = memo(ThreadTurnDetailsComponent, areThreadTurnDetailsPropsEqual);
 
 export function ThreadThreadContent ({
-  browseScreenshotEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
+  browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   defaultOpenCompletedWork = false,
   emptyMessage = "No subagent activity was captured yet.",
   flattenCompletedWork = false,
@@ -2347,7 +2352,7 @@ export function ThreadThreadContent ({
   relatedThreadsById = {},
   thread,
 }: {
-  browseScreenshotEntries?: readonly WorkbenchBrowseScreenshotEntry[];
+  browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   defaultOpenCompletedWork?: boolean;
   emptyMessage?: string;
   flattenCompletedWork?: boolean;
@@ -2369,7 +2374,7 @@ export function ThreadThreadContent ({
   relatedThreadsById?: RelatedThreadsById;
   thread: ThreadPayload | null | undefined;
 }) {
-  const browseScreenshotEntriesByTurnId = useStableBrowseScreenshotEntriesByTurn(browseScreenshotEntries);
+  const browseResultEntriesByTurnId = useStableBrowseResultEntriesByTurn(browseResultEntries);
 
   if (!thread) {
     return <ThreadContentLoadingSkeleton />;
@@ -2408,7 +2413,7 @@ export function ThreadThreadContent ({
         return turn ? (
           <ThreadTurnDetails
             key={entry.turnId}
-            browseScreenshotEntries={browseScreenshotEntriesByTurnId.get(entry.turnId) ?? EMPTY_BROWSE_SCREENSHOT_ENTRIES}
+            browseResultEntries={browseResultEntriesByTurnId.get(entry.turnId) ?? EMPTY_BROWSE_SCREENSHOT_ENTRIES}
             defaultOpenCompletedWork={defaultOpenCompletedWork}
             flattenCompletedWork={flattenCompletedWork}
             hiddenCollabAgentToolCallItemIds={hiddenCollabAgentToolCallItemIds}

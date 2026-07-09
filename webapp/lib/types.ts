@@ -459,14 +459,23 @@ export type WorkbenchBrowseAgentSequenceProgressEvent =
       type: "browse-action-start";
     };
 
-export interface WorkbenchBrowseScreenshotEntry {
-  action: WorkbenchBrowseAgentActionName;
+export type WorkbenchBrowseResultEntryState = "completed" | "failed" | "inProgress" | "queued";
+
+export type WorkbenchBrowseResultEntryDetailKind = "error" | "result" | "text";
+
+export interface WorkbenchBrowseResultEntry {
+  action: WorkbenchBrowseAgentActionName | string;
   actionIndex: number;
-  assetUrl: string;
+  assetUrl: string | null;
   commandItemId: string | null;
+  detailKind?: WorkbenchBrowseResultEntryDetailKind | null;
+  detailLabel?: string | null;
+  detailText?: string | null;
+  durationMs: number | null;
   entryKey: string;
   recordedAt: number;
-  session: string;
+  session: string | null;
+  state: WorkbenchBrowseResultEntryState;
   threadId: string;
   turnId: string;
 }
@@ -565,7 +574,7 @@ export interface ThreadUnreadBadge {
 }
 
 export interface ThreadPayload extends ThreadSummary {
-  browseScreenshotEntries?: WorkbenchBrowseScreenshotEntry[];
+  browseResultEntries?: WorkbenchBrowseResultEntry[];
   model: string | null;
   reasoningEffort: string | null;
   serviceTier: string | null;
@@ -734,14 +743,14 @@ export interface WorkbenchSteerHistoryEntry {
 }
 
 export interface WorkbenchThreadContextReadResponse {
-  browseScreenshotEntries: WorkbenchBrowseScreenshotEntry[];
+  browseResultEntries: WorkbenchBrowseResultEntry[];
   questionnaireEntries: WorkbenchQuestionnaireHistoryEntry[];
   steerEntries: WorkbenchSteerHistoryEntry[];
   thread: Thread;
 }
 
 export interface WorkbenchThreadContextBundle {
-  browseScreenshotEntries: WorkbenchBrowseScreenshotEntry[];
+  browseResultEntries: WorkbenchBrowseResultEntry[];
   questionnaireEntries: WorkbenchQuestionnaireHistoryEntry[];
   steerEntries: WorkbenchSteerHistoryEntry[];
   thread: ThreadPayload;

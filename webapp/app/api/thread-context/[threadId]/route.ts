@@ -67,7 +67,7 @@ export async function GET(
 
     const thread = toThreadPayload(context.thread, "codex");
     const pieces = buildWorkbenchThreadContextPieces({
-      browseScreenshotEntries: context.browseScreenshotEntries,
+      browseResultEntries: context.browseResultEntries,
       questionnaireEntries: context.questionnaireEntries,
       steerEntries: context.steerEntries,
       thread,

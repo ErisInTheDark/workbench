@@ -13,14 +13,14 @@ export interface ThreadWorkbenchOverlayLayerInput {
   optimisticRevision: number;
   questionnaireForceProjectionEpoch: number;
   questionnaireRevision: number;
-  screenshotRevision: number;
+  browseResultRevision: number;
   stablePreferenceRevision: number;
   statusRevision: number;
   steerRevision: number;
 }
 
 export interface ThreadWorkbenchOverlayLayerOptions {
-  applyBrowseScreenshotOverlay: (thread: ThreadPayload) => ThreadPayload;
+  applyBrowseResultOverlay: (thread: ThreadPayload) => ThreadPayload;
   applyOptimisticOverlay: (thread: ThreadPayload) => ThreadPayload;
   applyQuestionnaireOverlay: (thread: ThreadPayload) => ThreadPayload;
   applyStablePreferenceOverlay: (thread: ThreadPayload) => ThreadPayload;
@@ -57,7 +57,7 @@ export default class ThreadWorkbenchOverlayLayer {
       && previous.optimisticRevision === input.optimisticRevision
       && previous.questionnaireForceProjectionEpoch === input.questionnaireForceProjectionEpoch
       && previous.questionnaireRevision === input.questionnaireRevision
-      && previous.screenshotRevision === input.screenshotRevision
+      && previous.browseResultRevision === input.browseResultRevision
       && previous.stablePreferenceRevision === input.stablePreferenceRevision
       && previous.statusRevision === input.statusRevision
       && previous.steerRevision === input.steerRevision
@@ -69,8 +69,8 @@ export default class ThreadWorkbenchOverlayLayer {
     const statusThread = this.options.applyStatusOverlay(stableThread);
     const questionnaireThread = this.options.applyQuestionnaireOverlay(statusThread);
     const steerThread = this.options.applySteerOverlay(questionnaireThread);
-    const screenshotThread = this.options.applyBrowseScreenshotOverlay(steerThread);
-    const overlayThread = this.options.applyOptimisticOverlay(screenshotThread);
+    const browseResultThread = this.options.applyBrowseResultOverlay(steerThread);
+    const overlayThread = this.options.applyOptimisticOverlay(browseResultThread);
     this.cacheByKey.set(input.key, {
       ...input,
       overlayThread,

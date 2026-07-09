@@ -19,7 +19,7 @@ import type { ToolRequestUserInputQuestion } from "../lib/codex/generated/app-se
 import type { ToolRequestUserInputResponse } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputResponse";
 import type {
     WorkbenchApprovalCommandContext,
-    WorkbenchBrowseScreenshotEntry,
+    WorkbenchBrowseResultEntry,
     WorkbenchCollaborationState,
     WorkbenchQuestionnaireHistoryEntry,
     WorkbenchThreadContextReadResponse,
@@ -1192,15 +1192,15 @@ export default class CodexStdioBridge {
             id: requestId,
             result: await this.listSteerHistory(message.params),
           };
-        case "browse/screenshot/list":
+        case "browse/result/list":
           return {
             id: requestId,
-            result: await this.listBrowseScreenshotEntries(message.params),
+            result: await this.listBrowseResultEntries(message.params),
           };
-        case "browse/screenshot/record":
+        case "browse/result/record":
           return {
             id: requestId,
-            result: await this.recordBrowseScreenshotEntry(message.params),
+            result: await this.recordBrowseResultEntry(message.params),
           };
         case "questionnaire/respond":
           return {
@@ -1858,15 +1858,15 @@ export default class CodexStdioBridge {
     };
   }
 
-  private async listBrowseScreenshotEntries(params: unknown) {
+  private async listBrowseResultEntries(params: unknown) {
     const record = asRecord(params);
     const threadId = asString(record?.threadId)?.trim() ?? "";
     if (!threadId) {
-      throw new Error("Missing browse/screenshot/list thread id.");
+      throw new Error("Missing browse/result/list thread id.");
     }
 
     return {
-      data: await this.ensureTranscriptStore().listBrowseScreenshotEntries(threadId),
+      data: await this.ensureTranscriptStore().listBrowseResultEntries(threadId),
     };
   }
 
@@ -1900,57 +1900,67 @@ export default class CodexStdioBridge {
     }
 
     const transcriptStore = this.ensureTranscriptStore();
-    const [browseScreenshotEntries, questionnaireEntries, steerEntries] = await Promise.all([
-      transcriptStore.listBrowseScreenshotEntries(thread.id),
+    const [browseResultEntries, questionnaireEntries, steerEntries] = await Promise.all([
+      transcriptStore.listBrowseResultEntries(thread.id),
       transcriptStore.listQuestionnaireHistory(thread.id),
       transcriptStore.listSteerHistory(thread.id),
     ]);
 
     return {
-      browseScreenshotEntries,
+      browseResultEntries,
       questionnaireEntries,
       steerEntries,
       thread,
     };
   }
 
-  private async recordBrowseScreenshotEntry(params: unknown) {
+  private async recordBrowseResultEntry(params: unknown) {
     const record = asRecord(params);
     const action = asString(record?.action);
     const actionIndex = asNumber(record?.actionIndex);
-    const assetUrl = asString(record?.assetUrl);
+    const assetUrl = asString(record?.assetUrl)?.trim() || null;
+    const detailKind = asString(record?.detailKind)?.trim() || null;
+    const detailLabel = asString(record?.detailLabel)?.trim() || null;
+    const detailText = asString(record?.detailText)?.trim() || null;
+    const durationMs = asNumber(record?.durationMs);
     const entryKey = asString(record?.entryKey);
     const recordedAt = asNumber(record?.recordedAt);
-    const session = asString(record?.session);
+    const session = asString(record?.session)?.trim() || null;
+    const state = asString(record?.state)?.trim() || null;
     const threadId = asString(record?.threadId);
     const turnId = asString(record?.turnId);
     if (
       !action
       || actionIndex === null
-      || !assetUrl
       || !entryKey
       || recordedAt === null
-      || !session
+      || durationMs === null
+      || !state
       || !threadId
       || !turnId
     ) {
-      throw new Error("Missing browse/screenshot/record params.");
+      throw new Error("Missing browse/result/record params.");
     }
 
-    const entry: WorkbenchBrowseScreenshotEntry = {
-      action: action as WorkbenchBrowseScreenshotEntry["action"],
+    const entry: WorkbenchBrowseResultEntry = {
+      action: action as WorkbenchBrowseResultEntry["action"],
       actionIndex,
       assetUrl,
       commandItemId: asString(record?.commandItemId) ?? null,
+      detailKind: detailKind as WorkbenchBrowseResultEntry["detailKind"],
+      detailLabel,
+      detailText,
+      durationMs,
       entryKey,
       recordedAt,
       session,
+      state: state as WorkbenchBrowseResultEntry["state"],
       threadId,
       turnId,
     };
-    await this.ensureTranscriptStore().recordBrowseScreenshotEntry(entry);
+    await this.ensureTranscriptStore().recordBrowseResultEntry(entry);
     this.onNotification({
-      method: "browse/screenshot/recorded",
+      method: "browse/result/recorded",
       params: {
         threadId,
         turnId,

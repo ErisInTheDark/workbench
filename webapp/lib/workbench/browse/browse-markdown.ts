@@ -3,6 +3,7 @@
  * - WorkbenchBrowseMarkdownCompileOptions: defaults applied to BrowseMD script actions. Keywords: browse, markdown, compile, defaults.
  * - WorkbenchBrowseMarkdownParseError: line-aware BrowseMD parse failure. Keywords: browse, markdown, parse, error.
  * - compileWorkbenchBrowseMarkdown: compile BrowseMD text into a typed Browse action sequence. Keywords: browse, markdown, typed actions.
+ * - tokenizeWorkbenchBrowseMarkdownLine: split a BrowseMD command line with shell-ish quotes. Keywords: browse, markdown, shell, tokens.
  */
 import type {
   WorkbenchBrowseAgentAction,
@@ -102,7 +103,7 @@ export function compileWorkbenchBrowseMarkdown(
       return;
     }
 
-    const tokens = tokenizeBrowseMarkdownLine(line, lineNumber);
+    const tokens = tokenizeWorkbenchBrowseMarkdownLine(line, lineNumber);
     if (!tokens.length) {
       return;
     }
@@ -164,23 +165,28 @@ function compileFence(fence: ParsedFence, options: WorkbenchBrowseMarkdownCompil
 }
 
 function compileCommandLine(context: LineContext): WorkbenchBrowseAgentAction {
-  const [rawCommand = "", rawSecond = ""] = context.tokens;
+  const tokens = context.tokens[0]?.toLowerCase() === "browse" ? context.tokens.slice(1) : context.tokens;
+  if (!tokens.length) {
+    throw new WorkbenchBrowseMarkdownParseError("browse prefix requires a Browse command.", context.lineNumber);
+  }
+  const commandContext = { ...context, tokens };
+  const [rawCommand = "", rawSecond = ""] = tokens;
   const command = rawCommand.toLowerCase();
   const second = rawSecond.toLowerCase();
-  const args = getCommandArguments(context.tokens.slice(1));
+  const args = getCommandArguments(tokens.slice(1));
 
   switch (command) {
     case "back":
     case "forward":
     case "reload":
       return {
-        ...createBrowserActionBase(context.options, context.tokens),
+        ...createBrowserActionBase(context.options, tokens),
         action: command,
-        wait: readChoiceFlag(context.tokens, ["wait"], BROWSE_MARKDOWN_WAIT_STATES, "wait state", context.lineNumber) as WorkbenchBrowseAgentWaitState | null,
+        wait: readChoiceFlag(tokens, ["wait"], BROWSE_MARKDOWN_WAIT_STATES, "wait state", context.lineNumber) as WorkbenchBrowseAgentWaitState | null,
       };
     case "click":
       return {
-        ...createBrowserActionBase(context.options, context.tokens),
+        ...createBrowserActionBase(context.options, tokens),
         ...createTargetField(requireArgument(args, 0, "click requires a selector or ref.", context.lineNumber)),
         action: "click",
       };
@@ -188,125 +194,125 @@ function compileCommandLine(context: LineContext): WorkbenchBrowseAgentAction {
       return {
         ...createActionBase(context.options),
         action: "cleanup",
-        force: hasFlag(context.tokens, ["force"]),
+        force: hasFlag(tokens, ["force"]),
         sessions: args.length ? args : null,
       };
     case "cursor":
       return {
-        ...createBrowserActionBase(context.options, context.tokens),
+        ...createBrowserActionBase(context.options, tokens),
         action: "cursor",
       };
     case "doctor":
       return {
-        ...createSessionActionBase(context.options, context.tokens),
+        ...createSessionActionBase(context.options, tokens),
         action: "doctor",
       };
     case "eval":
       return {
-        ...createBrowserActionBase(context.options, context.tokens),
+        ...createBrowserActionBase(context.options, tokens),
         action: "eval",
         expression: requireRest(args, 0, "eval requires a JavaScript expression.", context.lineNumber),
       };
     case "fill":
       return {
-        ...createBrowserActionBase(context.options, context.tokens),
+        ...createBrowserActionBase(context.options, tokens),
         ...createTargetField(requireArgument(args, 0, "fill requires a selector or ref.", context.lineNumber)),
         action: "fill",
-        pressEnter: hasFlag(context.tokens, ["press-enter"]),
+        pressEnter: hasFlag(tokens, ["press-enter"]),
         value: requireRest(args, 1, "fill requires a value.", context.lineNumber),
       };
     case "get":
-      return compileGetCommand(context, args);
+      return compileGetCommand(commandContext, args);
     case "highlight":
       return {
-        ...createBrowserActionBase(context.options, context.tokens),
+        ...createBrowserActionBase(context.options, tokens),
         ...createTargetField(requireArgument(args, 0, "highlight requires a selector or ref.", context.lineNumber)),
         action: "highlight",
-        durationMs: readPositiveIntegerFlag(context.tokens, ["duration"], "duration", context.lineNumber),
+        durationMs: readPositiveIntegerFlag(tokens, ["duration"], "duration", context.lineNumber),
       };
     case "is":
-      return compileIsCommand(context, args);
+      return compileIsCommand(commandContext, args);
     case "js":
       return {
-        ...createBrowserActionBase(context.options, context.tokens),
+        ...createBrowserActionBase(context.options, tokens),
         action: "eval",
         expression: requireRest(args, 0, "js requires a JavaScript expression.", context.lineNumber),
       };
     case "key":
     case "press":
       return {
-        ...createBrowserActionBase(context.options, context.tokens),
+        ...createBrowserActionBase(context.options, tokens),
         action: "key",
         key: requireRest(args, 0, `${command} requires a key name or chord.`, context.lineNumber),
       };
     case "mouse":
-      return compileMouseCommand(context, second, getCommandArguments(context.tokens.slice(2)));
+      return compileMouseCommand(commandContext, second, getCommandArguments(tokens.slice(2)));
     case "move":
-      return compileMoveCommand(context, second, getCommandArguments(context.tokens.slice(2)));
+      return compileMoveCommand(commandContext, second, getCommandArguments(tokens.slice(2)));
     case "open":
       return {
-        ...createBrowserActionBase(context.options, context.tokens),
+        ...createBrowserActionBase(context.options, tokens),
         action: "open",
         url: requireArgument(args, 0, "open requires a URL.", context.lineNumber),
-        wait: readChoiceFlag(context.tokens, ["wait"], BROWSE_MARKDOWN_WAIT_STATES, "wait state", context.lineNumber) as WorkbenchBrowseAgentWaitState | null,
+        wait: readChoiceFlag(tokens, ["wait"], BROWSE_MARKDOWN_WAIT_STATES, "wait state", context.lineNumber) as WorkbenchBrowseAgentWaitState | null,
       };
     case "refs":
       return {
-        ...createBrowserActionBase(context.options, context.tokens),
+        ...createBrowserActionBase(context.options, tokens),
         action: "refs",
       };
     case "screenshot":
       return {
-        ...createBrowserActionBase(context.options, context.tokens),
+        ...createBrowserActionBase(context.options, tokens),
         action: "screenshot",
-        animations: readChoiceFlag(context.tokens, ["animations"], BROWSE_MARKDOWN_SCREENSHOT_ANIMATIONS, "screenshot animations", context.lineNumber) as "allow" | "disabled" | null,
-        fullPage: hasFlag(context.tokens, ["full-page"]),
-        type: readChoiceFlag(context.tokens, ["type"], BROWSE_MARKDOWN_SCREENSHOT_TYPES, "screenshot type", context.lineNumber) as "jpeg" | "png" | null,
+        animations: readChoiceFlag(tokens, ["animations"], BROWSE_MARKDOWN_SCREENSHOT_ANIMATIONS, "screenshot animations", context.lineNumber) as "allow" | "disabled" | null,
+        fullPage: hasFlag(tokens, ["full-page"]),
+        type: readChoiceFlag(tokens, ["type"], BROWSE_MARKDOWN_SCREENSHOT_TYPES, "screenshot type", context.lineNumber) as "jpeg" | "png" | null,
       };
     case "select":
       return {
-        ...createBrowserActionBase(context.options, context.tokens),
+        ...createBrowserActionBase(context.options, tokens),
         ...createTargetField(requireArgument(args, 0, "select requires a selector or ref.", context.lineNumber)),
         action: "select",
         value: requireRest(args, 1, "select requires a value.", context.lineNumber),
       };
     case "snapshot":
       return {
-        ...createBrowserActionBase(context.options, context.tokens),
+        ...createBrowserActionBase(context.options, tokens),
         action: "snapshot",
-        compact: hasFlag(context.tokens, ["compact"]) || args[0]?.toLowerCase() === "compact",
-        filter: readStringFlag(context.tokens, ["filter"]),
-        maxDepth: readPositiveIntegerFlag(context.tokens, ["max-depth"], "max-depth", context.lineNumber),
+        compact: hasFlag(tokens, ["compact"]) || args[0]?.toLowerCase() === "compact",
+        filter: readStringFlag(tokens, ["filter"]),
+        maxDepth: readPositiveIntegerFlag(tokens, ["max-depth"], "max-depth", context.lineNumber),
       };
     case "status":
       return {
-        ...createSessionActionBase(context.options, context.tokens),
+        ...createSessionActionBase(context.options, tokens),
         action: "status",
       };
     case "stop":
       return {
-        ...createSessionActionBase(context.options, context.tokens),
+        ...createSessionActionBase(context.options, tokens),
         action: "stop",
-        force: hasFlag(context.tokens, ["force"]),
+        force: hasFlag(tokens, ["force"]),
       };
     case "type":
       return {
-        ...createBrowserActionBase(context.options, context.tokens),
+        ...createBrowserActionBase(context.options, tokens),
         action: "type",
-        delayMs: readPositiveIntegerFlag(context.tokens, ["delay"], "delay", context.lineNumber),
-        mistakes: hasFlag(context.tokens, ["mistakes"]),
+        delayMs: readPositiveIntegerFlag(tokens, ["delay"], "delay", context.lineNumber),
+        mistakes: hasFlag(tokens, ["mistakes"]),
         text: requireRest(args, 0, "type requires text.", context.lineNumber),
       };
     case "viewport":
       return {
-        ...createBrowserActionBase(context.options, context.tokens),
+        ...createBrowserActionBase(context.options, tokens),
         action: "viewport",
         height: readRequiredNumber(args[1], "viewport requires a height.", context.lineNumber),
-        scale: readPositiveNumberFlag(context.tokens, ["scale"], "scale", context.lineNumber),
+        scale: readPositiveNumberFlag(tokens, ["scale"], "scale", context.lineNumber),
         width: readRequiredNumber(args[0], "viewport requires a width.", context.lineNumber),
       };
     case "wait":
-      return compileWaitCommand(context, args);
+      return compileWaitCommand(commandContext, args);
     default:
       throw new WorkbenchBrowseMarkdownParseError(`Unsupported BrowseMD command "${rawCommand}".`, context.lineNumber);
   }
@@ -472,7 +478,7 @@ function readMode(tokens: readonly string[]): WorkbenchBrowseSessionMode | null 
   return null;
 }
 
-function tokenizeBrowseMarkdownLine(line: string, lineNumber: number) {
+export function tokenizeWorkbenchBrowseMarkdownLine(line: string, lineNumber: number) {
   const tokens: string[] = [];
   let token = "";
   let quote: string | null = null;

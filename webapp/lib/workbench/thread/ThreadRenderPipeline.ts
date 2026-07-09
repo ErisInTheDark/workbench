@@ -58,7 +58,7 @@ export default class ThreadRenderPipeline {
       optimisticRevision: input.optimisticRevision,
       questionnaireForceProjectionEpoch: input.questionnaireForceProjectionEpoch,
       questionnaireRevision: input.questionnaireRevision,
-      screenshotRevision: input.screenshotRevision,
+      browseResultRevision: input.browseResultRevision,
       stablePreferenceRevision: input.stablePreferenceRevision,
       statusRevision: input.statusRevision,
       steerRevision: input.steerRevision,

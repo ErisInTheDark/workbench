@@ -12,7 +12,7 @@ import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/Thre
 import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
 import type { JsonValue } from "../../../lib/codex/generated/app-server/serde_json/JsonValue";
 import { toThreadPayload } from "../../../lib/codex/thread-adapter";
-import type { ThreadPayload, WorkbenchBrowseScreenshotEntry, WorkbenchHarness } from "../../../lib/types";
+import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchHarness } from "../../../lib/types";
 import ThreadRenderSurface from "./ThreadRenderSurface";
 
 type JsonObject = { [key: string]: JsonValue | undefined };
@@ -93,7 +93,7 @@ function buildThreadLabSampleRoutes() {
   };
 }
 
-function normalizeBrowseScreenshotEntry(value: JsonValue): WorkbenchBrowseScreenshotEntry | null {
+function normalizeBrowseResultEntry(value: JsonValue): WorkbenchBrowseResultEntry | null {
   if (!isJsonObject(value)) {
     return null;
   }
@@ -101,33 +101,43 @@ function normalizeBrowseScreenshotEntry(value: JsonValue): WorkbenchBrowseScreen
   const action = readString(value, "action");
   const actionIndex = readNumber(value, "actionIndex");
   const assetUrl = readString(value, "assetUrl");
+  const detailKind = readString(value, "detailKind");
+  const detailLabel = readString(value, "detailLabel");
+  const detailText = readString(value, "detailText");
+  const durationMs = readNumber(value, "durationMs");
   const entryKey = readString(value, "entryKey");
   const recordedAt = readNumber(value, "recordedAt");
   const session = readString(value, "session");
+  const state = readString(value, "state");
   const threadId = readString(value, "threadId");
   const turnId = readString(value, "turnId");
-  if (!action || actionIndex === null || !assetUrl || !entryKey || recordedAt === null || !session || !threadId || !turnId) {
+  if (!action || actionIndex === null || !entryKey || recordedAt === null || durationMs === null || !state || !threadId || !turnId) {
     return null;
   }
 
   return {
-    action: action as WorkbenchBrowseScreenshotEntry["action"],
+    action: action as WorkbenchBrowseResultEntry["action"],
     actionIndex,
-    assetUrl,
+    assetUrl: assetUrl ?? null,
     commandItemId: readString(value, "commandItemId"),
+    detailKind: detailKind as WorkbenchBrowseResultEntry["detailKind"],
+    detailLabel,
+    detailText,
+    durationMs,
     entryKey,
     recordedAt,
-    session,
+    session: session ?? null,
+    state: state as WorkbenchBrowseResultEntry["state"],
     threadId,
     turnId,
   };
 }
 
-function readBrowseScreenshotEntries(record: JsonObject) {
-  return Array.isArray(record.browseScreenshotEntries)
-    ? record.browseScreenshotEntries
-      .map(normalizeBrowseScreenshotEntry)
-      .filter((entry): entry is WorkbenchBrowseScreenshotEntry => entry !== null)
+function readBrowseResultEntries(record: JsonObject) {
+  return Array.isArray(record.browseResultEntries)
+    ? record.browseResultEntries
+      .map(normalizeBrowseResultEntry)
+      .filter((entry): entry is WorkbenchBrowseResultEntry => entry !== null)
     : [];
 }
 
@@ -314,7 +324,7 @@ function createThreadPayloadFromRecord(record: JsonObject): ThreadPayload | null
     reasoningEffort: readString(record, "reasoningEffort"),
     serviceTier: readString(record, "serviceTier"),
     agentPath: readString(record, "agentPath"),
-    browseScreenshotEntries: readBrowseScreenshotEntries(record),
+    browseResultEntries: readBrowseResultEntries(record),
     isDraft: record.isDraft === true,
   };
 }

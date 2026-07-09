@@ -11,7 +11,7 @@ import { CodexAppServerClient } from "../../../lib/codex/app-server-client";
 import type { ThreadReadResponse } from "../../../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import { isCodexJsonRpcFailure } from "../../../lib/codex/protocol";
 import { toThreadPayload } from "../../../lib/codex/thread-adapter";
-import type { ThreadPayload, WorkbenchBrowseScreenshotEntry, WorkbenchHarness } from "../../../lib/types";
+import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchHarness } from "../../../lib/types";
 import ThreadRenderSurface from "./ThreadRenderSurface";
 
 const ACTIVE_THREAD_REFRESH_INTERVAL_MS = 1500;
@@ -57,8 +57,8 @@ async function readStandaloneThreadPayload(
     return payload;
   }
 
-  const screenshotResponse = await client.sendRequest<{ data?: WorkbenchBrowseScreenshotEntry[] }>({
-    method: "browse/screenshot/list",
+  const screenshotResponse = await client.sendRequest<{ data?: WorkbenchBrowseResultEntry[] }>({
+    method: "browse/result/list",
     params: {
       threadId,
     },
@@ -70,7 +70,7 @@ async function readStandaloneThreadPayload(
 
   return {
     ...payload,
-    browseScreenshotEntries: screenshotResponse.result.data ?? [],
+    browseResultEntries: screenshotResponse.result.data ?? [],
   };
 }
 

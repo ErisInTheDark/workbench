@@ -48,7 +48,7 @@ export default function ThreadRenderSurface({
       style={style}
     >
       <ThreadThreadContent
-        browseScreenshotEntries={thread?.browseScreenshotEntries ?? []}
+        browseResultEntries={thread?.browseResultEntries ?? []}
         defaultOpenCompletedWork
         emptyMessage={emptyMessage}
         flattenCompletedWork={flattenCompletedWork}
