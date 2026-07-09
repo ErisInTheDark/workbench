@@ -78,6 +78,7 @@ export function createInitializeCapabilities(
 ): InitializeCapabilities {
   return {
     experimentalApi: overrides.experimentalApi ?? false,
+    requestAttestation: overrides.requestAttestation ?? false,
     optOutNotificationMethods: overrides.optOutNotificationMethods ?? null,
   };
 }

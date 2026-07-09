@@ -80,6 +80,7 @@ function createSyntheticSteerHistoryItem(entry: WorkbenchSteerHistoryEntry): Use
   return {
     content: entry.input.map(cloneUserInput),
     id: createSyntheticSteerHistoryItemId(entry),
+    clientId: null,
     type: "userMessage",
   };
 }

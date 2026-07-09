@@ -350,6 +350,7 @@ function createSyntheticTurn(threadId: string, input: UserInput[]): Turn {
     items: [{
       content: input,
       id: `opencode:user:pending:${now}`,
+      clientId: null,
       type: "userMessage",
     }],
     itemsView: "full",
@@ -1084,6 +1085,7 @@ export class OpenCodeBridge {
     return {
       rateLimits,
       rateLimitsByLimitId: null,
+      rateLimitResetCredits: null,
     };
   }
 

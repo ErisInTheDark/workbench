@@ -112,6 +112,7 @@ const canonicalUserMessage = {
     type: "text",
   }],
   id: "user-canonical",
+  clientId: null,
   type: "userMessage",
 } satisfies ThreadItem;
 
@@ -122,6 +123,7 @@ const genericSnapshotUserMessage = {
     type: "text",
   }],
   id: "item-1",
+  clientId: null,
   type: "userMessage",
 } satisfies ThreadItem;
 
@@ -138,6 +140,7 @@ const inlineImageUserMessage = {
     },
   ],
   id: "optimistic-user-message:initial:sent:1",
+  clientId: null,
   type: "userMessage",
 } satisfies ThreadItem;
 
@@ -154,6 +157,7 @@ const transcriptAssetImageUserMessage = {
     },
   ],
   id: "item-image-canonical",
+  clientId: null,
   type: "userMessage",
 } satisfies ThreadItem;
 

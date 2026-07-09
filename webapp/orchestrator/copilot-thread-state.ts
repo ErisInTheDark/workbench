@@ -156,6 +156,7 @@ function makeUserMessageItem(content: UserInput[]): Extract<ThreadItem, { type: 
   return {
     content,
     id: `user:${randomUUID()}`,
+    clientId: null,
     type: "userMessage",
   };
 }
@@ -320,7 +321,9 @@ function createEmptyThread(sessionId: string, projectRoot: string, metadata: Ses
     modelProvider: "copilot",
     name: metadata?.summary ?? null,
     path: null,
+    parentThreadId: null,
     preview: metadata?.summary ?? sessionId,
+    recencyAt: updatedAt,
     sessionId,
     source: { custom: "copilot-sdk" },
     status: { type: "idle" },

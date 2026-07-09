@@ -105,9 +105,11 @@ export function classifyCodexAppServerNotification(
     case "thread/started":
     case "thread/status/changed":
     case "thread/archived":
+    case "thread/deleted":
     case "thread/unarchived":
     case "thread/closed":
     case "thread/name/updated":
+    case "thread/settings/updated":
     case "thread/tokenUsage/updated":
       return createHandling(notification, "thread", {
         refreshThreads: true,
@@ -156,6 +158,10 @@ export function classifyCodexAppServerNotification(
         refreshThreads: true,
       });
 
+    case "turn/moderationMetadata":
+    case "model/safetyBuffering/updated":
+      return createHandling(notification, "turn");
+
     case "serverRequest/resolved":
     case "process/outputDelta":
     case "process/exited":
@@ -177,6 +183,7 @@ export function classifyCodexAppServerNotification(
 
     case "remoteControl/status/changed":
     case "app/list/updated":
+    case "externalAgentConfig/import/progress":
     case "externalAgentConfig/import/completed":
       return createHandling(notification, "app");
 

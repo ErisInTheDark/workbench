@@ -90,6 +90,7 @@ function createUserItem(message: Message, parts: Part[]): Extract<ThreadItem, { 
   return {
     content: toUserInput(parts),
     id: `opencode:user:${message.id}`,
+    clientId: null,
     type: "userMessage",
   };
 }
@@ -432,7 +433,9 @@ export function opencodeSessionToThread({ messages, session, status }: OpenCodeT
     modelProvider: model?.split("/")[0] ?? "opencode",
     name: session.title || null,
     path: null,
+    parentThreadId: null,
     preview: previewFromMessages(messages),
+    recencyAt: toUnixSeconds(session.time.updated),
     sessionId: session.id,
     source: { custom: "opencode" },
     status: threadStatus(status),

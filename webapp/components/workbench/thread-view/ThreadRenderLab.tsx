@@ -167,6 +167,7 @@ function createUserMessageItem(record: JsonObject, index: number): UserMessageIt
   return {
     type: "userMessage",
     id: readString(record, "id") ?? `lab-user-${index + 1}`,
+    clientId: readString(record, "clientId") ?? null,
     content: text ? [{ type: "text", text, text_elements: [] }] : [],
   };
 }

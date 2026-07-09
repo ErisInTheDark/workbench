@@ -364,6 +364,7 @@ export function applyOpenCodeLiveEvent(
       const userItem: Extract<ThreadItem, { type: "userMessage" }> = {
         content: promptToUserInput(event.data.prompt),
         id: userItemId(event.data.messageID),
+        clientId: null,
         type: "userMessage",
       };
       ensureTurn(live, event.data.sessionID, event.data.messageID, event.data.timestamp, onNotification, [userItem]);

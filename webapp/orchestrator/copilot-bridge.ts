@@ -558,6 +558,7 @@ export class CopilotBridge {
       credits: null,
       limitId: "copilot:premium_interactions",
       limitName: "Monthly",
+      individualLimit: null,
       planType: null,
       primary: {
         resetsAt: Number.isFinite(resetsAt) ? resetsAt : null,
@@ -574,6 +575,7 @@ export class CopilotBridge {
       credits: null,
       limitId: "copilot:auth",
       limitName: authStatus?.statusMessage?.trim() || "Sign in to Copilot to load premium quota",
+      individualLimit: null,
       planType: null,
       primary: null,
       rateLimitReachedType: null,
@@ -590,6 +592,7 @@ export class CopilotBridge {
       return {
         rateLimits,
         rateLimitsByLimitId: null,
+        rateLimitResetCredits: null,
       };
     } catch (error) {
       logError("copilot-bridge", error instanceof Error ? error.message : String(error));
@@ -600,12 +603,14 @@ export class CopilotBridge {
         return {
           rateLimits,
           rateLimitsByLimitId: null,
+          rateLimitResetCredits: null,
         };
       }
 
       return {
         rateLimits: null,
         rateLimitsByLimitId: null,
+        rateLimitResetCredits: null,
       };
     }
   }

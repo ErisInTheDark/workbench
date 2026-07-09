@@ -3789,8 +3789,10 @@ function WorkbenchThreadClient(
             : null
         ));
       case "thread/archived":
+      case "thread/deleted":
       case "thread/unarchived":
       case "thread/closed":
+      case "thread/settings/updated":
       case "thread/goal/updated":
       case "thread/goal/cleared":
       case "thread/compacted":
@@ -3814,6 +3816,8 @@ function WorkbenchThreadClient(
       case "collaboration/state/updated":
       case "model/rerouted":
       case "model/verification":
+      case "turn/moderationMetadata":
+      case "model/safetyBuffering/updated":
       case "thread/realtime/started":
       case "thread/realtime/itemAdded":
       case "thread/realtime/transcript/delta":
@@ -3830,6 +3834,7 @@ function WorkbenchThreadClient(
       case "account/rateLimits/updated":
       case "remoteControl/status/changed":
       case "app/list/updated":
+      case "externalAgentConfig/import/progress":
       case "externalAgentConfig/import/completed":
       case "fs/changed":
       case "warning":
@@ -3876,6 +3881,7 @@ function WorkbenchThreadClient(
     return {
       type: "userMessage",
       id: createOptimisticUserMessageId(placement, status),
+      clientId: null,
       content: input.map((entry) => cloneUserInput(entry)),
     };
   }
