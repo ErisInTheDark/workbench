@@ -508,6 +508,43 @@ function getBrowseResultEntriesChunkSignature(entries: readonly WorkbenchBrowseR
   return entries.map(getBrowseResultEntryChunkSignature).join("\n---\n");
 }
 
+function formatBrowseResultEntryActionLabel(action: string) {
+  return action
+    .replace(/([a-z0-9])([A-Z])/gu, "$1 $2")
+    .replace(/[-_]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .replace(/^./u, (value) => value.toUpperCase()) || "BrowseMD";
+}
+
+function shouldUseBrowseResultDetailAsTarget(entry: WorkbenchBrowseResultEntry) {
+  return entry.detailKind === "text"
+    && !entry.detailLabel
+    && Boolean(entry.detailText?.trim())
+    && /\b(?:directory|file|files|working directory)\b/iu.test(entry.action);
+}
+
+function createBrowseResultEntryDetailRows(entries: readonly WorkbenchBrowseResultEntry[]): ThreadCommandDetailRow[] {
+  return [...entries]
+    .sort((left, right) => left.actionIndex - right.actionIndex || left.recordedAt - right.recordedAt)
+    .map((entry) => {
+      const label = formatBrowseResultEntryActionLabel(entry.action);
+      const useDetailAsTarget = shouldUseBrowseResultDetailAsTarget(entry);
+      return {
+        detailKind: entry.detailKind ?? undefined,
+        detailLabel: entry.detailLabel ?? null,
+        detailText: useDetailAsTarget ? null : entry.detailText ?? null,
+        durationMs: entry.durationMs ?? null,
+        id: `browse-result:${entry.entryKey}`,
+        imageUrl: entry.assetUrl ?? null,
+        label,
+        state: entry.state,
+        summaryParts: [{ text: label, type: "text" as const }],
+        target: useDetailAsTarget && entry.detailText ? { kind: "code" as const, text: entry.detailText } : null,
+      };
+    });
+}
+
 export function useStableBrowseResultEntriesByTurn(
   entries: readonly WorkbenchBrowseResultEntry[] = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
 ) {
@@ -1520,7 +1557,7 @@ function mergeCommandDetailRowsWithBrowseOutput(
   commandStatus: CommandItem["status"] = "completed",
 ) {
   if (!rows?.length) {
-    return [];
+    return createBrowseResultEntryDetailRows(browseResultEntries);
   }
 
   const outputRows = parseBrowseSequenceCommandOutput(output);
@@ -1618,6 +1655,8 @@ function ThreadCommandExecutionDetails ({
       )
       : commandDisplay.detailRows ?? []
   ), [browseResultEntries, commandDisplay.claimedBy, commandDisplay.detailRows, item.aggregatedOutput, item.id, item.status]);
+  const shouldHideCommandOutput = commandDisplay.hideCommandOutput
+    && (commandDetailRows.length > 0 || !item.aggregatedOutput?.trim());
   const metaParts = [];
 
   if (item.status !== "completed") {
@@ -1687,7 +1726,7 @@ function ThreadCommandExecutionDetails ({
             projectId={projectId}
           />
         ) : null}
-        {commandDisplay.hideCommandOutput ? null : shouldRenderCheckpointDiff ? (
+        {shouldHideCommandOutput ? null : shouldRenderCheckpointDiff ? (
           <ThreadCheckpointDiffItem
             cwd={item.cwd}
             output={item.aggregatedOutput ?? ""}

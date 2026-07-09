@@ -206,7 +206,13 @@ function readBrowseRequestSummary(commandText: string): BrowseRequestSummary | n
     };
   }
 
-  return { action: "request", session: null, target: null };
+  return {
+    action: "request",
+    hideCommandOutput: true,
+    isBrowseRequest: true,
+    session: null,
+    target: null,
+  };
 }
 
 function readMixedBrowseScriptSummary(commandText: string): BrowseRequestSummary | null {

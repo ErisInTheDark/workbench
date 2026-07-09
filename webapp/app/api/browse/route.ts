@@ -26,6 +26,7 @@ import type {
   WorkbenchBrowseAgentSequenceResponse,
   WorkbenchBrowseCommandRequest,
   WorkbenchBrowseCommandResponse,
+  WorkbenchBrowseResultEntryDetailKind,
   WorkbenchHarness,
   WorkbenchBrowseSessionMode,
 } from "../../../lib/types";
@@ -170,14 +171,25 @@ function normalizeBrowseMarkdownFileName(value: string) {
 }
 
 interface BrowseMarkdownRuntimeContext {
+  activeThread: {
+    commandItemId: string | null;
+    harness: WorkbenchHarness;
+    turnId: string;
+  } | null;
   cwd: string;
-  projectRootPath: string;
   request: NextRequest;
   scriptRequest: WorkbenchBrowseAgentScriptRequest;
   variables: Map<string, string>;
+  workspaceRootPaths: string[];
 }
 
 interface BrowseMarkdownCommandResult extends WorkbenchBrowseCommandResponse {
+  browseResultAction?: string | null;
+  browseResultDetail?: {
+    detailKind: WorkbenchBrowseResultEntryDetailKind | null;
+    detailLabel: string | null;
+    detailText: string | null;
+  } | null;
   outputRedirected?: boolean;
 }
 
@@ -199,7 +211,7 @@ async function readBrowseMarkdownSource(request: WorkbenchBrowseAgentScriptReque
   if (!("scriptPath" in request)) {
     return {
       baseDirectoryPath: resolution.cwd,
-      projectRootPath: resolution.root.root,
+      workspaceRootPaths: resolution.project.roots.map((root) => root.root),
       script: request.script,
     };
   }
@@ -217,7 +229,7 @@ async function readBrowseMarkdownSource(request: WorkbenchBrowseAgentScriptReque
   }
   return {
     baseDirectoryPath: path.dirname(scriptFilePath),
-    projectRootPath: resolution.root.root,
+    workspaceRootPaths: resolution.project.roots.map((root) => root.root),
     script,
   };
 }
@@ -430,10 +442,50 @@ function resolveBrowseMarkdownWorkspacePath(context: BrowseMarkdownRuntimeContex
     throw new Error("BrowseMD file commands require project-relative paths.");
   }
   const absolutePath = path.resolve(context.cwd, targetPath);
-  if (!isPathInside(context.projectRootPath, absolutePath)) {
-    throw new Error(`BrowseMD path escapes the project root: ${targetPath}`);
+  if (!context.workspaceRootPaths.some((rootPath) => isPathInside(rootPath, absolutePath))) {
+    throw new Error(`BrowseMD path escapes the active workspace roots: ${targetPath}`);
   }
   return absolutePath;
+}
+
+function joinBrowseMarkdownDisplayArgs(args: readonly string[]) {
+  return args.length ? args.join(" ") : null;
+}
+
+function getBrowseMarkdownHelperDisplay(command: string, args: readonly string[]) {
+  const target = joinBrowseMarkdownDisplayArgs(args);
+  switch (command) {
+    case "cat":
+      return { action: "Read file", detailText: target };
+    case "cp":
+      return { action: "Copy file", detailText: args.length >= 2 ? `${args[0]} → ${args[1]}` : target };
+    case "echo":
+    case "printf":
+      return { action: "Print text", detailText: target };
+    case "grep":
+      return { action: "Filter text", detailText: target };
+    case "jq":
+      return { action: "Transform JSON", detailText: target };
+    case "ls":
+      return { action: "List files", detailText: target ?? "." };
+    case "mkdir":
+      return { action: "Create directory", detailText: args.at(-1) ?? target };
+    case "mv":
+      return { action: "Move file", detailText: args.length >= 2 ? `${args[0]} → ${args[1]}` : target };
+    case "pwd":
+      return { action: "Print working directory", detailText: null };
+    case "rm":
+      return { action: "Remove file", detailText: target };
+    default:
+      return { action: command, detailText: target };
+  }
+}
+
+function getBrowseMarkdownWriteDisplay(outputPath: string, append: boolean) {
+  return {
+    action: append ? "Append file" : "Write file",
+    detailText: outputPath,
+  };
 }
 
 async function runBrowseMarkdownProcess(command: string, args: string[], stdin: string, cwd: string, timeoutMs: number) {
@@ -522,7 +574,10 @@ async function runBrowseMarkdownFileCommand(
         if (args.length < 2) {
           return fail("mv requires source and destination.");
         }
-        await fs.rename(resolveBrowseMarkdownWorkspacePath(context, args[0] ?? ""), resolveBrowseMarkdownWorkspacePath(context, args[1] ?? ""));
+        const sourcePath = resolveBrowseMarkdownWorkspacePath(context, args[0] ?? "");
+        const destinationPath = resolveBrowseMarkdownWorkspacePath(context, args[1] ?? "");
+        await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+        await fs.rename(sourcePath, destinationPath);
         return ok();
       }
       case "rm": {
@@ -532,12 +587,19 @@ async function runBrowseMarkdownFileCommand(
         }
         for (const target of targets) {
           const absoluteTarget = resolveBrowseMarkdownWorkspacePath(context, target);
-          const relativeTarget = normalizeRelativePath(path.relative(context.projectRootPath, absoluteTarget));
-          const status = await runBrowseMarkdownProcess("git", ["-C", context.projectRootPath, "status", "--porcelain", "--", relativeTarget], "", context.projectRootPath, 10_000);
-          if (!status.ok || !status.stdout.trim().split(/\r?\n/u).every((line) => line.startsWith("?? "))) {
-            return fail(`rm only supports untracked files: ${target}`);
+          let stats;
+          try {
+            stats = await fs.lstat(absoluteTarget);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+              continue;
+            }
+            throw error;
           }
-          await fs.rm(absoluteTarget, { force: true, recursive: args.includes("-r") || args.includes("-rf") || args.includes("-fr") });
+          if (stats.isDirectory()) {
+            return fail(`rm only supports files: ${target}`);
+          }
+          await fs.rm(absoluteTarget, { force: true });
         }
         return ok();
       }
@@ -598,9 +660,20 @@ async function runBrowseMarkdownPipeline(
     const executableTokens = commandTokens[0]?.toLowerCase() === "browse" ? commandTokens.slice(1) : commandTokens;
     const command = executableTokens[0]?.toLowerCase() ?? "";
     const args = executableTokens.slice(1);
-    finalResult = BROWSE_MARKDOWN_FILE_COMMANDS.has(command)
-      ? await runBrowseMarkdownFileCommand(context, command, args, stdin)
-      : await runBrowseMarkdownBrowseCommand(context, serializeBrowseMarkdownTokens(executableTokens), actionIndex);
+    if (BROWSE_MARKDOWN_FILE_COMMANDS.has(command)) {
+      const display = getBrowseMarkdownHelperDisplay(command, args);
+      finalResult = {
+        ...await runBrowseMarkdownFileCommand(context, command, args, stdin),
+        browseResultAction: display.action,
+        browseResultDetail: {
+          detailKind: display.detailText ? "text" : null,
+          detailLabel: null,
+          detailText: display.detailText,
+        },
+      };
+    } else {
+      finalResult = await runBrowseMarkdownBrowseCommand(context, serializeBrowseMarkdownTokens(executableTokens), actionIndex);
+    }
     if (!finalResult.ok) {
       return finalResult;
     }
@@ -613,7 +686,18 @@ async function runBrowseMarkdownPipeline(
       } else {
         await fs.writeFile(resolvedOutputPath, finalResult.stdout);
       }
-      finalResult = { ...finalResult, outputRedirected: true, stdout: "" };
+      const display = getBrowseMarkdownWriteDisplay(outputPath, append);
+      finalResult = {
+        ...finalResult,
+        browseResultAction: display.action,
+        browseResultDetail: {
+          detailKind: "text",
+          detailLabel: null,
+          detailText: display.detailText,
+        },
+        outputRedirected: true,
+        stdout: "",
+      };
     }
   }
   return finalResult;
@@ -651,11 +735,12 @@ async function runBrowseMarkdownRequest(request: NextRequest, scriptRequest: Wor
   }
 
   const context: BrowseMarkdownRuntimeContext = {
+    activeThread: await readThreadForAutomaticBrowseResult(request, scriptRequest.threadId),
     cwd: scriptRequest.cwd,
-    projectRootPath: source.projectRootPath,
     request,
     scriptRequest,
     variables: new Map(),
+    workspaceRootPaths: source.workspaceRootPaths,
   };
   const helpStatements = statements.filter(isBrowseMarkdownHelpStatement);
   if (helpStatements.length) {
@@ -682,6 +767,19 @@ async function runBrowseMarkdownRequest(request: NextRequest, scriptRequest: Wor
       ? await runBrowseMarkdownPipeline(context, assignment.command, index)
       : await runBrowseMarkdownPipeline(context, statement.text, index);
     stderr += result.stderr;
+    if (result.browseResultAction && context.activeThread) {
+      await recordAutomaticBrowseResult(request, {
+        action: result.browseResultAction,
+        actionIndex: index,
+        assetUrl: null,
+        commandItemId: context.activeThread.commandItemId,
+        detailOverride: result.browseResultDetail,
+        result,
+        session: scriptRequest.session ?? null,
+        threadId: scriptRequest.threadId,
+        turnId: context.activeThread.turnId,
+      }).catch(() => undefined);
+    }
     if (!result.ok) {
       return {
         durationMs: Date.now() - startedAt,
@@ -1075,6 +1173,12 @@ function getBrowseResultDetail(result: WorkbenchBrowseAgentResponse) {
   };
 }
 
+interface BrowseResultDetailInput {
+  detailKind: WorkbenchBrowseResultEntryDetailKind | null;
+  detailLabel: string | null;
+  detailText: string | null;
+}
+
 async function recordAutomaticBrowseResult(
   request: NextRequest,
   {
@@ -1086,8 +1190,9 @@ async function recordAutomaticBrowseResult(
     threadId,
     turnId,
     assetUrl,
+    detailOverride,
   }: {
-    action: WorkbenchBrowseAgentAction["action"];
+    action: WorkbenchBrowseAgentAction["action"] | string;
     actionIndex: number;
     result: WorkbenchBrowseAgentResponse;
     commandItemId: string | null;
@@ -1095,9 +1200,10 @@ async function recordAutomaticBrowseResult(
     threadId: string;
     turnId: string;
     assetUrl: string | null;
+    detailOverride?: BrowseResultDetailInput | null;
   },
 ) {
-  const detail = getBrowseResultDetail(result);
+  const detail = result.ok && detailOverride ? detailOverride : getBrowseResultDetail(result);
   await sendServerWorkbenchBridgeRequest(request, "codex", {
     method: "browse/result/record",
     params: {

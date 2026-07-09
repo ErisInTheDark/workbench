@@ -69,7 +69,7 @@ If page data or Browse endpoint output needs additional processing, first run th
 1. Choose a short named session for the task.
 2. Run \`doctor\` or \`status\` when Browse availability is uncertain.
 3. Open the target URL with a BrowseMD \`open <url> --headless\` line unless headed behavior is needed.
-4. For multi-step work, prefer one inline BrowseMD script or reusable \`.workbench/browse/*.browsemd\` script. Workbench persists rich per-step result rows for rendering while the endpoint returns command-like stdout/stderr/code.
+4. For multi-step work, prefer one inline BrowseMD script or reusable \`.workbench/browse/*.browsemd\` script. Workbench persists rich per-step result rows for browser commands and BrowseMD helper commands while the endpoint returns command-like stdout/stderr/code.
 5. Use \`snapshot\` before interacting so refs and accessibility context are fresh.
 6. Use refs from the latest snapshot when available. In BrowseMD, refs use the normal Browse CLI spelling such as \`click @0-12\`.
 7. Use \`click\`, \`fill\`, \`type\`, \`key\`, \`select\`, \`mouseClick\`, and \`wait\` for interaction.
@@ -124,7 +124,7 @@ screenshot
 
 BrowseMD supports \`@include\` macro lines. Relative includes resolve from the current BrowseMD file; inline script includes resolve from the request \`cwd\`; bare names such as \`@include login\` resolve to \`.workbench/browse/login.browsemd\`; \`@include ~/login\` resolves to the user's \`~/.workbench/browse/login.browsemd\`; and \`@include root-name:login\` resolves inside a root from the current Workbench workspace. Include cycles and missing files fail clearly.
 
-BrowseMD supports shell-like assignment, variables, pipes, redirects, and allowlisted helper commands. Use \`title=$(get title)\`, then \`echo "$title"\` or pass \`$title\` / \`\${title}\` into later commands. Supported helper commands include \`echo\`, \`printf\`, \`pwd\`, \`ls\`, \`cat\`, \`mkdir\`, \`cp\`, \`mv\`, safe git-aware \`rm\` for untracked files only, and allowlisted real \`grep\` and \`jq\`. This is not arbitrary shell execution.
+BrowseMD supports shell-like assignment, variables, pipes, redirects, and allowlisted helper commands. Use \`title=$(get title)\`, then \`echo "$title"\` or pass \`$title\` / \`\${title}\` into later commands. Supported helper commands include \`echo\`, \`printf\`, \`pwd\`, \`ls\`, \`cat\`, \`mkdir\`, \`cp\`, \`mv\`, file-only \`rm\`, and allowlisted real \`grep\` and \`jq\`. This is not arbitrary shell execution. File command paths must resolve inside an active Workbench workspace root for the request \`cwd\`. \`mv\` is the rename command, creates destination parent directories, and overwrites existing destination files. \`rm\` means ensure a file is removed: it succeeds when the target or a parent folder is already missing, removes files and symlinks, and fails instead of removing directories.
 
 BrowseMD endpoint responses are command-like: \`stdout\`, \`stderr\`, \`exitCode\`, \`ok\`, \`durationMs\`, and optional \`error\`. Unassigned commands print natural output; assignments capture stdout and suppress it. Browse commands that normally do not print should not invent success chatter. Failures stop the script by default.
 
