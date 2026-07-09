@@ -47,6 +47,12 @@ function normalizeOptionalText(value: unknown) {
   return typeof value === "string" ? value : undefined;
 }
 
+function normalizeOptionalTimestamp(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.trunc(value))
+    : undefined;
+}
+
 function normalizeNullablePostId(value: unknown) {
   return typeof value === "string" ? value : null;
 }
@@ -209,12 +215,16 @@ function parseMutation(value: unknown): WorkbenchCollaborationAdminPostMutation 
   if (action === "updatePostPrompt") {
     const postId = normalizeText(value.postId).trim();
     const prompt = normalizeText(value.prompt).trim();
+    const basePostUpdatedAt = normalizeOptionalTimestamp(value.basePostUpdatedAt);
+    const basePrompt = normalizeOptionalText(value.basePrompt);
     if (!postId || !prompt) {
       throw new Error("A postId and prompt are required to update a Collaboration post prompt.");
     }
 
     return {
       action,
+      ...(basePostUpdatedAt !== undefined ? { basePostUpdatedAt } : {}),
+      ...(basePrompt !== undefined ? { basePrompt } : {}),
       postId,
       prompt,
     };
@@ -275,7 +285,10 @@ function applyMutation(
         prompt: mutation.prompt,
       });
     case "updatePostPrompt":
-      return updateCollaborationPostPrompt(state, mutation.postId, mutation.prompt);
+      return updateCollaborationPostPrompt(state, mutation.postId, mutation.prompt, {
+        basePostUpdatedAt: mutation.basePostUpdatedAt,
+        basePrompt: mutation.basePrompt,
+      });
   }
 }
 

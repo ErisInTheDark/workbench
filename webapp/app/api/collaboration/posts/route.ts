@@ -16,6 +16,7 @@ import type {
 } from "../../../../lib/types";
 import {
   createWorkbenchCollaborationAgentPostId,
+  createWorkbenchCollaborationSurfaceState,
   normalizeWorkbenchCollaborationPatchId,
 } from "../../../../lib/workbench/collaboration/collaboration-state";
 import {
@@ -56,7 +57,7 @@ interface ParsedMutationRequest {
 function stateResponse(projectId: string, state: WorkbenchCollaborationState): WorkbenchCollaborationPostEndpointStateResponse {
   return {
     projectId,
-    state,
+    state: createWorkbenchCollaborationSurfaceState(state),
     usage: ENDPOINT_USAGE,
   };
 }
@@ -184,9 +185,12 @@ function createMutationResponse(
   message: string,
   postId?: string,
 ): WorkbenchCollaborationPostMutationResponse {
-  const post = postId ? state.posts[postId] : undefined;
+  const surfaceState = createWorkbenchCollaborationSurfaceState(state);
+  const post = postId ? surfaceState.posts[postId] : undefined;
   return {
-    ...stateResponse(projectId, state),
+    projectId,
+    state: surfaceState,
+    usage: ENDPOINT_USAGE,
     action,
     message,
     ok: true,

@@ -14,7 +14,7 @@
  * - setCollaborationPostCollapsed: persist expanded or collapsed UI state for a post. Keywords: collaboration, post, collapse, expand.
  * - tagCollaborationPost: assign a project-level tag to a Collaboration post. Keywords: collaboration, post, tag.
  * - updateCollaborationPost: update visible post content and append previous state revision. Keywords: collaboration, edit, revisions.
- * - updateCollaborationPostPrompt: update only a post's suggested prompt without creating a visible-body revision. Keywords: collaboration, prompt, save.
+ * - updateCollaborationPostPrompt: update only a post's suggested prompt with optional stale-save guard. Keywords: collaboration, prompt, save.
  */
 
 import type {
@@ -231,7 +231,11 @@ export function updateCollaborationPostPrompt(
   state: WorkbenchCollaborationState,
   postId: string,
   prompt: string,
-  now = Date.now(),
+  options: {
+    basePostUpdatedAt?: number;
+    basePrompt?: string;
+    now?: number;
+  } = {},
 ) {
   const normalizedState = normalizeWorkbenchCollaborationState(state);
   const post = normalizedState.posts[postId];
@@ -240,6 +244,17 @@ export function updateCollaborationPostPrompt(
     return normalizedState;
   }
 
+  const basePrompt = options.basePrompt?.trim();
+  const hasBasePostUpdatedAt = typeof options.basePostUpdatedAt === "number" && Number.isFinite(options.basePostUpdatedAt);
+  const basePostUpdatedAt = hasBasePostUpdatedAt ? Math.trunc(options.basePostUpdatedAt as number) : 0;
+  if (
+    (basePrompt !== undefined && (post.prompt?.trim() ?? "") !== basePrompt)
+    || (hasBasePostUpdatedAt && post.updatedAt !== basePostUpdatedAt)
+  ) {
+    return normalizedState;
+  }
+
+  const now = options.now ?? Date.now();
   return touchWorkbenchCollaborationState(normalizeWorkbenchCollaborationState({
     ...normalizedState,
     posts: {

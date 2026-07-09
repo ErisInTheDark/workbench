@@ -875,6 +875,12 @@ export interface WorkbenchCollaborationState {
   version: 2;
 }
 
+export type WorkbenchCollaborationSurfacePost = Omit<WorkbenchCollaborationPost, "revisions">;
+
+export type WorkbenchCollaborationSurfaceState = Omit<WorkbenchCollaborationState, "posts"> & {
+  posts: Record<string, WorkbenchCollaborationSurfacePost>;
+};
+
 export type WorkbenchCollaborationPostMutationAction = "create" | "delete" | "update";
 
 export interface WorkbenchCollaborationPostCreateRequest {
@@ -914,7 +920,7 @@ export interface WorkbenchCollaborationPostEndpointUsage {
 
 export interface WorkbenchCollaborationPostEndpointStateResponse {
   projectId: string;
-  state: WorkbenchCollaborationState;
+  state: WorkbenchCollaborationSurfaceState;
   usage: WorkbenchCollaborationPostEndpointUsage;
 }
 
@@ -922,7 +928,7 @@ export interface WorkbenchCollaborationPostMutationResponse extends WorkbenchCol
   action: WorkbenchCollaborationPostMutationAction;
   message: string;
   ok: true;
-  post?: WorkbenchCollaborationPost;
+  post?: WorkbenchCollaborationSurfacePost;
   postId?: string;
 }
 
@@ -940,7 +946,7 @@ export interface WorkbenchCollaborationMemorySetRequest {
 export interface WorkbenchCollaborationMemoryStateResponse {
   memory: string;
   projectId: string;
-  state: WorkbenchCollaborationState;
+  state: WorkbenchCollaborationSurfaceState;
   usage: WorkbenchCollaborationMemoryEndpointUsage;
 }
 
@@ -1005,6 +1011,8 @@ export type WorkbenchCollaborationAdminPostMutation =
   }
   | {
     action: "updatePostPrompt";
+    basePostUpdatedAt?: number;
+    basePrompt?: string;
     postId: string;
     prompt: string;
   }

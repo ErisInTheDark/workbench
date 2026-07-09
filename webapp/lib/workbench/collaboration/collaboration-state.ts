@@ -6,6 +6,7 @@
  * - createWorkbenchCollaborationAgentPostId: create an opaque agent post id. Keywords: collaboration, post, agent, id.
  * - createWorkbenchCollaborationPostId: create an opaque user post id. Keywords: collaboration, post, id.
  * - createWorkbenchCollaborationRevisionId: create an opaque revision id. Keywords: collaboration, revision, id.
+ * - createWorkbenchCollaborationSurfaceState: project current Collaboration state without revision history for agent endpoints. Keywords: collaboration, surface, agent.
  * - createWorkbenchCollaborationStateRelativePath: build the project-scoped disk state path. Keywords: collaboration, state, disk.
  * - ensureImportedScratchpadPost: add one imported scratchpad root post when content exists. Keywords: collaboration, scratchpad, import.
  * - normalizeWorkbenchCollaborationPatchId: normalize collaborator-supplied post ids. Keywords: collaboration, patch, id.
@@ -21,6 +22,7 @@ import type {
   WorkbenchCollaborationPostAuthor,
   WorkbenchCollaborationPostRevision,
   WorkbenchCollaborationPostRevisionSource,
+  WorkbenchCollaborationSurfaceState,
   WorkbenchCollaborationState,
   WorkbenchCollaborationSuggestion,
   WorkbenchCollaborationThreadRegistry,
@@ -82,6 +84,22 @@ export function createWorkbenchCollaborationRevisionId() {
   }
 
   return `revision:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+}
+
+export function createWorkbenchCollaborationSurfaceState(
+  state: WorkbenchCollaborationState,
+): WorkbenchCollaborationSurfaceState {
+  const normalizedState = normalizeWorkbenchCollaborationState(state);
+  const posts = Object.fromEntries(
+    Object.entries(normalizedState.posts).map(([postId, post]) => {
+      const { revisions: _revisions, ...surfacePost } = post;
+      return [postId, surfacePost];
+    }),
+  );
+  return {
+    ...normalizedState,
+    posts,
+  };
 }
 
 function normalizeTrimmedText(value: unknown) {

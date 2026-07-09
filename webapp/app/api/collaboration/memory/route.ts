@@ -15,6 +15,7 @@ import type {
   WorkbenchCollaborationState,
 } from "../../../../lib/types";
 import {
+  createWorkbenchCollaborationSurfaceState,
   touchWorkbenchCollaborationState,
 } from "../../../../lib/workbench/collaboration/collaboration-state";
 import {
@@ -42,7 +43,7 @@ function stateResponse(projectId: string, state: WorkbenchCollaborationState): W
   return {
     memory: state.lastRunMemory,
     projectId,
-    state,
+    state: createWorkbenchCollaborationSurfaceState(state),
     usage: ENDPOINT_USAGE,
   };
 }

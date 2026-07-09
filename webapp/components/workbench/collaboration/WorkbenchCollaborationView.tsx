@@ -185,6 +185,7 @@ export default function WorkbenchCollaborationView({
   const adminPostMutationSerialRef = useRef(0);
   const attemptedScratchpadImportKeyRef = useRef("");
   const promptSaveTimeoutsByPostIdRef = useRef<Record<string, number | undefined>>({});
+  const promptSaveSourcesByPostIdRef = useRef<Record<string, PromptDraftSource | undefined>>({});
   const promptSaveValuesByPostIdRef = useRef<Record<string, string | undefined>>({});
   const promptDraftSourcesByPostIdRef = useRef<Record<string, PromptDraftSource | undefined>>({});
 
@@ -202,6 +203,7 @@ export default function WorkbenchCollaborationView({
       }
     }
     promptSaveTimeoutsByPostIdRef.current = {};
+    promptSaveSourcesByPostIdRef.current = {};
     promptSaveValuesByPostIdRef.current = {};
     promptDraftSourcesByPostIdRef.current = {};
     setPromptDraftThreadsByPostId({});
@@ -432,6 +434,7 @@ export default function WorkbenchCollaborationView({
       window.clearTimeout(timeoutId);
     }
     delete promptSaveTimeoutsByPostIdRef.current[postId];
+    delete promptSaveSourcesByPostIdRef.current[postId];
     delete promptSaveValuesByPostIdRef.current[postId];
   }, []);
 
@@ -477,8 +480,11 @@ export default function WorkbenchCollaborationView({
 
   const schedulePromptSave = useCallback((postId: string, prompt: string) => {
     const normalizedPrompt = prompt.trim();
-    const currentPrompt = stateRef.current.posts[postId]?.prompt?.trim() ?? "";
-    if (!normalizedPrompt || normalizedPrompt === currentPrompt) {
+    const post = stateRef.current.posts[postId];
+    const currentPrompt = post?.prompt?.trim() ?? "";
+    const source = promptDraftSourcesByPostIdRef.current[postId]
+      ?? (post ? createPromptDraftSourceFromPost(post) : undefined);
+    if (!normalizedPrompt || normalizedPrompt === currentPrompt || (source && normalizedPrompt === source.prompt)) {
       clearScheduledPromptSave(postId);
       return;
     }
@@ -488,21 +494,38 @@ export default function WorkbenchCollaborationView({
       window.clearTimeout(existingTimeoutId);
     }
 
+    if (!source) {
+      clearScheduledPromptSave(postId);
+      return;
+    }
+
+    promptSaveSourcesByPostIdRef.current[postId] = source;
     promptSaveValuesByPostIdRef.current[postId] = normalizedPrompt;
     promptSaveTimeoutsByPostIdRef.current[postId] = window.setTimeout(() => {
       delete promptSaveTimeoutsByPostIdRef.current[postId];
+      const baseSource = promptSaveSourcesByPostIdRef.current[postId];
+      delete promptSaveSourcesByPostIdRef.current[postId];
       const promptToSave = promptSaveValuesByPostIdRef.current[postId]?.trim() ?? "";
       delete promptSaveValuesByPostIdRef.current[postId];
-      const post = stateRef.current.posts[postId];
-      if (!post || !promptToSave || post.prompt?.trim() === promptToSave) {
+      const currentPost = stateRef.current.posts[postId];
+      if (!baseSource || !currentPost || !promptToSave || currentPost.prompt?.trim() === promptToSave) {
+        return;
+      }
+
+      if ((currentPost.prompt?.trim() ?? "") !== baseSource.prompt || currentPost.updatedAt !== baseSource.postUpdatedAt) {
         return;
       }
 
       mutateAdminPostState({
         action: "updatePostPrompt",
+        basePostUpdatedAt: baseSource.postUpdatedAt,
+        basePrompt: baseSource.prompt,
         postId,
         prompt: promptToSave,
-      }, (state) => updateCollaborationPostPrompt(state, postId, promptToSave));
+      }, (state) => updateCollaborationPostPrompt(state, postId, promptToSave, {
+        basePostUpdatedAt: baseSource.postUpdatedAt,
+        basePrompt: baseSource.prompt,
+      }));
     }, 500);
   }, [clearScheduledPromptSave, mutateAdminPostState]);
 

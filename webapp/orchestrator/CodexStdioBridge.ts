@@ -29,12 +29,7 @@ import type {
     WorkbenchUserInputResponse,
 } from "../lib/types";
 import { normalizeWorkbenchCollaborationState } from "../lib/workbench/collaboration/collaboration-state";
-import {
-    buildWorkbenchCollaborationDeveloperInstructions,
-    buildWorkbenchPromptInstructions,
-    buildWorkbenchThreadUtilityDeveloperInstructions,
-    type WorkbenchPromptInstructions,
-} from "../lib/workbench/instructions/WorkbenchPromptFiles";
+import type { WorkbenchPromptInstructions } from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import { isWorkbenchPauseControlRequest, WORKBENCH_PAUSE_CONTROL_KIND } from "../lib/workbench/thread/thread-pause-control";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type CodexAppServer from "./CodexAppServer";
@@ -950,6 +945,15 @@ function loadCodexTranscriptStore({ reload = false }: { reload?: boolean } = {})
   return (require("./CodexTranscriptStore") as { default: CodexTranscriptStoreConstructor }).default;
 }
 
+function loadFreshWorkbenchPromptFiles() {
+  const resolvedPath = require.resolve("../lib/workbench/instructions/WorkbenchPromptFiles");
+  for (const moduleId of collectCacheSubtree(resolvedPath)) {
+    delete require.cache[moduleId];
+  }
+
+  return require("../lib/workbench/instructions/WorkbenchPromptFiles") as typeof import("../lib/workbench/instructions/WorkbenchPromptFiles");
+}
+
 export default class CodexStdioBridge {
   private readonly appServer: CodexAppServer;
   private readonly bridgeUrl: string;
@@ -1317,10 +1321,11 @@ export default class CodexStdioBridge {
     }
 
     const params = asMutableParamsRecord(message.params);
+    const workbenchPromptFiles = loadFreshWorkbenchPromptFiles();
     if (isPromptAugmentedTurnMethod(method)) {
       const developerInstructions = promptContext.instructionScope === "threadUtilities"
-        ? await buildWorkbenchThreadUtilityDeveloperInstructions(promptContext)
-        : await buildWorkbenchCollaborationDeveloperInstructions(promptContext);
+        ? await workbenchPromptFiles.buildWorkbenchThreadUtilityDeveloperInstructions(promptContext)
+        : await workbenchPromptFiles.buildWorkbenchCollaborationDeveloperInstructions(promptContext);
       return {
         ...message,
         params: buildWorkbenchOwnedCollaborationParams(params, developerInstructions),
@@ -1328,14 +1333,14 @@ export default class CodexStdioBridge {
     }
 
     if (promptContext.instructionScope === "threadUtilities") {
-      const developerInstructions = await buildWorkbenchThreadUtilityDeveloperInstructions(promptContext);
+      const developerInstructions = await workbenchPromptFiles.buildWorkbenchThreadUtilityDeveloperInstructions(promptContext);
       return {
         ...message,
         params: buildWorkbenchOwnedDeveloperInstructionParams(params, developerInstructions),
       };
     }
 
-    const promptInstructions = await buildWorkbenchPromptInstructions(promptContext);
+    const promptInstructions = await workbenchPromptFiles.buildWorkbenchPromptInstructions(promptContext);
     return {
       ...message,
       params: buildWorkbenchOwnedPromptParams(params, promptInstructions),

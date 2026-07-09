@@ -170,14 +170,22 @@ function formatTagsForPrompt(state: WorkbenchCollaborationState) {
     : "No tags have been created yet.";
 }
 
+function formatRunModeForPrompt(hasUserNote: boolean) {
+  return hasUserNote
+    ? "User note provided. Treat the current user message as the primary collaborator task before broad tree maintenance."
+    : "Default collaborator maintenance run. No user note was provided beyond the default run request.";
+}
+
 function buildCollaborationInstructionInjections({
   cwd,
   diffMap,
+  hasUserNote,
   previousMemory,
   state,
 }: {
   cwd: string;
   diffMap: string;
+  hasUserNote: boolean;
   previousMemory: string;
   state: WorkbenchCollaborationState;
 }) {
@@ -194,6 +202,7 @@ function buildCollaborationInstructionInjections({
     "collaboration.memory-endpoint": collaborationMemoryEndpoint,
     "collaboration.post-endpoint": collaborationPostEndpoint,
     "collaboration.previous-memory": previousMemory || "None.",
+    "collaboration.run-mode": formatRunModeForPrompt(hasUserNote),
     "collaboration.tags": formatTagsForPrompt(state),
     "collaboration.tree": formatTreeForPrompt(state),
   };
@@ -497,6 +506,7 @@ export default function CollaborationRunController({
     const instructionInjections = buildCollaborationInstructionInjections({
       cwd: thread.cwd,
       diffMap: projectDiffMap,
+      hasUserNote: Boolean(options.additionalInput?.length),
       previousMemory: stateForPrompt.lastRunMemory,
       state: stateForPrompt,
     });
