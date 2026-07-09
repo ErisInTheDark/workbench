@@ -13,6 +13,7 @@ interface BrowseRequestSummary {
   detailRows?: ThreadCommandDetailRow[];
   hideCommandOutput?: boolean;
   isBrowseRequest?: boolean;
+  persistent?: boolean;
   session: string | null;
   summaryText?: string | null;
   target: string | null;
@@ -77,6 +78,9 @@ function buildBrowseRequestSummaryParts(summary: BrowseRequestSummary): ThreadCo
     parts.push(CommandMatcher.Text(" in "));
     parts.push(CommandMatcher.Code(summary.session));
   }
+  if (summary.persistent) {
+    parts.push(CommandMatcher.Text(" with persistence"));
+  }
 
   return parts;
 }
@@ -93,6 +97,9 @@ function buildBrowseActionSummaryParts(action: BrowseJsonAction): ThreadCommandD
   if (action.session) {
     parts.push(CommandMatcher.Text(" in "));
     parts.push(CommandMatcher.Text(action.session));
+  }
+  if (action.persistent) {
+    parts.push(CommandMatcher.Text(" with persistence"));
   }
   return parts;
 }
@@ -113,6 +120,8 @@ function formatBrowseActionLabel(action: string | null | undefined) {
       return "Cursor";
     case "fill":
       return "Fill";
+    case "forget":
+      return "Forget persistent profile";
     case "type":
       return "Type";
     case "key":
@@ -267,6 +276,7 @@ function readJsonBrowseRequestSummary(commandText: string): BrowseRequestSummary
       action: parsed.action,
       detailRows: [buildBrowseActionDetailRow(parsed, 0)],
       isBrowseRequest: true,
+      persistent: parsed.persistent === true,
       session: parsed.session ?? null,
       target: parsed.url
         ?? parsed.selector
@@ -301,6 +311,7 @@ function readPowerShellHashtableBrowseRequestSummary(commandText: string): Brows
     action,
     detailRows: [buildBrowseActionDetailRow(parsedAction, 0)],
     isBrowseRequest: true,
+    persistent: parsedAction.persistent === true,
     session: readPowerShellHashtableField(commandText, "session", commandText),
     target: readPowerShellHashtableField(commandText, "url", commandText)
       ?? readPowerShellHashtableField(commandText, "selector", commandText)
@@ -417,6 +428,7 @@ function readPowerShellHashtableBrowseAction(
     fromY: readPowerShellHashtableNumberField(blockText, "fromY"),
     key: readPowerShellHashtableField(blockText, "key", commandText) ?? undefined,
     ms: readPowerShellHashtableNumberField(blockText, "ms"),
+    persistent: readPowerShellHashtableBooleanField(blockText, "persistent"),
     deltaX: readPowerShellHashtableNumberField(blockText, "deltaX"),
     deltaY: readPowerShellHashtableNumberField(blockText, "deltaY"),
     ref: readPowerShellHashtableField(blockText, "ref", commandText) ?? undefined,
@@ -455,9 +467,10 @@ function summarizeBrowseArgs(args: string[] | null | undefined): BrowseRequestSu
 
   return {
     action,
-    detailRows: [buildBrowseActionDetailRow({ action, args: normalizedArgs }, 0)],
+    detailRows: [buildBrowseActionDetailRow({ action, args: normalizedArgs, persistent: normalizedArgs.some((arg) => arg.toLowerCase() === "--persistent") }, 0)],
     hideCommandOutput: false,
     isBrowseRequest: true,
+    persistent: normalizedArgs.some((arg) => arg.toLowerCase() === "--persistent"),
     session: readBrowseArgValue(normalizedArgs, "--session") ?? readBrowseArgValue(normalizedArgs, "-s"),
     target: getBrowseArgsTarget(normalizedArgs),
   };
@@ -590,6 +603,7 @@ type BrowseJsonAction = {
   fromY?: number;
   key?: string;
   ms?: number;
+  persistent?: boolean;
   projectId?: string;
   ref?: string;
   returnXPath?: boolean;
@@ -622,6 +636,7 @@ type BrowseJsonBody =
       fromX?: number;
       fromY?: number;
       ms?: number;
+      persistent?: boolean;
       ref?: string;
       returnXPath?: boolean;
       session?: string;
@@ -716,6 +731,8 @@ function formatBrowseAction(action: string) {
       return "show cursor";
     case "fill":
       return "fill";
+    case "forget":
+      return "forget persistent profile";
     case "type":
       return "type";
     case "key":

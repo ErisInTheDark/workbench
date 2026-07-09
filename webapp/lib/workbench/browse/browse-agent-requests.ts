@@ -10,6 +10,7 @@ import type {
   WorkbenchBrowseAgentActionName,
   WorkbenchBrowseAgentBrowserRequest,
   WorkbenchBrowseAgentCleanupRequest,
+  WorkbenchBrowseAgentForgetRequest,
   WorkbenchBrowseCommandRequest,
   WorkbenchBrowseSessionMode,
 } from "../../types";
@@ -26,10 +27,10 @@ const BROWSE_AGENT_ALLOWED_GET_VALUES = new Set(["box", "checked", "html", "mark
 const BROWSE_AGENT_ALLOWED_IS_CHECKS = new Set(["checked", "visible"]);
 const BROWSE_AGENT_ALLOWED_MOUSE_BUTTONS = new Set(["left", "middle", "right"]);
 
-type WorkbenchBrowseNonCleanupAgentAction = Exclude<WorkbenchBrowseAgentAction, WorkbenchBrowseAgentCleanupRequest>;
+type WorkbenchBrowseCliAgentAction = Exclude<WorkbenchBrowseAgentAction, WorkbenchBrowseAgentCleanupRequest | WorkbenchBrowseAgentForgetRequest>;
 
 export interface WorkbenchBrowseAgentCommand {
-  action: Exclude<WorkbenchBrowseAgentActionName, "cleanup">;
+  action: Exclude<WorkbenchBrowseAgentActionName, "cleanup" | "forget">;
   commandRequest: WorkbenchBrowseCommandRequest;
   mode: WorkbenchBrowseSessionMode | null;
   rememberSession: boolean;
@@ -46,9 +47,22 @@ export interface WorkbenchBrowseAgentCleanupCommand {
   timeoutMs?: number | null;
 }
 
+export interface WorkbenchBrowseAgentForgetCommand {
+  action: "forget";
+  cwd?: string | null;
+  projectId?: string | null;
+  session: string;
+  threadId: string;
+  timeoutMs?: number | null;
+}
+
 export type WorkbenchBrowseAgentRequestNormalization =
   | {
     command: WorkbenchBrowseAgentCleanupCommand;
+    ok: true;
+  }
+  | {
+    command: WorkbenchBrowseAgentForgetCommand;
     ok: true;
   }
   | {
@@ -81,6 +95,8 @@ export function normalizeWorkbenchBrowseAgentRequest(value: WorkbenchBrowseAgent
       return normalizeCommand(value, buildBrowserArgs("cursor", value));
     case "fill":
       return normalizeCommand(value, buildFillArgs(value));
+    case "forget":
+      return normalizeForget(value);
     case "eval":
       return normalizeCommand(value, buildEvalArgs(value));
     case "get":
@@ -128,7 +144,7 @@ export function normalizeWorkbenchBrowseAgentRequest(value: WorkbenchBrowseAgent
 }
 
 function normalizeCommand(
-  request: WorkbenchBrowseNonCleanupAgentAction,
+  request: WorkbenchBrowseCliAgentAction,
   argsResult: string[] | { error: string },
   { rememberSession = false }: { rememberSession?: boolean } = {},
 ): WorkbenchBrowseAgentRequestNormalization {
@@ -161,6 +177,43 @@ function normalizeCommand(
       mode: "mode" in request ? normalizeMode(request.mode) : null,
       rememberSession,
       session,
+    },
+    ok: true,
+  };
+}
+
+function normalizeForget(request: Extract<WorkbenchBrowseAgentAction, { action: "forget" }>): WorkbenchBrowseAgentRequestNormalization {
+  const threadId = normalizeThreadId(request.threadId);
+  if (!threadId) {
+    return {
+      error: "Typed Browse forget requires a valid threadId.",
+      ok: false,
+    };
+  }
+
+  if ("force" in request) {
+    return {
+      error: "Typed Browse forget does not support force.",
+      ok: false,
+    };
+  }
+
+  const session = normalizeSessionName(request.session);
+  if (!session) {
+    return {
+      error: "Typed Browse forget requires a valid named session.",
+      ok: false,
+    };
+  }
+
+  return {
+    command: {
+      action: "forget",
+      cwd: request.cwd ?? null,
+      projectId: request.projectId ?? null,
+      session,
+      threadId,
+      timeoutMs: request.timeoutMs ?? null,
     },
     ok: true,
   };
@@ -628,6 +681,9 @@ function appendBrowserSessionArgs(
   const mode = normalizeMode(request.mode) ?? defaultMode;
   if (mode) {
     args.push(mode === "headed" ? "--headed" : "--headless");
+  }
+  if (request.persistent === true) {
+    args.push("--persistent");
   }
   return null;
 }

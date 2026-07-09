@@ -153,7 +153,7 @@ function compileFence(fence: ParsedFence, options: WorkbenchBrowseMarkdownCompil
     );
   }
 
-  const expression = fence.lines.join("\n").trim();
+  const expression = createJavaScriptFenceExpression(fence.lines.join("\n").trim());
   if (!expression) {
     throw new WorkbenchBrowseMarkdownParseError("JavaScript eval block cannot be empty.", fence.lineNumber);
   }
@@ -162,6 +162,22 @@ function compileFence(fence: ParsedFence, options: WorkbenchBrowseMarkdownCompil
     action: "eval",
     expression,
   };
+}
+
+function createJavaScriptFenceExpression(source: string) {
+  if (!source) {
+    return "";
+  }
+  if (!isJavaScriptFenceBody(source)) {
+    return source;
+  }
+  return `(async () => {\n${source}\n})()`;
+}
+
+function isJavaScriptFenceBody(source: string) {
+  return source.includes("\n")
+    || /;\s*(?:$|\n)/u.test(source)
+    || /\breturn\b/u.test(source);
 }
 
 function compileCommandLine(context: LineContext): WorkbenchBrowseAgentAction {
@@ -221,6 +237,8 @@ function compileCommandLine(context: LineContext): WorkbenchBrowseAgentAction {
         pressEnter: hasFlag(tokens, ["press-enter"]),
         value: requireRest(args, 1, "fill requires a value.", context.lineNumber),
       };
+    case "forget":
+      return compileForgetCommand(commandContext);
     case "get":
       return compileGetCommand(commandContext, args);
     case "highlight":
@@ -316,6 +334,16 @@ function compileCommandLine(context: LineContext): WorkbenchBrowseAgentAction {
     default:
       throw new WorkbenchBrowseMarkdownParseError(`Unsupported BrowseMD command "${rawCommand}".`, context.lineNumber);
   }
+}
+
+function compileForgetCommand(context: LineContext): WorkbenchBrowseAgentAction {
+  if (hasFlag(context.tokens, ["force"])) {
+    throw new WorkbenchBrowseMarkdownParseError("forget does not support --force.", context.lineNumber);
+  }
+  return {
+    ...createSessionActionBase(context.options, context.tokens),
+    action: "forget",
+  };
 }
 
 function compileGetCommand(context: LineContext, args: string[]): WorkbenchBrowseAgentAction {
@@ -461,6 +489,7 @@ function createBrowserActionBase(options: WorkbenchBrowseMarkdownCompileOptions,
   return {
     ...createSessionActionBase(options, tokens),
     mode: readMode(tokens) ?? options.mode ?? null,
+    persistent: hasFlag(tokens, ["persistent"]) || null,
   };
 }
 

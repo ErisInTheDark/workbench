@@ -15,6 +15,7 @@ import type {
   WorkbenchBrowseSessionSummary,
 } from "../../types";
 import WorkbenchBrowseCli from "./WorkbenchBrowseCli";
+import WorkbenchBrowseProfileStore from "./WorkbenchBrowseProfileStore";
 import WorkbenchBrowseSessionRegistry, { type WorkbenchBrowseSessionRecord } from "./WorkbenchBrowseSessionRegistry";
 
 const DEFAULT_BROWSE_TIMEOUT_MS = 120_000;
@@ -35,16 +36,20 @@ interface BrowseStatusPayload {
 
 export default class WorkbenchBrowseSessionController {
   private readonly cli: WorkbenchBrowseCli;
+  private readonly profileStore: WorkbenchBrowseProfileStore;
   private readonly registry: WorkbenchBrowseSessionRegistry;
 
   constructor({
     cli = new WorkbenchBrowseCli(),
+    profileStore = new WorkbenchBrowseProfileStore(),
     registry = new WorkbenchBrowseSessionRegistry(),
   }: {
     cli?: WorkbenchBrowseCli;
+    profileStore?: WorkbenchBrowseProfileStore;
     registry?: WorkbenchBrowseSessionRegistry;
   } = {}) {
     this.cli = cli;
+    this.profileStore = profileStore;
     this.registry = registry;
   }
 
@@ -142,6 +147,63 @@ export default class WorkbenchBrowseSessionController {
       throw new Error("Browse session name is invalid.");
     }
     await this.registry.forget(sessionName);
+  }
+
+  async forgetPersistentSession({
+    cwd,
+    projectId,
+    session,
+    threadId,
+    timeoutMs,
+  }: {
+    cwd?: string | null;
+    projectId?: string | null;
+    session: string;
+    threadId: string;
+    timeoutMs?: number | null;
+  }): Promise<WorkbenchBrowseAgentResponse> {
+    if (!isValidSessionName(session)) {
+      throw new Error("Browse session name is invalid.");
+    }
+
+    const startedAt = Date.now();
+    const stopResult = await this.stopSession({
+      action: "stop",
+      cwd: cwd ?? null,
+      force: false,
+      projectId: projectId ?? null,
+      session,
+      threadId,
+      timeoutMs: timeoutMs ?? null,
+    });
+    if (stopResult.result && !stopResult.result.ok) {
+      return {
+        action: "forget",
+        durationMs: Date.now() - startedAt,
+        error: stopResult.result.error ?? "Unable to stop Browse session before forgetting its persistent profile.",
+        exitCode: stopResult.result.exitCode,
+        ok: false,
+        stderr: stopResult.result.stderr,
+        stdout: stopResult.result.stdout,
+        timedOut: stopResult.result.timedOut,
+      };
+    }
+
+    const forgottenProfile = await this.profileStore.forgetPersistentSession(session);
+    await this.registry.forget(session);
+    return {
+      action: "forget",
+      durationMs: Date.now() - startedAt,
+      exitCode: 0,
+      ok: true,
+      stderr: "",
+      stdout: JSON.stringify({
+        forgotPersistentProfile: Boolean(forgottenProfile),
+        profilePath: forgottenProfile?.profilePath ?? null,
+        session,
+        stopped: stopResult.stopped,
+      }, null, 2),
+    };
   }
 
   async listSessions(request: WorkbenchBrowseSessionListRequest): Promise<WorkbenchBrowseSessionListResponse> {

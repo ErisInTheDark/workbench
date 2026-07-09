@@ -54,6 +54,8 @@ Do not use Browserbase remote/cloud mode, Browse templates, Browse skills instal
 
 Use named sessions for non-trivial work so parallel agents do not collide through the default Browse session.
 
+Persistent login/profile state is opt-in. Use \`--persistent\` on a named local browser command, normally the first \`open\`, only when the user wants that session id to keep cookies, localStorage, and related browser profile data across stop/reopen cycles. Once a session id becomes persistent, later runs with the same session id reuse that profile without repeating \`--persistent\`. Use \`forget --session <name>\` only when the persistent profile and login state should be deleted.
+
 Stop sessions when finished. Workbench also cleans up thread-owned sessions after their owning thread has been inactive long enough, but agents should still clean up intentionally.
 
 ## Browse Command Isolation
@@ -68,7 +70,7 @@ If page data or Browse endpoint output needs additional processing, first run th
 
 1. Choose a short named session for the task.
 2. Run \`doctor\` or \`status\` when Browse availability is uncertain.
-3. Open the target URL with a BrowseMD \`open <url> --headless\` line unless headed behavior is needed.
+3. Open the target URL with a BrowseMD \`open <url> --headless\` line unless headed behavior is needed. Add \`--persistent\` only for deliberate login/profile reuse.
 4. For multi-step work, prefer one inline BrowseMD script or reusable \`.workbench/browse/*.browsemd\` script. Workbench persists rich per-step result rows for browser commands and BrowseMD helper commands while the endpoint returns command-like stdout/stderr/code.
 5. Use \`snapshot\` before interacting so refs and accessibility context are fresh.
 6. Use refs from the latest snapshot when available. In BrowseMD, refs use the normal Browse CLI spelling such as \`click @0-12\`.
@@ -78,7 +80,7 @@ If page data or Browse endpoint output needs additional processing, first run th
 10. Use \`is\` for simple state checks such as \`visible\` or \`checked\`.
 11. Use \`eval <expression>\` or a fenced \`\`\`js block only for focused JavaScript inspection when \`snapshot\`, \`get\`, or \`is\` cannot read the needed state clearly.
 12. Use \`screenshot\` when visual layout, pixels, or user-visible proof matters.
-13. Use \`cleanup\` or \`stop\` before ending the work.
+13. Use \`cleanup\` or \`stop\` before ending the work. These stop browser processes; they do not delete persistent profile data.
 
 ## Endpoint Request Contract
 
@@ -108,7 +110,7 @@ BrowseMD project script:
 
 Project BrowseMD scripts live directly under \`.workbench/browse/*.browsemd\` in the Workbench project root that owns the request \`cwd\`. Use \`scriptPath\` for reusable project-local Browse fragments. Do not pass absolute paths or \`..\` path segments.
 
-BrowseMD is a deterministic CLI-like markdown format. Browser-command lines match Browse CLI syntax, with an optional literal \`browse\` prefix. Examples: \`open <url>\`, \`browse snapshot compact\`, \`click @0-4\`, \`fill 'input[name=q]' "hello"\`, \`wait timeout 1000\`, \`move cursor 240 320\`, \`mouse drag 100 100 400 400 --steps 20\`, \`screenshot\`, and \`cleanup --force\`. JavaScript fenced blocks with \`js\` or \`javascript\` run as Browse \`eval\` actions:
+BrowseMD is a deterministic CLI-like markdown format. Browser-command lines match Browse CLI syntax, with an optional literal \`browse\` prefix. Examples: \`open <url>\`, \`open <url> --persistent\`, \`browse snapshot compact\`, \`click @0-4\`, \`fill 'input[name=q]' "hello"\`, \`wait timeout 1000\`, \`move cursor 240 320\`, \`mouse drag 100 100 400 400 --steps 20\`, \`screenshot\`, \`forget --session research\`, and \`cleanup --force\`. JavaScript fenced blocks with \`js\` or \`javascript\` run as Browse \`eval\` actions. Write either a simple expression or a normal script body with \`return\`; Workbench handles the needed eval wrapping:
 
 \`\`\`\`md
 open http://localhost:3000 --headless
@@ -116,7 +118,8 @@ snapshot compact
 click @0-4
 
 \`\`\`js
-document.title
+const title = document.title;
+return { title, url: location.href };
 \`\`\`
 
 screenshot
@@ -130,7 +133,7 @@ BrowseMD endpoint responses are command-like: \`stdout\`, \`stderr\`, \`exitCode
 
 \`--help\` and \`-h\` are help-only. A BrowseMD request that asks for help runs no side-effectful actions; mixing help with execution fails clearly.
 
-BrowseMD still follows the same Browse safety workflow: use named sessions, prefer local browser sessions, treat refs as stale after DOM-changing actions, and stop or clean up sessions when finished.
+BrowseMD still follows the same Browse safety workflow: use named sessions, prefer local browser sessions, treat refs as stale after DOM-changing actions, and stop or clean up sessions when finished. Persistent sessions keep browser profile data after stop/cleanup until \`forget --session <name>\` deletes the profile.
 
 Raw CLI-args passthrough, when explicitly needed and enabled:
 
@@ -237,6 +240,8 @@ Stop named sessions when finished. During active investigation, keep the named s
 Use \`cleanup\` for sessions owned by the current thread.
 
 Use explicit \`cleanup\` session lists when you created or inherited specific session names.
+
+Use \`forget --session <name>\` only for persistent sessions whose stored login/profile data should be removed. Do not use \`forget\` as routine cleanup.
 
 Users can also manage Workbench-known Browse sessions from the current project's sidebar.
 

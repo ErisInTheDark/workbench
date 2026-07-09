@@ -194,6 +194,7 @@ interface BrowseMarkdownCommandResult extends WorkbenchBrowseCommandResponse {
 }
 
 interface BrowseMarkdownStatement {
+  kind: "command" | "javascript";
   lineNumber: number;
   text: string;
 }
@@ -321,7 +322,7 @@ function readBrowseMarkdownStatements(script: string) {
     if (fenceStartLine !== null) {
       fenceLines.push(line);
       if (/^```+\s*$/u.test(line.trim())) {
-        statements.push({ lineNumber: fenceStartLine, text: fenceLines.join("\n") });
+        statements.push({ kind: "javascript", lineNumber: fenceStartLine, text: fenceLines.join("\n") });
         fenceStartLine = null;
         fenceLines = [];
       }
@@ -338,7 +339,7 @@ function readBrowseMarkdownStatements(script: string) {
     if (!trimmedLine || trimmedLine === "---" || trimmedLine.startsWith("# ") || trimmedLine.startsWith("## ") || trimmedLine.startsWith("### ") || trimmedLine.startsWith("// ")) {
       continue;
     }
-    statements.push({ lineNumber, text: line });
+    statements.push({ kind: "command", lineNumber, text: line });
   }
 
   if (fenceStartLine !== null) {
@@ -618,7 +619,7 @@ async function runBrowseMarkdownBrowseCommand(
   context: BrowseMarkdownRuntimeContext,
   line: string,
   actionIndex: number,
-) {
+): Promise<BrowseMarkdownCommandResult> {
   const sequence = compileWorkbenchBrowseMarkdown(line, {
     cwd: context.scriptRequest.cwd,
     mode: context.scriptRequest.mode ?? null,
@@ -646,13 +647,14 @@ async function runBrowseMarkdownPipeline(
   context: BrowseMarkdownRuntimeContext,
   line: string,
   actionIndex: number,
+  lineNumber: number,
 ) {
   const expandedLine = expandBrowseMarkdownVariables(line, context.variables);
   const segments = splitBrowseMarkdownPipeline(expandedLine);
   let stdin = "";
   let finalResult: BrowseMarkdownCommandResult = { durationMs: 0, exitCode: 0, ok: true, stderr: "", stdout: "" };
   for (const [segmentIndex, segment] of segments.entries()) {
-    const tokens = tokenizeWorkbenchBrowseMarkdownLine(segment, actionIndex + 1);
+    const tokens = tokenizeWorkbenchBrowseMarkdownLine(segment, lineNumber);
     const { append, commandTokens, inputPath, outputPath } = removeBrowseMarkdownRedirections(tokens);
     if (inputPath) {
       stdin = await fs.readFile(resolveBrowseMarkdownWorkspacePath(context, inputPath), "utf8");
@@ -704,11 +706,17 @@ async function runBrowseMarkdownPipeline(
 }
 
 function isBrowseMarkdownHelpStatement(statement: BrowseMarkdownStatement) {
+  if (statement.kind === "javascript") {
+    return false;
+  }
   const tokens = tokenizeWorkbenchBrowseMarkdownLine(statement.text, statement.lineNumber);
   return tokens.some((token) => token === "--help" || token === "-h");
 }
 
 async function runBrowseMarkdownHelpStatement(context: BrowseMarkdownRuntimeContext, statement: BrowseMarkdownStatement) {
+  if (statement.kind === "javascript") {
+    throw new Error("BrowseMD JavaScript blocks cannot be used as help statements.");
+  }
   const tokens = tokenizeWorkbenchBrowseMarkdownLine(statement.text, statement.lineNumber);
   const args = tokens[0]?.toLowerCase() === "browse" ? tokens.slice(1) : tokens;
   return await runBrowseCommand({
@@ -762,10 +770,12 @@ async function runBrowseMarkdownRequest(request: NextRequest, scriptRequest: Wor
   let stdout = "";
   let stderr = "";
   for (const [index, statement] of statements.entries()) {
-    const assignment = parseBrowseMarkdownAssignment(statement.text);
-    const result = assignment
-      ? await runBrowseMarkdownPipeline(context, assignment.command, index)
-      : await runBrowseMarkdownPipeline(context, statement.text, index);
+    const assignment = statement.kind === "command" ? parseBrowseMarkdownAssignment(statement.text) : null;
+    const result = statement.kind === "javascript"
+      ? await runBrowseMarkdownBrowseCommand(context, statement.text, index)
+      : assignment
+        ? await runBrowseMarkdownPipeline(context, assignment.command, index, statement.lineNumber)
+        : await runBrowseMarkdownPipeline(context, statement.text, index, statement.lineNumber);
     stderr += result.stderr;
     if (result.browseResultAction && context.activeThread) {
       await recordAutomaticBrowseResult(request, {
@@ -1266,6 +1276,24 @@ async function runBrowseAgentCommand(
   if (normalized.command.action === "cleanup") {
     void startedAt;
     return await browseSessionController.cleanupThreadSessions(normalized.command);
+  }
+
+  if (normalized.command.action === "forget") {
+    const activeThread = await readThreadForAutomaticBrowseResult(request, normalized.command.threadId);
+    const result = await browseSessionController.forgetPersistentSession(normalized.command);
+    if (activeThread) {
+      await recordAutomaticBrowseResult(request, {
+        action: "forget",
+        actionIndex,
+        assetUrl: null,
+        commandItemId: activeThread.commandItemId,
+        result,
+        session: normalized.command.session,
+        threadId: normalized.command.threadId,
+        turnId: activeThread.turnId,
+      }).catch(() => undefined);
+    }
+    return result;
   }
 
   const executionContext = await browseCli.resolveExecutionContext(normalized.command.commandRequest);

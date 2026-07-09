@@ -11,6 +11,7 @@ import path from "node:path";
 import { appRoot, normalizeRelativePath, resolveProjectRoot } from "../../project";
 import type { WorkbenchBrowseCommandRequest, WorkbenchBrowseCommandResponse } from "../../types";
 import { resolveAgentEndpointProjectFromCwd } from "../project/agent-endpoint-project";
+import WorkbenchBrowseProfileStore from "./WorkbenchBrowseProfileStore";
 
 export interface WorkbenchBrowseExecutionContext {
   cwd: string;
@@ -23,8 +24,19 @@ const DEFAULT_BROWSE_STATUS_TIMEOUT_MS = 5_000;
 const MAX_BROWSE_TIMEOUT_MS = 10 * 60_000;
 const BROWSE_RUNTIME_SESSION_FILE_PATTERN = /^(.+)\.(?:lock|pid|sock)$/u;
 const WORKBENCH_BROWSE_DOWNLOADS_PATH_ENV = "WORKBENCH_BROWSE_DOWNLOADS_PATH";
+const WORKBENCH_BROWSE_USER_DATA_DIR_ENV = "WORKBENCH_BROWSE_USER_DATA_DIR";
 
 export default class WorkbenchBrowseCli {
+  private readonly profileStore: WorkbenchBrowseProfileStore;
+
+  constructor({
+    profileStore = new WorkbenchBrowseProfileStore(),
+  }: {
+    profileStore?: WorkbenchBrowseProfileStore;
+  } = {}) {
+    this.profileStore = profileStore;
+  }
+
   async listRuntimeSessionNames() {
     const runtimeDirectoryPath = this.getRuntimeDirectoryPath();
     let entries;
@@ -94,15 +106,17 @@ export default class WorkbenchBrowseCli {
     const browseEntrypoint = await this.resolveBrowseEntrypoint();
     const executionContext = await this.resolveExecutionContext(request);
     const timeoutMs = normalizeTimeout(request.timeoutMs, DEFAULT_BROWSE_TIMEOUT_MS);
+    const preparedCommand = await this.prepareCommand(request.args);
 
     return new Promise((resolve) => {
-      const child = spawn(process.execPath, [browseEntrypoint, ...request.args], {
+      const child = spawn(process.execPath, [browseEntrypoint, ...preparedCommand.args], {
         cwd: executionContext.cwd,
         env: {
           ...process.env,
           BROWSERBASE_TELEMETRY_DISABLED: "1",
           BROWSE_DISABLE_UPDATE_CHECK: "1",
           [WORKBENCH_BROWSE_DOWNLOADS_PATH_ENV]: executionContext.cwd,
+          ...(preparedCommand.profilePath ? { [WORKBENCH_BROWSE_USER_DATA_DIR_ENV]: preparedCommand.profilePath } : {}),
         },
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],
@@ -191,6 +205,18 @@ export default class WorkbenchBrowseCli {
     const uid = typeof process.getuid === "function" ? process.getuid() : null;
     return uid === null ? "browse-driver" : `browse-driver-${uid}`;
   }
+
+  private async prepareCommand(args: string[]) {
+    const preparedArgs = stripWorkbenchPersistentFlag(args);
+    const sessionName = readBrowseSessionName(preparedArgs.args);
+    return {
+      args: preparedArgs.args,
+      profilePath: await this.profileStore.resolveProfilePath({
+        persistent: preparedArgs.persistent,
+        sessionName,
+      }),
+    };
+  }
 }
 
 function normalizeTimeout(value: number | null | undefined, fallback: number) {
@@ -200,4 +226,31 @@ function normalizeTimeout(value: number | null | undefined, fallback: number) {
   }
 
   return Math.min(Math.trunc(numericValue), MAX_BROWSE_TIMEOUT_MS);
+}
+
+function stripWorkbenchPersistentFlag(args: string[]) {
+  let persistent = false;
+  const nextArgs: string[] = [];
+  for (const arg of args) {
+    if (arg === "--persistent") {
+      persistent = true;
+      continue;
+    }
+    nextArgs.push(arg);
+  }
+  return { args: nextArgs, persistent };
+}
+
+function readBrowseSessionName(args: string[]) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (arg === "--session" || arg === "-s") {
+      return args[index + 1]?.trim() || null;
+    }
+    const match = /^(?:--session|-s)=(.+)$/u.exec(arg);
+    if (match?.[1]) {
+      return match[1].trim() || null;
+    }
+  }
+  return null;
 }

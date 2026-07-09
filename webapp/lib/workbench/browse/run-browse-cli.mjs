@@ -1,11 +1,13 @@
 /*
  * Runtime wrapper:
  * - Forces child_process spawn/exec helpers to default windowsHide=true before Browse loads.
- * - Injects Workbench-owned local Browse download directory defaults before Browse loads.
+ * - Injects Workbench-owned local Browse download and persistent-profile defaults before Browse loads.
+ * - Gives persistent local profiles a graceful Chrome shutdown path before Stagehand's kill fallback.
  * - Runs the project-local Browse oclif entrypoint without patching node_modules.
- * Keywords: browse, cli, windows, hidden, daemon, downloads.
+ * Keywords: browse, cli, windows, hidden, daemon, downloads, profile, cookies.
  */
 import childProcess from "node:child_process";
+import fs from "node:fs";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -78,8 +80,12 @@ const browseBinPath = require.resolve("browse/bin/run.js");
 const browseRequire = createRequire(pathToFileURL(browseBinPath));
 const browsePackageJsonPath = browseRequire.resolve("browse/package.json");
 const browsePackageRoot = path.dirname(browsePackageJsonPath);
+const stagehandPackageJsonPath = browseRequire.resolve("@browserbasehq/stagehand/package.json");
+const stagehandPackageRoot = path.dirname(stagehandPackageJsonPath);
 const sessionManagerModule = await import(pathToFileURL(path.join(browsePackageRoot, "dist", "lib", "driver", "session-manager.js")).href);
-patchBrowseDownloadsPath(sessionManagerModule);
+const contextModule = await import(pathToFileURL(path.join(stagehandPackageRoot, "dist", "esm", "lib", "v3", "understudy", "context.js")).href);
+patchBrowseLocalLaunchOptions(sessionManagerModule);
+patchBrowsePersistentProfileShutdown(contextModule);
 
 const { execute } = await import(pathToFileURL(browseRequire.resolve("@oclif/core")).href);
 await execute({ dir: pathToFileURL(browseBinPath).href });
@@ -128,9 +134,10 @@ function shouldAllowHeadedBrowserWindows(argv) {
   }
 }
 
-function patchBrowseDownloadsPath(sessionManagerModule) {
+function patchBrowseLocalLaunchOptions(sessionManagerModule) {
   const downloadsPath = process.env.WORKBENCH_BROWSE_DOWNLOADS_PATH?.trim();
-  if (!downloadsPath) {
+  const userDataDir = process.env.WORKBENCH_BROWSE_USER_DATA_DIR?.trim();
+  if (!downloadsPath && !userDataDir) {
     return;
   }
 
@@ -145,13 +152,59 @@ function patchBrowseDownloadsPath(sessionManagerModule) {
     const [target] = args;
 
     if (target?.kind === "managed-local" && options?.env === "LOCAL") {
+      if (userDataDir) {
+        fs.mkdirSync(userDataDir, { recursive: true });
+      }
+
       options.localBrowserLaunchOptions = {
         ...(options.localBrowserLaunchOptions ?? {}),
-        acceptDownloads: true,
-        downloadsPath,
+        ...(downloadsPath ? {
+          acceptDownloads: true,
+          downloadsPath,
+        } : {}),
+        ...(userDataDir ? {
+          preserveUserDataDir: true,
+          userDataDir,
+        } : {}),
       };
     }
 
     return options;
   };
+}
+
+function patchBrowsePersistentProfileShutdown(contextModule) {
+  const userDataDir = process.env.WORKBENCH_BROWSE_USER_DATA_DIR?.trim();
+  if (!userDataDir) {
+    return;
+  }
+
+  const prototype = contextModule.V3Context?.prototype;
+  if (!prototype || typeof prototype.close !== "function") {
+    return;
+  }
+
+  const originalClose = prototype.close;
+  prototype.close = async function closeWithPersistentProfileFlush(...args) {
+    if (this?.localBrowserLaunchOptions?.userDataDir === userDataDir) {
+      await requestBrowserClose(this.conn);
+    }
+
+    return originalClose.apply(this, args);
+  };
+}
+
+async function requestBrowserClose(connection) {
+  if (!connection || typeof connection.send !== "function") {
+    return;
+  }
+
+  try {
+    await Promise.race([
+      connection.send("Browser.close"),
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ]);
+  } catch {
+    // Browser.close often closes the CDP transport before a response returns.
+  }
 }

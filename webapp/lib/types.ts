@@ -135,6 +135,7 @@ export type WorkbenchBrowseAgentAction =
   | WorkbenchBrowseAgentDoctorRequest
   | WorkbenchBrowseAgentEvalRequest
   | WorkbenchBrowseAgentFillRequest
+  | WorkbenchBrowseAgentForgetRequest
   | WorkbenchBrowseAgentForwardRequest
   | WorkbenchBrowseAgentGetRequest
   | WorkbenchBrowseAgentHighlightRequest
@@ -173,6 +174,7 @@ export type WorkbenchBrowseAgentActionName =
   | "cursor"
   | "eval"
   | "fill"
+  | "forget"
   | "forward"
   | "get"
   | "highlight"
@@ -202,6 +204,7 @@ export interface WorkbenchBrowseAgentSessionRequest extends WorkbenchBrowseAgent
 export interface WorkbenchBrowseAgentBrowserRequest extends WorkbenchBrowseAgentSessionRequest {
   local?: boolean | null;
   mode?: WorkbenchBrowseSessionMode | null;
+  persistent?: boolean | null;
 }
 
 export interface WorkbenchBrowseAgentDoctorRequest extends WorkbenchBrowseAgentSessionRequest {
@@ -349,6 +352,10 @@ export interface WorkbenchBrowseAgentBackRequest extends WorkbenchBrowseAgentNav
 
 export interface WorkbenchBrowseAgentForwardRequest extends WorkbenchBrowseAgentNavigationRequest {
   action: "forward";
+}
+
+export interface WorkbenchBrowseAgentForgetRequest extends WorkbenchBrowseAgentSessionRequest {
+  action: "forget";
 }
 
 export interface WorkbenchBrowseAgentReloadRequest extends WorkbenchBrowseAgentNavigationRequest {
