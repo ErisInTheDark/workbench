@@ -33,6 +33,7 @@ import {
   getThreadCommandDisplay,
   isBrowseWebRequestMatcherClaim,
   isGitCheckpointDiffMatcherClaim,
+  isThreadContextMatcherClaim,
   parseBrowseSequenceCommandOutput,
   parseGitCheckpointDiffArtifactId,
   parseGitCheckpointDiffOutput,
@@ -50,6 +51,7 @@ import ThreadAgentName from "./ThreadAgentName";
 import ThreadCheckpointDiffItem from "./ThreadCheckpointDiffItem";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
 import ThreadContextCompactionItem from "./ThreadContextCompactionItem";
+import ThreadContextCommandItem from "./ThreadContextCommandItem";
 import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
@@ -1608,6 +1610,75 @@ function isBrowseWebRequestCommandItem({
   return isBrowseWebRequestMatcherClaim(display.claimedBy);
 }
 
+function isThreadContextCommandItem({
+  item,
+  knownSkills,
+  projectRootPath,
+  workspaceRoots,
+}: {
+  item: CommandItem;
+  knownSkills?: WorkbenchSkillSummary[];
+  projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+}) {
+  const display = getThreadCommandDisplay({
+    command: item.command,
+    commandActions: item.commandActions,
+    cwd: item.cwd,
+    knownSkills,
+    projectRootPath,
+    workspaceRoots,
+  });
+  return isThreadContextMatcherClaim(display.claimedBy);
+}
+
+type CommandSequenceRenderSegment =
+  | { items: CommandItem[]; kind: "commands" }
+  | { item: CommandItem; kind: "threadContext" };
+
+function buildCommandSequenceRenderSegments({
+  items,
+  knownSkills,
+  projectRootPath,
+  workspaceRoots,
+}: {
+  items: CommandItem[];
+  knownSkills?: WorkbenchSkillSummary[];
+  projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+}) {
+  const segments: CommandSequenceRenderSegment[] = [];
+  let pendingCommands: CommandItem[] = [];
+
+  const flushPendingCommands = () => {
+    if (!pendingCommands.length) {
+      return;
+    }
+
+    segments.push({
+      items: pendingCommands,
+      kind: "commands",
+    });
+    pendingCommands = [];
+  };
+
+  for (const item of items) {
+    if (isThreadContextCommandItem({ item, knownSkills, projectRootPath, workspaceRoots })) {
+      flushPendingCommands();
+      segments.push({
+        item,
+        kind: "threadContext",
+      });
+      continue;
+    }
+
+    pendingCommands.push(item);
+  }
+
+  flushPendingCommands();
+  return segments;
+}
+
 function ThreadCommandExecutionDetails ({
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   isMostRecent = false,
@@ -1756,7 +1827,7 @@ function ThreadCommandExecutionDetails ({
   );
 }
 
-function ThreadCommandSequence ({
+function ThreadRegularCommandSequence ({
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   isMostRecent,
   items,
@@ -1864,6 +1935,86 @@ function ThreadCommandSequence ({
   );
 }
 
+function ThreadCommandSequence ({
+  browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
+  isMostRecent,
+  items,
+  knownSkills,
+  projectFilePaths,
+  projectId,
+  projectRootPath,
+  threadCwdPath,
+  threadId,
+  workspaceRoots,
+}: {
+  browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
+  isMostRecent: boolean;
+  items: CommandItem[];
+  knownSkills?: WorkbenchSkillSummary[];
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+  projectRootPath?: string;
+  threadCwdPath?: string;
+  threadId: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+}) {
+  const renderSegments = useMemo(() => buildCommandSequenceRenderSegments({
+    items,
+    knownSkills,
+    projectRootPath,
+    workspaceRoots,
+  }), [items, knownSkills, projectRootPath, workspaceRoots]);
+  const hasThreadContextSegment = renderSegments.some((segment) => segment.kind === "threadContext");
+
+  if (!hasThreadContextSegment) {
+    return (
+      <ThreadRegularCommandSequence
+        browseResultEntries={browseResultEntries}
+        isMostRecent={isMostRecent}
+        items={items}
+        knownSkills={knownSkills}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        projectRootPath={projectRootPath}
+        threadId={threadId}
+        workspaceRoots={workspaceRoots}
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      {renderSegments.map((segment, index) => (
+        segment.kind === "threadContext" ? (
+          <ThreadContextCommandItem
+            defaultOpen={isMostRecent && index === renderSegments.length - 1}
+            item={segment.item}
+            key={`thread-context:${segment.item.id}`}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            threadCwdPath={threadCwdPath}
+            workspaceRoots={workspaceRoots}
+          />
+        ) : (
+          <ThreadRegularCommandSequence
+            browseResultEntries={browseResultEntries}
+            isMostRecent={isMostRecent && index === renderSegments.length - 1}
+            items={segment.items}
+            key={`commands:${segment.items[0]?.id ?? index}`}
+            knownSkills={knownSkills}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            threadId={threadId}
+            workspaceRoots={workspaceRoots}
+          />
+        )
+      ))}
+    </div>
+  );
+}
+
 function ThreadFallbackItem ({ item }: { item: NonGroupedItem }) {
   return (
     <ThreadDisclosure
@@ -1917,7 +2068,7 @@ function ThreadRenderableBlockViewComponent ({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   if (block.kind === "commandSequence") {
-    return <ThreadCommandSequence browseResultEntries={browseResultEntries} isMostRecent={isMostRecentBlock} items={block.items} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
+    return <ThreadCommandSequence browseResultEntries={browseResultEntries} isMostRecent={isMostRecentBlock} items={block.items} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} threadCwdPath={threadCwdPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
   }
 
   if (block.kind === "fileChangeSequence") {

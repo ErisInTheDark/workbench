@@ -9,6 +9,7 @@
  * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text. Keywords: path, command, relative, display.
  * - isBrowseWebRequestMatcherClaim/parseBrowseSequenceCommandOutput: detect and parse Browse request command output. Keywords: browse, sequence, command.
  * - isGitCheckpointDiffMatcherClaim: detect checkpoint diff matcher ids for specialized command-output rendering. Keywords: thread, command, checkpoint, diff.
+ * - isThreadContextMatcherClaim: detect thread context endpoint commands for dedicated disclosure rendering. Keywords: thread, context, disclosure.
  * - parseGitCheckpointDiffArtifactId: parse compact checkpoint diff output for a stored full-diff artifact id. Keywords: checkpoint, diff, artifact.
  * - parseGitCheckpointDiffOutput: parse checkpoint diff command output into file-change display entries. Keywords: checkpoint, diff, file change.
  * - getThreadCommandDisplay: unwrap shell launchers and describe common command patterns with staged shell matchers. Keywords: thread, command, matcher, shell.
@@ -43,6 +44,10 @@ import {
 import { POSIX_COMMAND_MATCHERS } from "./command-matchers/posix";
 import { POWERSHELL_COMMAND_MATCHERS } from "./command-matchers/powershell";
 import { COMMON_COMMAND_MATCHERS } from "./command-matchers/shared";
+import {
+  isThreadContextMatcherClaim,
+  THREAD_CONTEXT_COMMAND_MATCHERS,
+} from "./command-matchers/thread-context";
 import {
     consumeNextCommandStage,
     getCommandShellGroup,
@@ -146,7 +151,7 @@ const COMMAND_BLOCK_SUMMARY_CATEGORIES: Array<{
 ];
 
 export { CommandMatcher, formatThreadCommandPath };
-export { isBrowseWebRequestMatcherClaim, isGitCheckpointDiffMatcherClaim, parseBrowseSequenceCommandOutput, parseGitCheckpointDiffArtifactId, parseGitCheckpointDiffOutput };
+export { isBrowseWebRequestMatcherClaim, isGitCheckpointDiffMatcherClaim, isThreadContextMatcherClaim, parseBrowseSequenceCommandOutput, parseGitCheckpointDiffArtifactId, parseGitCheckpointDiffOutput };
 export type {
     ThreadCommandDisplay,
     ThreadCommandDisplayPart,
@@ -179,6 +184,7 @@ export function getThreadCommandDisplay({
   };
   const matchedDisplay = runThreadCommandMatchers(context, {
     commonMatchers: [
+      ...THREAD_CONTEXT_COMMAND_MATCHERS,
       ...COPILOT_COMMAND_MATCHERS,
       ...GIT_CHECKPOINT_COMMAND_MATCHERS,
       ...BROWSE_WEB_REQUEST_COMMAND_MATCHERS,
