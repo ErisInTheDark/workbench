@@ -74,8 +74,10 @@ export function consumeNextCommandStage(command: string, shellGroup: CommandShel
   }
 
   switch (shellGroup) {
-    case "powershell":
-      return consumePowerShellStage(normalizedCommand);
+    case "powershell": {
+      const commandStageText = unwrapPowerShellNewlineJoinedPipeline(normalizedCommand) ?? normalizedCommand;
+      return consumePowerShellStage(commandStageText);
+    }
     case "cmd":
       return consumeCmdStage(normalizedCommand);
     case "posix":
@@ -218,6 +220,140 @@ function consumePowerShellStage(command: string) {
   }
 
   return finalizeCommandStage(command, command.length, 0);
+}
+
+function unwrapPowerShellNewlineJoinedPipeline(command: string) {
+  const trimmedCommand = command.trim();
+  if (!trimmedCommand.startsWith("(")) {
+    return null;
+  }
+
+  const parenthesizedCommand = readPowerShellParenthesizedExpression(trimmedCommand, 0);
+  if (!parenthesizedCommand) {
+    return null;
+  }
+
+  const trailingCommand = trimmedCommand.slice(parenthesizedCommand.nextIndex).trim();
+  const joinMatch = trailingCommand.match(/^-join\s+([\s\S]+)$/i);
+  if (!joinMatch?.[1] || !isPowerShellNewlineJoinDelimiter(joinMatch[1])) {
+    return null;
+  }
+
+  const innerCommand = parenthesizedCommand.value.trim();
+  return hasTopLevelPowerShellPipeline(innerCommand) ? innerCommand : null;
+}
+
+function readPowerShellParenthesizedExpression(command: string, startIndex: number) {
+  if (command[startIndex] !== "(") {
+    return null;
+  }
+
+  let inDoubleQuote = false;
+  let inSingleQuote = false;
+  let parenthesisDepth = 0;
+  let value = "";
+
+  for (let index = startIndex; index < command.length; index += 1) {
+    const character = command[index];
+    const nextCharacter = command[index + 1] ?? "";
+
+    if (inSingleQuote) {
+      if (character === "'" && nextCharacter === "'") {
+        value += character;
+        value += nextCharacter;
+        index += 1;
+        continue;
+      }
+
+      if (character === "'") {
+        inSingleQuote = false;
+      }
+
+      value += character;
+      continue;
+    }
+
+    if (inDoubleQuote) {
+      if (character === "`") {
+        value += character;
+        value += nextCharacter;
+        index += 1;
+        continue;
+      }
+
+      if (character === "\"") {
+        inDoubleQuote = false;
+      }
+
+      value += character;
+      continue;
+    }
+
+    if (character === "'") {
+      inSingleQuote = true;
+      value += character;
+      continue;
+    }
+
+    if (character === "\"") {
+      inDoubleQuote = true;
+      value += character;
+      continue;
+    }
+
+    if (character === "(") {
+      parenthesisDepth += 1;
+      if (parenthesisDepth > 1) {
+        value += character;
+      }
+      continue;
+    }
+
+    if (character === ")") {
+      parenthesisDepth -= 1;
+      if (parenthesisDepth === 0) {
+        return {
+          nextIndex: index + 1,
+          value,
+        };
+      }
+
+      if (parenthesisDepth < 0) {
+        return null;
+      }
+
+      value += character;
+      continue;
+    }
+
+    value += character;
+  }
+
+  return null;
+}
+
+function isPowerShellNewlineJoinDelimiter(value: string) {
+  const normalizedValue = value.trim();
+  if (/^\[Environment\]::NewLine$/i.test(normalizedValue)) {
+    return true;
+  }
+
+  const unwrappedValue = unwrapPowerShellJoinDelimiterText(normalizedValue);
+  return unwrappedValue === "`n"
+    || unwrappedValue === "\\n"
+    || unwrappedValue === "\n"
+    || unwrappedValue === "\r\n";
+}
+
+function unwrapPowerShellJoinDelimiterText(value: string) {
+  const trimmedValue = value.trim();
+  const quotedMatch = trimmedValue.match(/^(?:\\?["'])([\s\S]*?)(?:\\?["'])$/);
+  return quotedMatch?.[1] ?? trimmedValue;
+}
+
+function hasTopLevelPowerShellPipeline(command: string) {
+  const firstStage = consumePowerShellStage(command);
+  return Boolean(firstStage?.remainingCommand && command.slice(firstStage.text.length).trimStart().startsWith("|"));
 }
 
 function consumePosixStage(command: string) {
