@@ -14,6 +14,7 @@ import { getCurrentInProgressTurn, hasStaleApprovalState, isCurrentTurnWaitingOn
 import type {
   ThreadPayload,
   WorkbenchAgentOption,
+  WorkbenchListModelsOptions,
   WorkbenchModelOption,
   WorkbenchPendingUserInputRequest,
   WorkbenchQuestionnaireDraft,
@@ -48,8 +49,27 @@ import ThreadLightboxImage from "./ThreadLightboxImage";
 import ThreadModelPicker from "./ThreadModelPicker";
 import ThreadUserInputRequest, { getThreadUserInputRequestPreviewText } from "./ThreadUserInputRequest";
 
+const PICKER_REFRESH_COOLDOWN_MS = 1500;
+const PICKER_REFRESH_MIN_SPIN_MS = 500;
+
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
+}
+
+async function waitForMinimumDuration (work: Promise<void>, durationMs: number): Promise<void> {
+  let thrownError: unknown = null;
+  await Promise.all([
+    work.catch((error: unknown) => {
+      thrownError = error;
+    }),
+    new Promise<void>((resolve) => {
+      window.setTimeout(resolve, durationMs);
+    }),
+  ]);
+
+  if (thrownError) {
+    throw thrownError;
+  }
 }
 
 function isCollapsedPreviewInteractiveTarget (
@@ -393,7 +413,7 @@ export default function ThreadComposer ({
   controlsMode?: "comment" | "thread";
   header?: ReactNode;
   layout?: "thread" | "inline";
-  onListModels: (harness: ThreadPayload["harness"]) => Promise<WorkbenchModelOption[]>;
+  onListModels: (harness: ThreadPayload["harness"], options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   onPauseThread: (threadId: string) => Promise<void> | void;
   onResumeThread: (threadId: string) => Promise<void> | void;
   onSendMessage: (threadId: string, input: UserInput[]) => Promise<void>;
@@ -448,6 +468,10 @@ export default function ThreadComposer ({
   const [isComposing, setIsComposing] = useState(false);
   const [isLoadingAgents, setIsLoadingAgents] = useState(false);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [isAgentRefreshPending, setIsAgentRefreshPending] = useState(false);
+  const [isAgentRefreshCoolingDown, setIsAgentRefreshCoolingDown] = useState(false);
+  const [isModelRefreshPending, setIsModelRefreshPending] = useState(false);
+  const [isModelRefreshCoolingDown, setIsModelRefreshCoolingDown] = useState(false);
   const [agentsError, setAgentsError] = useState("");
   const [modelsError, setModelsError] = useState("");
   const [isQuestionnaireVisible, setIsQuestionnaireVisible] = useState(Boolean(pendingUserInputRequest));
@@ -471,6 +495,11 @@ export default function ThreadComposer ({
     }
     : null);
   const previousStickyComposerArmedRef = useRef(false);
+  const agentLoadGenerationRef = useRef(0);
+  const modelLoadGenerationRef = useRef(0);
+  const agentRefreshCooldownTimeoutRef = useRef<number | null>(null);
+  const modelRefreshCooldownTimeoutRef = useRef<number | null>(null);
+  const isComposerMountedRef = useRef(true);
   const stickyTopSentinelRef = useRef<HTMLDivElement>(null);
   const stickySurfaceRef = useRef<HTMLDivElement>(null);
   const stickyExpandedRef = useRef<HTMLDivElement>(null);
@@ -563,6 +592,149 @@ export default function ThreadComposer ({
     ?? getWorkbenchAgentPathLabel(thread.agentPath)
     ?? "Default agent";
   const deprioritizedModelIds = deprioritizedModelIdsByHarness[thread.harness] ?? [];
+  const loadAvailableAgents = useCallback((options: { clearBeforeLoad?: boolean } = {}): Promise<void> => {
+    const generation = agentLoadGenerationRef.current + 1;
+    agentLoadGenerationRef.current = generation;
+
+    if (isCommentMode) {
+      setAvailableAgents([]);
+      setAgentsError("");
+      setIsLoadingAgents(false);
+      return Promise.resolve();
+    }
+
+    if (options.clearBeforeLoad) {
+      setAvailableAgents([]);
+    }
+    setAgentsError("");
+    setIsLoadingAgents(true);
+
+    return fetch(`/api/agents?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" }).then(async (response) => {
+      if (!response.ok) {
+        throw new Error("Unable to load agents.");
+      }
+
+      const payload = await response.json() as { data?: WorkbenchAgentOption[] };
+      if (agentLoadGenerationRef.current !== generation) {
+        return;
+      }
+
+      setAvailableAgents(payload.data ?? []);
+      setAgentsError("");
+    }).catch((agentsLoadError) => {
+      if (agentLoadGenerationRef.current !== generation) {
+        return;
+      }
+
+      setAgentsError(agentsLoadError instanceof Error ? agentsLoadError.message : "Unable to load agents.");
+    }).finally(() => {
+      if (agentLoadGenerationRef.current === generation) {
+        setIsLoadingAgents(false);
+      }
+    });
+  }, [isCommentMode, projectId]);
+  const loadAvailableModels = useCallback((options: { clearBeforeLoad?: boolean; forceRefresh?: boolean; showErrors?: boolean; showLoading?: boolean } = {}): Promise<void> => {
+    const {
+      clearBeforeLoad = false,
+      forceRefresh = false,
+      showErrors = true,
+      showLoading = true,
+    } = options;
+    const generation = modelLoadGenerationRef.current + 1;
+    modelLoadGenerationRef.current = generation;
+
+    if (isCommentMode) {
+      setAvailableModels([]);
+      setModelsError("");
+      setIsLoadingModels(false);
+      return Promise.resolve();
+    }
+
+    if (clearBeforeLoad) {
+      setAvailableModels([]);
+    }
+    if (showErrors) {
+      setModelsError("");
+    }
+    if (showLoading) {
+      setIsLoadingModels(true);
+    }
+
+    return onListModels(thread.harness, { forceRefresh }).then((models) => {
+      if (modelLoadGenerationRef.current !== generation) {
+        return;
+      }
+
+      setAvailableModels(models);
+      if (showErrors) {
+        setModelsError("");
+      }
+    }).catch((modelsLoadError) => {
+      if (modelLoadGenerationRef.current !== generation) {
+        return;
+      }
+
+      if (showErrors) {
+        setModelsError(modelsLoadError instanceof Error ? modelsLoadError.message : "Unable to load models.");
+      }
+    }).finally(() => {
+      if (modelLoadGenerationRef.current === generation && showLoading) {
+        setIsLoadingModels(false);
+      }
+    });
+  }, [isCommentMode, onListModels, thread.harness]);
+  const refreshAvailableAgents = useCallback(() => {
+    if (isLoadingAgents || isAgentRefreshPending || isAgentRefreshCoolingDown) {
+      return;
+    }
+
+    if (agentRefreshCooldownTimeoutRef.current !== null) {
+      window.clearTimeout(agentRefreshCooldownTimeoutRef.current);
+      agentRefreshCooldownTimeoutRef.current = null;
+    }
+
+    setIsAgentRefreshPending(true);
+    setIsAgentRefreshCoolingDown(true);
+    void waitForMinimumDuration(loadAvailableAgents(), PICKER_REFRESH_MIN_SPIN_MS).finally(() => {
+      if (!isComposerMountedRef.current) {
+        return;
+      }
+
+      setIsAgentRefreshPending(false);
+      agentRefreshCooldownTimeoutRef.current = window.setTimeout(() => {
+        agentRefreshCooldownTimeoutRef.current = null;
+        setIsAgentRefreshCoolingDown(false);
+      }, PICKER_REFRESH_COOLDOWN_MS);
+    });
+  }, [isAgentRefreshCoolingDown, isAgentRefreshPending, isLoadingAgents, loadAvailableAgents]);
+  const refreshAvailableModels = useCallback(() => {
+    if (isLoadingModels || isModelRefreshPending || isModelRefreshCoolingDown) {
+      return;
+    }
+
+    if (modelRefreshCooldownTimeoutRef.current !== null) {
+      window.clearTimeout(modelRefreshCooldownTimeoutRef.current);
+      modelRefreshCooldownTimeoutRef.current = null;
+    }
+
+    setIsModelRefreshPending(true);
+    setIsModelRefreshCoolingDown(true);
+    void waitForMinimumDuration(loadAvailableModels({
+      forceRefresh: true,
+      showErrors: true,
+      showLoading: true,
+    }), PICKER_REFRESH_MIN_SPIN_MS).finally(() => {
+      if (!isComposerMountedRef.current) {
+        return;
+      }
+
+      setIsModelRefreshPending(false);
+      modelRefreshCooldownTimeoutRef.current = window.setTimeout(() => {
+        modelRefreshCooldownTimeoutRef.current = null;
+        setIsModelRefreshCoolingDown(false);
+      }, PICKER_REFRESH_COOLDOWN_MS);
+    });
+  }, [isLoadingModels, isModelRefreshCoolingDown, isModelRefreshPending, loadAvailableModels]);
   const handleQuestionnaireDraftChange = useCallback((draft: WorkbenchQuestionnaireDraft) => {
     onThreadQuestionnaireDraftChange(thread.id, questionnaireRequestKey, draft);
   }, [onThreadQuestionnaireDraftChange, questionnaireRequestKey, thread.id]);
@@ -572,6 +744,20 @@ export default function ThreadComposer ({
   const composerHighlights = useMemo(() => (
     buildInlineMentionHighlights(value, highlightSources)
   ), [highlightSources, value]);
+
+  useEffect(() => {
+    isComposerMountedRef.current = true;
+
+    return () => {
+      isComposerMountedRef.current = false;
+      if (agentRefreshCooldownTimeoutRef.current !== null) {
+        window.clearTimeout(agentRefreshCooldownTimeoutRef.current);
+      }
+      if (modelRefreshCooldownTimeoutRef.current !== null) {
+        window.clearTimeout(modelRefreshCooldownTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const draftKey = `${thread.id}:${threadComposerDraft?.updatedAt ?? 0}`;
@@ -679,66 +865,24 @@ export default function ThreadComposer ({
   }, [autoExpandSavedDraftShelf, threadSavedComposerDrafts.length]);
 
   useEffect(() => {
-    if (isCommentMode) {
-      setAvailableAgents([]);
-      setAgentsError("");
-      setIsLoadingAgents(false);
-      return;
-    }
-
-    let cancelled = false;
-    setIsLoadingAgents(true);
-    void fetch(`/api/agents?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" }).then(async (response) => {
-      if (!response.ok) {
-        throw new Error("Unable to load agents.");
-      }
-
-      const payload = await response.json() as { data?: WorkbenchAgentOption[] };
-      if (cancelled) {
-        return;
-      }
-
-      setAvailableAgents(payload.data ?? []);
-      setAgentsError("");
-    }).catch((agentsLoadError) => {
-      if (cancelled) {
-        return;
-      }
-
-      setAgentsError(agentsLoadError instanceof Error ? agentsLoadError.message : "Unable to load agents.");
-    }).finally(() => {
-      if (!cancelled) {
-        setIsLoadingAgents(false);
-      }
-    });
+    void loadAvailableAgents({ clearBeforeLoad: true });
 
     return () => {
-      cancelled = true;
+      agentLoadGenerationRef.current += 1;
     };
-  }, [isCommentMode, projectId]);
+  }, [loadAvailableAgents]);
 
   useEffect(() => {
-    if (isCommentMode) {
-      setAvailableModels([]);
-      return;
-    }
-
-    let cancelled = false;
-    setAvailableModels([]);
-    void onListModels(thread.harness).then((models) => {
-      if (cancelled) {
-        return;
-      }
-
-      setAvailableModels(models);
-    }).catch(() => {
-      // Ignore background refresh failures; the picker load path shows a user-facing error.
+    void loadAvailableModels({
+      clearBeforeLoad: true,
+      showErrors: false,
+      showLoading: false,
     });
 
     return () => {
-      cancelled = true;
+      modelLoadGenerationRef.current += 1;
     };
-  }, [isCommentMode, onListModels, thread.harness]);
+  }, [loadAvailableModels]);
 
   useEffect(() => {
     if (!stickyMode) {
@@ -855,31 +999,15 @@ export default function ThreadComposer ({
       return;
     }
 
-    let cancelled = false;
-    setIsLoadingModels(true);
-    setModelsError("");
-    void onListModels(thread.harness).then((models) => {
-      if (cancelled) {
-        return;
-      }
-
-      setAvailableModels(models);
-    }).catch((modelsLoadError) => {
-      if (cancelled) {
-        return;
-      }
-
-      setModelsError(modelsLoadError instanceof Error ? modelsLoadError.message : "Unable to load models.");
-    }).finally(() => {
-      if (!cancelled) {
-        setIsLoadingModels(false);
-      }
+    void loadAvailableModels({
+      showErrors: true,
+      showLoading: true,
     });
 
     return () => {
-      cancelled = true;
+      modelLoadGenerationRef.current += 1;
     };
-  }, [isCommentMode, isModelPickerOpen, onListModels, thread.harness]);
+  }, [isCommentMode, isModelPickerOpen, loadAvailableModels]);
 
   const buildSavedDraftFromComposer = useCallback((): WorkbenchThreadSavedComposerDraft | null => {
     if (!value.trim() && attachments.length === 0) {
@@ -1450,11 +1578,14 @@ export default function ThreadComposer ({
                     error={modelsError}
                     harness={thread.harness}
                     isLoading={isLoadingModels}
+                    isRefreshDisabled={isLoadingModels || isModelRefreshPending || isModelRefreshCoolingDown}
+                    isRefreshing={isModelRefreshPending}
                     models={availableModels}
                     selectedModelId={selectedModel}
                     onClose={() => {
                       setActivePicker(null);
                     }}
+                    onRefresh={refreshAvailableModels}
                     onSelectModel={(model) => {
                       onThreadModelChange(thread.id, model.id);
                       if (!model.supportsFastMode && isFastModeEnabled) {
@@ -1488,10 +1619,13 @@ export default function ThreadComposer ({
                     agents={availableAgents}
                     error={agentsError}
                     isLoading={isLoadingAgents}
+                    isRefreshDisabled={isLoadingAgents || isAgentRefreshPending || isAgentRefreshCoolingDown}
+                    isRefreshing={isAgentRefreshPending}
                     selectedAgentPath={thread.agentPath}
                     onClose={() => {
                       setActivePicker(null);
                     }}
+                    onRefresh={refreshAvailableAgents}
                     onSelectAgent={(agentPath) => {
                       onThreadAgentChange(thread.id, agentPath);
                       setActivePicker(null);

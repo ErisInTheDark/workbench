@@ -554,6 +554,10 @@ export interface WorkbenchModelOption {
   billingMultiplier: number | null;
 }
 
+export interface WorkbenchListModelsOptions {
+  forceRefresh?: boolean;
+}
+
 export interface ChangeSummary {
   additions: number;
   deletions: number;
@@ -1050,7 +1054,7 @@ export interface WorkbenchControls {
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
   refreshRateLimits: () => Promise<void>;
   markThreadSeen: (thread: ThreadPayload) => void;
-  listModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
+  listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   sendThreadMessage: (
     thread: ThreadPayload,
     input: UserInput[],

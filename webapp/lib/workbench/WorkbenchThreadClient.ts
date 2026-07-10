@@ -49,6 +49,7 @@ import type {
     WorkbenchBrowseResultEntry,
     WorkbenchCollaborationState,
     WorkbenchHarness,
+    WorkbenchListModelsOptions,
     WorkbenchModelOption,
     WorkbenchPendingUserInputRequest,
     WorkbenchProjectRoot,
@@ -190,7 +191,7 @@ interface WorkbenchThreadClient {
   hasThread: (threadId: string) => boolean;
   isCurrentThreadUpToDate: (threadId: string) => boolean;
   isDraftThreadId: (threadId: string) => boolean;
-  listModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
+  listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   markThreadSeen: (thread: ThreadPayload) => void;
   openThread: (threadId: string, options?: { harness?: WorkbenchHarness; source?: "open" | "reload" }) => Promise<void>;
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
@@ -2608,9 +2609,9 @@ function WorkbenchThreadClient(
     };
   }
 
-  async function listModels(harness: WorkbenchHarness) {
+  async function listModels(harness: WorkbenchHarness, options: WorkbenchListModelsOptions = {}) {
     const cachedModels = state.modelsByHarness.get(harness);
-    if (cachedModels) {
+    if (cachedModels && !options.forceRefresh) {
       return cachedModels;
     }
 

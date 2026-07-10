@@ -1,7 +1,15 @@
 "use client";
 
+/*
+ * Exports:
+ * - default ThreadModelPicker: render model selection, priority, refresh, and return-to-message controls for a thread composer. Keywords: thread, model, picker, refresh.
+ * - Local helpers: format model context windows, feature pills, harness labels, and model priority arrows. Keywords: model metadata, harness, priority.
+ */
 import { JSX, type KeyboardEvent } from "react";
 import type { WorkbenchHarness, WorkbenchModelOption } from "../../../lib/types";
+import { PanelCloseIcon, ReloadIcon } from "../workbench-icons";
+
+const pickerIconButtonClassName = "inline-flex size-9 shrink-0 items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] text-muted transition hover:border-[color-mix(in_srgb,var(--text)_18%,transparent)] hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:border-[color-mix(in_srgb,var(--text)_10%,transparent)] disabled:hover:bg-transparent disabled:hover:text-muted";
 
 function formatContextWindow (tokens: number | null) {
 	if (!tokens) {
@@ -56,7 +64,7 @@ function buildFeatureList (model: WorkbenchModelOption) {
 	return features;
 }
 
-function formatHarnessLabel(harness: WorkbenchHarness) {
+function formatHarnessLabel (harness: WorkbenchHarness) {
 	switch (harness) {
 		case "copilot":
 			return "Copilot";
@@ -89,8 +97,11 @@ export default function ThreadModelPicker ({
 	error,
 	harness,
 	isLoading,
+	isRefreshDisabled,
+	isRefreshing,
 	models,
 	onClose,
+	onRefresh,
 	onSelectModel,
 	onToggleModelPriority,
 	selectedModelId,
@@ -100,8 +111,11 @@ export default function ThreadModelPicker ({
 	error: string;
 	harness: WorkbenchHarness;
 	isLoading: boolean;
+	isRefreshDisabled: boolean;
+	isRefreshing: boolean;
 	models: WorkbenchModelOption[];
 	onClose: () => void;
+	onRefresh: () => void;
 	onSelectModel: (model: WorkbenchModelOption) => void;
 	onToggleModelPriority: (modelId: string) => void;
 	selectedModelId: string | null;
@@ -187,26 +201,39 @@ export default function ThreadModelPicker ({
 		<>
 			<div className="flex items-center justify-between gap-3">
 				<div className="shrink-1">
-					<p className="m-0 text-[0.82em] font-semibold uppercase tracking-[0.16em] text-muted">
-						{harnessLabel} models
+					<p className="m-0 text-[1.2em] font-semibold text-muted">
+						Choose a {harnessLabel} model
 					</p>
-					<p className="mt-1 mb-0 text-[0.86em] leading-[1.6] text-muted">
-						Choose the model for this thread and save it as the default for new {harness} threads.
-					</p>
+					{appliesOnNextTurnOnly ? (
+						<p className="-mt-1 mb-0 text-[0.78em] leading-[1.6] text-muted">
+							Changes apply to the next new turn.
+						</p>
+					) : null}
 				</div>
-				<button
-					type="button"
-					className="shrink-0 self-start rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3 py-1.5 text-[0.78em] font-medium text-text transition hover:border-[color-mix(in_srgb,var(--text)_18%,transparent)] hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-					onClick={onClose}
-				>
-					Back to message
-				</button>
+				<div className="flex shrink-0 items-center gap-2 self-start">
+					<button
+						type="button"
+						aria-label={isRefreshing ? "Refreshing models" : "Refresh models"}
+						title={isRefreshing ? "Refreshing models" : "Refresh models"}
+						className={pickerIconButtonClassName}
+						disabled={isRefreshDisabled}
+						onClick={onRefresh}
+					>
+						<span className={isRefreshing ? "animate-spin [animation-direction:reverse]" : ""}>
+							<ReloadIcon />
+						</span>
+					</button>
+					<button
+						type="button"
+						aria-label="Back to message"
+						title="Back to message"
+						className={pickerIconButtonClassName}
+						onClick={onClose}
+					>
+						<PanelCloseIcon />
+					</button>
+				</div>
 			</div>
-			{appliesOnNextTurnOnly ? (
-				<p className="mt-3 mb-0 text-[0.78em] leading-[1.6] text-muted">
-					This Codex thread already has an active turn. Changing models here will apply to the next new turn, not the current steer message.
-				</p>
-			) : null}
 			{error ? (
 				<p className="mt-3 mb-0 text-[0.84em] leading-[1.6] text-danger">{error}</p>
 			) : null}

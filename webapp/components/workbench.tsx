@@ -17,6 +17,7 @@ import type {
   WorkbenchBrowseSessionSummary,
   WorkbenchFileOpenTarget,
   WorkbenchHarness,
+  WorkbenchListModelsOptions,
   WorkbenchLocalCapabilitySettings,
   WorkbenchLocalCapabilitySettingsResponse,
   WorkbenchPendingUserInputRequest,
@@ -1932,12 +1933,12 @@ export default function Workbench () {
     return await controls.compactThread(thread);
   }, [controls]);
 
-  const listThreadModels = useCallback(async (nextHarness: WorkbenchHarness) => {
+  const listThreadModels = useCallback(async (nextHarness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => {
     if (!controls) {
       return [];
     }
 
-    return await controls.listModels(nextHarness);
+    return await controls.listModels(nextHarness, options);
   }, [controls]);
 
   const setThreadModel = useCallback((threadId: string, model: string) => {

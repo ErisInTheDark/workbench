@@ -8,27 +8,27 @@
 
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
 
+import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import type {
-  WorkbenchUserInputQuestion,
   WorkbenchQuestionnaireDraft,
   WorkbenchSkillSummary,
   WorkbenchThreadComposerAttachmentDraft,
+  WorkbenchUserInputQuestion,
   WorkbenchUserInputRequest,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
-import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import { readClipboardImageDataUrls } from "../../../lib/workbench/dom/clipboard";
+import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import {
   buildInlineMentionHighlights,
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
+import { getThreadCommandDisplay } from "../../../lib/workbench/thread/thread-command-matchers";
 import {
   hasWorkbenchApprovalDecisionSelection,
   isWorkbenchApprovalDecisionQuestion,
   isWorkbenchApprovalRequest,
 } from "../../../lib/workbench/thread/thread-user-input-requests";
-import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
-import { getThreadCommandDisplay } from "../../../lib/workbench/thread/thread-command-matchers";
 import PrimaryButton from "../PrimaryButton";
 import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
 import PlaintextEditable, { isMobileTextInputEnvironment } from "./PlaintextEditable";
@@ -396,24 +396,25 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
   return (
     <div className="thread-user-input-request space-y-4 px-1 py-1">
       <div className="thread-user-input-request-content space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-2">
-          <div className="space-y-1">
-            <h3 className="m-0 text-[1.02em] font-semibold leading-[1.35] text-text">
-              {requestTitle}
-            </h3>
-            {requestSummary ? (
-              <p className="m-0 max-w-3xl text-[0.88em] leading-[1.7] text-muted">
-                {requestSummary}
-              </p>
-            ) : null}
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="space-y-2">
+            <div className="space-y-1">
+              <h3 className="m-0 text-[1.02em] font-semibold leading-[1.35] text-text">
+                {requestTitle}
+              </h3>
+              {requestSummary ? (
+                <p className="m-0 max-w-3xl text-[0.88em] leading-[1.7] text-muted">
+                  {requestSummary}
+                </p>
+              ) : null}
+            </div>
           </div>
-        </div>
-        {isHistoryMode ? (
-          historyProps?.statusLabel ? (
-            <p className="m-0 text-[0.76em] font-medium leading-[1.6] text-muted">{historyProps.statusLabel}</p>
-          ) : null
-        ) : (
+          {isHistoryMode ? (
+            historyProps?.statusLabel ? (
+              <p className="m-0 text-[0.76em] font-medium leading-[1.6] text-muted">{historyProps.statusLabel}</p>
+            ) : null
+          ) : (
+            <>{/*
           <button
             type="button"
             onClick={() => {
@@ -422,208 +423,209 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
             className="rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3 py-2 text-[0.76em] font-medium text-text transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
           >
             Clear answers
-          </button>
-        )}
-      </div>
+              </button>
+              */}</>
+          )}
+        </div>
 
-      <ThreadApprovalCommandSummary
-        knownSkills={props.knownSkills}
-        projectRootPath={props.projectRootPath}
-        request={request}
-        workspaceRoots={props.workspaceRoots}
-      />
+        <ThreadApprovalCommandSummary
+          knownSkills={props.knownSkills}
+          projectRootPath={props.projectRootPath}
+          request={request}
+          workspaceRoots={props.workspaceRoots}
+        />
 
-      <div className="space-y-3">
-        {request.questions.map((question, index) => {
-          const isLastQuestion = index === request.questions.length - 1;
-          const { headerText, questionText } = formatQuestionDisplay(question, index);
-          const answerValues = isHistoryMode
-            ? deriveAnsweredValues(question, historyProps?.response ?? null)
-            : {
-              customValue: customValues[question.id] ?? "",
-              selectedValues: selectedValues[question.id] ?? [],
-            };
-          const selectedQuestionValues = answerValues.selectedValues;
-          const customValue = answerValues.customValue;
-          const isSingleChoice = isSingleChoiceQuestion(request, question);
-          const customValueHighlights = highlightSources
-            ? buildInlineMentionHighlights(customValue, highlightSources)
-            : [];
+        <div className="space-y-3">
+          {request.questions.map((question, index) => {
+            const isLastQuestion = index === request.questions.length - 1;
+            const { headerText, questionText } = formatQuestionDisplay(question, index);
+            const answerValues = isHistoryMode
+              ? deriveAnsweredValues(question, historyProps?.response ?? null)
+              : {
+                customValue: customValues[question.id] ?? "",
+                selectedValues: selectedValues[question.id] ?? [],
+              };
+            const selectedQuestionValues = answerValues.selectedValues;
+            const customValue = answerValues.customValue;
+            const isSingleChoice = isSingleChoiceQuestion(request, question);
+            const customValueHighlights = highlightSources
+              ? buildInlineMentionHighlights(customValue, highlightSources)
+              : [];
 
-          return (
-            <section
-              key={question.id}
-              className="mb-0"
-            >
-              {!useCompactSingleQuestionDisplay ? (
-                <div className="space-y-1">
-                  <p className="m-0 text-[0.72em] font-semibold tracking-[0.08em] text-muted uppercase">
-                    {headerText}
-                  </p>
-                  {questionText ? (
-                    <p className="m-0 whitespace-pre-wrap break-words text-[0.92em] leading-[1.65] text-text">
-                      {questionText}
+            return (
+              <section
+                key={question.id}
+                className="mb-0"
+              >
+                {!useCompactSingleQuestionDisplay ? (
+                  <div className="space-y-1">
+                    <p className="m-0 text-[0.72em] font-semibold tracking-[0.08em] text-muted uppercase">
+                      {headerText}
                     </p>
-                  ) : null}
-                </div>
-              ) : null}
-              <div className="mt-3 space-y-2">
-                {question.options.map((option, index) => {
-                  const optionId = `${request.id}:${question.id}:option:${index}`;
-                  const isChecked = selectedQuestionValues.includes(option.label);
+                    {questionText ? (
+                      <p className="m-0 whitespace-pre-wrap break-words text-[0.92em] leading-[1.65] text-text">
+                        {questionText}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="mt-3 space-y-2">
+                  {question.options.map((option, index) => {
+                    const optionId = `${request.id}:${question.id}:option:${index}`;
+                    const isChecked = selectedQuestionValues.includes(option.label);
 
-                  if (isHistoryMode) {
+                    if (isHistoryMode) {
+                      return (
+                        <WorkbenchOptionCard
+                          key={optionId}
+                          description={option.description}
+                          isChecked={isChecked}
+                          isHistoryMode
+                          isSingleChoice={isSingleChoice}
+                          label={option.label}
+                          markerId={optionId}
+                        />
+                      );
+                    }
+
                     return (
                       <WorkbenchOptionCard
                         key={optionId}
                         description={option.description}
                         isChecked={isChecked}
-                        isHistoryMode
                         isSingleChoice={isSingleChoice}
                         label={option.label}
                         markerId={optionId}
-                      />
-                    );
-                  }
+                        onClick={() => {
+                          setSelectedValues((current) => {
+                            const next = { ...current };
+                            const currentQuestionValues = next[question.id] ?? [];
+                            if (isSingleChoice) {
+                              if (currentQuestionValues.includes(option.label)) {
+                                delete next[question.id];
+                              } else {
+                                next[question.id] = [option.label];
+                              }
+                              return next;
+                            }
 
-                  return (
-                    <WorkbenchOptionCard
-                      key={optionId}
-                      description={option.description}
-                      isChecked={isChecked}
-                      isSingleChoice={isSingleChoice}
-                      label={option.label}
-                      markerId={optionId}
-                      onClick={() => {
-                        setSelectedValues((current) => {
-                          const next = { ...current };
-                          const currentQuestionValues = next[question.id] ?? [];
-                          if (isSingleChoice) {
                             if (currentQuestionValues.includes(option.label)) {
-                              delete next[question.id];
+                              const nextQuestionValues = currentQuestionValues.filter((value) => value !== option.label);
+                              if (nextQuestionValues.length) {
+                                next[question.id] = nextQuestionValues;
+                              } else {
+                                delete next[question.id];
+                              }
                             } else {
-                              next[question.id] = [option.label];
+                              next[question.id] = [...currentQuestionValues, option.label];
+                            }
+                            if (!next[question.id]?.length) {
+                              delete next[question.id];
                             }
                             return next;
+                          });
+                          if (error) {
+                            setError("");
                           }
-
-                          if (currentQuestionValues.includes(option.label)) {
-                            const nextQuestionValues = currentQuestionValues.filter((value) => value !== option.label);
-                            if (nextQuestionValues.length) {
-                              next[question.id] = nextQuestionValues;
-                            } else {
-                              delete next[question.id];
-                            }
-                          } else {
-                            next[question.id] = [...currentQuestionValues, option.label];
-                          }
-                          if (!next[question.id]?.length) {
-                            delete next[question.id];
-                          }
-                          return next;
-                        });
+                        }}
+                      />
+                    );
+                  })}
+                  {isHistoryMode ? (
+                    customValue ? (
+                      <PlaintextEditable
+                        id={`${request.id}:${question.id}:custom`}
+                        ariaLabel={`${headerText} answer`}
+                        className="thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-3 py-3 text-[0.84em] leading-[1.5] text-text outline-none"
+                        readOnly
+                        spellCheck={false}
+                        highlights={customValueHighlights}
+                        value={customValue}
+                      />
+                    ) : (
+                      !isLastQuestion ? (
+                        <div
+                          aria-hidden="true"
+                          className={EMPTY_HISTORY_CUSTOM_TEXT_SPACER_CLASS}
+                        />
+                      ) : null
+                    )
+                  ) : (
+                    <PlaintextEditable
+                      id={`${request.id}:${question.id}:custom`}
+                      ariaLabel={`${headerText} answer`}
+                      className={joinClasses(
+                        "thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg px-3 py-2 text-[0.84em] leading-[1.5] text-text outline-none transition",
+                        customValue
+                          ? "bg-[color-mix(in_srgb,var(--text)_4%,transparent)] py-3 mt-1 mb-3"
+                          : `
+                          hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:py-3 hover:mb-3
+                          focus-visible:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:py-3 focus-visible:mt-1 focus-visible:mb-3
+                        `,
+                      )}
+                      spellCheck={!question.isSecret && (interactiveProps?.spellCheck ?? false)}
+                      highlights={customValueHighlights}
+                      mentionSources={highlightSources}
+                      mentionSuggestionsPlacement="below"
+                      value={customValue}
+                      onChange={(nextValue) => {
+                        setCustomValues((current) => ({
+                          ...current,
+                          [question.id]: nextValue,
+                        }));
                         if (error) {
                           setError("");
                         }
                       }}
+                      onKeyDown={isLastQuestion ? handleLastQuestionKeyDown : undefined}
+                      onPaste={handlePaste}
                     />
-                  );
-                })}
-                {isHistoryMode ? (
-                  customValue ? (
-                    <PlaintextEditable
-                      id={`${request.id}:${question.id}:custom`}
-                      ariaLabel={`${headerText} answer`}
-                      className="thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-3 py-3 text-[0.84em] leading-[1.5] text-text outline-none"
-                      readOnly
-                      spellCheck={false}
-                      highlights={customValueHighlights}
-                      value={customValue}
-                    />
-                  ) : (
-                    !isLastQuestion ? (
-                      <div
-                        aria-hidden="true"
-                        className={EMPTY_HISTORY_CUSTOM_TEXT_SPACER_CLASS}
-                      />
-                    ) : null
-                  )
-                ) : (
-                  <PlaintextEditable
-                    id={`${request.id}:${question.id}:custom`}
-                    ariaLabel={`${headerText} answer`}
-                    className={joinClasses(
-                      "thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg px-3 py-2 text-[0.84em] leading-[1.5] text-text outline-none transition",
-                      customValue
-                        ? "bg-[color-mix(in_srgb,var(--text)_4%,transparent)] py-3 mt-1 mb-3"
-                        : `
-                          hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:py-3 hover:mb-3
-                          focus-visible:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:py-3 focus-visible:mt-1 focus-visible:mb-3
-                        `,
-                    )}
-                    spellCheck={!question.isSecret && (interactiveProps?.spellCheck ?? false)}
-                    highlights={customValueHighlights}
-                    mentionSources={highlightSources}
-                    mentionSuggestionsPlacement="below"
-                    value={customValue}
-                    onChange={(nextValue) => {
-                      setCustomValues((current) => ({
-                        ...current,
-                        [question.id]: nextValue,
-                      }));
-                      if (error) {
-                        setError("");
-                      }
-                    }}
-                    onKeyDown={isLastQuestion ? handleLastQuestionKeyDown : undefined}
-                    onPaste={handlePaste}
-                  />
-                )}
-              </div>
-            </section>
-          );
-        })}
-      </div>
-      {!isHistoryMode && (attachments.length || isAttaching) ? (
-        <div className="space-y-2">
-          {attachments.length ? (
-            <div className="flex flex-wrap gap-3">
-              {attachments.map((attachment, index) => (
-                <div key={attachment.id} className="relative h-24 w-24">
-                  <ThreadLightboxImage
-                    alt={`Questionnaire attached image ${index + 1}`}
-                    buttonClassName="h-full w-full rounded-[0.95rem]"
-                    imageClassName="h-full w-full object-cover"
-                    src={attachment.url}
-                  />
-                  <button
-                    type="button"
-                    aria-label={`Remove questionnaire attached image ${index + 1}`}
-                    title="Remove attached image"
-                    className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text shadow-sm transition hover:bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                    onClick={() => {
-                      setAttachments((current) => current.filter((currentAttachment) => currentAttachment.id !== attachment.id));
-                    }}
-                  >
-                    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
-                      <path
-                        d="M4 4l8 8M12 4l-8 8"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeLinecap="round"
-                        strokeWidth="1.8"
-                      />
-                    </svg>
-                  </button>
+                  )}
                 </div>
-              ))}
-            </div>
-          ) : null}
-          {isAttaching ? (
-            <p className="m-0 text-[0.78em] leading-[1.6] text-muted">Attaching pasted image...</p>
-          ) : null}
+              </section>
+            );
+          })}
         </div>
-      ) : null}
+        {!isHistoryMode && (attachments.length || isAttaching) ? (
+          <div className="space-y-2">
+            {attachments.length ? (
+              <div className="flex flex-wrap gap-3">
+                {attachments.map((attachment, index) => (
+                  <div key={attachment.id} className="relative h-24 w-24">
+                    <ThreadLightboxImage
+                      alt={`Questionnaire attached image ${index + 1}`}
+                      buttonClassName="h-full w-full rounded-[0.95rem]"
+                      imageClassName="h-full w-full object-cover"
+                      src={attachment.url}
+                    />
+                    <button
+                      type="button"
+                      aria-label={`Remove questionnaire attached image ${index + 1}`}
+                      title="Remove attached image"
+                      className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text shadow-sm transition hover:bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+                      onClick={() => {
+                        setAttachments((current) => current.filter((currentAttachment) => currentAttachment.id !== attachment.id));
+                      }}
+                    >
+                      <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
+                        <path
+                          d="M4 4l8 8M12 4l-8 8"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeLinecap="round"
+                          strokeWidth="1.8"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {isAttaching ? (
+              <p className="m-0 text-[0.78em] leading-[1.6] text-muted">Attaching pasted image...</p>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {!isHistoryMode ? (
