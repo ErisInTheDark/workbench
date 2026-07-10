@@ -15,6 +15,7 @@ import type {
 
 export interface WorkbenchBrowseMarkdownCompileOptions {
   cwd: string;
+  lineNumberOffset?: number | null;
   mode?: WorkbenchBrowseSessionMode | null;
   session?: string | null;
   streamProgress?: boolean | null;
@@ -75,9 +76,10 @@ export function compileWorkbenchBrowseMarkdown(
   const actions: WorkbenchBrowseAgentAction[] = [];
   let activeFence: ParsedFence | null = null;
   const lines = normalizeLineEndings(script).split("\n");
+  const lineNumberOffset = options.lineNumberOffset ?? 0;
 
   lines.forEach((line, lineIndex) => {
-    const lineNumber = lineIndex + 1;
+    const lineNumber = lineIndex + 1 + lineNumberOffset;
     const fenceLanguage = readFenceLanguage(line);
     if (activeFence) {
       if (fenceLanguage !== null) {
@@ -114,7 +116,7 @@ export function compileWorkbenchBrowseMarkdown(
     throw new WorkbenchBrowseMarkdownParseError("Unclosed fenced code block.", activeFence.lineNumber);
   }
   if (!actions.length) {
-    throw new WorkbenchBrowseMarkdownParseError("BrowseMD script did not contain any actions.", 1);
+    throw new WorkbenchBrowseMarkdownParseError("BrowseMD script did not contain any actions.", 1 + lineNumberOffset);
   }
 
   return {
@@ -512,16 +514,19 @@ export function tokenizeWorkbenchBrowseMarkdownLine(line: string, lineNumber: nu
   let token = "";
   let quote: string | null = null;
   let escaped = false;
+  let tokenStarted = false;
 
   for (let index = 0; index < line.length; index += 1) {
     const character = line[index] ?? "";
     if (escaped) {
       token += character;
       escaped = false;
+      tokenStarted = true;
       continue;
     }
     if (character === "\\") {
       escaped = true;
+      tokenStarted = true;
       continue;
     }
     if (quote) {
@@ -530,20 +535,24 @@ export function tokenizeWorkbenchBrowseMarkdownLine(line: string, lineNumber: nu
       } else {
         token += character;
       }
+      tokenStarted = true;
       continue;
     }
     if (character === "'" || character === "\"" || character === "`") {
       quote = character;
+      tokenStarted = true;
       continue;
     }
     if (/\s/u.test(character)) {
-      if (token) {
+      if (tokenStarted) {
         tokens.push(token);
         token = "";
+        tokenStarted = false;
       }
       continue;
     }
     token += character;
+    tokenStarted = true;
   }
 
   if (escaped) {
@@ -552,7 +561,7 @@ export function tokenizeWorkbenchBrowseMarkdownLine(line: string, lineNumber: nu
   if (quote) {
     throw new WorkbenchBrowseMarkdownParseError("Unclosed quoted string.", lineNumber);
   }
-  if (token) {
+  if (tokenStarted) {
     tokens.push(token);
   }
   return tokens;

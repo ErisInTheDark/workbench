@@ -11,6 +11,7 @@ import type {
   WorkbenchBrowseSessionControlResponse,
   WorkbenchBrowseSessionListResponse,
 } from "../../../../lib/types";
+import { workbenchBrowseCommandQueue } from "../../../../lib/workbench/browse/WorkbenchBrowseCommandQueue";
 import WorkbenchBrowseSessionController from "../../../../lib/workbench/browse/WorkbenchBrowseSessionController";
 
 export const runtime = "nodejs";
@@ -73,13 +74,13 @@ function normalizeControlRequest(value: unknown): WorkbenchBrowseSessionControlR
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
-    const response = await browseSessionController.listSessions({
+    const response = await workbenchBrowseCommandQueue.run(async () => await browseSessionController.listSessions({
       cwd: normalizeString(searchParams.get("cwd")) || null,
       includeRuntime: !["false", "0"].includes(normalizeString(searchParams.get("includeRuntime")).toLowerCase()),
       projectId: normalizeString(searchParams.get("projectId")) || null,
       threadId: normalizeString(searchParams.get("threadId")) || null,
       timeoutMs: normalizeTimeout(searchParams.get("timeoutMs")),
-    });
+    }));
     return noStoreJson<WorkbenchBrowseSessionListResponse>(response);
   } catch (error) {
     return noStoreJson({
@@ -98,9 +99,11 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    const response = payload.action === "forget"
-      ? await browseSessionController.stopSession({ ...payload, action: "forget" })
-      : await browseSessionController.stopSession(payload);
+    const response = await workbenchBrowseCommandQueue.run(async () => (
+      payload.action === "forget"
+        ? await browseSessionController.stopSession({ ...payload, action: "forget" })
+        : await browseSessionController.stopSession(payload)
+    ));
     return noStoreJson<WorkbenchBrowseSessionControlResponse>(response);
   } catch (error) {
     return noStoreJson({

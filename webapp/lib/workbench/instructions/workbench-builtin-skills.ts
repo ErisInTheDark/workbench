@@ -90,7 +90,7 @@ BrowseMD inline script:
 
 \`\`\`json
 {
-  "script": "open http://localhost:3000 --headless\\nsnapshot compact\\nclick @0-4\\nscreenshot",
+  "script": "open http://localhost:3000 --headless\\nsnapshot --compact\\nclick @0-4\\nscreenshot",
   "threadId": "<current-thread-id>",
   "cwd": "<current-project-cwd>",
   "session": "research"
@@ -102,6 +102,10 @@ BrowseMD project script:
 \`\`\`json
 {
   "scriptPath": "check-homepage.browsemd",
+  "vars": {
+    "url": "https://example.com",
+    "exportKey": "example"
+  },
   "threadId": "<current-thread-id>",
   "cwd": "<current-project-cwd>",
   "session": "research"
@@ -110,11 +114,11 @@ BrowseMD project script:
 
 Project BrowseMD scripts live directly under \`.workbench/browse/*.browsemd\` in the Workbench project root that owns the request \`cwd\`. Use \`scriptPath\` for reusable project-local Browse fragments. Do not pass absolute paths or \`..\` path segments.
 
-BrowseMD is a deterministic CLI-like markdown format. Browser-command lines match Browse CLI syntax, with an optional literal \`browse\` prefix. Examples: \`open <url>\`, \`open <url> --persistent\`, \`browse snapshot compact\`, \`click @0-4\`, \`fill 'input[name=q]' "hello"\`, \`wait timeout 1000\`, \`move cursor 240 320\`, \`mouse drag 100 100 400 400 --steps 20\`, \`screenshot\`, \`forget --session research\`, and \`cleanup --force\`. JavaScript fenced blocks with \`js\` or \`javascript\` run as Browse \`eval\` actions. Write either a simple expression or a normal script body with \`return\`; Workbench handles the needed eval wrapping:
+BrowseMD is a deterministic CLI-like markdown format. Browser-command lines match Browse CLI syntax, with an optional literal \`browse\` prefix. Examples: \`open <url>\`, \`open <url> --persistent\`, \`browse snapshot --compact\`, \`click @0-4\`, \`fill 'input[name=q]' "hello"\`, \`wait timeout 1000\`, \`move cursor 240 320\`, \`mouse drag 100 100 400 400 --steps 20\`, \`screenshot\`, \`forget --session research\`, and \`cleanup --force\`. JavaScript fenced blocks with \`js\` or \`javascript\` run as Browse \`eval\` actions. Write either a simple expression or a normal script body with \`return\`; Workbench handles the needed eval wrapping:
 
 \`\`\`\`md
 open http://localhost:3000 --headless
-snapshot compact
+snapshot --compact
 click @0-4
 
 \`\`\`js
@@ -127,11 +131,24 @@ screenshot
 
 BrowseMD supports \`@include\` macro lines. Relative includes resolve from the current BrowseMD file; inline script includes resolve from the request \`cwd\`; bare names such as \`@include login\` resolve to \`.workbench/browse/login.browsemd\`; \`@include ~/login\` resolves to the user's \`~/.workbench/browse/login.browsemd\`; and \`@include root-name:login\` resolves inside a root from the current Workbench workspace. Include cycles and missing files fail clearly.
 
-BrowseMD supports shell-like assignment, variables, pipes, redirects, and allowlisted helper commands. Use \`title=$(get title)\`, then \`echo "$title"\` or pass \`$title\` / \`\${title}\` into later commands. Supported helper commands include \`echo\`, \`printf\`, \`pwd\`, \`ls\`, \`cat\`, \`mkdir\`, \`cp\`, \`mv\`, file-only \`rm\`, and allowlisted real \`grep\` and \`jq\`. This is not arbitrary shell execution. File command paths must resolve inside an active Workbench workspace root for the request \`cwd\`. \`mv\` is the rename command, creates destination parent directories, and overwrites existing destination files. \`rm\` means ensure a file is removed: it succeeds when the target or a parent folder is already missing, removes files and symlinks, and fails instead of removing directories.
+BrowseMD supports shell-like assignment, variables, pipes, redirects, request-provided \`vars\`, and allowlisted helper commands. Use \`title=$(get title)\`, then \`echo "$title"\` or pass \`$title\` / \`\${title}\` into later commands. Do not quote the command substitution in assignment syntax: use \`title=$(get title)\`, not \`title="$(get title)"\`. JSON-object assignment output also exposes scalar dotted fields, such as \`download=$(wait download)\` followed by \`mv "$download.path" ".doc-exports/$exportKey/current.md"\`. Use \`\\$name\` when a downstream tool, such as \`jq\`, needs to receive a literal \`$name\` instead of a BrowseMD variable expansion. Supported helper commands include \`echo\`, \`printf\`, \`pwd\`, \`ls\`, \`cat\`, \`mkdir\`, \`cp\`, \`mv\`, \`wait download\`, file-only \`rm\`, and allowlisted real \`grep\` and \`jq\`. \`printf\` supports simple \`%s\`, \`%%\`, and common escapes such as \`\\n\`; write \`\\\\n\` in BrowseMD source when the printf format should receive \`\\n\`. This is not arbitrary shell execution. File command paths must resolve inside an active Workbench workspace root for the request \`cwd\`. \`mv\` is the rename command, creates destination parent directories, and overwrites existing destination files. \`rm\` means ensure a file is removed: it succeeds when the target or a parent folder is already missing, removes files and symlinks, and fails instead of removing directories.
+
+Use \`wait download\` after triggering a browser download in a Workbench-managed local Browse session. It waits for a completed file in the request \`cwd\`, prints a JSON result with \`path\`, \`absolutePath\`, \`filename\`, \`size\`, and \`mimeType\`, and works well with assignment fields:
+
+\`\`\`\`md
+open "$url" --headless
+
+\`\`\`js
+document.querySelectorAll("button").values().find((button) => button.textContent?.includes("Export"))?.click()
+\`\`\`
+
+download=$(wait download)
+mkdir -p ".doc-exports/$exportKey"
+mv "$download.path" ".doc-exports/$exportKey/current.md"
+jq -n --arg sourceUrl "$url" --arg exportKey "$exportKey" --arg filename "$download.filename" --argjson size "$download.size" '{sourceUrl:\$sourceUrl,exportKey:\$exportKey,downloadedFilename:\$filename,size:\$size}' > ".doc-exports/$exportKey/metadata.json"
+\`\`\`\`
 
 BrowseMD endpoint responses are command-like: \`stdout\`, \`stderr\`, \`exitCode\`, \`ok\`, \`durationMs\`, and optional \`error\`. Unassigned commands print natural output; assignments capture stdout and suppress it. Browse commands that normally do not print should not invent success chatter. Failures stop the script by default.
-
-\`--help\` and \`-h\` are help-only. A BrowseMD request that asks for help runs no side-effectful actions; mixing help with execution fails clearly.
 
 BrowseMD still follows the same Browse safety workflow: use named sessions, prefer local browser sessions, treat refs as stale after DOM-changing actions, and stop or clean up sessions when finished. Persistent sessions keep browser profile data after stop/cleanup until \`forget --session <name>\` deletes the profile.
 
@@ -139,7 +156,7 @@ Raw CLI-args passthrough, when explicitly needed and enabled:
 
 \`\`\`json
 {
-  "args": ["status", "--session", "research"],
+  "args": ["snapshot", "--compact", "--session", "research"],
   "threadId": "<current-thread-id>",
   "cwd": "<current-project-cwd>"
 }
@@ -158,7 +175,7 @@ PowerShell inline BrowseMD:
 \`\`\`powershell
 $script = @'
 open https://example.com --headless
-snapshot compact
+snapshot --compact
 title=$(get title)
 echo "$title"
 cleanup --force
@@ -172,13 +189,13 @@ Bash inline BrowseMD:
 \`\`\`bash
 curl -s -X POST '<workbench-browse-endpoint-url>' \
   -H 'Content-Type: application/json' \
-  -d '{"script":"open https://example.com --headless\nsnapshot compact\ntitle=$(get title)\necho \"$title\"\ncleanup --force","threadId":"<current-thread-id>","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'","session":"research"}'
+  -d '{"script":"open https://example.com --headless\nsnapshot --compact\ntitle=$(get title)\necho \"$title\"\ncleanup --force","threadId":"<current-thread-id>","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'","session":"research"}'
 \`\`\`
 
 PowerShell project BrowseMD script:
 
 \`\`\`powershell
-$body = @{ scriptPath = 'check-homepage.browsemd'; threadId = '<current-thread-id>'; cwd = (Get-Location).Path; session = 'research' } | ConvertTo-Json -Compress
+$body = @{ scriptPath = 'check-homepage.browsemd'; vars = @{ url = 'https://example.com'; exportKey = 'example' }; threadId = '<current-thread-id>'; cwd = (Get-Location).Path; session = 'research' } | ConvertTo-Json -Compress
 Invoke-RestMethod -Method Post -Uri '<workbench-browse-endpoint-url>' -ContentType 'application/json' -Body $body
 \`\`\`
 
@@ -217,7 +234,7 @@ Browser clipboard reads can hang or be blocked by page permissions. After an int
 
 Workbench sets the download directory for managed local Browse sessions to the agent request's resolved cwd when the browser session starts. Existing sessions keep the download directory they launched with; stop and reopen a named session when you need the current cwd to apply. CDP-attached, remote, or non-Workbench Browse sessions may have different download behavior.
 
-Browse does not currently expose a first-class download result. After intentionally triggering a download, verify it with a user-safe cwd check using a timestamp marker and report only file name, size, time, and short content metrics unless the user asks for more.
+For BrowseMD scripts, prefer \`download=$(wait download)\` after the click or eval block that triggers a download, then move \`$download.path\` with BrowseMD file helpers. The \`path\` field is project-relative so it can be passed to \`mv\`; \`absolutePath\`, \`filename\`, \`size\`, and \`mimeType\` are also available for logging or metadata.
 
 ## Failure Handling
 

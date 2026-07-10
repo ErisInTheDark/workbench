@@ -411,6 +411,7 @@ export interface WorkbenchBrowseAgentScriptBaseRequest {
   stopOnError?: boolean | null;
   threadId: string;
   timeoutMs?: number | null;
+  vars?: Record<string, string> | null;
 }
 
 export interface WorkbenchBrowseAgentScriptInlineRequest extends WorkbenchBrowseAgentScriptBaseRequest {

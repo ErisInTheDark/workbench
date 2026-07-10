@@ -31,9 +31,11 @@ import type {
   WorkbenchBrowseSessionMode,
 } from "../../../lib/types";
 import WorkbenchBrowseCli from "../../../lib/workbench/browse/WorkbenchBrowseCli";
+import { workbenchBrowseCommandQueue } from "../../../lib/workbench/browse/WorkbenchBrowseCommandQueue";
 import WorkbenchBrowseSessionController from "../../../lib/workbench/browse/WorkbenchBrowseSessionController";
 import { normalizeWorkbenchBrowseAgentRequest } from "../../../lib/workbench/browse/browse-agent-requests";
 import { compileWorkbenchBrowseMarkdown, tokenizeWorkbenchBrowseMarkdownLine } from "../../../lib/workbench/browse/browse-markdown";
+import WorkbenchBrowseDownloadMonitor from "../../../lib/workbench/browse/WorkbenchBrowseDownloadMonitor";
 import { resolveAgentEndpointProjectFromCwd } from "../../../lib/workbench/project/agent-endpoint-project";
 import WorkbenchServerSettings from "../../../lib/workbench/settings/WorkbenchServerSettings";
 import { createAgentScreenshotSteerText } from "../../../lib/workbench/thread/thread-steer-markers";
@@ -47,12 +49,15 @@ const MAX_BROWSE_ARGS = 128;
 const MAX_BROWSE_ARG_LENGTH = 16_384;
 const MAX_BROWSE_STDIN_LENGTH = 2 * 1024 * 1024;
 const MAX_BROWSE_MARKDOWN_SCRIPT_LENGTH = 2 * 1024 * 1024;
+const MAX_BROWSE_MARKDOWN_VARIABLES = 64;
+const MAX_BROWSE_MARKDOWN_VARIABLE_VALUE_LENGTH = 16_384;
 const MAX_BROWSE_AGENT_SEQUENCE_ACTIONS = 50;
 const BROWSE_SCREENSHOT_ASSET_THREAD_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const BROWSE_SCREENSHOT_DATA_URL_PATTERN = /^data:(image\/(?:png|jpeg|jpg|webp|gif));base64,([a-z0-9+/=\s]+)$/iu;
 const BROWSE_SCREENSHOT_BASE64_PATTERN = /^[a-z0-9+/=\s]+$/iu;
 const BROWSE_MARKDOWN_FILE_NAME_PATTERN = /^[A-Za-z0-9_.-]+\.browsemd$/u;
 const BROWSE_MARKDOWN_VARIABLE_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+const BROWSE_MARKDOWN_VARIABLE_REFERENCE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/u;
 const VALID_HARNESSES: readonly WorkbenchHarness[] = ["codex", "copilot", "opencode"];
 const BROWSE_MARKDOWN_FILE_COMMANDS = new Set(["cat", "cp", "echo", "grep", "jq", "ls", "mkdir", "mv", "printf", "pwd", "rm"]);
 const browseCli = new WorkbenchBrowseCli();
@@ -129,6 +134,32 @@ function normalizeMode(value: unknown): WorkbenchBrowseSessionMode | null {
   return value === "headed" || value === "headless" ? value : null;
 }
 
+function normalizeBrowseMarkdownVariables(value: unknown) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const entries = Object.entries(value);
+  if (entries.length > MAX_BROWSE_MARKDOWN_VARIABLES) {
+    return null;
+  }
+
+  const variables: Record<string, string> = {};
+  for (const [name, variableValue] of entries) {
+    if (!BROWSE_MARKDOWN_VARIABLE_PATTERN.test(name)
+      || typeof variableValue !== "string"
+      || variableValue.includes("\0")
+      || variableValue.length > MAX_BROWSE_MARKDOWN_VARIABLE_VALUE_LENGTH) {
+      return null;
+    }
+    variables[name] = variableValue;
+  }
+  return variables;
+}
+
 function normalizeBrowseMarkdownRequest(value: Record<string, unknown>): WorkbenchBrowseAgentScriptRequest | null {
   const threadId = normalizeThreadId(value.threadId);
   const cwd = normalizeString(value.cwd);
@@ -144,6 +175,10 @@ function normalizeBrowseMarkdownRequest(value: Record<string, unknown>): Workben
   if (script !== null && script.length > MAX_BROWSE_MARKDOWN_SCRIPT_LENGTH) {
     return null;
   }
+  const vars = normalizeBrowseMarkdownVariables(value.vars);
+  if (value.vars !== undefined && value.vars !== null && !vars) {
+    return null;
+  }
 
   const base = {
     cwd,
@@ -154,6 +189,7 @@ function normalizeBrowseMarkdownRequest(value: Record<string, unknown>): Workben
     stopOnError: value.stopOnError === false ? false : true,
     threadId,
     timeoutMs: normalizePositiveInteger(value.timeoutMs, DEFAULT_BROWSE_TIMEOUT_MS, MAX_BROWSE_TIMEOUT_MS),
+    vars,
   };
 
   return script !== null
@@ -177,6 +213,7 @@ interface BrowseMarkdownRuntimeContext {
     turnId: string;
   } | null;
   cwd: string;
+  downloadMonitor: WorkbenchBrowseDownloadMonitor;
   request: NextRequest;
   scriptRequest: WorkbenchBrowseAgentScriptRequest;
   variables: Map<string, string>;
@@ -392,15 +429,96 @@ function splitBrowseMarkdownOutsideQuotes(line: string, separator: string) {
 }
 
 function expandBrowseMarkdownVariables(line: string, variables: ReadonlyMap<string, string>) {
-  return line.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/gu, (_match, bracedName: string | undefined, bareName: string | undefined) => {
-    const name = bracedName ?? bareName ?? "";
-    return variables.get(name) ?? "";
-  });
+  let output = "";
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index] ?? "";
+    if (character === "\\" && line[index + 1] === "$") {
+      output += "$";
+      index += 1;
+      continue;
+    }
+    if (character !== "$") {
+      output += character;
+      continue;
+    }
+
+    const reference = readBrowseMarkdownVariableReference(line, index);
+    if (!reference) {
+      output += character;
+      continue;
+    }
+    output += variables.get(reference.name) ?? "";
+    index = reference.endIndex - 1;
+  }
+  return output;
+}
+
+function readBrowseMarkdownVariableReference(line: string, startIndex: number) {
+  if (line[startIndex + 1] === "{") {
+    const closingIndex = line.indexOf("}", startIndex + 2);
+    if (closingIndex < 0) {
+      return null;
+    }
+    const name = line.slice(startIndex + 2, closingIndex);
+    return BROWSE_MARKDOWN_VARIABLE_REFERENCE_NAME_PATTERN.test(name)
+      ? { endIndex: closingIndex + 1, name }
+      : null;
+  }
+
+  const match = line.slice(startIndex + 1).match(/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*/u);
+  const name = match?.[0] ?? "";
+  return name ? { endIndex: startIndex + 1 + name.length, name } : null;
 }
 
 function parseBrowseMarkdownAssignment(line: string) {
   const match = line.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)=\$\(([\s\S]*)\)$/u);
   return match ? { command: match[2]?.trim() ?? "", name: match[1] ?? "" } : null;
+}
+
+function setBrowseMarkdownVariable(variables: Map<string, string>, name: string, stdout: string) {
+  const value = stdout.replace(/\r?\n$/u, "");
+  variables.set(name, value);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return;
+  }
+  if (!isRecord(parsed)) {
+    return;
+  }
+
+  for (const [fieldName, fieldValue] of Object.entries(parsed)) {
+    if (!BROWSE_MARKDOWN_VARIABLE_PATTERN.test(fieldName)) {
+      continue;
+    }
+    const stringValue = stringifyBrowseMarkdownVariableField(fieldValue);
+    if (stringValue !== null) {
+      variables.set(`${name}.${fieldName}`, stringValue);
+    }
+  }
+}
+
+function stringifyBrowseMarkdownVariableField(value: unknown) {
+  if (value === null) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return null;
+}
+
+function getBrowseMarkdownAssignmentShapeError(line: string) {
+  const trimmedLine = line.trim();
+  if (/^[A-Za-z_][A-Za-z0-9_]*\s*=\s*["'`]\s*\$\(/u.test(trimmedLine)) {
+    return "BrowseMD assignments use `name=$(command)` without quotes around the command substitution.";
+  }
+  return null;
 }
 
 function serializeBrowseMarkdownTokens(tokens: readonly string[]) {
@@ -489,6 +607,68 @@ function getBrowseMarkdownWriteDisplay(outputPath: string, append: boolean) {
   };
 }
 
+function formatBrowseMarkdownPrintf(args: readonly string[]) {
+  const format = args[0] ?? "";
+  const values = args.slice(1);
+  let valueIndex = 0;
+  let output = "";
+
+  for (let index = 0; index < format.length; index += 1) {
+    const character = format[index] ?? "";
+    if (character === "\\") {
+      const escaped = format[index + 1];
+      if (!escaped) {
+        output += "\\";
+        continue;
+      }
+      output += readBrowseMarkdownPrintfEscape(escaped);
+      index += 1;
+      continue;
+    }
+    if (character !== "%") {
+      output += character;
+      continue;
+    }
+
+    const conversion = format[index + 1];
+    if (!conversion) {
+      return { error: "printf format cannot end with a bare %.", ok: false as const };
+    }
+    if (conversion === "%") {
+      output += "%";
+      index += 1;
+      continue;
+    }
+    if (conversion !== "s") {
+      return { error: `printf only supports %s and %% conversions, not %${conversion}.`, ok: false as const };
+    }
+    output += values[valueIndex] ?? "";
+    valueIndex += 1;
+    index += 1;
+  }
+
+  return { ok: true as const, output };
+}
+
+function readBrowseMarkdownPrintfEscape(value: string) {
+  switch (value) {
+    case "n":
+      return "\n";
+    case "r":
+      return "\r";
+    case "t":
+      return "\t";
+    case "\\":
+      return "\\";
+    case "\"":
+      return "\"";
+    case "'":
+      return "'";
+    default:
+      return value;
+  }
+}
+
 async function runBrowseMarkdownProcess(command: string, args: string[], stdin: string, cwd: string, timeoutMs: number) {
   const startedAt = Date.now();
   return await new Promise<WorkbenchBrowseCommandResponse>((resolve) => {
@@ -545,8 +725,10 @@ async function runBrowseMarkdownFileCommand(
     switch (command) {
       case "echo":
         return ok(`${args.join(" ")}\n`);
-      case "printf":
-        return ok((args[0] ?? "").replace(/\\n/gu, "\n"));
+      case "printf": {
+        const result = formatBrowseMarkdownPrintf(args);
+        return result.ok ? ok(result.output) : fail(result.error);
+      }
       case "pwd":
         return ok(`${context.cwd}\n`);
       case "cat": {
@@ -615,13 +797,35 @@ async function runBrowseMarkdownFileCommand(
   }
 }
 
+async function runBrowseMarkdownDownloadCommand(context: BrowseMarkdownRuntimeContext, args: string[]): Promise<WorkbenchBrowseCommandResponse> {
+  const startedAt = Date.now();
+  const fail = (message: string) => ({ durationMs: Date.now() - startedAt, error: message, exitCode: 1, ok: false, stderr: `${message}\n`, stdout: "" });
+  if (args.length !== 1 || args[0]?.toLowerCase() !== "download") {
+    return fail("wait download does not support additional arguments.");
+  }
+  try {
+    const download = await context.downloadMonitor.waitForDownload();
+    return {
+      durationMs: Date.now() - startedAt,
+      exitCode: 0,
+      ok: true,
+      stderr: "",
+      stdout: `${JSON.stringify(download)}\n`,
+    };
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
 async function runBrowseMarkdownBrowseCommand(
   context: BrowseMarkdownRuntimeContext,
   line: string,
   actionIndex: number,
+  lineNumber: number,
 ): Promise<BrowseMarkdownCommandResult> {
   const sequence = compileWorkbenchBrowseMarkdown(line, {
     cwd: context.scriptRequest.cwd,
+    lineNumberOffset: lineNumber - 1,
     mode: context.scriptRequest.mode ?? null,
     session: context.scriptRequest.session ?? null,
     streamProgress: false,
@@ -662,7 +866,17 @@ async function runBrowseMarkdownPipeline(
     const executableTokens = commandTokens[0]?.toLowerCase() === "browse" ? commandTokens.slice(1) : commandTokens;
     const command = executableTokens[0]?.toLowerCase() ?? "";
     const args = executableTokens.slice(1);
-    if (BROWSE_MARKDOWN_FILE_COMMANDS.has(command)) {
+    if (command === "wait" && args[0]?.toLowerCase() === "download") {
+      finalResult = {
+        ...await runBrowseMarkdownDownloadCommand(context, args),
+        browseResultAction: "Wait for download",
+        browseResultDetail: {
+          detailKind: "text",
+          detailLabel: null,
+          detailText: "download",
+        },
+      };
+    } else if (BROWSE_MARKDOWN_FILE_COMMANDS.has(command)) {
       const display = getBrowseMarkdownHelperDisplay(command, args);
       finalResult = {
         ...await runBrowseMarkdownFileCommand(context, command, args, stdin),
@@ -674,7 +888,7 @@ async function runBrowseMarkdownPipeline(
         },
       };
     } else {
-      finalResult = await runBrowseMarkdownBrowseCommand(context, serializeBrowseMarkdownTokens(executableTokens), actionIndex);
+      finalResult = await runBrowseMarkdownBrowseCommand(context, serializeBrowseMarkdownTokens(executableTokens), actionIndex, lineNumber);
     }
     if (!finalResult.ok) {
       return finalResult;
@@ -713,20 +927,6 @@ function isBrowseMarkdownHelpStatement(statement: BrowseMarkdownStatement) {
   return tokens.some((token) => token === "--help" || token === "-h");
 }
 
-async function runBrowseMarkdownHelpStatement(context: BrowseMarkdownRuntimeContext, statement: BrowseMarkdownStatement) {
-  if (statement.kind === "javascript") {
-    throw new Error("BrowseMD JavaScript blocks cannot be used as help statements.");
-  }
-  const tokens = tokenizeWorkbenchBrowseMarkdownLine(statement.text, statement.lineNumber);
-  const args = tokens[0]?.toLowerCase() === "browse" ? tokens.slice(1) : tokens;
-  return await runBrowseCommand({
-    args,
-    cwd: context.scriptRequest.cwd,
-    threadId: context.scriptRequest.threadId,
-    timeoutMs: context.scriptRequest.timeoutMs ?? null,
-  });
-}
-
 async function runBrowseMarkdownRequest(request: NextRequest, scriptRequest: WorkbenchBrowseAgentScriptRequest): Promise<WorkbenchBrowseCommandResponse> {
   const startedAt = Date.now();
   const source = await readBrowseMarkdownSource(scriptRequest);
@@ -742,37 +942,37 @@ async function runBrowseMarkdownRequest(request: NextRequest, scriptRequest: Wor
     throw new Error(`BrowseMD scripts can include at most ${MAX_BROWSE_AGENT_SEQUENCE_ACTIONS} commands after includes.`);
   }
 
+  const downloadMonitor = new WorkbenchBrowseDownloadMonitor({
+    cwd: scriptRequest.cwd,
+    timeoutMs: scriptRequest.timeoutMs ?? DEFAULT_BROWSE_TIMEOUT_MS,
+    workspaceRootPaths: source.workspaceRootPaths,
+  });
+  await downloadMonitor.initialize();
+
   const context: BrowseMarkdownRuntimeContext = {
     activeThread: await readThreadForAutomaticBrowseResult(request, scriptRequest.threadId),
     cwd: scriptRequest.cwd,
+    downloadMonitor,
     request,
     scriptRequest,
-    variables: new Map(),
+    variables: new Map(Object.entries(scriptRequest.vars ?? {})),
     workspaceRootPaths: source.workspaceRootPaths,
   };
   const helpStatements = statements.filter(isBrowseMarkdownHelpStatement);
   if (helpStatements.length) {
-    if (statements.length !== helpStatements.length) {
-      throw new Error("BrowseMD help mode cannot be mixed with side-effectful commands.");
-    }
-    const helpResults = await Promise.all(helpStatements.map(async (statement) => await runBrowseMarkdownHelpStatement(context, statement)));
-    const ok = helpResults.every((result) => result.ok);
-    return {
-      durationMs: Date.now() - startedAt,
-      error: ok ? undefined : helpResults.find((result) => !result.ok)?.error ?? "Browse help failed.",
-      exitCode: ok ? 0 : 1,
-      ok,
-      stderr: helpResults.map((result) => result.stderr).join(""),
-      stdout: helpResults.map((result) => result.stdout).join(""),
-    };
+    throw new Error(getUnsupportedBrowseHelpError());
   }
 
   let stdout = "";
   let stderr = "";
   for (const [index, statement] of statements.entries()) {
+    const assignmentShapeError = statement.kind === "command" ? getBrowseMarkdownAssignmentShapeError(statement.text) : null;
+    if (assignmentShapeError) {
+      throw new Error(`BrowseMD line ${statement.lineNumber}: ${assignmentShapeError}`);
+    }
     const assignment = statement.kind === "command" ? parseBrowseMarkdownAssignment(statement.text) : null;
     const result = statement.kind === "javascript"
-      ? await runBrowseMarkdownBrowseCommand(context, statement.text, index)
+      ? await runBrowseMarkdownBrowseCommand(context, statement.text, index, statement.lineNumber)
       : assignment
         ? await runBrowseMarkdownPipeline(context, assignment.command, index, statement.lineNumber)
         : await runBrowseMarkdownPipeline(context, statement.text, index, statement.lineNumber);
@@ -804,7 +1004,7 @@ async function runBrowseMarkdownRequest(request: NextRequest, scriptRequest: Wor
       if (!BROWSE_MARKDOWN_VARIABLE_PATTERN.test(assignment.name)) {
         throw new Error(`Invalid BrowseMD variable name: ${assignment.name}`);
       }
-      context.variables.set(assignment.name, result.stdout.replace(/\r?\n$/u, ""));
+      setBrowseMarkdownVariable(context.variables, assignment.name, result.stdout);
     } else if (!result.outputRedirected) {
       stdout += result.stdout;
     }
@@ -879,6 +1079,25 @@ function browseAgentSequenceProgressResponse(
 
 function hasBrowseFlag(args: readonly string[], flag: string) {
   return args.some((arg) => arg === flag);
+}
+
+function hasBrowseHelpFlag(args: readonly string[]) {
+  return args.some((arg) => arg === "--help" || arg === "-h");
+}
+
+function getUnsupportedBrowseHelpError() {
+  return "Browse endpoint help mode is not supported. Use the /browse skill instructions as the Workbench Browse contract.";
+}
+
+function getRawBrowseArgsError(args: readonly string[]) {
+  const command = args[0]?.toLowerCase() ?? "";
+  if (hasBrowseHelpFlag(args)) {
+    return getUnsupportedBrowseHelpError();
+  }
+  if (command === "snapshot" && args.some((arg, index) => index > 0 && arg.toLowerCase() === "compact")) {
+    return "Raw Browse args use CLI flags: use `snapshot --compact`. BrowseMD scripts also support `snapshot --compact`; bare `snapshot compact` is only kept as a BrowseMD compatibility alias.";
+  }
+  return null;
 }
 
 function normalizeScreenshotSteerArgs(args: readonly string[]) {
@@ -1413,7 +1632,7 @@ export async function POST(request: NextRequest) {
       }
 
       try {
-        return browseCommandResponse(await runBrowseMarkdownRequest(request, scriptRequest));
+        return browseCommandResponse(await workbenchBrowseCommandQueue.run(async () => await runBrowseMarkdownRequest(request, scriptRequest)));
       } catch (error) {
         return browseCommandResponse({
           durationMs: Date.now() - startedAt,
@@ -1445,11 +1664,13 @@ export async function POST(request: NextRequest) {
       } satisfies WorkbenchBrowseAgentSequenceRequest;
       if (sequenceRequest.streamProgress) {
         return browseAgentSequenceProgressResponse(async (emitProgress) => {
-          await runBrowseAgentCommandSequence(request, sequenceRequest, { emitProgress });
+          await workbenchBrowseCommandQueue.run(async () => {
+            await runBrowseAgentCommandSequence(request, sequenceRequest, { emitProgress });
+          });
         });
       }
 
-      return browseAgentSequenceResponse(await runBrowseAgentCommandSequence(request, sequenceRequest));
+      return browseAgentSequenceResponse(await workbenchBrowseCommandQueue.run(async () => await runBrowseAgentCommandSequence(request, sequenceRequest)));
     }
 
     if (Array.isArray(requestBody)) {
@@ -1463,15 +1684,15 @@ export async function POST(request: NextRequest) {
         }, { status: 400 });
       }
 
-      return browseAgentSequenceResponse(await runBrowseAgentCommandSequence(request, {
+      return browseAgentSequenceResponse(await workbenchBrowseCommandQueue.run(async () => await runBrowseAgentCommandSequence(request, {
         actions: requestBody as WorkbenchBrowseAgentAction[],
         streamProgress: false,
         stopOnError: true,
-      }));
+      })));
     }
 
     if (isRecord(requestBody) && typeof requestBody.action === "string") {
-      return browseCommandResponse(await runBrowseAgentCommand(request, requestBody as unknown as WorkbenchBrowseAgentAction));
+      return browseCommandResponse(await workbenchBrowseCommandQueue.run(async () => await runBrowseAgentCommand(request, requestBody as unknown as WorkbenchBrowseAgentAction)));
     }
 
     const payload = normalizeBrowseRequest(requestBody);
@@ -1479,6 +1700,18 @@ export async function POST(request: NextRequest) {
       return browseCommandResponse({
         durationMs: Date.now() - startedAt,
         error: "A valid browse command request is required.",
+        exitCode: null,
+        ok: false,
+        stderr: "",
+        stdout: "",
+      }, { status: 400 });
+    }
+
+    const rawArgsError = getRawBrowseArgsError(payload.args);
+    if (rawArgsError) {
+      return browseCommandResponse({
+        durationMs: Date.now() - startedAt,
+        error: rawArgsError,
         exitCode: null,
         ok: false,
         stderr: "",
@@ -1500,7 +1733,7 @@ export async function POST(request: NextRequest) {
       }, { status: 403 });
     }
 
-    return browseCommandResponse(await runBrowseCommandAndMaybeSteerScreenshot(request, payload));
+    return browseCommandResponse(await workbenchBrowseCommandQueue.run(async () => await runBrowseCommandAndMaybeSteerScreenshot(request, payload)));
   } catch (error) {
     return browseCommandResponse({
       durationMs: Date.now() - startedAt,
