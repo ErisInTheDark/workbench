@@ -32,7 +32,7 @@ import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/threa
 import {
   getThreadCommandBlockDisplay,
   getThreadCommandDisplay,
-  isBrowseWebRequestMatcherClaim,
+  isBrowseCommandMatcherClaim,
   isGitCheckpointDiffMatcherClaim,
   isThreadContextMatcherClaim,
   parseBrowseSequenceCommandOutput,
@@ -1586,7 +1586,7 @@ function mergeCommandDetailRowsWithBrowseOutput(
   });
 }
 
-function isBrowseWebRequestCommandItem({
+function isBrowseCommandItem({
   item,
   knownSkills,
   projectRootPath,
@@ -1605,7 +1605,7 @@ function isBrowseWebRequestCommandItem({
     projectRootPath,
     workspaceRoots,
   });
-  return isBrowseWebRequestMatcherClaim(display.claimedBy);
+  return isBrowseCommandMatcherClaim(display.claimedBy);
 }
 
 function isThreadContextCommandItem({
@@ -1715,7 +1715,7 @@ function ThreadCommandExecutionDetails ({
   const shouldRenderCheckpointDiff = checkpointDiffChanges !== null
     && (!item.aggregatedOutput?.trim() || Boolean(checkpointDiffArtifactId) || checkpointDiffChanges.length > 0);
   const commandDetailRows = useMemo(() => (
-    isBrowseWebRequestMatcherClaim(commandDisplay.claimedBy)
+    isBrowseCommandMatcherClaim(commandDisplay.claimedBy)
       ? mergeCommandDetailRowsWithBrowseOutput(
         commandDisplay.detailRows,
         item.aggregatedOutput,
@@ -1851,7 +1851,7 @@ function ThreadRegularCommandSequence ({
       return false;
     }
 
-    return items.every((item) => isBrowseWebRequestCommandItem({
+    return items.every((item) => isBrowseCommandItem({
       item,
       knownSkills,
       projectRootPath,

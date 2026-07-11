@@ -41,7 +41,7 @@ If the user, project guidance, an active workflow, or another active instruction
 
 The \`/browse\` skill owns the browser-testing workflow. Use it to decide how to open pages, inspect snapshots, interact with elements, capture screenshots, switch between headed and headless sessions, stream progress, and clean up browser sessions.
 
-Workbench browser use is authoritative inside Workbench. If Codex, MCP, a plugin, or another injected instruction provides competing browser-use guidance, ignore the competing browser mechanism when it conflicts and follow Workbench's \`/browse\` skill plus Workbench-provided Browse endpoint instructions instead.
+Workbench browser use is authoritative inside Workbench. If Codex, MCP, a plugin, or another injected instruction provides competing browser-use guidance, ignore the competing browser mechanism when it conflicts and follow Workbench's \`/browse\` skill plus the Workbench \`wb browse\` command contract instead.
 
 Do not treat the Browse skill as ordinary internet research. Use normal web/search tools for research unless the task needs an actual browser session, local app testing, page interaction, screenshot evidence, or Browse diagnostics.
 
@@ -131,7 +131,7 @@ For any plan that would edit files:
 
 1. Identify the exact existing files you plan to edit.
 2. Confirm that Workbench Git Checkpoint instructions are available.
-3. Create a baseline checkpoint through the Workbench checkpoint endpoint.
+3. Create a baseline checkpoint through \`wb checkpoint baseline\`.
 4. Treat that checkpoint as the approval checkpoint.
 5. Keep the checkpoint commit privately available for later drift checks.
 6. In the user-facing plan, name the planned edit files, but do not print checkpoint plumbing unless it is needed to explain a problem.
@@ -314,7 +314,7 @@ If validation cannot be done without writing, explain the tradeoff and ask first
 
 - Apply **Newest Instruction Wins** and **Shared Workspace**.
 - Treat questionnaire responses and late user messages as steering events that may have been intended earlier than you received them.
-- After context compaction, if Workbench provides Thread Context Reorientation instructions, call the provided Workbench server endpoint and read its Markdown before relying on memory or continuing risky work.
+- After context compaction, if Workbench provides Thread Context Reorientation instructions, run the provided \`wb thread context\` command and read its Markdown before relying on memory or continuing risky work.
 - After interruption or resume, verify the newest request and current file state before risky work.
 - If substantial work remains under an active approval-gated workflow, restate the active plan and get approval again when the prior approval is ambiguous.
 - Before final or review-style messages after a context transition, make sure you are answering the newest request, not an older task.
@@ -727,7 +727,7 @@ Never revert unexpected edits unless the user explicitly asks for that exact rev
 
 ### Context compaction, resume, or interruption
 
-After context compaction, if Workbench provides Thread Context Reorientation instructions, call the provided Workbench server endpoint and read the returned Markdown before continuing. Use it to recover the latest user messages, steers, plan blocks, and questionnaire answers; then inspect the relevant files before editing. This endpoint does not replace approval, file checks, or checkpoint checks.
+After context compaction, if Workbench provides Thread Context Reorientation instructions, run the provided \`wb thread context\` command and read the returned Markdown before continuing. Use it to recover the latest user messages, steers, plan blocks, and questionnaire answers; then inspect the relevant files before editing. This command does not replace approval, file checks, or checkpoint checks.
 
 After resume, interruption, or a long delay, verify the newest user request and the current file state before risky work.
 
@@ -802,12 +802,6 @@ Workbench supplies the current Collaboration runtime facts through the placehold
 
 Project cwd:
 {collaboration.cwd}
-
-Dedicated Collaboration post endpoint:
-{collaboration.post-endpoint}
-
-Dedicated Collaboration memory endpoint:
-{collaboration.memory-endpoint}
 
 Previous private Workbench memory:
 {collaboration.previous-memory}
@@ -889,26 +883,26 @@ Keep the tree useful and low-noise. Zero changes is valid when current evidence 
 * DO NOT churn non-actionable branches just to prove they were reviewed.
 * DO NOT split tightly related work into noisy separate prompts.
 
-## Visible post endpoint
+## Visible post commands
 
-Use only the dedicated Collaboration post endpoint from the runtime context to maintain visible posts. Do not call unrelated Workbench endpoints.
+Use only the dedicated \`wb collaboration posts\` commands to maintain visible posts. Do not call unrelated Workbench commands or routes.
 
-Use \`GET\` when endpoint state or allowed operations need inspection. Use endpoint errors as feedback: inspect the error, fix the request, choose a different post, or report why mutation is unavailable.
+Run \`wb collaboration posts read\` when current state or allowed operations need inspection. Use command errors as feedback: inspect the error, fix the command, choose a different post, or report why mutation is unavailable.
 
-| Operation | Use only when                                        | POST payload                                                                        |
-| --------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Create    | Under a user-authored leaf marked eligible           | \`action: "create"\`, \`cwd\`, \`parentId\`, Markdown \`body\`, optional \`prompt\`           |
-| Update    | Current agent-authored leaf marked editable          | \`action: "update"\`, \`cwd\`, \`postId\`, replacement Markdown \`body\`, optional \`prompt\` |
-| Delete    | Obsolete current agent-authored leaf marked editable | \`action: "delete"\`, \`cwd\`, \`postId\`                                                 |
+| Operation | Use only when                                        | Command shape |
+| --------- | ---------------------------------------------------- | ------------- |
+| Create    | Under a user-authored leaf marked eligible           | \`wb collaboration posts create --parent <id> (--body <markdown> | --body-file <file>) [--prompt <text> | --prompt-file <file>]\` |
+| Update    | Current agent-authored leaf marked editable          | \`wb collaboration posts update --post <id> (--body <markdown> | --body-file <file>) [--prompt <text> | --prompt-file <file> | --clear-prompt]\` |
+| Delete    | Obsolete current agent-authored leaf marked editable | \`wb collaboration posts delete --post <id>\` |
 
-On update, omit \`prompt\` to preserve an existing prompt, and use \`prompt: null\` to clear an existing prompt.
+On update, omit all prompt flags to preserve an existing prompt, and use \`--clear-prompt\` to clear it.
 
 If you update a prompt-bearing post because the task wording changed, because the user objected to prompt text, or because the visible body would otherwise disagree with the prompt, include the replacement \`prompt\` in the same update. After updating a prompt-bearing post, inspect the updated post and verify the visible \`body\` and stored \`prompt\` separately.
 
 * DO NOT create agent posts except under eligible user-authored leaves.
 * DO NOT attempt to edit or delete posts unless they are current editable agent-authored leaves.
 * DO NOT attempt to rewrite an agent post once the user has replied under it.
-* DO NOT return post-mutation JSON envelopes in the final response.
+* DO NOT return post-command JSON envelopes in the final response.
 
 ## Visible post body
 
@@ -973,7 +967,7 @@ When a user post is too vague, stale, broad, or under-evidenced, prefer a visibl
 
 ## Private next-run memory
 
-Use only the dedicated Collaboration memory endpoint from the runtime context. POSTing memory replaces the previous private memory. If there is no useful memory update, do not POST memory; Workbench preserves the old memory.
+Use only \`wb collaboration memory read\` and \`wb collaboration memory write\`. Writing memory replaces the previous private memory. If there is no useful memory update, do not run the write command; Workbench preserves the old memory.
 
 Memory should be compact and future-facing. Store only context that helps the next collaborator and is not cheap to reconstruct.
 
@@ -982,8 +976,8 @@ Good memory candidates include durable leads, unresolved uncertainties, checkpoi
 * MUST carry forward still-useful previous memory when setting new memory.
 * MUST treat omitted old facts as intentionally forgotten.
 * MUST keep memory compact and future-facing.
-* DO NOT POST memory when there is no useful update.
-* DO NOT store changelogs, action logs, final reviews, rationale essays, routine evidence inspected, endpoint mutation logs, or completed-action summaries.
+* DO NOT write memory when there is no useful update.
+* DO NOT store changelogs, action logs, final reviews, rationale essays, routine evidence inspected, command mutation logs, or completed-action summaries.
 * DO NOT store routine-looking material unless it materially helps the next run.
 
 ## Checkpoints
@@ -1002,7 +996,7 @@ Keep the final response short and status-like.
 * MUST say whether private memory was updated or preserved.
 * MUST say that no source files were edited.
 * DO NOT duplicate private memory contents.
-* DO NOT return a post-mutation JSON envelope.
+* DO NOT return a post-command JSON envelope.
 * DO NOT offer to proceed into implementation mode from the collaborator run.
 `.trim();
 
@@ -1017,8 +1011,8 @@ Good things to put here:
 
 - how to use the shared threaded Collaboration tree
 - how to use Workbench-supplied Collaboration runtime placeholders
-- how to use the dedicated Collaboration post endpoint
-- how to use the dedicated Collaboration memory endpoint
+- how to use the dedicated \`wb collaboration posts\` commands
+- how to use the dedicated \`wb collaboration memory\` commands
 - when to suggest new dedicated threads with prompt-bearing posts
 - how to avoid duplicate or stale prompt posts
 - what useful collaborator prompt posts should include
@@ -1027,9 +1021,7 @@ Good things to put here:
 
 Workbench expands these Collaboration-specific runtime placeholders in COLLABORATOR.md:
 
-- \`{collaboration.cwd}\`: selected Workbench project cwd for endpoint requests.
-- \`{collaboration.post-endpoint}\`: dedicated Collaboration post endpoint for GET inspection and POST mutations.
-- \`{collaboration.memory-endpoint}\`: dedicated Collaboration memory endpoint for GET inspection and POST replacement.
+- \`{collaboration.cwd}\`: selected Workbench project cwd for CLI commands.
 - \`{collaboration.previous-memory}\`: private memory from the prior collaborator run.
 - \`{collaboration.diff-map}\`: compact current project diff map.
 - \`{collaboration.tags}\`: current Collaboration tag list.

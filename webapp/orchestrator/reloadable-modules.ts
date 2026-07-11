@@ -31,7 +31,6 @@ export type OrchestratorReloadableModules = {
   project: Pick<typeof import("../lib/project"), "isPathWithinRoot" | "readUserInvocableAgentDefinition" | "resolveProjectRoot">;
   threadBootstrap: Pick<typeof import("../lib/thread-bootstrap"),
     "buildThreadTitleBootstrapInstructions"
-    | "buildThreadTitleRouteUrl"
     | "normalizeThreadTitle">;
   opencodeWorkbenchInstructions: Pick<typeof import("./opencode-workbench-instructions"),
     "buildOpenCodeWorkbenchSystemPrompt"

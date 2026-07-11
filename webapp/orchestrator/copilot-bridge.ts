@@ -675,11 +675,9 @@ export class CopilotBridge {
     workbenchOrigin: string | null,
     promptContext: WorkbenchPromptContext | null = null,
   ) {
-    const { buildThreadTitleBootstrapInstructions, buildThreadTitleRouteUrl } = this.getReloadableModules().threadBootstrap;
+    const { buildThreadTitleBootstrapInstructions } = this.getReloadableModules().threadBootstrap;
     const { buildWorkbenchLibraryBootstrapInstructions } = this.getReloadableModules().workbenchLibrary;
-    const routeUrl = workbenchOrigin?.trim()
-      ? buildThreadTitleRouteUrl(workbenchOrigin)
-      : null;
+    const hasWorkbenchOrigin = Boolean(workbenchOrigin?.trim());
     const resolvedPromptContext = promptContext
       ? {
         ...promptContext,
@@ -720,10 +718,9 @@ Treat the Workbench instructions below as active for this session. If Copilot-pr
       USER_INPUT_TOOL_SYSTEM_MESSAGE,
       workbenchInstructions,
       workbenchLibraryInstructions,
-      !promptInstructions && routeUrl
+      !promptInstructions && hasWorkbenchOrigin
         ? buildThreadTitleBootstrapInstructions({
           harness: "copilot",
-          routeUrl,
           threadId,
         })
         : null,

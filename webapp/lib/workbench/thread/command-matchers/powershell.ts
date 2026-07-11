@@ -35,21 +35,6 @@ interface ParsedPowerShellNumericAssignment {
 
 export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
-    id: "powershell.hide-thread-title-setting",
-    match: (context) => {
-      if (context.summaryParts.length || !isPowerShellThreadTitleSettingCommand(context.unwrappedCommand)) {
-        return null;
-      }
-
-      return CommandMatcher.Result({
-        hide: true,
-        omitFromDisplay: true,
-        remainingCommand: null,
-        summaryParts: [],
-      });
-    },
-  }),
-  CommandMatcher({
     id: "powershell.delete-resolved-folder",
     match: (context) => {
       if (context.summaryParts.length) {
@@ -2176,104 +2161,6 @@ function buildPowerShellTestPathPart(
   }
 
   return getPowerShellStagePathPart(parsedStage, context);
-}
-
-function isPowerShellThreadTitleSettingCommand(commandText: string) {
-  if (isGeneralPowerShellThreadTitleSettingCommand(commandText)) {
-    return true;
-  }
-
-  return isLegacyPowerShellThreadTitleSettingCommand(commandText);
-}
-
-function isGeneralPowerShellThreadTitleSettingCommand(commandText: string) {
-  const normalizedCommandText = normalizePowerShellThreadTitleCommandText(commandText);
-  const bodyAssignmentMatch = normalizedCommandText.match(/\$body\s*=\s*@\{([\s\S]*?)\}\s*\|\s*ConvertTo-Json\s+-Compress\b/i);
-  const bodyText = bodyAssignmentMatch?.[1];
-  if (!bodyText || bodyAssignmentMatch.index === undefined) {
-    return false;
-  }
-
-  const prefix = normalizedCommandText.slice(0, bodyAssignmentMatch.index).trim();
-  if (prefix && !isPowerShellThreadTitleCommandPrefix(prefix)) {
-    return false;
-  }
-
-  return isPowerShellThreadTitleBody(bodyText)
-    && isPowerShellThreadTitleRequest(normalizedCommandText.slice(bodyAssignmentMatch.index));
-}
-
-function normalizePowerShellThreadTitleCommandText(commandText: string) {
-  return unwrapPowerShellStageText(commandText)
-    .replace(/\r\n/g, "\n")
-    .replace(/(?:'")|(?:"')/g, "'")
-    .replace(/[ \t]+/g, " ")
-    .trim();
-}
-
-function isPowerShellThreadTitleCommandPrefix(prefix: string) {
-  const normalizedPrefix = prefix.replace(/\s+/g, " ").trim();
-  if (!normalizedPrefix) {
-    return true;
-  }
-
-  if (/^['"`]*workbench-(?:agent-)?thread-title-v1['"`]*\s*;?$/i.test(normalizedPrefix)) {
-    return true;
-  }
-
-  return /^\$title\s*=\s*['"`]+[^;\r\n]+['"`]+\s*;?$/i.test(normalizedPrefix);
-}
-
-function isPowerShellThreadTitleBody(bodyText: string) {
-  return hasPowerShellHashtableField(bodyText, "harness", /['"`]*codex['"`]*/i)
-    && hasPowerShellHashtableField(
-      bodyText,
-      "threadId",
-      /['"`]*[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}['"`]*/i,
-    )
-    && hasPowerShellHashtableField(bodyText, "title", /(?:['"`]*\$title\b|['"`]+[^;}\r\n]+['"`]*)/i);
-}
-
-function hasPowerShellHashtableField(bodyText: string, key: string, valuePattern: RegExp) {
-  const fieldPattern = new RegExp(
-    `(?:^|;)\\s*${escapeRegExp(key)}\\s*=\\s*${valuePattern.source}\\s*(?=;|$)`,
-    valuePattern.ignoreCase ? "i" : "",
-  );
-  return fieldPattern.test(bodyText.trim());
-}
-
-function isPowerShellThreadTitleRequest(commandText: string) {
-  const requestMatch = commandText.match(/\bInvoke-RestMethod\b[\s\S]*$/i);
-  const requestText = requestMatch?.[0]?.trim();
-  if (!requestText) {
-    return false;
-  }
-
-  const normalizedRequestText = stripPowerShellThreadTitleRequestTail(requestText);
-  return /-Method\s+Post\b/i.test(normalizedRequestText)
-    && /-Uri\s+['"`]*https?:\/\/[^'"`\s]*\/api\/thread-title['"`]*/i.test(normalizedRequestText)
-    && /-ContentType\s+['"`]*application\/json['"`]*/i.test(normalizedRequestText)
-    && /-Body\s+['"`]*\$body\b/i.test(normalizedRequestText)
-    && !/[;|&]\s*\S/.test(normalizedRequestText);
-}
-
-function stripPowerShellThreadTitleRequestTail(requestText: string) {
-  return requestText
-    .replace(/\|\s*Out-Null\s*\}?\s*catch\s*\{\s*\}\s*['"`]*$/i, "")
-    .replace(/\|\s*Out-Null\s*['"`]*$/i, "")
-    .trim();
-}
-
-function isLegacyPowerShellThreadTitleSettingCommand(commandText: string) {
-  const normalizedCommandText = unwrapPowerShellStageText(commandText)
-    .replace(/\r\n/g, "\n")
-    .replace(/(?:'")|(?:"')/g, "'")
-    .trim();
-  const titleSettingMatch = normalizedCommandText.match(
-    /^\$title\s*=\s*['"]+[^'\r\n]*(?:''[^'\r\n]*)*['"]+\s*\n+\s*['"]*\$body\s*=\s*@\{\s*harness\s*=\s*['"]+codex'\s*;\s*threadId\s*=\s*'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'\s*;\s*title\s*=\s*['"]*\$title\s*\}\s*\|\s*ConvertTo-Json\s+-Compress\s*\n+\s*Invoke-RestMethod\s+-Method\s+Post\s+-Uri\s*['"]+http:\/\/127\.0\.0\.1:3002\/api\/thread-title'\s+-ContentType\s*'application\/json'\s+-Body\s+['"]*\$body\s*\|\s*Out-Null\s*$/i,
-  );
-
-  return Boolean(titleSettingMatch);
 }
 
 function isPowerShellLineNumberFormattingScript(scriptText: string) {

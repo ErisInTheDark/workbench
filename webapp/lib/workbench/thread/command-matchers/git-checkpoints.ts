@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - GIT_CHECKPOINT_COMMAND_MATCHERS: command-summary matchers for Workbench hidden Git checkpoint commands. Keywords: thread, command, matcher, git, checkpoint.
+ * - GIT_CHECKPOINT_COMMAND_MATCHERS: command-summary matchers for wb checkpoint commands. Keywords: thread, command, matcher, git, checkpoint, cli.
  * - isGitCheckpointDiffMatcherClaim: detect checkpoint diff matcher ids for specialized command-output rendering. Keywords: thread, command, checkpoint, diff.
  * - parseGitCheckpointDiffArtifactId: parse a compact checkpoint diff summary for the stored full-diff artifact id. Keywords: checkpoint, diff, artifact.
  * - parseGitCheckpointDiffOutput: parse checkpoint diff command output into file-change display entries. Keywords: checkpoint, diff, file change.
@@ -11,11 +11,6 @@ import { parseUnifiedDiffFileChanges } from "../thread-file-diff";
 import { CommandMatcher } from "./core";
 import type { CommandMatcherDefinition } from "./types";
 
-const CHECKPOINT_BASELINE_SENTINEL = "workbench-agent-checkpoint-baseline-v1";
-const CHECKPOINT_DIFF_CREATE_SENTINEL = "workbench-agent-checkpoint-create-diff-v1";
-const CHECKPOINT_DIFF_SENTINEL = "workbench-agent-checkpoint-diff-v1";
-const CHECKPOINT_FILE_DIFF_SENTINEL = "workbench-agent-checkpoint-file-diff-v1";
-const CHECKPOINT_RESTORE_SENTINEL = "workbench-agent-checkpoint-restore-v1";
 const CHECKPOINT_DIFF_MATCHER_ID = "git-checkpoint.diff";
 const CHECKPOINT_DIFF_ARTIFACT_PATTERN = /^Full diff artifact:\s*([a-f0-9]{64})\s*$/im;
 
@@ -23,10 +18,7 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
     id: "git-checkpoint.create",
     match: ({ stage }) => {
-      if (
-        !hasCheckpointSentinel(stage.text, CHECKPOINT_BASELINE_SENTINEL)
-        && !hasCheckpointSentinel(stage.text, CHECKPOINT_DIFF_CREATE_SENTINEL)
-      ) {
+      if (!/^wb(?:\.cmd)?\s+checkpoint\s+(?:baseline|create-diff)(?:\s|$)/iu.test(stage.text.trim())) {
         return null;
       }
 
@@ -41,10 +33,7 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
     id: CHECKPOINT_DIFF_MATCHER_ID,
     match: ({ stage }) => {
-      if (
-        !hasCheckpointSentinel(stage.text, CHECKPOINT_DIFF_SENTINEL)
-        && !hasCheckpointSentinel(stage.text, CHECKPOINT_FILE_DIFF_SENTINEL)
-      ) {
+      if (!/^wb(?:\.cmd)?\s+checkpoint\s+(?:diff|file-diff)(?:\s|$)/iu.test(stage.text.trim())) {
         return null;
       }
 
@@ -59,7 +48,7 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
     id: "git-checkpoint.restore",
     match: ({ stage }) => {
-      if (!hasCheckpointSentinel(stage.text, CHECKPOINT_RESTORE_SENTINEL)) {
+      if (!/^wb(?:\.cmd)?\s+checkpoint\s+restore(?:\s|$)/iu.test(stage.text.trim())) {
         return null;
       }
 
@@ -95,8 +84,4 @@ export function parseGitCheckpointDiffOutput(output: string): FileUpdateChange[]
 
 export function parseGitCheckpointDiffArtifactId(output: string) {
   return CHECKPOINT_DIFF_ARTIFACT_PATTERN.exec(String(output ?? ""))?.[1] ?? null;
-}
-
-function hasCheckpointSentinel(commandText: string, sentinel: string) {
-  return String(commandText ?? "").includes(sentinel);
 }

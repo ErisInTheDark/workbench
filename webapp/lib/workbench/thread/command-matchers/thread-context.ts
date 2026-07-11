@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - THREAD_CONTEXT_COMMAND_MATCHERS: command-summary matcher for Workbench thread context endpoint reads. Keywords: thread, context, command matcher.
+ * - THREAD_CONTEXT_COMMAND_MATCHERS: command-summary matcher for wb thread context reads. Keywords: thread, context, command matcher, cli.
  * - isThreadContextMatcherClaim: detect thread context matcher ids for dedicated thread disclosure rendering. Keywords: thread, context, disclosure.
  */
 
@@ -8,13 +8,12 @@ import { CommandMatcher } from "./core";
 import type { CommandMatcherDefinition } from "./types";
 
 const THREAD_CONTEXT_MATCHER_ID = "thread-context.read";
-const THREAD_CONTEXT_ROUTE_PATTERN = /(?:https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?)?\/api\/thread-context\/[^'"`\s?#)]+/i;
 
 export const THREAD_CONTEXT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
     id: THREAD_CONTEXT_MATCHER_ID,
     match: ({ stage, summaryParts }) => {
-      if (summaryParts.length || !THREAD_CONTEXT_ROUTE_PATTERN.test(stage.text)) {
+      if (summaryParts.length || !/^wb(?:\.cmd)?\s+thread\s+context(?:\s|$)/iu.test(stage.text.trim())) {
         return null;
       }
 

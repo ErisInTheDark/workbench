@@ -189,18 +189,9 @@ function buildCollaborationInstructionInjections({
   previousMemory: string;
   state: WorkbenchCollaborationState;
 }) {
-  const collaborationPostEndpoint = typeof window === "undefined"
-    ? "/api/collaboration/posts"
-    : `${window.location.origin}/api/collaboration/posts`;
-  const collaborationMemoryEndpoint = typeof window === "undefined"
-    ? "/api/collaboration/memory"
-    : `${window.location.origin}/api/collaboration/memory`;
-
   return {
     "collaboration.diff-map": diffMap,
     "collaboration.cwd": cwd,
-    "collaboration.memory-endpoint": collaborationMemoryEndpoint,
-    "collaboration.post-endpoint": collaborationPostEndpoint,
     "collaboration.previous-memory": previousMemory || "None.",
     "collaboration.run-mode": formatRunModeForPrompt(hasUserNote),
     "collaboration.tags": formatTagsForPrompt(state),

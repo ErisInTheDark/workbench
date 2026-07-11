@@ -4,7 +4,7 @@
  * - WorkbenchPromptInstructions: resolved base and developer instruction payload. Keywords: prompt, baseInstructions, developerInstructions.
  * - ensureWorkbenchPromptFiles: write generated Workbench prompt files and scaffold prompt folders. Keywords: AGENTS, workflows, default agent.
  * - buildWorkbenchPromptInstructions: resolve fresh prompt files and expand Workbench injections for a Codex thread. Keywords: prompt, injections, app-server.
- * - buildWorkbenchThreadUtilityDeveloperInstructions: resolve workflow-free Workbench endpoint instructions. Keywords: checkpoints, thread title, thread context.
+ * - buildWorkbenchThreadUtilityDeveloperInstructions: resolve workflow-free Workbench CLI instructions. Keywords: checkpoints, thread title, thread context, cli.
  * - buildWorkbenchCollaborationDeveloperInstructions: build Workbench-owned questionnaire collaboration instructions. Keywords: collaboration mode, plan mode, request_user_input.
  * - default WorkbenchPromptFiles: prompt-file owner namespace. Keywords: prompt, owner, generated files.
  */
@@ -15,10 +15,7 @@ import {
     listProjectSkillDefinitionsFromRoot,
     readUserInvocableAgentDefinitionFromRoot,
 } from "../../project";
-import {
-    buildThreadTitleBootstrapInstructions,
-    buildThreadTitleRouteUrl,
-} from "../../thread-bootstrap";
+import { buildThreadTitleBootstrapInstructions } from "../../thread-bootstrap";
 import type {
     WorkbenchAgentDefinition,
     WorkbenchHarness,
@@ -394,26 +391,20 @@ function joinInstructionSections(sections: Array<string | null | undefined>) {
 
 function buildThreadTitleInstructions(context: WorkbenchPromptContext) {
   const threadId = context.threadId?.trim();
-  const workbenchOrigin = context.workbenchOrigin?.trim();
-  if (!threadId || threadId === "new" || threadId.startsWith("draft:") || !workbenchOrigin) {
+  if (!threadId || threadId === "new" || threadId.startsWith("draft:") || !context.workbenchOrigin?.trim()) {
     return null;
   }
 
   return buildThreadTitleBootstrapInstructions({
     harness: context.harness ?? "codex",
-    routeUrl: buildThreadTitleRouteUrl(workbenchOrigin),
     threadId,
   });
 }
 
 async function buildWorkbenchBrowseInstructions(context: WorkbenchPromptContext) {
-  const workbenchOrigin = context.workbenchOrigin?.trim();
-  if (!workbenchOrigin) {
+  if (!context.workbenchOrigin?.trim()) {
     return null;
   }
-
-  const browseRouteUrl = new URL("/api/browse", workbenchOrigin).toString();
-  const browseSessionsRouteUrl = new URL("/api/browse/sessions", workbenchOrigin).toString();
   let rawCommandStatus = "Raw Browse CLI-args passthrough is currently disabled.";
   try {
     const settings = new WorkbenchServerSettings();
@@ -425,82 +416,65 @@ async function buildWorkbenchBrowseInstructions(context: WorkbenchPromptContext)
     rawCommandStatus = "Raw Browse CLI-args passthrough status could not be read; assume it is disabled unless the user confirms otherwise.";
   }
 
-  // NOTE: Do not put explanations about using the browse endpoint here, this is just meant to note that it exists and be meta direction pointing towards the built-in skill.
+  // NOTE: This section only advertises the CLI capability and points to the built-in skill for its workflow.
   return `
-## Workbench Browse API
+## Workbench Browse CLI
 
-Workbench provides this local Browse endpoint for browser automation only when the user, an active workflow, or another active instruction asks for browser work.
-
-Endpoint URL:
-
-\`\`\`text
-${browseRouteUrl}
-\`\`\`
-
-Browse session management endpoint URL:
-
-\`\`\`text
-${browseSessionsRouteUrl}
-\`\`\`
+Workbench provides the allowlisted \`wb browse\` command family for browser automation only when the user, an active workflow, or another active instruction asks for browser work.
 
 ${rawCommandStatus}
 
-This section does not authorize arbitrary Workbench webapp endpoint calls. Use the \`/browse\` skill for the browser workflow and request contract, including when listing or stopping Workbench-known Browse sessions.
+This section does not authorize arbitrary Workbench requests. Use the \`/browse\` skill for the browser workflow and command contract, including when listing or stopping Workbench-known Browse sessions.
 
-Browse endpoint calls must stay isolated and auditable: a shell command that calls \`/api/browse\` or \`/api/browse/sessions\` may contain only one typed Browse request or one typed Browse sequence. Do not bundle Browse calls with unrelated endpoint calls, file inspection, page-data transformation, branching, or follow-up scripts in the same command. If Browse output needs processing, run the Browse call visibly first, then run a separate follow-up command using the visible result.
+Each \`wb browse\` call must stay isolated and auditable. Do not bundle it with unrelated shell work, page-data transformation, branching, or cleanup outside the BrowseMD request. If Browse output needs processing, run the Browse command visibly first, then process its visible result separately.
+`.trim();
+}
+
+function buildWorkbenchOrchestratorReloadInstructions(context: WorkbenchPromptContext) {
+  if (!context.workbenchOrigin?.trim()) {
+    return null;
+  }
+
+  return `
+## Workbench Orchestrator Reload CLI
+
+Workbench exposes reload scopes only through the allowlisted \`wb orchestrator reload\` command. Add any required scopes as independent switches in one invocation:
+
+\`wb orchestrator reload [--orchestrator-logic] [--codex-bridge] [--opencode-bridge] [--opencode-server] [--next-dev]\`
+
+At least one switch is required. The command waits for terminal reload status and tolerates the temporary connection loss caused by \`--next-dev\`.
+
+Reloads preserve lifecycle ownership: \`--codex-bridge\` reloads bridge-side code without restarting the stable Codex app-server; \`--opencode-server\` explicitly restarts the managed OpenCode server; \`--next-dev\` restarts Next.js. Do not request broader scopes than the work requires.
 `.trim();
 }
 
 function buildWorkbenchThreadContextReorientationInstructions(context: WorkbenchPromptContext) {
   const threadId = context.threadId?.trim();
-  const workbenchOrigin = context.workbenchOrigin?.trim();
-  if (!threadId || threadId === "new" || threadId.startsWith("draft:") || !workbenchOrigin) {
+  if (!threadId || threadId === "new" || threadId.startsWith("draft:") || !context.workbenchOrigin?.trim()) {
     return null;
   }
-
-  const routeUrl = buildWorkbenchThreadContextRouteUrl(workbenchOrigin, threadId);
-  const powerShellRouteUrl = escapePowerShellSingleQuotedString(routeUrl);
 
   return `
 ## Workbench Thread Context Reorientation
 
-After context compaction, call this Workbench server endpoint before continuing:
+After context compaction, run this Workbench CLI command before continuing:
 
-\`\`\`text
-GET ${routeUrl}
-\`\`\`
+\`wb thread context --thread ${threadId}\`
 
-Use the returned Markdown to recover the latest user messages, steers, plan blocks, and questionnaire answers; then inspect the relevant files before editing. This endpoint is authorized only against the Workbench server for post-compaction reorientation and does not replace approval, file checks, or checkpoint checks.
-
-PowerShell:
-
-\`\`\`powershell
-Invoke-RestMethod -Method Get -Uri '${powerShellRouteUrl}'
-\`\`\`
-
-Bash:
-
-\`\`\`bash
-curl -s '${routeUrl}'
-\`\`\`
+Use the returned Markdown to recover the latest user messages, steers, plan blocks, and questionnaire answers; then inspect the relevant files before editing. This command is authorized only for post-compaction reorientation and does not replace approval, file checks, or checkpoint checks.
 `.trim();
 }
 
 function buildWorkbenchCheckpointInstructions(context: WorkbenchPromptContext) {
   const threadId = context.threadId?.trim();
-  const workbenchOrigin = context.workbenchOrigin?.trim();
-  if (!threadId || threadId === "new" || threadId.startsWith("draft:") || !workbenchOrigin) {
+  if (!threadId || threadId === "new" || threadId.startsWith("draft:") || !context.workbenchOrigin?.trim()) {
     return null;
   }
-
-  const routeUrl = buildGitCheckpointRouteUrl(workbenchOrigin);
-  const powerShellRouteUrl = escapePowerShellSingleQuotedString(routeUrl);
-  const powerShellThreadId = escapePowerShellSingleQuotedString(threadId);
 
   return `
 ## Workbench Git Checkpoints
 
-Workbench supports hidden Git checkpoints for agent workflow baselines. Checkpoints are real local Git commit objects stored under per-worktree refs by the Workbench checkpoint endpoint, not visible branch commits.
+Workbench supports hidden Git checkpoints for agent workflow baselines through the \`wb checkpoint\` command family. Checkpoints are real local Git commit objects stored under per-worktree refs, not visible branch commits.
 
 This thread's checkpoint namespace is owned by Workbench and scoped to the current Git worktree:
 
@@ -510,80 +484,38 @@ refs/worktree/agents/${threadId}/checkpoints
 
 Checkpoint refs are convenience state, not a security boundary. Do not use them to store secrets unless the repo state is already allowed to contain those secrets.
 
-Use these exact one-line commands so Workbench can match and render checkpoint operations. The endpoint owns the Git plumbing and uses a temporary index internally, so agents should not run raw \`git update-ref\` checkpoint scripts themselves.
+Use these exact CLI shapes so Workbench can match and render checkpoint operations. Workbench owns the Git plumbing and uses a temporary index internally, so agents should not run raw \`git update-ref\` checkpoint scripts themselves.
 
 ### Create a baseline checkpoint
 
 Run after entering Brief mode for an approved-plan baseline; call this returned checkpoint commit the approval checkpoint. Also run in Implement mode after the start-of-implementation checkpoint diff is classified safe and before the first file edit; call that returned checkpoint commit the initial implementation checkpoint for the current implementation arc.
 
-\`\`\`powershell
-"workbench-agent-checkpoint-baseline-v1"; $body = @{ action = 'baseline'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
-\`\`\`
-
-\`\`\`bash
-: 'workbench-agent-checkpoint-baseline-v1'; curl -s -X POST '${routeUrl}' -H 'Content-Type: application/json' -d '{"action":"baseline","threadId":"${threadId}","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'"}'
-\`\`\`
+\`wb checkpoint baseline --thread ${threadId}\`
 
 ### Diff against a specific checkpoint
 
 Run immediately after entering Implement mode before editing by passing the approval checkpoint commit. Run again after entering Review mode before summarizing changes by passing the initial implementation checkpoint commit for the current implementation arc. Do not omit \`checkpointCommit\`, do not substitute the newest checkpoint, and do not guess from thread history; parallel agents may create unrelated newer checkpoints. The command output is a compact checkpoint diff summary for agent review. Workbench stores the full unified diff separately and renders it for the user in the UI.
 
-\`\`\`powershell
-"workbench-agent-checkpoint-diff-v1"; $body = @{ action = 'diff'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path; checkpointCommit = '<checkpoint-commit-sha>' } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
-\`\`\`
-
-\`\`\`bash
-: 'workbench-agent-checkpoint-diff-v1'; curl -s -X POST '${routeUrl}' -H 'Content-Type: application/json' -d '{"action":"diff","threadId":"${threadId}","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'","checkpointCommit":"<checkpoint-commit-sha>"}'
-\`\`\`
+\`wb checkpoint diff --thread ${threadId} --commit <checkpoint-commit-sha>\`
 
 ### Diff a specific file against a specific checkpoint
 
 Use after the compact checkpoint diff when a changed file may dangerously intersect with the approved edit files, nearby ownership, contracts, dependencies, validation scope, branch/HEAD, or mechanics needed by the plan. Use the same \`checkpointCommit\` as the compact diff you are investigating. Replace \`<repo-relative-path>\` with a changed file path from that compact summary. The command returns that file's unified diff only.
 
-\`\`\`powershell
-"workbench-agent-checkpoint-file-diff-v1"; $body = @{ action = 'fileDiff'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path; checkpointCommit = '<checkpoint-commit-sha>'; filePath = '<repo-relative-path>' } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
-\`\`\`
-
-\`\`\`bash
-: 'workbench-agent-checkpoint-file-diff-v1'; curl -s -X POST '${routeUrl}' -H 'Content-Type: application/json' -d '{"action":"fileDiff","threadId":"${threadId}","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'","checkpointCommit":"<checkpoint-commit-sha>","filePath":"<repo-relative-path>"}'
-\`\`\`
+\`wb checkpoint file-diff --thread ${threadId} --commit <checkpoint-commit-sha> --file <repo-relative-path>\`
 
 ### Create a diff checkpoint
 
 Do not run this as part of normal Review mode. Use only when the user explicitly asks to preserve the current state as a checkpoint.
 
-\`\`\`powershell
-"workbench-agent-checkpoint-create-diff-v1"; $body = @{ action = 'diffCheckpoint'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
-\`\`\`
-
-\`\`\`bash
-: 'workbench-agent-checkpoint-create-diff-v1'; curl -s -X POST '${routeUrl}' -H 'Content-Type: application/json' -d '{"action":"diffCheckpoint","threadId":"${threadId}","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'"}'
-\`\`\`
+\`wb checkpoint create-diff --thread ${threadId}\`
 
 ### Restore a checkpoint after explicit user request
 
-Only restore when the user asks for a checkpoint restore. First run the diff command or another preview. Restore uses a checkpoint commit sha supplied by the user or selected from the thread's checkpoint output. The endpoint requires \`confirmRestore = $true\` and blocks when the checkpoint parent is not the current HEAD.
+Only restore when the user asks for a checkpoint restore. First run the diff command or another preview. Restore uses a checkpoint commit sha supplied by the user or selected from the thread's checkpoint output. The CLI requires \`--confirm\`, and Workbench blocks when the checkpoint parent is not the current HEAD.
 
-\`\`\`powershell
-"workbench-agent-checkpoint-restore-v1"; $body = @{ action = 'restore'; threadId = '${powerShellThreadId}'; cwd = (Get-Location).Path; checkpointCommit = '<checkpoint-commit-sha>'; confirmRestore = $true } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri '${powerShellRouteUrl}' -ContentType 'application/json' -Body $body
-\`\`\`
-
-\`\`\`bash
-: 'workbench-agent-checkpoint-restore-v1'; curl -s -X POST '${routeUrl}' -H 'Content-Type: application/json' -d '{"action":"restore","threadId":"${threadId}","cwd":"'"$(pwd -W 2>/dev/null || pwd)"'","checkpointCommit":"<checkpoint-commit-sha>","confirmRestore":true}'
-\`\`\`
+\`wb checkpoint restore --thread ${threadId} --commit <checkpoint-commit-sha> --confirm\`
 `.trim();
-}
-
-function buildGitCheckpointRouteUrl(workbenchOrigin: string) {
-  return `${workbenchOrigin.replace(/\/+$/g, "")}/api/git-checkpoint`;
-}
-
-function buildWorkbenchThreadContextRouteUrl(workbenchOrigin: string, threadId: string) {
-  return `${workbenchOrigin.replace(/\/+$/g, "")}/api/thread-context/${encodeURIComponent(threadId)}`;
-}
-
-function escapePowerShellSingleQuotedString(value: string) {
-  return value.replace(/'/g, "''");
 }
 
 async function listProjectSkillDefinitionsForPrompt(context: WorkbenchPromptContext) {
@@ -656,6 +588,7 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
     buildWorkbenchSkillsDeveloperInstructions(skillManifest),
     buildInstructionPackSections(instructionPacks),
     browseInstructions,
+    buildWorkbenchOrchestratorReloadInstructions(context),
     buildWorkbenchThreadContextReorientationInstructions(context),
     buildWorkbenchCheckpointInstructions(context),
     buildThreadTitleInstructions(context),
@@ -675,6 +608,7 @@ export async function buildWorkbenchThreadUtilityDeveloperInstructions(
   const browseInstructions = await buildWorkbenchBrowseInstructions(context);
   return joinInstructionSections([
     browseInstructions,
+    buildWorkbenchOrchestratorReloadInstructions(context),
     buildWorkbenchThreadContextReorientationInstructions(context),
     buildWorkbenchCheckpointInstructions(context),
     buildThreadTitleInstructions(context),
@@ -709,6 +643,7 @@ This collaboration-mode overlay must not replace the active Workbench workflow, 
     buildWorkspaceRootsInjection(context),
     workflowInjection,
     browseInstructions,
+    buildWorkbenchOrchestratorReloadInstructions(context),
     buildWorkbenchThreadContextReorientationInstructions(context),
     buildWorkbenchCheckpointInstructions(context),
     buildThreadTitleInstructions(context),

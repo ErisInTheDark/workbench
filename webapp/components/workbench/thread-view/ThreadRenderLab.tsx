@@ -24,15 +24,13 @@ type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
 type WebSearchItem = Extract<ThreadItem, { type: "webSearch" }>;
 
 function buildSampleThreadItemsText({
-  browseApiUrl = "http://127.0.0.1:<workbench-port>/api/browse",
   threadLabUrl = "http://localhost:<workbench-port>/agent/thread-lab",
 }: {
-  browseApiUrl?: string;
   threadLabUrl?: string;
 } = {}) {
   return JSON.stringify([
   {
-    command: `$body = @{ summary = 'verify hydrated lab renders pasted command items'; streamProgress = $true; actions = @(@{ action = 'stop'; threadId = 'thread-lab-sample'; session = 'thread-lab-check'; force = $true }, @{ action = 'open'; threadId = 'thread-lab-sample'; session = 'thread-lab-check'; url = '${threadLabUrl}'; mode = 'headless' }, @{ action = 'wait'; threadId = 'thread-lab-sample'; session = 'thread-lab-check'; type = 'timeout'; argument = '3000' }, @{ action = 'eval'; threadId = 'thread-lab-sample'; session = 'thread-lab-check'; expression = 'document.body.innerText.slice(0, 200)' }) } | ConvertTo-Json -Depth 8 -Compress; Invoke-RestMethod -Method Post -Uri '${browseApiUrl}' -ContentType 'application/json' -Body $body`,
+    command: `wb browse run --thread thread-lab-sample --session thread-lab-check --summary "verify hydrated lab renders pasted command items" --command "stop --force" --command "open ${threadLabUrl} --headless" --command "wait timeout 3000" --command "eval document.body.innerText.slice(0, 200)"`,
     cwd: "c:/git/web/workbench",
     status: "inProgress",
     aggregatedOutput: [
@@ -43,7 +41,7 @@ function buildSampleThreadItemsText({
     ].join("\n"),
   },
   {
-    command: `$body = @{ summary = 'verify hydrated lab renders pasted command items'; streamProgress = $true; actions = @(@{ action = 'open'; threadId = 'thread-lab-sample'; session = 'thread-lab-check'; url = '${threadLabUrl}'; mode = 'headless' }, @{ action = 'wait'; threadId = 'thread-lab-sample'; session = 'thread-lab-check'; type = 'timeout'; argument = '3000' }, @{ action = 'eval'; threadId = 'thread-lab-sample'; session = 'thread-lab-check'; expression = 'document.body.innerText.slice(0, 200)' }) } | ConvertTo-Json -Depth 8 -Compress; Invoke-RestMethod -Method Post -Uri '${browseApiUrl}' -ContentType 'application/json' -Body $body`,
+    command: `wb browse run --thread thread-lab-sample --session thread-lab-check --summary "verify hydrated lab renders pasted command items" --command "open ${threadLabUrl} --headless" --command "wait timeout 3000" --command "eval document.body.innerText.slice(0, 200)"`,
     cwd: "c:/git/web/workbench",
     durationMs: 8920,
     aggregatedOutput: [
@@ -86,9 +84,7 @@ function buildThreadLabSampleRoutes() {
 
   const threadLabUrl = new URL("/agent/thread-lab", window.location.href);
   threadLabUrl.hostname = "localhost";
-  const browseApiUrl = new URL("/api/browse", window.location.href);
   return {
-    browseApiUrl: browseApiUrl.toString(),
     threadLabUrl: threadLabUrl.toString(),
   };
 }

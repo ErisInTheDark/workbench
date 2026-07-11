@@ -29,6 +29,7 @@ import CodexAppServer from "./CodexAppServer";
 import CodexStdioBridge from "./CodexStdioBridge";
 import { CopilotBridge } from "./copilot-bridge";
 import { OpenCodeBridge } from "./opencode-bridge";
+import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
 import {
     createSpawnOptions,
     getSpawnDescriptor,
@@ -86,6 +87,11 @@ const CODEX_PUBLIC_BRIDGE_PORT = readNonEmptyEnv(process.env.NEXT_PUBLIC_CODEX_A
   ?? parseWebSocketPort(CODEX_PUBLIC_BRIDGE_URL ?? CODEX_BRIDGE_URL);
 const LOCAL_WORKBENCH_ORIGIN = readNonEmptyEnv(process.env.NEXT_PUBLIC_LOCAL_WORKBENCH_ORIGIN)
   ?? `http://127.0.0.1:${NEXT_PORT}`;
+const workbenchAgentCliEnvironment = new WorkbenchAgentCliEnvironment({
+  cliEntryPath: path.join(WEBAPP_ROOT, "lib", "workbench", "cli", "WorkbenchAgentCli.ts"),
+  origin: LOCAL_WORKBENCH_ORIGIN,
+  runtimeDirectoryPath: path.join(WEBAPP_ROOT, "node_modules", ".bin"),
+});
 
 const nextDevEnv: NodeJS.ProcessEnv = {
   ...process.env,
@@ -952,6 +958,7 @@ process.on("exit", () => {
 
 async function startOrchestrator() {
   log("orchestrator", `starting bridge at ${CODEX_BRIDGE_URL} and Next.js on port ${NEXT_PORT}`);
+  await workbenchAgentCliEnvironment.install();
   await ensureWorkbenchPromptFiles();
   startBridgeServer();
   browseSessionCleanupSupervisor.start();

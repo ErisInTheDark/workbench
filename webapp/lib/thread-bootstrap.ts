@@ -1,18 +1,15 @@
 /*
  * Exports:
- * - DEFAULT_THREAD_TITLE_ROUTE_PATH: stable local HTTP endpoint path used for thread-title bootstrap calls. Keywords: thread title, route, workbench, bootstrap.
  * - normalizeThreadTitle: trim and normalize candidate thread titles into a short UI-safe value. Keywords: thread title, normalize, truncate.
- * - buildThreadTitleRouteUrl: compose the absolute thread-title route URL from a known workbench origin. Keywords: thread title, URL, origin.
  * - MODE_STATE_TAG_INSTRUCTIONS: shared injected guidance for agent-visible operating mode changes. Keywords: mode, state tag, thread markdown.
  * - WORKBENCH_FILE_LINK_INSTRUCTIONS: shared injected guidance for agent-visible clickable file links. Keywords: thread markdown, file links, paths.
- * - buildThreadTitleBootstrapInstructions: create the hidden bootstrap instructions that tell a harness how to set a thread title through the local workbench route, providing both PowerShell and bash command variants. Keywords: thread title, instructions, PowerShell, bash, bootstrap.
+ * - buildThreadTitleBootstrapInstructions: create hidden bootstrap instructions for setting a thread title through wb. Keywords: thread title, instructions, cli, bootstrap.
  * - buildCodexThreadBootstrapInstructions: compose optional Codex agent activation/definition content together with the shared title bootstrap instructions. Keywords: codex, agent, developer instructions, bootstrap.
  */
 import type { WorkbenchAgentDefinition, WorkbenchHarness } from "./types";
 import { WORKBENCH_FILE_LINK_INSTRUCTIONS } from "./workbench/thread/workbench-file-link-instructions";
 
 const MAX_THREAD_TITLE_LENGTH = 80;
-export const DEFAULT_THREAD_TITLE_ROUTE_PATH = "/api/thread-title";
 export const MODE_STATE_TAG_INSTRUCTIONS = [
   "## Workbench Harness Display Contract:",
   "ALWAYS present plans and other findings as plain user-visible markdown-formatted chat text within <plan></plan> tags. Plans cannot be presented within questionnaire tool calls.",
@@ -59,10 +56,6 @@ function truncateText(value: string, maxLength: number) {
   return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
-function escapePowerShellSingleQuotedString(value: string) {
-  return value.replace(/'/g, "''");
-}
-
 function buildAgentDefinitionInstructions(agentDefinition: WorkbenchAgentDefinition) {
   return [
     "For this thread, you are the agent defined below. Treat the contents of `<agent_definition>` as CRITICAL rules to follow, only overridden by later user instructions.",
@@ -103,35 +96,21 @@ export function normalizeThreadTitle(value: string | null | undefined) {
   return truncateText(normalized, MAX_THREAD_TITLE_LENGTH);
 }
 
-export function buildThreadTitleRouteUrl(origin: string) {
-  const normalizedOrigin = origin.trim().replace(/\/$/, "");
-  if (!normalizedOrigin) {
-    return DEFAULT_THREAD_TITLE_ROUTE_PATH;
-  }
-
-  return `${normalizedOrigin}${DEFAULT_THREAD_TITLE_ROUTE_PATH}`;
-}
-
 export function buildThreadTitleBootstrapInstructions({
   harness,
-  routeUrl,
   threadId,
 }: {
   harness: WorkbenchHarness;
-  routeUrl: string;
   threadId: string;
 }) {
-  const escapedHarness = escapePowerShellSingleQuotedString(harness);
-  const escapedRouteUrl = escapePowerShellSingleQuotedString(routeUrl);
-  const escapedThreadId = escapePowerShellSingleQuotedString(threadId);
-
   return `
 CRITICAL: Before ANYTHING else, no matter how simple your task, you must ensure the thread has a concise title.
 If you already know that the thread has a title, continue normally without setting a new one.
 Use a plaintext, action-oriented title, avoiding quotes and other special chars.
 
-Use the shell tool of your choice to send a POST request to this URL: ${ escapedRouteUrl }
-Include a JSON body: { "harness": "${escapedHarness}", "threadId": "${escapedThreadId}", "title": "<short title>" }
+Use the shell tool to run this exact Workbench CLI shape:
+
+\`wb thread title --thread ${threadId} --harness ${harness} --title "<short title>"\`
 
 If the call fails because you made a mistake, try again with the correct command.
 If the call fails for any other reason, continue normally.
@@ -172,7 +151,6 @@ export function buildCodexThreadBootstrapInstructions({
   if (routeUrl?.trim()) {
     sections.push(buildThreadTitleBootstrapInstructions({
       harness,
-      routeUrl,
       threadId,
     }));
   }

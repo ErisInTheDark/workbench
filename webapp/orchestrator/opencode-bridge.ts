@@ -1000,7 +1000,6 @@ export class OpenCodeBridge {
     return workbenchOrigin
       ? this.getReloadableModules().threadBootstrap.buildThreadTitleBootstrapInstructions({
         harness: "opencode",
-        routeUrl: this.getReloadableModules().threadBootstrap.buildThreadTitleRouteUrl(workbenchOrigin),
         threadId,
       })
       : null;

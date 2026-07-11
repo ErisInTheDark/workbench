@@ -7,7 +7,7 @@
  * - ThreadCommandSummaryStats: aggregate command-summary counts for grouped command labels. Keywords: thread, command, summary, aggregate.
  * - ThreadCommandDisplay: parsed command-summary metadata for thread command rendering. Keywords: thread, command, summary, shell, omit.
  * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text. Keywords: path, command, relative, display.
- * - isBrowseWebRequestMatcherClaim/parseBrowseSequenceCommandOutput: detect and parse Browse request command output. Keywords: browse, sequence, command.
+ * - isBrowseCommandMatcherClaim/parseBrowseSequenceCommandOutput: detect and parse wb Browse command output. Keywords: browse, sequence, command, cli.
  * - isGitCheckpointDiffMatcherClaim: detect checkpoint diff matcher ids for specialized command-output rendering. Keywords: thread, command, checkpoint, diff.
  * - isThreadContextMatcherClaim: detect thread context endpoint commands for dedicated disclosure rendering. Keywords: thread, context, disclosure.
  * - parseGitCheckpointDiffArtifactId: parse compact checkpoint diff output for a stored full-diff artifact id. Keywords: checkpoint, diff, artifact.
@@ -18,10 +18,10 @@
 
 import type { CommandAction } from "../../codex/generated/app-server/v2/CommandAction";
 import {
-  BROWSE_WEB_REQUEST_COMMAND_MATCHERS,
-  isBrowseWebRequestMatcherClaim,
+  BROWSE_COMMAND_MATCHERS,
+  isBrowseCommandMatcherClaim,
   parseBrowseSequenceCommandOutput,
-} from "./command-matchers/browse-web-requests";
+} from "./command-matchers/browse";
 import { CMD_COMMAND_MATCHERS } from "./command-matchers/cmd";
 import { COPILOT_COMMAND_MATCHERS } from "./command-matchers/copilot-tool-calls";
 import { CommandMatcher, runThreadCommandMatchers } from "./command-matchers/core";
@@ -63,6 +63,7 @@ import type {
     ThreadCommandSummaryDisplay,
     ThreadCommandSummaryStats,
 } from "./command-matchers/types";
+import { WORKBENCH_CLI_COMMAND_MATCHERS } from "./command-matchers/workbench-cli";
 
 type KnownCommandSummaryStatKey = Exclude<keyof ThreadCommandSummaryStats, "otherCommands">;
 
@@ -151,7 +152,7 @@ const COMMAND_BLOCK_SUMMARY_CATEGORIES: Array<{
 ];
 
 export { CommandMatcher, formatThreadCommandPath };
-export { isBrowseWebRequestMatcherClaim, isGitCheckpointDiffMatcherClaim, isThreadContextMatcherClaim, parseBrowseSequenceCommandOutput, parseGitCheckpointDiffArtifactId, parseGitCheckpointDiffOutput };
+export { isBrowseCommandMatcherClaim, isGitCheckpointDiffMatcherClaim, isThreadContextMatcherClaim, parseBrowseSequenceCommandOutput, parseGitCheckpointDiffArtifactId, parseGitCheckpointDiffOutput };
 export type {
     ThreadCommandDisplay,
     ThreadCommandDisplayPart,
@@ -184,10 +185,11 @@ export function getThreadCommandDisplay({
   };
   const matchedDisplay = runThreadCommandMatchers(context, {
     commonMatchers: [
+      ...WORKBENCH_CLI_COMMAND_MATCHERS,
       ...THREAD_CONTEXT_COMMAND_MATCHERS,
       ...COPILOT_COMMAND_MATCHERS,
       ...GIT_CHECKPOINT_COMMAND_MATCHERS,
-      ...BROWSE_WEB_REQUEST_COMMAND_MATCHERS,
+      ...BROWSE_COMMAND_MATCHERS,
       ...COMMON_COMMAND_MATCHERS,
     ],
     shellMatchers: getShellCommandMatchers(context.shellGroup),
