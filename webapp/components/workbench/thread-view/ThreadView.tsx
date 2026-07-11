@@ -56,6 +56,7 @@ import {
   getThreadAgentTabLabel,
 } from "../../../lib/workbench/thread/thread-collab-agents";
 import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
+import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
 import { ThreadQuestionBadge, ThreadUnreadBadge as ThreadUnreadBadgeView } from "../ThreadStatusBadges";
 import { ThreadThreadContent, ThreadTurnDetails, ThreadTurnLoadingSkeleton, useStableBrowseResultEntriesByTurn } from "./thread-view-items";
@@ -390,7 +391,15 @@ function getCurrentReasoningStep (turn: ThreadPayload["turns"][number] | null) {
     return null;
   }
 
-  const latestItem = turn.items.at(-1);
+  let latestActivityItemIndex = turn.items.length - 1;
+  while (
+    latestActivityItemIndex >= 0
+    && isWorkbenchPendingSteerUserMessage(turn.items[latestActivityItemIndex]!)
+  ) {
+    latestActivityItemIndex -= 1;
+  }
+
+  const latestItem = turn.items[latestActivityItemIndex];
   if (!latestItem || latestItem.type !== "reasoning") {
     return null;
   }

@@ -3,6 +3,7 @@
  * - SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX: item id prefix reserved for workbench-injected steer history items. Keywords: synthetic, steer, history.
  * - isSyntheticSteerHistoryItem: detect Workbench-injected steer history user messages. Keywords: synthetic, steer, guard.
  * - isWorkbenchSyntheticSteerUserMessage: detect Workbench-only steer user messages that must not become durable anchors. Keywords: optimistic, synthetic, steer, anchor.
+ * - isWorkbenchPendingSteerUserMessage: detect Workbench-only steer messages still queued for the active turn. Keywords: optimistic, synthetic, steer, pending.
  * - applySteerHistoryToThread: strip prior synthetic steer items and reinsert persisted pending/unsent steer history. Keywords: steer, thread, overlay, persisted history.
  */
 
@@ -29,6 +30,14 @@ export function isWorkbenchSyntheticSteerUserMessage(item: ThreadItem) {
     && (
       item.id.startsWith("optimistic-user-message:steer:")
       || item.id.startsWith(SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX)
+    );
+}
+
+export function isWorkbenchPendingSteerUserMessage(item: ThreadItem) {
+  return item.type === "userMessage"
+    && (
+      item.id.startsWith("optimistic-user-message:steer:pending:")
+      || item.id.startsWith(`${SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX}pending:`)
     );
 }
 

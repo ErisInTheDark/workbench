@@ -28,6 +28,7 @@ import {
   getAgentScreenshotSteerImages,
   isAgentScreenshotSteerUserMessage,
 } from "../../../lib/workbench/thread/thread-steer-markers";
+import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import {
   getThreadCommandBlockDisplay,
   getThreadCommandDisplay,
@@ -160,10 +161,7 @@ function isWorkbenchControlUserMessage(item: Extract<ThreadItem, { type: "userMe
 }
 
 function getSteerUserMessageState(item: Extract<ThreadItem, { type: "userMessage" }>) {
-  if (
-    item.id.startsWith("optimistic-user-message:steer:pending:")
-    || item.id.startsWith("workbench:steer-history:pending:")
-  ) {
+  if (isWorkbenchPendingSteerUserMessage(item)) {
     return "pending";
   }
 
