@@ -768,6 +768,27 @@ export interface WorkbenchThreadContextBundle {
   thread: ThreadPayload;
 }
 
+export const WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS = 20_000;
+
+export type WorkbenchThreadRecallKind = "agent" | "plan" | "questionnaire" | "steer" | "user";
+
+export interface WorkbenchThreadRecallSearchRequest {
+  action: "search";
+  query: string;
+  kinds?: WorkbenchThreadRecallKind[];
+  limit?: number;
+}
+
+export interface WorkbenchThreadRecallExpandRequest {
+  action: "expand";
+  ref: string;
+  before?: number;
+  after?: number;
+  maxChars?: number;
+}
+
+export type WorkbenchThreadRecallRequest = WorkbenchThreadRecallExpandRequest | WorkbenchThreadRecallSearchRequest;
+
 export interface FileNode {
   isIgnored?: boolean;
   type: "file";

@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default ThreadContextCommandItem: render a thread-context endpoint command as a semantic Markdown disclosure. Keywords: thread context, markdown, disclosure.
- * - Local helpers: format command execution metadata for the thread-context disclosure summary. Keywords: status, duration, exit code.
+ * - default ThreadContextCommandItem: render a Thread Recall command or context alias as a semantic Markdown disclosure. Keywords: thread recall, context, markdown, disclosure.
+ * - Local helpers: format command execution metadata for the Thread Recall disclosure summary. Keywords: status, duration, exit code.
  */
 "use client";
 
@@ -90,7 +90,7 @@ export default function ThreadContextCommandItem ({
       defaultOpen={defaultOpen}
       summary={(
         <>
-          <span className="font-medium text-text">Checked thread context</span>
+          <span className="font-medium text-text">Recalled thread history</span>
           <ThreadContextCommandMetaParts item={item} />
         </>
       )}
@@ -113,7 +113,7 @@ export default function ThreadContextCommandItem ({
             workspaceRoots={workspaceRoots}
           />
         ) : (
-          <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No thread context output captured.</p>
+          <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No Thread Recall output captured.</p>
         )}
       </ThreadPreviewFrame>
     </ThreadDisclosure>

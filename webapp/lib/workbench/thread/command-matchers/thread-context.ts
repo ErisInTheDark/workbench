@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - THREAD_CONTEXT_COMMAND_MATCHERS: command-summary matcher for wb thread context reads. Keywords: thread, context, command matcher, cli.
+ * - THREAD_CONTEXT_COMMAND_MATCHERS: command-summary matcher for wb thread recall reads and compatibility aliases. Keywords: thread, recall, context, command matcher, cli.
  * - isThreadContextMatcherClaim: detect thread context matcher ids for dedicated thread disclosure rendering. Keywords: thread, context, disclosure.
  */
 
@@ -13,7 +13,7 @@ export const THREAD_CONTEXT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
     id: THREAD_CONTEXT_MATCHER_ID,
     match: ({ stage, summaryParts }) => {
-      if (summaryParts.length || !/^wb(?:\.cmd)?\s+thread\s+context(?:\s|$)/iu.test(stage.text.trim())) {
+      if (summaryParts.length || !/^wb(?:\.cmd)?\s+thread\s+(?:recall|context)(?:\s|$)/iu.test(stage.text.trim())) {
         return null;
       }
 
@@ -22,7 +22,7 @@ export const THREAD_CONTEXT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         hideCommandOutput: true,
         remainingCommand: null,
         stop: true,
-        summaryParts: [CommandMatcher.Text("Checked thread context")],
+        summaryParts: [CommandMatcher.Text("Recalled thread history")],
       });
     },
   }),

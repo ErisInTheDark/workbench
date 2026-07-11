@@ -80,9 +80,43 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     responseKind: "thread-title",
   });
 
-  const context = await parseWorkbenchAgentCliCommand(["thread", "context", "--thread", "thread/1"]);
+  const recall = await parseWorkbenchAgentCliCommand(["thread", "recall", "--thread", "thread/1", "--before", "user:item-1"]);
+  const context = await parseWorkbenchAgentCliCommand(["thread", "context", "--thread", "thread/1", "--before", "user:item-1"]);
+  assert.equal(recall.kind, "request");
   assert.equal(context.kind, "request");
-  assert.equal(context.request.path, "/api/thread-context/thread%2F1");
+  assert.deepEqual(context.request, recall.request);
+  assert.equal(recall.request.path, "/api/thread-context/thread%2F1?before=user%3Aitem-1");
+
+  const search = await parseWorkbenchAgentCliCommand([
+    "thread", "recall", "search", "--thread", "thread/1", "--query", "normal commentary",
+    "--kind", "user", "--kind", "agent", "--limit", "12",
+  ]);
+  const contextSearch = await parseWorkbenchAgentCliCommand([
+    "thread", "context", "search", "--thread", "thread/1", "--query", "normal commentary",
+    "--kind", "user", "--kind", "agent", "--limit", "12",
+  ]);
+  assert.equal(search.kind, "request");
+  assert.equal(contextSearch.kind, "request");
+  assert.deepEqual(contextSearch.request, search.request);
+  assert.deepEqual(search.request, {
+    body: { action: "search", kinds: ["user", "agent"], limit: 12, query: "normal commentary" },
+    method: "POST",
+    path: "/api/thread-context/thread%2F1",
+    responseKind: "native",
+  });
+
+  const expand = await parseWorkbenchAgentCliCommand([
+    "thread", "recall", "expand", "--thread", "thread/1", "--ref", "agent:item-2",
+    "--before", "1", "--after", "3", "--max-chars", "18000",
+  ]);
+  assert.equal(expand.kind, "request");
+  assert.deepEqual(expand.request.body, {
+    action: "expand",
+    after: 3,
+    before: 1,
+    maxChars: 18_000,
+    ref: "agent:item-2",
+  });
 
   const checkpoint = await parseWorkbenchAgentCliCommand([
     "checkpoint", "file-diff", "--thread", "thread-1", "--commit", "abc", "--file", "src/file.ts",
@@ -150,6 +184,8 @@ test("rejects arbitrary request capabilities and unsafe restore", async () => {
     ["request", "--url", "http://localhost:3002/api/file"],
     ["checkpoint", "diff", "--thread", "thread-1", "--commit", "abc", "--project-id", "other"],
     ["checkpoint", "restore", "--thread", "thread-1", "--commit", "abc"],
+    ["thread", "recall", "search", "--thread", "thread-1", "--query", "text", "--limit", "many"],
+    ["thread", "recall", "expand", "--thread", "thread-1", "--ref", "agent:item", "--before", "-1"],
   ]) {
     const parsed = await parseWorkbenchAgentCliCommand(args);
     assert.equal(parsed.kind, "error");
@@ -178,7 +214,8 @@ test("maps composable reload switches to one deduplicated fixed request", async 
 
 test("runs the real CLI process and preserves the server response", async () => {
   const result = await execFileAsync(process.execPath, [
-    "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", cliEntryPath, "thread", "context", "--thread", "real-process",
+    "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", cliEntryPath,
+    "thread", "recall", "search", "--thread", "real-process", "--query", "needle", "--kind", "agent",
   ], {
     cwd: temporaryDirectoryPath,
     env: { ...process.env, WORKBENCH_ORIGIN: origin },
@@ -186,6 +223,11 @@ test("runs the real CLI process and preserves the server response", async () => 
   assert.match(result.stdout, /"ok":true/u);
   assert.equal(result.stderr, "");
   assert.equal(requests.at(-1)?.url, "/api/thread-context/real-process");
+  assert.deepEqual(JSON.parse(requests.at(-1)?.body ?? "{}"), {
+    action: "search",
+    kinds: ["agent"],
+    query: "needle",
+  });
 });
 
 test("generates executable POSIX and working Windows shims", async (context) => {

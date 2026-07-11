@@ -4,7 +4,7 @@
  * - WorkbenchPromptInstructions: resolved base and developer instruction payload. Keywords: prompt, baseInstructions, developerInstructions.
  * - ensureWorkbenchPromptFiles: write generated Workbench prompt files and scaffold prompt folders. Keywords: AGENTS, workflows, default agent.
  * - buildWorkbenchPromptInstructions: resolve fresh prompt files and expand Workbench injections for a Codex thread. Keywords: prompt, injections, app-server.
- * - buildWorkbenchThreadUtilityDeveloperInstructions: resolve workflow-free Workbench CLI instructions. Keywords: checkpoints, thread title, thread context, cli.
+ * - buildWorkbenchThreadUtilityDeveloperInstructions: resolve workflow-free Workbench CLI instructions. Keywords: checkpoints, thread title, thread recall, cli.
  * - buildWorkbenchCollaborationDeveloperInstructions: build Workbench-owned questionnaire collaboration instructions. Keywords: collaboration mode, plan mode, request_user_input.
  * - default WorkbenchPromptFiles: prompt-file owner namespace. Keywords: prompt, owner, generated files.
  */
@@ -448,24 +448,36 @@ Reloads preserve lifecycle ownership: \`--codex-bridge\` reloads bridge-side cod
 `.trim();
 }
 
-function buildWorkbenchThreadContextReorientationInstructions(context: WorkbenchPromptContext) {
+function buildWorkbenchThreadRecallInstructions(context: WorkbenchPromptContext) {
   const threadId = context.threadId?.trim();
   if (!threadId || threadId === "new" || threadId.startsWith("draft:") || !context.workbenchOrigin?.trim()) {
     return null;
   }
 
   return `
-## Workbench Thread Context Reorientation
+## Workbench Thread Recall
 
 After context compaction, run this Workbench CLI command before continuing:
 
-\`wb thread context --thread ${threadId}\`
+\`wb thread recall --thread ${threadId}\`
+
+The default command returns the newest bounded page of chronological history. Long older plans are previewed, the globally newest plan receives a larger preview, and whole older entries may be omitted to keep the response transport-safe. When older entries are available, the output provides an exact \`--before <ref>\` command for the previous non-overlapping page. Historical pages intentionally omit newer evidence; never infer the current objective or approval state from a historical page alone.
+
+For targeted lookup across the complete visible narrative transcript:
+
+\`wb thread recall search --thread ${threadId} --query "<text>" [--kind <user|agent|questionnaire|plan|steer>...]\`
+
+Search results include stable refs. Expand one result and its chronological neighbors with:
+
+\`wb thread recall expand --thread ${threadId} --ref <ref> [--before <count>] [--after <count>]\`
+
+Recall searches user messages, agent commentary and final answers, questionnaire responses, steers, and plans. It does not search reasoning, raw commands, tool output, Browse data, hooks, or compaction markers. \`wb thread context\` remains a temporary compatibility alias, but use \`wb thread recall\` going forward.
 
 The returned Markdown is chronological source evidence, not a current-task specification. Treat the post-compaction summary as a compressed working hypothesis, then reconcile both sources with newer live user messages, the active workflow mode, explicit approvals, and the current workspace.
 
 Before speaking or acting, privately form a concise current working set: the current objective, newest constraints, active mode, approval boundary, completed and remaining work, and relevant files. Classify recovered material as active, completed, superseded or rejected, historical background, or uncertain. Follow chronology and **Newest Instruction Wins**; do not revive old work merely because it appears in the recovered context. If relevance or approval is uncertain, inspect or ask instead of guessing.
 
-This command is authorized only for post-compaction reorientation and does not replace approval, relevant-file inspection, or checkpoint checks.
+The base history command is required after compaction; search and expansion may also be used when targeted historical recall would help. These commands do not replace approval, relevant-file inspection, or checkpoint checks.
 `.trim();
 }
 
@@ -593,7 +605,7 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
     buildInstructionPackSections(instructionPacks),
     browseInstructions,
     buildWorkbenchOrchestratorReloadInstructions(context),
-    buildWorkbenchThreadContextReorientationInstructions(context),
+    buildWorkbenchThreadRecallInstructions(context),
     buildWorkbenchCheckpointInstructions(context),
     buildThreadTitleInstructions(context),
   ]);
@@ -613,7 +625,7 @@ export async function buildWorkbenchThreadUtilityDeveloperInstructions(
   return joinInstructionSections([
     browseInstructions,
     buildWorkbenchOrchestratorReloadInstructions(context),
-    buildWorkbenchThreadContextReorientationInstructions(context),
+    buildWorkbenchThreadRecallInstructions(context),
     buildWorkbenchCheckpointInstructions(context),
     buildThreadTitleInstructions(context),
   ]);
@@ -648,7 +660,7 @@ This collaboration-mode overlay must not replace the active Workbench workflow, 
     workflowInjection,
     browseInstructions,
     buildWorkbenchOrchestratorReloadInstructions(context),
-    buildWorkbenchThreadContextReorientationInstructions(context),
+    buildWorkbenchThreadRecallInstructions(context),
     buildWorkbenchCheckpointInstructions(context),
     buildThreadTitleInstructions(context),
   ]);

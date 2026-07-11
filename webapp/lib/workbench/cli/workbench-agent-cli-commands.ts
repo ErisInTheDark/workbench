@@ -42,6 +42,7 @@ interface CommandBuildContext {
 }
 
 interface CommandDefinition {
+  aliases?: readonly (readonly string[])[];
   build: (context: CommandBuildContext) => Promise<WorkbenchAgentCliRequest>;
   usage: string;
   words: readonly string[];
@@ -112,6 +113,21 @@ class ParsedFlags {
       throw new Error(`${flag} is required.`);
     }
     return value;
+  }
+
+  optionalNonNegativeInteger(flag: string) {
+    const value = this.optional(flag);
+    if (value === null) {
+      return null;
+    }
+    if (!/^\d+$/u.test(value)) {
+      throw new Error(`${flag} must be a non-negative integer.`);
+    }
+    const parsed = Number(value);
+    if (!Number.isSafeInteger(parsed)) {
+      throw new Error(`${flag} must be a safe non-negative integer.`);
+    }
+    return parsed;
   }
 }
 
@@ -202,11 +218,52 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
-    words: ["thread", "context"],
-    usage: "wb thread context --thread <id>",
+    aliases: [["thread", "context", "search"]],
+    words: ["thread", "recall", "search"],
+    usage: "wb thread recall search --thread <id> --query <text> [--kind <kind>...] [--limit <count>]",
     async build({ args }) {
-      const flags = new ParsedFlags(args, { values: THREAD_FLAG });
-      return get(`/api/thread-context/${encodeURIComponent(flags.required("--thread"))}`);
+      const flags = new ParsedFlags(args, {
+        repeatable: ["--kind"],
+        values: [...THREAD_FLAG, "--query", "--limit"],
+      });
+      const kinds = flags.repeated("--kind");
+      const limit = flags.optionalNonNegativeInteger("--limit");
+      return post(`/api/thread-context/${encodeURIComponent(flags.required("--thread"))}`, {
+        action: "search",
+        query: flags.required("--query"),
+        ...(kinds.length ? { kinds } : {}),
+        ...(limit !== null ? { limit } : {}),
+      });
+    },
+  },
+  {
+    aliases: [["thread", "context", "expand"]],
+    words: ["thread", "recall", "expand"],
+    usage: "wb thread recall expand --thread <id> --ref <ref> [--before <count>] [--after <count>] [--max-chars <count>]",
+    async build({ args }) {
+      const flags = new ParsedFlags(args, { values: [...THREAD_FLAG, "--ref", "--before", "--after", "--max-chars"] });
+      const before = flags.optionalNonNegativeInteger("--before");
+      const after = flags.optionalNonNegativeInteger("--after");
+      const maxChars = flags.optionalNonNegativeInteger("--max-chars");
+      return post(`/api/thread-context/${encodeURIComponent(flags.required("--thread"))}`, {
+        action: "expand",
+        ref: flags.required("--ref"),
+        ...(before !== null ? { before } : {}),
+        ...(after !== null ? { after } : {}),
+        ...(maxChars !== null ? { maxChars } : {}),
+      });
+    },
+  },
+  {
+    aliases: [["thread", "context"]],
+    words: ["thread", "recall"],
+    usage: "wb thread recall --thread <id> [--before <ref>]",
+    async build({ args }) {
+      const flags = new ParsedFlags(args, { values: [...THREAD_FLAG, "--before"] });
+      const threadId = flags.required("--thread");
+      return get(queryPath(`/api/thread-context/${encodeURIComponent(threadId)}`, {
+        before: flags.optional("--before"),
+      }));
     },
   },
   ...(["baseline", "create-diff"] as const).map((action): CommandDefinition => ({
@@ -429,6 +486,8 @@ Usage: wb <command> [options]
 
 ${COMMANDS.map((command) => `  ${command.usage}`).join("\n")}
 
+Compatibility alias: replace \`wb thread recall\` with \`wb thread context\`.
+
 Project ownership is derived from the current working directory.
 `;
 
@@ -446,19 +505,23 @@ export async function parseWorkbenchAgentCliCommand(
     return { help: WORKBENCH_AGENT_CLI_HELP, kind: "help" };
   }
 
-  const definition = COMMANDS.find((candidate) => candidate.words.every((word, index) => argv[index] === word));
-  if (!definition) {
+  const matched = COMMANDS.flatMap((definition) => (
+    [definition.words, ...(definition.aliases ?? [])].map((words) => ({ definition, words }))
+  ))
+    .filter((candidate) => candidate.words.every((word, index) => argv[index] === word))
+    .sort((left, right) => right.words.length - left.words.length)[0];
+  if (!matched) {
     return { error: `Unsupported wb command: ${argv.join(" ")}\n\n${WORKBENCH_AGENT_CLI_HELP}`, kind: "error" };
   }
 
   try {
     return {
       kind: "request",
-      request: await definition.build({ args: argv.slice(definition.words.length), cwd, readTextFile }),
+      request: await matched.definition.build({ args: argv.slice(matched.words.length), cwd, readTextFile }),
     };
   } catch (error) {
     return {
-      error: `${error instanceof Error ? error.message : String(error)}\n\nUsage: ${definition.usage}`,
+      error: `${error instanceof Error ? error.message : String(error)}\n\nUsage: ${matched.definition.usage}`,
       kind: "error",
     };
   }

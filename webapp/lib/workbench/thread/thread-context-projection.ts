@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadContextPiece: semantic thread context piece for client and Markdown projections. Keywords: thread, context, projection.
+ * - createWorkbenchThreadContextSortKey: build one sortable chronological key shared by context projections. Keywords: thread, context, chronology.
  * - extractThreadPlanBlocks: collect literal outer <plan> blocks from agent messages. Keywords: plan, markdown, outer block.
  * - buildWorkbenchThreadContextPieces: build ordered reorientation pieces from a thread context bundle. Keywords: context, questionnaire, steer, user message.
  */
@@ -8,7 +9,7 @@
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "../../codex/generated/app-server/v2/Turn";
 import type { UserInput } from "../../codex/generated/app-server/v2/UserInput";
-import { areUserInputsEquivalentForUserMessageDedupe } from "../../codex/thread-item-normalization";
+import { areUserInputsEquivalentForUserMessageDedupe } from "../../codex/thread-item-normalization.ts";
 import type {
   WorkbenchQuestionnaireHistoryEntry,
   WorkbenchSteerHistoryEntry,
@@ -17,7 +18,7 @@ import type {
 import {
   isAgentScreenshotSteerInput,
   isAgentScreenshotSteerUserMessage,
-} from "./thread-steer-markers";
+} from "./thread-steer-markers.ts";
 
 type ContextPieceKind = "planBlock" | "questionnaire" | "userMessage" | "userSteer";
 
@@ -47,6 +48,7 @@ export interface WorkbenchThreadContextQuestionnairePiece extends OrderedContext
 }
 
 export interface WorkbenchThreadContextPlanBlockPiece extends OrderedContextPieceBase {
+  blockIndex: number;
   itemId: string;
   kind: "planBlock";
   planMarkdown: string;
@@ -70,7 +72,13 @@ interface CodeFenceOpenLine {
   size: number;
 }
 
-function createSortKey(turnIndex: number, itemIndex: number, slot: number, subIndex: number, timestamp = 0) {
+export function createWorkbenchThreadContextSortKey(
+  turnIndex: number,
+  itemIndex: number,
+  slot: number,
+  subIndex: number,
+  timestamp = 0,
+) {
   return [
     turnIndex.toString().padStart(8, "0"),
     itemIndex.toString().padStart(8, "0"),
@@ -207,7 +215,7 @@ function pushUserMessagePieces(
         itemId: item.id,
         kind: "userMessage",
         sequence: sequence.value,
-        sortKey: createSortKey(turnIndex, itemIndex, 0, sequence.value),
+        sortKey: createWorkbenchThreadContextSortKey(turnIndex, itemIndex, 0, sequence.value),
         turnId: turn.id,
       });
       sequence.value += 1;
@@ -228,11 +236,12 @@ function pushPlanBlockPieces(
 
       extractThreadPlanBlocks(item.text).forEach((planMarkdown, blockIndex) => {
         pieces.push({
+          blockIndex,
           itemId: item.id,
           kind: "planBlock",
           planMarkdown,
           sequence: sequence.value,
-          sortKey: createSortKey(turnIndex, itemIndex, 20, blockIndex),
+          sortKey: createWorkbenchThreadContextSortKey(turnIndex, itemIndex, 20, blockIndex),
           turnId: turn.id,
         });
         sequence.value += 1;
@@ -286,7 +295,13 @@ function pushQuestionnairePieces(
       itemId: entry.itemId,
       kind: "questionnaire",
       sequence: sequence.value,
-      sortKey: createSortKey(position.turnIndex, position.itemIndex, 40, sequence.value, entry.resolvedAt),
+      sortKey: createWorkbenchThreadContextSortKey(
+        position.turnIndex,
+        position.itemIndex,
+        40,
+        sequence.value,
+        entry.resolvedAt,
+      ),
       turnId: entry.turnId,
     });
     sequence.value += 1;
@@ -332,7 +347,13 @@ function pushSteerPieces(
       itemId: entry.canonicalItemId,
       kind: "userSteer",
       sequence: sequence.value,
-      sortKey: createSortKey(position.turnIndex, position.itemIndex, 10, sequence.value, entry.attemptedAt),
+      sortKey: createWorkbenchThreadContextSortKey(
+        position.turnIndex,
+        position.itemIndex,
+        10,
+        sequence.value,
+        entry.attemptedAt,
+      ),
       turnId: entry.turnId,
     });
     sequence.value += 1;

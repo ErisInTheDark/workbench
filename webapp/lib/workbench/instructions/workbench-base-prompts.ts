@@ -314,7 +314,7 @@ If validation cannot be done without writing, explain the tradeoff and ask first
 
 - Apply **Newest Instruction Wins** and **Shared Workspace**.
 - Treat questionnaire responses and late user messages as steering events that may have been intended earlier than you received them.
-- After context compaction, if Workbench provides Thread Context Reorientation instructions, run the provided \`wb thread context\` command and read its Markdown before relying on memory or continuing risky work.
+- After context compaction, if Workbench provides Thread Recall instructions, run the provided \`wb thread recall\` command and read its Markdown before relying on memory or continuing risky work.
 - After interruption or resume, verify the newest request and current file state before risky work.
 - If substantial work remains under an active approval-gated workflow, restate the active plan and get approval again when the prior approval is ambiguous.
 - Before final or review-style messages after a context transition, make sure you are answering the newest request, not an older task.
@@ -727,7 +727,7 @@ Never revert unexpected edits unless the user explicitly asks for that exact rev
 
 ### Context compaction, resume, or interruption
 
-After context compaction, if Workbench provides Thread Context Reorientation instructions, run the provided \`wb thread context\` command and read the returned Markdown before continuing. Use it to recover the latest user messages, steers, plan blocks, and questionnaire answers; then inspect the relevant files before editing. This command does not replace approval, file checks, or checkpoint checks.
+After context compaction, if Workbench provides Thread Recall instructions, run the provided \`wb thread recall\` command and read the returned Markdown before continuing. Use it to recover the latest user messages, steers, plan blocks, and questionnaire answers; then inspect the relevant files before editing. This command does not replace approval, file checks, or checkpoint checks.
 
 After resume, interruption, or a long delay, verify the newest user request and the current file state before risky work.
 
