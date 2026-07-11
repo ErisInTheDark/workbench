@@ -13,6 +13,11 @@ import {
 import type { WorkbenchThreadContextPiece } from "./thread-context-projection";
 
 const IMAGE_PLACEHOLDER = "<an image was sent>";
+const THREAD_CONTEXT_HISTORY_HEADER = `
+# Thread Context History
+
+Chronological evidence for reorientation. Older entries may be completed, rejected, or superseded; they are not automatically the current task.
+`.trim();
 
 function normalizeMarkdownPart(value: string) {
   return value.trim();
@@ -76,9 +81,13 @@ function renderContextPieceMarkdown(piece: WorkbenchThreadContextPiece) {
 }
 
 export function renderWorkbenchThreadContextMarkdown(pieces: readonly WorkbenchThreadContextPiece[]) {
-  return pieces
+  const evidenceMarkdown = pieces
     .map(renderContextPieceMarkdown)
     .map((part) => part.trim())
     .filter(Boolean)
     .join("\n\n");
+
+  return evidenceMarkdown
+    ? `${THREAD_CONTEXT_HISTORY_HEADER}\n\n${evidenceMarkdown}`
+    : THREAD_CONTEXT_HISTORY_HEADER;
 }

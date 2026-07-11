@@ -461,7 +461,11 @@ After context compaction, run this Workbench CLI command before continuing:
 
 \`wb thread context --thread ${threadId}\`
 
-Use the returned Markdown to recover the latest user messages, steers, plan blocks, and questionnaire answers; then inspect the relevant files before editing. This command is authorized only for post-compaction reorientation and does not replace approval, file checks, or checkpoint checks.
+The returned Markdown is chronological source evidence, not a current-task specification. Treat the post-compaction summary as a compressed working hypothesis, then reconcile both sources with newer live user messages, the active workflow mode, explicit approvals, and the current workspace.
+
+Before speaking or acting, privately form a concise current working set: the current objective, newest constraints, active mode, approval boundary, completed and remaining work, and relevant files. Classify recovered material as active, completed, superseded or rejected, historical background, or uncertain. Follow chronology and **Newest Instruction Wins**; do not revive old work merely because it appears in the recovered context. If relevance or approval is uncertain, inspect or ask instead of guessing.
+
+This command is authorized only for post-compaction reorientation and does not replace approval, relevant-file inspection, or checkpoint checks.
 `.trim();
 }
 
