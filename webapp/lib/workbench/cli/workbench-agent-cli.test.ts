@@ -239,7 +239,9 @@ test("generates executable POSIX and working Windows shims", async (context) => 
     runtimeDirectoryPath: shimDirectoryPath,
   }).install(env);
   const posixContent = await readFile(installed.posixShimPath, "utf8");
+  const powershellContent = await readFile(installed.powershellShimPath, "utf8");
   assert.match(posixContent, /^#!\/usr\/bin\/env sh/u);
+  assert.match(powershellContent, /workbench-agent-cli-shim-v1/u);
   if (process.platform !== "win32") {
     assert.notEqual((await stat(installed.posixShimPath)).mode & 0o111, 0);
   }
@@ -250,6 +252,39 @@ test("generates executable POSIX and working Windows shims", async (context) => 
     context.skip("Windows shim execution is only available on Windows.");
     return;
   }
+  const multilineBody = "# Visible body\n\n- first | second";
+  const multilinePrompt = "Inspect line one\nInspect line two";
+  const multilineResult = await execFileAsync("powershell.exe", [
+    "-NoProfile",
+    "-Command",
+    [
+      "$body = @'",
+      multilineBody,
+      "'@",
+      "$prompt = @'",
+      multilinePrompt,
+      "'@",
+      "wb collaboration posts create --parent post-multiline --body $body --prompt $prompt",
+    ].join("\n"),
+  ], {
+    cwd: temporaryDirectoryPath,
+    env: { ...env, Path: env.PATH },
+  });
+  assert.equal(multilineResult.stderr, "");
+  const multilinePost = [...requests].reverse().find((request) => {
+    if (request.url !== "/api/collaboration/posts" || request.method !== "POST") {
+      return false;
+    }
+    return (JSON.parse(request.body) as { parentId?: string }).parentId === "post-multiline";
+  });
+  assert.deepEqual(JSON.parse(multilinePost?.body ?? "{}"), {
+    action: "create",
+    body: multilineBody,
+    cwd: temporaryDirectoryPath,
+    parentId: "post-multiline",
+    prompt: multilinePrompt,
+  });
+
   delete env.WORKBENCH_ORIGIN;
   reloadStatusReadCount = 0;
   const result = await execFileAsync(installed.windowsShimPath, [

@@ -889,6 +889,8 @@ Use only the dedicated \`wb collaboration posts\` commands to maintain visible p
 
 Run \`wb collaboration posts read\` when current state or allowed operations need inspection. Use command errors as feedback: inspect the error, fix the command, choose a different post, or report why mutation is unavailable.
 
+Multiline \`body\` and \`prompt\` values are supported directly. Use the current shell's native multiline string syntax and pass the resulting values to \`--body\` and \`--prompt\`; do not flatten Markdown or create temporary files solely to transport line breaks. Use \`--body-file\` and \`--prompt-file\` when the content already belongs in files.
+
 | Operation | Use only when                                        | Command shape |
 | --------- | ---------------------------------------------------- | ------------- |
 | Create    | Under a user-authored leaf marked eligible           | \`wb collaboration posts create --parent <id> (--body <markdown> | --body-file <file>) [--prompt <text> | --prompt-file <file>]\` |

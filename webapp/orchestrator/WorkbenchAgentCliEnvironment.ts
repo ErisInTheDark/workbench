@@ -18,6 +18,10 @@ function quotePosixSingle(value: string) {
   return `'${value.replace(/'/gu, `'"'"'`)}'`;
 }
 
+function quotePowerShellSingle(value: string) {
+  return `'${value.replace(/'/gu, "''")}'`;
+}
+
 export default class WorkbenchAgentCliEnvironment {
   private readonly cliEntryPath: string;
   private readonly origin: string;
@@ -34,13 +38,16 @@ export default class WorkbenchAgentCliEnvironment {
     await fs.mkdir(this.runtimeDirectoryPath, { recursive: true });
 
     const posixShimPath = path.join(this.runtimeDirectoryPath, "wb");
+    const powershellShimPath = path.join(this.runtimeDirectoryPath, "wb.ps1");
     const windowsShimPath = path.join(this.runtimeDirectoryPath, "wb.cmd");
     await Promise.all([
       assertManagedOrMissing(posixShimPath),
+      assertManagedOrMissing(powershellShimPath),
       assertManagedOrMissing(windowsShimPath),
     ]);
     await Promise.all([
       fs.writeFile(posixShimPath, `#!/usr/bin/env sh\n# ${SHIM_MARKER}\nWORKBENCH_ORIGIN=${quotePosixSingle(this.origin)} exec node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON ${quotePosixSingle(this.cliEntryPath)} "$@"\n`, "utf8"),
+      fs.writeFile(powershellShimPath, `# ${SHIM_MARKER}\n$env:WORKBENCH_ORIGIN = ${quotePowerShellSingle(this.origin)}\n& node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON ${quotePowerShellSingle(this.cliEntryPath)} @args\nexit $LASTEXITCODE\n`, "utf8"),
       fs.writeFile(windowsShimPath, `@echo off\r\n@rem ${SHIM_MARKER}\r\n@set "WORKBENCH_ORIGIN=${this.origin.replace(/"/gu, '""')}"\r\nnode --disable-warning=MODULE_TYPELESS_PACKAGE_JSON "${this.cliEntryPath.replace(/"/gu, '""')}" %*\r\n`, "utf8"),
     ]);
     await fs.chmod(posixShimPath, 0o755);
@@ -55,6 +62,7 @@ export default class WorkbenchAgentCliEnvironment {
 
     return {
       posixShimPath,
+      powershellShimPath,
       windowsShimPath,
     };
   }
