@@ -5,6 +5,7 @@
  * Helpers:
  * - HTTP reload helpers: parse, proxy, queue, and report orchestrator reload scopes. Keywords: reload, next-dev, bridge.
  * - Browse HTTP helpers: route stateless Next proxies through the drainable orchestrator-owned Browse controller. Keywords: browse, controller, queue, streaming, reload.
+ * - Project snapshot HTTP helpers: route stateless Next proxies through the bounded orchestrator-owned serialized project cache. Keywords: project, tree, snapshot, cache, watcher, reload.
  * - Child process helpers: start, restart, and schedule managed process lifecycles. Keywords: process, restart, child.
  * - Bridge helpers: route websocket JSON-RPC messages across Codex, Copilot, and OpenCode harnesses. Keywords: websocket, harness, rpc.
  * - Health helpers: supervise the Next.js dev server and restart it after repeated 5xx health probes. Keywords: watchdog, turbopack, 500.
@@ -64,6 +65,8 @@ const NEXT_DEV_HEALTH_SERVER_ERROR_THRESHOLD = 3;
 const ORCHESTRATOR_RELOAD_PATH = "/orchestrator/reload";
 const ORCHESTRATOR_BROWSE_PATH = "/orchestrator/browse";
 const ORCHESTRATOR_BROWSE_SESSIONS_PATH = "/orchestrator/browse/sessions";
+const ORCHESTRATOR_PROJECTS_PATH = "/orchestrator/projects";
+const ORCHESTRATOR_TREE_PATH = "/orchestrator/tree";
 const CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS = 5000;
 const BROWSE_CONTROLLER_RELOAD_DRAIN_TIMEOUT_MS = 5000;
 const ORCHESTRATOR_RELOAD_SCOPE_VALUES = new Set<OrchestratorReloadScope>([
@@ -135,6 +138,7 @@ let opencodeBridge: OpenCodeBridge;
 let browseSessionCleanupSupervisor = createBrowseSessionCleanupSupervisor();
 let browseController: import("./WorkbenchBrowseController").default | null = null;
 let nextDevHealthSupervisor = createNextDevHealthSupervisor();
+let projectSnapshotController = createProjectSnapshotController();
 let upstreamMessageQueue: Promise<void> = Promise.resolve();
 let codexBridgeReloadPromise: Promise<void> | null = null;
 let opencodeBridgeReloadPromise: Promise<void> | null = null;
@@ -314,6 +318,7 @@ function finalizeReloadResponse(
 async function stopAllChildren() {
   browseSessionCleanupSupervisor.dispose();
   nextDevHealthSupervisor.dispose();
+  projectSnapshotController.dispose();
 
   for (const entry of processes.values()) {
     if (entry.child && !entry.child.killed) {
@@ -364,9 +369,11 @@ function restartChild(spec: ProcessSpec) {
 function reloadOrchestratorLogic() {
   browseSessionCleanupSupervisor.dispose();
   nextDevHealthSupervisor.dispose();
+  projectSnapshotController.dispose();
   reloadableModules = reloadOrchestratorReloadableModules();
   browseSessionCleanupSupervisor = createBrowseSessionCleanupSupervisor();
   nextDevHealthSupervisor = createNextDevHealthSupervisor();
+  projectSnapshotController = createProjectSnapshotController();
   browseSessionCleanupSupervisor.start();
   nextDevHealthSupervisor.start();
   log("orchestrator", "reloaded orchestrator helper modules");
@@ -513,6 +520,11 @@ function createNextDevHealthSupervisor() {
     restartNextDev: restartNextDevFromWatchdog,
     serverErrorThreshold: NEXT_DEV_HEALTH_SERVER_ERROR_THRESHOLD,
   });
+}
+
+function createProjectSnapshotController() {
+  const Controller = reloadableModules.projectSnapshotController.default;
+  return new Controller();
 }
 
 function restartNextDevFromWatchdog(reason: string) {
@@ -1014,6 +1026,20 @@ function startBridgeServer() {
   bridgeWebSocketServer = new WebSocketServer({ noServer: true });
   bridgeServer = http.createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://localhost").pathname;
+    if (requestPath === ORCHESTRATOR_PROJECTS_PATH && request.method === "GET") {
+      void projectSnapshotController.handleProjectsHttpRequest(request, response).catch((error) => {
+        if (!response.headersSent) sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Project discovery failed." });
+      });
+      return;
+    }
+
+    if (requestPath === ORCHESTRATOR_TREE_PATH && (request.method === "GET" || request.method === "POST")) {
+      void projectSnapshotController.handleTreeHttpRequest(request, response).catch((error) => {
+        if (!response.headersSent) sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Project tree request failed." });
+      });
+      return;
+    }
+
     if (requestPath === ORCHESTRATOR_BROWSE_PATH && request.method === "POST") {
       void runAfterBrowseControllerReload(() => getBrowseController().handleBrowseHttpRequest(request, response)).catch((error) => {
         if (!response.headersSent) {

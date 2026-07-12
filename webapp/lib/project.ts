@@ -36,7 +36,6 @@ const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", "node_m
 const discoveryIgnoredNames = new Set([...ignoredNames, "dist", "build", "coverage"]);
 const README_FILE_NAME = "README.md";
 const WORKSPACE_FILE_EXTENSION = ".code-workspace";
-let discoveredProjectsCache: Promise<WorkbenchProjectOption[]> | null = null;
 
 interface GitignoreMatcherGroup {
   ignored: boolean;
@@ -696,49 +695,42 @@ async function walkProjects(currentDir: string, projects: WorkbenchProjectOption
   }
 }
 
-export async function discoverProjects({ refresh = false }: { refresh?: boolean } = {}) {
-  if (!discoveredProjectsCache || refresh) {
-    discoveredProjectsCache = (async () => {
-      const projects: WorkbenchProjectOption[] = [];
-      const libraryProject = await createWorkbenchLibraryProjectOption();
-      await walkProjects(projectsRoot, projects);
-      const normalizedLibraryRoot = normalizePathForComparison(workbenchLibraryRoot);
-      const discoveredProjects = projects
-        .filter((project) => normalizePathForComparison(project.rootPath) !== normalizedLibraryRoot)
-        .sort((left, right) => {
-        const leftTime = left.lastCommitTimeMs ?? Number.NEGATIVE_INFINITY;
-        const rightTime = right.lastCommitTimeMs ?? Number.NEGATIVE_INFINITY;
-        if (leftTime !== rightTime) {
-          return rightTime - leftTime;
-        }
+export async function discoverProjects() {
+  const projects: WorkbenchProjectOption[] = [];
+  const libraryProject = await createWorkbenchLibraryProjectOption();
+  await walkProjects(projectsRoot, projects);
+  const normalizedLibraryRoot = normalizePathForComparison(workbenchLibraryRoot);
+  const discoveredProjects = projects
+    .filter((project) => normalizePathForComparison(project.rootPath) !== normalizedLibraryRoot)
+    .sort((left, right) => {
+      const leftTime = left.lastCommitTimeMs ?? Number.NEGATIVE_INFINITY;
+      const rightTime = right.lastCommitTimeMs ?? Number.NEGATIVE_INFINITY;
+      if (leftTime !== rightTime) {
+        return rightTime - leftTime;
+      }
 
-        return left.id.localeCompare(right.id, undefined, { numeric: true, sensitivity: "base" });
-      });
-      return [libraryProject, ...discoveredProjects];
-    })();
-  }
-
-  return await discoveredProjectsCache;
+      return left.id.localeCompare(right.id, undefined, { numeric: true, sensitivity: "base" });
+    });
+  return [libraryProject, ...discoveredProjects];
 }
 
-export async function getDefaultProjectId() {
-  const projects = await discoverProjects();
+function getDefaultProjectIdFromProjects(projects: readonly WorkbenchProjectOption[]) {
   const currentProjectOption = projects.find((project) => project.kind === "git" && normalizePathForComparison(project.rootPath) === normalizePathForComparison(projectRoot));
   return currentProjectOption?.id ?? projects[0]?.id ?? "";
 }
 
+export async function getDefaultProjectId() {
+  return getDefaultProjectIdFromProjects(await discoverProjects());
+}
+
 export async function resolveProjectRoot(projectId?: string | null) {
-  const requestedProjectId = normalizeProjectId(projectId ?? "") || await getDefaultProjectId();
+  const projects = await discoverProjects();
+  const requestedProjectId = normalizeProjectId(projectId ?? "") || getDefaultProjectIdFromProjects(projects);
   if (!requestedProjectId) {
     throw new Error("No projects were found under the configured projects root.");
   }
 
-  const projects = await discoverProjects();
-  let project = projects.find((candidate) => candidate.id === requestedProjectId);
-  if (!project) {
-    const refreshedProjects = await discoverProjects({ refresh: true });
-    project = refreshedProjects.find((candidate) => candidate.id === requestedProjectId);
-  }
+  const project = projects.find((candidate) => candidate.id === requestedProjectId);
   if (!project) {
     throw new Error("Unknown project.");
   }

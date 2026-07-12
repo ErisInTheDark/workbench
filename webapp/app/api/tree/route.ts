@@ -1,54 +1,81 @@
+/*
+ * Exports:
+ * - runtime/dynamic: keep project tree transport on the dynamic Node.js runtime. Keywords: tree, api, node runtime, stateless.
+ * - GET: stream an orchestrator-owned serialized project snapshot, with a stateless local fallback for pre-bootstrap orchestrators. Keywords: tree, project, orchestrator, proxy.
+ * - POST: create a project entry through the orchestrator, with a stateless local fallback for pre-bootstrap orchestrators. Keywords: tree, create, orchestrator, compatibility.
+ */
+import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { NextRequest } from "next/server";
 
-import { getProjectSnapshot, createProjectEntry, formatWorkspaceQualifiedPath, resolveProjectFilePath, resolveProjectRoot } from "../../../lib/project";
+import { proxyWorkbenchOrchestratorRequest } from "../../../lib/workbench/orchestrator-http-proxy";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(request: NextRequest) {
+async function localTreeGetFallback(request: NextRequest) {
+  const { getProjectSnapshot } = await import("../../../lib/project");
   try {
-    const snapshot = await getProjectSnapshot(request.nextUrl.searchParams.get("projectId"));
-    return NextResponse.json(snapshot, {
-      headers: {
-        "Cache-Control": "no-store",
-      },
+    return NextResponse.json(await getProjectSnapshot(request.nextUrl.searchParams.get("projectId")), {
+      headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {
-    return NextResponse.json({ error: (error as Error).message }, { status: 400 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to load project." }, { status: 400 });
   }
 }
 
-export async function POST(request: NextRequest) {
+async function localTreePostFallback(request: Request) {
+  const {
+    createProjectEntry,
+    formatWorkspaceQualifiedPath,
+    getProjectSnapshot,
+    resolveProjectFilePath,
+    resolveProjectRoot,
+  } = await import("../../../lib/project");
   try {
-    const {
-      parentPath = "",
-      projectId,
-      name,
-      type,
-    } = await request.json();
-
+    const { parentPath = "", projectId, name, type } = await request.json() as {
+      name?: string;
+      parentPath?: string;
+      projectId?: string;
+      type?: string;
+    };
     if (type !== "file" && type !== "directory") {
       return NextResponse.json({ error: "A valid entry type is required." }, { status: 400 });
     }
-
     const resolvedProject = await resolveProjectRoot(projectId);
     const resolvedParent = resolveProjectFilePath(resolvedProject, parentPath);
-    const createdRootPath = await createProjectEntry(resolvedParent.rootRelativePath, name, type, resolvedParent.gitRoot);
+    const createdRootPath = await createProjectEntry(resolvedParent.rootRelativePath, name ?? "", type, resolvedParent.gitRoot);
     const createdPath = resolvedProject.kind === "workspace"
       ? formatWorkspaceQualifiedPath(resolvedParent.root.id, createdRootPath)
       : createdRootPath;
-    const snapshot = await getProjectSnapshot(resolvedProject.id);
     return NextResponse.json({
-      ...snapshot,
+      ...await getProjectSnapshot(resolvedProject.id),
       path: createdPath,
       type,
     }, {
-      headers: {
-        "Cache-Control": "no-store",
-      },
+      headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {
-    return NextResponse.json({ error: (error as Error).message }, { status: 400 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to create project entry." }, { status: 400 });
   }
+}
+
+export async function GET(request: NextRequest) {
+  const response = await proxyWorkbenchOrchestratorRequest(request, "/orchestrator/tree", {
+    responseMode: "stream",
+    timeoutMs: 10_000,
+  });
+  if (response.status !== 404) return response;
+  await response.arrayBuffer();
+  return await localTreeGetFallback(request);
+}
+
+export async function POST(request: NextRequest) {
+  const fallbackRequest = request.clone();
+  const response = await proxyWorkbenchOrchestratorRequest(request, "/orchestrator/tree", {
+    responseMode: "stream",
+    timeoutMs: 10_000,
+  });
+  if (response.status !== 404) return response;
+  await response.arrayBuffer();
+  return await localTreePostFallback(fallbackRequest);
 }

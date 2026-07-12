@@ -90,9 +90,7 @@ export async function resolveAgentEndpointProjectFromCwd(
   }
 
   const resolvedCwd = path.resolve(requestedCwd);
-  const firstPassMatch = await findProjectMatchForCwd(await discoverProjects(), resolvedCwd);
-  const projectMatch = firstPassMatch
-    ?? await findProjectMatchForCwd(await discoverProjects({ refresh: true }), resolvedCwd);
+  const projectMatch = await findProjectMatchForCwd(await discoverProjects(), resolvedCwd);
   if (!projectMatch) {
     throw new Error(`${endpointName} cwd must be inside a discovered Workbench project.`);
   }
