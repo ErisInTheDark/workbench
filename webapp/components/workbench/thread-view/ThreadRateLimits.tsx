@@ -9,7 +9,7 @@ import type { ReactNode } from "react";
 import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { RateLimitWindow } from "../../../lib/codex/generated/app-server/v2/RateLimitWindow";
 import type { WorkbenchHarness } from "../../../lib/types";
-import { HarnessIcon } from "../workbench-icons";
+import ThreadHarnessControl from "./ThreadHarnessControl";
 
 function formatWindowLabel (window: RateLimitWindow, fallback: string) {
   const minutes = window.windowDurationMins;
@@ -61,17 +61,6 @@ function formatResetTimestamp (timestampSeconds: number | null) {
   });
 }
 
-function formatHarnessLabel(harness: WorkbenchHarness) {
-  switch (harness) {
-    case "copilot":
-      return "Copilot";
-    case "opencode":
-      return "OpenCode";
-    case "codex":
-      return "Codex";
-  }
-}
-
 function RateLimitWindowText ({
   fallback,
   window,
@@ -93,34 +82,21 @@ export default function ThreadRateLimits ({
   harness,
   onHarnessToggle,
   rateLimits,
+  showsHarnessControl = true,
   trailingContent = null,
 }: {
   canToggleHarness?: boolean;
   harness: WorkbenchHarness;
   onHarnessToggle?: () => void;
   rateLimits: RateLimitSnapshot | null;
+  showsHarnessControl?: boolean;
   trailingContent?: ReactNode;
 }) {
   if (!trailingContent && !canToggleHarness && harness !== "copilot" && harness !== "opencode" && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.limitName) {
     return null;
   }
 
-  const harnessLabel = formatHarnessLabel(harness);
-  const harnessControl = canToggleHarness ? (
-    <button
-      type="button"
-      className="inline-flex items-center justify-center min-w-28 gap-2 rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3 py-1.5 font-semibold text-text transition hover:border-[color-mix(in_srgb,var(--text)_18%,transparent)] hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-      onClick={onHarnessToggle}
-    >
-      <HarnessIcon className="size-4" harness={harness} />
-      <span>{harnessLabel}</span>
-    </button>
-  ) : (
-    <span className="inline-flex items-center gap-2 font-semibold text-text">
-      <HarnessIcon className="size-4" harness={harness} />
-      <span>{harnessLabel}</span>
-    </span>
-  );
+  const harnessControl = showsHarnessControl ? <ThreadHarnessControl canToggle={canToggleHarness} harness={harness} onToggle={onHarnessToggle} /> : null;
 
   if (canToggleHarness && harness !== "copilot" && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.limitName) {
     return (

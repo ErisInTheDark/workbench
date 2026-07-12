@@ -38,6 +38,7 @@ export default function CollaborationPromptComposer ({
   onStartPromptThread,
   onSubmitUserInputRequest,
   onThreadAgentChange,
+  onThreadHarnessToggle,
   onThreadModelChange,
   onThreadQuestionnaireDraftChange,
   onThreadQuestionnaireDraftClear,
@@ -63,6 +64,7 @@ export default function CollaborationPromptComposer ({
   onStartPromptThread: (postId: string, input: UserInput[], thread: ThreadPayload) => Promise<void>;
   onSubmitUserInputRequest: ThreadComposerProps["onSubmitUserInputRequest"];
   onThreadAgentChange: (postId: string, threadId: string, agentPath: string | null) => void;
+  onThreadHarnessToggle: (postId: string, threadId: string) => void;
   onThreadModelChange: (postId: string, threadId: string, model: string) => void;
   onThreadQuestionnaireDraftChange: (threadId: string, requestKey: string, draft: WorkbenchQuestionnaireDraft) => void;
   onThreadQuestionnaireDraftClear: (threadId: string, requestKey: string) => void;
@@ -88,11 +90,13 @@ export default function CollaborationPromptComposer ({
   return (
     <div data-collaboration-no-drag="true">
       <ThreadComposer
+        canToggleHarness={thread.isDraft}
         composerSpellCheck={composerSpellCheck}
         highlightSources={highlightSources}
         knownSkills={[]}
         layout="inline"
         onListModels={onListModels}
+        onHarnessToggle={() => onThreadHarnessToggle(post.id, thread.id)}
         onPauseThread={() => { }}
         onResumeThread={() => { }}
         onSendMessage={async (threadId, input) => {

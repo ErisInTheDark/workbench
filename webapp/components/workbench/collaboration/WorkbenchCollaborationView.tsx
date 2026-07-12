@@ -704,11 +704,13 @@ export default function WorkbenchCollaborationView({
   const collaboratorComposerThread = runController.collaboratorDraftThread;
   const collaboratorComposer = collaboratorComposerThread ? (
     <ThreadComposer
+      canToggleHarness={collaboratorComposerThread.isDraft}
       key={collaboratorComposerThread.id}
       composerSpellCheck={composerSpellCheck}
       highlightSources={highlightSources}
       knownSkills={[]}
       onListModels={threadViewProps.onListModels}
+      onHarnessToggle={runController.cycleCollaboratorDraftHarness}
       onPauseThread={() => { }}
       onResumeThread={() => { }}
       onSendMessage={runController.sendComposerMessage}
@@ -737,12 +739,7 @@ export default function WorkbenchCollaborationView({
       threadSavedComposerDrafts={threadSavedComposerDrafts}
       workspaceRoots={composerWorkspaceRoots}
     >
-      <ThreadRateLimits
-        canToggleHarness={collaboratorComposerThread.isDraft}
-        harness={collaboratorComposerThread.harness}
-        onHarnessToggle={runController.cycleCollaboratorDraftHarness}
-        rateLimits={rateLimits}
-      />
+      {({ isProfilePickerOpen }) => <ThreadRateLimits canToggleHarness={collaboratorComposerThread.isDraft} harness={collaboratorComposerThread.harness} onHarnessToggle={runController.cycleCollaboratorDraftHarness} rateLimits={rateLimits} showsHarnessControl={!isProfilePickerOpen} />}
     </ThreadComposer>
   ) : (
     <p className="m-0 text-[0.86rem] leading-6 text-muted">Collaborator is not ready.</p>
@@ -867,6 +864,16 @@ export default function WorkbenchCollaborationView({
       onThreadSavedComposerDraftSave={threadViewProps.onThreadSavedComposerDraftSave}
       onThreadServiceTierChange={(postId, threadId, serviceTier) => {
         updatePromptDraftThread(postId, threadId, (thread) => ({ ...thread, serviceTier }));
+      }}
+      onThreadHarnessToggle={(postId, threadId) => {
+        const current = promptDraftThreadsByPostId[postId];
+        if (!current || current.id !== threadId || !controls) return;
+        const harnesses: WorkbenchHarness[] = ["codex", "copilot", "opencode"];
+        const nextHarness = harnesses[(harnesses.indexOf(current.harness) + 1) % harnesses.length] ?? "codex";
+        const replacement = controls.createThreadDraft(nextHarness, { select: false, threadId });
+        setPromptDraftThreadsByPostId((threads) => ({ ...threads, [postId]: replacement }));
+        threadViewProps.onDraftHarnessChange(nextHarness);
+        composerProfileController.selectCustom({ kind: "new-thread", projectId });
       }}
       onThreadSettingsChange={(postId, threadId, settings) => {
         updatePromptDraftThread(postId, threadId, (thread) => ({

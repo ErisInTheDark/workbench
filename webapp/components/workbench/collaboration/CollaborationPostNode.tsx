@@ -224,6 +224,7 @@ export default function CollaborationPostNode ({
   onStartPromptThread,
   onTagPost,
   onThreadAgentChange,
+  onThreadHarnessToggle,
   onThreadModelChange,
   onThreadQuestionnaireDraftChange,
   onThreadQuestionnaireDraftClear,
@@ -264,6 +265,7 @@ export default function CollaborationPostNode ({
   onStartPromptThread: CollaborationPromptComposerProps["onStartPromptThread"];
   onTagPost: (postId: string, tag: string) => void;
   onThreadAgentChange: CollaborationPromptComposerProps["onThreadAgentChange"];
+  onThreadHarnessToggle: CollaborationPromptComposerProps["onThreadHarnessToggle"];
   onThreadModelChange: CollaborationPromptComposerProps["onThreadModelChange"];
   onThreadQuestionnaireDraftChange: CollaborationPromptComposerProps["onThreadQuestionnaireDraftChange"];
   onThreadQuestionnaireDraftClear: CollaborationPromptComposerProps["onThreadQuestionnaireDraftClear"];
@@ -405,6 +407,7 @@ export default function CollaborationPostNode ({
                 }}
                 onSubmitUserInputRequest={onSubmitUserInputRequest}
                 onThreadAgentChange={onThreadAgentChange}
+                onThreadHarnessToggle={onThreadHarnessToggle}
                 onThreadModelChange={onThreadModelChange}
                 onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
                 onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
@@ -575,6 +578,7 @@ export default function CollaborationPostNode ({
                     onTagPost={onTagPost}
                     onSubmitUserInputRequest={onSubmitUserInputRequest}
                     onThreadAgentChange={onThreadAgentChange}
+                    onThreadHarnessToggle={onThreadHarnessToggle}
                     onThreadModelChange={onThreadModelChange}
                     onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
                     onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}

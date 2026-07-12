@@ -9,6 +9,7 @@ import { JSX, type KeyboardEvent } from "react";
 import type { WorkbenchHarness, WorkbenchModelOption } from "../../../lib/types";
 import { ReloadIcon } from "../workbench-icons";
 import ThreadComposerPickerHeader from "./ThreadComposerPickerHeader";
+import ThreadPickerGroupMoveButton from "./ThreadPickerGroupMoveButton";
 
 function formatContextWindow (tokens: number | null) {
 	if (!tokens) {
@@ -72,22 +73,6 @@ function formatHarnessLabel (harness: WorkbenchHarness) {
 		case "codex":
 			return "Codex";
 	}
-}
-
-function DownArrowIcon () {
-	return (
-		<svg viewBox="0 0 16 16" className="h-4 w-4" aria-hidden="true">
-			<path d="M4 6.5L8 10.5L12 6.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
-		</svg>
-	);
-}
-
-function UpArrowIcon () {
-	return (
-		<svg viewBox="0 0 16 16" className="h-4 w-4" aria-hidden="true">
-			<path d="M4 9.5L8 5.5L12 9.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
-		</svg>
-	);
 }
 
 export default function ThreadModelPicker ({
@@ -181,17 +166,7 @@ export default function ThreadModelPicker ({
 						) : null}
 					</div>
 					{showsPriorityControls ? <div className="flex items-center gap-2">
-						<button
-							type="button"
-							className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] text-muted transition hover:border-[color-mix(in_srgb,var(--text)_18%,transparent)] hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-							aria-label={deprioritized ? `Move ${model.displayName} back to the top group` : `Move ${model.displayName} to the bottom group`}
-							onClick={(event) => {
-								event.stopPropagation();
-								onToggleModelPriority(model.id);
-							}}
-						>
-							{deprioritized ? <UpArrowIcon /> : <DownArrowIcon />}
-						</button>
+						<ThreadPickerGroupMoveButton direction={deprioritized ? "up" : "down"} label={deprioritized ? `Move ${model.displayName} back to the top group` : `Move ${model.displayName} to the bottom group`} onClick={() => onToggleModelPriority(model.id)} />
 					</div> : null}
 				</div>
 			</div>

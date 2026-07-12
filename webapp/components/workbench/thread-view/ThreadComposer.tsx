@@ -51,6 +51,7 @@ import ThreadComposerRibbon from "./ThreadComposerRibbon";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 import ThreadModelPicker from "./ThreadModelPicker";
 import ThreadProfilePicker from "./ThreadProfilePicker";
+import { getComposerProfileDisplayLabel } from "./composer-profile-label";
 import ThreadUserInputRequest, { getThreadUserInputRequestPreviewText } from "./ThreadUserInputRequest";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileProvider";
 
@@ -361,11 +362,13 @@ function ThreadSavedDraftShelf ({
 
 export default function ThreadComposer ({
   children,
+  canToggleHarness = false,
   composerSpellCheck,
   controlsMode = "thread",
   header,
   layout = "thread",
   onListModels,
+  onHarnessToggle,
   onPauseThread,
   onResumeThread,
   onSendMessage,
@@ -404,12 +407,14 @@ export default function ThreadComposer ({
   highlightSources,
   thread,
 }: {
-  children?: ReactNode;
+  children?: ReactNode | ((state: { isProfilePickerOpen: boolean }) => ReactNode);
+  canToggleHarness?: boolean;
   composerSpellCheck: boolean;
   controlsMode?: "comment" | "thread";
   header?: ReactNode;
   layout?: "thread" | "inline";
   onListModels: (harness: ThreadPayload["harness"], options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
+  onHarnessToggle?: () => void;
   onPauseThread: (threadId: string) => Promise<void> | void;
   onResumeThread: (threadId: string) => Promise<void> | void;
   onSendMessage: (threadId: string, input: UserInput[]) => Promise<void>;
@@ -597,7 +602,7 @@ export default function ThreadComposer ({
   const selectedProfile = profileSelection.kind === "profile"
     ? composerProfileController.getProfile(profileSelection.profileId)
     : null;
-  const profileButtonLabel = selectedProfile?.name ?? "Custom";
+  const profileButtonLabel = selectedProfile ? getComposerProfileDisplayLabel(selectedProfile, agentButtonLabel, modelButtonLabel) : "Custom";
   const currentComposerSettings: WorkbenchComposerSettings = {
     agentPath: thread.agentPath,
     agentSource: selectedAgent?.source ?? null,
@@ -649,10 +654,11 @@ export default function ThreadComposer ({
       }
     });
   }, [isCommentMode, projectId]);
-  const loadAvailableModels = useCallback((options: { clearBeforeLoad?: boolean; forceRefresh?: boolean; showErrors?: boolean; showLoading?: boolean } = {}): Promise<void> => {
+  const loadAvailableModels = useCallback((options: { clearBeforeLoad?: boolean; forceRefresh?: boolean; harness?: ThreadPayload["harness"]; showErrors?: boolean; showLoading?: boolean } = {}): Promise<void> => {
     const {
       clearBeforeLoad = false,
       forceRefresh = false,
+      harness = thread.harness,
       showErrors = true,
       showLoading = true,
     } = options;
@@ -676,7 +682,7 @@ export default function ThreadComposer ({
       setIsLoadingModels(true);
     }
 
-    return onListModels(thread.harness, { forceRefresh }).then((models) => {
+    return onListModels(harness, { forceRefresh }).then((models) => {
       if (modelLoadGenerationRef.current !== generation) {
         return;
       }
@@ -1529,6 +1535,7 @@ export default function ThreadComposer ({
                       isProfilePanelOpen={isProfilePickerOpen}
                       modelLabel={modelButtonLabel}
                       profileLabel={profileButtonLabel}
+                      selectedProfileLabel={selectedProfile ? profileButtonLabel : null}
                       showsFastModeControl={showsFastModeControl}
                       showsReasoningEffortControl={showsReasoningEffortControl}
                       onAgentOpen={() => setActivePicker("agent")}
@@ -1651,6 +1658,7 @@ export default function ThreadComposer ({
                     <ThreadProfilePicker
                       agents={availableAgents}
                       agentsError={agentsError}
+                      canToggleHarness={canToggleHarness}
                       currentSettings={currentComposerSettings}
                       deprioritizedModelIds={deprioritizedModelIds}
                       isAgentRefreshDisabled={isLoadingAgents || isAgentRefreshPending || isAgentRefreshCoolingDown}
@@ -1664,8 +1672,9 @@ export default function ThreadComposer ({
                       projectId={projectId}
                       slot={profileSlot}
                       onClose={() => setActivePicker(null)}
+                      onHarnessToggle={onHarnessToggle}
+                      onLoadModels={(harness, forceRefresh = false) => loadAvailableModels({ clearBeforeLoad: true, forceRefresh, harness, showErrors: true, showLoading: true })}
                       onRefreshAgents={refreshAvailableAgents}
-                      onRefreshModels={refreshAvailableModels}
                     />
                   ) : null}
                 </div>
@@ -1751,7 +1760,7 @@ export default function ThreadComposer ({
   return (
     <>
       {composerContent}
-      {children}
+      {typeof children === "function" ? children({ isProfilePickerOpen }) : children}
       {showSavedDraftControls
         ? useSavedDraftShelfPortal
           ? (savedDraftShelfPortalHost ? createPortal(savedDraftShelf, savedDraftShelfPortalHost) : null)

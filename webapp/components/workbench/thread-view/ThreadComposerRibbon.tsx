@@ -30,6 +30,7 @@ export default function ThreadComposerRibbon({
   onProfileOpen,
   onReasoningEffortCycle,
   profileLabel,
+  selectedProfileLabel = null,
   showsFastModeControl,
   showsProfileControl = true,
   showsReasoningEffortControl,
@@ -45,6 +46,7 @@ export default function ThreadComposerRibbon({
   onProfileOpen: () => void;
   onReasoningEffortCycle: (direction: 1 | -1) => void;
   profileLabel: string;
+  selectedProfileLabel?: string | null;
   showsFastModeControl: boolean;
   showsProfileControl?: boolean;
   showsReasoningEffortControl: boolean;
@@ -56,15 +58,17 @@ export default function ThreadComposerRibbon({
         aria-label={`Composer profile: ${profileLabel}`}
         aria-pressed={isProfilePanelOpen}
         className={joinClasses(
-          "inline-flex items-center justify-center px-2.5 py-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft",
+          "inline-flex items-center justify-center gap-2 px-2.5 py-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft",
           isProfilePanelOpen ? "bg-[color-mix(in_srgb,var(--text)_7%,transparent)] text-text" : "text-muted hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text",
         )}
         title={`Composer profile: ${profileLabel}`}
         onClick={onProfileOpen}
       >
         <BlocksIcon className="size-4.5" />
+        {selectedProfileLabel ? <span className="font-semibold">{selectedProfileLabel}</span> : null}
       </button>
-      <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" /></> : null}
+      {!selectedProfileLabel ? <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" /> : null}</> : null}
+      {!selectedProfileLabel ? <>
       <button
         type="button"
         className="px-3 py-2 transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
@@ -117,6 +121,7 @@ export default function ThreadComposerRibbon({
       >
         {agentLabel}
       </button>
+      </> : null}
     </div>
   );
 }

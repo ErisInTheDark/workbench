@@ -1594,27 +1594,21 @@ export default memo(function ThreadView ({
   }, [livePendingUserInputRequestsByThreadId, seenItemCountsByThreadId, thread.id]);
 
   const mainThreadBadge = getTabBadge(thread.id, thread);
+  const handleComposerHarnessToggle = () => {
+    if (!activeThread?.isDraft) return;
+    const harnesses: WorkbenchHarness[] = ["codex", "copilot", "opencode"];
+    const nextHarness = harnesses[(harnesses.indexOf(activeThread.harness) + 1) % harnesses.length] ?? "codex";
+    if (activeProfileSlot && resolvedActiveThread?.model && composerProfileController.getSelection(activeProfileSlot).kind === "profile") {
+      handleThreadSettingsChange(activeThread.id, { agentPath: resolvedActiveThread.agentPath, agentSource: null, harness: resolvedActiveThread.harness, model: resolvedActiveThread.model, reasoningEffort: resolvedActiveThread.reasoningEffort, serviceTier: resolvedActiveThread.serviceTier === "fast" ? "fast" : null });
+      composerProfileController.selectCustom(activeProfileSlot);
+    }
+    onDraftHarnessChange(nextHarness);
+  };
   const composerStatus = activeThread ? (
     <ThreadRateLimits
       canToggleHarness={activeThread.isDraft}
       harness={activeThread.harness}
-      onHarnessToggle={() => {
-        const harnesses: WorkbenchHarness[] = ["codex", "copilot", "opencode"];
-        const currentIndex = harnesses.indexOf(activeThread.harness);
-        const nextHarness = harnesses[(currentIndex + 1) % harnesses.length] ?? "codex";
-        if (activeProfileSlot && resolvedActiveThread?.model && composerProfileController.getSelection(activeProfileSlot).kind === "profile") {
-          handleThreadSettingsChange(activeThread.id, {
-            agentPath: resolvedActiveThread.agentPath,
-            agentSource: null,
-            harness: resolvedActiveThread.harness,
-            model: resolvedActiveThread.model,
-            reasoningEffort: resolvedActiveThread.reasoningEffort,
-            serviceTier: resolvedActiveThread.serviceTier === "fast" ? "fast" : null,
-          });
-          composerProfileController.selectCustom(activeProfileSlot);
-        }
-        onDraftHarnessChange(nextHarness);
-      }}
+      onHarnessToggle={handleComposerHarnessToggle}
       rateLimits={rateLimits}
       trailingContent={(
         <ThreadContextStatus
@@ -1626,9 +1620,11 @@ export default memo(function ThreadView ({
   ) : null;
   const composer = activeThread ? (
     <ThreadComposer
+      canToggleHarness={activeThread.isDraft}
       key={activeThread.id}
       composerSpellCheck={composerSpellCheck}
       onListModels={onListModels}
+      onHarnessToggle={handleComposerHarnessToggle}
       highlightSources={inlineMentionSources}
       onPauseThread={() => {
         void handlePauseThread();
@@ -1670,7 +1666,7 @@ export default memo(function ThreadView ({
       knownSkills={workbenchSkills}
       thread={resolvedActiveThread!}
     >
-      {isDraftThreadView ? composerStatus : null}
+      {isDraftThreadView ? ({ isProfilePickerOpen }) => <ThreadRateLimits canToggleHarness harness={activeThread.harness} onHarnessToggle={handleComposerHarnessToggle} rateLimits={rateLimits} showsHarnessControl={!isProfilePickerOpen} trailingContent={<ThreadContextStatus onCompactThread={onCompactThread} thread={activeThread} />} /> : null}
     </ThreadComposer>
   ) : null;
 

@@ -108,3 +108,14 @@ test("invalid persisted data normalizes to an empty usable registry", () => {
   assert.deepEqual(controller.getSnapshot(), { profiles: [], selections: {} });
   controller.dispose();
 });
+
+test("unnamed profiles survive persistence and remain unnamed", () => {
+  const storage = new MemoryStorage();
+  const controller = new WorkbenchComposerProfileController(storage);
+  const profile = controller.createProfile({ ...CODEX_SETTINGS, name: "", scope: { kind: "global" } });
+  assert.equal(profile.name, "");
+  controller.dispose();
+  const reloaded = new WorkbenchComposerProfileController(storage);
+  assert.equal(reloaded.getProfile(profile.id)?.name, "");
+  reloaded.dispose();
+});

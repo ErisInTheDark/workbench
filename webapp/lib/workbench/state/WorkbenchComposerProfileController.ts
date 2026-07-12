@@ -88,7 +88,7 @@ function normalizeProfile(value: unknown): WorkbenchComposerProfile | null {
     : candidate.scope?.kind === "project" && typeof candidate.scope.projectId === "string" && candidate.scope.projectId.trim()
       ? { kind: "project" as const, projectId: candidate.scope.projectId.trim() }
       : null;
-  if (!id || !name || !scope) {
+  if (!id || !scope) {
     return null;
   }
 
@@ -279,7 +279,7 @@ export default class WorkbenchComposerProfileController {
       updatedAt: Date.now(),
     });
     if (!normalized) {
-      throw new Error("Profile name and model are required.");
+      throw new Error("Profile model and scope are required.");
     }
     if (normalized.scope.kind === "global" && normalized.agentSource === "project") {
       throw new Error("Profiles using a project agent cannot be global.");

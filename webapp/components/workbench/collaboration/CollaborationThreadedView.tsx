@@ -57,6 +57,7 @@ export default function CollaborationThreadedView ({
   onTagPost,
   onSubmitUserInputRequest,
   onThreadAgentChange,
+  onThreadHarnessToggle,
   onThreadModelChange,
   onThreadQuestionnaireDraftChange,
   onThreadQuestionnaireDraftClear,
@@ -96,6 +97,7 @@ export default function CollaborationThreadedView ({
   onTagPost: (postId: string, tag: string) => void;
   onSubmitUserInputRequest: CollaborationPromptComposerProps["onSubmitUserInputRequest"];
   onThreadAgentChange: CollaborationPromptComposerProps["onThreadAgentChange"];
+  onThreadHarnessToggle: CollaborationPromptComposerProps["onThreadHarnessToggle"];
   onThreadModelChange: CollaborationPromptComposerProps["onThreadModelChange"];
   onThreadQuestionnaireDraftChange: CollaborationPromptComposerProps["onThreadQuestionnaireDraftChange"];
   onThreadQuestionnaireDraftClear: CollaborationPromptComposerProps["onThreadQuestionnaireDraftClear"];
@@ -167,6 +169,7 @@ export default function CollaborationThreadedView ({
                 onTagPost={onTagPost}
                 onSubmitUserInputRequest={onSubmitUserInputRequest}
                 onThreadAgentChange={onThreadAgentChange}
+                onThreadHarnessToggle={onThreadHarnessToggle}
                 onThreadModelChange={onThreadModelChange}
                 onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
                 onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
