@@ -3,7 +3,7 @@
   "private": true,
   "packageManager": "pnpm@10.31.0",
   "scripts": {
-    "dev": "tsx orchestrator/index.ts",
+    "dev": "node --env-file-if-exists=.env.local --import tsx orchestrator/index.ts",
     "dev:next": "next dev -p 3002",
     "codex:generate-types": "codex app-server generate-ts --out lib/codex/generated/app-server",
     "typecheck": "pnpm exec tsc --noEmit && pnpm exec tsc --noEmit -p orchestrator"
