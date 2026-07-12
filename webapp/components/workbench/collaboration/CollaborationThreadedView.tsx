@@ -64,6 +64,7 @@ export default function CollaborationThreadedView ({
   onThreadSavedComposerDraftDelete,
   onThreadSavedComposerDraftSave,
   onThreadServiceTierChange,
+  onThreadSettingsChange,
   onListModels,
 }: {
   activeDrag: WorkbenchDragPayload | null;
@@ -102,6 +103,7 @@ export default function CollaborationThreadedView ({
   onThreadSavedComposerDraftDelete: CollaborationPromptComposerProps["onThreadSavedComposerDraftDelete"];
   onThreadSavedComposerDraftSave: CollaborationPromptComposerProps["onThreadSavedComposerDraftSave"];
   onThreadServiceTierChange: CollaborationPromptComposerProps["onThreadServiceTierChange"];
+  onThreadSettingsChange: CollaborationPromptComposerProps["onThreadSettingsChange"];
   onListModels: CollaborationPromptComposerProps["onListModels"];
 }) {
   const rootPosts = state.rootPostIds.map((postId) => state.posts[postId]).filter((post): post is WorkbenchCollaborationPost => Boolean(post));
@@ -172,6 +174,7 @@ export default function CollaborationThreadedView ({
                 onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
                 onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
                 onThreadServiceTierChange={onThreadServiceTierChange}
+                onThreadSettingsChange={onThreadSettingsChange}
                 onListModels={onListModels}
               />
             ))}

@@ -12,6 +12,8 @@ import { getCurrentInProgressTurn, mergeTurnsPreservingLiveItems } from "../../.
 import type {
   ThreadPayload,
   ThreadUnreadBadge,
+  WorkbenchComposerProfileSlot,
+  WorkbenchComposerSettings,
   WorkbenchHarness,
   WorkbenchListModelsOptions,
   WorkbenchBrowseResultEntry,
@@ -59,6 +61,7 @@ import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thr
 import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
 import { ThreadQuestionBadge, ThreadUnreadBadge as ThreadUnreadBadgeView } from "../ThreadStatusBadges";
+import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileProvider";
 import { ThreadThreadContent, ThreadTurnDetails, ThreadTurnLoadingSkeleton, useStableBrowseResultEntriesByTurn } from "./thread-view-items";
 import ThreadAgentName from "./ThreadAgentName";
 import ThreadComposer from "./ThreadComposer";
@@ -660,6 +663,7 @@ export default memo(function ThreadView ({
   onThreadAgentChange,
   onThreadReasoningEffortChange,
   onThreadServiceTierChange,
+  onThreadSettingsChange,
   onThreadModelChange,
   projectId,
   projectFileCandidates,
@@ -711,6 +715,7 @@ export default memo(function ThreadView ({
   onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
   onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
   onThreadServiceTierChange: (threadId: string, serviceTier: string | null) => void;
+  onThreadSettingsChange: (threadId: string, settings: WorkbenchComposerSettings) => void;
   onThreadModelChange: (threadId: string, model: string) => void;
   projectId: string;
   projectFileCandidates: readonly ProjectTreeFileCandidate[];
@@ -727,6 +732,7 @@ export default memo(function ThreadView ({
   threadSavedComposerDrafts: WorkbenchThreadSavedComposerDraft[];
   thread: ThreadPayload;
 }) {
+  const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const [activeThreadId, setActiveThreadId] = useState(thread.id);
   const [subthreadsById, setSubthreadsById] = useState<Record<string, ThreadPayload>>({});
   const [loadingThreadIds, setLoadingThreadIds] = useState<Record<string, true>>({});
@@ -757,6 +763,15 @@ export default memo(function ThreadView ({
   const activeThread = activeThreadId === thread.id
     ? getThreadDocumentFromSnapshot(threadDocuments, thread.id) ?? thread
     : relatedThreadsById[activeThreadId] ?? null;
+  const activeProfileSlot: WorkbenchComposerProfileSlot | null = activeThread
+    ? activeThread.isDraft
+      ? { kind: "new-thread", projectId }
+      : { harness: activeThread.harness, kind: "thread", threadId: activeThread.id }
+    : null;
+  const resolvedActiveThread = activeThread && activeProfileSlot
+    ? composerProfileController.resolveThread(activeProfileSlot, activeThread)
+    : activeThread;
+  void composerProfileSnapshot;
   const activeThreadIdentity = activeThread ? `${activeThread.harness}:${activeThread.id}` : "";
   const activeThreadBrowseResultEntries = activeThread?.browseResultEntries ?? EMPTY_BROWSE_RESULT_ENTRIES;
   const activeThreadBrowseResultEntriesByTurnId = useStableBrowseResultEntriesByTurn(activeThreadBrowseResultEntries);
@@ -1259,20 +1274,21 @@ export default memo(function ThreadView ({
   }, [loadSubthread, thread.id]);
 
   const handleSendMessage = useCallback(async (_threadId: string, input: UserInput[]) => {
-    if (!activeThread) {
+    if (!resolvedActiveThread || !activeProfileSlot) {
       return;
     }
 
-    const payload = await onSendMessage(activeThread, input, {
-      selectThread: activeThread.id === thread.id,
+    const payload = await onSendMessage(resolvedActiveThread, input, {
+      composerProfileSlot: activeProfileSlot,
+      selectThread: resolvedActiveThread.id === thread.id,
     });
-    if (payload && activeThread.id !== thread.id) {
+    if (payload && resolvedActiveThread.id !== thread.id) {
       setSubthreadsById((current) => ({
         ...current,
-        [activeThread.id]: payload,
+        [resolvedActiveThread.id]: payload,
       }));
     }
-  }, [activeThread, onSendMessage, thread.id]);
+  }, [activeProfileSlot, onSendMessage, resolvedActiveThread, thread.id]);
 
   const handleStopThread = useCallback(async () => {
     if (!activeThread) {
@@ -1405,6 +1421,45 @@ export default memo(function ThreadView ({
       };
     });
   }, [onThreadServiceTierChange, thread.id]);
+
+  const handleThreadSettingsChange = useCallback((threadId: string, settings: WorkbenchComposerSettings) => {
+    if (threadId === thread.id) {
+      onThreadSettingsChange(threadId, settings);
+      return;
+    }
+
+    setSubthreadsById((current) => {
+      const existing = current[threadId];
+      if (!existing || (!existing.isDraft && existing.harness !== settings.harness)) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [threadId]: {
+          ...existing,
+          agentPath: settings.agentPath,
+          harness: settings.harness,
+          model: settings.model,
+          reasoningEffort: settings.reasoningEffort,
+          serviceTier: settings.serviceTier,
+        },
+      };
+    });
+  }, [onThreadSettingsChange, thread.id]);
+
+  useEffect(() => {
+    if (!activeThread || !activeProfileSlot) {
+      return;
+    }
+    const selection = composerProfileController.getSelection(activeProfileSlot);
+    if (selection.kind !== "custom" || !selection.pendingSettings) {
+      return;
+    }
+
+    handleThreadSettingsChange(activeThread.id, selection.pendingSettings);
+    composerProfileController.acknowledgePendingSettings(activeProfileSlot);
+  }, [activeProfileSlot, activeThread, composerProfileController, composerProfileSnapshot, handleThreadSettingsChange]);
 
   const syncCodeBlockWrapDomState = useCallback((nextValue: boolean) => {
     const root = threadViewRef.current;
@@ -1546,7 +1601,19 @@ export default memo(function ThreadView ({
       onHarnessToggle={() => {
         const harnesses: WorkbenchHarness[] = ["codex", "copilot", "opencode"];
         const currentIndex = harnesses.indexOf(activeThread.harness);
-        onDraftHarnessChange(harnesses[(currentIndex + 1) % harnesses.length] ?? "codex");
+        const nextHarness = harnesses[(currentIndex + 1) % harnesses.length] ?? "codex";
+        if (activeProfileSlot && resolvedActiveThread?.model && composerProfileController.getSelection(activeProfileSlot).kind === "profile") {
+          handleThreadSettingsChange(activeThread.id, {
+            agentPath: resolvedActiveThread.agentPath,
+            agentSource: null,
+            harness: resolvedActiveThread.harness,
+            model: resolvedActiveThread.model,
+            reasoningEffort: resolvedActiveThread.reasoningEffort,
+            serviceTier: resolvedActiveThread.serviceTier === "fast" ? "fast" : null,
+          });
+          composerProfileController.selectCustom(activeProfileSlot);
+        }
+        onDraftHarnessChange(nextHarness);
       }}
       rateLimits={rateLimits}
       trailingContent={(
@@ -1583,10 +1650,12 @@ export default memo(function ThreadView ({
       onThreadAgentChange={handleThreadAgentChange}
       onThreadReasoningEffortChange={handleThreadReasoningEffortChange}
       onThreadServiceTierChange={handleThreadServiceTierChange}
+      onThreadSettingsChange={handleThreadSettingsChange}
       onThreadModelChange={handleThreadModelChange}
       pendingUserInputRequest={activePendingUserInputRequest}
       projectId={projectId}
       projectRootPath={projectRootPath}
+      profileSlot={activeProfileSlot!}
       workspaceRoots={workspaceFileLinkRoots}
       rateLimits={rateLimits}
       autoExpandSavedDraftShelf={!isDraftThreadView}
@@ -1599,7 +1668,7 @@ export default memo(function ThreadView ({
       threadSavedComposerDrafts={threadSavedComposerDrafts}
       useSavedDraftShelfPortal={isDraftThreadView}
       knownSkills={workbenchSkills}
-      thread={activeThread}
+      thread={resolvedActiveThread!}
     >
       {isDraftThreadView ? composerStatus : null}
     </ThreadComposer>

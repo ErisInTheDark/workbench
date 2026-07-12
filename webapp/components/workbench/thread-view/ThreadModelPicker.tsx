@@ -7,9 +7,8 @@
  */
 import { JSX, type KeyboardEvent } from "react";
 import type { WorkbenchHarness, WorkbenchModelOption } from "../../../lib/types";
-import { PanelCloseIcon, ReloadIcon } from "../workbench-icons";
-
-const pickerIconButtonClassName = "inline-flex size-9 shrink-0 items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] text-muted transition hover:border-[color-mix(in_srgb,var(--text)_18%,transparent)] hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:border-[color-mix(in_srgb,var(--text)_10%,transparent)] disabled:hover:bg-transparent disabled:hover:text-muted";
+import { ReloadIcon } from "../workbench-icons";
+import ThreadComposerPickerHeader from "./ThreadComposerPickerHeader";
 
 function formatContextWindow (tokens: number | null) {
 	if (!tokens) {
@@ -105,6 +104,7 @@ export default function ThreadModelPicker ({
 	onSelectModel,
 	onToggleModelPriority,
 	selectedModelId,
+	showsPriorityControls = true,
 }: {
 	appliesOnNextTurnOnly: boolean;
 	deprioritizedModelIds: string[];
@@ -119,6 +119,7 @@ export default function ThreadModelPicker ({
 	onSelectModel: (model: WorkbenchModelOption) => void;
 	onToggleModelPriority: (modelId: string) => void;
 	selectedModelId: string | null;
+	showsPriorityControls?: boolean;
 }) {
 	const visibleModels = models.filter((model) => model.policyState !== "disabled");
 	const topGroup = visibleModels.filter((model) => !deprioritizedModelIds.includes(model.id));
@@ -179,7 +180,7 @@ export default function ThreadModelPicker ({
 							<p className="mt-1 mb-0 text-[0.7em] leading-[1.7] text-muted">{model.description}</p>
 						) : null}
 					</div>
-					<div className="flex items-center gap-2">
+					{showsPriorityControls ? <div className="flex items-center gap-2">
 						<button
 							type="button"
 							className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] text-muted transition hover:border-[color-mix(in_srgb,var(--text)_18%,transparent)] hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
@@ -191,7 +192,7 @@ export default function ThreadModelPicker ({
 						>
 							{deprioritized ? <UpArrowIcon /> : <DownArrowIcon />}
 						</button>
-					</div>
+					</div> : null}
 				</div>
 			</div>
 		);
@@ -199,41 +200,17 @@ export default function ThreadModelPicker ({
 
 	return (
 		<>
-			<div className="flex items-center justify-between gap-3">
-				<div className="shrink-1">
-					<p className="m-0 text-[1.2em] font-semibold text-muted">
-						Choose a {harnessLabel} model
-					</p>
-					{appliesOnNextTurnOnly ? (
-						<p className="-mt-1 mb-0 text-[0.78em] leading-[1.6] text-muted">
-							Changes apply to the next new turn.
-						</p>
-					) : null}
-				</div>
-				<div className="flex shrink-0 items-center gap-2 self-start">
-					<button
-						type="button"
-						aria-label={isRefreshing ? "Refreshing models" : "Refresh models"}
-						title={isRefreshing ? "Refreshing models" : "Refresh models"}
-						className={pickerIconButtonClassName}
-						disabled={isRefreshDisabled}
-						onClick={onRefresh}
-					>
-						<span className={isRefreshing ? "animate-spin [animation-direction:reverse]" : ""}>
-							<ReloadIcon />
-						</span>
-					</button>
-					<button
-						type="button"
-						aria-label="Back to message"
-						title="Back to message"
-						className={pickerIconButtonClassName}
-						onClick={onClose}
-					>
-						<PanelCloseIcon />
-					</button>
-				</div>
-			</div>
+			<ThreadComposerPickerHeader
+				actions={[{
+					disabled: isRefreshDisabled,
+					icon: <span className={isRefreshing ? "animate-spin [animation-direction:reverse]" : ""}><ReloadIcon /></span>,
+					label: isRefreshing ? "Refreshing models" : "Refresh models",
+					onClick: onRefresh,
+				}]}
+				onClose={onClose}
+				supportingText={appliesOnNextTurnOnly ? "Changes apply to the next new turn." : null}
+				title={`Choose a ${harnessLabel} model`}
+			/>
 			{error ? (
 				<p className="mt-3 mb-0 text-[0.84em] leading-[1.6] text-danger">{error}</p>
 			) : null}

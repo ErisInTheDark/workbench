@@ -62,6 +62,7 @@ import CollaborationRunController from "./CollaborationRunController";
 import CollaborationRevisionHistoryDialog from "./CollaborationRevisionHistoryDialog";
 import CollaborationRunPanel from "./CollaborationRunPanel";
 import CollaborationThreadedView from "./CollaborationThreadedView";
+import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileProvider";
 
 type ThreadViewProps = ComponentProps<typeof ThreadView>;
 
@@ -160,6 +161,7 @@ export default function WorkbenchCollaborationView({
   onPostPointerDragStart,
   onReadThread,
   onSendMessage,
+  onThreadSettingsChange,
   onStartThreadFromPrompt,
   projectChanges,
   projectFileCandidates,
@@ -174,6 +176,8 @@ export default function WorkbenchCollaborationView({
   threadSavedComposerDrafts,
   ...threadViewProps
 }: WorkbenchCollaborationViewProps) {
+  const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
+  void composerProfileSnapshot;
   const [promptDraftThreadsByPostId, setPromptDraftThreadsByPostId] = useState<Record<string, ThreadPayload | undefined>>({});
   const [promptComposerDraftsByPostId, setPromptComposerDraftsByPostId] = useState<Record<string, WorkbenchThreadComposerDraft | undefined>>({});
   const [promptStartErrorsByPostId, setPromptStartErrorsByPostId] = useState<Record<string, string | undefined>>({});
@@ -271,6 +275,7 @@ export default function WorkbenchCollaborationView({
   const runController = CollaborationRunController({
     collaborationState,
     collaborationThreadSummaries,
+    composerProfileController,
     controls,
     getCurrentCollaborationState,
     harness,
@@ -719,9 +724,11 @@ export default function WorkbenchCollaborationView({
       onThreadSavedComposerDraftDelete={threadViewProps.onThreadSavedComposerDraftDelete}
       onThreadSavedComposerDraftSave={threadViewProps.onThreadSavedComposerDraftSave}
       onThreadServiceTierChange={runController.setCollaboratorDraftServiceTier}
+      onThreadSettingsChange={runController.setCollaboratorDraftSettings}
       pendingUserInputRequest={null}
       projectId={projectId}
       projectRootPath={projectRootPath}
+      profileSlot={{ kind: "collaboration-runner", projectId }}
       rateLimits={rateLimits}
       sendLabel="Run with note"
       thread={collaboratorComposerThread}
@@ -756,6 +763,7 @@ export default function WorkbenchCollaborationView({
         onResumeThread={runController.resumeRunThread}
         onSendMessage={runController.sendRunMessage}
         onStopThread={runController.stopRunThread}
+        onThreadSettingsChange={onThreadSettingsChange}
         projectId={projectId}
         projectFileCandidates={projectFileCandidates}
         projectFileIndexId={projectFileIndexId}
@@ -859,6 +867,16 @@ export default function WorkbenchCollaborationView({
       onThreadSavedComposerDraftSave={threadViewProps.onThreadSavedComposerDraftSave}
       onThreadServiceTierChange={(postId, threadId, serviceTier) => {
         updatePromptDraftThread(postId, threadId, (thread) => ({ ...thread, serviceTier }));
+      }}
+      onThreadSettingsChange={(postId, threadId, settings) => {
+        updatePromptDraftThread(postId, threadId, (thread) => ({
+          ...thread,
+          agentPath: settings.agentPath,
+          harness: settings.harness,
+          model: settings.model,
+          reasoningEffort: settings.reasoningEffort,
+          serviceTier: settings.serviceTier,
+        }));
       }}
       onListModels={threadViewProps.onListModels}
     />

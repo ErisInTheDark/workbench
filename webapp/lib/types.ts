@@ -554,6 +554,36 @@ export interface WorkbenchModelOption {
   billingMultiplier: number | null;
 }
 
+export interface WorkbenchComposerSettings {
+  agentPath: string | null;
+  agentSource: "library" | "project" | null;
+  harness: WorkbenchHarness;
+  model: string;
+  reasoningEffort: string | null;
+  serviceTier: "fast" | null;
+}
+
+export type WorkbenchComposerProfileScope =
+  | { kind: "global" }
+  | { kind: "project"; projectId: string };
+
+export interface WorkbenchComposerProfile extends WorkbenchComposerSettings {
+  createdAt: number;
+  id: string;
+  name: string;
+  scope: WorkbenchComposerProfileScope;
+  updatedAt: number;
+}
+
+export type WorkbenchComposerProfileSlot =
+  | { kind: "collaboration-runner"; projectId: string }
+  | { kind: "new-thread"; projectId: string }
+  | { harness: WorkbenchHarness; kind: "thread"; threadId: string };
+
+export type WorkbenchComposerProfileSelection =
+  | { kind: "custom"; pendingSettings?: WorkbenchComposerSettings }
+  | { kind: "profile"; profileId: string };
+
 export interface WorkbenchListModelsOptions {
   forceRefresh?: boolean;
 }
@@ -628,6 +658,7 @@ export interface WorkbenchReadThreadOptions {
 
 export interface WorkbenchSendThreadMessageOptions {
   additionalWritableRoots?: string[];
+  composerProfileSlot?: WorkbenchComposerProfileSlot;
   instructionInjections?: Record<string, string>;
   onThreadMaterialized?: (thread: ThreadPayload) => void;
   selectThread?: boolean;
@@ -1095,6 +1126,7 @@ export interface WorkbenchControls {
   setCurrentThreadAgent: (threadId: string, agentPath: string | null) => void;
   setCurrentThreadReasoningEffort: (threadId: string, effort: string | null) => void;
   setCurrentThreadServiceTier: (threadId: string, serviceTier: string | null) => void;
+  setCurrentThreadComposerSettings: (threadId: string, settings: WorkbenchComposerSettings) => void;
   toggleDirectory: (path: string) => void;
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
   setDraftThreadHarness: (harness: WorkbenchHarness) => void;

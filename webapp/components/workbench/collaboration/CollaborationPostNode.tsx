@@ -231,6 +231,7 @@ export default function CollaborationPostNode ({
   onThreadSavedComposerDraftDelete,
   onThreadSavedComposerDraftSave,
   onThreadServiceTierChange,
+  onThreadSettingsChange,
   onListModels,
   onSubmitUserInputRequest,
 }: {
@@ -270,6 +271,7 @@ export default function CollaborationPostNode ({
   onThreadSavedComposerDraftDelete: CollaborationPromptComposerProps["onThreadSavedComposerDraftDelete"];
   onThreadSavedComposerDraftSave: CollaborationPromptComposerProps["onThreadSavedComposerDraftSave"];
   onThreadServiceTierChange: CollaborationPromptComposerProps["onThreadServiceTierChange"];
+  onThreadSettingsChange: CollaborationPromptComposerProps["onThreadSettingsChange"];
   onListModels: CollaborationPromptComposerProps["onListModels"];
   onSubmitUserInputRequest: CollaborationPromptComposerProps["onSubmitUserInputRequest"];
 }) {
@@ -410,6 +412,7 @@ export default function CollaborationPostNode ({
                 onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
                 onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
                 onThreadServiceTierChange={onThreadServiceTierChange}
+                onThreadSettingsChange={onThreadSettingsChange}
               />
             ) : (
               <p className="m-0 px-1 py-4 text-[0.86rem] leading-6 text-muted">Preparing prompt composer...</p>
@@ -579,6 +582,7 @@ export default function CollaborationPostNode ({
                     onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
                     onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
                     onThreadServiceTierChange={onThreadServiceTierChange}
+                    onThreadSettingsChange={onThreadSettingsChange}
                     onListModels={onListModels}
                   />
                 ))}

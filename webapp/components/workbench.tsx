@@ -11,6 +11,7 @@ import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type {
   ExplorerSnapshot, FilePayload, OpenFileInEditorRequest, OrchestratorReloadRequest, OrchestratorReloadResponse, ThreadPayload, ThreadSummary, TreeNode,
   WorkbenchCollaborationState,
+  WorkbenchComposerSettings,
   WorkbenchControls,
   WorkbenchBrowseSessionControlResponse,
   WorkbenchBrowseSessionListResponse,
@@ -72,6 +73,7 @@ import {
   persistHarness,
   readStoredHarness,
 } from "../lib/workbench/state/browser-state";
+import WorkbenchComposerProfileController from "../lib/workbench/state/WorkbenchComposerProfileController";
 import {
   EMPTY_WORKBENCH_THREAD_SIDEBAR_PREFERENCES,
   areWorkbenchThreadSidebarPreferencesEqual,
@@ -121,6 +123,7 @@ import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/threa
 import useThreadActivityTimestamp from "./workbench/thread-view/use-thread-activity-timestamp";
 import WorkbenchCollaborationView from "./workbench/collaboration/WorkbenchCollaborationView";
 import WorkbenchContextMenuProvider, { type WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuProvider";
+import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfileProvider";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
 import WorkbenchMainLayoutView from "./workbench/layout/WorkbenchMainLayoutView";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
@@ -570,6 +573,10 @@ function pruneResolvedUserInputRequestKeys (
 }
 
 export default function Workbench () {
+  const [composerProfileController] = useState(() => new WorkbenchComposerProfileController());
+  useEffect(() => () => {
+    composerProfileController.dispose();
+  }, [composerProfileController]);
   const { navigateToRoute, route } = useWorkbenchRoute();
   const currentRouteRef = useRef<WorkbenchRoute>(route);
   currentRouteRef.current = route;
@@ -1784,6 +1791,9 @@ export default function Workbench () {
       ? {
         ...options,
         onThreadMaterialized: (materializedThread) => {
+          if (options?.composerProfileSlot) {
+            composerProfileController.materializeSelection(options.composerProfileSlot, materializedThread.id, materializedThread.harness);
+          }
           options?.onThreadMaterialized?.(materializedThread);
           replaceCurrentDraftThreadRoute(materializedThread);
         },
@@ -1791,6 +1801,9 @@ export default function Workbench () {
       : options;
     const payload = await controls.sendThreadMessage(thread, input, materializedOptions);
     if (payload) {
+      if (thread.isDraft && options?.composerProfileSlot) {
+        composerProfileController.materializeSelection(options.composerProfileSlot, payload.id, payload.harness);
+      }
       if (thread.isDraft) {
         replaceCurrentDraftThreadRoute(payload);
       }
@@ -1818,7 +1831,7 @@ export default function Workbench () {
     }
 
     return payload;
-  }, [controls, navigateToRoute]);
+  }, [composerProfileController, controls, navigateToRoute]);
 
   const handleThreadComposerDraftChange = useCallback((threadId: string, draft: WorkbenchThreadComposerDraft) => {
     if (!explorer.currentProjectId) {
@@ -1956,6 +1969,14 @@ export default function Workbench () {
   const setThreadAgent = useCallback((threadId: string, agentPath: string | null) => {
     controls?.setCurrentThreadAgent(threadId, agentPath);
   }, [controls]);
+
+  const setThreadComposerSettings = useCallback((threadId: string, settings: WorkbenchComposerSettings) => {
+    if (currentThread?.id === threadId && currentThread.isDraft && currentThread.harness !== settings.harness) {
+      persistHarness(settings.harness);
+      setHarness(settings.harness);
+    }
+    controls?.setCurrentThreadComposerSettings(threadId, settings);
+  }, [controls, currentThread]);
 
   const submitUserInputRequest = useCallback(async (
     threadId: string,
@@ -2954,6 +2975,7 @@ export default function Workbench () {
     try {
       let materializedThreadId = "";
       const payload = await sendThreadMessage(draftThread, input, {
+        composerProfileSlot: { kind: "new-thread", projectId: activeProjectId },
         onThreadMaterialized: (materializedThread) => {
           materializedThreadId = materializedThread.id;
         },
@@ -2978,9 +3000,10 @@ export default function Workbench () {
         status: "failed",
       };
     }
-  }, [controls, sendThreadMessage]);
+  }, [activeProjectId, controls, sendThreadMessage]);
 
   return (
+    <WorkbenchComposerProfileProvider controller={composerProfileController}>
     <WorkbenchContextMenuProvider>
       <div
         className={`relative isolate h-dvh overflow-hidden md:grid md:min-h-screen md:h-auto md:overflow-visible md:items-start${isEffectiveDesktopSidebarCollapsed
@@ -3521,6 +3544,7 @@ export default function Workbench () {
                   onThreadAgentChange={setThreadAgent}
                   onThreadReasoningEffortChange={setThreadReasoningEffort}
                   onThreadServiceTierChange={setThreadServiceTier}
+                  onThreadSettingsChange={setThreadComposerSettings}
                   onThreadModelChange={setThreadModel}
                   onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
                   projectId={activeProjectId}
@@ -3635,6 +3659,7 @@ export default function Workbench () {
                   onThreadAgentChange={setThreadAgent}
                   onThreadReasoningEffortChange={setThreadReasoningEffort}
                   onThreadServiceTierChange={setThreadServiceTier}
+                  onThreadSettingsChange={setThreadComposerSettings}
                   onOpenThreadFromPromptPost={(threadId) => {
                     navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, threadId));
                   }}
@@ -3816,6 +3841,7 @@ export default function Workbench () {
                         onThreadAgentChange={setThreadAgent}
                         onThreadReasoningEffortChange={setThreadReasoningEffort}
                         onThreadServiceTierChange={setThreadServiceTier}
+                        onThreadSettingsChange={setThreadComposerSettings}
                         onThreadModelChange={setThreadModel}
                         onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
                         projectId={activeProjectId}
@@ -4179,5 +4205,6 @@ export default function Workbench () {
       </div>
       </div>
     </WorkbenchContextMenuProvider>
+    </WorkbenchComposerProfileProvider>
   );
 }

@@ -5,9 +5,8 @@
  * - default ThreadAgentPicker: render agent selection, refresh, and return-to-message controls for a thread composer. Keywords: thread, agent, picker, refresh.
  */
 import type { WorkbenchAgentOption } from "../../../lib/types";
-import { PanelCloseIcon, ReloadIcon } from "../workbench-icons";
-
-const pickerIconButtonClassName = "inline-flex size-9 shrink-0 items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] text-muted transition hover:border-[color-mix(in_srgb,var(--text)_18%,transparent)] hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:border-[color-mix(in_srgb,var(--text)_10%,transparent)] disabled:hover:bg-transparent disabled:hover:text-muted";
+import { ReloadIcon } from "../workbench-icons";
+import ThreadComposerPickerHeader from "./ThreadComposerPickerHeader";
 
 export default function ThreadAgentPicker ({
 	agents,
@@ -32,34 +31,16 @@ export default function ThreadAgentPicker ({
 }) {
 	return (
 		<>
-			<div className="flex items-center justify-between gap-3">
-				<div className="shrink-1">
-					<p className="m-0 text-[1.2em] font-semibold text-muted">Choose an agent</p>
-				</div>
-				<div className="flex shrink-0 items-center gap-2 self-start">
-					<button
-						type="button"
-						aria-label={isRefreshing ? "Refreshing agents" : "Refresh agents"}
-						title={isRefreshing ? "Refreshing agents" : "Refresh agents"}
-						className={pickerIconButtonClassName}
-						disabled={isRefreshDisabled}
-						onClick={onRefresh}
-					>
-						<span className={isRefreshing ? "animate-spin [animation-direction:reverse]" : ""}>
-							<ReloadIcon />
-						</span>
-					</button>
-					<button
-						type="button"
-						aria-label="Back to message"
-						title="Back to message"
-						className={pickerIconButtonClassName}
-						onClick={onClose}
-					>
-						<PanelCloseIcon />
-					</button>
-				</div>
-			</div>
+			<ThreadComposerPickerHeader
+				actions={[{
+					disabled: isRefreshDisabled,
+					icon: <span className={isRefreshing ? "animate-spin [animation-direction:reverse]" : ""}><ReloadIcon /></span>,
+					label: isRefreshing ? "Refreshing agents" : "Refresh agents",
+					onClick: onRefresh,
+				}]}
+				onClose={onClose}
+				title="Choose an agent"
+			/>
 			{error ? (
 				<p className="mt-3 mb-0 text-[0.84em] leading-[1.6] text-danger">{error}</p>
 			) : null}

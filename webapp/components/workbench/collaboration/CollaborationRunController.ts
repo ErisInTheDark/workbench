@@ -16,6 +16,8 @@ import type {
   ThreadPayload,
   ThreadSummary,
   WorkbenchCollaborationState,
+  WorkbenchComposerProfileSlot,
+  WorkbenchComposerSettings,
   WorkbenchControls,
   WorkbenchHarness,
   WorkbenchPendingUserInputRequest,
@@ -33,6 +35,7 @@ import {
   writeWorkbenchCollaborationState,
 } from "../../../lib/workbench/collaboration/collaboration-registry-api";
 import ActiveTabRefreshLeader from "../../../lib/workbench/state/ActiveTabRefreshLeader";
+import type WorkbenchComposerProfileController from "../../../lib/workbench/state/WorkbenchComposerProfileController";
 import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
 
 const COLLABORATOR_THREAD_HYDRATION: WorkbenchReadThreadOptions["hydration"] = { mode: "legacyFull" };
@@ -45,6 +48,7 @@ export type CollaboratorRunStatus = "failed" | "hydrating" | "idle" | "running" 
 export interface CollaborationRunControllerOptions {
   collaborationState: WorkbenchCollaborationState;
   collaborationThreadSummaries: readonly ThreadSummary[];
+  composerProfileController: WorkbenchComposerProfileController;
   controls: WorkbenchControls | null;
   getCurrentCollaborationState: () => WorkbenchCollaborationState;
   harness: WorkbenchHarness;
@@ -95,6 +99,7 @@ export interface CollaborationRunControllerState {
   setCollaboratorDraftModel: (threadId: string, model: string) => void;
   setCollaboratorDraftReasoningEffort: (threadId: string, reasoningEffort: string | null) => void;
   setCollaboratorDraftServiceTier: (threadId: string, serviceTier: string | null) => void;
+  setCollaboratorDraftSettings: (threadId: string, settings: WorkbenchComposerSettings) => void;
   startCollaboratorRun: () => Promise<void>;
   stopRunThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   pauseRunThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
@@ -226,6 +231,7 @@ function updateDraftThread(
 export default function CollaborationRunController({
   collaborationState,
   collaborationThreadSummaries,
+  composerProfileController,
   controls,
   getCurrentCollaborationState,
   harness,
@@ -302,6 +308,11 @@ export default function CollaborationRunController({
     ),
   );
   const collaboratorDraftHasContent = Boolean(collaboratorDraftComposerDraft?.text.trim() || collaboratorDraftComposerDraft?.attachments.length);
+  const collaboratorProfileSlot: WorkbenchComposerProfileSlot = { kind: "collaboration-runner", projectId };
+  const collaboratorProfileSelection = composerProfileController.getSelection(collaboratorProfileSlot);
+  const resolvedCollaboratorDraftThread = collaboratorDraftThread
+    ? composerProfileController.resolveThread(collaboratorProfileSlot, collaboratorDraftThread)
+    : null;
   const autoWakeCountdownMs = pendingAutoWakeActivityAt === null
     ? null
     : Math.max(0, pendingAutoWakeActivityAt + WORKBENCH_COLLABORATION_AUTO_WAKE_DELAY_MS - autoWakeNow);
@@ -471,6 +482,22 @@ export default function CollaborationRunController({
       : createCollaboratorDraftThread());
   }, [controls, createCollaboratorDraftThread, projectId]);
 
+  useEffect(() => {
+    if (!collaboratorDraftThread || collaboratorProfileSelection.kind !== "custom" || !collaboratorProfileSelection.pendingSettings) {
+      return;
+    }
+    const settings = collaboratorProfileSelection.pendingSettings;
+    setCollaboratorDraftThread((current) => current ? ({
+      ...current,
+      agentPath: settings.agentPath,
+      harness: settings.harness,
+      model: settings.model,
+      reasoningEffort: settings.reasoningEffort,
+      serviceTier: settings.serviceTier,
+    }) : current);
+    composerProfileController.acknowledgePendingSettings(collaboratorProfileSlot);
+  }, [collaboratorDraftThread, collaboratorProfileSelection, composerProfileController, projectId]);
+
   const sendCollaboratorRun = useCallback(async (
     thread: ThreadPayload,
     options: {
@@ -506,6 +533,7 @@ export default function CollaborationRunController({
       : [createTextInput("Run the collaborator workflow with the injected Collaboration context.")];
     const sendOptions: WorkbenchSendThreadMessageOptions = {
       additionalWritableRoots: scratchpadWritableRoot ? [scratchpadWritableRoot] : [],
+      composerProfileSlot: collaboratorProfileSlot,
       instructionInjections,
       onThreadMaterialized: (materializedThread) => {
         rememberCollaboratorThread(materializedThread, { replaceThreadId: options.replaceThreadId });
@@ -555,7 +583,7 @@ export default function CollaborationRunController({
       return;
     }
 
-    const settingsThread = collaboratorDraftThread ?? createCollaboratorDraftThread();
+    const settingsThread = resolvedCollaboratorDraftThread ?? createCollaboratorDraftThread();
     if (!settingsThread) {
       setCollaboratorError("Collaborator draft is not ready.");
       return;
@@ -574,7 +602,7 @@ export default function CollaborationRunController({
       setCollaboratorDraftThread(createCollaboratorDraftThread(settingsThread));
       setCollaboratorDraftComposerDraftState(null);
     }
-  }, [collaboratorDraftThread, controls, createCollaboratorDraftThread, rememberCollaboratorThread, sendCollaboratorRun]);
+  }, [controls, createCollaboratorDraftThread, rememberCollaboratorThread, resolvedCollaboratorDraftThread, sendCollaboratorRun]);
 
   useEffect(() => {
     const leader = new ActiveTabRefreshLeader({
@@ -660,6 +688,10 @@ export default function CollaborationRunController({
       return;
     }
 
+    if (resolvedCollaboratorDraftThread?.model && collaboratorProfileSelection.kind === "profile") {
+      setCollaboratorDraftThread({ ...resolvedCollaboratorDraftThread });
+      composerProfileController.selectCustom(collaboratorProfileSlot);
+    }
     setCollaboratorDraftThread((current) => {
       const currentHarness = current?.harness ?? harness;
       const currentIndex = THREAD_HARNESSES.indexOf(currentHarness);
@@ -670,14 +702,14 @@ export default function CollaborationRunController({
         threadId: createDraftCollaboratorThreadId(projectId),
       });
     });
-  }, [controls, harness, projectId]);
+  }, [collaboratorProfileSelection.kind, composerProfileController, controls, harness, projectId, resolvedCollaboratorDraftThread]);
 
   const sendComposerMessage = useCallback(async (threadId: string, input: UserInput[]) => {
     if (!collaboratorDraftThread || threadId !== collaboratorDraftThread.id) {
       throw new Error("Collaborator draft is not ready.");
     }
 
-    const draftThread = createCollaboratorDraftThread(collaboratorDraftThread);
+    const draftThread = createCollaboratorDraftThread(resolvedCollaboratorDraftThread);
     if (!draftThread) {
       throw new Error("Collaborator draft is not ready.");
     }
@@ -690,7 +722,7 @@ export default function CollaborationRunController({
     });
     setCollaboratorDraftThread(createCollaboratorDraftThread(collaboratorDraftThread));
     setCollaboratorDraftComposerDraftState(null);
-  }, [collaboratorDraftThread, createCollaboratorDraftThread, rememberCollaboratorThread, sendCollaboratorRun]);
+  }, [collaboratorDraftThread, createCollaboratorDraftThread, rememberCollaboratorThread, resolvedCollaboratorDraftThread, sendCollaboratorRun]);
 
   const sendRunMessage = useCallback(async (
     thread: ThreadPayload,
@@ -740,7 +772,7 @@ export default function CollaborationRunController({
     autoWakeProgressPercent,
     canContinueSelectedRunThread,
     collaboratorDraftComposerDraft,
-    collaboratorDraftThread,
+    collaboratorDraftThread: resolvedCollaboratorDraftThread,
     collaboratorError,
     collaboratorStatus,
     collaboratorStatusLabel,
@@ -786,6 +818,16 @@ export default function CollaborationRunController({
     },
     setCollaboratorDraftServiceTier: (threadId, serviceTier) => {
       updateDraftThread(threadId, setCollaboratorDraftThread, (thread) => ({ ...thread, serviceTier }));
+    },
+    setCollaboratorDraftSettings: (threadId, settings) => {
+      updateDraftThread(threadId, setCollaboratorDraftThread, (thread) => ({
+        ...thread,
+        agentPath: settings.agentPath,
+        harness: settings.harness,
+        model: settings.model,
+        reasoningEffort: settings.reasoningEffort,
+        serviceTier: settings.serviceTier,
+      }));
     },
     startCollaboratorRun,
     stopRunThread,

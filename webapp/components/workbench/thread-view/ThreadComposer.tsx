@@ -14,6 +14,8 @@ import { getCurrentInProgressTurn, hasStaleApprovalState, isCurrentTurnWaitingOn
 import type {
   ThreadPayload,
   WorkbenchAgentOption,
+  WorkbenchComposerProfileSlot,
+  WorkbenchComposerSettings,
   WorkbenchListModelsOptions,
   WorkbenchModelOption,
   WorkbenchPendingUserInputRequest,
@@ -45,9 +47,12 @@ import ChevronIcon from "../ChevronIcon";
 import { PauseIcon, PlayIcon, StopIcon } from "../workbench-icons";
 import PlaintextEditable, { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./PlaintextEditable";
 import ThreadAgentPicker from "./ThreadAgentPicker";
+import ThreadComposerRibbon from "./ThreadComposerRibbon";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 import ThreadModelPicker from "./ThreadModelPicker";
+import ThreadProfilePicker from "./ThreadProfilePicker";
 import ThreadUserInputRequest, { getThreadUserInputRequestPreviewText } from "./ThreadUserInputRequest";
+import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileProvider";
 
 const PICKER_REFRESH_COOLDOWN_MS = 1500;
 const PICKER_REFRESH_MIN_SPIN_MS = 500;
@@ -82,17 +87,6 @@ function isCollapsedPreviewInteractiveTarget (
 
   const interactiveTarget = target.closest("button,a,input,textarea,select,[contenteditable='true']");
   return Boolean(interactiveTarget && interactiveTarget !== currentTarget);
-}
-
-function LightningBoltIcon () {
-  return (
-    <svg viewBox="0 0 20 20" className="h-4.5 w-4.5" aria-hidden="true">
-      <path
-        d="M11.25 1.9L4.75 10.7h4.55l-.75 7.4 6.7-9h-4.65l.65-7.2z"
-        fill="currentColor"
-      />
-    </svg>
-  );
 }
 
 function ArchiveTrayIcon () {
@@ -386,10 +380,12 @@ export default function ThreadComposer ({
   onThreadAgentChange,
   onThreadReasoningEffortChange,
   onThreadServiceTierChange,
+  onThreadSettingsChange,
   onThreadModelChange,
   pendingUserInputRequest,
   projectId,
   projectRootPath,
+  profileSlot,
   workspaceRoots,
   rateLimits,
   autoExpandSavedDraftShelf = true,
@@ -432,10 +428,12 @@ export default function ThreadComposer ({
   onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
   onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
   onThreadServiceTierChange: (threadId: string, serviceTier: string | null) => void;
+  onThreadSettingsChange?: (threadId: string, settings: WorkbenchComposerSettings) => void;
   onThreadModelChange: (threadId: string, model: string) => void;
   pendingUserInputRequest: WorkbenchPendingUserInputRequest | null;
   projectId: string;
   projectRootPath: string;
+  profileSlot?: WorkbenchComposerProfileSlot;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
   rateLimits: RateLimitSnapshot | null;
   autoExpandSavedDraftShelf?: boolean;
@@ -454,6 +452,7 @@ export default function ThreadComposer ({
   highlightSources: InlineMentionHighlightSources;
   thread: ThreadPayload;
 }) {
+  const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const [value, setValue] = useState(threadComposerDraft?.text ?? "");
   const [attachments, setAttachments] = useState<ComposerImageAttachment[]>(threadComposerDraft?.attachments ?? []);
   const [availableModels, setAvailableModels] = useState<WorkbenchModelOption[]>([]);
@@ -463,7 +462,7 @@ export default function ThreadComposer ({
     copilot: [],
     opencode: [],
   });
-  const [activePicker, setActivePicker] = useState<"agent" | "model" | null>(null);
+  const [activePicker, setActivePicker] = useState<"agent" | "model" | "profile" | null>(null);
   const [error, setError] = useState("");
   const [isComposing, setIsComposing] = useState(false);
   const [isLoadingAgents, setIsLoadingAgents] = useState(false);
@@ -574,6 +573,7 @@ export default function ThreadComposer ({
   const isFastModeEnabled = thread.serviceTier === "fast";
   const isAgentPickerOpen = showsThreadControls && activePicker === "agent";
   const isModelPickerOpen = showsThreadControls && activePicker === "model";
+  const isProfilePickerOpen = showsThreadControls && activePicker === "profile";
   const isPickerOpen = activePicker !== null;
   const composerPlaceholder = isCommentMode
     ? "Write a comment..."
@@ -591,6 +591,22 @@ export default function ThreadComposer ({
   const agentButtonLabel = selectedAgent?.name
     ?? getWorkbenchAgentPathLabel(thread.agentPath)
     ?? "Default agent";
+  const profileSelection = profileSlot
+    ? composerProfileController.getSelection(profileSlot)
+    : { kind: "custom" } as const;
+  const selectedProfile = profileSelection.kind === "profile"
+    ? composerProfileController.getProfile(profileSelection.profileId)
+    : null;
+  const profileButtonLabel = selectedProfile?.name ?? "Custom";
+  const currentComposerSettings: WorkbenchComposerSettings = {
+    agentPath: thread.agentPath,
+    agentSource: selectedAgent?.source ?? null,
+    harness: thread.harness,
+    model: selectedModel ?? modelOptionForControls?.id ?? "",
+    reasoningEffort: currentReasoningEffort,
+    serviceTier: isFastModeEnabled ? "fast" : null,
+  };
+  void composerProfileSnapshot;
   const deprioritizedModelIds = deprioritizedModelIdsByHarness[thread.harness] ?? [];
   const loadAvailableAgents = useCallback((options: { clearBeforeLoad?: boolean } = {}): Promise<void> => {
     const generation = agentLoadGenerationRef.current + 1;
@@ -1191,6 +1207,19 @@ export default function ThreadComposer ({
     })();
   };
 
+  const applyDirectSettingsChange = (
+    nextSettings: WorkbenchComposerSettings,
+    applyCustomChange: () => void,
+  ) => {
+    if (profileSelection.kind === "profile" && profileSlot && onThreadSettingsChange) {
+      onThreadSettingsChange(thread.id, nextSettings);
+      composerProfileController.selectCustom(profileSlot);
+      return;
+    }
+
+    applyCustomChange();
+  };
+
   const cycleReasoningEffort = (direction: 1 | -1) => {
     if (!supportedReasoningEfforts.length || !currentReasoningEffort) {
       return;
@@ -1199,7 +1228,11 @@ export default function ThreadComposer ({
     const currentIndex = supportedReasoningEfforts.indexOf(currentReasoningEffort);
     const baseIndex = currentIndex >= 0 ? currentIndex : 0;
     const nextIndex = (baseIndex + direction + supportedReasoningEfforts.length) % supportedReasoningEfforts.length;
-    onThreadReasoningEffortChange(thread.id, supportedReasoningEfforts[nextIndex] ?? null);
+    const nextEffort = supportedReasoningEfforts[nextIndex] ?? null;
+    applyDirectSettingsChange(
+      { ...currentComposerSettings, reasoningEffort: nextEffort },
+      () => onThreadReasoningEffortChange(thread.id, nextEffort),
+    );
   };
 
   const pauseButton = showStopButton || hiddenPauseRequest || isPauseRequestPending ? (
@@ -1322,7 +1355,7 @@ export default function ThreadComposer ({
   const stickyHostStyle = stickyExpandedHeightPx > 0
     ? { "--thread-composer-expanded-height": `${stickyExpandedHeightPx}px` } as CSSProperties
     : undefined;
-  const showComposerControlRow = !showQuestionnairePanel && !isModelPickerOpen && !isAgentPickerOpen;
+  const showComposerControlRow = !showQuestionnairePanel && !isModelPickerOpen && !isAgentPickerOpen && !isProfilePickerOpen;
   const hasNormalComposerSupplementalContent = attachments.length > 0 || Boolean(helperText);
   const activeComposerMode = showQuestionnairePanel
     ? "questionnaire"
@@ -1330,11 +1363,14 @@ export default function ThreadComposer ({
       ? "model"
       : isAgentPickerOpen
         ? "agent"
+        : isProfilePickerOpen
+          ? "profile"
         : "composer";
   const isComposerPanelActive = activeComposerMode === "composer";
   const isQuestionnairePanelActive = activeComposerMode === "questionnaire";
   const isModelPickerPanelActive = activeComposerMode === "model";
   const isAgentPickerPanelActive = activeComposerMode === "agent";
+  const isProfilePickerPanelActive = activeComposerMode === "profile";
   const composerForm = (
       <form
         className={joinClasses(
@@ -1486,68 +1522,27 @@ export default function ThreadComposer ({
                       </button>
                     ) : null}
                     {showsThreadControls ? (
-                    <div className="inline-flex items-stretch overflow-hidden rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-[0.78em] font-medium text-text">
-                      <button
-                        type="button"
-                        className="px-3 py-2 transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
-                        onClick={() => {
-                          setActivePicker("model");
-                        }}
-                      >
-                        {modelButtonLabel}
-                      </button>
-                      {showsReasoningEffortControl ? (
-                        <>
-                          <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
-                          <button
-                            type="button"
-                            className="px-2.5 py-2 capitalize transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
-                            title="Left click to increase effort. Right click to decrease effort."
-                            onClick={() => {
-                              cycleReasoningEffort(1);
-                            }}
-                            onContextMenu={(event) => {
-                              event.preventDefault();
-                              cycleReasoningEffort(-1);
-                            }}
-                          >
-                            {currentReasoningEffort}
-                          </button>
-                        </>
-                      ) : null}
-                      {showsFastModeControl ? (
-                        <>
-                          <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
-                          <button
-                            type="button"
-                            aria-label={isFastModeEnabled ? "Turn fast mode off" : "Turn fast mode on"}
-                            aria-pressed={isFastModeEnabled}
-                            className={joinClasses(
-                              "inline-flex items-center justify-center px-2.5 py-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft",
-                              isFastModeEnabled
-                                ? "text-text hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)]"
-                                : "text-muted opacity-40 hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:opacity-65",
-                            )}
-                            title={isFastModeEnabled ? "Fast mode is on" : "Fast mode is off"}
-                            onClick={() => {
-                              onThreadServiceTierChange(thread.id, isFastModeEnabled ? null : "fast");
-                            }}
-                          >
-                            <LightningBoltIcon />
-                          </button>
-                        </>
-                      ) : null}
-                      <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
-                      <button
-                        type="button"
-                        className="px-3 py-2 transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
-                        onClick={() => {
-                          setActivePicker("agent");
-                        }}
-                      >
-                        {agentButtonLabel}
-                      </button>
-                    </div>
+                    <ThreadComposerRibbon
+                      agentLabel={agentButtonLabel}
+                      currentReasoningEffort={currentReasoningEffort}
+                      isFastModeEnabled={isFastModeEnabled}
+                      isProfilePanelOpen={isProfilePickerOpen}
+                      modelLabel={modelButtonLabel}
+                      profileLabel={profileButtonLabel}
+                      showsFastModeControl={showsFastModeControl}
+                      showsReasoningEffortControl={showsReasoningEffortControl}
+                      onAgentOpen={() => setActivePicker("agent")}
+                      onFastModeToggle={() => {
+                        const serviceTier = isFastModeEnabled ? null : "fast";
+                        applyDirectSettingsChange(
+                          { ...currentComposerSettings, serviceTier },
+                          () => onThreadServiceTierChange(thread.id, serviceTier),
+                        );
+                      }}
+                      onModelOpen={() => setActivePicker("model")}
+                      onProfileOpen={() => setActivePicker((current) => current === "profile" ? null : "profile")}
+                      onReasoningEffortCycle={cycleReasoningEffort}
+                    />
                     ) : null}
                     {leadingActions}
                     <PrimaryButton
@@ -1587,10 +1582,20 @@ export default function ThreadComposer ({
                     }}
                     onRefresh={refreshAvailableModels}
                     onSelectModel={(model) => {
-                      onThreadModelChange(thread.id, model.id);
-                      if (!model.supportsFastMode && isFastModeEnabled) {
-                        onThreadServiceTierChange(thread.id, null);
-                      }
+                      const nextSettings: WorkbenchComposerSettings = {
+                        ...currentComposerSettings,
+                        model: model.id,
+                        reasoningEffort: model.supportsReasoningEffort
+                          ? model.defaultReasoningEffort ?? model.supportedReasoningEfforts[0] ?? null
+                          : null,
+                        serviceTier: model.supportsFastMode ? currentComposerSettings.serviceTier : null,
+                      };
+                      applyDirectSettingsChange(nextSettings, () => {
+                        onThreadModelChange(thread.id, model.id);
+                        if (!model.supportsFastMode && isFastModeEnabled) {
+                          onThreadServiceTierChange(thread.id, null);
+                        }
+                      });
                       setModelsError("");
                       setActivePicker(null);
                     }}
@@ -1627,10 +1632,42 @@ export default function ThreadComposer ({
                     }}
                     onRefresh={refreshAvailableAgents}
                     onSelectAgent={(agentPath) => {
-                      onThreadAgentChange(thread.id, agentPath);
+                      const agent = availableAgents.find((candidate) => areWorkbenchAgentPathsEqual(candidate.path, agentPath)) ?? null;
+                      applyDirectSettingsChange(
+                        { ...currentComposerSettings, agentPath, agentSource: agent?.source ?? null },
+                        () => onThreadAgentChange(thread.id, agentPath),
+                      );
                       setActivePicker(null);
                     }}
                   />
+                </div>
+                <div
+                  aria-hidden={!isProfilePickerPanelActive}
+                  className="thread-composer-mode-panel"
+                  data-active={isProfilePickerPanelActive ? "true" : "false"}
+                  inert={!isProfilePickerPanelActive}
+                >
+                  {profileSlot ? (
+                    <ThreadProfilePicker
+                      agents={availableAgents}
+                      agentsError={agentsError}
+                      currentSettings={currentComposerSettings}
+                      deprioritizedModelIds={deprioritizedModelIds}
+                      isAgentRefreshDisabled={isLoadingAgents || isAgentRefreshPending || isAgentRefreshCoolingDown}
+                      isAgentRefreshing={isAgentRefreshPending}
+                      isLoadingAgents={isLoadingAgents}
+                      isLoadingModels={isLoadingModels}
+                      isModelRefreshDisabled={isLoadingModels || isModelRefreshPending || isModelRefreshCoolingDown}
+                      isModelRefreshing={isModelRefreshPending}
+                      models={availableModels}
+                      modelsError={modelsError}
+                      projectId={projectId}
+                      slot={profileSlot}
+                      onClose={() => setActivePicker(null)}
+                      onRefreshAgents={refreshAvailableAgents}
+                      onRefreshModels={refreshAvailableModels}
+                    />
+                  ) : null}
                 </div>
               </>
             ) : null}

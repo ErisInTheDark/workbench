@@ -11,6 +11,7 @@
  * - PanelCloseIcon: render the mosaic panel close control. Keywords: workbench, icon, panel, close.
  * - GearIcon: render the settings navigation icon. Keywords: workbench, icon, settings.
  * - CollaborationIcon: render the collaboration navigation icon. Keywords: workbench, icon, collaboration.
+ * - BlocksIcon: render the Lucide-style composer profile control icon. Keywords: workbench, icon, composer, profile, blocks.
  * - BrowserSessionIcon: render the Browse session sidebar icon. Keywords: workbench, icon, browse, session.
  * - ReloadIcon: render the local runtime reload icon. Keywords: workbench, icon, reload.
  * - StopIcon/PauseIcon/PlayIcon/ClockIcon/WarningIcon: render shared thread turn and command-status icons. Keywords: workbench, icon, thread, stop, pause, play, progress.
@@ -211,6 +212,15 @@ export function CollaborationIcon () {
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
       <path d="M4.25 4.75H15.75V13.25H8.25L4.25 16.25V4.75Z" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M7.25 8H12.75M7.25 10.5H10.75" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function BlocksIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10 22V7a1 1 0 0 0-1-1H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5a1 1 0 0 0-1-1H2" />
+      <rect x="14" y="2" width="8" height="8" rx="1" />
     </svg>
   );
 }

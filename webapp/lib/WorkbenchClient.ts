@@ -783,6 +783,9 @@ export async function WorkbenchClient(
     setCurrentThreadAgent: (threadId, agentPath) => {
       threadClient.setCurrentThreadAgent(threadId, agentPath);
     },
+    setCurrentThreadComposerSettings: (threadId, settings) => {
+      threadClient.setCurrentThreadComposerSettings(threadId, settings);
+    },
     setCurrentThreadReasoningEffort: (threadId, effort) => {
       threadClient.setCurrentThreadReasoningEffort(threadId, effort);
     },

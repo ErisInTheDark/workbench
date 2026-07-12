@@ -48,6 +48,7 @@ import type {
     ThreadSummary,
     WorkbenchBrowseResultEntry,
     WorkbenchCollaborationState,
+    WorkbenchComposerSettings,
     WorkbenchHarness,
     WorkbenchListModelsOptions,
     WorkbenchModelOption,
@@ -218,6 +219,7 @@ interface WorkbenchThreadClient {
     options?: WorkbenchSubmitUserInputRequestOptions,
   ) => Promise<void>;
   setCurrentThreadAgent: (threadId: string, agentPath: string | null) => void;
+  setCurrentThreadComposerSettings: (threadId: string, settings: WorkbenchComposerSettings) => void;
   setCurrentThreadModel: (threadId: string, model: string) => void;
   setCurrentThreadReasoningEffort: (threadId: string, effort: string | null) => void;
   setCurrentThreadServiceTier: (threadId: string, serviceTier: string | null) => void;
@@ -4735,6 +4737,23 @@ function WorkbenchThreadClient(
     updateThreadSourceFields(state.currentThread, { serviceTier: nextServiceTier });
   }
 
+  function setCurrentThreadComposerSettings(threadId: string, settings: WorkbenchComposerSettings) {
+    if (!state.currentThread || state.currentThread.id !== threadId) {
+      return;
+    }
+    if (!state.currentThread.isDraft && state.currentThread.harness !== settings.harness) {
+      return;
+    }
+
+    if (state.currentThread.isDraft && state.currentThread.harness !== settings.harness) {
+      setDraftThreadHarness(settings.harness);
+    }
+    setCurrentThreadModel(threadId, settings.model);
+    setCurrentThreadReasoningEffort(threadId, settings.reasoningEffort);
+    setCurrentThreadAgent(threadId, settings.agentPath);
+    setCurrentThreadServiceTier(threadId, settings.serviceTier);
+  }
+
   function setDraftThreadHarness(harness: WorkbenchHarness) {
     if (!state.currentThread?.isDraft) {
       return;
@@ -4792,6 +4811,7 @@ function WorkbenchThreadClient(
     stopThread,
     submitPendingUserInputRequest,
     setCurrentThreadAgent,
+    setCurrentThreadComposerSettings,
     setCurrentThreadModel,
     setCurrentThreadReasoningEffort,
     setCurrentThreadServiceTier,
