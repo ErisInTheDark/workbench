@@ -760,6 +760,7 @@ function readPowerShellNumericValue(parsedStage: ParsedPowerShellStage, flag: st
 function getPowerShellPositionalArguments(parsedStage: ParsedPowerShellStage) {
   const argumentsList: string[] = [];
   const consumingFlags = getPowerShellValueFlags(parsedStage.commandName);
+  const flagsAreCaseSensitive = matchesRipgrepCommand(parsedStage);
 
   for (let index = 1; index < parsedStage.tokens.length; index += 1) {
     const token = parsedStage.tokens[index];
@@ -773,7 +774,8 @@ function getPowerShellPositionalArguments(parsedStage: ParsedPowerShellStage) {
     }
 
     const nextToken = parsedStage.tokens[index + 1];
-    if (consumingFlags.has(token.toLowerCase()) && nextToken && !nextToken.startsWith("-")) {
+    const consumingFlag = flagsAreCaseSensitive ? token : token.toLowerCase();
+    if (consumingFlags.has(consumingFlag) && nextToken && !nextToken.startsWith("-")) {
       index += 1;
     }
   }
