@@ -51,6 +51,7 @@ import {
 import ThreadAgentName from "./ThreadAgentName";
 import ThreadCheckpointDiffItem from "./ThreadCheckpointDiffItem";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
+import ThreadCommandDetails from "./ThreadCommandDetails";
 import ThreadContextCompactionItem from "./ThreadContextCompactionItem";
 import ThreadContextCommandItem from "./ThreadContextCommandItem";
 import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
@@ -1712,10 +1713,11 @@ function ThreadCommandExecutionDetails ({
   const checkpointDiffArtifactId = isGitCheckpointDiffMatcherClaim(commandDisplay.claimedBy)
     ? parseGitCheckpointDiffArtifactId(item.aggregatedOutput ?? "")
     : null;
+  const isBrowseCommand = isBrowseCommandMatcherClaim(commandDisplay.claimedBy);
   const shouldRenderCheckpointDiff = checkpointDiffChanges !== null
     && (!item.aggregatedOutput?.trim() || Boolean(checkpointDiffArtifactId) || checkpointDiffChanges.length > 0);
   const commandDetailRows = useMemo(() => (
-    isBrowseCommandMatcherClaim(commandDisplay.claimedBy)
+    isBrowseCommand
       ? mergeCommandDetailRowsWithBrowseOutput(
         commandDisplay.detailRows,
         item.aggregatedOutput,
@@ -1723,7 +1725,7 @@ function ThreadCommandExecutionDetails ({
         item.status,
       )
       : commandDisplay.detailRows ?? []
-  ), [browseResultEntries, commandDisplay.claimedBy, commandDisplay.detailRows, item.aggregatedOutput, item.id, item.status]);
+  ), [browseResultEntries, commandDisplay.detailRows, isBrowseCommand, item.aggregatedOutput, item.id, item.status]);
   const shouldHideCommandOutput = commandDisplay.hideCommandOutput
     && (commandDetailRows.length > 0 || !item.aggregatedOutput?.trim());
   const metaParts = [];
@@ -1795,7 +1797,12 @@ function ThreadCommandExecutionDetails ({
             projectId={projectId}
           />
         ) : null}
-        {shouldHideCommandOutput ? null : shouldRenderCheckpointDiff ? (
+        {isBrowseCommand ? (
+          <ThreadCommandDetails
+            command={item.command}
+            output={item.aggregatedOutput}
+          />
+        ) : shouldHideCommandOutput ? null : shouldRenderCheckpointDiff ? (
           <ThreadCheckpointDiffItem
             cwd={item.cwd}
             output={item.aggregatedOutput ?? ""}
