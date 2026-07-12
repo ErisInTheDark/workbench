@@ -440,11 +440,11 @@ function buildWorkbenchOrchestratorReloadInstructions(context: WorkbenchPromptCo
 
 Workbench exposes reload scopes only through the allowlisted \`wb orchestrator reload\` command. Add any required scopes as independent switches in one invocation:
 
-\`wb orchestrator reload [--orchestrator-logic] [--codex-bridge] [--opencode-bridge] [--opencode-server] [--next-dev]\`
+\`wb orchestrator reload [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--opencode-bridge] [--opencode-server] [--next-dev]\`
 
 At least one switch is required. The command waits for terminal reload status and tolerates the temporary connection loss caused by \`--next-dev\`.
 
-Reloads preserve lifecycle ownership: \`--codex-bridge\` reloads bridge-side code without restarting the stable Codex app-server; \`--opencode-server\` explicitly restarts the managed OpenCode server; \`--next-dev\` restarts Next.js. Do not request broader scopes than the work requires.
+Reloads preserve lifecycle ownership: \`--browse-controller\` drains and reloads orchestrator-owned Browse execution without restarting browser sessions; \`--codex-bridge\` reloads bridge-side code without restarting the stable Codex app-server; \`--opencode-server\` explicitly restarts the managed OpenCode server; \`--next-dev\` restarts Next.js. Do not request broader scopes than the work requires.
 `.trim();
 }
 

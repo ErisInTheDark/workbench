@@ -53,13 +53,13 @@ export default class WorkbenchBrowseSessionController {
     this.registry = registry;
   }
 
-  async cleanupStaleInactiveSessions({
+  async findStaleInactiveSessionStops({
     olderThanMs,
     readThreadActive,
   }: {
     olderThanMs: number;
     readThreadActive: (threadId: string) => Promise<boolean | null>;
-  }) {
+  }): Promise<WorkbenchBrowseSessionControlRequest[]> {
     const threadIds = await this.registry.listOwnedThreadIds();
     for (const threadId of threadIds) {
       const active = await readThreadActive(threadId);
@@ -77,19 +77,15 @@ export default class WorkbenchBrowseSessionController {
     const staleSessions = await this.registry.listStaleInactiveSessions({
       olderThanMs,
     });
-    for (const session of staleSessions) {
-      if (!session.threadId) {
-        continue;
-      }
-
-      await this.stopSession({
+    return staleSessions.flatMap((session) => session.threadId
+      ? [{
         action: "stop",
         force: true,
         projectId: session.projectId,
         session: session.name,
         threadId: session.threadId,
-      });
-    }
+      } satisfies WorkbenchBrowseSessionControlRequest]
+      : []);
   }
 
   async cleanupThreadSessions({
@@ -106,7 +102,7 @@ export default class WorkbenchBrowseSessionController {
     sessions: string[] | null;
     threadId: string;
     timeoutMs?: number | null;
-  }): Promise<WorkbenchBrowseAgentResponse> {
+  }, signal?: AbortSignal): Promise<WorkbenchBrowseAgentResponse> {
     const startedAt = Date.now();
     const registeredSessions = sessions ?? (await this.registry.listByThreadId(threadId)).map((session) => session.name);
     const sessionNames = [...new Set(registeredSessions)];
@@ -121,7 +117,7 @@ export default class WorkbenchBrowseSessionController {
         session,
         threadId,
         timeoutMs: timeoutMs ?? null,
-      });
+    }, signal);
       if (result.result) {
         cleanupResults.push(result.result);
       }
@@ -161,7 +157,7 @@ export default class WorkbenchBrowseSessionController {
     session: string;
     threadId: string;
     timeoutMs?: number | null;
-  }): Promise<WorkbenchBrowseAgentResponse> {
+  }, signal?: AbortSignal): Promise<WorkbenchBrowseAgentResponse> {
     if (!isValidSessionName(session)) {
       throw new Error("Browse session name is invalid.");
     }
@@ -175,7 +171,7 @@ export default class WorkbenchBrowseSessionController {
       session,
       threadId,
       timeoutMs: timeoutMs ?? null,
-    });
+    }, signal);
     if (stopResult.result && !stopResult.result.ok) {
       return {
         action: "forget",
@@ -206,7 +202,7 @@ export default class WorkbenchBrowseSessionController {
     };
   }
 
-  async listSessions(request: WorkbenchBrowseSessionListRequest): Promise<WorkbenchBrowseSessionListResponse> {
+  async listSessions(request: WorkbenchBrowseSessionListRequest, signal?: AbortSignal): Promise<WorkbenchBrowseSessionListResponse> {
     const executionContext = await this.cli.resolveExecutionContext({
       cwd: request.cwd ?? null,
       projectId: request.projectId ?? null,
@@ -229,7 +225,7 @@ export default class WorkbenchBrowseSessionController {
         cwd: request.cwd ?? null,
         projectId: request.projectId ?? executionContext.projectId,
         threadId: request.threadId ?? null,
-      }, runtimeSessionNames.includes(sessionName))
+      }, runtimeSessionNames.includes(sessionName), signal)
     )));
 
     return {
@@ -264,7 +260,7 @@ export default class WorkbenchBrowseSessionController {
     });
   }
 
-  async stopSession(request: WorkbenchBrowseSessionControlRequest): Promise<WorkbenchBrowseSessionControlResponse> {
+  async stopSession(request: WorkbenchBrowseSessionControlRequest, signal?: AbortSignal): Promise<WorkbenchBrowseSessionControlResponse> {
     if (!isValidSessionName(request.session)) {
       throw new Error("Browse session name is invalid.");
     }
@@ -297,7 +293,7 @@ export default class WorkbenchBrowseSessionController {
       projectId: request.projectId ?? projectContext.projectId,
       threadId: request.threadId ?? existing?.threadId ?? "browse-session-ui",
       timeoutMs: request.timeoutMs ?? DEFAULT_BROWSE_TIMEOUT_MS,
-    });
+    }, signal);
     if (result.ok) {
       await this.registry.forget(request.session);
     }
@@ -310,7 +306,7 @@ export default class WorkbenchBrowseSessionController {
           cwd: request.cwd ?? null,
           projectId: request.projectId ?? projectContext.projectId,
           threadId: request.threadId ?? existing?.threadId ?? null,
-        }, true),
+        }, true, signal),
       stopped: result.ok,
     };
   }
@@ -324,12 +320,13 @@ export default class WorkbenchBrowseSessionController {
       threadId: string | null;
     },
     hasRuntimeFiles: boolean,
+    signal?: AbortSignal,
   ): Promise<WorkbenchBrowseSessionSummary> {
     const statusResult = await this.cli.runStatus(sessionName, {
       cwd: request.cwd ?? record?.cwd ?? null,
       projectId: request.projectId ?? record?.projectId ?? null,
       threadId: request.threadId ?? record?.threadId ?? "browse-session-list",
-    });
+    }, signal);
     const status = parseBrowseStatus(statusResult);
     const pid = status.pid ?? await this.cli.readRuntimePid(sessionName).catch(() => null);
     return {

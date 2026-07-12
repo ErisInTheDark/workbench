@@ -134,6 +134,7 @@ class ParsedFlags {
 const THREAD_FLAG = ["--thread"] as const;
 const RELOAD_SWITCHES = [
   "--orchestrator-logic",
+  "--browse-controller",
   "--codex-bridge",
   "--opencode-bridge",
   "--opencode-server",
@@ -388,7 +389,7 @@ const COMMANDS: readonly CommandDefinition[] = [
   })),
   {
     words: ["orchestrator", "reload"],
-    usage: "wb orchestrator reload [--orchestrator-logic] [--codex-bridge] [--opencode-bridge] [--opencode-server] [--next-dev]",
+    usage: "wb orchestrator reload [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--opencode-bridge] [--opencode-server] [--next-dev]",
     async build({ args }) {
       const flags = new ParsedFlags(args, { boolean: RELOAD_SWITCHES });
       const scopes = RELOAD_SWITCHES

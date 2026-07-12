@@ -14,9 +14,12 @@ import type { GrantedPermissionProfile } from "../lib/codex/generated/app-server
 import type { PermissionsRequestApprovalParams } from "../lib/codex/generated/app-server/v2/PermissionsRequestApprovalParams";
 import type { RequestPermissionProfile } from "../lib/codex/generated/app-server/v2/RequestPermissionProfile";
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
+import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import type { ToolRequestUserInputParams } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputParams";
 import type { ToolRequestUserInputQuestion } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputQuestion";
 import type { ToolRequestUserInputResponse } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputResponse";
+import type { TurnSteerResponse } from "../lib/codex/generated/app-server/v2/TurnSteerResponse";
+import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type {
     WorkbenchApprovalCommandContext,
     WorkbenchBrowseResultEntry,
@@ -1143,6 +1146,34 @@ export default class CodexStdioBridge {
     }
 
     return await this.enqueueOperation(() => this.handleBridgeRequestImmediately(message));
+  }
+
+  async readThreadForBrowse(threadId: string): Promise<ThreadReadResponse> {
+    this.assertAcceptingWork();
+    const response = await this.readThreadContext({
+      method: "thread/context/read",
+      params: { includeTurns: true, threadId },
+      workbenchThreadHydration: { mode: "latest" },
+    });
+    return { thread: response.thread };
+  }
+
+  async recordBrowseResultForBrowse(entry: WorkbenchBrowseResultEntry) {
+    this.assertAcceptingWork();
+    await this.recordBrowseResultEntry(entry);
+  }
+
+  async steerTurnForBrowse(threadId: string, expectedTurnId: string, input: UserInput[]) {
+    this.assertAcceptingWork();
+    const response = await this.request({
+      method: "turn/steer",
+      params: { expectedTurnId, input, threadId },
+    }, { internal: true });
+    if (response.error) {
+      throw new Error(response.error.message);
+    }
+    const result = response.result as TurnSteerResponse | undefined;
+    return result?.turnId ?? null;
   }
 
   private async handleThreadContextReadRequest(message: JsonRpcRequest): Promise<JsonRpcResponse> {

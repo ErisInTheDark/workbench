@@ -195,11 +195,11 @@ test("rejects arbitrary request capabilities and unsafe restore", async () => {
 test("maps composable reload switches to one deduplicated fixed request", async () => {
   const parsed = await parseWorkbenchAgentCliCommand([
     "orchestrator", "reload", "--next-dev", "--codex-bridge", "--opencode-server", "--next-dev",
-    "--orchestrator-logic", "--opencode-bridge",
+    "--orchestrator-logic", "--browse-controller", "--opencode-bridge",
   ]);
   assert.equal(parsed.kind, "request");
   assert.deepEqual(parsed.request, {
-    body: { scopes: ["orchestrator-logic", "codex-bridge", "opencode-bridge", "opencode-server", "next-dev"] },
+    body: { scopes: ["orchestrator-logic", "browse-controller", "codex-bridge", "opencode-bridge", "opencode-server", "next-dev"] },
     method: "POST",
     path: "/api/orchestrator/reload",
     responseKind: "orchestrator-reload",

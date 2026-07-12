@@ -3,10 +3,13 @@
  * - BrowseSessionCleanupSupervisorOptions: injected thread-activity reader and cleanup timing knobs. Keywords: browse, cleanup, supervisor, orchestrator.
  * - default BrowseSessionCleanupSupervisor: long-lived orchestrator owner for stale Browse session cleanup. Keywords: browse, sessions, lifecycle, cleanup.
  */
-import WorkbenchBrowseSessionController from "../lib/workbench/browse/WorkbenchBrowseSessionController";
 import { logError } from "./process-helpers";
 
 export interface BrowseSessionCleanupSupervisorOptions {
+  cleanupStaleInactiveSessions: (options: {
+    olderThanMs: number;
+    readThreadActive: (threadId: string) => Promise<boolean | null>;
+  }) => Promise<void>;
   inactiveCleanupMs?: number;
   intervalMs?: number;
   readThreadActive: (threadId: string) => Promise<boolean | null>;
@@ -17,17 +20,19 @@ const DEFAULT_BROWSE_SESSION_INACTIVE_CLEANUP_MS = 30 * 60_000;
 
 export default class BrowseSessionCleanupSupervisor {
   private inFlight = false;
+  private readonly cleanupStaleInactiveSessions: BrowseSessionCleanupSupervisorOptions["cleanupStaleInactiveSessions"];
   private readonly inactiveCleanupMs: number;
   private readonly intervalMs: number;
   private readonly readThreadActive: (threadId: string) => Promise<boolean | null>;
-  private readonly sessionController = new WorkbenchBrowseSessionController();
   private timer: NodeJS.Timeout | null = null;
 
   constructor({
+    cleanupStaleInactiveSessions,
     inactiveCleanupMs = DEFAULT_BROWSE_SESSION_INACTIVE_CLEANUP_MS,
     intervalMs = DEFAULT_BROWSE_SESSION_CLEANUP_POLL_MS,
     readThreadActive,
   }: BrowseSessionCleanupSupervisorOptions) {
+    this.cleanupStaleInactiveSessions = cleanupStaleInactiveSessions;
     this.inactiveCleanupMs = inactiveCleanupMs;
     this.intervalMs = intervalMs;
     this.readThreadActive = readThreadActive;
@@ -49,7 +54,7 @@ export default class BrowseSessionCleanupSupervisor {
 
     this.inFlight = true;
     try {
-      await this.sessionController.cleanupStaleInactiveSessions({
+      await this.cleanupStaleInactiveSessions({
         olderThanMs: this.inactiveCleanupMs,
         readThreadActive: this.readThreadActive,
       });

@@ -4,6 +4,7 @@
  *
  * Helpers:
  * - HTTP reload helpers: parse, proxy, queue, and report orchestrator reload scopes. Keywords: reload, next-dev, bridge.
+ * - Browse HTTP helpers: route stateless Next proxies through the drainable orchestrator-owned Browse controller. Keywords: browse, controller, queue, streaming, reload.
  * - Child process helpers: start, restart, and schedule managed process lifecycles. Keywords: process, restart, child.
  * - Bridge helpers: route websocket JSON-RPC messages across Codex, Copilot, and OpenCode harnesses. Keywords: websocket, harness, rpc.
  * - Health helpers: supervise the Next.js dev server and restart it after repeated 5xx health probes. Keywords: watchdog, turbopack, 500.
@@ -18,11 +19,14 @@ import { createInitializeCapabilities, createInitializeRequest } from "../lib/co
 import { CodexAppServerClient } from "../lib/codex/app-server-client";
 import { isCodexJsonRpcFailure } from "../lib/codex/protocol";
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
+import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import { getCurrentInProgressTurn, hasThreadActiveFlag } from "../lib/codex/thread-state";
 import type {
   OrchestratorReloadRequest,
   OrchestratorReloadResponse,
   OrchestratorReloadScope,
+  WorkbenchBrowseResultEntry,
+  WorkbenchHarness,
 } from "../lib/types";
 import type { BridgeClient, HarnessKind, JsonRpcNotification, JsonRpcRequest } from "./bridge-types";
 import CodexAppServer from "./CodexAppServer";
@@ -58,8 +62,12 @@ const NEXT_DEV_HEALTH_REQUEST_TIMEOUT_MS = 2000;
 const NEXT_DEV_HEALTH_RESTART_COOLDOWN_MS = 30000;
 const NEXT_DEV_HEALTH_SERVER_ERROR_THRESHOLD = 3;
 const ORCHESTRATOR_RELOAD_PATH = "/orchestrator/reload";
+const ORCHESTRATOR_BROWSE_PATH = "/orchestrator/browse";
+const ORCHESTRATOR_BROWSE_SESSIONS_PATH = "/orchestrator/browse/sessions";
 const CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS = 5000;
+const BROWSE_CONTROLLER_RELOAD_DRAIN_TIMEOUT_MS = 5000;
 const ORCHESTRATOR_RELOAD_SCOPE_VALUES = new Set<OrchestratorReloadScope>([
+  "browse-controller",
   "codex-bridge",
   "next-dev",
   "opencode-bridge",
@@ -125,10 +133,12 @@ let shuttingDown = false;
 let codexBridge: CodexStdioBridge;
 let opencodeBridge: OpenCodeBridge;
 let browseSessionCleanupSupervisor = createBrowseSessionCleanupSupervisor();
+let browseController: import("./WorkbenchBrowseController").default | null = null;
 let nextDevHealthSupervisor = createNextDevHealthSupervisor();
 let upstreamMessageQueue: Promise<void> = Promise.resolve();
 let codexBridgeReloadPromise: Promise<void> | null = null;
 let opencodeBridgeReloadPromise: Promise<void> | null = null;
+let browseControllerReloadPromise: Promise<void> | null = null;
 let codexFatalExitInProgress = false;
 
 const copilotBridge = new CopilotBridge({
@@ -421,8 +431,72 @@ async function readThreadActiveForBrowseCleanup(threadId: string) {
 function createBrowseSessionCleanupSupervisor() {
   const Supervisor = reloadableModules.browseSessionCleanupSupervisor.default;
   return new Supervisor({
+    cleanupStaleInactiveSessions: async (options) => {
+      if (!browseController) return;
+      await runAfterBrowseControllerReload(async () => {
+        if (browseController) await browseController.cleanupStaleInactiveSessions(options);
+      });
+    },
     readThreadActive: readThreadActiveForBrowseCleanup,
   });
+}
+
+function loadBrowseControllerModule() {
+  return require("./WorkbenchBrowseController") as typeof import("./WorkbenchBrowseController");
+}
+
+function loadBrowseTranscriptAdapterModule() {
+  return require("./WorkbenchBrowseTranscriptAdapter") as typeof import("./WorkbenchBrowseTranscriptAdapter");
+}
+
+async function requestBrowseHarness<TValue>(
+  harness: Exclude<WorkbenchHarness, "codex">,
+  message: JsonRpcRequest,
+): Promise<TValue> {
+  const response = harness === "copilot"
+    ? await copilotBridge.handleRequest(message)
+    : await runAfterOpenCodeBridgeReload(() => opencodeBridge.handleRequest(message));
+  if (response.error) throw new Error(response.error.message);
+  return response.result as TValue;
+}
+
+function createBrowseTranscriptAdapter() {
+  const { default: Adapter } = loadBrowseTranscriptAdapterModule();
+  return new Adapter({
+    readThread: async (harness, threadId) => {
+      if (harness === "codex") return await runAfterCodexBridgeReload(() => codexBridge.readThreadForBrowse(threadId));
+      return await requestBrowseHarness<ThreadReadResponse>(harness, {
+        id: 0,
+        method: "thread/read",
+        params: { includeTurns: true, threadId },
+      });
+    },
+    recordResult: async (entry: WorkbenchBrowseResultEntry) => {
+      await runAfterCodexBridgeReload(() => codexBridge.recordBrowseResultForBrowse(entry));
+    },
+    steerTurn: async (harness, threadId, expectedTurnId, input: UserInput[]) => {
+      if (harness === "codex") {
+        return await runAfterCodexBridgeReload(() => codexBridge.steerTurnForBrowse(threadId, expectedTurnId, input));
+      }
+      const result = await requestBrowseHarness<{ turnId?: string } | { ok?: boolean }>(harness, {
+        id: 0,
+        method: "turn/steer",
+        params: { expectedTurnId, input, threadId },
+      });
+      const resultRecord = asRecord(result);
+      return typeof resultRecord?.turnId === "string" ? resultRecord.turnId : null;
+    },
+  });
+}
+
+function createBrowseController() {
+  const { default: Controller } = loadBrowseControllerModule();
+  return new Controller(createBrowseTranscriptAdapter());
+}
+
+function getBrowseController() {
+  browseController ??= createBrowseController();
+  return browseController;
 }
 
 function createNextDevHealthSupervisor() {
@@ -526,6 +600,68 @@ function reloadOpenCodeBridgeModule() {
   }
 
   return require("./opencode-bridge") as typeof import("./opencode-bridge");
+}
+
+function reloadBrowseControllerModule() {
+  const modulePaths = [
+    "./WorkbenchBrowseController",
+    "./WorkbenchBrowseTranscriptAdapter",
+    "../lib/workbench/browse/WorkbenchBrowseRequestHandler",
+    "../lib/workbench/browse/browse-command-runtime",
+    "../lib/workbench/browse/browse-markdown-runtime",
+  ];
+  for (const modulePath of modulePaths) {
+    delete require.cache[require.resolve(modulePath)];
+  }
+  return loadBrowseControllerModule();
+}
+
+async function waitForBrowseControllerReload() {
+  while (browseControllerReloadPromise) {
+    await browseControllerReloadPromise.catch(() => undefined);
+  }
+}
+
+async function runAfterBrowseControllerReload<TValue>(task: () => TValue | Promise<TValue>) {
+  await waitForBrowseControllerReload();
+  return await task();
+}
+
+async function reloadBrowseController() {
+  if (browseControllerReloadPromise) {
+    await browseControllerReloadPromise;
+    return;
+  }
+  const currentController = browseController;
+  const reloadPromise = (async () => {
+    if (!currentController) {
+      reloadBrowseControllerModule();
+      log("browse-controller", "reloaded lazy Browse controller modules");
+      return;
+    }
+    currentController.beginDrain();
+    try {
+      await withTimeout(
+        currentController.waitForIdle(),
+        BROWSE_CONTROLLER_RELOAD_DRAIN_TIMEOUT_MS,
+        "Browse controller reload timed out waiting for active work to drain; retry after the current Browse command settles.",
+      );
+      reloadBrowseControllerModule();
+      browseController = createBrowseController();
+      log("browse-controller", "reloaded Browse controller without restarting browser sessions or bridge processes");
+    } catch (error) {
+      currentController.resume();
+      throw error;
+    }
+  })();
+  browseControllerReloadPromise = reloadPromise;
+  try {
+    await reloadPromise;
+  } finally {
+    if (browseControllerReloadPromise === reloadPromise) {
+      browseControllerReloadPromise = null;
+    }
+  }
 }
 
 function createCodexBridge() {
@@ -657,12 +793,16 @@ function queueReload(scopes: OrchestratorReloadScope[]) {
           reloadOrchestratorLogic();
         }
 
-        if (scopes.includes("orchestrator-logic") || scopes.includes("codex-bridge") || scopes.includes("opencode-bridge") || shouldRestartOpenCodeServer) {
+        if (scopes.includes("orchestrator-logic") || scopes.includes("browse-controller") || scopes.includes("codex-bridge") || scopes.includes("opencode-bridge") || shouldRestartOpenCodeServer) {
           await ensureWorkbenchPromptFiles();
         }
 
         if (scopes.includes("codex-bridge")) {
           await reloadCodexBridge();
+        }
+
+        if (scopes.includes("browse-controller")) {
+          await reloadBrowseController();
         }
 
         if (scopes.includes("opencode-bridge") || shouldRestartOpenCodeServer) {
@@ -873,6 +1013,29 @@ function startBridgeServer() {
   const { host, port } = codexBridge.getListenDescriptor();
   bridgeWebSocketServer = new WebSocketServer({ noServer: true });
   bridgeServer = http.createServer((request, response) => {
+    const requestPath = new URL(request.url ?? "/", "http://localhost").pathname;
+    if (requestPath === ORCHESTRATOR_BROWSE_PATH && request.method === "POST") {
+      void runAfterBrowseControllerReload(() => getBrowseController().handleBrowseHttpRequest(request, response)).catch((error) => {
+        if (!response.headersSent) {
+          sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Browse request failed." });
+        } else if (!response.writableEnded) {
+          response.end();
+        }
+      });
+      return;
+    }
+
+    if (requestPath === ORCHESTRATOR_BROWSE_SESSIONS_PATH && (request.method === "GET" || request.method === "POST")) {
+      void runAfterBrowseControllerReload(() => getBrowseController().handleSessionsHttpRequest(request, response)).catch((error) => {
+        if (!response.headersSent) {
+          sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Browse session request failed." });
+        } else if (!response.writableEnded) {
+          response.end();
+        }
+      });
+      return;
+    }
+
     if (request.url === ORCHESTRATOR_RELOAD_PATH && request.method === "GET") {
       sendHttpJson(response, 200, lastReloadResponse);
       return;

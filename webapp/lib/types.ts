@@ -9,7 +9,7 @@ import type { ProjectTreeFileCandidate } from "./workbench/project/ProjectTreeFi
 import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread-item-timeline";
 
 export type WorkbenchHarness = "codex" | "copilot" | "opencode";
-export type OrchestratorReloadScope = "codex-bridge" | "next-dev" | "opencode-bridge" | "opencode-server" | "orchestrator-logic";
+export type OrchestratorReloadScope = "browse-controller" | "codex-bridge" | "next-dev" | "opencode-bridge" | "opencode-server" | "orchestrator-logic";
 export type OrchestratorReloadState = "idle" | "running" | "succeeded" | "failed";
 
 export interface OrchestratorReloadRequest {

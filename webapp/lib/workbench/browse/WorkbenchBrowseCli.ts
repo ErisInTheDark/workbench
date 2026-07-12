@@ -12,6 +12,7 @@ import { appRoot, normalizeRelativePath, resolveProjectRoot } from "../../projec
 import type { WorkbenchBrowseCommandRequest, WorkbenchBrowseCommandResponse } from "../../types";
 import { resolveAgentEndpointProjectFromCwd } from "../project/agent-endpoint-project";
 import WorkbenchBrowseProfileStore from "./WorkbenchBrowseProfileStore";
+import { killProcessTree } from "../../../orchestrator/process-helpers";
 
 export interface WorkbenchBrowseExecutionContext {
   cwd: string;
@@ -101,7 +102,7 @@ export default class WorkbenchBrowseCli {
     };
   }
 
-  async run(request: WorkbenchBrowseCommandRequest): Promise<WorkbenchBrowseCommandResponse> {
+  async run(request: WorkbenchBrowseCommandRequest, signal?: AbortSignal): Promise<WorkbenchBrowseCommandResponse> {
     const startedAt = Date.now();
     const browseEntrypoint = await this.resolveBrowseEntrypoint();
     const executionContext = await this.resolveExecutionContext(request);
@@ -125,11 +126,17 @@ export default class WorkbenchBrowseCli {
 
       let stdout = "";
       let stderr = "";
+      let aborted = signal?.aborted ?? false;
       let settled = false;
       let timedOut = false;
+      const abort = () => {
+        aborted = true;
+        killProcessTree(child.pid);
+      };
+      signal?.addEventListener("abort", abort, { once: true });
       const timeout = setTimeout(() => {
         timedOut = true;
-        child.kill();
+        killProcessTree(child.pid);
       }, timeoutMs);
 
       child.stdout.on("data", (chunk: Buffer) => {
@@ -144,9 +151,10 @@ export default class WorkbenchBrowseCli {
         }
         settled = true;
         clearTimeout(timeout);
+        signal?.removeEventListener("abort", abort);
         resolve({
           durationMs: Date.now() - startedAt,
-          error: error.message,
+          error: aborted ? "browse command cancelled because the client disconnected." : error.message,
           exitCode: null,
           ok: false,
           stderr,
@@ -160,16 +168,23 @@ export default class WorkbenchBrowseCli {
         }
         settled = true;
         clearTimeout(timeout);
+        signal?.removeEventListener("abort", abort);
         resolve({
           durationMs: Date.now() - startedAt,
-          error: timedOut ? `browse command timed out after ${timeoutMs}ms.` : undefined,
+          error: aborted
+            ? "browse command cancelled because the client disconnected."
+            : timedOut ? `browse command timed out after ${timeoutMs}ms.` : undefined,
           exitCode,
-          ok: exitCode === 0 && !timedOut,
+          ok: exitCode === 0 && !timedOut && !aborted,
           stderr,
           stdout,
           timedOut: timedOut || undefined,
         });
       });
+
+      if (aborted) {
+        abort();
+      }
 
       if (request.stdin) {
         child.stdin.end(request.stdin);
@@ -179,14 +194,18 @@ export default class WorkbenchBrowseCli {
     });
   }
 
-  async runStatus(sessionName: string, request: Pick<WorkbenchBrowseCommandRequest, "cwd" | "projectId" | "threadId">) {
+  async runStatus(
+    sessionName: string,
+    request: Pick<WorkbenchBrowseCommandRequest, "cwd" | "projectId" | "threadId">,
+    signal?: AbortSignal,
+  ) {
     return await this.run({
       args: ["status", "--session", sessionName],
       cwd: request.cwd ?? null,
       projectId: request.projectId ?? null,
       threadId: request.threadId,
       timeoutMs: DEFAULT_BROWSE_STATUS_TIMEOUT_MS,
-    });
+    }, signal);
   }
 
   private async resolveBrowseEntrypoint() {

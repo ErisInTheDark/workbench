@@ -57,6 +57,7 @@
 - Changes to code between the Codex app-server stdio connection and the browser websocket must be covered by the `codex-bridge` reload scope or a newer equivalent reload scope that does not restart the Codex app-server child.
 - `codex-bridge` reload must reload the bridge module or a delegated middleware module and preserve the live app-server process, pending bridge state, and websocket clients.
 - If adding a new orchestrator subsystem, document its reload boundary in code: either add it to the reloadable helper bundle or wire it into an explicit non-destructive reload scope.
+- Browse command execution, session control, and FIFO serialization are owned by the orchestrator `WorkbenchBrowseController`; Next Browse routes are stateless transport proxies, with commands streamed and session responses fully buffered. Use the `browse-controller` reload scope to drain and replace controller code without restarting browser sessions, bridges, the Codex app-server, or Next.js.
 
 ## OpenCode Diagnostics
 - When diagnosing OpenCode integration under `webapp/orchestrator/`, it is safe to run local OpenCode SDK probes with small prompts because OpenCode usage here is unlimited. This does not override the rule against calling webapp endpoints without explicit permission. Prefer bounded probes that subscribe to events, send a tiny prompt, print event types, and abort promptly. Minimal pattern:
