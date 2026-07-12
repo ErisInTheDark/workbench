@@ -76,6 +76,7 @@ import {
     persistHarnessModel,
     persistHarnessModelEffort,
     persistHarnessServiceTier,
+    persistThreadServiceTier,
     persistThreadTokenUsage,
     persistThreadUnreadState,
     readLocalWorkbenchOrigin,
@@ -83,6 +84,7 @@ import {
     readStoredHarnessModel,
     readStoredHarnessModelEffort,
     readStoredHarnessServiceTier,
+    readStoredThreadServiceTier,
     readStoredThreadTokenUsage,
     readStoredThreadUnreadState,
 } from "./state/browser-state";
@@ -2562,7 +2564,8 @@ function WorkbenchThreadClient(
       return null;
     }
 
-    return getThreadServiceTier(threadId) ?? readStoredHarnessServiceTier(harness);
+    const storedServiceTier = readStoredThreadServiceTier(harness, threadId);
+    return storedServiceTier === undefined ? getThreadServiceTier(threadId) : storedServiceTier;
   }
 
   function resolvePreferredReasoningEffort(harness: WorkbenchHarness, modelId: string | null) {
@@ -2902,14 +2905,21 @@ function WorkbenchThreadClient(
         : readStoredHarnessAgent(harness);
       const workbenchOrigin = readLocalWorkbenchOrigin();
       let resumedThread: ThreadResumeResponse | null = null;
+      const isCurrentThread = state.currentThread?.id === threadId && state.currentThread.harness === harness;
+      const storedServiceTier = harness === "codex" ? readStoredThreadServiceTier(harness, threadId) : undefined;
+      const hasServiceTierPreference = harness === "codex" && (isCurrentThread || storedServiceTier !== undefined);
+      const selectedServiceTier = harness === "codex"
+        ? isCurrentThread
+          ? getPreferredThreadServiceTier(threadId, harness)
+          : storedServiceTier
+        : null;
 
       if (harness === "codex") {
-        const selectedServiceTier = getPreferredThreadServiceTier(threadId, harness);
         try {
           resumedThread = await sendBridgeRequest<ThreadResumeResponse>(harness, {
             method: "thread/resume",
             params: {
-              serviceTier: selectedServiceTier,
+              ...(hasServiceTierPreference ? { serviceTier: selectedServiceTier } : {}),
               threadId,
             } satisfies ThreadResumeParams,
             [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext("codex", threadId, selectedAgentPath, workbenchOrigin),
@@ -2960,10 +2970,13 @@ function WorkbenchThreadClient(
         ? getThreadModel(threadId)
         : resumedThread?.model ?? readStoredHarnessModel(harness);
       const nextServiceTier = harness === "codex"
-        ? state.currentThread?.id === threadId
-          ? getPreferredThreadServiceTier(threadId, harness) ?? resumedThread?.serviceTier
-          : resumedThread?.serviceTier ?? getPreferredThreadServiceTier(threadId, harness)
+        ? hasServiceTierPreference
+          ? selectedServiceTier ?? null
+          : resumedThread?.serviceTier ?? null
         : null;
+      if (harness === "codex" && !hasServiceTierPreference && resumedThread) {
+        persistThreadServiceTier(harness, threadId, nextServiceTier);
+      }
       if (contextResponse) {
         setThreadContextReadEntries(threadId, contextResponse);
       }
@@ -4046,9 +4059,12 @@ function WorkbenchThreadClient(
         harness,
         startedThreadResponse.model ?? selectedModel ?? null,
         selectedReasoningEffort ?? startedThreadResponse.reasoningEffort ?? null,
-        selectedServiceTier ?? startedThreadResponse.serviceTier ?? null,
+        harness === "codex" ? selectedServiceTier : startedThreadResponse.serviceTier ?? null,
         selectedAgentPath,
       );
+      if (harness === "codex") {
+        persistThreadServiceTier(harness, startedPayload.id, selectedServiceTier);
+      }
       bootstrapThread = startedPayload;
       if (sendOptions.selectThread !== false) {
         setCurrentThread(bootstrapThread);
@@ -4095,7 +4111,7 @@ function WorkbenchThreadClient(
         harness,
         resumedThreadResponse.model ?? selectedModel ?? readableThread.model,
         selectedReasoningEffort ?? resumedThreadResponse.reasoningEffort ?? readableThread.reasoningEffort,
-        selectedServiceTier ?? resumedThreadResponse.serviceTier ?? readableThread.serviceTier,
+        harness === "codex" ? selectedServiceTier : resumedThreadResponse.serviceTier ?? readableThread.serviceTier,
         selectedAgentPath,
       );
 
@@ -4233,7 +4249,7 @@ function WorkbenchThreadClient(
           harness,
           refreshedThreadResponse.model ?? resumedThread.model,
           refreshedThreadResponse.reasoningEffort ?? resumedThread.reasoningEffort,
-          refreshedThreadResponse.serviceTier ?? resumedThread.serviceTier,
+          selectedServiceTier,
           resumedThread.agentPath,
         ));
       } else {
@@ -4708,7 +4724,11 @@ function WorkbenchThreadClient(
     }
 
     const nextServiceTier = serviceTier === "fast" ? "fast" : null;
-    persistHarnessServiceTier(state.currentThread.harness, nextServiceTier);
+    if (state.currentThread.isDraft) {
+      persistHarnessServiceTier(state.currentThread.harness, nextServiceTier);
+    } else {
+      persistThreadServiceTier(state.currentThread.harness, state.currentThread.id, nextServiceTier);
+    }
     updateStablePreferenceSource(state.currentThread, (record) => {
       record.serviceTier = nextServiceTier;
     });

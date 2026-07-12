@@ -1,7 +1,7 @@
 /**
  * Exports:
  * - DEFAULT_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE: editor font size defaults and bounds. Keywords: editor zoom, font size, clamp.
- * - EXPANDED_DIRECTORIES_STORAGE_KEY, FONT_SIZE_STORAGE_KEY, HARNESS_STORAGE_KEY, HARNESS_MODEL_STORAGE_KEY, HARNESS_MODEL_EFFORT_STORAGE_KEY, HARNESS_SERVICE_TIER_STORAGE_KEY, HARNESS_AGENT_STORAGE_KEY, THREAD_TOKEN_USAGE_STORAGE_KEY, THREAD_UNREAD_STATE_STORAGE_KEY, THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY, WORKBENCH_THEME_STORAGE_KEY: localStorage keys for persisted explorer, editor, harness, model, effort, service tier, agent, thread token usage, thread unread state, live activity disclosure state, and theme. Keywords: localStorage, explorer, font size, harness, model, effort, service tier, agent, threads, token usage, live activity, theme.
+ * - EXPANDED_DIRECTORIES_STORAGE_KEY, FONT_SIZE_STORAGE_KEY, HARNESS_STORAGE_KEY, HARNESS_MODEL_STORAGE_KEY, HARNESS_MODEL_EFFORT_STORAGE_KEY, HARNESS_SERVICE_TIER_STORAGE_KEY, HARNESS_AGENT_STORAGE_KEY, THREAD_SERVICE_TIER_STORAGE_KEY, THREAD_TOKEN_USAGE_STORAGE_KEY, THREAD_UNREAD_STATE_STORAGE_KEY, THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY, WORKBENCH_THEME_STORAGE_KEY: localStorage keys for persisted explorer, editor, harness, model, effort, draft and thread service tiers, agent, thread token usage, thread unread state, live activity disclosure state, and theme. Keywords: localStorage, explorer, font size, harness, model, effort, service tier, agent, threads, token usage, live activity, theme.
  * - readStoredExpandedDirectories: read and normalize persisted expanded directory paths for a project. Keywords: localStorage, explorer tree, expanded directories, browser state.
  * - persistExpandedDirectories: persist expanded directory paths for a project from a provided collection. Keywords: localStorage, explorer tree, persistence, directories.
  * - readStoredFontSize: read and clamp the persisted editor font size. Keywords: localStorage, editor zoom, font size, clamp.
@@ -9,7 +9,8 @@
  * - readStoredHarness/persistHarness: persist the selected bridge harness. Keywords: localStorage, codex, copilot, opencode, harness.
  * - readStoredHarnessModel/persistHarnessModel: persist the preferred model for each harness. Keywords: localStorage, codex, copilot, opencode, harness, model.
  * - readStoredHarnessModelEffort/persistHarnessModelEffort: persist the preferred reasoning effort for each harness/model pair. Keywords: localStorage, codex, copilot, opencode, harness, model, effort.
- * - readStoredHarnessServiceTier/persistHarnessServiceTier: persist the preferred service tier for each harness. Keywords: localStorage, codex, harness, service tier, fast.
+ * - readStoredHarnessServiceTier/persistHarnessServiceTier: persist the preferred service tier for each harness's draft thread. Keywords: localStorage, codex, harness, draft, service tier, fast.
+ * - readStoredThreadServiceTier/persistThreadServiceTier: persist presence-aware service-tier preferences for materialized threads. Keywords: localStorage, codex, thread, service tier, fast.
  * - readStoredHarnessAgent/persistHarnessAgent: persist the preferred agent file for each harness. Keywords: localStorage, codex, copilot, opencode, harness, agent.
  * - readStoredThreadTokenUsage/persistThreadTokenUsage/clearStoredThreadTokenUsage: persist latest per-thread token usage when the harness only sends it as a live notification. Keywords: localStorage, thread, token usage, context.
  * - readStoredThreadUnreadState/persistThreadUnreadState: persist per-thread unread tracking for sidebar badges. Keywords: localStorage, threads, unread, badges.
@@ -41,6 +42,7 @@ export const HARNESS_MODEL_STORAGE_KEY = "workbench:harness-models";
 export const HARNESS_MODEL_EFFORT_STORAGE_KEY = "workbench:harness-model-efforts";
 export const HARNESS_SERVICE_TIER_STORAGE_KEY = "workbench:harness-service-tiers";
 export const HARNESS_AGENT_STORAGE_KEY = "workbench:harness-agents";
+export const THREAD_SERVICE_TIER_STORAGE_KEY = "workbench:thread-service-tiers";
 export const THREAD_TOKEN_USAGE_STORAGE_KEY = "workbench:thread-token-usage";
 export const THREAD_UNREAD_STATE_STORAGE_KEY = "workbench:thread-unread-state";
 export const THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY = "workbench:thread-live-activity-open";
@@ -119,7 +121,7 @@ function normalizeStoredThreadTokenUsage(value: unknown): ThreadTokenUsage | nul
   };
 }
 
-function getThreadTokenUsageStateKey(harness: WorkbenchHarness, threadId: string) {
+function getStoredThreadStateKey(harness: WorkbenchHarness, threadId: string) {
   return `${harness}:${threadId}`;
 }
 
@@ -296,6 +298,49 @@ export function persistHarnessServiceTier(harness: WorkbenchHarness, serviceTier
   }
 }
 
+export function readStoredThreadServiceTier(harness: WorkbenchHarness, threadId: string): string | null | undefined {
+  try {
+    const rawValue = window.localStorage.getItem(THREAD_SERVICE_TIER_STORAGE_KEY);
+    if (!rawValue) {
+      return undefined;
+    }
+
+    const parsedValue = JSON.parse(rawValue);
+    if (!parsedValue || typeof parsedValue !== "object" || Array.isArray(parsedValue)) {
+      return undefined;
+    }
+
+    const preferenceKey = getStoredThreadStateKey(harness, threadId);
+    if (!Object.prototype.hasOwnProperty.call(parsedValue, preferenceKey)) {
+      return undefined;
+    }
+
+    const selectedTier = parsedValue[preferenceKey];
+    if (selectedTier === null) {
+      return null;
+    }
+
+    return typeof selectedTier === "string" && selectedTier.trim() ? selectedTier : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function persistThreadServiceTier(harness: WorkbenchHarness, threadId: string, serviceTier: string | null) {
+  try {
+    const rawValue = window.localStorage.getItem(THREAD_SERVICE_TIER_STORAGE_KEY);
+    const parsedValue = rawValue ? JSON.parse(rawValue) : {};
+    const nextValue = parsedValue && typeof parsedValue === "object" && !Array.isArray(parsedValue)
+      ? parsedValue as Record<string, string | null>
+      : {};
+
+    nextValue[getStoredThreadStateKey(harness, threadId)] = serviceTier;
+    window.localStorage.setItem(THREAD_SERVICE_TIER_STORAGE_KEY, JSON.stringify(nextValue));
+  } catch {
+    // Ignore storage failures and keep the in-memory service tier state working.
+  }
+}
+
 export function readStoredHarnessAgent(harness: WorkbenchHarness) {
   try {
     const rawValue = window.localStorage.getItem(HARNESS_AGENT_STORAGE_KEY);
@@ -342,7 +387,7 @@ export function readStoredThreadTokenUsage(harness: WorkbenchHarness, threadId: 
       return null;
     }
 
-    return normalizeStoredThreadTokenUsage(parsedValue[getThreadTokenUsageStateKey(harness, threadId)]);
+    return normalizeStoredThreadTokenUsage(parsedValue[getStoredThreadStateKey(harness, threadId)]);
   } catch {
     return null;
   }
@@ -356,7 +401,7 @@ export function persistThreadTokenUsage(harness: WorkbenchHarness, threadId: str
       ? parsedValue as Record<string, ThreadTokenUsage>
       : {};
 
-    nextValue[getThreadTokenUsageStateKey(harness, threadId)] = tokenUsage;
+    nextValue[getStoredThreadStateKey(harness, threadId)] = tokenUsage;
     window.localStorage.setItem(THREAD_TOKEN_USAGE_STORAGE_KEY, JSON.stringify(nextValue));
   } catch {
     // Ignore storage failures and keep the live token usage state working.
@@ -375,7 +420,7 @@ export function clearStoredThreadTokenUsage(harness: WorkbenchHarness, threadId:
       return;
     }
 
-    delete (parsedValue as Record<string, ThreadTokenUsage>)[getThreadTokenUsageStateKey(harness, threadId)];
+    delete (parsedValue as Record<string, ThreadTokenUsage>)[getStoredThreadStateKey(harness, threadId)];
     window.localStorage.setItem(THREAD_TOKEN_USAGE_STORAGE_KEY, JSON.stringify(parsedValue));
   } catch {
     // Ignore storage failures and keep the live token usage state working.
