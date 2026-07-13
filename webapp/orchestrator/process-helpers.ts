@@ -3,15 +3,16 @@
  * - ProcessSpec/RunningProcess: small process manager contracts for orchestrator child processes. Keywords: process, restart, child.
  * - log/logError: tagged stdout and stderr logging for orchestrator modules. Keywords: logging, orchestrator.
  * - appendCopilotEventLog: persist raw Copilot session events as JSONL for bridge debugging. Keywords: copilot, debug, events, jsonl.
- * - pipeChildStream/getSpawnDescriptor/createSpawnOptions/killProcessTree: platform-safe process helpers for spawned child processes. Keywords: windows, spawn, shutdown.
+ * - pipeChildStream/getSpawnDescriptor/createSpawnOptions/killProcessTree/killProcessTreeAsync: platform-safe process helpers for spawned child processes. Keywords: windows, spawn, shutdown, async, timeout.
  */
-import { spawnSync, type SpawnOptionsWithoutStdio } from "node:child_process";
+import { spawn, spawnSync, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import type { SessionEvent } from "@github/copilot-sdk";
 
 const COPILOT_EVENT_LOG_MAX_STRING_LENGTH = 1024;
+const ASYNC_PROCESS_TREE_KILL_TIMEOUT_MS = 5_000;
 
 export type ProcessSpec = {
   name: string;
@@ -141,4 +142,43 @@ export function killProcessTree(pid: number | undefined) {
   } catch {
     // Best effort during shutdown.
   }
+}
+
+export async function killProcessTreeAsync(pid: number | undefined) {
+  if (!pid) return;
+  if (process.platform !== "win32") {
+    try {
+      process.kill(-pid, "SIGTERM");
+    } catch {
+      // Best effort during runtime recovery.
+    }
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    const child = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.removeListener("error", finish);
+      child.removeListener("exit", finish);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      child.kill();
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // The daemon may already be gone even when taskkill did not exit cleanly.
+      }
+      finish();
+    }, ASYNC_PROCESS_TREE_KILL_TIMEOUT_MS);
+    child.once("error", finish);
+    child.once("exit", finish);
+  });
 }

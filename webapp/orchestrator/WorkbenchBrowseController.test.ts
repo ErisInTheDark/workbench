@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover concurrent Browse producers, cancellation release, session-read bypass, active-work ownership, result draining, and reload behavior. Keywords: browse, controller, concurrency, cancel, sessions, result, reload, test.
+ * - No production exports; Node tests cover direct request adapters, concurrent Browse producers, cancellation release, session-read bypass, active-work ownership, result draining, and reload behavior. Keywords: browse, controller, direct, concurrency, cancel, sessions, result, reload, test.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -18,7 +18,10 @@ function deferred() {
   return { promise, resolve };
 }
 
-function createController(onListSessions: (request: WorkbenchBrowseSessionListRequest) => void = () => undefined) {
+function createController(
+  onListSessions: (request: WorkbenchBrowseSessionListRequest) => void = () => undefined,
+  onHandle: (signal: AbortSignal) => void = () => undefined,
+) {
   const results: WorkbenchBrowseResultSink = {
     record: () => undefined,
     steerScreenshot: async () => "turn-1",
@@ -27,7 +30,10 @@ function createController(onListSessions: (request: WorkbenchBrowseSessionListRe
   return new WorkbenchBrowseController(results, new WorkbenchBrowseRuntime(), {
     controlSession: async () => ({ result: null, session: null, stopped: false }),
     findStaleInactiveSessionStops: async () => [],
-    handle: async () => Response.json({ ok: true }),
+    handle: async (_body, signal) => {
+      onHandle(signal);
+      return Response.json({ ok: true });
+    },
     listSessions: async (request) => {
       onListSessions(request);
       return { generatedAt: new Date(0).toISOString(), projectId: null, sessions: [] };
@@ -35,6 +41,32 @@ function createController(onListSessions: (request: WorkbenchBrowseSessionListRe
     waitForIdle: async () => undefined,
   });
 }
+
+test("direct Browse request execution uses the same handler and cancellation signal as HTTP ingress", async () => {
+  let receivedSignal: AbortSignal | null = null;
+  const controller = createController(() => undefined, (signal) => { receivedSignal = signal; });
+  const abortController = new AbortController();
+  const response = await controller.executeBrowseRequest(Buffer.from("{}"), abortController.signal);
+
+  assert.equal(response.status, 200);
+  assert.equal(receivedSignal, abortController.signal);
+  assert.deepEqual(await response.json(), { ok: true });
+});
+
+test("direct session request execution preserves query adaptation", async () => {
+  let receivedRequest: WorkbenchBrowseSessionListRequest | null = null;
+  const controller = createController((request) => { receivedRequest = request; });
+  const response = await controller.executeSessionRequest({
+    body: Buffer.alloc(0),
+    method: "GET",
+    url: "/api/browse/sessions?cwd=C%3A%5Cprojects%5Cworkbench&includeRuntime=false&threadId=thread-1",
+  }, new AbortController().signal);
+
+  assert.equal(response.status, 200);
+  assert.equal(receivedRequest?.cwd, "C:\\projects\\workbench");
+  assert.equal(receivedRequest?.includeRuntime, false);
+  assert.equal(receivedRequest?.threadId, "thread-1");
+});
 
 test("independent Browse command producers can run concurrently", async () => {
   const controller = createController();

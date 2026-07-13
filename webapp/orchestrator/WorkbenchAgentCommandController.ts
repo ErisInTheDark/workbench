@@ -16,6 +16,16 @@ const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 const RELOAD_POLL_INTERVAL_MS = 250;
 const RELOAD_TIMEOUT_MS = 60_000;
 
+interface WorkbenchAgentBrowsePort {
+  executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
+  executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
+}
+
+const UNCONFIGURED_BROWSE_PORT: WorkbenchAgentBrowsePort = {
+  executeBrowseRequest: async () => { throw new Error("Direct Browse dispatch is not configured."); },
+  executeSessionRequest: async () => { throw new Error("Direct Browse session dispatch is not configured."); },
+};
+
 async function readBody(request: http.IncomingMessage) {
   const chunks: Buffer[] = [];
   let length = 0;
@@ -29,10 +39,59 @@ async function readBody(request: http.IncomingMessage) {
 }
 
 function sendText(response: http.ServerResponse, status: number, text: string) {
+  if (response.destroyed || response.writableEnded) return;
   response.statusCode = status;
   response.setHeader("Cache-Control", "no-store");
   response.setHeader("Content-Type", "text/plain; charset=utf-8");
   response.end(text);
+}
+
+function bindRequestAbort(request: http.IncomingMessage, response: http.ServerResponse) {
+  const controller = new AbortController();
+  const abort = () => controller.abort(new Error("Workbench agent command client disconnected."));
+  request.once("aborted", abort);
+  response.once("close", () => {
+    if (!response.writableEnded) abort();
+  });
+  return controller.signal;
+}
+
+function waitForDelay(ms: number, signal: AbortSignal) {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<void>((resolve, reject) => {
+    const finish = (operation: () => void) => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      operation();
+    };
+    const abort = () => finish(() => reject(signal.reason));
+    const timer = setTimeout(() => finish(resolve), ms);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+async function writeNativeResponse(response: http.ServerResponse, upstream: Response, signal: AbortSignal) {
+  response.statusCode = upstream.status;
+  response.setHeader("Cache-Control", "no-store");
+  response.setHeader("Content-Type", upstream.headers.get("content-type") ?? "text/plain; charset=utf-8");
+  if (!upstream.body) {
+    response.end();
+    return;
+  }
+  const reader = upstream.body.getReader();
+  const abort = () => void reader.cancel(signal.reason).catch(() => undefined);
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    while (!signal.aborted) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      response.write(Buffer.from(chunk.value));
+    }
+    if (!response.destroyed && !response.writableEnded) response.end();
+  } finally {
+    signal.removeEventListener("abort", abort);
+    reader.releaseLock();
+  }
 }
 
 function isLoopbackAddress(address: string | undefined) {
@@ -48,10 +107,12 @@ export default class WorkbenchAgentCommandController {
   constructor(
     private readonly nextOrigin: string,
     private readonly orchestratorOrigin: string,
+    private readonly browse: WorkbenchAgentBrowsePort = UNCONFIGURED_BROWSE_PORT,
     private readonly fetchRequest: typeof fetch = fetch,
   ) {}
 
   async handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
+    const signal = bindRequestAbort(request, response);
     try {
       if (!isLoopbackAddress(request.socket.remoteAddress)) {
         sendText(response, 403, "Workbench agent commands are available only over loopback.\n");
@@ -81,42 +142,31 @@ export default class WorkbenchAgentCommandController {
         return;
       }
       const upstream = parsed.request.waitForReload
-        ? await this.runReloadRequest(parsed.request)
-        : await this.fetchRequest(this.resolveUrl(parsed.request.path), this.buildRequestInit(parsed.request));
+        ? await this.runReloadRequest(parsed.request, signal)
+        : await this.dispatchRequest(parsed.request, signal);
       const streamsNative = upstream.ok && (
         parsed.request.responseKind === "native"
         || upstream.headers.get("content-type")?.includes("application/x-ndjson")
       );
       if (streamsNative) {
-        response.statusCode = upstream.status;
-        response.setHeader("Cache-Control", "no-store");
-        response.setHeader("Content-Type", upstream.headers.get("content-type") ?? "text/plain; charset=utf-8");
-        if (!upstream.body) {
-          response.end();
-          return;
-        }
-        const reader = upstream.body.getReader();
-        while (true) {
-          const chunk = await reader.read();
-          if (chunk.done) break;
-          response.write(Buffer.from(chunk.value));
-        }
-        response.end();
+        await writeNativeResponse(response, upstream, signal);
         return;
       }
       const text = await upstream.text();
       const adapted = adaptWorkbenchAgentCliResponse({ httpOk: upstream.ok, request: parsed.request, text });
       sendText(response, adapted.exitCode === 0 ? 200 : 400, adapted.exitCode === 0 ? adapted.stdout : adapted.stderr);
     } catch (error) {
+      if (signal.aborted) return;
       sendText(response, 500, `${error instanceof Error ? error.message : String(error)}\n`);
     }
   }
 
-  private buildRequestInit(request: WorkbenchAgentCliRequest): RequestInit {
+  private buildRequestInit(request: WorkbenchAgentCliRequest, signal: AbortSignal): RequestInit {
     return {
       cache: "no-store",
       method: request.method,
       redirect: "error",
+      signal,
       ...(request.body ? {
         body: JSON.stringify(request.body),
         headers: { "Content-Type": "application/json" },
@@ -124,28 +174,33 @@ export default class WorkbenchAgentCommandController {
     };
   }
 
+  private async dispatchRequest(request: WorkbenchAgentCliRequest, signal: AbortSignal) {
+    const body = Buffer.from(request.body ? JSON.stringify(request.body) : "");
+    if (request.path.startsWith("/api/browse/sessions")) {
+      return await this.browse.executeSessionRequest({ body, method: request.method, url: request.path }, signal);
+    }
+    if (request.path.startsWith("/api/browse")) {
+      return await this.browse.executeBrowseRequest(body, signal);
+    }
+    return await this.fetchRequest(this.resolveUrl(request.path), this.buildRequestInit(request, signal));
+  }
+
   private resolveUrl(requestPath: string) {
-    if (requestPath.startsWith("/api/browse/sessions")) {
-      return new URL(requestPath.replace("/api/browse/sessions", "/orchestrator/browse/sessions"), this.orchestratorOrigin);
-    }
-    if (requestPath.startsWith("/api/browse")) {
-      return new URL(requestPath.replace("/api/browse", "/orchestrator/browse"), this.orchestratorOrigin);
-    }
     if (requestPath.startsWith("/api/orchestrator/reload")) {
       return new URL(requestPath.replace("/api/orchestrator/reload", "/orchestrator/reload"), this.orchestratorOrigin);
     }
     return new URL(requestPath, this.nextOrigin);
   }
 
-  private async runReloadRequest(request: WorkbenchAgentCliRequest) {
-    let response = await this.fetchRequest(this.resolveUrl(request.path), this.buildRequestInit(request));
+  private async runReloadRequest(request: WorkbenchAgentCliRequest, signal: AbortSignal) {
+    let response = await this.fetchRequest(this.resolveUrl(request.path), this.buildRequestInit(request, signal));
     if (!response.ok) return response;
     let text = await response.text();
     let state = readReloadState(text);
     const deadline = Date.now() + RELOAD_TIMEOUT_MS;
     while (state === "running" && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, RELOAD_POLL_INTERVAL_MS));
-      response = await this.fetchRequest(this.resolveUrl(request.path), { cache: "no-store", method: "GET", redirect: "error" });
+      await waitForDelay(RELOAD_POLL_INTERVAL_MS, signal);
+      response = await this.fetchRequest(this.resolveUrl(request.path), { cache: "no-store", method: "GET", redirect: "error", signal });
       if (!response.ok) continue;
       text = await response.text();
       state = readReloadState(text);

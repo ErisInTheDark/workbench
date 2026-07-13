@@ -50,6 +50,7 @@ test("executes with a supplied project context without resolving the project aga
   const client = new FakeBrowseTransport();
   const runtime = new WorkbenchBrowseRuntime({
     client,
+    retireProcess: async () => undefined,
     resolveProjectFromCwd: async () => { throw new Error("unexpected project resolution"); },
   });
   const command: WorkbenchBrowseAgentCommand = {
@@ -81,7 +82,7 @@ test("executes with a supplied project context without resolving the project aga
 
 test("serializes one session while allowing unrelated sessions to proceed", async () => {
   const client = new FakeBrowseTransport();
-  const runtime = new WorkbenchBrowseRuntime({ client });
+  const runtime = new WorkbenchBrowseRuntime({ client, retireProcess: async () => undefined });
   const first = runtime.status("research");
   await Promise.resolve();
   const second = runtime.status("research");
@@ -99,16 +100,21 @@ test("serializes one session while allowing unrelated sessions to proceed", asyn
 test("retires only the session whose runtime-owned status deadline expires", async () => {
   const client = new FakeBrowseTransport();
   client.firstResearch.reject(new WorkbenchBrowseDaemonTimeoutError("simulated deadline"));
-  const runtime = new WorkbenchBrowseRuntime({ client });
+  const retiredPids: number[] = [];
+  const runtime = new WorkbenchBrowseRuntime({
+    client,
+    retireProcess: async (pid) => { retiredPids.push(pid); },
+  });
 
   await assert.rejects(runtime.status("research"), /simulated deadline/u);
+  assert.deepEqual(retiredPids, [123]);
   assert.deepEqual(client.cleaned, ["research"]);
   assert.deepEqual(await runtime.status("other"), { initialized: true, session: "other" });
 });
 
 test("releases a failed session queue so its next request is not stranded", async () => {
   const client = new FakeBrowseTransport();
-  const runtime = new WorkbenchBrowseRuntime({ client });
+  const runtime = new WorkbenchBrowseRuntime({ client, retireProcess: async () => undefined });
   const first = runtime.status("research");
   await Promise.resolve();
   const second = runtime.status("research");
@@ -117,4 +123,39 @@ test("releases a failed session queue so its next request is not stranded", asyn
   await assert.rejects(first, /simulated timeout/u);
   assert.deepEqual(await second, { initialized: true, session: "research" });
   assert.deepEqual(client.calls, ["research", "research"]);
+});
+
+test("aborting a queued waiter does not retire or bypass the active session owner", async () => {
+  const client = new FakeBrowseTransport();
+  const runtime = new WorkbenchBrowseRuntime({ client, retireProcess: async () => undefined });
+  const first = runtime.status("research");
+  await Promise.resolve();
+
+  const abortController = new AbortController();
+  const cancelled = runtime.status("research", 5_000, abortController.signal);
+  const third = runtime.status("research");
+  abortController.abort(new Error("cancel queued waiter"));
+
+  await assert.rejects(cancelled, /cancel queued waiter/u);
+  assert.deepEqual(client.cleaned, []);
+  assert.deepEqual(client.calls, ["research"]);
+
+  client.firstResearch.resolve({ initialized: true, session: "research" });
+  assert.deepEqual(await first, { initialized: true, session: "research" });
+  assert.deepEqual(await third, { initialized: true, session: "research" });
+  assert.deepEqual(client.calls, ["research", "research"]);
+});
+
+test("a queued waiter observes its deadline without retiring the active owner", async () => {
+  const client = new FakeBrowseTransport();
+  const runtime = new WorkbenchBrowseRuntime({ client, retireProcess: async () => undefined });
+  const first = runtime.status("research");
+  await Promise.resolve();
+
+  await assert.rejects(runtime.status("research", 5), /waiting for its previous command/u);
+  assert.deepEqual(client.cleaned, []);
+  assert.deepEqual(client.calls, ["research"]);
+
+  client.firstResearch.resolve({ initialized: true, session: "research" });
+  await first;
 });

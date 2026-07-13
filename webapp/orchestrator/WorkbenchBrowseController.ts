@@ -116,22 +116,26 @@ export default class WorkbenchBrowseController {
     return await this.requestHandler.listSessions(request, signal);
   }
 
-  async handleBrowseHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
-    const signal = bindRequestAbort(request, response);
-    const body = await readRequestBody(request);
-    const upstream = await this.requestHandler.handle(
+  async executeBrowseRequest(body: Buffer, signal: AbortSignal) {
+    return await this.requestHandler.handle(
       body,
       signal,
       (task) => this.runCommand(task),
     );
-    await writeResponse(response, upstream, signal);
   }
 
-  async handleSessionsHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
-    const signal = bindRequestAbort(request, response);
+  async executeSessionRequest({
+    body,
+    method,
+    url,
+  }: {
+    body: Buffer;
+    method: string;
+    url: string;
+  }, signal: AbortSignal) {
     try {
-      const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
-      if (request.method === "GET") {
+      const requestUrl = new URL(url, "http://localhost");
+      if (method === "GET") {
         const query: WorkbenchBrowseSessionListRequest = {
           cwd: normalizeString(requestUrl.searchParams.get("cwd")) || null,
           includeRuntime: !["false", "0"].includes(normalizeString(requestUrl.searchParams.get("includeRuntime")).toLowerCase()),
@@ -139,27 +143,42 @@ export default class WorkbenchBrowseController {
           threadId: normalizeString(requestUrl.searchParams.get("threadId")) || null,
           timeoutMs: normalizeTimeout(requestUrl.searchParams.get("timeoutMs")),
         };
-        await writeResponse(response, jsonResponse(await this.listSessions(query, signal)), signal);
-        return;
+        return jsonResponse(await this.listSessions(query, signal));
       }
-      if (request.method === "POST") {
-        const rawBody = (await readRequestBody(request)).toString("utf8");
+      if (method === "POST") {
+        const rawBody = body.toString("utf8");
         const value = rawBody.trim() ? JSON.parse(rawBody) as Partial<WorkbenchBrowseSessionControlRequest> : null;
         const action = value?.action === "forget" || value?.action === "stop" ? value.action : null;
         const session = typeof value?.session === "string" ? value.session.trim() : "";
         if (!action || !SESSION_NAME_PATTERN.test(session)) {
-          await writeResponse(response, jsonResponse({ error: "A valid Browse session control request is required." }, 400), signal);
-          return;
+          return jsonResponse({ error: "A valid Browse session control request is required." }, 400);
         }
         const payload: WorkbenchBrowseSessionControlRequest = { ...value, action, session };
         const result = await this.runCommand(() => this.requestHandler.controlSession(payload, signal));
-        await writeResponse(response, jsonResponse(result), signal);
-        return;
+        return jsonResponse(result);
       }
-      await writeResponse(response, jsonResponse({ error: "Method not allowed" }, 405), signal);
+      return jsonResponse({ error: "Method not allowed" }, 405);
     } catch (error) {
-      await writeResponse(response, jsonResponse({ error: error instanceof Error ? error.message : "Unable to manage Browse sessions." }, 400), signal);
+      return jsonResponse({ error: error instanceof Error ? error.message : "Unable to manage Browse sessions." }, 400);
     }
+  }
+
+  async handleBrowseHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
+    const signal = bindRequestAbort(request, response);
+    const body = await readRequestBody(request);
+    const upstream = await this.executeBrowseRequest(body, signal);
+    await writeResponse(response, upstream, signal);
+  }
+
+  async handleSessionsHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
+    const signal = bindRequestAbort(request, response);
+    const body = request.method === "POST" ? await readRequestBody(request) : Buffer.alloc(0);
+    const upstream = await this.executeSessionRequest({
+      body,
+      method: request.method ?? "",
+      url: request.url ?? "/",
+    }, signal);
+    await writeResponse(response, upstream, signal);
   }
 
   beginDrain() {

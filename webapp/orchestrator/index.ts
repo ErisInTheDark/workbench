@@ -5,7 +5,7 @@
  * Helpers:
  * - HTTP reload helpers: parse, proxy, queue, and report orchestrator reload scopes. Keywords: reload, next-dev, bridge.
  * - Server bridge request helpers: route allowlisted stateless Next RPCs over buffered HTTP into live harness bridges. Keywords: bridge, http, rpc, allowlist, server.
- * - Browse HTTP helpers: route stateless Next proxies through the drainable orchestrator-owned Browse controller. Keywords: browse, controller, queue, streaming, reload.
+ * - Browse ingress helpers: route native agent commands directly and stateless Next proxies through the drainable orchestrator-owned Browse controller. Keywords: browse, agent, direct, controller, queue, streaming, reload.
  * - Project catalog and snapshot HTTP helpers: route stateless Next proxies through orchestrator-owned structured discovery and bounded tree caches. Keywords: project, catalog, tree, snapshot, cache, watcher, reload.
  * - Child process helpers: start, restart, and schedule managed process lifecycles. Keywords: process, restart, child.
  * - Bridge helpers: route websocket JSON-RPC messages across Codex, Copilot, and OpenCode harnesses. Keywords: websocket, harness, rpc.
@@ -18,8 +18,6 @@ import path from "node:path";
 import { WebSocketServer } from "next/dist/compiled/ws";
 
 import { createInitializeCapabilities, createInitializeRequest } from "../lib/codex/protocol";
-import { CodexAppServerClient } from "../lib/codex/app-server-client";
-import { isCodexJsonRpcFailure } from "../lib/codex/protocol";
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import { getCurrentInProgressTurn, hasThreadActiveFlag } from "../lib/codex/thread-state";
@@ -30,12 +28,11 @@ import type {
   WorkbenchBrowseResultEntry,
   WorkbenchHarness,
 } from "../lib/types";
-import type { BridgeClient, HarnessKind, JsonRpcNotification, JsonRpcRequest } from "./bridge-types";
+import type { BridgeClient, HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import CodexAppServer from "./CodexAppServer";
 import CodexStdioBridge from "./CodexStdioBridge";
 import { CopilotBridge } from "./copilot-bridge";
 import { OpenCodeBridge } from "./opencode-bridge";
-import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
 import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
 import {
     createSpawnOptions,
@@ -108,7 +105,6 @@ const workbenchAgentCliEnvironment = new WorkbenchAgentCliEnvironment({
   runtimeDirectoryPath: path.join(WEBAPP_ROOT, "node_modules", ".bin"),
   shellSourcePath: path.join(WEBAPP_ROOT, "lib", "workbench", "cli", "workbench-agent-cli.sh"),
 });
-const workbenchAgentCommandController = new WorkbenchAgentCommandController(LOCAL_WORKBENCH_ORIGIN, LOCAL_ORCHESTRATOR_ORIGIN);
 
 const nextDevEnv: NodeJS.ProcessEnv = {
   ...process.env,
@@ -138,6 +134,7 @@ let lastReloadResponse: OrchestratorReloadResponse = {
   state: "idle",
 };
 let reloadableModules = loadOrchestratorReloadableModules();
+let workbenchAgentCommandController = createAgentCommandController();
 let bridgeRequestController = createBridgeRequestController();
 let shuttingDown = false;
 let codexBridge: CodexStdioBridge;
@@ -382,6 +379,7 @@ function reloadOrchestratorLogic() {
   projectCatalogController.dispose();
   projectSnapshotController.dispose();
   reloadableModules = reloadOrchestratorReloadableModules();
+  workbenchAgentCommandController = createAgentCommandController();
   bridgeRequestController = createBridgeRequestController();
   browseSessionCleanupSupervisor = createBrowseSessionCleanupSupervisor();
   nextDevHealthSupervisor = createNextDevHealthSupervisor();
@@ -390,36 +388,6 @@ function reloadOrchestratorLogic() {
   browseSessionCleanupSupervisor.start();
   nextDevHealthSupervisor.start();
   log("orchestrator", "reloaded orchestrator helper modules");
-}
-
-function normalizeBridgeUrl(url: string) {
-  const parsedUrl = new URL(url.replace("://0.0.0.0", "://127.0.0.1"));
-  parsedUrl.pathname = "";
-  parsedUrl.search = "";
-  parsedUrl.hash = "";
-  return parsedUrl.toString().replace(/\/$/u, "");
-}
-
-async function sendBackgroundBridgeRequest<TResponse>(
-  harness: HarnessKind,
-  bridgeRequest: { id?: number; method: string; params?: unknown } & Record<string, unknown>,
-) {
-  const client = new CodexAppServerClient();
-  try {
-    await client.connect(normalizeBridgeUrl(CODEX_BRIDGE_URL));
-    const response = await client.sendRequest<TResponse>({
-      ...bridgeRequest,
-      workbenchHarness: harness,
-    });
-    if (isCodexJsonRpcFailure(response)) {
-      const detail = response.error.data ? ` ${JSON.stringify(response.error.data)}` : "";
-      throw new Error(`${response.error.message}${detail}`);
-    }
-
-    return response.result;
-  } finally {
-    client.close();
-  }
 }
 
 function isThreadActiveForBrowseCleanup(thread: ThreadReadResponse["thread"]) {
@@ -431,7 +399,8 @@ function isThreadActiveForBrowseCleanup(thread: ThreadReadResponse["thread"]) {
 async function readThreadActiveForBrowseCleanup(threadId: string) {
   for (const harness of ["codex", "copilot", "opencode"] as const satisfies readonly HarnessKind[]) {
     try {
-      const response = await sendBackgroundBridgeRequest<ThreadReadResponse>(harness, {
+      const response = await requestLiveHarness(harness, {
+        id: 0,
         method: "thread/read",
         params: {
           includeTurns: true,
@@ -439,7 +408,8 @@ async function readThreadActiveForBrowseCleanup(threadId: string) {
         },
         workbenchThreadHydration: { mode: "latest" },
       });
-      return isThreadActiveForBrowseCleanup(response.thread);
+      if (response.error) throw new Error(response.error.message);
+      return isThreadActiveForBrowseCleanup((response.result as ThreadReadResponse).thread);
     } catch {
       // Try the next harness; preserve sessions if no harness can read the thread.
     }
@@ -565,16 +535,30 @@ function createProjectCatalogController() {
 function createBridgeRequestController() {
   const Controller = reloadableModules.bridgeRequestController.default;
   return new Controller({
-    requestHarness: async (harness, request) => {
-      if (harness === "copilot") return await copilotBridge.handleRequest(request);
-      if (harness === "opencode") {
-        return await runAfterOpenCodeBridgeReload(() => opencodeBridge.handleRequest(request));
-      }
-      return await runAfterCodexBridgeReload(async () => {
-        await ensureCodexReady();
-        return await codexBridge.handleServerRequest(request);
-      });
-    },
+    requestHarness: requestLiveHarness,
+  });
+}
+
+function createAgentCommandController() {
+  const Controller = reloadableModules.agentCommandController.default;
+  return new Controller(LOCAL_WORKBENCH_ORIGIN, LOCAL_ORCHESTRATOR_ORIGIN, {
+    executeBrowseRequest: async (body, signal) => await runAfterBrowseControllerReload(
+      () => getBrowseController().executeBrowseRequest(body, signal),
+    ),
+    executeSessionRequest: async (request, signal) => await runAfterBrowseControllerReload(
+      () => getBrowseController().executeSessionRequest(request, signal),
+    ),
+  });
+}
+
+async function requestLiveHarness(harness: HarnessKind, request: JsonRpcRequest): Promise<JsonRpcResponse> {
+  if (harness === "copilot") return await copilotBridge.handleRequest(request);
+  if (harness === "opencode") {
+    return await runAfterOpenCodeBridgeReload(() => opencodeBridge.handleRequest(request));
+  }
+  return await runAfterCodexBridgeReload(async () => {
+    await ensureCodexReady();
+    return await codexBridge.handleServerRequest(request);
   });
 }
 

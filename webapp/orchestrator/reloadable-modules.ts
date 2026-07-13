@@ -6,6 +6,7 @@
  */
 
 export type OrchestratorReloadableModules = {
+  agentCommandController: Pick<typeof import("./WorkbenchAgentCommandController"), "default">;
   browseSessionCleanupSupervisor: Pick<typeof import("./BrowseSessionCleanupSupervisor"), "default">;
   bridgeRequestController: Pick<typeof import("./WorkbenchBridgeRequestController"), "default">;
   nextDevHealthSupervisor: Pick<typeof import("./NextDevHealthSupervisor"), "default">;
@@ -46,6 +47,7 @@ export type OrchestratorReloadableModules = {
 };
 
 const RELOADABLE_MODULE_SPECIFIERS = [
+  "./WorkbenchAgentCommandController",
   "./BrowseSessionCleanupSupervisor",
   "./WorkbenchBridgeRequestController",
   "./NextDevHealthSupervisor",
@@ -89,6 +91,7 @@ function collectCacheSubtree(moduleId: string, visited = new Set<string>()) {
 
 export function loadOrchestratorReloadableModules(): OrchestratorReloadableModules {
   return {
+    agentCommandController: requireTyped<OrchestratorReloadableModules["agentCommandController"]>("./WorkbenchAgentCommandController"),
     browseSessionCleanupSupervisor: requireTyped<OrchestratorReloadableModules["browseSessionCleanupSupervisor"]>("./BrowseSessionCleanupSupervisor"),
     bridgeRequestController: requireTyped<OrchestratorReloadableModules["bridgeRequestController"]>("./WorkbenchBridgeRequestController"),
     nextDevHealthSupervisor: requireTyped<OrchestratorReloadableModules["nextDevHealthSupervisor"]>("./NextDevHealthSupervisor"),
