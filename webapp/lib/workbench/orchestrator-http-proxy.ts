@@ -5,7 +5,7 @@
  */
 import type { NextRequest } from "next/server";
 
-import { getServerCodexBridgeHttpOrigins } from "../codex/server-bridge";
+import { getServerWorkbenchOrchestratorOrigins } from "../codex/server-orchestrator";
 
 export interface WorkbenchOrchestratorProxyOptions {
   responseMode: "buffer" | "stream";
@@ -31,7 +31,7 @@ export async function proxyWorkbenchOrchestratorRequest(
     : request.signal;
 
   try {
-    for (const origin of getServerCodexBridgeHttpOrigins(request)) {
+    for (const origin of getServerWorkbenchOrchestratorOrigins(request)) {
       try {
         const upstream = await fetch(`${origin}${pathname}${suffix}`, {
           body: requestBody,

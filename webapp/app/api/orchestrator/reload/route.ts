@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { getServerCodexBridgeHttpOrigins } from "../../../../lib/codex/server-bridge";
+import { getServerWorkbenchOrchestratorOrigins } from "../../../../lib/codex/server-orchestrator";
 import type {
   OrchestratorReloadRequest,
   OrchestratorReloadResponse,
@@ -35,7 +35,7 @@ async function proxyReloadRequest(
   request: NextRequest,
   init: RequestInit,
 ) {
-  const candidateOrigins = getServerCodexBridgeHttpOrigins(request);
+  const candidateOrigins = getServerWorkbenchOrchestratorOrigins(request);
   let lastError: unknown = null;
 
   for (let index = 0; index < candidateOrigins.length; index += 1) {

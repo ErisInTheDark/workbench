@@ -1160,6 +1160,15 @@ export default class CodexStdioBridge {
     return await this.enqueueOperation(() => this.handleBridgeRequestImmediately(message));
   }
 
+  async handleServerRequest(message: JsonRpcRequest): Promise<JsonRpcResponse> {
+    const bridgeResponse = await this.handleBridgeRequest(message);
+    if (bridgeResponse) return bridgeResponse;
+    return await this.enqueueOperation(() => {
+      this.assertAcceptingWork();
+      return this.request(message, { internal: true });
+    });
+  }
+
   async readThreadForBrowse(threadId: string): Promise<ThreadReadResponse> {
     this.assertAcceptingWork();
     const response = await this.readThreadContext({

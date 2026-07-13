@@ -1,11 +1,11 @@
 /*
  * Exports:
- * - notifyCollaborationStateUpdated: best-effort bridge broadcast for persisted Collaboration state changes. Keywords: collaboration, state, notification, websocket.
+ * - notifyCollaborationStateUpdated: best-effort orchestrator broadcast for persisted Collaboration state changes. Keywords: collaboration, state, notification, orchestrator.
  */
 
 import type { NextRequest } from "next/server";
 
-import { sendServerWorkbenchBridgeRequest } from "../../../lib/codex/server-bridge";
+import { sendServerWorkbenchOrchestratorRequest } from "../../../lib/codex/server-orchestrator";
 import type { WorkbenchCollaborationState } from "../../../lib/types";
 
 export async function notifyCollaborationStateUpdated(
@@ -14,7 +14,7 @@ export async function notifyCollaborationStateUpdated(
   state: WorkbenchCollaborationState,
 ) {
   try {
-    await sendServerWorkbenchBridgeRequest<{ ok?: boolean }>(request, "codex", {
+    await sendServerWorkbenchOrchestratorRequest<{ ok?: boolean }>(request, "codex", {
       method: "workbench/notification/broadcast",
       params: {
         notification: {

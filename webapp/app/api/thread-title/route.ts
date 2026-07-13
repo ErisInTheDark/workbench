@@ -1,6 +1,11 @@
+/*
+ * Exports:
+ * - runtime/dynamic: keep thread-title writes on stateless Node route handling. Keywords: thread, title, orchestrator, node.
+ * - POST: validate and forward one harness-scoped thread title through orchestrator HTTP. Keywords: thread, title, bridge, http.
+ */
 import { NextRequest, NextResponse } from "next/server";
 
-import { sendServerWorkbenchBridgeRequest } from "../../../lib/codex/server-bridge";
+import { sendServerWorkbenchOrchestratorRequest } from "../../../lib/codex/server-orchestrator";
 import { normalizeThreadTitle } from "../../../lib/thread-bootstrap";
 import type { WorkbenchHarness } from "../../../lib/types";
 
@@ -35,7 +40,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "A non-empty title is required." }, { status: 400 });
     }
 
-    await sendServerWorkbenchBridgeRequest<Record<string, never>>(request, harness, {
+    await sendServerWorkbenchOrchestratorRequest<Record<string, never>>(request, harness, {
       method: "thread/name/set",
       params: {
         name: title,

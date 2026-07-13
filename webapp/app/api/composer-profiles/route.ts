@@ -5,7 +5,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 
-import { sendServerWorkbenchBridgeRequest } from "../../../lib/codex/server-bridge";
+import { sendServerWorkbenchOrchestratorRequest } from "../../../lib/codex/server-orchestrator";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,7 +16,7 @@ function errorResponse(error: unknown) {
 
 export async function GET(request: NextRequest) {
   try {
-    const result = await sendServerWorkbenchBridgeRequest(request, "codex", { method: "workbench/composerProfiles/read", params: {} });
+    const result = await sendServerWorkbenchOrchestratorRequest(request, "codex", { method: "workbench/composerProfiles/read", params: {} });
     return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch (error) { return errorResponse(error); }
 }
@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
         ? "workbench/composerProfiles/mutate"
         : null;
     if (!method) throw new Error("Composer profile action must be importLegacy or mutate.");
-    const result = await sendServerWorkbenchBridgeRequest(request, "codex", { method, params: { mutation: body.mutation, profiles: body.profiles } });
+    const result = await sendServerWorkbenchOrchestratorRequest(request, "codex", { method, params: { mutation: body.mutation, profiles: body.profiles } });
     return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch (error) { return errorResponse(error); }
 }

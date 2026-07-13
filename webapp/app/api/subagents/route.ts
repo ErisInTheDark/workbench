@@ -7,7 +7,7 @@
 import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 
-import { sendServerWorkbenchBridgeRequest } from "../../../lib/codex/server-bridge";
+import { sendServerWorkbenchOrchestratorRequest } from "../../../lib/codex/server-orchestrator";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,7 +25,7 @@ function errorResponse(error: unknown) {
 
 export async function GET(request: NextRequest) {
   try {
-    const result = await sendServerWorkbenchBridgeRequest(request, "codex", {
+    const result = await sendServerWorkbenchOrchestratorRequest(request, "codex", {
       method: "workbench/subagent/list",
       params: {
         cwd: request.nextUrl.searchParams.get("cwd"),
@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
     const method = ACTION_METHODS[action as keyof typeof ACTION_METHODS];
     if (!method) return errorResponse(new Error("Unsupported Workbench subagent action."));
     try {
-      const result = await sendServerWorkbenchBridgeRequest(request, "codex", { method, params: body });
+      const result = await sendServerWorkbenchOrchestratorRequest(request, "codex", { method, params: body });
       return action === "message" || action === "stop"
         ? new NextResponse(null, { status: 204 })
         : NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
@@ -53,14 +53,14 @@ export async function POST(request: NextRequest) {
 
   const waitId = randomUUID();
   const cancel = () => {
-    void sendServerWorkbenchBridgeRequest(request, "codex", {
+    void sendServerWorkbenchOrchestratorRequest(request, "codex", {
       method: "workbench/subagent/waitCancel",
       params: { waitId },
-    }).catch(() => undefined);
+    }, { signal: null }).catch(() => undefined);
   };
   request.signal.addEventListener("abort", cancel, { once: true });
   try {
-    const result = await sendServerWorkbenchBridgeRequest<{ output: string }>(request, "codex", {
+    const result = await sendServerWorkbenchOrchestratorRequest<{ output: string }>(request, "codex", {
       method: "workbench/subagent/wait",
       params: { ...body, waitId },
     });

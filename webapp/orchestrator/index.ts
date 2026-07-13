@@ -4,6 +4,7 @@
  *
  * Helpers:
  * - HTTP reload helpers: parse, proxy, queue, and report orchestrator reload scopes. Keywords: reload, next-dev, bridge.
+ * - Server bridge request helpers: route allowlisted stateless Next RPCs over buffered HTTP into live harness bridges. Keywords: bridge, http, rpc, allowlist, server.
  * - Browse HTTP helpers: route stateless Next proxies through the drainable orchestrator-owned Browse controller. Keywords: browse, controller, queue, streaming, reload.
  * - Project catalog and snapshot HTTP helpers: route stateless Next proxies through orchestrator-owned structured discovery and bounded tree caches. Keywords: project, catalog, tree, snapshot, cache, watcher, reload.
  * - Child process helpers: start, restart, and schedule managed process lifecycles. Keywords: process, restart, child.
@@ -67,6 +68,7 @@ const ORCHESTRATOR_RELOAD_PATH = "/orchestrator/reload";
 const ORCHESTRATOR_BROWSE_PATH = "/orchestrator/browse";
 const ORCHESTRATOR_BROWSE_SESSIONS_PATH = "/orchestrator/browse/sessions";
 const ORCHESTRATOR_AGENT_COMMAND_PATH = "/orchestrator/agent-command";
+const ORCHESTRATOR_BRIDGE_REQUEST_PATH = "/orchestrator/bridge-request";
 const ORCHESTRATOR_PROJECTS_PATH = "/orchestrator/projects";
 const ORCHESTRATOR_TREE_PATH = "/orchestrator/tree";
 const CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS = 5000;
@@ -136,6 +138,7 @@ let lastReloadResponse: OrchestratorReloadResponse = {
   state: "idle",
 };
 let reloadableModules = loadOrchestratorReloadableModules();
+let bridgeRequestController = createBridgeRequestController();
 let shuttingDown = false;
 let codexBridge: CodexStdioBridge;
 let opencodeBridge: OpenCodeBridge;
@@ -379,6 +382,7 @@ function reloadOrchestratorLogic() {
   projectCatalogController.dispose();
   projectSnapshotController.dispose();
   reloadableModules = reloadOrchestratorReloadableModules();
+  bridgeRequestController = createBridgeRequestController();
   browseSessionCleanupSupervisor = createBrowseSessionCleanupSupervisor();
   nextDevHealthSupervisor = createNextDevHealthSupervisor();
   projectCatalogController = createProjectCatalogController();
@@ -556,6 +560,22 @@ function createProjectSnapshotController() {
 function createProjectCatalogController() {
   const Controller = reloadableModules.projectCatalogController.default;
   return new Controller();
+}
+
+function createBridgeRequestController() {
+  const Controller = reloadableModules.bridgeRequestController.default;
+  return new Controller({
+    requestHarness: async (harness, request) => {
+      if (harness === "copilot") return await copilotBridge.handleRequest(request);
+      if (harness === "opencode") {
+        return await runAfterOpenCodeBridgeReload(() => opencodeBridge.handleRequest(request));
+      }
+      return await runAfterCodexBridgeReload(async () => {
+        await ensureCodexReady();
+        return await codexBridge.handleServerRequest(request);
+      });
+    },
+  });
 }
 
 function restartNextDevFromWatchdog(reason: string) {
@@ -1074,6 +1094,12 @@ function startBridgeServer() {
     const requestPath = new URL(request.url ?? "/", "http://localhost").pathname;
     if (requestPath === ORCHESTRATOR_AGENT_COMMAND_PATH && request.method === "POST") {
       void workbenchAgentCommandController.handleHttpRequest(request, response);
+      return;
+    }
+    if (requestPath === ORCHESTRATOR_BRIDGE_REQUEST_PATH && request.method === "POST") {
+      void bridgeRequestController.handleHttpRequest(request, response).catch((error) => {
+        if (!response.headersSent) sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Bridge request failed." });
+      });
       return;
     }
     if (requestPath === ORCHESTRATOR_PROJECTS_PATH && request.method === "GET") {

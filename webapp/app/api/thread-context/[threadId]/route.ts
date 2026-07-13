@@ -14,7 +14,7 @@ import type {
   WorkbenchThreadRecallRequest,
 } from "../../../../lib/types";
 import { WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS } from "../../../../lib/types";
-import { sendServerWorkbenchBridgeRequest } from "../../../../lib/codex/server-bridge";
+import { sendServerWorkbenchOrchestratorRequest } from "../../../../lib/codex/server-orchestrator";
 import { isProjectCodexThread, toThreadPayload } from "../../../../lib/codex/thread-adapter";
 import { resolveAgentEndpointProjectFromCwd } from "../../../../lib/workbench/project/agent-endpoint-project";
 import {
@@ -144,7 +144,7 @@ async function readThreadContextBundle(
     throw new Error("Thread Recall requires a threadId.");
   }
 
-  const context = await sendServerWorkbenchBridgeRequest<WorkbenchThreadContextReadResponse>(request, "codex", {
+  const context = await sendServerWorkbenchOrchestratorRequest<WorkbenchThreadContextReadResponse>(request, "codex", {
     method: "thread/context/read",
     params: {
       includeTurns: true,
