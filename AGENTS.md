@@ -1,89 +1,77 @@
-## Orientation
+# Workbench Agent Guidance
 
-- `webapp/` is a Next.js App Router app using React 19, Tailwind 4, and a custom markdown workbench and editor.
-- `webapp/components/workbench.tsx` owns the React shell, responsive explorer and editor layout, and UI chrome; `webapp/lib/WorkbenchClient.ts` owns imperative editor behavior, persistence, polling, and most client-side file and thread interactions.
-- `webapp/lib/workbench/` uses layered ownership: public client surfaces stay at the folder root, editor-private controllers live under `editor/`, reusable DOM helpers live under `dom/`, state owners live under `state/`, markdown helpers live under `markdown/`, project helpers live under `project/`, and thread helpers live under `thread/`.
-- `webapp/app/api/` contains server routes for tree, file, and Codex operations; keep their contracts aligned with `webapp/lib/types.ts`.
-- `webapp/orchestrator/` coordinates local Next.js development together with the Codex and Copilot bridge paths.
-- The agent-facing `wb` command is a native Bash/curl transport with PowerShell and CMD comfort wrappers; `webapp/orchestrator/WorkbenchAgentCommandController.ts` owns server-side argv parsing, allowlisted routing, response adaptation, and reload polling so agent commands do not start Node per invocation.
-- Workbench subagent lifecycle and direct-parent authorization are owned by `webapp/orchestrator/WorkbenchSubagentController.ts` beneath `CodexStdioBridge`; durable relationships live in `.workbench/runtime/subagents.json`, while Next routes remain stateless proxies.
-- User-visible composer profile records are disk-canonical through `webapp/orchestrator/WorkbenchComposerProfileStore.ts`; browser selections stay local, and profile mutations synchronize through the browser controller's bounded outbox.
+## What Belongs Here
 
-## Validation for agent thread rendering
+- Keep this file limited to durable project constraints, project-skill routing, project-specific commands, validation commands, and explicit permission boundaries.
+- Do not add architecture inventories, temporary implementation notes, changelogs, task-specific procedures, or facts that an agent can recover by inspecting the source.
+- Update this file or nearby project guidance when a change materially alters a durable project constraint or operating workflow, and confirm that guidance change with the user.
 
-- Validation of the running workbench UI can be done via Browse. Use the `localhost` hostname rather than `127.0.0.1`, use whatever port you're provided.
-- `/agent/thread/<threadId>` to view a specific thread (chrome free)
-- `/agent/thread-lab` provides a render lab for pasted thread payloads, turns, thread items, command strings, and simplified command objects. It is the preferred manual surface for command matcher rendering checks.
+## Project Skills
 
-# Constraints
+- `/opencode-diagnostics` owns the bounded local SDK-probe workflow for diagnosing OpenCode connectivity, event streams, sessions, prompt delivery, and bridge behavior under `webapp/orchestrator/`.
 
-## DO
+## Code Organization
 
-- PREFER REUSABLE COMPONENTS. Reusable components should be the default export of their file, which should have a matching PascalCase filename such as `ThreadView.tsx`.
-- PREFER PROMINENT CONTROLLERS. State owners/controllers — whether a function, or a class — should be the default export of their file, which should have a matching PascalCase filename such as `WorkbenchClient.ts`.
-- MISC FILES LOOK MISC. Files containing miscellaneous functions or types or registries should be kebab-case, such as `command-matchers.ts`.
-- RELATED FUNCTIONALITY BELONGS IN REGISTRIES. For example, handling transformation of raw strings into specific actions or displays should not be hardcoded, but should instead be individual items within a transformation registry. Large registries should be broken into a core registry file that imports all of its contents from smaller files of individual registry items or groups.
-- DOCUMENT FILES. Add & keep updated a start-of-file manifest comment for files containing multiple components, functions, types, etc. Include high-signal keywords. List every export and its one-line purpose. Manifest comments that do not follow this exact format should be proactively updated.
-- KEEP FILES SMALL AND REUSABLE. PROACTIVELY PLAN REFACTORS. The codebase MUST stay in coherent, maintainable pieces instead of growing monolithic files.
-- FLUSH/ZEN VISUAL LANGUAGE. Minimal borders, backgrounds only when necessary. Gradient masks can help differentiate parts of the app. Buttons should only get a background on hover.
-- ENSURE COLOUR SCHEME SUPPORT. Both dark & light mode should be supported by every change.
-- ENSURE MOBILE SUPPORT. Make desktop and mobile behavior DELIBERATE, especially for split explorer and editor layout, sticky controls, and save or reset affordances.
-- KEEP SHARED CODE IN SYNC. Never write shared code, such as client/server code, with `any`/`unknown` types, always use shared types and keep the two sides synchronised.
-- UPDATE GUIDANCE. Keep`AGENTS.md` or nearby project guidance up-to-date when the webapp's structure or operating workflow changes materially. Confirm the changes with the user.
-- UPDATE INSTRUCTION SOURCES, NOT GENERATED FILES. For Workbench-owned prompts/workflows, edit the source under `webapp/lib/workbench/instructions/` instead of generated files in the Workbench library. Confirm the source-to-generated path before planning.
-- AGENT ENDPOINTS ARE CWD OWNED. Project-scoped endpoints that Workbench explicitly exposes to agents must derive project ownership from the agent's `cwd`, not from a caller-supplied `projectId`. Keep `projectId` as UI/app selection state and as resolved response/storage identity, not as the primary agent endpoint input.
-- TREAT NEXT ROUTES AS STATELESS. `webapp/app/api/` handlers should behave like serverless request handlers: do not rely on module memory, timers, or warm-process caches for correctness. Store durable endpoint state on disk/git or delegate long-lived process/lifecycle ownership to `webapp/orchestrator/`. If a route needs bridge/app-server state, call the orchestrator/bridge per request instead of mirroring that state locally.
+- Prefer reusable components. A reusable component should be the default export of a matching PascalCase file, such as `ThreadView.tsx`.
+- Prefer prominent controllers and state owners. A controller or state-owning function/class should be the default export of a matching PascalCase file, such as `WorkbenchClient.ts`.
+- Use kebab-case filenames for miscellaneous functions, types, and registries, such as `command-matchers.ts`.
+- Put related transformations in registries instead of hardcoded dispatch branches. Split large registries into a core registry that imports focused registry items or groups.
+- Add and maintain a start-of-file manifest comment in files containing multiple components, functions, types, or other exports. Include high-signal keywords and list every export with a one-line purpose; proactively fix nonconforming manifests in files you edit.
+- Keep files small, reusable, and conceptually coherent. Plan the nearby refactor when the requested change would otherwise deepen a monolith, duplicate ownership, or add helper soup.
+- Do not create file-specific duplicate components, utilities, or types when a shared owner already exists.
 
+## UI Constraints
 
-## DO NOT
+- Follow the flush/zen visual language: use minimal borders, add backgrounds only when necessary, use gradient masks when they clarify separation, and give buttons a background only on hover.
+- Support both light and dark color schemes in every visual change.
+- Make desktop and mobile behavior deliberate, especially for split explorer/editor layouts, sticky controls, and save/reset affordances.
 
-- DO NOT add file-specific duplicate components, utilities, or types when a shared home already exists.
-- DO NOT leave a single-component file in `webapp/components/` on a mismatched filename or named export.
-- DO NOT leave API contracts or state flow half-migrated.
-- DO NOT leave the Workbench webapp compile-broken, route-broken, or unable to serve agent workflow/checkpoint endpoints while waiting for user input. For shared contracts, thread rendering, app routes, instruction-generation, or other app-core changes, work in compile-safe vertical slices and preserve compatibility until all consumers are migrated. If a plan gap is discovered after edits, restore app health within the already-approved scope before asking for more direction.
-- DO NOT run any `pnpm` script except `typecheck`.
-- DO NOT call the webapp endpoints yourself without EXPLICIT permission from the user.
-- DO NOT run `tsx` to test your code.
+## Contracts, Sources, and Equality
 
-## Structured Equality
+- Keep shared client/server code synchronized through shared types. Do not use `any` or `unknown` in shared contracts, and do not leave API contracts or state flow half-migrated.
+- For app-core, shared-contract, thread-rendering, route, or instruction-generation changes, work in compile-safe vertical slices. Preserve compatibility until all consumers are migrated, and do not leave the app or workflow/checkpoint endpoints broken while awaiting user input.
+- Edit Workbench-owned prompt and workflow sources under `webapp/lib/workbench/instructions/`, not generated Workbench-library files. Confirm the source-to-generated path before planning.
+- Do not use `JSON.stringify` for equality. Compare explicit fields when the owner has meaningful equality rules, use the shared deep-equality utility for JSON-like structural data, and reserve stable serializers for serialization, signatures, logs, cache keys, request bodies, or display text.
 
-- Do not use `JSON.stringify` for equality checks.
-- Compare explicit fields when the owning concept has meaningful equality rules.
-- Use the shared deep equality utility for JSON-like structural data.
-- Use stable serializers only for serialization, saved signatures, logs, cache keys, request bodies, or display text.
+## Endpoint and Lifecycle Invariants
 
-## Orchestrator Reload Discipline
+- Project-scoped agent endpoints derive ownership from the agent's validated `cwd`, never a caller-supplied `projectId`. Keep `projectId` as UI/app selection state and resolved response/storage identity only.
+- Treat Next.js routes as stateless serverless handlers. Do not rely on route-module memory, timers, or warm-process caches for correctness; store durable state on disk/git or delegate long-lived state and lifecycle to the orchestrator.
+- Keep Next-to-orchestrator one-shot RPC on the allowlisted buffered HTTP boundary. Reserve bridge WebSockets for persistent browser clients and notification streams, and do not create one-shot app-server sockets inside Next routes.
+- Make changes to long-lived orchestrator behavior reload-capable in the same changeset, or explicitly tell the user that a full orchestrator restart is required.
+- Keep reloads non-destructive and narrowly scoped. `orchestrator-logic` reloads only declared reloadable modules; `codex-bridge` must preserve the Codex app-server process, pending bridge state, and browser WebSocket clients; `browse-controller` must drain and replace controller code without restarting browser sessions.
+- Keep Browse command execution warm and orchestrator-owned, including direct daemon communication, per-session FIFO queues, deadlines, cancellation, and timed-out session retirement. Do not reintroduce an upstream Browse CLI child process per typed action; only the explicitly gated raw fallback may spawn it.
+- Keep Browse result resolution and ordered sidecars out of the command transport, and keep thread-activity reads isolated to session-cleanup polling rather than the command path.
+- Keep project discovery coalesced and `cwd`-validated with watcher invalidation and a bounded soft refresh. Do not reintroduce per-request project walks, and keep explorer tree snapshot caching separate from project discovery.
+- Preserve an active subagent controller across a bridge reload only while it owns active waiters. Ordinary bridge reloads may recreate the controller but must not restart the stable Codex app-server.
+- Give every new long-lived orchestrator subsystem an explicit reload/disposal boundary.
 
-- When changing long-lived orchestrator behavior, make it reload-capable in the same changeset or explicitly tell the user a full orchestrator restart is required.
-- `orchestrator-logic` only reloads modules listed in `webapp/orchestrator/reloadable-modules.ts`; it does not replace long-lived bridge instances.
-- Changes to `CodexStdioBridge` must preserve the existing Codex app-server process unless the user explicitly asks for an app-server restart. Reload support should change the bridge-side behavior around the connection, not tear down the connection.
-- Changes to code between the Codex app-server stdio connection and the browser websocket must be covered by the `codex-bridge` reload scope or a newer equivalent reload scope that does not restart the Codex app-server child.
-- `codex-bridge` reload must reload the bridge module or a delegated middleware module and preserve the live app-server process, pending bridge state, and websocket clients.
-- If adding a new orchestrator subsystem, document its reload boundary in code: either add it to the reloadable helper bundle or wire it into an explicit non-destructive reload scope.
-- Browse command execution, session control, and FIFO serialization are owned by the orchestrator `WorkbenchBrowseController`; Next Browse routes are stateless transport proxies, with commands streamed and session responses fully buffered. Use the `browse-controller` reload scope to drain and replace controller code without restarting browser sessions, bridges, the Codex app-server, or Next.js.
-- `WorkbenchBrowseRuntime` owns the warm Browse protocol import, direct long-lived daemon communication, per-session FIFO queues, command deadlines, cancellation, and timed-out session retirement. Do not reintroduce a Browse CLI child process per typed action; only the explicitly gated raw fallback may spawn the upstream CLI.
-- Stateless Next-to-orchestrator bridge RPC uses the allowlisted buffered HTTP boundary owned by `WorkbenchBridgeRequestController`; reserve bridge WebSockets for persistent browser clients and notification streams. Do not create one-shot `CodexAppServerClient` sockets inside Next routes.
-- Browse execution receives only the owning `threadId`; `WorkbenchBrowseResultController` owns deferred harness/turn/command-item resolution, ordered result sidecars, and explicit screenshot steering. Thread-activity reads for session cleanup remain isolated to `BrowseSessionCleanupSupervisor` polling and must not enter the command path.
-- Structured project discovery is owned by the orchestrator `WorkbenchProjectCatalogController`, which coalesces discovery, resolves agent CWD ownership from its validated catalog, and combines hard watcher invalidation with soft TTL refresh. Explorer tree snapshot caching remains owned by `WorkbenchProjectSnapshotController`; Next project/tree routes are stateless streaming proxies. Both controllers are disposed/recreated by the `orchestrator-logic` reload scope.
-- Subagent lifecycle uses the existing `codex-bridge` boundary. Preserve an active `WorkbenchSubagentController` across bridge reload only while it owns active waiters; ordinary reloads recreate it without restarting the stable Codex app-server.
+## Commands and Permission Boundaries
 
-## OpenCode Diagnostics
-- When diagnosing OpenCode integration under `webapp/orchestrator/`, it is safe to run local OpenCode SDK probes with small prompts because OpenCode usage here is unlimited. This does not override the rule against calling webapp endpoints without explicit permission. Prefer bounded probes that subscribe to events, send a tiny prompt, print event types, and abort promptly. Minimal pattern:
+Run project validation from `webapp/` unless a command says otherwise.
+
+### Allowed Validation
 
 ```powershell
-$script = @'
-import { createOpencodeClient } from "@opencode-ai/sdk/v2";
-const baseUrl = process.env.OPENCODE_SERVER_URL || "http://127.0.0.1:4096";
-const directory = process.cwd().replace(/\\/g, "/").replace(/\/webapp$/i, "");
-const client = createOpencodeClient({ baseUrl, directory });
-const abort = new AbortController();
-void (async () => {
-  const events = await client.v2.event.subscribe({ signal: abort.signal });
-  for await (const event of events.stream) console.log(event.type, event.data?.sessionID ?? "");
-})();
-const session = (await client.session.create({ directory, title: "OpenCode probe" })).data;
-await client.session.promptAsync({ directory, sessionID: session.id, parts: [{ type: "text", text: "who are you, and summarise instructions and tools" }] });
-setTimeout(() => abort.abort(), 30000);
-'@
-node --input-type=module -e $script
+pnpm typecheck
 ```
+
+- `pnpm typecheck` is the only allowed `pnpm` script.
+- For agent-thread rendering, use `http://localhost:<port>/agent/thread/<threadId>` for the chrome-free thread view and `http://localhost:<port>/agent/thread-lab` for pasted payload, turn, item, command-string, and simplified-command rendering checks.
+
+### Ask the User First
+
+- Obtain explicit user permission through a questionnaire before calling any Workbench webapp endpoint directly.
+- Obtain explicit user permission through a questionnaire before reloading or restarting shared runtime state. When approved, use the narrowest applicable scope:
+
+```text
+wb orchestrator reload [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--opencode-bridge] [--opencode-server] [--next-dev]
+```
+
+- Ask before running installs, generation, formatting, migration, cleanup, build, or other commands that write artifacts or disturb active watch/runtime state.
+
+### Forbidden Shortcuts
+
+- Do not run any `pnpm` script other than `typecheck`.
+- Do not run `tsx` to test code.
+- Do not broaden a reload beyond the subsystem changed.
