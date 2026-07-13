@@ -41,9 +41,14 @@ function joinInstructionSections(sections: Array<string | null | undefined>) {
     .join("\n\n") || null;
 }
 
-function buildOpenCodeSystemReplacementPluginSource() {
+export function buildOpenCodeSystemReplacementPluginSource() {
   return `
 export const WorkbenchSystemReplacementPlugin = async () => ({
+  "shell.env": async (input, output) => {
+    if (input.sessionID) {
+      output.env.WORKBENCH_THREAD_ID = input.sessionID;
+    }
+  },
   "experimental.chat.system.transform": async (_input, output) => {
     const markerStart = ${JSON.stringify(WORKBENCH_OPENCODE_SYSTEM_BEGIN)};
     const markerEnd = ${JSON.stringify(WORKBENCH_OPENCODE_SYSTEM_END)};

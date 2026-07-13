@@ -20,6 +20,7 @@ export type WorkbenchAgentCliResponseKind =
   | "json"
   | "native"
   | "orchestrator-reload"
+  | "subagent-create"
   | "thread-title";
 
 export interface WorkbenchAgentCliRequest {
@@ -37,8 +38,10 @@ export type WorkbenchAgentCliParseResult =
 
 interface CommandBuildContext {
   args: string[];
+  callerThreadId: string | null;
   cwd: string;
   readTextFile: (filePath: string) => Promise<string>;
+  workbenchOrigin: string | null;
 }
 
 interface CommandDefinition {
@@ -202,6 +205,50 @@ function parseVariables(values: string[]) {
 }
 
 const COMMANDS: readonly CommandDefinition[] = [
+  {
+    words: ["subagent", "profiles"],
+    usage: "wb subagent profiles",
+    async build({ args, callerThreadId, cwd, workbenchOrigin }) {
+      new ParsedFlags(args, {});
+      if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
+      return post("/api/subagents", { action: "profiles", callerThreadId, cwd, ...(workbenchOrigin ? { workbenchOrigin } : {}) }, "json");
+    },
+  },
+  {
+    words: ["subagent", "create"],
+    usage: "wb subagent create --profile <profile id> --name <name> --title <title> --message <message>",
+    async build({ args, callerThreadId, cwd, workbenchOrigin }) {
+      const flags = new ParsedFlags(args, { values: ["--profile", "--name", "--title", "--message"] });
+      if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
+      return post("/api/subagents", {
+        action: "create", callerThreadId, cwd, message: flags.required("--message"), name: flags.required("--name"),
+        profileId: flags.required("--profile"), title: flags.required("--title"), ...(workbenchOrigin ? { workbenchOrigin } : {}),
+      }, "subagent-create");
+    },
+  },
+  ...(["wait", "stop"] as const).map((action): CommandDefinition => ({
+    words: ["subagent", action],
+    usage: `wb subagent ${action} --id <id>`,
+    async build({ args, callerThreadId, cwd, workbenchOrigin }) {
+      const flags = new ParsedFlags(args, { values: ["--id"] });
+      if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
+      return post("/api/subagents", {
+        action, callerThreadId, cwd, threadId: flags.required("--id"), ...(workbenchOrigin ? { workbenchOrigin } : {}),
+      });
+    },
+  })),
+  {
+    words: ["subagent", "message"],
+    usage: "wb subagent message --id <id> --message <message>",
+    async build({ args, callerThreadId, cwd, workbenchOrigin }) {
+      const flags = new ParsedFlags(args, { values: ["--id", "--message"] });
+      if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
+      return post("/api/subagents", {
+        action: "message", callerThreadId, cwd, message: flags.required("--message"), threadId: flags.required("--id"),
+        ...(workbenchOrigin ? { workbenchOrigin } : {}),
+      });
+    },
+  },
   {
     words: ["thread", "title"],
     usage: "wb thread title --thread <id> --harness <codex|copilot|opencode> --title <text>",
@@ -496,10 +543,14 @@ export async function parseWorkbenchAgentCliCommand(
   argv: string[],
   {
     cwd = process.cwd(),
+    callerThreadId = process.env.WORKBENCH_THREAD_ID?.trim() || process.env.CODEX_THREAD_ID?.trim() || null,
     readTextFile = async (filePath: string) => await readFile(filePath, "utf8"),
+    workbenchOrigin = process.env.WORKBENCH_ORIGIN?.trim() || null,
   }: {
+    callerThreadId?: string | null;
     cwd?: string;
     readTextFile?: CommandBuildContext["readTextFile"];
+    workbenchOrigin?: string | null;
   } = {},
 ): Promise<WorkbenchAgentCliParseResult> {
   if (!argv.length || argv.includes("--help") || argv[0] === "help") {
@@ -518,7 +569,7 @@ export async function parseWorkbenchAgentCliCommand(
   try {
     return {
       kind: "request",
-      request: await matched.definition.build({ args: argv.slice(matched.words.length), cwd, readTextFile }),
+      request: await matched.definition.build({ args: argv.slice(matched.words.length), callerThreadId, cwd, readTextFile, workbenchOrigin }),
     };
   } catch (error) {
     return {

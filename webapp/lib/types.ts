@@ -575,6 +575,28 @@ export interface WorkbenchComposerProfile extends WorkbenchComposerSettings {
   updatedAt: number;
 }
 
+export type WorkbenchComposerProfileMutation =
+  | { kind: "delete"; profileId: string }
+  | { kind: "upsert"; profile: WorkbenchComposerProfile };
+
+export interface WorkbenchComposerProfileStorePayload {
+  profiles: WorkbenchComposerProfile[];
+}
+
+export interface WorkbenchSubagentSummary {
+  createdAt: number;
+  cwd: string;
+  harness: WorkbenchHarness;
+  name: string;
+  parentThreadId: string;
+  profileId: string;
+  profileName: string;
+  projectId: string;
+  threadId: string;
+  title: string;
+  updatedAt: number;
+}
+
 export type WorkbenchComposerProfileSlot =
   | { kind: "collaboration-runner"; projectId: string }
   | { kind: "new-thread"; projectId: string }

@@ -24,6 +24,7 @@ import type {
   WorkbenchReadThreadOptions,
   WorkbenchSendThreadMessageOptions,
   WorkbenchSkillSummary,
+  WorkbenchSubagentSummary,
   WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadComposerDraft,
   WorkbenchThreadDocumentSnapshot,
@@ -54,9 +55,12 @@ import {
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
 import {
-  getCollabAgentThreadIds,
+  getSubagentHarness,
+  getSubagentSummary,
+  getSubagentThreadIds,
   getThreadAgentTabLabel,
-} from "../../../lib/workbench/thread/thread-collab-agents";
+  listWorkbenchSubagents,
+} from "../../../lib/workbench/thread/thread-subagents";
 import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
 import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
@@ -78,9 +82,9 @@ import {
 } from "./ThreadWebSearchItem";
 
 const SUBTHREAD_POLL_INTERVAL_MS = 1500;
+const SUBAGENT_METADATA_POLL_INTERVAL_MS = 3000;
 const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
 const MAX_VISIBLE_HISTORY_ENTRIES = 8;
-const EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS: readonly string[] = [];
 const EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS: readonly string[] = [];
 const EMPTY_BROWSE_RESULT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
 const EMPTY_PROJECT_FILE_CANDIDATES: readonly ProjectTreeFileCandidate[] = [];
@@ -93,13 +97,6 @@ type LiveThreadActivity =
     hiddenItemId: string | null;
     kind: "reasoning";
     title: string;
-  }
-  | {
-    kind: "subagentWaits";
-    waits: Array<{
-      hiddenItemId: string;
-      receiverThreadId: string;
-    }>;
   }
   | {
     contextItems: Extract<ThreadPayload["turns"][number]["items"][number], { type: "webSearch" }>[];
@@ -437,40 +434,6 @@ function getLiveThreadActivity ({
     return null;
   }
 
-  const waits: Array<{ hiddenItemId: string; receiverThreadId: string }> = [];
-  const seenWaitKeys = new Set<string>();
-  for (let index = turn.items.length - 1; index >= 0; index -= 1) {
-    const item = turn.items[index];
-    if (item.type !== "collabAgentToolCall" || item.tool !== "wait" || item.status !== "inProgress") {
-      break;
-    }
-
-    for (const receiverThreadId of item.receiverThreadIds) {
-      const trimmedReceiverThreadId = receiverThreadId.trim();
-      if (!trimmedReceiverThreadId) {
-        continue;
-      }
-
-      const waitKey = `${item.id}:${trimmedReceiverThreadId}`;
-      if (seenWaitKeys.has(waitKey)) {
-        continue;
-      }
-
-      seenWaitKeys.add(waitKey);
-      waits.unshift({
-        hiddenItemId: item.id,
-        receiverThreadId: trimmedReceiverThreadId,
-      });
-    }
-  }
-
-  if (waits.length) {
-    return {
-      kind: "subagentWaits",
-      waits,
-    };
-  }
-
   const reasoningStep = getCurrentReasoningStep(turn);
   if (reasoningStep) {
     return {
@@ -734,6 +697,7 @@ export default memo(function ThreadView ({
 }) {
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const [activeThreadId, setActiveThreadId] = useState(thread.id);
+  const [subagents, setSubagents] = useState<WorkbenchSubagentSummary[]>([]);
   const [subthreadsById, setSubthreadsById] = useState<Record<string, ThreadPayload>>({});
   const [loadingThreadIds, setLoadingThreadIds] = useState<Record<string, true>>({});
   const [loadingPreviousTurnKeys, setLoadingPreviousTurnKeys] = useState<Record<string, true>>({});
@@ -754,7 +718,35 @@ export default memo(function ThreadView ({
     scrollAnchorControllerRef.current = ThreadScrollAnchorController();
   }
   const scrollAnchorController = scrollAnchorControllerRef.current;
-  const subagentThreadIds = useMemo(() => getCollabAgentThreadIds(thread.turns), [thread.turns]);
+  useEffect(() => {
+    const lifecycleController = new AbortController();
+    let refreshTimer: number | null = null;
+    setSubagents([]);
+
+    const refreshSubagents = async () => {
+      try {
+        const summaries = await listWorkbenchSubagents({
+          cwd: projectRootPath,
+          parentThreadId: thread.id,
+          signal: AbortSignal.any([lifecycleController.signal, AbortSignal.timeout(5_000)]),
+        });
+        if (!lifecycleController.signal.aborted) setSubagents(summaries);
+      } catch {
+        // Parent rendering and questionnaires never depend on optional child metadata.
+      } finally {
+        if (!lifecycleController.signal.aborted) {
+          refreshTimer = window.setTimeout(refreshSubagents, SUBAGENT_METADATA_POLL_INTERVAL_MS);
+        }
+      }
+    };
+
+    void refreshSubagents();
+    return () => {
+      lifecycleController.abort();
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+    };
+  }, [projectRootPath, thread.id]);
+  const subagentThreadIds = useMemo(() => getSubagentThreadIds(subagents), [subagents]);
   const relatedThreadsById = useStableRelatedThreadsById({
     subagentThreadIds,
     subthreadsById,
@@ -801,13 +793,6 @@ export default memo(function ThreadView ({
     pendingUserInputRequest: activePendingUserInputRequest,
     turn: currentTurn,
   }), [activePendingUserInputRequest, currentTurn]);
-  const hiddenCollabAgentToolCallItemIds = useMemo(() => {
-    if (liveActivity?.kind !== "subagentWaits") {
-      return EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS;
-    }
-
-    return Array.from(new Set(liveActivity.waits.map((wait) => wait.hiddenItemId)));
-  }, [liveActivity]);
   const hiddenDynamicToolCallItemIds = useMemo(() => {
     if (!currentTurn || activePendingUserInputRequest?.harness !== "opencode") {
       return EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS;
@@ -859,13 +844,13 @@ export default memo(function ThreadView ({
   const tabDefinitions = useMemo(() => {
     const baseLabelCounts = new Map<string, number>();
     for (const threadId of subagentThreadIds) {
-      const label = getThreadAgentTabLabel(relatedThreadsById[threadId]);
+      const label = getThreadAgentTabLabel(relatedThreadsById[threadId], getSubagentSummary(subagents, threadId));
       baseLabelCounts.set(label, (baseLabelCounts.get(label) ?? 0) + 1);
     }
 
     const usedLabels = new Map<string, number>();
     return subagentThreadIds.map((threadId) => {
-      const baseLabel = getThreadAgentTabLabel(relatedThreadsById[threadId]);
+      const baseLabel = getThreadAgentTabLabel(relatedThreadsById[threadId], getSubagentSummary(subagents, threadId));
       const totalCount = baseLabelCounts.get(baseLabel) ?? 0;
       const nextCount = (usedLabels.get(baseLabel) ?? 0) + 1;
       usedLabels.set(baseLabel, nextCount);
@@ -875,7 +860,7 @@ export default memo(function ThreadView ({
         suffix: totalCount > 1 ? ` ${nextCount}` : "",
       };
     });
-  }, [loadingThreadIds, relatedThreadsById, subagentThreadIds]);
+  }, [loadingThreadIds, relatedThreadsById, subagentThreadIds, subagents]);
 
   const scheduleScrollToBottom = useCallback((options: { force?: boolean } = {}) => {
     if (bottomScrollFrameRef.current !== null) {
@@ -907,7 +892,7 @@ export default memo(function ThreadView ({
     ));
   }, []);
 
-  const loadSubthread = useCallback(async (threadId: string, harness: WorkbenchHarness = thread.harness) => {
+  const loadSubthread = useCallback(async (threadId: string, harness: WorkbenchHarness) => {
     if (!threadId.trim() || threadId === thread.id) {
       return null;
     }
@@ -1104,9 +1089,9 @@ export default memo(function ThreadView ({
         continue;
       }
 
-      void loadSubthread(threadId);
+      void loadSubthread(threadId, getSubagentHarness(subagents, threadId, thread.harness));
     }
-  }, [loadSubthread, loadingThreadIds, relatedThreadsById, subagentThreadIds, thread.id]);
+  }, [loadSubthread, loadingThreadIds, relatedThreadsById, subagentThreadIds, subagents, thread.harness, thread.id]);
 
   const pollingThreadIds = useMemo(() => subagentThreadIds.filter((threadId) => {
     const payload = relatedThreadsById[threadId];
@@ -1120,14 +1105,14 @@ export default memo(function ThreadView ({
 
     const intervalId = window.setInterval(() => {
       for (const threadId of pollingThreadIds) {
-        void loadSubthread(threadId);
+        void loadSubthread(threadId, getSubagentHarness(subagents, threadId, thread.harness));
       }
     }, SUBTHREAD_POLL_INTERVAL_MS);
 
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [loadSubthread, pollingThreadIds]);
+  }, [loadSubthread, pollingThreadIds, subagents, thread.harness]);
 
   useEffect(() => {
     const sentinel = historySentinelRef.current;
@@ -1269,9 +1254,9 @@ export default memo(function ThreadView ({
   const handleSubthreadSelection = useCallback((threadId: string) => {
     setActiveThreadId(threadId);
     if (threadId !== thread.id) {
-      void loadSubthread(threadId);
+      void loadSubthread(threadId, getSubagentHarness(subagents, threadId, thread.harness));
     }
-  }, [loadSubthread, thread.id]);
+  }, [loadSubthread, subagents, thread.harness, thread.id]);
 
   const handleSendMessage = useCallback(async (_threadId: string, input: UserInput[]) => {
     if (!resolvedActiveThread || !activeProfileSlot) {
@@ -1728,7 +1713,6 @@ export default memo(function ThreadView ({
                     <ThreadTurnDetails
                       key={entry.turnId}
                       browseResultEntries={activeThreadBrowseResultEntriesByTurnId.get(entry.turnId) ?? EMPTY_BROWSE_RESULT_ENTRIES}
-                      hiddenCollabAgentToolCallItemIds={turn.id === currentTurn?.id ? hiddenCollabAgentToolCallItemIds : EMPTY_HIDDEN_COLLAB_AGENT_TOOL_CALL_ITEM_IDS}
                       hiddenDynamicToolCallItemIds={turn.id === currentTurn?.id ? hiddenDynamicToolCallItemIds : EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS}
                       hideFinalAgentMessage={hideFinalAgentMessage}
                       hideWorkbenchControlAgentMessages={hideWorkbenchControlAgentMessages}
@@ -1741,6 +1725,7 @@ export default memo(function ThreadView ({
                       projectId={projectId}
                       projectRootPath={projectRootPath}
                       relatedThreadsById={relatedThreadsById}
+                      subagents={subagents}
                       turn={turn}
                       workspaceRoots={workspaceFileLinkRoots}
                       hiddenReasoningItemId={turn.id === currentTurn?.id && liveActivity?.kind === "reasoning" ? liveActivity.hiddenItemId : null}
@@ -1822,58 +1807,7 @@ export default memo(function ThreadView ({
               <p className="thread-thinking-text m-0 text-[0.92em] font-medium leading-[1.6]">
                 {liveActivity.title}
               </p>
-            ) : (
-              <div className="space-y-3">
-                {liveActivity.waits.map((wait) => {
-                  const liveSubagentThread = relatedThreadsById[wait.receiverThreadId] ?? null;
-                  const summary = (
-                    <span>
-                      <span className="thread-thinking-text">waiting for</span>{" "}
-                      <ThreadAgentName
-                        fallbackKey={wait.receiverThreadId}
-                        thread={liveSubagentThread}
-                      />
-                    </span>
-                  );
-                  if (!liveSubagentThread?.turns.length) {
-                    return (
-                      <p key={`${wait.hiddenItemId}:${wait.receiverThreadId}`} className="m-0 text-[0.92em] font-medium leading-[1.6]">
-                        {summary}
-                      </p>
-                    );
-                  }
-
-                  return (
-                    <ThreadDisclosure
-                      key={`${wait.hiddenItemId}:${wait.receiverThreadId}`}
-                      contentClassName="mt-2"
-                      open={isLiveActivityOpen}
-                      onToggle={(event) => {
-                        const nextIsOpen = event.currentTarget.open;
-                        setIsLiveActivityOpen(nextIsOpen);
-                        persistThreadLiveActivityOpen(nextIsOpen);
-                      }}
-                      summary={summary}
-                      summaryClassName="text-[0.92em] font-medium leading-[1.6]"
-                    >
-                      <ThreadPreviewFrame height="22rem" scale={0.9}>
-                        <ThreadThreadContent
-                          browseResultEntries={liveSubagentThread.browseResultEntries ?? EMPTY_BROWSE_RESULT_ENTRIES}
-                          inlineMentionSources={inlineMentionSources}
-                          knownSkills={workbenchSkills}
-                          projectFilePaths={projectFilePaths}
-                          projectId={projectId}
-                          projectRoots={projectRoots}
-                          projectRootPath={projectRootPath}
-                          relatedThreadsById={relatedThreadsById}
-                          thread={liveSubagentThread}
-                        />
-                      </ThreadPreviewFrame>
-                    </ThreadDisclosure>
-                  );
-                })}
-              </div>
-            )}
+            ) : null}
           </div>
         ) : null}
         {tabDefinitions.length ? (
@@ -1917,6 +1851,7 @@ export default memo(function ThreadView ({
                   >
                     <ThreadAgentName
                       fallbackKey={tab.id}
+                      subagent={getSubagentSummary(subagents, tab.id)}
                       thread={tabThread}
                     />
                     {tab.suffix ? <span className="text-muted">{tab.suffix}</span> : null}

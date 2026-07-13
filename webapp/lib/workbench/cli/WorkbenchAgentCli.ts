@@ -102,7 +102,11 @@ export default class WorkbenchAgentCli {
   }
 
   async run(argv: string[]) {
-    const parsed = await parseWorkbenchAgentCliCommand(argv, { cwd: this.cwd });
+    const parsed = await parseWorkbenchAgentCliCommand(argv, {
+      callerThreadId: this.env.WORKBENCH_THREAD_ID?.trim() || this.env.CODEX_THREAD_ID?.trim() || null,
+      cwd: this.cwd,
+      workbenchOrigin: this.env.WORKBENCH_ORIGIN?.trim() || null,
+    });
     if (parsed.kind === "help") {
       this.io.writeStdout(parsed.help);
       return 0;

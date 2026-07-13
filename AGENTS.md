@@ -5,6 +5,8 @@
 - `webapp/lib/workbench/` uses layered ownership: public client surfaces stay at the folder root, editor-private controllers live under `editor/`, reusable DOM helpers live under `dom/`, state owners live under `state/`, markdown helpers live under `markdown/`, project helpers live under `project/`, and thread helpers live under `thread/`.
 - `webapp/app/api/` contains server routes for tree, file, and Codex operations; keep their contracts aligned with `webapp/lib/types.ts`.
 - `webapp/orchestrator/` coordinates local Next.js development together with the Codex and Copilot bridge paths.
+- Workbench subagent lifecycle and direct-parent authorization are owned by `webapp/orchestrator/WorkbenchSubagentController.ts` beneath `CodexStdioBridge`; durable relationships live in `.workbench/runtime/subagents.json`, while Next routes remain stateless proxies.
+- User-visible composer profile records are disk-canonical through `webapp/orchestrator/WorkbenchComposerProfileStore.ts`; browser selections stay local, and profile mutations synchronize through the browser controller's bounded outbox.
 
 ## Validation for agent thread rendering
 
@@ -59,6 +61,7 @@
 - If adding a new orchestrator subsystem, document its reload boundary in code: either add it to the reloadable helper bundle or wire it into an explicit non-destructive reload scope.
 - Browse command execution, session control, and FIFO serialization are owned by the orchestrator `WorkbenchBrowseController`; Next Browse routes are stateless transport proxies, with commands streamed and session responses fully buffered. Use the `browse-controller` reload scope to drain and replace controller code without restarting browser sessions, bridges, the Codex app-server, or Next.js.
 - Project discovery and explorer tree snapshot caching are owned by the orchestrator `WorkbenchProjectSnapshotController`; Next project/tree routes are stateless streaming proxies. The controller retains only bounded serialized payloads, coalesces misses, invalidates tree entries through filtered filesystem watchers plus a TTL safety net, and is disposed/recreated by the `orchestrator-logic` reload scope.
+- Subagent lifecycle uses the existing `codex-bridge` boundary. Preserve an active `WorkbenchSubagentController` across bridge reload only while it owns active waiters; ordinary reloads recreate it without restarting the stable Codex app-server.
 
 ## OpenCode Diagnostics
 - When diagnosing OpenCode integration under `webapp/orchestrator/`, it is safe to run local OpenCode SDK probes with small prompts because OpenCode usage here is unlimited. This does not override the rule against calling webapp endpoints without explicit permission. Prefer bounded probes that subscribe to events, send a tiny prompt, print event types, and abort promptly. Minimal pattern:

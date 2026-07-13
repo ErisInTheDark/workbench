@@ -57,6 +57,7 @@ export interface WorkbenchPromptContext {
   readonly instructionInjections?: Readonly<Record<string, string>>;
   readonly projectId?: string | null;
   readonly roots?: readonly WorkbenchProjectRoot[];
+  readonly subagentName?: string | null;
   readonly threadId?: string | null;
   readonly workbenchOrigin?: string | null;
   readonly workflowIds?: readonly string[];
@@ -295,6 +296,17 @@ function buildAgentDefinitionInjection(agentDefinition: WorkbenchAgentDefinition
     .replaceAll("{agent.prompt}", agentDefinition.prompt.trim());
 }
 
+function escapeXmlText(value: string) {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+function buildSubagentIdentityInjection(context: WorkbenchPromptContext) {
+  const name = context.subagentName?.trim();
+  return name
+    ? WORKBENCH_INJECTION_TEMPLATES["subagent.identity"].injection.replaceAll("{subagent.name}", escapeXmlText(name))
+    : "";
+}
+
 function formatWorkspaceRoots(roots: readonly WorkbenchProjectRoot[] | null | undefined) {
   if (!roots?.length) {
     return "- No workspace roots were supplied by Workbench for this thread.";
@@ -448,6 +460,27 @@ Reloads preserve lifecycle ownership: \`--browse-controller\` drains and reloads
 `.trim();
 }
 
+function buildWorkbenchSubagentInstructions(context: WorkbenchPromptContext) {
+  if (!context.workbenchOrigin?.trim()) return null;
+  return `
+## Workbench Subagent CLI
+
+Workbench owns subagents through the allowlisted \`wb subagent\` command suite. Run every command from the intended project cwd; the CLI privately supplies that cwd and the current managed thread identity.
+
+\`wb subagent profiles\` lists profiles available to this thread. Use a profile ID only as the machine value for \`--profile\`. When talking to the user, always use the profile's user-facing \`name\`, never its ID.
+
+\`wb subagent create --profile <profile id> --name <name> --title <title> --message <message>\` creates and starts a child. Every flag is required. Choose a unique, person-like name the user can use conversationally. Let your active agent identity influence the name, but do not use a task slug, role label, or operation codename; \`--title\` owns the task description. Workbench stores the exact name you provide and does not generate or rewrite it.
+
+\`wb subagent wait --id <id>\` waits for the child's current turn to end or ask a questionnaire. It prints trailing commentary plus the questionnaire and options, or the final output when the turn ends.
+
+\`wb subagent message --id <id> --message <message>\` sends ordinary prose as a steer. When a questionnaire is pending, Workbench delivers the steer first and then resolves the questionnaire with no selected option. When no turn is active, it starts a new turn.
+
+\`wb subagent stop --id <id>\` is equivalent to the thread stop button.
+
+The returned subagent ID is its thread ID and can be used with Workbench Thread Recall. You may operate only on direct children owned by the current thread; sideways and grandchild access fails closed.
+`.trim();
+}
+
 function buildWorkbenchThreadRecallInstructions(context: WorkbenchPromptContext) {
   const threadId = context.threadId?.trim();
   if (!threadId || threadId === "new" || threadId.startsWith("draft:") || !context.workbenchOrigin?.trim()) {
@@ -592,6 +625,7 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
 
   const injections: Record<string, string> = {
     "agent.definition": buildAgentDefinitionInjection(agentDefinition),
+    "subagent.identity": buildSubagentIdentityInjection(context),
     "workbench.rendering": WORKBENCH_INJECTION_TEMPLATES["workbench.rendering"].injection,
     "workbench.skills": buildWorkbenchSkillsInjection(skillManifest),
     "workbench.tools": WORKBENCH_INJECTION_TEMPLATES["workbench.tools"].injection,
@@ -607,6 +641,7 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
     buildWorkbenchOrchestratorReloadInstructions(context),
     buildWorkbenchThreadRecallInstructions(context),
     buildWorkbenchCheckpointInstructions(context),
+    buildWorkbenchSubagentInstructions(context),
     buildThreadTitleInstructions(context),
   ]);
 
@@ -627,6 +662,7 @@ export async function buildWorkbenchThreadUtilityDeveloperInstructions(
     buildWorkbenchOrchestratorReloadInstructions(context),
     buildWorkbenchThreadRecallInstructions(context),
     buildWorkbenchCheckpointInstructions(context),
+    buildWorkbenchSubagentInstructions(context),
     buildThreadTitleInstructions(context),
   ]);
 }
@@ -662,6 +698,7 @@ This collaboration-mode overlay must not replace the active Workbench workflow, 
     buildWorkbenchOrchestratorReloadInstructions(context),
     buildWorkbenchThreadRecallInstructions(context),
     buildWorkbenchCheckpointInstructions(context),
+    buildWorkbenchSubagentInstructions(context),
     buildThreadTitleInstructions(context),
   ]);
 }

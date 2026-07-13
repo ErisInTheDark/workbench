@@ -10,6 +10,7 @@
  * - isBrowseCommandMatcherClaim/parseBrowseSequenceCommandOutput: detect and parse wb Browse command output. Keywords: browse, sequence, command, cli.
  * - isGitCheckpointDiffMatcherClaim: detect checkpoint diff matcher ids for specialized command-output rendering. Keywords: thread, command, checkpoint, diff.
  * - isThreadContextMatcherClaim: detect thread context endpoint commands for dedicated disclosure rendering. Keywords: thread, context, disclosure.
+ * - parseWorkbenchSubagentCommand: parse semantic wb subagent actions for specialized thread rendering. Keywords: workbench, subagent, command, parse.
  * - parseGitCheckpointDiffArtifactId: parse compact checkpoint diff output for a stored full-diff artifact id. Keywords: checkpoint, diff, artifact.
  * - parseGitCheckpointDiffOutput: parse checkpoint diff command output into file-change display entries. Keywords: checkpoint, diff, file change.
  * - getThreadCommandDisplay: unwrap shell launchers and describe common command patterns with staged shell matchers. Keywords: thread, command, matcher, shell.
@@ -63,7 +64,10 @@ import type {
     ThreadCommandSummaryDisplay,
     ThreadCommandSummaryStats,
 } from "./command-matchers/types";
-import { WORKBENCH_CLI_COMMAND_MATCHERS } from "./command-matchers/workbench-cli";
+import {
+  parseWorkbenchSubagentCommand,
+  WORKBENCH_CLI_COMMAND_MATCHERS,
+} from "./command-matchers/workbench-cli";
 
 type KnownCommandSummaryStatKey = Exclude<keyof ThreadCommandSummaryStats, "otherCommands">;
 
@@ -153,6 +157,7 @@ const COMMAND_BLOCK_SUMMARY_CATEGORIES: Array<{
 
 export { CommandMatcher, formatThreadCommandPath };
 export { isBrowseCommandMatcherClaim, isGitCheckpointDiffMatcherClaim, isThreadContextMatcherClaim, parseBrowseSequenceCommandOutput, parseGitCheckpointDiffArtifactId, parseGitCheckpointDiffOutput };
+export { parseWorkbenchSubagentCommand };
 export type {
     ThreadCommandDisplay,
     ThreadCommandDisplayPart,

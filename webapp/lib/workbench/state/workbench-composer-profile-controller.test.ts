@@ -6,7 +6,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { WorkbenchComposerSettings } from "../../types";
+import type {
+  ThreadPayload,
+  WorkbenchComposerProfile,
+  WorkbenchComposerProfileMutation,
+  WorkbenchComposerSettings,
+} from "../../types";
+import type { ComposerProfilePersistence } from "./composer-profile-api";
 import WorkbenchComposerProfileController from "./WorkbenchComposerProfileController";
 
 class MemoryStorage {
@@ -19,6 +25,38 @@ class MemoryStorage {
   setItem(key: string, value: string) {
     this.values.set(key, value);
   }
+}
+
+class MemoryPersistence implements ComposerProfilePersistence {
+  readonly imported: WorkbenchComposerProfile[][] = [];
+  readonly mutations: WorkbenchComposerProfileMutation[] = [];
+  profiles: WorkbenchComposerProfile[] = [];
+
+  async importLegacy(profiles: WorkbenchComposerProfile[]) {
+    this.imported.push(profiles);
+    this.profiles = profiles;
+    return { profiles: this.profiles };
+  }
+
+  async mutate(mutation: WorkbenchComposerProfileMutation) {
+    this.mutations.push(mutation);
+    this.profiles = mutation.kind === "delete"
+      ? this.profiles.filter((profile) => profile.id !== mutation.profileId)
+      : [...this.profiles.filter((profile) => profile.id !== mutation.profile.id), mutation.profile];
+    return { profiles: this.profiles };
+  }
+
+  async read() {
+    return { profiles: this.profiles };
+  }
+}
+
+async function waitFor(predicate: () => boolean) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  assert.fail("Timed out waiting for profile persistence.");
 }
 
 const CODEX_SETTINGS: WorkbenchComposerSettings = {
@@ -118,4 +156,58 @@ test("unnamed profiles survive persistence and remain unnamed", () => {
   const reloaded = new WorkbenchComposerProfileController(storage);
   assert.equal(reloaded.getProfile(profile.id)?.name, "");
   reloaded.dispose();
+});
+
+test("imports legacy profiles once, flushes the mutation outbox, and notifies subscribers", async () => {
+  const storage = new MemoryStorage();
+  const controller = new WorkbenchComposerProfileController(storage);
+  const profile = controller.createProfile({ ...CODEX_SETTINGS, name: "Durable Lily", scope: { kind: "global" } });
+  const persistence = new MemoryPersistence();
+  let notifications = 0;
+  controller.subscribe(() => { notifications += 1; });
+
+  await controller.initializePersistence(persistence);
+  await waitFor(() => persistence.mutations.length === 1);
+  assert.deepEqual(persistence.imported, [[profile]]);
+  assert.deepEqual(persistence.mutations, [{ kind: "upsert", profile }]);
+  assert.equal(storage.getItem("workbench:composer-profiles:disk-v1"), "complete");
+  assert.ok(notifications >= 1);
+  controller.dispose();
+});
+
+test("profile resolution preserves the thread payload contract", () => {
+  const controller = new WorkbenchComposerProfileController(new MemoryStorage());
+  const slot = { kind: "new-thread" as const, projectId: "project-a" };
+  const profile = controller.createProfile({ ...CODEX_SETTINGS, name: "Thread-safe Lily", scope: { kind: "global" } });
+  controller.selectProfile(slot, profile.id);
+  const resolved = controller.resolveThread(slot, {
+    agentNickname: null,
+    agentPath: null,
+    agentRole: null,
+    browseResultEntries: [],
+    createdAt: 1,
+    cwd: "C:/workspace",
+    forkedFromId: null,
+    harness: "codex",
+    id: "draft:1",
+    isDraft: true,
+    model: "gpt-5.4",
+    name: "Draft",
+    preview: "",
+    path: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    source: "codex",
+    status: "idle",
+    tokenUsage: null,
+    turnHistory: [],
+    turns: [],
+    unreadBadge: null,
+    updatedAt: 1,
+  } satisfies ThreadPayload);
+
+  assert.equal("profileId" in resolved, false);
+  assert.equal("scope" in resolved, false);
+  assert.equal("updatedAt" in resolved, true);
+  controller.dispose();
 });

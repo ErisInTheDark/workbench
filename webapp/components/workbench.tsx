@@ -74,6 +74,7 @@ import {
   readStoredHarness,
 } from "../lib/workbench/state/browser-state";
 import WorkbenchComposerProfileController from "../lib/workbench/state/WorkbenchComposerProfileController";
+import { createComposerProfilePersistence } from "../lib/workbench/state/composer-profile-api";
 import {
   EMPTY_WORKBENCH_THREAD_SIDEBAR_PREFERENCES,
   areWorkbenchThreadSidebarPreferencesEqual,
@@ -576,8 +577,14 @@ function pruneResolvedUserInputRequestKeys (
 
 export default function Workbench () {
   const [composerProfileController] = useState(() => new WorkbenchComposerProfileController());
-  useEffect(() => () => {
-    composerProfileController.dispose();
+  useEffect(() => {
+    void composerProfileController.initializePersistence(createComposerProfilePersistence()).catch(() => {
+      // The local outbox retains mutations until the stateless profile route is available again.
+    });
+
+    return () => {
+      composerProfileController.dispose();
+    };
   }, [composerProfileController]);
   const { navigateToRoute, route } = useWorkbenchRoute();
   const currentRouteRef = useRef<WorkbenchRoute>(route);

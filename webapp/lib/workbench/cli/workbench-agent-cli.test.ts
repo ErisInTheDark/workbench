@@ -158,6 +158,64 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   });
 });
 
+test("parses the cwd-owned subagent suite and requires managed thread identity", async () => {
+  const options = {
+    callerThreadId: "parent-thread",
+    cwd: "C:/workspace",
+    workbenchOrigin: "http://localhost:3000",
+  };
+  const profiles = await parseWorkbenchAgentCliCommand(["subagent", "profiles"], options);
+  assert.equal(profiles.kind, "request");
+  assert.deepEqual(profiles.request, {
+    body: {
+      action: "profiles",
+      callerThreadId: "parent-thread",
+      cwd: "C:/workspace",
+      workbenchOrigin: "http://localhost:3000",
+    },
+    method: "POST",
+    path: "/api/subagents",
+    responseKind: "json",
+  });
+
+  const create = await parseWorkbenchAgentCliCommand([
+    "subagent", "create", "--profile", "profile-1", "--name", "sparkle-scout",
+    "--title", "Inspect code", "--message", "Find the bug.",
+  ], options);
+  assert.equal(create.kind, "request");
+  assert.deepEqual(create.request.body, {
+    action: "create",
+    callerThreadId: "parent-thread",
+    cwd: "C:/workspace",
+    message: "Find the bug.",
+    name: "sparkle-scout",
+    profileId: "profile-1",
+    title: "Inspect code",
+    workbenchOrigin: "http://localhost:3000",
+  });
+  assert.equal(create.request.responseKind, "subagent-create");
+
+  const message = await parseWorkbenchAgentCliCommand([
+    "subagent", "message", "--id", "child-thread", "--message", "Continue safely.",
+  ], options);
+  assert.equal(message.kind, "request");
+  assert.deepEqual(message.request.body, {
+    action: "message",
+    callerThreadId: "parent-thread",
+    cwd: "C:/workspace",
+    message: "Continue safely.",
+    threadId: "child-thread",
+    workbenchOrigin: "http://localhost:3000",
+  });
+
+  assert.equal((await parseWorkbenchAgentCliCommand(["subagent", "wait", "--id", "child-thread"], options)).kind, "request");
+  assert.equal((await parseWorkbenchAgentCliCommand(["subagent", "stop", "--id", "child-thread"], options)).kind, "request");
+  assert.equal((await parseWorkbenchAgentCliCommand(["subagent", "profiles"], { ...options, callerThreadId: null })).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand([
+    "subagent", "create", "--profile", "profile-1", "--name", "missing-fields",
+  ], options)).kind, "error");
+});
+
 test("loads Collaboration content from files and rejects conflicting sources", async () => {
   const bodyPath = path.join(temporaryDirectoryPath, "body.md");
   await writeFile(bodyPath, "# Visible body\n", "utf8");
@@ -366,6 +424,11 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
   assert.equal(adapt("checkpoint-create", { checkpointCommit: "abc" }, { action: "baseline" }).stdout, "Created checkpoint abc\n");
   assert.equal(adapt("checkpoint-create", { checkpointCommit: "def" }, { action: "diffCheckpoint" }).stdout, "Created diff checkpoint def\n");
   assert.equal(adapt("checkpoint-restore", { checkpointCommit: "abc" }).stdout, "Restored checkpoint abc\n");
+  assert.deepEqual(adapt("subagent-create", { threadId: "child-thread" }), {
+    exitCode: 0,
+    stderr: "",
+    stdout: "child-thread\n",
+  });
   assert.equal(adapt("native", "## Context\n").stdout, "## Context\n");
   assert.equal(adapt("collaboration-memory-read", { memory: "remember this" }).stdout, "remember this");
   assert.equal(adapt("collaboration-memory-write", { message: "Collaboration memory replaced." }).stdout, "Collaboration memory replaced.\n");

@@ -365,6 +365,8 @@ If an active workflow enters Implement mode after explicit approval, approved im
 
 {agent.definition}
 
+{subagent.identity}
+
 ### Workflow
 
 {workflow.active}
@@ -1056,7 +1058,7 @@ You are an autonomous agent working on a bounded assignment. Do not behave as a 
 
 Stay inside your assignment and ownership boundary. Do not revert or overwrite unrelated user or agent changes. If nearby changes affect your work, adapt to them and mention the impact.
 
-Subagent threads may not have reliable questionnaire support. Do not depend on request_user_input. When blocked, ask concise questions in normal chat or explain the decision needed.
+Subagent questionnaires are relayed to the parent through \`wb subagent wait\`. You may use request_user_input when a bounded choice is the right interaction; the parent can steer ordinary prose and resolve the questionnaire without selecting an option through \`wb subagent message\`.
 
 When you finish, report:
 

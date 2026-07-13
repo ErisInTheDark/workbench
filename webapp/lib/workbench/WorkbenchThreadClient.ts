@@ -69,6 +69,11 @@ import type {
 import { normalizeWorkbenchAgentPath } from "./agent-paths";
 import { areDeeplyEqual } from "./deep-equality";
 import {
+    filterSubagentThreadSummaries,
+    getSubagentThreadIds,
+    listWorkbenchSubagents,
+} from "./thread/thread-subagents";
+import {
     getThreadStateChangeTagText as getNormalizedThreadStateChangeTagText,
 } from "./markdown/markdown-parse";
 import {
@@ -720,6 +725,7 @@ function WorkbenchThreadClient(
   const latestTurnStartedAtRefreshKeyByThreadKey = new Map<string, string>();
   let disposed = false;
   let projectContextGeneration = 0;
+  let subagentThreadIds = new Set<string>();
   let rateLimitGeneration = 0;
   const refreshRateLimitsPromisesByHarness = new Map<WorkbenchHarness, Promise<void>>();
   const pendingUserInputRequestGenerationsByHarness = new Map<WorkbenchHarness, number>();
@@ -730,6 +736,27 @@ function WorkbenchThreadClient(
 
   function emitStatusMessage(message: string) {
     options.onStatusMessage?.(message);
+  }
+
+  async function refreshSubagentThreadIds(refreshGeneration: number) {
+    const cwd = state.projectRootPath;
+    if (!cwd) return;
+    try {
+      const summaries = await listWorkbenchSubagents({
+        cwd,
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (disposed || refreshGeneration !== projectContextGeneration) return;
+      const nextIds = new Set(getSubagentThreadIds(summaries));
+      const didChange = nextIds.size !== subagentThreadIds.size
+        || Array.from(nextIds).some((threadId) => !subagentThreadIds.has(threadId));
+      if (!didChange) return;
+      subagentThreadIds = nextIds;
+      state.threads = filterSubagentThreadSummaries(state.threads, subagentThreadIds);
+      emit();
+    } catch {
+      // Sidebar metadata is optional and never blocks the main thread lifecycle.
+    }
   }
 
   function serializePendingUserInputRequests() {
@@ -953,6 +980,7 @@ function WorkbenchThreadClient(
     state.projectRootPath = context.rootPath;
     state.projectRoots = nextRoots;
     projectContextGeneration += 1;
+    subagentThreadIds = new Set();
     state.threads = [];
     state.threadsError = "";
     state.hasLoadedThreads = false;
@@ -3141,6 +3169,8 @@ function WorkbenchThreadClient(
           return;
         }
 
+        void refreshSubagentThreadIds(refreshGeneration);
+
         const results = await Promise.allSettled((["codex", "copilot", "opencode"] as const).map(async (harness) => {
           const cwdFilterPaths = harness === "codex"
             ? getCodexThreadCwdFilterPathsForRoots(projectRootPaths)
@@ -3208,10 +3238,10 @@ function WorkbenchThreadClient(
           return;
         }
 
-        state.threads = [
+        state.threads = filterSubagentThreadSummaries([
           ...stableVisibleThreads,
           ...threadsByRecentItem.slice(STABLE_VISIBLE_THREAD_COUNT),
-        ];
+        ], subagentThreadIds);
         void refreshVisibleThreadUnreadStates(state.threads);
         state.threadsError = errors.join(" ");
         state.hasLoadedThreads = true;

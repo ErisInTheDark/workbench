@@ -87,6 +87,7 @@ export function readWorkbenchPromptContext(message: JsonRpcRequest): WorkbenchPr
     instructionInjections: readInstructionInjections(value.instructionInjections),
     projectId: asString(value.projectId),
     roots,
+    subagentName: asString(value.subagentName),
     threadId: asString(value.threadId),
     workbenchOrigin: asString(value.workbenchOrigin),
     workflowIds,

@@ -38,6 +38,7 @@ import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse
 import type CodexAppServer from "./CodexAppServer";
 import { log, logError } from "./process-helpers";
 import { readWorkbenchPromptContext, WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
+import WorkbenchSubagentController from "./WorkbenchSubagentController";
 
 type CodexTranscriptStoreInstance = import("./CodexTranscriptStore").default;
 type CodexTranscriptStoreConstructor = new (
@@ -88,6 +89,7 @@ export type CodexStdioBridgeReloadState = {
   pendingUserInputRequests: Map<string, PendingCodexUserInputRequest>;
   requestIdAllocator: RequestIdAllocator;
   upstreamInitialized: boolean;
+  subagentController?: WorkbenchSubagentController;
 };
 
 type CodexStdioBridgeReloadOptions = {
@@ -992,6 +994,7 @@ export default class CodexStdioBridge {
   private transcriptLastSkipLabel = "";
   private upstreamInitialized: boolean;
   private upstreamInitializePromise: Promise<void> | null = null;
+  private readonly subagentController: WorkbenchSubagentController;
 
   constructor({ appServer, bridgeUrl, initialState, onNotification, sendToClient, storageRoot }: CodexStdioBridgeOptions) {
     this.appServer = appServer;
@@ -1004,6 +1007,7 @@ export default class CodexStdioBridge {
     this.pendingUserInputRequests = initialState?.pendingUserInputRequests ?? new Map();
     this.requestIdAllocator = initialState?.requestIdAllocator ?? { next: 1 };
     this.upstreamInitialized = initialState?.upstreamInitialized ?? false;
+    this.subagentController = initialState?.subagentController ?? new WorkbenchSubagentController({ bridgeUrl, storageRoot });
     this.transcriptInstrumentationTimer = setInterval(() => {
       this.logTranscriptInstrumentation("interval");
     }, TRANSCRIPT_INSTRUMENTATION_INTERVAL_MS);
@@ -1036,6 +1040,7 @@ export default class CodexStdioBridge {
     this.coalescedTranscriptNotifications.clear();
     this.coalescedTranscriptByteEstimate = 0;
     this.pendingUserInputRequests.clear();
+    this.subagentController.dispose();
     for (const pending of this.pendingResponses.values()) {
       if (isPendingInternalResponse(pending)) {
         pending.reject(new Error("Codex bridge stopped before the upstream response arrived."));
@@ -1078,12 +1083,15 @@ export default class CodexStdioBridge {
       await this.transcriptStore.dispose();
       this.transcriptStore = null;
     }
+    const preservedSubagentController = this.subagentController.hasActiveWaiters() ? this.subagentController : undefined;
+    if (!preservedSubagentController) this.subagentController.dispose();
     return {
       initializeResult: this.initializeResult,
       pendingResponses: this.pendingResponses,
       pendingUserInputRequests: this.pendingUserInputRequests,
       requestIdAllocator: this.requestIdAllocator,
       upstreamInitialized: this.upstreamInitialized,
+      ...(preservedSubagentController ? { subagentController: preservedSubagentController } : {}),
     };
   }
 
@@ -1141,6 +1149,10 @@ export default class CodexStdioBridge {
   }
 
   async handleBridgeRequest(message: JsonRpcRequest): Promise<JsonRpcResponse | null> {
+    if (message.method?.startsWith("workbench/subagent/") || message.method?.startsWith("workbench/composerProfiles/")) {
+      this.assertAcceptingWork();
+      return await this.subagentController.handleRequest(message);
+    }
     if (message.method === "thread/context/read") {
       return await this.handleThreadContextReadRequest(message);
     }

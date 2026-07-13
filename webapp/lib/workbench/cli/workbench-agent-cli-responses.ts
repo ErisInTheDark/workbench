@@ -28,6 +28,8 @@ export function adaptWorkbenchAgentCliResponse({
   switch (request.responseKind) {
     case "thread-title":
       return succeeded(`Thread title set: ${readString(payload, "title") || "untitled"}`);
+    case "subagent-create":
+      return succeeded(readString(payload, "threadId") || "");
     case "checkpoint-create": {
       const action = readString(request.body, "action");
       const label = action === "diffCheckpoint" ? "Created diff checkpoint" : "Created checkpoint";

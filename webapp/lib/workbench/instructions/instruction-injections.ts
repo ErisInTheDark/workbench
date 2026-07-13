@@ -3,6 +3,7 @@
  * - InstructionInjectionTemplate: keyed prompt-injection text plus manifest description. Keywords: prompt, injection, manifest.
  * - injectionTemplate: build one keyed instruction injection template. Keywords: prompt, injection, helper.
  * - AGENT_DEFINITION_INJECTION: selected Workbench agent identity slot. Keywords: agent, identity, personality.
+ * - SUBAGENT_IDENTITY_INJECTION: optional Workbench-owned subagent name immediately after agent identity. Keywords: subagent, identity, name.
  * - WORKFLOW_ACTIVE_INJECTION: active workflow prompt slot. Keywords: workflow, active, process.
  * - WORKBENCH_RENDERING_INJECTION: Workbench-visible rendering and file-link contract. Keywords: rendering, plan, mode, file links.
  * - WORKBENCH_TOOLS_INJECTION: Workbench tool-use guidance. Keywords: tools, questionnaire, browser, MCP.
@@ -47,6 +48,14 @@ For this thread, you are the Workbench agent defined below. Treat the contents o
 </prompt>
 </agent_definition>
 `,
+);
+
+export const SUBAGENT_IDENTITY_INJECTION = injectionTemplate(
+  "subagent.identity",
+  "Optional Workbench-owned subagent name, emitted immediately after the selected agent identity.",
+  `<subagent_identity>
+<name>{subagent.name}</name>
+</subagent_identity>`,
 );
 
 export const WORKFLOW_ACTIVE_INJECTION = injectionTemplate(
@@ -161,6 +170,7 @@ Detected Workbench skills:
 
 export const WORKBENCH_INJECTION_TEMPLATES = {
   ...AGENT_DEFINITION_INJECTION,
+  ...SUBAGENT_IDENTITY_INJECTION,
   ...WORKFLOW_ACTIVE_INJECTION,
   ...WORKBENCH_RENDERING_INJECTION,
   ...WORKBENCH_TOOLS_INJECTION,

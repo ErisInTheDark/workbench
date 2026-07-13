@@ -14,16 +14,13 @@ import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/Thre
 import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import { getCurrentTurn } from "../../../lib/codex/thread-state";
-import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchSkillSummary, WorkbenchThreadTurnHistoryEntry } from "../../../lib/types";
+import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchSkillSummary, WorkbenchSubagentSummary, WorkbenchThreadTurnHistoryEntry } from "../../../lib/types";
 import type { WorkbenchThreadItemTimelineEntry } from "../../../lib/workbench/thread/thread-item-timeline";
 import { getThreadItemsRenderChunkSignature } from "../../../lib/workbench/thread/thread-item-signature";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
-import {
-  getPrimaryCollabAgentThreadId,
-  type CollabAgentToolCallItem,
-} from "../../../lib/workbench/thread/thread-collab-agents";
 import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
+
 import {
   getAgentScreenshotSteerImages,
   isAgentScreenshotSteerUserMessage,
@@ -35,12 +32,14 @@ import {
   isBrowseCommandMatcherClaim,
   isGitCheckpointDiffMatcherClaim,
   isThreadContextMatcherClaim,
+  parseWorkbenchSubagentCommand,
   parseBrowseSequenceCommandOutput,
   parseGitCheckpointDiffArtifactId,
   parseGitCheckpointDiffOutput,
   type ThreadCommandDetailRow,
   type ThreadCommandDetailTarget,
 } from "../../../lib/workbench/thread/thread-command-matchers";
+import { getSubagentSummary } from "../../../lib/workbench/thread/thread-subagents";
 import {
   formatThreadDuration,
   formatThreadTimestamp,
@@ -48,7 +47,6 @@ import {
   ThreadCommandSummary,
   truncateThreadText,
 } from "./thread-view-primitives";
-import ThreadAgentName from "./ThreadAgentName";
 import ThreadCheckpointDiffItem from "./ThreadCheckpointDiffItem";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
 import ThreadCommandDetails from "./ThreadCommandDetails";
@@ -60,9 +58,11 @@ import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
 import ThreadFileChangeItem from "./ThreadFileChangeItem";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
-import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadReasoningItem from "./ThreadReasoningItem";
 import ThreadSummaryText from "./ThreadSummaryText";
+import ThreadSubagentMessageItem from "./ThreadSubagentMessageItem";
+import ThreadSubagentStopItem from "./ThreadSubagentStopItem";
+import ThreadSubagentWaitItem from "./ThreadSubagentWaitItem";
 import ThreadUserImage from "./ThreadUserImage";
 import ThreadWebSearchItem, {
   isThreadWebSearchPlaceholder,
@@ -91,7 +91,6 @@ type ThreadRenderableBlock =
 type RelatedThreadsById = Record<string, ThreadPayload | undefined>;
 
 interface HiddenThreadItemIds {
-  collabAgentToolCallIds?: ReadonlySet<string> | null;
   controlAgentMessages?: boolean;
   controlUserMessages?: boolean;
   dynamicToolCallIds?: ReadonlySet<string> | null;
@@ -364,14 +363,6 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
         continue;
       }
       pendingWebSearches.push(item);
-      continue;
-    }
-
-    if (item.type === "collabAgentToolCall" && hiddenItemIds.collabAgentToolCallIds?.has(item.id)) {
-      flushPendingCommands();
-      flushPendingReasoning();
-      flushPendingFileChanges();
-      flushPendingWebSearches();
       continue;
     }
 
@@ -875,279 +866,6 @@ function ThreadPlanItem ({
   );
 }
 
-function ThreadAgentBubble ({
-  inlineMentionSources,
-  label,
-  markdown,
-  threadCwdPath,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
-  workspaceRoots,
-}: {
-  inlineMentionSources?: InlineMentionHighlightSources | null;
-  label: ReactNode;
-  markdown: string;
-  threadCwdPath?: string;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
-}) {
-  return (
-    <section className="py-2">
-      <div className="w-full max-w-[42rem] rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3">
-        <div className="m-0 pb-2 text-[0.74em] font-medium leading-[1.4] text-muted">
-          {label}
-        </div>
-        <ThreadMarkdown
-          inlineMentionSources={inlineMentionSources}
-          markdown={markdown || "No message captured."}
-          threadCwdPath={threadCwdPath}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          workspaceRoots={workspaceRoots}
-        />
-      </div>
-    </section>
-  );
-}
-
-function getCollabAgentStateMessage (item: CollabAgentToolCallItem, receiverThreadId: string) {
-  const preferredMessage = item.agentsStates[receiverThreadId]?.message?.trim();
-  if (preferredMessage) {
-    return preferredMessage;
-  }
-
-  for (const threadId of item.receiverThreadIds) {
-    const message = item.agentsStates[threadId]?.message?.trim();
-    if (message) {
-      return message;
-    }
-  }
-
-  return null;
-}
-
-function ThreadCurrentSubagentItemPreview ({
-  inlineMentionSources,
-  knownSkills,
-  threadCwdPath,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
-  relatedThreadsById,
-  thread,
-  workspaceRoots,
-}: {
-  inlineMentionSources?: InlineMentionHighlightSources | null;
-  knownSkills?: WorkbenchSkillSummary[];
-  threadCwdPath?: string;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  relatedThreadsById: RelatedThreadsById;
-  thread: ThreadPayload | undefined;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
-}) {
-  const currentTurn = getCurrentTurn(thread);
-  if (!currentTurn) {
-    return (
-      <p className="m-0 text-[0.92em] leading-[1.6] text-muted">
-        No subagent activity was captured yet.
-      </p>
-    );
-  }
-
-  const blocks = buildRenderableBlocks(currentTurn.items);
-  const block = blocks.at(-1) ?? null;
-  if (!block) {
-    return (
-      <p className="m-0 text-[0.92em] leading-[1.6] text-muted">
-        No subagent activity was captured yet.
-      </p>
-    );
-  }
-
-  return (
-    <ThreadPreviewFrame height="22rem" scale={0.9}>
-      <ThreadRenderableBlockView
-        block={block}
-        finalAgentMessageId={getFinalAgentMessageId(currentTurn)}
-        isMostRecentBlock={true}
-        inlineMentionSources={inlineMentionSources}
-        knownSkills={knownSkills}
-        primaryUserBlock={null}
-        threadCwdPath={threadCwdPath ?? thread?.cwd}
-        threadId={thread.id}
-        projectFilePaths={projectFilePaths}
-        projectId={projectId}
-        projectRootPath={projectRootPath}
-        relatedThreadsById={relatedThreadsById}
-        turnCompletedAt={currentTurn.completedAt}
-        turnStartedAt={currentTurn.startedAt}
-        turnStatus={currentTurn.status}
-        workspaceRoots={workspaceRoots}
-      />
-    </ThreadPreviewFrame>
-  );
-}
-
-function ThreadCollabAgentToolCallItem ({
-  inlineMentionSources,
-  isMostRecent,
-  item,
-  knownSkills,
-  threadCwdPath,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
-  relatedThreadsById,
-  workspaceRoots,
-}: {
-  inlineMentionSources?: InlineMentionHighlightSources | null;
-  isMostRecent: boolean;
-  item: CollabAgentToolCallItem;
-  knownSkills?: WorkbenchSkillSummary[];
-  threadCwdPath?: string;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  relatedThreadsById: RelatedThreadsById;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
-}) {
-  const receiverThreadId = getPrimaryCollabAgentThreadId(item);
-  const receiverThread = relatedThreadsById[receiverThreadId];
-  const prompt = item.prompt?.trim() ?? "";
-  const responseMessage = getCollabAgentStateMessage(item, receiverThreadId);
-  const isActiveWait = item.status === "inProgress" && isMostRecent;
-  const agentName = (
-    <ThreadAgentName
-      fallbackKey={receiverThreadId}
-      thread={receiverThread}
-    />
-  );
-
-  if (item.tool === "spawnAgent") {
-    return (
-      <ThreadDisclosure
-        className="py-2"
-        contentClassName="mt-2 pl-6"
-        summary={<><span>Spawned </span>{agentName}</>}
-        summaryClassName="text-[0.92em] leading-[1.6] text-muted"
-      >
-        <ThreadAgentBubble
-          label="Main agent"
-          inlineMentionSources={inlineMentionSources}
-          markdown={prompt}
-          threadCwdPath={threadCwdPath}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          workspaceRoots={workspaceRoots}
-        />
-      </ThreadDisclosure>
-    );
-  }
-
-  if (item.tool === "wait") {
-    return (
-      <ThreadDisclosure
-        className="py-2"
-        contentClassName="mt-2 pl-6"
-        defaultOpen={isActiveWait}
-        summary={<><span>{isActiveWait ? "Waiting for " : "Waited for "}</span>{agentName}</>}
-        summaryClassName="text-[0.92em] leading-[1.6] text-muted"
-      >
-        {isActiveWait ? (
-          <ThreadCurrentSubagentItemPreview
-            inlineMentionSources={inlineMentionSources}
-            knownSkills={knownSkills}
-            threadCwdPath={receiverThread?.cwd ?? threadCwdPath}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            relatedThreadsById={relatedThreadsById}
-            thread={receiverThread}
-            workspaceRoots={workspaceRoots}
-          />
-        ) : null}
-      </ThreadDisclosure>
-    );
-  }
-
-  if ((item.tool === "sendInput" || item.tool === "resumeAgent") && prompt) {
-    return (
-      <ThreadDisclosure
-        className="py-2"
-        contentClassName="mt-2 pl-6"
-        summary={<><span>Messaged </span>{agentName}</>}
-        summaryClassName="text-[0.92em] leading-[1.6] text-muted"
-      >
-        <ThreadAgentBubble
-          label="Main agent"
-          inlineMentionSources={inlineMentionSources}
-          markdown={prompt}
-          threadCwdPath={threadCwdPath}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          workspaceRoots={workspaceRoots}
-        />
-      </ThreadDisclosure>
-    );
-  }
-
-  if (responseMessage) {
-    return (
-      <ThreadDisclosure
-        className="py-2"
-        contentClassName="mt-2 pl-6"
-        summary={<><span>Received response from </span>{agentName}</>}
-        summaryClassName="text-[0.92em] leading-[1.6] text-muted"
-      >
-        <ThreadAgentBubble
-          label={agentName}
-          inlineMentionSources={inlineMentionSources}
-          markdown={responseMessage}
-          threadCwdPath={receiverThread?.cwd ?? threadCwdPath}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          workspaceRoots={workspaceRoots}
-        />
-      </ThreadDisclosure>
-    );
-  }
-
-  if (item.tool === "closeAgent") {
-    return (
-      <ThreadDisclosure
-        className="py-2"
-        contentClassName="mt-2 pl-6"
-        summary={<><span>Closed </span>{agentName}</>}
-        summaryClassName="text-[0.92em] leading-[1.6] text-muted"
-      >
-        <></>
-      </ThreadDisclosure>
-    );
-  }
-
-  return (
-    <ThreadDisclosure
-      className="py-2"
-      contentClassName="mt-2 pl-6"
-      summary={`Collaboration: ${humanizeThreadLabel(item.tool)}`}
-      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
-    >
-      <pre className="m-0 max-w-full overflow-x-auto whitespace-pre rounded-[0.9rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text">
-        {JSON.stringify(item, null, 2)}
-      </pre>
-    </ThreadDisclosure>
-  );
-}
-
 function ThreadReasoningSequence ({
   block,
   inlineMentionSources,
@@ -1633,6 +1351,7 @@ function isThreadContextCommandItem({
 
 type CommandSequenceRenderSegment =
   | { items: CommandItem[]; kind: "commands" }
+  | { item: CommandItem; kind: "subagentRelationship" }
   | { item: CommandItem; kind: "threadContext" };
 
 function buildCommandSequenceRenderSegments({
@@ -1671,6 +1390,24 @@ function buildCommandSequenceRenderSegments({
       continue;
     }
 
+    const commandDisplay = getThreadCommandDisplay({
+      command: item.command,
+      commandActions: item.commandActions,
+      cwd: item.cwd,
+      knownSkills,
+      projectRootPath,
+      workspaceRoots,
+    });
+    const subagentAction = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand)?.action;
+    if (subagentAction === "message" || subagentAction === "stop" || subagentAction === "wait") {
+      flushPendingCommands();
+      segments.push({
+        item,
+        kind: "subagentRelationship",
+      });
+      continue;
+    }
+
     pendingCommands.push(item);
   }
 
@@ -1678,24 +1415,87 @@ function buildCommandSequenceRenderSegments({
   return segments;
 }
 
+function ThreadSubagentCurrentActivityPreview ({
+  inlineMentionSources,
+  knownSkills,
+  projectFilePaths,
+  projectId,
+  projectRootPath,
+  relatedThreadsById,
+  thread,
+  workspaceRoots,
+}: {
+  inlineMentionSources?: InlineMentionHighlightSources | null;
+  knownSkills?: WorkbenchSkillSummary[];
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+  projectRootPath?: string;
+  relatedThreadsById: RelatedThreadsById;
+  thread: ThreadPayload | undefined;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+}) {
+  const currentTurn = getCurrentTurn(thread);
+  if (!thread || !currentTurn) {
+    return <ThreadContentLoadingSkeleton />;
+  }
+
+  const blocks = buildRenderableBlocks(currentTurn.items);
+  const block = blocks.at(-1) ?? null;
+  if (!block) {
+    return (
+      <p className="m-0 text-[0.92em] leading-[1.6] text-muted">
+        No subagent activity was captured yet.
+      </p>
+    );
+  }
+
+  return (
+    <ThreadRenderableBlockView
+      block={block}
+      finalAgentMessageId={getFinalAgentMessageId(currentTurn)}
+      inlineMentionSources={inlineMentionSources}
+      isMostRecentBlock
+      knownSkills={knownSkills}
+      primaryUserBlock={null}
+      projectFilePaths={projectFilePaths}
+      projectId={projectId}
+      projectRootPath={projectRootPath}
+      relatedThreadsById={relatedThreadsById}
+      subagents={[]}
+      threadCwdPath={thread.cwd}
+      threadId={thread.id}
+      turnCompletedAt={currentTurn.completedAt}
+      turnStartedAt={currentTurn.startedAt}
+      turnStatus={currentTurn.status}
+      workspaceRoots={workspaceRoots}
+    />
+  );
+}
+
 function ThreadCommandExecutionDetails ({
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
+  inlineMentionSources,
   isMostRecent = false,
   item,
   knownSkills,
   projectFilePaths,
   projectId,
   projectRootPath,
+  relatedThreadsById,
+  subagents,
   threadId,
   workspaceRoots,
 }: {
   browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
+  inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecent?: boolean;
   item: CommandItem;
   knownSkills?: WorkbenchSkillSummary[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  relatedThreadsById: RelatedThreadsById;
+  subagents: readonly WorkbenchSubagentSummary[];
   threadId: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
@@ -1707,6 +1507,7 @@ function ThreadCommandExecutionDetails ({
     projectRootPath,
     workspaceRoots,
   }), [item.command, item.commandActions, item.cwd, knownSkills, projectRootPath, workspaceRoots]);
+  const subagentCommand = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand);
   const checkpointDiffChanges = isGitCheckpointDiffMatcherClaim(commandDisplay.claimedBy)
     ? parseGitCheckpointDiffOutput(item.aggregatedOutput ?? "")
     : null;
@@ -1728,6 +1529,75 @@ function ThreadCommandExecutionDetails ({
   ), [browseResultEntries, commandDisplay.detailRows, isBrowseCommand, item.aggregatedOutput, item.id, item.status]);
   const shouldHideCommandOutput = commandDisplay.hideCommandOutput
     && (commandDetailRows.length > 0 || !item.aggregatedOutput?.trim());
+  if (
+    subagentCommand?.action === "wait"
+    && subagentCommand.threadId
+    && (item.status === "inProgress" || item.status === "completed")
+    && (item.exitCode === null || item.exitCode === 0)
+  ) {
+    const childThread = relatedThreadsById[subagentCommand.threadId];
+    return (
+      <ThreadSubagentWaitItem
+        active={item.status === "inProgress" && isMostRecent}
+        subagent={getSubagentSummary(subagents, subagentCommand.threadId)}
+        thread={childThread}
+        threadId={subagentCommand.threadId}
+      >
+        <ThreadSubagentCurrentActivityPreview
+          inlineMentionSources={inlineMentionSources}
+          knownSkills={knownSkills}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          relatedThreadsById={relatedThreadsById}
+          thread={childThread}
+          workspaceRoots={workspaceRoots}
+        />
+      </ThreadSubagentWaitItem>
+    );
+  }
+  if (
+    subagentCommand?.action === "message"
+    && subagentCommand.threadId
+    && subagentCommand.message
+    && (item.status === "inProgress" || item.status === "completed")
+    && (item.exitCode === null || item.exitCode === 0)
+  ) {
+    const childThread = relatedThreadsById[subagentCommand.threadId];
+    return (
+      <ThreadSubagentMessageItem
+        subagent={getSubagentSummary(subagents, subagentCommand.threadId)}
+        thread={childThread}
+        threadId={subagentCommand.threadId}
+      >
+        <ThreadMarkdown
+          inlineMentionSources={inlineMentionSources}
+          markdown={subagentCommand.message}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          threadCwdPath={item.cwd}
+          workspaceRoots={workspaceRoots}
+        />
+      </ThreadSubagentMessageItem>
+    );
+  }
+  if (
+    subagentCommand?.action === "stop"
+    && subagentCommand.threadId
+    && (item.status === "inProgress" || item.status === "completed")
+    && (item.exitCode === null || item.exitCode === 0)
+  ) {
+    const childThread = relatedThreadsById[subagentCommand.threadId];
+    return (
+      <ThreadSubagentStopItem
+        active={item.status === "inProgress"}
+        subagent={getSubagentSummary(subagents, subagentCommand.threadId)}
+        thread={childThread}
+        threadId={subagentCommand.threadId}
+      />
+    );
+  }
   const metaParts = [];
 
   if (item.status !== "completed") {
@@ -1834,22 +1704,28 @@ function ThreadCommandExecutionDetails ({
 
 function ThreadRegularCommandSequence ({
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
+  inlineMentionSources,
   isMostRecent,
   items,
   knownSkills,
   projectFilePaths,
   projectId,
   projectRootPath,
+  relatedThreadsById,
+  subagents,
   threadId,
   workspaceRoots,
 }: {
   browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
+  inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecent: boolean;
   items: CommandItem[];
   knownSkills?: WorkbenchSkillSummary[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  relatedThreadsById: RelatedThreadsById;
+  subagents: readonly WorkbenchSubagentSummary[];
   threadId: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
@@ -1884,7 +1760,7 @@ function ThreadRegularCommandSequence ({
   }, [allBrowseRequests, commandBlockItems, items.length, knownSkills, projectRootPath, workspaceRoots]);
 
   if (items.length === 1) {
-    return <ThreadCommandExecutionDetails browseResultEntries={browseResultEntries} isMostRecent={isMostRecent} item={items[0]} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
+    return <ThreadCommandExecutionDetails browseResultEntries={browseResultEntries} inlineMentionSources={inlineMentionSources} isMostRecent={isMostRecent} item={items[0]} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} relatedThreadsById={relatedThreadsById} subagents={subagents} threadId={threadId} workspaceRoots={workspaceRoots} />;
   }
 
   if (allBrowseRequests) {
@@ -1893,6 +1769,7 @@ function ThreadRegularCommandSequence ({
         {items.map((item, index) => (
           <ThreadCommandExecutionDetails
             browseResultEntries={browseResultEntries}
+            inlineMentionSources={inlineMentionSources}
             isMostRecent={isMostRecent && index === items.length - 1}
             item={item}
             key={item.id}
@@ -1900,6 +1777,8 @@ function ThreadRegularCommandSequence ({
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}
+            relatedThreadsById={relatedThreadsById}
+            subagents={subagents}
             threadId={threadId}
             workspaceRoots={workspaceRoots}
           />
@@ -1924,6 +1803,7 @@ function ThreadRegularCommandSequence ({
         {items.map((item, index) => (
           <ThreadCommandExecutionDetails
             browseResultEntries={browseResultEntries}
+            inlineMentionSources={inlineMentionSources}
             isMostRecent={isMostRecent && index === items.length - 1}
             item={item}
             key={item.id}
@@ -1931,6 +1811,8 @@ function ThreadRegularCommandSequence ({
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}
+            relatedThreadsById={relatedThreadsById}
+            subagents={subagents}
             threadId={threadId}
             workspaceRoots={workspaceRoots}
           />
@@ -1942,23 +1824,29 @@ function ThreadRegularCommandSequence ({
 
 function ThreadCommandSequence ({
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
+  inlineMentionSources,
   isMostRecent,
   items,
   knownSkills,
   projectFilePaths,
   projectId,
   projectRootPath,
+  relatedThreadsById,
+  subagents,
   threadCwdPath,
   threadId,
   workspaceRoots,
 }: {
   browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
+  inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecent: boolean;
   items: CommandItem[];
   knownSkills?: WorkbenchSkillSummary[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  relatedThreadsById: RelatedThreadsById;
+  subagents: readonly WorkbenchSubagentSummary[];
   threadCwdPath?: string;
   threadId: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
@@ -1969,18 +1857,21 @@ function ThreadCommandSequence ({
     projectRootPath,
     workspaceRoots,
   }), [items, knownSkills, projectRootPath, workspaceRoots]);
-  const hasThreadContextSegment = renderSegments.some((segment) => segment.kind === "threadContext");
+  const hasStandaloneCommandSegment = renderSegments.some((segment) => segment.kind !== "commands");
 
-  if (!hasThreadContextSegment) {
+  if (!hasStandaloneCommandSegment) {
     return (
       <ThreadRegularCommandSequence
         browseResultEntries={browseResultEntries}
+        inlineMentionSources={inlineMentionSources}
         isMostRecent={isMostRecent}
         items={items}
         knownSkills={knownSkills}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
         projectRootPath={projectRootPath}
+        relatedThreadsById={relatedThreadsById}
+        subagents={subagents}
         threadId={threadId}
         workspaceRoots={workspaceRoots}
       />
@@ -2001,9 +1892,26 @@ function ThreadCommandSequence ({
             threadCwdPath={threadCwdPath}
             workspaceRoots={workspaceRoots}
           />
+        ) : segment.kind === "subagentRelationship" ? (
+          <ThreadCommandExecutionDetails
+            browseResultEntries={browseResultEntries}
+            inlineMentionSources={inlineMentionSources}
+            isMostRecent={isMostRecent && index === renderSegments.length - 1}
+            item={segment.item}
+            key={`subagent-relationship:${segment.item.id}`}
+            knownSkills={knownSkills}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            relatedThreadsById={relatedThreadsById}
+            subagents={subagents}
+            threadId={threadId}
+            workspaceRoots={workspaceRoots}
+          />
         ) : (
           <ThreadRegularCommandSequence
             browseResultEntries={browseResultEntries}
+            inlineMentionSources={inlineMentionSources}
             isMostRecent={isMostRecent && index === renderSegments.length - 1}
             items={segment.items}
             key={`commands:${segment.items[0]?.id ?? index}`}
@@ -2011,6 +1919,8 @@ function ThreadCommandSequence ({
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}
+            relatedThreadsById={relatedThreadsById}
+            subagents={subagents}
             threadId={threadId}
             workspaceRoots={workspaceRoots}
           />
@@ -2049,6 +1959,7 @@ function ThreadRenderableBlockViewComponent ({
   projectId,
   projectRootPath,
   relatedThreadsById,
+  subagents,
   turnCompletedAt,
   turnStartedAt,
   turnStatus,
@@ -2067,13 +1978,14 @@ function ThreadRenderableBlockViewComponent ({
   projectId?: string | null;
   projectRootPath?: string;
   relatedThreadsById: RelatedThreadsById;
+  subagents: readonly WorkbenchSubagentSummary[];
   turnCompletedAt: number | null;
   turnStartedAt: number | null;
   turnStatus: Turn["status"];
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   if (block.kind === "commandSequence") {
-    return <ThreadCommandSequence browseResultEntries={browseResultEntries} isMostRecent={isMostRecentBlock} items={block.items} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} threadCwdPath={threadCwdPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
+    return <ThreadCommandSequence browseResultEntries={browseResultEntries} inlineMentionSources={inlineMentionSources} isMostRecent={isMostRecentBlock} items={block.items} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} relatedThreadsById={relatedThreadsById} subagents={subagents} threadCwdPath={threadCwdPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
   }
 
   if (block.kind === "fileChangeSequence") {
@@ -2149,20 +2061,7 @@ function ThreadRenderableBlockViewComponent ({
     case "webSearch":
       return <ThreadWebSearchItem item={block.item} />;
     case "collabAgentToolCall":
-      return (
-        <ThreadCollabAgentToolCallItem
-          isMostRecent={isMostRecentBlock}
-          inlineMentionSources={inlineMentionSources}
-          item={block.item}
-          knownSkills={knownSkills}
-          threadCwdPath={threadCwdPath}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          relatedThreadsById={relatedThreadsById}
-          workspaceRoots={workspaceRoots}
-        />
-      );
+      return null;
     default:
       return <ThreadFallbackItem item={block.item} />;
   }
@@ -2182,6 +2081,7 @@ const ThreadRenderableBlockView = memo(ThreadRenderableBlockViewComponent, (left
   && left.projectId === right.projectId
   && left.projectRootPath === right.projectRootPath
   && left.relatedThreadsById === right.relatedThreadsById
+  && left.subagents === right.subagents
   && left.turnCompletedAt === right.turnCompletedAt
   && left.turnStartedAt === right.turnStartedAt
   && left.turnStatus === right.turnStatus
@@ -2192,7 +2092,6 @@ function ThreadTurnDetailsComponent ({
   defaultOpenCompletedWork = false,
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   flattenCompletedWork = false,
-  hiddenCollabAgentToolCallItemIds = [],
   hiddenDynamicToolCallItemIds = [],
   hideFinalAgentMessage = false,
   hideTopBorder = false,
@@ -2209,13 +2108,13 @@ function ThreadTurnDetailsComponent ({
   projectId,
   projectRootPath,
   relatedThreadsById = {},
+  subagents = [],
   turn,
   workspaceRoots,
 }: {
   defaultOpenCompletedWork?: boolean;
   browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   flattenCompletedWork?: boolean;
-  hiddenCollabAgentToolCallItemIds?: readonly string[];
   hiddenDynamicToolCallItemIds?: readonly string[];
   hideFinalAgentMessage?: boolean;
   hideTopBorder?: boolean;
@@ -2232,14 +2131,10 @@ function ThreadTurnDetailsComponent ({
   projectId?: string | null;
   projectRootPath?: string;
   relatedThreadsById?: RelatedThreadsById;
+  subagents?: readonly WorkbenchSubagentSummary[];
   turn: Turn;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const hiddenCollabAgentToolCallIds = useMemo(() => (
-    hiddenCollabAgentToolCallItemIds.length
-      ? new Set(hiddenCollabAgentToolCallItemIds)
-      : null
-  ), [hiddenCollabAgentToolCallItemIds]);
   const hiddenDynamicToolCallIds = useMemo(() => (
     hiddenDynamicToolCallItemIds.length
       ? new Set(hiddenDynamicToolCallItemIds)
@@ -2254,14 +2149,12 @@ function ThreadTurnDetailsComponent ({
     turn.items.some((item) => item.type === "userMessage" && isWorkbenchControlUserMessage(item))
   ), [turn.items]);
   const hiddenItemIds = useMemo(() => ({
-    collabAgentToolCallIds: hiddenCollabAgentToolCallIds,
     controlAgentMessages: hideWorkbenchControlAgentMessages && isWorkbenchControlTurn,
     controlUserMessages: hideWorkbenchControlUserMessages,
     dynamicToolCallIds: hiddenDynamicToolCallIds,
     reasoningItemId: hiddenReasoningItemId,
     webSearchItemIds: hiddenWebSearchIds,
   } satisfies HiddenThreadItemIds), [
-    hiddenCollabAgentToolCallIds,
     hiddenDynamicToolCallIds,
     hiddenReasoningItemId,
     hiddenWebSearchIds,
@@ -2321,6 +2214,7 @@ function ThreadTurnDetailsComponent ({
       projectId={projectId}
       projectRootPath={projectRootPath}
       relatedThreadsById={relatedThreadsById}
+      subagents={subagents}
       turnCompletedAt={turn.completedAt}
       turnStartedAt={turn.startedAt}
       turnStatus={turn.status}
@@ -2502,7 +2396,6 @@ function areThreadTurnDetailsPropsEqual (
   return left.turn === right.turn
     && left.defaultOpenCompletedWork === right.defaultOpenCompletedWork
     && left.flattenCompletedWork === right.flattenCompletedWork
-    && left.hiddenCollabAgentToolCallItemIds === right.hiddenCollabAgentToolCallItemIds
     && left.hiddenDynamicToolCallItemIds === right.hiddenDynamicToolCallItemIds
     && left.hideFinalAgentMessage === right.hideFinalAgentMessage
     && left.hideTopBorder === right.hideTopBorder
@@ -2519,7 +2412,8 @@ function areThreadTurnDetailsPropsEqual (
     && left.projectFilePaths === right.projectFilePaths
     && left.projectId === right.projectId
     && left.projectRootPath === right.projectRootPath
-    && left.relatedThreadsById === right.relatedThreadsById;
+    && left.relatedThreadsById === right.relatedThreadsById
+    && left.subagents === right.subagents;
 }
 
 export const ThreadTurnDetails = memo(ThreadTurnDetailsComponent, areThreadTurnDetailsPropsEqual);
@@ -2529,7 +2423,6 @@ export function ThreadThreadContent ({
   defaultOpenCompletedWork = false,
   emptyMessage = "No subagent activity was captured yet.",
   flattenCompletedWork = false,
-  hiddenCollabAgentToolCallItemIds = [],
   hiddenDynamicToolCallItemIds = [],
   hideFinalAgentMessage = false,
   hideFirstTurnTopBorder = false,
@@ -2545,13 +2438,13 @@ export function ThreadThreadContent ({
   projectRoots,
   projectRootPath,
   relatedThreadsById = {},
+  subagents = [],
   thread,
 }: {
   browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   defaultOpenCompletedWork?: boolean;
   emptyMessage?: string;
   flattenCompletedWork?: boolean;
-  hiddenCollabAgentToolCallItemIds?: readonly string[];
   hiddenDynamicToolCallItemIds?: readonly string[];
   hideFinalAgentMessage?: boolean;
   hideFirstTurnTopBorder?: boolean;
@@ -2567,6 +2460,7 @@ export function ThreadThreadContent ({
   projectRoots?: readonly { id: string; rootPath: string }[];
   projectRootPath?: string;
   relatedThreadsById?: RelatedThreadsById;
+  subagents?: readonly WorkbenchSubagentSummary[];
   thread: ThreadPayload | null | undefined;
 }) {
   const browseResultEntriesByTurnId = useStableBrowseResultEntriesByTurn(browseResultEntries);
@@ -2611,7 +2505,6 @@ export function ThreadThreadContent ({
             browseResultEntries={browseResultEntriesByTurnId.get(entry.turnId) ?? EMPTY_BROWSE_SCREENSHOT_ENTRIES}
             defaultOpenCompletedWork={defaultOpenCompletedWork}
             flattenCompletedWork={flattenCompletedWork}
-            hiddenCollabAgentToolCallItemIds={hiddenCollabAgentToolCallItemIds}
             hiddenDynamicToolCallItemIds={hiddenDynamicToolCallItemIds}
             hideFinalAgentMessage={hideFinalAgentMessage}
             hideTopBorder={hideFirstTurnTopBorder && index === 0}
@@ -2628,6 +2521,7 @@ export function ThreadThreadContent ({
             projectId={projectId}
             projectRootPath={projectRootPath}
             relatedThreadsById={relatedThreadsById}
+            subagents={subagents}
             turn={turn}
             workspaceRoots={projectRoots}
           />
