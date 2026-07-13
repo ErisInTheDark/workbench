@@ -5,30 +5,45 @@
  */
 "use client";
 
-import { useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import type { WorkbenchAgentOption, WorkbenchComposerProfile, WorkbenchComposerProfileSlot, WorkbenchComposerSettings, WorkbenchModelOption } from "../../../lib/types";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileProvider";
 import { FileDeleteIcon, SparkleIcon } from "../workbench-icons";
-import ThreadAgentPicker from "./ThreadAgentPicker";
 import ThreadComposerPickerHeader from "./ThreadComposerPickerHeader";
 import ThreadComposerRibbon from "./ThreadComposerRibbon";
 import ThreadHarnessControl from "./ThreadHarnessControl";
-import ThreadModelPicker from "./ThreadModelPicker";
 import ThreadPickerGroupMoveButton from "./ThreadPickerGroupMoveButton";
 import { getComposerProfileDisplayLabel } from "./composer-profile-label";
 
 const iconButtonClassName = "inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] text-muted transition hover:border-[color-mix(in_srgb,var(--text)_18%,transparent)] hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft";
 
-function settingsFromModel(settings: WorkbenchComposerSettings, model: WorkbenchModelOption | null) {
-  if (!model) return settings;
-  const efforts = model.supportedReasoningEfforts;
-  return { ...settings, reasoningEffort: model.supportsReasoningEffort ? (efforts.includes(settings.reasoningEffort ?? "") ? settings.reasoningEffort : model.defaultReasoningEffort ?? efforts[0] ?? null) : null, serviceTier: model.supportsFastMode ? settings.serviceTier : null };
+function ProfileNameEditable({ fallback, name, onCommit }: { fallback: string; name: string; onCommit: (name: string) => void }) {
+  const editableRef = useRef<HTMLSpanElement>(null);
+  const [hasText, setHasText] = useState(Boolean(name));
+
+  useEffect(() => {
+    const editable = editableRef.current;
+    if (!editable || document.activeElement === editable) return;
+    if ((editable.textContent ?? "") !== name) editable.textContent = name;
+    setHasText(Boolean(name));
+  }, [name]);
+
+  const commit = () => {
+    const value = (editableRef.current?.textContent ?? "").trim();
+    if (editableRef.current && editableRef.current.textContent !== value) editableRef.current.textContent = value;
+    setHasText(Boolean(value));
+    if (value !== name) onCommit(value);
+  };
+
+  return <span className="relative inline-grid min-w-[8ch] max-w-full">
+    {!hasText ? <span aria-hidden="true" className="pointer-events-none col-start-1 row-start-1 whitespace-nowrap text-[0.96em] font-semibold text-muted">{fallback}</span> : null}
+    <span ref={editableRef} aria-label="Profile name" contentEditable="plaintext-only" suppressContentEditableWarning role="textbox" className="relative col-start-1 row-start-1 inline-block min-w-[8ch] max-w-full overflow-hidden whitespace-nowrap text-[0.96em] font-semibold text-text outline-none" onBlur={commit} onClick={(event) => event.stopPropagation()} onInput={(event) => setHasText(Boolean(event.currentTarget.textContent))} onKeyDown={(event: KeyboardEvent<HTMLSpanElement>) => { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }}>{name}</span>
+  </span>;
 }
 
-export default function ThreadProfilePicker({ agents, agentsError, canToggleHarness, currentSettings, deprioritizedModelIds, isAgentRefreshDisabled, isAgentRefreshing, isLoadingAgents, isLoadingModels, isModelRefreshDisabled, isModelRefreshing, models, modelsError, onClose, onHarnessToggle, onLoadModels, onRefreshAgents, projectId, slot }: {
-  agents: WorkbenchAgentOption[]; agentsError: string; canToggleHarness: boolean; currentSettings: WorkbenchComposerSettings; deprioritizedModelIds: string[];
-  isAgentRefreshDisabled: boolean; isAgentRefreshing: boolean; isLoadingAgents: boolean; isLoadingModels: boolean; isModelRefreshDisabled: boolean; isModelRefreshing: boolean;
-  models: WorkbenchModelOption[]; modelsError: string; onClose: () => void; onHarnessToggle?: () => void; onLoadModels: (harness: WorkbenchComposerSettings["harness"], forceRefresh?: boolean) => Promise<void>; onRefreshAgents: () => void;
+export default function ThreadProfilePicker({ agents, canToggleHarness, currentSettings, models, onAgentOpen, onClose, onHarnessToggle, onModelOpen, projectId, slot }: {
+  agents: WorkbenchAgentOption[]; canToggleHarness: boolean; currentSettings: WorkbenchComposerSettings;
+  models: WorkbenchModelOption[]; onAgentOpen: (profileId: string) => void; onClose: () => void; onHarnessToggle?: () => void; onModelOpen: (profileId: string, harness: WorkbenchComposerSettings["harness"]) => void;
   projectId: string; slot: WorkbenchComposerProfileSlot;
 }) {
   const { controller, snapshot } = useWorkbenchComposerProfiles();
@@ -38,12 +53,7 @@ export default function ThreadProfilePicker({ agents, agentsError, canToggleHarn
   const profiles = selectedProfile && !visible.some(({ id }) => id === selectedProfile.id) ? [selectedProfile, ...visible] : visible;
   const globals = profiles.filter(({ scope }) => scope.kind === "global");
   const projects = profiles.filter(({ scope }) => scope.kind === "project");
-  const [target, setTarget] = useState<{ id: string; step: "agent" | "model" } | null>(null);
-  const targetProfile = target ? controller.getProfile(target.id) : null;
   void snapshot;
-
-  if (targetProfile && target?.step === "model") return <ThreadModelPicker appliesOnNextTurnOnly={false} deprioritizedModelIds={deprioritizedModelIds} error={modelsError} harness={targetProfile.harness} isLoading={isLoadingModels} isRefreshDisabled={isModelRefreshDisabled} isRefreshing={isModelRefreshing} models={models} selectedModelId={targetProfile.model} showsPriorityControls={false} onClose={() => setTarget(null)} onRefresh={() => { void onLoadModels(targetProfile.harness, true); }} onSelectModel={(model) => { controller.updateProfile(targetProfile.id, settingsFromModel({ ...targetProfile, model: model.id }, model)); setTarget(null); }} onToggleModelPriority={() => {}} />;
-  if (targetProfile && target?.step === "agent") return <ThreadAgentPicker agents={agents} error={agentsError} isLoading={isLoadingAgents} isRefreshDisabled={isAgentRefreshDisabled} isRefreshing={isAgentRefreshing} selectedAgentPath={targetProfile.agentPath} onClose={() => setTarget(null)} onRefresh={onRefreshAgents} onSelectAgent={(agentPath) => { const agent = agents.find(({ path }) => path === agentPath); controller.updateProfile(targetProfile.id, { agentPath, agentSource: agent?.source ?? null }); setTarget(null); }} />;
 
   const renderProfile = (profile: WorkbenchComposerProfile) => {
     const model = models.find(({ id }) => id === profile.model) ?? null;
@@ -54,10 +64,7 @@ export default function ThreadProfilePicker({ agents, agentsError, canToggleHarn
     const selectFromRow = (event: MouseEvent<HTMLElement>) => { if (!(event.target instanceof HTMLElement) || event.target.closest("button,[contenteditable='plaintext-only']")) return; controller.selectProfile(slot, profile.id); };
     return <article key={profile.id} role="radio" aria-checked={active} tabIndex={0} className={`rounded-[1rem] border px-4 py-3 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft ${active ? "border-text bg-[color-mix(in_srgb,var(--text)_6%,transparent)]" : "border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_98%,transparent)]"}`} onClick={selectFromRow} onKeyDown={(event) => { if (event.key === " " && event.target === event.currentTarget) { event.preventDefault(); controller.selectProfile(slot, profile.id); } }}>
       <div className="flex flex-wrap items-center gap-2">
-        <span className="relative inline-grid min-w-[8ch] max-w-full">
-          {!profile.name ? <span aria-hidden="true" className="pointer-events-none col-start-1 row-start-1 whitespace-nowrap text-[0.96em] font-semibold text-muted">{label}</span> : null}
-          <span aria-label="Profile name" contentEditable="plaintext-only" suppressContentEditableWarning role="textbox" className="relative col-start-1 row-start-1 inline-block min-w-[8ch] max-w-full overflow-hidden whitespace-nowrap text-[0.96em] font-semibold text-text outline-none" onClick={(event) => event.stopPropagation()} onInput={(event) => controller.updateProfile(profile.id, { name: event.currentTarget.textContent ?? "" })} onKeyDown={(event: KeyboardEvent<HTMLSpanElement>) => { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }}>{profile.name}</span>
-        </span>
+        <ProfileNameEditable fallback={label} name={profile.name} onCommit={(name) => controller.updateProfile(profile.id, { name })} />
         <div className="ml-auto flex items-center gap-2">
           <ThreadPickerGroupMoveButton direction={profile.scope.kind === "global" ? "down" : "up"} disabled={profile.scope.kind === "project" && profile.agentSource === "project"} label={profile.scope.kind === "global" ? `Move ${label} to this project` : `Promote ${label} globally`} onClick={() => controller.updateProfile(profile.id, { scope: profile.scope.kind === "global" ? { kind: "project", projectId } : { kind: "global" } })} />
           <button type="button" aria-label={`Remove ${label}`} title={`Remove ${label}`} className={`${iconButtonClassName} hover:!text-danger`} onClick={(event) => { event.stopPropagation(); controller.deleteProfile(profile.id); }}><FileDeleteIcon /></button>
@@ -65,7 +72,7 @@ export default function ThreadProfilePicker({ agents, agentsError, canToggleHarn
       </div>
       <div className="mt-1.5 flex flex-wrap items-center gap-3 text-muted">
         <span className="text-[0.78em]"><ThreadHarnessControl harness={profile.harness} /></span>
-        <ThreadComposerRibbon agentLabel={agent?.name ?? (profile.agentPath || "Default agent")} currentReasoningEffort={profile.reasoningEffort} isFastModeEnabled={profile.serviceTier === "fast"} isProfilePanelOpen={false} modelLabel={model?.displayName ?? profile.model} profileLabel="" showsFastModeControl={profile.harness === "codex" && Boolean(model?.supportsFastMode)} showsProfileControl={false} showsReasoningEffortControl={Boolean(model?.supportsReasoningEffort && profile.reasoningEffort)} onAgentOpen={() => setTarget({ id: profile.id, step: "agent" })} onFastModeToggle={() => controller.updateProfile(profile.id, { serviceTier: profile.serviceTier === "fast" ? null : "fast" })} onModelOpen={() => { setTarget({ id: profile.id, step: "model" }); void onLoadModels(profile.harness); }} onProfileOpen={() => {}} onReasoningEffortCycle={cycleEffort} />
+        <ThreadComposerRibbon agentLabel={agent?.name ?? (profile.agentPath || "Default agent")} currentReasoningEffort={profile.reasoningEffort} isFastModeEnabled={profile.serviceTier === "fast"} isProfilePanelOpen={false} modelLabel={model?.displayName ?? profile.model} profileLabel="" showsFastModeControl={profile.harness === "codex" && Boolean(model?.supportsFastMode)} showsProfileControl={false} showsReasoningEffortControl={Boolean(model?.supportsReasoningEffort && profile.reasoningEffort)} onAgentOpen={() => onAgentOpen(profile.id)} onFastModeToggle={() => controller.updateProfile(profile.id, { serviceTier: profile.serviceTier === "fast" ? null : "fast" })} onModelOpen={() => onModelOpen(profile.id, profile.harness)} onProfileOpen={() => {}} onReasoningEffortCycle={cycleEffort} />
       </div>
     </article>;
   };

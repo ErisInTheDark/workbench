@@ -468,6 +468,7 @@ export default function ThreadComposer ({
     opencode: [],
   });
   const [activePicker, setActivePicker] = useState<"agent" | "model" | "profile" | null>(null);
+  const [profilePickerTargetId, setProfilePickerTargetId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [isComposing, setIsComposing] = useState(false);
   const [isLoadingAgents, setIsLoadingAgents] = useState(false);
@@ -602,6 +603,12 @@ export default function ThreadComposer ({
   const selectedProfile = profileSelection.kind === "profile"
     ? composerProfileController.getProfile(profileSelection.profileId)
     : null;
+  const profilePickerTarget = profilePickerTargetId
+    ? composerProfileController.getProfile(profilePickerTargetId)
+    : null;
+  const pickerHarness = profilePickerTarget?.harness ?? thread.harness;
+  const pickerSelectedModelId = profilePickerTarget?.model ?? selectedModel;
+  const pickerSelectedAgentPath = profilePickerTarget?.agentPath ?? thread.agentPath;
   const profileButtonLabel = selectedProfile ? getComposerProfileDisplayLabel(selectedProfile, agentButtonLabel, modelButtonLabel) : "Custom";
   const currentComposerSettings: WorkbenchComposerSettings = {
     agentPath: thread.agentPath,
@@ -612,7 +619,21 @@ export default function ThreadComposer ({
     serviceTier: isFastModeEnabled ? "fast" : null,
   };
   void composerProfileSnapshot;
-  const deprioritizedModelIds = deprioritizedModelIdsByHarness[thread.harness] ?? [];
+  const deprioritizedModelIds = deprioritizedModelIdsByHarness[pickerHarness] ?? [];
+
+  useEffect(() => {
+    if (!profilePickerTargetId || profilePickerTarget) {
+      return;
+    }
+    setProfilePickerTargetId(null);
+    setActivePicker(null);
+  }, [profilePickerTarget, profilePickerTargetId]);
+
+  const finishConfigurationPicker = () => {
+    const shouldReturnToProfiles = profilePickerTarget !== null;
+    setProfilePickerTargetId(null);
+    setActivePicker(shouldReturnToProfiles ? "profile" : null);
+  };
   const loadAvailableAgents = useCallback((options: { clearBeforeLoad?: boolean } = {}): Promise<void> => {
     const generation = agentLoadGenerationRef.current + 1;
     agentLoadGenerationRef.current = generation;
@@ -743,6 +764,7 @@ export default function ThreadComposer ({
     setIsModelRefreshCoolingDown(true);
     void waitForMinimumDuration(loadAvailableModels({
       forceRefresh: true,
+      harness: pickerHarness,
       showErrors: true,
       showLoading: true,
     }), PICKER_REFRESH_MIN_SPIN_MS).finally(() => {
@@ -756,7 +778,7 @@ export default function ThreadComposer ({
         setIsModelRefreshCoolingDown(false);
       }, PICKER_REFRESH_COOLDOWN_MS);
     });
-  }, [isLoadingModels, isModelRefreshCoolingDown, isModelRefreshPending, loadAvailableModels]);
+  }, [isLoadingModels, isModelRefreshCoolingDown, isModelRefreshPending, loadAvailableModels, pickerHarness]);
   const handleQuestionnaireDraftChange = useCallback((draft: WorkbenchQuestionnaireDraft) => {
     onThreadQuestionnaireDraftChange(thread.id, questionnaireRequestKey, draft);
   }, [onThreadQuestionnaireDraftChange, questionnaireRequestKey, thread.id]);
@@ -1538,7 +1560,10 @@ export default function ThreadComposer ({
                       selectedProfileLabel={selectedProfile ? profileButtonLabel : null}
                       showsFastModeControl={showsFastModeControl}
                       showsReasoningEffortControl={showsReasoningEffortControl}
-                      onAgentOpen={() => setActivePicker("agent")}
+                      onAgentOpen={() => {
+                        setProfilePickerTargetId(null);
+                        setActivePicker("agent");
+                      }}
                       onFastModeToggle={() => {
                         const serviceTier = isFastModeEnabled ? null : "fast";
                         applyDirectSettingsChange(
@@ -1546,8 +1571,14 @@ export default function ThreadComposer ({
                           () => onThreadServiceTierChange(thread.id, serviceTier),
                         );
                       }}
-                      onModelOpen={() => setActivePicker("model")}
-                      onProfileOpen={() => setActivePicker((current) => current === "profile" ? null : "profile")}
+                      onModelOpen={() => {
+                        setProfilePickerTargetId(null);
+                        setActivePicker("model");
+                      }}
+                      onProfileOpen={() => {
+                        setProfilePickerTargetId(null);
+                        setActivePicker((current) => current === "profile" ? null : "profile");
+                      }}
                       onReasoningEffortCycle={cycleReasoningEffort}
                     />
                     ) : null}
@@ -1575,20 +1606,30 @@ export default function ThreadComposer ({
                   inert={!isModelPickerPanelActive}
                 >
                   <ThreadModelPicker
-                    appliesOnNextTurnOnly={thread.harness === "codex" && isActiveThread}
+                    appliesOnNextTurnOnly={!profilePickerTarget && thread.harness === "codex" && isActiveThread}
                     deprioritizedModelIds={deprioritizedModelIds}
                     error={modelsError}
-                    harness={thread.harness}
+                    harness={pickerHarness}
                     isLoading={isLoadingModels}
                     isRefreshDisabled={isLoadingModels || isModelRefreshPending || isModelRefreshCoolingDown}
                     isRefreshing={isModelRefreshPending}
                     models={availableModels}
-                    selectedModelId={selectedModel}
-                    onClose={() => {
-                      setActivePicker(null);
-                    }}
+                    selectedModelId={pickerSelectedModelId}
+                    onClose={finishConfigurationPicker}
                     onRefresh={refreshAvailableModels}
                     onSelectModel={(model) => {
+                      if (profilePickerTarget) {
+                        composerProfileController.updateProfile(profilePickerTarget.id, {
+                          model: model.id,
+                          reasoningEffort: model.supportsReasoningEffort
+                            ? model.defaultReasoningEffort ?? model.supportedReasoningEfforts[0] ?? null
+                            : null,
+                          serviceTier: model.supportsFastMode ? profilePickerTarget.serviceTier : null,
+                        });
+                        setModelsError("");
+                        finishConfigurationPicker();
+                        return;
+                      }
                       const nextSettings: WorkbenchComposerSettings = {
                         ...currentComposerSettings,
                         model: model.id,
@@ -1604,18 +1645,18 @@ export default function ThreadComposer ({
                         }
                       });
                       setModelsError("");
-                      setActivePicker(null);
+                      finishConfigurationPicker();
                     }}
                     onToggleModelPriority={(modelId) => {
                       setDeprioritizedModelIdsByHarness((current) => {
-                        const currentIds = current[thread.harness] ?? [];
+                        const currentIds = current[pickerHarness] ?? [];
                         const nextIds = currentIds.includes(modelId)
                           ? currentIds.filter((id) => id !== modelId)
                           : [...currentIds, modelId];
 
                         return {
                           ...current,
-                          [thread.harness]: nextIds,
+                          [pickerHarness]: nextIds,
                         };
                       });
                     }}
@@ -1633,18 +1674,24 @@ export default function ThreadComposer ({
                     isLoading={isLoadingAgents}
                     isRefreshDisabled={isLoadingAgents || isAgentRefreshPending || isAgentRefreshCoolingDown}
                     isRefreshing={isAgentRefreshPending}
-                    selectedAgentPath={thread.agentPath}
-                    onClose={() => {
-                      setActivePicker(null);
-                    }}
+                    selectedAgentPath={pickerSelectedAgentPath}
+                    onClose={finishConfigurationPicker}
                     onRefresh={refreshAvailableAgents}
                     onSelectAgent={(agentPath) => {
                       const agent = availableAgents.find((candidate) => areWorkbenchAgentPathsEqual(candidate.path, agentPath)) ?? null;
+                      if (profilePickerTarget) {
+                        composerProfileController.updateProfile(profilePickerTarget.id, {
+                          agentPath,
+                          agentSource: agent?.source ?? null,
+                        });
+                        finishConfigurationPicker();
+                        return;
+                      }
                       applyDirectSettingsChange(
                         { ...currentComposerSettings, agentPath, agentSource: agent?.source ?? null },
                         () => onThreadAgentChange(thread.id, agentPath),
                       );
-                      setActivePicker(null);
+                      finishConfigurationPicker();
                     }}
                   />
                 </div>
@@ -1657,24 +1704,25 @@ export default function ThreadComposer ({
                   {profileSlot ? (
                     <ThreadProfilePicker
                       agents={availableAgents}
-                      agentsError={agentsError}
                       canToggleHarness={canToggleHarness}
                       currentSettings={currentComposerSettings}
-                      deprioritizedModelIds={deprioritizedModelIds}
-                      isAgentRefreshDisabled={isLoadingAgents || isAgentRefreshPending || isAgentRefreshCoolingDown}
-                      isAgentRefreshing={isAgentRefreshPending}
-                      isLoadingAgents={isLoadingAgents}
-                      isLoadingModels={isLoadingModels}
-                      isModelRefreshDisabled={isLoadingModels || isModelRefreshPending || isModelRefreshCoolingDown}
-                      isModelRefreshing={isModelRefreshPending}
                       models={availableModels}
-                      modelsError={modelsError}
                       projectId={projectId}
                       slot={profileSlot}
-                      onClose={() => setActivePicker(null)}
+                      onAgentOpen={(profileId) => {
+                        setProfilePickerTargetId(profileId);
+                        setActivePicker("agent");
+                      }}
+                      onClose={() => {
+                        setProfilePickerTargetId(null);
+                        setActivePicker(null);
+                      }}
                       onHarnessToggle={onHarnessToggle}
-                      onLoadModels={(harness, forceRefresh = false) => loadAvailableModels({ clearBeforeLoad: true, forceRefresh, harness, showErrors: true, showLoading: true })}
-                      onRefreshAgents={refreshAvailableAgents}
+                      onModelOpen={(profileId, harness) => {
+                        setProfilePickerTargetId(profileId);
+                        setActivePicker("model");
+                        void loadAvailableModels({ clearBeforeLoad: true, harness, showErrors: true, showLoading: true });
+                      }}
                     />
                   ) : null}
                 </div>
