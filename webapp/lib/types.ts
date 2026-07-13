@@ -1129,6 +1129,7 @@ export interface WorkbenchControls {
   setCurrentThreadComposerSettings: (threadId: string, settings: WorkbenchComposerSettings) => void;
   toggleDirectory: (path: string) => void;
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
+  deleteFile: (filePath: string, options?: { confirmUntracked?: boolean }) => Promise<DeleteFileResponse>;
   setDraftThreadHarness: (harness: WorkbenchHarness) => void;
 }
 
@@ -1156,6 +1157,27 @@ export interface CreateEntryPayload extends ProjectSnapshot {
   path: string;
   type: "directory" | "file";
 }
+
+export interface DeleteFileRequest {
+  confirmUntracked?: boolean;
+  path: string;
+  projectId: string;
+}
+
+export interface DeleteFileConfirmationRequired {
+  confirmationRequired: true;
+  path: string;
+  projectId: string;
+  tracked: false;
+}
+
+export interface DeleteFilePayload extends ProjectSnapshot {
+  confirmationRequired?: false;
+  path: string;
+  tracked: boolean;
+}
+
+export type DeleteFileResponse = DeleteFileConfirmationRequired | DeleteFilePayload;
 
 export interface SaveFilePayload {
   projectId: string;
@@ -1189,6 +1211,17 @@ export interface OpenFileInEditorResponse {
   path: string;
   projectId: string | null;
   target: string;
+}
+
+export interface RevealProjectEntryRequest {
+  path: string;
+  projectId: string;
+}
+
+export interface RevealProjectEntryResponse {
+  ok: true;
+  path: string;
+  projectId: string;
 }
 
 export interface ResolveExternalFileLinkRootsRequest {

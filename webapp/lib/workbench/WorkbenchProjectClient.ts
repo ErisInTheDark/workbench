@@ -5,10 +5,10 @@
  * - WorkbenchProjectListener: subscriber signature for project client state changes. Keywords: workbench, project, subscribe.
  * - cloneTreeNodes: deep-clone recursive tree node arrays for safe project snapshots. Keywords: workbench, project, tree, clone.
  * - WorkbenchProjectClient: public surface for the workbench project sub-client. Keywords: workbench, project, client, dispose, select.
- * - default WorkbenchProjectClient: create the project sub-client that owns project discovery, tree refresh, entry creation, and directory expansion state. Keywords: workbench, project, tree, entries, default export.
+ * - default WorkbenchProjectClient: create the project sub-client that owns project discovery, tree refresh, entry creation/deletion, and directory expansion state. Keywords: workbench, project, tree, entries, delete, default export.
  */
 
-import type { ChangeSummary, CreateEntryPayload, ProjectSnapshot, TreeNode, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchProjectsPayload } from "../types";
+import type { ChangeSummary, CreateEntryPayload, DeleteFileRequest, DeleteFileResponse, ProjectSnapshot, TreeNode, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchProjectsPayload } from "../types";
 import { areDeeplyEqual } from "./deep-equality";
 import ProjectTreeFileIndex, { type ProjectTreeFileCandidate, type ProjectTreeFileIndex as ProjectTreeFileIndexRecord } from "./project/ProjectTreeFileIndex";
 import { persistExpandedDirectories, readStoredExpandedDirectories } from "./state/browser-state";
@@ -62,6 +62,7 @@ export type WorkbenchProjectListener = (snapshot: WorkbenchProjectSnapshot) => v
 
 interface WorkbenchProjectClient {
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
+  deleteFile: (filePath: string, options?: { confirmUntracked?: boolean }) => Promise<DeleteFileResponse>;
   dispose: () => void;
   expandPath: (filePath: string) => boolean;
   getSnapshot: () => WorkbenchProjectSnapshot;
@@ -310,6 +311,36 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
     return payload.path;
   }
 
+  async function deleteFile(filePath: string, options: { confirmUntracked?: boolean } = {}) {
+    if (!state.currentProjectId) {
+      throw new Error("Select a project before deleting files.");
+    }
+
+    const request: DeleteFileRequest = {
+      confirmUntracked: options.confirmUntracked === true,
+      path: filePath,
+      projectId: state.currentProjectId,
+    };
+    const response = await fetch("/api/tree", {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    });
+    const payload = await response.json().catch(() => ({ error: "Unable to delete file." })) as DeleteFileResponse | { error?: string } | null;
+    if (response.status === 409 && payload && "confirmationRequired" in payload && payload.confirmationRequired) {
+      return payload;
+    }
+    if (!response.ok || !payload || !("tree" in payload)) {
+      throw new Error(payload && "error" in payload && typeof payload.error === "string" ? payload.error : "Unable to delete file.");
+    }
+
+    applyProjectSnapshot(payload);
+    emit();
+    return payload;
+  }
+
   async function selectProjectStrict(projectId: string) {
     const cachedProject = state.projects.find((candidate) => candidate.id === projectId);
     if (cachedProject && state.currentProjectId !== projectId) {
@@ -406,6 +437,7 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
 
   return {
     createEntry,
+    deleteFile,
     dispose,
     expandPath,
     getSnapshot,

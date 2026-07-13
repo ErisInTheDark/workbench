@@ -398,6 +398,7 @@ interface ExplorerTreeProps {
   expandedDirectories: Set<string>;
   isFileOpenable?: (path: string) => boolean;
   getFileDragPayload?: (path: string) => WorkbenchDragPayload | null;
+  getNodeContextMenu?: (node: TreeNode) => WorkbenchContextMenuDefinition | null;
   derivedState?: ExplorerTreeDerivedState;
   modifiedPaths: Set<string>;
   nested?: boolean;
@@ -415,6 +416,7 @@ export function ExplorerTree ({
   expandedDirectories,
   isFileOpenable,
   getFileDragPayload,
+  getNodeContextMenu,
   modifiedPaths,
   nested = false,
   nodes,
@@ -445,8 +447,9 @@ export function ExplorerTree ({
               data-tree-key={`${node.type}:${node.path}`}
               data-tree-type={node.type}
             >
-              <div className="group/entry-row flex min-w-0 items-center justify-between gap-2">
-                <button
+              <ContextMenuCapability menu={getNodeContextMenu?.(node) ?? null}>
+                <div className="group/entry-row flex min-w-0 items-center justify-between gap-2">
+                  <button
                   data-role="tree-button"
                   type="button"
                   className="inline-flex max-w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:py-0.5"
@@ -466,8 +469,8 @@ export function ExplorerTree ({
                   <span data-role="tree-label" className="min-w-0 truncate">{node.name}</span>
                   <ExplorerModifiedDot hidden={!isModified} />
                   <ExplorerChangeSummary summary={changeSummary} />
-                </button>
-                <button
+                  </button>
+                  <button
                   type="button"
                   aria-label={`Create in ${node.name}`}
                   title={`Create in ${node.name}`}
@@ -478,8 +481,9 @@ export function ExplorerTree ({
                 >
                   <NewEntryIcon />
                   <span className="sr-only">{`Create in ${node.name}`}</span>
-                </button>
-              </div>
+                  </button>
+                </div>
+              </ContextMenuCapability>
               {isExpanded ? (
                 <ExplorerTree
                   changes={changes}
@@ -488,6 +492,7 @@ export function ExplorerTree ({
                   derivedState={treeDerivedState}
                   expandedDirectories={expandedDirectories}
                   getFileDragPayload={getFileDragPayload}
+                  getNodeContextMenu={getNodeContextMenu}
                   isFileOpenable={isFileOpenable}
                   modifiedPaths={modifiedPaths}
                   nested
@@ -515,8 +520,9 @@ export function ExplorerTree ({
             data-tree-key={`${node.type}:${node.path}`}
             data-tree-type={node.type}
           >
-            <div className="flex min-w-0 items-center gap-2">
-              <button
+            <ContextMenuCapability menu={getNodeContextMenu?.(node) ?? null}>
+              <div className="flex min-w-0 items-center gap-2">
+                <button
                 data-role="tree-button"
                 type="button"
                 aria-disabled={!isOpenable}
@@ -545,6 +551,7 @@ export function ExplorerTree ({
                   <ExplorerChangeSummary summary={changeSummary} />
                 </button>
               </div>
+            </ContextMenuCapability>
             </li>
           );
       })}

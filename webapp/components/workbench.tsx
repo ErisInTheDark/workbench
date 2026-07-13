@@ -9,7 +9,7 @@ import { startTransition, useCallback, useEffect, useMemo, useRef, useState, typ
 import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type {
-  ExplorerSnapshot, FilePayload, OpenFileInEditorRequest, OrchestratorReloadRequest, OrchestratorReloadResponse, ThreadPayload, ThreadSummary, TreeNode,
+  ExplorerSnapshot, FilePayload, OpenFileInEditorRequest, OrchestratorReloadRequest, OrchestratorReloadResponse, RevealProjectEntryRequest, ThreadPayload, ThreadSummary, TreeNode,
   WorkbenchCollaborationState,
   WorkbenchComposerSettings,
   WorkbenchControls,
@@ -172,8 +172,10 @@ import {
   ArchiveIcon,
   BackArrowIcon,
   BinIcon,
+  CheckIcon,
   CollaborationIcon,
   CopyIcon,
+  FileMoveIcon,
   GearIcon,
   PinIcon,
   ReloadIcon,
@@ -601,6 +603,10 @@ export default function Workbench () {
   const [isMobileShellHeaderVisible, setIsMobileShellHeaderVisible] = useState(true);
   const [mobilePane, setMobilePane] = useState<MobilePane>("explorer");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [pendingDeleteFilePath, setPendingDeleteFilePath] = useState("");
+  const [isDeletingFile, setIsDeletingFile] = useState(false);
+  const [deleteDialogError, setDeleteDialogError] = useState("");
+  const [projectActionError, setProjectActionError] = useState("");
   const [sidebarMode, setSidebarMode] = useState<"main" | "projects">("main");
   const [globalSettings, setGlobalSettings] = useState<WorkbenchGlobalSettings>(() => {
     if (typeof window === "undefined") {
@@ -1580,6 +1586,19 @@ export default function Workbench () {
             void writeTextToClipboard(thread.id);
           },
         },
+        ...(thread.unreadBadge?.unreadCount ? [{
+          icon: <CheckIcon className="size-4" />,
+          id: "mark-read",
+          label: "Mark as read",
+          onSelect: () => {
+            void (async () => {
+              const payload = await controls?.readThread(thread.id, thread.harness);
+              if (payload) {
+                controls?.markThreadSeen(payload);
+              }
+            })();
+          },
+        }] : []),
         {
           icon: <PinIcon className="size-4" />,
           id: isPinned ? "unpin" : "pin",
@@ -1616,7 +1635,7 @@ export default function Workbench () {
       ],
       label: `Thread actions for ${label}`,
     };
-  }, [pinnedSidebarThreadKeySet, stopSidebarThread, updateThreadSidebarPreferences]);
+  }, [controls, pinnedSidebarThreadKeySet, stopSidebarThread, updateThreadSidebarPreferences]);
   const updateBrowseSession = useCallback(async (session: WorkbenchBrowseSessionSummary, action: "forget" | "stop", options: { force?: boolean } = {}) => {
     if (!activeProjectId) {
       return;
@@ -2342,6 +2361,109 @@ export default function Workbench () {
 
     navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId));
   }, [explorer.currentProjectId, navigateToMosaicNode, navigateToRoute, route.mosaicNode, route.projectId, route.view]);
+
+  const revealProjectEntry = useCallback(async (path: string) => {
+    const projectId = explorer.currentProjectId || route.projectId;
+    if (!projectId) {
+      return;
+    }
+
+    setProjectActionError("");
+    try {
+      const request: RevealProjectEntryRequest = { path, projectId };
+      const response = await fetch("/api/file/reveal", {
+        body: JSON.stringify(request),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: "Unable to show that entry in the file explorer." }));
+        throw new Error(typeof error.error === "string" ? error.error : "Unable to show that entry in the file explorer.");
+      }
+    } catch (error) {
+      setProjectActionError(error instanceof Error ? error.message : "Unable to show that entry in the file explorer.");
+    }
+  }, [explorer.currentProjectId, route.projectId]);
+
+  const closeDeletedFileViews = useCallback((filePath: string) => {
+    setMainLayout((current) => WorkbenchMainLayout.panels(current)
+      .filter((panel) => panel.target.kind === "file" && panel.target.filePath === filePath)
+      .reduce((next, panel) => WorkbenchMainLayout.closePanel(next, panel.id), current));
+
+    if (route.view === "mosaic" && route.mosaicNode) {
+      const nextNode = closeWorkbenchMosaicTarget(route.mosaicNode, { filePath, kind: "file" });
+      if (nextNode) {
+        navigateToMosaicNode(nextNode);
+      } else {
+        navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId));
+      }
+      return;
+    }
+    if (route.view === "file" && route.filePath === filePath) {
+      navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId));
+    }
+  }, [explorer.currentProjectId, navigateToMosaicNode, navigateToRoute, route]);
+
+  const deleteProjectFile = useCallback(async (filePath: string, confirmUntracked = false) => {
+    if (!controls || isDeletingFile) {
+      return;
+    }
+
+    setIsDeletingFile(true);
+    setDeleteDialogError("");
+    setProjectActionError("");
+    try {
+      const result = await controls.deleteFile(filePath, { confirmUntracked });
+      if (result.confirmationRequired) {
+        setPendingDeleteFilePath(result.path);
+        return;
+      }
+
+      setPendingDeleteFilePath("");
+      closeDeletedFileViews(result.path);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to delete that file.";
+      if (pendingDeleteFilePath) {
+        setDeleteDialogError(message);
+      } else {
+        setProjectActionError(message);
+      }
+    } finally {
+      setIsDeletingFile(false);
+    }
+  }, [closeDeletedFileViews, controls, isDeletingFile, pendingDeleteFilePath]);
+
+  const closeDeleteFileDialog = useCallback(() => {
+    if (isDeletingFile) {
+      return;
+    }
+    setPendingDeleteFilePath("");
+    setDeleteDialogError("");
+  }, [isDeletingFile]);
+
+  const getProjectNodeContextMenu = useCallback((node: TreeNode): WorkbenchContextMenuDefinition => ({
+    id: `project-entry:${node.type}:${node.path}`,
+    items: [
+      {
+        icon: <FileMoveIcon className="size-4" />,
+        id: "reveal",
+        label: "Show in File Explorer",
+        onSelect: () => {
+          void revealProjectEntry(node.path);
+        },
+      },
+      ...(node.type === "file" ? [{
+        icon: <BinIcon />,
+        id: "delete",
+        label: "Delete file",
+        onSelect: () => {
+          void deleteProjectFile(node.path);
+        },
+        tone: "danger" as const,
+      }] : []),
+    ],
+    label: `${node.type === "file" ? "File" : "Folder"} actions for ${node.name}`,
+  }), [deleteProjectFile, revealProjectEntry]);
 
   const sidebarSectionOrderIndex = useMemo(() => (
     Object.fromEntries(sidebarSectionOrder.map((sectionId, index) => [sectionId, index])) as Record<WorkbenchSidebarSectionId, number>
@@ -3293,6 +3415,7 @@ export default function Workbench () {
                           target: { filePath: path, kind: "file" },
                           type: "panel-target",
                         })}
+                        getNodeContextMenu={getProjectNodeContextMenu}
                         isFileOpenable={canOpenFileFromExplorer}
                         modifiedPaths={modifiedPaths}
                         nodes={visibleTree}
@@ -3309,6 +3432,9 @@ export default function Workbench () {
                       />
                     </nav>
                   )}
+                  {projectActionError ? (
+                    <p className="m-0 pr-2 text-[0.84rem] leading-6 text-danger md:pr-4.5">{projectActionError}</p>
+                  ) : null}
                 </section>
                 {browseSessions.length ? (
                   <section
@@ -4003,6 +4129,46 @@ export default function Workbench () {
             <p id="reset-draft-summary" className="mt-3 text-sm leading-6 text-muted">
               Reset to saved discards the current draft and reloads the file from disk. Reset to HEAD overwrites the file on disk with the current git HEAD version, then reloads it here.
             </p>
+          </WorkbenchDialog>
+
+          <WorkbenchDialog
+            id="delete-file-dialog"
+            titleId="delete-file-title"
+            summaryId="delete-file-summary"
+            eyebrow="Permanent deletion"
+            title="Permanently delete this untracked file?"
+            isOpen={Boolean(pendingDeleteFilePath)}
+            onBackdropClick={closeDeleteFileDialog}
+            actions={
+              <>
+                <button
+                  type="button"
+                  className={dialogButtonClassName}
+                  onClick={closeDeleteFileDialog}
+                  disabled={isDeletingFile}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className={`${dialogButtonClassName} text-danger`}
+                  onClick={() => {
+                    void deleteProjectFile(pendingDeleteFilePath, true);
+                  }}
+                  disabled={isDeletingFile}
+                >
+                  Delete permanently
+                </button>
+              </>
+            }
+          >
+            <>
+              <p id="delete-file-summary" className="mt-3 text-sm leading-6 text-muted">
+                Git cannot restore this file. This also discards its saved Workbench draft.
+              </p>
+              <p className="mt-3 break-all text-[0.84rem] leading-6 text-text">{pendingDeleteFilePath}</p>
+              {deleteDialogError ? <p className="mt-3 text-sm leading-6 text-danger">{deleteDialogError}</p> : null}
+            </>
           </WorkbenchDialog>
 
           <WorkbenchDialog

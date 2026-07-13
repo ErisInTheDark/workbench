@@ -7,7 +7,7 @@
  * - safeResolve/safeResolveProjectPath: resolve and validate project-relative paths inside a selected project root. Keywords: path, resolve, safety.
  * - isPathWithinRoot: test whether an absolute path belongs to a project root. Keywords: path, root, thread filter.
  * - discoverProjects/resolveProjectRoot/getDefaultProjectId: find and resolve selectable git projects and VS Code workspaces, newest HEAD activity first. Keywords: project, workspace, discovery, id, last commit.
- * - createProjectEntry: create a new project file or directory and return its normalized relative path. Keywords: create, file, directory.
+ * - createProjectEntry/assertProjectFileCanBeDeleted/deleteProjectFile: create project entries, validate deletion targets, or permanently delete one project file. Keywords: create, delete, file, directory.
  * - buildTree/buildProjectTree: build the visible explorer tree for a project. Keywords: tree, explorer, filesystem.
  * - getProjectSnapshot: assemble the project tree, root info, and git change summary for the client. Keywords: snapshot, project, explorer.
  * - resolveExternalFileLinkRoot: find the owning git root for an absolute local file link. Keywords: file link, absolute path, git root.
@@ -906,6 +906,20 @@ export async function createProjectEntry(parentPath: string, name: string, type:
   }
 
   return relativeEntryPath;
+}
+
+export async function assertProjectFileCanBeDeleted(filePath: string, rootDir = projectRoot) {
+  const absoluteFilePath = safeResolveProjectPath(rootDir, filePath);
+  const stats = await fs.stat(absoluteFilePath);
+  if (!stats.isFile()) {
+    throw new Error("Only files can be deleted from the project explorer.");
+  }
+}
+
+export async function deleteProjectFile(filePath: string, rootDir = projectRoot) {
+  await assertProjectFileCanBeDeleted(filePath, rootDir);
+  const absoluteFilePath = safeResolveProjectPath(rootDir, filePath);
+  await fs.unlink(absoluteFilePath);
 }
 
 export async function buildTree(

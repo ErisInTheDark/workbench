@@ -7,6 +7,7 @@ import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
 import { getCurrentTurn } from "./codex/thread-state";
 import type {
     ExplorerSnapshot,
+    DeleteFileResponse,
     WorkbenchPendingUserInputRequest,
     ThreadPayload,
     WorkbenchBindings,
@@ -532,6 +533,24 @@ export async function WorkbenchClient(
     return createdPath;
   }
 
+  async function deleteFile(filePath: string, options: { confirmUntracked?: boolean } = {}): Promise<DeleteFileResponse> {
+    const result = await projectClient.deleteFile(filePath, options);
+    if (result.confirmationRequired) {
+      return result;
+    }
+
+    try {
+      await draftStore.clearBuffer(filePath);
+    } catch {
+      reportStatusMessage("The file was deleted, but its persisted Workbench draft could not be removed from browser storage.");
+    }
+    if (activeFilePath === filePath) {
+      activeFilePath = "";
+    }
+    emitExplorerStateChange();
+    return result;
+  }
+
   async function compactThread(thread: ThreadPayload) {
     const payload = await threadClient.compactThread(thread);
     if (!payload) {
@@ -764,6 +783,7 @@ export async function WorkbenchClient(
       return draftThread;
     },
     createEntry,
+    deleteFile,
     listModels: threadClient.listModels,
     markThreadSeen,
     readThread,

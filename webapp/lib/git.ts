@@ -1,3 +1,9 @@
+/*
+ * Exports:
+ * - getGitChanges: summarize tracked and untracked project file changes for the explorer. Keywords: git, changes, explorer.
+ * - getHeadFileContent: read a tracked file from HEAD when available. Keywords: git, HEAD, file.
+ * - isGitTrackedFile: report whether Git tracks a project-relative path in its index. Keywords: git, tracked, file, delete.
+ */
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -131,5 +137,14 @@ export async function getHeadFileContent(rootDir: string, filePath: string): Pro
     return stdout;
   } catch {
     return null;
+  }
+}
+
+export async function isGitTrackedFile(rootDir: string, filePath: string) {
+  try {
+    await runGit(rootDir, ["ls-files", "--error-unmatch", "--", filePath.replace(/\\/g, "/")]);
+    return true;
+  } catch {
+    return false;
   }
 }

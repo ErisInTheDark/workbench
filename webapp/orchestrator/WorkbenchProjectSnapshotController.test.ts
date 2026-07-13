@@ -1,11 +1,15 @@
 /*
  * Exports:
- * - No production exports; Node tests cover bounded project snapshot caching, coalescing, invalidation, mutation refresh, LRU eviction, and disposal. Keywords: project, snapshot, cache, watcher, lifecycle, test.
+ * - No production exports; Node tests cover bounded project snapshot caching, coalescing, deletion confirmation, mutation refresh, LRU eviction, and disposal. Keywords: project, snapshot, cache, watcher, delete, lifecycle, test.
  */
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { Readable } from "node:stream";
 import { test } from "node:test";
 
+import { deleteProjectFile } from "../lib/project";
 import type { ProjectSnapshot } from "../lib/types";
 import WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
 
@@ -83,6 +87,8 @@ async function captureResponse(run: (response: object) => Promise<void>) {
 }
 
 function createHarness({ maxProjectSnapshots = 4 }: { maxProjectSnapshots?: number } = {}) {
+  const deletedPaths: string[] = [];
+  let tracked = true;
   let now = 1_000;
   let snapshotReads = 0;
   let snapshotReader = async (projectId: string | null | undefined) => createSnapshot(projectId || "default");
@@ -97,12 +103,15 @@ function createHarness({ maxProjectSnapshots = 4 }: { maxProjectSnapshots?: numb
     maxProjectSnapshots,
     now: () => now,
     operations: {
+      assertProjectFileCanBeDeleted: async () => undefined,
       createProjectEntry: async () => "created.md",
+      deleteProjectFile: async (filePath) => { deletedPaths.push(filePath); },
       discoverProjects: async () => [],
       getProjectSnapshot: async (projectId) => {
         snapshotReads += 1;
         return await snapshotReader(projectId);
       },
+      isGitTrackedFile: async () => tracked,
       resolveProjectFilePath: (project, requestPath) => ({
         absolutePath: `${project.root}/${requestPath}`,
         displayPath: requestPath,
@@ -125,9 +134,11 @@ function createHarness({ maxProjectSnapshots = 4 }: { maxProjectSnapshots?: numb
   });
   return {
     controller,
+    deletedPaths,
     get snapshotReads() { return snapshotReads; },
     readTree,
     setNow(value: number) { now = value; },
+    setTracked(value: boolean) { tracked = value; },
     setSnapshotReader(reader: typeof snapshotReader) { snapshotReader = reader; },
     watchers,
   };
@@ -201,6 +212,66 @@ test("tree mutation invalidates and refreshes the serialized snapshot", async ()
   assert.equal(JSON.parse(response.body).path, "created.md");
   assert.equal(harness.snapshotReads, 2);
   assert.equal((await harness.readTree("alpha")).headers["X-Workbench-Snapshot-Cache"], "hit");
+});
+
+test("tracked file deletion proceeds immediately and refreshes the snapshot", async () => {
+  const harness = createHarness();
+  await harness.readTree("alpha");
+  const response = await captureResponse(async (captured) => {
+    await harness.controller.handleTreeHttpRequest(createRequest("DELETE", "/orchestrator/tree", JSON.stringify({
+      path: "README.md",
+      projectId: "alpha",
+    })) as never, captured as never);
+  });
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(harness.deletedPaths, ["README.md"]);
+  assert.equal(JSON.parse(response.body).tracked, true);
+  assert.equal(harness.snapshotReads, 2);
+  assert.equal((await harness.readTree("alpha")).headers["X-Workbench-Snapshot-Cache"], "hit");
+});
+
+test("untracked file deletion requires explicit confirmation", async () => {
+  const harness = createHarness();
+  harness.setTracked(false);
+  const response = await captureResponse(async (captured) => {
+    await harness.controller.handleTreeHttpRequest(createRequest("DELETE", "/orchestrator/tree", JSON.stringify({
+      path: "notes.md",
+      projectId: "alpha",
+    })) as never, captured as never);
+  });
+  assert.equal(response.statusCode, 409);
+  assert.deepEqual(harness.deletedPaths, []);
+  assert.deepEqual(JSON.parse(response.body), {
+    confirmationRequired: true,
+    path: "notes.md",
+    projectId: "alpha",
+    tracked: false,
+  });
+});
+
+test("confirmed untracked file deletion proceeds", async () => {
+  const harness = createHarness();
+  harness.setTracked(false);
+  const response = await captureResponse(async (captured) => {
+    await harness.controller.handleTreeHttpRequest(createRequest("DELETE", "/orchestrator/tree", JSON.stringify({
+      confirmUntracked: true,
+      path: "notes.md",
+      projectId: "alpha",
+    })) as never, captured as never);
+  });
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(harness.deletedPaths, ["notes.md"]);
+  assert.equal(JSON.parse(response.body).tracked, false);
+});
+
+test("project deletion rejects directory targets", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-delete-test-"));
+  await fs.mkdir(path.join(root, "folder"));
+  try {
+    await assert.rejects(deleteProjectFile("folder", root), /Only files can be deleted/);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
 });
 
 test("LRU eviction and disposal close owned watchers", async () => {

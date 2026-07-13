@@ -8,7 +8,9 @@ import type http from "node:http";
 import path from "node:path";
 
 import {
+  assertProjectFileCanBeDeleted,
   createProjectEntry,
+  deleteProjectFile,
   discoverProjects,
   formatWorkspaceQualifiedPath,
   getProjectSnapshot,
@@ -17,6 +19,7 @@ import {
   resolveProjectFilePath,
   resolveProjectRoot,
 } from "../lib/project";
+import { isGitTrackedFile } from "../lib/git";
 import type { ProjectSnapshot, WorkbenchProjectsPayload } from "../lib/types";
 
 const DEFAULT_CACHE_TTL_MS = 15_000;
@@ -52,9 +55,12 @@ interface SnapshotResponse {
 }
 
 type ProjectOperations = {
+  assertProjectFileCanBeDeleted: typeof assertProjectFileCanBeDeleted;
   createProjectEntry: typeof createProjectEntry;
+  deleteProjectFile: typeof deleteProjectFile;
   discoverProjects: typeof discoverProjects;
   getProjectSnapshot: typeof getProjectSnapshot;
+  isGitTrackedFile: typeof isGitTrackedFile;
   resolveProjectFilePath: typeof resolveProjectFilePath;
   resolveProjectRoot: typeof resolveProjectRoot;
 };
@@ -162,7 +168,7 @@ export default class WorkbenchProjectSnapshotController {
     createWatcher = defaultCreateWatcher,
     maxProjectSnapshots = DEFAULT_MAX_PROJECT_SNAPSHOTS,
     now = Date.now,
-    operations = { createProjectEntry, discoverProjects, getProjectSnapshot, resolveProjectFilePath, resolveProjectRoot },
+    operations = { assertProjectFileCanBeDeleted, createProjectEntry, deleteProjectFile, discoverProjects, getProjectSnapshot, isGitTrackedFile, resolveProjectFilePath, resolveProjectRoot },
     projectsRootPath = projectsRoot,
   }: WorkbenchProjectSnapshotControllerOptions = {}) {
     this.cacheTtlMs = cacheTtlMs;
@@ -203,6 +209,38 @@ export default class WorkbenchProjectSnapshotController {
       if (request.method === "GET") {
         const result = await this.readSnapshot(requestUrl.searchParams.get("projectId"));
         sendSerializedJson(response, 200, result.serialized, result.cacheState);
+        return;
+      }
+      if (request.method === "DELETE") {
+        const value = JSON.parse(await readRequestBody(request)) as { confirmUntracked?: boolean; path?: string; projectId?: string };
+        if (!value.path) {
+          sendSerializedJson(response, 400, JSON.stringify({ error: "A file path is required." }));
+          return;
+        }
+        const resolvedProject = await this.operations.resolveProjectRoot(value.projectId ?? null);
+        const resolvedFile = this.operations.resolveProjectFilePath(resolvedProject, value.path);
+        await this.operations.assertProjectFileCanBeDeleted(resolvedFile.rootRelativePath, resolvedFile.gitRoot);
+        const tracked = await this.operations.isGitTrackedFile(resolvedFile.gitRoot, resolvedFile.rootRelativePath);
+        if (!tracked && value.confirmUntracked !== true) {
+          sendSerializedJson(response, 409, JSON.stringify({
+            confirmationRequired: true,
+            path: resolvedFile.displayPath,
+            projectId: resolvedProject.id,
+            tracked: false,
+          }));
+          return;
+        }
+
+        await this.operations.deleteProjectFile(resolvedFile.rootRelativePath, resolvedFile.gitRoot);
+        this.invalidateSnapshot(resolvedProject.id);
+        this.invalidateSnapshot("__default__");
+        const result = await this.readSnapshot(resolvedProject.id);
+        if (!result.snapshot) throw new Error("Project tree refresh did not produce a snapshot.");
+        sendSerializedJson(response, 200, JSON.stringify({
+          ...result.snapshot,
+          path: resolvedFile.displayPath,
+          tracked,
+        }), result.cacheState);
         return;
       }
       if (request.method !== "POST") {
