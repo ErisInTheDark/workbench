@@ -55,6 +55,7 @@ import {
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
 import {
+  filterSubagentsByParentThreadId,
   getSubagentHarness,
   getSubagentSummary,
   getSubagentThreadIds,
@@ -635,6 +636,7 @@ export default memo(function ThreadView ({
   projectFilePaths,
   projectRootPath,
   projectRoots,
+  knownSubagents,
   rateLimits,
   threadCodeBlockWrap,
   threadComposerDraftsByThreadId,
@@ -687,6 +689,7 @@ export default memo(function ThreadView ({
   projectFilePaths: readonly string[];
   projectRootPath: string;
   projectRoots?: readonly WorkbenchProjectRoot[];
+  knownSubagents: readonly WorkbenchSubagentSummary[];
   rateLimits: RateLimitSnapshot | null;
   threadCodeBlockWrap: boolean;
   threadComposerDraftsByThreadId: Record<string, WorkbenchThreadComposerDraft | undefined>;
@@ -697,7 +700,7 @@ export default memo(function ThreadView ({
 }) {
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const [activeThreadId, setActiveThreadId] = useState(thread.id);
-  const [subagents, setSubagents] = useState<WorkbenchSubagentSummary[]>([]);
+  const [refreshedSubagents, setRefreshedSubagents] = useState<WorkbenchSubagentSummary[] | null>(null);
   const [subthreadsById, setSubthreadsById] = useState<Record<string, ThreadPayload>>({});
   const [loadingThreadIds, setLoadingThreadIds] = useState<Record<string, true>>({});
   const [loadingPreviousTurnKeys, setLoadingPreviousTurnKeys] = useState<Record<string, true>>({});
@@ -718,10 +721,15 @@ export default memo(function ThreadView ({
     scrollAnchorControllerRef.current = ThreadScrollAnchorController();
   }
   const scrollAnchorController = scrollAnchorControllerRef.current;
+  const knownDirectSubagents = useMemo(
+    () => filterSubagentsByParentThreadId(knownSubagents, thread.id),
+    [knownSubagents, thread.id],
+  );
+  const subagents = refreshedSubagents ?? knownDirectSubagents;
   useEffect(() => {
     const lifecycleController = new AbortController();
     let refreshTimer: number | null = null;
-    setSubagents([]);
+    setRefreshedSubagents(null);
 
     const refreshSubagents = async () => {
       try {
@@ -730,7 +738,7 @@ export default memo(function ThreadView ({
           parentThreadId: thread.id,
           signal: AbortSignal.any([lifecycleController.signal, AbortSignal.timeout(5_000)]),
         });
-        if (!lifecycleController.signal.aborted) setSubagents(summaries);
+        if (!lifecycleController.signal.aborted) setRefreshedSubagents(summaries);
       } catch {
         // Parent rendering and questionnaires never depend on optional child metadata.
       } finally {
@@ -740,7 +748,7 @@ export default memo(function ThreadView ({
       }
     };
 
-    void refreshSubagents();
+    refreshTimer = window.setTimeout(refreshSubagents, SUBAGENT_METADATA_POLL_INTERVAL_MS);
     return () => {
       lifecycleController.abort();
       if (refreshTimer !== null) window.clearTimeout(refreshTimer);

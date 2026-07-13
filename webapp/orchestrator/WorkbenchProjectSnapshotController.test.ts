@@ -106,7 +106,6 @@ function createHarness({ maxProjectSnapshots = 4 }: { maxProjectSnapshots?: numb
       assertProjectFileCanBeDeleted: async () => undefined,
       createProjectEntry: async () => "created.md",
       deleteProjectFile: async (filePath) => { deletedPaths.push(filePath); },
-      discoverProjects: async () => [],
       getProjectSnapshot: async (projectId) => {
         snapshotReads += 1;
         return await snapshotReader(projectId);
@@ -127,7 +126,6 @@ function createHarness({ maxProjectSnapshots = 4 }: { maxProjectSnapshots?: numb
         roots: [{ id: projectId || "default", name: projectId || "default", root: `C:/projects/${projectId || "default"}`, rootPath: `C:/projects/${projectId || "default"}` }],
       }),
     },
-    projectsRootPath: "C:/projects",
   });
   const readTree = async (projectId: string) => await captureResponse(async (response) => {
     await controller.handleTreeHttpRequest(createRequest("GET", `/orchestrator/tree?projectId=${projectId}`) as never, response as never);
@@ -152,7 +150,6 @@ test("serializes once and serves unchanged project snapshots from bounded cache"
   assert.equal(second.headers["X-Workbench-Snapshot-Cache"], "hit");
   assert.equal(harness.snapshotReads, 1);
   assert.deepEqual(JSON.parse(second.body), createSnapshot("alpha"));
-  assert.equal(harness.watchers.find((watcher) => watcher.rootPath === "C:/projects")?.recursive, false);
   assert.equal(harness.watchers.find((watcher) => watcher.rootPath.endsWith("alpha"))?.recursive, true);
 });
 

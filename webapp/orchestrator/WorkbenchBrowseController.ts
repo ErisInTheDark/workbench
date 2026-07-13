@@ -1,20 +1,20 @@
 /*
  * Exports:
- * - default WorkbenchBrowseController: own command-producer FIFO, cancellation, session access, HTTP adaptation, and drain-safe reload state. Keywords: browse, orchestrator, controller, queue, cancel, streaming, reload.
+ * - default WorkbenchBrowseController: own command tracking, cancellation, session access, HTTP adaptation, result-drain coordination, and reload state. Keywords: browse, orchestrator, controller, cancel, streaming, result, reload.
  */
 import type http from "node:http";
 
 import type { WorkbenchBrowseSessionControlRequest, WorkbenchBrowseSessionListRequest } from "../lib/types";
 import WorkbenchBrowseRequestHandler from "../lib/workbench/browse/WorkbenchBrowseRequestHandler";
-import WorkbenchBrowseTranscriptAdapter from "./WorkbenchBrowseTranscriptAdapter";
+import type { WorkbenchBrowseResultSink } from "../lib/workbench/browse/browse-result-events";
+import WorkbenchBrowseRuntime from "../lib/workbench/browse/WorkbenchBrowseRuntime";
 
-const IDLE_GATE = Promise.resolve();
 const SESSION_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,80}$/u;
 const MAX_BROWSE_SESSION_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_BROWSE_SESSION_TIMEOUT_MS = 120_000;
 type WorkbenchBrowseRequestHandlerPort = Pick<
   WorkbenchBrowseRequestHandler,
-  "controlSession" | "findStaleInactiveSessionStops" | "handle" | "listSessions"
+  "controlSession" | "findStaleInactiveSessionStops" | "handle" | "listSessions" | "waitForIdle"
 >;
 
 function normalizeString(value: string | null) {
@@ -92,13 +92,16 @@ function jsonResponse(payload: object, status = 200) {
 
 export default class WorkbenchBrowseController {
   private acceptingCommands = true;
+  private readonly activeCommands = new Set<Promise<void>>();
   private readonly requestHandler: WorkbenchBrowseRequestHandlerPort;
-  private tail: Promise<void> = IDLE_GATE;
+  private readonly results: WorkbenchBrowseResultSink;
 
   constructor(
-    transcripts: WorkbenchBrowseTranscriptAdapter,
-    requestHandler: WorkbenchBrowseRequestHandlerPort = new WorkbenchBrowseRequestHandler(transcripts),
+    results: WorkbenchBrowseResultSink,
+    runtime: WorkbenchBrowseRuntime = new WorkbenchBrowseRuntime(),
+    requestHandler: WorkbenchBrowseRequestHandlerPort = new WorkbenchBrowseRequestHandler(results, runtime),
   ) {
+    this.results = results;
     this.requestHandler = requestHandler;
   }
 
@@ -168,21 +171,21 @@ export default class WorkbenchBrowseController {
   }
 
   async waitForIdle() {
-    await this.tail;
+    await Promise.allSettled([...this.activeCommands]);
+    await this.requestHandler.waitForIdle();
+    await this.results.waitForIdle();
   }
 
   async runCommand<TValue>(task: () => Promise<TValue>): Promise<TValue> {
     if (!this.acceptingCommands) throw new Error("Browse controller is draining for reload.");
-    const previous = this.tail;
     let release = () => undefined;
-    const current = new Promise<void>((resolve) => { release = resolve; });
-    this.tail = current;
-    await previous;
+    const active = new Promise<void>((resolve) => { release = resolve; });
+    this.activeCommands.add(active);
     try {
       return await task();
     } finally {
       release();
-      if (this.tail === current) this.tail = IDLE_GATE;
+      this.activeCommands.delete(active);
     }
   }
 }

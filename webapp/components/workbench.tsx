@@ -205,6 +205,7 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   projectFileIndexId: ProjectTreeFileIndex.empty.id,
   projectFileIndexKey: ProjectTreeFileIndex.empty.key,
   projectFilePaths: ProjectTreeFileIndex.empty.paths,
+  subagents: [],
   threads: [],
   isProjectLoading: false,
   isThreadsLoading: false,
@@ -3687,6 +3688,7 @@ export default function Workbench () {
                   projectFileLinkRoots={projectFileLinkRoots}
                   projectRootPath={explorer.rootPath}
                   projectRoots={explorer.roots}
+                  knownSubagents={explorer.subagents}
                   rateLimits={rateLimits}
                   threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
                   threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
@@ -3772,6 +3774,7 @@ export default function Workbench () {
                   harness={harness}
                   isMobile={isMobile}
                   isProjectLoading={explorer.isProjectLoading}
+                  knownSubagents={explorer.subagents}
                   livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
                   onCollaborationStateChange={handleCollaborationStateChange}
                   onClaimAutoWake={claimWorkbenchCollaborationStateAutoWake}
@@ -3955,6 +3958,7 @@ export default function Workbench () {
                         isFocused={isFocused}
                         isMinimized={isMinimized}
                         isMinimizedVertical={isMinimizedVertical}
+                        knownSubagents={explorer.subagents}
                         livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
                         onDraftHarnessChange={handleHarnessChange}
                         onListModels={listThreadModels}

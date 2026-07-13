@@ -14,8 +14,8 @@ import type {
   WorkbenchBrowseSessionSource,
   WorkbenchBrowseSessionSummary,
 } from "../../types";
-import WorkbenchBrowseCli from "./WorkbenchBrowseCli";
 import WorkbenchBrowseProfileStore from "./WorkbenchBrowseProfileStore";
+import WorkbenchBrowseRuntime from "./WorkbenchBrowseRuntime";
 import WorkbenchBrowseSessionRegistry, { type WorkbenchBrowseSessionRecord } from "./WorkbenchBrowseSessionRegistry";
 
 const DEFAULT_BROWSE_TIMEOUT_MS = 120_000;
@@ -35,20 +35,20 @@ interface BrowseStatusPayload {
 }
 
 export default class WorkbenchBrowseSessionController {
-  private readonly cli: WorkbenchBrowseCli;
   private readonly profileStore: WorkbenchBrowseProfileStore;
   private readonly registry: WorkbenchBrowseSessionRegistry;
+  private readonly runtime: WorkbenchBrowseRuntime;
 
   constructor({
-    cli = new WorkbenchBrowseCli(),
+    runtime = new WorkbenchBrowseRuntime(),
     profileStore = new WorkbenchBrowseProfileStore(),
     registry = new WorkbenchBrowseSessionRegistry(),
   }: {
-    cli?: WorkbenchBrowseCli;
+    runtime?: WorkbenchBrowseRuntime;
     profileStore?: WorkbenchBrowseProfileStore;
     registry?: WorkbenchBrowseSessionRegistry;
   } = {}) {
-    this.cli = cli;
+    this.runtime = runtime;
     this.profileStore = profileStore;
     this.registry = registry;
   }
@@ -203,7 +203,7 @@ export default class WorkbenchBrowseSessionController {
   }
 
   async listSessions(request: WorkbenchBrowseSessionListRequest, signal?: AbortSignal): Promise<WorkbenchBrowseSessionListResponse> {
-    const executionContext = await this.cli.resolveExecutionContext({
+    const executionContext = await this.runtime.resolveExecutionContext({
       cwd: request.cwd ?? null,
       projectId: request.projectId ?? null,
     });
@@ -214,7 +214,7 @@ export default class WorkbenchBrowseSessionController {
         ? await this.registry.listByProjectId(executionContext.projectId)
         : await this.registry.list();
     const recordsByName = new Map(records.map((record) => [record.name, record]));
-    const runtimeSessionNames = includeRuntime ? await this.cli.listRuntimeSessionNames() : [];
+    const runtimeSessionNames = includeRuntime ? await this.runtime.listRuntimeSessionNames() : [];
     const sessionNames = [...new Set([
       ...records.map((record) => record.name),
       ...runtimeSessionNames.filter((sessionName) => !executionContext.projectId || recordsByName.has(sessionName)),
@@ -265,7 +265,7 @@ export default class WorkbenchBrowseSessionController {
       throw new Error("Browse session name is invalid.");
     }
 
-    const projectContext = await this.cli.resolveExecutionContext({
+    const projectContext = await this.runtime.resolveExecutionContext({
       cwd: request.cwd ?? null,
       projectId: request.projectId ?? null,
     });
@@ -283,17 +283,31 @@ export default class WorkbenchBrowseSessionController {
       };
     }
 
-    const args = ["stop", "--session", request.session];
-    if (request.force) {
-      args.push("--force");
+    const startedAt = Date.now();
+    let result: WorkbenchBrowseCommandResponse;
+    try {
+      const stopped = await this.runtime.stop(request.session, {
+        force: request.force === true,
+        signal,
+        timeoutMs: request.timeoutMs ?? DEFAULT_BROWSE_TIMEOUT_MS,
+      });
+      result = {
+        durationMs: Date.now() - startedAt,
+        exitCode: 0,
+        ok: true,
+        stderr: "",
+        stdout: `${JSON.stringify(stopped, null, 2)}\n`,
+      };
+    } catch (error) {
+      result = {
+        durationMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : "Unable to stop Browse session.",
+        exitCode: 1,
+        ok: false,
+        stderr: "",
+        stdout: "",
+      };
     }
-    const result = await this.cli.run({
-      args,
-      cwd: request.cwd ?? projectContext.cwd,
-      projectId: request.projectId ?? projectContext.projectId,
-      threadId: request.threadId ?? existing?.threadId ?? "browse-session-ui",
-      timeoutMs: request.timeoutMs ?? DEFAULT_BROWSE_TIMEOUT_MS,
-    }, signal);
     if (result.ok) {
       await this.registry.forget(request.session);
     }
@@ -322,13 +336,29 @@ export default class WorkbenchBrowseSessionController {
     hasRuntimeFiles: boolean,
     signal?: AbortSignal,
   ): Promise<WorkbenchBrowseSessionSummary> {
-    const statusResult = await this.cli.runStatus(sessionName, {
-      cwd: request.cwd ?? record?.cwd ?? null,
-      projectId: request.projectId ?? record?.projectId ?? null,
-      threadId: request.threadId ?? record?.threadId ?? "browse-session-list",
-    }, signal);
+    const statusStartedAt = Date.now();
+    let statusResult: WorkbenchBrowseCommandResponse;
+    try {
+      const statusValue = await this.runtime.status(sessionName, 5_000, signal);
+      statusResult = {
+        durationMs: Date.now() - statusStartedAt,
+        exitCode: 0,
+        ok: true,
+        stderr: "",
+        stdout: `${JSON.stringify(statusValue, null, 2)}\n`,
+      };
+    } catch (error) {
+      statusResult = {
+        durationMs: Date.now() - statusStartedAt,
+        error: error instanceof Error ? error.message : "Unable to read Browse session status.",
+        exitCode: 1,
+        ok: false,
+        stderr: "",
+        stdout: "",
+      };
+    }
     const status = parseBrowseStatus(statusResult);
-    const pid = status.pid ?? await this.cli.readRuntimePid(sessionName).catch(() => null);
+    const pid = status.pid ?? await this.runtime.readRuntimePid(sessionName).catch(() => null);
     return {
       browserConnected: status.browserConnected,
       cwd: record?.cwd ?? null,
@@ -412,7 +442,16 @@ function parseBrowseStatus(result: WorkbenchBrowseCommandResponse): {
   }
 
   try {
-    const parsed = JSON.parse(result.stdout) as BrowseStatusPayload;
+    const parsed = JSON.parse(result.stdout) as BrowseStatusPayload | null;
+    if (!parsed) {
+      return {
+        browserConnected: null,
+        error: null,
+        initialized: null,
+        mode: null,
+        pid: null,
+      };
+    }
     const targetHeadless = parsed.target?.headless;
     return {
       browserConnected: typeof parsed.browserConnected === "boolean" ? parsed.browserConnected : null,

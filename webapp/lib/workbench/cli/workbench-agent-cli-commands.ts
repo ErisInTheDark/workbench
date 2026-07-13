@@ -438,9 +438,9 @@ const COMMANDS: readonly CommandDefinition[] = [
     words: ["orchestrator", "reload"],
     usage: "wb orchestrator reload [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--opencode-bridge] [--opencode-server] [--next-dev]",
     async build({ args }) {
-      const flags = new ParsedFlags(args, { boolean: RELOAD_SWITCHES });
+      const flags = new ParsedFlags(args, { boolean: [...RELOAD_SWITCHES, "--all"] });
       const scopes = RELOAD_SWITCHES
-        .filter((flag) => flags.has(flag))
+        .filter((flag) => flags.has("--all") || flags.has(flag))
         .map((flag) => flag.slice(2));
       if (!scopes.length) {
         throw new Error("Orchestrator reload requires at least one reload switch.");

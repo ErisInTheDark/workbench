@@ -5,7 +5,7 @@
  * Helpers:
  * - HTTP reload helpers: parse, proxy, queue, and report orchestrator reload scopes. Keywords: reload, next-dev, bridge.
  * - Browse HTTP helpers: route stateless Next proxies through the drainable orchestrator-owned Browse controller. Keywords: browse, controller, queue, streaming, reload.
- * - Project snapshot HTTP helpers: route stateless Next proxies through the bounded orchestrator-owned serialized project cache. Keywords: project, tree, snapshot, cache, watcher, reload.
+ * - Project catalog and snapshot HTTP helpers: route stateless Next proxies through orchestrator-owned structured discovery and bounded tree caches. Keywords: project, catalog, tree, snapshot, cache, watcher, reload.
  * - Child process helpers: start, restart, and schedule managed process lifecycles. Keywords: process, restart, child.
  * - Bridge helpers: route websocket JSON-RPC messages across Codex, Copilot, and OpenCode harnesses. Keywords: websocket, harness, rpc.
  * - Health helpers: supervise the Next.js dev server and restart it after repeated 5xx health probes. Keywords: watchdog, turbopack, 500.
@@ -34,6 +34,7 @@ import CodexAppServer from "./CodexAppServer";
 import CodexStdioBridge from "./CodexStdioBridge";
 import { CopilotBridge } from "./copilot-bridge";
 import { OpenCodeBridge } from "./opencode-bridge";
+import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
 import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
 import {
     createSpawnOptions,
@@ -65,6 +66,7 @@ const NEXT_DEV_HEALTH_SERVER_ERROR_THRESHOLD = 3;
 const ORCHESTRATOR_RELOAD_PATH = "/orchestrator/reload";
 const ORCHESTRATOR_BROWSE_PATH = "/orchestrator/browse";
 const ORCHESTRATOR_BROWSE_SESSIONS_PATH = "/orchestrator/browse/sessions";
+const ORCHESTRATOR_AGENT_COMMAND_PATH = "/orchestrator/agent-command";
 const ORCHESTRATOR_PROJECTS_PATH = "/orchestrator/projects";
 const ORCHESTRATOR_TREE_PATH = "/orchestrator/tree";
 const CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS = 5000;
@@ -98,11 +100,13 @@ const CODEX_PUBLIC_BRIDGE_PORT = readNonEmptyEnv(process.env.NEXT_PUBLIC_CODEX_A
   ?? parseWebSocketPort(CODEX_PUBLIC_BRIDGE_URL ?? CODEX_BRIDGE_URL);
 const LOCAL_WORKBENCH_ORIGIN = readNonEmptyEnv(process.env.NEXT_PUBLIC_LOCAL_WORKBENCH_ORIGIN)
   ?? `http://127.0.0.1:${NEXT_PORT}`;
+const LOCAL_ORCHESTRATOR_ORIGIN = `http://127.0.0.1:${parseWebSocketPort(CODEX_BRIDGE_URL)}`;
 const workbenchAgentCliEnvironment = new WorkbenchAgentCliEnvironment({
-  cliEntryPath: path.join(WEBAPP_ROOT, "lib", "workbench", "cli", "WorkbenchAgentCli.ts"),
-  origin: LOCAL_WORKBENCH_ORIGIN,
+  origin: LOCAL_ORCHESTRATOR_ORIGIN,
   runtimeDirectoryPath: path.join(WEBAPP_ROOT, "node_modules", ".bin"),
+  shellSourcePath: path.join(WEBAPP_ROOT, "lib", "workbench", "cli", "workbench-agent-cli.sh"),
 });
+const workbenchAgentCommandController = new WorkbenchAgentCommandController(LOCAL_WORKBENCH_ORIGIN, LOCAL_ORCHESTRATOR_ORIGIN);
 
 const nextDevEnv: NodeJS.ProcessEnv = {
   ...process.env,
@@ -137,7 +141,9 @@ let codexBridge: CodexStdioBridge;
 let opencodeBridge: OpenCodeBridge;
 let browseSessionCleanupSupervisor = createBrowseSessionCleanupSupervisor();
 let browseController: import("./WorkbenchBrowseController").default | null = null;
+let browseRuntime: import("../lib/workbench/browse/WorkbenchBrowseRuntime").default | null = null;
 let nextDevHealthSupervisor = createNextDevHealthSupervisor();
+let projectCatalogController = createProjectCatalogController();
 let projectSnapshotController = createProjectSnapshotController();
 let upstreamMessageQueue: Promise<void> = Promise.resolve();
 let codexBridgeReloadPromise: Promise<void> | null = null;
@@ -318,6 +324,7 @@ function finalizeReloadResponse(
 async function stopAllChildren() {
   browseSessionCleanupSupervisor.dispose();
   nextDevHealthSupervisor.dispose();
+  projectCatalogController.dispose();
   projectSnapshotController.dispose();
 
   for (const entry of processes.values()) {
@@ -369,10 +376,12 @@ function restartChild(spec: ProcessSpec) {
 function reloadOrchestratorLogic() {
   browseSessionCleanupSupervisor.dispose();
   nextDevHealthSupervisor.dispose();
+  projectCatalogController.dispose();
   projectSnapshotController.dispose();
   reloadableModules = reloadOrchestratorReloadableModules();
   browseSessionCleanupSupervisor = createBrowseSessionCleanupSupervisor();
   nextDevHealthSupervisor = createNextDevHealthSupervisor();
+  projectCatalogController = createProjectCatalogController();
   projectSnapshotController = createProjectSnapshotController();
   browseSessionCleanupSupervisor.start();
   nextDevHealthSupervisor.start();
@@ -452,8 +461,12 @@ function loadBrowseControllerModule() {
   return require("./WorkbenchBrowseController") as typeof import("./WorkbenchBrowseController");
 }
 
-function loadBrowseTranscriptAdapterModule() {
-  return require("./WorkbenchBrowseTranscriptAdapter") as typeof import("./WorkbenchBrowseTranscriptAdapter");
+function loadBrowseRuntimeModule() {
+  return require("../lib/workbench/browse/WorkbenchBrowseRuntime") as typeof import("../lib/workbench/browse/WorkbenchBrowseRuntime");
+}
+
+function loadBrowseResultControllerModule() {
+  return require("./WorkbenchBrowseResultController") as typeof import("./WorkbenchBrowseResultController");
 }
 
 async function requestBrowseHarness<TValue>(
@@ -467,9 +480,10 @@ async function requestBrowseHarness<TValue>(
   return response.result as TValue;
 }
 
-function createBrowseTranscriptAdapter() {
-  const { default: Adapter } = loadBrowseTranscriptAdapterModule();
-  return new Adapter({
+function createBrowseResultController() {
+  const { default: Controller } = loadBrowseResultControllerModule();
+  return new Controller({
+    logError: (message) => logError("browse-results", message),
     readThread: async (harness, threadId) => {
       if (harness === "codex") return await runAfterCodexBridgeReload(() => codexBridge.readThreadForBrowse(threadId));
       return await requestBrowseHarness<ThreadReadResponse>(harness, {
@@ -498,7 +512,19 @@ function createBrowseTranscriptAdapter() {
 
 function createBrowseController() {
   const { default: Controller } = loadBrowseControllerModule();
-  return new Controller(createBrowseTranscriptAdapter());
+  return new Controller(createBrowseResultController(), getBrowseRuntime());
+}
+
+function createBrowseRuntime() {
+  const { default: Runtime } = loadBrowseRuntimeModule();
+  return new Runtime({
+    resolveProjectFromCwd: (cwd, options) => projectCatalogController.resolveAgentEndpointProjectFromCwd(cwd, options),
+  });
+}
+
+function getBrowseRuntime() {
+  browseRuntime ??= createBrowseRuntime();
+  return browseRuntime;
 }
 
 function getBrowseController() {
@@ -524,6 +550,11 @@ function createNextDevHealthSupervisor() {
 
 function createProjectSnapshotController() {
   const Controller = reloadableModules.projectSnapshotController.default;
+  return new Controller();
+}
+
+function createProjectCatalogController() {
+  const Controller = reloadableModules.projectCatalogController.default;
   return new Controller();
 }
 
@@ -617,8 +648,19 @@ function reloadOpenCodeBridgeModule() {
 function reloadBrowseControllerModule() {
   const modulePaths = [
     "./WorkbenchBrowseController",
-    "./WorkbenchBrowseTranscriptAdapter",
+    "./WorkbenchBrowseResultController",
+    "../lib/workbench/browse/WorkbenchBrowseDaemonClient",
+    "../lib/workbench/browse/WorkbenchBrowseRawCli",
     "../lib/workbench/browse/WorkbenchBrowseRequestHandler",
+    "../lib/workbench/browse/WorkbenchBrowseRuntime",
+    "../lib/workbench/browse/WorkbenchBrowseSessionController",
+    "../lib/workbench/browse/actions/browse-action-registry",
+    "../lib/workbench/browse/actions/element-input-actions",
+    "../lib/workbench/browse/actions/mouse-actions",
+    "../lib/workbench/browse/actions/navigation-actions",
+    "../lib/workbench/browse/actions/runtime-actions",
+    "../lib/workbench/browse/actions/session-actions",
+    "../lib/workbench/browse/browse-result-events",
     "../lib/workbench/browse/browse-command-runtime",
     "../lib/workbench/browse/browse-markdown-runtime",
   ];
@@ -648,6 +690,8 @@ async function reloadBrowseController() {
   const reloadPromise = (async () => {
     if (!currentController) {
       reloadBrowseControllerModule();
+      browseRuntime = createBrowseRuntime();
+      await browseRuntime.initialize();
       log("browse-controller", "reloaded lazy Browse controller modules");
       return;
     }
@@ -659,6 +703,8 @@ async function reloadBrowseController() {
         "Browse controller reload timed out waiting for active work to drain; retry after the current Browse command settles.",
       );
       reloadBrowseControllerModule();
+      browseRuntime = createBrowseRuntime();
+      await browseRuntime.initialize();
       browseController = createBrowseController();
       log("browse-controller", "reloaded Browse controller without restarting browser sessions or bridge processes");
     } catch (error) {
@@ -1026,8 +1072,12 @@ function startBridgeServer() {
   bridgeWebSocketServer = new WebSocketServer({ noServer: true });
   bridgeServer = http.createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://localhost").pathname;
+    if (requestPath === ORCHESTRATOR_AGENT_COMMAND_PATH && request.method === "POST") {
+      void workbenchAgentCommandController.handleHttpRequest(request, response);
+      return;
+    }
     if (requestPath === ORCHESTRATOR_PROJECTS_PATH && request.method === "GET") {
-      void projectSnapshotController.handleProjectsHttpRequest(request, response).catch((error) => {
+      void projectCatalogController.handleHttpRequest(request, response).catch((error) => {
         if (!response.headersSent) sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Project discovery failed." });
       });
       return;
@@ -1147,6 +1197,7 @@ process.on("exit", () => {
 
 async function startOrchestrator() {
   log("orchestrator", `starting bridge at ${CODEX_BRIDGE_URL} and Next.js on port ${NEXT_PORT}`);
+  await getBrowseRuntime().initialize();
   await workbenchAgentCliEnvironment.install();
   await ensureWorkbenchPromptFiles();
   startBridgeServer();

@@ -1,13 +1,14 @@
 /*
  * Exports:
- * - No production exports; Node tests cover Browse command FIFO, cancellation release, session-read bypass, producer ownership, and reload draining. Keywords: browse, controller, queue, cancel, sessions, reload, test.
+ * - No production exports; Node tests cover concurrent Browse producers, cancellation release, session-read bypass, active-work ownership, result draining, and reload behavior. Keywords: browse, controller, concurrency, cancel, sessions, result, reload, test.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { WorkbenchBrowseSessionListRequest } from "../lib/types";
+import type { WorkbenchBrowseResultSink } from "../lib/workbench/browse/browse-result-events";
 import WorkbenchBrowseController from "./WorkbenchBrowseController";
-import WorkbenchBrowseTranscriptAdapter from "./WorkbenchBrowseTranscriptAdapter";
+import WorkbenchBrowseRuntime from "../lib/workbench/browse/WorkbenchBrowseRuntime";
 
 function deferred() {
   let resolve = () => undefined;
@@ -18,12 +19,12 @@ function deferred() {
 }
 
 function createController(onListSessions: (request: WorkbenchBrowseSessionListRequest) => void = () => undefined) {
-  const transcripts = new WorkbenchBrowseTranscriptAdapter({
-    readThread: async () => { throw new Error("Unexpected transcript read."); },
-    recordResult: async () => undefined,
-    steerTurn: async () => null,
-  });
-  return new WorkbenchBrowseController(transcripts, {
+  const results: WorkbenchBrowseResultSink = {
+    record: () => undefined,
+    steerScreenshot: async () => "turn-1",
+    waitForIdle: async () => undefined,
+  };
+  return new WorkbenchBrowseController(results, new WorkbenchBrowseRuntime(), {
     controlSession: async () => ({ result: null, session: null, stopped: false }),
     findStaleInactiveSessionStops: async () => [],
     handle: async () => Response.json({ ok: true }),
@@ -31,10 +32,11 @@ function createController(onListSessions: (request: WorkbenchBrowseSessionListRe
       onListSessions(request);
       return { generatedAt: new Date(0).toISOString(), projectId: null, sessions: [] };
     },
+    waitForIdle: async () => undefined,
   });
 }
 
-test("Browse command producers run in FIFO order", async () => {
+test("independent Browse command producers can run concurrently", async () => {
   const controller = createController();
   const firstGate = deferred();
   const events: string[] = [];
@@ -48,10 +50,10 @@ test("Browse command producers run in FIFO order", async () => {
   });
 
   await Promise.resolve();
-  assert.deepEqual(events, ["first-start"]);
+  assert.deepEqual(events, ["first-start", "second"]);
   firstGate.resolve();
   await Promise.all([first, second]);
-  assert.deepEqual(events, ["first-start", "first-end", "second"]);
+  assert.deepEqual(events, ["first-start", "second", "first-end"]);
 });
 
 test("a failed command releases the next producer", async () => {
@@ -93,22 +95,23 @@ test("session reads bypass a blocked command producer", async () => {
   await producer;
 });
 
-test("producer completion, rather than response creation, owns the FIFO", async () => {
+test("producer completion owns reload drain tracking", async () => {
   const controller = createController();
   const producerGate = deferred();
-  let secondStarted = false;
   const streamedProducer = controller.runCommand(async () => {
     await producerGate.promise;
   });
-  const second = controller.runCommand(async () => {
-    secondStarted = true;
-  });
+  controller.beginDrain();
 
   await Promise.resolve();
-  assert.equal(secondStarted, false);
+  const idle = controller.waitForIdle();
+  let idleSettled = false;
+  void idle.then(() => { idleSettled = true; });
+  await Promise.resolve();
+  assert.equal(idleSettled, false);
   producerGate.resolve();
-  await Promise.all([streamedProducer, second]);
-  assert.equal(secondStarted, true);
+  await Promise.all([streamedProducer, idle]);
+  assert.equal(idleSettled, true);
 });
 
 test("draining rejects new commands and resume preserves the controller", async () => {

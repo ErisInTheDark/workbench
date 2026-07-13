@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover durable child IDs, metadata-first labels, and stable colors. Keywords: thread, subagent, metadata, label, test.
+ * - No production exports; Node tests cover durable parent/child identity, metadata-first labels, and stable colors. Keywords: thread, subagent, metadata, label, test.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -10,6 +10,7 @@ import {
   getSubagentSummary,
   getSubagentHarness,
   getSubagentThreadIds,
+  filterSubagentsByParentThreadId,
   filterSubagentThreadSummaries,
   getThreadAgentAccentColor,
   getThreadAgentLabelParts,
@@ -44,6 +45,17 @@ test("derives child identity exclusively from durable summaries", () => {
       { id: "child" },
     ] as never, new Set(["child"])).map(({ id }) => id),
     ["parent"],
+  );
+});
+
+test("filters durable summaries to direct children without changing their order", () => {
+  const earlierChild = { ...subagent, threadId: "earlier-child" };
+  const siblingChild = { ...subagent, parentThreadId: "other-parent", threadId: "sibling-child" };
+  const laterChild = { ...subagent, threadId: "later-child" };
+
+  assert.deepEqual(
+    filterSubagentsByParentThreadId([earlierChild, siblingChild, laterChild], "parent"),
+    [earlierChild, laterChild],
   );
 });
 

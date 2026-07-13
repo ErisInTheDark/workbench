@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - AgentEndpointProjectResolution: resolved cwd, Workbench project, and owning root for a project-scoped agent endpoint. Keywords: agent endpoint, cwd, project.
+ * - resolveAgentEndpointProjectFromProjects: resolve a project-scoped agent endpoint from an existing discovered project catalog. Keywords: agent endpoint, cwd, catalog.
  * - resolveAgentEndpointProjectFromCwd: resolve a project-scoped agent endpoint request from cwd without relying on route process memory. Keywords: agent endpoint, cwd, serverless.
  */
 import fs from "node:fs/promises";
@@ -9,7 +10,7 @@ import path from "node:path";
 import {
   discoverProjects,
   normalizeRelativePath,
-  resolveProjectRoot,
+  resolveDiscoveredProject,
   type ResolvedProject,
 } from "../../project";
 import type { WorkbenchProjectOption } from "../../types";
@@ -56,12 +57,12 @@ async function isCwdWithinRoot(cwd: string, rootPath: string) {
 }
 
 async function findProjectMatchForCwd(projects: readonly WorkbenchProjectOption[], cwd: string) {
-  const matches: Array<{ projectId: string; rootPath: string }> = [];
+  const matches: Array<{ project: WorkbenchProjectOption; rootPath: string }> = [];
   for (const project of projects) {
     for (const root of project.roots) {
       if (await isCwdWithinRoot(cwd, root.rootPath)) {
         matches.push({
-          projectId: project.id,
+          project,
           rootPath: path.resolve(root.rootPath),
         });
       }
@@ -84,18 +85,26 @@ export async function resolveAgentEndpointProjectFromCwd(
   cwd: string | null | undefined,
   { endpointName = "Agent endpoint" }: { endpointName?: string } = {},
 ): Promise<AgentEndpointProjectResolution> {
+  return await resolveAgentEndpointProjectFromProjects(await discoverProjects(), cwd, { endpointName });
+}
+
+export async function resolveAgentEndpointProjectFromProjects(
+  projects: readonly WorkbenchProjectOption[],
+  cwd: string | null | undefined,
+  { endpointName = "Agent endpoint" }: { endpointName?: string } = {},
+): Promise<AgentEndpointProjectResolution> {
   const requestedCwd = typeof cwd === "string" ? cwd.trim() : "";
   if (!requestedCwd) {
     throw new Error(`${endpointName} requires a cwd.`);
   }
 
   const resolvedCwd = path.resolve(requestedCwd);
-  const projectMatch = await findProjectMatchForCwd(await discoverProjects(), resolvedCwd);
+  const projectMatch = await findProjectMatchForCwd(projects, resolvedCwd);
   if (!projectMatch) {
     throw new Error(`${endpointName} cwd must be inside a discovered Workbench project.`);
   }
 
-  const project = await resolveProjectRoot(projectMatch.projectId);
+  const project = await resolveDiscoveredProject(projectMatch.project);
   const root = await findOwningResolvedRoot(project, resolvedCwd);
   if (!root) {
     throw new Error(`${endpointName} cwd must be inside the resolved Workbench project.`);

@@ -12,8 +12,8 @@ import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import WorkbenchAgentCommandController from "../../../orchestrator/WorkbenchAgentCommandController.ts";
 import WorkbenchAgentCliEnvironment from "../../../orchestrator/WorkbenchAgentCliEnvironment.ts";
-import WorkbenchAgentCli from "./WorkbenchAgentCli.ts";
 import {
   parseWorkbenchAgentCliCommand,
   type WorkbenchAgentCliRequest,
@@ -21,8 +21,9 @@ import {
 import { adaptWorkbenchAgentCliResponse } from "./workbench-agent-cli-responses.ts";
 
 const execFileAsync = promisify(execFile);
-const cliEntryPath = fileURLToPath(new URL("./WorkbenchAgentCli.ts", import.meta.url));
+const shellSourcePath = fileURLToPath(new URL("./workbench-agent-cli.sh", import.meta.url));
 const requests: Array<{ body: string; method: string; url: string }> = [];
+let agentCommandController: WorkbenchAgentCommandController;
 let origin = "";
 let server: http.Server;
 let temporaryDirectoryPath = "";
@@ -30,6 +31,10 @@ let reloadStatusReadCount = 0;
 
 before(async () => {
   server = http.createServer((request, response) => {
+    if (request.url === "/orchestrator/agent-command") {
+      void agentCommandController.handleHttpRequest(request, response);
+      return;
+    }
     let body = "";
     request.setEncoding("utf8");
     request.on("data", (chunk) => {
@@ -37,7 +42,7 @@ before(async () => {
     });
     request.on("end", () => {
       requests.push({ body, method: request.method ?? "", url: request.url ?? "" });
-      if (request.url === "/api/orchestrator/reload") {
+      if (request.url === "/orchestrator/reload") {
         if (request.method === "GET") {
           reloadStatusReadCount += 1;
           if (reloadStatusReadCount === 1) {
@@ -60,6 +65,7 @@ before(async () => {
   const address = server.address();
   assert(address && typeof address === "object");
   origin = `http://127.0.0.1:${address.port}`;
+  agentCommandController = new WorkbenchAgentCommandController(origin, origin);
   temporaryDirectoryPath = await mkdtemp(path.join(os.tmpdir(), "workbench-agent-cli-test-"));
 });
 
@@ -270,9 +276,20 @@ test("maps composable reload switches to one deduplicated fixed request", async 
   ])).kind, "error");
 });
 
-test("runs the real CLI process and preserves the server response", async () => {
-  const result = await execFileAsync(process.execPath, [
-    "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", cliEntryPath,
+test("expands the hidden reload all alias without advertising it in agent help", async () => {
+  const parsed = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--all"]);
+  assert.equal(parsed.kind, "request");
+  assert.deepEqual(parsed.request.body, {
+    scopes: ["orchestrator-logic", "browse-controller", "codex-bridge", "opencode-bridge", "opencode-server", "next-dev"],
+  });
+  const help = await parseWorkbenchAgentCliCommand(["--help"]);
+  assert.equal(help.kind, "help");
+  if (help.kind === "help") assert.doesNotMatch(help.help, /--all/u);
+});
+
+test("runs the native shell transport and preserves the server response", async () => {
+  const result = await execFileAsync("bash", [
+    shellSourcePath,
     "thread", "recall", "search", "--thread", "real-process", "--query", "needle", "--kind", "agent",
   ], {
     cwd: temporaryDirectoryPath,
@@ -292,13 +309,13 @@ test("generates executable POSIX and working Windows shims", async (context) => 
   const shimDirectoryPath = path.join(temporaryDirectoryPath, "shims");
   const env = { ...process.env };
   const installed = await new WorkbenchAgentCliEnvironment({
-    cliEntryPath,
     origin,
     runtimeDirectoryPath: shimDirectoryPath,
+    shellSourcePath,
   }).install(env);
   const posixContent = await readFile(installed.posixShimPath, "utf8");
   const powershellContent = await readFile(installed.powershellShimPath, "utf8");
-  assert.match(posixContent, /^#!\/usr\/bin\/env sh/u);
+  assert.match(posixContent, /^#!\/usr\/bin\/env bash/u);
   assert.match(powershellContent, /workbench-agent-cli-shim-v1/u);
   if (process.platform !== "win32") {
     assert.notEqual((await stat(installed.posixShimPath)).mode & 0o111, 0);
@@ -353,46 +370,14 @@ test("generates executable POSIX and working Windows shims", async (context) => 
     shell: true,
   });
   assert.equal(result.stdout, "Reload succeeded.\nApplied: codex-bridge\nQueued: next-dev\n");
-  const reloadPost = [...requests].reverse().find((request) => request.url === "/api/orchestrator/reload" && request.method === "POST");
+  const reloadPost = [...requests].reverse().find((request) => request.url === "/orchestrator/reload" && request.method === "POST");
   assert.deepEqual(JSON.parse(reloadPost?.body ?? "{}"), { scopes: ["codex-bridge", "next-dev"] });
-});
-
-test("reports terminal reload failure and bounded timeout", async () => {
-  const outputs = { stderr: "", stdout: "" };
-  const io = {
-    writeStderr: (value: string) => { outputs.stderr += value; },
-    writeStdout: (value: string) => { outputs.stdout += value; },
-  };
-  let calls = 0;
-  const failedCli = new WorkbenchAgentCli({
-    env: { ...process.env, WORKBENCH_ORIGIN: origin },
-    fetchRequest: async () => {
-      calls += 1;
-      return new Response(JSON.stringify({ ok: true, state: calls === 1 ? "running" : "failed" }), { status: 200 });
-    },
-    io,
-    reloadPollIntervalMs: 1,
-    reloadTimeoutMs: 50,
-  });
-  assert.equal(await failedCli.run(["orchestrator", "reload", "--codex-bridge"]), 1);
-  assert.equal(outputs.stderr, "Orchestrator reload failed.\n");
-
-  outputs.stderr = "";
-  const timeoutCli = new WorkbenchAgentCli({
-    env: { ...process.env, WORKBENCH_ORIGIN: origin },
-    fetchRequest: async () => new Response(JSON.stringify({ ok: true, state: "running" }), { status: 200 }),
-    io,
-    reloadPollIntervalMs: 1,
-    reloadTimeoutMs: 3,
-  });
-  assert.equal(await timeoutCli.run(["orchestrator", "reload", "--next-dev"]), 1);
-  assert.match(outputs.stderr, /did not settle/u);
 });
 
 test("fails before transport when the origin is missing or non-loopback", async () => {
   for (const unsafeOrigin of ["", "https://example.com", "http://example.com"]) {
     await assert.rejects(
-      execFileAsync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", cliEntryPath, "thread", "context", "--thread", "unsafe"], {
+      execFileAsync("bash", [shellSourcePath, "thread", "context", "--thread", "unsafe"], {
         env: { ...process.env, WORKBENCH_ORIGIN: unsafeOrigin },
       }),
       (error: NodeJS.ErrnoException & { stderr?: string }) => {

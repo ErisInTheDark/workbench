@@ -9,9 +9,9 @@ import path from "node:path";
 const SHIM_MARKER = "workbench-agent-cli-shim-v1";
 
 export interface WorkbenchAgentCliEnvironmentOptions {
-  cliEntryPath: string;
   origin: string;
   runtimeDirectoryPath: string;
+  shellSourcePath: string;
 }
 
 function quotePosixSingle(value: string) {
@@ -23,18 +23,18 @@ function quotePowerShellSingle(value: string) {
 }
 
 export default class WorkbenchAgentCliEnvironment {
-  private readonly cliEntryPath: string;
   private readonly origin: string;
   private readonly runtimeDirectoryPath: string;
+  private readonly shellSourcePath: string;
 
-  constructor({ cliEntryPath, origin, runtimeDirectoryPath }: WorkbenchAgentCliEnvironmentOptions) {
-    this.cliEntryPath = path.resolve(cliEntryPath);
+  constructor({ origin, runtimeDirectoryPath, shellSourcePath }: WorkbenchAgentCliEnvironmentOptions) {
     this.origin = origin;
     this.runtimeDirectoryPath = path.resolve(runtimeDirectoryPath);
+    this.shellSourcePath = path.resolve(shellSourcePath);
   }
 
   async install(env: NodeJS.ProcessEnv = process.env) {
-    await fs.access(this.cliEntryPath);
+    const shellSource = await fs.readFile(this.shellSourcePath, "utf8");
     await fs.mkdir(this.runtimeDirectoryPath, { recursive: true });
 
     const posixShimPath = path.join(this.runtimeDirectoryPath, "wb");
@@ -46,9 +46,9 @@ export default class WorkbenchAgentCliEnvironment {
       assertManagedOrMissing(windowsShimPath),
     ]);
     await Promise.all([
-      fs.writeFile(posixShimPath, `#!/usr/bin/env sh\n# ${SHIM_MARKER}\nWORKBENCH_ORIGIN=${quotePosixSingle(this.origin)} exec node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON ${quotePosixSingle(this.cliEntryPath)} "$@"\n`, "utf8"),
-      fs.writeFile(powershellShimPath, `# ${SHIM_MARKER}\n$env:WORKBENCH_ORIGIN = ${quotePowerShellSingle(this.origin)}\n& node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON ${quotePowerShellSingle(this.cliEntryPath)} @args\nexit $LASTEXITCODE\n`, "utf8"),
-      fs.writeFile(windowsShimPath, `@echo off\r\n@rem ${SHIM_MARKER}\r\n@set "WORKBENCH_ORIGIN=${this.origin.replace(/"/gu, '""')}"\r\nnode --disable-warning=MODULE_TYPELESS_PACKAGE_JSON "${this.cliEntryPath.replace(/"/gu, '""')}" %*\r\n`, "utf8"),
+      fs.writeFile(posixShimPath, `${shellSource.replace(/^#![^\n]*\n/u, "#!/usr/bin/env bash\n# " + SHIM_MARKER + "\nexport WORKBENCH_ORIGIN=" + quotePosixSingle(this.origin) + "\n")}`, "utf8"),
+      fs.writeFile(powershellShimPath, `# ${SHIM_MARKER}\n$env:WORKBENCH_ORIGIN = ${quotePowerShellSingle(this.origin)}\n& bash ${quotePowerShellSingle(posixShimPath)} @args\nexit $LASTEXITCODE\n`, "utf8"),
+      fs.writeFile(windowsShimPath, `@echo off\r\n@rem ${SHIM_MARKER}\r\n@set "WORKBENCH_ORIGIN=${this.origin.replace(/"/gu, '""')}"\r\nbash "${posixShimPath.replace(/"/gu, '""')}" %*\r\nexit /b %ERRORLEVEL%\r\n`, "utf8"),
     ]);
     await fs.chmod(posixShimPath, 0o755);
 

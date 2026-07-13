@@ -59,6 +59,7 @@ import type {
     WorkbenchSendThreadMessageOptions,
     WorkbenchSteerHistoryEntry,
     WorkbenchStoredThreadUnreadState,
+    WorkbenchSubagentSummary,
     WorkbenchSubmitUserInputRequestOptions,
     WorkbenchThreadContextReadResponse,
     WorkbenchThreadDocumentSnapshot,
@@ -166,6 +167,7 @@ export interface WorkbenchThreadState {
   rateLimitsByHarness: Map<WorkbenchHarness, RateLimitSnapshot | null>;
   browseResultEntriesByThreadId: Map<string, WorkbenchBrowseResultEntry[]>;
   steerHistoryByThreadId: Map<string, WorkbenchSteerHistoryEntry[]>;
+  subagents: WorkbenchSubagentSummary[];
   threadUnreadStateByKey: Map<string, WorkbenchStoredThreadUnreadState>;
   threads: ThreadSummary[];
   threadsError: string;
@@ -177,6 +179,7 @@ export interface WorkbenchThreadSnapshot {
   isLoading: boolean;
   pendingUserInputRequestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>;
   rateLimits: RateLimitSnapshot | null;
+  subagents: WorkbenchSubagentSummary[];
   threadDocuments: WorkbenchThreadDocumentSnapshot;
   threads: ThreadSummary[];
   threadsError: string;
@@ -316,6 +319,7 @@ function createInitialThreadState(): WorkbenchThreadState {
     rateLimitsByHarness: new Map(),
     browseResultEntriesByThreadId: new Map(),
     steerHistoryByThreadId: new Map(),
+    subagents: [],
     threadUnreadStateByKey: new Map(),
     threads: [],
     threadsError: "",
@@ -725,7 +729,6 @@ function WorkbenchThreadClient(
   const latestTurnStartedAtRefreshKeyByThreadKey = new Map<string, string>();
   let disposed = false;
   let projectContextGeneration = 0;
-  let subagentThreadIds = new Set<string>();
   let rateLimitGeneration = 0;
   const refreshRateLimitsPromisesByHarness = new Map<WorkbenchHarness, Promise<void>>();
   const pendingUserInputRequestGenerationsByHarness = new Map<WorkbenchHarness, number>();
@@ -738,7 +741,7 @@ function WorkbenchThreadClient(
     options.onStatusMessage?.(message);
   }
 
-  async function refreshSubagentThreadIds(refreshGeneration: number) {
+  async function refreshSubagents(refreshGeneration: number) {
     const cwd = state.projectRootPath;
     if (!cwd) return;
     try {
@@ -747,12 +750,12 @@ function WorkbenchThreadClient(
         signal: AbortSignal.timeout(5_000),
       });
       if (disposed || refreshGeneration !== projectContextGeneration) return;
-      const nextIds = new Set(getSubagentThreadIds(summaries));
-      const didChange = nextIds.size !== subagentThreadIds.size
-        || Array.from(nextIds).some((threadId) => !subagentThreadIds.has(threadId));
-      if (!didChange) return;
-      subagentThreadIds = nextIds;
-      state.threads = filterSubagentThreadSummaries(state.threads, subagentThreadIds);
+      if (areDeeplyEqual(state.subagents, summaries)) return;
+      state.subagents = summaries;
+      state.threads = filterSubagentThreadSummaries(
+        state.threads,
+        new Set(getSubagentThreadIds(state.subagents)),
+      );
       emit();
     } catch {
       // Sidebar metadata is optional and never blocks the main thread lifecycle.
@@ -922,6 +925,7 @@ function WorkbenchThreadClient(
       isLoading: state.isLoading,
       pendingUserInputRequestsByThreadId: serializePendingUserInputRequests(),
       rateLimits: state.rateLimits,
+      subagents: state.subagents,
       threadDocuments: threadDocuments.getSnapshot(),
       threads: state.threads.map(buildThreadSummaryWithUnreadBadge),
       threadsError: state.threadsError,
@@ -980,7 +984,7 @@ function WorkbenchThreadClient(
     state.projectRootPath = context.rootPath;
     state.projectRoots = nextRoots;
     projectContextGeneration += 1;
-    subagentThreadIds = new Set();
+    state.subagents = [];
     state.threads = [];
     state.threadsError = "";
     state.hasLoadedThreads = false;
@@ -3169,7 +3173,7 @@ function WorkbenchThreadClient(
           return;
         }
 
-        void refreshSubagentThreadIds(refreshGeneration);
+        void refreshSubagents(refreshGeneration);
 
         const results = await Promise.allSettled((["codex", "copilot", "opencode"] as const).map(async (harness) => {
           const cwdFilterPaths = harness === "codex"
@@ -3241,7 +3245,7 @@ function WorkbenchThreadClient(
         state.threads = filterSubagentThreadSummaries([
           ...stableVisibleThreads,
           ...threadsByRecentItem.slice(STABLE_VISIBLE_THREAD_COUNT),
-        ], subagentThreadIds);
+        ], new Set(getSubagentThreadIds(state.subagents)));
         void refreshVisibleThreadUnreadStates(state.threads);
         state.threadsError = errors.join(" ");
         state.hasLoadedThreads = true;

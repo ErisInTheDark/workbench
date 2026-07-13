@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - listWorkbenchSubagents: fetch durable project- or parent-scoped child summaries without joining thread hydration. Keywords: workbench, thread, subagent, metadata, fetch.
- * - getSubagentThreadIds/getSubagentSummary/getSubagentHarness/filterSubagentThreadSummaries: derive and filter direct-child identity from durable summaries. Keywords: workbench, thread, subagent, metadata, harness, sidebar.
+ * - getSubagentThreadIds/getSubagentSummary/getSubagentHarness/filterSubagentsByParentThreadId/filterSubagentThreadSummaries: derive and filter direct-child identity from durable summaries. Keywords: workbench, thread, subagent, metadata, harness, sidebar.
  * - getThreadAgentAccentColor/getThreadAgentLabelParts/getThreadAgentTabLabel: stable child colors and metadata-first labels. Keywords: subagent, color, label, tabs.
  */
 import type { ThreadPayload, ThreadSummary, WorkbenchSubagentSummary } from "../../types";
@@ -65,6 +65,13 @@ export function getSubagentHarness(
   fallbackHarness: WorkbenchSubagentSummary["harness"],
 ) {
   return getSubagentSummary(subagents, threadId)?.harness ?? fallbackHarness;
+}
+
+export function filterSubagentsByParentThreadId(
+  subagents: readonly WorkbenchSubagentSummary[],
+  parentThreadId: string,
+) {
+  return subagents.filter((record) => record.parentThreadId === parentThreadId);
 }
 
 export function filterSubagentThreadSummaries(

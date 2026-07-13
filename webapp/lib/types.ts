@@ -879,6 +879,7 @@ export interface ExplorerSnapshot {
   projectFileIndexId: string;
   projectFileIndexKey: string;
   projectFilePaths: readonly string[];
+  subagents: WorkbenchSubagentSummary[];
   threads: ThreadSummary[];
   isProjectLoading: boolean;
   isThreadsLoading: boolean;

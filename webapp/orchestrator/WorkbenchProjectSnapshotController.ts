@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - WorkbenchProjectSnapshotControllerOptions: injected project operations, watcher factory, clock, TTL, and cache bound for deterministic lifecycle tests. Keywords: project, snapshot, cache, watcher, test.
- * - default WorkbenchProjectSnapshotController: own bounded serialized project payloads, request coalescing, filesystem invalidation, HTTP adaptation, and disposal. Keywords: project, tree, cache, orchestrator, watcher, lifecycle.
+ * - WorkbenchProjectSnapshotControllerOptions: injected tree operations, watcher factory, clock, TTL, and cache bound for deterministic lifecycle tests. Keywords: project, snapshot, cache, watcher, test.
+ * - default WorkbenchProjectSnapshotController: own bounded tree snapshots, request coalescing, filesystem invalidation, mutation HTTP adaptation, and disposal. Keywords: project, tree, cache, orchestrator, watcher, lifecycle.
  */
 import fs from "node:fs";
 import type http from "node:http";
@@ -11,21 +11,18 @@ import {
   assertProjectFileCanBeDeleted,
   createProjectEntry,
   deleteProjectFile,
-  discoverProjects,
   formatWorkspaceQualifiedPath,
   getProjectSnapshot,
   normalizeRelativePath,
-  projectsRoot,
   resolveProjectFilePath,
   resolveProjectRoot,
 } from "../lib/project";
 import { isGitTrackedFile } from "../lib/git";
-import type { ProjectSnapshot, WorkbenchProjectsPayload } from "../lib/types";
+import type { ProjectSnapshot } from "../lib/types";
 
 const DEFAULT_CACHE_TTL_MS = 15_000;
 const DEFAULT_MAX_PROJECT_SNAPSHOTS = 4;
 const IGNORED_TREE_SEGMENTS = new Set([".codex", ".next", ".vscode", ".workbench", "node_modules"]);
-const IGNORED_DISCOVERY_SEGMENTS = new Set([".next", "build", "coverage", "dist", "node_modules"]);
 
 type SnapshotCacheState = "coalesced" | "hit" | "miss";
 
@@ -58,7 +55,6 @@ type ProjectOperations = {
   assertProjectFileCanBeDeleted: typeof assertProjectFileCanBeDeleted;
   createProjectEntry: typeof createProjectEntry;
   deleteProjectFile: typeof deleteProjectFile;
-  discoverProjects: typeof discoverProjects;
   getProjectSnapshot: typeof getProjectSnapshot;
   isGitTrackedFile: typeof isGitTrackedFile;
   resolveProjectFilePath: typeof resolveProjectFilePath;
@@ -71,7 +67,6 @@ export interface WorkbenchProjectSnapshotControllerOptions {
   maxProjectSnapshots?: number;
   now?: () => number;
   operations?: ProjectOperations;
-  projectsRootPath?: string;
 }
 
 function defaultCreateWatcher(rootPath: string, listener: (eventType: string, filename: string | Buffer | null) => void, recursive: boolean) {
@@ -104,14 +99,6 @@ function shouldInvalidateTree(filename: string | Buffer | null) {
   if (!relativePath) return true;
   if (relativePath.split("/").includes(".git")) return isRelevantGitPath(relativePath);
   return !hasIgnoredSegment(relativePath, IGNORED_TREE_SEGMENTS);
-}
-
-function shouldInvalidateProjects(eventType: string, filename: string | Buffer | null) {
-  const relativePath = normalizeWatchPath(filename);
-  if (!relativePath) return true;
-  if (hasIgnoredSegment(relativePath, IGNORED_DISCOVERY_SEGMENTS)) return false;
-  if (relativePath.split("/").includes(".git")) return isRelevantGitPath(relativePath);
-  return eventType === "rename" || relativePath.endsWith(".code-workspace");
 }
 
 function haveSameRootPaths(left: readonly string[], right: readonly string[]) {
@@ -153,14 +140,6 @@ export default class WorkbenchProjectSnapshotController {
   private readonly maxProjectSnapshots: number;
   private readonly now: () => number;
   private readonly operations: ProjectOperations;
-  private projectsCache: { expiresAt: number; generation: number; serialized: string | null } = {
-    expiresAt: 0,
-    generation: 0,
-    serialized: null,
-  };
-  private projectsInFlight: Promise<string> | null = null;
-  private projectsWatcher: ProjectWatcher | null = null;
-  private readonly projectsRootPath: string;
   private readonly snapshots = new Map<string, SnapshotCacheEntry>();
 
   constructor({
@@ -168,39 +147,21 @@ export default class WorkbenchProjectSnapshotController {
     createWatcher = defaultCreateWatcher,
     maxProjectSnapshots = DEFAULT_MAX_PROJECT_SNAPSHOTS,
     now = Date.now,
-    operations = { assertProjectFileCanBeDeleted, createProjectEntry, deleteProjectFile, discoverProjects, getProjectSnapshot, isGitTrackedFile, resolveProjectFilePath, resolveProjectRoot },
-    projectsRootPath = projectsRoot,
+    operations = { assertProjectFileCanBeDeleted, createProjectEntry, deleteProjectFile, getProjectSnapshot, isGitTrackedFile, resolveProjectFilePath, resolveProjectRoot },
   }: WorkbenchProjectSnapshotControllerOptions = {}) {
     this.cacheTtlMs = cacheTtlMs;
     this.createWatcher = createWatcher;
     this.maxProjectSnapshots = Math.max(1, Math.trunc(maxProjectSnapshots));
     this.now = now;
     this.operations = operations;
-    this.projectsRootPath = projectsRootPath;
-    this.projectsWatcher = this.watch(this.projectsRootPath, (eventType, filename) => {
-      if (shouldInvalidateProjects(eventType, filename)) this.invalidateProjects();
-    }, this.invalidateProjects, false);
   }
 
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
-    this.projectsWatcher?.close();
-    this.projectsWatcher = null;
     for (const entry of this.snapshots.values()) this.closeWatchers(entry.watchers);
     this.snapshots.clear();
     this.inFlightSnapshots.clear();
-    this.projectsInFlight = null;
-    this.projectsCache = { expiresAt: 0, generation: this.projectsCache.generation + 1, serialized: null };
-  }
-
-  async handleProjectsHttpRequest(_request: http.IncomingMessage, response: http.ServerResponse) {
-    try {
-      const result = await this.readProjects();
-      sendSerializedJson(response, 200, result.serialized, result.cacheState);
-    } catch (error) {
-      sendError(response, error, "Unable to discover projects.");
-    }
   }
 
   async handleTreeHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
@@ -273,49 +234,12 @@ export default class WorkbenchProjectSnapshotController {
     }
   }
 
-  invalidateProjects = () => {
-    this.projectsCache = {
-      expiresAt: 0,
-      generation: this.projectsCache.generation + 1,
-      serialized: null,
-    };
-  };
-
   invalidateSnapshot(projectId: string) {
     const entry = this.snapshots.get(projectId);
     if (!entry) return;
     entry.expiresAt = 0;
     entry.generation += 1;
     entry.serialized = null;
-  }
-
-  private async readProjects() {
-    this.assertActive();
-    const now = this.now();
-    if (this.projectsCache.serialized && this.projectsCache.expiresAt > now) {
-      return { cacheState: "hit" as const, serialized: this.projectsCache.serialized };
-    }
-    if (this.projectsInFlight) {
-      return { cacheState: "coalesced" as const, serialized: await this.projectsInFlight };
-    }
-    const generation = this.projectsCache.generation;
-    const promise = (async () => {
-      const payload: WorkbenchProjectsPayload = {
-        data: await this.operations.discoverProjects(),
-        rootPath: normalizeRelativePath(this.projectsRootPath),
-      };
-      const serialized = JSON.stringify(payload);
-      if (!this.disposed && this.projectsCache.generation === generation) {
-        this.projectsCache = { expiresAt: this.now() + this.cacheTtlMs, generation, serialized };
-      }
-      return serialized;
-    })();
-    this.projectsInFlight = promise;
-    try {
-      return { cacheState: "miss" as const, serialized: await promise };
-    } finally {
-      if (this.projectsInFlight === promise) this.projectsInFlight = null;
-    }
   }
 
   private async readSnapshot(projectId: string | null): Promise<SnapshotResponse> {

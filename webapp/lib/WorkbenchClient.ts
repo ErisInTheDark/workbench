@@ -72,6 +72,7 @@ function areExplorerSnapshotsEquivalent(left: ExplorerSnapshot | null, right: Ex
     && (left.projects === right.projects || areDeeplyEqual(left.projects, right.projects))
     && (left.roots === right.roots || areDeeplyEqual(left.roots, right.roots))
     && (left.tree === right.tree || areDeeplyEqual(left.tree, right.tree))
+    && (left.subagents === right.subagents || areDeeplyEqual(left.subagents, right.subagents))
     && (left.threads === right.threads || areDeeplyEqual(left.threads, right.threads))
     && (left.changes === right.changes || areDeeplyEqual(left.changes, right.changes))
     && (left.expandedDirectories === right.expandedDirectories || areDeeplyEqual(left.expandedDirectories, right.expandedDirectories))
@@ -166,6 +167,7 @@ export async function WorkbenchClient(
 
     if (
       lastSnapshot.currentThreadId !== snapshot.currentThreadId
+      || lastSnapshot.subagents !== snapshot.subagents
       || lastSnapshot.threads !== snapshot.threads
       || lastSnapshot.threadsError !== snapshot.threadsError
     ) {
@@ -230,6 +232,7 @@ export async function WorkbenchClient(
       projectFileIndexId: projectSnapshot.projectFileIndexId,
       projectFileIndexKey: projectSnapshot.projectFileIndexKey,
       projectFilePaths: projectSnapshot.projectFilePaths,
+      subagents: threadSnapshot.subagents,
       threads: threadSnapshot.threads,
       isProjectLoading: projectSnapshot.isLoading,
       isThreadsLoading: threadSnapshot.isLoading,
