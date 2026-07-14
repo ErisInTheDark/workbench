@@ -3,8 +3,8 @@
  * - ThreadTurnDetails: render one thread turn with grouped commands and typed item sections. Keywords: workbench, thread, turn.
  * - ThreadThreadContent: render all turns for one thread payload without composer chrome. Keywords: workbench, thread, subagent, preview.
  * - ThreadTurnLoadingSkeleton: render a lightweight placeholder for unloaded lazy-history turns. Keywords: workbench, thread, lazy history, skeleton.
- * - useStableBrowseResultEntriesByTurn: preserve turn-owned result chunk arrays across thread-level sidecar refreshes. Keywords: browse, screenshot, render, chunk.
  * - Local helpers: summarize inputs, group command, reasoning, file, and web-search sequences, and render the supported thread item variants. Keywords: thread items, command sequence, reasoning, rendering.
+ * - Refresh boundary: keep runtime exports component-only; reusable hooks and helpers belong in focused modules. Keywords: React Refresh, HMR, boundary.
  */
 "use client";
 
@@ -47,9 +47,9 @@ import {
   formatThreadDuration,
   formatThreadTimestamp,
   humanizeThreadLabel,
-  ThreadCommandSummary,
   truncateThreadText,
-} from "./thread-view-primitives";
+} from "./thread-view-formatters";
+import { ThreadCommandSummary } from "./thread-view-primitives";
 import ThreadCheckpointDiffItem from "./ThreadCheckpointDiffItem";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
 import ThreadCommandDetails from "./ThreadCommandDetails";
@@ -68,9 +68,9 @@ import ThreadSubagentStopItem from "./ThreadSubagentStopItem";
 import ThreadSubagentWaitItem from "./ThreadSubagentWaitItem";
 import ThreadUserImage from "./ThreadUserImage";
 import ThreadWebSearchItem, {
-  isThreadWebSearchPlaceholder,
   ThreadWebSearchSequence,
 } from "./ThreadWebSearchItem";
+import { isThreadWebSearchPlaceholder } from "./thread-web-search-state";
 import {
   getThreadSubagentWaitTiming,
   groupThreadSubagentWaitRenderEntries,
@@ -79,6 +79,7 @@ import {
   type ThreadSubagentWaitTiming,
 } from "./thread-subagent-wait-groups";
 import { createThreadTurnCompactionRenderPlan } from "./thread-turn-compaction-sections";
+import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
 import { CheckIcon, ClockIcon, PlayIcon, WarningIcon } from "../workbench-icons";
 
 const THREAD_DETAIL_INLINE_CODE_CLASS = "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-[0.34em] py-[0.08em] font-mono text-[0.88em] leading-[1.6] text-text";
@@ -416,16 +417,6 @@ interface StableRenderableBlockEntry {
   signature: string;
 }
 
-interface StableBrowseResultEntriesByTurnResult {
-  cacheEntriesByTurnId: Map<string, StableBrowseResultEntriesByTurnEntry>;
-  entriesByTurnId: Map<string, readonly WorkbenchBrowseResultEntry[]>;
-}
-
-interface StableBrowseResultEntriesByTurnEntry {
-  entries: readonly WorkbenchBrowseResultEntry[];
-  signature: string;
-}
-
 function getRenderableBlockItems(block: ThreadRenderableBlock): readonly ThreadItem[] {
   switch (block.kind) {
     case "commandSequence":
@@ -497,22 +488,6 @@ function useStableRenderableBlocks(blocks: ThreadRenderableBlock[]) {
   return useMemo(() => stableEntries.map((entry) => entry.block), [stableEntries]);
 }
 
-function getBrowseResultEntryChunkSignature(entry: WorkbenchBrowseResultEntry) {
-  return [
-    entry.entryKey,
-    entry.turnId,
-    entry.commandItemId ?? "",
-    entry.recordedAt,
-    entry.assetUrl,
-    entry.action,
-    entry.actionIndex,
-  ].join("\n");
-}
-
-function getBrowseResultEntriesChunkSignature(entries: readonly WorkbenchBrowseResultEntry[]) {
-  return entries.map(getBrowseResultEntryChunkSignature).join("\n---\n");
-}
-
 function formatBrowseResultEntryActionLabel(action: string) {
   return action
     .replace(/([a-z0-9])([A-Z])/gu, "$1 $2")
@@ -548,45 +523,6 @@ function createBrowseResultEntryDetailRows(entries: readonly WorkbenchBrowseResu
         target: useDetailAsTarget && entry.detailText ? { kind: "code" as const, text: entry.detailText } : null,
       };
     });
-}
-
-export function useStableBrowseResultEntriesByTurn(
-  entries: readonly WorkbenchBrowseResultEntry[] = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
-) {
-  const previousEntriesRef = useRef<Map<string, StableBrowseResultEntriesByTurnEntry>>(new Map());
-  const stableResult = useMemo((): StableBrowseResultEntriesByTurnResult => {
-    const groupedEntriesByTurnId = new Map<string, WorkbenchBrowseResultEntry[]>();
-    for (const entry of entries) {
-      const turnEntries = groupedEntriesByTurnId.get(entry.turnId) ?? [];
-      turnEntries.push(entry);
-      groupedEntriesByTurnId.set(entry.turnId, turnEntries);
-    }
-
-    const cacheEntriesByTurnId = new Map<string, StableBrowseResultEntriesByTurnEntry>();
-    const entriesByTurnId = new Map<string, readonly WorkbenchBrowseResultEntry[]>();
-    for (const [turnId, turnEntries] of groupedEntriesByTurnId) {
-      const signature = getBrowseResultEntriesChunkSignature(turnEntries);
-      const previousEntry = previousEntriesRef.current.get(turnId);
-      const stableEntries = previousEntry?.signature === signature ? previousEntry.entries : turnEntries;
-      const cacheEntry = {
-        entries: stableEntries,
-        signature,
-      };
-      cacheEntriesByTurnId.set(turnId, cacheEntry);
-      entriesByTurnId.set(turnId, stableEntries);
-    }
-
-    return {
-      cacheEntriesByTurnId,
-      entriesByTurnId,
-    };
-  }, [entries]);
-
-  useEffect(() => {
-    previousEntriesRef.current = stableResult.cacheEntriesByTurnId;
-  }, [stableResult]);
-
-  return stableResult.entriesByTurnId;
 }
 
 function isHiddenCommandExecution (command: string) {

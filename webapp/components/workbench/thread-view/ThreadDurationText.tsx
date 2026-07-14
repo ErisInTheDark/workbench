@@ -1,8 +1,12 @@
+/*
+ * Exports:
+ * - default ThreadDurationText: render a formatted thread duration with optional emphasis. Keywords: thread, duration, metadata, text.
+ */
 "use client";
 
 import { Fragment } from "react";
 
-import { formatThreadDuration } from "./thread-view-primitives";
+import { formatThreadDuration } from "./thread-view-formatters";
 
 function joinClasses(...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");

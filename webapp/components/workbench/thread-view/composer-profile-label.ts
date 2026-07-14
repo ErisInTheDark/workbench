@@ -3,7 +3,7 @@
  * - getComposerProfileDisplayLabel: derive a profile's custom or settings-based display label without persisting fallback text. Keywords: composer, profile, label, fallback.
  */
 import type { WorkbenchComposerProfile } from "../../../lib/types";
-import { formatHarnessLabel } from "./ThreadHarnessControl";
+import { formatHarnessLabel } from "./harness-label";
 
 export function getComposerProfileDisplayLabel(profile: WorkbenchComposerProfile, agentLabel?: string | null, modelLabel?: string | null) {
   if (profile.name.trim()) return profile.name.trim();

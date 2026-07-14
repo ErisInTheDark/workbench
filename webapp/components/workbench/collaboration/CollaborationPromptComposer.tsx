@@ -17,7 +17,7 @@ import type {
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import ThreadComposer from "../thread-view/ThreadComposer";
-import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileProvider";
+import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 
 type ThreadComposerProps = ComponentProps<typeof ThreadComposer>;
 

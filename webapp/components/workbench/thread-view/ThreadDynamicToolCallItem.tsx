@@ -26,7 +26,7 @@ import ThreadDurationText from "./ThreadDurationText";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
-import { humanizeThreadLabel } from "./thread-view-primitives";
+import { humanizeThreadLabel } from "./thread-view-formatters";
 
 type DynamicToolCallItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 

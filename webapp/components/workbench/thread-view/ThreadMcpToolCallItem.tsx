@@ -11,7 +11,7 @@ import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/Thre
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadSummaryText from "./ThreadSummaryText";
-import { humanizeThreadLabel } from "./thread-view-primitives";
+import { humanizeThreadLabel } from "./thread-view-formatters";
 
 type McpToolCallItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 

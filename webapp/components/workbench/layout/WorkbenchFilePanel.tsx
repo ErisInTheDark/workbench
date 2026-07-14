@@ -14,9 +14,9 @@ import {
   workbenchIconButtonClassName,
 } from "../workbench-class-names";
 import {
-  dialogButtonClassName,
   WorkbenchDialog,
 } from "../workbench-dialogs";
+import { dialogButtonClassName } from "../workbench-dialog-styles";
 import {
   BinIcon,
   PanelCloseIcon,

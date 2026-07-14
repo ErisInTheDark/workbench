@@ -70,8 +70,9 @@ import {
 import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
 import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
-import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileProvider";
-import { ThreadThreadContent, ThreadTurnDetails, ThreadTurnLoadingSkeleton, useStableBrowseResultEntriesByTurn } from "./thread-view-items";
+import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
+import { ThreadThreadContent, ThreadTurnDetails, ThreadTurnLoadingSkeleton } from "./thread-view-items";
+import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
 import ThreadAgentTabs from "./ThreadAgentTabs";
 import ThreadComposer from "./ThreadComposer";
 import ThreadContextStatus from "./ThreadContextStatus";
@@ -84,6 +85,8 @@ import ThreadScrollAnchorController, { type ThreadScrollSnapshot } from "./Threa
 import {
   getThreadWebSearchLiveLabel,
   isThreadWebSearchPlaceholder,
+} from "./thread-web-search-state";
+import {
   ThreadWebSearchActionRow,
 } from "./ThreadWebSearchItem";
 

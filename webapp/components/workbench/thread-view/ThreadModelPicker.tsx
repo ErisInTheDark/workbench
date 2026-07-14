@@ -1,15 +1,16 @@
-"use client";
-
 /*
  * Exports:
  * - default ThreadModelPicker: render model selection, priority, refresh, and return-to-message controls for a thread composer. Keywords: thread, model, picker, refresh.
- * - Local helpers: format model context windows, feature pills, harness labels, and model priority arrows. Keywords: model metadata, harness, priority.
+ * - Local helpers: format model context windows, feature pills, and model priority arrows. Keywords: model metadata, priority.
  */
+"use client";
+
 import { JSX, type KeyboardEvent } from "react";
 import type { WorkbenchHarness, WorkbenchModelOption } from "../../../lib/types";
 import { ReloadIcon } from "../workbench-icons";
 import ThreadComposerPickerHeader from "./ThreadComposerPickerHeader";
 import ThreadPickerGroupMoveButton from "./ThreadPickerGroupMoveButton";
+import { formatHarnessLabel } from "./harness-label";
 
 function formatContextWindow (tokens: number | null) {
 	if (!tokens) {
@@ -62,17 +63,6 @@ function buildFeatureList (model: WorkbenchModelOption) {
 	// }
 
 	return features;
-}
-
-function formatHarnessLabel (harness: WorkbenchHarness) {
-	switch (harness) {
-		case "copilot":
-			return "Copilot";
-		case "opencode":
-			return "OpenCode";
-		case "codex":
-			return "Codex";
-	}
 }
 
 export default function ThreadModelPicker ({

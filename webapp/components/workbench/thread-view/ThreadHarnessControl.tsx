@@ -1,16 +1,12 @@
 /*
  * Exports:
  * - default ThreadHarnessControl: render a mutable harness rotator or immutable harness identity. Keywords: thread, composer, harness, control.
- * - formatHarnessLabel: format Workbench harness identifiers for composer UI. Keywords: harness, label.
  */
 "use client";
 
 import type { WorkbenchHarness } from "../../../lib/types";
 import { HarnessIcon } from "../workbench-icons";
-
-export function formatHarnessLabel(harness: WorkbenchHarness) {
-  return harness === "codex" ? "Codex" : harness === "copilot" ? "Copilot" : "OpenCode";
-}
+import { formatHarnessLabel } from "./harness-label";
 
 export default function ThreadHarnessControl({ canToggle = false, harness, onToggle }: {
   canToggle?: boolean;

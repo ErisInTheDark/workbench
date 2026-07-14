@@ -24,7 +24,7 @@ import ChevronIcon from "./ChevronIcon";
 import ContextMenuCapability from "./ContextMenuCapability";
 import { ThreadQuestionBadge, ThreadUnreadBadge } from "./ThreadStatusBadges";
 import ThreadDisclosure from "./thread-view/ThreadDisclosure";
-import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuProvider";
+import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import {
   workbenchIconButtonClassName,
   workbenchNewEntryButtonClassName,

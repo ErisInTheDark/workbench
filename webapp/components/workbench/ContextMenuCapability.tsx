@@ -10,7 +10,7 @@ import type { MouseEvent, ReactNode } from "react";
 import {
   useWorkbenchContextMenu,
   type WorkbenchContextMenuDefinition,
-} from "./WorkbenchContextMenuProvider";
+} from "./WorkbenchContextMenuContext";
 
 export type ContextMenuCapabilityMenuFactory = (
   event: MouseEvent<HTMLElement>,

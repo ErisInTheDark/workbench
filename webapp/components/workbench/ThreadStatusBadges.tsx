@@ -1,6 +1,5 @@
 /*
  * Exports:
- * - formatThreadUnreadBadgeAccessibilityText: shared screen-reader/title copy for thread unread badges. Keywords: workbench, thread, unread, badge.
  * - ThreadUnreadBadge: shared unread/active badge used by thread lists and thread tabs. Keywords: workbench, thread, unread, badge.
  * - ThreadQuestionBadge: shared response-needed badge used by thread lists and thread tabs. Keywords: workbench, thread, questionnaire, approval, badge.
  */
@@ -8,7 +7,7 @@
 
 import type { ThreadUnreadBadge as ThreadUnreadBadgeValue } from "../../lib/types";
 
-export function formatThreadUnreadBadgeAccessibilityText(badge: ThreadUnreadBadgeValue) {
+function formatThreadUnreadBadgeAccessibilityText(badge: ThreadUnreadBadgeValue) {
   const unreadItemsLabel = badge.unreadCount === 1
     ? "1 unread turn item"
     : `${badge.unreadCount} unread turn items`;

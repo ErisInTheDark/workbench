@@ -1,8 +1,6 @@
 /*
  * Exports:
  * - default PlaintextEditable: contenteditable plaintext input with overlays and optional mention suggestions. Keywords: composer, questionnaire, mentions, autocomplete.
- * - isMobileTextInputEnvironment: detect soft-keyboard-oriented input contexts for Enter-key behavior. Keywords: mobile, keyboard, input.
- * - useMobileTextInputEnvironment: subscribe to mobile text-input media query changes. Keywords: mobile, keyboard, hook.
  * - Local helpers: caret measurement/restoration, highlight rendering, and mention popup rendering. Keywords: contenteditable, caret, highlights.
  */
 "use client";
@@ -17,6 +15,7 @@ import {
   type InlineMentionSuggestion,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
 import { getInlineMentionMarkClassName, getInlineMentionOverlayClassName } from "../../../lib/workbench/thread/inline-mention-styles";
+import { isMobileTextInputEnvironment } from "./mobile-text-input-environment";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -26,47 +25,8 @@ function normalizePlaintextEditableValue (value: string) {
   return value.replace(/\r\n/g, "\n");
 }
 
-const MOBILE_TEXT_INPUT_MEDIA_QUERY = "(hover: none) and (pointer: coarse)";
 const INLINE_MENTION_SUGGESTIONS_VIEWPORT_GUTTER_PX = 8;
 const INLINE_MENTION_SUGGESTIONS_ANCHOR_GAP_PX = 8;
-
-export function isMobileTextInputEnvironment () {
-  return typeof window !== "undefined"
-    && typeof window.matchMedia === "function"
-    && window.matchMedia(MOBILE_TEXT_INPUT_MEDIA_QUERY).matches;
-}
-
-export function useMobileTextInputEnvironment () {
-  const [isMobileTextInput, setIsMobileTextInput] = useState(false);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-      return;
-    }
-
-    const mediaQuery = window.matchMedia(MOBILE_TEXT_INPUT_MEDIA_QUERY);
-    const applyMatch = () => {
-      setIsMobileTextInput(mediaQuery.matches);
-    };
-
-    applyMatch();
-    if (typeof mediaQuery.addEventListener === "function") {
-      mediaQuery.addEventListener("change", applyMatch);
-    } else {
-      mediaQuery.addListener(applyMatch);
-    }
-
-    return () => {
-      if (typeof mediaQuery.removeEventListener === "function") {
-        mediaQuery.removeEventListener("change", applyMatch);
-      } else {
-        mediaQuery.removeListener(applyMatch);
-      }
-    };
-  }, []);
-
-  return isMobileTextInput;
-}
 
 function getEditableCaretOffset (element: HTMLElement) {
   const selection = window.getSelection?.();

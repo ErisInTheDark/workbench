@@ -1,17 +1,11 @@
 /*
  * Exports:
- * - WorkbenchContextMenuItem: menu item contract for document context menu actions. Keywords: context menu, item, action.
- * - WorkbenchContextMenuDefinition: menu definition opened by context-menu capabilities. Keywords: context menu, definition.
- * - WorkbenchContextMenuRequest: pointer-positioned menu open request. Keywords: context menu, position, request.
- * - useWorkbenchContextMenu: read the document context menu controller from React context. Keywords: context menu, hook, controller.
  * - default WorkbenchContextMenuProvider: own and render the active document context menu. Keywords: context menu, provider, document.
  */
 "use client";
 
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -19,39 +13,16 @@ import {
   type ReactNode,
 } from "react";
 
+import WorkbenchContextMenuContext, {
+  type WorkbenchContextMenuController,
+  type WorkbenchContextMenuRequest,
+} from "./WorkbenchContextMenuContext";
+
 const CONTEXT_MENU_VIEWPORT_PADDING = 8;
-
-export interface WorkbenchContextMenuItem {
-  disabled?: boolean;
-  icon?: ReactNode;
-  id: string;
-  label: string;
-  onSelect: () => void;
-  tone?: "default" | "danger";
-}
-
-export interface WorkbenchContextMenuDefinition {
-  id: string;
-  items: WorkbenchContextMenuItem[];
-  label: string;
-}
-
-export interface WorkbenchContextMenuRequest {
-  menu: WorkbenchContextMenuDefinition;
-  x: number;
-  y: number;
-}
 
 interface ActiveWorkbenchContextMenu extends WorkbenchContextMenuRequest {
   generation: number;
 }
-
-interface WorkbenchContextMenuController {
-  closeContextMenu: () => void;
-  openContextMenu: (request: WorkbenchContextMenuRequest) => void;
-}
-
-const WorkbenchContextMenuContext = createContext<WorkbenchContextMenuController | null>(null);
 
 function clampMenuPosition(value: number, size: number, viewportSize: number) {
   return Math.max(
@@ -152,15 +123,6 @@ function WorkbenchContextMenuSurface ({
       ))}
     </div>
   );
-}
-
-export function useWorkbenchContextMenu() {
-  const controller = useContext(WorkbenchContextMenuContext);
-  if (!controller) {
-    throw new Error("useWorkbenchContextMenu must be used inside WorkbenchContextMenuProvider.");
-  }
-
-  return controller;
 }
 
 export default function WorkbenchContextMenuProvider ({ children }: { children: ReactNode }) {

@@ -120,10 +120,11 @@ import { writeTextToClipboard } from "../lib/workbench/dom/clipboard";
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
 import ThreadLoadingSkeleton from "./workbench/thread-view/ThreadLoadingSkeleton";
 import ThreadView from "./workbench/thread-view/ThreadView";
-import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-primitives";
+import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
 import useThreadActivityTimestamp from "./workbench/thread-view/use-thread-activity-timestamp";
 import WorkbenchCollaborationView from "./workbench/collaboration/WorkbenchCollaborationView";
-import WorkbenchContextMenuProvider, { type WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuProvider";
+import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuContext";
+import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
 import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfileProvider";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
 import WorkbenchMainLayoutView from "./workbench/layout/WorkbenchMainLayoutView";
@@ -158,9 +159,9 @@ import {
   workbenchRevisionHoverToolbarClassName,
 } from "./workbench/workbench-class-names";
 import {
-  dialogButtonClassName,
   WorkbenchDialog,
 } from "./workbench/workbench-dialogs";
+import { dialogButtonClassName } from "./workbench/workbench-dialog-styles";
 import {
   BrowseSessionsList,
   ExplorerTree,

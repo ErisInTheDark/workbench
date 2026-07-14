@@ -49,15 +49,17 @@ import {
 import PrimaryButton from "../PrimaryButton";
 import ChevronIcon from "../ChevronIcon";
 import { PauseIcon, PlayIcon, StopIcon } from "../workbench-icons";
-import PlaintextEditable, { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./PlaintextEditable";
+import PlaintextEditable from "./PlaintextEditable";
+import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import ThreadAgentPicker from "./ThreadAgentPicker";
 import ThreadComposerRibbon from "./ThreadComposerRibbon";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 import ThreadModelPicker from "./ThreadModelPicker";
 import ThreadProfilePicker from "./ThreadProfilePicker";
 import { getComposerProfileDisplayLabel } from "./composer-profile-label";
-import ThreadUserInputRequest, { getThreadUserInputRequestPreviewText } from "./ThreadUserInputRequest";
-import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileProvider";
+import ThreadUserInputRequest from "./ThreadUserInputRequest";
+import { getThreadUserInputRequestPreviewText } from "./thread-user-input-request-preview";
+import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 
 const PICKER_REFRESH_COOLDOWN_MS = 1500;
 const PICKER_REFRESH_MIN_SPIN_MS = 500;

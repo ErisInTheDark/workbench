@@ -1,12 +1,9 @@
 /*
  * Exports:
- * - dialogButtonClassName: share the action button classes used across workbench dialogs. Keywords: workbench, dialog, button.
  * - WorkbenchDialogProps: type the reusable workbench dialog shell props. Keywords: workbench, dialog, props.
  * - WorkbenchDialog: render the shared modal shell for workbench confirmation and create-entry flows. Keywords: workbench, dialog, modal.
  */
 import type { ReactNode, Ref } from "react";
-
-export const dialogButtonClassName = "rounded-xl px-3 py-1.5 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none";
 
 export interface WorkbenchDialogProps {
   actions: ReactNode;

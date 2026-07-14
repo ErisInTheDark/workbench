@@ -1,7 +1,5 @@
 /*
  * Exports:
- * - getThreadWebSearchLiveLabel: derive the live activity label for a web-search item. Keywords: workbench, thread, web search, live.
- * - isThreadWebSearchPlaceholder: detect empty in-progress web-search placeholders. Keywords: workbench, thread, web search, placeholder.
  * - ThreadWebSearchSequence: render grouped adjacent Codex web search actions. Keywords: workbench, thread, web search, grouped.
  * - ThreadWebSearchOutput: optional enriched display data for future web search result rendering. Keywords: workbench, thread, web search, output.
  * - default ThreadWebSearchItem: render Codex web search actions inside thread history. Keywords: workbench, thread, web search.
@@ -14,7 +12,8 @@ import type { ReactNode } from "react";
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
 import ThreadSummaryText from "./ThreadSummaryText";
-import { truncateThreadText } from "./thread-view-primitives";
+import { truncateThreadText } from "./thread-view-formatters";
+import { isNonEmptyString, isThreadWebSearchPlaceholder } from "./thread-web-search-state";
 
 type WebSearchItem = Extract<ThreadItem, { type: "webSearch" }>;
 
@@ -32,10 +31,6 @@ const JSON_BLOCK_CLASS = "m-0 max-w-full overflow-x-auto whitespace-pre rounded-
 const INLINE_CODE_CLASS = "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-[0.34em] py-[0.08em] font-mono text-[0.78em] leading-[1.6] text-text";
 const ROW_LABEL_CLASS = "shrink-0 text-muted";
 const ROW_VALUE_CLASS = "min-w-0 break-words font-medium text-text";
-
-function isNonEmptyString(value: string | null | undefined): value is string {
-  return Boolean(value?.trim());
-}
 
 function uniqueNonEmptyStrings(values: Array<string | null | undefined>) {
   const seen = new Set<string>();
@@ -126,23 +121,6 @@ function formatSearchQueryLabel(query: string) {
       </>
     )
     : truncateThreadText(parsedQuery.terms, 96);
-}
-
-export function isThreadWebSearchPlaceholder(item: WebSearchItem) {
-  return (!item.action || item.action.type === "other") && !isNonEmptyString(item.query);
-}
-
-export function getThreadWebSearchLiveLabel(item: WebSearchItem) {
-  switch (item.action?.type) {
-    case "search":
-      return "Searching web...";
-    case "openPage":
-      return "Opening page...";
-    case "findInPage":
-      return "Searching page...";
-    default:
-      return "Using web...";
-  }
 }
 
 function formatUrlLabel(url: string) {

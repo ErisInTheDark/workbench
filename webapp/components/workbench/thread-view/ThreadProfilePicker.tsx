@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import type { WorkbenchAgentOption, WorkbenchComposerProfile, WorkbenchComposerProfileSlot, WorkbenchComposerSettings, WorkbenchModelOption } from "../../../lib/types";
-import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileProvider";
+import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 import { FileDeleteIcon, SparkleIcon } from "../workbench-icons";
 import PlaintextEditable from "./PlaintextEditable";
 import ThreadComposerPickerHeader from "./ThreadComposerPickerHeader";

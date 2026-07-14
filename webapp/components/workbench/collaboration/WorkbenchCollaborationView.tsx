@@ -62,7 +62,7 @@ import CollaborationRunController from "./CollaborationRunController";
 import CollaborationRevisionHistoryDialog from "./CollaborationRevisionHistoryDialog";
 import CollaborationRunPanel from "./CollaborationRunPanel";
 import CollaborationThreadedView from "./CollaborationThreadedView";
-import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileProvider";
+import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 
 type ThreadViewProps = ComponentProps<typeof ThreadView>;
 

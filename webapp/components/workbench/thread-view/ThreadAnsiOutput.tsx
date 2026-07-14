@@ -1,7 +1,6 @@
 /*
  * Exports:
  * - default ThreadAnsiOutput: render terminal text with ANSI SGR formatting while dropping other escape sequences. Keywords: thread, ansi, terminal, command output.
- * - parseAnsiOutput: split terminal text into styled spans after consuming ANSI escape sequences. Keywords: ansi, parser, sgr, escape.
  */
 "use client";
 
@@ -326,7 +325,7 @@ function isPlainControlCharacter(character: string) {
   return code < 0x20 && character !== "\n" && character !== "\r" && character !== "\t";
 }
 
-export function parseAnsiOutput(input: string) {
+function parseAnsiOutput(input: string) {
   const spans: AnsiOutputSpan[] = [];
   const state = cloneAnsiState(DEFAULT_STATE);
   let textStartIndex = 0;

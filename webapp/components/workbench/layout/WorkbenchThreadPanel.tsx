@@ -9,7 +9,7 @@ import { useCallback, useEffect, useState, type ComponentProps, type PointerEven
 import type { ThreadPayload, ThreadSummary, WorkbenchThreadHydrationRequest } from "../../../lib/types";
 import ThreadLoadingSkeleton from "../thread-view/ThreadLoadingSkeleton";
 import ThreadView from "../thread-view/ThreadView";
-import { formatThreadRelativeTimestamp, getThreadTitle } from "../thread-view/thread-view-primitives";
+import { formatThreadRelativeTimestamp, getThreadTitle } from "../thread-view/thread-view-formatters";
 import useThreadActivityTimestamp from "../thread-view/use-thread-activity-timestamp";
 import { workbenchIconButtonClassName } from "../workbench-class-names";
 import {

@@ -8,7 +8,7 @@
 import type { MouseEvent } from "react";
 
 import type { WorkbenchCollaborationPost } from "../../../lib/types";
-import { useWorkbenchContextMenu } from "../WorkbenchContextMenuProvider";
+import { useWorkbenchContextMenu } from "../WorkbenchContextMenuContext";
 import { FileDeleteIcon, FileUpdateIcon } from "../workbench-icons";
 
 function HistoryIcon () {
