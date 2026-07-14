@@ -83,6 +83,7 @@ import {
     filterSubagentThreadSummaries,
     getSubagentThreadIds,
     listWorkbenchSubagents,
+    mergeWorkbenchSubagentSummaries,
 } from "./thread/thread-subagents";
 import {
     getThreadStateChangeTagText as getNormalizedThreadStateChangeTagText,
@@ -757,25 +758,12 @@ function WorkbenchThreadClient(
     options.onStatusMessage?.(message);
   }
 
-  async function refreshSubagents(refreshGeneration: number) {
-    const cwd = state.projectRootPath;
-    if (!cwd) return;
-    try {
-      const summaries = await listWorkbenchSubagents({
-        cwd,
-        signal: AbortSignal.timeout(5_000),
-      });
-      if (disposed || refreshGeneration !== projectContextGeneration) return;
-      if (areDeeplyEqual(state.subagents, summaries)) return;
-      state.subagents = summaries;
-      state.threads = filterSubagentThreadSummaries(
-        state.threads,
-        new Set(getSubagentThreadIds(state.subagents)),
-      );
-      emit();
-    } catch {
-      // Sidebar metadata is optional and never blocks the main thread lifecycle.
-    }
+  async function readProjectSubagents(projectRootPaths: readonly string[]) {
+    const summaryGroups = await Promise.all(projectRootPaths.map((cwd) => listWorkbenchSubagents({
+      cwd,
+      signal: AbortSignal.timeout(5_000),
+    })));
+    return mergeWorkbenchSubagentSummaries(summaryGroups);
   }
 
   function serializePendingUserInputRequests() {
@@ -3189,9 +3177,11 @@ function WorkbenchThreadClient(
           return;
         }
 
-        void refreshSubagents(refreshGeneration);
-
-        const results = await Promise.allSettled((["codex", "copilot", "opencode"] as const).map(async (harness) => {
+        const subagentResultPromise = readProjectSubagents(projectRootPaths).then(
+          (summaries) => ({ summaries }),
+          (error: unknown) => ({ error }),
+        );
+        const threadResultsPromise = Promise.allSettled((["codex", "copilot", "opencode"] as const).map(async (harness) => {
           const cwdFilterPaths = harness === "codex"
             ? getCodexThreadCwdFilterPathsForRoots(projectRootPaths)
             : null;
@@ -3211,6 +3201,19 @@ function WorkbenchThreadClient(
             .filter((thread) => isWorkbenchThreadInCurrentProject(thread, harness, projectRootPaths))
             .map((thread) => toThreadSummary(thread, harness));
         }));
+        const [subagentResult, results] = await Promise.all([subagentResultPromise, threadResultsPromise]);
+        if (refreshGeneration !== projectContextGeneration) {
+          return;
+        }
+        if ("error" in subagentResult) {
+          const message = subagentResult.error instanceof Error
+            ? subagentResult.error.message
+            : "Unable to load Workbench subagent metadata.";
+          state.threadsError = message;
+          state.hasLoadedThreads = true;
+          return;
+        }
+        const refreshedSubagents = subagentResult.summaries;
 
         const threads: ThreadSummary[] = [];
         const errors: string[] = [];
@@ -3254,14 +3257,13 @@ function WorkbenchThreadClient(
 
           return left.id.localeCompare(right.id);
         });
-        if (refreshGeneration !== projectContextGeneration) {
-          return;
-        }
-
+        state.subagents = areDeeplyEqual(state.subagents, refreshedSubagents)
+          ? state.subagents
+          : refreshedSubagents;
         state.threads = filterSubagentThreadSummaries([
           ...stableVisibleThreads,
           ...threadsByRecentItem.slice(STABLE_VISIBLE_THREAD_COUNT),
-        ], new Set(getSubagentThreadIds(state.subagents)));
+        ], new Set(getSubagentThreadIds(refreshedSubagents)));
         void refreshVisibleThreadUnreadStates(state.threads);
         state.threadsError = errors.join(" ");
         state.hasLoadedThreads = true;

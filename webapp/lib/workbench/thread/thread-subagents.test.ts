@@ -14,6 +14,7 @@ import {
   getSubagentThreadIds,
   filterSubagentsByParentThreadId,
   filterSubagentThreadSummaries,
+  mergeWorkbenchSubagentSummaries,
   getThreadAgentAccentColor,
   getThreadAgentLabelParts,
   getThreadAgentTabLabel,
@@ -62,6 +63,30 @@ test("filters durable summaries to direct children without changing their order"
   assert.deepEqual(
     filterSubagentsByParentThreadId([earlierChild, siblingChild, laterChild], "parent"),
     [earlierChild, laterChild],
+  );
+});
+
+test("merges active-project root summaries by durable child identity", () => {
+  const earlier = { ...subagent, createdAt: 1, threadId: "earlier" };
+  const olderDuplicate = { ...subagent, createdAt: 2, threadId: "duplicate", title: "Older", updatedAt: 2 };
+  const newerDuplicate = { ...olderDuplicate, title: "Newer", updatedAt: 3 };
+  const later = { ...subagent, createdAt: 4, threadId: "later" };
+
+  const merged = mergeWorkbenchSubagentSummaries([
+    [olderDuplicate, later],
+    [earlier, newerDuplicate],
+  ]);
+
+  assert.deepEqual(merged.map(({ threadId }) => threadId), ["earlier", "duplicate", "later"]);
+  assert.equal(merged[1]?.title, "Newer");
+  assert.deepEqual(
+    filterSubagentThreadSummaries([
+      { id: "root" },
+      { id: "earlier" },
+      { id: "duplicate" },
+      { id: "later" },
+    ] as never, new Set(getSubagentThreadIds(merged))).map(({ id }) => id),
+    ["root"],
   );
 });
 

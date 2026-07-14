@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - listWorkbenchSubagents/readWorkbenchSubagentPage: fetch durable project metadata or one bounded parent page without joining thread hydration. Keywords: workbench, thread, subagent, metadata, fetch, pagination.
- * - getSubagentThreadIds/getSubagentSummary/getSubagentHarness/filterSubagentsByParentThreadId/filterSubagentThreadSummaries: derive and filter direct-child identity from durable summaries. Keywords: workbench, thread, subagent, metadata, harness, sidebar.
+ * - mergeWorkbenchSubagentSummaries/getSubagentThreadIds/getSubagentSummary/getSubagentHarness/filterSubagentsByParentThreadId/filterSubagentThreadSummaries: merge, derive, and filter direct-child identity from durable summaries. Keywords: workbench, thread, subagent, metadata, harness, sidebar.
  * - sortWorkbenchSubagents/getSubagentTabLayout/getNextSubagentHydrationBatch/getSubagentPollingBatch: derive activity order, stale folding, and bounded background work. Keywords: subagent, tabs, activity, hydration, polling, batch.
  * - getThreadAgentAccentColor/getThreadAgentLabelParts/getThreadAgentTabLabel: stable child colors and metadata-first labels. Keywords: subagent, color, label, tabs.
  */
@@ -138,6 +138,24 @@ export function getSubagentPollingBatch(threadIds: readonly string[], cursor: nu
 
 export function getSubagentThreadIds(subagents: readonly WorkbenchSubagentSummary[]) {
   return subagents.map((record) => record.threadId);
+}
+
+export function mergeWorkbenchSubagentSummaries(
+  summaryGroups: readonly (readonly WorkbenchSubagentSummary[])[],
+) {
+  const summariesByThreadId = new Map<string, WorkbenchSubagentSummary>();
+  for (const summaries of summaryGroups) {
+    for (const summary of summaries) {
+      const previous = summariesByThreadId.get(summary.threadId);
+      if (!previous || summary.updatedAt > previous.updatedAt) {
+        summariesByThreadId.set(summary.threadId, summary);
+      }
+    }
+  }
+  return Array.from(summariesByThreadId.values()).sort((left, right) => (
+    left.createdAt - right.createdAt
+    || left.threadId.localeCompare(right.threadId)
+  ));
 }
 
 export function getSubagentSummary(subagents: readonly WorkbenchSubagentSummary[], threadId: string) {
