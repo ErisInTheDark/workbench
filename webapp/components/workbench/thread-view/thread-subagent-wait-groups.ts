@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ThreadSubagentWaitRenderEntry/ThreadSubagentWaitRenderGroup: describe parsed wait attempts and their UI-only folded groups. Keywords: thread, subagent, wait, timeout, render.
- * - groupThreadSubagentWaitRenderEntries: fold adjacent timed-out attempts into an identical active or successful wait anchor. Keywords: subagent, wait, merge, targets.
+ * - groupThreadSubagentWaitRenderEntries: fold adjacent same-target timed-out attempts into their final timeout, active, or successful wait anchor. Keywords: subagent, wait, merge, targets.
  * - getThreadSubagentWaitTiming: derive frozen or live cumulative timing from command durations and the canonical item timeline. Keywords: subagent, wait, cumulative, duration, timeline.
  */
 
@@ -56,7 +56,15 @@ export function groupThreadSubagentWaitRenderEntries<Item>(
   let pendingTimedOutEntries: ThreadSubagentWaitRenderEntry<Item>[] = [];
 
   const flushPendingTimedOutEntries = () => {
-    groups.push(...pendingTimedOutEntries.map(singleEntryGroup));
+    const anchor = pendingTimedOutEntries[pendingTimedOutEntries.length - 1];
+    if (!anchor) {
+      return;
+    }
+
+    groups.push({
+      anchor,
+      entries: pendingTimedOutEntries,
+    });
     pendingTimedOutEntries = [];
   };
 

@@ -67,7 +67,36 @@ test("folds timeouts into a successful wait and preserves the successful anchor"
   assert.equal(groups[0].anchor.item.id, "success");
 });
 
-test("does not fold different target multisets, unresolved timeouts, failures, or declines", () => {
+test("folds a terminal run of identical timeouts into its final timeout", () => {
+  const [group] = groupThreadSubagentWaitRenderEntries([
+    waitEntry("timeout-1", "timedOut", ["Momo", "Yuzu"], 61_000),
+    waitEntry("timeout-2", "timedOut", ["Yuzu", "Momo"], 61_000),
+    waitEntry("timeout-3", "timedOut", ["Momo", "Yuzu"], 61_000),
+  ]);
+
+  assert.equal(group.anchor.item.id, "timeout-3");
+  assert.deepEqual(group.entries.map((entry) => entry.item.id), ["timeout-1", "timeout-2", "timeout-3"]);
+  assert.deepEqual(getThreadSubagentWaitTiming(group, []), {
+    activeStartedAtMs: null,
+    durationMs: 183_000,
+  });
+});
+
+test("keeps differently targeted timeout runs in separate groups", () => {
+  const groups = groupThreadSubagentWaitRenderEntries([
+    waitEntry("momo-1", "timedOut", ["Momo"]),
+    waitEntry("momo-2", "timedOut", ["Momo"]),
+    waitEntry("yuzu-1", "timedOut", ["Yuzu"]),
+    waitEntry("yuzu-2", "timedOut", ["Yuzu"]),
+  ]);
+
+  assert.deepEqual(groups.map((group) => group.entries.map((entry) => entry.item.id)), [
+    ["momo-1", "momo-2"],
+    ["yuzu-1", "yuzu-2"],
+  ]);
+});
+
+test("keeps mismatched targets, failures, and declines in separate groups", () => {
   const groups = groupThreadSubagentWaitRenderEntries([
     waitEntry("timeout-a", "timedOut"),
     waitEntry("active-other", "inProgress", ["Momo"]),
