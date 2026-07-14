@@ -291,15 +291,31 @@ test("maps composable reload switches to one deduplicated fixed request", async 
   ])).kind, "error");
 });
 
-test("expands the hidden reload all alias without advertising it in agent help", async () => {
+test("expands safe reload all without server replacement and keeps hard restart hidden", async () => {
   const parsed = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--all"]);
   assert.equal(parsed.kind, "request");
   assert.deepEqual(parsed.request.body, {
-    scopes: ["orchestrator-logic", "browse-controller", "codex-bridge", "opencode-bridge", "opencode-server", "next-dev"],
+    scopes: ["orchestrator-logic", "browse-controller", "codex-bridge", "opencode-bridge", "next-dev"],
   });
+  const explicitServer = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--all", "--opencode-server"]);
+  assert.equal(explicitServer.kind, "request");
+  if (explicitServer.kind === "request") {
+    assert.deepEqual(explicitServer.request.body, {
+      scopes: ["orchestrator-logic", "browse-controller", "codex-bridge", "opencode-bridge", "next-dev", "opencode-server"],
+    });
+  }
+  const hard = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--hard"]);
+  assert.equal(hard.kind, "request");
+  if (hard.kind === "request") assert.deepEqual(hard.request.body, { scopes: ["orchestrator-server"] });
+  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--hard", "--all"])).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--hard", "--codex-bridge"])).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--orchestrator-server"])).kind, "error");
   const help = await parseWorkbenchAgentCliCommand(["--help"]);
   assert.equal(help.kind, "help");
-  if (help.kind === "help") assert.doesNotMatch(help.help, /--all/u);
+  if (help.kind === "help") {
+    assert.match(help.help, /--all/u);
+    assert.doesNotMatch(help.help, /--hard|--orchestrator-server/u);
+  }
 });
 
 test("runs the native shell transport and preserves the server response", async () => {

@@ -26,6 +26,7 @@ import {
   isAgentScreenshotSteerUserMessage,
 } from "../../../lib/workbench/thread/thread-steer-markers";
 import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
+import { isWorkbenchThreadRecoveryUserMessage } from "../../../lib/workbench/thread/thread-recovery-message";
 import {
   getThreadCommandBlockDisplay,
   getThreadCommandDisplay,
@@ -297,6 +298,9 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
   };
 
   for (const item of items) {
+    if (item.type === "userMessage" && isWorkbenchThreadRecoveryUserMessage(item)) {
+      continue;
+    }
     const narrativeSnapshotDedupeKey = getNarrativeSnapshotDedupeKey(item);
     if (
       hasSeenContextCompaction

@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - OpenCodeBridge: translate Workbench bridge requests into typed OpenCode SDK server/session calls and emit Codex-shaped notifications back out. Keywords: opencode, sdk, bridge, session, events.
+ * - OpenCodeBridge: translate Workbench bridge requests into typed OpenCode SDK server/session calls, recovery, and notifications. Keywords: opencode, sdk, bridge, session, recovery, events.
+ * - getOpenCodeRecoveryDisposition/createOpenCodeRecoveryStartRequest: decide and construct deterministic interrupted-session continuation. Keywords: opencode, recovery, dedupe.
  */
 import fs from "node:fs";
 
@@ -21,12 +22,19 @@ import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { ThreadStatus } from "../lib/codex/generated/app-server/v2/ThreadStatus";
 import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
+import { getCurrentTurn } from "../lib/codex/thread-state";
 import type { WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "../lib/types";
 import { isWorkbenchPauseControlRequest, WORKBENCH_PAUSE_CONTROL_KIND } from "../lib/workbench/thread/thread-pause-control";
+import {
+  createWorkbenchThreadRecoveryInput,
+  isWorkbenchThreadRecoveryInput,
+  isWorkbenchThreadRecoveryUserMessage,
+} from "../lib/workbench/thread/thread-recovery-message";
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { OpenCodeLiveThreadState } from "./opencode-live-thread-state";
 import { log, logError } from "./process-helpers";
 import type { OrchestratorReloadableModules } from "./reloadable-modules";
+import type { WorkbenchTurnRecoveryHandoffCandidate } from "./WorkbenchTurnRecoveryHandoffStore";
 import { readWorkbenchPromptContext } from "./workbench-prompt-context";
 
 type OpenCodeBridgeOptions = {
@@ -340,7 +348,7 @@ function openCodeQuestionDisplayRequest(question: PendingQuestion) {
   return question.v2 ?? question.legacy;
 }
 
-function createSyntheticTurn(threadId: string, input: UserInput[]): Turn {
+function createSyntheticTurn(threadId: string, input: UserInput[], clientUserMessageId: string | null): Turn {
   const now = Math.floor(Date.now() / 1000);
   return {
     completedAt: null,
@@ -349,7 +357,7 @@ function createSyntheticTurn(threadId: string, input: UserInput[]): Turn {
     id: `opencode:turn:${threadId}:pending:${now}`,
     items: [{
       content: input,
-      id: `opencode:user:pending:${now}`,
+      id: clientUserMessageId ? `opencode:user:${clientUserMessageId}` : `opencode:user:pending:${now}`,
       clientId: null,
       type: "userMessage",
     }],
@@ -357,6 +365,40 @@ function createSyntheticTurn(threadId: string, input: UserInput[]): Turn {
     startedAt: now,
     status: "inProgress",
   };
+}
+
+export type OpenCodeRecoveryDisposition = "busy" | "completed" | "prompt";
+
+export function getOpenCodeRecoveryDisposition(
+  thread: Thread,
+  candidate: WorkbenchTurnRecoveryHandoffCandidate,
+): OpenCodeRecoveryDisposition {
+  const hasRecoveryMarker = thread.turns.some((turn) => turn.items.some((item) => (
+    item.type === "userMessage"
+    && item.id === `opencode:user:${candidate.recoveryId}`
+    && isWorkbenchThreadRecoveryUserMessage(item)
+  )));
+  if (hasRecoveryMarker) return "completed";
+  const originalTurn = candidate.turnId
+    ? thread.turns.find((turn) => turn.id === candidate.turnId) ?? null
+    : null;
+  if (originalTurn?.status === "completed") return "completed";
+  const currentTurn = getCurrentTurn(thread);
+  if (currentTurn?.status === "completed" && currentTurn.startedAt * 1000 >= candidate.startedAt - 2_000) return "completed";
+  if (thread.status.type === "active" || currentTurn?.status === "inProgress") return "busy";
+  return "prompt";
+}
+
+export function createOpenCodeRecoveryStartRequest(candidate: WorkbenchTurnRecoveryHandoffCandidate): JsonRpcRequest {
+  const request = structuredClone(candidate.request);
+  request.id = `recovery-start:${candidate.recoveryId}`;
+  request.params = {
+    ...asRecord(request.params),
+    clientUserMessageId: candidate.recoveryId,
+    input: createWorkbenchThreadRecoveryInput(),
+    threadId: candidate.threadId,
+  };
+  return request;
 }
 
 export class OpenCodeBridge {
@@ -525,6 +567,15 @@ export class OpenCodeBridge {
         error instanceof Error ? error.message : "OpenCode bridge request failed.",
       );
     }
+  }
+
+  async recoverInterruptedTurn(candidate: WorkbenchTurnRecoveryHandoffCandidate) {
+    const directory = requestDirectory(candidate.request.params, this.projectRoot);
+    const snapshot = await this.readThread(candidate.threadId, directory);
+    const disposition = getOpenCodeRecoveryDisposition(snapshot.thread, candidate);
+    if (disposition !== "prompt") return disposition;
+    await this.startTurn(createOpenCodeRecoveryStartRequest(candidate));
+    return "recovered" as const;
   }
 
   private getManagedServerCooldownError() {
@@ -1014,6 +1065,7 @@ export class OpenCodeBridge {
     }
 
     const directory = requestDirectory(params, this.projectRoot);
+    const clientUserMessageId = asString(asRecord(params)?.clientUserMessageId);
     const prompt = this.getReloadableModules().opencodeThreadState.formatPromptFromInput(input);
     if (!prompt) {
       throw new Error("OpenCode prompt cannot be empty.");
@@ -1025,7 +1077,7 @@ export class OpenCodeBridge {
     const system = await this.buildTurnSystemPrompt(message, threadId, params);
     await this.updateDefaultThreadTitleFromPrompt(client, threadId, directory, prompt);
     this.rememberSessionDirectory(threadId, directory);
-    const turn = createSyntheticTurn(threadId, input);
+    const turn = createSyntheticTurn(threadId, input, clientUserMessageId);
     this.onNotification({
       method: "turn/started",
       params: {
@@ -1038,8 +1090,13 @@ export class OpenCodeBridge {
       await client.session.promptAsync({
       ...(agent ? { agent } : {}),
       directory,
+      ...(clientUserMessageId ? { messageID: clientUserMessageId } : {}),
       ...(model ? { model } : {}),
-      parts: [{ text: prompt, type: "text" }],
+      parts: [{
+        text: prompt,
+        type: "text",
+        ...(isWorkbenchThreadRecoveryInput(input) ? { synthetic: true } : {}),
+      }],
       sessionID: threadId,
       ...(system ? { system } : {}),
       });

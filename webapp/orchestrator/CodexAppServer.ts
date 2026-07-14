@@ -1,34 +1,42 @@
 /*
  * Exports:
- * - CodexAppServer: stable owner for the Codex app-server stdio process. Keywords: codex, app-server, stdio, lifecycle.
+ * - CodexAppServerOptions: inject app-server callbacks and testable child lifecycle boundaries. Keywords: codex, app-server, options.
+ * - default CodexAppServer: stable owner for the Codex app-server stdio process. Keywords: codex, app-server, stdio, lifecycle.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 
 import {
-    createSpawnOptions,
-    getSpawnDescriptor,
-    killProcessTree,
-    log,
-    logError,
-    pipeChildStream,
+  createSpawnOptions,
+  getSpawnDescriptor,
+  killProcessTree,
+  log,
+  logError,
+  pipeChildStream,
 } from "./process-helpers";
 
 export type CodexAppServerOptions = {
+  createChild?: () => ChildProcess;
   onFatalExit: (reason: string) => void;
   onMessage: (message: unknown) => void;
   projectRoot: string;
+  terminateChild?: (child: ChildProcess) => void;
 };
 
 export default class CodexAppServer {
   private codexProcess: ChildProcess | null = null;
+  private generation = 0;
+  private readonly createChild: () => ChildProcess;
   private readonly onFatalExit: CodexAppServerOptions["onFatalExit"];
   private readonly onMessage: CodexAppServerOptions["onMessage"];
   private readonly projectRoot: string;
+  private readonly terminateChild: (child: ChildProcess) => void;
 
-  constructor({ onFatalExit, onMessage, projectRoot }: CodexAppServerOptions) {
+  constructor({ createChild, onFatalExit, onMessage, projectRoot, terminateChild }: CodexAppServerOptions) {
+    this.createChild = createChild ?? (() => this.createStdioChild());
     this.onFatalExit = onFatalExit;
     this.onMessage = onMessage;
     this.projectRoot = projectRoot;
+    this.terminateChild = terminateChild ?? ((child) => killProcessTree(child.pid));
   }
 
   send(message: unknown) {
@@ -41,9 +49,13 @@ export default class CodexAppServer {
   }
 
   stop() {
-    if (this.codexProcess && !this.codexProcess.killed) {
-      killProcessTree(this.codexProcess.pid);
+    const retiringProcess = this.codexProcess;
+    if (retiringProcess) {
       this.codexProcess = null;
+      this.generation += 1;
+      if (!retiringProcess.killed) {
+        this.terminateChild(retiringProcess);
+      }
     }
   }
 
@@ -68,26 +80,37 @@ export default class CodexAppServer {
       return this.codexProcess;
     }
 
-    this.codexProcess = this.createStdioChild();
-    this.bindStdout(this.codexProcess);
-    pipeChildStream("codex-stdio", this.codexProcess.stderr, (chunk) => process.stderr.write(chunk));
+    const generation = this.generation + 1;
+    const codexProcess = this.createChild();
+    this.generation = generation;
+    this.codexProcess = codexProcess;
+    this.bindStdout(codexProcess, generation);
+    pipeChildStream("codex-stdio", codexProcess.stderr, (chunk) => process.stderr.write(chunk));
 
-    this.codexProcess.once("error", (error) => {
+    codexProcess.once("error", (error) => {
+      if (!this.owns(codexProcess, generation)) return;
+      this.codexProcess = null;
+      this.generation += 1;
       logError("codex-stdio", `failed to start: ${error instanceof Error ? error.message : String(error)}`);
       this.onFatalExit("Codex app-server failed to start.");
     });
 
-    this.codexProcess.once("exit", (code, signal) => {
+    codexProcess.once("exit", (code, signal) => {
       log("codex-stdio", `exited (code=${code ?? "null"}, signal=${signal ?? "null"})`);
+      if (!this.owns(codexProcess, generation)) return;
       this.codexProcess = null;
       this.onFatalExit("Codex app-server exited.");
     });
 
     log("codex-bridge", "started shared stdio app-server");
-    return this.codexProcess;
+    return codexProcess;
   }
 
-  private bindStdout(codexProcess: ChildProcess) {
+  private owns(codexProcess: ChildProcess, generation: number) {
+    return this.codexProcess === codexProcess && this.generation === generation;
+  }
+
+  private bindStdout(codexProcess: ChildProcess, generation: number) {
     let bufferedOutput = "";
 
     codexProcess.stdout?.on("data", (chunk: Buffer) => {
@@ -96,6 +119,7 @@ export default class CodexAppServer {
       bufferedOutput = lines.pop() ?? "";
 
       for (const line of lines) {
+        if (!this.owns(codexProcess, generation)) return;
         const trimmedLine = line.trim();
         if (!trimmedLine) {
           continue;

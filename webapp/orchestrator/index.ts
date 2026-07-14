@@ -21,7 +21,15 @@ import { WebSocketServer } from "next/dist/compiled/ws";
 import { createInitializeCapabilities, createInitializeRequest } from "../lib/codex/protocol";
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
-import { getCurrentInProgressTurn, hasThreadActiveFlag } from "../lib/codex/thread-state";
+import { getCurrentInProgressTurn, getCurrentTurn, hasThreadActiveFlag } from "../lib/codex/thread-state";
+import {
+  normalizeOrchestratorReloadScopes,
+  validateOrchestratorReloadScopeCombination,
+} from "../lib/workbench/orchestrator-reload";
+import {
+  createWorkbenchThreadRecoveryInput,
+  isWorkbenchThreadRecoveryUserMessage,
+} from "../lib/workbench/thread/thread-recovery-message";
 import type {
   OrchestratorReloadRequest,
   OrchestratorReloadResponse,
@@ -31,10 +39,13 @@ import type {
 } from "../lib/types";
 import type { BridgeClient, HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import CodexAppServer from "./CodexAppServer";
+import CodexBridgeTransitionController from "./CodexBridgeTransitionController";
 import CodexRecoverySupervisor from "./CodexRecoverySupervisor";
 import CodexStdioBridge from "./CodexStdioBridge";
 import { CopilotBridge } from "./copilot-bridge";
 import { OpenCodeBridge } from "./opencode-bridge";
+import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
+import WorkbenchTurnRecoveryHandoffStore, { type WorkbenchTurnRecoveryHandoffCandidate } from "./WorkbenchTurnRecoveryHandoffStore";
 import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
 import {
     createSpawnOptions,
@@ -73,15 +84,10 @@ const ORCHESTRATOR_TREE_PATH = "/orchestrator/tree";
 const CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS = 5000;
 const CODEX_RECOVERY_INITIAL_RETRY_DELAY_MS = 1000;
 const CODEX_RECOVERY_MAX_RETRY_DELAY_MS = 30000;
+const CODEX_HEALTH_INTERVAL_MS = 10000;
+const CODEX_HEALTH_REQUEST_TIMEOUT_MS = 5000;
+const CODEX_HEALTH_FAILURE_THRESHOLD = 3;
 const BROWSE_CONTROLLER_RELOAD_DRAIN_TIMEOUT_MS = 5000;
-const ORCHESTRATOR_RELOAD_SCOPE_VALUES = new Set<OrchestratorReloadScope>([
-  "browse-controller",
-  "codex-bridge",
-  "next-dev",
-  "opencode-bridge",
-  "opencode-server",
-  "orchestrator-logic",
-]);
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
 
 function readNonEmptyEnv(value: string | undefined) {
@@ -149,12 +155,18 @@ let browseRuntime: import("../lib/workbench/browse/WorkbenchBrowseRuntime").defa
 let nextDevHealthSupervisor = createNextDevHealthSupervisor();
 let projectCatalogController = createProjectCatalogController();
 let projectSnapshotController = createProjectSnapshotController();
-let upstreamMessageQueue: Promise<void> = Promise.resolve();
-let codexBridgeReloadPromise: Promise<void> | null = null;
 let opencodeBridgeReloadPromise: Promise<void> | null = null;
 let browseControllerReloadPromise: Promise<void> | null = null;
 let codexAcceptsUpstreamMessages = true;
 let codexRecoverySupervisor: CodexRecoverySupervisor;
+let codexHealthMonitor: import("./CodexHealthMonitor").default;
+let controlledRestartPending = false;
+const codexBridgeTransitionController = new CodexBridgeTransitionController();
+const turnRecoveryHandoffStore = new WorkbenchTurnRecoveryHandoffStore(PROJECT_ROOT);
+const turnRecoveryController = new WorkbenchTurnRecoveryController(
+  turnRecoveryHandoffStore,
+  (message) => log("turn-recovery", message),
+);
 
 const copilotBridge = new CopilotBridge({
   getReloadableModules: () => reloadableModules,
@@ -183,13 +195,18 @@ const codexAppServer = new CodexAppServer({
       return;
     }
 
-    upstreamMessageQueue = upstreamMessageQueue
-      .catch(() => undefined)
-      .then(() => waitForCodexBridgeReload())
-      .then(() => codexBridge.handleUpstreamMessage(message))
-      .catch((error) => {
+    const upstreamNotification = asRecord(message);
+    if (typeof upstreamNotification?.method === "string" && !("id" in upstreamNotification)) {
+      turnRecoveryController.observeNotification("codex", message as JsonRpcNotification);
+    }
+
+    void codexBridgeTransitionController.enqueueUpstreamMessage(
+      codexBridgeTransitionController.currentGeneration,
+      () => codexBridge.handleUpstreamMessage(message),
+      (error) => {
         logError("codex-bridge", `failed to handle upstream message: ${error instanceof Error ? error.message : String(error)}`);
-      });
+      },
+    );
   },
   projectRoot: WEBAPP_ROOT,
 });
@@ -197,6 +214,7 @@ const codexAppServer = new CodexAppServer({
 codexBridge = createCodexBridge();
 opencodeBridge = createOpenCodeBridge();
 codexRecoverySupervisor = createCodexRecoverySupervisor();
+codexHealthMonitor = createCodexHealthMonitor();
 
 const specs: ProcessSpec[] = [
   {
@@ -214,6 +232,9 @@ function sendJsonToClient(client: BridgeClient, message: unknown) {
 }
 
 function broadcastToClients(harness: HarnessKind, message: JsonRpcNotification) {
+  if (harness === "codex" || harness === "opencode") {
+    turnRecoveryController.observeNotification(harness, message);
+  }
   for (const client of bridgeConnections) {
     sendJsonToClient(client, {
       ...message,
@@ -286,25 +307,13 @@ function readRequestBody(request: http.IncomingMessage) {
   });
 }
 
-function normalizeReloadScopes(value: unknown): OrchestratorReloadScope[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return Array.from(new Set(
-    value.filter((scope): scope is OrchestratorReloadScope => (
-      typeof scope === "string" && ORCHESTRATOR_RELOAD_SCOPE_VALUES.has(scope as OrchestratorReloadScope)
-    )),
-  ));
-}
-
 function createReloadResponse(scopes: OrchestratorReloadScope[]): OrchestratorReloadResponse {
   return {
-    appliedScopes: scopes.filter((scope) => scope !== "next-dev"),
+    appliedScopes: scopes.filter((scope) => scope !== "next-dev" && scope !== "orchestrator-server"),
     completedAt: null,
     error: null,
     ok: true,
-    queuedScopes: scopes.filter((scope) => scope === "next-dev"),
+    queuedScopes: scopes.filter((scope) => scope === "next-dev" || scope === "orchestrator-server"),
     requestedScopes: scopes,
     startedAt: Date.now(),
     state: "running",
@@ -327,6 +336,7 @@ function finalizeReloadResponse(
 
 async function stopAllChildren() {
   codexRecoverySupervisor.dispose();
+  codexHealthMonitor.dispose();
   browseSessionCleanupSupervisor.dispose();
   nextDevHealthSupervisor.dispose();
   projectCatalogController.dispose();
@@ -380,6 +390,7 @@ function restartChild(spec: ProcessSpec) {
 
 function reloadOrchestratorLogic() {
   browseSessionCleanupSupervisor.dispose();
+  codexHealthMonitor.dispose();
   nextDevHealthSupervisor.dispose();
   projectCatalogController.dispose();
   projectSnapshotController.dispose();
@@ -388,10 +399,14 @@ function reloadOrchestratorLogic() {
   bridgeRequestController = createBridgeRequestController();
   browseSessionCleanupSupervisor = createBrowseSessionCleanupSupervisor();
   nextDevHealthSupervisor = createNextDevHealthSupervisor();
+  codexHealthMonitor = createCodexHealthMonitor();
   projectCatalogController = createProjectCatalogController();
   projectSnapshotController = createProjectSnapshotController();
   browseSessionCleanupSupervisor.start();
   nextDevHealthSupervisor.start();
+  if (codexReadyPromise) {
+    void codexReadyPromise.then(() => codexHealthMonitor.start({ armed: true })).catch(() => undefined);
+  }
   log("orchestrator", "reloaded orchestrator helper modules");
 }
 
@@ -538,6 +553,25 @@ function createCodexRecoverySupervisor() {
   });
 }
 
+function createCodexHealthMonitor() {
+  const Monitor = reloadableModules.codexHealthMonitor.default;
+  return new Monitor({
+    failureThreshold: CODEX_HEALTH_FAILURE_THRESHOLD,
+    intervalMs: CODEX_HEALTH_INTERVAL_MS,
+    isProbeAllowed: () => codexAcceptsUpstreamMessages
+      && !controlledRestartPending
+      && !codexBridgeTransitionController.isTransitioning,
+    isShuttingDown: () => shuttingDown,
+    log: (message) => log("codex-health", message),
+    logError: (message) => logError("codex-health", message),
+    probe: async () => {
+      const response = await requestLiveCodexWithDeadline({ id: "codex-health", method: "account/read", params: {} });
+      if (response.error) throw new Error(response.error.message);
+    },
+    requestRecovery: (reason) => codexRecoverySupervisor.requestRecovery(reason),
+  });
+}
+
 function createProjectSnapshotController() {
   const Controller = reloadableModules.projectSnapshotController.default;
   return new Controller();
@@ -568,6 +602,8 @@ function createAgentCommandController() {
 }
 
 async function requestLiveHarness(harness: HarnessKind, request: JsonRpcRequest): Promise<JsonRpcResponse> {
+  if (controlledRestartPending) throw new Error("The orchestrator is restarting; new harness work is temporarily unavailable.");
+  if (harness === "codex" || harness === "opencode") turnRecoveryController.observeRequest(harness, request);
   if (harness === "copilot") return await copilotBridge.handleRequest(request);
   if (harness === "opencode") {
     return await runAfterOpenCodeBridgeReload(() => opencodeBridge.handleRequest(request));
@@ -575,6 +611,15 @@ async function requestLiveHarness(harness: HarnessKind, request: JsonRpcRequest)
   return await runAfterCodexBridgeReload(async () => {
     await ensureCodexReady();
     return await codexBridge.handleServerRequest(request);
+  });
+}
+
+async function requestLiveCodexWithDeadline(request: JsonRpcRequest, timeoutMs = CODEX_HEALTH_REQUEST_TIMEOUT_MS) {
+  if (controlledRestartPending) throw new Error("The orchestrator is restarting; new harness work is temporarily unavailable.");
+  turnRecoveryController.observeRequest("codex", request);
+  return await runAfterCodexBridgeReload(async () => {
+    await ensureCodexReady();
+    return await codexBridge.handleServerRequest(request, { timeoutMs });
   });
 }
 
@@ -595,9 +640,7 @@ async function ensureWorkbenchPromptFiles() {
 }
 
 async function waitForCodexBridgeReload() {
-  while (codexBridgeReloadPromise) {
-    await codexBridgeReloadPromise.catch(() => undefined);
-  }
+  await codexBridgeTransitionController.waitForTransition();
 }
 
 async function runAfterCodexBridgeReload<TValue>(task: () => TValue | Promise<TValue>) {
@@ -769,35 +812,50 @@ function createOpenCodeBridge(initialState?: Awaited<ReturnType<OpenCodeBridge["
 
 async function reloadCodexBridge() {
   if (codexReadyPromise) {
-    await codexReadyPromise.catch(() => undefined);
+    try {
+      await withTimeout(
+        codexReadyPromise.catch(() => undefined),
+        CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS,
+        "Codex bridge reload timed out waiting for app-server readiness.",
+      );
+    } catch (error) {
+      codexRecoverySupervisor.requestRecovery("Codex bridge reload could not reach the app-server readiness boundary.");
+      throw error;
+    }
   }
   codexReadyPromise = null;
 
-  const upstreamQueueBeforeReload = upstreamMessageQueue;
-  await runCodexBridgeTransition(async () => {
-    await withTimeout(
-      upstreamQueueBeforeReload.catch(() => undefined),
-      CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS,
-      "Codex bridge reload timed out waiting for the upstream message queue to drain; retry after current bridge activity settles.",
-    );
-    const state = await codexBridge.detachForReload({
-      idleTimeoutMs: CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS,
-    });
-    const { default: ReloadedCodexStdioBridge } = reloadCodexBridgeModule();
-    codexBridge = new ReloadedCodexStdioBridge({
-      appServer: codexAppServer,
-      bridgeUrl: CODEX_BRIDGE_URL,
-      initialState: state,
-      onNotification: (notification) => {
-        broadcastToClients("codex", notification);
-      },
-      sendToClient: (client, message) => {
-        sendJsonToClient(client, message);
-      },
-      storageRoot: PROJECT_ROOT,
-    });
-    log("codex-bridge", "reloaded bridge code without restarting app-server");
-  });
+  try {
+    await codexBridgeTransitionController.runTransition(async ({ messagesBeforeTransition }) => {
+      await withTimeout(
+        messagesBeforeTransition,
+        CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS,
+        "Codex bridge reload timed out waiting for the upstream message queue to drain; retry after current bridge activity settles.",
+      );
+      const state = await codexBridge.detachForReload({
+        idleTimeoutMs: CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS,
+      });
+      const { default: ReloadedCodexStdioBridge } = reloadCodexBridgeModule();
+      codexBridge = new ReloadedCodexStdioBridge({
+        appServer: codexAppServer,
+        bridgeUrl: CODEX_BRIDGE_URL,
+        initialState: state,
+        onNotification: (notification) => {
+          broadcastToClients("codex", notification);
+        },
+        sendToClient: (client, message) => {
+          sendJsonToClient(client, message);
+        },
+        storageRoot: PROJECT_ROOT,
+      });
+      log("codex-bridge", "reloaded bridge code without restarting app-server");
+    }, { drain: false });
+  } catch (error) {
+    codexAcceptsUpstreamMessages = false;
+    codexBridge.beginStopping();
+    codexRecoverySupervisor.requestRecovery("Codex bridge reload transition failed.");
+    throw error;
+  }
 
   codexAcceptsUpstreamMessages = true;
   try {
@@ -810,36 +868,24 @@ async function reloadCodexBridge() {
   }
 }
 
-async function runCodexBridgeTransition(operation: () => Promise<void>) {
-  while (codexBridgeReloadPromise) {
-    await codexBridgeReloadPromise.catch(() => undefined);
+function closeBridgeClients(code: number, reason: string) {
+  for (const client of bridgeConnections) {
+    client.close(code, reason);
   }
-
-  const transitionPromise = operation();
-  codexBridgeReloadPromise = transitionPromise;
-  try {
-    await transitionPromise;
-  } finally {
-    if (codexBridgeReloadPromise === transitionPromise) {
-      codexBridgeReloadPromise = null;
-    }
-  }
+  bridgeConnections.clear();
 }
 
 async function recoverCodexBridge(reason: string) {
-  const pendingUpstreamMessages = upstreamMessageQueue;
-  await withTimeout(
-    pendingUpstreamMessages.catch(() => undefined),
-    CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS,
-    "Codex recovery timed out waiting for the upstream message queue to drain.",
-  );
-
-  await runCodexBridgeTransition(async () => {
+  const candidates = turnRecoveryController.capture(["codex"]);
+  codexAcceptsUpstreamMessages = false;
+  closeBridgeClients(1012, "Codex app-server is recovering; reconnect shortly.");
+  await codexBridgeTransitionController.runTransition(async () => {
     await withTimeout(
-      codexBridge.stopAfterFlushingTranscripts(),
+      codexBridge.disposeImmediately(),
       CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS,
-      "Codex recovery timed out flushing the failed bridge.",
+      "Codex recovery timed out disposing the failed bridge.",
     );
+    codexAppServer.stop();
     const { default: ReloadedCodexStdioBridge } = reloadCodexBridgeModule();
     codexBridge = new ReloadedCodexStdioBridge({
       appServer: codexAppServer,
@@ -853,17 +899,93 @@ async function recoverCodexBridge(reason: string) {
       storageRoot: PROJECT_ROOT,
     });
     codexReadyPromise = null;
-  });
+  }, { drain: false, invalidateGeneration: true });
 
   codexAcceptsUpstreamMessages = true;
   try {
-    await ensureCodexReady();
+    await withTimeout(
+      ensureCodexReady(),
+      CODEX_HEALTH_REQUEST_TIMEOUT_MS,
+      "Codex app-server recovery readiness timed out.",
+    );
   } catch (error) {
     codexAcceptsUpstreamMessages = false;
     codexBridge.beginStopping();
     throw error;
   }
+  await turnRecoveryController.recover(candidates, recoverTurnCandidate);
+  await recoverPersistedHandoff();
   log("codex-bridge", `restored bridge and app-server readiness after: ${reason}`);
+}
+
+function readThreadResult(response: JsonRpcResponse) {
+  if (response.error) throw new Error(response.error.message);
+  const result = asRecord(response.result);
+  const thread = result?.thread;
+  return thread && typeof thread === "object" ? thread as ThreadReadResponse["thread"] : null;
+}
+
+function containsRecoveryMarker(thread: ThreadReadResponse["thread"], recoveryId: string) {
+  return thread.turns.some((turn) => turn.items.some((item) => (
+    item.type === "userMessage"
+    && (item.clientId === recoveryId || item.id === `opencode:user:${recoveryId}`)
+    && isWorkbenchThreadRecoveryUserMessage(item)
+  )));
+}
+
+async function readRecoveryThread(candidate: WorkbenchTurnRecoveryHandoffCandidate) {
+  const response = await requestLiveCodexWithDeadline({
+    id: `recovery-read:${candidate.recoveryId}`,
+    method: "thread/read",
+    params: {
+      includeTurns: true,
+      ...asRecord(candidate.request.params),
+      threadId: candidate.threadId,
+    },
+    workbenchThreadHydration: { mode: "latest" },
+  });
+  const thread = readThreadResult(response);
+  if (!thread) throw new Error(`Recovery could not read ${candidate.harness} thread ${candidate.threadId}.`);
+  return thread;
+}
+
+async function recoverTurnCandidate(candidate: WorkbenchTurnRecoveryHandoffCandidate) {
+  if (candidate.harness === "opencode") {
+    return await runAfterOpenCodeBridgeReload(() => opencodeBridge.recoverInterruptedTurn(candidate));
+  }
+  let thread = await readRecoveryThread(candidate);
+  if (containsRecoveryMarker(thread, candidate.recoveryId)) return "completed" as const;
+  const originalTurn = candidate.turnId
+    ? thread.turns.find((turn) => turn.id === candidate.turnId) ?? null
+    : null;
+  if (originalTurn?.status === "completed") return "completed" as const;
+
+  const currentTurn = getCurrentTurn(thread);
+  if (currentTurn?.status === "inProgress") {
+    const interruptResponse = await requestLiveCodexWithDeadline({
+      id: `recovery-interrupt:${candidate.recoveryId}`,
+      method: "turn/interrupt",
+      params: { threadId: candidate.threadId, turnId: currentTurn.id },
+    });
+    if (interruptResponse.error) throw new Error(interruptResponse.error.message);
+    thread = await readRecoveryThread(candidate);
+    if (getCurrentTurn(thread)?.status === "inProgress") {
+      throw new Error(`Interrupted Codex turn ${currentTurn.id} did not reach a terminal state.`);
+    }
+  }
+  if (containsRecoveryMarker(thread, candidate.recoveryId)) return "completed" as const;
+
+  const request = structuredClone(candidate.request);
+  request.id = `recovery-start:${candidate.recoveryId}`;
+  request.params = {
+    ...asRecord(request.params),
+    clientUserMessageId: candidate.recoveryId,
+    input: createWorkbenchThreadRecoveryInput(),
+    threadId: candidate.threadId,
+  };
+  const response = await requestLiveCodexWithDeadline(request);
+  if (response.error) throw new Error(response.error.message);
+  return "recovered" as const;
 }
 
 async function waitForOpenCodeBridgeReload() {
@@ -965,6 +1087,57 @@ function queueReload(scopes: OrchestratorReloadScope[]) {
   });
 }
 
+async function recoverPersistedHandoff() {
+  const handoff = await turnRecoveryHandoffStore.load();
+  if (!handoff) return;
+  turnRecoveryController.loadCandidates(handoff.candidates);
+  await turnRecoveryController.recover(handoff.candidates, recoverTurnCandidate, handoff);
+  log("turn-recovery", `settled controlled-restart handoff ${handoff.id}`);
+}
+
+async function handleControlledOrchestratorRestart(response: http.ServerResponse) {
+  if (process.env.WORKBENCH_ORCHESTRATOR_LOOP !== "1") {
+    sendHttpJson(response, 409, { error: "Full orchestrator restart requires run-orchestrator-loop.sh to own relaunch." });
+    return;
+  }
+
+  controlledRestartPending = true;
+  closeBridgeClients(1012, "The orchestrator is restarting; reconnect shortly.");
+  try {
+    await turnRecoveryController.persistControlledRestart();
+  } catch (error) {
+    controlledRestartPending = false;
+    sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Unable to persist restart recovery state." });
+    return;
+  }
+
+  const startedAt = Date.now();
+  lastReloadResponse = {
+    appliedScopes: [],
+    completedAt: startedAt,
+    error: null,
+    ok: true,
+    queuedScopes: ["orchestrator-server"],
+    requestedScopes: ["orchestrator-server"],
+    startedAt,
+    state: "succeeded",
+  };
+
+  let acknowledged = false;
+  response.once("finish", () => {
+    acknowledged = true;
+    setImmediate(() => shutdownAndExit(0));
+  });
+  response.once("close", () => {
+    if (acknowledged || response.writableFinished) return;
+    controlledRestartPending = false;
+    void turnRecoveryHandoffStore.remove().catch((error) => {
+      logError("turn-recovery", `failed to cancel unacknowledged restart handoff: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  });
+  sendHttpJson(response, 202, lastReloadResponse);
+}
+
 async function handleReloadHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
   let payload: OrchestratorReloadRequest | null = null;
   try {
@@ -972,7 +1145,7 @@ async function handleReloadHttpRequest(request: http.IncomingMessage, response: 
     const parsedBody = rawBody.trim() ? JSON.parse(rawBody) as unknown : {};
     const record = asRecord(parsedBody);
     payload = {
-      scopes: normalizeReloadScopes(record?.scopes),
+      scopes: normalizeOrchestratorReloadScopes(record?.scopes),
     };
   } catch (error) {
     sendHttpJson(response, 400, {
@@ -985,6 +1158,16 @@ async function handleReloadHttpRequest(request: http.IncomingMessage, response: 
     sendHttpJson(response, 400, {
       error: "At least one supported reload scope is required.",
     });
+    return;
+  }
+
+  const combinationError = validateOrchestratorReloadScopeCombination(payload.scopes);
+  if (combinationError) {
+    sendHttpJson(response, 400, { error: combinationError });
+    return;
+  }
+  if (payload.scopes[0] === "orchestrator-server") {
+    await handleControlledOrchestratorRestart(response);
     return;
   }
 
@@ -1064,6 +1247,16 @@ async function handleClientMessage(client: BridgeClient, data: Buffer) {
     return;
   }
 
+  if (controlledRestartPending) {
+    if ("id" in message) {
+      sendJsonToClient(client, {
+        id: message.id,
+        error: { code: -32000, message: "The orchestrator is restarting; reconnect shortly." },
+      });
+    }
+    return;
+  }
+
   if (message.method === "initialize" && "id" in message) {
     try {
       await runAfterCodexBridgeReload(async () => {
@@ -1090,6 +1283,10 @@ async function handleClientMessage(client: BridgeClient, data: Buffer) {
   }
 
   const harness = readHarness(message);
+  const strippedMessage = stripHarnessField(message);
+  if ((harness === "codex" || harness === "opencode") && "id" in strippedMessage) {
+    turnRecoveryController.observeRequest(harness, strippedMessage);
+  }
 
   if (harness === "copilot") {
     if (!("id" in message)) {
@@ -1106,13 +1303,12 @@ async function handleClientMessage(client: BridgeClient, data: Buffer) {
       return;
     }
 
-    const response = await runAfterOpenCodeBridgeReload(() => opencodeBridge.handleRequest(stripHarnessField(message)));
+    const response = await runAfterOpenCodeBridgeReload(() => opencodeBridge.handleRequest(strippedMessage));
     sendJsonToClient(client, response);
     return;
   }
 
   if ("id" in message) {
-    const strippedMessage = stripHarnessField(message);
     try {
       const bridgeResponse = await runAfterCodexBridgeReload(() => codexBridge.handleBridgeRequest(strippedMessage));
       if (bridgeResponse) {
@@ -1278,13 +1474,20 @@ async function startOrchestrator() {
   await workbenchAgentCliEnvironment.install();
   await ensureWorkbenchPromptFiles();
   startBridgeServer();
-  void ensureCodexReady().catch((error) => {
-    codexAcceptsUpstreamMessages = false;
-    codexBridge.beginStopping();
-    codexRecoverySupervisor.requestRecovery(
-      `Codex app-server startup readiness failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  });
+  void ensureCodexReady()
+    .then(() => {
+      codexHealthMonitor.start({ armed: true });
+      void recoverPersistedHandoff().catch((error) => {
+        logError("turn-recovery", `startup handoff recovery failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    })
+    .catch((error) => {
+      codexAcceptsUpstreamMessages = false;
+      codexBridge.beginStopping();
+      codexRecoverySupervisor.requestRecovery(
+        `Codex app-server startup readiness failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
   browseSessionCleanupSupervisor.start();
   for (const spec of specs) {
     startChild(spec);

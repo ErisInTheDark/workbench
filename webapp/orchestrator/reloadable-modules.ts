@@ -9,6 +9,7 @@ export type OrchestratorReloadableModules = {
   agentCommandController: Pick<typeof import("./WorkbenchAgentCommandController"), "default">;
   browseSessionCleanupSupervisor: Pick<typeof import("./BrowseSessionCleanupSupervisor"), "default">;
   bridgeRequestController: Pick<typeof import("./WorkbenchBridgeRequestController"), "default">;
+  codexHealthMonitor: Pick<typeof import("./CodexHealthMonitor"), "default">;
   nextDevHealthSupervisor: Pick<typeof import("./NextDevHealthSupervisor"), "default">;
   projectCatalogController: Pick<typeof import("./WorkbenchProjectCatalogController"), "default">;
   projectSnapshotController: Pick<typeof import("./WorkbenchProjectSnapshotController"), "default">;
@@ -50,6 +51,7 @@ const RELOADABLE_MODULE_SPECIFIERS = [
   "./WorkbenchAgentCommandController",
   "./BrowseSessionCleanupSupervisor",
   "./WorkbenchBridgeRequestController",
+  "./CodexHealthMonitor",
   "./NextDevHealthSupervisor",
   "./WorkbenchProjectCatalogController",
   "./WorkbenchProjectSnapshotController",
@@ -94,6 +96,7 @@ export function loadOrchestratorReloadableModules(): OrchestratorReloadableModul
     agentCommandController: requireTyped<OrchestratorReloadableModules["agentCommandController"]>("./WorkbenchAgentCommandController"),
     browseSessionCleanupSupervisor: requireTyped<OrchestratorReloadableModules["browseSessionCleanupSupervisor"]>("./BrowseSessionCleanupSupervisor"),
     bridgeRequestController: requireTyped<OrchestratorReloadableModules["bridgeRequestController"]>("./WorkbenchBridgeRequestController"),
+    codexHealthMonitor: requireTyped<OrchestratorReloadableModules["codexHealthMonitor"]>("./CodexHealthMonitor"),
     nextDevHealthSupervisor: requireTyped<OrchestratorReloadableModules["nextDevHealthSupervisor"]>("./NextDevHealthSupervisor"),
     projectCatalogController: requireTyped<OrchestratorReloadableModules["projectCatalogController"]>("./WorkbenchProjectCatalogController"),
     projectSnapshotController: requireTyped<OrchestratorReloadableModules["projectSnapshotController"]>("./WorkbenchProjectSnapshotController"),

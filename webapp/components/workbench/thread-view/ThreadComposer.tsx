@@ -42,6 +42,10 @@ import {
 } from "../../../lib/workbench/thread/thread-pause-control";
 import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
 import { isWorkbenchSyntheticSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
+import {
+  createWorkbenchThreadRecoveryInput,
+  isWorkbenchInterruptedThreadRecoveryEligible,
+} from "../../../lib/workbench/thread/thread-recovery-message";
 import PrimaryButton from "../PrimaryButton";
 import ChevronIcon from "../ChevronIcon";
 import { PauseIcon, PlayIcon, StopIcon } from "../workbench-icons";
@@ -485,6 +489,7 @@ export default function ThreadComposer ({
   const [isSending, setIsSending] = useState(false);
   const [isPausing, setIsPausing] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
+  const [isRecoveringInterruptedTurn, setIsRecoveringInterruptedTurn] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [isSavedDraftShelfExpanded, setIsSavedDraftShelfExpanded] = useState(false);
   const [isStickyComposerArmed, setIsStickyComposerArmed] = useState(false);
@@ -531,7 +536,8 @@ export default function ThreadComposer ({
   const isThreadStateBroken = hasStaleApprovalState(thread);
   const isApprovalBlocked = isCurrentTurnWaitingOnApproval(thread);
   const isActiveThread = getCurrentInProgressTurn(thread) !== null;
-  const isInputDisabled = isSending || isAttaching || isThreadStateBroken || isCopilotAuthRequired;
+  const canRecoverInterruptedTurn = isWorkbenchInterruptedThreadRecoveryEligible(thread, controlsMode);
+  const isInputDisabled = isSending || isRecoveringInterruptedTurn || isAttaching || isThreadStateBroken || isCopilotAuthRequired;
   const isSendDisabled = isInputDisabled;
   const isSaveDraftDisabled = hasPendingUserInputRequest || isInputDisabled || (!trimmedValue && !attachments.length);
   const isStopDisabled = !isActiveThread || isStopping;
@@ -1193,6 +1199,22 @@ export default function ThreadComposer ({
     }
   };
 
+  const recoverInterruptedTurn = async () => {
+    if (!canRecoverInterruptedTurn || isRecoveringInterruptedTurn || isPickerOpen) {
+      return;
+    }
+
+    setIsRecoveringInterruptedTurn(true);
+    setError("");
+    try {
+      await onSendMessage(thread.id, createWorkbenchThreadRecoveryInput());
+    } catch (resumeError) {
+      setError(resumeError instanceof Error ? resumeError.message : "Unable to resume that interrupted turn.");
+    } finally {
+      setIsRecoveringInterruptedTurn(false);
+    }
+  };
+
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     void submit();
@@ -1291,6 +1313,20 @@ export default function ThreadComposer ({
       }}
     >
       <StopIcon className="h-4.5 w-4.5" />
+    </PrimaryButton>
+  ) : null;
+  const interruptedResumeButton = canRecoverInterruptedTurn ? (
+    <PrimaryButton
+      type="button"
+      aria-label={isRecoveringInterruptedTurn ? "Resuming interrupted turn" : "Resume interrupted turn"}
+      title={isRecoveringInterruptedTurn ? "Resuming interrupted turn" : "Resume interrupted turn"}
+      disabled={isRecoveringInterruptedTurn}
+      shape="circle"
+      onClick={() => {
+        void recoverInterruptedTurn();
+      }}
+    >
+      <PlayIcon className="h-4.5 w-4.5" />
     </PrimaryButton>
   ) : null;
   const questionnaireToggleButton = hasVisiblePendingUserInputRequest ? (
@@ -1591,6 +1627,7 @@ export default function ThreadComposer ({
                       {isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : sendLabel}
                     </PrimaryButton>
                     {trailingActions}
+                    {interruptedResumeButton}
                     {pauseButton}
                     {stopButton}
                   </div>

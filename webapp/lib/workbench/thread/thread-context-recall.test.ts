@@ -22,6 +22,7 @@ import {
 } from "./thread-context-recall.ts";
 import { renderWorkbenchThreadRecallHistoryMarkdown } from "./thread-context-markdown.ts";
 import { buildWorkbenchThreadContextPieces } from "./thread-context-projection.ts";
+import { createWorkbenchThreadRecoveryId, createWorkbenchThreadRecoveryInput } from "./thread-recovery-message.ts";
 
 function turn(id: string, items: ThreadItem[]) {
   return {
@@ -119,6 +120,7 @@ function createBundle(): WorkbenchThreadContextBundle {
         turn("turn-new", [
           { id: "commentary-new", memoryCitation: null, phase: "commentary", text: "Normal   commentary remembers the safe route.", type: "agentMessage" },
           { id: "plan-new", memoryCitation: null, phase: "final_answer", text: newestPlan, type: "agentMessage" },
+          { clientId: createWorkbenchThreadRecoveryId("recall-hidden"), content: createWorkbenchThreadRecoveryInput(), id: "user-recovery", type: "userMessage" },
           { clientId: null, content: [{ text: "newest user constraint", text_elements: [], type: "text" }], id: "user-new", type: "userMessage" },
         ]),
       ],
@@ -152,6 +154,7 @@ test("renders bounded newest and historical pages with global plan preview limit
 
 test("searches only narrative records with stable refs and normalized literal matching", () => {
   const records = buildWorkbenchThreadRecallRecords(createBundle());
+  assert.equal(records.some((record) => record.ref === "user:user-recovery"), false);
   assert(records.some((record) => record.ref === "plan-block:plan-new:0"));
   assert(!records.some((record) => record.ref === "agent:plan-new"));
 

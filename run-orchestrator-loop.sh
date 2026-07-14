@@ -20,7 +20,7 @@ while true; do
   (
     cd "$webapp_dir" || exit 1
     kill-by-port 3002
-    pnpm dev
+    WORKBENCH_ORCHESTRATOR_LOOP=1 pnpm dev
   )
   exit_code=$?
   timestamp="$(date '+%Y-%m-%d %H:%M:%S')"

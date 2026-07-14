@@ -6,6 +6,7 @@
     "dev": "node --env-file-if-exists=.env.local --import tsx orchestrator/index.ts",
     "dev:next": "next dev -p 3002",
     "codex:generate-types": "codex app-server generate-ts --out lib/codex/generated/app-server",
+    "test": "tsx --test --test-timeout=30000",
     "typecheck": "pnpm exec tsc --noEmit && pnpm exec tsc --noEmit -p orchestrator"
   },
   "dependencies": {

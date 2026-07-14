@@ -99,13 +99,18 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       if (!/^wb(?:\.cmd)?\s+orchestrator\s+reload(?:\s|$)/iu.test(normalized)) {
         return null;
       }
-      const scopes = ["orchestrator-logic", "codex-bridge", "opencode-bridge", "opencode-server", "next-dev"]
+      const scopes = ["orchestrator-logic", "browse-controller", "codex-bridge", "opencode-bridge", "opencode-server", "next-dev"]
         .filter((scope) => new RegExp(`(?:^|\\s)--${scope}(?:\\s|$)`, "u").test(normalized));
+      const label = /(?:^|\s)--hard(?:\s|$)/u.test(normalized)
+        ? "orchestrator server"
+        : /(?:^|\s)--all(?:\s|$)/u.test(normalized)
+          ? scopes.length ? scopes.join(", ") : "all reloadable scopes"
+          : scopes.length ? scopes.join(", ") : "orchestrator";
       return CommandMatcher.Result({
-        ongoingSummaryParts: [CommandMatcher.Text(`Reloading ${scopes.length ? scopes.join(", ") : "orchestrator"}`)],
+        ongoingSummaryParts: [CommandMatcher.Text(`${label === "orchestrator server" ? "Restarting" : "Reloading"} ${label}`)],
         remainingCommand: null,
         stop: true,
-        summaryParts: [CommandMatcher.Text(`Reloaded ${scopes.length ? scopes.join(", ") : "orchestrator"}`)],
+        summaryParts: [CommandMatcher.Text(`${label === "orchestrator server" ? "Restarted" : "Reloaded"} ${label}`)],
       });
     },
   }),

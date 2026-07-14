@@ -4,32 +4,14 @@ import { getServerWorkbenchOrchestratorOrigins } from "../../../../lib/codex/ser
 import type {
   OrchestratorReloadRequest,
   OrchestratorReloadResponse,
-  OrchestratorReloadScope,
 } from "../../../../lib/types";
+import {
+  normalizeOrchestratorReloadScopes,
+  validateOrchestratorReloadScopeCombination,
+} from "../../../../lib/workbench/orchestrator-reload";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const VALID_RELOAD_SCOPES = new Set<OrchestratorReloadScope>([
-  "browse-controller",
-  "codex-bridge",
-  "next-dev",
-  "opencode-bridge",
-  "opencode-server",
-  "orchestrator-logic",
-]);
-
-function normalizeReloadScopes(value: unknown): OrchestratorReloadScope[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return Array.from(new Set(
-    value.filter((scope): scope is OrchestratorReloadScope => (
-      typeof scope === "string" && VALID_RELOAD_SCOPES.has(scope as OrchestratorReloadScope)
-    )),
-  ));
-}
 
 async function proxyReloadRequest(
   request: NextRequest,
@@ -76,9 +58,13 @@ async function proxyReloadRequest(
 export async function POST(request: NextRequest) {
   try {
     const requestBody = await request.json() as Partial<OrchestratorReloadRequest>;
-    const scopes = normalizeReloadScopes(requestBody?.scopes);
+    const scopes = normalizeOrchestratorReloadScopes(requestBody?.scopes);
     if (!scopes.length) {
       return NextResponse.json({ error: "At least one supported reload scope is required." }, { status: 400 });
+    }
+    const combinationError = validateOrchestratorReloadScopeCombination(scopes);
+    if (combinationError) {
+      return NextResponse.json({ error: combinationError }, { status: 400 });
     }
 
     return await proxyReloadRequest(request, {

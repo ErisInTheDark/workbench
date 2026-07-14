@@ -134,3 +134,44 @@ test("raw commands receive an explicit ongoing fallback", () => {
   assert.equal(display.ongoingSummaryText, "Running mystery-command --flag");
   assert.equal(getThreadCommandOutcomeDisplay(display, "timedOut").summaryText, "Timed out running mystery-command --flag");
 });
+
+test("PowerShell numbered reads resolve a preceding literal path assignment", () => {
+  const display = getThreadCommandDisplay({
+    command: String.raw`"c:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command '$p='"'"'webapp\\lib\\workbench\\thread\\command-matchers\\workbench-cli.ts'"'"'; $c=Get-Content $p; $c[80..116]'`,
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+
+  assert.equal(display.claimedBy, "powershell.hide-trivial-assignment,powershell.read-numbered-lines");
+  assert.equal(
+    display.summaryText,
+    "Read lines 81-117 of webapp/lib/workbench/thread/command-matchers/workbench-cli.ts",
+  );
+  assert.equal(
+    display.ongoingSummaryText,
+    "Reading lines 81-117 of webapp/lib/workbench/thread/command-matchers/workbench-cli.ts",
+  );
+
+  const pathPart = display.summaryParts.at(-1);
+  assert.equal(pathPart?.type, "path");
+  if (pathPart?.type === "path") {
+    assert.equal(pathPart.path, "webapp/lib/workbench/thread/command-matchers/workbench-cli.ts");
+  }
+});
+
+test("PowerShell numbered reads invalidate a literal path after dynamic reassignment", () => {
+  const display = getThreadCommandDisplay({
+    command: String.raw`"c:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command '$p='"'"'safe.ts'"'"'; $p="$other"; $c=Get-Content $p; $c[0..1]'`,
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+
+  assert.equal(
+    display.claimedBy,
+    "powershell.hide-trivial-assignment,powershell.hide-trivial-assignment,powershell.read-numbered-lines",
+  );
+  assert.equal(display.summaryText, "Read lines 1-2 of $p");
+  assert.equal(display.ongoingSummaryText, "Reading lines 1-2 of $p");
+});

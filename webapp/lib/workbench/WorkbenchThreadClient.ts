@@ -70,6 +70,10 @@ import type {
 import { normalizeWorkbenchAgentPath } from "./agent-paths";
 import { areDeeplyEqual } from "./deep-equality";
 import {
+    createWorkbenchThreadRecoveryId,
+    isWorkbenchThreadRecoveryInput,
+} from "./thread/thread-recovery-message";
+import {
     filterSubagentThreadSummaries,
     getSubagentThreadIds,
     listWorkbenchSubagents,
@@ -4035,6 +4039,9 @@ function WorkbenchThreadClient(
         : state.currentThread?.agentPath ?? readStoredHarnessAgent(harness)
     ));
     const normalizedInput = normalizeThreadMessageInput(input);
+    const recoveryClientUserMessageId = isWorkbenchThreadRecoveryInput(normalizedInput)
+      ? createWorkbenchThreadRecoveryId()
+      : null;
     const workbenchOrigin = readLocalWorkbenchOrigin();
     const isDraftThread = thread.isDraft;
     const shouldBypassCodexDraftBootstrap = harness === "codex" && isDraftThread;
@@ -4240,6 +4247,7 @@ function WorkbenchThreadClient(
           ...(selectedModel ? { model: selectedModel } : {}),
           ...(harness === "codex" ? { serviceTier: selectedServiceTier } : {}),
           ...(codexWorkspaceSandboxPolicy ? { sandboxPolicy: codexWorkspaceSandboxPolicy } : {}),
+          ...(recoveryClientUserMessageId ? { clientUserMessageId: recoveryClientUserMessageId } : {}),
           summary: DEFAULT_TURN_REASONING_SUMMARY,
           threadId: resolvedThreadId,
         } as TurnStartParams & {
@@ -4249,7 +4257,7 @@ function WorkbenchThreadClient(
         },
       });
       optimisticTurnId = turnStartResponse.turn.id;
-      if (harness !== "opencode") {
+      if (harness !== "opencode" && !recoveryClientUserMessageId) {
         enqueueOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, normalizedInput, "initial", "sent");
         resumedThread = applyOptimisticUserMessageOverlay({
           ...resumedThread,

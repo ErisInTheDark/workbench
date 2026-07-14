@@ -19,6 +19,7 @@ import {
   isAgentScreenshotSteerInput,
   isAgentScreenshotSteerUserMessage,
 } from "./thread-steer-markers.ts";
+import { isWorkbenchThreadRecoveryUserMessage } from "./thread-recovery-message.ts";
 
 type ContextPieceKind = "planBlock" | "questionnaire" | "userMessage" | "userSteer";
 
@@ -128,6 +129,7 @@ function shouldIncludeUserMessage(
   steerEntries: readonly WorkbenchSteerHistoryEntry[],
 ) {
   return !isAgentScreenshotSteerUserMessage(item)
+    && !isWorkbenchThreadRecoveryUserMessage(item)
     && !isSteerEntryForUserMessage(item, steerEntries);
 }
 

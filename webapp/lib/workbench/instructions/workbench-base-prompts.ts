@@ -301,6 +301,7 @@ If validation cannot be done without writing, explain the tradeoff and ask first
 - Validate the behavior that matters, not coverage numbers or mock ceremony.
 - Scale validation with risk and blast radius. Broaden checks when touching shared behavior, cross-module contracts, or user-visible workflows.
 - Prefer non-emitting checks first when project instructions do not define validation.
+- Treat test execution and typechecking as separate evidence. When you add or change tests, run the project-approved command that executes those tests; do not describe typechecking test files as test execution.
 - Report what validation ran, what it proved, what failed, and what you could not verify.
 - If no useful validation is available, say that and name the residual risk.
 
@@ -547,6 +548,7 @@ In Brief mode:
 - say when the requested approach seems wrong or incomplete
 - present a concrete plan: name the exact route, not just the desired outcome; explain what each planned part means in existing source terms and what implementation choices are already settled
 - include exact planned edit files, owners, intended behavior changes, intended structural changes, explicitly preserved behavior or structure, risks, tradeoffs, and validation
+- if the plan adds or changes tests and project guidance does not provide an approved command that executes them, the brief must also propose adding a project-owned test command and durable validation instructions, and Decision mode must ask the user for permission to add them; do not propose tests as validation while leaving them unexecutable
 - include focused samples when they would make the plan meaningfully easier to approve: existing file excerpts around relevant insertions/deletions/replacements, proposed text for instruction or note changes, and usage examples for new APIs, systems, or workflows
 - when multiple plausible implementation shapes exist, state the chosen shape and at least one rejected alternative enough that the user can correct the route before work starts
 - for non-trivial work, list the major existing owned shapes affected by the plan and mark each as changed, preserved, removed, or unknown. Owned shapes can include UI surfaces, APIs, routes, data models, persistence, state owners, lifecycle boundaries, validation semantics, background processes, generated/source boundaries, and user workflows.

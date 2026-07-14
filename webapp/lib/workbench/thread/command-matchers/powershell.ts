@@ -952,7 +952,7 @@ function collapsePowerShellStageForComparison(stageText: string) {
 
 function readPowerShellAssignedReadStage(
   stageText: string,
-  context: Parameters<typeof buildCommandPathPart>[1],
+  context: Parameters<CommandMatcherDefinition["match"]>[0],
 ) {
   const assignmentMatch = unwrapPowerShellStageText(stageText).match(/^\$([A-Za-z_][\w]*)\s*=\s*([\s\S]+)$/);
   if (!assignmentMatch?.[1] || !assignmentMatch[2]) {
@@ -964,7 +964,13 @@ function readPowerShellAssignedReadStage(
     return null;
   }
 
-  const pathPart = getPowerShellStagePathPart(parsedAssignedStage, context);
+  const path = getPowerShellStagePath(parsedAssignedStage);
+  if (!path) {
+    return null;
+  }
+
+  const resolvedPath = readPowerShellLiteralPathAssignmentBeforeStage(path, context) ?? path;
+  const pathPart = buildCommandPathPart(resolvedPath, context);
   if (!pathPart) {
     return null;
   }
@@ -973,6 +979,58 @@ function readPowerShellAssignedReadStage(
     pathPart,
     variableName: assignmentMatch[1],
   };
+}
+
+function readPowerShellLiteralPathAssignmentBeforeStage(
+  path: string,
+  context: Parameters<CommandMatcherDefinition["match"]>[0],
+) {
+  const variableMatch = path.match(/^\$([A-Za-z_][\w]*)$/);
+  if (!variableMatch?.[1]) {
+    return null;
+  }
+
+  const targetVariableName = variableMatch[1].toLowerCase();
+  let resolvedPath: string | null = null;
+  let remainingCommand: string | null = context.unwrappedCommand;
+
+  while (remainingCommand) {
+    const nextStage = consumeNextCommandStage(remainingCommand, "powershell");
+    if (!nextStage) {
+      return null;
+    }
+
+    if (matchesPowerShellStagePosition(nextStage, context.stage)) {
+      return resolvedPath;
+    }
+
+    const assignmentMatch = unwrapPowerShellStageText(nextStage.text).match(/^\$([A-Za-z_][\w]*)\s*=\s*([\s\S]+)$/);
+    if (assignmentMatch?.[1]?.toLowerCase() === targetVariableName && assignmentMatch[2]) {
+      resolvedPath = readPowerShellSingleQuotedLiteral(assignmentMatch[2]);
+    }
+
+    remainingCommand = nextStage.remainingCommand ?? null;
+  }
+
+  return null;
+}
+
+function matchesPowerShellStagePosition(
+  left: Parameters<CommandMatcherDefinition["match"]>[0]["stage"],
+  right: Parameters<CommandMatcherDefinition["match"]>[0]["stage"],
+) {
+  return left.text.trim() === right.text.trim()
+    && (left.remainingCommand ?? "").trim() === (right.remainingCommand ?? "").trim();
+}
+
+function readPowerShellSingleQuotedLiteral(value: string) {
+  const normalizedValue = value.trim();
+  if (!normalizedValue.startsWith("'")) {
+    return null;
+  }
+
+  const segment = readPowerShellSingleQuotedSegment(normalizedValue, 0);
+  return segment.nextIndex === normalizedValue.length ? segment.value : null;
 }
 
 function readPowerShellNumberedLineRange(

@@ -53,10 +53,14 @@ Run project validation from `webapp/` unless a command says otherwise.
 ### Allowed Validation
 
 ```powershell
+pnpm test
 pnpm typecheck
 ```
 
-- `pnpm typecheck` is the only allowed `pnpm` script.
+- `pnpm test` executes the TypeScript `node:test` suite through the project-owned runner.
+- `pnpm typecheck` type-checks the app and orchestrator without emitting files.
+- `pnpm test` and `pnpm typecheck` are the only allowed `pnpm` scripts for agent validation.
+- When tests are added or changed, run `pnpm test`; typechecking test files does not count as executing their assertions.
 - For agent-thread rendering, use `http://localhost:<port>/agent/thread/<threadId>` for the chrome-free thread view and `http://localhost:<port>/agent/thread-lab` for pasted payload, turn, item, command-string, and simplified-command rendering checks.
 
 ### Ask the User First
@@ -74,6 +78,6 @@ wb orchestrator reload [--orchestrator-logic] [--browse-controller] [--codex-bri
 
 ### Forbidden Shortcuts
 
-- Do not run any `pnpm` script other than `typecheck`.
-- Do not run `tsx` to test code.
+- Do not run any `pnpm` script other than `test` or `typecheck` for agent validation.
+- Do not invoke `tsx` or another ad hoc test runner directly; use the project-owned `pnpm test` script.
 - Do not broaden a reload beyond the subsystem changed.

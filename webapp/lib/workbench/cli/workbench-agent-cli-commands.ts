@@ -6,6 +6,8 @@
  */
 import { readFile } from "node:fs/promises";
 
+import { ORCHESTRATOR_ALL_RELOAD_SCOPES } from "../orchestrator-reload";
+
 type JsonPrimitive = boolean | number | string | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
@@ -458,12 +460,19 @@ const COMMANDS: readonly CommandDefinition[] = [
   })),
   {
     words: ["orchestrator", "reload"],
-    usage: "wb orchestrator reload [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--opencode-bridge] [--opencode-server] [--next-dev]",
+    usage: "wb orchestrator reload [--all] [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--opencode-bridge] [--opencode-server] [--next-dev]",
     async build({ args }) {
-      const flags = new ParsedFlags(args, { boolean: [...RELOAD_SWITCHES, "--all"] });
-      const scopes = RELOAD_SWITCHES
-        .filter((flag) => flags.has("--all") || flags.has(flag))
-        .map((flag) => flag.slice(2));
+      const flags = new ParsedFlags(args, { boolean: [...RELOAD_SWITCHES, "--all", "--hard"] });
+      const selectedOrdinaryFlags = RELOAD_SWITCHES.filter((flag) => flags.has(flag));
+      if (flags.has("--hard") && (flags.has("--all") || selectedOrdinaryFlags.length)) {
+        throw new Error("--hard must be requested by itself.");
+      }
+      const scopes = flags.has("--hard")
+        ? ["orchestrator-server"]
+        : Array.from(new Set([
+          ...(flags.has("--all") ? ORCHESTRATOR_ALL_RELOAD_SCOPES : []),
+          ...selectedOrdinaryFlags.map((flag) => flag.slice(2)),
+        ]));
       if (!scopes.length) {
         throw new Error("Orchestrator reload requires at least one reload switch.");
       }

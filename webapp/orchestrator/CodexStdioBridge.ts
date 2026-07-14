@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - CodexStdioBridge: translate websocket requests and Codex app-server messages around a stable app-server process. Keywords: codex, stdio, websocket, bridge.
+ * - CodexStdioBridgeReloadState: transferable bridge state preserved across code-only reload. Keywords: codex, reload, state.
+ * - default CodexStdioBridge: translate websocket requests and Codex app-server messages around a stable app-server process. Keywords: codex, stdio, websocket, bridge.
  */
 import type { ApplyPatchApprovalParams } from "../lib/codex/generated/app-server/ApplyPatchApprovalParams";
 import type { ExecCommandApprovalParams } from "../lib/codex/generated/app-server/ExecCommandApprovalParams";
@@ -1102,6 +1103,14 @@ export default class CodexStdioBridge {
     };
   }
 
+  async disposeImmediately() {
+    this.stop();
+    if (this.transcriptStore) {
+      await this.transcriptStore.dispose();
+      this.transcriptStore = null;
+    }
+  }
+
   async reloadTranscriptStore() {
     if (!this.transcriptStore) {
       this.transcriptStoreReloadPending = true;
@@ -1167,13 +1176,33 @@ export default class CodexStdioBridge {
     return await this.enqueueOperation(() => this.handleBridgeRequestImmediately(message));
   }
 
-  async handleServerRequest(message: JsonRpcRequest): Promise<JsonRpcResponse> {
-    const bridgeResponse = await this.handleBridgeRequest(message);
-    if (bridgeResponse) return bridgeResponse;
-    return await this.enqueueOperation(() => {
-      this.assertAcceptingWork();
-      return this.request(message, { internal: true });
+  async handleServerRequest(message: JsonRpcRequest, options: { timeoutMs?: number } = {}): Promise<JsonRpcResponse> {
+    const controller = options.timeoutMs === undefined ? null : new AbortController();
+    const run = async () => {
+      const bridgeResponse = await this.handleBridgeRequest(message);
+      if (bridgeResponse) return bridgeResponse;
+      return await this.enqueueOperation(() => {
+        if (controller?.signal.aborted) throw controller.signal.reason;
+        this.assertAcceptingWork();
+        return this.request(message, { internal: true, signal: controller?.signal });
+      });
+    };
+    if (!controller || options.timeoutMs === undefined) return await run();
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(`Codex internal request ${message.method} timed out after ${options.timeoutMs}ms.`);
+        controller.abort(error);
+        reject(error);
+      }, options.timeoutMs);
+      timer.unref();
     });
+    try {
+      return await Promise.race([run(), deadline]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   async readThreadForBrowse(threadId: string): Promise<ThreadReadResponse> {
@@ -1308,6 +1337,7 @@ export default class CodexStdioBridge {
   }
 
   private send(message: unknown) {
+    this.assertAcceptingWork();
     this.appServer.send(message);
   }
 
@@ -1317,10 +1347,12 @@ export default class CodexStdioBridge {
       client,
       clientRequestId,
       internal = false,
+      signal,
     }: {
       client?: BridgeClient;
       clientRequestId?: number | string;
       internal?: boolean;
+      signal?: AbortSignal;
     },
   ) {
     const upstreamRequestId = this.nextUpstreamRequestId();
@@ -1333,7 +1365,10 @@ export default class CodexStdioBridge {
     );
 
     if (internal) {
+      if (signal?.aborted) throw signal.reason;
+      let rejectResponse!: (error: Error) => void;
       const responsePromise = new Promise<JsonRpcResponse>((resolve, reject) => {
+        rejectResponse = reject;
         this.pendingResponses.set(upstreamRequestId, {
           internal: true,
           reject,
@@ -1342,9 +1377,19 @@ export default class CodexStdioBridge {
           upstreamRequest: upstreamMessage,
         });
       });
+      const abortPendingResponse = () => {
+        if (!this.pendingResponses.delete(upstreamRequestId)) return;
+        rejectResponse(signal?.reason instanceof Error ? signal.reason : new Error("Codex internal request was cancelled."));
+      };
+      signal?.addEventListener("abort", abortPendingResponse, { once: true });
       void this.captureTranscript("client-request", () => this.ensureTranscriptStore().recordClientRequest(upstreamMessage));
-      this.send(upstreamMessage);
-      return responsePromise;
+      try {
+        this.send(upstreamMessage);
+      } catch (error) {
+        this.pendingResponses.delete(upstreamRequestId);
+        rejectResponse(error instanceof Error ? error : new Error(String(error)));
+      }
+      return signal ? responsePromise.finally(() => signal.removeEventListener("abort", abortPendingResponse)) : responsePromise;
     }
 
     if (!client || clientRequestId === undefined) {
@@ -1365,7 +1410,12 @@ export default class CodexStdioBridge {
     } else {
       this.recordSkippedAutoRefreshTranscript(`client-request:${method ?? "unknown"}`);
     }
-    this.send(upstreamMessage);
+    try {
+      this.send(upstreamMessage);
+    } catch (error) {
+      this.pendingResponses.delete(upstreamRequestId);
+      throw error;
+    }
     return null;
   }
 
