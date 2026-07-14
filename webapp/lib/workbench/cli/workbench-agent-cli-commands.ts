@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkbenchAgentCliRequest/WorkbenchAgentCliParseResult: normalized allowlisted CLI request and parse result contracts. Keywords: workbench, cli, request, parse.
+ * - WorkbenchAgentCliThreadHelpAudience/WorkbenchAgentCliCapabilitiesRequest/WorkbenchAgentCliCapabilitiesResponse: thread-aware help capability contracts. Keywords: workbench, cli, help, audience, capabilities.
  * - WORKBENCH_AGENT_CLI_HELP: complete agent-facing command reference. Keywords: workbench, cli, help, commands.
  * - parseWorkbenchAgentCliCommand: parse one allowlisted wb command into a fixed Workbench request. Keywords: workbench, cli, allowlist, cwd.
  */
@@ -38,6 +39,17 @@ export type WorkbenchAgentCliParseResult =
   | { error: string; kind: "error" }
   | { kind: "request"; request: WorkbenchAgentCliRequest };
 
+export type WorkbenchAgentCliThreadHelpAudience = "collaborator" | "default";
+
+export interface WorkbenchAgentCliCapabilitiesRequest {
+  cwd: string;
+  threadId: string;
+}
+
+export interface WorkbenchAgentCliCapabilitiesResponse {
+  helpAudience: WorkbenchAgentCliThreadHelpAudience;
+}
+
 interface CommandBuildContext {
   args: string[];
   callerThreadId: string | null;
@@ -48,7 +60,20 @@ interface CommandBuildContext {
 
 interface CommandDefinition {
   aliases?: readonly (readonly string[])[];
+  audiences: readonly WorkbenchAgentCliThreadHelpAudience[];
   build: (context: CommandBuildContext) => Promise<WorkbenchAgentCliRequest>;
+  description: string;
+  helpGroups: readonly string[];
+  usage: string;
+  words: readonly string[];
+}
+
+interface HelpGroupDefinition {
+  aliases?: readonly (readonly string[])[];
+  commandOrder?: readonly string[];
+  footer?: string;
+  key: string;
+  options?: string;
   usage: string;
   words: readonly string[];
 }
@@ -148,6 +173,9 @@ class ParsedFlags {
 }
 
 const THREAD_FLAG = ["--thread"] as const;
+const DEFAULT_HELP_AUDIENCE = ["default"] as const;
+const SHARED_HELP_AUDIENCES = ["default", "collaborator"] as const;
+const COLLABORATOR_HELP_AUDIENCE = ["collaborator"] as const;
 const RELOAD_SWITCHES = [
   "--orchestrator-logic",
   "--browse-controller",
@@ -240,6 +268,9 @@ function parseVariables(values: string[]) {
 
 const COMMANDS: readonly CommandDefinition[] = [
   {
+    audiences: DEFAULT_HELP_AUDIENCE,
+    description: "List direct children, newest activity first.",
+    helpGroups: ["subagent"],
     words: ["subagent", "list"],
     usage: "wb subagent list [--cursor <cursor>] [--limit <1-20>]",
     async build({ args, callerThreadId, cwd }) {
@@ -256,6 +287,9 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
+    audiences: DEFAULT_HELP_AUDIENCE,
+    description: "List the subagent profiles available to this thread.",
+    helpGroups: ["subagent"],
     words: ["subagent", "profiles"],
     usage: "wb subagent profiles",
     async build({ args, callerThreadId, cwd, workbenchOrigin }) {
@@ -265,8 +299,11 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
+    audiences: DEFAULT_HELP_AUDIENCE,
+    description: "Create and start a direct child, then print its thread ID.",
+    helpGroups: ["subagent"],
     words: ["subagent", "create"],
-    usage: "wb subagent create --profile <profile id> --name <name> --title <title> --message <message>",
+    usage: "wb subagent create --profile <profile-id> --name <name> --title <title> --message <message>",
     async build({ args, callerThreadId, cwd, workbenchOrigin }) {
       const flags = new ParsedFlags(args, { values: ["--profile", "--name", "--title", "--message"] });
       if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
@@ -277,6 +314,9 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
+    audiences: DEFAULT_HELP_AUDIENCE,
+    description: "Wait until any selected child has a pending questionnaire or no active turn.",
+    helpGroups: ["subagent"],
     words: ["subagent", "wait"],
     usage: "wb subagent wait --id <id> [--id <id>...]",
     async build({ args, callerThreadId, cwd, workbenchOrigin }) {
@@ -288,6 +328,9 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
+    audiences: DEFAULT_HELP_AUDIENCE,
+    description: "Stop a direct child thread.",
+    helpGroups: ["subagent"],
     words: ["subagent", "stop"],
     usage: "wb subagent stop --id <id>",
     async build({ args, callerThreadId, cwd, workbenchOrigin }) {
@@ -299,6 +342,9 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
+    audiences: DEFAULT_HELP_AUDIENCE,
+    description: "Steer a child, or start a new turn when it is idle.",
+    helpGroups: ["subagent"],
     words: ["subagent", "message"],
     usage: "wb subagent message --id <id> --message <message>",
     async build({ args, callerThreadId, cwd, workbenchOrigin }) {
@@ -311,6 +357,9 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
+    audiences: SHARED_HELP_AUDIENCES,
+    description: "Set a concise title for a managed thread.",
+    helpGroups: ["thread"],
     words: ["thread", "title"],
     usage: "wb thread title --thread <id> --harness <codex|copilot|opencode> --title <text>",
     async build({ args }) {
@@ -328,6 +377,9 @@ const COMMANDS: readonly CommandDefinition[] = [
   },
   {
     aliases: [["thread", "context", "search"]],
+    audiences: SHARED_HELP_AUDIENCES,
+    description: "Search visible narrative history and return stable result references.",
+    helpGroups: ["thread", "thread-recall"],
     words: ["thread", "recall", "search"],
     usage: "wb thread recall search --thread <id> --query <text> [--kind <kind>...] [--limit <count>]",
     async build({ args }) {
@@ -347,6 +399,9 @@ const COMMANDS: readonly CommandDefinition[] = [
   },
   {
     aliases: [["thread", "context", "expand"]],
+    audiences: SHARED_HELP_AUDIENCES,
+    description: "Expand one referenced result with chronological neighbors.",
+    helpGroups: ["thread", "thread-recall"],
     words: ["thread", "recall", "expand"],
     usage: "wb thread recall expand --thread <id> --ref <ref> [--before <count>] [--after <count>] [--max-chars <count>]",
     async build({ args }) {
@@ -365,6 +420,9 @@ const COMMANDS: readonly CommandDefinition[] = [
   },
   {
     aliases: [["thread", "context"]],
+    audiences: SHARED_HELP_AUDIENCES,
+    description: "Read the newest visible history page, or the page before a stable reference.",
+    helpGroups: ["thread", "thread-recall"],
     words: ["thread", "recall"],
     usage: "wb thread recall --thread <id> [--before <ref>]",
     async build({ args }) {
@@ -376,6 +434,11 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   ...(["add", "unstage"] as const).map((action): CommandDefinition => ({
+    audiences: DEFAULT_HELP_AUDIENCE,
+    description: action === "add"
+      ? "Add currently changed files beneath the paths to this thread's commit selection."
+      : "Remove exact files or descendants from this thread's commit selection.",
+    helpGroups: ["git"],
     words: ["git", action],
     usage: `wb git ${action} --thread <id> -- <path> [<path>...]`,
     async build({ args, callerThreadId, cwd }) {
@@ -390,6 +453,9 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   })),
   {
+    audiences: DEFAULT_HELP_AUDIENCE,
+    description: "Commit only this thread's selected files, then clear the selection on success.",
+    helpGroups: ["git"],
     words: ["git", "commit"],
     usage: "wb git commit --thread <id> --message <message>",
     async build({ args, callerThreadId, cwd }) {
@@ -404,6 +470,11 @@ const COMMANDS: readonly CommandDefinition[] = [
   },
   ...(["baseline", "create-diff"] as const).map((action): CommandDefinition => ({
     aliases: [["checkpoint", action]],
+    audiences: DEFAULT_HELP_AUDIENCE,
+    description: action === "baseline"
+      ? "Capture the current worktree as a hidden baseline checkpoint."
+      : "Preserve the current worktree as an explicit diff checkpoint.",
+    helpGroups: ["git-checkpoint"],
     words: ["git", "checkpoint", action],
     usage: `wb git checkpoint ${action} --thread <id>`,
     async build({ args, cwd }) {
@@ -417,6 +488,9 @@ const COMMANDS: readonly CommandDefinition[] = [
   })),
   {
     aliases: [["checkpoint", "diff"]],
+    audiences: DEFAULT_HELP_AUDIENCE,
+    description: "Summarize worktree changes since the specified checkpoint.",
+    helpGroups: ["git-checkpoint"],
     words: ["git", "checkpoint", "diff"],
     usage: "wb git checkpoint diff --thread <id> --commit <sha>",
     async build({ args, cwd }) {
@@ -431,6 +505,9 @@ const COMMANDS: readonly CommandDefinition[] = [
   },
   {
     aliases: [["checkpoint", "file-diff"]],
+    audiences: DEFAULT_HELP_AUDIENCE,
+    description: "Show the unified diff for one file since the specified checkpoint.",
+    helpGroups: ["git-checkpoint"],
     words: ["git", "checkpoint", "file-diff"],
     usage: "wb git checkpoint file-diff --thread <id> --commit <sha> --file <path>",
     async build({ args, cwd }) {
@@ -446,6 +523,9 @@ const COMMANDS: readonly CommandDefinition[] = [
   },
   {
     aliases: [["checkpoint", "restore"]],
+    audiences: DEFAULT_HELP_AUDIENCE,
+    description: "Restore the specified checkpoint after explicit confirmation.",
+    helpGroups: ["git-checkpoint"],
     words: ["git", "checkpoint", "restore"],
     usage: "wb git checkpoint restore --thread <id> --commit <sha> --confirm",
     async build({ args, cwd }) {
@@ -463,8 +543,11 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
+    audiences: DEFAULT_HELP_AUDIENCE,
+    description: "Run inline BrowseMD commands or one project BrowseMD script.",
+    helpGroups: ["browse"],
     words: ["browse", "run"],
-    usage: "wb browse run --thread <id> [--session <name>] (--command <line>... | --script-path <file>) [--var key=value]",
+    usage: "wb browse run --thread <id> [--session <name>] (--command <line>... | --script-path <file>) [--var <key=value>...] [--summary <text>]",
     async build({ args, cwd }) {
       const flags = new ParsedFlags(args, {
         repeatable: ["--command", "--var"],
@@ -487,6 +570,9 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
+    audiences: DEFAULT_HELP_AUDIENCE,
+    description: "Run the explicitly gated raw Browse CLI passthrough.",
+    helpGroups: ["browse"],
     words: ["browse", "raw"],
     usage: "wb browse raw --thread <id> -- <Browse CLI args>",
     async build({ args, cwd }) {
@@ -502,6 +588,9 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
+    audiences: DEFAULT_HELP_AUDIENCE,
+    description: "List Workbench-known browser sessions for the thread.",
+    helpGroups: ["browse"],
     words: ["browse", "sessions"],
     usage: "wb browse sessions --thread <id>",
     async build({ args, cwd }) {
@@ -510,6 +599,11 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   ...(["stop", "forget"] as const).map((action): CommandDefinition => ({
+    audiences: DEFAULT_HELP_AUDIENCE,
+    description: action === "stop"
+      ? "Stop a browser session without deleting persistent profile data."
+      : "Forget a stopped session and delete its persistent profile data.",
+    helpGroups: ["browse"],
     words: ["browse", action],
     usage: `wb browse ${action} --thread <id> --session <name>${action === "stop" ? " [--force]" : ""}`,
     async build({ args, cwd }) {
@@ -527,6 +621,9 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   })),
   {
+    audiences: DEFAULT_HELP_AUDIENCE,
+    description: "Reload selected Workbench runtime subsystems and wait for terminal reload status.",
+    helpGroups: ["orchestrator"],
     words: ["orchestrator", "reload"],
     usage: "wb orchestrator reload [--all] [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--opencode-bridge] [--opencode-server] [--next-dev]",
     async build({ args }) {
@@ -551,6 +648,9 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
+    audiences: COLLABORATOR_HELP_AUDIENCE,
+    description: "Read the current post tree and allowed operations.",
+    helpGroups: ["collaboration", "collaboration-posts"],
     words: ["collaboration", "posts", "read"],
     usage: "wb collaboration posts read",
     async build({ args, cwd }) {
@@ -559,8 +659,11 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
+    audiences: COLLABORATOR_HELP_AUDIENCE,
+    description: "Create an agent post under an eligible user-authored leaf.",
+    helpGroups: ["collaboration", "collaboration-posts"],
     words: ["collaboration", "posts", "create"],
-    usage: "wb collaboration posts create --parent <id> (--body <md> | --body-file <file>) [--prompt <text> | --prompt-file <file>]",
+    usage: "wb collaboration posts create --parent <id> (--body <markdown> | --body-file <file>) [--prompt <text> | --prompt-file <file>]",
     async build({ args, cwd, readTextFile }) {
       const flags = new ParsedFlags(args, { values: ["--parent", "--body", "--body-file", "--prompt", "--prompt-file"] });
       const body = await readLiteralOrFile(flags, "--body", "--body-file", readTextFile, { required: true });
@@ -575,8 +678,11 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
+    audiences: COLLABORATOR_HELP_AUDIENCE,
+    description: "Update a current editable agent-authored leaf.",
+    helpGroups: ["collaboration", "collaboration-posts"],
     words: ["collaboration", "posts", "update"],
-    usage: "wb collaboration posts update --post <id> (--body <md> | --body-file <file>) [--prompt <text> | --prompt-file <file> | --clear-prompt]",
+    usage: "wb collaboration posts update --post <id> (--body <markdown> | --body-file <file>) [--prompt <text> | --prompt-file <file> | --clear-prompt]",
     async build({ args, cwd, readTextFile }) {
       const flags = new ParsedFlags(args, {
         boolean: ["--clear-prompt"],
@@ -597,6 +703,9 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
+    audiences: COLLABORATOR_HELP_AUDIENCE,
+    description: "Delete an obsolete current editable agent-authored leaf.",
+    helpGroups: ["collaboration", "collaboration-posts"],
     words: ["collaboration", "posts", "delete"],
     usage: "wb collaboration posts delete --post <id>",
     async build({ args, cwd }) {
@@ -609,6 +718,9 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
+    audiences: COLLABORATOR_HELP_AUDIENCE,
+    description: "Print the current private next-run memory.",
+    helpGroups: ["collaboration", "collaboration-memory"],
     words: ["collaboration", "memory", "read"],
     usage: "wb collaboration memory read",
     async build({ args, cwd }) {
@@ -617,6 +729,9 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
+    audiences: COLLABORATOR_HELP_AUDIENCE,
+    description: "Replace private next-run memory with literal text or file contents.",
+    helpGroups: ["collaboration", "collaboration-memory"],
     words: ["collaboration", "memory", "write"],
     usage: "wb collaboration memory write (--memory <text> | --memory-file <file>)",
     async build({ args, cwd, readTextFile }) {
@@ -627,16 +742,283 @@ const COMMANDS: readonly CommandDefinition[] = [
   },
 ];
 
-export const WORKBENCH_AGENT_CLI_HELP = `Workbench agent CLI
+const ROOT_HELP_COMMAND_ORDER = [
+  "subagent list",
+  "subagent profiles",
+  "subagent create",
+  "subagent wait",
+  "subagent stop",
+  "subagent message",
+  "thread title",
+  "thread recall",
+  "thread recall search",
+  "thread recall expand",
+  "git add",
+  "git unstage",
+  "git commit",
+  "git checkpoint baseline",
+  "git checkpoint create-diff",
+  "git checkpoint diff",
+  "git checkpoint file-diff",
+  "git checkpoint restore",
+  "browse run",
+  "browse raw",
+  "browse sessions",
+  "browse stop",
+  "browse forget",
+  "orchestrator reload",
+  "collaboration posts read",
+  "collaboration posts create",
+  "collaboration posts update",
+  "collaboration posts delete",
+  "collaboration memory read",
+  "collaboration memory write",
+] as const;
 
-Usage: wb <command> [options]
+const HELP_GROUPS: readonly HelpGroupDefinition[] = [
+  {
+    commandOrder: ["subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent message", "subagent stop"],
+    footer: [
+      "The current managed thread is always the parent.",
+      "Run commands from the intended project working directory.",
+    ].join("\n"),
+    key: "subagent",
+    usage: "wb subagent <command> [options]",
+    words: ["subagent"],
+  },
+  {
+    commandOrder: ["thread title", "thread recall", "thread recall search", "thread recall expand"],
+    key: "thread",
+    usage: "wb thread <command> [options]",
+    words: ["thread"],
+  },
+  {
+    aliases: [["thread", "context"]],
+    commandOrder: ["thread recall", "thread recall search", "thread recall expand"],
+    footer: [
+      "Recall includes user messages, agent commentary, questionnaires, plans, and steers.",
+      "Recall excludes reasoning, raw commands, tool output, Browse data, hooks, and compaction markers.",
+    ].join("\n"),
+    key: "thread-recall",
+    usage: "wb thread recall [command] [options]",
+    words: ["thread", "recall"],
+  },
+  {
+    commandOrder: ["git add", "git unstage", "git commit"],
+    footer: [
+      "Run from the repository root and use . with add to select all changed files.",
+      "Run from the repository root and use . with unstage to clear the thread selection.",
+      "Git commands must use the current managed thread ID.",
+      "Unrelated files in the ordinary Git index remain outside the thread-owned commit.",
+    ].join("\n"),
+    key: "git",
+    usage: "wb git <command> [options]",
+    words: ["git"],
+  },
+  {
+    aliases: [["checkpoint"]],
+    commandOrder: [
+      "git checkpoint baseline",
+      "git checkpoint create-diff",
+      "git checkpoint diff",
+      "git checkpoint file-diff",
+      "git checkpoint restore",
+    ],
+    key: "git-checkpoint",
+    usage: "wb git checkpoint <command> [options]",
+    words: ["git", "checkpoint"],
+  },
+  {
+    commandOrder: ["browse run", "browse sessions", "browse stop", "browse forget", "browse raw"],
+    footer: [
+      "Use the /browse skill for browser workflow, sequencing, screenshots, and cleanup.",
+      "Raw passthrough is unavailable unless Workbench explicitly enables it.",
+      "Each wb browse call must contain only one BrowseMD run, raw invocation, or session command.",
+    ].join("\n"),
+    key: "browse",
+    usage: "wb browse <command> [options]",
+    words: ["browse"],
+  },
+  {
+    key: "orchestrator",
+    options: [
+      "Options:",
+      "  --all                 Reload all non-destructive orchestrator scopes: orchestrator-logic, browse-controller, codex-bridge, opencode-bridge, next-dev.",
+      "  --orchestrator-logic  Reload declared orchestrator modules.",
+      "  --browse-controller   Drain and replace Browse controller code without restarting browser sessions.",
+      "  --codex-bridge        Reload Codex bridge code without restarting the stable Codex app-server.",
+      "  --opencode-bridge     Reload OpenCode bridge code.",
+      "  --opencode-server     Restart the managed OpenCode server.",
+      "  --next-dev            Restart the Next.js development server.",
+    ].join("\n"),
+    footer: [
+      "At least one option is required.",
+      "Use the narrowest applicable scope.",
+    ].join("\n"),
+    usage: "wb orchestrator reload [--all] [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--opencode-bridge] [--opencode-server] [--next-dev]",
+    words: ["orchestrator"],
+  },
+  {
+    commandOrder: [
+      "collaboration posts read",
+      "collaboration posts create",
+      "collaboration posts update",
+      "collaboration posts delete",
+      "collaboration memory read",
+      "collaboration memory write",
+    ],
+    footer: "Project ownership is derived from the current working directory.",
+    key: "collaboration",
+    usage: "wb collaboration <group> <command> [options]",
+    words: ["collaboration"],
+  },
+  {
+    commandOrder: [
+      "collaboration posts read",
+      "collaboration posts create",
+      "collaboration posts update",
+      "collaboration posts delete",
+    ],
+    footer: [
+      "On update, omit prompt options to preserve the existing prompt.",
+      "Use --clear-prompt to remove the existing prompt.",
+      "Literal and file options for the same field are mutually exclusive.",
+    ].join("\n"),
+    key: "collaboration-posts",
+    usage: "wb collaboration posts <command> [options]",
+    words: ["collaboration", "posts"],
+  },
+  {
+    commandOrder: ["collaboration memory read", "collaboration memory write"],
+    footer: [
+      "Writing replaces the entire previous memory.",
+      "Do not write when there is no useful memory update.",
+    ].join("\n"),
+    key: "collaboration-memory",
+    usage: "wb collaboration memory <command> [options]",
+    words: ["collaboration", "memory"],
+  },
+];
 
-${COMMANDS.map((command) => `  ${command.usage}`).join("\n")}
+function commandKey(command: CommandDefinition) {
+  return command.words.join(" ");
+}
 
-Compatibility alias: replace \`wb thread recall\` with \`wb thread context\`.
+function orderCommands(commands: readonly CommandDefinition[], order: readonly string[]) {
+  const indexes = new Map(order.map((key, index) => [key, index]));
+  return [...commands].sort((left, right) => (
+    (indexes.get(commandKey(left)) ?? Number.MAX_SAFE_INTEGER)
+    - (indexes.get(commandKey(right)) ?? Number.MAX_SAFE_INTEGER)
+  ));
+}
 
-Project ownership is derived from the current working directory.
-`;
+function isCommandVisible(command: CommandDefinition, audience: WorkbenchAgentCliThreadHelpAudience | "all") {
+  return audience === "all" || command.audiences.includes(audience);
+}
+
+function renderRootHelp(audience: WorkbenchAgentCliThreadHelpAudience | "all") {
+  const commands = orderCommands(
+    COMMANDS.filter((command) => isCommandVisible(command, audience)),
+    ROOT_HELP_COMMAND_ORDER,
+  );
+  const helpGroups = HELP_GROUPS.filter((group) => COMMANDS.some((command) => (
+    command.helpGroups.includes(group.key) && isCommandVisible(command, audience)
+  )));
+  return [
+    "Usage:",
+    "  wb --help [--thread <id>]",
+    "  wb <command> [options]",
+    "",
+    "Commands:",
+    ...commands.map((command) => `  ${command.usage}`),
+    "",
+    "Help commands:",
+    ...helpGroups.map((group) => `  wb ${group.words.join(" ")} --help [--thread <id>]`),
+    "",
+    "Pass --thread <current-thread-id> to hide commands that are not relevant to that thread.",
+    "Project ownership is derived from the current working directory.",
+    "",
+  ].join("\n");
+}
+
+function renderGroupHelp(
+  group: HelpGroupDefinition,
+  audience: WorkbenchAgentCliThreadHelpAudience | "all",
+) {
+  const commands = orderCommands(
+    COMMANDS.filter((command) => command.helpGroups.includes(group.key) && isCommandVisible(command, audience)),
+    group.commandOrder ?? [],
+  );
+  if (!commands.length) {
+    return null;
+  }
+
+  const commandSection = group.options
+    ? group.options
+    : [
+      "Commands:",
+      ...commands.flatMap((command, index) => [
+        ...(index ? [""] : []),
+        `  ${command.usage}`,
+        `    ${command.description}`,
+      ]),
+    ].join("\n");
+  return [
+    "Usage:",
+    `  ${group.usage}`,
+    "",
+    commandSection,
+    ...(group.footer ? ["", group.footer] : []),
+    "",
+  ].join("\n");
+}
+
+function matchesWords(argv: readonly string[], words: readonly string[]) {
+  return words.every((word, index) => argv[index] === word);
+}
+
+function matchHelpGroup(argv: readonly string[]) {
+  return HELP_GROUPS.flatMap((group) => (
+    [group.words, ...(group.aliases ?? [])].map((words) => ({ group, words }))
+  ))
+    .filter((candidate) => matchesWords(argv, candidate.words))
+    .sort((left, right) => right.words.length - left.words.length)[0]?.group ?? null;
+}
+
+function parseHelpThreadId(argv: readonly string[], callerThreadId: string | null) {
+  const indexes = argv.flatMap((argument, index) => argument === "--thread" ? [index] : []);
+  if (indexes.length > 1) {
+    throw new Error("--thread may only be supplied once for help.");
+  }
+  if (!indexes.length) {
+    return null;
+  }
+
+  const value = argv[indexes[0] + 1]?.trim();
+  if (!value || value.startsWith("--")) {
+    throw new Error("--thread requires a value for help.");
+  }
+  if (!callerThreadId) {
+    throw new Error("Thread-filtered help requires a managed Workbench thread identity.");
+  }
+  if (value !== callerThreadId) {
+    throw new Error("Thread-filtered help must use the current managed Workbench thread id.");
+  }
+  return value;
+}
+
+function helpPath(argv: readonly string[]) {
+  if (argv[0] === "help") {
+    return [];
+  }
+  const threadIndex = argv.indexOf("--thread");
+  return argv.filter((_, index) => (
+    argv[index] !== "--help"
+    && (threadIndex < 0 || (index !== threadIndex && index !== threadIndex + 1))
+  ));
+}
+
+export const WORKBENCH_AGENT_CLI_HELP = renderRootHelp("all");
 
 export async function parseWorkbenchAgentCliCommand(
   argv: string[],
@@ -644,22 +1026,48 @@ export async function parseWorkbenchAgentCliCommand(
     cwd = process.cwd(),
     callerThreadId = process.env.WORKBENCH_THREAD_ID?.trim() || process.env.CODEX_THREAD_ID?.trim() || null,
     readTextFile = async (filePath: string) => await readFile(filePath, "utf8"),
+    resolveHelpAudience,
     workbenchOrigin = process.env.WORKBENCH_ORIGIN?.trim() || null,
   }: {
     callerThreadId?: string | null;
     cwd?: string;
     readTextFile?: CommandBuildContext["readTextFile"];
+    resolveHelpAudience?: (context: {
+      cwd: string;
+      threadId: string;
+    }) => Promise<WorkbenchAgentCliThreadHelpAudience>;
     workbenchOrigin?: string | null;
   } = {},
 ): Promise<WorkbenchAgentCliParseResult> {
   if (!argv.length || argv.includes("--help") || argv[0] === "help") {
-    return { help: WORKBENCH_AGENT_CLI_HELP, kind: "help" };
+    try {
+      const threadId = parseHelpThreadId(argv, callerThreadId);
+      const audience = threadId
+        ? await resolveHelpAudience?.({ cwd, threadId })
+        : "all";
+      if (!audience) {
+        throw new Error("Thread-filtered help is unavailable.");
+      }
+      const group = matchHelpGroup(helpPath(argv));
+      if (!group) {
+        return { help: renderRootHelp(audience), kind: "help" };
+      }
+      const help = renderGroupHelp(group, audience);
+      return help
+        ? { help, kind: "help" }
+        : {
+          error: `wb ${group.words.join(" ")} help is not relevant to this thread.\nRun wb --help --thread <id> to list relevant commands.`,
+          kind: "error",
+        };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error), kind: "error" };
+    }
   }
 
   const matched = COMMANDS.flatMap((definition) => (
     [definition.words, ...(definition.aliases ?? [])].map((words) => ({ definition, words }))
   ))
-    .filter((candidate) => candidate.words.every((word, index) => argv[index] === word))
+    .filter((candidate) => matchesWords(argv, candidate.words))
     .sort((left, right) => right.words.length - left.words.length)[0];
   if (!matched) {
     return { error: `Unsupported wb command: ${argv.join(" ")}\n\n${WORKBENCH_AGENT_CLI_HELP}`, kind: "error" };

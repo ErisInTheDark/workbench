@@ -15,6 +15,7 @@ import { promisify } from "node:util";
 import WorkbenchAgentCommandController from "../../../orchestrator/WorkbenchAgentCommandController.ts";
 import WorkbenchAgentCliEnvironment from "../../../orchestrator/WorkbenchAgentCliEnvironment.ts";
 import {
+  WORKBENCH_AGENT_CLI_HELP,
   parseWorkbenchAgentCliCommand,
   type WorkbenchAgentCliRequest,
 } from "./workbench-agent-cli-commands.ts";
@@ -329,6 +330,113 @@ test("rejects arbitrary request capabilities and unsafe restore", async () => {
     const parsed = await parseWorkbenchAgentCliCommand(args);
     assert.equal(parsed.kind, "error");
   }
+});
+
+test("renders complete root help and exact focused Git and orchestrator help", async () => {
+  const root = await parseWorkbenchAgentCliCommand(["--help"]);
+  assert.deepEqual(root, { help: WORKBENCH_AGENT_CLI_HELP, kind: "help" });
+  assert.match(WORKBENCH_AGENT_CLI_HELP, /^Usage:\n/u);
+  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git checkpoint restore/u);
+  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb collaboration memory write/u);
+  assert.match(WORKBENCH_AGENT_CLI_HELP, /Help commands:\n  wb subagent --help \[--thread <id>\][\s\S]*  wb collaboration memory --help \[--thread <id>\]/u);
+  assert.match(WORKBENCH_AGENT_CLI_HELP, /  wb thread recall --help \[--thread <id>\]/u);
+  assert.match(WORKBENCH_AGENT_CLI_HELP, /  wb git checkpoint --help \[--thread <id>\]/u);
+  assert.doesNotMatch(WORKBENCH_AGENT_CLI_HELP, /Workbench agent CLI|Compatibility alias|--hard|--orchestrator-server/u);
+
+  const git = await parseWorkbenchAgentCliCommand(["git", "--help"]);
+  assert.deepEqual(git, {
+    help: `Usage:
+  wb git <command> [options]
+
+Commands:
+  wb git add --thread <id> -- <path> [<path>...]
+    Add currently changed files beneath the paths to this thread's commit selection.
+
+  wb git unstage --thread <id> -- <path> [<path>...]
+    Remove exact files or descendants from this thread's commit selection.
+
+  wb git commit --thread <id> --message <message>
+    Commit only this thread's selected files, then clear the selection on success.
+
+Run from the repository root and use . with add to select all changed files.
+Run from the repository root and use . with unstage to clear the thread selection.
+Git commands must use the current managed thread ID.
+Unrelated files in the ordinary Git index remain outside the thread-owned commit.
+`,
+    kind: "help",
+  });
+  assert.doesNotMatch(git.kind === "help" ? git.help : "", /checkpoint/u);
+
+  const orchestrator = await parseWorkbenchAgentCliCommand(["orchestrator", "--help"]);
+  assert.deepEqual(orchestrator, {
+    help: `Usage:
+  wb orchestrator reload [--all] [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--opencode-bridge] [--opencode-server] [--next-dev]
+
+Options:
+  --all                 Reload all non-destructive orchestrator scopes: orchestrator-logic, browse-controller, codex-bridge, opencode-bridge, next-dev.
+  --orchestrator-logic  Reload declared orchestrator modules.
+  --browse-controller   Drain and replace Browse controller code without restarting browser sessions.
+  --codex-bridge        Reload Codex bridge code without restarting the stable Codex app-server.
+  --opencode-bridge     Reload OpenCode bridge code.
+  --opencode-server     Restart the managed OpenCode server.
+  --next-dev            Restart the Next.js development server.
+
+At least one option is required.
+Use the narrowest applicable scope.
+`,
+    kind: "help",
+  });
+});
+
+test("filters help by the validated caller thread without building commands", async () => {
+  const seenContexts: Array<{ cwd: string; threadId: string }> = [];
+  const options = {
+    callerThreadId: "current-thread",
+    cwd: "C:/workspace",
+    readTextFile: async () => { throw new Error("help must not read files"); },
+    resolveHelpAudience: async (context: { cwd: string; threadId: string }) => {
+      seenContexts.push(context);
+      return "collaborator" as const;
+    },
+  };
+  const collaborator = await parseWorkbenchAgentCliCommand(["--help", "--thread", "current-thread"], options);
+  assert.equal(collaborator.kind, "help");
+  if (collaborator.kind === "help") {
+    assert.match(collaborator.help, /wb thread recall/u);
+    assert.match(collaborator.help, /wb collaboration posts read/u);
+    assert.match(collaborator.help, /wb thread --help \[--thread <id>\]/u);
+    assert.match(collaborator.help, /wb collaboration memory --help \[--thread <id>\]/u);
+    assert.doesNotMatch(collaborator.help, /wb git |wb browse |wb subagent |wb orchestrator /u);
+  }
+  assert.deepEqual(seenContexts, [{ cwd: "C:/workspace", threadId: "current-thread" }]);
+
+  const unavailable = await parseWorkbenchAgentCliCommand([
+    "git", "commit", "--help", "--thread", "current-thread",
+  ], options);
+  assert.deepEqual(unavailable, {
+    error: "wb git help is not relevant to this thread.\nRun wb --help --thread <id> to list relevant commands.",
+    kind: "error",
+  });
+  const mismatched = await parseWorkbenchAgentCliCommand(["--help", "--thread", "other-thread"], options);
+  assert.deepEqual(mismatched, {
+    error: "Thread-filtered help must use the current managed Workbench thread id.",
+    kind: "error",
+  });
+  assert.equal(seenContexts.length, 2);
+});
+
+test("routes canonical, compatibility, and leaf help to the nearest owning group", async () => {
+  const canonicalRecall = await parseWorkbenchAgentCliCommand(["thread", "recall", "--help"]);
+  const contextRecall = await parseWorkbenchAgentCliCommand(["thread", "context", "search", "--help"]);
+  assert.deepEqual(contextRecall, canonicalRecall);
+
+  const canonicalCheckpoint = await parseWorkbenchAgentCliCommand(["git", "checkpoint", "--help"]);
+  const checkpointAlias = await parseWorkbenchAgentCliCommand(["checkpoint", "diff", "--help"]);
+  assert.deepEqual(checkpointAlias, canonicalCheckpoint);
+
+  const browse = await parseWorkbenchAgentCliCommand(["browse", "--help"]);
+  const browseLeaf = await parseWorkbenchAgentCliCommand(["browse", "run", "--help"]);
+  assert.deepEqual(browseLeaf, browse);
 });
 
 test("maps composable reload switches to one deduplicated fixed request", async () => {

@@ -80,6 +80,47 @@ test("dispatches Browse commands directly without an internal fetch and preserve
   }
 });
 
+test("resolves only thread-filtered help through the stateless capability boundary", async () => {
+  const capabilityRequests: Array<{ body: string; path: string }> = [];
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:3002",
+    "http://127.0.0.1:4500",
+    createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+    async (input, init) => {
+      const url = input instanceof URL ? input : new URL(String(input));
+      capabilityRequests.push({ body: String(init?.body ?? ""), path: url.pathname });
+      return Response.json({ helpAudience: "collaborator" });
+    },
+  );
+  const server = await startController(controller);
+  try {
+    const filtered = await fetch(`${server.origin}/orchestrator/agent-command`, {
+      body: subagentCommandBody(["--help", "--thread", "parent-thread"]),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    });
+    assert.equal(filtered.status, 200);
+    const filteredText = await filtered.text();
+    assert.match(filteredText, /wb collaboration posts read/u);
+    assert.doesNotMatch(filteredText, /wb git |wb browse /u);
+    assert.deepEqual(capabilityRequests, [{
+      body: JSON.stringify({ cwd: process.cwd(), threadId: "parent-thread" }),
+      path: "/api/agent-command-capabilities",
+    }]);
+
+    const complete = await fetch(`${server.origin}/orchestrator/agent-command`, {
+      body: agentCommandBody(["--help"]),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    });
+    assert.equal(complete.status, 200);
+    assert.match(await complete.text(), /wb git checkpoint restore/u);
+    assert.equal(capabilityRequests.length, 1);
+  } finally {
+    await server.close();
+  }
+});
+
 test("dispatches native subagent commands directly without waiting on Next fetch headers", async () => {
   let receivedRequest: { method?: string; params?: unknown } | null = null;
   const controller = new WorkbenchAgentCommandController(

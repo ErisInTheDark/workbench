@@ -9,7 +9,10 @@ import path from "node:path";
 
 import {
   parseWorkbenchAgentCliCommand,
+  type WorkbenchAgentCliCapabilitiesRequest,
+  type WorkbenchAgentCliCapabilitiesResponse,
   type WorkbenchAgentCliRequest,
+  type WorkbenchAgentCliThreadHelpAudience,
 } from "../lib/workbench/cli/workbench-agent-cli-commands";
 import { adaptWorkbenchAgentCliResponse } from "../lib/workbench/cli/workbench-agent-cli-responses";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
@@ -141,6 +144,7 @@ export default class WorkbenchAgentCommandController {
         callerThreadId,
         cwd,
         readTextFile: async (filePath) => await fs.readFile(path.resolve(cwd, filePath), "utf8"),
+        resolveHelpAudience: async (context) => await this.resolveHelpAudience(context, signal),
         workbenchOrigin,
       });
       if (parsed.kind === "help") {
@@ -261,6 +265,30 @@ export default class WorkbenchAgentCommandController {
     return new URL(requestPath, this.nextOrigin);
   }
 
+  private async resolveHelpAudience(
+    request: WorkbenchAgentCliCapabilitiesRequest,
+    signal: AbortSignal,
+  ): Promise<WorkbenchAgentCliThreadHelpAudience> {
+    const response = await this.fetchRequest(this.resolveUrl("/api/agent-command-capabilities"), {
+      body: JSON.stringify(request),
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+      redirect: "error",
+      signal,
+    });
+    const text = await response.text();
+    const payload = parseRecord(text);
+    if (!response.ok) {
+      throw new Error(readRecordString(payload, "error") || "Unable to resolve thread-aware agent command help.");
+    }
+    const helpAudience = readRecordString(payload, "helpAudience");
+    if (helpAudience !== "collaborator" && helpAudience !== "default") {
+      throw new Error("Agent command capabilities returned an invalid help audience.");
+    }
+    return helpAudience satisfies WorkbenchAgentCliCapabilitiesResponse["helpAudience"];
+  }
+
   private async runReloadRequest(request: WorkbenchAgentCliRequest, signal: AbortSignal) {
     let response = await this.fetchRequest(this.resolveUrl(request.path), this.buildRequestInit(request, signal));
     if (!response.ok) return response;
@@ -288,4 +316,20 @@ function readReloadState(text: string) {
   } catch {
     return null;
   }
+}
+
+function parseRecord(text: string) {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function readRecordString(record: Record<string, unknown> | null, key: string) {
+  const value = record?.[key];
+  return typeof value === "string" ? value : "";
 }
