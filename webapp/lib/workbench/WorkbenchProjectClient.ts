@@ -185,8 +185,8 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
   async function refreshProjects() {
     const response = await fetch("/api/projects", { cache: "no-store" });
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "Unable to load projects." }));
-      throw new Error(error.error);
+      const error = await response.json().catch(err => ({ error: "Unable to load projects.", cause: err }));
+      throw new Error(error.error, { cause: error.cause });
     }
 
     const payload = await response.json() as WorkbenchProjectsPayload;

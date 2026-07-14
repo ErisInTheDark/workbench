@@ -12,6 +12,7 @@ import {
   type WorkbenchContextMenuDefinition,
 } from "./WorkbenchContextMenuContext";
 
+
 export type ContextMenuCapabilityMenuFactory = (
   event: MouseEvent<HTMLElement>,
 ) => WorkbenchContextMenuDefinition | null;
