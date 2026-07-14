@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - default ThreadSubagentWaitItem: render a relationship-aware subagent wait disclosure with a live child-thread preview. Keywords: workbench, thread, subagent, wait, preview.
+ * - default ThreadSubagentWaitItem: render singular or tabbed multiplexed subagent waits with one live child-thread preview. Keywords: workbench, thread, subagent, wait, tabs, preview.
  */
 "use client";
 
-import type { ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 
 import type { ThreadPayload, WorkbenchSubagentSummary } from "../../../lib/types";
 
@@ -12,19 +12,26 @@ import ThreadAgentName from "./ThreadAgentName";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 
-export default function ThreadSubagentWaitItem ({
-  active,
-  children,
-  subagent,
-  thread,
-  threadId,
-}: {
-  active: boolean;
-  children?: ReactNode;
+interface ThreadSubagentWaitEntry {
+  content?: ReactNode;
   subagent?: WorkbenchSubagentSummary | null;
   thread?: ThreadPayload | null;
   threadId: string;
+}
+
+export default function ThreadSubagentWaitItem ({
+  active,
+  entries,
+}: {
+  active: boolean;
+  entries: ThreadSubagentWaitEntry[];
 }) {
+  const tabSetId = useId();
+  const [selectedThreadId, setSelectedThreadId] = useState(entries[0]?.threadId ?? "");
+  const selectedEntry = entries.find((entry) => entry.threadId === selectedThreadId) ?? entries[0] ?? null;
+  const multiplexed = entries.length > 1;
+  if (!selectedEntry) return null;
+
   return (
     <ThreadDisclosure
       className="py-2"
@@ -33,19 +40,86 @@ export default function ThreadSubagentWaitItem ({
       summary={(
         <span>
           {active ? "Waiting for " : "Waited for "}
-          <ThreadAgentName fallbackKey={threadId} subagent={subagent} thread={thread} />
+          {entries.map((entry, index) => (
+            <span key={entry.threadId}>
+              {index === 0
+                ? null
+                : index === entries.length - 1
+                  ? entries.length === 2 ? " and " : ", and "
+                  : ", "}
+              <ThreadAgentName
+                fallbackKey={entry.threadId}
+                subagent={entry.subagent}
+                thread={entry.thread}
+              />
+            </span>
+          ))}
         </span>
       )}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"
     >
-      {active && children ? (
+      {multiplexed && active ? (
+        <>
+          <div
+            aria-label="Watched subagents"
+            className="explorer-scrollbar -mb-px flex max-w-full gap-3 overflow-x-auto"
+            role="tablist"
+          >
+            {entries.map((entry, index) => {
+              const selected = entry.threadId === selectedEntry.threadId;
+              const tabId = `${tabSetId}-tab-${index}`;
+              const panelId = `${tabSetId}-panel`;
+              return (
+                <button
+                  aria-controls={panelId}
+                  aria-selected={selected}
+                  className={`shrink-0 border-b-2 px-1 py-2 text-[0.84rem] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${selected
+                    ? " border-text text-text"
+                    : " border-transparent text-muted hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text"}`}
+                  id={tabId}
+                  key={entry.threadId}
+                  onClick={() => setSelectedThreadId(entry.threadId)}
+                  role="tab"
+                  type="button"
+                >
+                  <ThreadAgentName fallbackKey={entry.threadId} subagent={entry.subagent} thread={entry.thread} />
+                </button>
+              );
+            })}
+          </div>
+          <div
+            aria-labelledby={`${tabSetId}-tab-${entries.indexOf(selectedEntry)}`}
+            id={`${tabSetId}-panel`}
+            role="tabpanel"
+          >
+            {selectedEntry.content ? (
+              <ThreadPreviewFrame
+                contentClassName="px-4 py-3 md:px-12"
+                contentPadding="none"
+                height="22rem"
+                scale={0.9}
+              >
+                {selectedEntry.content}
+              </ThreadPreviewFrame>
+            ) : null}
+          </div>
+        </>
+      ) : multiplexed ? (
+        <ul className="m-0 list-disc space-y-1 pl-5 text-[0.86rem] leading-6 text-muted">
+          {entries.map((entry) => (
+            <li key={entry.threadId}>
+              <ThreadAgentName fallbackKey={entry.threadId} subagent={entry.subagent} thread={entry.thread} />
+            </li>
+          ))}
+        </ul>
+      ) : active && selectedEntry.content ? (
         <ThreadPreviewFrame
           contentClassName="px-4 py-3 md:px-12"
           contentPadding="none"
           height="22rem"
           scale={0.9}
         >
-          {children}
+          {selectedEntry.content}
         </ThreadPreviewFrame>
       ) : null}
     </ThreadDisclosure>

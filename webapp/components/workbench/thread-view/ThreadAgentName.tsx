@@ -36,7 +36,7 @@ export default function ThreadAgentName ({
 
   return (
     <span className={className}>
-      <span style={{ color: getThreadAgentAccentColor(thread, fallbackKey, subagent) }}>{label.nickname}</span>
+      <span className="font-medium" style={{ color: getThreadAgentAccentColor(thread, fallbackKey, subagent) }}>{label.nickname}</span>
       {hasDistinctRole ? <span className={roleClassName}> ({label.role})</span> : null}
     </span>
   );

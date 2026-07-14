@@ -292,6 +292,8 @@ Prefer a controller, state model, or lifecycle boundary with explicit idle/loadi
 
 Prefer non-emitting inspection and validation. Do not run build, generation, format, migration, install, or cleanup commands unless the user or project instructions allow that class of command.
 
+On Windows, invoking PowerShell \`Remove-Item\` summons a privilege-escalation approval prompt in managed Workbench sandboxes, even for a single generated artifact. Do not attempt it during ordinary or unattended work; leave the artifact in place or use an already-approved project-owned cleanup mechanism unless the user explicitly authorized deletion and escalation through this path.
+
 If validation cannot be done without writing, explain the tradeoff and ask first.
 
 ## Validation

@@ -11,6 +11,7 @@ import {
   createEmptySubagentQuestionnaireResponse,
   renderSubagentQuestionnaireOutput,
   renderSubagentTurnOutput,
+  renderSubagentWaitResultOutput,
 } from "./subagent-output.ts";
 
 const questionnaire: WorkbenchUserInputRequest = {
@@ -56,4 +57,28 @@ test("renders final output and creates an explicitly empty response", () => {
   assert.deepEqual(createEmptySubagentQuestionnaireResponse(questionnaire), {
     answers: { direction: { answers: [] } },
   });
+});
+
+test("identifies multiplexed wait results while preserving singular output", () => {
+  assert.equal(renderSubagentWaitResultOutput({
+    multiplexed: false,
+    name: "Momo",
+    outcome: "finished",
+    output: "Finished",
+    threadId: "child-1",
+  }), "Finished");
+  assert.equal(renderSubagentWaitResultOutput({
+    multiplexed: true,
+    name: "Momo",
+    outcome: "needs-interaction",
+    output: "Choose a direction.",
+    threadId: "child-1",
+  }), "Subagent Momo (child-1) needs interaction.\n\nChoose a direction.");
+  assert.equal(renderSubagentWaitResultOutput({
+    multiplexed: true,
+    name: "Yuzu",
+    outcome: "finished",
+    output: "",
+    threadId: "child-2",
+  }), "Subagent Yuzu (child-2) finished its current turn.");
 });

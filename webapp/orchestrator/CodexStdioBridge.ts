@@ -37,6 +37,9 @@ import { isWorkbenchPauseControlRequest, WORKBENCH_PAUSE_CONTROL_KIND } from "..
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type CodexAppServer from "./CodexAppServer";
 import { log, logError } from "./process-helpers";
+import ReloadableWorkbenchSubagentController, {
+  type ReloadableWorkbenchSubagentControllerState,
+} from "./ReloadableWorkbenchSubagentController";
 import { readWorkbenchPromptContext, WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 
@@ -89,6 +92,8 @@ export type CodexStdioBridgeReloadState = {
   pendingUserInputRequests: Map<string, PendingCodexUserInputRequest>;
   requestIdAllocator: RequestIdAllocator;
   upstreamInitialized: boolean;
+  subagentControllerState?: ReloadableWorkbenchSubagentControllerState;
+  /** Compatibility with bridge state produced before reloadable subagent-controller routing. */
   subagentController?: WorkbenchSubagentController;
 };
 
@@ -994,7 +999,7 @@ export default class CodexStdioBridge {
   private transcriptLastSkipLabel = "";
   private upstreamInitialized: boolean;
   private upstreamInitializePromise: Promise<void> | null = null;
-  private readonly subagentController: WorkbenchSubagentController;
+  private readonly subagentController: ReloadableWorkbenchSubagentController;
 
   constructor({ appServer, bridgeUrl, initialState, onNotification, sendToClient, storageRoot }: CodexStdioBridgeOptions) {
     this.appServer = appServer;
@@ -1007,7 +1012,11 @@ export default class CodexStdioBridge {
     this.pendingUserInputRequests = initialState?.pendingUserInputRequests ?? new Map();
     this.requestIdAllocator = initialState?.requestIdAllocator ?? { next: 1 };
     this.upstreamInitialized = initialState?.upstreamInitialized ?? false;
-    this.subagentController = initialState?.subagentController ?? new WorkbenchSubagentController({ bridgeUrl, storageRoot });
+    this.subagentController = new ReloadableWorkbenchSubagentController({
+      createController: () => new WorkbenchSubagentController({ bridgeUrl, storageRoot }),
+      initialState: initialState?.subagentControllerState,
+      legacyController: initialState?.subagentController,
+    });
     this.transcriptInstrumentationTimer = setInterval(() => {
       this.logTranscriptInstrumentation("interval");
     }, TRANSCRIPT_INSTRUMENTATION_INTERVAL_MS);
@@ -1083,15 +1092,13 @@ export default class CodexStdioBridge {
       await this.transcriptStore.dispose();
       this.transcriptStore = null;
     }
-    const preservedSubagentController = this.subagentController.hasActiveWaiters() ? this.subagentController : undefined;
-    if (!preservedSubagentController) this.subagentController.dispose();
     return {
       initializeResult: this.initializeResult,
       pendingResponses: this.pendingResponses,
       pendingUserInputRequests: this.pendingUserInputRequests,
       requestIdAllocator: this.requestIdAllocator,
       upstreamInitialized: this.upstreamInitialized,
-      ...(preservedSubagentController ? { subagentController: preservedSubagentController } : {}),
+      subagentControllerState: this.subagentController.detachForReload(),
     };
   }
 

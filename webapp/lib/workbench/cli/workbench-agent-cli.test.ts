@@ -214,7 +214,22 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
     workbenchOrigin: "http://localhost:3000",
   });
 
-  assert.equal((await parseWorkbenchAgentCliCommand(["subagent", "wait", "--id", "child-thread"], options)).kind, "request");
+  const wait = await parseWorkbenchAgentCliCommand([
+    "subagent", "wait", "--id", "child-thread", "--id", "other-child",
+  ], options);
+  assert.equal(wait.kind, "request");
+  if (wait.kind === "request") {
+    assert.deepEqual(wait.request.body, {
+      action: "wait",
+      callerThreadId: "parent-thread",
+      cwd: "C:/workspace",
+      threadIds: ["child-thread", "other-child"],
+      workbenchOrigin: "http://localhost:3000",
+    });
+  }
+  assert.equal((await parseWorkbenchAgentCliCommand([
+    "subagent", "wait", "--id", "child-thread", "--id", "child-thread",
+  ], options)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand(["subagent", "stop", "--id", "child-thread"], options)).kind, "request");
   assert.equal((await parseWorkbenchAgentCliCommand(["subagent", "profiles"], { ...options, callerThreadId: null })).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand([

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchSubagentCommand/parseWorkbenchSubagentCommand: parse semantic subagent action, child thread ID, and message from wb commands. Keywords: workbench, cli, subagent, parse, thread id, message.
+ * - WorkbenchSubagentCommand/parseWorkbenchSubagentCommand: parse semantic subagent action, ordered child thread IDs, and message from wb commands. Keywords: workbench, cli, subagent, parse, thread ids, message.
  * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb title, subagent, reload, and Collaboration commands. Keywords: workbench, cli, title, subagent, collaboration.
  */
 import { CommandMatcher } from "./core";
@@ -13,13 +13,11 @@ export type WorkbenchSubagentCommandAction = "create" | "message" | "profiles" |
 export interface WorkbenchSubagentCommand {
   action: WorkbenchSubagentCommandAction;
   message: string | null;
-  threadId: string | null;
+  threadIds: string[];
 }
 
-function readFlagValue(command: string, flag: string) {
-  const match = new RegExp(`(?:^|\\s)--${flag}(?:\\s+|=)`, "u").exec(command);
-  if (!match) return null;
-  let index = match.index + match[0].length;
+function readValue(command: string, startIndex: number) {
+  let index = startIndex;
   const quote = command[index] === "\"" || command[index] === "'" ? command[index++] : null;
   let value = "";
 
@@ -32,7 +30,7 @@ function readFlagValue(command: string, flag: string) {
           index += 2;
           continue;
         }
-        return value;
+        return { nextIndex: index + 1, value };
       }
       if ((character === "\\" || character === "`") && command[index + 1] === quote) {
         value += quote;
@@ -40,13 +38,29 @@ function readFlagValue(command: string, flag: string) {
         continue;
       }
     } else if (/\s|[;&|]/u.test(character)) {
-      return value;
+      return { nextIndex: index, value };
     }
     value += character;
     index += 1;
   }
 
-  return value || null;
+  return { nextIndex: index, value };
+}
+
+function readFlagValues(command: string, flag: string) {
+  const pattern = new RegExp(`(?:^|\\s)--${flag}(?:\\s+|=)`, "gu");
+  const values: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(command))) {
+    const result = readValue(command, match.index + match[0].length);
+    if (result.value) values.push(result.value);
+    pattern.lastIndex = Math.max(pattern.lastIndex, result.nextIndex);
+  }
+  return values;
+}
+
+function readFlagValue(command: string, flag: string) {
+  return readFlagValues(command, flag)[0] ?? null;
 }
 
 export function parseWorkbenchSubagentCommand(command: string): WorkbenchSubagentCommand | null {
@@ -57,7 +71,7 @@ export function parseWorkbenchSubagentCommand(command: string): WorkbenchSubagen
   return {
     action,
     message: readFlagValue(normalized, "message"),
-    threadId: readFlagValue(normalized, "id"),
+    threadIds: readFlagValues(normalized, "id"),
   };
 }
 
@@ -98,17 +112,19 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     match: ({ stage }) => {
       const command = parseWorkbenchSubagentCommand(stage.text);
       if (!command) return null;
-      const labels: Record<WorkbenchSubagentCommandAction, string> = {
+      const labels: Record<Exclude<WorkbenchSubagentCommandAction, "wait">, string> = {
         create: "Created subagent",
         message: "Messaged subagent",
         profiles: "Listed subagent profiles",
         stop: "Stopped subagent",
-        wait: "Waited for subagent",
       };
+      const label = command.action === "wait"
+        ? command.threadIds.length > 1 ? `Waited for ${command.threadIds.length} subagents` : "Waited for subagent"
+        : labels[command.action];
       return CommandMatcher.Result({
         remainingCommand: null,
         stop: true,
-        summaryParts: [CommandMatcher.Text(labels[command.action])],
+        summaryParts: [CommandMatcher.Text(label)],
       });
     },
   }),

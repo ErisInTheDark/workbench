@@ -7,7 +7,7 @@
  */
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CompositionEvent, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CompositionEvent, type CSSProperties, type FocusEvent, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import {
@@ -231,6 +231,7 @@ export default function PlaintextEditable ({
   className,
   disabled = false,
   id,
+  onBlur,
   onChange,
   onCompositionEnd,
   onCompositionStart,
@@ -248,6 +249,7 @@ export default function PlaintextEditable ({
   className?: string;
   disabled?: boolean;
   id?: string;
+  onBlur?: (event: FocusEvent<HTMLDivElement>) => void;
   onChange?: (value: string) => void;
   onCompositionEnd?: (event: CompositionEvent<HTMLDivElement>) => void;
   onCompositionStart?: (event: CompositionEvent<HTMLDivElement>) => void;
@@ -392,6 +394,7 @@ export default function PlaintextEditable ({
           spellCheck={spellCheck}
           suppressContentEditableWarning
           tabIndex={readOnly || disabled ? -1 : 0}
+          onBlur={onBlur}
           onCompositionEnd={(event) => {
             isComposingRef.current = false;
             updateCaretOffset();

@@ -158,6 +158,21 @@ test("unnamed profiles survive persistence and remain unnamed", () => {
   reloaded.dispose();
 });
 
+test("profile descriptions preserve multiline text and clear to an absent optional field", () => {
+  const controller = new WorkbenchComposerProfileController(new MemoryStorage());
+  const profile = controller.createProfile({
+    ...CODEX_SETTINGS,
+    description: "  Use for implementation reviews.\r\nDo not use for quick searches.  ",
+    name: "Described Lily",
+    scope: { kind: "global" },
+  });
+
+  assert.equal(profile.description, "Use for implementation reviews.\nDo not use for quick searches.");
+  const cleared = controller.updateProfile(profile.id, { description: " \r\n " });
+  assert.equal(cleared && "description" in cleared, false);
+  controller.dispose();
+});
+
 test("imports legacy profiles once, flushes the mutation outbox, and notifies subscribers", async () => {
   const storage = new MemoryStorage();
   const controller = new WorkbenchComposerProfileController(storage);

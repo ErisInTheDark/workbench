@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover subagent creation, direct-parent ownership, one-client lifecycle, and questionnaire steer ordering. Keywords: subagent, controller, authorization, questionnaire, test.
+ * - No production exports; Node tests cover profile listing, subagent creation, direct-parent ownership, one-client lifecycle, and questionnaire steer ordering. Keywords: subagent, profile, controller, authorization, questionnaire, test.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -96,6 +96,7 @@ function profile(): WorkbenchComposerProfile {
     agentPath: "agent://lily.md",
     agentSource: "library",
     createdAt: 1,
+    description: "Use for difficult implementation work.\nAvoid for quick read-only searches.",
     harness: "codex",
     id: "lily-infinite",
     model: "gpt-5.4",
@@ -123,12 +124,14 @@ test("creates with one client and delivers a steer before empty questionnaire re
   });
 
   await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/importLegacy", params: { profiles: [profile()] } });
+  const profiles = await controller.handleRequest({ id: 2, method: "workbench/subagent/profiles", params: { cwd } });
+  assert.deepEqual(profiles, { id: 2, result: { profiles: [profile()] } });
   const created = await controller.handleRequest({
-    id: 2,
+    id: 3,
     method: "workbench/subagent/create",
     params: { callerThreadId, cwd, message: "Inspect the code.", name: "Mimi", profileId: profile().id, title: "Inspect code" },
   });
-  assert.deepEqual(created, { id: 2, result: { threadId: childThreadId } });
+  assert.deepEqual(created, { id: 3, result: { threadId: childThreadId } });
   assert.equal(clients.length, 1);
   assert.equal(clients[0].connectCount, 1);
   assert.equal(clients[0].closeCount, 1);
@@ -138,7 +141,7 @@ test("creates with one client and delivers a steer before empty questionnaire re
   ]);
 
   const messaged = await controller.handleRequest({
-    id: 3,
+    id: 4,
     method: "workbench/subagent/message",
     params: { callerThreadId, cwd, message: "Take the safer route.", threadId: childThreadId },
   });
@@ -151,11 +154,11 @@ test("creates with one client and delivers a steer before empty questionnaire re
   assert.deepEqual(lifecycleCalls[1].params.response, { answers: { direction: { answers: [] } } });
 
   const denied = await controller.handleRequest({
-    id: 4,
+    id: 5,
     method: "workbench/subagent/stop",
     params: { callerThreadId: "different-parent", cwd, threadId: childThreadId },
   });
-  assert.equal(denied.id, 4);
+  assert.equal(denied.id, 5);
   assert.match(denied.error?.message ?? "", /not owned by the current thread/u);
 });
 

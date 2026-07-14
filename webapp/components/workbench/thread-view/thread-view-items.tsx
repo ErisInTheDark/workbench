@@ -1531,44 +1531,50 @@ function ThreadCommandExecutionDetails ({
     && (commandDetailRows.length > 0 || !item.aggregatedOutput?.trim());
   if (
     subagentCommand?.action === "wait"
-    && subagentCommand.threadId
+    && subagentCommand.threadIds.length
     && (item.status === "inProgress" || item.status === "completed")
     && (item.exitCode === null || item.exitCode === 0)
   ) {
-    const childThread = relatedThreadsById[subagentCommand.threadId];
     return (
       <ThreadSubagentWaitItem
         active={item.status === "inProgress" && isMostRecent}
-        subagent={getSubagentSummary(subagents, subagentCommand.threadId)}
-        thread={childThread}
-        threadId={subagentCommand.threadId}
-      >
-        <ThreadSubagentCurrentActivityPreview
-          inlineMentionSources={inlineMentionSources}
-          knownSkills={knownSkills}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          relatedThreadsById={relatedThreadsById}
-          thread={childThread}
-          workspaceRoots={workspaceRoots}
-        />
-      </ThreadSubagentWaitItem>
+        entries={subagentCommand.threadIds.map((childThreadId) => {
+          const childThread = relatedThreadsById[childThreadId];
+          return {
+            content: (
+              <ThreadSubagentCurrentActivityPreview
+                inlineMentionSources={inlineMentionSources}
+                knownSkills={knownSkills}
+                projectFilePaths={projectFilePaths}
+                projectId={projectId}
+                projectRootPath={projectRootPath}
+                relatedThreadsById={relatedThreadsById}
+                thread={childThread}
+                workspaceRoots={workspaceRoots}
+              />
+            ),
+            subagent: getSubagentSummary(subagents, childThreadId),
+            thread: childThread,
+            threadId: childThreadId,
+          };
+        })}
+      />
     );
   }
+  const subagentThreadId = subagentCommand?.threadIds[0] ?? null;
   if (
     subagentCommand?.action === "message"
-    && subagentCommand.threadId
+    && subagentThreadId
     && subagentCommand.message
     && (item.status === "inProgress" || item.status === "completed")
     && (item.exitCode === null || item.exitCode === 0)
   ) {
-    const childThread = relatedThreadsById[subagentCommand.threadId];
+    const childThread = relatedThreadsById[subagentThreadId];
     return (
       <ThreadSubagentMessageItem
-        subagent={getSubagentSummary(subagents, subagentCommand.threadId)}
+        subagent={getSubagentSummary(subagents, subagentThreadId)}
         thread={childThread}
-        threadId={subagentCommand.threadId}
+        threadId={subagentThreadId}
       >
         <ThreadMarkdown
           inlineMentionSources={inlineMentionSources}
@@ -1584,17 +1590,17 @@ function ThreadCommandExecutionDetails ({
   }
   if (
     subagentCommand?.action === "stop"
-    && subagentCommand.threadId
+    && subagentThreadId
     && (item.status === "inProgress" || item.status === "completed")
     && (item.exitCode === null || item.exitCode === 0)
   ) {
-    const childThread = relatedThreadsById[subagentCommand.threadId];
+    const childThread = relatedThreadsById[subagentThreadId];
     return (
       <ThreadSubagentStopItem
         active={item.status === "inProgress"}
-        subagent={getSubagentSummary(subagents, subagentCommand.threadId)}
+        subagent={getSubagentSummary(subagents, subagentThreadId)}
         thread={childThread}
-        threadId={subagentCommand.threadId}
+        threadId={subagentThreadId}
       />
     );
   }

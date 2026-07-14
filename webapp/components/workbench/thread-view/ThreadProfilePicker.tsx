@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ThreadProfilePicker: select, create, rename, configure, scope, and remove inline composer profiles. Keywords: thread, composer, profile, picker, scope.
- * - Local helpers: normalize model-dependent settings and render inline profile groups. Keywords: profile, model, group.
+ * - Local helpers: edit profile names/descriptions and render inline profile groups. Keywords: profile, name, description, model, group.
  */
 "use client";
 
@@ -9,6 +9,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from
 import type { WorkbenchAgentOption, WorkbenchComposerProfile, WorkbenchComposerProfileSlot, WorkbenchComposerSettings, WorkbenchModelOption } from "../../../lib/types";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileProvider";
 import { FileDeleteIcon, SparkleIcon } from "../workbench-icons";
+import PlaintextEditable from "./PlaintextEditable";
 import ThreadComposerPickerHeader from "./ThreadComposerPickerHeader";
 import ThreadComposerRibbon from "./ThreadComposerRibbon";
 import ThreadHarnessControl from "./ThreadHarnessControl";
@@ -41,6 +42,36 @@ function ProfileNameEditable({ fallback, name, onCommit }: { fallback: string; n
   </span>;
 }
 
+function normalizeProfileDescription(value: string) {
+  return value.replace(/\r\n?/gu, "\n").trim();
+}
+
+function ProfileDescriptionEditable({ description = "", onCommit }: { description?: string; onCommit: (description: string | undefined) => void }) {
+  const [draft, setDraft] = useState(description);
+
+  useEffect(() => {
+    setDraft(description);
+  }, [description]);
+
+  const commit = (value: string) => {
+    const normalized = normalizeProfileDescription(value);
+    setDraft(normalized);
+    if (normalized !== description) onCommit(normalized || undefined);
+  };
+
+  return <div className="mt-2">
+    <PlaintextEditable
+      ariaLabel="Profile description"
+      className="min-h-[1.45rem] whitespace-pre-wrap break-words text-[0.78em] leading-[1.6] text-muted outline-none before:pointer-events-none before:text-muted/60 data-[empty=true]:before:content-[attr(data-placeholder)]"
+      onBlur={(event) => commit(event.currentTarget.innerText)}
+      onChange={setDraft}
+      placeholder="Describe when this profile should be used as a subagent…"
+      spellCheck
+      value={draft}
+    />
+  </div>;
+}
+
 export default function ThreadProfilePicker({ agents, canToggleHarness, currentSettings, models, onAgentOpen, onClose, onHarnessToggle, onModelOpen, projectId, slot }: {
   agents: WorkbenchAgentOption[]; canToggleHarness: boolean; currentSettings: WorkbenchComposerSettings;
   models: WorkbenchModelOption[]; onAgentOpen: (profileId: string) => void; onClose: () => void; onHarnessToggle?: () => void; onModelOpen: (profileId: string, harness: WorkbenchComposerSettings["harness"]) => void;
@@ -70,6 +101,7 @@ export default function ThreadProfilePicker({ agents, canToggleHarness, currentS
           <button type="button" aria-label={`Remove ${label}`} title={`Remove ${label}`} className={`${iconButtonClassName} hover:!text-danger`} onClick={(event) => { event.stopPropagation(); controller.deleteProfile(profile.id); }}><FileDeleteIcon /></button>
         </div>
       </div>
+      <ProfileDescriptionEditable description={profile.description} onCommit={(description) => controller.updateProfile(profile.id, { description })} />
       <div className="mt-1.5 flex flex-wrap items-center gap-3 text-muted">
         <span className="text-[0.78em]"><ThreadHarnessControl harness={profile.harness} /></span>
         <ThreadComposerRibbon agentLabel={agent?.name ?? (profile.agentPath || "Default agent")} currentReasoningEffort={profile.reasoningEffort} isFastModeEnabled={profile.serviceTier === "fast"} isProfilePanelOpen={false} modelLabel={model?.displayName ?? profile.model} profileLabel="" showsFastModeControl={profile.harness === "codex" && Boolean(model?.supportsFastMode)} showsProfileControl={false} showsReasoningEffortControl={Boolean(model?.supportsReasoningEffort && profile.reasoningEffort)} onAgentOpen={() => onAgentOpen(profile.id)} onFastModeToggle={() => controller.updateProfile(profile.id, { serviceTier: profile.serviceTier === "fast" ? null : "fast" })} onModelOpen={() => onModelOpen(profile.id, profile.harness)} onProfileOpen={() => {}} onReasoningEffortCycle={cycleEffort} />

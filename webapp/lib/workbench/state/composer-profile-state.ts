@@ -37,6 +37,12 @@ function normalizeHarness(value: unknown): WorkbenchHarness | null {
   return value === "codex" || value === "copilot" || value === "opencode" ? value : null;
 }
 
+function normalizeDescription(value: unknown) {
+  if (typeof value !== "string") return null;
+  const description = value.replace(/\r\n?/gu, "\n").trim();
+  return description || null;
+}
+
 function normalizeSettings(value: unknown): WorkbenchComposerSettings | null {
   if (!isRecord(value)) return null;
   const harness = normalizeHarness(value.harness);
@@ -56,6 +62,7 @@ function normalizeSettings(value: unknown): WorkbenchComposerSettings | null {
 export function normalizeComposerProfile(value: unknown): WorkbenchComposerProfile | null {
   const settings = normalizeSettings(value);
   if (!settings || !isRecord(value)) return null;
+  const description = normalizeDescription(value.description);
   const id = typeof value.id === "string" ? value.id.trim() : "";
   const name = typeof value.name === "string" ? value.name.trim() : "";
   const scope = isRecord(value.scope) && value.scope.kind === "global"
@@ -70,7 +77,7 @@ export function normalizeComposerProfile(value: unknown): WorkbenchComposerProfi
   const updatedAt = typeof value.updatedAt === "number" && Number.isFinite(value.updatedAt)
     ? Math.max(createdAt, Math.trunc(value.updatedAt))
     : createdAt;
-  return { ...settings, createdAt, id, name, scope, updatedAt };
+  return { ...settings, createdAt, ...(description ? { description } : {}), id, name, scope, updatedAt };
 }
 
 function normalizeSelection(value: unknown): WorkbenchComposerProfileSelection | null {

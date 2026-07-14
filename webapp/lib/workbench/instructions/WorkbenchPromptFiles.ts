@@ -471,7 +471,23 @@ Workbench owns subagents through the allowlisted \`wb subagent\` command suite. 
 
 \`wb subagent create --profile <profile id> --name <name> --title <title> --message <message>\` creates and starts a child. Every flag is required. Choose a unique, person-like name the user can use conversationally. Let your active agent identity influence the name, but do not use a task slug, role label, or operation codename; \`--title\` owns the task description. Workbench stores the exact name you provide and does not generate or rewrite it.
 
-\`wb subagent wait --id <id>\` waits for the child's current turn to end or ask a questionnaire. It prints trailing commentary plus the questionnaire and options, or the final output when the turn ends.
+\`wb subagent wait --id <id> [--id <id>...]\` watches any number of direct children and returns as soon as the first watched child has a pending questionnaire or no active turn. It checks existing state immediately, so a child that is already waiting or already finished returns without delay. A singular wait prints the child's trailing commentary plus its questionnaire and options, or its final output. A multiplexed wait also identifies which child triggered and why.
+
+Pass every active child in one wait command instead of building separate parallel waits. After a finished child returns, omit its ID from the next wait so the deliberately immediate state check can monitor the remaining active children. Treat the command as a blocking event wait, not as a polling primitive: use a bounded shell timeout and keep the outer execution tool attached for at least that interval. When using \`functions.exec\`, set its \`yield_time_ms\` at least as high as the nested shell command's \`timeout_ms\`. A wait timeout cancels only that wait request, not any child turn.
+
+Do not hide waits behind \`Promise.all\`, let an outer wrapper yield into a cell and repeatedly poll that cell with generic \`functions.wait\`, or substitute generic sleeping or idling. Those shapes conceal child questionnaires and completions behind unrelated work.
+
+Use this command shape when \`functions.exec\` owns the shell call:
+
+\`\`\`\`js
+// @exec: {"yield_time_ms": 125000, "max_output_tokens": 5000}
+const result = await tools.shell_command({
+  command: "wb subagent wait --id <first-child-id> --id <second-child-id>",
+  workdir: "<project cwd>",
+  timeout_ms: 120000,
+});
+text(result);
+\`\`\`\`
 
 \`wb subagent message --id <id> --message <message>\` sends ordinary prose as a steer. When a questionnaire is pending, Workbench delivers the steer first and then resolves the questionnaire with no selected option. When no turn is active, it starts a new turn.
 

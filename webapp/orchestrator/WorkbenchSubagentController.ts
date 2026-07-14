@@ -25,6 +25,7 @@ import {
   createEmptySubagentQuestionnaireResponse,
   renderSubagentQuestionnaireOutput,
   renderSubagentTurnOutput,
+  renderSubagentWaitResultOutput,
 } from "../lib/workbench/subagent/subagent-output";
 import AtomicJsonStore from "./AtomicJsonStore";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
@@ -69,6 +70,14 @@ function requiredString(record: Record<string, unknown>, key: string) {
   const value = typeof record[key] === "string" ? record[key].trim() : "";
   if (!value) throw new Error(`${key} is required.`);
   return value;
+}
+
+function requiredThreadIds(record: Record<string, unknown>) {
+  const rawValues = Array.isArray(record.threadIds) ? record.threadIds : [record.threadId];
+  const threadIds = rawValues.map((value) => typeof value === "string" ? value.trim() : "");
+  if (!threadIds.length || threadIds.some((threadId) => !threadId)) throw new Error("threadIds are required.");
+  if (new Set(threadIds).size !== threadIds.length) throw new Error("threadIds must be unique.");
+  return threadIds;
 }
 
 function normalizeSummary(value: unknown): WorkbenchSubagentSummary | null {
@@ -321,24 +330,68 @@ export default class WorkbenchSubagentController {
     return { caller: { callerThreadId, cwd, project: project.project }, record };
   }
 
+  private async ownedRecords(params: Record<string, unknown>) {
+    const callerThreadId = requiredString(params, "callerThreadId");
+    const cwd = requiredString(params, "cwd");
+    const project = await resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
+    const threadIds = requiredThreadIds(params);
+    const subagents = (await this.readMetadata()).subagents;
+    const records = threadIds.map((threadId) => subagents[threadId]);
+    if (records.some((record) => !record || record.parentThreadId !== callerThreadId || record.projectId !== project.project.id)) {
+      throw new Error("Every requested subagent must be owned by the current thread.");
+    }
+    return records as WorkbenchSubagentSummary[];
+  }
+
+  private async pendingQuestionnaires(client: WorkbenchSubagentHarnessClient, harness: WorkbenchHarness, cwd: string) {
+    return (await this.requestHarness<PendingQuestionnaireList>(client, harness, { method: "questionnaire/list", params: { cwd } })).data;
+  }
+
   private async pendingQuestionnaire(client: WorkbenchSubagentHarnessClient, record: WorkbenchSubagentSummary) {
-    const list = await this.requestHarness<PendingQuestionnaireList>(client, record.harness, { method: "questionnaire/list", params: { cwd: record.cwd } });
-    return list.data.find((entry) => entry.threadId === record.threadId) ?? null;
+    return (await this.pendingQuestionnaires(client, record.harness, record.cwd)).find((entry) => entry.threadId === record.threadId) ?? null;
   }
 
   private async wait(client: WorkbenchSubagentHarnessClient, params: Record<string, unknown>) {
-    const { record } = await this.ownedRecord(params);
+    const records = await this.ownedRecords(params);
     const waitId = requiredString(params, "waitId");
     if (this.waiters.has(waitId)) throw new Error("That subagent wait id is already active.");
     const controller = new AbortController(); this.waiters.set(waitId, controller);
     try {
       while (true) {
-        const [thread, pending] = await Promise.all([
-          this.readThread(client, record.harness, record.threadId, record.cwd),
-          this.pendingQuestionnaire(client, record),
-        ]);
-        if (pending) return { output: renderSubagentQuestionnaireOutput(thread, pending.request) };
-        if (!isTurnActive(thread)) return { output: renderSubagentTurnOutput(thread) };
+        const pendingByScope = new Map<string, Promise<PendingQuestionnaireList["data"]>>();
+        const states = await Promise.all(records.map(async (record) => {
+          const scopeKey = `${record.harness}\0${record.cwd}`;
+          let pendingPromise = pendingByScope.get(scopeKey);
+          if (!pendingPromise) {
+            pendingPromise = this.pendingQuestionnaires(client, record.harness, record.cwd);
+            pendingByScope.set(scopeKey, pendingPromise);
+          }
+          const [thread, pending] = await Promise.all([
+            this.readThread(client, record.harness, record.threadId, record.cwd),
+            pendingPromise,
+          ]);
+          return { pending: pending.find((entry) => entry.threadId === record.threadId) ?? null, record, thread };
+        }));
+        const questionnaireState = states.find((state) => state.pending);
+        if (questionnaireState?.pending) {
+          return { output: renderSubagentWaitResultOutput({
+            multiplexed: records.length > 1,
+            name: questionnaireState.record.name,
+            outcome: "needs-interaction",
+            output: renderSubagentQuestionnaireOutput(questionnaireState.thread, questionnaireState.pending.request),
+            threadId: questionnaireState.record.threadId,
+          }) };
+        }
+        const finishedState = states.find((state) => !isTurnActive(state.thread));
+        if (finishedState) {
+          return { output: renderSubagentWaitResultOutput({
+            multiplexed: records.length > 1,
+            name: finishedState.record.name,
+            outcome: "finished",
+            output: renderSubagentTurnOutput(finishedState.thread),
+            threadId: finishedState.record.threadId,
+          }) };
+        }
         await delay(POLL_INTERVAL_MS, controller.signal);
       }
     } finally {

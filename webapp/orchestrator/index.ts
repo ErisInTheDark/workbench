@@ -10,6 +10,7 @@
  * - Child process helpers: start, restart, and schedule managed process lifecycles. Keywords: process, restart, child.
  * - Bridge helpers: route websocket JSON-RPC messages across Codex, Copilot, and OpenCode harnesses. Keywords: websocket, harness, rpc.
  * - Health helpers: supervise the Next.js dev server and restart it after repeated 5xx health probes. Keywords: watchdog, turbopack, 500.
+ * - Codex recovery helpers: replace and reinitialize a failed Codex bridge while a supervisor owns retry timing. Keywords: codex, recovery, retry, lifecycle.
  */
 import { spawn } from "node:child_process";
 import http from "node:http";
@@ -30,6 +31,7 @@ import type {
 } from "../lib/types";
 import type { BridgeClient, HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import CodexAppServer from "./CodexAppServer";
+import CodexRecoverySupervisor from "./CodexRecoverySupervisor";
 import CodexStdioBridge from "./CodexStdioBridge";
 import { CopilotBridge } from "./copilot-bridge";
 import { OpenCodeBridge } from "./opencode-bridge";
@@ -69,6 +71,8 @@ const ORCHESTRATOR_BRIDGE_REQUEST_PATH = "/orchestrator/bridge-request";
 const ORCHESTRATOR_PROJECTS_PATH = "/orchestrator/projects";
 const ORCHESTRATOR_TREE_PATH = "/orchestrator/tree";
 const CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS = 5000;
+const CODEX_RECOVERY_INITIAL_RETRY_DELAY_MS = 1000;
+const CODEX_RECOVERY_MAX_RETRY_DELAY_MS = 30000;
 const BROWSE_CONTROLLER_RELOAD_DRAIN_TIMEOUT_MS = 5000;
 const ORCHESTRATOR_RELOAD_SCOPE_VALUES = new Set<OrchestratorReloadScope>([
   "browse-controller",
@@ -149,7 +153,8 @@ let upstreamMessageQueue: Promise<void> = Promise.resolve();
 let codexBridgeReloadPromise: Promise<void> | null = null;
 let opencodeBridgeReloadPromise: Promise<void> | null = null;
 let browseControllerReloadPromise: Promise<void> | null = null;
-let codexFatalExitInProgress = false;
+let codexAcceptsUpstreamMessages = true;
+let codexRecoverySupervisor: CodexRecoverySupervisor;
 
 const copilotBridge = new CopilotBridge({
   getReloadableModules: () => reloadableModules,
@@ -161,25 +166,19 @@ const copilotBridge = new CopilotBridge({
 
 const codexAppServer = new CodexAppServer({
   onFatalExit: (reason) => {
-    if (codexFatalExitInProgress) {
+    if (shuttingDown) {
       return;
     }
-    codexFatalExitInProgress = true;
+    codexAcceptsUpstreamMessages = false;
     codexBridge.beginStopping();
     for (const client of bridgeConnections) {
       client.close(1011, reason);
     }
-
-    const pendingUpstreamMessages = upstreamMessageQueue;
-    void pendingUpstreamMessages
-      .catch(() => undefined)
-      .then(() => codexBridge.stopAfterFlushingTranscripts())
-      .finally(() => {
-        codexReadyPromise = null;
-      });
+    codexReadyPromise = null;
+    codexRecoverySupervisor.requestRecovery(reason);
   },
   onMessage: (message) => {
-    if (codexFatalExitInProgress) {
+    if (!codexAcceptsUpstreamMessages) {
       log("codex-bridge", "ignored upstream message after fatal app-server exit");
       return;
     }
@@ -197,6 +196,7 @@ const codexAppServer = new CodexAppServer({
 
 codexBridge = createCodexBridge();
 opencodeBridge = createOpenCodeBridge();
+codexRecoverySupervisor = createCodexRecoverySupervisor();
 
 const specs: ProcessSpec[] = [
   {
@@ -252,11 +252,15 @@ function ensureCodexReady() {
     return codexReadyPromise;
   }
 
-  codexReadyPromise = codexBridge.ensureInitialized(getBridgeInitializeMessage())
+  let trackedReadyPromise: Promise<void>;
+  trackedReadyPromise = codexBridge.ensureInitialized(getBridgeInitializeMessage())
     .catch((error) => {
-      codexReadyPromise = null;
+      if (codexReadyPromise === trackedReadyPromise) {
+        codexReadyPromise = null;
+      }
       throw error;
     });
+  codexReadyPromise = trackedReadyPromise;
 
   return codexReadyPromise;
 }
@@ -322,6 +326,7 @@ function finalizeReloadResponse(
 }
 
 async function stopAllChildren() {
+  codexRecoverySupervisor.dispose();
   browseSessionCleanupSupervisor.dispose();
   nextDevHealthSupervisor.dispose();
   projectCatalogController.dispose();
@@ -519,6 +524,17 @@ function createNextDevHealthSupervisor() {
     restartCooldownMs: NEXT_DEV_HEALTH_RESTART_COOLDOWN_MS,
     restartNextDev: restartNextDevFromWatchdog,
     serverErrorThreshold: NEXT_DEV_HEALTH_SERVER_ERROR_THRESHOLD,
+  });
+}
+
+function createCodexRecoverySupervisor() {
+  return new CodexRecoverySupervisor({
+    initialRetryDelayMs: CODEX_RECOVERY_INITIAL_RETRY_DELAY_MS,
+    isShuttingDown: () => shuttingDown,
+    log: (message) => log("codex-recovery", message),
+    logError: (message) => logError("codex-recovery", message),
+    maxRetryDelayMs: CODEX_RECOVERY_MAX_RETRY_DELAY_MS,
+    recover: recoverCodexBridge,
   });
 }
 
@@ -752,18 +768,13 @@ function createOpenCodeBridge(initialState?: Awaited<ReturnType<OpenCodeBridge["
 }
 
 async function reloadCodexBridge() {
-  if (codexBridgeReloadPromise) {
-    await codexBridgeReloadPromise;
-    return;
-  }
-
   if (codexReadyPromise) {
     await codexReadyPromise.catch(() => undefined);
   }
   codexReadyPromise = null;
 
   const upstreamQueueBeforeReload = upstreamMessageQueue;
-  const reloadPromise = (async () => {
+  await runCodexBridgeTransition(async () => {
     await withTimeout(
       upstreamQueueBeforeReload.catch(() => undefined),
       CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS,
@@ -785,18 +796,74 @@ async function reloadCodexBridge() {
       },
       storageRoot: PROJECT_ROOT,
     });
-    codexFatalExitInProgress = false;
     log("codex-bridge", "reloaded bridge code without restarting app-server");
-  })();
+  });
 
-  codexBridgeReloadPromise = reloadPromise;
+  codexAcceptsUpstreamMessages = true;
   try {
-    await reloadPromise;
+    await ensureCodexReady();
+  } catch (error) {
+    codexAcceptsUpstreamMessages = false;
+    codexBridge.beginStopping();
+    codexRecoverySupervisor.requestRecovery("Codex bridge reload could not restore app-server readiness.");
+    throw error;
+  }
+}
+
+async function runCodexBridgeTransition(operation: () => Promise<void>) {
+  while (codexBridgeReloadPromise) {
+    await codexBridgeReloadPromise.catch(() => undefined);
+  }
+
+  const transitionPromise = operation();
+  codexBridgeReloadPromise = transitionPromise;
+  try {
+    await transitionPromise;
   } finally {
-    if (codexBridgeReloadPromise === reloadPromise) {
+    if (codexBridgeReloadPromise === transitionPromise) {
       codexBridgeReloadPromise = null;
     }
   }
+}
+
+async function recoverCodexBridge(reason: string) {
+  const pendingUpstreamMessages = upstreamMessageQueue;
+  await withTimeout(
+    pendingUpstreamMessages.catch(() => undefined),
+    CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS,
+    "Codex recovery timed out waiting for the upstream message queue to drain.",
+  );
+
+  await runCodexBridgeTransition(async () => {
+    await withTimeout(
+      codexBridge.stopAfterFlushingTranscripts(),
+      CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS,
+      "Codex recovery timed out flushing the failed bridge.",
+    );
+    const { default: ReloadedCodexStdioBridge } = reloadCodexBridgeModule();
+    codexBridge = new ReloadedCodexStdioBridge({
+      appServer: codexAppServer,
+      bridgeUrl: CODEX_BRIDGE_URL,
+      onNotification: (notification) => {
+        broadcastToClients("codex", notification);
+      },
+      sendToClient: (client, message) => {
+        sendJsonToClient(client, message);
+      },
+      storageRoot: PROJECT_ROOT,
+    });
+    codexReadyPromise = null;
+  });
+
+  codexAcceptsUpstreamMessages = true;
+  try {
+    await ensureCodexReady();
+  } catch (error) {
+    codexAcceptsUpstreamMessages = false;
+    codexBridge.beginStopping();
+    throw error;
+  }
+  log("codex-bridge", `restored bridge and app-server readiness after: ${reason}`);
 }
 
 async function waitForOpenCodeBridgeReload() {
@@ -1211,6 +1278,13 @@ async function startOrchestrator() {
   await workbenchAgentCliEnvironment.install();
   await ensureWorkbenchPromptFiles();
   startBridgeServer();
+  void ensureCodexReady().catch((error) => {
+    codexAcceptsUpstreamMessages = false;
+    codexBridge.beginStopping();
+    codexRecoverySupervisor.requestRecovery(
+      `Codex app-server startup readiness failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
   browseSessionCleanupSupervisor.start();
   for (const spec of specs) {
     startChild(spec);

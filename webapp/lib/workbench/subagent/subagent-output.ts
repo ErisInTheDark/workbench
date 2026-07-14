@@ -2,6 +2,7 @@
  * Exports:
  * - createEmptySubagentQuestionnaireResponse: resolve every pending question without a selection. Keywords: subagent, questionnaire, empty response.
  * - renderSubagentQuestionnaireOutput/renderSubagentTurnOutput: produce native wait stdout for paused and settled subagent turns. Keywords: subagent, wait, commentary, final.
+ * - renderSubagentWaitResultOutput: identify which child triggered a multiplexed wait while preserving singular output. Keywords: subagent, multiplex, wait, output.
  */
 import type { Thread } from "../../codex/generated/app-server/v2/Thread";
 import type { WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "../../types";
@@ -39,4 +40,22 @@ export function renderSubagentTurnOutput(thread: Thread) {
   ));
   const finalMessage = messages.slice().reverse().find((item) => item.phase === "final_answer");
   return (finalMessage ?? messages.at(-1))?.text.trim() ?? "";
+}
+
+export function renderSubagentWaitResultOutput({
+  multiplexed,
+  name,
+  outcome,
+  output,
+  threadId,
+}: {
+  multiplexed: boolean;
+  name: string;
+  outcome: "finished" | "needs-interaction";
+  output: string;
+  threadId: string;
+}) {
+  if (!multiplexed) return output;
+  const status = outcome === "needs-interaction" ? "needs interaction" : "finished its current turn";
+  return [`Subagent ${name} (${threadId}) ${status}.`, output].filter(Boolean).join("\n\n");
 }

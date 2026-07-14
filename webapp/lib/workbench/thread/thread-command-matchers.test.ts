@@ -41,32 +41,32 @@ test("Workbench subagent commands share one semantic parser", () => {
   assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent wait --id child-thread"), {
     action: "wait",
     message: null,
-    threadId: "child-thread",
+    threadIds: ["child-thread"],
   });
   assert.deepEqual(parseWorkbenchSubagentCommand('wb.cmd subagent message --id "child thread" --message continue'), {
     action: "message",
     message: "continue",
-    threadId: "child thread",
+    threadIds: ["child thread"],
   });
   assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent stop --id='child-thread'"), {
     action: "stop",
     message: null,
-    threadId: "child-thread",
+    threadIds: ["child-thread"],
   });
   assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent wait --id child-thread; Write-Output done"), {
     action: "wait",
     message: null,
-    threadId: "child-thread",
+    threadIds: ["child-thread"],
   });
   assert.deepEqual(parseWorkbenchSubagentCommand('wb subagent message --message "Use the safer `route`" --id child-thread'), {
     action: "message",
     message: "Use the safer `route`",
-    threadId: "child-thread",
+    threadIds: ["child-thread"],
   });
   assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent profiles"), {
     action: "profiles",
     message: null,
-    threadId: null,
+    threadIds: [],
   });
   assert.equal(parseWorkbenchSubagentCommand("wb thread recall --thread child-thread"), null);
 
@@ -78,4 +78,13 @@ test("Workbench subagent commands share one semantic parser", () => {
   });
   assert.equal(display.claimedBy, "workbench-cli.subagent");
   assert.equal(display.summaryText, "Waited for subagent");
+
+  const multiplexedDisplay = getThreadCommandDisplay({
+    command: "wb subagent wait --id child-thread --id other-child",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(multiplexedDisplay.claimedBy, "workbench-cli.subagent");
+  assert.equal(multiplexedDisplay.summaryText, "Waited for 2 subagents");
 });

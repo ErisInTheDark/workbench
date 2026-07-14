@@ -569,6 +569,7 @@ export type WorkbenchComposerProfileScope =
 
 export interface WorkbenchComposerProfile extends WorkbenchComposerSettings {
   createdAt: number;
+  description?: string;
   id: string;
   name: string;
   scope: WorkbenchComposerProfileScope;

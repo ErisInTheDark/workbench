@@ -118,6 +118,17 @@ class ParsedFlags {
     return value;
   }
 
+  requiredRepeated(flag: string) {
+    const values = this.repeated(flag).map((value) => value.trim());
+    if (!values.length || values.some((value) => !value)) {
+      throw new Error(`${flag} is required.`);
+    }
+    if (new Set(values).size !== values.length) {
+      throw new Error(`${flag} values must be unique.`);
+    }
+    return values;
+  }
+
   optionalNonNegativeInteger(flag: string) {
     const value = this.optional(flag);
     if (value === null) {
@@ -226,17 +237,28 @@ const COMMANDS: readonly CommandDefinition[] = [
       }, "subagent-create");
     },
   },
-  ...(["wait", "stop"] as const).map((action): CommandDefinition => ({
-    words: ["subagent", action],
-    usage: `wb subagent ${action} --id <id>`,
+  {
+    words: ["subagent", "wait"],
+    usage: "wb subagent wait --id <id> [--id <id>...]",
+    async build({ args, callerThreadId, cwd, workbenchOrigin }) {
+      const flags = new ParsedFlags(args, { repeatable: ["--id"] });
+      if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
+      return post("/api/subagents", {
+        action: "wait", callerThreadId, cwd, threadIds: flags.requiredRepeated("--id"), ...(workbenchOrigin ? { workbenchOrigin } : {}),
+      });
+    },
+  },
+  {
+    words: ["subagent", "stop"],
+    usage: "wb subagent stop --id <id>",
     async build({ args, callerThreadId, cwd, workbenchOrigin }) {
       const flags = new ParsedFlags(args, { values: ["--id"] });
       if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
       return post("/api/subagents", {
-        action, callerThreadId, cwd, threadId: flags.required("--id"), ...(workbenchOrigin ? { workbenchOrigin } : {}),
+        action: "stop", callerThreadId, cwd, threadId: flags.required("--id"), ...(workbenchOrigin ? { workbenchOrigin } : {}),
       });
     },
-  })),
+  },
   {
     words: ["subagent", "message"],
     usage: "wb subagent message --id <id> --message <message>",
