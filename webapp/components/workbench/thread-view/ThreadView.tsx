@@ -28,6 +28,7 @@ import type {
   WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadComposerDraft,
   WorkbenchThreadDocumentSnapshot,
+  WorkbenchThreadGoalControls,
   WorkbenchThreadSavedComposerDraft,
   WorkbenchThreadTurnHistoryEntry,
   WorkbenchUserInputResponse,
@@ -72,6 +73,7 @@ import ThreadAgentName from "./ThreadAgentName";
 import ThreadComposer from "./ThreadComposer";
 import ThreadContextStatus from "./ThreadContextStatus";
 import ThreadDisclosure from "./ThreadDisclosure";
+import ThreadGoalControl from "./ThreadGoalControl";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadRateLimits from "./ThreadRateLimits";
@@ -641,6 +643,7 @@ export default memo(function ThreadView ({
   threadCodeBlockWrap,
   threadComposerDraftsByThreadId,
   threadDocuments,
+  threadGoalControls,
   threadQuestionnaireDraftsByKey,
   threadSavedComposerDrafts,
   thread,
@@ -694,6 +697,7 @@ export default memo(function ThreadView ({
   threadCodeBlockWrap: boolean;
   threadComposerDraftsByThreadId: Record<string, WorkbenchThreadComposerDraft | undefined>;
   threadDocuments: WorkbenchThreadDocumentSnapshot;
+  threadGoalControls: WorkbenchThreadGoalControls | null;
   threadQuestionnaireDraftsByKey: Record<string, WorkbenchQuestionnaireDraft | undefined>;
   threadSavedComposerDrafts: WorkbenchThreadSavedComposerDraft[];
   thread: ThreadPayload;
@@ -1663,6 +1667,57 @@ export default memo(function ThreadView ({
     </ThreadComposer>
   ) : null;
 
+  const agentTabs = tabDefinitions.length ? (
+    <>
+      <button
+        type="button"
+        className={joinClasses(
+          "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[0.78em] font-medium leading-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
+          activeThreadId === thread.id
+            ? "border-[color-mix(in_srgb,var(--text)_18%,transparent)] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] text-text"
+            : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] text-muted hover:text-text",
+        )}
+        onClick={() => {
+          handleSubthreadSelection(thread.id);
+        }}
+      >
+        <span>Main agent</span>
+        {mainThreadBadge.isQuestion ? <ThreadQuestionBadge /> : mainThreadBadge.unreadBadge ? <ThreadUnreadBadgeView badge={mainThreadBadge.unreadBadge} /> : null}
+      </button>
+      <span className="text-[0.84em] text-muted" aria-hidden="true">|</span>
+      {tabDefinitions.map((tab) => {
+        const tabThread = relatedThreadsById[tab.id];
+        const badge = getTabBadge(tab.id, tabThread);
+
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            aria-busy={tab.isLoading}
+            className={joinClasses(
+              "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[0.78em] font-medium leading-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
+              activeThreadId === tab.id
+                ? "border-[color-mix(in_srgb,var(--text)_18%,transparent)] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] text-text"
+                : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] text-muted hover:text-text",
+              tab.isLoading && activeThreadId !== tab.id && "opacity-70",
+            )}
+            onClick={() => {
+              handleSubthreadSelection(tab.id);
+            }}
+          >
+            <ThreadAgentName
+              fallbackKey={tab.id}
+              subagent={getSubagentSummary(subagents, tab.id)}
+              thread={tabThread}
+            />
+            {tab.suffix ? <span className="text-muted">{tab.suffix}</span> : null}
+            {badge.isQuestion ? <ThreadQuestionBadge /> : badge.unreadBadge ? <ThreadUnreadBadgeView badge={badge.unreadBadge} /> : null}
+          </button>
+        );
+      })}
+    </>
+  ) : null;
+
   return (
     <ProjectFilePathDisplayProvider
       disambiguationIndex={projectFilePathDisambiguationIndex}
@@ -1818,56 +1873,13 @@ export default memo(function ThreadView ({
             ) : null}
           </div>
         ) : null}
-        {tabDefinitions.length ? (
+        {activeThread?.harness === "codex" && threadGoalControls ? (
+          <ThreadGoalControl controls={threadGoalControls} thread={activeThread}>
+            {agentTabs}
+          </ThreadGoalControl>
+        ) : agentTabs ? (
           <div className="mt-6">
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                className={joinClasses(
-                  "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[0.78em] font-medium leading-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
-                  activeThreadId === thread.id
-                    ? "border-[color-mix(in_srgb,var(--text)_18%,transparent)] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] text-text"
-                    : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] text-muted hover:text-text",
-                )}
-                onClick={() => {
-                  handleSubthreadSelection(thread.id);
-                }}
-              >
-                <span>Main agent</span>
-                {mainThreadBadge.isQuestion ? <ThreadQuestionBadge /> : mainThreadBadge.unreadBadge ? <ThreadUnreadBadgeView badge={mainThreadBadge.unreadBadge} /> : null}
-              </button>
-              <span className="text-[0.84em] text-muted" aria-hidden="true">|</span>
-              {tabDefinitions.map((tab) => {
-                const tabThread = relatedThreadsById[tab.id];
-                const badge = getTabBadge(tab.id, tabThread);
-
-                return (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    aria-busy={tab.isLoading}
-                    className={joinClasses(
-                      "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[0.78em] font-medium leading-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
-                      activeThreadId === tab.id
-                        ? "border-[color-mix(in_srgb,var(--text)_18%,transparent)] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] text-text"
-                        : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] text-muted hover:text-text",
-                      tab.isLoading && activeThreadId !== tab.id && "opacity-70",
-                    )}
-                    onClick={() => {
-                      handleSubthreadSelection(tab.id);
-                    }}
-                  >
-                    <ThreadAgentName
-                      fallbackKey={tab.id}
-                      subagent={getSubagentSummary(subagents, tab.id)}
-                      thread={tabThread}
-                    />
-                    {tab.suffix ? <span className="text-muted">{tab.suffix}</span> : null}
-                    {badge.isQuestion ? <ThreadQuestionBadge /> : badge.unreadBadge ? <ThreadUnreadBadgeView badge={badge.unreadBadge} /> : null}
-                  </button>
-                );
-              })}
-            </div>
+            <div className="flex flex-wrap items-center gap-2">{agentTabs}</div>
           </div>
         ) : null}
         {activeThread && !isDraftThreadView ? (

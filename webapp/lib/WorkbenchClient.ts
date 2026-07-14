@@ -796,6 +796,7 @@ export async function WorkbenchClient(
     pauseThread,
     resumeThread,
     stopThread,
+    threadGoals: threadClient.threadGoals,
     submitPendingUserInputRequest: threadClient.submitPendingUserInputRequest,
     setEditorFontSize: (fontSize) => {
       void fontSize;

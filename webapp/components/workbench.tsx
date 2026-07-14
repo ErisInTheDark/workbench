@@ -3693,6 +3693,7 @@ export default function Workbench () {
                   threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
                   threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
                   threadDocuments={threadDocuments}
+                  threadGoalControls={controls.threadGoals}
                   threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
                   threadSavedComposerDrafts={threadSavedComposerDrafts}
                   onThreadSavedComposerDraftDelete={handleThreadSavedComposerDraftDelete}
@@ -3823,6 +3824,7 @@ export default function Workbench () {
                   threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
                   threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
                   threadDocuments={threadDocuments}
+                  threadGoalControls={controls?.threadGoals ?? null}
                   threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
                   threadSavedComposerDrafts={threadSavedComposerDrafts}
                   onThreadSavedComposerDraftDelete={handleThreadSavedComposerDraftDelete}
@@ -3991,6 +3993,7 @@ export default function Workbench () {
                         threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
                         threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
                         threadDocuments={threadDocuments}
+                        threadGoalControls={controls?.threadGoals ?? null}
                         threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
                         threadSavedComposerDrafts={threadSavedComposerDrafts}
                         onThreadSavedComposerDraftDelete={handleThreadSavedComposerDraftDelete}

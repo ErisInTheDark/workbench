@@ -1,6 +1,7 @@
 import type { RateLimitSnapshot } from "./codex/generated/app-server/v2/RateLimitSnapshot";
 import type { CommandAction } from "./codex/generated/app-server/v2/CommandAction";
 import type { Thread } from "./codex/generated/app-server/v2/Thread";
+import type { ThreadGoal } from "./codex/generated/app-server/v2/ThreadGoal";
 import type { ThreadTokenUsage } from "./codex/generated/app-server/v2/ThreadTokenUsage";
 import type { Turn } from "./codex/generated/app-server/v2/Turn";
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
@@ -1140,6 +1141,7 @@ export interface WorkbenchControls {
   pauseThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   resumeThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   stopThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
+  threadGoals: WorkbenchThreadGoalControls;
   submitPendingUserInputRequest: (
     threadId: string,
     response: WorkbenchUserInputResponse,
@@ -1155,6 +1157,23 @@ export interface WorkbenchControls {
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
   deleteFile: (filePath: string, options?: { confirmUntracked?: boolean }) => Promise<DeleteFileResponse>;
   setDraftThreadHarness: (harness: WorkbenchHarness) => void;
+}
+
+export interface WorkbenchThreadGoalSnapshot {
+  error: string | null;
+  goal: ThreadGoal | null;
+  isLoaded: boolean;
+  isLoading: boolean;
+  pendingAction: "clear" | "update" | null;
+}
+
+export interface WorkbenchThreadGoalControls {
+  clear: (threadId: string) => Promise<void>;
+  getSnapshot: (threadId: string) => WorkbenchThreadGoalSnapshot;
+  load: (threadId: string) => Promise<void>;
+  refresh: (threadId: string) => Promise<void>;
+  subscribe: (threadId: string, listener: () => void) => () => void;
+  updateObjective: (threadId: string, objective: string) => Promise<void>;
 }
 
 export interface WorkbenchBindings {

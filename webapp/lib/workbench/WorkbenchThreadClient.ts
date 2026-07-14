@@ -17,6 +17,9 @@ import type { RateLimitSnapshot } from "../codex/generated/app-server/v2/RateLim
 import type { SandboxPolicy } from "../codex/generated/app-server/v2/SandboxPolicy";
 import type { ThreadActiveFlag } from "../codex/generated/app-server/v2/ThreadActiveFlag";
 import type { ThreadCompactStartResponse } from "../codex/generated/app-server/v2/ThreadCompactStartResponse";
+import type { ThreadGoalClearResponse } from "../codex/generated/app-server/v2/ThreadGoalClearResponse";
+import type { ThreadGoalGetResponse } from "../codex/generated/app-server/v2/ThreadGoalGetResponse";
+import type { ThreadGoalSetResponse } from "../codex/generated/app-server/v2/ThreadGoalSetResponse";
 import type { ThreadItem } from "../codex/generated/app-server/v2/ThreadItem";
 import type { ThreadListResponse } from "../codex/generated/app-server/v2/ThreadListResponse";
 import type { ThreadReadResponse } from "../codex/generated/app-server/v2/ThreadReadResponse";
@@ -63,6 +66,7 @@ import type {
     WorkbenchSubmitUserInputRequestOptions,
     WorkbenchThreadContextReadResponse,
     WorkbenchThreadDocumentSnapshot,
+    WorkbenchThreadGoalControls,
     WorkbenchThreadTurnHistoryEntry,
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
@@ -74,6 +78,7 @@ import {
     isWorkbenchThreadRecoveryInput,
 } from "./thread/thread-recovery-message";
 import { stopWorkbenchThread } from "./thread/thread-stop";
+import ThreadGoalController from "./thread/ThreadGoalController";
 import {
     filterSubagentThreadSummaries,
     getSubagentThreadIds,
@@ -226,6 +231,7 @@ interface WorkbenchThreadClient {
   pauseThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   resumeThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   stopThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
+  threadGoals: WorkbenchThreadGoalControls;
   submitPendingUserInputRequest: (
     threadId: string,
     response: WorkbenchUserInputResponse,
@@ -702,6 +708,11 @@ function WorkbenchThreadClient(
   lifecycle: LifecycleScope = new LifecycleScope(),
 ): WorkbenchThreadClient {
   const codexClient = new CodexAppServerClient();
+  const threadGoals = new ThreadGoalController({
+    clear: (params) => sendBridgeRequest<ThreadGoalClearResponse>("codex", { method: "thread/goal/clear", params }),
+    get: (params) => sendBridgeRequest<ThreadGoalGetResponse>("codex", { method: "thread/goal/get", params }),
+    set: (params) => sendBridgeRequest<ThreadGoalSetResponse>("codex", { method: "thread/goal/set", params }),
+  });
   const listeners = new Set<WorkbenchThreadListener>();
   const rateLimitSnapshotEntriesByHarness = new Map<WorkbenchHarness, RateLimitSnapshotEntry>();
   const state = createInitialThreadState();
@@ -4597,6 +4608,10 @@ function WorkbenchThreadClient(
     handling: CodexAppServerNotificationHandling,
     harness: WorkbenchHarness,
   ) {
+    if (harness === "codex" && (notification.method === "thread/goal/updated" || notification.method === "thread/goal/cleared")) {
+      threadGoals.observeNotification(notification);
+    }
+
     if (notification.method === "collaboration/state/updated") {
       options.onCollaborationStateUpdated?.(notification.params.projectId, notification.params.state);
       return;
@@ -4827,6 +4842,7 @@ function WorkbenchThreadClient(
   function dispose() {
     disposed = true;
     listeners.clear();
+    threadGoals.dispose();
     lifecycle.dispose();
   }
 
@@ -4853,6 +4869,7 @@ function WorkbenchThreadClient(
     pauseThread,
     resumeThread,
     stopThread,
+    threadGoals,
     submitPendingUserInputRequest,
     setCurrentThreadAgent,
     setCurrentThreadComposerSettings,

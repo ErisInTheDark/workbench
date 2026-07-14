@@ -16,6 +16,7 @@
  * - ReloadIcon: render the local runtime reload icon. Keywords: workbench, icon, reload.
  * - StopIcon/PauseIcon/PlayIcon/ClockIcon/WarningIcon: render shared thread turn and command-status icons. Keywords: workbench, icon, thread, stop, pause, play, progress.
  * - PinIcon: render the pinned thread icon. Keywords: workbench, icon, thread, pin.
+ * - FlagIcon: render the Codex goal control icon. Keywords: workbench, icon, thread, goal, flag.
  * - ArchiveIcon: render the thread archive context menu icon. Keywords: workbench, icon, thread, archive.
  * - WrapTextIcon: render the thread codeblock line-wrap toggle icon. Keywords: workbench, icon, thread, code, wrap.
  * - PreviewIcon: render the thread codeblock preview toggle icon. Keywords: workbench, icon, thread, code, preview.
@@ -297,6 +298,24 @@ export function PinIcon ({ className = "size-4" }: IconProps) {
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
       <path d="M7.75 3.75H12.25L11.65 8.35L14.75 11.2V12.5H5.25V11.2L8.35 8.35L7.75 3.75Z" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M10 12.5V17" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function FlagIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path d="M6 22V2.8a.8.8 0 0 1 1.17-.71l11.38 5.69a.8.8 0 0 1 0 1.44L6 15.5" />
     </svg>
   );
 }
