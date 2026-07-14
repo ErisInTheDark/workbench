@@ -71,6 +71,13 @@ import ThreadWebSearchItem, {
   isThreadWebSearchPlaceholder,
   ThreadWebSearchSequence,
 } from "./ThreadWebSearchItem";
+import {
+  getThreadSubagentWaitTiming,
+  groupThreadSubagentWaitRenderEntries,
+  type ThreadSubagentWaitRenderEntry,
+  type ThreadSubagentWaitRenderGroup,
+  type ThreadSubagentWaitTiming,
+} from "./thread-subagent-wait-groups";
 import { createThreadTurnCompactionRenderPlan } from "./thread-turn-compaction-sections";
 import { CheckIcon, ClockIcon, PlayIcon, WarningIcon } from "../workbench-icons";
 
@@ -1360,6 +1367,7 @@ function isThreadContextCommandItem({
 type CommandSequenceRenderSegment =
   | { items: CommandItem[]; kind: "commands" }
   | { item: CommandItem; kind: "subagentRelationship" }
+  | { group: ThreadSubagentWaitRenderGroup<CommandItem>; kind: "subagentWait" }
   | { item: CommandItem; kind: "threadContext" };
 
 function buildCommandSequenceRenderSegments({
@@ -1375,6 +1383,7 @@ function buildCommandSequenceRenderSegments({
 }) {
   const segments: CommandSequenceRenderSegment[] = [];
   let pendingCommands: CommandItem[] = [];
+  let pendingSubagentWaits: ThreadSubagentWaitRenderEntry<CommandItem>[] = [];
 
   const flushPendingCommands = () => {
     if (!pendingCommands.length) {
@@ -1388,9 +1397,22 @@ function buildCommandSequenceRenderSegments({
     pendingCommands = [];
   };
 
+  const flushPendingSubagentWaits = () => {
+    if (!pendingSubagentWaits.length) {
+      return;
+    }
+
+    segments.push(...groupThreadSubagentWaitRenderEntries(pendingSubagentWaits).map((group) => ({
+      group,
+      kind: "subagentWait" as const,
+    })));
+    pendingSubagentWaits = [];
+  };
+
   for (const item of items) {
     if (isThreadContextCommandItem({ item, knownSkills, projectRootPath, workspaceRoots })) {
       flushPendingCommands();
+      flushPendingSubagentWaits();
       segments.push({
         item,
         kind: "threadContext",
@@ -1406,8 +1428,19 @@ function buildCommandSequenceRenderSegments({
       projectRootPath,
       workspaceRoots,
     });
-    const subagentAction = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand)?.action;
-    if (subagentAction === "message" || subagentAction === "stop" || subagentAction === "wait") {
+    const subagentCommand = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand);
+    if (subagentCommand?.action === "wait" && subagentCommand.threadIds.length) {
+      flushPendingCommands();
+      pendingSubagentWaits.push({
+        item,
+        outcome: getThreadCommandExecutionOutcome(item.status, item.exitCode),
+        threadIds: subagentCommand.threadIds,
+      });
+      continue;
+    }
+
+    flushPendingSubagentWaits();
+    if (subagentCommand?.action === "message" || subagentCommand?.action === "stop") {
       flushPendingCommands();
       segments.push({
         item,
@@ -1426,6 +1459,7 @@ function buildCommandSequenceRenderSegments({
   }
 
   flushPendingCommands();
+  flushPendingSubagentWaits();
   return segments;
 }
 
@@ -1496,6 +1530,7 @@ function ThreadCommandExecutionDetails ({
   projectId,
   projectRootPath,
   relatedThreadsById,
+  subagentWaitTiming,
   subagents,
   threadId,
   workspaceRoots,
@@ -1509,6 +1544,7 @@ function ThreadCommandExecutionDetails ({
   projectId?: string | null;
   projectRootPath?: string;
   relatedThreadsById: RelatedThreadsById;
+  subagentWaitTiming?: ThreadSubagentWaitTiming;
   subagents: readonly WorkbenchSubagentSummary[];
   threadId: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
@@ -1554,6 +1590,7 @@ function ThreadCommandExecutionDetails ({
   ) {
     return (
       <ThreadSubagentWaitItem
+        activeStartedAtMs={subagentWaitTiming?.activeStartedAtMs}
         disclosureContent={commandOutcome === "completed"
           ? item.aggregatedOutput?.trim() ? (
             <ThreadMarkdown
@@ -1574,7 +1611,7 @@ function ThreadCommandExecutionDetails ({
               variant="plain"
             />
           )}
-        durationMs={item.durationMs}
+        durationMs={subagentWaitTiming ? subagentWaitTiming.durationMs : item.durationMs}
         entries={subagentCommand.threadIds.map((childThreadId) => {
           const childThread = relatedThreadsById[childThreadId];
           return {
@@ -1862,6 +1899,7 @@ function ThreadCommandSequence ({
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   inlineMentionSources,
   isMostRecent,
+  itemTimeline = [],
   items,
   knownSkills,
   projectFilePaths,
@@ -1876,6 +1914,7 @@ function ThreadCommandSequence ({
   browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecent: boolean;
+  itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
   items: CommandItem[];
   knownSkills?: WorkbenchSkillSummary[];
   projectFilePaths?: readonly string[];
@@ -1944,6 +1983,23 @@ function ThreadCommandSequence ({
             threadId={threadId}
             workspaceRoots={workspaceRoots}
           />
+        ) : segment.kind === "subagentWait" ? (
+          <ThreadCommandExecutionDetails
+            browseResultEntries={browseResultEntries}
+            inlineMentionSources={inlineMentionSources}
+            isMostRecent={isMostRecent && index === renderSegments.length - 1}
+            item={segment.group.anchor.item}
+            key={`subagent-wait:${segment.group.anchor.item.id}`}
+            knownSkills={knownSkills}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            relatedThreadsById={relatedThreadsById}
+            subagentWaitTiming={getThreadSubagentWaitTiming(segment.group, itemTimeline)}
+            subagents={subagents}
+            threadId={threadId}
+            workspaceRoots={workspaceRoots}
+          />
         ) : (
           <ThreadRegularCommandSequence
             browseResultEntries={browseResultEntries}
@@ -1986,6 +2042,7 @@ function ThreadRenderableBlockViewComponent ({
   browseResultEntries,
   finalAgentMessageId,
   inlineMentionSources,
+  itemTimeline,
   isMostRecentBlock,
   knownSkills,
   primaryUserBlock,
@@ -2005,6 +2062,7 @@ function ThreadRenderableBlockViewComponent ({
   browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   finalAgentMessageId: string | null;
   inlineMentionSources?: InlineMentionHighlightSources | null;
+  itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
   isMostRecentBlock: boolean;
   knownSkills?: WorkbenchSkillSummary[];
   primaryUserBlock: ThreadRenderableBlock | null;
@@ -2021,7 +2079,7 @@ function ThreadRenderableBlockViewComponent ({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   if (block.kind === "commandSequence") {
-    return <ThreadCommandSequence browseResultEntries={browseResultEntries} inlineMentionSources={inlineMentionSources} isMostRecent={isMostRecentBlock} items={block.items} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} relatedThreadsById={relatedThreadsById} subagents={subagents} threadCwdPath={threadCwdPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
+    return <ThreadCommandSequence browseResultEntries={browseResultEntries} inlineMentionSources={inlineMentionSources} isMostRecent={isMostRecentBlock} itemTimeline={itemTimeline} items={block.items} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} relatedThreadsById={relatedThreadsById} subagents={subagents} threadCwdPath={threadCwdPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
   }
 
   if (block.kind === "fileChangeSequence") {
@@ -2108,6 +2166,7 @@ const ThreadRenderableBlockView = memo(ThreadRenderableBlockViewComponent, (left
   && left.browseResultEntries === right.browseResultEntries
   && left.finalAgentMessageId === right.finalAgentMessageId
   && (left.inlineMentionSources?.cacheKey ?? "") === (right.inlineMentionSources?.cacheKey ?? "")
+  && left.itemTimeline === right.itemTimeline
   && left.isMostRecentBlock === right.isMostRecentBlock
   && left.knownSkills === right.knownSkills
   && left.primaryUserBlock === right.primaryUserBlock
@@ -2241,6 +2300,7 @@ function ThreadTurnDetailsComponent ({
       browseResultEntries={turnBrowseResultEntries}
       finalAgentMessageId={finalAgentMessageId}
       inlineMentionSources={inlineMentionSources}
+      itemTimeline={itemTimeline}
       isMostRecentBlock={block === blockList[blockList.length - 1]}
       knownSkills={knownSkills}
       primaryUserBlock={primaryUserBlock}

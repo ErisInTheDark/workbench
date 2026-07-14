@@ -18,25 +18,25 @@ import path from "node:path";
 
 import { WebSocketServer } from "next/dist/compiled/ws";
 
-import { createInitializeCapabilities, createInitializeRequest } from "../lib/codex/protocol";
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
+import { createInitializeCapabilities, createInitializeRequest } from "../lib/codex/protocol";
 import { getCurrentInProgressTurn, getCurrentTurn, hasThreadActiveFlag } from "../lib/codex/thread-state";
+import type {
+    OrchestratorReloadRequest,
+    OrchestratorReloadResponse,
+    OrchestratorReloadScope,
+    WorkbenchBrowseResultEntry,
+    WorkbenchHarness,
+} from "../lib/types";
 import {
-  normalizeOrchestratorReloadScopes,
-  validateOrchestratorReloadScopeCombination,
+    normalizeOrchestratorReloadScopes,
+    validateOrchestratorReloadScopeCombination,
 } from "../lib/workbench/orchestrator-reload";
 import {
-  createWorkbenchThreadRecoveryInput,
-  isWorkbenchThreadRecoveryUserMessage,
+    createWorkbenchThreadRecoveryInput,
+    isWorkbenchThreadRecoveryUserMessage,
 } from "../lib/workbench/thread/thread-recovery-message";
-import type {
-  OrchestratorReloadRequest,
-  OrchestratorReloadResponse,
-  OrchestratorReloadScope,
-  WorkbenchBrowseResultEntry,
-  WorkbenchHarness,
-} from "../lib/types";
 import type { BridgeClient, HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import CodexAppServer from "./CodexAppServer";
 import CodexBridgeTransitionController from "./CodexBridgeTransitionController";
@@ -44,9 +44,6 @@ import CodexRecoverySupervisor from "./CodexRecoverySupervisor";
 import CodexStdioBridge from "./CodexStdioBridge";
 import { CopilotBridge } from "./copilot-bridge";
 import { OpenCodeBridge } from "./opencode-bridge";
-import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
-import WorkbenchTurnRecoveryHandoffStore, { type WorkbenchTurnRecoveryHandoffCandidate } from "./WorkbenchTurnRecoveryHandoffStore";
-import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
 import {
     createSpawnOptions,
     getSpawnDescriptor,
@@ -58,9 +55,12 @@ import {
     type RunningProcess,
 } from "./process-helpers";
 import {
-  loadOrchestratorReloadableModules,
-  reloadOrchestratorReloadableModules,
+    loadOrchestratorReloadableModules,
+    reloadOrchestratorReloadableModules,
 } from "./reloadable-modules";
+import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
+import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
+import WorkbenchTurnRecoveryHandoffStore, { type WorkbenchTurnRecoveryHandoffCandidate } from "./WorkbenchTurnRecoveryHandoffStore";
 
 const ORCHESTRATOR_ROOT = __dirname;
 const WEBAPP_ROOT = path.resolve(ORCHESTRATOR_ROOT, "..");
@@ -84,9 +84,9 @@ const ORCHESTRATOR_TREE_PATH = "/orchestrator/tree";
 const CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS = 5000;
 const CODEX_RECOVERY_INITIAL_RETRY_DELAY_MS = 1000;
 const CODEX_RECOVERY_MAX_RETRY_DELAY_MS = 30000;
-const CODEX_HEALTH_INTERVAL_MS = 10000;
+const CODEX_HEALTH_INTERVAL_MS = 30000;
 const CODEX_HEALTH_REQUEST_TIMEOUT_MS = 5000;
-const CODEX_HEALTH_FAILURE_THRESHOLD = 3;
+const CODEX_HEALTH_FAILURE_THRESHOLD = 5;
 const BROWSE_CONTROLLER_RELOAD_DRAIN_TIMEOUT_MS = 5000;
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
 
@@ -598,6 +598,7 @@ function createAgentCommandController() {
     executeSessionRequest: async (request, signal) => await runAfterBrowseControllerReload(
       () => getBrowseController().executeSessionRequest(request, signal),
     ),
+    requestSubagent: async (request) => await requestLiveHarness("codex", request),
   });
 }
 

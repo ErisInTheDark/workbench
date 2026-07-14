@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover direct Browse dispatch, response adaptation, and caller cancellation. Keywords: workbench, agent, command, browse, cancellation, transport, test.
+ * - No production exports; Node tests cover direct Browse/subagent dispatch, response adaptation, and caller cancellation. Keywords: workbench, agent, command, browse, subagent, cancellation, transport, test.
  */
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -32,6 +32,12 @@ async function startController(controller: WorkbenchAgentCommandController) {
 function agentCommandBody(args: string[]) {
   const body = new URLSearchParams({ cwd: process.cwd() });
   for (const arg of args) body.append("arg", arg);
+  return body.toString();
+}
+
+function subagentCommandBody(args: string[]) {
+  const body = new URLSearchParams(agentCommandBody(args));
+  body.set("callerThreadId", "parent-thread");
   return body.toString();
 }
 
@@ -69,6 +75,88 @@ test("dispatches Browse commands directly without an internal fetch and preserve
     assert.equal(response.status, 200);
     assert.equal(await response.text(), "direct Browse owner\n");
     assert.match(receivedBody, /"script":"status"/u);
+  } finally {
+    await server.close();
+  }
+});
+
+test("dispatches native subagent commands directly without waiting on Next fetch headers", async () => {
+  let receivedRequest: { method?: string; params?: unknown } | null = null;
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:3002",
+    "http://127.0.0.1:4500",
+    {
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      requestSubagent: async (request) => {
+        receivedRequest = request;
+        return { id: request.id ?? null, result: { profiles: [] } };
+      },
+    },
+    async () => { throw new Error("unexpected internal fetch"); },
+  );
+  const server = await startController(controller);
+  try {
+    const response = await fetch(`${server.origin}/orchestrator/agent-command`, {
+      body: subagentCommandBody(["subagent", "profiles"]),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(JSON.parse(await response.text()), { profiles: [] });
+    assert.equal(receivedRequest?.method, "workbench/subagent/profiles");
+    assert.deepEqual(receivedRequest?.params, {
+      action: "profiles",
+      callerThreadId: "parent-thread",
+      cwd: process.cwd(),
+      workbenchOrigin: "http://127.0.0.1:4500",
+    });
+  } finally {
+    await server.close();
+  }
+});
+
+test("cancels the exact direct subagent waiter when the native caller disconnects", async () => {
+  const waitStarted = deferred<string>();
+  const waitCancelled = deferred<string>();
+  const waitResponse = deferred<{ id: number | string | null; error: { code: number; message: string } }>();
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:3002",
+    "http://127.0.0.1:4500",
+    {
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      requestSubagent: async (message) => {
+        const params = message.params && typeof message.params === "object" && !Array.isArray(message.params)
+          ? message.params as Record<string, unknown>
+          : {};
+        const waitId = String(params.waitId ?? "");
+        if (message.method === "workbench/subagent/wait") {
+          waitStarted.resolve(waitId);
+          return await waitResponse.promise;
+        }
+        assert.equal(message.method, "workbench/subagent/waitCancel");
+        waitCancelled.resolve(waitId);
+        waitResponse.resolve({ id: 0, error: { code: -32000, message: "Subagent wait cancelled." } });
+        return { id: 0, result: { cancelled: true } };
+      },
+    },
+    async () => { throw new Error("unexpected internal fetch"); },
+  );
+  const server = await startController(controller);
+  try {
+    const body = subagentCommandBody(["subagent", "wait", "--id", "child-thread"]);
+    const request = http.request(`${server.origin}/orchestrator/agent-command`, {
+      headers: {
+        "Content-Length": Buffer.byteLength(body),
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      method: "POST",
+    });
+    request.on("error", () => undefined);
+    request.end(body);
+    const waitId = await waitStarted.promise;
+    assert.ok(waitId);
+    request.destroy();
+    assert.equal(await waitCancelled.promise, waitId);
   } finally {
     await server.close();
   }
@@ -134,7 +222,7 @@ test("passes caller cancellation into genuine remaining fetches", async () => {
   );
   const server = await startController(controller);
   try {
-    const body = agentCommandBody(["subagent", "profiles"]);
+    const body = agentCommandBody(["thread", "recall", "--thread", "thread-1"]);
     const request = http.request(`${server.origin}/orchestrator/agent-command`, {
       headers: {
         "Content-Length": Buffer.byteLength(body),

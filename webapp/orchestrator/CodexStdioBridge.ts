@@ -1133,7 +1133,11 @@ export default class CodexStdioBridge {
     }
 
     this.upstreamInitializePromise = (async () => {
-      const response = await this.request(initializeMessage, { internal: true });
+      const dispatch = await this.dispatchRequest(initializeMessage, { internal: true });
+      if (!dispatch.response) {
+        throw new Error("Codex initialize request did not create an internal response.");
+      }
+      const response = await dispatch.response;
       if (response.error) {
         throw new Error(response.error.message);
       }
@@ -1153,7 +1157,7 @@ export default class CodexStdioBridge {
   async forwardRequest(message: JsonRpcRequest, client: BridgeClient, clientRequestId: number | string) {
     await this.enqueueOperation(() => {
       this.assertAcceptingWork();
-      return this.request(message, { client, clientRequestId });
+      return this.dispatchRequest(message, { client, clientRequestId });
     });
   }
 
@@ -1181,11 +1185,13 @@ export default class CodexStdioBridge {
     const run = async () => {
       const bridgeResponse = await this.handleBridgeRequest(message);
       if (bridgeResponse) return bridgeResponse;
-      return await this.enqueueOperation(() => {
+      const dispatch = await this.enqueueOperation(() => {
         if (controller?.signal.aborted) throw controller.signal.reason;
         this.assertAcceptingWork();
-        return this.request(message, { internal: true, signal: controller?.signal });
+        return this.dispatchRequest(message, { internal: true, signal: controller?.signal });
       });
+      if (!dispatch.response) throw new Error(`Codex internal request ${message.method} did not create a response.`);
+      return await dispatch.response;
     };
     if (!controller || options.timeoutMs === undefined) return await run();
 
@@ -1222,10 +1228,12 @@ export default class CodexStdioBridge {
 
   async steerTurnForBrowse(threadId: string, expectedTurnId: string, input: UserInput[]) {
     this.assertAcceptingWork();
-    const response = await this.request({
+    const dispatch = await this.dispatchRequest({
       method: "turn/steer",
       params: { expectedTurnId, input, threadId },
     }, { internal: true });
+    if (!dispatch.response) throw new Error("turn/steer did not create an internal response.");
+    const response = await dispatch.response;
     if (response.error) {
       throw new Error(response.error.message);
     }
@@ -1341,7 +1349,7 @@ export default class CodexStdioBridge {
     this.appServer.send(message);
   }
 
-  private async request(
+  private async dispatchRequest(
     message: JsonRpcRequest,
     {
       client,
@@ -1389,7 +1397,11 @@ export default class CodexStdioBridge {
         this.pendingResponses.delete(upstreamRequestId);
         rejectResponse(error instanceof Error ? error : new Error(String(error)));
       }
-      return signal ? responsePromise.finally(() => signal.removeEventListener("abort", abortPendingResponse)) : responsePromise;
+      return {
+        response: signal
+          ? responsePromise.finally(() => signal.removeEventListener("abort", abortPendingResponse))
+          : responsePromise,
+      };
     }
 
     if (!client || clientRequestId === undefined) {
@@ -1416,7 +1428,7 @@ export default class CodexStdioBridge {
       this.pendingResponses.delete(upstreamRequestId);
       throw error;
     }
-    return null;
+    return { response: null };
   }
 
   private async withWorkbenchPromptInstructions(message: JsonRpcRequest, method: string | null): Promise<JsonRpcRequest> {
@@ -2002,7 +2014,9 @@ export default class CodexStdioBridge {
       params: readParams,
       ...(hydration ? { [WORKBENCH_THREAD_HYDRATION_FIELD]: hydration } : {}),
     };
-    const readResponse = await this.request(readRequest, { internal: true });
+    const dispatch = await this.dispatchRequest(readRequest, { internal: true });
+    if (!dispatch.response) throw new Error("thread/context/read did not create an internal response.");
+    const readResponse = await dispatch.response;
     if (readResponse.error) {
       throw new Error(readResponse.error.message);
     }

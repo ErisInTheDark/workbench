@@ -73,6 +73,7 @@ import {
     createWorkbenchThreadRecoveryId,
     isWorkbenchThreadRecoveryInput,
 } from "./thread/thread-recovery-message";
+import { stopWorkbenchThread } from "./thread/thread-stop";
 import {
     filterSubagentThreadSummaries,
     getSubagentThreadIds,
@@ -4358,12 +4359,13 @@ function WorkbenchThreadClient(
       return thread;
     }
 
-    await sendBridgeRequest<{ ok?: boolean }>(thread.harness, {
-      method: "turn/interrupt",
-      params: {
-        threadId: thread.id,
-        turnId: activeTurn.id,
+    await stopWorkbenchThread({
+      harness: thread.harness,
+      sendRequest: async (harness, request) => {
+        await sendBridgeRequest(harness, request);
       },
+      threadId: thread.id,
+      turnId: activeTurn.id,
     });
 
     const refreshedThread = await readThread(thread.id, thread.harness).catch(() => null);

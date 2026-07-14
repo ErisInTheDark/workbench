@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import type { JsonRpcRequest } from "./bridge-types";
 import type CodexAppServer from "./CodexAppServer";
 import CodexHealthMonitor from "./CodexHealthMonitor";
 import CodexStdioBridge from "./CodexStdioBridge";
@@ -43,10 +44,11 @@ test("health monitor arms on success and signals only after the configured failu
   monitor.dispose();
 });
 
-test("health requests use the bridge-owned pending-response deadline", async () => {
+test("health requests use their deadline without waiting behind another internal response", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-codex-health-deadline-"));
+  const sentRequests: JsonRpcRequest[] = [];
   const bridge = new CodexStdioBridge({
-    appServer: { send: () => undefined } as unknown as CodexAppServer,
+    appServer: { send: (message: unknown) => sentRequests.push(message as JsonRpcRequest) } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:4500",
     onNotification: () => undefined,
     sendToClient: () => undefined,
@@ -59,10 +61,16 @@ test("health requests use the bridge-owned pending-response deadline", async () 
   const blockingRequest = bridge.handleServerRequest({ id: "blocking", method: "account/read", params: {} });
   void blockingRequest.catch(() => undefined);
   await Promise.resolve();
-  await assert.rejects(
-    bridge.handleServerRequest({ id: "queued-health", method: "account/read", params: {} }, { timeoutMs: 20 }),
-    /timed out after 20ms/u,
+  const healthRequest = bridge.handleServerRequest(
+    { id: "independent-health", method: "account/read", params: {} },
+    { timeoutMs: 1_000 },
   );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(sentRequests.length, 3);
+  const dispatchedHealthRequest = sentRequests[2];
+  assert.equal(dispatchedHealthRequest?.method, "account/read");
+  await bridge.handleUpstreamMessage({ id: dispatchedHealthRequest?.id ?? -1, result: { account: null } });
+  await healthRequest;
   await bridge.disposeImmediately();
   await assert.rejects(blockingRequest, /stopped before the upstream response arrived/u);
 });

@@ -1,7 +1,8 @@
 /*
  * Exports:
- * - default WorkbenchAgentCommandController: parse native-shell wb argv, route allowlisted requests to their owners, adapt output, and stream native responses. Keywords: workbench, agent, command, shell, orchestrator, transport.
+ * - default WorkbenchAgentCommandController: parse native-shell wb argv, directly dispatch Browse and subagent requests, adapt output, and stream native responses. Keywords: workbench, agent, command, shell, orchestrator, transport, subagent.
  */
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type http from "node:http";
 import path from "node:path";
@@ -11,20 +12,29 @@ import {
   type WorkbenchAgentCliRequest,
 } from "../lib/workbench/cli/workbench-agent-cli-commands";
 import { adaptWorkbenchAgentCliResponse } from "../lib/workbench/cli/workbench-agent-cli-responses";
+import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 const RELOAD_POLL_INTERVAL_MS = 250;
 const RELOAD_TIMEOUT_MS = 60_000;
 
-interface WorkbenchAgentBrowsePort {
+interface WorkbenchAgentDirectPort {
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
+  requestSubagent?: (message: JsonRpcRequest) => Promise<JsonRpcResponse>;
 }
 
-const UNCONFIGURED_BROWSE_PORT: WorkbenchAgentBrowsePort = {
+const UNCONFIGURED_DIRECT_PORT: WorkbenchAgentDirectPort = {
   executeBrowseRequest: async () => { throw new Error("Direct Browse dispatch is not configured."); },
   executeSessionRequest: async () => { throw new Error("Direct Browse session dispatch is not configured."); },
 };
+
+const SUBAGENT_ACTION_METHODS = {
+  create: "workbench/subagent/create",
+  message: "workbench/subagent/message",
+  profiles: "workbench/subagent/profiles",
+  stop: "workbench/subagent/stop",
+} as const;
 
 async function readBody(request: http.IncomingMessage) {
   const chunks: Buffer[] = [];
@@ -107,7 +117,7 @@ export default class WorkbenchAgentCommandController {
   constructor(
     private readonly nextOrigin: string,
     private readonly orchestratorOrigin: string,
-    private readonly browse: WorkbenchAgentBrowsePort = UNCONFIGURED_BROWSE_PORT,
+    private readonly direct: WorkbenchAgentDirectPort = UNCONFIGURED_DIRECT_PORT,
     private readonly fetchRequest: typeof fetch = fetch,
   ) {}
 
@@ -176,13 +186,72 @@ export default class WorkbenchAgentCommandController {
 
   private async dispatchRequest(request: WorkbenchAgentCliRequest, signal: AbortSignal) {
     const body = Buffer.from(request.body ? JSON.stringify(request.body) : "");
+    if (request.path === "/api/subagents" && request.body) {
+      return await this.dispatchSubagentRequest(request.body, signal);
+    }
     if (request.path.startsWith("/api/browse/sessions")) {
-      return await this.browse.executeSessionRequest({ body, method: request.method, url: request.path }, signal);
+      return await this.direct.executeSessionRequest({ body, method: request.method, url: request.path }, signal);
     }
     if (request.path.startsWith("/api/browse")) {
-      return await this.browse.executeBrowseRequest(body, signal);
+      return await this.direct.executeBrowseRequest(body, signal);
     }
     return await this.fetchRequest(this.resolveUrl(request.path), this.buildRequestInit(request, signal));
+  }
+
+  private async dispatchSubagentRequest(body: Record<string, unknown>, signal: AbortSignal) {
+    const requestSubagent = this.direct.requestSubagent;
+    if (!requestSubagent) {
+      throw new Error("Direct subagent dispatch is not configured.");
+    }
+    if (signal.aborted) {
+      throw signal.reason;
+    }
+
+    const action = typeof body.action === "string" ? body.action : "";
+    if (action !== "wait") {
+      const method = SUBAGENT_ACTION_METHODS[action as keyof typeof SUBAGENT_ACTION_METHODS];
+      if (!method) {
+        return Response.json({ error: "Unsupported Workbench subagent action." }, { status: 400 });
+      }
+      const response = await requestSubagent({ id: 0, method, params: body });
+      if (response.error) {
+        return Response.json({ error: response.error.message }, { status: 400 });
+      }
+      return action === "message" || action === "stop"
+        ? new Response(null, { status: 204 })
+        : Response.json(response.result ?? {});
+    }
+
+    const waitId = randomUUID();
+    const cancel = () => {
+      void requestSubagent({
+        id: 0,
+        method: "workbench/subagent/waitCancel",
+        params: { waitId },
+      }).catch(() => undefined);
+    };
+    signal.addEventListener("abort", cancel, { once: true });
+    try {
+      const response = await requestSubagent({
+        id: 0,
+        method: "workbench/subagent/wait",
+        params: { ...body, waitId },
+      });
+      if (response.error) {
+        return Response.json({ error: response.error.message }, { status: 400 });
+      }
+      const result = response.result && typeof response.result === "object"
+        ? response.result as { output?: unknown }
+        : null;
+      if (typeof result?.output !== "string") {
+        return Response.json({ error: "Workbench subagent wait returned no output." }, { status: 400 });
+      }
+      return new Response(result.output, {
+        headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+      });
+    } finally {
+      signal.removeEventListener("abort", cancel);
+    }
   }
 
   private resolveUrl(requestPath: string) {

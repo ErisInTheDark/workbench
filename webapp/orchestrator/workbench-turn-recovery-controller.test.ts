@@ -57,3 +57,32 @@ test("handoff progress keeps the first unsettled candidate after a recovery fail
   const persisted = await store.load();
   assert.deepEqual(persisted?.candidates.map((candidate) => candidate.threadId), ["second"]);
 });
+
+test("recovery cannot retire a replacement candidate registered for the same thread", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-recovery-replacement-"));
+  const controller = new WorkbenchTurnRecoveryController(new WorkbenchTurnRecoveryHandoffStore(root), () => undefined);
+  controller.observeRequest("codex", { id: "original", method: "turn/start", params: { input: [], threadId: "thread" } });
+  const original = controller.capture(["codex"])[0];
+  assert.ok(original);
+
+  await controller.recover([original], async () => {
+    controller.observeRequest("codex", { id: "recovery-start", method: "turn/start", params: { input: [], threadId: "thread" } });
+    return "recovered";
+  });
+
+  const replacement = controller.capture(["codex"])[0];
+  assert.ok(replacement);
+  assert.notEqual(replacement.recoveryId, original.recoveryId);
+});
+
+test("busy recovery candidates remain registered", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-recovery-busy-"));
+  const controller = new WorkbenchTurnRecoveryController(new WorkbenchTurnRecoveryHandoffStore(root), () => undefined);
+  controller.observeRequest("codex", { id: "busy", method: "turn/start", params: { input: [], threadId: "thread" } });
+  const candidate = controller.capture(["codex"])[0];
+  assert.ok(candidate);
+
+  await controller.recover([candidate], async () => "busy");
+
+  assert.equal(controller.capture(["codex"])[0]?.recoveryId, candidate.recoveryId);
+});

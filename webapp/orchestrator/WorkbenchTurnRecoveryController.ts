@@ -108,8 +108,11 @@ export default class WorkbenchTurnRecoveryController {
   async recover(candidates: WorkbenchTurnRecoveryHandoffCandidate[], port: WorkbenchTurnRecoveryPort, handoff?: WorkbenchTurnRecoveryHandoff) {
     let remaining = [...candidates];
     for (const candidate of candidates) {
-      await port(candidate);
-      this.candidates.delete(candidate.key);
+      const result = await port(candidate);
+      const currentCandidate = this.candidates.get(candidate.key);
+      if (result !== "busy" && currentCandidate?.recoveryId === candidate.recoveryId) {
+        this.candidates.delete(candidate.key);
+      }
       remaining = remaining.filter((entry) => entry.key !== candidate.key);
       if (handoff) await this.store.updateCandidates(handoff, remaining);
     }
