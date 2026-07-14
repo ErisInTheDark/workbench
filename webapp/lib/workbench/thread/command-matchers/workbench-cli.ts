@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchSubagentCommand/parseWorkbenchSubagentCommand: parse semantic subagent action, ordered child thread IDs, and message from wb commands. Keywords: workbench, cli, subagent, parse, thread ids, message.
+ * - WorkbenchSubagentCommand/parseWorkbenchSubagentCommand: parse semantic subagent actions, create metadata, ordered child thread IDs, and messages from wb commands. Keywords: workbench, cli, subagent, parse, create, metadata, thread ids, message.
  * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb title, subagent, reload, and Collaboration commands. Keywords: workbench, cli, title, subagent, collaboration.
  */
 import { CommandMatcher } from "./core";
@@ -13,7 +13,10 @@ export type WorkbenchSubagentCommandAction = "create" | "list" | "message" | "pr
 export interface WorkbenchSubagentCommand {
   action: WorkbenchSubagentCommandAction;
   message: string | null;
+  name: string | null;
+  profileId: string | null;
   threadIds: string[];
+  title: string | null;
 }
 
 function readValue(command: string, startIndex: number) {
@@ -71,7 +74,10 @@ export function parseWorkbenchSubagentCommand(command: string): WorkbenchSubagen
   return {
     action,
     message: readFlagValue(normalized, "message"),
+    name: readFlagValue(normalized, "name"),
+    profileId: readFlagValue(normalized, "profile"),
     threadIds: readFlagValues(normalized, "id"),
+    title: readFlagValue(normalized, "title"),
   };
 }
 

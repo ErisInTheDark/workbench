@@ -63,6 +63,7 @@ import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
 import ThreadReasoningItem from "./ThreadReasoningItem";
 import ThreadSummaryText from "./ThreadSummaryText";
+import ThreadSubagentCreateItem from "./ThreadSubagentCreateItem";
 import ThreadSubagentMessageItem from "./ThreadSubagentMessageItem";
 import ThreadSubagentStopItem from "./ThreadSubagentStopItem";
 import ThreadSubagentWaitItem from "./ThreadSubagentWaitItem";
@@ -1302,7 +1303,7 @@ function isThreadContextCommandItem({
 
 type CommandSequenceRenderSegment =
   | { items: CommandItem[]; kind: "commands" }
-  | { item: CommandItem; kind: "subagentRelationship" }
+  | { item: CommandItem; kind: "subagent" }
   | { group: ThreadSubagentWaitRenderGroup<CommandItem>; kind: "subagentWait" }
   | { item: CommandItem; kind: "threadContext" };
 
@@ -1376,11 +1377,11 @@ function buildCommandSequenceRenderSegments({
     }
 
     flushPendingSubagentWaits();
-    if (subagentCommand?.action === "message" || subagentCommand?.action === "stop") {
+    if (subagentCommand) {
       flushPendingCommands();
       segments.push({
         item,
-        kind: "subagentRelationship",
+        kind: "subagent",
       });
       continue;
     }
@@ -1574,6 +1575,37 @@ function ThreadCommandExecutionDetails ({
     );
   }
   const subagentThreadId = subagentCommand?.threadIds[0] ?? null;
+  if (
+    subagentCommand?.action === "create"
+    && subagentCommand.message
+    && subagentCommand.name
+    && subagentCommand.profileId
+    && subagentCommand.title
+    && (item.status === "inProgress" || item.status === "completed")
+    && (item.exitCode === null || item.exitCode === 0)
+  ) {
+    const createdThreadId = item.status === "completed" ? item.aggregatedOutput?.trim() || null : null;
+    return (
+      <ThreadSubagentCreateItem
+        active={item.status === "inProgress"}
+        fallbackName={subagentCommand.name}
+        fallbackProfileName={subagentCommand.profileId}
+        fallbackTitle={subagentCommand.title}
+        subagent={createdThreadId ? getSubagentSummary(subagents, createdThreadId) : null}
+        threadId={createdThreadId}
+      >
+        <ThreadMarkdown
+          inlineMentionSources={inlineMentionSources}
+          markdown={subagentCommand.message}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          threadCwdPath={item.cwd}
+          workspaceRoots={workspaceRoots}
+        />
+      </ThreadSubagentCreateItem>
+    );
+  }
   if (
     subagentCommand?.action === "message"
     && subagentThreadId
@@ -1903,13 +1935,13 @@ function ThreadCommandSequence ({
             threadCwdPath={threadCwdPath}
             workspaceRoots={workspaceRoots}
           />
-        ) : segment.kind === "subagentRelationship" ? (
+        ) : segment.kind === "subagent" ? (
           <ThreadCommandExecutionDetails
             browseResultEntries={browseResultEntries}
             inlineMentionSources={inlineMentionSources}
             isMostRecent={isMostRecent && index === renderSegments.length - 1}
             item={segment.item}
-            key={`subagent-relationship:${segment.item.id}`}
+            key={`subagent:${segment.item.id}`}
             knownSkills={knownSkills}
             projectFilePaths={projectFilePaths}
             projectId={projectId}

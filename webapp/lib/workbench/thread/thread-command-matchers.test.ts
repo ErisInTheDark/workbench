@@ -51,32 +51,50 @@ test("Workbench subagent commands share one semantic parser", () => {
   assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent wait --id child-thread"), {
     action: "wait",
     message: null,
+    name: null,
+    profileId: null,
     threadIds: ["child-thread"],
+    title: null,
   });
   assert.deepEqual(parseWorkbenchSubagentCommand('wb.cmd subagent message --id "child thread" --message continue'), {
     action: "message",
     message: "continue",
+    name: null,
+    profileId: null,
     threadIds: ["child thread"],
+    title: null,
   });
   assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent stop --id='child-thread'"), {
     action: "stop",
     message: null,
+    name: null,
+    profileId: null,
     threadIds: ["child-thread"],
+    title: null,
   });
   assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent wait --id child-thread; Write-Output done"), {
     action: "wait",
     message: null,
+    name: null,
+    profileId: null,
     threadIds: ["child-thread"],
+    title: null,
   });
   assert.deepEqual(parseWorkbenchSubagentCommand('wb subagent message --message "Use the safer `route`" --id child-thread'), {
     action: "message",
     message: "Use the safer `route`",
+    name: null,
+    profileId: null,
     threadIds: ["child-thread"],
+    title: null,
   });
   assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent profiles"), {
     action: "profiles",
     message: null,
+    name: null,
+    profileId: null,
     threadIds: [],
+    title: null,
   });
   assert.equal(parseWorkbenchSubagentCommand("wb thread recall --thread child-thread"), null);
 
@@ -102,11 +120,35 @@ test("Workbench subagent commands share one semantic parser", () => {
 
 });
 
+test("Workbench subagent create commands expose metadata through PowerShell wrappers", () => {
+  const createCommand = 'wb subagent create --profile "safety-profile" --name Maribel --title "Review bridge reloads" --message "Check cancellation and pending waiters"';
+  assert.deepEqual(parseWorkbenchSubagentCommand(createCommand), {
+    action: "create",
+    message: "Check cancellation and pending waiters",
+    name: "Maribel",
+    profileId: "safety-profile",
+    threadIds: [],
+    title: "Review bridge reloads",
+  });
+  const wrappedCreateDisplay = getThreadCommandDisplay({
+    command: `"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command '${createCommand}'`,
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(wrappedCreateDisplay.claimedBy, "workbench-cli.subagent");
+  assert.equal(wrappedCreateDisplay.summaryText, "Created subagent");
+  assert.equal(wrappedCreateDisplay.ongoingSummaryText, "Creating subagent");
+});
+
 test("Workbench subagent list gets dedicated metadata labels", () => {
   assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent list --limit 20"), {
     action: "list",
     message: null,
+    name: null,
+    profileId: null,
     threadIds: [],
+    title: null,
   });
   const listDisplay = getThreadCommandDisplay({
     command: "wb subagent list",
