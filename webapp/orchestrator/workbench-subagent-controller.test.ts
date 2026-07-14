@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover profile listing, subagent creation, direct-parent ownership, one-client lifecycle, and questionnaire steer ordering. Keywords: subagent, profile, controller, authorization, questionnaire, test.
+ * - No production exports; Node tests cover profile listing, subagent creation/activity, direct-parent ownership, one-client lifecycle, and questionnaire steer ordering. Keywords: subagent, profile, controller, activity, authorization, questionnaire, test.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -10,7 +10,7 @@ import { test } from "node:test";
 
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { CodexJsonRpcResponse } from "../lib/codex/protocol";
-import type { WorkbenchComposerProfile, WorkbenchUserInputRequest } from "../lib/types";
+import type { WorkbenchComposerProfile, WorkbenchSubagentPage, WorkbenchUserInputRequest } from "../lib/types";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 
 interface HarnessCall {
@@ -139,13 +139,19 @@ test("creates with one client and delivers a steer before empty questionnaire re
     "thread/start",
     "turn/start",
   ]);
+  const listedAfterCreate = await controller.handleRequest({
+    id: 4,
+    method: "workbench/subagent/list",
+    params: { cwd, limit: 20, parentThreadId: callerThreadId },
+  });
+  assert.equal((listedAfterCreate.result as WorkbenchSubagentPage).subagents[0]?.activityStatus, "active");
 
   const messaged = await controller.handleRequest({
-    id: 4,
+    id: 5,
     method: "workbench/subagent/message",
     params: { callerThreadId, cwd, message: "Take the safer route.", threadId: childThreadId },
   });
-  assert.deepEqual(messaged, { id: 3, result: {} });
+  assert.deepEqual(messaged, { id: 5, result: {} });
   assert.equal(clients.length, 2);
   assert.equal(clients[1].connectCount, 1);
   assert.equal(clients[1].closeCount, 1);
@@ -153,13 +159,68 @@ test("creates with one client and delivers a steer before empty questionnaire re
   assert.deepEqual(lifecycleCalls.map(({ method }) => method), ["turn/steer", "questionnaire/respond"]);
   assert.deepEqual(lifecycleCalls[1].params.response, { answers: { direction: { answers: [] } } });
 
+  const stopped = await controller.handleRequest({
+    id: 6,
+    method: "workbench/subagent/stop",
+    params: { callerThreadId, cwd, threadId: childThreadId },
+  });
+  assert.deepEqual(stopped, { id: 6, result: {} });
+  const listedAfterStop = await controller.handleRequest({
+    id: 7,
+    method: "workbench/subagent/list",
+    params: { cwd, limit: 20, parentThreadId: callerThreadId },
+  });
+  assert.equal((listedAfterStop.result as WorkbenchSubagentPage).subagents[0]?.activityStatus, "inactive");
+
   const denied = await controller.handleRequest({
-    id: 5,
+    id: 8,
     method: "workbench/subagent/stop",
     params: { callerThreadId: "different-parent", cwd, threadId: childThreadId },
   });
-  assert.equal(denied.id, 5);
+  assert.equal(denied.id, 8);
   assert.match(denied.error?.message ?? "", /not owned by the current thread/u);
+});
+
+test("tracks durable activity through create, message, and stop", async (context) => {
+  const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-controller-activity-"));
+  context.after(async () => await rm(storageRoot, { force: true, recursive: true }));
+  const cwd = process.cwd();
+  const controller = new WorkbenchSubagentController({
+    bridgeUrl: "ws://unused",
+    createHarnessClient: () => new FakeHarnessClient(cwd),
+    storageRoot,
+  });
+
+  await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/importLegacy", params: { profiles: [profile()] } });
+  const created = await controller.handleRequest({
+    id: 2,
+    method: "workbench/subagent/create",
+    params: { callerThreadId, cwd, message: "Inspect the code.", name: "Mimi", profileId: profile().id, title: "Inspect code" },
+  });
+  assert.deepEqual(created, { id: 2, result: { threadId: childThreadId } });
+  const listedAfterCreate = await controller.handleRequest({
+    id: 3,
+    method: "workbench/subagent/list",
+    params: { cwd, limit: 20, parentThreadId: callerThreadId },
+  });
+  assert.equal((listedAfterCreate.result as WorkbenchSubagentPage).subagents[0]?.activityStatus, "active");
+
+  assert.deepEqual(await controller.handleRequest({
+    id: 4,
+    method: "workbench/subagent/message",
+    params: { callerThreadId, cwd, message: "Take the safer route.", threadId: childThreadId },
+  }), { id: 4, result: {} });
+  assert.deepEqual(await controller.handleRequest({
+    id: 5,
+    method: "workbench/subagent/stop",
+    params: { callerThreadId, cwd, threadId: childThreadId },
+  }), { id: 5, result: {} });
+  const listedAfterStop = await controller.handleRequest({
+    id: 6,
+    method: "workbench/subagent/list",
+    params: { cwd, limit: 20, parentThreadId: callerThreadId },
+  });
+  assert.equal((listedAfterStop.result as WorkbenchSubagentPage).subagents[0]?.activityStatus, "inactive");
 });
 
 test("keeps a created child durable when its first turn fails to start", async (context) => {
@@ -180,10 +241,17 @@ test("keeps a created child durable when its first turn fails to start", async (
   });
   assert.match(created.error?.message ?? "", /Turn failed to start.*subagent thread child-thread/u);
 
-  const stopped = await controller.handleRequest({
+  const listed = await controller.handleRequest({
     id: 3,
+    method: "workbench/subagent/list",
+    params: { cwd, limit: 20, parentThreadId: callerThreadId },
+  });
+  assert.equal((listed.result as WorkbenchSubagentPage).subagents[0]?.activityStatus, "inactive");
+
+  const stopped = await controller.handleRequest({
+    id: 4,
     method: "workbench/subagent/stop",
     params: { callerThreadId, cwd, threadId: childThreadId },
   });
-  assert.deepEqual(stopped, { id: 3, result: {} });
+  assert.deepEqual(stopped, { id: 4, result: {} });
 });

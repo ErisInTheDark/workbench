@@ -3,7 +3,6 @@
  * - WorkbenchSubagentControllerReloadState: active-wait state preserved across Codex bridge reloads. Keywords: subagent, reload, waiter, lifecycle.
  * - default WorkbenchSubagentController: own durable parent-child metadata, authorization, cross-harness lifecycle, and wait cancellation. Keywords: orchestrator, subagent, controller, ownership, wait.
  */
-import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
@@ -27,14 +26,9 @@ import {
   renderSubagentTurnOutput,
   renderSubagentWaitResultOutput,
 } from "../lib/workbench/subagent/subagent-output";
-import AtomicJsonStore from "./AtomicJsonStore";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
-
-interface StoredSubagents {
-  subagents: Record<string, WorkbenchSubagentSummary>;
-  version: 1;
-}
+import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 
 interface PendingQuestionnaireList {
   data: Array<Omit<WorkbenchPendingUserInputRequest, "harness">>;
@@ -56,7 +50,6 @@ export interface WorkbenchSubagentControllerReloadState {
   controller: WorkbenchSubagentController;
 }
 
-const EMPTY_SUBAGENTS: StoredSubagents = { subagents: {}, version: 1 };
 const POLL_INTERVAL_MS = 300;
 const WORKBENCH_PROMPT_CONTEXT_FIELD = "workbenchPromptContext";
 
@@ -78,34 +71,6 @@ function requiredThreadIds(record: Record<string, unknown>) {
   if (!threadIds.length || threadIds.some((threadId) => !threadId)) throw new Error("threadIds are required.");
   if (new Set(threadIds).size !== threadIds.length) throw new Error("threadIds must be unique.");
   return threadIds;
-}
-
-function normalizeSummary(value: unknown): WorkbenchSubagentSummary | null {
-  if (!isRecord(value)) return null;
-  const harness = value.harness === "codex" || value.harness === "copilot" || value.harness === "opencode" ? value.harness : null;
-  const strings = ["cwd", "name", "parentThreadId", "profileId", "profileName", "projectId", "threadId", "title"] as const;
-  if (!harness || strings.some((key) => typeof value[key] !== "string" || !value[key].trim())) return null;
-  const createdAt = typeof value.createdAt === "number" && Number.isFinite(value.createdAt) ? value.createdAt : 0;
-  const updatedAt = typeof value.updatedAt === "number" && Number.isFinite(value.updatedAt) ? value.updatedAt : createdAt;
-  return {
-    createdAt,
-    cwd: String(value.cwd),
-    harness,
-    name: String(value.name),
-    parentThreadId: String(value.parentThreadId),
-    profileId: String(value.profileId),
-    profileName: String(value.profileName),
-    projectId: String(value.projectId),
-    threadId: String(value.threadId),
-    title: String(value.title),
-    updatedAt,
-  };
-}
-
-function normalizeStore(value: unknown): StoredSubagents {
-  if (!isRecord(value) || !isRecord(value.subagents)) return EMPTY_SUBAGENTS;
-  const records = Object.values(value.subagents).flatMap((entry) => normalizeSummary(entry) ?? []);
-  return { subagents: Object.fromEntries(records.map((record) => [record.threadId, record])), version: 1 };
 }
 
 function textInput(message: string): UserInput[] {
@@ -139,25 +104,25 @@ export default class WorkbenchSubagentController {
   private readonly bridgeUrl: string;
   private createQueue: Promise<void> = Promise.resolve();
   private readonly createHarnessClient: () => WorkbenchSubagentHarnessClient;
-  private readonly jsonStore: AtomicJsonStore;
-  private readonly metadataPath: string;
   private readonly profileStore: WorkbenchComposerProfileStore;
+  private readonly subagentStore: WorkbenchSubagentStore;
   private readonly waiters = new Map<string, AbortController>();
 
   constructor({
     bridgeUrl,
     createHarnessClient = () => new CodexAppServerClient(),
     storageRoot,
+    subagentStore = new WorkbenchSubagentStore(storageRoot),
   }: {
     bridgeUrl: string;
     createHarnessClient?: () => WorkbenchSubagentHarnessClient;
     storageRoot: string;
+    subagentStore?: WorkbenchSubagentStore;
   }) {
     this.bridgeUrl = bridgeUrl;
     this.createHarnessClient = createHarnessClient;
-    this.jsonStore = new AtomicJsonStore();
-    this.metadataPath = path.join(storageRoot, ".workbench", "runtime", "subagents.json");
     this.profileStore = new WorkbenchComposerProfileStore(storageRoot);
+    this.subagentStore = subagentStore;
   }
 
   hasActiveWaiters() { return this.waiters.size > 0; }
@@ -224,20 +189,13 @@ export default class WorkbenchSubagentController {
     return { callerThreadId, cwd, harness: matches[0].harness, project: requestedProject.project };
   }
 
-  private async readMetadata() {
-    return normalizeStore(await this.jsonStore.read(this.metadataPath, EMPTY_SUBAGENTS));
-  }
-
   private async list(params: Record<string, unknown>) {
     const cwd = requiredString(params, "cwd");
     const project = await resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench subagent list" });
     const parentThreadId = typeof params.parentThreadId === "string" ? params.parentThreadId.trim() : "";
-    const records = Object.values((await this.readMetadata()).subagents).filter((record) => (
-      record.projectId === project.project.id
-      && !record.threadId.startsWith("pending:")
-      && (!parentThreadId || record.parentThreadId === parentThreadId)
-    ));
-    return { subagents: records.sort((left, right) => left.createdAt - right.createdAt) };
+    const cursor = typeof params.cursor === "string" ? params.cursor.trim() : null;
+    const limit = typeof params.limit === "number" ? params.limit : null;
+    return await this.subagentStore.list({ cursor, limit, parentThreadId, projectId: project.project.id });
   }
 
   private async profiles(params: Record<string, unknown>) {
@@ -275,16 +233,11 @@ export default class WorkbenchSubagentController {
       const reservationId = `pending:${randomUUID()}`;
       const now = Date.now();
       const reservation: WorkbenchSubagentSummary = {
-        createdAt: now, cwd: caller.cwd, harness: profile.harness, name, parentThreadId: caller.callerThreadId,
-        profileId: profile.id, profileName: profile.name, projectId: caller.project.id, threadId: reservationId, title, updatedAt: now,
+        activityStatus: "unknown", createdAt: now, cwd: caller.cwd, harness: profile.harness, lastActivityAt: now,
+        name, parentThreadId: caller.callerThreadId, profileId: profile.id, profileName: profile.name,
+        projectId: caller.project.id, threadId: reservationId, title, updatedAt: now,
       };
-      await this.jsonStore.update(this.metadataPath, EMPTY_SUBAGENTS, (raw) => {
-        const state = normalizeStore(raw);
-        if (Object.values(state.subagents).some((entry) => entry.parentThreadId === caller.callerThreadId && entry.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
-          throw new Error(`Subagent name is already in use by this parent: ${name}`);
-        }
-        return { ...state, subagents: { ...state.subagents, [reservationId]: reservation } };
-      });
+      await this.subagentStore.reserve(reservation);
       let childId = "";
       try {
         const start = await this.requestHarness<{ thread: Thread }>(client, profile.harness, {
@@ -293,10 +246,9 @@ export default class WorkbenchSubagentController {
           params: { cwd: caller.cwd, ephemeral: false, model: profile.model, serviceTier: profile.serviceTier },
         });
         childId = start.thread.id;
-        const record = { ...reservation, threadId: childId, updatedAt: Date.now() };
-        await this.jsonStore.update(this.metadataPath, EMPTY_SUBAGENTS, (raw) => {
-          const state = normalizeStore(raw); const subagents = { ...state.subagents }; delete subagents[reservationId]; subagents[childId] = record; return { ...state, subagents };
-        });
+        const startedAt = Date.now();
+        const record = { ...reservation, activityStatus: "active" as const, lastActivityAt: startedAt, threadId: childId, updatedAt: startedAt };
+        await this.subagentStore.replace(caller.callerThreadId, reservationId, record);
         await this.requestHarness(client, profile.harness, { method: "thread/name/set", params: { cwd: caller.cwd, name: title, threadId: childId } });
         const turnContext = this.buildPromptContext(caller, profile, childId, name, workbenchOrigin, profile.harness === "codex" ? "threadUtilities" : undefined);
         await this.requestHarness(client, profile.harness, {
@@ -310,7 +262,11 @@ export default class WorkbenchSubagentController {
         });
         result = { threadId: childId };
       } catch (error) {
-        if (!childId) await this.jsonStore.update(this.metadataPath, EMPTY_SUBAGENTS, (raw) => { const state = normalizeStore(raw); const subagents = { ...state.subagents }; delete subagents[reservationId]; return { ...state, subagents }; });
+        if (!childId) {
+          await this.subagentStore.remove(caller.callerThreadId, reservationId);
+        } else {
+          await this.subagentStore.markActivity(childId, "inactive");
+        }
         throw new Error(`${error instanceof Error ? error.message : String(error)}${childId ? ` (subagent thread ${childId})` : ""}`);
       }
     });
@@ -325,8 +281,8 @@ export default class WorkbenchSubagentController {
     const cwd = requiredString(params, "cwd");
     const project = await resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
     const threadId = requiredString(params, "threadId");
-    const record = (await this.readMetadata()).subagents[threadId];
-    if (!record || record.parentThreadId !== callerThreadId || record.projectId !== project.project.id) throw new Error("That subagent is not owned by the current thread.");
+    const record = await this.subagentStore.getOwned(callerThreadId, project.project.id, threadId);
+    if (!record) throw new Error("That subagent is not owned by the current thread.");
     return { caller: { callerThreadId, cwd, project: project.project }, record };
   }
 
@@ -335,12 +291,11 @@ export default class WorkbenchSubagentController {
     const cwd = requiredString(params, "cwd");
     const project = await resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
     const threadIds = requiredThreadIds(params);
-    const subagents = (await this.readMetadata()).subagents;
-    const records = threadIds.map((threadId) => subagents[threadId]);
-    if (records.some((record) => !record || record.parentThreadId !== callerThreadId || record.projectId !== project.project.id)) {
+    const records = await this.subagentStore.getOwnedMany(callerThreadId, project.project.id, threadIds);
+    if (!records) {
       throw new Error("Every requested subagent must be owned by the current thread.");
     }
-    return records as WorkbenchSubagentSummary[];
+    return records;
   }
 
   private async pendingQuestionnaires(client: WorkbenchSubagentHarnessClient, harness: WorkbenchHarness, cwd: string) {
@@ -418,6 +373,7 @@ export default class WorkbenchSubagentController {
         method: "questionnaire/respond",
         params: { requestKey: pending.requestKey, response: createEmptySubagentQuestionnaireResponse(pending.request), threadId: record.threadId, turnId: pending.turnId },
       });
+      await this.subagentStore.markActivity(record.threadId, "active");
       return {};
     }
     const profile = (await this.profileStore.read()).profiles.find((candidate) => candidate.id === record.profileId);
@@ -431,6 +387,7 @@ export default class WorkbenchSubagentController {
         serviceTier: profile.serviceTier, summary: "detailed", threadId: record.threadId,
       },
     });
+    await this.subagentStore.markActivity(record.threadId, "active");
     return {};
   }
 
@@ -439,6 +396,7 @@ export default class WorkbenchSubagentController {
     const thread = await this.readThread(client, record.harness, record.threadId, record.cwd);
     const turn = currentTurn(thread);
     if (turn?.status === "inProgress") await this.requestHarness(client, record.harness, { method: "turn/interrupt", params: { cwd: record.cwd, threadId: record.threadId, turnId: turn.id } });
+    await this.subagentStore.markActivity(record.threadId, "inactive");
     return {};
   }
 }

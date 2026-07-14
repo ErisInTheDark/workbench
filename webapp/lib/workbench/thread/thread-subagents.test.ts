@@ -7,6 +7,8 @@ import { test } from "node:test";
 
 import type { WorkbenchSubagentSummary } from "../../types.ts";
 import {
+  getNextSubagentHydrationBatch,
+  getSubagentPollingBatch,
   getSubagentSummary,
   getSubagentHarness,
   getSubagentThreadIds,
@@ -15,12 +17,16 @@ import {
   getThreadAgentAccentColor,
   getThreadAgentLabelParts,
   getThreadAgentTabLabel,
+  getSubagentTabLayout,
+  sortWorkbenchSubagents,
 } from "./thread-subagents.ts";
 
 const subagent: WorkbenchSubagentSummary = {
+  activityStatus: "inactive",
   createdAt: 1,
   cwd: "C:/workspace",
   harness: "codex",
+  lastActivityAt: 1,
   name: "Mimi",
   parentThreadId: "parent",
   profileId: "profile",
@@ -71,4 +77,38 @@ test("prefers the durable subagent name while preserving the agent role", () => 
     getThreadAgentAccentColor(thread, "child", subagent),
     getThreadAgentAccentColor(null, "different fallback", subagent),
   );
+});
+
+test("orders activity deterministically and folds stale non-active children", () => {
+  const now = 60 * 60_000;
+  const active = { ...subagent, activityStatus: "active" as const, lastActivityAt: 1, threadId: "active" };
+  const recentInactive = { ...subagent, lastActivityAt: now - 30 * 60_000, threadId: "recent" };
+  const staleInactive = { ...subagent, lastActivityAt: now - 30 * 60_000 - 1, threadId: "stale" };
+  const staleUnknown = { ...staleInactive, activityStatus: "unknown" as const, threadId: "unknown" };
+  assert.deepEqual(
+    sortWorkbenchSubagents([recentInactive, staleInactive, active, staleUnknown]).map(({ threadId }) => threadId),
+    ["active", "unknown", "recent", "stale"],
+  );
+  const layout = getSubagentTabLayout([recentInactive, staleInactive, active, staleUnknown], { now });
+  assert.deepEqual(layout.visible.map(({ threadId }) => threadId), ["active", "recent"]);
+  assert.deepEqual(layout.collapsed.map(({ threadId }) => threadId), ["unknown", "stale"]);
+  assert.deepEqual(
+    getSubagentTabLayout([staleInactive], { now, revealedThreadIds: new Set(["stale"]) }).visible.map(({ threadId }) => threadId),
+    ["stale"],
+  );
+});
+
+test("caps hydration and rotates polling through fair four-thread batches", () => {
+  const ids = ["one", "two", "three", "four", "five", "six"];
+  assert.deepEqual(getNextSubagentHydrationBatch({
+    loadedThreadIds: new Set(["one"]),
+    loadingThreadIds: new Set(["two"]),
+    threadIds: ids,
+  }), ["three", "four", "five", "six"]);
+  const first = getSubagentPollingBatch(ids, 0);
+  assert.deepEqual(first, { nextCursor: 4, threadIds: ["one", "two", "three", "four"] });
+  assert.deepEqual(getSubagentPollingBatch(ids, first.nextCursor), {
+    nextCursor: 2,
+    threadIds: ["five", "six", "one", "two"],
+  });
 });

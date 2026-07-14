@@ -57,19 +57,22 @@ import {
 } from "../../../lib/workbench/thread/inline-mention-highlights";
 import {
   filterSubagentsByParentThreadId,
+  getNextSubagentHydrationBatch,
+  getSubagentPollingBatch,
   getSubagentHarness,
   getSubagentSummary,
+  getSubagentTabLayout,
   getSubagentThreadIds,
   getThreadAgentTabLabel,
-  listWorkbenchSubagents,
+  readWorkbenchSubagentPage,
+  sortWorkbenchSubagents,
 } from "../../../lib/workbench/thread/thread-subagents";
 import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
 import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
-import { ThreadQuestionBadge, ThreadUnreadBadge as ThreadUnreadBadgeView } from "../ThreadStatusBadges";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileProvider";
 import { ThreadThreadContent, ThreadTurnDetails, ThreadTurnLoadingSkeleton, useStableBrowseResultEntriesByTurn } from "./thread-view-items";
-import ThreadAgentName from "./ThreadAgentName";
+import ThreadAgentTabs from "./ThreadAgentTabs";
 import ThreadComposer from "./ThreadComposer";
 import ThreadContextStatus from "./ThreadContextStatus";
 import ThreadDisclosure from "./ThreadDisclosure";
@@ -86,6 +89,7 @@ import {
 
 const SUBTHREAD_POLL_INTERVAL_MS = 1500;
 const SUBAGENT_METADATA_POLL_INTERVAL_MS = 3000;
+const SUBAGENT_PAGE_SIZE = 20;
 const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
 const MAX_VISIBLE_HISTORY_ENTRIES = 8;
 const EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS: readonly string[] = [];
@@ -705,6 +709,9 @@ export default memo(function ThreadView ({
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const [activeThreadId, setActiveThreadId] = useState(thread.id);
   const [refreshedSubagents, setRefreshedSubagents] = useState<WorkbenchSubagentSummary[] | null>(null);
+  const [nextSubagentCursor, setNextSubagentCursor] = useState<string | null>(null);
+  const [isRevealingMoreSubagents, setIsRevealingMoreSubagents] = useState(false);
+  const [revealedSubagentThreadIds, setRevealedSubagentThreadIds] = useState<Record<string, true>>({});
   const [subthreadsById, setSubthreadsById] = useState<Record<string, ThreadPayload>>({});
   const [loadingThreadIds, setLoadingThreadIds] = useState<Record<string, true>>({});
   const [loadingPreviousTurnKeys, setLoadingPreviousTurnKeys] = useState<Record<string, true>>({});
@@ -721,6 +728,8 @@ export default memo(function ThreadView ({
   const pendingPreviousTurnScrollRestoreRef = useRef<PendingPreviousTurnScrollRestore | null>(null);
   const scrollAnchorControllerRef = useRef<ReturnType<typeof ThreadScrollAnchorController> | null>(null);
   const subthreadLoadGenerationRef = useRef(0);
+  const hasLoadedAdditionalSubagentPagesRef = useRef(false);
+  const subagentPollingCursorRef = useRef(0);
   if (!scrollAnchorControllerRef.current) {
     scrollAnchorControllerRef.current = ThreadScrollAnchorController();
   }
@@ -729,20 +738,37 @@ export default memo(function ThreadView ({
     () => filterSubagentsByParentThreadId(knownSubagents, thread.id),
     [knownSubagents, thread.id],
   );
-  const subagents = refreshedSubagents ?? knownDirectSubagents;
+  const knownFirstSubagentPage = useMemo(
+    () => sortWorkbenchSubagents(knownDirectSubagents).slice(0, SUBAGENT_PAGE_SIZE),
+    [knownDirectSubagents],
+  );
+  const subagents = refreshedSubagents ?? knownFirstSubagentPage;
   useEffect(() => {
     const lifecycleController = new AbortController();
     let refreshTimer: number | null = null;
     setRefreshedSubagents(null);
+    setNextSubagentCursor(null);
+    setRevealedSubagentThreadIds({});
+    setIsRevealingMoreSubagents(false);
+    hasLoadedAdditionalSubagentPagesRef.current = false;
+    subagentPollingCursorRef.current = 0;
 
     const refreshSubagents = async () => {
       try {
-        const summaries = await listWorkbenchSubagents({
+        const page = await readWorkbenchSubagentPage({
           cwd: projectRootPath,
+          limit: SUBAGENT_PAGE_SIZE,
           parentThreadId: thread.id,
           signal: AbortSignal.any([lifecycleController.signal, AbortSignal.timeout(5_000)]),
         });
-        if (!lifecycleController.signal.aborted) setRefreshedSubagents(summaries);
+        if (!lifecycleController.signal.aborted) {
+          setRefreshedSubagents((current) => {
+            if (!current || !hasLoadedAdditionalSubagentPagesRef.current) return page.subagents;
+            const firstPageIds = new Set(page.subagents.map(({ threadId }) => threadId));
+            return [...page.subagents, ...current.filter(({ threadId }) => !firstPageIds.has(threadId))];
+          });
+          if (!hasLoadedAdditionalSubagentPagesRef.current) setNextSubagentCursor(page.nextCursor);
+        }
       } catch {
         // Parent rendering and questionnaires never depend on optional child metadata.
       } finally {
@@ -752,13 +778,20 @@ export default memo(function ThreadView ({
       }
     };
 
-    refreshTimer = window.setTimeout(refreshSubagents, SUBAGENT_METADATA_POLL_INTERVAL_MS);
+    void refreshSubagents();
     return () => {
       lifecycleController.abort();
       if (refreshTimer !== null) window.clearTimeout(refreshTimer);
     };
   }, [projectRootPath, thread.id]);
   const subagentThreadIds = useMemo(() => getSubagentThreadIds(subagents), [subagents]);
+  const subagentTabLayout = useMemo(() => {
+    const revealedThreadIds = new Set(Object.keys(revealedSubagentThreadIds));
+    if (activeThreadId !== thread.id) revealedThreadIds.add(activeThreadId);
+    return getSubagentTabLayout(subagents, { revealedThreadIds });
+  }, [activeThreadId, revealedSubagentThreadIds, subagents, thread.id]);
+  const visibleSubagents = subagentTabLayout.visible;
+  const visibleSubagentThreadIds = useMemo(() => getSubagentThreadIds(visibleSubagents), [visibleSubagents]);
   const relatedThreadsById = useStableRelatedThreadsById({
     subagentThreadIds,
     subthreadsById,
@@ -855,13 +888,13 @@ export default memo(function ThreadView ({
 
   const tabDefinitions = useMemo(() => {
     const baseLabelCounts = new Map<string, number>();
-    for (const threadId of subagentThreadIds) {
+    for (const threadId of visibleSubagentThreadIds) {
       const label = getThreadAgentTabLabel(relatedThreadsById[threadId], getSubagentSummary(subagents, threadId));
       baseLabelCounts.set(label, (baseLabelCounts.get(label) ?? 0) + 1);
     }
 
     const usedLabels = new Map<string, number>();
-    return subagentThreadIds.map((threadId) => {
+    return visibleSubagentThreadIds.map((threadId) => {
       const baseLabel = getThreadAgentTabLabel(relatedThreadsById[threadId], getSubagentSummary(subagents, threadId));
       const totalCount = baseLabelCounts.get(baseLabel) ?? 0;
       const nextCount = (usedLabels.get(baseLabel) ?? 0) + 1;
@@ -872,7 +905,7 @@ export default memo(function ThreadView ({
         suffix: totalCount > 1 ? ` ${nextCount}` : "",
       };
     });
-  }, [loadingThreadIds, relatedThreadsById, subagentThreadIds, subagents]);
+  }, [loadingThreadIds, relatedThreadsById, subagents, visibleSubagentThreadIds]);
 
   const scheduleScrollToBottom = useCallback((options: { force?: boolean } = {}) => {
     if (bottomScrollFrameRef.current !== null) {
@@ -970,6 +1003,50 @@ export default memo(function ThreadView ({
     }
   }, [onReadThread, projectId, thread.harness, thread.id]);
 
+  const loadNextSubagentPage = useCallback(async () => {
+    const cursor = nextSubagentCursor;
+    if (!cursor || isRevealingMoreSubagents) return;
+    const loadGeneration = subthreadLoadGenerationRef.current;
+    setIsRevealingMoreSubagents(true);
+    try {
+      const page = await readWorkbenchSubagentPage({
+        cursor,
+        cwd: projectRootPath,
+        limit: SUBAGENT_PAGE_SIZE,
+        parentThreadId: thread.id,
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (loadGeneration !== subthreadLoadGenerationRef.current) return;
+      hasLoadedAdditionalSubagentPagesRef.current = true;
+      setRefreshedSubagents((current) => {
+        const summariesById = new Map((current ?? []).map((summary) => [summary.threadId, summary]));
+        for (const summary of page.subagents) summariesById.set(summary.threadId, summary);
+        return Array.from(summariesById.values());
+      });
+      setRevealedSubagentThreadIds((current) => ({
+        ...current,
+        ...Object.fromEntries(page.subagents.map(({ threadId }) => [threadId, true as const])),
+      }));
+      setNextSubagentCursor(page.nextCursor);
+    } catch {
+      // The existing loaded page remains usable when an optional older page cannot be read.
+    } finally {
+      if (loadGeneration === subthreadLoadGenerationRef.current) setIsRevealingMoreSubagents(false);
+    }
+  }, [isRevealingMoreSubagents, nextSubagentCursor, projectRootPath, thread.id]);
+
+  const handleRevealMoreSubagents = useCallback(() => {
+    if (subagentTabLayout.collapsed.length) {
+      const nextRecords = subagentTabLayout.collapsed.slice(0, SUBAGENT_PAGE_SIZE);
+      setRevealedSubagentThreadIds((current) => ({
+        ...current,
+        ...Object.fromEntries(nextRecords.map(({ threadId }) => [threadId, true as const])),
+      }));
+      return;
+    }
+    void loadNextSubagentPage();
+  }, [loadNextSubagentPage, subagentTabLayout.collapsed]);
+
   const loadPreviousTurn = useCallback(async () => {
     if (!activeThread || !firstVisibleLoadedEntry || !previousTurnLoadKey || loadingPreviousTurnKeys[previousTurnLoadKey]) {
       return;
@@ -1057,6 +1134,7 @@ export default memo(function ThreadView ({
 
   useEffect(() => {
     subthreadLoadGenerationRef.current += 1;
+    subagentPollingCursorRef.current = 0;
     activeThreadScrollKeyRef.current = "";
     didRestorePreviousTurnScrollRef.current = false;
     pendingPreviousTurnScrollRestoreRef.current = null;
@@ -1096,19 +1174,20 @@ export default memo(function ThreadView ({
   }, [projectId]);
 
   useEffect(() => {
-    for (const threadId of subagentThreadIds) {
-      if (threadId === thread.id || relatedThreadsById[threadId] || loadingThreadIds[threadId]) {
-        continue;
-      }
-
+    const preloadBatch = getNextSubagentHydrationBatch({
+      loadedThreadIds: new Set(Object.keys(relatedThreadsById)),
+      loadingThreadIds: new Set(Object.keys(loadingThreadIds)),
+      threadIds: visibleSubagentThreadIds.filter((threadId) => threadId !== thread.id),
+    });
+    for (const threadId of preloadBatch) {
       void loadSubthread(threadId, getSubagentHarness(subagents, threadId, thread.harness));
     }
-  }, [loadSubthread, loadingThreadIds, relatedThreadsById, subagentThreadIds, subagents, thread.harness, thread.id]);
+  }, [loadSubthread, loadingThreadIds, relatedThreadsById, subagents, thread.harness, thread.id, visibleSubagentThreadIds]);
 
-  const pollingThreadIds = useMemo(() => subagentThreadIds.filter((threadId) => {
+  const pollingThreadIds = useMemo(() => visibleSubagentThreadIds.filter((threadId) => {
     const payload = relatedThreadsById[threadId];
     return Boolean(payload && getCurrentInProgressTurn(payload));
-  }), [relatedThreadsById, subagentThreadIds]);
+  }), [relatedThreadsById, visibleSubagentThreadIds]);
 
   useEffect(() => {
     if (!pollingThreadIds.length) {
@@ -1116,7 +1195,9 @@ export default memo(function ThreadView ({
     }
 
     const intervalId = window.setInterval(() => {
-      for (const threadId of pollingThreadIds) {
+      const batch = getSubagentPollingBatch(pollingThreadIds, subagentPollingCursorRef.current);
+      subagentPollingCursorRef.current = batch.nextCursor;
+      for (const threadId of batch.threadIds) {
         void loadSubthread(threadId, getSubagentHarness(subagents, threadId, thread.harness));
       }
     }, SUBTHREAD_POLL_INTERVAL_MS);
@@ -1667,55 +1748,25 @@ export default memo(function ThreadView ({
     </ThreadComposer>
   ) : null;
 
-  const agentTabs = tabDefinitions.length ? (
-    <>
-      <button
-        type="button"
-        className={joinClasses(
-          "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[0.78em] font-medium leading-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
-          activeThreadId === thread.id
-            ? "border-[color-mix(in_srgb,var(--text)_18%,transparent)] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] text-text"
-            : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] text-muted hover:text-text",
-        )}
-        onClick={() => {
-          handleSubthreadSelection(thread.id);
-        }}
-      >
-        <span>Main agent</span>
-        {mainThreadBadge.isQuestion ? <ThreadQuestionBadge /> : mainThreadBadge.unreadBadge ? <ThreadUnreadBadgeView badge={mainThreadBadge.unreadBadge} /> : null}
-      </button>
-      <span className="text-[0.84em] text-muted" aria-hidden="true">|</span>
-      {tabDefinitions.map((tab) => {
-        const tabThread = relatedThreadsById[tab.id];
-        const badge = getTabBadge(tab.id, tabThread);
-
-        return (
-          <button
-            key={tab.id}
-            type="button"
-            aria-busy={tab.isLoading}
-            className={joinClasses(
-              "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[0.78em] font-medium leading-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
-              activeThreadId === tab.id
-                ? "border-[color-mix(in_srgb,var(--text)_18%,transparent)] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] text-text"
-                : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] text-muted hover:text-text",
-              tab.isLoading && activeThreadId !== tab.id && "opacity-70",
-            )}
-            onClick={() => {
-              handleSubthreadSelection(tab.id);
-            }}
-          >
-            <ThreadAgentName
-              fallbackKey={tab.id}
-              subagent={getSubagentSummary(subagents, tab.id)}
-              thread={tabThread}
-            />
-            {tab.suffix ? <span className="text-muted">{tab.suffix}</span> : null}
-            {badge.isQuestion ? <ThreadQuestionBadge /> : badge.unreadBadge ? <ThreadUnreadBadgeView badge={badge.unreadBadge} /> : null}
-          </button>
-        );
+  const agentTabs = tabDefinitions.length || subagentTabLayout.collapsed.length || nextSubagentCursor ? (
+    <ThreadAgentTabs
+      activeThreadId={activeThreadId}
+      canRevealMore={Boolean(subagentTabLayout.collapsed.length || nextSubagentCursor)}
+      isRevealingMore={isRevealingMoreSubagents}
+      mainThreadBadge={mainThreadBadge}
+      mainThreadId={thread.id}
+      onRevealMore={handleRevealMoreSubagents}
+      onSelectThread={handleSubthreadSelection}
+      tabs={tabDefinitions.map((tab) => {
+        const tabThread = relatedThreadsById[tab.id] ?? null;
+        return {
+          ...tab,
+          badge: getTabBadge(tab.id, tabThread),
+          subagent: getSubagentSummary(subagents, tab.id),
+          thread: tabThread,
+        };
       })}
-    </>
+    />
   ) : null;
 
   return (

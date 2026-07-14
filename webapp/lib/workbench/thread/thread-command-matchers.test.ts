@@ -99,6 +99,24 @@ test("Workbench subagent commands share one semantic parser", () => {
   assert.equal(multiplexedDisplay.claimedBy, "workbench-cli.subagent");
   assert.equal(multiplexedDisplay.summaryText, "Waited for 2 subagents");
   assert.equal(multiplexedDisplay.ongoingSummaryText, "Waiting for 2 subagents");
+
+});
+
+test("Workbench subagent list gets dedicated metadata labels", () => {
+  assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent list --limit 20"), {
+    action: "list",
+    message: null,
+    threadIds: [],
+  });
+  const listDisplay = getThreadCommandDisplay({
+    command: "wb subagent list",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(listDisplay.claimedBy, "workbench-cli.subagent");
+  assert.equal(listDisplay.summaryText, "Listed subagents");
+  assert.equal(listDisplay.ongoingSummaryText, "Listing subagents");
 });
 
 test("command execution outcomes select the explicit ongoing tense", () => {

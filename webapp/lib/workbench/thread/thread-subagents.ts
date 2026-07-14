@@ -1,10 +1,11 @@
 /*
  * Exports:
- * - listWorkbenchSubagents: fetch durable project- or parent-scoped child summaries without joining thread hydration. Keywords: workbench, thread, subagent, metadata, fetch.
+ * - listWorkbenchSubagents/readWorkbenchSubagentPage: fetch durable project metadata or one bounded parent page without joining thread hydration. Keywords: workbench, thread, subagent, metadata, fetch, pagination.
  * - getSubagentThreadIds/getSubagentSummary/getSubagentHarness/filterSubagentsByParentThreadId/filterSubagentThreadSummaries: derive and filter direct-child identity from durable summaries. Keywords: workbench, thread, subagent, metadata, harness, sidebar.
+ * - sortWorkbenchSubagents/getSubagentTabLayout/getNextSubagentHydrationBatch/getSubagentPollingBatch: derive activity order, stale folding, and bounded background work. Keywords: subagent, tabs, activity, hydration, polling, batch.
  * - getThreadAgentAccentColor/getThreadAgentLabelParts/getThreadAgentTabLabel: stable child colors and metadata-first labels. Keywords: subagent, color, label, tabs.
  */
-import type { ThreadPayload, ThreadSummary, WorkbenchSubagentSummary } from "../../types";
+import type { ThreadPayload, ThreadSummary, WorkbenchSubagentPage, WorkbenchSubagentSummary } from "../../types";
 
 export interface ThreadAgentLabelParts {
   nickname: string | null;
@@ -17,6 +18,8 @@ type ThreadAgentIdentity = Pick<ThreadPayload, "agentNickname" | "agentRole">;
 const THREAD_AGENT_ACCENT_PALETTE = [
   0, 30, 60, 120, 150, 180, 210, 240, 270, 300, 330,
 ].map((hue) => `oklch(var(--oklch-text-lightness) 100% ${hue}deg)`);
+const SUBAGENT_STALE_AFTER_MS = 30 * 60_000;
+const SUBAGENT_BACKGROUND_BATCH_SIZE = 4;
 
 function normalizeLabel(value: string | null | undefined) {
   return value?.trim() || null;
@@ -49,6 +52,88 @@ export async function listWorkbenchSubagents({
   const payload = await response.json() as { error?: string; subagents?: WorkbenchSubagentSummary[] };
   if (!response.ok) throw new Error(payload.error || "Unable to read Workbench subagents.");
   return payload.subagents ?? [];
+}
+
+export async function readWorkbenchSubagentPage({
+  cursor,
+  cwd,
+  limit = 20,
+  parentThreadId,
+  signal,
+}: {
+  cursor?: string | null;
+  cwd: string;
+  limit?: number;
+  parentThreadId: string;
+  signal: AbortSignal;
+}): Promise<WorkbenchSubagentPage> {
+  const search = new URLSearchParams({ cwd, limit: String(limit), parentThreadId });
+  if (cursor?.trim()) search.set("cursor", cursor.trim());
+  const response = await fetch(`/api/subagents?${search.toString()}`, { cache: "no-store", signal });
+  const payload = await response.json() as Partial<WorkbenchSubagentPage> & { error?: string };
+  if (!response.ok) throw new Error(payload.error || "Unable to read Workbench subagents.");
+  return {
+    nextCursor: typeof payload.nextCursor === "string" ? payload.nextCursor : null,
+    subagents: payload.subagents ?? [],
+  };
+}
+
+function activityRank(status: WorkbenchSubagentSummary["activityStatus"]) {
+  return status === "active" ? 0 : status === "unknown" ? 1 : 2;
+}
+
+export function sortWorkbenchSubagents(subagents: readonly WorkbenchSubagentSummary[]) {
+  return subagents.slice().sort((left, right) => (
+    activityRank(left.activityStatus) - activityRank(right.activityStatus)
+    || right.lastActivityAt - left.lastActivityAt
+    || right.createdAt - left.createdAt
+    || left.threadId.localeCompare(right.threadId)
+  ));
+}
+
+export function getSubagentTabLayout(
+  subagents: readonly WorkbenchSubagentSummary[],
+  {
+    now = Date.now(),
+    revealedThreadIds = new Set<string>(),
+  }: {
+    now?: number;
+    revealedThreadIds?: ReadonlySet<string>;
+  } = {},
+) {
+  const visible: WorkbenchSubagentSummary[] = [];
+  const collapsed: WorkbenchSubagentSummary[] = [];
+  for (const subagent of sortWorkbenchSubagents(subagents)) {
+    const isStale = subagent.activityStatus !== "active"
+      && subagent.lastActivityAt < now - SUBAGENT_STALE_AFTER_MS;
+    (isStale && !revealedThreadIds.has(subagent.threadId) ? collapsed : visible).push(subagent);
+  }
+  return { collapsed, visible };
+}
+
+export function getNextSubagentHydrationBatch({
+  loadedThreadIds,
+  loadingThreadIds,
+  threadIds,
+}: {
+  loadedThreadIds: ReadonlySet<string>;
+  loadingThreadIds: ReadonlySet<string>;
+  threadIds: readonly string[];
+}) {
+  return threadIds
+    .filter((threadId) => !loadedThreadIds.has(threadId) && !loadingThreadIds.has(threadId))
+    .slice(0, SUBAGENT_BACKGROUND_BATCH_SIZE);
+}
+
+export function getSubagentPollingBatch(threadIds: readonly string[], cursor: number) {
+  if (!threadIds.length) return { nextCursor: 0, threadIds: [] as string[] };
+  const start = ((cursor % threadIds.length) + threadIds.length) % threadIds.length;
+  const count = Math.min(SUBAGENT_BACKGROUND_BATCH_SIZE, threadIds.length);
+  const batch = Array.from({ length: count }, (_, index) => threadIds[(start + index) % threadIds.length]!);
+  return {
+    nextCursor: (start + count) % threadIds.length,
+    threadIds: batch,
+  };
 }
 
 export function getSubagentThreadIds(subagents: readonly WorkbenchSubagentSummary[]) {

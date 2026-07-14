@@ -586,9 +586,11 @@ export interface WorkbenchComposerProfileStorePayload {
 }
 
 export interface WorkbenchSubagentSummary {
+  activityStatus: "active" | "inactive" | "unknown";
   createdAt: number;
   cwd: string;
   harness: WorkbenchHarness;
+  lastActivityAt: number;
   name: string;
   parentThreadId: string;
   profileId: string;
@@ -597,6 +599,11 @@ export interface WorkbenchSubagentSummary {
   threadId: string;
   title: string;
   updatedAt: number;
+}
+
+export interface WorkbenchSubagentPage {
+  nextCursor: string | null;
+  subagents: WorkbenchSubagentSummary[];
 }
 
 export type WorkbenchComposerProfileSlot =

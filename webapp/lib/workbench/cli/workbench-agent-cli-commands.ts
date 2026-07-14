@@ -219,6 +219,22 @@ function parseVariables(values: string[]) {
 
 const COMMANDS: readonly CommandDefinition[] = [
   {
+    words: ["subagent", "list"],
+    usage: "wb subagent list [--cursor <cursor>] [--limit <1-20>]",
+    async build({ args, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(args, { values: ["--cursor", "--limit"] });
+      if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
+      const limit = flags.optionalNonNegativeInteger("--limit");
+      if (limit !== null && (limit < 1 || limit > 20)) throw new Error("--limit must be between 1 and 20.");
+      return get(queryPath("/api/subagents", {
+        cursor: flags.optional("--cursor"),
+        cwd,
+        limit: limit === null ? null : String(limit),
+        parentThreadId: callerThreadId,
+      }), "json");
+    },
+  },
+  {
     words: ["subagent", "profiles"],
     usage: "wb subagent profiles",
     async build({ args, callerThreadId, cwd, workbenchOrigin }) {

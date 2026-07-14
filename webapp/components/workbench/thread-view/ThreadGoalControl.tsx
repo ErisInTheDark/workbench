@@ -65,14 +65,32 @@ export default function ThreadGoalControl ({
 
   useEffect(() => {
     void controls.load(thread.id);
+    setIsOpen(false);
     setIsEditing(false);
     setIsConfirmingClear(false);
     setLocalError("");
+    setDraft("");
   }, [controls, thread.id]);
 
   useEffect(() => {
-    if (!isEditing) setDraft(goal?.objective ?? "");
-  }, [goal?.objective, isEditing]);
+    if (!goal) {
+      setIsOpen(false);
+      setIsEditing(false);
+      setIsConfirmingClear(false);
+      setLocalError("");
+      setDraft("");
+      return;
+    }
+    if (!isEditing) setDraft(goal.objective);
+  }, [goal?.objective, isEditing, thread.id]);
+
+  if (!snapshot.isLoaded || !goal) {
+    return children ? (
+      <div className="mt-6">
+        <div className="flex flex-wrap items-center gap-2">{children}</div>
+      </div>
+    ) : null;
+  }
 
   const save = async () => {
     if (!objectiveIsValid) {
@@ -147,11 +165,8 @@ export default function ThreadGoalControl ({
             ) : null}
           </div>
 
-          {snapshot.isLoading && !snapshot.isLoaded ? (
-            <p className="m-0 mt-3 text-[0.78em] text-muted">Loading goal...</p>
-          ) : goal ? (
-            isEditing ? (
-              <div className="mt-3">
+          {isEditing ? (
+            <div className="mt-3">
                 <label className="text-[0.72em] font-medium text-muted" htmlFor={`${panelId}-objective`}>Objective</label>
                 <div className="mt-2 rounded-xl border border-[color-mix(in_srgb,var(--text)_8%,transparent)] bg-[color-mix(in_srgb,var(--bg)_84%,transparent)] px-3 py-2.5 focus-within:border-[color-mix(in_srgb,var(--text)_18%,transparent)]">
                   <PlaintextEditable
@@ -181,15 +196,12 @@ export default function ThreadGoalControl ({
                     </button>
                   </div>
                 </div>
-              </div>
-            ) : (
-              <>
-                <p className="m-0 mt-3 whitespace-pre-wrap text-[0.88em] leading-[1.65] text-text">{goal.objective}</p>
-                <p className="m-0 mt-2 text-[0.7em] text-muted">{formatTokenCount(goal.tokensUsed)} <span aria-hidden="true">·</span> {formatElapsedTime(goal.timeUsedSeconds)}</p>
-              </>
-            )
+            </div>
           ) : (
-            <p className="m-0 mt-3 text-[0.8em] leading-[1.6] text-muted">No goal is attached to this thread. Ask Codex to create one when you want durable autonomous progress.</p>
+            <>
+              <p className="m-0 mt-3 whitespace-pre-wrap text-[0.88em] leading-[1.65] text-text">{goal.objective}</p>
+              <p className="m-0 mt-2 text-[0.7em] text-muted">{formatTokenCount(goal.tokensUsed)} <span aria-hidden="true">·</span> {formatElapsedTime(goal.timeUsedSeconds)}</p>
+            </>
           )}
 
           {localError || snapshot.error ? (

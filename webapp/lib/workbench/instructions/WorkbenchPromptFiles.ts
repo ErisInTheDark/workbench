@@ -469,6 +469,8 @@ function buildWorkbenchSubagentInstructions(context: WorkbenchPromptContext) {
 
 Workbench owns subagents through the allowlisted \`wb subagent\` command suite. Run every command from the intended project cwd; the CLI privately supplies that cwd and the current managed thread identity.
 
+\`wb subagent list [--cursor <cursor>] [--limit <1-20>]\` lists direct children owned by the current thread without contacting their harnesses. Results are activity-sorted metadata pages with at most 20 records and a \`nextCursor\`; pass that cursor to read the next page. \`activityStatus\` is \`active\`, \`inactive\`, or \`unknown\`, where \`unknown\` honestly represents legacy metadata or activity invalidated by an orchestrator restart.
+
 \`wb subagent profiles\` lists profiles available to this thread. Use a profile ID only as the machine value for \`--profile\`. When talking to the user, always use the profile's user-facing \`name\`, never its ID.
 
 \`wb subagent create --profile <profile id> --name <name> --title <title> --message <message>\` creates and starts a child. Every flag is required. Choose a unique, person-like name the user can use conversationally. Let your active agent identity influence the name, but do not use a task slug, role label, or operation codename; \`--title\` owns the task description. Workbench stores the exact name you provide and does not generate or rewrite it.

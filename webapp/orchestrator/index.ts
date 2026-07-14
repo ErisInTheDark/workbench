@@ -59,6 +59,7 @@ import {
     reloadOrchestratorReloadableModules,
 } from "./reloadable-modules";
 import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
+import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import WorkbenchTurnRecoveryHandoffStore, { type WorkbenchTurnRecoveryHandoffCandidate } from "./WorkbenchTurnRecoveryHandoffStore";
 
@@ -167,6 +168,7 @@ const turnRecoveryController = new WorkbenchTurnRecoveryController(
   turnRecoveryHandoffStore,
   (message) => log("turn-recovery", message),
 );
+const subagentStore = new WorkbenchSubagentStore(PROJECT_ROOT);
 
 const copilotBridge = new CopilotBridge({
   getReloadableModules: () => reloadableModules,
@@ -232,6 +234,9 @@ function sendJsonToClient(client: BridgeClient, message: unknown) {
 }
 
 function broadcastToClients(harness: HarnessKind, message: JsonRpcNotification) {
+  void subagentStore.observeNotification(harness, message).catch((error) => {
+    logError("subagent-store", error instanceof Error ? error.message : String(error));
+  });
   if (harness === "codex" || harness === "opencode") {
     turnRecoveryController.observeNotification(harness, message);
   }
@@ -797,6 +802,7 @@ function createCodexBridge() {
       sendJsonToClient(client, message);
     },
     storageRoot: PROJECT_ROOT,
+    subagentStore,
   });
 }
 
@@ -848,6 +854,7 @@ async function reloadCodexBridge() {
           sendJsonToClient(client, message);
         },
         storageRoot: PROJECT_ROOT,
+        subagentStore,
       });
       log("codex-bridge", "reloaded bridge code without restarting app-server");
     }, { drain: false });
@@ -898,6 +905,7 @@ async function recoverCodexBridge(reason: string) {
         sendJsonToClient(client, message);
       },
       storageRoot: PROJECT_ROOT,
+      subagentStore,
     });
     codexReadyPromise = null;
   }, { drain: false, invalidateGeneration: true });
@@ -1454,7 +1462,7 @@ function shutdownAndExit(exitCode: number, error?: unknown) {
     logError("orchestrator", error instanceof Error ? error.stack ?? error.message : String(error));
   }
 
-  void stopAllChildren().finally(() => copilotBridge.stop()).finally(() => opencodeBridge.stop()).finally(() => {
+  void stopAllChildren().finally(() => copilotBridge.stop()).finally(() => opencodeBridge.stop()).finally(() => subagentStore.waitForIdle()).finally(() => {
     process.exit(exitCode);
   });
 }
@@ -1471,6 +1479,7 @@ process.on("exit", () => {
 
 async function startOrchestrator() {
   log("orchestrator", `starting bridge at ${CODEX_BRIDGE_URL} and Next.js on port ${NEXT_PORT}`);
+  await subagentStore.initialize();
   await getBrowseRuntime().initialize();
   await workbenchAgentCliEnvironment.install();
   await ensureWorkbenchPromptFiles();

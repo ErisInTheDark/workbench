@@ -43,6 +43,7 @@ import ReloadableWorkbenchSubagentController, {
 } from "./ReloadableWorkbenchSubagentController";
 import { readWorkbenchPromptContext, WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
+import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 
 type CodexTranscriptStoreInstance = import("./CodexTranscriptStore").default;
 type CodexTranscriptStoreConstructor = new (
@@ -81,6 +82,7 @@ type CodexStdioBridgeOptions = {
   onNotification: (notification: JsonRpcNotification) => void;
   sendToClient: (client: BridgeClient, message: unknown) => void;
   storageRoot: string;
+  subagentStore?: WorkbenchSubagentStore;
 };
 
 type RequestIdAllocator = {
@@ -1002,7 +1004,7 @@ export default class CodexStdioBridge {
   private upstreamInitializePromise: Promise<void> | null = null;
   private readonly subagentController: ReloadableWorkbenchSubagentController;
 
-  constructor({ appServer, bridgeUrl, initialState, onNotification, sendToClient, storageRoot }: CodexStdioBridgeOptions) {
+  constructor({ appServer, bridgeUrl, initialState, onNotification, sendToClient, storageRoot, subagentStore = new WorkbenchSubagentStore(storageRoot) }: CodexStdioBridgeOptions) {
     this.appServer = appServer;
     this.bridgeUrl = bridgeUrl;
     this.onNotification = onNotification;
@@ -1014,7 +1016,7 @@ export default class CodexStdioBridge {
     this.requestIdAllocator = initialState?.requestIdAllocator ?? { next: 1 };
     this.upstreamInitialized = initialState?.upstreamInitialized ?? false;
     this.subagentController = new ReloadableWorkbenchSubagentController({
-      createController: () => new WorkbenchSubagentController({ bridgeUrl, storageRoot }),
+      createController: () => new WorkbenchSubagentController({ bridgeUrl, storageRoot, subagentStore }),
       initialState: initialState?.subagentControllerState,
       legacyController: initialState?.subagentController,
     });

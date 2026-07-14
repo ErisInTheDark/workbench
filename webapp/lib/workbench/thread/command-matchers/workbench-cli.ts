@@ -8,7 +8,7 @@ import type { CommandMatcherDefinition } from "./types";
 
 const WB_PREFIX = /^wb(?:\.cmd)?\s+/iu;
 
-export type WorkbenchSubagentCommandAction = "create" | "message" | "profiles" | "stop" | "wait";
+export type WorkbenchSubagentCommandAction = "create" | "list" | "message" | "profiles" | "stop" | "wait";
 
 export interface WorkbenchSubagentCommand {
   action: WorkbenchSubagentCommandAction;
@@ -65,7 +65,7 @@ function readFlagValue(command: string, flag: string) {
 
 export function parseWorkbenchSubagentCommand(command: string): WorkbenchSubagentCommand | null {
   const normalized = command.trim();
-  const actionMatch = normalized.match(/^wb(?:\.cmd)?\s+subagent\s+(profiles|create|wait|message|stop)\b/iu);
+  const actionMatch = normalized.match(/^wb(?:\.cmd)?\s+subagent\s+(list|profiles|create|wait|message|stop)\b/iu);
   if (!actionMatch) return null;
   const action = actionMatch[1].toLowerCase() as WorkbenchSubagentCommandAction;
   return {
@@ -121,6 +121,7 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       if (!command) return null;
       const labels: Record<Exclude<WorkbenchSubagentCommandAction, "wait">, string> = {
         create: "Created subagent",
+        list: "Listed subagents",
         message: "Messaged subagent",
         profiles: "Listed subagent profiles",
         stop: "Stopped subagent",
@@ -131,6 +132,7 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       const ongoingLabel = command.action === "wait"
         ? command.threadIds.length > 1 ? `Waiting for ${command.threadIds.length} subagents` : "Waiting for subagent"
         : command.action === "create" ? "Creating subagent"
+        : command.action === "list" ? "Listing subagents"
         : command.action === "message" ? "Messaging subagent"
         : command.action === "profiles" ? "Listing subagent profiles"
         : "Stopping subagent";

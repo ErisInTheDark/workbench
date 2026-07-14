@@ -28,7 +28,11 @@ export async function GET(request: NextRequest) {
     const result = await sendServerWorkbenchOrchestratorRequest(request, "codex", {
       method: "workbench/subagent/list",
       params: {
+        cursor: request.nextUrl.searchParams.get("cursor"),
         cwd: request.nextUrl.searchParams.get("cwd"),
+        limit: request.nextUrl.searchParams.has("limit")
+          ? Number(request.nextUrl.searchParams.get("limit"))
+          : null,
         parentThreadId: request.nextUrl.searchParams.get("parentThreadId"),
       },
     });

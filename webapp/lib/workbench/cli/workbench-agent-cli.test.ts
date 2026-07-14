@@ -170,6 +170,13 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
     cwd: "C:/workspace",
     workbenchOrigin: "http://localhost:3000",
   };
+  const list = await parseWorkbenchAgentCliCommand(["subagent", "list", "--limit", "20", "--cursor", "next-page"], options);
+  assert.equal(list.kind, "request");
+  assert.deepEqual(list.request, {
+    method: "GET",
+    path: "/api/subagents?cursor=next-page&cwd=C%3A%2Fworkspace&limit=20&parentThreadId=parent-thread",
+    responseKind: "json",
+  });
   const profiles = await parseWorkbenchAgentCliCommand(["subagent", "profiles"], options);
   assert.equal(profiles.kind, "request");
   assert.deepEqual(profiles.request, {
@@ -232,6 +239,8 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
   ], options)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand(["subagent", "stop", "--id", "child-thread"], options)).kind, "request");
   assert.equal((await parseWorkbenchAgentCliCommand(["subagent", "profiles"], { ...options, callerThreadId: null })).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["subagent", "list"], { ...options, callerThreadId: null })).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["subagent", "list", "--limit", "21"], options)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand([
     "subagent", "create", "--profile", "profile-1", "--name", "missing-fields",
   ], options)).kind, "error");
