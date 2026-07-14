@@ -20,6 +20,7 @@ export const THREAD_CONTEXT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       return CommandMatcher.Result({
         hideCommandCwd: true,
         hideCommandOutput: true,
+        ongoingSummaryParts: [CommandMatcher.Text("Recalling thread history")],
         remainingCommand: null,
         stop: true,
         summaryParts: [CommandMatcher.Text("Recalled thread history")],

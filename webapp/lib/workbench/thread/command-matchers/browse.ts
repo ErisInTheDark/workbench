@@ -11,6 +11,7 @@ const BROWSE_MATCHER_ID = "browse.command";
 
 interface BrowseCommandSummary {
   detailRows?: ThreadCommandDetailRow[];
+  ongoingSummaryParts: ThreadCommandDisplayPart[];
   session: string | null;
   summaryParts: ThreadCommandDisplayPart[];
 }
@@ -30,6 +31,7 @@ export const BROWSE_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         detailRows: summary.detailRows,
         hideCommandCwd: true,
         hideCommandOutput: true,
+        ongoingSummaryParts: summary.ongoingSummaryParts,
         remainingCommand: null,
         stop: true,
         summaryParts: summary.summaryParts,
@@ -56,21 +58,33 @@ function summarizeBrowseCommand(commandText: string): BrowseCommandSummary | nul
       : scriptPath
         ? [CommandMatcher.Text("Browse: run script "), CommandMatcher.Code(scriptPath)]
         : [CommandMatcher.Text(`Browse: run ${commands.length} ${pluralize(commands.length, "action")}`)];
+    const ongoingSummaryParts: ThreadCommandDisplayPart[] = summary
+      ? [CommandMatcher.Text("Browsing: "), primary(summary)]
+      : scriptPath
+        ? [CommandMatcher.Text("Browsing: running script "), CommandMatcher.Code(scriptPath)]
+        : [CommandMatcher.Text(`Browsing: running ${commands.length} ${pluralize(commands.length, "action")}`)];
     appendSession(summaryParts, session);
-    return { detailRows, session, summaryParts };
+    appendSession(ongoingSummaryParts, session);
+    return { detailRows, ongoingSummaryParts, session, summaryParts };
   }
   if (operation === "raw") {
     const separator = tokens.indexOf("--");
     const rawAction = separator >= 0 ? tokens[separator + 1] : null;
     const summaryParts = [CommandMatcher.Text(`Browse: ${formatBrowseAction(rawAction ?? "raw")}`)];
-    appendSession(summaryParts, session || readFlag(tokens.slice(separator + 1), "--session"));
-    return { session, summaryParts };
+    const ongoingSummaryParts = [CommandMatcher.Text(`Browsing: running ${formatBrowseAction(rawAction ?? "raw")}`)];
+    const resolvedSession = session || readFlag(tokens.slice(separator + 1), "--session");
+    appendSession(summaryParts, resolvedSession);
+    appendSession(ongoingSummaryParts, resolvedSession);
+    return { ongoingSummaryParts, session, summaryParts };
   }
   if (["sessions", "stop", "forget"].includes(operation)) {
     const label = operation === "sessions" ? "list sessions" : operation === "stop" ? "stop session" : "forget persistent profile";
     const summaryParts = [CommandMatcher.Text(`Browse: ${label}`)];
+    const ongoingLabel = operation === "sessions" ? "listing sessions" : operation === "stop" ? "stopping session" : "forgetting persistent profile";
+    const ongoingSummaryParts = [CommandMatcher.Text(`Browsing: ${ongoingLabel}`)];
     appendSession(summaryParts, session);
-    return { session, summaryParts };
+    appendSession(ongoingSummaryParts, session);
+    return { ongoingSummaryParts, session, summaryParts };
   }
   return null;
 }

@@ -6,6 +6,7 @@
  * - createEmptyCommandSummaryStats: build a zeroed aggregate-summary counter object. Keywords: thread, command, summary, aggregate.
  * - mergeCommandSummaryStats: add aggregate command-summary counters together. Keywords: thread, command, summary, aggregate.
  * - countKnownCommandSummaryStats: total the categorized command-summary counters without the other bucket. Keywords: thread, command, summary, aggregate.
+ * - buildReadCommandSummary: build paired completed and ongoing structured summaries for file and skill reads. Keywords: thread, command, read, tense.
  * - getCommandPathKnownSkill: resolve a command path to a known Workbench Skill when it targets SKILL.md. Keywords: command, skill, path.
  * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text. Keywords: path, command, relative, display.
  * - summarizeDisplayParts: flatten structured command-summary parts into plain text. Keywords: thread, command, summary, text.
@@ -166,10 +167,15 @@ export function buildReadCommandSummary(
   value: string | null | undefined,
   context: Pick<ParsedCommandDisplayContext, "cwd" | "knownSkills" | "projectRootPath" | "workspaceRoots">,
   readPrefix = "Read ",
+  ongoingReadPrefix = "Reading ",
 ) {
   const knownSkill = getCommandPathKnownSkill(value, context);
   if (knownSkill) {
     return {
+      ongoingSummaryParts: [
+        { text: "Loading ", type: "text", variant: "plain" },
+        { name: knownSkill.name, path: knownSkill.path, type: "skill" },
+      ] satisfies ThreadCommandDisplayPart[],
       summaryParts: [
         { text: "Load ", type: "text", variant: "plain" },
         { name: knownSkill.name, path: knownSkill.path, type: "skill" },
@@ -184,6 +190,10 @@ export function buildReadCommandSummary(
   }
 
   return {
+    ongoingSummaryParts: [
+      { text: ongoingReadPrefix, type: "text", variant: "plain" },
+      pathPart,
+    ] satisfies ThreadCommandDisplayPart[],
     pathPart,
     summaryParts: [
       { text: readPrefix, type: "text", variant: "plain" },

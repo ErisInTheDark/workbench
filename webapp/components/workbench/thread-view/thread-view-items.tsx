@@ -29,6 +29,8 @@ import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/threa
 import {
   getThreadCommandBlockDisplay,
   getThreadCommandDisplay,
+  getThreadCommandExecutionOutcome,
+  getThreadCommandOutcomeDisplay,
   isBrowseCommandMatcherClaim,
   isGitCheckpointDiffMatcherClaim,
   isThreadContextMatcherClaim,
@@ -1010,6 +1012,8 @@ function ThreadStructuredCommandDetailRow({
         display={{
           claimedBy: "command-detail-row",
           omitFromDisplay: false,
+          ongoingSummaryParts: row.summaryParts,
+          ongoingSummaryText: "",
           shell: null,
           showShell: false,
           summaryKind: "matched",
@@ -1408,6 +1412,12 @@ function buildCommandSequenceRenderSegments({
       continue;
     }
 
+    if (getThreadCommandExecutionOutcome(item.status, item.exitCode) !== "completed") {
+      flushPendingCommands();
+      segments.push({ items: [item], kind: "commands" });
+      continue;
+    }
+
     pendingCommands.push(item);
   }
 
@@ -1507,6 +1517,11 @@ function ThreadCommandExecutionDetails ({
     projectRootPath,
     workspaceRoots,
   }), [item.command, item.commandActions, item.cwd, knownSkills, projectRootPath, workspaceRoots]);
+  const commandOutcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
+  const outcomeCommandDisplay = useMemo(
+    () => getThreadCommandOutcomeDisplay(commandDisplay, commandOutcome),
+    [commandDisplay, commandOutcome],
+  );
   const subagentCommand = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand);
   const checkpointDiffChanges = isGitCheckpointDiffMatcherClaim(commandDisplay.claimedBy)
     ? parseGitCheckpointDiffOutput(item.aggregatedOutput ?? "")
@@ -1532,12 +1547,30 @@ function ThreadCommandExecutionDetails ({
   if (
     subagentCommand?.action === "wait"
     && subagentCommand.threadIds.length
-    && (item.status === "inProgress" || item.status === "completed")
-    && (item.exitCode === null || item.exitCode === 0)
   ) {
     return (
       <ThreadSubagentWaitItem
-        active={item.status === "inProgress" && isMostRecent}
+        disclosureContent={commandOutcome === "completed"
+          ? item.aggregatedOutput?.trim() ? (
+            <ThreadMarkdown
+              inlineMentionSources={inlineMentionSources}
+              markdown={item.aggregatedOutput.trim()}
+              projectFilePaths={projectFilePaths}
+              projectId={projectId}
+              projectRootPath={projectRootPath}
+              threadCwdPath={item.cwd}
+              workspaceRoots={workspaceRoots}
+            />
+          ) : undefined
+          : commandOutcome === "inProgress" ? undefined : (
+            <ThreadCodeDisplay
+              header={<ThreadCommandHeader command={item.command} surface="framed" />}
+              output={item.aggregatedOutput?.trim() || undefined}
+              preview
+              variant="plain"
+            />
+          )}
+        durationMs={item.durationMs}
         entries={subagentCommand.threadIds.map((childThreadId) => {
           const childThread = relatedThreadsById[childThreadId];
           return {
@@ -1558,6 +1591,8 @@ function ThreadCommandExecutionDetails ({
             threadId: childThreadId,
           };
         })}
+        exitCode={item.exitCode}
+        outcome={commandOutcome}
       />
     );
   }
@@ -1606,16 +1641,7 @@ function ThreadCommandExecutionDetails ({
   }
   const metaParts = [];
 
-  if (item.status !== "completed") {
-    metaParts.push(
-      <ThreadSummaryText
-        key={`${item.id}:status`}
-        text={humanizeThreadLabel(item.status)}
-      />,
-    );
-  }
-
-  if (item.exitCode !== null && item.exitCode !== 0) {
+  if (commandOutcome === "failed" && item.exitCode !== null && item.exitCode !== 0) {
     metaParts.push(
       <ThreadSummaryText
         key={`${item.id}:exit`}
@@ -1640,7 +1666,7 @@ function ThreadCommandExecutionDetails ({
       defaultOpen={isMostRecent}
       summary={(
         <>
-          <ThreadCommandSummary display={commandDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />
+          <ThreadCommandSummary display={outcomeCommandDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />
           {metaParts.length ? (
             <span className="ml-2 text-[0.78em] text-muted">
               {metaParts.map((part, index) => (

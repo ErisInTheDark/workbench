@@ -85,6 +85,7 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       return CommandMatcher.Result({
         hide: true,
         omitFromDisplay: true,
+        ongoingSummaryParts: [],
         remainingCommand: null,
         stop: true,
         summaryParts: [],
@@ -101,6 +102,7 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       const scopes = ["orchestrator-logic", "codex-bridge", "opencode-bridge", "opencode-server", "next-dev"]
         .filter((scope) => new RegExp(`(?:^|\\s)--${scope}(?:\\s|$)`, "u").test(normalized));
       return CommandMatcher.Result({
+        ongoingSummaryParts: [CommandMatcher.Text(`Reloading ${scopes.length ? scopes.join(", ") : "orchestrator"}`)],
         remainingCommand: null,
         stop: true,
         summaryParts: [CommandMatcher.Text(`Reloaded ${scopes.length ? scopes.join(", ") : "orchestrator"}`)],
@@ -121,7 +123,14 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       const label = command.action === "wait"
         ? command.threadIds.length > 1 ? `Waited for ${command.threadIds.length} subagents` : "Waited for subagent"
         : labels[command.action];
+      const ongoingLabel = command.action === "wait"
+        ? command.threadIds.length > 1 ? `Waiting for ${command.threadIds.length} subagents` : "Waiting for subagent"
+        : command.action === "create" ? "Creating subagent"
+        : command.action === "message" ? "Messaging subagent"
+        : command.action === "profiles" ? "Listing subagent profiles"
+        : "Stopping subagent";
       return CommandMatcher.Result({
+        ongoingSummaryParts: [CommandMatcher.Text(ongoingLabel)],
         remainingCommand: null,
         stop: true,
         summaryParts: [CommandMatcher.Text(label)],
@@ -145,7 +154,12 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         : action[2] === "update" ? "Updated"
         : action[2] === "delete" ? "Deleted"
         : "Updated";
+      const ongoingVerb = action[2] === "read" ? "Reading"
+        : action[2] === "create" ? "Creating"
+        : action[2] === "delete" ? "Deleting"
+        : "Updating";
       return CommandMatcher.Result({
+        ongoingSummaryParts: [CommandMatcher.Text(`${ongoingVerb} ${owner.toLowerCase()}`)],
         remainingCommand: null,
         stop: true,
         summaryParts: [CommandMatcher.Text(`${verb} ${owner.toLowerCase()}`)],

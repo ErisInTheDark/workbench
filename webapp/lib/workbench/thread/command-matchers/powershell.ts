@@ -52,6 +52,10 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [
+          CommandMatcher.Text("Deleting folder "),
+          pathPart,
+        ],
         remainingCommand: null,
         stop: true,
         summaryParts: [
@@ -85,6 +89,10 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [
+          CommandMatcher.Text("Deleting folder "),
+          pathPart,
+        ],
         summaryParts: [
           CommandMatcher.Text("Delete folder "),
           pathPart,
@@ -123,6 +131,7 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
 
       return CommandMatcher.Result({
         hide: true,
+        ongoingSummaryParts: [],
         summaryParts: [],
       });
     },
@@ -136,6 +145,10 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [
+          CommandMatcher.Text("Checking for "),
+          pathPart,
+        ],
         summaryParts: [
           CommandMatcher.Text("Checked for "),
           pathPart,
@@ -165,13 +178,20 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         CommandMatcher.Text(`${method} `),
         CommandMatcher.Code(urlDisplay),
       ];
+      const ongoingSummaryParts = [
+        CommandMatcher.Text(`Requesting ${method} `),
+        CommandMatcher.Code(urlDisplay),
+      ];
 
       if (bodySummary) {
         summaryParts.push(CommandMatcher.Text(" with JSON "));
         summaryParts.push(CommandMatcher.Code(bodySummary));
+        ongoingSummaryParts.push(CommandMatcher.Text(" with JSON "));
+        ongoingSummaryParts.push(CommandMatcher.Code(bodySummary));
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts,
         remainingCommand: shouldHidePowerShellWebRequestRemainder(context.stage.remainingCommand)
           ? null
           : context.stage.remainingCommand,
@@ -212,6 +232,7 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         const readSummary = buildReadCommandSummary(path, context);
         if (readSummary?.summaryStats.skillLoads) {
           return CommandMatcher.Result({
+            ongoingSummaryParts: readSummary.ongoingSummaryParts,
             summaryStats: readSummary.summaryStats,
             summaryParts: readSummary.summaryParts,
           });
@@ -221,24 +242,26 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       if (first !== null) {
-        const readSummary = buildReadCommandSummary(path, context, `Read first ${first} lines of `);
+        const readSummary = buildReadCommandSummary(path, context, `Read first ${first} lines of `, `Reading first ${first} lines of `);
         if (!readSummary) {
           return null;
         }
 
         return CommandMatcher.Result({
+          ongoingSummaryParts: readSummary.ongoingSummaryParts,
           summaryStats: readSummary.summaryStats,
           summaryParts: readSummary.summaryParts,
         });
       }
 
       if (totalCount !== null) {
-        const readSummary = buildReadCommandSummary(path, context, `Read first ${totalCount} lines of `);
+        const readSummary = buildReadCommandSummary(path, context, `Read first ${totalCount} lines of `, `Reading first ${totalCount} lines of `);
         if (!readSummary) {
           return null;
         }
 
         return CommandMatcher.Result({
+          ongoingSummaryParts: readSummary.ongoingSummaryParts,
           summaryStats: readSummary.summaryStats,
           summaryParts: readSummary.summaryParts,
         });
@@ -250,6 +273,7 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: readSummary.ongoingSummaryParts,
         summaryStats: readSummary.summaryStats,
         summaryParts: readSummary.summaryParts,
       });
@@ -276,6 +300,12 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
 
       if (includePatterns.length) {
         return CommandMatcher.Result({
+          ongoingSummaryParts: [
+            CommandMatcher.Text("Listing "),
+            CommandMatcher.Code(includePatterns.join(", ")),
+            CommandMatcher.Text(` ${collectionLabel} ${locationLabel} `),
+            pathPart,
+          ],
           summaryStats: { listedFiles: 1 },
           summaryParts: [
             CommandMatcher.Text("List "),
@@ -287,6 +317,10 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [
+          CommandMatcher.Text(`Listing ${collectionLabel} ${locationLabel} `),
+          pathPart,
+        ],
         summaryStats: { listedFiles: 1 },
         summaryParts: [
           CommandMatcher.Text(`List ${collectionLabel} ${locationLabel} `),
@@ -312,6 +346,10 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [
+          CommandMatcher.Text("Listing files under "),
+          pathPart,
+        ],
         summaryStats: { listedFiles: 1 },
         summaryParts: [
           CommandMatcher.Text("List files under "),
@@ -338,15 +376,21 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         CommandMatcher.Text("Search for "),
         CommandMatcher.Code(`"${formatPatternForDisplay(query)}"`),
       ];
+      const ongoingSummaryParts = [
+        CommandMatcher.Text("Searching for "),
+        CommandMatcher.Code(`"${formatPatternForDisplay(query)}"`),
+      ];
       const path = getPowerShellRipgrepPathArgument(parsedStage, positionalArguments);
       const pathPart = path
         ? buildCommandPathPart(path, context)
         : buildDisplayPathPart(context.cwdDisplay);
       if (pathPart) {
         summaryParts.push(CommandMatcher.Text(" in "), pathPart);
+        ongoingSummaryParts.push(CommandMatcher.Text(" in "), pathPart);
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts,
         summaryParts,
         summaryStats: { searchedFiles: 1 },
       });
@@ -366,6 +410,9 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: whereObjectFilter.mode === "exclude"
+          ? [CommandMatcher.Text("Excluding "), CommandMatcher.Code(whereObjectFilter.pattern)]
+          : [CommandMatcher.Text("Filtering to "), CommandMatcher.Code(whereObjectFilter.pattern)],
         summaryStats: { otherCommands: 1 },
         summaryParts: whereObjectFilter.mode === "exclude"
           ? [
@@ -399,6 +446,7 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
           : "";
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [CommandMatcher.Text(`Sorting by ${propertyName}${direction}`)],
         summaryStats: { otherCommands: 1 },
         summaryParts: [
           CommandMatcher.Text(`Sort by ${propertyName}${direction}`),
@@ -417,6 +465,7 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       const first = readPowerShellNumericValue(parsedStage, "-First");
       if (first !== null) {
         return CommandMatcher.Result({
+          ongoingSummaryParts: [CommandMatcher.Text(`Taking first ${first}`)],
           summaryStats: { otherCommands: 1 },
           summaryParts: [
             CommandMatcher.Text(`Take first ${first}`),
@@ -427,6 +476,7 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       const last = readPowerShellNumericValue(parsedStage, "-Last");
       if (last !== null) {
         return CommandMatcher.Result({
+          ongoingSummaryParts: [CommandMatcher.Text(`Taking last ${last}`)],
           summaryStats: { otherCommands: 1 },
           summaryParts: [
             CommandMatcher.Text(`Take last ${last}`),
@@ -447,6 +497,7 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
 
       return CommandMatcher.Result({
         hide: true,
+        ongoingSummaryParts: [],
         summaryParts: [],
       });
     },
@@ -465,6 +516,7 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
 
       return CommandMatcher.Result({
         hide: true,
+        ongoingSummaryParts: [],
         summaryParts: [],
       });
     },
@@ -486,12 +538,18 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         CommandMatcher.Text("Search for "),
         CommandMatcher.Code(`"${formatPatternForDisplay(pattern)}"`),
       ];
+      const ongoingSummaryParts = [
+        CommandMatcher.Text("Searching for "),
+        CommandMatcher.Code(`"${formatPatternForDisplay(pattern)}"`),
+      ];
       const pathPart = getPowerShellStagePathPart(parsedStage, context);
       if (pathPart) {
         summaryParts.push(CommandMatcher.Text(" in "), pathPart);
+        ongoingSummaryParts.push(CommandMatcher.Text(" in "), pathPart);
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts,
         summaryParts,
         summaryStats: { searchedFiles: 1 },
       });
@@ -1418,6 +1476,10 @@ function buildPowerShellSelectObjectReadSummary(
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [
+          CommandMatcher.Text(`Reading first ${first} lines of `),
+          pathPart,
+        ],
         remainingCommand: nextStage.remainingCommand,
         summaryStats: { readFiles: 1 },
         summaryParts: [
@@ -1434,6 +1496,10 @@ function buildPowerShellSelectObjectReadSummary(
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [
+          CommandMatcher.Text(`Reading last ${last} lines of `),
+          pathPart,
+        ],
         remainingCommand: nextStage.remainingCommand,
         summaryStats: { readFiles: 1 },
         summaryParts: [
@@ -1450,6 +1516,10 @@ function buildPowerShellSelectObjectReadSummary(
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [
+          CommandMatcher.Text(`Reading from line ${skip + 1} of `),
+          pathPart,
+        ],
         remainingCommand: nextStage.remainingCommand,
         summaryStats: { readFiles: 1 },
         summaryParts: [
@@ -1493,6 +1563,10 @@ function buildPowerShellLineRangesReadSummary(
 
   if (lineRanges.length > 1) {
     return CommandMatcher.Result({
+      ongoingSummaryParts: [
+        CommandMatcher.Text(`Reading lines ${formatPowerShellLineRanges(lineRanges)} of `),
+        pathPart,
+      ],
       remainingCommand,
       summaryStats: { readFiles: 1 },
       summaryParts: [
@@ -1505,6 +1579,13 @@ function buildPowerShellLineRangesReadSummary(
   const { endLine, startLine } = firstRange;
   if (startLine === endLine) {
     return CommandMatcher.Result({
+      ongoingSummaryParts: [
+        CommandMatcher.Text("Reading "),
+        CommandMatcher.Path({
+          ...pathPart,
+          lineNumber: startLine,
+        }),
+      ],
       remainingCommand,
       summaryStats: { readFiles: 1 },
       summaryParts: [
@@ -1518,6 +1599,10 @@ function buildPowerShellLineRangesReadSummary(
   }
 
   return CommandMatcher.Result({
+    ongoingSummaryParts: [
+      CommandMatcher.Text(`Reading lines ${startLine}-${endLine} of `),
+      pathPart,
+    ],
     remainingCommand,
     summaryStats: { readFiles: 1 },
     summaryParts: [
@@ -1548,6 +1633,10 @@ function buildPowerShellSkillLoadSummaryFromPathPart(
   const knownSkill = getCommandPathKnownSkill(pathPart.path, context);
   if (knownSkill) {
     return CommandMatcher.Result({
+      ongoingSummaryParts: [
+        CommandMatcher.Text("Loading "),
+        CommandMatcher.Skill({ name: knownSkill.name, path: knownSkill.path }),
+      ],
       remainingCommand,
       summaryStats: { skillLoads: 1 },
       summaryParts: [

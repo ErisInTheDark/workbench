@@ -15,9 +15,12 @@
  * - parseGitCheckpointDiffOutput: parse checkpoint diff command output into file-change display entries. Keywords: checkpoint, diff, file change.
  * - getThreadCommandDisplay: unwrap shell launchers and describe common command patterns with staged shell matchers. Keywords: thread, command, matcher, shell.
  * - getThreadCommandBlockDisplay: aggregate multiple command displays into one grouped summary label. Keywords: thread, command, summary, aggregate.
+ * - getThreadCommandExecutionOutcome/getThreadCommandOutcomeDisplay: classify command lifecycle results and select completed or ongoing structured grammar. Keywords: command, timeout, failure, tense.
+ * - ThreadCommandExecutionOutcome: semantic completed, ongoing, timeout, failure, or decline state for command summaries. Keywords: command, lifecycle, outcome.
  */
 
 import type { CommandAction } from "../../codex/generated/app-server/v2/CommandAction";
+import type { CommandExecutionStatus } from "../../codex/generated/app-server/v2/CommandExecutionStatus";
 import {
   BROWSE_COMMAND_MATCHERS,
   isBrowseCommandMatcherClaim,
@@ -73,85 +76,122 @@ type KnownCommandSummaryStatKey = Exclude<keyof ThreadCommandSummaryStats, "othe
 
 const COMMAND_BLOCK_SUMMARY_CATEGORIES: Array<{
   format: (count: number) => string;
+  formatOngoing: (count: number) => string;
   key: KnownCommandSummaryStatKey;
 }> = [
   {
     key: "skillLoads",
     format: (count) => `loaded ${count} ${pluralize(count, "skill")}`,
+    formatOngoing: (count) => `loading ${count} ${pluralize(count, "skill")}`,
   },
   {
     key: "readFiles",
     format: (count) => `read ${count} ${pluralize(count, "file")}`,
+    formatOngoing: (count) => `reading ${count} ${pluralize(count, "file")}`,
   },
   {
     key: "searchedFiles",
     format: (count) => `searched ${count} ${pluralize(count, "file")}`,
+    formatOngoing: (count) => `searching ${count} ${pluralize(count, "file")}`,
   },
   {
     key: "listedFiles",
     format: (count) => count === 1
       ? "listed files"
       : `listed files ${count} times`,
+    formatOngoing: (count) => count === 1
+      ? "listing files"
+      : `listing files ${count} times`,
   },
   {
     key: "deletedPaths",
     format: (count) => count === 1
       ? "deleted 1 path"
       : `deleted ${count} paths`,
+    formatOngoing: (count) => count === 1
+      ? "deleting 1 path"
+      : `deleting ${count} paths`,
   },
   {
     key: "pathChecks",
     format: (count) => count === 1
       ? "checked 1 path"
       : `checked ${count} paths`,
+    formatOngoing: (count) => count === 1
+      ? "checking 1 path"
+      : `checking ${count} paths`,
   },
   {
     key: "gitStatusChecks",
     format: (count) => count === 1
       ? "checked git status"
       : `checked git status ${count} times`,
+    formatOngoing: (count) => count === 1
+      ? "checking git status"
+      : `checking git status ${count} times`,
   },
   {
     key: "gitDiffChecks",
     format: (count) => count === 1
       ? "checked git diff"
       : `checked git diff ${count} times`,
+    formatOngoing: (count) => count === 1
+      ? "checking git diff"
+      : `checking git diff ${count} times`,
   },
   {
     key: "typescriptValidations",
     format: (count) => count === 1
       ? "validated TypeScript"
       : `validated TypeScript ${count} times`,
+    formatOngoing: (count) => count === 1
+      ? "validating TypeScript"
+      : `validating TypeScript ${count} times`,
   },
   {
     key: "typescriptBuilds",
     format: (count) => count === 1
       ? "built TypeScript"
       : `built TypeScript ${count} times`,
+    formatOngoing: (count) => count === 1
+      ? "building TypeScript"
+      : `building TypeScript ${count} times`,
   },
   {
     key: "gitCheckpointCreates",
     format: (count) => count === 1
       ? "created a git checkpoint"
       : `created ${count} git checkpoints`,
+    formatOngoing: (count) => count === 1
+      ? "creating a git checkpoint"
+      : `creating ${count} git checkpoints`,
   },
   {
     key: "gitCheckpointDiffs",
     format: (count) => count === 1
       ? "diffed against a git checkpoint"
       : `diffed against git checkpoints ${count} times`,
+    formatOngoing: (count) => count === 1
+      ? "diffing against a git checkpoint"
+      : `diffing against git checkpoints ${count} times`,
   },
   {
     key: "gitCheckpointRestores",
     format: (count) => count === 1
       ? "restored a git checkpoint"
       : `restored git checkpoints ${count} times`,
+    formatOngoing: (count) => count === 1
+      ? "restoring a git checkpoint"
+      : `restoring git checkpoints ${count} times`,
   },
   {
     key: "webRequests",
     format: (count) => count === 1
       ? "made a web request"
       : `made ${count} web requests`,
+    formatOngoing: (count) => count === 1
+      ? "making a web request"
+      : `making ${count} web requests`,
   },
 ];
 
@@ -166,6 +206,8 @@ export type {
     ThreadCommandSummaryDisplay,
     ThreadCommandSummaryStats
 };
+
+export type ThreadCommandExecutionOutcome = "completed" | "declined" | "failed" | "inProgress" | "timedOut";
 
 export function getThreadCommandDisplay({
   command,
@@ -217,6 +259,8 @@ export function getThreadCommandDisplay({
       cwdDisplay: context.cwdDisplay,
       fullCommand: command,
       omitFromDisplay: false,
+      ongoingSummaryParts: actionSummary.ongoingSummaryParts,
+      ongoingSummaryText: summarizeDisplayParts(actionSummary.ongoingSummaryParts),
       shell: context.shell,
       showShell: false,
       summaryKind: "matched",
@@ -233,6 +277,8 @@ export function getThreadCommandDisplay({
     cwdDisplay: context.cwdDisplay,
     fullCommand: command,
     omitFromDisplay: false,
+    ongoingSummaryParts: [CommandMatcher.Text("Running "), CommandMatcher.Code(rawSummaryText, { clamp: true })],
+    ongoingSummaryText: `Running ${rawSummaryText}`,
     shell: context.shell,
     showShell: Boolean(context.shell),
     summaryKind: "raw",
@@ -282,9 +328,12 @@ export function getThreadCommandBlockDisplay({
   }
 
   const summaryText = formatCommandBlockSummaryText(summaryStats, items.length, summaryCategoryOrder);
+  const ongoingSummaryText = formatCommandBlockSummaryText(summaryStats, items.length, summaryCategoryOrder, true);
   return {
     claimedBy: "command-block",
     omitFromDisplay: false,
+    ongoingSummaryParts: [CommandMatcher.Text(ongoingSummaryText)],
+    ongoingSummaryText,
     shell: null,
     showShell: false,
     summaryKind: "matched",
@@ -308,6 +357,7 @@ function getShellCommandMatchers(shellGroup: ParsedCommandDisplayContext["shellG
 }
 
 function summarizeCommandActions(context: ParsedCommandDisplayContext) {
+  const ongoingSummaryParts: ThreadCommandDisplayPart[] = [];
   const summaryParts: ThreadCommandDisplayPart[] = [];
   const summaryStats = createEmptyCommandSummaryStats();
   let hasKnownAction = false;
@@ -321,15 +371,18 @@ function summarizeCommandActions(context: ParsedCommandDisplayContext) {
 
     if (summaryParts.length) {
       summaryParts.push(CommandMatcher.Separator());
+      ongoingSummaryParts.push(CommandMatcher.Separator());
     }
 
     hasKnownAction = true;
+    ongoingSummaryParts.push(...actionSummary.ongoingSummaryParts);
     summaryParts.push(...actionSummary.summaryParts);
     mergeCommandSummaryStats(summaryStats, actionSummary.summaryStats);
   }
 
   return hasKnownAction
     ? {
+      ongoingSummaryParts,
       summaryParts,
       summaryStats,
     }
@@ -340,6 +393,7 @@ function summarizeCommandAction(
   action: CommandAction,
   context: ParsedCommandDisplayContext,
 ): {
+  ongoingSummaryParts: ThreadCommandDisplayPart[];
   summaryParts: ThreadCommandDisplayPart[];
   summaryStats: Partial<ThreadCommandSummaryStats>;
 } | null {
@@ -347,6 +401,7 @@ function summarizeCommandAction(
     case "read": {
       const readSummary = buildReadCommandSummary(action.path, context);
       return {
+        ongoingSummaryParts: readSummary?.ongoingSummaryParts ?? [CommandMatcher.Text("Reading file")],
         summaryParts: readSummary?.summaryParts ?? [CommandMatcher.Text("Read file")],
         summaryStats: readSummary?.summaryStats ?? { readFiles: 1 },
       };
@@ -356,6 +411,9 @@ function summarizeCommandAction(
         ? buildCommandPathPart(action.path, context)
         : buildDisplayPathPart(context.cwdDisplay);
       return {
+        ongoingSummaryParts: pathPart
+          ? [CommandMatcher.Text("Listing files under "), pathPart]
+          : [CommandMatcher.Text("Listing files")],
         summaryParts: pathPart
           ? [
             CommandMatcher.Text("List files under "),
@@ -371,6 +429,9 @@ function summarizeCommandAction(
         ? buildCommandPathPart(action.path, context)
         : null;
       return {
+        ongoingSummaryParts: pathPart
+          ? [CommandMatcher.Text("Searching for "), CommandMatcher.Code(queryText), CommandMatcher.Text(" in "), pathPart]
+          : [CommandMatcher.Text("Searching for "), CommandMatcher.Code(queryText)],
         summaryParts: pathPart
           ? [
             CommandMatcher.Text("Search for "),
@@ -394,26 +455,66 @@ function formatCommandBlockSummaryText(
   summaryStats: ThreadCommandSummaryStats,
   fallbackCommandCount: number,
   summaryCategoryOrder = getKnownCommandSummaryCategoryKeys(summaryStats),
+  ongoing = false,
 ) {
   const segments = summaryCategoryOrder
     .map((key) => {
       const count = summaryStats[key];
       const category = COMMAND_BLOCK_SUMMARY_CATEGORIES.find((candidate) => candidate.key === key);
-      return count && category ? category.format(count) : null;
+      return count && category ? (ongoing ? category.formatOngoing(count) : category.format(count)) : null;
     })
     .filter((segment): segment is string => Boolean(segment));
 
   if (countKnownCommandSummaryStats(summaryStats) && summaryStats.otherCommands) {
-    segments.push(`ran ${summaryStats.otherCommands} other ${pluralize(summaryStats.otherCommands, "command")}`);
+    segments.push(`${ongoing ? "running" : "ran"} ${summaryStats.otherCommands} other ${pluralize(summaryStats.otherCommands, "command")}`);
   }
 
   if (!segments.length) {
-    return `Ran ${fallbackCommandCount} ${pluralize(fallbackCommandCount, "command")}`;
+    return `${ongoing ? "Running" : "Ran"} ${fallbackCommandCount} ${pluralize(fallbackCommandCount, "command")}`;
   }
 
   const [firstSegment, ...remainingSegments] = segments;
   const normalizedFirstSegment = `${firstSegment.slice(0, 1).toUpperCase()}${firstSegment.slice(1)}`;
   return [normalizedFirstSegment, ...remainingSegments].join(", ");
+}
+
+export function getThreadCommandExecutionOutcome(
+  status: CommandExecutionStatus,
+  exitCode: number | null,
+): ThreadCommandExecutionOutcome {
+  if (exitCode === 124) return "timedOut";
+  if ((exitCode !== null && exitCode !== 0) || status === "failed") return "failed";
+  if (status === "declined") return "declined";
+  if (status === "inProgress") return "inProgress";
+  return "completed";
+}
+
+export function getThreadCommandOutcomeDisplay(
+  display: ThreadCommandSummaryDisplay,
+  outcome: ThreadCommandExecutionOutcome,
+): ThreadCommandSummaryDisplay {
+  if (outcome === "completed") return display;
+  const ongoingSummaryParts = display.ongoingSummaryParts;
+  const summaryParts = outcome === "inProgress"
+    ? ongoingSummaryParts
+    : [
+      CommandMatcher.Text(outcome === "timedOut" ? "Timed out " : outcome === "failed" ? "Failed " : "Declined "),
+      ...lowercaseFirstSummaryPart(ongoingSummaryParts),
+    ];
+  return {
+    ...display,
+    summaryParts,
+    summaryText: summarizeDisplayParts(summaryParts),
+  };
+}
+
+function lowercaseFirstSummaryPart(parts: ThreadCommandDisplayPart[]) {
+  let changed = false;
+  return parts.map((part) => {
+    if (changed || part.type !== "text" || !part.text) return part;
+    changed = true;
+    return { ...part, text: `${part.text[0].toLowerCase()}${part.text.slice(1)}` };
+  });
 }
 
 function getKnownCommandSummaryCategoryKeys(stats: ThreadCommandSummaryStats) {

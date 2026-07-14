@@ -23,6 +23,7 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [CommandMatcher.Text("Creating git checkpoint")],
         remainingCommand: null,
         stop: true,
         summaryParts: [CommandMatcher.Text("Created git checkpoint")],
@@ -38,6 +39,7 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [CommandMatcher.Text("Diffing against git checkpoint")],
         remainingCommand: null,
         stop: true,
         summaryParts: [CommandMatcher.Text("Diffed against git checkpoint")],
@@ -53,6 +55,7 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [CommandMatcher.Text("Restoring git checkpoint")],
         remainingCommand: null,
         stop: true,
         summaryParts: [CommandMatcher.Text("Restored git checkpoint")],

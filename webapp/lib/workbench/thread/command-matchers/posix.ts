@@ -32,6 +32,7 @@ export const POSIX_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: readSummary.ongoingSummaryParts,
         summaryStats: readSummary.summaryStats,
         summaryParts: readSummary.summaryParts,
       });
@@ -62,6 +63,7 @@ export const POSIX_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       const readSummary = buildReadCommandSummary(path, context);
       if (readSummary?.summaryStats.skillLoads) {
         return CommandMatcher.Result({
+          ongoingSummaryParts: readSummary.ongoingSummaryParts,
           summaryStats: readSummary.summaryStats,
           summaryParts: readSummary.summaryParts,
         });
@@ -74,6 +76,13 @@ export const POSIX_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
 
       if (startLine === endLine) {
         return CommandMatcher.Result({
+          ongoingSummaryParts: [
+            CommandMatcher.Text("Reading "),
+            CommandMatcher.Path({
+              ...pathPart,
+              lineNumber: startLine,
+            }),
+          ],
           summaryStats: { readFiles: 1 },
           summaryParts: [
             CommandMatcher.Text("Read "),
@@ -86,6 +95,10 @@ export const POSIX_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [
+          CommandMatcher.Text(`Reading lines ${startLine}-${endLine} of `),
+          pathPart,
+        ],
         summaryStats: { readFiles: 1 },
         summaryParts: [
           CommandMatcher.Text(`Read lines ${startLine}-${endLine} of `),
@@ -119,6 +132,10 @@ export const POSIX_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [
+          CommandMatcher.Text("Listing files under "),
+          pathPart,
+        ],
         summaryStats: { listedFiles: 1 },
         summaryParts: [
           CommandMatcher.Text("List files under "),
@@ -145,14 +162,20 @@ export const POSIX_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         CommandMatcher.Text("Search for "),
         CommandMatcher.Code(`"${query}"`),
       ];
+      const ongoingSummaryParts = [
+        CommandMatcher.Text("Searching for "),
+        CommandMatcher.Code(`"${query}"`),
+      ];
       const pathPart = positionalArguments[1]
         ? buildCommandPathPart(positionalArguments[1], context)
         : buildDisplayPathPart(context.cwdDisplay);
       if (pathPart) {
         summaryParts.push(CommandMatcher.Text(" in "), pathPart);
+        ongoingSummaryParts.push(CommandMatcher.Text(" in "), pathPart);
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts,
         summaryParts,
         summaryStats: { searchedFiles: 1 },
       });
@@ -292,12 +315,14 @@ function matchHeadOrTail(
     return null;
   }
 
-  const readSummary = buildReadCommandSummary(path, context, `Read ${kind === "head" ? "first" : "last"} ${lineCount} lines of `);
+  const position = kind === "head" ? "first" : "last";
+  const readSummary = buildReadCommandSummary(path, context, `Read ${position} ${lineCount} lines of `, `Reading ${position} ${lineCount} lines of `);
   if (!readSummary) {
     return null;
   }
 
   return CommandMatcher.Result({
+    ongoingSummaryParts: readSummary.ongoingSummaryParts,
     summaryStats: readSummary.summaryStats,
     summaryParts: readSummary.summaryParts,
   });

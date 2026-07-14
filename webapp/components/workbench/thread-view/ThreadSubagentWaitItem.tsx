@@ -1,16 +1,19 @@
 /*
  * Exports:
- * - default ThreadSubagentWaitItem: render singular or tabbed multiplexed subagent waits with one live child-thread preview. Keywords: workbench, thread, subagent, wait, tabs, preview.
+ * - default ThreadSubagentWaitItem: render named subagent wait outcomes with live tabs, completed Markdown, or failure details. Keywords: workbench, thread, subagent, wait, tabs, preview, timeout.
  */
 "use client";
 
 import { useId, useState, type ReactNode } from "react";
 
 import type { ThreadPayload, WorkbenchSubagentSummary } from "../../../lib/types";
+import type { ThreadCommandExecutionOutcome } from "../../../lib/workbench/thread/thread-command-matchers";
 
 import ThreadAgentName from "./ThreadAgentName";
-import ThreadDisclosure from "./ThreadDisclosure";
+import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
+import ThreadDurationText from "./ThreadDurationText";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
+import ThreadSummaryText from "./ThreadSummaryText";
 
 interface ThreadSubagentWaitEntry {
   content?: ReactNode;
@@ -20,45 +23,75 @@ interface ThreadSubagentWaitEntry {
 }
 
 export default function ThreadSubagentWaitItem ({
-  active,
+  disclosureContent,
+  durationMs,
   entries,
+  exitCode,
+  outcome,
 }: {
-  active: boolean;
+  disclosureContent?: ReactNode;
+  durationMs?: number | null;
   entries: ThreadSubagentWaitEntry[];
+  exitCode?: number | null;
+  outcome: ThreadCommandExecutionOutcome;
 }) {
   const tabSetId = useId();
   const [selectedThreadId, setSelectedThreadId] = useState(entries[0]?.threadId ?? "");
   const selectedEntry = entries.find((entry) => entry.threadId === selectedThreadId) ?? entries[0] ?? null;
   const multiplexed = entries.length > 1;
+  const active = outcome === "inProgress";
+  const showFailureExit = outcome === "failed" && exitCode !== null && exitCode !== undefined && exitCode !== 0;
+  const showOutcomeDuration = outcome === "declined" || outcome === "failed" || outcome === "timedOut";
   if (!selectedEntry) return null;
+  const summary = (
+    <span>
+      {outcome === "inProgress" ? "Waiting for "
+        : outcome === "timedOut" ? "Timed out waiting for "
+        : outcome === "failed" ? "Failed waiting for "
+        : outcome === "declined" ? "Declined waiting for "
+        : "Waited for "}
+      {entries.map((entry, index) => (
+        <span key={entry.threadId}>
+          {index === 0
+            ? null
+            : index === entries.length - 1
+              ? entries.length === 2 ? " and " : ", and "
+              : ", "}
+          <ThreadAgentName
+            fallbackKey={entry.threadId}
+            subagent={entry.subagent}
+            thread={entry.thread}
+          />
+        </span>
+      ))}
+      {showFailureExit || (showOutcomeDuration && durationMs !== null && durationMs !== undefined) ? (
+        <span className="ml-2 text-[0.84em] text-muted">
+          {showFailureExit ? <ThreadSummaryText text={`exit ${exitCode}`} /> : null}
+          {showFailureExit && durationMs !== null && durationMs !== undefined ? <span> | </span> : null}
+          {showOutcomeDuration && durationMs !== null && durationMs !== undefined ? <ThreadDurationText durationMs={durationMs} /> : null}
+        </span>
+      ) : null}
+    </span>
+  );
+
+  if (outcome === "completed" && !disclosureContent) {
+    return (
+      <ThreadDisclosureStaticRow
+        summary={summary}
+        summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      />
+    );
+  }
 
   return (
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
       defaultOpen={active}
-      summary={(
-        <span>
-          {active ? "Waiting for " : "Waited for "}
-          {entries.map((entry, index) => (
-            <span key={entry.threadId}>
-              {index === 0
-                ? null
-                : index === entries.length - 1
-                  ? entries.length === 2 ? " and " : ", and "
-                  : ", "}
-              <ThreadAgentName
-                fallbackKey={entry.threadId}
-                subagent={entry.subagent}
-                thread={entry.thread}
-              />
-            </span>
-          ))}
-        </span>
-      )}
+      summary={summary}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"
     >
-      {multiplexed && active ? (
+      {disclosureContent ? disclosureContent : multiplexed && active ? (
         <>
           <div
             aria-label="Watched subagents"
@@ -104,14 +137,6 @@ export default function ThreadSubagentWaitItem ({
             ) : null}
           </div>
         </>
-      ) : multiplexed ? (
-        <ul className="m-0 list-disc space-y-1 pl-5 text-[0.86rem] leading-6 text-muted">
-          {entries.map((entry) => (
-            <li key={entry.threadId}>
-              <ThreadAgentName fallbackKey={entry.threadId} subagent={entry.subagent} thread={entry.thread} />
-            </li>
-          ))}
-        </ul>
       ) : active && selectedEntry.content ? (
         <ThreadPreviewFrame
           contentClassName="px-4 py-3 md:px-12"

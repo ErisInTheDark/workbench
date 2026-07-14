@@ -16,6 +16,7 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [CommandMatcher.Text("Validating TypeScript (no emit)")],
         summaryStats: { typescriptValidations: 1 },
         summaryParts: [CommandMatcher.Text("TypeScript build (no emit)")],
       });
@@ -29,6 +30,7 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [CommandMatcher.Text("Building TypeScript")],
         summaryStats: { typescriptBuilds: 1 },
         summaryParts: [CommandMatcher.Text("TypeScript build")],
       });
@@ -42,6 +44,7 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [CommandMatcher.Text("Checking git status")],
         summaryStats: { gitStatusChecks: 1 },
         summaryParts: [CommandMatcher.Text("Git status")],
       });
@@ -61,6 +64,9 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         : null;
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: pathPart
+          ? [CommandMatcher.Text(formatGitLsFilesPathPrefix({ listsUntrackedFiles, path }, true)), pathPart]
+          : [CommandMatcher.Text(listsUntrackedFiles ? "Listing untracked files" : "Listing tracked files")],
         summaryStats: { listedFiles: 1 },
         summaryParts: pathPart
           ? [
@@ -84,6 +90,9 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         : null;
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: pathPart
+          ? [CommandMatcher.Text("Showing git revision for "), pathPart]
+          : [CommandMatcher.Text("Showing git revision")],
         summaryStats: { gitDiffChecks: 1 },
         summaryParts: pathPart
           ? [
@@ -109,16 +118,22 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       const summaryParts: ThreadCommandDisplayPart[] = [
         CommandMatcher.Text(lineRange ? `Git blame lines ${lineRange} of ` : "Git blame"),
       ];
+      const ongoingSummaryParts: ThreadCommandDisplayPart[] = [
+        CommandMatcher.Text(lineRange ? `Blaming lines ${lineRange} of ` : "Blaming"),
+      ];
 
       if (pathPart) {
         if (!lineRange) {
           summaryParts.push(CommandMatcher.Text(" "));
+          ongoingSummaryParts.push(CommandMatcher.Text(" "));
         }
 
         summaryParts.push(pathPart);
+        ongoingSummaryParts.push(pathPart);
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts,
         summaryStats: { readFiles: 1 },
         summaryParts,
       });
@@ -132,6 +147,7 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [CommandMatcher.Text("Listing changed files")],
         summaryStats: { gitDiffChecks: 1 },
         summaryParts: [CommandMatcher.Text("List changed files")],
       });
@@ -145,6 +161,7 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [CommandMatcher.Text("Checking git diff statistics")],
         summaryStats: { gitDiffChecks: 1 },
         summaryParts: [CommandMatcher.Text("Git diff (stat)")],
       });
@@ -175,6 +192,7 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       const summaryParts = [CommandMatcher.Text("Git diff for ")] as ReturnType<typeof CommandMatcher.Text>[];
+      const ongoingSummaryParts = [CommandMatcher.Text("Diffing git changes for ")] as ReturnType<typeof CommandMatcher.Text>[];
       pathParts.forEach((pathPart, index) => {
         if (!pathPart) {
           return;
@@ -182,12 +200,15 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
 
         if (index) {
           summaryParts.push(CommandMatcher.Text(", "));
+          ongoingSummaryParts.push(CommandMatcher.Text(", "));
         }
 
         summaryParts.push(pathPart);
+        ongoingSummaryParts.push(pathPart);
       });
 
       return CommandMatcher.Result({
+        ongoingSummaryParts,
         summaryStats: { gitDiffChecks: 1 },
         summaryParts,
       });
@@ -278,12 +299,16 @@ function formatGitLsFilesPathPrefix({
 }: {
   listsUntrackedFiles: boolean;
   path: string;
-}) {
+}, ongoing = false) {
   if (listsUntrackedFiles) {
-    return looksLikeTrackedFilePath(path) ? "Check untracked file " : "List untracked files under ";
+    return looksLikeTrackedFilePath(path)
+      ? ongoing ? "Checking untracked file " : "Check untracked file "
+      : ongoing ? "Listing untracked files under " : "List untracked files under ";
   }
 
-  return looksLikeTrackedFilePath(path) ? "Check tracked file " : "List tracked files under ";
+  return looksLikeTrackedFilePath(path)
+    ? ongoing ? "Checking tracked file " : "Check tracked file "
+    : ongoing ? "Listing tracked files under " : "List tracked files under ";
 }
 
 function readGitRevisionPath(token: string) {

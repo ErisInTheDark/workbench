@@ -23,6 +23,7 @@ export const COPILOT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: readSummary.ongoingSummaryParts,
         summaryStats: readSummary.summaryStats,
         summaryParts: readSummary.summaryParts,
       });

@@ -34,6 +34,10 @@ export const CMD_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: [
+          CommandMatcher.Text("Listing files in "),
+          pathPart,
+        ],
         summaryStats: { listedFiles: 1 },
         summaryParts: [
           CommandMatcher.Text("List files in "),
@@ -57,6 +61,7 @@ export const CMD_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts: readSummary.ongoingSummaryParts,
         summaryStats: readSummary.summaryStats,
         summaryParts: readSummary.summaryParts,
       });
@@ -79,13 +84,19 @@ export const CMD_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         CommandMatcher.Text("Search for "),
         CommandMatcher.Code(`"${pattern}"`),
       ];
+      const ongoingSummaryParts = [
+        CommandMatcher.Text("Searching for "),
+        CommandMatcher.Code(`"${pattern}"`),
+      ];
       const path = getCmdPositionalArguments(parsedStage).at(-1) ?? null;
       const pathPart = path ? buildCommandPathPart(path, context) : null;
       if (pathPart) {
         summaryParts.push(CommandMatcher.Text(" in "), pathPart);
+        ongoingSummaryParts.push(CommandMatcher.Text(" in "), pathPart);
       }
 
       return CommandMatcher.Result({
+        ongoingSummaryParts,
         summaryParts,
         summaryStats: { searchedFiles: 1 },
       });

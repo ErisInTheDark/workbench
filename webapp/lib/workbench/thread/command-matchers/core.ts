@@ -70,6 +70,7 @@ export const CommandMatcher: CommandMatcherBuilder = Object.assign(
       hideCommandCwd = false,
       hideCommandOutput = false,
       omitFromDisplay = false,
+      ongoingSummaryParts,
       remainingCommand,
       stop = false,
       summaryParts,
@@ -81,6 +82,7 @@ export const CommandMatcher: CommandMatcherBuilder = Object.assign(
         hideCommandCwd,
         hideCommandOutput,
         omitFromDisplay,
+        ongoingSummaryParts,
         remainingCommand,
         stop,
         summaryParts,
@@ -118,6 +120,7 @@ export function runThreadCommandMatchers(
 ) {
   const claimedMatcherIds: string[] = [];
   const matchers = [...commonMatchers, ...shellMatchers];
+  const ongoingSummaryParts: ThreadCommandDisplayPart[] = [];
   const summaryParts: ThreadCommandDisplayPart[] = [];
   const detailRows: ThreadCommandDetailRow[] = [];
   const summaryStats = createEmptyCommandSummaryStats();
@@ -158,6 +161,9 @@ export function runThreadCommandMatchers(
 
       summaryParts.push(CommandMatcher.Separator());
       summaryParts.push(CommandMatcher.Code(collapseWhitespace(remainingCommand), { clamp: true }));
+      ongoingSummaryParts.push(CommandMatcher.Separator());
+      ongoingSummaryParts.push(CommandMatcher.Text("Running "));
+      ongoingSummaryParts.push(CommandMatcher.Code(collapseWhitespace(remainingCommand), { clamp: true }));
       summaryStats.otherCommands += countCommandStages(remainingCommand, context.shellGroup);
       hadUnmatchedRemainder = true;
       remainingCommand = null;
@@ -171,10 +177,12 @@ export function runThreadCommandMatchers(
 
     if (shouldRenderSummaryParts && summaryParts.length) {
       summaryParts.push(CommandMatcher.Separator());
+      ongoingSummaryParts.push(CommandMatcher.Separator());
     }
 
     if (shouldRenderSummaryParts) {
       summaryParts.push(...matchedResult.summaryParts);
+      ongoingSummaryParts.push(...matchedResult.ongoingSummaryParts ?? []);
     }
     if (matchedResult.detailRows?.length) {
       detailRows.push(...matchedResult.detailRows);
@@ -204,6 +212,8 @@ export function runThreadCommandMatchers(
     hideCommandCwd: hideCommandCwd || undefined,
     hideCommandOutput: hideCommandOutput || undefined,
     omitFromDisplay,
+    ongoingSummaryParts,
+    ongoingSummaryText: summarizeDisplayParts(ongoingSummaryParts),
     showShell: hadUnmatchedRemainder,
     summaryParts,
     summaryKind: "matched" as const,

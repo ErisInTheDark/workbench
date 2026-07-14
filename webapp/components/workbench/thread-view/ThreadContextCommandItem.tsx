@@ -9,28 +9,31 @@ import type { ReactNode } from "react";
 
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
+import {
+  getThreadCommandDisplay,
+  getThreadCommandExecutionOutcome,
+  getThreadCommandOutcomeDisplay,
+  type ThreadCommandExecutionOutcome,
+} from "../../../lib/workbench/thread/thread-command-matchers";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadSummaryText from "./ThreadSummaryText";
-import { humanizeThreadLabel } from "./thread-view-primitives";
+import { ThreadCommandSummary } from "./thread-view-primitives";
 
 type CommandItem = Extract<ThreadItem, { type: "commandExecution" }>;
 
-function ThreadContextCommandMetaParts({ item }: { item: CommandItem }) {
+function ThreadContextCommandMetaParts({
+  item,
+  outcome,
+}: {
+  item: CommandItem;
+  outcome: ThreadCommandExecutionOutcome;
+}) {
   const metaParts: ReactNode[] = [];
 
-  if (item.status !== "completed") {
-    metaParts.push(
-      <ThreadSummaryText
-        key={`${item.id}:status`}
-        text={humanizeThreadLabel(item.status)}
-      />,
-    );
-  }
-
-  if (item.exitCode !== null && item.exitCode !== 0) {
+  if (outcome === "failed" && item.exitCode !== null && item.exitCode !== 0) {
     metaParts.push(
       <ThreadSummaryText
         key={`${item.id}:exit`}
@@ -82,6 +85,15 @@ export default function ThreadContextCommandItem ({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const markdown = item.aggregatedOutput?.trim() ?? "";
+  const commandDisplay = getThreadCommandDisplay({
+    command: item.command,
+    commandActions: item.commandActions,
+    cwd: item.cwd,
+    projectRootPath,
+    workspaceRoots,
+  });
+  const outcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
+  const outcomeDisplay = getThreadCommandOutcomeDisplay(commandDisplay, outcome);
 
   return (
     <ThreadDisclosure
@@ -90,8 +102,8 @@ export default function ThreadContextCommandItem ({
       defaultOpen={defaultOpen}
       summary={(
         <>
-          <span className="font-medium text-text">Recalled thread history</span>
-          <ThreadContextCommandMetaParts item={item} />
+          <ThreadCommandSummary display={outcomeDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />
+          <ThreadContextCommandMetaParts item={item} outcome={outcome} />
         </>
       )}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"

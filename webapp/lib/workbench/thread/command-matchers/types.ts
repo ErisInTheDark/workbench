@@ -117,6 +117,8 @@ export interface ThreadCommandSummaryDisplay {
   hideCommandCwd?: boolean;
   hideCommandOutput?: boolean;
   omitFromDisplay: boolean;
+  ongoingSummaryParts: ThreadCommandDisplayPart[];
+  ongoingSummaryText: string;
   shell: CommandShell;
   showShell: boolean;
   summaryParts: ThreadCommandDisplayPart[];
@@ -163,6 +165,7 @@ export interface CommandMatcherResult {
   hideCommandOutput?: boolean;
   hide?: boolean;
   omitFromDisplay?: boolean;
+  ongoingSummaryParts: ThreadCommandDisplayPart[];
   remainingCommand?: string | null;
   stop?: boolean;
   summaryParts: ThreadCommandDisplayPart[];
