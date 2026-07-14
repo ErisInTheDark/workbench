@@ -35,6 +35,7 @@ import {
   parseGitCheckpointDiffArtifactId,
   parseGitCheckpointDiffOutput,
 } from "./command-matchers/git-checkpoints";
+import { GIT_COMMAND_MATCHERS } from "./command-matchers/git-commands";
 import {
     buildCommandPathPart,
     buildDisplayPathPart,
@@ -235,6 +236,7 @@ export function getThreadCommandDisplay({
       ...WORKBENCH_CLI_COMMAND_MATCHERS,
       ...THREAD_CONTEXT_COMMAND_MATCHERS,
       ...COPILOT_COMMAND_MATCHERS,
+      ...GIT_COMMAND_MATCHERS,
       ...GIT_CHECKPOINT_COMMAND_MATCHERS,
       ...BROWSE_COMMAND_MATCHERS,
       ...COMMON_COMMAND_MATCHERS,

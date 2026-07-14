@@ -157,6 +157,27 @@ const RELOAD_SWITCHES = [
   "--next-dev",
 ] as const;
 
+function readOwnedThreadId(flags: ParsedFlags, callerThreadId: string | null) {
+  if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
+  const threadId = flags.required("--thread");
+  if (threadId !== callerThreadId) throw new Error("Git operations must use the current managed Workbench thread id.");
+  return threadId;
+}
+
+function preservePowerShellTrailingPaths(args: string[]) {
+  if (args.includes("--")) return args;
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === "--thread") {
+      index += 1;
+      continue;
+    }
+    if (!args[index].startsWith("--")) {
+      return [...args.slice(0, index), "--", ...args.slice(index)];
+    }
+  }
+  return args;
+}
+
 async function readLiteralOrFile(
   flags: ParsedFlags,
   literalFlag: string,
@@ -354,9 +375,37 @@ const COMMANDS: readonly CommandDefinition[] = [
       }));
     },
   },
+  ...(["add", "unstage"] as const).map((action): CommandDefinition => ({
+    words: ["git", action],
+    usage: `wb git ${action} --thread <id> -- <path> [<path>...]`,
+    async build({ args, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args), { trailing: true, values: THREAD_FLAG });
+      if (!flags.trailing.length) throw new Error(`wb git ${action} requires at least one path.`);
+      return post("/api/git", {
+        action,
+        cwd,
+        paths: flags.trailing,
+        threadId: readOwnedThreadId(flags, callerThreadId),
+      });
+    },
+  })),
+  {
+    words: ["git", "commit"],
+    usage: "wb git commit --thread <id> --message <message>",
+    async build({ args, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(args, { values: [...THREAD_FLAG, "--message"] });
+      return post("/api/git", {
+        action: "commit",
+        cwd,
+        message: flags.required("--message"),
+        threadId: readOwnedThreadId(flags, callerThreadId),
+      });
+    },
+  },
   ...(["baseline", "create-diff"] as const).map((action): CommandDefinition => ({
-    words: ["checkpoint", action],
-    usage: `wb checkpoint ${action} --thread <id>`,
+    aliases: [["checkpoint", action]],
+    words: ["git", "checkpoint", action],
+    usage: `wb git checkpoint ${action} --thread <id>`,
     async build({ args, cwd }) {
       const flags = new ParsedFlags(args, { values: THREAD_FLAG });
       return post("/api/git-checkpoint", {
@@ -367,8 +416,9 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   })),
   {
-    words: ["checkpoint", "diff"],
-    usage: "wb checkpoint diff --thread <id> --commit <sha>",
+    aliases: [["checkpoint", "diff"]],
+    words: ["git", "checkpoint", "diff"],
+    usage: "wb git checkpoint diff --thread <id> --commit <sha>",
     async build({ args, cwd }) {
       const flags = new ParsedFlags(args, { values: [...THREAD_FLAG, "--commit"] });
       return post("/api/git-checkpoint", {
@@ -380,8 +430,9 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
-    words: ["checkpoint", "file-diff"],
-    usage: "wb checkpoint file-diff --thread <id> --commit <sha> --file <path>",
+    aliases: [["checkpoint", "file-diff"]],
+    words: ["git", "checkpoint", "file-diff"],
+    usage: "wb git checkpoint file-diff --thread <id> --commit <sha> --file <path>",
     async build({ args, cwd }) {
       const flags = new ParsedFlags(args, { values: [...THREAD_FLAG, "--commit", "--file"] });
       return post("/api/git-checkpoint", {
@@ -394,8 +445,9 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
-    words: ["checkpoint", "restore"],
-    usage: "wb checkpoint restore --thread <id> --commit <sha> --confirm",
+    aliases: [["checkpoint", "restore"]],
+    words: ["git", "checkpoint", "restore"],
+    usage: "wb git checkpoint restore --thread <id> --commit <sha> --confirm",
     async build({ args, cwd }) {
       const flags = new ParsedFlags(args, { boolean: ["--confirm"], values: [...THREAD_FLAG, "--commit"] });
       if (!flags.has("--confirm")) {

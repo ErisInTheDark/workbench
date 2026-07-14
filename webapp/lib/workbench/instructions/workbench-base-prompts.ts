@@ -131,7 +131,7 @@ For any plan that would edit files:
 
 1. Identify the exact existing files you plan to edit.
 2. Confirm that Workbench Git Checkpoint instructions are available.
-3. Create a baseline checkpoint through \`wb checkpoint baseline\`.
+3. Create a baseline checkpoint through \`wb git checkpoint baseline\`.
 4. Treat that checkpoint as the approval checkpoint.
 5. Keep the checkpoint commit privately available for later drift checks.
 6. In the user-facing plan, name the planned edit files, but do not print checkpoint plumbing unless it is needed to explain a problem.

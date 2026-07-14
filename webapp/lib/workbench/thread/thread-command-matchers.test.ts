@@ -153,6 +153,42 @@ test("raw commands receive an explicit ongoing fallback", () => {
   assert.equal(getThreadCommandOutcomeDisplay(display, "timedOut").summaryText, "Timed out running mystery-command --flag");
 });
 
+test("Workbench Git commands receive bounded selection, commit, and checkpoint summaries", () => {
+  const selection = getThreadCommandDisplay({
+    command: "wb git add --thread thread-1 -- src/file.ts",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(selection.claimedBy, "workbench-git.selection");
+  assert.equal(selection.summaryText, "Selected files for commit");
+  assert.equal(selection.ongoingSummaryText, "Selecting files for commit");
+
+  const commit = getThreadCommandDisplay({
+    command: 'wb git commit --thread thread-1 --message "A bounded commit"',
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(commit.claimedBy, "workbench-git.commit");
+  assert.equal(commit.summaryText, "Committed selected files");
+  assert.equal(commit.ongoingSummaryText, "Committing selected files");
+
+  for (const command of [
+    "wb git checkpoint diff --thread thread-1 --commit abc",
+    "wb checkpoint diff --thread thread-1 --commit abc",
+  ]) {
+    const checkpoint = getThreadCommandDisplay({
+      command,
+      commandActions: [],
+      cwd: PROJECT_ROOT,
+      projectRootPath: PROJECT_ROOT,
+    });
+    assert.equal(checkpoint.claimedBy, "git-checkpoint.diff");
+    assert.equal(checkpoint.summaryText, "Diffed against git checkpoint");
+  }
+});
+
 test("PowerShell numbered reads resolve a preceding literal path assignment", () => {
   const display = getThreadCommandDisplay({
     command: String.raw`"c:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command '$p='"'"'webapp\\lib\\workbench\\thread\\command-matchers\\workbench-cli.ts'"'"'; $c=Get-Content $p; $c[80..116]'`,

@@ -124,6 +124,51 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     ref: "agent:item-2",
   });
 
+  const gitOptions = { callerThreadId: "thread-1", cwd: "C:/workspace" };
+  const gitAdd = await parseWorkbenchAgentCliCommand([
+    "git", "add", "--thread", "thread-1", "--", "src/file.ts", "src/nested",
+  ], gitOptions);
+  assert.equal(gitAdd.kind, "request");
+  assert.deepEqual(gitAdd.request, {
+    body: {
+      action: "add",
+      cwd: "C:/workspace",
+      paths: ["src/file.ts", "src/nested"],
+      threadId: "thread-1",
+    },
+    method: "POST",
+    path: "/api/git",
+    responseKind: "native",
+  });
+  const powerShellGitAdd = await parseWorkbenchAgentCliCommand([
+    "git", "add", "--thread", "thread-1", "src/file.ts", "src/nested",
+  ], gitOptions);
+  assert.equal(powerShellGitAdd.kind, "request");
+  assert.deepEqual(powerShellGitAdd.request, gitAdd.request);
+  const gitUnstage = await parseWorkbenchAgentCliCommand([
+    "git", "unstage", "--thread", "thread-1", "--", ".",
+  ], gitOptions);
+  assert.equal(gitUnstage.kind, "request");
+  assert.deepEqual(gitUnstage.request.body, {
+    action: "unstage",
+    cwd: "C:/workspace",
+    paths: ["."],
+    threadId: "thread-1",
+  });
+  const gitCommit = await parseWorkbenchAgentCliCommand([
+    "git", "commit", "--thread", "thread-1", "--message", "A bounded commit",
+  ], gitOptions);
+  assert.equal(gitCommit.kind, "request");
+  assert.deepEqual(gitCommit.request.body, {
+    action: "commit",
+    cwd: "C:/workspace",
+    message: "A bounded commit",
+    threadId: "thread-1",
+  });
+  assert.equal((await parseWorkbenchAgentCliCommand([
+    "git", "commit", "--thread", "other-thread", "--message", "Nope",
+  ], gitOptions)).kind, "error");
+
   const checkpoint = await parseWorkbenchAgentCliCommand([
     "checkpoint", "file-diff", "--thread", "thread-1", "--commit", "abc", "--file", "src/file.ts",
   ], { cwd: "C:/workspace" });
@@ -136,6 +181,12 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     threadId: "thread-1",
   });
   assert.equal(checkpoint.request.responseKind, "native");
+
+  const canonicalCheckpoint = await parseWorkbenchAgentCliCommand([
+    "git", "checkpoint", "file-diff", "--thread", "thread-1", "--commit", "abc", "--file", "src/file.ts",
+  ], { cwd: "C:/workspace" });
+  assert.equal(canonicalCheckpoint.kind, "request");
+  assert.deepEqual(canonicalCheckpoint.request, checkpoint.request);
 
   const checkpointDiff = await parseWorkbenchAgentCliCommand([
     "checkpoint", "diff", "--thread", "thread-1", "--commit", "abc",

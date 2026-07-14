@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - GIT_CHECKPOINT_COMMAND_MATCHERS: command-summary matchers for wb checkpoint commands. Keywords: thread, command, matcher, git, checkpoint, cli.
+ * - GIT_CHECKPOINT_COMMAND_MATCHERS: command-summary matchers for canonical wb git checkpoint commands and wb checkpoint aliases. Keywords: thread, command, matcher, git, checkpoint, cli.
  * - isGitCheckpointDiffMatcherClaim: detect checkpoint diff matcher ids for specialized command-output rendering. Keywords: thread, command, checkpoint, diff.
  * - parseGitCheckpointDiffArtifactId: parse a compact checkpoint diff summary for the stored full-diff artifact id. Keywords: checkpoint, diff, artifact.
  * - parseGitCheckpointDiffOutput: parse checkpoint diff command output into file-change display entries. Keywords: checkpoint, diff, file change.
@@ -18,7 +18,7 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
     id: "git-checkpoint.create",
     match: ({ stage }) => {
-      if (!/^wb(?:\.cmd)?\s+checkpoint\s+(?:baseline|create-diff)(?:\s|$)/iu.test(stage.text.trim())) {
+      if (!/^wb(?:\.cmd)?\s+(?:git\s+)?checkpoint\s+(?:baseline|create-diff)(?:\s|$)/iu.test(stage.text.trim())) {
         return null;
       }
 
@@ -34,7 +34,7 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
     id: CHECKPOINT_DIFF_MATCHER_ID,
     match: ({ stage }) => {
-      if (!/^wb(?:\.cmd)?\s+checkpoint\s+(?:diff|file-diff)(?:\s|$)/iu.test(stage.text.trim())) {
+      if (!/^wb(?:\.cmd)?\s+(?:git\s+)?checkpoint\s+(?:diff|file-diff)(?:\s|$)/iu.test(stage.text.trim())) {
         return null;
       }
 
@@ -50,7 +50,7 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
     id: "git-checkpoint.restore",
     match: ({ stage }) => {
-      if (!/^wb(?:\.cmd)?\s+checkpoint\s+restore(?:\s|$)/iu.test(stage.text.trim())) {
+      if (!/^wb(?:\.cmd)?\s+(?:git\s+)?checkpoint\s+restore(?:\s|$)/iu.test(stage.text.trim())) {
         return null;
       }
 
