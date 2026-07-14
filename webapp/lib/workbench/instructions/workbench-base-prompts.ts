@@ -298,6 +298,8 @@ On Windows, invoking PowerShell \`Remove-Item\` summons a privilege-escalation a
 
 If validation cannot be done without writing, explain the tradeoff and ask first.
 
+\`apply_patch\` to create files does not require creating directories in advance.
+
 ## Validation
 
 - Validate the behavior that matters, not coverage numbers or mock ceremony.

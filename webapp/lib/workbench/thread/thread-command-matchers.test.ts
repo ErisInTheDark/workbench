@@ -141,6 +141,23 @@ test("Workbench subagent create commands expose metadata through PowerShell wrap
   assert.equal(wrappedCreateDisplay.ongoingSummaryText, "Creating subagent");
 });
 
+test("Workbench subagent commands prefer clean semantic actions over escaped PowerShell wrappers", () => {
+  const semanticCommand = 'wb subagent create --profile 48444e25-57b2-474b-80de-f842bb511762 --name Nell --title "Book 1 chapters 60 through 84 note pass" --message "# Read the notes\n\n- Preserve **Markdown**\n- Keep `C:\\stories\\book.md` linked"';
+  const wrappedCommand = String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "wb subagent create --profile 48444e25-57b2-474b-80de-f842bb511762 --name Nell --title \"Book 1 chapters 60 through 84 note pass\" --message \"# Read the notes...\""`;
+
+  assert.deepEqual(parseWorkbenchSubagentCommand(wrappedCommand, [
+    { type: "unknown", command: "Get-Location" },
+    { type: "unknown", command: semanticCommand },
+  ]), {
+    action: "create",
+    message: "# Read the notes\n\n- Preserve **Markdown**\n- Keep `C:\\stories\\book.md` linked",
+    name: "Nell",
+    profileId: "48444e25-57b2-474b-80de-f842bb511762",
+    threadIds: [],
+    title: "Book 1 chapters 60 through 84 note pass",
+  });
+});
+
 test("Workbench subagent list gets dedicated metadata labels", () => {
   assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent list --limit 20"), {
     action: "list",

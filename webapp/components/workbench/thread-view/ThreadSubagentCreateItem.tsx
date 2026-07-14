@@ -4,10 +4,11 @@
  */
 "use client";
 
-import type { ReactNode } from "react";
+import { useContext, type ReactNode } from "react";
 
 import type { WorkbenchSubagentSummary } from "../../../lib/types";
 
+import WorkbenchComposerProfileContext from "../WorkbenchComposerProfileContext";
 import ThreadAgentName from "./ThreadAgentName";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadSubagentUserMessage from "./ThreadSubagentUserMessage";
@@ -16,21 +17,24 @@ export default function ThreadSubagentCreateItem ({
   active,
   children,
   fallbackName,
-  fallbackProfileName,
   fallbackTitle,
+  profileId,
   subagent,
   threadId,
 }: {
   active: boolean;
   children: ReactNode;
   fallbackName: string;
-  fallbackProfileName: string;
   fallbackTitle: string;
+  profileId: string;
   subagent?: WorkbenchSubagentSummary | null;
   threadId?: string | null;
 }) {
+  const composerProfileContext = useContext(WorkbenchComposerProfileContext);
   const name = subagent?.name ?? fallbackName;
-  const profileName = subagent?.profileName ?? fallbackProfileName;
+  const profileName = subagent?.profileName
+    ?? composerProfileContext?.snapshot.profiles.find((profile) => profile.id === profileId)?.name
+    ?? null;
   const title = subagent?.title ?? fallbackTitle;
 
   return (

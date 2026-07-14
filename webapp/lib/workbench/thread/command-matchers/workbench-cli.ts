@@ -3,6 +3,8 @@
  * - WorkbenchSubagentCommand/parseWorkbenchSubagentCommand: parse semantic subagent actions, create metadata, ordered child thread IDs, and messages from wb commands. Keywords: workbench, cli, subagent, parse, create, metadata, thread ids, message.
  * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb title, subagent, reload, and Collaboration commands. Keywords: workbench, cli, title, subagent, collaboration.
  */
+import type { CommandAction } from "../../../codex/generated/app-server/v2/CommandAction";
+
 import { CommandMatcher } from "./core";
 import type { CommandMatcherDefinition } from "./types";
 
@@ -66,7 +68,7 @@ function readFlagValue(command: string, flag: string) {
   return readFlagValues(command, flag)[0] ?? null;
 }
 
-export function parseWorkbenchSubagentCommand(command: string): WorkbenchSubagentCommand | null {
+function parseSingleWorkbenchSubagentCommand(command: string): WorkbenchSubagentCommand | null {
   const normalized = command.trim();
   const actionMatch = normalized.match(/^wb(?:\.cmd)?\s+subagent\s+(list|profiles|create|wait|message|stop)\b/iu);
   if (!actionMatch) return null;
@@ -79,6 +81,19 @@ export function parseWorkbenchSubagentCommand(command: string): WorkbenchSubagen
     threadIds: readFlagValues(normalized, "id"),
     title: readFlagValue(normalized, "title"),
   };
+}
+
+export function parseWorkbenchSubagentCommand(
+  command: string,
+  commandActions: readonly CommandAction[] = [],
+): WorkbenchSubagentCommand | null {
+  for (const action of commandActions) {
+    const parsedAction = parseSingleWorkbenchSubagentCommand(action.command);
+    if (parsedAction) {
+      return parsedAction;
+    }
+  }
+  return parseSingleWorkbenchSubagentCommand(command);
 }
 
 export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [

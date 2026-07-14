@@ -1365,7 +1365,7 @@ function buildCommandSequenceRenderSegments({
       projectRootPath,
       workspaceRoots,
     });
-    const subagentCommand = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand);
+    const subagentCommand = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand, item.commandActions);
     if (subagentCommand?.action === "wait" && subagentCommand.threadIds.length) {
       flushPendingCommands();
       pendingSubagentWaits.push({
@@ -1499,7 +1499,7 @@ function ThreadCommandExecutionDetails ({
     () => getThreadCommandOutcomeDisplay(commandDisplay, commandOutcome),
     [commandDisplay, commandOutcome],
   );
-  const subagentCommand = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand);
+  const subagentCommand = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand, item.commandActions);
   const checkpointDiffChanges = isGitCheckpointDiffMatcherClaim(commandDisplay.claimedBy)
     ? parseGitCheckpointDiffOutput(item.aggregatedOutput ?? "")
     : null;
@@ -1589,7 +1589,7 @@ function ThreadCommandExecutionDetails ({
       <ThreadSubagentCreateItem
         active={item.status === "inProgress"}
         fallbackName={subagentCommand.name}
-        fallbackProfileName={subagentCommand.profileId}
+        profileId={subagentCommand.profileId}
         fallbackTitle={subagentCommand.title}
         subagent={createdThreadId ? getSubagentSummary(subagents, createdThreadId) : null}
         threadId={createdThreadId}
