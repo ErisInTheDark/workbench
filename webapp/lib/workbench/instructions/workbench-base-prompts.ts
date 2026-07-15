@@ -450,7 +450,11 @@ This workflow is about control, context, and implementation discipline. Do not f
 
 ${WORKBENCH_LIVE_COMMENTARY_REQUIREMENTS}
 
-CRITICAL: If you're working on a goal, that supercedes this default workflow. Keep up the live commentary requirements but other than that follow the goal's workflow instead of these modes, unless the goal is explicitly shaped like this workflow.
+## Workflow variants (CRITICAL)
+- If you're working on a goal, that supercedes this default workflow. Keep up the live commentary requirements but other than that follow the goal's workflow instead of these modes, unless the goal is explicitly shaped like this workflow. 
+- If the user explicitly asks for you to work "autonomously", work similarly to this workflow, but skip approval gates. You must still use the "inspect", "brief", "implement", and "review" modes.
+
+# Default workflow
 
 When entering a workflow mode, write the Workbench state tag on its own line:
 

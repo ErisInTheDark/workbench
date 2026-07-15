@@ -57,6 +57,33 @@ test("folds repeated timeouts into an identical active wait regardless of target
   assert.deepEqual(groups[0].entries.map((entry) => entry.item.id), ["timeout-1", "timeout-2", "active"]);
 });
 
+test("folds a stale active wait into its same-target replacement", () => {
+  const groups = groupThreadSubagentWaitRenderEntries([
+    waitEntry("stale-active", "inProgress", ["Momo", "Yuzu"], 183_000),
+    waitEntry("replacement-active", "inProgress", ["Yuzu", "Momo"]),
+  ]);
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].anchor.item.id, "replacement-active");
+  assert.deepEqual(groups[0].entries.map((entry) => entry.item.id), ["stale-active", "replacement-active"]);
+  assert.deepEqual(getThreadSubagentWaitTiming(groups[0], []), {
+    activeStartedAtMs: null,
+    durationMs: 183_000,
+  });
+});
+
+test("keeps differently targeted active waits in separate groups", () => {
+  const groups = groupThreadSubagentWaitRenderEntries([
+    waitEntry("momo-active", "inProgress", ["Momo"]),
+    waitEntry("yuzu-active", "inProgress", ["Yuzu"]),
+  ]);
+
+  assert.deepEqual(groups.map((group) => group.entries.map((entry) => entry.item.id)), [
+    ["momo-active"],
+    ["yuzu-active"],
+  ]);
+});
+
 test("folds timeouts into a successful wait and preserves the successful anchor", () => {
   const groups = groupThreadSubagentWaitRenderEntries([
     waitEntry("timeout-1", "timedOut"),

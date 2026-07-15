@@ -14,6 +14,7 @@ import type { CodexJsonRpcResponse } from "../lib/codex/protocol";
 import type { WorkbenchComposerProfile, WorkbenchSubagentPage, WorkbenchUserInputRequest } from "../lib/types";
 import { readWorkbenchSubagentMessageInput } from "../lib/workbench/thread/thread-subagent-message";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
+import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 
 interface HarnessCall {
   harness: string;
@@ -93,6 +94,18 @@ class FakeHarnessClient {
     }
     return { id: 1, result: {} as T };
   }
+}
+
+function createPreReloadStoreSurface(store: WorkbenchSubagentStore) {
+  return {
+    getOwned: store.getOwned.bind(store),
+    getOwnedMany: store.getOwnedMany.bind(store),
+    list: store.list.bind(store),
+    markActivity: store.markActivity.bind(store),
+    remove: store.remove.bind(store),
+    replace: store.replace.bind(store),
+    reserve: store.reserve.bind(store),
+  };
 }
 
 function profile(): WorkbenchComposerProfile {
@@ -185,11 +198,12 @@ test("creates with one client and delivers a steer before empty questionnaire re
   assert.match(denied.error?.message ?? "", /not owned by the current thread/u);
 });
 
-test("starts an idle direct parent with a server-authored informational message", async (context) => {
+test("starts an idle direct parent through the pre-reload store surface", async (context) => {
   const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-controller-idle-parent-message-"));
   context.after(async () => await rm(storageRoot, { force: true, recursive: true }));
   const cwd = process.cwd();
   const clients: FakeHarnessClient[] = [];
+  const subagentStore = new WorkbenchSubagentStore(storageRoot);
   const controller = new WorkbenchSubagentController({
     bridgeUrl: "ws://unused",
     createHarnessClient: () => {
@@ -198,6 +212,7 @@ test("starts an idle direct parent with a server-authored informational message"
       return client;
     },
     storageRoot,
+    subagentStore: createPreReloadStoreSurface(subagentStore),
   });
 
   await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/importLegacy", params: { profiles: [profile()] } });
@@ -212,6 +227,10 @@ test("starts an idle direct parent with a server-authored informational message"
     method: "workbench/subagent/message",
     params: { callerThreadId: childThreadId, cwd, message: "The safe route is ready.", parent: true },
   }), { id: 3, result: {} });
+  assert.deepEqual(
+    clients[1].calls.filter(({ method }) => method === "thread/read").map(({ harness }) => harness),
+    ["codex", "codex"],
+  );
   const parentTurnStart = clients[1].calls.find(({ method, params }) => method === "turn/start" && params.threadId === callerThreadId);
   assert(parentTurnStart);
   assert.deepEqual(readWorkbenchSubagentMessageInput(parentTurnStart.params.input as UserInput[]), {

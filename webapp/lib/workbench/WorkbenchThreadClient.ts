@@ -73,6 +73,7 @@ import type {
 } from "../types";
 import { normalizeWorkbenchAgentPath } from "./agent-paths";
 import { areDeeplyEqual } from "./deep-equality";
+import { getWorkbenchThreadHarnessCandidates } from "./thread/thread-harness-candidates";
 import {
     createWorkbenchThreadRecoveryId,
     isWorkbenchThreadRecoveryInput,
@@ -136,7 +137,6 @@ const ACTIVE_TURN_RATE_LIMIT_REFRESH_INTERVAL_MS = 15_000;
 const AUTO_REFRESH_REQUEST_SOURCE = "autoRefresh";
 const WORKBENCH_PROMPT_CONTEXT_FIELD = "workbenchPromptContext";
 const DEFAULT_TURN_REASONING_SUMMARY = "detailed" as const;
-const THREAD_HARNESSES: readonly WorkbenchHarness[] = ["codex", "copilot", "opencode"];
 const DEFAULT_WORKFLOW_IDS = ["default"] as const;
 const SUBAGENT_WORKFLOW_IDS = ["subagent"] as const;
 const DRAFT_THREAD_ID = "new";
@@ -2557,20 +2557,7 @@ function WorkbenchThreadClient(
   }
 
   function getThreadHarnessCandidates(threadId: string, harness?: WorkbenchHarness) {
-    if (harness) {
-      return [harness];
-    }
-
-    const knownHarness = getKnownThreadHarness(threadId);
-    if (knownHarness) {
-      return [knownHarness];
-    }
-
-    const preferredHarness: WorkbenchHarness = threadId.startsWith("ses_") ? "opencode" : "codex";
-    return [
-      preferredHarness,
-      ...THREAD_HARNESSES.filter((candidateHarness) => candidateHarness !== preferredHarness),
-    ];
+    return getWorkbenchThreadHarnessCandidates(threadId, harness ?? getKnownThreadHarness(threadId));
   }
 
   function getThreadModel(threadId: string) {

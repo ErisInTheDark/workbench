@@ -682,6 +682,7 @@ function ThreadUserMessageItem ({
       <ThreadSubagentIncomingMessage
         name={subagentMessage.name}
         steerState={steerState}
+        threadId={subagentMessage.threadId}
         timestamp={showStartedAt ? <ThreadMessageTimestamp className="mt-1" timestampSeconds={startedAt} /> : undefined}
       >
         <ThreadMarkdown

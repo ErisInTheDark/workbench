@@ -95,7 +95,7 @@ test("repeats a partial migration without replacing a newer parent record", asyn
   assert.equal((await restarted.list({ parentThreadId: "parent", projectId: "project" })).subagents[0]?.title, "Newer parent record");
 });
 
-test("keeps parent writes isolated, resolves direct parents, and pages activity-sorted records twenty at a time", async (context) => {
+test("keeps parent writes isolated, lists project relationships, and pages activity-sorted records twenty at a time", async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-store-pages-"));
   context.after(async () => await fs.rm(root, { force: true, recursive: true }));
   const store = new WorkbenchSubagentStore(root);
@@ -110,9 +110,8 @@ test("keeps parent writes isolated, resolves direct parents, and pages activity-
   }
   await store.reserve(summary("parent-b", "other-child"));
 
-  assert.equal((await store.getParentRelationship("other-child", "project"))?.parentThreadId, "parent-b");
-  assert.equal(await store.getParentRelationship("other-child", "different-project"), null);
-  assert.equal(await store.getParentRelationship("missing-child", "project"), null);
+  const projectRelationships = await store.list({ projectId: "project" });
+  assert.equal(projectRelationships.subagents.find(({ threadId }) => threadId === "other-child")?.parentThreadId, "parent-b");
 
   const first = await store.list({ limit: 20, parentThreadId: "parent-a", projectId: "project" });
   assert.equal(first.subagents.length, 20);

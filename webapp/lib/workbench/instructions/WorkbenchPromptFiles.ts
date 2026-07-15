@@ -467,7 +467,7 @@ function buildWorkbenchSubagentInstructions(context: WorkbenchPromptContext) {
   return `
 ## Workbench Subagent CLI
 
-Workbench owns subagents through the allowlisted \`wb subagent\` command suite. Run every command from the intended project cwd; the CLI privately supplies that cwd and the current managed thread identity.
+Workbench owns subagents exclusively through the allowlisted \`wb subagent\` command suite. No other subagent tools are approved. Run every command from the intended project cwd; the CLI privately supplies that cwd and the current managed thread identity.
 
 \`wb subagent list [--cursor <cursor>] [--limit <1-20>]\` lists direct children owned by the current thread without contacting their harnesses. Results are activity-sorted metadata pages with at most 20 records and a \`nextCursor\`; pass that cursor to read the next page. \`activityStatus\` is \`active\`, \`inactive\`, or \`unknown\`, where \`unknown\` honestly represents legacy metadata or activity invalidated by an orchestrator restart.
 

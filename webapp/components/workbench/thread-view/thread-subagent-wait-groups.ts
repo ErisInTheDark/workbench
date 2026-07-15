@@ -94,6 +94,18 @@ export function groupThreadSubagentWaitRenderEntries<Item>(
     }
 
     flushPendingTimedOutEntries();
+    const previousGroup = groups.at(-1);
+    if (
+      entry.outcome === "inProgress"
+      && previousGroup?.anchor.outcome === "inProgress"
+      && hasIdenticalTargets(previousGroup.anchor, entry)
+    ) {
+      groups[groups.length - 1] = {
+        anchor: entry,
+        entries: [...previousGroup.entries, entry],
+      };
+      continue;
+    }
     groups.push(singleEntryGroup(entry));
   }
 
