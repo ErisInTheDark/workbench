@@ -15,6 +15,7 @@ import {
   filterSubagentsByParentThreadId,
   filterSubagentThreadSummaries,
   mergeWorkbenchSubagentSummaries,
+  reconcileWorkbenchSubagentPage,
   getThreadAgentAccentColor,
   getThreadAgentLabelParts,
   getThreadAgentTabLabel,
@@ -88,6 +89,59 @@ test("merges active-project root summaries by durable child identity", () => {
     ] as never, new Set(getSubagentThreadIds(merged))).map(({ id }) => id),
     ["root"],
   );
+});
+
+test("reuses subagent page state when metadata polling has no visible change", () => {
+  const fallback = [subagent];
+  assert.equal(reconcileWorkbenchSubagentPage({
+    current: null,
+    fallback,
+    pageSubagents: [{ ...subagent }],
+    preserveAdditionalPages: false,
+  }), null);
+
+  const current = [{ ...subagent }];
+  assert.equal(reconcileWorkbenchSubagentPage({
+    current,
+    fallback: [],
+    pageSubagents: [{ ...subagent }],
+    preserveAdditionalPages: false,
+  }), current);
+});
+
+test("replaces subagent page state when polled metadata changes", () => {
+  const current = [{ ...subagent }];
+  const reconciled = reconcileWorkbenchSubagentPage({
+    current,
+    fallback: [],
+    pageSubagents: [{ ...subagent, activityStatus: "active", updatedAt: 2 }],
+    preserveAdditionalPages: false,
+  });
+
+  assert.notEqual(reconciled, current);
+  assert.deepEqual(reconciled, [{ ...subagent, activityStatus: "active", updatedAt: 2 }]);
+});
+
+test("preserves loaded older subagents when refreshing the first page", () => {
+  const firstPageSubagent = { ...subagent, threadId: "first-page" };
+  const olderSubagent = { ...subagent, threadId: "older-page" };
+  const current = [firstPageSubagent, olderSubagent];
+  assert.equal(reconcileWorkbenchSubagentPage({
+    current,
+    fallback: [],
+    pageSubagents: [{ ...firstPageSubagent }],
+    preserveAdditionalPages: true,
+  }), current);
+
+  assert.deepEqual(reconcileWorkbenchSubagentPage({
+    current,
+    fallback: [],
+    pageSubagents: [{ ...firstPageSubagent, title: "Updated" }],
+    preserveAdditionalPages: true,
+  }), [
+    { ...firstPageSubagent, title: "Updated" },
+    olderSubagent,
+  ]);
 });
 
 test("prefers the durable subagent name while preserving the agent role", () => {

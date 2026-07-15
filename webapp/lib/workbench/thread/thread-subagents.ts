@@ -1,11 +1,12 @@
 /*
  * Exports:
  * - listWorkbenchSubagents/readWorkbenchSubagentPage: fetch durable project metadata or one bounded parent page without joining thread hydration. Keywords: workbench, thread, subagent, metadata, fetch, pagination.
- * - mergeWorkbenchSubagentSummaries/getSubagentThreadIds/getSubagentSummary/getSubagentHarness/filterSubagentsByParentThreadId/filterSubagentThreadSummaries: merge, derive, and filter direct-child identity from durable summaries. Keywords: workbench, thread, subagent, metadata, harness, sidebar.
+ * - mergeWorkbenchSubagentSummaries/reconcileWorkbenchSubagentPage/getSubagentThreadIds/getSubagentSummary/getSubagentHarness/filterSubagentsByParentThreadId/filterSubagentThreadSummaries: merge, reconcile, derive, and filter direct-child identity from durable summaries. Keywords: workbench, thread, subagent, metadata, harness, sidebar.
  * - sortWorkbenchSubagents/getSubagentTabLayout/getNextSubagentHydrationBatch/getSubagentPollingBatch: derive activity order, stale folding, and bounded background work. Keywords: subagent, tabs, activity, hydration, polling, batch.
  * - getThreadAgentAccentColor/getThreadAgentLabelParts/getThreadAgentTabLabel: stable child colors and metadata-first labels. Keywords: subagent, color, label, tabs.
  */
 import type { ThreadPayload, ThreadSummary, WorkbenchSubagentPage, WorkbenchSubagentSummary } from "../../types";
+import { areDeeplyEqual } from "../deep-equality";
 
 export interface ThreadAgentLabelParts {
   nickname: string | null;
@@ -156,6 +157,26 @@ export function mergeWorkbenchSubagentSummaries(
     left.createdAt - right.createdAt
     || left.threadId.localeCompare(right.threadId)
   ));
+}
+
+export function reconcileWorkbenchSubagentPage({
+  current,
+  fallback,
+  pageSubagents,
+  preserveAdditionalPages,
+}: {
+  current: WorkbenchSubagentSummary[] | null;
+  fallback: readonly WorkbenchSubagentSummary[];
+  pageSubagents: WorkbenchSubagentSummary[];
+  preserveAdditionalPages: boolean;
+}): WorkbenchSubagentSummary[] | null {
+  const nextSubagents = preserveAdditionalPages && current
+    ? [
+      ...pageSubagents,
+      ...current.filter((summary) => !pageSubagents.some((pageSummary) => pageSummary.threadId === summary.threadId)),
+    ]
+    : pageSubagents;
+  return areDeeplyEqual(current ?? fallback, nextSubagents) ? current : nextSubagents;
 }
 
 export function getSubagentSummary(subagents: readonly WorkbenchSubagentSummary[], threadId: string) {

@@ -1644,62 +1644,64 @@ export default function ThreadComposer ({
                   data-active={isModelPickerPanelActive ? "true" : "false"}
                   inert={!isModelPickerPanelActive}
                 >
-                  <ThreadModelPicker
-                    appliesOnNextTurnOnly={!profilePickerTarget && thread.harness === "codex" && isActiveThread}
-                    deprioritizedModelIds={deprioritizedModelIds}
-                    error={modelsError}
-                    harness={pickerHarness}
-                    isLoading={isLoadingModels}
-                    isRefreshDisabled={isLoadingModels || isModelRefreshPending || isModelRefreshCoolingDown}
-                    isRefreshing={isModelRefreshPending}
-                    models={availableModels}
-                    selectedModelId={pickerSelectedModelId}
-                    onClose={finishConfigurationPicker}
-                    onRefresh={refreshAvailableModels}
-                    onSelectModel={(model) => {
-                      if (profilePickerTarget) {
-                        composerProfileController.updateProfile(profilePickerTarget.id, {
+                  {isModelPickerPanelActive ? (
+                    <ThreadModelPicker
+                      appliesOnNextTurnOnly={!profilePickerTarget && thread.harness === "codex" && isActiveThread}
+                      deprioritizedModelIds={deprioritizedModelIds}
+                      error={modelsError}
+                      harness={pickerHarness}
+                      isLoading={isLoadingModels}
+                      isRefreshDisabled={isLoadingModels || isModelRefreshPending || isModelRefreshCoolingDown}
+                      isRefreshing={isModelRefreshPending}
+                      models={availableModels}
+                      selectedModelId={pickerSelectedModelId}
+                      onClose={finishConfigurationPicker}
+                      onRefresh={refreshAvailableModels}
+                      onSelectModel={(model) => {
+                        if (profilePickerTarget) {
+                          composerProfileController.updateProfile(profilePickerTarget.id, {
+                            model: model.id,
+                            reasoningEffort: model.supportsReasoningEffort
+                              ? model.defaultReasoningEffort ?? model.supportedReasoningEfforts[0] ?? null
+                              : null,
+                            serviceTier: model.supportsFastMode ? profilePickerTarget.serviceTier : null,
+                          });
+                          setModelsError("");
+                          finishConfigurationPicker();
+                          return;
+                        }
+                        const nextSettings: WorkbenchComposerSettings = {
+                          ...currentComposerSettings,
                           model: model.id,
                           reasoningEffort: model.supportsReasoningEffort
                             ? model.defaultReasoningEffort ?? model.supportedReasoningEfforts[0] ?? null
                             : null,
-                          serviceTier: model.supportsFastMode ? profilePickerTarget.serviceTier : null,
+                          serviceTier: model.supportsFastMode ? currentComposerSettings.serviceTier : null,
+                        };
+                        applyDirectSettingsChange(nextSettings, () => {
+                          onThreadModelChange(thread.id, model.id);
+                          if (!model.supportsFastMode && isFastModeEnabled) {
+                            onThreadServiceTierChange(thread.id, null);
+                          }
                         });
                         setModelsError("");
                         finishConfigurationPicker();
-                        return;
-                      }
-                      const nextSettings: WorkbenchComposerSettings = {
-                        ...currentComposerSettings,
-                        model: model.id,
-                        reasoningEffort: model.supportsReasoningEffort
-                          ? model.defaultReasoningEffort ?? model.supportedReasoningEfforts[0] ?? null
-                          : null,
-                        serviceTier: model.supportsFastMode ? currentComposerSettings.serviceTier : null,
-                      };
-                      applyDirectSettingsChange(nextSettings, () => {
-                        onThreadModelChange(thread.id, model.id);
-                        if (!model.supportsFastMode && isFastModeEnabled) {
-                          onThreadServiceTierChange(thread.id, null);
-                        }
-                      });
-                      setModelsError("");
-                      finishConfigurationPicker();
-                    }}
-                    onToggleModelPriority={(modelId) => {
-                      setDeprioritizedModelIdsByHarness((current) => {
-                        const currentIds = current[pickerHarness] ?? [];
-                        const nextIds = currentIds.includes(modelId)
-                          ? currentIds.filter((id) => id !== modelId)
-                          : [...currentIds, modelId];
+                      }}
+                      onToggleModelPriority={(modelId) => {
+                        setDeprioritizedModelIdsByHarness((current) => {
+                          const currentIds = current[pickerHarness] ?? [];
+                          const nextIds = currentIds.includes(modelId)
+                            ? currentIds.filter((id) => id !== modelId)
+                            : [...currentIds, modelId];
 
-                        return {
-                          ...current,
-                          [pickerHarness]: nextIds,
-                        };
-                      });
-                    }}
-                  />
+                          return {
+                            ...current,
+                            [pickerHarness]: nextIds,
+                          };
+                        });
+                      }}
+                    />
+                  ) : null}
                 </div>
                 <div
                   aria-hidden={!isAgentPickerPanelActive}

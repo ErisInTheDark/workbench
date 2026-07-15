@@ -65,6 +65,7 @@ import {
   getSubagentThreadIds,
   getThreadAgentTabLabel,
   readWorkbenchSubagentPage,
+  reconcileWorkbenchSubagentPage,
   sortWorkbenchSubagents,
 } from "../../../lib/workbench/thread/thread-subagents";
 import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
@@ -714,6 +715,8 @@ export default memo(function ThreadView ({
     () => sortWorkbenchSubagents(knownDirectSubagents).slice(0, SUBAGENT_PAGE_SIZE),
     [knownDirectSubagents],
   );
+  const knownFirstSubagentPageRef = useRef(knownFirstSubagentPage);
+  knownFirstSubagentPageRef.current = knownFirstSubagentPage;
   const subagents = refreshedSubagents ?? knownFirstSubagentPage;
   useEffect(() => {
     const lifecycleController = new AbortController();
@@ -735,9 +738,12 @@ export default memo(function ThreadView ({
         });
         if (!lifecycleController.signal.aborted) {
           setRefreshedSubagents((current) => {
-            if (!current || !hasLoadedAdditionalSubagentPagesRef.current) return page.subagents;
-            const firstPageIds = new Set(page.subagents.map(({ threadId }) => threadId));
-            return [...page.subagents, ...current.filter(({ threadId }) => !firstPageIds.has(threadId))];
+            return reconcileWorkbenchSubagentPage({
+              current,
+              fallback: knownFirstSubagentPageRef.current,
+              pageSubagents: page.subagents,
+              preserveAdditionalPages: hasLoadedAdditionalSubagentPagesRef.current,
+            });
           });
           if (!hasLoadedAdditionalSubagentPagesRef.current) setNextSubagentCursor(page.nextCursor);
         }
