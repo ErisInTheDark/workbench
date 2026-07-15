@@ -2,7 +2,7 @@
  * Exports:
  * - listWorkbenchSubagents/readWorkbenchSubagentPage: fetch durable project metadata or one bounded parent page without joining thread hydration. Keywords: workbench, thread, subagent, metadata, fetch, pagination.
  * - mergeWorkbenchSubagentSummaries/reconcileWorkbenchSubagentPage/getSubagentThreadIds/getSubagentSummary/getSubagentHarness/filterSubagentsByParentThreadId/filterSubagentThreadSummaries: merge, reconcile, derive, and filter direct-child identity from durable summaries. Keywords: workbench, thread, subagent, metadata, harness, sidebar.
- * - sortWorkbenchSubagents/getSubagentTabLayout/getNextSubagentHydrationBatch/getSubagentPollingBatch: derive activity order, stale folding, and bounded background work. Keywords: subagent, tabs, activity, hydration, polling, batch.
+ * - sortWorkbenchSubagents/getSubagentTabLayout/getNextSubagentHydrationBatch/getSubagentPollingBatch: derive pinned-first activity order, stale folding, and bounded background work. Keywords: subagent, tabs, pinned, activity, hydration, polling, batch.
  * - getThreadAgentAccentColor/getThreadAgentLabelParts/getThreadAgentTabLabel: stable child colors and metadata-first labels. Keywords: subagent, color, label, tabs.
  */
 import type { ThreadPayload, ThreadSummary, WorkbenchSubagentPage, WorkbenchSubagentSummary } from "../../types";
@@ -96,15 +96,26 @@ export function getSubagentTabLayout(
   subagents: readonly WorkbenchSubagentSummary[],
   {
     now = Date.now(),
+    pinnedThreadIds = [],
     revealedThreadIds = new Set<string>(),
   }: {
     now?: number;
+    pinnedThreadIds?: readonly string[];
     revealedThreadIds?: ReadonlySet<string>;
   } = {},
 ) {
   const visible: WorkbenchSubagentSummary[] = [];
   const collapsed: WorkbenchSubagentSummary[] = [];
-  for (const subagent of sortWorkbenchSubagents(subagents)) {
+  const sortedSubagentsByThreadId = new Map(
+    sortWorkbenchSubagents(subagents).map((subagent) => [subagent.threadId, subagent]),
+  );
+  for (const threadId of pinnedThreadIds) {
+    const subagent = sortedSubagentsByThreadId.get(threadId);
+    if (!subagent) continue;
+    visible.push(subagent);
+    sortedSubagentsByThreadId.delete(threadId);
+  }
+  for (const subagent of sortedSubagentsByThreadId.values()) {
     const isStale = subagent.activityStatus !== "active"
       && subagent.lastActivityAt < now - SUBAGENT_STALE_AFTER_MS;
     (isStale && !revealedThreadIds.has(subagent.threadId) ? collapsed : visible).push(subagent);

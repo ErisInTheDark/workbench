@@ -175,6 +175,12 @@ test("orders activity deterministically and folds stale non-active children", ()
     getSubagentTabLayout([staleInactive], { now, revealedThreadIds: new Set(["stale"]) }).visible.map(({ threadId }) => threadId),
     ["stale"],
   );
+  const pinnedLayout = getSubagentTabLayout(
+    [recentInactive, staleInactive, active, staleUnknown],
+    { now, pinnedThreadIds: ["stale", "active"] },
+  );
+  assert.deepEqual(pinnedLayout.visible.map(({ threadId }) => threadId), ["stale", "active", "recent"]);
+  assert.deepEqual(pinnedLayout.collapsed.map(({ threadId }) => threadId), ["unknown"]);
 });
 
 test("caps hydration and rotates polling through fair four-thread batches", () => {

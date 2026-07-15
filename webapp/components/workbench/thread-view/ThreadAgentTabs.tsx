@@ -1,9 +1,11 @@
 /*
  * Exports:
- * - default ThreadAgentTabs: render the main-agent tab, bounded subagent tabs, badges, and the tab-shaped reveal control. Keywords: thread, subagent, tabs, pagination, activity.
+ * - default ThreadAgentTabs: render the main-agent tab, pinnable bounded subagent tabs, badges, and the tab-shaped reveal control. Keywords: thread, subagent, tabs, pinned, context menu, pagination, activity.
  */
 import type { ThreadPayload, ThreadUnreadBadge, WorkbenchSubagentSummary } from "../../../lib/types";
+import ContextMenuCapability from "../ContextMenuCapability";
 import { ThreadQuestionBadge, ThreadUnreadBadge as ThreadUnreadBadgeView } from "../ThreadStatusBadges";
+import { PinIcon } from "../workbench-icons";
 import ThreadAgentName from "./ThreadAgentName";
 
 interface TabBadge {
@@ -14,6 +16,7 @@ interface TabBadge {
 interface SubagentTab {
   badge: TabBadge;
   id: string;
+  isPinned: boolean;
   isLoading: boolean;
   subagent: WorkbenchSubagentSummary | null;
   suffix: string;
@@ -40,6 +43,7 @@ export default function ThreadAgentTabs ({
   mainThreadId,
   onRevealMore,
   onSelectThread,
+  onTogglePin,
   tabs,
 }: {
   activeThreadId: string;
@@ -49,6 +53,7 @@ export default function ThreadAgentTabs ({
   mainThreadId: string;
   onRevealMore: () => void;
   onSelectThread: (threadId: string) => void;
+  onTogglePin: (threadId: string) => void;
   tabs: readonly SubagentTab[];
 }) {
   if (!tabs.length && !canRevealMore) return null;
@@ -69,23 +74,37 @@ export default function ThreadAgentTabs ({
       </button>
       <span className="text-[0.84em] text-muted" aria-hidden="true">|</span>
       {tabs.map((tab) => (
-        <button
+        <ContextMenuCapability
           key={tab.id}
-          type="button"
-          aria-busy={tab.isLoading}
-          className={joinClasses(
-            tabClassName,
-            activeThreadId === tab.id
-              ? "border-[color-mix(in_srgb,var(--text)_18%,transparent)] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] text-text"
-              : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-transparent text-muted hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text",
-            tab.isLoading && activeThreadId !== tab.id && "opacity-70",
-          )}
-          onClick={() => onSelectThread(tab.id)}
+          menu={{
+            id: `subagent-tab:${tab.id}`,
+            label: "Subagent tab actions",
+            items: [{
+              icon: <PinIcon className="size-4" />,
+              id: tab.isPinned ? "unpin" : "pin",
+              label: tab.isPinned ? "Unpin subagent tab" : "Pin subagent tab",
+              onSelect: () => onTogglePin(tab.id),
+            }],
+          }}
         >
-          <ThreadAgentName fallbackKey={tab.id} subagent={tab.subagent} thread={tab.thread} />
-          {tab.suffix ? <span className="text-muted">{tab.suffix}</span> : null}
-          {badgeView(tab.badge)}
-        </button>
+          <button
+            type="button"
+            aria-busy={tab.isLoading}
+            className={joinClasses(
+              tabClassName,
+              activeThreadId === tab.id
+                ? "border-[color-mix(in_srgb,var(--text)_18%,transparent)] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] text-text"
+                : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-transparent text-muted hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text",
+              tab.isLoading && activeThreadId !== tab.id && "opacity-70",
+            )}
+            onClick={() => onSelectThread(tab.id)}
+          >
+            {tab.isPinned ? <PinIcon className="size-3.5 shrink-0" /> : null}
+            <ThreadAgentName fallbackKey={tab.id} subagent={tab.subagent} thread={tab.thread} />
+            {tab.suffix ? <span className="text-muted">{tab.suffix}</span> : null}
+            {badgeView(tab.badge)}
+          </button>
+        </ContextMenuCapability>
       ))}
       {canRevealMore ? (
         <button

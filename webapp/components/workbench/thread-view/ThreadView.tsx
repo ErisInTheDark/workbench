@@ -49,6 +49,10 @@ import {
 } from "../../../lib/workbench/state/browser-state";
 import CooperativeRebuildQueue from "../../../lib/workbench/state/CooperativeRebuildQueue";
 import {
+  readStoredPinnedSubagentThreadIds,
+  writeStoredPinnedSubagentThreadIds,
+} from "../../../lib/workbench/state/subagent-tab-preferences";
+import {
   buildInlineMentionCandidates,
   buildInlineMentionCandidatesCooperatively,
   readCachedInlineMentionCandidates,
@@ -685,6 +689,9 @@ export default memo(function ThreadView ({
   const [nextSubagentCursor, setNextSubagentCursor] = useState<string | null>(null);
   const [isRevealingMoreSubagents, setIsRevealingMoreSubagents] = useState(false);
   const [revealedSubagentThreadIds, setRevealedSubagentThreadIds] = useState<Record<string, true>>({});
+  const [pinnedSubagentThreadIds, setPinnedSubagentThreadIds] = useState(() => (
+    readStoredPinnedSubagentThreadIds(projectId, thread.id)
+  ));
   const [subthreadsById, setSubthreadsById] = useState<Record<string, ThreadPayload>>({});
   const [loadingThreadIds, setLoadingThreadIds] = useState<Record<string, true>>({});
   const [loadingPreviousTurnKeys, setLoadingPreviousTurnKeys] = useState<Record<string, true>>({});
@@ -717,7 +724,21 @@ export default memo(function ThreadView ({
   );
   const knownFirstSubagentPageRef = useRef(knownFirstSubagentPage);
   knownFirstSubagentPageRef.current = knownFirstSubagentPage;
-  const subagents = refreshedSubagents ?? knownFirstSubagentPage;
+  const pinnedSubagentThreadIdSet = useMemo(
+    () => new Set(pinnedSubagentThreadIds),
+    [pinnedSubagentThreadIds],
+  );
+  const subagents = useMemo(() => {
+    const firstPageSubagents = refreshedSubagents ?? knownFirstSubagentPage;
+    if (!pinnedSubagentThreadIdSet.size) return firstPageSubagents;
+    const summariesByThreadId = new Map(firstPageSubagents.map((summary) => [summary.threadId, summary]));
+    for (const summary of knownDirectSubagents) {
+      if (pinnedSubagentThreadIdSet.has(summary.threadId) && !summariesByThreadId.has(summary.threadId)) {
+        summariesByThreadId.set(summary.threadId, summary);
+      }
+    }
+    return Array.from(summariesByThreadId.values());
+  }, [knownDirectSubagents, knownFirstSubagentPage, pinnedSubagentThreadIdSet, refreshedSubagents]);
   useEffect(() => {
     const lifecycleController = new AbortController();
     let refreshTimer: number | null = null;
@@ -766,8 +787,8 @@ export default memo(function ThreadView ({
   const subagentTabLayout = useMemo(() => {
     const revealedThreadIds = new Set(Object.keys(revealedSubagentThreadIds));
     if (activeThreadId !== thread.id) revealedThreadIds.add(activeThreadId);
-    return getSubagentTabLayout(subagents, { revealedThreadIds });
-  }, [activeThreadId, revealedSubagentThreadIds, subagents, thread.id]);
+    return getSubagentTabLayout(subagents, { pinnedThreadIds: pinnedSubagentThreadIds, revealedThreadIds });
+  }, [activeThreadId, pinnedSubagentThreadIds, revealedSubagentThreadIds, subagents, thread.id]);
   const visibleSubagents = subagentTabLayout.visible;
   const visibleSubagentThreadIds = useMemo(() => getSubagentThreadIds(visibleSubagents), [visibleSubagents]);
   const relatedThreadsById = useStableRelatedThreadsById({
@@ -1329,6 +1350,16 @@ export default memo(function ThreadView ({
     }
   }, [loadSubthread, subagents, thread.harness, thread.id]);
 
+  const handleSubagentPinToggle = useCallback((threadId: string) => {
+    setPinnedSubagentThreadIds((current) => {
+      const next = current.includes(threadId)
+        ? current.filter((pinnedThreadId) => pinnedThreadId !== threadId)
+        : [...current, threadId];
+      writeStoredPinnedSubagentThreadIds(projectId, thread.id, next);
+      return next;
+    });
+  }, [projectId, thread.id]);
+
   const handleSendMessage = useCallback(async (_threadId: string, input: UserInput[]) => {
     if (!resolvedActiveThread || !activeProfileSlot) {
       return;
@@ -1735,11 +1766,13 @@ export default memo(function ThreadView ({
       mainThreadId={thread.id}
       onRevealMore={handleRevealMoreSubagents}
       onSelectThread={handleSubthreadSelection}
+      onTogglePin={handleSubagentPinToggle}
       tabs={tabDefinitions.map((tab) => {
         const tabThread = relatedThreadsById[tab.id] ?? null;
         return {
           ...tab,
           badge: getTabBadge(tab.id, tabThread),
+          isPinned: pinnedSubagentThreadIdSet.has(tab.id),
           subagent: getSubagentSummary(subagents, tab.id),
           thread: tabThread,
         };
