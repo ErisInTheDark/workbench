@@ -26,6 +26,7 @@ import {
   renderSubagentTurnOutput,
   renderSubagentWaitResultOutput,
 } from "../lib/workbench/subagent/subagent-output";
+import { createWorkbenchSubagentMessageText } from "../lib/workbench/thread/thread-subagent-message";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
@@ -174,19 +175,36 @@ export default class WorkbenchSubagentController {
     })).thread;
   }
 
+  private async resolveThreadHarness(
+    client: WorkbenchSubagentHarnessClient,
+    threadId: string,
+    cwd: string,
+    project: AgentEndpointProjectResolution["project"],
+    label: string,
+  ) {
+    const matches = (await Promise.all((["codex", "copilot", "opencode"] as const).map(async (harness) => {
+      try {
+        const thread = await this.readThread(client, harness, threadId, cwd);
+        const threadProject = await resolveAgentEndpointProjectFromCwd(thread.cwd, { endpointName: label });
+        return threadProject.project.id === project.id ? { harness, thread } : null;
+      } catch { return null; }
+    }))).filter((match): match is { harness: WorkbenchHarness; thread: Thread } => Boolean(match));
+    if (matches.length !== 1) throw new Error(matches.length ? `${label} identity is ambiguous.` : `${label} does not belong to this cwd project.`);
+    return matches[0];
+  }
+
   private async resolveCaller(client: WorkbenchSubagentHarnessClient, params: Record<string, unknown>) {
     const callerThreadId = requiredString(params, "callerThreadId");
     const cwd = requiredString(params, "cwd");
     const requestedProject = await resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
-    const matches = (await Promise.all((["codex", "copilot", "opencode"] as const).map(async (harness) => {
-      try {
-        const thread = await this.readThread(client, harness, callerThreadId, cwd);
-        const threadProject = await resolveAgentEndpointProjectFromCwd(thread.cwd, { endpointName: "Workbench subagent caller" });
-        return threadProject.project.id === requestedProject.project.id ? { harness, thread } : null;
-      } catch { return null; }
-    }))).filter((match): match is { harness: WorkbenchHarness; thread: Thread } => Boolean(match));
-    if (matches.length !== 1) throw new Error(matches.length ? "Caller thread identity is ambiguous." : "Caller thread does not belong to this cwd project.");
-    return { callerThreadId, cwd, harness: matches[0].harness, project: requestedProject.project };
+    const caller = await this.resolveThreadHarness(
+      client,
+      callerThreadId,
+      cwd,
+      requestedProject.project,
+      "Workbench subagent caller",
+    );
+    return { callerThreadId, cwd, harness: caller.harness, project: requestedProject.project };
   }
 
   private async list(params: Record<string, unknown>) {
@@ -362,6 +380,9 @@ export default class WorkbenchSubagentController {
   }
 
   private async message(client: WorkbenchSubagentHarnessClient, params: Record<string, unknown>) {
+    if (params.parent === true) {
+      return await this.messageParent(client, params);
+    }
     const { caller, record } = await this.ownedRecord(params);
     const message = requiredString(params, "message");
     const thread = await this.readThread(client, record.harness, record.threadId, record.cwd);
@@ -388,6 +409,44 @@ export default class WorkbenchSubagentController {
       },
     });
     await this.subagentStore.markActivity(record.threadId, "active");
+    return {};
+  }
+
+  private async messageParent(client: WorkbenchSubagentHarnessClient, params: Record<string, unknown>) {
+    const caller = await this.resolveCaller(client, params);
+    const relationship = await this.subagentStore.getParentRelationship(caller.callerThreadId, caller.project.id);
+    if (!relationship || relationship.harness !== caller.harness) {
+      throw new Error("The current thread is not a Workbench subagent with a direct parent in this project.");
+    }
+    const parent = await this.resolveThreadHarness(
+      client,
+      relationship.parentThreadId,
+      relationship.cwd,
+      caller.project,
+      "Workbench subagent parent",
+    );
+    const input = textInput(createWorkbenchSubagentMessageText({
+      message: requiredString(params, "message"),
+      name: relationship.name,
+      threadId: relationship.threadId,
+    }));
+    const turn = currentTurn(parent.thread);
+    if (turn?.status === "inProgress") {
+      await this.requestHarness(client, parent.harness, {
+        method: "turn/steer",
+        params: {
+          cwd: parent.thread.cwd,
+          expectedTurnId: turn.id,
+          input,
+          threadId: parent.thread.id,
+        },
+      });
+      return {};
+    }
+    await this.requestHarness(client, parent.harness, {
+      method: "turn/start",
+      params: { cwd: parent.thread.cwd, input, threadId: parent.thread.id },
+    });
     return {};
   }
 

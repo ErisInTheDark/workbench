@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchSubagentStore: own parent-scoped durable subagent metadata, legacy migration, activity transitions, and bounded cursor pages. Keywords: subagent, store, parent, activity, pagination, migration.
+ * - default WorkbenchSubagentStore: own parent-scoped durable subagent metadata, direct relationship lookup, legacy migration, activity transitions, and bounded cursor pages. Keywords: subagent, store, parent, child, activity, pagination, migration.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -237,6 +237,14 @@ export default class WorkbenchSubagentStore {
   async getOwnedMany(parentThreadId: string, projectId: string, threadIds: readonly string[]) {
     const records = await Promise.all(threadIds.map((threadId) => this.getOwned(parentThreadId, projectId, threadId)));
     return records.every((record): record is WorkbenchSubagentSummary => Boolean(record)) ? records : null;
+  }
+
+  async getParentRelationship(childThreadId: string, projectId: string) {
+    await this.initialize();
+    const parentThreadId = this.childParents.get(childThreadId);
+    if (!parentThreadId) return null;
+    const record = this.parents.get(parentThreadId)?.get(childThreadId) ?? null;
+    return record?.projectId === projectId ? record : null;
   }
 
   async markActivity(

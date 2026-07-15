@@ -26,6 +26,7 @@ import {
   isAgentScreenshotSteerUserMessage,
 } from "../../../lib/workbench/thread/thread-steer-markers";
 import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
+import { readWorkbenchSubagentMessageInput } from "../../../lib/workbench/thread/thread-subagent-message";
 import { isWorkbenchThreadRecoveryUserMessage } from "../../../lib/workbench/thread/thread-recovery-message";
 import {
   getThreadCommandBlockDisplay,
@@ -64,6 +65,7 @@ import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
 import ThreadReasoningItem from "./ThreadReasoningItem";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadSubagentCreateItem from "./ThreadSubagentCreateItem";
+import ThreadSubagentIncomingMessage from "./ThreadSubagentIncomingMessage";
 import ThreadSubagentMessageItem from "./ThreadSubagentMessageItem";
 import ThreadSubagentStopItem from "./ThreadSubagentStopItem";
 import ThreadSubagentWaitItem from "./ThreadSubagentWaitItem";
@@ -673,6 +675,28 @@ function ThreadUserMessageItem ({
   startedAt: number | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  const subagentMessage = readWorkbenchSubagentMessageInput(item.content);
+  if (subagentMessage) {
+    const steerState = getSteerUserMessageState(item);
+    return (
+      <ThreadSubagentIncomingMessage
+        name={subagentMessage.name}
+        steerState={steerState}
+        timestamp={showStartedAt ? <ThreadMessageTimestamp className="mt-1" timestampSeconds={startedAt} /> : undefined}
+      >
+        <ThreadMarkdown
+          inlineMentionSources={inlineMentionSources}
+          markdown={subagentMessage.message}
+          threadCwdPath={threadCwdPath}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          workspaceRoots={workspaceRoots}
+        />
+      </ThreadSubagentIncomingMessage>
+    );
+  }
+
   if (isAgentScreenshotSteerUserMessage(item)) {
     return (
       <ThreadAgentScreenshotSteerItem

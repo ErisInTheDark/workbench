@@ -21,6 +21,7 @@ import {
   extractThreadPlanBlocks,
   type WorkbenchThreadContextPiece,
 } from "./thread-context-projection.ts";
+import { readWorkbenchSubagentMessageInput } from "./thread-subagent-message.ts";
 
 const SEARCH_SNIPPET_CHARACTERS = 500;
 
@@ -65,6 +66,10 @@ function contextPieceKind(piece: WorkbenchThreadContextPiece): WorkbenchThreadRe
 }
 
 function contextPieceLabel(piece: WorkbenchThreadContextPiece) {
+  if (piece.kind === "userMessage" || piece.kind === "userSteer") {
+    const subagentMessage = readWorkbenchSubagentMessageInput(piece.input);
+    if (subagentMessage) return `Subagent message from ${subagentMessage.name}`;
+  }
   switch (piece.kind) {
     case "userMessage":
       return "User message";

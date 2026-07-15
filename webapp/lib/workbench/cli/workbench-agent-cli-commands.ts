@@ -343,15 +343,19 @@ const COMMANDS: readonly CommandDefinition[] = [
   },
   {
     audiences: DEFAULT_HELP_AUDIENCE,
-    description: "Steer a child, or start a new turn when it is idle.",
+    description: "Message a direct child or parent, steering an active turn or starting an idle one.",
     helpGroups: ["subagent"],
     words: ["subagent", "message"],
-    usage: "wb subagent message --id <id> --message <message>",
+    usage: "wb subagent message (--id <id> | --parent) --message <message>",
     async build({ args, callerThreadId, cwd, workbenchOrigin }) {
-      const flags = new ParsedFlags(args, { values: ["--id", "--message"] });
+      const flags = new ParsedFlags(args, { boolean: ["--parent"], values: ["--id", "--message"] });
       if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
+      const threadId = flags.optional("--id")?.trim() ?? "";
+      const parent = flags.has("--parent");
+      if (Boolean(threadId) === parent) throw new Error("Exactly one of --id or --parent is required.");
       return post("/api/subagents", {
-        action: "message", callerThreadId, cwd, message: flags.required("--message"), threadId: flags.required("--id"),
+        action: "message", callerThreadId, cwd, message: flags.required("--message"),
+        ...(parent ? { parent: true } : { threadId }),
         ...(workbenchOrigin ? { workbenchOrigin } : {}),
       });
     },

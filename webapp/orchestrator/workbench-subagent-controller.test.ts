@@ -9,8 +9,10 @@ import path from "node:path";
 import { test } from "node:test";
 
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
+import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type { CodexJsonRpcResponse } from "../lib/codex/protocol";
 import type { WorkbenchComposerProfile, WorkbenchSubagentPage, WorkbenchUserInputRequest } from "../lib/types";
+import { readWorkbenchSubagentMessageInput } from "../lib/workbench/thread/thread-subagent-message";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 
 interface HarnessCall {
@@ -55,10 +57,12 @@ class FakeHarnessClient {
   connectCount = 0;
   private readonly cwd: string;
   private readonly failTurnStart: boolean;
+  private readonly parentStatus: "completed" | "inProgress";
 
-  constructor(cwd: string, failTurnStart = false) {
+  constructor(cwd: string, failTurnStart = false, parentStatus: "completed" | "inProgress" = "completed") {
     this.cwd = cwd;
     this.failTurnStart = failTurnStart;
+    this.parentStatus = parentStatus;
   }
 
   async connect() { this.connectCount += 1; }
@@ -74,7 +78,7 @@ class FakeHarnessClient {
     if (message.method === "thread/read") {
       if (harness !== "codex") return { error: { code: -32000, message: "Thread not found." }, id: 1 };
       const threadId = String(params.threadId ?? "");
-      const result = { thread: thread(threadId, this.cwd, threadId === childThreadId ? "inProgress" : "completed") };
+      const result = { thread: thread(threadId, this.cwd, threadId === childThreadId ? "inProgress" : this.parentStatus) };
       return { id: 1, result: result as T };
     }
     if (message.method === "thread/start") return { id: 1, result: { thread: thread(childThreadId, this.cwd) } as T };
@@ -179,6 +183,87 @@ test("creates with one client and delivers a steer before empty questionnaire re
   });
   assert.equal(denied.id, 8);
   assert.match(denied.error?.message ?? "", /not owned by the current thread/u);
+});
+
+test("starts an idle direct parent with a server-authored informational message", async (context) => {
+  const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-controller-idle-parent-message-"));
+  context.after(async () => await rm(storageRoot, { force: true, recursive: true }));
+  const cwd = process.cwd();
+  const clients: FakeHarnessClient[] = [];
+  const controller = new WorkbenchSubagentController({
+    bridgeUrl: "ws://unused",
+    createHarnessClient: () => {
+      const client = new FakeHarnessClient(cwd);
+      clients.push(client);
+      return client;
+    },
+    storageRoot,
+  });
+
+  await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/importLegacy", params: { profiles: [profile()] } });
+  assert.deepEqual(await controller.handleRequest({
+    id: 2,
+    method: "workbench/subagent/create",
+    params: { callerThreadId, cwd, message: "Inspect the code.", name: "Mimi", profileId: profile().id, title: "Inspect code" },
+  }), { id: 2, result: { threadId: childThreadId } });
+
+  assert.deepEqual(await controller.handleRequest({
+    id: 3,
+    method: "workbench/subagent/message",
+    params: { callerThreadId: childThreadId, cwd, message: "The safe route is ready.", parent: true },
+  }), { id: 3, result: {} });
+  const parentTurnStart = clients[1].calls.find(({ method, params }) => method === "turn/start" && params.threadId === callerThreadId);
+  assert(parentTurnStart);
+  assert.deepEqual(readWorkbenchSubagentMessageInput(parentTurnStart.params.input as UserInput[]), {
+    message: "The safe route is ready.",
+    name: "Mimi",
+    threadId: childThreadId,
+  });
+  assert.equal(clients[1].calls.some(({ method }) => method === "questionnaire/respond"), false);
+});
+
+test("steers an active direct parent and rejects callers without a relationship", async (context) => {
+  const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-controller-parent-message-"));
+  context.after(async () => await rm(storageRoot, { force: true, recursive: true }));
+  const cwd = process.cwd();
+  const clients: FakeHarnessClient[] = [];
+  const controller = new WorkbenchSubagentController({
+    bridgeUrl: "ws://unused",
+    createHarnessClient: () => {
+      const client = new FakeHarnessClient(cwd, false, "inProgress");
+      clients.push(client);
+      return client;
+    },
+    storageRoot,
+  });
+
+  await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/importLegacy", params: { profiles: [profile()] } });
+  assert.deepEqual(await controller.handleRequest({
+    id: 2,
+    method: "workbench/subagent/create",
+    params: { callerThreadId, cwd, message: "Inspect the code.", name: "Mimi", profileId: profile().id, title: "Inspect code" },
+  }), { id: 2, result: { threadId: childThreadId } });
+
+  assert.deepEqual(await controller.handleRequest({
+    id: 3,
+    method: "workbench/subagent/message",
+    params: { callerThreadId: childThreadId, cwd, message: "Active parent note.", parent: true },
+  }), { id: 3, result: {} });
+  const parentSteer = clients[1].calls.find(({ method, params }) => method === "turn/steer" && params.threadId === callerThreadId);
+  assert(parentSteer);
+  assert.deepEqual(readWorkbenchSubagentMessageInput(parentSteer.params.input as UserInput[]), {
+    message: "Active parent note.",
+    name: "Mimi",
+    threadId: childThreadId,
+  });
+  assert.equal(clients[1].calls.some(({ method }) => method === "questionnaire/respond"), false);
+
+  const denied = await controller.handleRequest({
+    id: 4,
+    method: "workbench/subagent/message",
+    params: { callerThreadId: "unrelated-thread", cwd, message: "Spoofed note.", parent: true },
+  });
+  assert.match(denied.error?.message ?? "", /not a Workbench subagent with a direct parent/u);
 });
 
 test("tracks durable activity through create, message, and stop", async (context) => {

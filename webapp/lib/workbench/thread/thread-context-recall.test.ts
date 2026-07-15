@@ -23,6 +23,7 @@ import {
 import { renderWorkbenchThreadRecallHistoryMarkdown } from "./thread-context-markdown.ts";
 import { buildWorkbenchThreadContextPieces } from "./thread-context-projection.ts";
 import { createWorkbenchThreadRecoveryId, createWorkbenchThreadRecoveryInput } from "./thread-recovery-message.ts";
+import { createWorkbenchSubagentMessageText } from "./thread-subagent-message.ts";
 
 function turn(id: string, items: ThreadItem[]) {
   return {
@@ -77,6 +78,21 @@ function createBundle(): WorkbenchThreadContextBundle {
       status: "sent",
       threadId: "thread-1",
       turnId: "turn-old",
+    }, {
+      attemptedAt: 8,
+      canonicalItemId: null,
+      entryKey: "subagent-steer-key",
+      error: null,
+      input: [{
+        text: createWorkbenchSubagentMessageText({ message: "active parent progress", name: "Mimi", threadId: "child-active" }),
+        text_elements: [],
+        type: "text",
+      }],
+      requestId: "subagent-steer-request",
+      resolvedAt: 9,
+      status: "sent",
+      threadId: "thread-1",
+      turnId: "turn-new",
     }],
     thread: {
       agentNickname: null,
@@ -122,6 +138,16 @@ function createBundle(): WorkbenchThreadContextBundle {
           { id: "plan-new", memoryCitation: null, phase: "final_answer", text: newestPlan, type: "agentMessage" },
           { clientId: createWorkbenchThreadRecoveryId("recall-hidden"), content: createWorkbenchThreadRecoveryInput(), id: "user-recovery", type: "userMessage" },
           { clientId: null, content: [{ text: "newest user constraint", text_elements: [], type: "text" }], id: "user-new", type: "userMessage" },
+          {
+            clientId: null,
+            content: [{
+              text: createWorkbenchSubagentMessageText({ message: "idle parent progress", name: "Nell", threadId: "child-idle" }),
+              text_elements: [],
+              type: "text",
+            }],
+            id: "user-subagent",
+            type: "userMessage",
+          },
         ]),
       ],
       unreadBadge: null,
@@ -157,6 +183,21 @@ test("searches only narrative records with stable refs and normalized literal ma
   assert.equal(records.some((record) => record.ref === "user:user-recovery"), false);
   assert(records.some((record) => record.ref === "plan-block:plan-new:0"));
   assert(!records.some((record) => record.ref === "agent:plan-new"));
+  assert.deepEqual(
+    records.filter((record) => record.ref === "steer:subagent-steer-key" || record.ref === "user:user-subagent")
+      .map(({ kind, label, ref, text }) => ({ kind, label, ref, text })),
+    [{
+      kind: "user",
+      label: "Subagent message from Nell",
+      ref: "user:user-subagent",
+      text: "## Subagent Message From Nell\n\nidle parent progress",
+    }, {
+      kind: "steer",
+      label: "Subagent message from Mimi",
+      ref: "steer:subagent-steer-key",
+      text: "## Subagent Message From Mimi\n\nactive parent progress",
+    }],
+  );
 
   const result = searchWorkbenchThreadRecall(records, {
     kinds: ["agent", "user", "questionnaire", "plan", "steer"],

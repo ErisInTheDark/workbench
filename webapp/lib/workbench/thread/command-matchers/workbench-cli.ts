@@ -19,6 +19,7 @@ export interface WorkbenchSubagentCommand {
   profileId: string | null;
   threadIds: string[];
   title: string | null;
+  toParent: boolean;
 }
 
 function readValue(command: string, startIndex: number) {
@@ -37,7 +38,7 @@ function readValue(command: string, startIndex: number) {
         }
         return { nextIndex: index + 1, value };
       }
-      if ((character === "\\" || character === "`") && command[index + 1] === quote) {
+      if (character === "\\" && command[index + 1] === quote) {
         value += quote;
         index += 2;
         continue;
@@ -68,6 +69,10 @@ function readFlagValue(command: string, flag: string) {
   return readFlagValues(command, flag)[0] ?? null;
 }
 
+function hasBooleanFlag(command: string, flag: string) {
+  return new RegExp(`(?:^|\\s)--${flag}(?=\\s|$|[;&|])`, "u").test(command);
+}
+
 function parseSingleWorkbenchSubagentCommand(command: string): WorkbenchSubagentCommand | null {
   const normalized = command.trim();
   const actionMatch = normalized.match(/^wb(?:\.cmd)?\s+subagent\s+(list|profiles|create|wait|message|stop)\b/iu);
@@ -80,6 +85,7 @@ function parseSingleWorkbenchSubagentCommand(command: string): WorkbenchSubagent
     profileId: readFlagValue(normalized, "profile"),
     threadIds: readFlagValues(normalized, "id"),
     title: readFlagValue(normalized, "title"),
+    toParent: hasBooleanFlag(normalized, "parent"),
   };
 }
 
@@ -147,10 +153,14 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         profiles: "Listed subagent profiles",
         stop: "Stopped subagent",
       };
-      const label = command.action === "wait"
+      const label = command.action === "message" && command.toParent
+        ? "Messaged parent"
+        : command.action === "wait"
         ? command.threadIds.length > 1 ? `Waited for ${command.threadIds.length} subagents` : "Waited for subagent"
         : labels[command.action];
-      const ongoingLabel = command.action === "wait"
+      const ongoingLabel = command.action === "message" && command.toParent
+        ? "Messaging parent"
+        : command.action === "wait"
         ? command.threadIds.length > 1 ? `Waiting for ${command.threadIds.length} subagents` : "Waiting for subagent"
         : command.action === "create" ? "Creating subagent"
         : command.action === "list" ? "Listing subagents"

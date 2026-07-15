@@ -493,7 +493,9 @@ const result = await tools.shell_command({
 text(result);
 \`\`\`\`
 
-\`wb subagent message --id <id> --message <message>\` sends ordinary prose as a steer. When a questionnaire is pending, Workbench delivers the steer first and then resolves the questionnaire with no selected option. When no turn is active, it starts a new turn.
+\`wb subagent message --id <id> --message <message>\` sends ordinary prose to a direct child as a steer. When a questionnaire is pending, Workbench delivers the steer first and then resolves the questionnaire with no selected option. When no turn is active, it starts a new turn.
+
+\`wb subagent message --parent --message <message>\` lets a direct child send progress, blockers, risks, or integration information to its direct parent. Workbench identifies the sender from durable relationship metadata and wraps the body as subagent information rather than user direction. An active parent receives a steer without resolving any pending questionnaire; an idle parent receives a new turn.
 
 \`wb subagent stop --id <id>\` is equivalent to the thread stop button.
 

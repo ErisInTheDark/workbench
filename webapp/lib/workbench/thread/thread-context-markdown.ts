@@ -14,6 +14,7 @@ import {
   getSingleQuestionnaireSummaryLabel,
 } from "./thread-questionnaire-transcript.ts";
 import type { WorkbenchThreadContextPiece } from "./thread-context-projection.ts";
+import { readWorkbenchSubagentMessageInput } from "./thread-subagent-message.ts";
 
 const IMAGE_PLACEHOLDER = "<an image was sent>";
 const NEWEST_PLAN_PREVIEW_CHARACTERS = 10_000;
@@ -76,6 +77,12 @@ function renderQuestionnaireMarkdown(piece: Extract<WorkbenchThreadContextPiece,
 }
 
 export function renderWorkbenchThreadContextPieceMarkdown(piece: WorkbenchThreadContextPiece) {
+  if (piece.kind === "userMessage" || piece.kind === "userSteer") {
+    const subagentMessage = readWorkbenchSubagentMessageInput(piece.input);
+    if (subagentMessage) {
+      return `## Subagent Message From ${subagentMessage.name}\n\n${subagentMessage.message}`;
+    }
+  }
   switch (piece.kind) {
     case "userMessage":
       return `## User Message\n\n${renderUserInputMarkdown(piece.input)}`;
@@ -102,6 +109,12 @@ export function getWorkbenchThreadContextPieceRef(piece: WorkbenchThreadContextP
 }
 
 function getContextPieceKindLabel(piece: WorkbenchThreadContextPiece) {
+  if (
+    (piece.kind === "userMessage" || piece.kind === "userSteer")
+    && readWorkbenchSubagentMessageInput(piece.input)
+  ) {
+    return "subagent message";
+  }
   switch (piece.kind) {
     case "userMessage":
       return "user message";
