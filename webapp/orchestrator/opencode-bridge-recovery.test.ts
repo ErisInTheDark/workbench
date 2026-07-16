@@ -5,11 +5,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { Session } from "@opencode-ai/sdk/v2";
+
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import { createWorkbenchThreadRecoveryId, createWorkbenchThreadRecoveryInput } from "../lib/workbench/thread/thread-recovery-message";
 import {
+  createOpenCodeReasoningConfig,
   createOpenCodeRecoveryStartRequest,
   getOpenCodeRecoveryDisposition,
+  readOpenCodeSessionReasoningEffort,
 } from "./opencode-bridge";
 import type { WorkbenchTurnRecoveryHandoffCandidate } from "./WorkbenchTurnRecoveryHandoffStore";
 
@@ -80,4 +84,11 @@ test("OpenCode recovery prompts only incomplete idle work with preserved setting
     model: "provider/model",
     threadId: "session",
   });
+});
+
+test("OpenCode effort adapter writes the SDK prompt variant and reads the admitted session variant", () => {
+  assert.deepEqual(createOpenCodeReasoningConfig("medium"), { variant: "medium" });
+  assert.deepEqual(createOpenCodeReasoningConfig(null), {});
+  const session = { model: { id: "model", providerID: "provider", variant: "medium" } } as Session;
+  assert.equal(readOpenCodeSessionReasoningEffort(session), "medium");
 });

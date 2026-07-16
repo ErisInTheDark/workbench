@@ -110,15 +110,15 @@ function createPreReloadStoreSurface(store: WorkbenchSubagentStore) {
 
 function profile(): WorkbenchComposerProfile {
   return {
-    agentPath: "agent://lily.md",
-    agentSource: "library",
+    agentPath: null,
+    agentSource: null,
     createdAt: 1,
     description: "Use for difficult implementation work.\nAvoid for quick read-only searches.",
     harness: "codex",
     id: "lily-infinite",
     model: "gpt-5.4",
     name: "Lily INFINITE",
-    reasoningEffort: "high",
+    reasoningEffort: "medium",
     scope: { kind: "global" },
     serviceTier: null,
     updatedAt: 1,
@@ -178,6 +178,11 @@ test("creates with one client and delivers a steer before empty questionnaire re
     "thread/start",
     "turn/start",
   ]);
+  const threadStart = clients[0].calls.find(({ method }) => method === "thread/start");
+  const turnStart = clients[0].calls.find(({ method }) => method === "turn/start");
+  assert.equal(threadStart?.params.effort, "medium");
+  assert.equal(turnStart?.params.effort, "medium");
+  assert.equal((turnStart?.params.collaborationMode as { settings?: { reasoning_effort?: string } })?.settings?.reasoning_effort, "medium");
   const listedAfterCreate = await controller.handleRequest({
     id: 4,
     method: "workbench/subagent/list",

@@ -226,3 +226,13 @@ test("profile resolution preserves the thread payload contract", () => {
   assert.equal("updatedAt" in resolved, true);
   controller.dispose();
 });
+
+test("resolves a hydrated subagent's current profile effort without crossing harnesses", () => {
+  const controller = new WorkbenchComposerProfileController(new MemoryStorage());
+  const profile = controller.createProfile({ ...CODEX_SETTINGS, name: "Medium Lily", reasoningEffort: "medium", scope: { kind: "global" } });
+
+  assert.equal(controller.getProfileReasoningEffort(profile.id, "codex"), "medium");
+  assert.equal(controller.getProfileReasoningEffort(profile.id, "opencode"), null);
+  assert.equal(controller.getProfileReasoningEffort("missing-profile", "codex"), null);
+  controller.dispose();
+});

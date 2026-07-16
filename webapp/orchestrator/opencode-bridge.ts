@@ -13,6 +13,7 @@ import type {
   QuestionRequest,
   QuestionV2Request,
   Session,
+  SessionPromptAsyncData,
   SessionStatus,
   V2Event,
 } from "@opencode-ai/sdk/v2";
@@ -188,6 +189,14 @@ function modelParts(model: string | null | undefined) {
   return providerID && modelID ? { modelID, providerID } : null;
 }
 
+export function createOpenCodeReasoningConfig(reasoningEffort: string | null | undefined): Pick<NonNullable<SessionPromptAsyncData["body"]>, "variant"> {
+  return reasoningEffort ? { variant: reasoningEffort } : {};
+}
+
+export function readOpenCodeSessionReasoningEffort(session: Session) {
+  return session.model?.variant ?? null;
+}
+
 function okResponse(id: JsonRpcResponse["id"], result: unknown): JsonRpcResponse {
   return { id, result };
 }
@@ -285,6 +294,10 @@ function requestInput(params: unknown) {
 
 function requestModel(params: unknown) {
   return asString(asRecord(params)?.model);
+}
+
+function requestReasoningEffort(params: unknown) {
+  return asString(asRecord(params)?.effort) ?? asString(asRecord(params)?.reasoningEffort);
 }
 
 function requestAgent(params: unknown) {
@@ -951,7 +964,7 @@ export class OpenCodeBridge {
     return {
       model: (thread as Thread & { model?: string | null }).model ?? null,
       modelProvider: thread.modelProvider,
-      reasoningEffort: null,
+      reasoningEffort: readOpenCodeSessionReasoningEffort(session),
       serviceTier: null,
       thread,
     };
@@ -960,8 +973,11 @@ export class OpenCodeBridge {
   private async startThread(params: unknown): Promise<OpenCodeSessionResponse> {
     const directory = requestDirectory(params, this.projectRoot);
     const client = await this.ensureClient(directory);
+    const model = modelParts(requestModel(params));
+    const reasoningConfig = createOpenCodeReasoningConfig(requestReasoningEffort(params));
     const session = unwrapResponse(await client.session.create({
       directory,
+      ...(model ? { model: { id: model.modelID, providerID: model.providerID, ...reasoningConfig } } : {}),
       title: DEFAULT_OPENCODE_THREAD_TITLE,
     }));
     this.rememberSessionDirectory(session.id, session.directory);
@@ -973,7 +989,7 @@ export class OpenCodeBridge {
     return {
       model: requestModel(params),
       modelProvider: requestModel(params)?.split("/")[0] ?? "opencode",
-      reasoningEffort: null,
+      reasoningEffort: readOpenCodeSessionReasoningEffort(session),
       serviceTier: null,
       thread,
     };
@@ -1073,6 +1089,7 @@ export class OpenCodeBridge {
 
     const client = await this.ensureClient(directory);
     const model = modelParts(requestModel(params));
+    const reasoningConfig = createOpenCodeReasoningConfig(requestReasoningEffort(params));
     const agent = requestAgent(params);
     const system = await this.buildTurnSystemPrompt(message, threadId, params);
     await this.updateDefaultThreadTitleFromPrompt(client, threadId, directory, prompt);
@@ -1092,6 +1109,7 @@ export class OpenCodeBridge {
       directory,
       ...(clientUserMessageId ? { messageID: clientUserMessageId } : {}),
       ...(model ? { model } : {}),
+      ...reasoningConfig,
       parts: [{
         text: prompt,
         type: "text",

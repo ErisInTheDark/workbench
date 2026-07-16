@@ -804,9 +804,19 @@ export default memo(function ThreadView ({
       ? { kind: "new-thread", projectId }
       : { harness: activeThread.harness, kind: "thread", threadId: activeThread.id }
     : null;
-  const resolvedActiveThread = activeThread && activeProfileSlot
+  const profileResolvedActiveThread = activeThread && activeProfileSlot
     ? composerProfileController.resolveThread(activeProfileSlot, activeThread)
     : activeThread;
+  const activeSubagentSummary = activeThread ? getSubagentSummary(subagents, activeThread.id) : null;
+  const resolvedActiveThread = profileResolvedActiveThread && !profileResolvedActiveThread.reasoningEffort && activeSubagentSummary
+    ? {
+        ...profileResolvedActiveThread,
+        reasoningEffort: composerProfileController.getProfileReasoningEffort(
+          activeSubagentSummary.profileId,
+          profileResolvedActiveThread.harness,
+        ),
+      }
+    : profileResolvedActiveThread;
   void composerProfileSnapshot;
   const activeThreadIdentity = activeThread ? `${activeThread.harness}:${activeThread.id}` : "";
   const activeThreadBrowseResultEntries = activeThread?.browseResultEntries ?? EMPTY_BROWSE_RESULT_ENTRIES;

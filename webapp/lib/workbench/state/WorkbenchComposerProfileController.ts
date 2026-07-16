@@ -95,6 +95,10 @@ export default class WorkbenchComposerProfileController {
   getSnapshot = () => this.snapshot;
   getSelection(slot: WorkbenchComposerProfileSlot) { return this.state.selections[getSlotKey(slot)] ?? EMPTY_CUSTOM_SELECTION; }
   getProfile(profileId: string) { return this.state.profiles.find((profile) => profile.id === profileId) ?? null; }
+  getProfileReasoningEffort(profileId: string, harness: WorkbenchHarness) {
+    const profile = this.getProfile(profileId);
+    return profile?.harness === harness ? profile.reasoningEffort : null;
+  }
   getSelectedProfile(slot: WorkbenchComposerProfileSlot) { const selection = this.getSelection(slot); return selection.kind === "profile" ? this.getProfile(selection.profileId) : null; }
   getVisibleProfiles(projectId: string, harness?: WorkbenchHarness | null) {
     return this.state.profiles.filter((profile) => (!harness || profile.harness === harness) && (profile.scope.kind === "global" || profile.scope.projectId === projectId));

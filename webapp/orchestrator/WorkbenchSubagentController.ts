@@ -286,7 +286,7 @@ export default class WorkbenchSubagentController {
         const start = await this.requestHarness<{ thread: Thread }>(client, profile.harness, {
           method: "thread/start",
           [WORKBENCH_PROMPT_CONTEXT_FIELD]: this.buildPromptContext(caller, profile, "", name, workbenchOrigin),
-          params: { cwd: caller.cwd, ephemeral: false, model: profile.model, serviceTier: profile.serviceTier },
+          params: { cwd: caller.cwd, effort: profile.reasoningEffort, ephemeral: false, model: profile.model, serviceTier: profile.serviceTier },
         });
         childId = start.thread.id;
         const startedAt = Date.now();
