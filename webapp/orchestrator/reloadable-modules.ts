@@ -9,6 +9,7 @@ export type OrchestratorReloadableModules = {
   agentCommandController: Pick<typeof import("./WorkbenchAgentCommandController"), "default">;
   browseSessionCleanupSupervisor: Pick<typeof import("./BrowseSessionCleanupSupervisor"), "default">;
   bridgeRequestController: Pick<typeof import("./WorkbenchBridgeRequestController"), "default">;
+  legacyMigrationSourceController: Pick<typeof import("./WorkbenchLegacyMigrationSourceController"), "default">;
   codexHealthMonitor: Pick<typeof import("./CodexHealthMonitor"), "default">;
   nextDevHealthSupervisor: Pick<typeof import("./NextDevHealthSupervisor"), "default">;
   projectCatalogController: Pick<typeof import("./WorkbenchProjectCatalogController"), "default">;
@@ -51,6 +52,7 @@ const RELOADABLE_MODULE_SPECIFIERS = [
   "./WorkbenchAgentCommandController",
   "./BrowseSessionCleanupSupervisor",
   "./WorkbenchBridgeRequestController",
+  "./WorkbenchLegacyMigrationSourceController",
   "./CodexHealthMonitor",
   "./NextDevHealthSupervisor",
   "./WorkbenchProjectCatalogController",
@@ -96,6 +98,7 @@ export function loadOrchestratorReloadableModules(): OrchestratorReloadableModul
     agentCommandController: requireTyped<OrchestratorReloadableModules["agentCommandController"]>("./WorkbenchAgentCommandController"),
     browseSessionCleanupSupervisor: requireTyped<OrchestratorReloadableModules["browseSessionCleanupSupervisor"]>("./BrowseSessionCleanupSupervisor"),
     bridgeRequestController: requireTyped<OrchestratorReloadableModules["bridgeRequestController"]>("./WorkbenchBridgeRequestController"),
+    legacyMigrationSourceController: requireTyped<OrchestratorReloadableModules["legacyMigrationSourceController"]>("./WorkbenchLegacyMigrationSourceController"),
     codexHealthMonitor: requireTyped<OrchestratorReloadableModules["codexHealthMonitor"]>("./CodexHealthMonitor"),
     nextDevHealthSupervisor: requireTyped<OrchestratorReloadableModules["nextDevHealthSupervisor"]>("./NextDevHealthSupervisor"),
     projectCatalogController: requireTyped<OrchestratorReloadableModules["projectCatalogController"]>("./WorkbenchProjectCatalogController"),

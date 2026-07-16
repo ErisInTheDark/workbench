@@ -5,6 +5,7 @@
  * Helpers:
  * - HTTP reload helpers: parse, proxy, queue, and report orchestrator reload scopes. Keywords: reload, next-dev, bridge.
  * - Server bridge request helpers: route allowlisted stateless Next RPCs over buffered HTTP into live harness bridges. Keywords: bridge, http, rpc, allowlist, server.
+ * - Legacy migration source helper: expose capability-fenced bounded catalog pages and selected snapshots from stable bridges. Keywords: migration, readonly, lazy, bridge.
  * - Browse ingress helpers: route native agent commands directly and stateless Next proxies through the drainable orchestrator-owned Browse controller. Keywords: browse, agent, direct, controller, queue, streaming, reload.
  * - Project catalog and snapshot HTTP helpers: route stateless Next proxies through orchestrator-owned structured discovery and bounded tree caches. Keywords: project, catalog, tree, snapshot, cache, watcher, reload.
  * - Child process helpers: start, restart, and schedule managed process lifecycles. Keywords: process, restart, child.
@@ -80,6 +81,7 @@ const ORCHESTRATOR_BROWSE_PATH = "/orchestrator/browse";
 const ORCHESTRATOR_BROWSE_SESSIONS_PATH = "/orchestrator/browse/sessions";
 const ORCHESTRATOR_AGENT_COMMAND_PATH = "/orchestrator/agent-command";
 const ORCHESTRATOR_BRIDGE_REQUEST_PATH = "/orchestrator/bridge-request";
+const ORCHESTRATOR_LEGACY_MIGRATION_SOURCE_PATH = "/orchestrator/legacy-migration-source";
 const ORCHESTRATOR_PROJECTS_PATH = "/orchestrator/projects";
 const ORCHESTRATOR_TREE_PATH = "/orchestrator/tree";
 const CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS = 5000;
@@ -147,6 +149,7 @@ let lastReloadResponse: OrchestratorReloadResponse = {
 let reloadableModules = loadOrchestratorReloadableModules();
 let workbenchAgentCommandController = createAgentCommandController();
 let bridgeRequestController = createBridgeRequestController();
+let legacyMigrationSourceController = createLegacyMigrationSourceController();
 let shuttingDown = false;
 let codexBridge: CodexStdioBridge;
 let opencodeBridge: OpenCodeBridge;
@@ -402,6 +405,7 @@ function reloadOrchestratorLogic() {
   reloadableModules = reloadOrchestratorReloadableModules();
   workbenchAgentCommandController = createAgentCommandController();
   bridgeRequestController = createBridgeRequestController();
+  legacyMigrationSourceController = createLegacyMigrationSourceController();
   browseSessionCleanupSupervisor = createBrowseSessionCleanupSupervisor();
   nextDevHealthSupervisor = createNextDevHealthSupervisor();
   codexHealthMonitor = createCodexHealthMonitor();
@@ -591,6 +595,21 @@ function createBridgeRequestController() {
   const Controller = reloadableModules.bridgeRequestController.default;
   return new Controller({
     requestHarness: requestLiveHarness,
+  });
+}
+
+function createLegacyMigrationSourceController() {
+  const Controller = reloadableModules.legacyMigrationSourceController.default;
+  const capability = readNonEmptyEnv(process.env.WORKBENCH_LEGACY_MIGRATION_SOURCE_CAPABILITY);
+  const allowedProjectIds = new Set((readNonEmptyEnv(process.env.WORKBENCH_LEGACY_MIGRATION_PROJECT_IDS) ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean));
+  return new Controller({
+    allowedProjectIds,
+    capability,
+    requestHarness: requestLiveHarness,
+    resolveProjectFromCwd: async (cwd) => await projectCatalogController.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Legacy migration source" }),
   });
 }
 
@@ -1355,6 +1374,12 @@ function startBridgeServer() {
     if (requestPath === ORCHESTRATOR_BRIDGE_REQUEST_PATH && request.method === "POST") {
       void bridgeRequestController.handleHttpRequest(request, response).catch((error) => {
         if (!response.headersSent) sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Bridge request failed." });
+      });
+      return;
+    }
+    if (requestPath === ORCHESTRATOR_LEGACY_MIGRATION_SOURCE_PATH) {
+      void legacyMigrationSourceController.handleHttpRequest(request, response).catch((error) => {
+        if (!response.headersSent) sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Legacy migration source failed." });
       });
       return;
     }
