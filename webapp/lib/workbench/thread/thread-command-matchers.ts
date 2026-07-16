@@ -210,6 +210,34 @@ export type {
 
 export type ThreadCommandExecutionOutcome = "completed" | "declined" | "failed" | "inProgress" | "timedOut";
 
+type MatchedCommandDisplay = NonNullable<ReturnType<typeof runThreadCommandMatchers>>;
+
+function cwdName(cwd: string) {
+  const parts = cwd.replace(/[\\/]+$/u, "").split(/[\\/]/u);
+  return parts.at(-1) || cwd;
+}
+
+function prefixWorkbenchCommandDisplay(
+  display: MatchedCommandDisplay,
+  context: ParsedCommandDisplayContext,
+) {
+  if (!/^wb(?:\.cmd)?(?:\s|$)/iu.test(context.unwrappedCommand.trim()) || display.omitFromDisplay) {
+    return display;
+  }
+  const prefix = CommandMatcher.Text(`${cwdName(context.cwd)}: `);
+  const summaryParts = [prefix, ...display.summaryParts];
+  const ongoingSummaryParts = display.ongoingSummaryParts.length
+    ? [prefix, ...display.ongoingSummaryParts]
+    : [];
+  return {
+    ...display,
+    ongoingSummaryParts,
+    ongoingSummaryText: summarizeDisplayParts(ongoingSummaryParts),
+    summaryParts,
+    summaryText: summarizeDisplayParts(summaryParts),
+  };
+}
+
 export function getThreadCommandDisplay({
   command,
   commandActions,
@@ -245,8 +273,9 @@ export function getThreadCommandDisplay({
   });
 
   if (matchedDisplay) {
+    const prefixedDisplay = prefixWorkbenchCommandDisplay(matchedDisplay, context);
     return {
-      ...matchedDisplay,
+      ...prefixedDisplay,
       cwdDisplay: context.cwdDisplay,
       fullCommand: command,
       shell: context.shell,

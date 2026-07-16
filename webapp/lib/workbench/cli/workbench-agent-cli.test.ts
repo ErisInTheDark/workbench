@@ -573,7 +573,7 @@ test("generates executable POSIX and working Windows shims", async (context) => 
   assert.deepEqual(JSON.parse(multilinePost?.body ?? "{}"), {
     action: "create",
     body: multilineBody,
-    cwd: temporaryDirectoryPath,
+    cwd: temporaryDirectoryPath.replace(/\\/gu, "/"),
     parentId: "post-multiline",
     prompt: multilinePrompt,
   });
@@ -592,10 +592,56 @@ test("generates executable POSIX and working Windows shims", async (context) => 
   assert.deepEqual(JSON.parse(reloadPost?.body ?? "{}"), { scopes: ["codex-bridge", "next-dev"] });
 });
 
+test("redirects a PATH-resolved wb command to the Workbench install in cwd", async () => {
+  const cwdRequests: string[] = [];
+  const cwdServer = http.createServer((request, response) => {
+    let requestBody = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => { requestBody += chunk; });
+    request.on("end", () => {
+      cwdRequests.push(requestBody);
+      response.writeHead(200, { "Content-Type": "text/plain" });
+      response.end("cwd-local\n");
+    });
+  });
+  await new Promise<void>((resolve) => cwdServer.listen(0, "127.0.0.1", resolve));
+  try {
+    const cwdAddress = cwdServer.address();
+    assert(cwdAddress && typeof cwdAddress === "object");
+    const workbenchRoot = path.join(temporaryDirectoryPath, "cwd-workbench");
+    const cwdRuntimePath = path.join(workbenchRoot, "webapp", "node_modules", ".bin");
+    const pathRuntimePath = path.join(temporaryDirectoryPath, "path-workbench-bin");
+    const cwdEnv = { ...process.env };
+    await new WorkbenchAgentCliEnvironment({
+      origin: `http://127.0.0.1:${cwdAddress.port}`,
+      runtimeDirectoryPath: cwdRuntimePath,
+      shellSourcePath,
+    }).install(cwdEnv);
+    const pathEnv = { ...process.env };
+    const pathInstall = await new WorkbenchAgentCliEnvironment({
+      origin,
+      runtimeDirectoryPath: pathRuntimePath,
+      shellSourcePath,
+    }).install(pathEnv);
+
+    const result = await execFileAsync("bash", [pathInstall.posixShimPath, "subagent", "list"], {
+      cwd: workbenchRoot,
+      env: { ...process.env, WORKBENCH_ORIGIN: origin },
+    });
+
+    assert.equal(result.stdout, "cwd-local\n");
+    assert.equal(cwdRequests.length, 1);
+    assert.match(cwdRequests[0], /(?:^|&)cwd=.*cwd-workbench(?:&|$)/u);
+  } finally {
+    await new Promise<void>((resolve, reject) => cwdServer.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 test("fails before transport when the origin is missing or non-loopback", async () => {
   for (const unsafeOrigin of ["", "https://example.com", "http://example.com"]) {
     await assert.rejects(
       execFileAsync("bash", [shellSourcePath, "thread", "context", "--thread", "unsafe"], {
+        cwd: temporaryDirectoryPath,
         env: { ...process.env, WORKBENCH_ORIGIN: unsafeOrigin },
       }),
       (error: NodeJS.ErrnoException & { stderr?: string }) => {
