@@ -42,6 +42,7 @@ import ReloadableWorkbenchSubagentController, {
   type ReloadableWorkbenchSubagentControllerState,
 } from "./ReloadableWorkbenchSubagentController";
 import { readWorkbenchPromptContext, WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
+import { resolveProjectFromActiveCatalog } from "./WorkbenchProjectCatalogController";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 
@@ -1016,7 +1017,12 @@ export default class CodexStdioBridge {
     this.requestIdAllocator = initialState?.requestIdAllocator ?? { next: 1 };
     this.upstreamInitialized = initialState?.upstreamInitialized ?? false;
     this.subagentController = new ReloadableWorkbenchSubagentController({
-      createController: () => new WorkbenchSubagentController({ bridgeUrl, storageRoot, subagentStore }),
+      createController: () => new WorkbenchSubagentController({
+        bridgeUrl,
+        resolveProjectFromCwd: resolveProjectFromActiveCatalog,
+        storageRoot,
+        subagentStore,
+      }),
       initialState: initialState?.subagentControllerState,
       legacyController: initialState?.subagentController,
     });

@@ -40,6 +40,7 @@ import {
     formatThreadStatus,
     getCodexThreadCwdFilterPathsForRoots,
     isProjectCodexThread,
+    isProjectCodexThreadAtExpectedCwd,
     toThreadPayload,
     toThreadSummary,
 } from "../codex/thread-adapter";
@@ -2924,6 +2925,7 @@ function WorkbenchThreadClient(
     } = {},
   ) {
     const hydration = options.hydration ?? { mode: "latest" as const };
+    const requestedCwd = options.cwd?.trim() || state.projectRootPath || null;
     try {
       const selectedAgentPath = state.currentThread?.id === threadId
         ? state.currentThread.agentPath
@@ -2944,6 +2946,7 @@ function WorkbenchThreadClient(
           resumedThread = await sendBridgeRequest<ThreadResumeResponse>(harness, {
             method: "thread/resume",
             params: {
+              ...(requestedCwd ? { cwd: requestedCwd } : {}),
               ...(hasServiceTierPreference ? { serviceTier: selectedServiceTier } : {}),
               threadId,
             } satisfies ThreadResumeParams,
@@ -2973,7 +2976,7 @@ function WorkbenchThreadClient(
             includeTurns: true,
             ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
             ...(state.projectId && harness === "copilot" ? { projectId: state.projectId } : {}),
-            ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
+            ...(requestedCwd && harness !== "codex" ? { cwd: requestedCwd } : {}),
             ...(workbenchOrigin && harness !== "codex" ? { workbenchOrigin } : {}),
             threadId,
           },
@@ -2981,7 +2984,7 @@ function WorkbenchThreadClient(
         });
 
       const projectRootPaths = getProjectRootPaths(state);
-      if (projectRootPaths.length && !isProjectCodexThread(response.thread, projectRootPaths)) {
+      if (projectRootPaths.length && !isProjectCodexThreadAtExpectedCwd(response.thread, projectRootPaths, options.cwd)) {
         const message = `That ${harness} thread doesn't belong to this project.`;
         if (!options.suppressStatusMessage) {
           emitStatusMessage(message);
@@ -3192,18 +3195,16 @@ function WorkbenchThreadClient(
         if (refreshGeneration !== projectContextGeneration) {
           return;
         }
-        if ("error" in subagentResult) {
-          const message = subagentResult.error instanceof Error
-            ? subagentResult.error.message
-            : "Unable to load Workbench subagent metadata.";
-          state.threadsError = message;
-          state.hasLoadedThreads = true;
-          return;
-        }
-        const refreshedSubagents = subagentResult.summaries;
-
         const threads: ThreadSummary[] = [];
         const errors: string[] = [];
+        const refreshedSubagents = "error" in subagentResult
+          ? state.subagents
+          : subagentResult.summaries;
+        if ("error" in subagentResult) {
+          errors.push(subagentResult.error instanceof Error
+            ? subagentResult.error.message
+            : "Unable to load Workbench subagent metadata.");
+        }
 
         for (const result of results) {
           if (result.status === "fulfilled") {

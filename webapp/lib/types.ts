@@ -684,6 +684,7 @@ export type WorkbenchThreadHydrationRequest =
   | { mode: "legacyFull" };
 
 export interface WorkbenchReadThreadOptions {
+  cwd?: string;
   hydration?: WorkbenchThreadHydrationRequest;
 }
 

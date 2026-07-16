@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkbenchProjectCatalogControllerOptions: injected project discovery, CWD resolution, watcher, clock, and TTL controls. Keywords: project, catalog, cache, watcher, test.
+ * - resolveProjectFromActiveCatalog: resolve a validated CWD through the current reloadable catalog owner. Keywords: project, catalog, cwd, reload.
  * - default WorkbenchProjectCatalogController: own the structured project catalog, serialized HTTP payload, coalesced refresh, CWD resolution, and invalidation lifecycle. Keywords: project, catalog, cwd, cache, orchestrator.
  */
 import fs from "node:fs";
@@ -33,6 +34,17 @@ type ResolveProjectFromCatalog = (
   cwd: string | null | undefined,
   options?: { endpointName?: string },
 ) => Promise<AgentEndpointProjectResolution>;
+
+let activeProjectCatalogController: WorkbenchProjectCatalogController | null = null;
+
+export async function resolveProjectFromActiveCatalog(
+  cwd: string | null | undefined,
+  options: { endpointName?: string } = {},
+) {
+  const controller = activeProjectCatalogController;
+  if (!controller) throw new Error("Project catalog controller is unavailable.");
+  return await controller.resolveAgentEndpointProjectFromCwd(cwd, options);
+}
 
 export interface WorkbenchProjectCatalogControllerOptions {
   cacheTtlMs?: number;
@@ -122,11 +134,13 @@ export default class WorkbenchProjectCatalogController {
     this.projectsRootPath = projectsRootPath;
     this.resolveProjectFromCatalog = resolveProjectFromCatalog;
     this.projectsWatcher = this.watchProjects();
+    activeProjectCatalogController = this;
   }
 
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    if (activeProjectCatalogController === this) activeProjectCatalogController = null;
     this.projectsWatcher?.close();
     this.projectsWatcher = null;
     this.catalog = null;

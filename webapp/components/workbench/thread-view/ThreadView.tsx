@@ -952,7 +952,11 @@ export default memo(function ThreadView ({
     ));
 
     try {
-      const payload = await onReadThread(threadId, harness, { hydration: { mode: "latest" } });
+      const subagentCwd = getSubagentSummary(subagents, threadId)?.cwd.trim();
+      const payload = await onReadThread(threadId, harness, {
+        ...(subagentCwd ? { cwd: subagentCwd } : {}),
+        hydration: { mode: "latest" },
+      });
       if (!payload) {
         return null;
       }
@@ -1000,7 +1004,7 @@ export default memo(function ThreadView ({
         return next;
       });
     }
-  }, [onReadThread, projectId, thread.harness, thread.id]);
+  }, [onReadThread, projectId, subagents, thread.harness, thread.id]);
 
   const loadNextSubagentPage = useCallback(async () => {
     const cursor = nextSubagentCursor;
@@ -1081,7 +1085,9 @@ export default memo(function ThreadView ({
     ));
 
     try {
+      const subagentCwd = getSubagentSummary(subagents, targetThreadId)?.cwd.trim();
       const payload = await onReadThread(targetThreadId, targetHarness, {
+        ...(subagentCwd ? { cwd: subagentCwd } : {}),
         hydration: {
           beforeTurnId: firstVisibleLoadedEntry.turnId,
           mode: "previous",
@@ -1116,7 +1122,7 @@ export default memo(function ThreadView ({
         return next;
       });
     }
-  }, [activeThread, firstVisibleLoadedEntry, loadingPreviousTurnKeys, onReadThread, previousTurnLoadKey, scrollAnchorController, thread.id]);
+  }, [activeThread, firstVisibleLoadedEntry, loadingPreviousTurnKeys, onReadThread, previousTurnLoadKey, scrollAnchorController, subagents, thread.id]);
 
   const requestPreviousTurnIfAtTop = useCallback(() => {
     if (!canLoadPreviousTurn || !previousTurnLoadKey || loadingPreviousTurnKeys[previousTurnLoadKey]) {

@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - WorkbenchSubagentControllerOptions: injected bridge, durable store, harness client, and validated project resolver dependencies. Keywords: orchestrator, subagent, project, test.
  * - WorkbenchSubagentControllerReloadState: active-wait state preserved across Codex bridge reloads. Keywords: subagent, reload, waiter, lifecycle.
  * - default WorkbenchSubagentController: own durable parent-child metadata, authorization, cross-harness lifecycle, and wait cancellation. Keywords: orchestrator, subagent, controller, ownership, wait.
  */
@@ -61,6 +62,14 @@ type WorkbenchSubagentControllerStore = Pick<
   "getOwned" | "getOwnedMany" | "list" | "markActivity" | "remove" | "replace" | "reserve"
 >;
 
+export interface WorkbenchSubagentControllerOptions {
+  bridgeUrl: string;
+  createHarnessClient?: () => WorkbenchSubagentHarnessClient;
+  resolveProjectFromCwd?: typeof resolveAgentEndpointProjectFromCwd;
+  storageRoot: string;
+  subagentStore?: WorkbenchSubagentControllerStore;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -111,23 +120,21 @@ export default class WorkbenchSubagentController {
   private createQueue: Promise<void> = Promise.resolve();
   private readonly createHarnessClient: () => WorkbenchSubagentHarnessClient;
   private readonly profileStore: WorkbenchComposerProfileStore;
+  private readonly resolveProjectFromCwd: typeof resolveAgentEndpointProjectFromCwd;
   private readonly subagentStore: WorkbenchSubagentControllerStore;
   private readonly waiters = new Map<string, AbortController>();
 
   constructor({
     bridgeUrl,
     createHarnessClient = () => new CodexAppServerClient(),
+    resolveProjectFromCwd = resolveAgentEndpointProjectFromCwd,
     storageRoot,
     subagentStore = new WorkbenchSubagentStore(storageRoot),
-  }: {
-    bridgeUrl: string;
-    createHarnessClient?: () => WorkbenchSubagentHarnessClient;
-    storageRoot: string;
-    subagentStore?: WorkbenchSubagentControllerStore;
-  }) {
+  }: WorkbenchSubagentControllerOptions) {
     this.bridgeUrl = bridgeUrl;
     this.createHarnessClient = createHarnessClient;
     this.profileStore = new WorkbenchComposerProfileStore(storageRoot);
+    this.resolveProjectFromCwd = resolveProjectFromCwd;
     this.subagentStore = subagentStore;
   }
 
@@ -191,7 +198,7 @@ export default class WorkbenchSubagentController {
     for (const harness of getWorkbenchThreadHarnessCandidates(threadId, knownHarness)) {
       try {
         const thread = await this.readThread(client, harness, threadId, cwd);
-        const threadProject = await resolveAgentEndpointProjectFromCwd(thread.cwd, { endpointName: label });
+        const threadProject = await this.resolveProjectFromCwd(thread.cwd, { endpointName: label });
         if (threadProject.project.id === project.id) return { harness, thread };
       } catch {
         // Try the next locally ordered provider candidate.
@@ -213,7 +220,7 @@ export default class WorkbenchSubagentController {
   ) {
     const callerThreadId = requiredString(params, "callerThreadId");
     const cwd = requiredString(params, "cwd");
-    const resolvedProject = requestedProject ?? await resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
+    const resolvedProject = requestedProject ?? await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
     const caller = await this.resolveThreadHarness(
       client,
       callerThreadId,
@@ -227,7 +234,7 @@ export default class WorkbenchSubagentController {
 
   private async list(params: Record<string, unknown>) {
     const cwd = requiredString(params, "cwd");
-    const project = await resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench subagent list" });
+    const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent list" });
     const parentThreadId = typeof params.parentThreadId === "string" ? params.parentThreadId.trim() : "";
     const cursor = typeof params.cursor === "string" ? params.cursor.trim() : null;
     const limit = typeof params.limit === "number" ? params.limit : null;
@@ -236,7 +243,7 @@ export default class WorkbenchSubagentController {
 
   private async profiles(params: Record<string, unknown>) {
     const cwd = requiredString(params, "cwd");
-    const project = await resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench subagent profiles" });
+    const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent profiles" });
     const profiles = (await this.profileStore.read()).profiles.filter((profile) => profile.scope.kind === "global" || profile.scope.projectId === project.project.id);
     return { profiles };
   }
@@ -315,7 +322,7 @@ export default class WorkbenchSubagentController {
   private async ownedRecord(params: Record<string, unknown>) {
     const callerThreadId = requiredString(params, "callerThreadId");
     const cwd = requiredString(params, "cwd");
-    const project = await resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
+    const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
     const threadId = requiredString(params, "threadId");
     const record = await this.subagentStore.getOwned(callerThreadId, project.project.id, threadId);
     if (!record) throw new Error("That subagent is not owned by the current thread.");
@@ -325,7 +332,7 @@ export default class WorkbenchSubagentController {
   private async ownedRecords(params: Record<string, unknown>) {
     const callerThreadId = requiredString(params, "callerThreadId");
     const cwd = requiredString(params, "cwd");
-    const project = await resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
+    const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
     const threadIds = requiredThreadIds(params);
     const records = await this.subagentStore.getOwnedMany(callerThreadId, project.project.id, threadIds);
     if (!records) {
@@ -433,7 +440,7 @@ export default class WorkbenchSubagentController {
   private async messageParent(client: WorkbenchSubagentHarnessClient, params: Record<string, unknown>) {
     const callerThreadId = requiredString(params, "callerThreadId");
     const cwd = requiredString(params, "cwd");
-    const requestedProject = await resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
+    const requestedProject = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
     const relationships = await this.subagentStore.list({ projectId: requestedProject.project.id });
     const relationship = relationships.subagents.find(({ threadId }) => threadId === callerThreadId) ?? null;
     if (!relationship) {

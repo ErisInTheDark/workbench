@@ -5,6 +5,7 @@
  * - getCodexThreadCwdFilterPaths/getCodexThreadCwdFilterPathsForRoots: build exact-match cwd filter variants for Codex app-server thread listing. Keywords: thread, cwd, filter, windows, workspace.
  * - isCodexThreadWithinRoot/isCodexThreadAtRoot: browser-safe absolute path checks for project thread filtering. Keywords: cwd, root, filter.
  * - isProjectCodexThread: test whether a generated Codex thread belongs to the current project root. Keywords: thread, cwd, project.
+ * - isProjectCodexThreadAtExpectedCwd: validate a relationship-owned descendant cwd without broadening ordinary project thread membership. Keywords: thread, cwd, subagent, worktree.
  * - toThreadSummary: normalize generated Codex threads for the explorer sidebar. Keywords: summary, thread list.
  * - toThreadPayload: normalize generated Codex threads for the thread detail view. Keywords: payload, turns, thread read.
  */
@@ -125,6 +126,20 @@ export function isCodexThreadAtRoot(candidatePath: string, rootPath: string) {
 export function isProjectCodexThread(thread: Pick<Thread, "cwd">, rootPath: string | string[]) {
   const rootPaths = Array.isArray(rootPath) ? rootPath : [rootPath];
   return rootPaths.some((candidateRootPath) => isCodexThreadAtRoot(thread.cwd, candidateRootPath));
+}
+
+export function isProjectCodexThreadAtExpectedCwd(
+  thread: Pick<Thread, "cwd">,
+  rootPath: string | string[],
+  expectedCwd: string | null | undefined,
+) {
+  if (!expectedCwd?.trim()) {
+    return isProjectCodexThread(thread, rootPath);
+  }
+
+  const rootPaths = Array.isArray(rootPath) ? rootPath : [rootPath];
+  return rootPaths.some((candidateRootPath) => isCodexThreadWithinRoot(expectedCwd, candidateRootPath))
+    && isCodexThreadAtRoot(thread.cwd, expectedCwd);
 }
 
 export function toThreadSummary(thread: Thread, harness: WorkbenchHarness = "codex"): ThreadSummary {

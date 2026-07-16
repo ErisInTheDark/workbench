@@ -125,6 +125,27 @@ function profile(): WorkbenchComposerProfile {
   };
 }
 
+function createProjectResolver(expectedCwd: string) {
+  const cwd = path.resolve(expectedCwd);
+  const root = {
+    id: "workbench",
+    name: "workbench",
+    root: cwd,
+    rootPath: cwd,
+  };
+  const project = {
+    id: "web/workbench",
+    kind: "git" as const,
+    root: cwd,
+    rootPath: cwd,
+    roots: [root],
+  };
+  return async (requestedCwd: string | null | undefined) => {
+    assert.equal(path.resolve(requestedCwd ?? ""), cwd);
+    return { cwd, project, root };
+  };
+}
+
 test("creates with one client and delivers a steer before empty questionnaire resolution", async (context) => {
   const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-controller-"));
   context.after(async () => await rm(storageRoot, { force: true, recursive: true }));
@@ -137,6 +158,7 @@ test("creates with one client and delivers a steer before empty questionnaire re
       clients.push(client);
       return client;
     },
+    resolveProjectFromCwd: createProjectResolver(cwd),
     storageRoot,
   });
 
@@ -211,6 +233,7 @@ test("starts an idle direct parent through the pre-reload store surface", async 
       clients.push(client);
       return client;
     },
+    resolveProjectFromCwd: createProjectResolver(cwd),
     storageRoot,
     subagentStore: createPreReloadStoreSurface(subagentStore),
   });
@@ -253,6 +276,7 @@ test("steers an active direct parent and rejects callers without a relationship"
       clients.push(client);
       return client;
     },
+    resolveProjectFromCwd: createProjectResolver(cwd),
     storageRoot,
   });
 
@@ -292,6 +316,7 @@ test("tracks durable activity through create, message, and stop", async (context
   const controller = new WorkbenchSubagentController({
     bridgeUrl: "ws://unused",
     createHarnessClient: () => new FakeHarnessClient(cwd),
+    resolveProjectFromCwd: createProjectResolver(cwd),
     storageRoot,
   });
 
@@ -334,6 +359,7 @@ test("keeps a created child durable when its first turn fails to start", async (
   const controller = new WorkbenchSubagentController({
     bridgeUrl: "ws://unused",
     createHarnessClient: () => new FakeHarnessClient(cwd, true),
+    resolveProjectFromCwd: createProjectResolver(cwd),
     storageRoot,
   });
 
