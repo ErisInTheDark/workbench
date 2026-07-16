@@ -224,6 +224,22 @@ test("all Workbench CLI matcher families show the alternate install cwd name", (
     assert.match(display.summaryText, /^convex-lab: /u, command);
     assert.match(display.ongoingSummaryText, /^convex-lab: /u, command);
   }
+
+  const caseDistinctPosixDisplay = getThreadCommandDisplay({
+    command: "wb subagent list",
+    commandActions: [],
+    cwd: "/workspace/Workbench",
+    projectRootPath: "/workspace/workbench",
+  });
+  assert.match(caseDistinctPosixDisplay.summaryText, /^Workbench: /u);
+
+  const failedDisplay = getThreadCommandOutcomeDisplay(getThreadCommandDisplay({
+    command: "wb subagent list",
+    commandActions: [],
+    cwd: "C:/git/web/workbench/.workbench/worktrees/convex-lab",
+    projectRootPath: PROJECT_ROOT,
+  }), "failed");
+  assert.equal(failedDisplay.summaryText, "convex-lab: Failed listing subagents");
 });
 
 test("command execution outcomes select the explicit ongoing tense", () => {

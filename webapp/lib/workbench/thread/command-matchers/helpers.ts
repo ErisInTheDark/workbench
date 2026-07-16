@@ -9,6 +9,7 @@
  * - buildReadCommandSummary: build paired completed and ongoing structured summaries for file and skill reads. Keywords: thread, command, read, tense.
  * - getCommandPathKnownSkill: resolve a command path to a known Workbench Skill when it targets SKILL.md. Keywords: command, skill, path.
  * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text. Keywords: path, command, relative, display.
+ * - pathsEqual: compare normalized Workbench paths with platform-appropriate case semantics. Keywords: path, equality, windows, posix.
  * - summarizeDisplayParts: flatten structured command-summary parts into plain text. Keywords: thread, command, summary, text.
  */
 
@@ -256,7 +257,7 @@ function isAbsoluteLocalPath(value: string) {
   return /^[A-Za-z]:\//.test(value) || value.startsWith("/");
 }
 
-function pathsEqual(left: string, right: string) {
+export function pathsEqual(left: string, right: string) {
   const normalizedLeft = normalizeWorkbenchPath(left);
   const normalizedRight = normalizeWorkbenchPath(right);
 

@@ -617,6 +617,11 @@ test("redirects a PATH-resolved wb command to the Workbench install in cwd", asy
       runtimeDirectoryPath: cwdRuntimePath,
       shellSourcePath,
     }).install(cwdEnv);
+    await new WorkbenchAgentCliEnvironment({
+      origin: `http://127.0.0.1:${cwdAddress.port}`,
+      runtimeDirectoryPath: path.join(workbenchRoot, "node_modules", ".bin"),
+      shellSourcePath,
+    }).install({ ...process.env });
     const pathEnv = { ...process.env };
     const pathInstall = await new WorkbenchAgentCliEnvironment({
       origin,
@@ -627,6 +632,7 @@ test("redirects a PATH-resolved wb command to the Workbench install in cwd", asy
     const result = await execFileAsync("bash", [pathInstall.posixShimPath, "subagent", "list"], {
       cwd: workbenchRoot,
       env: { ...process.env, WORKBENCH_ORIGIN: origin },
+      timeout: 2_000,
     });
 
     assert.equal(result.stdout, "cwd-local\n");

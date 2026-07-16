@@ -44,6 +44,7 @@ import {
     createEmptyCommandSummaryStats,
     formatThreadCommandPath,
     mergeCommandSummaryStats,
+    pathsEqual,
     summarizeDisplayParts,
 } from "./command-matchers/helpers";
 import { POSIX_COMMAND_MATCHERS } from "./command-matchers/posix";
@@ -217,16 +218,12 @@ function cwdName(cwd: string) {
   return parts.at(-1) || cwd;
 }
 
-function normalizedCwd(cwd: string) {
-  return cwd.replace(/\\/gu, "/").replace(/\/+$/u, "").toLowerCase();
-}
-
 function prefixWorkbenchCommandDisplay(
   display: MatchedCommandDisplay,
   context: ParsedCommandDisplayContext,
 ) {
   const isPrimaryCwd = context.projectRootPath
-    ? normalizedCwd(context.cwd) === normalizedCwd(context.projectRootPath)
+    ? pathsEqual(context.cwd, context.projectRootPath)
     : false;
   if (isPrimaryCwd || !/^wb(?:\.cmd)?(?:\s|$)/iu.test(context.unwrappedCommand.trim()) || display.omitFromDisplay) {
     return display;
@@ -533,11 +530,16 @@ export function getThreadCommandOutcomeDisplay(
 ): ThreadCommandSummaryDisplay {
   if (outcome === "completed") return display;
   const ongoingSummaryParts = display.ongoingSummaryParts;
+  const leadingContextParts = ongoingSummaryParts[0]?.type === "text" && /:\s$/u.test(ongoingSummaryParts[0].text)
+    ? ongoingSummaryParts.slice(0, 1)
+    : [];
+  const commandSummaryParts = leadingContextParts.length ? ongoingSummaryParts.slice(1) : ongoingSummaryParts;
   const summaryParts = outcome === "inProgress"
     ? ongoingSummaryParts
     : [
+      ...leadingContextParts,
       CommandMatcher.Text(outcome === "timedOut" ? "Timed out " : outcome === "failed" ? "Failed " : "Declined "),
-      ...lowercaseFirstSummaryPart(ongoingSummaryParts),
+      ...lowercaseFirstSummaryPart(commandSummaryParts),
     ];
   return {
     ...display,
