@@ -591,6 +591,13 @@ function createProjectCatalogController() {
   return new Controller();
 }
 
+function resolveProjectFromCurrentCatalog(
+  cwd: string | null | undefined,
+  options: { endpointName?: string } = {},
+) {
+  return projectCatalogController.resolveAgentEndpointProjectFromCwd(cwd, options);
+}
+
 function createBridgeRequestController() {
   const Controller = reloadableModules.bridgeRequestController.default;
   return new Controller({
@@ -814,6 +821,7 @@ function createCodexBridge() {
     onNotification: (notification) => {
       broadcastToClients("codex", notification);
     },
+    resolveProjectFromCwd: resolveProjectFromCurrentCatalog,
     sendToClient: (client, message) => {
       sendJsonToClient(client, message);
     },
@@ -866,6 +874,7 @@ async function reloadCodexBridge() {
         onNotification: (notification) => {
           broadcastToClients("codex", notification);
         },
+        resolveProjectFromCwd: resolveProjectFromCurrentCatalog,
         sendToClient: (client, message) => {
           sendJsonToClient(client, message);
         },
@@ -917,6 +926,7 @@ async function recoverCodexBridge(reason: string) {
       onNotification: (notification) => {
         broadcastToClients("codex", notification);
       },
+      resolveProjectFromCwd: resolveProjectFromCurrentCatalog,
       sendToClient: (client, message) => {
         sendJsonToClient(client, message);
       },

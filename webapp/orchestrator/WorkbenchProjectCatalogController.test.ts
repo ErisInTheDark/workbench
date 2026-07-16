@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover structured project catalog caching, coalescing, watcher invalidation, soft TTL refresh, active-owner CWD resolution, retry, and disposal. Keywords: project, catalog, cache, watcher, cwd, lifecycle, test.
+ * - No production exports; Node tests cover structured project catalog caching, coalescing, watcher invalidation, soft TTL refresh, CWD resolution, retry, and disposal. Keywords: project, catalog, cache, watcher, cwd, lifecycle, test.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -8,7 +8,7 @@ import { test } from "node:test";
 import type { ResolvedProject } from "../lib/project";
 import type { WorkbenchProjectOption } from "../lib/types";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
-import WorkbenchProjectCatalogController, { resolveProjectFromActiveCatalog } from "./WorkbenchProjectCatalogController";
+import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 
 class FakeWatcher {
   closed = false;
@@ -157,14 +157,6 @@ test("an unknown CWD forces one refresh and retry", async () => {
   harness.setProjects([createProject("alpha"), createProject("beta")]);
   assert.equal((await harness.controller.resolveAgentEndpointProjectFromCwd("C:/projects/beta/src")).project.id, "beta");
   assert.equal(harness.discoveryReads, 2);
-});
-
-test("routes reloadable consumers through the active catalog owner", async () => {
-  const harness = createHarness();
-  assert.equal((await resolveProjectFromActiveCatalog("C:/projects/alpha/src")).project.id, "alpha");
-  assert.equal(harness.discoveryReads, 1);
-  harness.controller.dispose();
-  await assert.rejects(resolveProjectFromActiveCatalog("C:/projects/alpha/src"), /unavailable/u);
 });
 
 test("disposal closes the watcher and rejects later work", async () => {

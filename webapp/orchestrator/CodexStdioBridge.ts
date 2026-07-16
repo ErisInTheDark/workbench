@@ -42,8 +42,7 @@ import ReloadableWorkbenchSubagentController, {
   type ReloadableWorkbenchSubagentControllerState,
 } from "./ReloadableWorkbenchSubagentController";
 import { readWorkbenchPromptContext, WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
-import { resolveProjectFromActiveCatalog } from "./WorkbenchProjectCatalogController";
-import WorkbenchSubagentController from "./WorkbenchSubagentController";
+import WorkbenchSubagentController, { type WorkbenchSubagentControllerOptions } from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 
 type CodexTranscriptStoreInstance = import("./CodexTranscriptStore").default;
@@ -81,6 +80,7 @@ type CodexStdioBridgeOptions = {
   bridgeUrl: string;
   initialState?: CodexStdioBridgeReloadState;
   onNotification: (notification: JsonRpcNotification) => void;
+  resolveProjectFromCwd: NonNullable<WorkbenchSubagentControllerOptions["resolveProjectFromCwd"]>;
   sendToClient: (client: BridgeClient, message: unknown) => void;
   storageRoot: string;
   subagentStore?: WorkbenchSubagentStore;
@@ -1005,7 +1005,7 @@ export default class CodexStdioBridge {
   private upstreamInitializePromise: Promise<void> | null = null;
   private readonly subagentController: ReloadableWorkbenchSubagentController;
 
-  constructor({ appServer, bridgeUrl, initialState, onNotification, sendToClient, storageRoot, subagentStore = new WorkbenchSubagentStore(storageRoot) }: CodexStdioBridgeOptions) {
+  constructor({ appServer, bridgeUrl, initialState, onNotification, resolveProjectFromCwd, sendToClient, storageRoot, subagentStore = new WorkbenchSubagentStore(storageRoot) }: CodexStdioBridgeOptions) {
     this.appServer = appServer;
     this.bridgeUrl = bridgeUrl;
     this.onNotification = onNotification;
@@ -1019,7 +1019,7 @@ export default class CodexStdioBridge {
     this.subagentController = new ReloadableWorkbenchSubagentController({
       createController: () => new WorkbenchSubagentController({
         bridgeUrl,
-        resolveProjectFromCwd: resolveProjectFromActiveCatalog,
+        resolveProjectFromCwd,
         storageRoot,
         subagentStore,
       }),

@@ -51,6 +51,7 @@ test("health requests use their deadline without waiting behind another internal
     appServer: { send: (message: unknown) => sentRequests.push(message as JsonRpcRequest) } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:4500",
     onNotification: () => undefined,
+    resolveProjectFromCwd: async () => { throw new Error("Project resolution is not expected in this test."); },
     sendToClient: () => undefined,
     storageRoot,
   });
