@@ -120,8 +120,8 @@ test("Workbench subagent commands share one semantic parser", () => {
     projectRootPath: PROJECT_ROOT,
   });
   assert.equal(display.claimedBy, "workbench-cli.subagent");
-  assert.equal(display.summaryText, "workbench: Waited for subagent");
-  assert.equal(display.ongoingSummaryText, "workbench: Waiting for subagent");
+  assert.equal(display.summaryText, "Waited for subagent");
+  assert.equal(display.ongoingSummaryText, "Waiting for subagent");
 
   const multiplexedDisplay = getThreadCommandDisplay({
     command: "wb subagent wait --id child-thread --id other-child",
@@ -130,8 +130,8 @@ test("Workbench subagent commands share one semantic parser", () => {
     projectRootPath: PROJECT_ROOT,
   });
   assert.equal(multiplexedDisplay.claimedBy, "workbench-cli.subagent");
-  assert.equal(multiplexedDisplay.summaryText, "workbench: Waited for 2 subagents");
-  assert.equal(multiplexedDisplay.ongoingSummaryText, "workbench: Waiting for 2 subagents");
+  assert.equal(multiplexedDisplay.summaryText, "Waited for 2 subagents");
+  assert.equal(multiplexedDisplay.ongoingSummaryText, "Waiting for 2 subagents");
 
   const parentMessageDisplay = getThreadCommandDisplay({
     command: 'wb subagent message --parent --message "Progress note"',
@@ -139,8 +139,8 @@ test("Workbench subagent commands share one semantic parser", () => {
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(parentMessageDisplay.summaryText, "workbench: Messaged parent");
-  assert.equal(parentMessageDisplay.ongoingSummaryText, "workbench: Messaging parent");
+  assert.equal(parentMessageDisplay.summaryText, "Messaged parent");
+  assert.equal(parentMessageDisplay.ongoingSummaryText, "Messaging parent");
 
 });
 
@@ -162,8 +162,8 @@ test("Workbench subagent create commands expose metadata through PowerShell wrap
     projectRootPath: PROJECT_ROOT,
   });
   assert.equal(wrappedCreateDisplay.claimedBy, "workbench-cli.subagent");
-  assert.equal(wrappedCreateDisplay.summaryText, "workbench: Created subagent");
-  assert.equal(wrappedCreateDisplay.ongoingSummaryText, "workbench: Creating subagent");
+  assert.equal(wrappedCreateDisplay.summaryText, "Created subagent");
+  assert.equal(wrappedCreateDisplay.ongoingSummaryText, "Creating subagent");
 });
 
 test("Workbench subagent commands prefer clean semantic actions over escaped PowerShell wrappers", () => {
@@ -201,11 +201,11 @@ test("Workbench subagent list gets dedicated metadata labels", () => {
     projectRootPath: PROJECT_ROOT,
   });
   assert.equal(listDisplay.claimedBy, "workbench-cli.subagent");
-  assert.equal(listDisplay.summaryText, "workbench: Listed subagents");
-  assert.equal(listDisplay.ongoingSummaryText, "workbench: Listing subagents");
+  assert.equal(listDisplay.summaryText, "Listed subagents");
+  assert.equal(listDisplay.ongoingSummaryText, "Listing subagents");
 });
 
-test("all Workbench CLI matcher families show the cwd name", () => {
+test("all Workbench CLI matcher families show the alternate install cwd name", () => {
   const commands = [
     "wb orchestrator reload --orchestrator-logic",
     "wb thread recall --thread thread-id",
@@ -268,8 +268,8 @@ test("Workbench Git commands receive bounded selection, commit, and checkpoint s
     projectRootPath: PROJECT_ROOT,
   });
   assert.equal(selection.claimedBy, "workbench-git.selection");
-  assert.equal(selection.summaryText, "workbench: Selected files for commit");
-  assert.equal(selection.ongoingSummaryText, "workbench: Selecting files for commit");
+  assert.equal(selection.summaryText, "Selected files for commit");
+  assert.equal(selection.ongoingSummaryText, "Selecting files for commit");
 
   const commit = getThreadCommandDisplay({
     command: 'wb git commit --thread thread-1 --message "A bounded commit"',
@@ -278,8 +278,8 @@ test("Workbench Git commands receive bounded selection, commit, and checkpoint s
     projectRootPath: PROJECT_ROOT,
   });
   assert.equal(commit.claimedBy, "workbench-git.commit");
-  assert.equal(commit.summaryText, "workbench: Committed selected files");
-  assert.equal(commit.ongoingSummaryText, "workbench: Committing selected files");
+  assert.equal(commit.summaryText, "Committed selected files");
+  assert.equal(commit.ongoingSummaryText, "Committing selected files");
 
   for (const command of [
     "wb git checkpoint diff --thread thread-1 --commit abc",
@@ -292,7 +292,7 @@ test("Workbench Git commands receive bounded selection, commit, and checkpoint s
       projectRootPath: PROJECT_ROOT,
     });
     assert.equal(checkpoint.claimedBy, "git-checkpoint.diff");
-    assert.equal(checkpoint.summaryText, "workbench: Diffed against git checkpoint");
+    assert.equal(checkpoint.summaryText, "Diffed against git checkpoint");
   }
 });
 

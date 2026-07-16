@@ -217,11 +217,18 @@ function cwdName(cwd: string) {
   return parts.at(-1) || cwd;
 }
 
+function normalizedCwd(cwd: string) {
+  return cwd.replace(/\\/gu, "/").replace(/\/+$/u, "").toLowerCase();
+}
+
 function prefixWorkbenchCommandDisplay(
   display: MatchedCommandDisplay,
   context: ParsedCommandDisplayContext,
 ) {
-  if (!/^wb(?:\.cmd)?(?:\s|$)/iu.test(context.unwrappedCommand.trim()) || display.omitFromDisplay) {
+  const isPrimaryCwd = context.projectRootPath
+    ? normalizedCwd(context.cwd) === normalizedCwd(context.projectRootPath)
+    : false;
+  if (isPrimaryCwd || !/^wb(?:\.cmd)?(?:\s|$)/iu.test(context.unwrappedCommand.trim()) || display.omitFromDisplay) {
     return display;
   }
   const prefix = CommandMatcher.Text(`${cwdName(context.cwd)}: `);
