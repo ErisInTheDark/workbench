@@ -4,6 +4,7 @@
  * - default WorkbenchLegacyMigrationSourceController: serve one bounded catalog page or one selected normalized thread snapshot without reading provider homes or Workbench sidecars. Keywords: migration, readonly, lazy, bridge.
  */
 import type http from "node:http";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import type { WorkbenchHarness } from "../lib/types";
@@ -23,6 +24,17 @@ export interface WorkbenchLegacyMigrationSourceControllerOptions {
   capability: string | null;
   requestHarness: LegacyMigrationHarnessRequest;
   resolveProjectFromCwd: (cwd: string) => Promise<LegacyMigrationProjectResolution>;
+}
+
+export function readLegacyMigrationSourceConfig(projectRoot: string) {
+  try {
+    const value = JSON.parse(readFileSync(path.join(projectRoot, ".workbench", "runtime", "legacy-migration-source.json"), "utf8")) as unknown;
+    if (!isRecord(value) || typeof value.capability !== "string" || !value.capability.trim() || !Array.isArray(value.allowedProjectIds) || !value.allowedProjectIds.every((entry) => typeof entry === "string" && entry.trim())) throw new Error("Legacy migration source config is malformed.");
+    return { allowedProjectIds: new Set(value.allowedProjectIds), capability: value.capability };
+  } catch (error) {
+    if (isRecord(error) && error.code === "ENOENT") return { allowedProjectIds: new Set<string>(), capability: null };
+    throw error;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

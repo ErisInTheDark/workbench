@@ -9,7 +9,7 @@ export type OrchestratorReloadableModules = {
   agentCommandController: Pick<typeof import("./WorkbenchAgentCommandController"), "default">;
   browseSessionCleanupSupervisor: Pick<typeof import("./BrowseSessionCleanupSupervisor"), "default">;
   bridgeRequestController: Pick<typeof import("./WorkbenchBridgeRequestController"), "default">;
-  legacyMigrationSourceController: Pick<typeof import("./WorkbenchLegacyMigrationSourceController"), "default">;
+  legacyMigrationSourceController: Pick<typeof import("./WorkbenchLegacyMigrationSourceController"), "default" | "readLegacyMigrationSourceConfig">;
   codexHealthMonitor: Pick<typeof import("./CodexHealthMonitor"), "default">;
   nextDevHealthSupervisor: Pick<typeof import("./NextDevHealthSupervisor"), "default">;
   projectCatalogController: Pick<typeof import("./WorkbenchProjectCatalogController"), "default">;

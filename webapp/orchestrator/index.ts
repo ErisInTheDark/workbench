@@ -599,12 +599,9 @@ function createBridgeRequestController() {
 }
 
 function createLegacyMigrationSourceController() {
-  const Controller = reloadableModules.legacyMigrationSourceController.default;
-  const capability = readNonEmptyEnv(process.env.WORKBENCH_LEGACY_MIGRATION_SOURCE_CAPABILITY);
-  const allowedProjectIds = new Set((readNonEmptyEnv(process.env.WORKBENCH_LEGACY_MIGRATION_PROJECT_IDS) ?? "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean));
+  const module = reloadableModules.legacyMigrationSourceController;
+  const Controller = module.default;
+  const { allowedProjectIds, capability } = module.readLegacyMigrationSourceConfig(PROJECT_ROOT);
   return new Controller({
     allowedProjectIds,
     capability,
