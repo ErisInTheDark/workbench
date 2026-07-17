@@ -3,8 +3,10 @@
  */
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import type http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import test from "node:test";
 
 import WorkbenchLegacyMigrationSourceController, { LegacyMigrationSnapshotError, readLegacyMigrationSourceConfig } from "./WorkbenchLegacyMigrationSourceController";
@@ -56,7 +58,7 @@ test("one explicit selected thread uses one normalized read and no eager catalog
   const result = await source.execute(snapshotContext);
   assert.equal((result as { providerThreadId: string }).providerThreadId, "selected");
   assert.deepEqual(requests.map((request) => request.method), ["thread/read"]);
-  assert.deepEqual(requests[0]?.params, { cwd, includeTurns: true, projectId: "project", threadId: "selected" });
+  assert.deepEqual(requests[0]?.params, { cwd, includeTurns: true, threadId: "selected" });
 });
 
 test("disabled, non-allowlisted, and invalid operations dispatch no provider work", async () => {
@@ -104,7 +106,62 @@ test("admitted unloaded Codex session resumes once then rereads once", async () 
   });
   await source.execute(snapshotContext);
   assert.deepEqual(requests.map((request) => request.method), ["thread/read", "thread/resume", "thread/read"]);
-  assert.deepEqual(requests[1]?.params, { cwd, projectId: "project", threadId: "selected" });
+  assert.deepEqual(requests[0]?.params, { cwd, includeTurns: true, threadId: "selected" });
+  assert.deepEqual(requests[1]?.params, { threadId: "selected" });
+  assert.deepEqual(requests[2]?.params, { cwd, includeTurns: true, threadId: "selected" });
+});
+
+test("resume failure preserves only a bounded safe provider reason without changing retry truth", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const source = new WorkbenchLegacyMigrationSourceController({
+    allowedProjectIds: new Set(["project"]), capability: "enabled",
+    requestHarness: async (_harness, request) => {
+      requests.push(request);
+      return request.method === "thread/read"
+        ? { error: { code: -32600, message: "thread not loaded: selected" }, id: request.id ?? null }
+        : { error: { code: -32602, data: { authorization: "Bearer raw-provider-secret" }, message: `Invalid params at ${cwd}/private.json token=raw-provider-secret ${"x".repeat(300)}` }, id: request.id ?? null };
+    },
+    resolveProjectFromCwd: async () => ({ cwd, project: { id: "project" } }),
+  });
+  await assert.rejects(source.execute(snapshotContext), (error) => {
+    assert.ok(error instanceof LegacyMigrationSnapshotError);
+    assert.equal(error.causeCode, "providerResumeFailed");
+    assert.equal(error.terminal, false);
+    assert.equal(error.context.providerReason?.code, -32602);
+    assert.match(error.context.providerReason?.message ?? "", /Invalid params at \[path\] token=\[redacted\]/u);
+    assert.ok((error.context.providerReason?.message.length ?? 0) <= 240);
+    assert.doesNotMatch(JSON.stringify({ context: error.context, message: error.message }), /raw-provider-secret|authorization|private\.json/u);
+    return true;
+  });
+  assert.deepEqual(requests.map((request) => request.method), ["thread/read", "thread/resume"]);
+  assert.deepEqual(requests[1]?.params, { threadId: "selected" });
+});
+
+test("read failure serializes a sanitized provider code and message", async () => {
+  const source = new WorkbenchLegacyMigrationSourceController({
+    allowedProjectIds: new Set(["project"]), capability: "enabled",
+    requestHarness: async (_harness, request) => ({
+      error: { code: -32001, data: { secret: "not-safe" }, message: `database unavailable at C:\\Users\\private\\state.db api_key=not-safe` },
+      id: request.id ?? null,
+    }),
+    resolveProjectFromCwd: async () => ({ cwd, project: { id: "project" } }),
+  });
+  const request = Readable.from([JSON.stringify(snapshotContext)]) as http.IncomingMessage;
+  request.method = "POST";
+  request.headers = { "x-workbench-migration-capability": "enabled" };
+  let status = 0;
+  let body = "";
+  const response = {
+    end: (value: string) => { body = value; },
+    writeHead: (value: number) => { status = value; },
+  } as unknown as http.ServerResponse;
+  await source.handleHttpRequest(request, response);
+  assert.equal(status, 400);
+  const result = JSON.parse(body) as { cause: string; context: { providerReason: { code: number; message: string } }; error: string };
+  assert.equal(result.cause, "providerReadFailed");
+  assert.deepEqual(result.context.providerReason, { code: -32001, message: "database unavailable at [path] api_key=[redacted]" });
+  assert.match(result.error, /providerReasonCode=-32001 providerReason=database unavailable at \[path\] api_key=\[redacted\]/u);
+  assert.doesNotMatch(body, /not-safe|C:\\Users|state\.db/u);
 });
 
 test("active thread exclusion and single-flight admission happen before extra provider dispatch", async () => {

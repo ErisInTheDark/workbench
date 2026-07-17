@@ -13,6 +13,7 @@ import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_PAGE_SIZE = 100;
+const MAX_PROVIDER_REASON_LENGTH = 240;
 const MAX_TIMEOUT_MS = 30_000;
 const MIN_TIMEOUT_MS = 1_000;
 const CODEX_CURSOR_PREFIX = "legacy-codex:";
@@ -28,11 +29,13 @@ export interface WorkbenchLegacyMigrationSourceControllerOptions {
 }
 
 type SnapshotCause = "identityMismatch" | "providerMissing" | "providerReadFailed" | "providerResumeFailed" | "scopeNotAllowlisted";
-type SnapshotContext = { bindingState: string; correlationId: string; harness: WorkbenchHarness; providerThreadId: string; sourceKind: string; workbenchThreadId: string };
+type SafeProviderReason = { code: number; message: string };
+type SnapshotContext = { bindingState: string; correlationId: string; harness: WorkbenchHarness; providerReason?: SafeProviderReason; providerThreadId: string; sourceKind: string; workbenchThreadId: string };
 
 export class LegacyMigrationSnapshotError extends Error {
   constructor(readonly causeCode: SnapshotCause, readonly context: SnapshotContext, readonly terminal: boolean, options?: ErrorOptions) {
-    super(`Legacy import ${causeCode}: harness=${context.harness} providerThreadId=${context.providerThreadId} workbenchThreadId=${context.workbenchThreadId} bindingState=${context.bindingState} correlationId=${context.correlationId} sourceKind=${context.sourceKind}`, options);
+    const providerReason = context.providerReason ? ` providerReasonCode=${context.providerReason.code} providerReason=${context.providerReason.message}` : "";
+    super(`Legacy import ${causeCode}: harness=${context.harness} providerThreadId=${context.providerThreadId} workbenchThreadId=${context.workbenchThreadId} bindingState=${context.bindingState} correlationId=${context.correlationId} sourceKind=${context.sourceKind}${providerReason}`, options);
     this.name = "LegacyMigrationSnapshotError";
   }
 }
@@ -50,6 +53,26 @@ export function readLegacyMigrationSourceConfig(projectRoot: string) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function sanitizeProviderReason(error: NonNullable<JsonRpcResponse["error"]>, cwd: string): SafeProviderReason {
+  const escapedCwd = cwd.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const message = error.message
+    .replace(new RegExp(`${escapedCwd}(?:[\\\\/][^\\s\"'<>]*)?`, "giu"), "[path]")
+    .replace(/\b[A-Za-z]:[\\/][^\s"'<>]*/gu, "[path]")
+    .replace(/(^|\s)\/(?:Users|home|private|tmp|var|etc|opt|srv|mnt)\/[^\s"'<>]*/giu, "$1[path]")
+    .replace(/\b(Bearer\s+)[^\s,;]+/giu, "$1[redacted]")
+    .replace(/\b(api[_-]?key|authorization|secret|token)(\s*[:=]\s*)[^\s,;]+/giu, "$1$2[redacted]")
+    .replace(/\s+/gu, " ")
+    .trim();
+  return {
+    code: error.code,
+    message: message.length > MAX_PROVIDER_REASON_LENGTH ? `${message.slice(0, MAX_PROVIDER_REASON_LENGTH - 1)}…` : message,
+  };
+}
+
+function withProviderReason(context: SnapshotContext, error: NonNullable<JsonRpcResponse["error"]>, cwd: string): SnapshotContext {
+  return { ...context, providerReason: sanitizeProviderReason(error, cwd) };
 }
 
 function requireString(value: unknown, label: string) {
@@ -206,21 +229,21 @@ export default class WorkbenchLegacyMigrationSourceController {
     const read = async (suffix: string) => await raceDeadline(this.options.requestHarness(harness, {
       id: `legacy-migration:${context.correlationId}:${suffix}`,
       method: "thread/read",
-      params: { cwd, includeTurns: true, projectId, threadId: context.providerThreadId },
+      params: { cwd, includeTurns: true, ...(harness === "codex" ? {} : { projectId }), threadId: context.providerThreadId },
     }), timeoutMs, signal);
     let response = await read("thread-read");
     if (response.error?.message === `thread not loaded: ${context.providerThreadId}` && harness === "codex") {
       const resumed = await raceDeadline(this.options.requestHarness(harness, {
         id: `legacy-migration:${context.correlationId}:thread-resume`,
         method: "thread/resume",
-        params: { cwd, projectId, threadId: context.providerThreadId },
+        params: { threadId: context.providerThreadId },
       }), timeoutMs, signal);
-      if (resumed.error) throw new LegacyMigrationSnapshotError("providerResumeFailed", context, false, { cause: resumed.error });
+      if (resumed.error) throw new LegacyMigrationSnapshotError("providerResumeFailed", withProviderReason(context, resumed.error, cwd), false, { cause: resumed.error });
       response = await read("thread-read-after-resume");
     }
     if (response.error) {
       if (missingProviderMessage(response.error.message, context.providerThreadId)) throw new LegacyMigrationSnapshotError("providerMissing", context, true, { cause: response.error });
-      throw new LegacyMigrationSnapshotError("providerReadFailed", context, false, { cause: response.error });
+      throw new LegacyMigrationSnapshotError("providerReadFailed", withProviderReason(context, response.error, cwd), false, { cause: response.error });
     }
     const thread = isRecord(response.result) && isRecord(response.result.thread) ? response.result.thread : null;
     if (!thread || thread.id !== context.providerThreadId || typeof thread.cwd !== "string" || !exactPath(thread.cwd, cwd) || !Array.isArray(thread.turns)) throw new LegacyMigrationSnapshotError("identityMismatch", context, true);
