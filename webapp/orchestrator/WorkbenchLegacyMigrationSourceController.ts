@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - LegacyMigrationHarnessRequest/LegacyMigrationProjectResolution/WorkbenchLegacyMigrationSourceControllerOptions: injected live-bridge and validated-project boundaries. Keywords: migration, source, capability, project.
- * - default WorkbenchLegacyMigrationSourceController: serve one bounded catalog page or one selected normalized thread snapshot without reading provider homes or Workbench sidecars. Keywords: migration, readonly, lazy, bridge.
+ * - LegacyMigrationSnapshotError: safe typed selected-thread failure with exact durable import identity. Keywords: migration, diagnostics, terminal, identity.
+ * - default WorkbenchLegacyMigrationSourceController: serve one bounded catalog page or one selected normalized thread snapshot, owning Codex unloaded-session resume. Keywords: migration, readonly, lazy, resume, bridge.
  */
 import type http from "node:http";
 import { readFileSync } from "node:fs";
@@ -24,6 +25,16 @@ export interface WorkbenchLegacyMigrationSourceControllerOptions {
   capability: string | null;
   requestHarness: LegacyMigrationHarnessRequest;
   resolveProjectFromCwd: (cwd: string) => Promise<LegacyMigrationProjectResolution>;
+}
+
+type SnapshotCause = "identityMismatch" | "providerMissing" | "providerReadFailed" | "providerResumeFailed" | "scopeNotAllowlisted";
+type SnapshotContext = { bindingState: string; correlationId: string; harness: WorkbenchHarness; providerThreadId: string; sourceKind: string; workbenchThreadId: string };
+
+export class LegacyMigrationSnapshotError extends Error {
+  constructor(readonly causeCode: SnapshotCause, readonly context: SnapshotContext, readonly terminal: boolean, options?: ErrorOptions) {
+    super(`Legacy import ${causeCode}: harness=${context.harness} providerThreadId=${context.providerThreadId} workbenchThreadId=${context.workbenchThreadId} bindingState=${context.bindingState} correlationId=${context.correlationId} sourceKind=${context.sourceKind}`, options);
+    this.name = "LegacyMigrationSnapshotError";
+  }
 }
 
 export function readLegacyMigrationSourceConfig(projectRoot: string) {
@@ -106,6 +117,13 @@ function safeSummary(value: unknown, expectedCwd: string) {
   };
 }
 
+function missingProviderMessage(message: string, providerThreadId: string) {
+  const normalized = message.toLocaleLowerCase();
+  return normalized === `thread not found: ${providerThreadId}`.toLocaleLowerCase()
+    || normalized === `thread deleted: ${providerThreadId}`.toLocaleLowerCase()
+    || normalized === `thread does not exist: ${providerThreadId}`.toLocaleLowerCase();
+}
+
 function abortError(signal: AbortSignal) { return signal.reason instanceof Error ? signal.reason : new Error("Legacy migration source request was cancelled."); }
 
 function raceDeadline<T>(operation: Promise<T>, timeoutMs: number, signal?: AbortSignal) {
@@ -138,20 +156,9 @@ export default class WorkbenchLegacyMigrationSourceController {
     const timeoutMs = body.timeoutMs === undefined ? 10_000 : body.timeoutMs;
     if (!Number.isInteger(timeoutMs) || (timeoutMs as number) < MIN_TIMEOUT_MS || (timeoutMs as number) > MAX_TIMEOUT_MS) throw new Error("Legacy migration timeoutMs is out of bounds.");
     const scope = await raceDeadline(this.options.resolveProjectFromCwd(cwd), timeoutMs as number, signal);
-    if (scope.project.id !== projectId || !exactPath(scope.cwd, cwd) || !this.options.allowedProjectIds.has(projectId)) throw new Error("Legacy migration scope is not allowlisted.");
-
-    if (operation === "threadSnapshot") {
-      const providerThreadId = requireString(body.providerThreadId, "Legacy migration providerThreadId");
-      if (providerThreadId === ACTIVE_THREAD_ID) throw new Error("The active Workbench thread is excluded from legacy migration reads.");
-      const result = readResult(await raceDeadline(this.options.requestHarness(harness, {
-        id: "legacy-migration:thread-read",
-        method: "thread/read",
-        params: { cwd: scope.cwd, includeTurns: true, projectId, threadId: providerThreadId },
-      }), timeoutMs as number, signal), "thread/read");
-      const thread = isRecord(result.thread) ? result.thread : null;
-      if (!thread || thread.id !== providerThreadId || typeof thread.cwd !== "string" || !exactPath(thread.cwd, scope.cwd) || !Array.isArray(thread.turns)) throw new Error("Selected provider thread snapshot escaped its validated scope or is incomplete.");
-      return { harness, projectId, providerThreadId, thread };
-    }
+    const exactScope = scope.project.id === projectId && exactPath(scope.cwd, cwd);
+    if (operation === "threadSnapshot") return await this.readThreadSnapshot(body, harness, scope.cwd, projectId, timeoutMs as number, exactScope, signal);
+    if (!exactScope || !this.options.allowedProjectIds.has(projectId)) throw new Error("Legacy migration scope is not allowlisted.");
 
     const limit = body.limit === undefined ? 50 : body.limit;
     if (!Number.isInteger(limit) || (limit as number) < 1 || (limit as number) > MAX_PAGE_SIZE) throw new Error("Legacy migration catalog limit is out of bounds.");
@@ -184,6 +191,42 @@ export default class WorkbenchLegacyMigrationSourceController {
     }
   }
 
+  private async readThreadSnapshot(body: Record<string, unknown>, harness: WorkbenchHarness, cwd: string, projectId: string, timeoutMs: number, exactScope: boolean, signal?: AbortSignal) {
+    const context: SnapshotContext = {
+      bindingState: requireString(body.bindingState, "Legacy migration bindingState"),
+      correlationId: requireString(body.correlationId, "Legacy migration correlationId"),
+      harness,
+      providerThreadId: requireString(body.providerThreadId, "Legacy migration providerThreadId"),
+      sourceKind: requireString(body.sourceKind, "Legacy migration sourceKind"),
+      workbenchThreadId: requireString(body.workbenchThreadId, "Legacy migration workbenchThreadId"),
+    };
+    if (!exactScope) throw new LegacyMigrationSnapshotError("identityMismatch", context, true);
+    if (!this.options.allowedProjectIds.has(projectId)) throw new LegacyMigrationSnapshotError("scopeNotAllowlisted", context, true);
+    if (context.providerThreadId === ACTIVE_THREAD_ID) throw new Error("The active Workbench thread is excluded from legacy migration reads.");
+    const read = async (suffix: string) => await raceDeadline(this.options.requestHarness(harness, {
+      id: `legacy-migration:${context.correlationId}:${suffix}`,
+      method: "thread/read",
+      params: { cwd, includeTurns: true, projectId, threadId: context.providerThreadId },
+    }), timeoutMs, signal);
+    let response = await read("thread-read");
+    if (response.error?.message === `thread not loaded: ${context.providerThreadId}` && harness === "codex") {
+      const resumed = await raceDeadline(this.options.requestHarness(harness, {
+        id: `legacy-migration:${context.correlationId}:thread-resume`,
+        method: "thread/resume",
+        params: { cwd, projectId, threadId: context.providerThreadId },
+      }), timeoutMs, signal);
+      if (resumed.error) throw new LegacyMigrationSnapshotError("providerResumeFailed", context, false, { cause: resumed.error });
+      response = await read("thread-read-after-resume");
+    }
+    if (response.error) {
+      if (missingProviderMessage(response.error.message, context.providerThreadId)) throw new LegacyMigrationSnapshotError("providerMissing", context, true, { cause: response.error });
+      throw new LegacyMigrationSnapshotError("providerReadFailed", context, false, { cause: response.error });
+    }
+    const thread = isRecord(response.result) && isRecord(response.result.thread) ? response.result.thread : null;
+    if (!thread || thread.id !== context.providerThreadId || typeof thread.cwd !== "string" || !exactPath(thread.cwd, cwd) || !Array.isArray(thread.turns)) throw new LegacyMigrationSnapshotError("identityMismatch", context, true);
+    return { harness, projectId, providerThreadId: context.providerThreadId, thread };
+  }
+
   async handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
     if (request.method !== "POST") return sendJson(response, 405, { error: "Method not allowed" });
     if (!this.options.capability || request.headers["x-workbench-migration-capability"] !== this.options.capability) return sendJson(response, 403, { error: "Legacy migration source is disabled or unauthorized." });
@@ -193,7 +236,8 @@ export default class WorkbenchLegacyMigrationSourceController {
     try {
       sendJson(response, 200, await this.execute(await readBody(request), cancellation.signal));
     } catch (error) {
-      sendJson(response, 400, { error: error instanceof Error ? error.message : "Legacy migration source failed." });
+      const snapshotError = error instanceof LegacyMigrationSnapshotError ? error : null;
+      sendJson(response, snapshotError?.terminal ? 410 : 400, { ...(snapshotError ? { cause: snapshotError.causeCode, context: snapshotError.context } : {}), error: error instanceof Error ? error.message : "Legacy migration source failed." });
     } finally {
       request.removeListener("aborted", onAborted);
     }
