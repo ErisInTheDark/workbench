@@ -16,6 +16,7 @@ import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserI
 import { getCurrentTurn } from "../../../lib/codex/thread-state";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchSkillSummary, WorkbenchSubagentSummary, WorkbenchThreadTurnHistoryEntry } from "../../../lib/types";
 import type { WorkbenchThreadItemTimelineEntry } from "../../../lib/workbench/thread/thread-item-timeline";
+import type { WorkbenchThreadRecallOutputRecord } from "../../../lib/workbench/thread/thread-recall-output";
 import { getThreadItemsRenderChunkSignature } from "../../../lib/workbench/thread/thread-item-signature";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
@@ -1482,6 +1483,86 @@ function ThreadSubagentCurrentActivityPreview ({
   );
 }
 
+function ThreadRecallRecordItem({
+  inlineMentionSources,
+  record,
+  threadCwdPath,
+  projectFilePaths,
+  projectId,
+  projectRootPath,
+  workspaceRoots,
+}: {
+  inlineMentionSources?: InlineMentionHighlightSources | null;
+  record: WorkbenchThreadRecallOutputRecord;
+  threadCwdPath?: string;
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+  projectRootPath?: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+}) {
+  const id = `thread-recall:${record.ref}`;
+  switch (record.kind) {
+    case "user-message":
+    case "user-steer":
+      return (
+        <ThreadUserMessageItem
+          inlineMentionSources={inlineMentionSources}
+          item={{
+            clientId: null,
+            content: [{ text: record.text, text_elements: [], type: "text" }],
+            id,
+            type: "userMessage",
+          }}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          showStartedAt={false}
+          startedAt={null}
+          threadCwdPath={threadCwdPath}
+          workspaceRoots={workspaceRoots}
+        />
+      );
+    case "commentary":
+    case "final-answer":
+    case "agent-message":
+      return (
+        <ThreadAgentMessageItem
+          completedAt={null}
+          inlineMentionSources={inlineMentionSources}
+          isFinal={record.kind === "final-answer"}
+          item={{
+            id,
+            memoryCitation: null,
+            phase: record.kind === "commentary"
+              ? "commentary"
+              : record.kind === "final-answer" ? "final_answer" : null,
+            text: record.text,
+            type: "agentMessage",
+          }}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          threadCwdPath={threadCwdPath}
+          workspaceRoots={workspaceRoots}
+        />
+      );
+    case "plan":
+      return (
+        <ThreadPlanItem
+          inlineMentionSources={inlineMentionSources}
+          item={{ id, text: record.text, type: "plan" }}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          threadCwdPath={threadCwdPath}
+          workspaceRoots={workspaceRoots}
+        />
+      );
+    case "questionnaire":
+      return null;
+  }
+}
+
 function ThreadCommandExecutionDetails ({
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   inlineMentionSources,
@@ -1957,6 +2038,17 @@ function ThreadCommandSequence ({
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}
+            renderRecord={(record) => (
+              <ThreadRecallRecordItem
+                inlineMentionSources={inlineMentionSources}
+                record={record}
+                projectFilePaths={projectFilePaths}
+                projectId={projectId}
+                projectRootPath={projectRootPath}
+                threadCwdPath={threadCwdPath}
+                workspaceRoots={workspaceRoots}
+              />
+            )}
             threadCwdPath={threadCwdPath}
             workspaceRoots={workspaceRoots}
           />

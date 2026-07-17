@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover Thread Recall paging, plan previews, search allowlisting, and expansion. Keywords: thread recall, pagination, search, test.
+ * - No production exports; Node tests cover filtered history/search paging, tagged output, plan dedupe, and record expansion. Keywords: thread recall, pagination, tags, test.
  */
 
 import assert from "node:assert/strict";
@@ -10,20 +10,34 @@ import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.
 import {
   WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS,
   type WorkbenchThreadContextBundle,
+  type WorkbenchThreadRecallKind,
 } from "../../types.ts";
 import {
   renderWorkbenchThreadRecallExpansionMarkdown,
+  renderWorkbenchThreadRecallHistoryMarkdown,
   renderWorkbenchThreadRecallSearchMarkdown,
 } from "./thread-context-recall-markdown.ts";
 import {
   buildWorkbenchThreadRecallRecords,
   expandWorkbenchThreadRecall,
+  readWorkbenchThreadRecallCursor,
   searchWorkbenchThreadRecall,
+  selectWorkbenchThreadRecallRecords,
+  type WorkbenchThreadRecallRecord,
 } from "./thread-context-recall.ts";
-import { renderWorkbenchThreadRecallHistoryMarkdown } from "./thread-context-markdown.ts";
-import { buildWorkbenchThreadContextPieces } from "./thread-context-projection.ts";
+import { WORKBENCH_COLLABORATION_CONTROL_MARKER } from "./thread-pause-control.ts";
 import { createWorkbenchThreadRecoveryId, createWorkbenchThreadRecoveryInput } from "./thread-recovery-message.ts";
 import { createWorkbenchSubagentMessageText } from "./thread-subagent-message.ts";
+
+const ALL_KINDS: WorkbenchThreadRecallKind[] = [
+  "agent-message",
+  "commentary",
+  "final-answer",
+  "plan",
+  "questionnaire",
+  "user-message",
+  "user-steer",
+];
 
 function turn(id: string, items: ThreadItem[]) {
   return {
@@ -39,8 +53,8 @@ function turn(id: string, items: ThreadItem[]) {
 }
 
 function createBundle(): WorkbenchThreadContextBundle {
-  const oldPlan = `<plan>\nOLD_HEAD_${"A".repeat(2_200)}OLD_MIDDLE_SHOULD_NOT_APPEAR${"B".repeat(1_000)}\n</plan>`;
-  const newestPlan = `<plan>\nLATEST_HEAD_${"N".repeat(10_500)}LATEST_TAIL_SHOULD_NOT_APPEAR${"Z".repeat(1_000)}\n</plan>`;
+  const oldPlan = `<plan>\nOLD_HEAD_${"A".repeat(2_200)}OLD_TAIL\n</plan>`;
+  const newestPlan = `<plan>\nLATEST_HEAD_${"N".repeat(30_500)}LATEST_TAIL\n</plan>`;
   return {
     browseResultEntries: [],
     questionnaireEntries: [{
@@ -66,11 +80,34 @@ function createBundle(): WorkbenchThreadContextBundle {
       response: { answers: { "recall-choice": { answers: ["Safe recall"] } } },
       threadId: "thread-1",
       turnId: "turn-old",
+    }, {
+      insertAfterItemId: "user-new",
+      insertAfterItemIndex: 3,
+      itemId: "questionnaire-item-new",
+      request: {
+        id: "questionnaire-request-new",
+        questions: [{
+          allowOther: false,
+          header: "Identity",
+          id: "identity-choice",
+          isSecret: false,
+          options: [{ description: "Keep both turn-owned entries.", label: "Keep both" }],
+          question: "Can a later turn reuse the same request key?",
+        }],
+        submitLabel: "Choose",
+        summary: "Choose identity",
+        title: "Recall identity",
+      },
+      requestKey: "questionnaire-key",
+      resolvedAt: 10,
+      response: { answers: { "identity-choice": { answers: ["Keep both"] } } },
+      threadId: "thread-1",
+      turnId: "turn-new",
     }],
     steerEntries: [{
       attemptedAt: 6,
       canonicalItemId: null,
-      entryKey: "steer-key",
+      entryKey: "turn-steer:139",
       error: null,
       input: [{ text: "steered recall constraint", text_elements: [], type: "text" }],
       requestId: "steer-request",
@@ -81,7 +118,7 @@ function createBundle(): WorkbenchThreadContextBundle {
     }, {
       attemptedAt: 8,
       canonicalItemId: null,
-      entryKey: "subagent-steer-key",
+      entryKey: "turn-steer:139",
       error: null,
       input: [{
         text: createWorkbenchSubagentMessageText({ message: "active parent progress", name: "Mimi", threadId: "child-active" }),
@@ -90,6 +127,21 @@ function createBundle(): WorkbenchThreadContextBundle {
       }],
       requestId: "subagent-steer-request",
       resolvedAt: 9,
+      status: "sent",
+      threadId: "thread-1",
+      turnId: "turn-new",
+    }, {
+      attemptedAt: 11,
+      canonicalItemId: null,
+      entryKey: "turn-steer:pause-control",
+      error: null,
+      input: [{
+        text: `${WORKBENCH_COLLABORATION_CONTROL_MARKER}\nDeliberately different control prose.`,
+        text_elements: [],
+        type: "text",
+      }],
+      requestId: "pause-control-request",
+      resolvedAt: 12,
       status: "sent",
       threadId: "thread-1",
       turnId: "turn-new",
@@ -116,7 +168,7 @@ function createBundle(): WorkbenchThreadContextBundle {
       turnHistory: [],
       turns: [
         turn("turn-old", [
-          { clientId: null, content: [{ text: `old user ${"U".repeat(9_000)}`, text_elements: [], type: "text" }], id: "user-old", type: "userMessage" },
+          { clientId: null, content: [{ text: "old user", text_elements: [], type: "text" }], id: "user-old", type: "userMessage" },
           { id: "plan-old", memoryCitation: null, phase: "final_answer", text: oldPlan, type: "agentMessage" },
           { content: ["reasoning leak canary"], id: "reasoning-old", summary: [], type: "reasoning" },
           {
@@ -134,7 +186,7 @@ function createBundle(): WorkbenchThreadContextBundle {
           },
         ]),
         turn("turn-new", [
-          { id: "commentary-new", memoryCitation: null, phase: "commentary", text: "Normal   commentary remembers the safe route.", type: "agentMessage" },
+          { id: "commentary-new", memoryCitation: null, phase: "commentary", text: "Normal commentary remembers the safe route.", type: "agentMessage" },
           { id: "plan-new", memoryCitation: null, phase: "final_answer", text: newestPlan, type: "agentMessage" },
           { clientId: createWorkbenchThreadRecoveryId("recall-hidden"), content: createWorkbenchThreadRecoveryInput(), id: "user-recovery", type: "userMessage" },
           { clientId: null, content: [{ text: "newest user constraint", text_elements: [], type: "text" }], id: "user-new", type: "userMessage" },
@@ -156,83 +208,126 @@ function createBundle(): WorkbenchThreadContextBundle {
   };
 }
 
-test("renders bounded newest and historical pages with global plan preview limits", () => {
-  const bundle = createBundle();
-  const pieces = buildWorkbenchThreadContextPieces(bundle);
-  const newest = renderWorkbenchThreadRecallHistoryMarkdown(pieces, { threadId: bundle.thread.id });
-  assert(newest.length <= WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS);
-  assert.match(newest, /newest user constraint/u);
-  assert.match(newest, /Showing the first 10,000/u);
-  assert.doesNotMatch(newest, /LATEST_TAIL_SHOULD_NOT_APPEAR/u);
-  assert.match(newest, /Showing the first 2,000/u);
-  assert.doesNotMatch(newest, /OLD_MIDDLE_SHOULD_NOT_APPEAR/u);
-  assert.match(newest, /Previous page: `wb thread recall/u);
-
-  const before = /--before ([^`\s]+)/u.exec(newest)?.[1];
-  assert(before);
-  const historical = renderWorkbenchThreadRecallHistoryMarkdown(pieces, { before, threadId: bundle.thread.id });
-  assert(historical.length <= WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS);
-  assert.match(historical, /WARNING: Newer thread evidence is intentionally omitted/u);
-  assert.match(historical, /Return to newest: `wb thread recall/u);
-  assert.doesNotMatch(historical, /newest user constraint/u);
-  assert.doesNotMatch(historical, /Showing the first 10,000/u);
-});
-
-test("searches only narrative records with stable refs and normalized literal matching", () => {
+test("builds one rich narrative projection and suppresses embedded plans with their selected parent", () => {
   const records = buildWorkbenchThreadRecallRecords(createBundle());
   assert.equal(records.some((record) => record.ref === "user:user-recovery"), false);
-  assert(records.some((record) => record.ref === "plan-block:plan-new:0"));
-  assert(!records.some((record) => record.ref === "agent:plan-new"));
+  assert(records.some((record) => record.ref === "agent:commentary-new" && record.kind === "commentary"));
+  assert(records.some((record) => record.ref === "plan-block:plan-new:0" && record.parentRef === "agent:plan-new"));
   assert.deepEqual(
-    records.filter((record) => record.ref === "steer:subagent-steer-key" || record.ref === "user:user-subagent")
-      .map(({ kind, label, ref, text }) => ({ kind, label, ref, text })),
-    [{
-      kind: "user",
-      label: "Subagent message from Nell",
-      ref: "user:user-subagent",
-      text: "## Subagent Message From Nell\n\nidle parent progress",
-    }, {
-      kind: "steer",
-      label: "Subagent message from Mimi",
-      ref: "steer:subagent-steer-key",
-      text: "## Subagent Message From Mimi\n\nactive parent progress",
-    }],
+    records.filter((record) => record.kind === "questionnaire").map((record) => record.ref),
+    [
+      "questionnaire:turn-old:questionnaire-key",
+      "questionnaire:turn-new:questionnaire-key",
+    ],
   );
+  assert.deepEqual(
+    records.filter((record) => record.kind === "user-steer").map((record) => record.ref),
+    [
+      "steer:turn-old:turn-steer:139",
+      "steer:turn-new:turn-steer:139",
+    ],
+  );
+  assert.deepEqual(
+    selectWorkbenchThreadRecallRecords(records, ALL_KINDS)
+      .filter((record) => record.ref === "agent:plan-new" || record.ref === "plan-block:plan-new:0")
+      .map((record) => record.ref),
+    ["agent:plan-new"],
+  );
+  assert.deepEqual(
+    selectWorkbenchThreadRecallRecords(records, ["plan"])
+      .filter((record) => record.ref.includes("plan-new"))
+      .map((record) => record.ref),
+    ["plan-block:plan-new:0"],
+  );
+});
 
-  const result = searchWorkbenchThreadRecall(records, {
-    kinds: ["agent", "user", "questionnaire", "plan", "steer"],
-    limit: 10,
-    query: "NORMAL commentary",
+test("renders filtered tagged history backward through a long record with exact cursors", () => {
+  const records = selectWorkbenchThreadRecallRecords(buildWorkbenchThreadRecallRecords(createBundle()), ["final-answer"]);
+  const newest = renderWorkbenchThreadRecallHistoryMarkdown(records, {
+    kinds: ["final-answer"],
+    threadId: "thread-1",
   });
-  assert.equal(result.totalMatches, 1);
-  assert.equal(result.matches[0]?.record.ref, "agent:commentary-new");
-  const markdown = renderWorkbenchThreadRecallSearchMarkdown(result);
-  assert(markdown.length <= WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS);
-  assert.match(markdown, /agent:commentary-new/u);
+  assert(newest.length <= WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS);
+  assert.match(newest, /<final-answer id="ref:agent:plan-new"/u);
+  assert.match(newest, /LATEST_TAIL/u);
+  assert.doesNotMatch(newest, /## Agent final answer/u);
+  assert.match(newest, /--kind final-answer --before recall-v1:/u);
 
+  const before = /--before (recall-v1:[^`\s]+)/u.exec(newest)?.[1];
+  assert(before);
+  const historical = renderWorkbenchThreadRecallHistoryMarkdown(records, {
+    before,
+    kinds: ["final-answer"],
+    threadId: "thread-1",
+  });
+  assert(historical.length <= WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS);
+  assert.match(historical, /LATEST_HEAD/u);
+  assert.doesNotMatch(historical, /LATEST_TAIL/u);
+  assert.match(historical, /Return to newest: `wb thread recall --thread thread-1 --kind final-answer`/u);
+});
+
+test("pages search matches newest-first and excludes non-narrative records", () => {
+  const records = buildWorkbenchThreadRecallRecords(createBundle());
+  const newest = searchWorkbenchThreadRecall(records, {
+    before: null,
+    kinds: ALL_KINDS,
+    limit: 1,
+    query: "safe",
+  });
+  assert.equal(newest.totalMatches, 2);
+  assert.equal(newest.matches[0]?.record.ref, "agent:commentary-new");
+  const markdown = renderWorkbenchThreadRecallSearchMarkdown(newest, "thread-1");
+  assert.match(markdown, /<commentary id="ref:agent:commentary-new"/u);
+  assert.match(markdown, /Previous search page:/u);
+  assert.match(markdown, /--kind commentary/u);
+
+  const older = searchWorkbenchThreadRecall(records, {
+    before: newest.matches[0]!.record.ref,
+    kinds: ALL_KINDS,
+    limit: 1,
+    query: "safe",
+  });
+  assert.equal(older.matches[0]?.record.ref, "questionnaire:turn-old:questionnaire-key");
   for (const leakCanary of ["reasoning leak canary", "command leak canary"]) {
     assert.equal(searchWorkbenchThreadRecall(records, {
-      kinds: ["agent", "user", "questionnaire", "plan", "steer"],
+      before: null,
+      kinds: ALL_KINDS,
       limit: 10,
       query: leakCanary,
     }).totalMatches, 0);
   }
 });
 
-test("expands exact refs under the requested transport budget", () => {
-  const records = buildWorkbenchThreadRecallRecords(createBundle());
-  const expansion = expandWorkbenchThreadRecall(records, {
-    after: 1,
-    before: 1,
-    ref: "plan-block:plan-new:0",
-  });
-  const markdown = renderWorkbenchThreadRecallExpansionMarkdown(expansion, 4_000);
-  assert(markdown.length <= 4_000);
-  assert.match(markdown, /plan-block:plan-new:0/u);
-  assert.match(markdown, /target characters omitted/u);
-  assert.throws(() => expandWorkbenchThreadRecall(records, {
-    after: 1,
-    before: 1,
-    ref: "plan-block:missing:0",
+test("expands one long record through newline-preferred fixed-budget pages", () => {
+  const record: WorkbenchThreadRecallRecord = {
+    kind: "commentary",
+    label: "Agent commentary",
+    parentRef: null,
+    ref: "agent:long",
+    sequence: 0,
+    sortKey: "0",
+    text: Array.from({ length: 1_500 }, (_, index) => `line-${index}-${"X".repeat(20)}`).join("\n"),
+    turnId: "turn-long",
+  };
+  const first = renderWorkbenchThreadRecallExpansionMarkdown(
+    expandWorkbenchThreadRecall([record], { cursor: null, ref: record.ref }),
+    "thread-1",
+  );
+  assert(first.length <= WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS);
+  const cursorValue = /--cursor (recall-v1:[^`\s]+)/u.exec(first)?.[1];
+  assert(cursorValue);
+  const cursor = readWorkbenchThreadRecallCursor(cursorValue);
+  assert(cursor && cursor.offset > 0);
+  assert.equal(record.text[cursor.offset - 1], "\n");
+
+  const second = renderWorkbenchThreadRecallExpansionMarkdown(
+    expandWorkbenchThreadRecall([record], { cursor: cursorValue, ref: record.ref }),
+    "thread-1",
+  );
+  assert(second.length <= WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS);
+  assert.match(second, new RegExp(record.text.slice(cursor.offset, cursor.offset + 20), "u"));
+  assert.throws(() => expandWorkbenchThreadRecall([record], {
+    cursor: cursorValue,
+    ref: "agent:missing",
   }), /Unknown Thread Recall ref/u);
 });

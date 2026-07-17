@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadContextCommandItem: render a Thread Recall command or context alias as a semantic Markdown disclosure. Keywords: thread recall, context, markdown, disclosure.
+ * - default ThreadContextCommandItem: render a Thread Recall command or context alias as a semantic tagged-record disclosure. Keywords: thread recall, context, records, disclosure.
  * - Local helpers: format command execution metadata for the Thread Recall disclosure summary. Keywords: status, duration, exit code.
  */
 "use client";
@@ -9,6 +9,7 @@ import type { ReactNode } from "react";
 
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
+import type { WorkbenchThreadRecallOutputRecord } from "../../../lib/workbench/thread/thread-recall-output";
 import {
   getThreadCommandDisplay,
   getThreadCommandExecutionOutcome,
@@ -17,8 +18,8 @@ import {
 } from "../../../lib/workbench/thread/thread-command-matchers";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
-import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
+import ThreadRecallOutput from "./ThreadRecallOutput";
 import ThreadSummaryText from "./ThreadSummaryText";
 import { ThreadCommandSummary } from "./thread-view-primitives";
 
@@ -73,6 +74,7 @@ export default function ThreadContextCommandItem ({
   projectFilePaths,
   projectId,
   projectRootPath,
+  renderRecord,
   threadCwdPath,
   workspaceRoots,
 }: {
@@ -81,6 +83,7 @@ export default function ThreadContextCommandItem ({
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  renderRecord: (record: WorkbenchThreadRecallOutputRecord, index: number) => ReactNode;
   threadCwdPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
@@ -116,11 +119,12 @@ export default function ThreadContextCommandItem ({
         mode="panel"
       >
         {markdown ? (
-          <ThreadMarkdown
+          <ThreadRecallOutput
             markdown={markdown}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}
+            renderRecord={renderRecord}
             threadCwdPath={threadCwdPath ?? item.cwd}
             workspaceRoots={workspaceRoots}
           />

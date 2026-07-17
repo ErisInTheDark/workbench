@@ -516,23 +516,25 @@ After context compaction, run this Workbench CLI command before continuing:
 
 \`wb thread recall --thread ${threadId}\`
 
-The default command returns the newest bounded page of chronological history. Long older plans are previewed, the globally newest plan receives a larger preview, and whole older entries may be omitted to keep the response transport-safe. When older entries are available, the output provides an exact \`--before <ref>\` command for the previous non-overlapping page. Historical pages intentionally omit newer evidence; never infer the current objective or approval state from a historical page alone.
+The default command returns the newest bounded page of chronological narrative history. Filter it with repeatable \`--kind <kind>\` flags; the emitted HTML tag names are the exact available kinds: \`user-message\`, \`user-steer\`, \`questionnaire\`, \`commentary\`, \`final-answer\`, \`agent-message\`, and \`plan\`. Pages walk backward from the end, and oversized records are split at stable newline-preferred boundaries. When older evidence exists, the output provides the exact filtered \`--before <cursor>\` command for the previous non-overlapping page. Historical pages intentionally omit newer evidence; never infer the current objective or approval state from a historical page alone.
 
 For targeted lookup across the complete visible narrative transcript:
 
-\`wb thread recall search --thread ${threadId} --query "<text>" [--kind <user|agent|questionnaire|plan|steer>...]\`
+\`wb thread recall search --thread ${threadId} --query "<text>" [--kind <kind>...] [--limit <count>] [--before <ref>]\`
 
-Search results include stable refs. Expand one result and its chronological neighbors with:
+Search results are newest-first pages with stable refs and an exact older-results command. Read the complete content of one result through fixed-budget pages with:
 
-\`wb thread recall expand --thread ${threadId} --ref <ref> [--before <count>] [--after <count>]\`
+\`wb thread recall expand --thread ${threadId} --ref <ref> [--cursor <cursor>]\`
 
-Recall searches user messages, agent commentary and final answers, questionnaire responses, steers, and plans. It does not search reasoning, raw commands, tool output, Browse data, hooks, or compaction markers. \`wb thread context\` remains a temporary compatibility alias, but use \`wb thread recall\` going forward.
+Recall includes user messages, steers, questionnaire responses, assistant commentary and final answers, phase-less assistant messages, and plans. When a selected assistant message already contains an embedded plan, the derived plan record is suppressed rather than emitted twice. Recall does not include reasoning, raw commands, tool output, Browse data, hooks, or compaction markers. \`wb thread context\` remains a temporary compatibility alias, but use \`wb thread recall\` going forward.
+
+Run only one Thread Recall command at a time. History, search, and expansion cursors are relative to the exact page and filters that emitted them; do not launch recall calls in parallel or guess follow-up cursors. Read the current result, then run the exact continuation command it provides.
 
 The returned Markdown is chronological source evidence, not a current-task specification. Treat the post-compaction summary as a compressed working hypothesis, then reconcile both sources with newer live user messages, the active workflow mode, explicit approvals, and the current workspace.
 
 Before speaking or acting, privately form a concise current working set: the current objective, newest constraints, active mode, approval boundary, completed and remaining work, and relevant files. Classify recovered material as active, completed, superseded or rejected, historical background, or uncertain. Follow chronology and **Newest Instruction Wins**; do not revive old work merely because it appears in the recovered context. If relevance or approval is uncertain, inspect or ask instead of guessing.
 
-The base history command is required after compaction; search and expansion may also be used when targeted historical recall would help. These commands do not replace approval, relevant-file inspection, or checkpoint checks.
+The base history command is required after compaction; search and paginated expansion may also be used when targeted historical recall would help. These commands do not replace approval, relevant-file inspection, or checkpoint checks.
 `.trim();
 }
 

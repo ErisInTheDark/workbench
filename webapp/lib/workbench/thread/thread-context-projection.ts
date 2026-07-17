@@ -19,6 +19,7 @@ import {
   isAgentScreenshotSteerInput,
   isAgentScreenshotSteerUserMessage,
 } from "./thread-steer-markers.ts";
+import { WORKBENCH_COLLABORATION_CONTROL_MARKER } from "./thread-pause-control.ts";
 import { isWorkbenchThreadRecoveryUserMessage } from "./thread-recovery-message.ts";
 
 type ContextPieceKind = "planBlock" | "questionnaire" | "userMessage" | "userSteer";
@@ -134,7 +135,10 @@ function shouldIncludeUserMessage(
 }
 
 function shouldIncludeSteerEntry(entry: WorkbenchSteerHistoryEntry) {
-  return !entry.input.some(isAgentScreenshotSteerInput);
+  return !entry.input.some((input) => (
+    (input.type === "text" && input.text.includes(WORKBENCH_COLLABORATION_CONTROL_MARKER))
+    || isAgentScreenshotSteerInput(input)
+  ));
 }
 
 function parseCodeFenceOpenLine(line: string): CodeFenceOpenLine | null {

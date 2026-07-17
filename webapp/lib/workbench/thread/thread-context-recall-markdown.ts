@@ -1,151 +1,325 @@
 /*
  * Exports:
- * - renderWorkbenchThreadRecallSearchMarkdown: render bounded native Markdown for recall search results. Keywords: thread recall, search, markdown.
- * - renderWorkbenchThreadRecallExpansionMarkdown: render bounded target-first Markdown for recall expansion. Keywords: thread recall, expand, markdown.
+ * - renderWorkbenchThreadRecallHistoryMarkdown: render a filtered newest-to-oldest history page with stable continuation commands. Keywords: thread recall, history, pagination.
+ * - renderWorkbenchThreadRecallSearchMarkdown: render one newest-to-oldest search page with tagged snippets and an exact older-results command. Keywords: search, pagination, tags.
+ * - renderWorkbenchThreadRecallExpansionMarkdown: render one fixed-budget record-content page and its exact next command. Keywords: expansion, cursor, chunking.
  */
 
-import { WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS } from "../../types.ts";
-import type {
-  WorkbenchThreadRecallExpansion,
-  WorkbenchThreadRecallRecord,
-  WorkbenchThreadRecallSearchResult,
+import {
+  WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS,
+  type WorkbenchThreadRecallKind,
+} from "../../types.ts";
+import {
+  createWorkbenchThreadRecallCursor,
+  readWorkbenchThreadRecallCursor,
+  type WorkbenchThreadRecallExpansion,
+  type WorkbenchThreadRecallRecord,
+  type WorkbenchThreadRecallSearchResult,
 } from "./thread-context-recall.ts";
 
-function createTextFence(value: string) {
-  const longestRun = Math.max(0, ...Array.from(value.matchAll(/`+/gu), (match) => match[0].length));
-  return "`".repeat(Math.max(4, longestRun + 1));
+const MIN_PREFERRED_HISTORY_CHUNK_CHARACTERS = 1_000;
+
+interface ThreadRecallChunk {
+  end: number;
+  record: WorkbenchThreadRecallRecord;
+  start: number;
 }
 
-function renderTextBlock(value: string) {
-  const fence = createTextFence(value);
-  return `${fence}text\n${value}\n${fence}`;
+function commandValue(value: string) {
+  return /^[A-Za-z0-9_./:@+-]+$/u.test(value) ? value : JSON.stringify(value);
 }
 
-function inlineCode(value: string) {
-  const fence = "`".repeat(Math.max(1, ...Array.from(value.matchAll(/`+/gu), (match) => match[0].length + 1)));
-  return `${fence}${value}${fence}`;
+function kindFlags(kinds: readonly WorkbenchThreadRecallKind[]) {
+  return kinds.map((kind) => ` --kind ${kind}`).join("");
 }
 
-function renderSearchMatch(record: WorkbenchThreadRecallRecord, snippet: string, index: number) {
+function historyCommand(threadId: string, kinds: readonly WorkbenchThreadRecallKind[], before?: string | null) {
+  return `wb thread recall --thread ${commandValue(threadId)}${kindFlags(kinds)}${before ? ` --before ${commandValue(before)}` : ""}`;
+}
+
+function searchCommand(result: WorkbenchThreadRecallSearchResult, threadId: string, before?: string | null) {
+  return `wb thread recall search --thread ${commandValue(threadId)} --query ${commandValue(result.query)}${kindFlags(result.kinds)} --limit ${result.limit}${before ? ` --before ${commandValue(before)}` : ""}`;
+}
+
+function expandCommand(threadId: string, ref: string, cursor?: string | null) {
+  return `wb thread recall expand --thread ${commandValue(threadId)} --ref ${commandValue(ref)}${cursor ? ` --cursor ${commandValue(cursor)}` : ""}`;
+}
+
+function escapeAttribute(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function escapeClosingTagLine(value: string, tagName: string) {
+  const closingTag = `</${tagName}>`;
+  return value.replace(/\r\n?/gu, "\n").split("\n").map((line) => (
+    line.trim() === closingTag ? line.replace(closingTag, `&lt;/${tagName}&gt;`) : line
+  )).join("\n");
+}
+
+function renderRecallRecordTag(
+  record: WorkbenchThreadRecallRecord,
+  text: string,
+  range?: { end: number; start: number; total: number },
+) {
+  const rangeAttributes = range && (range.start > 0 || range.end < range.total)
+    ? ` start="${range.start}" end="${range.end}" total="${range.total}"`
+    : "";
   return [
-    `## Match ${index + 1} — ${record.label}`,
-    "",
-    `Ref: \`${record.ref}\``,
-    `Turn: \`${record.turnId}\``,
-    "",
-    renderTextBlock(snippet),
+    `<${record.kind} id="${escapeAttribute(`ref:${record.ref}`)}" turn="${escapeAttribute(record.turnId)}"${rangeAttributes}>`,
+    escapeClosingTagLine(text, record.kind),
+    `</${record.kind}>`,
   ].join("\n");
 }
 
-function renderSearchPage(result: WorkbenchThreadRecallSearchResult, matches: WorkbenchThreadRecallSearchResult["matches"]) {
+function continuationBeforeForChunk(records: readonly WorkbenchThreadRecallRecord[], chunk: ThreadRecallChunk) {
+  if (chunk.start > 0) {
+    return createWorkbenchThreadRecallCursor(chunk.record.ref, chunk.start);
+  }
+  const recordIndex = records.findIndex((record) => record.ref === chunk.record.ref);
+  return recordIndex > 0 ? chunk.record.ref : null;
+}
+
+function renderHistoryPage({
+  before,
+  chunks,
+  kinds,
+  records,
+  threadId,
+}: {
+  before: string | null;
+  chunks: readonly ThreadRecallChunk[];
+  kinds: readonly WorkbenchThreadRecallKind[];
+  records: readonly WorkbenchThreadRecallRecord[];
+  threadId: string;
+}) {
+  const historical = before !== null;
+  const continuationBefore = chunks[0] ? continuationBeforeForChunk(records, chunks[0]) : null;
+  const header = historical
+    ? [
+      "# Thread Recall History — Historical Page",
+      "",
+      "WARNING: Newer thread evidence is intentionally omitted from this page. Do not infer the current objective or approval state from this page alone.",
+      "",
+      `Kinds: ${kinds.join(", ")}`,
+      `Return to newest: \`${historyCommand(threadId, kinds)}\``,
+    ].join("\n")
+    : [
+      "# Thread Recall History",
+      "",
+      "Newest filtered narrative evidence. Older entries may be completed, rejected, or superseded; they are not automatically the current task.",
+      "",
+      `Kinds: ${kinds.join(", ")}`,
+    ].join("\n");
   return [
-    "# Thread Recall Search",
-    "",
-    `Query: ${inlineCode(result.query)}`,
-    `Kinds: ${result.kinds.join(", ")}`,
-    `Matches: ${result.totalMatches.toLocaleString("en-US")} total; ${matches.length.toLocaleString("en-US")} shown.`,
-    ...matches.map((match, index) => renderSearchMatch(match.record, match.snippet, index)),
-    ...(matches.length < result.matches.length
-      ? ["---", `${(result.matches.length - matches.length).toLocaleString("en-US")} requested matches were omitted to keep this response transport-safe.`]
-      : []),
+    header,
+    ...chunks.map((chunk) => renderRecallRecordTag(
+      chunk.record,
+      chunk.record.text.slice(chunk.start, chunk.end),
+      { end: chunk.end, start: chunk.start, total: chunk.record.text.length },
+    )),
+    ...(continuationBefore ? [
+      "---",
+      `Previous page: \`${historyCommand(threadId, kinds, continuationBefore)}\``,
+    ] : []),
   ].map((part) => part.trim()).filter(Boolean).join("\n\n");
 }
 
-export function renderWorkbenchThreadRecallSearchMarkdown(result: WorkbenchThreadRecallSearchResult) {
-  let matches = [...result.matches];
-  let markdown = renderSearchPage(result, matches);
-  while (markdown.length > WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS && matches.length) {
-    matches = matches.slice(0, -1);
-    markdown = renderSearchPage(result, matches);
+function resolveHistoryEnd(records: readonly WorkbenchThreadRecallRecord[], before: string | null) {
+  if (before === null) {
+    const index = records.length - 1;
+    return { end: records[index]?.text.length ?? 0, index };
   }
+  const cursor = readWorkbenchThreadRecallCursor(before);
+  if (cursor) {
+    const index = records.findIndex((record) => record.ref === cursor.ref);
+    if (index < 0 || cursor.offset > records[index]!.text.length) {
+      throw new Error(`Unknown Thread Recall history cursor: ${before}`);
+    }
+    return cursor.offset === 0
+      ? { end: records[index - 1]?.text.length ?? 0, index: index - 1 }
+      : { end: cursor.offset, index };
+  }
+  const index = records.findIndex((record) => record.ref === before);
+  if (index < 0) {
+    throw new Error(`Unknown Thread Recall history ref: ${before}`);
+  }
+  return { end: records[index - 1]?.text.length ?? 0, index: index - 1 };
+}
+
+function findHistoryChunkStart({
+  before,
+  end,
+  kinds,
+  record,
+  records,
+  threadId,
+}: {
+  before: string | null;
+  end: number;
+  kinds: readonly WorkbenchThreadRecallKind[];
+  record: WorkbenchThreadRecallRecord;
+  records: readonly WorkbenchThreadRecallRecord[];
+  threadId: string;
+}) {
+  const fits = (start: number) => renderHistoryPage({
+    before,
+    chunks: [{ end, record, start }],
+    kinds,
+    records,
+    threadId,
+  }).length <= WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS;
+  let lower = 0;
+  let upper = Math.max(0, end - 1);
+  let start = end;
+  while (lower <= upper) {
+    const midpoint = Math.floor((lower + upper) / 2);
+    if (fits(midpoint)) {
+      start = midpoint;
+      upper = midpoint - 1;
+    } else {
+      lower = midpoint + 1;
+    }
+  }
+  if (start >= end) {
+    throw new Error("Thread Recall could not fit record content inside the safe response budget.");
+  }
+  const newline = record.text.indexOf("\n", start);
+  return newline >= start && end - (newline + 1) >= MIN_PREFERRED_HISTORY_CHUNK_CHARACTERS
+    ? newline + 1
+    : start;
+}
+
+export function renderWorkbenchThreadRecallHistoryMarkdown(
+  records: readonly WorkbenchThreadRecallRecord[],
+  {
+    before = null,
+    kinds,
+    threadId,
+  }: {
+    before?: string | null;
+    kinds: readonly WorkbenchThreadRecallKind[];
+    threadId: string;
+  },
+) {
+  const resolvedEnd = resolveHistoryEnd(records, before);
+  let index = resolvedEnd.index;
+  let end = resolvedEnd.end;
+  let chunks: ThreadRecallChunk[] = [];
+  while (index >= 0) {
+    const record = records[index]!;
+    const candidateChunk = { end, record, start: 0 };
+    const candidateChunks = [candidateChunk, ...chunks];
+    if (renderHistoryPage({ before, chunks: candidateChunks, kinds, records, threadId }).length <= WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS) {
+      chunks = candidateChunks;
+      index -= 1;
+      end = records[index]?.text.length ?? 0;
+      continue;
+    }
+    if (chunks.length) break;
+    const start = findHistoryChunkStart({ before, end, kinds, record, records, threadId });
+    chunks = [{ end, record, start }];
+    break;
+  }
+  const markdown = renderHistoryPage({ before, chunks, kinds, records, threadId });
   if (markdown.length > WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS) {
-    throw new Error("Thread Recall search metadata exceeds the safe response budget.");
+    throw new Error("Thread Recall could not render a history page inside the safe response budget.");
   }
   return markdown;
 }
 
-function renderExpansionRecord(record: WorkbenchThreadRecallRecord, targetRef: string, text = record.text) {
+function renderSearchPage(result: WorkbenchThreadRecallSearchResult, threadId: string) {
+  const oldestMatchRef = result.matches.at(-1)?.record.ref ?? null;
   return [
-    `## ${record.label}${record.ref === targetRef ? " — Target" : ""}`,
+    "# Thread Recall Search",
     "",
-    `Ref: \`${record.ref}\``,
-    `Turn: \`${record.turnId}\``,
-    "",
-    text,
-  ].join("\n");
-}
-
-function renderExpansionPage(records: readonly WorkbenchThreadRecallRecord[], targetRef: string) {
-  return [
-    "# Thread Recall Expansion",
-    "",
-    `Target: \`${targetRef}\``,
-    ...records.map((record) => renderExpansionRecord(record, targetRef)),
+    `Query: \`${result.query.replaceAll("`", "\\`")}\``,
+    `Kinds: ${result.kinds.join(", ")}`,
+    `Matches: ${result.totalMatches.toLocaleString("en-US")} total; ${result.matches.length.toLocaleString("en-US")} shown on this newest-first page.`,
+    ...result.matches.flatMap((match) => [
+      renderRecallRecordTag(match.record, match.snippet),
+      `Expand: \`${expandCommand(threadId, match.record.ref)}\``,
+    ]),
+    ...(result.hasOlderMatches && oldestMatchRef ? [
+      "---",
+      `Previous search page: \`${searchCommand(result, threadId, oldestMatchRef)}\``,
+    ] : []),
   ].map((part) => part.trim()).filter(Boolean).join("\n\n");
 }
 
-function renderTruncatedTarget(record: WorkbenchThreadRecallRecord, maxCharacters: number) {
-  const createCandidate = (previewCharacters: number) => {
-    const preview = record.text.slice(0, previewCharacters);
-    return {
-      ...record,
-      text: [
-        `Showing the first ${preview.length.toLocaleString("en-US")} of ${record.text.length.toLocaleString("en-US")} target characters.`,
-        "",
-        renderTextBlock(preview),
-        "",
-        `[${(record.text.length - preview.length).toLocaleString("en-US")} target characters omitted to keep this response transport-safe.]`,
-      ].join("\n"),
+export function renderWorkbenchThreadRecallSearchMarkdown(
+  result: WorkbenchThreadRecallSearchResult,
+  threadId: string,
+) {
+  let pageResult = result;
+  let markdown = renderSearchPage(pageResult, threadId);
+  while (markdown.length > WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS && pageResult.matches.length > 1) {
+    pageResult = {
+      ...pageResult,
+      hasOlderMatches: true,
+      matches: pageResult.matches.slice(0, -1),
     };
-  };
-
-  let lower = 0;
-  let upper = record.text.length;
-  while (lower < upper) {
-    const midpoint = Math.ceil((lower + upper) / 2);
-    if (renderExpansionPage([createCandidate(midpoint)], record.ref).length <= maxCharacters) {
-      lower = midpoint;
-    } else {
-      upper = midpoint - 1;
-    }
+    markdown = renderSearchPage(pageResult, threadId);
   }
-  return createCandidate(lower);
+  if (markdown.length > WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS) {
+    throw new Error("Thread Recall search page exceeds the safe response budget.");
+  }
+  return markdown;
+}
+
+function renderExpansionPage(
+  expansion: WorkbenchThreadRecallExpansion,
+  threadId: string,
+  end: number,
+) {
+  const nextCursor = end < expansion.record.text.length
+    ? createWorkbenchThreadRecallCursor(expansion.record.ref, end)
+    : null;
+  return [
+    "# Thread Recall Record",
+    "",
+    `Ref: \`${expansion.record.ref}\``,
+    renderRecallRecordTag(
+      expansion.record,
+      expansion.record.text.slice(expansion.cursor, end),
+      { end, start: expansion.cursor, total: expansion.record.text.length },
+    ),
+    ...(nextCursor ? [
+      "---",
+      `Next page: \`${expandCommand(threadId, expansion.record.ref, nextCursor)}\``,
+    ] : []),
+  ].map((part) => part.trim()).filter(Boolean).join("\n\n");
 }
 
 export function renderWorkbenchThreadRecallExpansionMarkdown(
   expansion: WorkbenchThreadRecallExpansion,
-  maxCharacters: number,
+  threadId: string,
 ) {
-  const target = expansion.records.find((record) => record.ref === expansion.targetRef);
-  if (!target) {
-    throw new Error(`Thread Recall expansion target disappeared: ${expansion.targetRef}`);
-  }
-
-  const safeMaximum = Math.min(maxCharacters, WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS);
-  const orderByRef = new Map(expansion.records.map((record, index) => [record.ref, index]));
-  const targetIndex = orderByRef.get(expansion.targetRef) ?? 0;
-  const targetRecord = renderExpansionPage([target], expansion.targetRef).length <= safeMaximum
-    ? target
-    : renderTruncatedTarget(target, safeMaximum);
-  let selected = [targetRecord];
-  const candidates = expansion.records
-    .filter((record) => record.ref !== expansion.targetRef)
-    .sort((left, right) => (
-      Math.abs((orderByRef.get(left.ref) ?? 0) - targetIndex)
-      - Math.abs((orderByRef.get(right.ref) ?? 0) - targetIndex)
-    ));
-  for (const candidate of candidates) {
-    const next = [...selected, candidate].sort((left, right) => (
-      (orderByRef.get(left.ref) ?? 0) - (orderByRef.get(right.ref) ?? 0)
-    ));
-    if (renderExpansionPage(next, expansion.targetRef).length <= safeMaximum) {
-      selected = next;
+  let lower = Math.min(expansion.record.text.length, expansion.cursor + 1);
+  let upper = expansion.record.text.length;
+  let end = expansion.cursor;
+  while (lower <= upper) {
+    const midpoint = Math.floor((lower + upper) / 2);
+    if (renderExpansionPage(expansion, threadId, midpoint).length <= WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS) {
+      end = midpoint;
+      lower = midpoint + 1;
+    } else {
+      upper = midpoint - 1;
     }
   }
-
-  const markdown = renderExpansionPage(selected, expansion.targetRef);
-  if (markdown.length > safeMaximum) {
-    throw new Error("Thread Recall expansion could not fit inside the requested response budget.");
+  if (end <= expansion.cursor && expansion.cursor < expansion.record.text.length) {
+    throw new Error("Thread Recall could not fit expansion content inside the safe response budget.");
+  }
+  if (end < expansion.record.text.length) {
+    const newline = expansion.record.text.lastIndexOf("\n", end - 1);
+    if (newline >= expansion.cursor) end = newline + 1;
+  }
+  const markdown = renderExpansionPage(expansion, threadId, end);
+  if (markdown.length > WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS) {
+    throw new Error("Thread Recall expansion page exceeds the safe response budget.");
   }
   return markdown;
 }

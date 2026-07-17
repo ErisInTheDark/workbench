@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - runtime/dynamic: force Thread Recall reads onto the Node.js runtime without static caching. Keywords: thread recall, markdown, node.
- * - GET: read a CWD-owned Codex thread and return one bounded chronological recall page. Keywords: agent endpoint, thread recall, history, markdown.
- * - POST: search or expand narrative Thread Recall records through typed private CLI transport. Keywords: agent endpoint, thread recall, search, expand.
+ * - GET: read a CWD-owned Codex thread and return one filtered bounded chronological recall page. Keywords: agent endpoint, thread recall, history, markdown.
+ * - POST: page search results or one expanded narrative record through typed private CLI transport. Keywords: agent endpoint, thread recall, search, expand.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -13,7 +13,6 @@ import type {
   WorkbenchThreadRecallKind,
   WorkbenchThreadRecallRequest,
 } from "../../../../lib/types";
-import { WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS } from "../../../../lib/types";
 import { sendServerWorkbenchOrchestratorRequest } from "../../../../lib/codex/server-orchestrator";
 import { isProjectCodexThread, toThreadPayload } from "../../../../lib/codex/thread-adapter";
 import { resolveAgentEndpointProjectFromCwd } from "../../../../lib/workbench/project/agent-endpoint-project";
@@ -25,19 +24,21 @@ import {
   buildWorkbenchThreadRecallRecords,
   expandWorkbenchThreadRecall,
   searchWorkbenchThreadRecall,
+  selectWorkbenchThreadRecallRecords,
 } from "../../../../lib/workbench/thread/thread-context-recall";
-import { renderWorkbenchThreadRecallHistoryMarkdown } from "../../../../lib/workbench/thread/thread-context-markdown";
-import { buildWorkbenchThreadContextPieces } from "../../../../lib/workbench/thread/thread-context-projection";
+import { renderWorkbenchThreadRecallHistoryMarkdown } from "../../../../lib/workbench/thread/thread-context-recall-markdown";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const THREAD_RECALL_KINDS: readonly WorkbenchThreadRecallKind[] = [
-  "agent",
+  "agent-message",
+  "commentary",
+  "final-answer",
   "plan",
   "questionnaire",
-  "steer",
-  "user",
+  "user-message",
+  "user-steer",
 ];
 
 function readString(value: unknown) {
@@ -109,11 +110,19 @@ function parseRecallRequest(value: unknown): WorkbenchThreadRecallRequest {
     }
     const kinds = readRecallKinds(record.kinds);
     const limit = readOptionalInteger(record, "limit", 50);
+    if (limit === 0) {
+      throw new Error("Thread Recall search limit must be between 1 and 50.");
+    }
+    const before = readString(record.before);
+    if (before.length > 1_000) {
+      throw new Error("Thread Recall search before ref must contain at most 1,000 characters.");
+    }
     return {
       action,
       query,
       ...(kinds ? { kinds } : {}),
       ...(limit !== undefined ? { limit } : {}),
+      ...(before ? { before } : {}),
     };
   }
   if (action === "expand") {
@@ -121,15 +130,14 @@ function parseRecallRequest(value: unknown): WorkbenchThreadRecallRequest {
     if (!ref || ref.length > 1_000) {
       throw new Error("Thread Recall expand ref must contain 1 to 1,000 characters.");
     }
-    const before = readOptionalInteger(record, "before", 10);
-    const after = readOptionalInteger(record, "after", 10);
-    const maxChars = readOptionalInteger(record, "maxChars", WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS);
+    const cursor = readString(record.cursor);
+    if (cursor.length > 2_000) {
+      throw new Error("Thread Recall expansion cursor must contain at most 2,000 characters.");
+    }
     return {
       action,
       ref,
-      ...(before !== undefined ? { before } : {}),
-      ...(after !== undefined ? { after } : {}),
-      ...(maxChars !== undefined ? { maxChars } : {}),
+      ...(cursor ? { cursor } : {}),
     };
   }
   throw new Error("Thread Recall action must be search or expand.");
@@ -173,13 +181,16 @@ export async function GET(
   try {
     const { threadId } = await params;
     const bundle = await readThreadContextBundle(request, threadId);
-    const pieces = buildWorkbenchThreadContextPieces(bundle);
     const before = readString(request.nextUrl.searchParams.get("before")) || null;
     if (before && before.length > 1_000) {
       throw new Error("Thread Recall history ref must contain at most 1,000 characters.");
     }
-    return markdownResponse(renderWorkbenchThreadRecallHistoryMarkdown(pieces, {
+    const requestedKinds = request.nextUrl.searchParams.getAll("kind");
+    const kinds = (requestedKinds.length ? readRecallKinds(requestedKinds) : undefined) ?? THREAD_RECALL_KINDS;
+    const records = selectWorkbenchThreadRecallRecords(buildWorkbenchThreadRecallRecords(bundle), kinds);
+    return markdownResponse(renderWorkbenchThreadRecallHistoryMarkdown(records, {
       before,
+      kinds,
       threadId: bundle.thread.id,
     }));
   } catch (error) {
@@ -201,18 +212,18 @@ export async function POST(
         kinds: recallRequest.kinds ?? THREAD_RECALL_KINDS,
         limit: recallRequest.limit ?? 10,
         query: recallRequest.query,
+        before: recallRequest.before ?? null,
       });
-      return markdownResponse(renderWorkbenchThreadRecallSearchMarkdown(result));
+      return markdownResponse(renderWorkbenchThreadRecallSearchMarkdown(result, bundle.thread.id));
     }
 
     const expansion = expandWorkbenchThreadRecall(records, {
-      after: recallRequest.after ?? 2,
-      before: recallRequest.before ?? 2,
+      cursor: recallRequest.cursor ?? null,
       ref: recallRequest.ref,
     });
     return markdownResponse(renderWorkbenchThreadRecallExpansionMarkdown(
       expansion,
-      recallRequest.maxChars ?? 12_000,
+      bundle.thread.id,
     ));
   } catch (error) {
     return errorResponse(error);

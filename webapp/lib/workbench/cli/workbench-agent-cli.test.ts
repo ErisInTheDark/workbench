@@ -87,41 +87,45 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     responseKind: "thread-title",
   });
 
-  const recall = await parseWorkbenchAgentCliCommand(["thread", "recall", "--thread", "thread/1", "--before", "user:item-1"]);
-  const context = await parseWorkbenchAgentCliCommand(["thread", "context", "--thread", "thread/1", "--before", "user:item-1"]);
+  const recall = await parseWorkbenchAgentCliCommand([
+    "thread", "recall", "--thread", "thread/1", "--kind", "user-message", "--kind", "commentary", "--before", "user:item-1",
+  ]);
+  const context = await parseWorkbenchAgentCliCommand([
+    "thread", "context", "--thread", "thread/1", "--kind", "user-message", "--kind", "commentary", "--before", "user:item-1",
+  ]);
   assert.equal(recall.kind, "request");
   assert.equal(context.kind, "request");
   assert.deepEqual(context.request, recall.request);
-  assert.equal(recall.request.path, "/api/thread-context/thread%2F1?before=user%3Aitem-1");
+  assert.equal(recall.request.path, "/api/thread-context/thread%2F1?before=user%3Aitem-1&kind=user-message&kind=commentary");
 
   const search = await parseWorkbenchAgentCliCommand([
     "thread", "recall", "search", "--thread", "thread/1", "--query", "normal commentary",
-    "--kind", "user", "--kind", "agent", "--limit", "12",
+    "--kind", "user-message", "--kind", "commentary", "--limit", "12", "--before", "agent:item-9",
   ]);
   const contextSearch = await parseWorkbenchAgentCliCommand([
     "thread", "context", "search", "--thread", "thread/1", "--query", "normal commentary",
-    "--kind", "user", "--kind", "agent", "--limit", "12",
+    "--kind", "user-message", "--kind", "commentary", "--limit", "12", "--before", "agent:item-9",
   ]);
   assert.equal(search.kind, "request");
   assert.equal(contextSearch.kind, "request");
   assert.deepEqual(contextSearch.request, search.request);
   assert.deepEqual(search.request, {
-    body: { action: "search", kinds: ["user", "agent"], limit: 12, query: "normal commentary" },
+    body: { action: "search", before: "agent:item-9", kinds: ["user-message", "commentary"], limit: 12, query: "normal commentary" },
     method: "POST",
     path: "/api/thread-context/thread%2F1",
     responseKind: "native",
   });
+  assert.equal((await parseWorkbenchAgentCliCommand([
+    "thread", "recall", "search", "--thread", "thread/1", "--query", "needle", "--limit", "0",
+  ])).kind, "error");
 
   const expand = await parseWorkbenchAgentCliCommand([
-    "thread", "recall", "expand", "--thread", "thread/1", "--ref", "agent:item-2",
-    "--before", "1", "--after", "3", "--max-chars", "18000",
+    "thread", "recall", "expand", "--thread", "thread/1", "--ref", "agent:item-2", "--cursor", "recall-v1:cursor",
   ]);
   assert.equal(expand.kind, "request");
   assert.deepEqual(expand.request.body, {
     action: "expand",
-    after: 3,
-    before: 1,
-    maxChars: 18_000,
+    cursor: "recall-v1:cursor",
     ref: "agent:item-2",
   });
 
@@ -508,7 +512,7 @@ test("expands safe reload all without server replacement and keeps hard restart 
 test("runs the native shell transport and preserves the server response", async () => {
   const result = await execFileAsync("bash", [
     shellSourcePath,
-    "thread", "recall", "search", "--thread", "real-process", "--query", "needle", "--kind", "agent",
+    "thread", "recall", "search", "--thread", "real-process", "--query", "needle", "--kind", "commentary",
   ], {
     cwd: temporaryDirectoryPath,
     env: { ...process.env, WORKBENCH_ORIGIN: origin },
@@ -518,7 +522,7 @@ test("runs the native shell transport and preserves the server response", async 
   assert.equal(requests.at(-1)?.url, "/api/thread-context/real-process");
   assert.deepEqual(JSON.parse(requests.at(-1)?.body ?? "{}"), {
     action: "search",
-    kinds: ["agent"],
+    kinds: ["commentary"],
     query: "needle",
   });
 });

@@ -230,10 +230,12 @@ async function readLiteralOrFile(
   return null;
 }
 
-function queryPath(pathname: string, values: Record<string, string | null>) {
+function queryPath(pathname: string, values: Record<string, string | readonly string[] | null>) {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(values)) {
-    if (value) {
+    if (Array.isArray(value)) {
+      value.filter(Boolean).forEach((entry) => query.append(key, entry));
+    } else if (typeof value === "string" && value) {
       query.set(key, value);
     }
   }
@@ -385,55 +387,53 @@ const COMMANDS: readonly CommandDefinition[] = [
     description: "Search visible narrative history and return stable result references.",
     helpGroups: ["thread", "thread-recall"],
     words: ["thread", "recall", "search"],
-    usage: "wb thread recall search --thread <id> --query <text> [--kind <kind>...] [--limit <count>]",
+    usage: "wb thread recall search --thread <id> --query <text> [--kind <kind>...] [--limit <count>] [--before <ref>]",
     async build({ args }) {
       const flags = new ParsedFlags(args, {
         repeatable: ["--kind"],
-        values: [...THREAD_FLAG, "--query", "--limit"],
+        values: [...THREAD_FLAG, "--query", "--limit", "--before"],
       });
       const kinds = flags.repeated("--kind");
       const limit = flags.optionalNonNegativeInteger("--limit");
+      if (limit !== null && (limit < 1 || limit > 50)) throw new Error("--limit must be between 1 and 50.");
       return post(`/api/thread-context/${encodeURIComponent(flags.required("--thread"))}`, {
         action: "search",
         query: flags.required("--query"),
         ...(kinds.length ? { kinds } : {}),
         ...(limit !== null ? { limit } : {}),
+        ...(flags.optional("--before") ? { before: flags.optional("--before") } : {}),
       });
     },
   },
   {
     aliases: [["thread", "context", "expand"]],
     audiences: SHARED_HELP_AUDIENCES,
-    description: "Expand one referenced result with chronological neighbors.",
+    description: "Read one referenced record through fixed-budget content pages.",
     helpGroups: ["thread", "thread-recall"],
     words: ["thread", "recall", "expand"],
-    usage: "wb thread recall expand --thread <id> --ref <ref> [--before <count>] [--after <count>] [--max-chars <count>]",
+    usage: "wb thread recall expand --thread <id> --ref <ref> [--cursor <cursor>]",
     async build({ args }) {
-      const flags = new ParsedFlags(args, { values: [...THREAD_FLAG, "--ref", "--before", "--after", "--max-chars"] });
-      const before = flags.optionalNonNegativeInteger("--before");
-      const after = flags.optionalNonNegativeInteger("--after");
-      const maxChars = flags.optionalNonNegativeInteger("--max-chars");
+      const flags = new ParsedFlags(args, { values: [...THREAD_FLAG, "--ref", "--cursor"] });
       return post(`/api/thread-context/${encodeURIComponent(flags.required("--thread"))}`, {
         action: "expand",
         ref: flags.required("--ref"),
-        ...(before !== null ? { before } : {}),
-        ...(after !== null ? { after } : {}),
-        ...(maxChars !== null ? { maxChars } : {}),
+        ...(flags.optional("--cursor") ? { cursor: flags.optional("--cursor") } : {}),
       });
     },
   },
   {
     aliases: [["thread", "context"]],
     audiences: SHARED_HELP_AUDIENCES,
-    description: "Read the newest visible history page, or the page before a stable reference.",
+    description: "Read filtered history newest-first, or continue before an emitted cursor.",
     helpGroups: ["thread", "thread-recall"],
     words: ["thread", "recall"],
-    usage: "wb thread recall --thread <id> [--before <ref>]",
+    usage: "wb thread recall --thread <id> [--kind <kind>...] [--before <cursor>]",
     async build({ args }) {
-      const flags = new ParsedFlags(args, { values: [...THREAD_FLAG, "--before"] });
+      const flags = new ParsedFlags(args, { repeatable: ["--kind"], values: [...THREAD_FLAG, "--before"] });
       const threadId = flags.required("--thread");
       return get(queryPath(`/api/thread-context/${encodeURIComponent(threadId)}`, {
         before: flags.optional("--before"),
+        kind: flags.repeated("--kind"),
       }));
     },
   },
@@ -800,8 +800,9 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     aliases: [["thread", "context"]],
     commandOrder: ["thread recall", "thread recall search", "thread recall expand"],
     footer: [
-      "Recall includes user messages, agent commentary, questionnaires, plans, and steers.",
+      "Kinds: user-message, user-steer, questionnaire, commentary, final-answer, agent-message, plan.",
       "Recall excludes reasoning, raw commands, tool output, Browse data, hooks, and compaction markers.",
+      "Run one recall command at a time and follow the exact continuation command emitted by the current page.",
     ].join("\n"),
     key: "thread-recall",
     usage: "wb thread recall [command] [options]",

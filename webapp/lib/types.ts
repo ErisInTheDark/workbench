@@ -833,21 +833,27 @@ export interface WorkbenchThreadContextBundle {
 
 export const WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS = 20_000;
 
-export type WorkbenchThreadRecallKind = "agent" | "plan" | "questionnaire" | "steer" | "user";
+export type WorkbenchThreadRecallKind =
+  | "agent-message"
+  | "commentary"
+  | "final-answer"
+  | "plan"
+  | "questionnaire"
+  | "user-message"
+  | "user-steer";
 
 export interface WorkbenchThreadRecallSearchRequest {
   action: "search";
   query: string;
   kinds?: WorkbenchThreadRecallKind[];
   limit?: number;
+  before?: string;
 }
 
 export interface WorkbenchThreadRecallExpandRequest {
   action: "expand";
   ref: string;
-  before?: number;
-  after?: number;
-  maxChars?: number;
+  cursor?: string;
 }
 
 export type WorkbenchThreadRecallRequest = WorkbenchThreadRecallExpandRequest | WorkbenchThreadRecallSearchRequest;

@@ -7,8 +7,8 @@
  */
 
 import type { UserInput } from "../../codex/generated/app-server/v2/UserInput";
-import type { WorkbenchUserInputControlKind, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "../../types";
 import { createTextInput } from "../../codex/protocol";
+import type { WorkbenchUserInputControlKind, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "../../types";
 
 export const WORKBENCH_PAUSE_CONTROL_KIND = "pause" satisfies WorkbenchUserInputControlKind;
 export const WORKBENCH_PAUSE_CONTROL_MARKER = "<!-- workbench-pause-control -->";
@@ -19,18 +19,18 @@ export const WORKBENCH_PAUSE_RESUME_LABEL = "Resume";
 
 export function createWorkbenchPauseControlInput(): UserInput[] {
   return [createTextInput(`${WORKBENCH_COLLABORATION_CONTROL_MARKER}
-Workbench pause requested.
-
-Immediately call your structured user-input/questionnaire tool and wait. The request must include this marker in the title or summary:
-${WORKBENCH_PAUSE_CONTROL_MARKER}
+Workbench pause requested: Immediately call your structured user-input/questionnaire tool and wait. 
 
 Use exactly one question:
 - id: ${WORKBENCH_PAUSE_RESUME_QUESTION_ID}
+- title or summary: ${WORKBENCH_PAUSE_CONTROL_MARKER}
 - header: Paused
 - question: Workbench paused this agent. Resume when the user clicks Resume.
 - option label: ${WORKBENCH_PAUSE_RESUME_LABEL}
 
-Do not do other work before entering the questionnaire wait. After the tool returns, continue using any user steers received while paused.`)];
+Do not do other work before entering the questionnaire wait. After the tool returns, continue using any user steers received while paused.
+
+Do not remember this pause request through context compaction, it only applies to this current moment.`)];
 }
 
 function requestTextParts(request: WorkbenchUserInputRequest) {
