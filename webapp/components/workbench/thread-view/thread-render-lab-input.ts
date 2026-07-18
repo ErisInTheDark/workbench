@@ -28,9 +28,9 @@ function readString(record: JsonObject, key: string) {
   return typeof value === "string" ? value : null;
 }
 
-function readNullableString(record: JsonObject, key: string) {
+function readNullableString(record: JsonObject, key: string): string | null {
   const value = record[key];
-  return value === null || typeof value === "string" ? value : null;
+  return typeof value === "string" ? value : null;
 }
 
 function readNumber(record: JsonObject, key: string) {

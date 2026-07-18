@@ -84,10 +84,10 @@ test("serializes one session while allowing unrelated sessions to proceed", asyn
   const client = new FakeBrowseTransport();
   const runtime = new WorkbenchBrowseRuntime({ client, retireProcess: async () => undefined });
   const first = runtime.status("research");
-  await Promise.resolve();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   const second = runtime.status("research");
   const unrelated = runtime.status("other");
-  await Promise.resolve();
+  await new Promise<void>((resolve) => setImmediate(resolve));
 
   assert.deepEqual(client.calls, ["research", "other"]);
   assert.deepEqual(await unrelated, { initialized: true, session: "other" });

@@ -297,7 +297,12 @@ export default class WorkbenchAgentCommandController {
     const deadline = Date.now() + RELOAD_TIMEOUT_MS;
     while (state === "running" && Date.now() < deadline) {
       await waitForDelay(RELOAD_POLL_INTERVAL_MS, signal);
-      response = await this.fetchRequest(this.resolveUrl(request.path), { cache: "no-store", method: "GET", redirect: "error", signal });
+      try {
+        response = await this.fetchRequest(this.resolveUrl(request.path), { cache: "no-store", method: "GET", redirect: "error", signal });
+      } catch (error) {
+        if (signal.aborted) throw error;
+        continue;
+      }
       if (!response.ok) continue;
       text = await response.text();
       state = readReloadState(text);

@@ -36,7 +36,7 @@ test("PowerShell ripgrep summaries do not treat an uppercase context value as th
 
 test("PowerShell ripgrep summaries preserve lowercase count flags as non-consuming", () => {
   const display = getThreadCommandDisplay({
-    command: "rg -n -c needle webapp/components/workbench.tsx",
+    command: "pwsh -Command 'rg -n -c needle webapp/components/workbench.tsx'",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
@@ -244,7 +244,7 @@ test("all Workbench CLI matcher families show the alternate install cwd name", (
 
 test("command execution outcomes select the explicit ongoing tense", () => {
   const display = getThreadCommandDisplay({
-    command: "rg needle webapp",
+    command: "pwsh -Command 'rg needle webapp'",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,

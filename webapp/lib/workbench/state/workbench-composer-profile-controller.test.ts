@@ -60,7 +60,7 @@ async function waitFor(predicate: () => boolean) {
 }
 
 const CODEX_SETTINGS: WorkbenchComposerSettings = {
-  agentPath: "agent://lily.md",
+  agentPath: "library:agents/lily.md",
   agentSource: "library",
   harness: "codex",
   model: "gpt-5.4",
