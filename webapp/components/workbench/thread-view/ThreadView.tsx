@@ -724,6 +724,8 @@ export default memo(function ThreadView ({
   );
   const knownFirstSubagentPageRef = useRef(knownFirstSubagentPage);
   knownFirstSubagentPageRef.current = knownFirstSubagentPage;
+  const knownDirectSubagentsRef = useRef(knownDirectSubagents);
+  knownDirectSubagentsRef.current = knownDirectSubagents;
   const pinnedSubagentThreadIdSet = useMemo(
     () => new Set(pinnedSubagentThreadIds),
     [pinnedSubagentThreadIds],
@@ -753,6 +755,7 @@ export default memo(function ThreadView ({
       try {
         const page = await readWorkbenchSubagentPage({
           cwd: projectRootPath,
+          fallbackSubagents: knownDirectSubagentsRef.current,
           limit: SUBAGENT_PAGE_SIZE,
           parentThreadId: thread.id,
           signal: AbortSignal.any([lifecycleController.signal, AbortSignal.timeout(5_000)]),
@@ -1025,6 +1028,7 @@ export default memo(function ThreadView ({
       const page = await readWorkbenchSubagentPage({
         cursor,
         cwd: projectRootPath,
+        fallbackSubagents: knownDirectSubagents,
         limit: SUBAGENT_PAGE_SIZE,
         parentThreadId: thread.id,
         signal: AbortSignal.timeout(5_000),

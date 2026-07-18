@@ -15,6 +15,9 @@ export interface ThreadAgentLabelParts {
 }
 
 type ThreadAgentIdentity = Pick<ThreadPayload, "agentNickname" | "agentRole">;
+type CompatibleWorkbenchSubagentSummary = Omit<WorkbenchSubagentSummary, "directSubagentIndex"> & {
+  directSubagentIndex?: number;
+};
 
 const SUBAGENT_HUE_ROTATION_DEGREES = 1080 / 23;
 const SUBAGENT_STALE_AFTER_MS = 30 * 60_000;
@@ -33,6 +36,33 @@ function hashThreadId(value: string) {
   return hash >>> 0;
 }
 
+function normalizeWorkbenchSubagentSummaries(
+  summaries: readonly CompatibleWorkbenchSubagentSummary[],
+  fallbackSummaries: readonly WorkbenchSubagentSummary[] = [],
+) {
+  const fallbackIndexesByThreadId = new Map(
+    fallbackSummaries.map(({ directSubagentIndex, threadId }) => [threadId, directSubagentIndex]),
+  );
+  const summariesByParentThreadId = new Map<string, CompatibleWorkbenchSubagentSummary[]>();
+  for (const summary of [...fallbackSummaries, ...summaries]) {
+    const siblings = summariesByParentThreadId.get(summary.parentThreadId) ?? [];
+    if (!siblings.some(({ threadId }) => threadId === summary.threadId)) siblings.push(summary);
+    summariesByParentThreadId.set(summary.parentThreadId, siblings);
+  }
+  const projectedIndexesByThreadId = new Map<string, number>();
+  for (const siblings of summariesByParentThreadId.values()) {
+    siblings
+      .sort((left, right) => left.createdAt - right.createdAt || left.threadId.localeCompare(right.threadId))
+      .forEach(({ threadId }, index) => projectedIndexesByThreadId.set(threadId, index));
+  }
+  return summaries.map((summary): WorkbenchSubagentSummary => ({
+    ...summary,
+    directSubagentIndex: Number.isSafeInteger(summary.directSubagentIndex) && Number(summary.directSubagentIndex) >= 0
+      ? Number(summary.directSubagentIndex)
+      : fallbackIndexesByThreadId.get(summary.threadId) ?? projectedIndexesByThreadId.get(summary.threadId)!,
+  }));
+}
+
 export async function listWorkbenchSubagents({
   cwd,
   parentThreadId,
@@ -48,9 +78,9 @@ export async function listWorkbenchSubagents({
     cache: "no-store",
     signal,
   });
-  const payload = await response.json() as { error?: string; subagents?: WorkbenchSubagentSummary[] };
+  const payload = await response.json() as { error?: string; subagents?: CompatibleWorkbenchSubagentSummary[] };
   if (!response.ok) throw new Error(payload.error || "Unable to read Workbench subagents.");
-  return payload.subagents ?? [];
+  return normalizeWorkbenchSubagentSummaries(payload.subagents ?? []);
 }
 
 export async function readWorkbenchSubagentPage({
@@ -58,22 +88,27 @@ export async function readWorkbenchSubagentPage({
   cwd,
   limit = 20,
   parentThreadId,
+  fallbackSubagents = [],
   signal,
 }: {
   cursor?: string | null;
   cwd: string;
   limit?: number;
   parentThreadId: string;
+  fallbackSubagents?: readonly WorkbenchSubagentSummary[];
   signal: AbortSignal;
 }): Promise<WorkbenchSubagentPage> {
   const search = new URLSearchParams({ cwd, limit: String(limit), parentThreadId });
   if (cursor?.trim()) search.set("cursor", cursor.trim());
   const response = await fetch(`/api/subagents?${search.toString()}`, { cache: "no-store", signal });
-  const payload = await response.json() as Partial<WorkbenchSubagentPage> & { error?: string };
+  const payload = await response.json() as Omit<Partial<WorkbenchSubagentPage>, "subagents"> & {
+    error?: string;
+    subagents?: CompatibleWorkbenchSubagentSummary[];
+  };
   if (!response.ok) throw new Error(payload.error || "Unable to read Workbench subagents.");
   return {
     nextCursor: typeof payload.nextCursor === "string" ? payload.nextCursor : null,
-    subagents: payload.subagents ?? [],
+    subagents: normalizeWorkbenchSubagentSummaries(payload.subagents ?? [], fallbackSubagents),
   };
 }
 
@@ -236,7 +271,7 @@ export function getThreadAgentAccentColor(
 ) {
   const startingHue = hashThreadId(subagent.parentThreadId) % 360;
   const hue = (startingHue + SUBAGENT_HUE_ROTATION_DEGREES * subagent.directSubagentIndex) % 360;
-  return `oklch(var(--oklch-text-lightness) 100% ${hue}deg)`;
+  return `oklch(var(--oklch-text-lightness) 90% ${hue}deg)`;
 }
 
 export function getThreadAgentTabLabel(
