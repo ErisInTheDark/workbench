@@ -55,6 +55,7 @@ function summary({ cwd, name, projectId, threadId }: { cwd: string; name: string
     activityStatus: "inactive",
     createdAt: 1,
     cwd,
+    directSubagentIndex: 0,
     harness: "codex",
     lastActivityAt: 1,
     name,

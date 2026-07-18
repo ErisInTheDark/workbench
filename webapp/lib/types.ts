@@ -589,6 +589,7 @@ export interface WorkbenchSubagentRelationship {
   activityStatus: "active" | "inactive" | "unknown";
   createdAt: number;
   cwd: string;
+  directSubagentIndex: number;
   harness: WorkbenchHarness;
   lastActivityAt: number;
   name: string;
@@ -601,9 +602,7 @@ export interface WorkbenchSubagentRelationship {
   updatedAt: number;
 }
 
-export interface WorkbenchSubagentSummary extends WorkbenchSubagentRelationship {
-  directSubagentIndex: number;
-}
+export type WorkbenchSubagentSummary = WorkbenchSubagentRelationship;
 
 export interface WorkbenchSubagentPage {
   nextCursor: string | null;

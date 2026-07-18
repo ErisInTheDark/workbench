@@ -21,6 +21,7 @@ function summary(
     activityStatus: "inactive",
     createdAt: 1,
     cwd: "C:/workspace",
+    directSubagentIndex: 0,
     harness: "codex",
     lastActivityAt: 1,
     name: `Agent ${threadId}`,

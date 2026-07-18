@@ -275,12 +275,11 @@ export default class WorkbenchSubagentController {
       if (!profile || (profile.scope.kind === "project" && profile.scope.projectId !== caller.project.id)) throw new Error("That profile is not visible in this cwd project.");
       const reservationId = `pending:${randomUUID()}`;
       const now = Date.now();
-      const reservation: WorkbenchSubagentRelationship = {
+      const reservation = await this.subagentStore.reserve({
         activityStatus: "unknown", createdAt: now, cwd: caller.cwd, harness: profile.harness, lastActivityAt: now,
         name, parentThreadId: caller.callerThreadId, profileId: profile.id, profileName: profile.name,
         projectId: caller.project.id, threadId: reservationId, title, updatedAt: now,
-      };
-      await this.subagentStore.reserve(reservation);
+      });
       let childId = "";
       try {
         const start = await this.requestHarness<{ thread: Thread }>(client, profile.harness, {
