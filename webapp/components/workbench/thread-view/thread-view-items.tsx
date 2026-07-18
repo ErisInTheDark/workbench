@@ -664,6 +664,7 @@ function ThreadUserMessageItem ({
   projectRootPath,
   showStartedAt,
   startedAt,
+  subagents = [],
   workspaceRoots,
 }: {
   inlineMentionSources?: InlineMentionHighlightSources | null;
@@ -674,6 +675,7 @@ function ThreadUserMessageItem ({
   projectRootPath?: string;
   showStartedAt: boolean;
   startedAt: number | null;
+  subagents?: readonly WorkbenchSubagentSummary[];
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const subagentMessage = readWorkbenchSubagentMessageInput(item.content);
@@ -683,7 +685,7 @@ function ThreadUserMessageItem ({
       <ThreadSubagentIncomingMessage
         name={subagentMessage.name}
         steerState={steerState}
-        threadId={subagentMessage.threadId}
+        subagent={getSubagentSummary(subagents, subagentMessage.threadId)}
         timestamp={showStartedAt ? <ThreadMessageTimestamp className="mt-1" timestampSeconds={startedAt} /> : undefined}
       >
         <ThreadMarkdown
@@ -1698,7 +1700,6 @@ function ThreadCommandExecutionDetails ({
         profileId={subagentCommand.profileId}
         fallbackTitle={subagentCommand.title}
         subagent={createdThreadId ? getSubagentSummary(subagents, createdThreadId) : null}
-        threadId={createdThreadId}
       >
         <ThreadMarkdown
           inlineMentionSources={inlineMentionSources}
@@ -1724,7 +1725,6 @@ function ThreadCommandExecutionDetails ({
       <ThreadSubagentMessageItem
         subagent={getSubagentSummary(subagents, subagentThreadId)}
         thread={childThread}
-        threadId={subagentThreadId}
       >
         <ThreadMarkdown
           inlineMentionSources={inlineMentionSources}
@@ -1750,7 +1750,6 @@ function ThreadCommandExecutionDetails ({
         active={item.status === "inProgress"}
         subagent={getSubagentSummary(subagents, subagentThreadId)}
         thread={childThread}
-        threadId={subagentThreadId}
       />
     );
   }
@@ -2200,6 +2199,7 @@ function ThreadRenderableBlockViewComponent ({
           projectId={projectId}
           threadCwdPath={threadCwdPath}
           projectRootPath={projectRootPath}
+          subagents={subagents}
           workspaceRoots={workspaceRoots}
           showStartedAt={block === primaryUserBlock}
           startedAt={turnStartedAt}

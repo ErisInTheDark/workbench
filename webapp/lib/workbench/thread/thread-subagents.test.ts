@@ -27,6 +27,7 @@ const subagent: WorkbenchSubagentSummary = {
   activityStatus: "inactive",
   createdAt: 1,
   cwd: "C:/workspace",
+  directSubagentIndex: 0,
   harness: "codex",
   lastActivityAt: 1,
   name: "Mimi",
@@ -153,8 +154,8 @@ test("prefers the durable subagent name while preserving the agent role", () => 
   });
   assert.equal(getThreadAgentTabLabel(thread, subagent), "Mimi (reviewer)");
   assert.equal(
-    getThreadAgentAccentColor(thread, "child", subagent),
-    getThreadAgentAccentColor(null, "different fallback", subagent),
+    getThreadAgentAccentColor(subagent),
+    getThreadAgentAccentColor({ directSubagentIndex: 0, parentThreadId: "parent" }),
   );
 });
 

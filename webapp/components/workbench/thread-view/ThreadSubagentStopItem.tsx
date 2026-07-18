@@ -13,12 +13,10 @@ export default function ThreadSubagentStopItem ({
   active,
   subagent,
   thread,
-  threadId,
 }: {
   active: boolean;
   subagent?: WorkbenchSubagentSummary | null;
   thread?: ThreadPayload | null;
-  threadId: string;
 }) {
   return (
     <ThreadDisclosure
@@ -27,7 +25,7 @@ export default function ThreadSubagentStopItem ({
       summary={(
         <span>
           {active ? "Stopping " : "Stopped "}
-          <ThreadAgentName fallbackKey={threadId} subagent={subagent} thread={thread} />
+          <ThreadAgentName subagent={subagent} thread={thread} />
         </span>
       )}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"

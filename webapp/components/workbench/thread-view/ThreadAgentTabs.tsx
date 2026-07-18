@@ -100,7 +100,7 @@ export default function ThreadAgentTabs ({
             onClick={() => onSelectThread(tab.id)}
           >
             {tab.isPinned ? <PinIcon className="size-3.5 shrink-0" /> : null}
-            <ThreadAgentName fallbackKey={tab.id} subagent={tab.subagent} thread={tab.thread} />
+            <ThreadAgentName subagent={tab.subagent} thread={tab.thread} />
             {tab.suffix ? <span className="text-muted">{tab.suffix}</span> : null}
             {badgeView(tab.badge)}
           </button>

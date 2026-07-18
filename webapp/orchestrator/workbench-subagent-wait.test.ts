@@ -10,7 +10,7 @@ import { test } from "node:test";
 
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { CodexJsonRpcResponse } from "../lib/codex/protocol";
-import type { WorkbenchSubagentSummary, WorkbenchUserInputRequest } from "../lib/types";
+import type { WorkbenchSubagentRelationship, WorkbenchUserInputRequest } from "../lib/types";
 import { resolveAgentEndpointProjectFromCwd } from "../lib/workbench/project/agent-endpoint-project";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 
@@ -50,7 +50,7 @@ function thread(threadId: string, cwd: string, active: boolean): Thread {
   } as Thread;
 }
 
-function summary({ cwd, name, projectId, threadId }: { cwd: string; name: string; projectId: string; threadId: string }): WorkbenchSubagentSummary {
+function summary({ cwd, name, projectId, threadId }: { cwd: string; name: string; projectId: string; threadId: string }): WorkbenchSubagentRelationship {
   return {
     activityStatus: "inactive",
     createdAt: 1,

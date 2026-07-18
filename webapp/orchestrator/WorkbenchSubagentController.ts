@@ -15,7 +15,7 @@ import type {
   WorkbenchComposerProfile,
   WorkbenchHarness,
   WorkbenchPendingUserInputRequest,
-  WorkbenchSubagentSummary,
+  WorkbenchSubagentRelationship,
 } from "../lib/types";
 import {
   resolveAgentEndpointProjectFromCwd,
@@ -275,7 +275,7 @@ export default class WorkbenchSubagentController {
       if (!profile || (profile.scope.kind === "project" && profile.scope.projectId !== caller.project.id)) throw new Error("That profile is not visible in this cwd project.");
       const reservationId = `pending:${randomUUID()}`;
       const now = Date.now();
-      const reservation: WorkbenchSubagentSummary = {
+      const reservation: WorkbenchSubagentRelationship = {
         activityStatus: "unknown", createdAt: now, cwd: caller.cwd, harness: profile.harness, lastActivityAt: now,
         name, parentThreadId: caller.callerThreadId, profileId: profile.id, profileName: profile.name,
         projectId: caller.project.id, threadId: reservationId, title, updatedAt: now,
@@ -345,7 +345,7 @@ export default class WorkbenchSubagentController {
     return (await this.requestHarness<PendingQuestionnaireList>(client, harness, { method: "questionnaire/list", params: { cwd } })).data;
   }
 
-  private async pendingQuestionnaire(client: WorkbenchSubagentHarnessClient, record: WorkbenchSubagentSummary) {
+  private async pendingQuestionnaire(client: WorkbenchSubagentHarnessClient, record: WorkbenchSubagentRelationship) {
     return (await this.pendingQuestionnaires(client, record.harness, record.cwd)).find((entry) => entry.threadId === record.threadId) ?? null;
   }
 

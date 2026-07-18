@@ -3,7 +3,7 @@
  * - listWorkbenchSubagents/readWorkbenchSubagentPage: fetch durable project metadata or one bounded parent page without joining thread hydration. Keywords: workbench, thread, subagent, metadata, fetch, pagination.
  * - mergeWorkbenchSubagentSummaries/reconcileWorkbenchSubagentPage/getSubagentThreadIds/getSubagentSummary/getSubagentHarness/filterSubagentsByParentThreadId/filterSubagentThreadSummaries: merge, reconcile, derive, and filter direct-child identity from durable summaries. Keywords: workbench, thread, subagent, metadata, harness, sidebar.
  * - sortWorkbenchSubagents/getSubagentTabLayout/getNextSubagentHydrationBatch/getSubagentPollingBatch: derive pinned-first activity order, stale folding, and bounded background work. Keywords: subagent, tabs, pinned, activity, hydration, polling, batch.
- * - getThreadAgentAccentColor/getThreadAgentLabelParts/getThreadAgentTabLabel: stable child colors and metadata-first labels. Keywords: subagent, color, label, tabs.
+ * - getThreadAgentAccentColor/getThreadAgentLabelParts/getThreadAgentTabLabel: parent-derived child colors and metadata-first labels. Keywords: subagent, color, hue, label, tabs.
  */
 import type { ThreadPayload, ThreadSummary, WorkbenchSubagentPage, WorkbenchSubagentSummary } from "../../types";
 import { areDeeplyEqual } from "../deep-equality";
@@ -16,9 +16,7 @@ export interface ThreadAgentLabelParts {
 
 type ThreadAgentIdentity = Pick<ThreadPayload, "agentNickname" | "agentRole">;
 
-const THREAD_AGENT_ACCENT_PALETTE = [
-  0, 30, 60, 120, 150, 180, 210, 240, 270, 300, 330,
-].map((hue) => `oklch(var(--oklch-text-lightness) 100% ${hue}deg)`);
+const SUBAGENT_HUE_ROTATION_DEGREES = 1080 / 23;
 const SUBAGENT_STALE_AFTER_MS = 30 * 60_000;
 const SUBAGENT_BACKGROUND_BATCH_SIZE = 4;
 
@@ -26,13 +24,13 @@ function normalizeLabel(value: string | null | undefined) {
   return value?.trim() || null;
 }
 
-function hashLabel(value: string) {
-  let hash = 0;
-  for (const character of value) {
-    hash = ((hash << 5) - hash) + character.charCodeAt(0);
-    hash |= 0;
+function hashThreadId(value: string) {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
   }
-  return Math.abs(hash);
+  return hash >>> 0;
 }
 
 export async function listWorkbenchSubagents({
@@ -234,17 +232,11 @@ export function getThreadAgentLabelParts(
 }
 
 export function getThreadAgentAccentColor(
-  thread: Partial<ThreadAgentIdentity> | null | undefined,
-  fallbackKey = "",
-  subagent?: WorkbenchSubagentSummary | null,
+  subagent: Pick<WorkbenchSubagentSummary, "directSubagentIndex" | "parentThreadId">,
 ) {
-  const label = normalizeLabel(subagent?.name)
-    ?? normalizeLabel(fallbackKey)
-    ?? normalizeLabel(thread?.agentNickname)
-    ?? normalizeLabel(thread?.agentRole)
-    ?? "subagent";
-  return THREAD_AGENT_ACCENT_PALETTE[hashLabel(label) % THREAD_AGENT_ACCENT_PALETTE.length]
-    ?? THREAD_AGENT_ACCENT_PALETTE[0];
+  const startingHue = hashThreadId(subagent.parentThreadId) % 360;
+  const hue = (startingHue + SUBAGENT_HUE_ROTATION_DEGREES * subagent.directSubagentIndex) % 360;
+  return `oklch(var(--oklch-text-lightness) 100% ${hue}deg)`;
 }
 
 export function getThreadAgentTabLabel(

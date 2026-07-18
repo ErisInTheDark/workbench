@@ -6,19 +6,21 @@
 
 import type { ReactNode } from "react";
 
+import type { WorkbenchSubagentSummary } from "../../../lib/types";
+
 import ThreadAgentName from "./ThreadAgentName";
 
 export default function ThreadSubagentIncomingMessage ({
   children,
   name,
+  subagent,
   steerState,
-  threadId,
   timestamp,
 }: {
   children: ReactNode;
   name: string;
+  subagent?: WorkbenchSubagentSummary | null;
   steerState: "pending" | "unsent" | null;
-  threadId: string;
   timestamp?: ReactNode;
 }) {
   const decorated = steerState !== null;
@@ -31,7 +33,7 @@ export default function ThreadSubagentIncomingMessage ({
       <div className={`w-full max-w-[42rem]${decorated ? steerMessageClass : " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3"}`}>
         <div className={`space-y-2 text-left${decorated ? " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3" : ""}`}>
           <p className="m-0 text-[0.78em] font-medium leading-[1.5] text-muted">
-            <ThreadAgentName fallbackKey={threadId} thread={{ agentNickname: name, agentRole: null }} /> sent a message
+            <ThreadAgentName subagent={subagent} thread={{ agentNickname: name, agentRole: null }} /> sent a message
           </p>
           {children}
         </div>

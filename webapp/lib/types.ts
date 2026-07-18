@@ -585,7 +585,7 @@ export interface WorkbenchComposerProfileStorePayload {
   profiles: WorkbenchComposerProfile[];
 }
 
-export interface WorkbenchSubagentSummary {
+export interface WorkbenchSubagentRelationship {
   activityStatus: "active" | "inactive" | "unknown";
   createdAt: number;
   cwd: string;
@@ -599,6 +599,10 @@ export interface WorkbenchSubagentSummary {
   threadId: string;
   title: string;
   updatedAt: number;
+}
+
+export interface WorkbenchSubagentSummary extends WorkbenchSubagentRelationship {
+  directSubagentIndex: number;
 }
 
 export interface WorkbenchSubagentPage {

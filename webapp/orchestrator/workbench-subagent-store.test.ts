@@ -8,15 +8,15 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import type { WorkbenchSubagentSummary } from "../lib/types";
+import type { WorkbenchSubagentRelationship } from "../lib/types";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 
 function summary(
   parentThreadId: string,
   threadId: string,
-  overrides: Partial<WorkbenchSubagentSummary> = {},
-): WorkbenchSubagentSummary {
+  overrides: Partial<WorkbenchSubagentRelationship> = {},
+): WorkbenchSubagentRelationship {
   return {
     activityStatus: "inactive",
     createdAt: 1,

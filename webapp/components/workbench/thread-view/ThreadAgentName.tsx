@@ -7,13 +7,11 @@ import { getThreadAgentAccentColor, getThreadAgentLabelParts } from "../../../li
 
 export default function ThreadAgentName ({
   className = "",
-  fallbackKey = "",
   roleClassName = "text-muted",
   subagent,
   thread,
 }: {
   className?: string;
-  fallbackKey?: string;
   roleClassName?: string;
   subagent?: WorkbenchSubagentSummary | null;
   thread: {
@@ -36,7 +34,7 @@ export default function ThreadAgentName ({
 
   return (
     <span className={className}>
-      <span className="font-medium" style={{ color: getThreadAgentAccentColor(thread, fallbackKey, subagent) }}>{label.nickname}</span>
+      <span className="font-medium" style={subagent ? { color: getThreadAgentAccentColor(subagent) } : undefined}>{label.nickname}</span>
       {hasDistinctRole ? <span className={roleClassName}> ({label.role})</span> : null}
     </span>
   );

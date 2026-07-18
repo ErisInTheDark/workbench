@@ -79,7 +79,6 @@ export default function ThreadSubagentWaitItem ({
               ? entries.length === 2 ? " and " : ", and "
               : ", "}
           <ThreadAgentName
-            fallbackKey={entry.threadId}
             subagent={entry.subagent}
             thread={entry.thread}
           />
@@ -136,7 +135,7 @@ export default function ThreadSubagentWaitItem ({
                   role="tab"
                   type="button"
                 >
-                  <ThreadAgentName fallbackKey={entry.threadId} subagent={entry.subagent} thread={entry.thread} />
+                  <ThreadAgentName subagent={entry.subagent} thread={entry.thread} />
                 </button>
               );
             })}

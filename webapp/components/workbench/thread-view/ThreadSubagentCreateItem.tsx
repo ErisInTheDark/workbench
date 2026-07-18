@@ -20,7 +20,6 @@ export default function ThreadSubagentCreateItem ({
   fallbackTitle,
   profileId,
   subagent,
-  threadId,
 }: {
   active: boolean;
   children: ReactNode;
@@ -28,7 +27,6 @@ export default function ThreadSubagentCreateItem ({
   fallbackTitle: string;
   profileId: string;
   subagent?: WorkbenchSubagentSummary | null;
-  threadId?: string | null;
 }) {
   const composerProfileContext = useContext(WorkbenchComposerProfileContext);
   const name = subagent?.name ?? fallbackName;
@@ -46,7 +44,6 @@ export default function ThreadSubagentCreateItem ({
         <span>
           {active ? "Creating " : "Created "}
           <ThreadAgentName
-            fallbackKey={threadId ?? name}
             subagent={subagent}
             thread={{ agentNickname: name, agentRole: null }}
           />

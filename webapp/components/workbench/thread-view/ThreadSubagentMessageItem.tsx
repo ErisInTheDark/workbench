@@ -16,12 +16,10 @@ export default function ThreadSubagentMessageItem ({
   children,
   subagent,
   thread,
-  threadId,
 }: {
   children: ReactNode;
   subagent?: WorkbenchSubagentSummary | null;
   thread?: ThreadPayload | null;
-  threadId: string;
 }) {
   return (
     <ThreadDisclosure
@@ -29,7 +27,7 @@ export default function ThreadSubagentMessageItem ({
       contentClassName="mt-2 pl-6"
       summary={(
         <span>
-          Messaged <ThreadAgentName fallbackKey={threadId} subagent={subagent} thread={thread} />
+          Messaged <ThreadAgentName subagent={subagent} thread={thread} />
         </span>
       )}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"
