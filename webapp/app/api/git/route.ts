@@ -42,11 +42,12 @@ export async function POST(request: NextRequest) {
     const body = await request.json() as Record<string, unknown>;
     const action = readAction(body.action);
     const cwd = readString(body.cwd);
+    const targetWorktree = readString(body.targetWorktree) || undefined;
     const threadId = readString(body.threadId);
     if (!action) return NextResponse.json({ error: "A valid thread Git action is required." }, { status: 400 });
     if (!threadId) return NextResponse.json({ error: "A managed Workbench thread id is required." }, { status: 400 });
     const resolved = await resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Thread Git" });
-    const threadGit = await WorkbenchThreadGit.create({ cwd: resolved.cwd, threadId });
+    const threadGit = await WorkbenchThreadGit.create({ cwd: resolved.cwd, targetWorktree, threadId });
 
     if (action === "commit") {
       const result = await threadGit.commit(readString(body.message));

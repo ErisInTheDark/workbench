@@ -131,7 +131,7 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
 
   const gitOptions = { callerThreadId: "thread-1", cwd: "C:/workspace" };
   const gitAdd = await parseWorkbenchAgentCliCommand([
-    "git", "add", "--thread", "thread-1", "--", "src/file.ts", "src/nested",
+    "git", "add", "--", "src/file.ts", "src/nested",
   ], gitOptions);
   assert.equal(gitAdd.kind, "request");
   assert.deepEqual(gitAdd.request, {
@@ -145,13 +145,24 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     path: "/api/git",
     responseKind: "native",
   });
+  const explicitWorktree = await parseWorkbenchAgentCliCommand([
+    "git", "add", "--worktree", "C:/workspace/.worktrees/lab", "--", "src/file.ts",
+  ], gitOptions);
+  assert.equal(explicitWorktree.kind, "request");
+  assert.deepEqual(explicitWorktree.request.body, {
+    action: "add",
+    cwd: "C:/workspace",
+    paths: ["src/file.ts"],
+    targetWorktree: "C:/workspace/.worktrees/lab",
+    threadId: "thread-1",
+  });
   const powerShellGitAdd = await parseWorkbenchAgentCliCommand([
-    "git", "add", "--thread", "thread-1", "src/file.ts", "src/nested",
+    "git", "add", "src/file.ts", "src/nested",
   ], gitOptions);
   assert.equal(powerShellGitAdd.kind, "request");
   assert.deepEqual(powerShellGitAdd.request, gitAdd.request);
   const gitUnstage = await parseWorkbenchAgentCliCommand([
-    "git", "unstage", "--thread", "thread-1", "--", ".",
+    "git", "unstage", "--", ".",
   ], gitOptions);
   assert.equal(gitUnstage.kind, "request");
   assert.deepEqual(gitUnstage.request.body, {
@@ -161,7 +172,7 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     threadId: "thread-1",
   });
   const gitCommit = await parseWorkbenchAgentCliCommand([
-    "git", "commit", "--thread", "thread-1", "--message", "A bounded commit",
+    "git", "commit", "--message", "A bounded commit",
   ], gitOptions);
   assert.equal(gitCommit.kind, "request");
   assert.deepEqual(gitCommit.request.body, {
@@ -170,13 +181,19 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     message: "A bounded commit",
     threadId: "thread-1",
   });
+  const explicitWorktreeCommit = await parseWorkbenchAgentCliCommand([
+    "git", "commit", "--worktree", "C:/workspace/.worktrees/lab", "--message", "A bounded commit",
+  ], gitOptions);
+  assert.equal(explicitWorktreeCommit.kind, "request");
+  assert.equal(explicitWorktreeCommit.request.body?.targetWorktree, "C:/workspace/.worktrees/lab");
   assert.equal((await parseWorkbenchAgentCliCommand([
-    "git", "commit", "--thread", "other-thread", "--message", "Nope",
+    "git", "commit", "--thread", "thread-1", "--message", "Nope",
   ], gitOptions)).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["git", "add", "--", "src/file.ts"], { callerThreadId: null, cwd: "C:/workspace" })).kind, "error");
 
   const checkpoint = await parseWorkbenchAgentCliCommand([
-    "checkpoint", "file-diff", "--thread", "thread-1", "--commit", "abc", "--file", "src/file.ts",
-  ], { cwd: "C:/workspace" });
+    "checkpoint", "file-diff", "--commit", "abc", "--file", "src/file.ts",
+  ], gitOptions);
   assert.equal(checkpoint.kind, "request");
   assert.deepEqual(checkpoint.request.body, {
     action: "fileDiff",
@@ -188,20 +205,20 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   assert.equal(checkpoint.request.responseKind, "native");
 
   const canonicalCheckpoint = await parseWorkbenchAgentCliCommand([
-    "git", "checkpoint", "file-diff", "--thread", "thread-1", "--commit", "abc", "--file", "src/file.ts",
-  ], { cwd: "C:/workspace" });
+    "git", "checkpoint", "file-diff", "--commit", "abc", "--file", "src/file.ts",
+  ], gitOptions);
   assert.equal(canonicalCheckpoint.kind, "request");
   assert.deepEqual(canonicalCheckpoint.request, checkpoint.request);
 
   const checkpointDiff = await parseWorkbenchAgentCliCommand([
-    "checkpoint", "diff", "--thread", "thread-1", "--commit", "abc",
-  ]);
+    "checkpoint", "diff", "--commit", "abc",
+  ], gitOptions);
   assert.equal(checkpointDiff.kind, "request");
   assert.equal(checkpointDiff.request.responseKind, "native");
 
   const checkpointRestore = await parseWorkbenchAgentCliCommand([
-    "checkpoint", "restore", "--thread", "thread-1", "--commit", "abc", "--confirm",
-  ]);
+    "checkpoint", "restore", "--commit", "abc", "--confirm",
+  ], gitOptions);
   assert.equal(checkpointRestore.kind, "request");
   assert.equal(checkpointRestore.request.responseKind, "checkpoint-restore");
 
@@ -363,7 +380,7 @@ test("renders complete root help and exact focused Git and orchestrator help", a
   assert.match(WORKBENCH_AGENT_CLI_HELP, /wb collaboration memory write/u);
   assert.match(WORKBENCH_AGENT_CLI_HELP, /Help commands:\n  wb subagent --help \[--thread <id>\][\s\S]*  wb collaboration memory --help \[--thread <id>\]/u);
   assert.match(WORKBENCH_AGENT_CLI_HELP, /  wb thread recall --help \[--thread <id>\]/u);
-  assert.match(WORKBENCH_AGENT_CLI_HELP, /  wb git checkpoint --help \[--thread <id>\]/u);
+  assert.match(WORKBENCH_AGENT_CLI_HELP, /  wb git checkpoint --help/u);
   assert.doesNotMatch(WORKBENCH_AGENT_CLI_HELP, /Workbench agent CLI|Compatibility alias|--hard|--orchestrator-server/u);
 
   const git = await parseWorkbenchAgentCliCommand(["git", "--help"]);
@@ -372,18 +389,19 @@ test("renders complete root help and exact focused Git and orchestrator help", a
   wb git <command> [options]
 
 Commands:
-  wb git add --thread <id> -- <path> [<path>...]
+  wb git add [--worktree <absolute-path>] -- <path> [<path>...]
     Add currently changed files beneath the paths to this thread's commit selection.
 
-  wb git unstage --thread <id> -- <path> [<path>...]
+  wb git unstage [--worktree <absolute-path>] -- <path> [<path>...]
     Remove exact files or descendants from this thread's commit selection.
 
-  wb git commit --thread <id> --message <message>
+  wb git commit [--worktree <absolute-path>] --message <message>
     Commit only this thread's selected files, then clear the selection on success.
 
 Run from the repository root and use . with add to select all changed files.
 Run from the repository root and use . with unstage to clear the thread selection.
-Git commands must use the current managed thread ID.
+Use --worktree with an absolute registered worktree path while keeping the command cwd as the control-plane project.
+Git commands derive the current managed thread ID from Workbench caller context.
 Unrelated files in the ordinary Git index remain outside the thread-owned commit.
 `,
     kind: "help",

@@ -22,6 +22,7 @@ const STALE_TRANSACTION_AGE_MS = 5 * 60 * 1000;
 interface WorkbenchThreadGitOptions {
   cwd: string;
   storageRootPath?: string;
+  targetWorktree?: string;
   threadId: string;
 }
 
@@ -91,6 +92,22 @@ async function resolveRepoRoot(cwd: string) {
   return path.resolve(repoRoot);
 }
 
+function pathsEqual(left: string, right: string) {
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+async function resolveRegisteredWorktree(controlRepoRoot: string, targetWorktree: string) {
+  if (!path.isAbsolute(targetWorktree)) throw new Error("Explicit Git worktree must be an absolute path.");
+  const requestedRoot = path.resolve(targetWorktree);
+  const registeredRoots = (await runGit(controlRepoRoot, ["worktree", "list", "--porcelain"]))
+    .split(/\r?\n/gu)
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => path.resolve(line.slice("worktree ".length)));
+  const registeredRoot = registeredRoots.find((candidate) => pathsEqual(candidate, requestedRoot));
+  if (!registeredRoot) throw new Error("Explicit Git target is not a registered Git worktree of the control repository.");
+  return registeredRoot;
+}
+
 export default class WorkbenchThreadGit {
   readonly cwd: string;
   readonly repoRoot: string;
@@ -117,11 +134,15 @@ export default class WorkbenchThreadGit {
     this.transactionsDirectoryPath = path.join(selectionRootPath, "transactions");
   }
 
-  static async create({ cwd, storageRootPath = workbenchLibraryRoot, threadId }: WorkbenchThreadGitOptions) {
+  static async create({ cwd, storageRootPath = workbenchLibraryRoot, targetWorktree, threadId }: WorkbenchThreadGitOptions) {
     const normalizedThreadId = threadId.trim();
     if (!normalizedThreadId) throw new Error("A managed Workbench thread id is required.");
-    const resolvedCwd = path.resolve(cwd);
-    const repoRoot = await resolveRepoRoot(resolvedCwd);
+    const controlCwd = path.resolve(cwd);
+    const controlRepoRoot = await resolveRepoRoot(controlCwd);
+    const repoRoot = targetWorktree
+      ? await resolveRegisteredWorktree(controlRepoRoot, targetWorktree)
+      : controlRepoRoot;
+    const resolvedCwd = targetWorktree ? repoRoot : controlCwd;
     const worktreeHash = createHash("sha256").update(repoRoot).digest("hex");
     return new WorkbenchThreadGit({
       cwd: resolvedCwd,

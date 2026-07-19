@@ -185,17 +185,15 @@ const RELOAD_SWITCHES = [
   "--next-dev",
 ] as const;
 
-function readOwnedThreadId(flags: ParsedFlags, callerThreadId: string | null) {
+function requireCallerThreadId(callerThreadId: string | null) {
   if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
-  const threadId = flags.required("--thread");
-  if (threadId !== callerThreadId) throw new Error("Git operations must use the current managed Workbench thread id.");
-  return threadId;
+  return callerThreadId;
 }
 
 function preservePowerShellTrailingPaths(args: string[]) {
   if (args.includes("--")) return args;
   for (let index = 0; index < args.length; index += 1) {
-    if (args[index] === "--thread") {
+    if (args[index] === "--worktree") {
       index += 1;
       continue;
     }
@@ -444,15 +442,17 @@ const COMMANDS: readonly CommandDefinition[] = [
       : "Remove exact files or descendants from this thread's commit selection.",
     helpGroups: ["git"],
     words: ["git", action],
-    usage: `wb git ${action} --thread <id> -- <path> [<path>...]`,
+    usage: `wb git ${action} [--worktree <absolute-path>] -- <path> [<path>...]`,
     async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args), { trailing: true, values: THREAD_FLAG });
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args), { trailing: true, values: ["--worktree"] });
       if (!flags.trailing.length) throw new Error(`wb git ${action} requires at least one path.`);
+      const targetWorktree = flags.optional("--worktree");
       return post("/api/git", {
         action,
         cwd,
         paths: flags.trailing,
-        threadId: readOwnedThreadId(flags, callerThreadId),
+        ...(targetWorktree ? { targetWorktree } : {}),
+        threadId: requireCallerThreadId(callerThreadId),
       });
     },
   })),
@@ -461,14 +461,16 @@ const COMMANDS: readonly CommandDefinition[] = [
     description: "Commit only this thread's selected files, then clear the selection on success.",
     helpGroups: ["git"],
     words: ["git", "commit"],
-    usage: "wb git commit --thread <id> --message <message>",
+    usage: "wb git commit [--worktree <absolute-path>] --message <message>",
     async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(args, { values: [...THREAD_FLAG, "--message"] });
+      const flags = new ParsedFlags(args, { values: ["--message", "--worktree"] });
+      const targetWorktree = flags.optional("--worktree");
       return post("/api/git", {
         action: "commit",
         cwd,
         message: flags.required("--message"),
-        threadId: readOwnedThreadId(flags, callerThreadId),
+        ...(targetWorktree ? { targetWorktree } : {}),
+        threadId: requireCallerThreadId(callerThreadId),
       });
     },
   },
@@ -480,13 +482,13 @@ const COMMANDS: readonly CommandDefinition[] = [
       : "Preserve the current worktree as an explicit diff checkpoint.",
     helpGroups: ["git-checkpoint"],
     words: ["git", "checkpoint", action],
-    usage: `wb git checkpoint ${action} --thread <id>`,
-    async build({ args, cwd }) {
-      const flags = new ParsedFlags(args, { values: THREAD_FLAG });
+    usage: `wb git checkpoint ${action}`,
+    async build({ args, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(args, {});
       return post("/api/git-checkpoint", {
         action: action === "create-diff" ? "diffCheckpoint" : "baseline",
         cwd,
-        threadId: flags.required("--thread"),
+        threadId: requireCallerThreadId(callerThreadId),
       }, "checkpoint-create");
     },
   })),
@@ -496,14 +498,14 @@ const COMMANDS: readonly CommandDefinition[] = [
     description: "Summarize worktree changes since the specified checkpoint.",
     helpGroups: ["git-checkpoint"],
     words: ["git", "checkpoint", "diff"],
-    usage: "wb git checkpoint diff --thread <id> --commit <sha>",
-    async build({ args, cwd }) {
-      const flags = new ParsedFlags(args, { values: [...THREAD_FLAG, "--commit"] });
+    usage: "wb git checkpoint diff --commit <sha>",
+    async build({ args, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(args, { values: ["--commit"] });
       return post("/api/git-checkpoint", {
         action: "diff",
         checkpointCommit: flags.required("--commit"),
         cwd,
-        threadId: flags.required("--thread"),
+        threadId: requireCallerThreadId(callerThreadId),
       });
     },
   },
@@ -513,15 +515,15 @@ const COMMANDS: readonly CommandDefinition[] = [
     description: "Show the unified diff for one file since the specified checkpoint.",
     helpGroups: ["git-checkpoint"],
     words: ["git", "checkpoint", "file-diff"],
-    usage: "wb git checkpoint file-diff --thread <id> --commit <sha> --file <path>",
-    async build({ args, cwd }) {
-      const flags = new ParsedFlags(args, { values: [...THREAD_FLAG, "--commit", "--file"] });
+    usage: "wb git checkpoint file-diff --commit <sha> --file <path>",
+    async build({ args, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(args, { values: ["--commit", "--file"] });
       return post("/api/git-checkpoint", {
         action: "fileDiff",
         checkpointCommit: flags.required("--commit"),
         cwd,
         filePath: flags.required("--file"),
-        threadId: flags.required("--thread"),
+        threadId: requireCallerThreadId(callerThreadId),
       });
     },
   },
@@ -531,9 +533,9 @@ const COMMANDS: readonly CommandDefinition[] = [
     description: "Restore the specified checkpoint after explicit confirmation.",
     helpGroups: ["git-checkpoint"],
     words: ["git", "checkpoint", "restore"],
-    usage: "wb git checkpoint restore --thread <id> --commit <sha> --confirm",
-    async build({ args, cwd }) {
-      const flags = new ParsedFlags(args, { boolean: ["--confirm"], values: [...THREAD_FLAG, "--commit"] });
+    usage: "wb git checkpoint restore --commit <sha> --confirm",
+    async build({ args, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(args, { boolean: ["--confirm"], values: ["--commit"] });
       if (!flags.has("--confirm")) {
         throw new Error("Checkpoint restore requires --confirm.");
       }
@@ -542,7 +544,7 @@ const COMMANDS: readonly CommandDefinition[] = [
         checkpointCommit: flags.required("--commit"),
         confirmRestore: true,
         cwd,
-        threadId: flags.required("--thread"),
+        threadId: requireCallerThreadId(callerThreadId),
       }, "checkpoint-restore");
     },
   },
@@ -813,7 +815,8 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     footer: [
       "Run from the repository root and use . with add to select all changed files.",
       "Run from the repository root and use . with unstage to clear the thread selection.",
-      "Git commands must use the current managed thread ID.",
+      "Use --worktree with an absolute registered worktree path while keeping the command cwd as the control-plane project.",
+      "Git commands derive the current managed thread ID from Workbench caller context.",
       "Unrelated files in the ordinary Git index remain outside the thread-owned commit.",
     ].join("\n"),
     key: "git",

@@ -549,11 +549,13 @@ function buildWorkbenchGitInstructions(context: WorkbenchPromptContext) {
 
 When workflows or the user explicitly authorize a commit, use Workbench's bounded, thread-owned commit-selection workflow instead:
 
-\`wb git add --thread ${threadId} -- <path> [<path>...]\`
+\`wb git add -- <path> [<path>...]\`
 
-\`wb git unstage --thread ${threadId} -- <path> [<path>...]\`
+\`wb git unstage -- <path> [<path>...]\`
 
-\`wb git commit --thread ${threadId} --message <message>\`
+\`wb git commit --message <message>\`
+
+When the control-plane project owns the thread but the files belong to another registered worktree of the same repository, keep the command cwd in the control-plane project and add \`--worktree <absolute-path>\` to each add, unstage, and commit command. The explicit worktree selects the Git execution root and the thread's per-worktree selection namespace; it does not reinterpret thread identity.
 
 \`wb git add\` records the exact files that are currently changed beneath the requested paths. It does not snapshot their contents or modify the repository's ordinary Git index. Later edits to a selected file are included when \`wb git commit\` reads that file's current contents. \`wb git unstage\` removes exact selected files or selected descendants of a requested directory; use \`.\` to clear the thread's selection.
 
@@ -577,31 +579,31 @@ Use these exact CLI shapes so Workbench can match and render checkpoint operatio
 
 Run after entering Brief mode for an approved-plan baseline; call this returned checkpoint commit the approval checkpoint. Also run in Implement mode after the start-of-implementation checkpoint diff is classified safe and before the first file edit; call that returned checkpoint commit the initial implementation checkpoint for the current implementation arc.
 
-\`wb git checkpoint baseline --thread ${threadId}\`
+\`wb git checkpoint baseline\`
 
 ### Diff against a specific checkpoint
 
 Run immediately after entering Implement mode before editing by passing the approval checkpoint commit. Run again after entering Review mode before summarizing changes by passing the initial implementation checkpoint commit for the current implementation arc. Do not omit \`checkpointCommit\`, do not substitute the newest checkpoint, and do not guess from thread history; parallel agents may create unrelated newer checkpoints. The command output is a compact checkpoint diff summary for agent review. Workbench stores the full unified diff separately and renders it for the user in the UI.
 
-\`wb git checkpoint diff --thread ${threadId} --commit <checkpoint-commit-sha>\`
+\`wb git checkpoint diff --commit <checkpoint-commit-sha>\`
 
 ### Diff a specific file against a specific checkpoint
 
 Use after the compact checkpoint diff when a changed file may dangerously intersect with the approved edit files, nearby ownership, contracts, dependencies, validation scope, branch/HEAD, or mechanics needed by the plan. Use the same \`checkpointCommit\` as the compact diff you are investigating. Replace \`<repo-relative-path>\` with a changed file path from that compact summary. The command returns that file's unified diff only.
 
-\`wb git checkpoint file-diff --thread ${threadId} --commit <checkpoint-commit-sha> --file <repo-relative-path>\`
+\`wb git checkpoint file-diff --commit <checkpoint-commit-sha> --file <repo-relative-path>\`
 
 ### Create a diff checkpoint
 
 Do not run this as part of normal Review mode. Use only when the user explicitly asks to preserve the current state as a checkpoint.
 
-\`wb git checkpoint create-diff --thread ${threadId}\`
+\`wb git checkpoint create-diff\`
 
 ### Restore a checkpoint after explicit user request
 
 Only restore when the user asks for a checkpoint restore. First run the diff command or another preview. Restore uses a checkpoint commit sha supplied by the user or selected from the thread's checkpoint output. The CLI requires \`--confirm\`, and Workbench blocks when the checkpoint parent is not the current HEAD.
 
-\`wb git checkpoint restore --thread ${threadId} --commit <checkpoint-commit-sha> --confirm\`
+\`wb git checkpoint restore --commit <checkpoint-commit-sha> --confirm\`
 `.trim();
 }
 

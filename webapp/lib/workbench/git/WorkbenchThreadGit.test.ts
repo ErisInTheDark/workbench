@@ -40,7 +40,7 @@ async function createRepository() {
   await write(repoRoot, "nested/two.txt", "two base\n");
   await git(repoRoot, ["add", "-A"]);
   await git(repoRoot, ["commit", "-m", "base"]);
-  return { repoRoot, storageRootPath };
+  return { repoRoot, storageRootPath, testRoot };
 }
 
 afterEach(async () => {
@@ -145,4 +145,50 @@ test("rejects selections outside the repository", async () => {
   const { repoRoot, storageRootPath } = await createRepository();
   const owner = await WorkbenchThreadGit.create({ cwd: repoRoot, storageRootPath, threadId: "thread-one" });
   await assert.rejects(owner.add(["../outside.txt"]), /must stay inside the repository/u);
+});
+
+test("a primary control cwd selects and commits only inside an explicit registered secondary worktree", async () => {
+  const { repoRoot, storageRootPath, testRoot } = await createRepository();
+  const secondaryRoot = path.join(testRoot, "secondary");
+  await git(repoRoot, ["worktree", "add", "-b", "secondary", secondaryRoot]);
+  await write(repoRoot, "selected.txt", "primary selected\n");
+  await write(secondaryRoot, "selected.txt", "secondary selected\n");
+  await write(secondaryRoot, "ordinary.txt", "secondary staged\n");
+  await git(secondaryRoot, ["add", "--", "ordinary.txt"]);
+
+  const primaryOwner = await WorkbenchThreadGit.create({ cwd: repoRoot, storageRootPath, threadId: "primary-owned-thread" });
+  const owner = await WorkbenchThreadGit.create({ cwd: repoRoot, storageRootPath, targetWorktree: secondaryRoot, threadId: "primary-owned-thread" });
+  assert.deepEqual((await primaryOwner.add(["selected.txt"])).selectedPaths, ["selected.txt"]);
+  assert.deepEqual((await owner.add(["selected.txt"])).selectedPaths, ["selected.txt"]);
+  const result = await owner.commit("secondary worktree commit");
+
+  assert.deepEqual(result.committedPaths, ["selected.txt"]);
+  assert.equal(await git(secondaryRoot, ["show", "HEAD:selected.txt"]), "secondary selected\n");
+  assert.equal(await git(secondaryRoot, ["show", "HEAD:ordinary.txt"]), "ordinary base\n");
+  assert.equal((await git(secondaryRoot, ["diff", "--cached", "--name-only"])).trim(), "ordinary.txt");
+  assert.equal(await git(repoRoot, ["show", "HEAD:selected.txt"]), "selected base\n");
+  assert.deepEqual((await primaryOwner.commit("primary worktree commit")).committedPaths, ["selected.txt"]);
+  assert.equal(await git(repoRoot, ["show", "HEAD:selected.txt"]), "primary selected\n");
+});
+
+test("explicit targets fail closed unless they are absolute registered worktrees of the control repository", async () => {
+  const { repoRoot, storageRootPath, testRoot } = await createRepository();
+  const ordinaryDirectory = path.join(testRoot, "ordinary-directory");
+  await fs.mkdir(ordinaryDirectory);
+  await assert.rejects(
+    WorkbenchThreadGit.create({ cwd: repoRoot, storageRootPath, targetWorktree: ordinaryDirectory, threadId: "thread-one" }),
+    /registered Git worktree/u,
+  );
+  await assert.rejects(
+    WorkbenchThreadGit.create({ cwd: repoRoot, storageRootPath, targetWorktree: "relative-worktree", threadId: "thread-one" }),
+    /absolute path/u,
+  );
+
+  const foreignRoot = path.join(testRoot, "foreign");
+  await fs.mkdir(foreignRoot);
+  await git(foreignRoot, ["init", "-b", "main"]);
+  await assert.rejects(
+    WorkbenchThreadGit.create({ cwd: repoRoot, storageRootPath, targetWorktree: foreignRoot, threadId: "thread-one" }),
+    /registered Git worktree/u,
+  );
 });

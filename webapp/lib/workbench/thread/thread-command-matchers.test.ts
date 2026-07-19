@@ -278,7 +278,7 @@ test("raw commands receive an explicit ongoing fallback", () => {
 
 test("Workbench Git commands receive bounded selection, commit, and checkpoint summaries", () => {
   const selection = getThreadCommandDisplay({
-    command: "wb git add --thread thread-1 -- src/file.ts",
+    command: "wb git add --worktree C:/workspace/.worktrees/lab -- src/file.ts",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
@@ -288,7 +288,7 @@ test("Workbench Git commands receive bounded selection, commit, and checkpoint s
   assert.equal(selection.ongoingSummaryText, "Selecting files for commit");
 
   const commit = getThreadCommandDisplay({
-    command: 'wb git commit --thread thread-1 --message "A bounded commit"',
+    command: 'wb git commit --worktree C:/workspace/.worktrees/lab --message "A bounded commit"',
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
