@@ -528,12 +528,15 @@ test("expands safe reload all without server replacement and keeps hard restart 
 });
 
 test("runs the native shell transport and preserves the server response", async () => {
+  const unusableTempPath = path.join(temporaryDirectoryPath, "not-a-directory");
+  await writeFile(unusableTempPath, "The shell transport must not use this as a temp directory.", "utf8");
+  const env = { ...process.env, TMPDIR: unusableTempPath, WORKBENCH_ORIGIN: origin };
   const result = await execFileAsync("bash", [
     shellSourcePath,
     "thread", "recall", "search", "--thread", "real-process", "--query", "needle", "--kind", "commentary",
   ], {
     cwd: temporaryDirectoryPath,
-    env: { ...process.env, WORKBENCH_ORIGIN: origin },
+    env,
   });
   assert.match(result.stdout, /"ok":true/u);
   assert.equal(result.stderr, "");
@@ -543,6 +546,19 @@ test("runs the native shell transport and preserves the server response", async 
     kinds: ["commentary"],
     query: "needle",
   });
+
+  await assert.rejects(
+    execFileAsync("bash", [shellSourcePath, "unsupported-command"], {
+      cwd: temporaryDirectoryPath,
+      env,
+    }),
+    (error: NodeJS.ErrnoException & { stderr?: string; stdout?: string }) => {
+      assert.equal(error.stdout, "");
+      assert.match(error.stderr ?? "", /Unsupported wb command: unsupported-command/u);
+      assert.doesNotMatch(error.stderr ?? "", /mktemp|workbench-agent-response/u);
+      return true;
+    },
+  );
 });
 
 test("generates executable POSIX and working Windows shims", async (context) => {
