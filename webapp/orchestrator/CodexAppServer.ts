@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - CodexAppServerOptions: inject app-server callbacks and testable child lifecycle boundaries. Keywords: codex, app-server, options.
+ * - getCodexAppServerArgs: define managed Codex feature policy and app-server stdio arguments. Keywords: codex, app-server, args, policy.
  * - default CodexAppServer: stable owner for the Codex app-server stdio process. Keywords: codex, app-server, stdio, lifecycle.
  */
 import { spawn, type ChildProcess } from "node:child_process";
@@ -21,6 +22,18 @@ export type CodexAppServerOptions = {
   projectRoot: string;
   terminateChild?: (child: ChildProcess) => void;
 };
+
+export function getCodexAppServerArgs() {
+  return [
+    "--config",
+    "features.multi_agent=false",
+    "--config",
+    "agents.enabled=false",
+    "app-server",
+    "--listen",
+    "stdio://",
+  ];
+}
 
 export default class CodexAppServer {
   private codexProcess: ChildProcess | null = null;
@@ -62,7 +75,7 @@ export default class CodexAppServer {
   private createStdioChild() {
     const spawnDescriptor = getSpawnDescriptor({
       command: "codex",
-      args: ["app-server", "--listen", "stdio://"],
+      args: getCodexAppServerArgs(),
     });
 
     return spawn(spawnDescriptor.command, spawnDescriptor.args, {

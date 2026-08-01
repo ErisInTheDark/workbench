@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect intentional Codex child replacement from stale stdout and fatal-exit callbacks. Keywords: codex, app-server, generation, test.
+ * No production exports. Node tests protect Codex launch policy and intentional child replacement from stale callbacks. Keywords: codex, app-server, args, generation, test.
  */
 
 import assert from "node:assert/strict";
@@ -8,7 +8,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import type { ChildProcess } from "node:child_process";
 
-import CodexAppServer from "./CodexAppServer";
+import CodexAppServer, { getCodexAppServerArgs } from "./CodexAppServer";
 
 function fakeChild(pid: number) {
   const child = new EventEmitter() as EventEmitter & {
@@ -25,6 +25,18 @@ function fakeChild(pid: number) {
   child.stdout = new PassThrough();
   return child as unknown as ChildProcess;
 }
+
+test("managed Codex disables native subagents before launching app-server", () => {
+  assert.deepEqual(getCodexAppServerArgs(), [
+    "--config",
+    "features.multi_agent=false",
+    "--config",
+    "agents.enabled=false",
+    "app-server",
+    "--listen",
+    "stdio://",
+  ]);
+});
 
 test("intentional replacement ignores stale child output and exit", () => {
   const first = fakeChild(101);
