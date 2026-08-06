@@ -3094,8 +3094,62 @@ function WorkbenchThreadClient(
     }
   }
 
+  async function readSubagentBackgroundThread(
+    threadId: string,
+    harness: WorkbenchHarness,
+    options: WorkbenchReadThreadOptions,
+  ) {
+    const subagent = state.subagents.find((candidate) => (
+      candidate.threadId === threadId && candidate.harness === harness
+    ));
+    if (harness !== "codex" || !subagent) {
+      return null;
+    }
+
+    const hydration = options.hydration ?? { mode: "latest" as const };
+    try {
+      const contextResponse = await sendBridgeRequest<WorkbenchThreadContextReadResponse>(harness, {
+        method: "thread/context/read",
+        params: {
+          includeTurns: false,
+          threadId,
+          workbenchReadScope: "subagentBackground",
+        },
+        workbenchRequestSource: AUTO_REFRESH_REQUEST_SOURCE,
+        workbenchThreadHydration: hydration,
+      });
+      const projectRootPaths = getProjectRootPaths(state);
+      const expectedCwd = options.cwd?.trim() || subagent.cwd;
+      if (
+        projectRootPaths.length
+        && !isProjectCodexThreadAtExpectedCwd(contextResponse.thread, projectRootPaths, expectedCwd)
+      ) {
+        return null;
+      }
+
+      const nextModel = getThreadModel(threadId);
+      return mergeLiveStreamingThreadSnapshot(toThreadPayload(
+        contextResponse.thread,
+        harness,
+        nextModel,
+        getThreadReasoningEffort(threadId) ?? readStoredHarnessModelEffort(harness, nextModel),
+        getPreferredThreadServiceTier(threadId, harness),
+        state.currentThread?.id === threadId
+          ? state.currentThread.agentPath
+          : readStoredHarnessAgent(harness),
+      ));
+    } catch {
+      return null;
+    }
+  }
+
   async function readThread(threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) {
-    const payload = await fetchThreadPayloadFromCandidates(threadId, harness, options);
+    const isKnownCodexSubagent = harness === "codex" && state.subagents.some((candidate) => (
+      candidate.threadId === threadId && candidate.harness === harness
+    ));
+    const payload = options?.readScope === "subagentBackground" && harness && isKnownCodexSubagent
+      ? await readSubagentBackgroundThread(threadId, harness, options)
+      : await fetchThreadPayloadFromCandidates(threadId, harness, options);
     if (payload && state.currentThread?.id === payload.id && state.currentThread.harness === payload.harness) {
       setCurrentThread(payload);
       return state.currentThread;
@@ -3215,7 +3269,9 @@ function WorkbenchThreadClient(
           errors.push(result.reason instanceof Error ? result.reason.message : "Unable to load some threads.");
         }
 
-        const threadsByRecentItem = threads.sort((left, right) => {
+        const subagentThreadIds = new Set(getSubagentThreadIds(refreshedSubagents));
+        const mainThreads = filterSubagentThreadSummaries(threads, subagentThreadIds);
+        const threadsByRecentItem = mainThreads.sort((left, right) => {
           if (right.updatedAt !== left.updatedAt) {
             return right.updatedAt - left.updatedAt;
           }
@@ -3248,10 +3304,10 @@ function WorkbenchThreadClient(
         state.subagents = areDeeplyEqual(state.subagents, refreshedSubagents)
           ? state.subagents
           : refreshedSubagents;
-        state.threads = filterSubagentThreadSummaries([
+        state.threads = [
           ...stableVisibleThreads,
           ...threadsByRecentItem.slice(STABLE_VISIBLE_THREAD_COUNT),
-        ], new Set(getSubagentThreadIds(refreshedSubagents)));
+        ];
         void refreshVisibleThreadUnreadStates(state.threads);
         state.threadsError = errors.join(" ");
         state.hasLoadedThreads = true;

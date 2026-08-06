@@ -53,7 +53,7 @@ export interface WorkbenchSubagentControllerReloadState {
   controller: WorkbenchSubagentController;
 }
 
-const POLL_INTERVAL_MS = 300;
+const POLL_INTERVAL_MS = 1_000;
 const WORKBENCH_PROMPT_CONTEXT_FIELD = "workbenchPromptContext";
 
 type WorkbenchSubagentHarnessClient = Pick<CodexAppServerClient, "close" | "connect" | "sendRequest">;
@@ -185,6 +185,30 @@ export default class WorkbenchSubagentController {
       params: { cwd, includeTurns: true, threadId },
       workbenchThreadHydration: { mode: "latest" },
     })).thread;
+  }
+
+  private async readThreadForWaitPoll(client: WorkbenchSubagentHarnessClient, record: WorkbenchSubagentRelationship) {
+    if (record.harness !== "codex") {
+      return await this.readThread(client, record.harness, record.threadId, record.cwd);
+    }
+
+    return (await this.requestHarness<ThreadReadResponse>(client, record.harness, {
+      method: "thread/read",
+      params: { cwd: record.cwd, includeTurns: false, threadId: record.threadId },
+      workbenchRequestSource: "autoRefresh",
+    })).thread;
+  }
+
+  private async readThreadForWaitBoundary(
+    client: WorkbenchSubagentHarnessClient,
+    record: WorkbenchSubagentRelationship,
+    polledThread: Thread,
+  ) {
+    if (record.harness !== "codex" || polledThread.turns.length) {
+      return polledThread;
+    }
+
+    return await this.readThread(client, record.harness, record.threadId, record.cwd);
   }
 
   private async resolveThreadHarness(
@@ -341,7 +365,11 @@ export default class WorkbenchSubagentController {
   }
 
   private async pendingQuestionnaires(client: WorkbenchSubagentHarnessClient, harness: WorkbenchHarness, cwd: string) {
-    return (await this.requestHarness<PendingQuestionnaireList>(client, harness, { method: "questionnaire/list", params: { cwd } })).data;
+    return (await this.requestHarness<PendingQuestionnaireList>(client, harness, {
+      method: "questionnaire/list",
+      params: { cwd },
+      workbenchRequestSource: "autoRefresh",
+    })).data;
   }
 
   private async pendingQuestionnaire(client: WorkbenchSubagentHarnessClient, record: WorkbenchSubagentRelationship) {
@@ -364,28 +392,43 @@ export default class WorkbenchSubagentController {
             pendingByScope.set(scopeKey, pendingPromise);
           }
           const [thread, pending] = await Promise.all([
-            this.readThread(client, record.harness, record.threadId, record.cwd),
+            this.readThreadForWaitPoll(client, record),
             pendingPromise,
           ]);
           return { pending: pending.find((entry) => entry.threadId === record.threadId) ?? null, record, thread };
         }));
         const questionnaireState = states.find((state) => state.pending);
         if (questionnaireState?.pending) {
+          const thread = await this.readThreadForWaitBoundary(
+            client,
+            questionnaireState.record,
+            questionnaireState.thread,
+          );
           return { output: renderSubagentWaitResultOutput({
             multiplexed: records.length > 1,
             name: questionnaireState.record.name,
             outcome: "needs-interaction",
-            output: renderSubagentQuestionnaireOutput(questionnaireState.thread, questionnaireState.pending.request),
+            output: renderSubagentQuestionnaireOutput(thread, questionnaireState.pending.request),
             threadId: questionnaireState.record.threadId,
           }) };
         }
-        const finishedState = states.find((state) => !isTurnActive(state.thread));
+        const finishedState = states.find((state) => state.record.harness === "codex"
+          ? state.thread.status.type === "idle" || state.thread.status.type === "systemError"
+          : !isTurnActive(state.thread));
         if (finishedState) {
+          const thread = await this.readThreadForWaitBoundary(client, finishedState.record, finishedState.thread);
+          if (
+            finishedState.record.harness === "codex"
+            && (thread.status.type === "active" || thread.status.type === "notLoaded")
+          ) {
+            await delay(POLL_INTERVAL_MS, controller.signal);
+            continue;
+          }
           return { output: renderSubagentWaitResultOutput({
             multiplexed: records.length > 1,
             name: finishedState.record.name,
             outcome: "finished",
-            output: renderSubagentTurnOutput(finishedState.thread),
+            output: renderSubagentTurnOutput(thread),
             threadId: finishedState.record.threadId,
           }) };
         }

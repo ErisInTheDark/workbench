@@ -1,11 +1,13 @@
 /*
  * Exports:
- * - default migrateV5: queue oversized command output compaction in transcript files. Keywords: transcript, migration, command output.
- * - queueCodexTranscriptCommandOutputCompactionMigration: rerunnable bounded background migration for old oversized command output. Keywords: transcript, command output, migration.
+ * - default migrateV5: await oversized command output compaction in transcript files. Keywords: transcript, migration, command output.
+ * - queueCodexTranscriptCommandOutputCompactionMigration: coalesce and await command output migration by transcript root. Keywords: transcript, command output, migration.
  */
+import { randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createInterface } from "node:readline";
 
 import { compactCommandOutputPayload } from "../../lib/codex/thread-command-output";
 import type AtomicJsonStore from "../AtomicJsonStore";
@@ -17,7 +19,7 @@ const PROGRESS_LOG_INTERVAL_MS = 5_000;
 const ACTIVE_COMMAND_OUTPUT_COMPACTION_ROOTS_KEY = "__workbenchCodexTranscriptCommandOutputCompactionRoots";
 
 type MigrationGlobal = typeof globalThis & {
-  [ACTIVE_COMMAND_OUTPUT_COMPACTION_ROOTS_KEY]?: Set<string>;
+  [ACTIVE_COMMAND_OUTPUT_COMPACTION_ROOTS_KEY]?: Map<string, Promise<void>> | Set<string>;
 };
 
 type MigrationCounts = {
@@ -29,7 +31,11 @@ type MigrationCounts = {
 };
 
 const migrationGlobal = globalThis as MigrationGlobal;
-const activeMigrationRoots = migrationGlobal[ACTIVE_COMMAND_OUTPUT_COMPACTION_ROOTS_KEY] ??= new Set<string>();
+const existingActiveMigrationRoots = migrationGlobal[ACTIVE_COMMAND_OUTPUT_COMPACTION_ROOTS_KEY];
+const activeMigrationsByRoot = existingActiveMigrationRoots instanceof Map
+  ? existingActiveMigrationRoots
+  : new Map<string, Promise<void>>();
+migrationGlobal[ACTIVE_COMMAND_OUTPUT_COMPACTION_ROOTS_KEY] = activeMigrationsByRoot;
 
 function delay(ms: number) {
   return new Promise((resolve) => {
@@ -96,36 +102,47 @@ async function migrateJsonFile(filePath: string, counts: MigrationCounts) {
 
 async function migrateJsonLinesFile(filePath: string, counts: MigrationCounts) {
   counts.filesVisited += 1;
-  const raw = await fs.readFile(filePath, "utf8").catch((error) => {
+  const tempPath = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
+  const tempFile = await fs.open(tempPath, "wx");
+  let changed = false;
+  try {
+    const lines = createInterface({
+      crlfDelay: Infinity,
+      input: createReadStream(filePath, { encoding: "utf8" }),
+    });
+    for await (const line of lines) {
+      const trimmedLine = line.trim();
+      if (!trimmedLine) {
+        continue;
+      }
+
+      if (!mayContainCommandOutput(trimmedLine)) {
+        await tempFile.write(`${trimmedLine}\n`);
+        continue;
+      }
+
+      const parsed = JSON.parse(trimmedLine) as unknown;
+      const compacted = compactCommandOutputPayload(parsed);
+      await tempFile.write(`${compacted === parsed ? trimmedLine : JSON.stringify(compacted)}\n`);
+      changed ||= compacted !== parsed;
+    }
+
+    await tempFile.close();
+    if (!changed) {
+      await fs.rm(tempPath, { force: true });
+      return;
+    }
+
+    await fs.rename(tempPath, filePath);
+    counts.filesChanged += 1;
+  } catch (error) {
+    await tempFile.close().catch(() => undefined);
+    await fs.rm(tempPath, { force: true }).catch(() => undefined);
     if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return null;
+      return;
     }
     throw error;
-  });
-  if (raw === null || !mayContainCommandOutput(raw)) {
-    return;
   }
-
-  let changed = false;
-  const nextLines: string[] = [];
-  for (const line of raw.split(/\r?\n/u)) {
-    const trimmedLine = line.trim();
-    if (!trimmedLine) {
-      continue;
-    }
-
-    const parsed = JSON.parse(trimmedLine) as unknown;
-    const compacted = compactCommandOutputPayload(parsed);
-    nextLines.push(JSON.stringify(compacted));
-    changed ||= compacted !== parsed;
-  }
-
-  if (!changed) {
-    return;
-  }
-
-  await writeTextFileAtomically(filePath, `${nextLines.join("\n")}\n`);
-  counts.filesChanged += 1;
 }
 
 async function listTurnTranscriptFiles(threadDirectoryPath: string, counts: MigrationCounts) {
@@ -220,10 +237,10 @@ async function runBackgroundCommandOutputCompaction(rootDirectoryPath: string, c
 
 export async function queueCodexTranscriptCommandOutputCompactionMigration(rootDirectoryPath: string) {
   const resolvedRootDirectoryPath = path.resolve(rootDirectoryPath);
-  if (activeMigrationRoots.has(resolvedRootDirectoryPath)) {
-    return;
+  const activeMigration = activeMigrationsByRoot.get(resolvedRootDirectoryPath);
+  if (activeMigration) {
+    return await activeMigration;
   }
-  activeMigrationRoots.add(resolvedRootDirectoryPath);
 
   const counts: MigrationCounts = {
     errors: 0,
@@ -233,13 +250,19 @@ export async function queueCodexTranscriptCommandOutputCompactionMigration(rootD
     threadsVisited: 0,
   };
 
-  void runBackgroundCommandOutputCompaction(rootDirectoryPath, counts)
+  const migration = runBackgroundCommandOutputCompaction(rootDirectoryPath, counts)
     .catch((error) => {
       logError("codex-transcript", `command output compaction failed: ${error instanceof Error ? error.message : String(error)}`);
-    })
-    .finally(() => {
-      activeMigrationRoots.delete(resolvedRootDirectoryPath);
+      throw error;
     });
+  activeMigrationsByRoot.set(resolvedRootDirectoryPath, migration);
+  const clearActiveMigration = () => {
+    if (activeMigrationsByRoot.get(resolvedRootDirectoryPath) === migration) {
+      activeMigrationsByRoot.delete(resolvedRootDirectoryPath);
+    }
+  };
+  void migration.then(clearActiveMigration, clearActiveMigration);
+  return await migration;
 }
 
 export default async function migrateV5(rootDirectoryPath: string, _jsonStore: AtomicJsonStore) {

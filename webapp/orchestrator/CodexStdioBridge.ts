@@ -430,7 +430,12 @@ function shouldCapturePollingTranscript(method: string | null, requestSource: Wo
   }
 }
 
-function shouldHydrateThreadResponse(method: string | null) {
+function shouldHydrateThreadResponse(request: JsonRpcRequest) {
+  const method = asString(request.method);
+  if (method === "thread/read" && asRecord(request.params)?.includeTurns === false) {
+    return false;
+  }
+
   switch (method) {
     case "thread/fork":
     case "thread/read":
@@ -1533,7 +1538,7 @@ export default class CodexStdioBridge {
     let hydratedMessage = message;
     const shouldCaptureTranscript = isPendingInternalResponse(pending)
       || shouldCapturePollingTranscript(pending.method, pending.requestSource);
-    if (shouldCaptureTranscript || shouldHydrateThreadResponse(pending.method)) {
+    if (shouldHydrateThreadResponse(pending.upstreamRequest)) {
       try {
         hydratedMessage = await this.ensureTranscriptStore().hydrateThreadResponse(pending.upstreamRequest, message, {
           hydration: pending.threadHydration,
@@ -2012,9 +2017,11 @@ export default class CodexStdioBridge {
     }
 
     const hydration = readThreadHydration(message);
+    const isSubagentBackgroundRead = record?.workbenchReadScope === "subagentBackground";
+    const { workbenchReadScope: _workbenchReadScope, ...upstreamParams } = record ?? {};
     const readParams = {
-      ...(record ?? {}),
-      includeTurns: record?.includeTurns ?? true,
+      ...upstreamParams,
+      includeTurns: isSubagentBackgroundRead ? false : record?.includeTurns ?? true,
       threadId,
     };
     const readRequest: JsonRpcRequest = {
@@ -2024,7 +2031,14 @@ export default class CodexStdioBridge {
     };
     const dispatch = await this.dispatchRequest(readRequest, { internal: true });
     if (!dispatch.response) throw new Error("thread/context/read did not create an internal response.");
-    const readResponse = await dispatch.response;
+    const upstreamReadResponse = await dispatch.response;
+    const transcriptStore = this.ensureTranscriptStore();
+    const readResponse = isSubagentBackgroundRead
+      ? await transcriptStore.hydrateThreadResponse(readRequest, upstreamReadResponse, {
+        hydration,
+        touchThread: false,
+      })
+      : upstreamReadResponse;
     if (readResponse.error) {
       throw new Error(readResponse.error.message);
     }
@@ -2035,12 +2049,16 @@ export default class CodexStdioBridge {
       throw new Error("thread/context/read did not receive a readable thread.");
     }
 
-    const transcriptStore = this.ensureTranscriptStore();
-    const [browseResultEntries, questionnaireEntries, steerEntries] = await Promise.all([
-      transcriptStore.listBrowseResultEntries(thread.id),
-      transcriptStore.listQuestionnaireHistory(thread.id),
-      transcriptStore.listSteerHistory(thread.id),
-    ]);
+    let browseResultEntries: WorkbenchThreadContextReadResponse["browseResultEntries"] = [];
+    let questionnaireEntries: WorkbenchThreadContextReadResponse["questionnaireEntries"] = [];
+    let steerEntries: WorkbenchThreadContextReadResponse["steerEntries"] = [];
+    if (!isSubagentBackgroundRead) {
+      [browseResultEntries, questionnaireEntries, steerEntries] = await Promise.all([
+        transcriptStore.listBrowseResultEntries(thread.id),
+        transcriptStore.listQuestionnaireHistory(thread.id),
+        transcriptStore.listSteerHistory(thread.id),
+      ]);
+    }
 
     return {
       browseResultEntries,

@@ -689,6 +689,7 @@ export type WorkbenchThreadHydrationRequest =
 export interface WorkbenchReadThreadOptions {
   cwd?: string;
   hydration?: WorkbenchThreadHydrationRequest;
+  readScope?: "subagentBackground";
 }
 
 export interface WorkbenchSendThreadMessageOptions {

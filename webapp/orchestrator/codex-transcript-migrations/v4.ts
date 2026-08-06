@@ -1,11 +1,13 @@
 /*
  * Exports:
- * - default migrateV4: queue inline transcript image extraction into hashed thread assets. Keywords: transcript, migration, image assets.
- * - queueCodexTranscriptImageAssetMigration: rerunnable bounded background migration for old inline transcript images. Keywords: transcript, image assets, migration.
+ * - default migrateV4: await inline transcript image extraction into hashed thread assets. Keywords: transcript, migration, image assets.
+ * - queueCodexTranscriptImageAssetMigration: coalesce and await inline image migration by transcript root. Keywords: transcript, image assets, migration.
  */
+import { randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createInterface } from "node:readline";
 
 import type AtomicJsonStore from "../AtomicJsonStore";
 import externalizeCodexTranscriptInlineImages from "../codex-transcript-image-assets";
@@ -17,7 +19,7 @@ const PROGRESS_LOG_INTERVAL_MS = 5_000;
 const ACTIVE_IMAGE_ASSET_MIGRATION_ROOTS_KEY = "__workbenchCodexTranscriptImageAssetMigrationRoots";
 
 type MigrationGlobal = typeof globalThis & {
-  [ACTIVE_IMAGE_ASSET_MIGRATION_ROOTS_KEY]?: Set<string>;
+  [ACTIVE_IMAGE_ASSET_MIGRATION_ROOTS_KEY]?: Map<string, Promise<void>> | Set<string>;
 };
 
 type MigrationCounts = {
@@ -30,7 +32,11 @@ type MigrationCounts = {
 };
 
 const migrationGlobal = globalThis as MigrationGlobal;
-const activeMigrationRoots = migrationGlobal[ACTIVE_IMAGE_ASSET_MIGRATION_ROOTS_KEY] ??= new Set<string>();
+const existingActiveMigrationRoots = migrationGlobal[ACTIVE_IMAGE_ASSET_MIGRATION_ROOTS_KEY];
+const activeMigrationsByRoot = existingActiveMigrationRoots instanceof Map
+  ? existingActiveMigrationRoots
+  : new Map<string, Promise<void>>();
+migrationGlobal[ACTIVE_IMAGE_ASSET_MIGRATION_ROOTS_KEY] = activeMigrationsByRoot;
 
 function delay(ms: number) {
   return new Promise((resolve) => {
@@ -107,42 +113,53 @@ async function migrateJsonLinesFile(
   counts: MigrationCounts,
 ) {
   counts.filesVisited += 1;
-  const raw = await fs.readFile(filePath, "utf8").catch((error) => {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  });
-  if (raw === null || !raw.includes("data:image/")) {
-    return;
-  }
-
+  const tempPath = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
+  const tempFile = await fs.open(tempPath, "wx");
   let changed = false;
   let assetCount = 0;
-  const nextLines: string[] = [];
-  for (const line of raw.split(/\r?\n/u)) {
-    const trimmedLine = line.trim();
-    if (!trimmedLine) {
-      continue;
+  try {
+    const lines = createInterface({
+      crlfDelay: Infinity,
+      input: createReadStream(filePath, { encoding: "utf8" }),
+    });
+    for await (const line of lines) {
+      const trimmedLine = line.trim();
+      if (!trimmedLine) {
+        continue;
+      }
+
+      if (!trimmedLine.includes("data:image/")) {
+        await tempFile.write(`${trimmedLine}\n`);
+        continue;
+      }
+
+      const parsed = JSON.parse(trimmedLine) as unknown;
+      const result = await externalizeCodexTranscriptInlineImages(parsed, {
+        encodedThreadId,
+        threadDirectoryPath,
+      });
+      await tempFile.write(`${result.changed ? JSON.stringify(result.value) : trimmedLine}\n`);
+      changed ||= result.changed;
+      assetCount += result.assetCount;
     }
 
-    const parsed = JSON.parse(trimmedLine) as unknown;
-    const result = await externalizeCodexTranscriptInlineImages(parsed, {
-      encodedThreadId,
-      threadDirectoryPath,
-    });
-    nextLines.push(JSON.stringify(result.value));
-    changed ||= result.changed;
-    assetCount += result.assetCount;
-  }
+    await tempFile.close();
+    if (!changed) {
+      await fs.rm(tempPath, { force: true });
+      return;
+    }
 
-  if (!changed) {
-    return;
+    await fs.rename(tempPath, filePath);
+    counts.assets += assetCount;
+    counts.filesChanged += 1;
+  } catch (error) {
+    await tempFile.close().catch(() => undefined);
+    await fs.rm(tempPath, { force: true }).catch(() => undefined);
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return;
+    }
+    throw error;
   }
-
-  await writeTextFileAtomically(filePath, `${nextLines.join("\n")}\n`);
-  counts.assets += assetCount;
-  counts.filesChanged += 1;
 }
 
 async function listTurnTranscriptFiles(threadDirectoryPath: string, counts: MigrationCounts) {
@@ -245,10 +262,10 @@ async function runBackgroundImageAssetMigration(rootDirectoryPath: string, count
 
 export async function queueCodexTranscriptImageAssetMigration(rootDirectoryPath: string) {
   const resolvedRootDirectoryPath = path.resolve(rootDirectoryPath);
-  if (activeMigrationRoots.has(resolvedRootDirectoryPath)) {
-    return;
+  const activeMigration = activeMigrationsByRoot.get(resolvedRootDirectoryPath);
+  if (activeMigration) {
+    return await activeMigration;
   }
-  activeMigrationRoots.add(resolvedRootDirectoryPath);
 
   const counts: MigrationCounts = {
     assets: 0,
@@ -259,13 +276,19 @@ export async function queueCodexTranscriptImageAssetMigration(rootDirectoryPath:
     threadsVisited: 0,
   };
 
-  void runBackgroundImageAssetMigration(rootDirectoryPath, counts)
+  const migration = runBackgroundImageAssetMigration(rootDirectoryPath, counts)
     .catch((error) => {
       logError("codex-transcript", `inline image asset migration failed: ${error instanceof Error ? error.message : String(error)}`);
-    })
-    .finally(() => {
-      activeMigrationRoots.delete(resolvedRootDirectoryPath);
+      throw error;
     });
+  activeMigrationsByRoot.set(resolvedRootDirectoryPath, migration);
+  const clearActiveMigration = () => {
+    if (activeMigrationsByRoot.get(resolvedRootDirectoryPath) === migration) {
+      activeMigrationsByRoot.delete(resolvedRootDirectoryPath);
+    }
+  };
+  void migration.then(clearActiveMigration, clearActiveMigration);
+  return await migration;
 }
 
 export default async function migrateV4(rootDirectoryPath: string, _jsonStore: AtomicJsonStore) {

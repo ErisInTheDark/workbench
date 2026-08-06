@@ -50,8 +50,6 @@ import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bri
 import externalizeCodexTranscriptInlineImages from "./codex-transcript-image-assets";
 import { runCodexTranscriptMigrations } from "./codex-transcript-migrations";
 import { queueCodexTranscriptRequestSidecarCleanup } from "./codex-transcript-migrations/v3";
-import { queueCodexTranscriptImageAssetMigration } from "./codex-transcript-migrations/v4";
-import { queueCodexTranscriptCommandOutputCompactionMigration } from "./codex-transcript-migrations/v5";
 import { CODEX_TRANSCRIPT_SCHEMA_VERSION } from "./codex-transcript-version";
 
 const PRUNE_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
@@ -982,8 +980,6 @@ export default class CodexTranscriptStore {
       .then(async () => {
         const rootDirectoryPath = path.dirname(this.threadsDirectoryPath);
         await queueCodexTranscriptRequestSidecarCleanup(rootDirectoryPath);
-        await queueCodexTranscriptImageAssetMigration(rootDirectoryPath);
-        await queueCodexTranscriptCommandOutputCompactionMigration(rootDirectoryPath);
       })
       .catch(() => undefined);
   }

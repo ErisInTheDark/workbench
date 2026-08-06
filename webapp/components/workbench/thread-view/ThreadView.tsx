@@ -949,7 +949,11 @@ export default memo(function ThreadView ({
     ));
   }, []);
 
-  const loadSubthread = useCallback(async (threadId: string, harness: WorkbenchHarness) => {
+  const loadSubthread = useCallback(async (
+    threadId: string,
+    harness: WorkbenchHarness,
+    options: { background?: boolean } = {},
+  ) => {
     if (!threadId.trim() || threadId === thread.id) {
       return null;
     }
@@ -969,6 +973,7 @@ export default memo(function ThreadView ({
       const payload = await onReadThread(threadId, harness, {
         ...(subagentCwd ? { cwd: subagentCwd } : {}),
         hydration: { mode: "latest" },
+        ...(options.background ? { readScope: "subagentBackground" as const } : {}),
       });
       if (!payload) {
         return null;
@@ -1199,7 +1204,7 @@ export default memo(function ThreadView ({
       threadIds: visibleSubagentThreadIds.filter((threadId) => threadId !== thread.id),
     });
     for (const threadId of preloadBatch) {
-      void loadSubthread(threadId, getSubagentHarness(subagents, threadId, thread.harness));
+      void loadSubthread(threadId, getSubagentHarness(subagents, threadId, thread.harness), { background: true });
     }
   }, [loadSubthread, loadingThreadIds, relatedThreadsById, subagents, thread.harness, thread.id, visibleSubagentThreadIds]);
 
@@ -1217,7 +1222,7 @@ export default memo(function ThreadView ({
       const batch = getSubagentPollingBatch(pollingThreadIds, subagentPollingCursorRef.current);
       subagentPollingCursorRef.current = batch.nextCursor;
       for (const threadId of batch.threadIds) {
-        void loadSubthread(threadId, getSubagentHarness(subagents, threadId, thread.harness));
+        void loadSubthread(threadId, getSubagentHarness(subagents, threadId, thread.harness), { background: true });
       }
     }, SUBTHREAD_POLL_INTERVAL_MS);
 
