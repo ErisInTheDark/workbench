@@ -7,12 +7,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
 
 import {
-  createSpawnOptions,
-  getSpawnDescriptor,
-  killProcessTree,
-  log,
-  logError,
-  pipeChildStream,
+    createSpawnOptions,
+    getSpawnDescriptor,
+    killProcessTree,
+    log,
+    logError,
+    pipeChildStream,
 } from "./process-helpers";
 
 export type CodexAppServerOptions = {
@@ -27,8 +27,8 @@ export function getCodexAppServerArgs() {
   return [
     "--config",
     "features.multi_agent=false",
-    "--config",
-    "agents.enabled=false",
+    // "--config",
+    // "agents.enabled=false",
     "app-server",
     "--listen",
     "stdio://",

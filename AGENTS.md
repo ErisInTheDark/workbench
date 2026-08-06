@@ -35,6 +35,8 @@
 
 ## Endpoint and Lifecycle Invariants
 
+- Do not add arbitrary short timeouts to production work. A timeout is valid only when completion after its deadline is itself a product failure; if late completion would still be correct or useful, keep the work lifecycle-owned and expose progress or caller-owned cancellation instead of manufacturing a timeout failure. Every real deadline must name its owner, reason, failure behavior, and regression proof.
+- Do not swallow, bury, or silently discard unexpected failures. Surface every unexpected failure at its owning boundary as a bounded sanitized warning/error and preserve typed failure propagation or durable failure state where the caller or product needs it. Silence is allowed only for an explicitly expected condition whose handling is complete and regression-tested; empty catches, ignored rejections, and quiet fallback paths are not error handling.
 - Project-scoped agent endpoints derive ownership from the agent's validated `cwd`, never a caller-supplied `projectId`. Keep `projectId` as UI/app selection state and resolved response/storage identity only.
 - Treat Next.js routes as stateless serverless handlers. Do not rely on route-module memory, timers, or warm-process caches for correctness; store durable state on disk/git or delegate long-lived state and lifecycle to the orchestrator.
 - Keep Next-to-orchestrator one-shot RPC on the allowlisted buffered HTTP boundary. Reserve bridge WebSockets for persistent browser clients and notification streams, and do not create one-shot app-server sockets inside Next routes.
