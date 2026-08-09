@@ -481,6 +481,8 @@ Pass every active child in one wait command instead of building separate paralle
 
 Do not hide waits behind \`Promise.all\`, let an outer wrapper yield into a cell and repeatedly poll that cell with generic \`functions.wait\`, or substitute generic sleeping or idling. Those shapes conceal child questionnaires and completions behind unrelated work.
 
+Do not include pointless "anxiety commentary" between waits. We include a timeout on waits solely to allow user steers a chance to arrive. Workbench automatically combines waits in the log, but if you're interleaving waits with noisy commentary, this compression does not happen.
+
 Use this command shape when \`functions.exec\` owns the shell call:
 
 \`\`\`\`js
