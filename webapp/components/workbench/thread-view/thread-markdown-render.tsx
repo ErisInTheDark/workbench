@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - renderThreadMarkdown: render shared markdown parse nodes into React thread display elements. Keywords: thread, markdown, React, renderer.
+ * - Local helpers: render inline/block nodes, code-block controls, SVG previews, and diff code-block rows. Keywords: markdown, code, diff, SVG.
  */
 
 import { Fragment, type ReactNode } from "react";
@@ -22,6 +23,10 @@ import {
   type ParsedTableCell,
 } from "../../../lib/workbench/markdown/markdown-parse";
 import { getInlineMentionMarkClassName } from "../../../lib/workbench/thread/inline-mention-styles";
+import {
+  splitUnifiedDiffLine,
+  type UnifiedDiffDisplayLine,
+} from "../../../lib/workbench/thread/thread-file-diff";
 import ChevronIcon from "../ChevronIcon";
 import ProjectFilePath from "../ProjectFilePath";
 import { CheckIcon, CopyIcon, PreviewIcon, WrapTextIcon } from "../workbench-icons";
@@ -64,6 +69,12 @@ const SVG_PREVIEW_SRC_DOC_STYLE = [
   "svg{display:block;max-width:100%;max-height:100vh;}",
 ].join("");
 const CODE_BLOCK_HEADER_FILE_LINK_PATTERN = /(^|\s)#\[([^\]\r\n]+)\](?=\s|$)/;
+const DIFF_CODE_BLOCK_LINE_CLASS_NAMES = {
+  addition: "bg-[color-mix(in_srgb,var(--success)_12%,transparent)]",
+  context: "",
+  deletion: "bg-[color-mix(in_srgb,var(--danger)_12%,transparent)]",
+  note: "",
+} satisfies Record<UnifiedDiffDisplayLine["type"], string>;
 
 interface ThreadCodeBlockHeader {
   fileLink: Extract<ParsedInlineNode, { type: "projectFileLink" }> | null;
@@ -409,6 +420,35 @@ function isSvgCodeBlockLanguage (language: string) {
   return getCodeBlockLanguageToken(language) === "svg";
 }
 
+function isDiffCodeBlockLanguage (language: string) {
+  return getCodeBlockLanguageToken(language) === "diff";
+}
+
+function renderThreadDiffCodeBlock (text: string, keyPrefix: string) {
+  const lines = text.split("\n");
+
+  return lines.map((line, index) => {
+    const displayLine = splitUnifiedDiffLine(line);
+
+    return (
+      <Fragment key={`${keyPrefix}-diff-line-${index}`}>
+        <span
+          className={`block min-h-[1lh] px-[0.95rem] ${DIFF_CODE_BLOCK_LINE_CLASS_NAMES[displayLine.type]}`}
+          data-thread-codeblock-diff-line={displayLine.type}
+        >
+          {displayLine.prefix ? (
+            <span className="sr-only" data-thread-codeblock-diff-prefix="true">{displayLine.prefix}</span>
+          ) : null}
+          {displayLine.text}
+        </span>
+        {index < lines.length - 1 ? (
+          <span aria-hidden="true" className="hidden" data-thread-codeblock-diff-separator="true">{"\n"}</span>
+        ) : null}
+      </Fragment>
+    );
+  });
+}
+
 function parseThreadCodeBlockHeader(language: string, options: MarkdownParseOptions): ThreadCodeBlockHeader {
   const match = CODE_BLOCK_HEADER_FILE_LINK_PATTERN.exec(language);
   if (!match) {
@@ -480,11 +520,13 @@ function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, k
     case "code": {
       const header = parseThreadCodeBlockHeader(block.language, options);
       const language = header.language;
+      const isDiffCodeBlock = isDiffCodeBlockLanguage(language);
       const isSvgCodeBlock = isSvgCodeBlockLanguage(language);
       return (
         <div
           className={`${BLOCK_SPACING_CLASS} max-w-full overflow-hidden rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)]`}
           data-thread-codeblock="true"
+          data-thread-codeblock-diff={isDiffCodeBlock ? "true" : undefined}
           data-thread-codeblock-svg-preview-state={isSvgCodeBlock ? "code" : undefined}
           key={keyPrefix}
         >
@@ -537,11 +579,13 @@ function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, k
           </div>
           <div className="relative min-h-[2.8rem]" data-thread-codeblock-body="true">
             <pre
-              className="max-w-full overflow-x-auto whitespace-pre px-[0.95rem] py-[0.8rem]"
+              className={`max-w-full overflow-x-auto whitespace-pre py-[0.8rem] ${isDiffCodeBlock ? "px-0" : "px-[0.95rem]"}`}
               data-language={language}
               data-thread-codeblock-pre="true"
             >
-              <code className="block w-max min-w-full rounded-none bg-transparent p-0 font-mono text-[0.94em]" data-thread-codeblock-code="true">{block.text}</code>
+              <code className="block w-max min-w-full rounded-none bg-transparent p-0 font-mono text-[0.94em]" data-thread-codeblock-code="true">
+                {isDiffCodeBlock ? renderThreadDiffCodeBlock(block.text, keyPrefix) : block.text}
+              </code>
             </pre>
             {isSvgCodeBlock ? (
               <div

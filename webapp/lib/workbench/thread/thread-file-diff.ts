@@ -4,6 +4,8 @@
  * - UnifiedDiffHunk: parsed unified-diff hunk with header and line rows. Keywords: diff, unified, hunk.
  * - ParsedUnifiedDiff: parsed unified-diff payload with headers, hunks, and change counts. Keywords: diff, unified, counts.
  * - ParsedUnifiedDiffFileChange: parsed per-file change from a multi-file unified diff. Keywords: diff, unified, file change.
+ * - UnifiedDiffDisplayLine: one diff line split into its raw marker and display text. Keywords: diff, line, prefix, display.
+ * - splitUnifiedDiffLine: classify a diff line and separate its raw marker from display text. Keywords: diff, parse, prefix.
  * - parseUnifiedDiff: parse unified diff text into headers, hunk rows, and addition/deletion counts. Keywords: diff, parse, unified.
  * - parseUnifiedDiffFileChanges: split multi-file unified diff text into file-change entries. Keywords: diff, parse, files.
  */
@@ -34,6 +36,28 @@ export interface ParsedUnifiedDiffFileChange {
     | { type: "delete" }
     | { movePath: string | null; type: "update" };
   path: string;
+}
+
+export interface UnifiedDiffDisplayLine {
+  prefix: "" | " " | "+" | "-";
+  text: string;
+  type: UnifiedDiffLine["type"];
+}
+
+export function splitUnifiedDiffLine(line: string): UnifiedDiffDisplayLine {
+  if (line.startsWith("+") && !line.startsWith("+++")) {
+    return { prefix: "+", text: line.slice(1), type: "addition" };
+  }
+
+  if (line.startsWith("-") && !line.startsWith("---")) {
+    return { prefix: "-", text: line.slice(1), type: "deletion" };
+  }
+
+  if (line.startsWith(" ")) {
+    return { prefix: " ", text: line.slice(1), type: "context" };
+  }
+
+  return { prefix: "", text: line, type: "note" };
 }
 
 export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff {
@@ -79,11 +103,13 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff {
       continue;
     }
 
-    if (line.startsWith("+") && !line.startsWith("+++")) {
+    const displayLine = splitUnifiedDiffLine(line);
+
+    if (displayLine.type === "addition") {
       currentHunk.lines.push({
         newLineNumber,
         oldLineNumber: null,
-        text: line.slice(1),
+        text: displayLine.text,
         type: "addition",
       });
       parsed.additions += 1;
@@ -91,11 +117,11 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff {
       continue;
     }
 
-    if (line.startsWith("-") && !line.startsWith("---")) {
+    if (displayLine.type === "deletion") {
       currentHunk.lines.push({
         newLineNumber: null,
         oldLineNumber,
-        text: line.slice(1),
+        text: displayLine.text,
         type: "deletion",
       });
       parsed.deletions += 1;
@@ -103,11 +129,11 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff {
       continue;
     }
 
-    if (line.startsWith(" ")) {
+    if (displayLine.type === "context") {
       currentHunk.lines.push({
         newLineNumber,
         oldLineNumber,
-        text: line.slice(1),
+        text: displayLine.text,
         type: "context",
       });
       oldLineNumber += 1;
@@ -118,7 +144,7 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff {
     currentHunk.lines.push({
       newLineNumber: null,
       oldLineNumber: null,
-      text: line,
+      text: displayLine.text,
       type: "note",
     });
   }
