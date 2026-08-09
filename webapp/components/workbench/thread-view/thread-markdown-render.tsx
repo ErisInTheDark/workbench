@@ -52,6 +52,7 @@ const CODE_BLOCK_HEADER_BUTTON_CLASS = [
   "focus-visible:text-accent",
   "focus-visible:outline-none",
   "data-[thread-codeblock-copy-state=copied]:text-success",
+  "data-[thread-codeblock-copy-state=failed]:text-danger",
   "data-[thread-codeblock-toggle-state=active]:text-accent",
 ].join(" ");
 const HEADING_CLASSES = {

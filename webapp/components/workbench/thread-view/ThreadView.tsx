@@ -318,10 +318,15 @@ function hasExpandedSelectionWithin (root: HTMLElement | null) {
   return Boolean(anchorNode && focusNode && root.contains(anchorNode) && root.contains(focusNode));
 }
 
-function setCodeBlockCopyButtonState (button: HTMLButtonElement, isCopied: boolean) {
-  button.setAttribute("data-thread-codeblock-copy-state", isCopied ? "copied" : "idle");
-  button.setAttribute("aria-label", isCopied ? "Copied code block" : "Copy code block");
-  button.title = isCopied ? "Copied" : "Copy code block";
+type CodeBlockCopyState = "copied" | "failed" | "idle";
+
+function setCodeBlockCopyButtonState (button: HTMLButtonElement, state: CodeBlockCopyState) {
+  button.setAttribute("data-thread-codeblock-copy-state", state);
+  button.setAttribute(
+    "aria-label",
+    state === "copied" ? "Copied code block" : state === "failed" ? "Code block copy failed" : "Copy code block",
+  );
+  button.title = state === "copied" ? "Copied" : state === "failed" ? "Copy failed" : "Copy code block";
 }
 
 function setCodeBlockToggleButtonState (button: HTMLButtonElement, isActive: boolean) {
@@ -1589,15 +1594,15 @@ export default memo(function ThreadView ({
     syncCodeBlockWrapDomState(threadCodeBlockWrap);
   }, [syncCodeBlockWrapDomState, threadCodeBlockWrap]);
 
-  const showCodeBlockCopyFeedback = useCallback((button: HTMLButtonElement) => {
+  const showCodeBlockCopyFeedback = useCallback((button: HTMLButtonElement, state: Exclude<CodeBlockCopyState, "idle">) => {
     const existingTimeoutId = codeBlockCopyResetTimersRef.current.get(button);
     if (existingTimeoutId !== undefined) {
       window.clearTimeout(existingTimeoutId);
     }
 
-    setCodeBlockCopyButtonState(button, true);
+    setCodeBlockCopyButtonState(button, state);
     const timeoutId = window.setTimeout(() => {
-      setCodeBlockCopyButtonState(button, false);
+      setCodeBlockCopyButtonState(button, "idle");
       codeBlockCopyResetTimersRef.current.delete(button);
     }, CODE_BLOCK_COPY_FEEDBACK_MS);
     codeBlockCopyResetTimersRef.current.set(button, timeoutId);
@@ -1612,11 +1617,11 @@ export default memo(function ThreadView ({
     }
 
     const didCopy = await writeTextToClipboard(code.textContent ?? "");
-    if (!didCopy || !root.contains(button)) {
+    if (!root.contains(button)) {
       return;
     }
 
-    showCodeBlockCopyFeedback(button);
+    showCodeBlockCopyFeedback(button, didCopy ? "copied" : "failed");
   }, [showCodeBlockCopyFeedback]);
 
   const handleSvgCodeBlockPreviewToggle = useCallback((button: HTMLButtonElement) => {
