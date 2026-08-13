@@ -469,12 +469,14 @@ function buildWorkbenchSubagentInstructions(context: WorkbenchPromptContext) {
 
 Workbench owns subagents exclusively through the allowlisted \`wb subagent\` command suite. No other subagent tools are approved. Run every command from the intended project cwd; the CLI privately supplies that cwd and the current managed thread identity.
 
+### Managing subagents
 \`wb subagent list [--cursor <cursor>] [--limit <1-20>]\` lists direct children owned by the current thread without contacting their harnesses. Results are activity-sorted metadata pages with at most 20 records and a \`nextCursor\`; pass that cursor to read the next page. \`activityStatus\` is \`active\`, \`inactive\`, or \`unknown\`, where \`unknown\` honestly represents legacy metadata or activity invalidated by an orchestrator restart.
 
 \`wb subagent profiles\` lists profiles available to this thread. Use a profile ID only as the machine value for \`--profile\`. When talking to the user, always use the profile's user-facing \`name\`, never its ID.
 
 \`wb subagent create --profile <profile id> --name <name> --title <title> --message <message>\` creates and starts a child. Every flag is required. Choose a unique, person-like name the user can use conversationally. Let your active agent identity influence the name, but do not use a task slug, role label, or operation codename; \`--title\` owns the task description. Workbench stores the exact name you provide and does not generate or rewrite it.
 
+### Waiting for subagents
 \`wb subagent wait --id <id> [--id <id>...]\` watches any number of direct children and returns as soon as the first watched child has a pending questionnaire or no active turn. It checks existing state immediately, so a child that is already waiting or already finished returns without delay. A singular wait prints the child's trailing commentary plus its questionnaire and options, or its final output. A multiplexed wait also identifies which child triggered and why.
 
 Pass every active child in one wait command instead of building separate parallel waits. After a finished child returns, omit its ID from the next wait so the deliberately immediate state check can monitor the remaining active children. Treat the command as a blocking event wait, not as a polling primitive: use a bounded shell timeout and keep the outer execution tool attached for at least that interval. When using \`functions.exec\`, set its \`yield_time_ms\` at least as high as the nested shell command's \`timeout_ms\`. A wait timeout cancels only that wait request, not any child turn.
@@ -495,13 +497,20 @@ const result = await tools.shell_command({
 text(result);
 \`\`\`\`
 
-\`wb subagent message --id <id> --message <message>\` sends ordinary prose to a direct child as a steer. When a questionnaire is pending, Workbench delivers the steer first and then resolves the questionnaire with no selected option. When no turn is active, it starts a new turn.
+\`wb subagent message --id <id> --message <message>\` sends ordinary prose to a direct child as a steer. When no turn is active, it starts a new turn.
 
-\`wb subagent message --parent --message <message>\` lets a direct child send progress, blockers, risks, or integration information to its direct parent. Workbench identifies the sender from durable relationship metadata and wraps the body as subagent information rather than user direction. An active parent receives a steer without resolving any pending questionnaire; an idle parent receives a new turn.
+\`wb subagent message --parent --message <message>\` lets a direct child send info to its direct parent.
 
 \`wb subagent stop --id <id>\` is equivalent to the thread stop button.
 
 The returned subagent ID is its thread ID and can be used with Workbench Thread Recall. You may operate only on direct children owned by the current thread; sideways and grandchild access fails closed.
+
+### Subagent notes & recipes
+- The wait command is the only way to receive a subagent's final output. Do not leave them hanging with no wait.
+- Without explicit instruction, subagents communicate through commentary (not visible to you). If you need to get preliminary info from a subagent before completion, ask it specifically to message you with what you need using the \`wb subagent message --parent\` command.
+- Subagents are entirely isolated, they do not inherit any context of the parent or sibling threads. Prompts must be self-contained. Do not poison subagents by telling them to do or not to do <thing they don't know anything about>, they WILL hallucinate.
+- Do not blindly trust subagent output. Subagents are often less intelligent models.
+- When you are orchestrating subagent review passes, you must orchestrate STRONGLY and DELIBERATELY against infinite review loops and scope creep. You are responsible for getting the implementation or plan to an acceptable state as defined by the user or project requirements in a reasonable time frame. If you don't plan, prompt, or implement effectively, subagents will continue to find additional work to do endlessly.
 `.trim();
 }
 
