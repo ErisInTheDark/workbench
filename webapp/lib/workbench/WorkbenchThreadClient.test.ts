@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover selected Codex fast steer settlement and canonical placement. Keywords: workbench, codex, steer, integration, test.
+ * - No production exports; Node tests cover thread reads, lifecycle fencing, canonical placement, and steer settlement. Keywords: workbench, thread, lifecycle, read, steer, integration, test.
  */
 
 import assert from "node:assert/strict";
@@ -339,6 +339,52 @@ test("project reset and a newer canonical notification fence stale reads before 
   assert.equal(await racedRead, null);
   assert.deepEqual(client.getSnapshot().currentThread?.turns[0]?.items.map((item) => item.id), ["new-item"]);
 }));
+
+test("candidate reads keep superseded ownership fences silent", async () => {
+  const statusMessages: string[] = [];
+  await withClient(async (client) => {
+    FakeWebSocket.intercept = (socket, request) => {
+      if (request.method !== "thread/context/read") {
+        return false;
+      }
+
+      client.selectThreadPayload({
+        ...activeThread("codex", "superseded"),
+        updatedAt: 2,
+      });
+      queueMicrotask(() => socket.respond(request.id, {
+        browseResultEntries: [],
+        questionnaireEntries: [],
+        steerEntries: [],
+        thread: wireThread("superseded"),
+      }));
+      return true;
+    };
+
+    assert.equal(await client.readThread("superseded"), null);
+    assert.equal(client.getSnapshot().threadsError, "");
+    assert.deepEqual(statusMessages, []);
+  }, { onStatusMessage: (message) => statusMessages.push(message) });
+});
+
+test("candidate reads still surface genuine provider failures", async () => {
+  const statusMessages: string[] = [];
+  await withClient(async (client) => {
+    FakeWebSocket.intercept = (socket, request) => {
+      if (request.method !== "thread/context/read" && request.method !== "thread/read") {
+        return false;
+      }
+
+      queueMicrotask(() => socket.fail(request.id, `${request.workbenchHarness ?? "codex"} missing`));
+      return true;
+    };
+
+    assert.equal(await client.readThread("missing"), null);
+    const expectedMessage = "Unable to open codex thread missing: codex missing";
+    assert.equal(client.getSnapshot().threadsError, expectedMessage);
+    assert.deepEqual(statusMessages, [expectedMessage]);
+  }, { onStatusMessage: (message) => statusMessages.push(message) });
+});
 
 test("open-thread selection binding prevents a late open from replacing newer selection", async () => withClient(async (client, socket) => {
   client.selectThreadPayload(activeThread("codex", "b"));

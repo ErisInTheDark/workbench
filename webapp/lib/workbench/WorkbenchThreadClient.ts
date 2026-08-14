@@ -265,11 +265,16 @@ type OptimisticUserMessagePlacement = "initial" | "steer";
 type OptimisticUserMessageStatus = "pending" | "sent" | "interrupted" | "failed";
 type ProviderSteerAcknowledgement = TurnSteerResponse | { ok: true } | { turn: Turn };
 
-interface SuppressedThreadReadFailure {
+interface ThreadReadFailure {
   harness: WorkbenchHarness;
   message: string;
   transientRollout: boolean;
 }
+
+type ThreadPayloadFetchOutcome =
+  | { kind: "failure"; failure: ThreadReadFailure }
+  | { kind: "success"; payload: ThreadPayload }
+  | { kind: "superseded" };
 
 interface ThreadOverlayRevisionRecord {
   key: string;
@@ -2974,13 +2979,10 @@ function WorkbenchThreadClient(
   async function fetchThreadPayload(
     threadId: string,
     harness: WorkbenchHarness,
-    options: WorkbenchReadThreadOptions & {
-      onSuppressedFailure?: (failure: SuppressedThreadReadFailure) => void;
-      suppressStatusMessage?: boolean;
-    } = {},
+    options: WorkbenchReadThreadOptions = {},
     commit: (payload: ThreadPayload) => ThreadPayload | null = (payload) => payload,
     { selectionBound = false }: { selectionBound?: boolean } = {},
-  ) {
+  ): Promise<ThreadPayloadFetchOutcome> {
     const operationFence = captureThreadOperationFence(harness, threadId, { selectionBound });
     const hydration = options.hydration ?? { mode: "latest" as const };
     const requestedCwd = options.cwd?.trim() || state.projectRootPath || null;
@@ -3047,14 +3049,13 @@ function WorkbenchThreadClient(
 
       if (projectRootPaths.length && !isProjectCodexThreadAtExpectedCwd(response.thread, projectRootPaths, options.cwd)) {
         const message = `That ${harness} thread doesn't belong to this project.`;
-        if (!options.suppressStatusMessage) {
-          if (isThreadOperationFenceCurrent(operationFence)) {
-            emitStatusMessage(message);
-          }
-        } else {
-          options.onSuppressedFailure?.({ harness, message, transientRollout: false });
+        if (!isThreadOperationFenceCurrent(operationFence)) {
+          return { kind: "superseded" };
         }
-        return null;
+        return {
+          failure: { harness, message, transientRollout: false },
+          kind: "failure",
+        };
       }
 
       const nextModel = isCurrentThread
@@ -3081,27 +3082,30 @@ function WorkbenchThreadClient(
           ? { harness, serviceTier: nextServiceTier, threadId }
           : null,
       };
-      return commitThreadReadResult(operationFence, result, commit);
+      const payload = commitThreadReadResult(operationFence, result, commit);
+      return payload
+        ? { kind: "success", payload }
+        : { kind: "superseded" };
     } catch (error) {
       if (!isThreadOperationFenceCurrent(operationFence)) {
-        return null;
+        return { kind: "superseded" };
       }
       if (harness === "codex" && isTransientRolloutReadError(error)) {
-        if (!options.suppressStatusMessage) {
-          emitStatusMessage(FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE);
-        } else {
-          options.onSuppressedFailure?.({ harness, message: FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE, transientRollout: true });
-        }
-        return null;
+        return {
+          failure: {
+            harness,
+            message: FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE,
+            transientRollout: true,
+          },
+          kind: "failure",
+        };
       }
 
       const message = error instanceof Error ? error.message : `Unable to open ${harness} thread.`;
-      if (!options.suppressStatusMessage) {
-        emitStatusMessage(message);
-      } else {
-        options.onSuppressedFailure?.({ harness, message, transientRollout: false });
-      }
-      return null;
+      return {
+        failure: { harness, message, transientRollout: false },
+        kind: "failure",
+      };
     }
   }
 
@@ -3256,27 +3260,30 @@ function WorkbenchThreadClient(
     operationOptions: { selectionBound?: boolean } = {},
   ) {
     if (harness) {
-      return await fetchThreadPayload(threadId, harness, options, commit, operationOptions);
-    }
-
-    const failures: SuppressedThreadReadFailure[] = [];
-    for (const candidateHarness of getThreadHarnessCandidates(threadId)) {
-      const payload = await fetchThreadPayload(threadId, candidateHarness, {
-        ...options,
-        onSuppressedFailure: (failure) => {
-          failures.push(failure);
-        },
-        suppressStatusMessage: true,
-      }, commit, operationOptions);
-      if (payload) {
-        return payload;
+      const outcome = await fetchThreadPayload(threadId, harness, options, commit, operationOptions);
+      if (outcome.kind === "success") {
+        return outcome.payload;
       }
+      if (outcome.kind === "failure") {
+        emitStatusMessage(outcome.failure.message);
+      }
+      return null;
     }
 
-    const actionableFailure = failures.find((failure) => !failure.transientRollout) ?? failures[0] ?? null;
-    const message = actionableFailure
-      ? `Unable to open ${actionableFailure.harness} thread ${threadId}: ${actionableFailure.message}`
-      : `Thread not found: ${threadId}`;
+    const failures: ThreadReadFailure[] = [];
+    for (const candidateHarness of getThreadHarnessCandidates(threadId)) {
+      const outcome = await fetchThreadPayload(threadId, candidateHarness, options, commit, operationOptions);
+      if (outcome.kind === "success") {
+        return outcome.payload;
+      }
+      if (outcome.kind === "superseded") {
+        return null;
+      }
+      failures.push(outcome.failure);
+    }
+
+    const actionableFailure = failures.find((failure) => !failure.transientRollout) ?? failures[0]!;
+    const message = `Unable to open ${actionableFailure.harness} thread ${threadId}: ${actionableFailure.message}`;
     state.threadsError = message;
     emitStatusMessage(message);
     emit();
