@@ -287,6 +287,15 @@ function truncateText(value: string, maxLength = 400) {
   return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
+function sanitizeTranscriptErrorMessage(error: unknown) {
+  const message = (error instanceof Error ? error.message : String(error))
+    .replace(/\b[A-Za-z]:[\\/][^\s"'<>]*/gu, "[path]")
+    .replace(/(^|\s)\/(?:Users|home|private|tmp|var|etc|opt|srv|mnt)\/[^\s"'<>]*/giu, "$1[path]")
+    .replace(/\b(Bearer\s+)[^\s,;]+/giu, "$1[redacted]")
+    .replace(/\b(api[_-]?key|authorization|secret|token)(\s*[:=]\s*)[^\s,;]+/giu, "$1$2[redacted]");
+  return truncateText(message, 1000) || "turn/steer transport failed.";
+}
+
 function formatBytes(value: number) {
   return `${Math.round(value / 1024 / 1024)}MB`;
 }
@@ -1439,6 +1448,12 @@ export default class CodexStdioBridge {
       this.send(upstreamMessage);
     } catch (error) {
       this.pendingResponses.delete(upstreamRequestId);
+      const errorMessage = sanitizeTranscriptErrorMessage(error);
+      if (method === "turn/steer") {
+        void this.captureTranscript("client-request-failure:turn/steer", () => (
+          this.ensureTranscriptStore().recordClientRequestFailure(upstreamMessage, errorMessage)
+        ));
+      }
       throw error;
     }
     return { response: null };

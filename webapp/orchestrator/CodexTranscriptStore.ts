@@ -51,6 +51,7 @@ import externalizeCodexTranscriptInlineImages from "./codex-transcript-image-ass
 import { runCodexTranscriptMigrations } from "./codex-transcript-migrations";
 import { queueCodexTranscriptRequestSidecarCleanup } from "./codex-transcript-migrations/v3";
 import { CODEX_TRANSCRIPT_SCHEMA_VERSION } from "./codex-transcript-version";
+import { logError } from "./process-helpers";
 
 const PRUNE_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
 const PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -95,6 +96,12 @@ function sortQuestionnaireEntries(entries: WorkbenchQuestionnaireHistoryEntry[])
 
 function sortSteerEntries(entries: WorkbenchSteerHistoryEntry[]) {
   return [...entries].sort((left, right) => {
+    if (left.dispatchSequence !== null && left.dispatchSequence !== undefined
+      && right.dispatchSequence !== null && right.dispatchSequence !== undefined
+      && left.dispatchSequence !== right.dispatchSequence) {
+      return left.dispatchSequence - right.dispatchSequence;
+    }
+
     if (left.attemptedAt !== right.attemptedAt) {
       return left.attemptedAt - right.attemptedAt;
     }
@@ -235,11 +242,18 @@ function createSteerHistoryEntryFromRequest(request: JsonRpcRequest): WorkbenchS
   const requestId = typeof request.id === "number" || typeof request.id === "string"
     ? String(request.id)
     : null;
+  const clientUserMessageId = asString(params?.clientUserMessageId)?.trim() || null;
   const attemptedAt = now();
   return {
     attemptedAt,
     canonicalItemId: null,
-    entryKey: requestId ? `turn-steer:${requestId}` : `turn-steer:${attemptedAt}:${Math.random().toString(36).slice(2)}`,
+    clientUserMessageId,
+    dispatchSequence: null,
+    entryKey: clientUserMessageId
+      ? `turn-steer-client:${clientUserMessageId}`
+      : requestId
+        ? `turn-steer:${requestId}`
+        : `turn-steer:${attemptedAt}:${Math.random().toString(36).slice(2)}`,
     error: null,
     input: input.map(cloneUserInput),
     requestId,
@@ -261,13 +275,106 @@ function updateSteerEntryStatus(
   resolvedAt: number,
   options: { canonicalItemId?: string | null; error?: string | null } = {},
 ): WorkbenchSteerHistoryEntry {
+  if (entry.status === "sent" && status !== "sent") {
+    return entry;
+  }
+  const hasCanonicalItemId = Object.prototype.hasOwnProperty.call(options, "canonicalItemId");
+  const hasError = Object.prototype.hasOwnProperty.call(options, "error");
   return {
     ...entry,
-    canonicalItemId: options.canonicalItemId ?? entry.canonicalItemId,
-    error: options.error ?? entry.error,
+    canonicalItemId: hasCanonicalItemId ? options.canonicalItemId ?? null : entry.canonicalItemId,
+    error: hasError ? options.error ?? null : entry.error,
     resolvedAt,
     status,
   };
+}
+
+function getNextSteerDispatchSequence(file: CodexTranscriptThreadFile) {
+  if (file.nextSteerDispatchSequence !== undefined) {
+    return file.nextSteerDispatchSequence;
+  }
+
+  return (file.steerEntries ?? []).reduce(
+    (next, entry) => Math.max(next, (entry.dispatchSequence ?? -1) + 1),
+    0,
+  );
+}
+
+function updateNativeSteerEntriesForUserMessage(
+  entries: WorkbenchSteerHistoryEntry[],
+  turnId: string,
+  item: ThreadItem,
+  resolvedAt: number,
+) {
+  if (item.type !== "userMessage" || !item.clientId) {
+    return entries;
+  }
+
+  let changed = false;
+  const nextEntries = entries.map((entry) => {
+    if (entry.clientUserMessageId !== item.clientId) {
+      return entry;
+    }
+
+    if (entry.status === "sent" && entry.turnId === turnId && entry.canonicalItemId === item.id && entry.error === null) {
+      return entry;
+    }
+
+    changed = true;
+    return {
+      ...updateSteerEntryStatus(entry, "sent", resolvedAt, { canonicalItemId: item.id, error: null }),
+      turnId,
+    };
+  });
+  return changed ? sortSteerEntries(nextEntries) : entries;
+}
+
+function updateNativeSteerEntriesForInterruptedTurn(
+  entries: WorkbenchSteerHistoryEntry[],
+  turn: Turn,
+  resolvedAt: number,
+) {
+  if (turn.status !== "interrupted") {
+    return entries;
+  }
+
+  let nextEntries = entries;
+  for (const item of turn.items) {
+    nextEntries = updateNativeSteerEntriesForUserMessage(nextEntries, turn.id, item, resolvedAt);
+  }
+
+  let changed = nextEntries !== entries;
+  const interruptedEntries = nextEntries.map((entry) => {
+    if (entry.status !== "pending" || entry.turnId !== turn.id) {
+      return entry;
+    }
+
+    changed = true;
+    return updateSteerEntryStatus(entry, "interrupted", resolvedAt, {
+      error: "The turn stopped before this steer was delivered.",
+    });
+  });
+  return changed ? sortSteerEntries(interruptedEntries) : entries;
+}
+
+function hasNativeSteerReconciliationEvidence(turn: Turn) {
+  return turn.status === "interrupted"
+    || turn.items.some((item) => item.type === "userMessage" && Boolean(item.clientId?.trim()));
+}
+
+function reconcileNativeSteerEntriesForTurns(
+  entries: WorkbenchSteerHistoryEntry[],
+  turns: Turn[],
+  resolvedAt: number,
+) {
+  let nextEntries = entries;
+  for (const turn of turns) {
+    for (const item of turn.items) {
+      nextEntries = updateNativeSteerEntriesForUserMessage(nextEntries, turn.id, item, resolvedAt);
+    }
+    nextEntries = updateNativeSteerEntriesForInterruptedTurn(nextEntries, turn, resolvedAt);
+  }
+  return nextEntries;
 }
 
 function updateMatchingPendingSteerEntriesForUserMessage(
@@ -283,6 +390,7 @@ function updateMatchingPendingSteerEntriesForUserMessage(
   const nextEntries = entries.map((entry) => {
     if (
       entry.status !== "pending"
+      || Boolean(entry.clientUserMessageId?.trim())
       || !areUserInputsEquivalentForUserMessageDedupe(entry.input, item.content)
     ) {
       return entry;
@@ -307,7 +415,7 @@ function updatePendingSteerEntriesForInterruptedTurn(
   const canonicalUserMessages = turn.items.filter((item): item is Extract<ThreadItem, { type: "userMessage" }> => item.type === "userMessage");
   let changed = false;
   const nextEntries = entries.map((entry) => {
-    if (entry.status !== "pending") {
+    if (entry.status !== "pending" || Boolean(entry.clientUserMessageId?.trim())) {
       return entry;
     }
 
@@ -335,7 +443,9 @@ function createThreadFile(threadId: string): CodexTranscriptThreadFile {
     encodedThreadId: encodeTranscriptPathSegment(threadId),
     lastTouchedAt: now(),
     schemaVersion: CODEX_TRANSCRIPT_SCHEMA_VERSION,
+    nextSteerDispatchSequence: 0,
     sourceThreadIds: [threadId],
+    steerEntries: [],
     thread: null,
     threadId,
     turnIndex: [],
@@ -994,7 +1104,12 @@ export default class CodexTranscriptStore {
     await this.ready();
     const steerEntry = createSteerHistoryEntryFromRequest(request);
     if (steerEntry) {
-      await this.recordSteerHistoryEntry(steerEntry, createRawEvent("client-request", request, request.method, request.id ?? null));
+      const event = createRawEvent("client-request", request, request.method, request.id ?? null);
+      if (steerEntry.clientUserMessageId) {
+        await this.admitNativeSteerHistoryEntry(steerEntry, event);
+      } else {
+        await this.recordSteerHistoryEntry(steerEntry, event);
+      }
       return;
     }
 
@@ -1004,23 +1119,48 @@ export default class CodexTranscriptStore {
   async recordUpstreamResponse(originalRequest: JsonRpcRequest | null, response: JsonRpcResponse) {
     await this.ready();
     if (originalRequest?.method === "turn/steer") {
+      const steerEntry = createSteerHistoryEntryFromRequest(originalRequest);
       const errorMessage = getJsonRpcErrorMessage(response);
-      if (errorMessage) {
-        const steerEntry = createSteerHistoryEntryFromRequest(originalRequest);
-        if (steerEntry) {
-          const event = createRawEvent("upstream-response", response, originalRequest.method, response.id ?? null);
+      if (steerEntry?.clientUserMessageId) {
+        const event = createRawEvent("upstream-response", response, originalRequest.method, response.id ?? null);
+        const acknowledgedTurnId = asString(asRecord(response.result)?.turnId)?.trim() ?? "";
+        await this.updateNativeSteerAdmissionResult(
+          steerEntry,
+          acknowledgedTurnId,
+          errorMessage ?? (acknowledgedTurnId ? null : "turn/steer returned an empty turn id."),
+          event,
+        );
+        return;
+      }
+
+      if (errorMessage && steerEntry) {
+        const event = createRawEvent("upstream-response", response, originalRequest.method, response.id ?? null);
           await this.recordSteerHistoryEntry(updateSteerEntryStatus(
             steerEntry,
             "failed",
             event.receivedAt,
             { error: errorMessage },
-          ), event);
-          return;
-        }
+        ), event);
+        return;
       }
     }
 
     await this.recordRawTraffic("upstream-response", response, originalRequest?.method ?? null, originalRequest);
+  }
+
+  async recordClientRequestFailure(request: JsonRpcRequest, errorMessage: string) {
+    await this.ready();
+    const steerEntry = createSteerHistoryEntryFromRequest(request);
+    if (!steerEntry?.clientUserMessageId) {
+      return;
+    }
+
+    await this.updateNativeSteerAdmissionResult(
+      steerEntry,
+      "",
+      errorMessage,
+      createRawEvent("workbench", { error: errorMessage }, request.method ?? null, request.id ?? null),
+    );
   }
 
   async recordHydratedThreadSnapshot(response: JsonRpcResponse) {
@@ -1135,16 +1275,89 @@ export default class CodexTranscriptStore {
 
   async recordSteerHistoryEntry(entry: WorkbenchSteerHistoryEntry, event: CodexTranscriptRawEvent) {
     await this.ready();
-    await this.updateTurnFile(entry.threadId, entry.turnId, (file) => ({
-      ...file,
-      lastTouchedAt: now(),
-      steerEntries: sortSteerEntries([
-        ...(file.steerEntries ?? []).filter((existingEntry) => existingEntry.entryKey !== entry.entryKey),
-        entry,
-      ]),
-    }));
+    await this.updateTurnFile(entry.threadId, entry.turnId, (file) => {
+      const entries = file.steerEntries ?? [];
+      const existing = entries.find((candidate) => candidate.entryKey === entry.entryKey);
+      const nextEntry = existing?.status === "sent" && entry.status !== "sent" ? existing : entry;
+      return {
+        ...file,
+        lastTouchedAt: now(),
+        steerEntries: sortSteerEntries([
+          ...entries.filter((candidate) => candidate.entryKey !== entry.entryKey),
+          nextEntry,
+        ]),
+      };
+    });
     await this.appendTurnEvent(entry.threadId, entry.turnId, event);
     await this.touchThread(entry.threadId, null);
+  }
+
+  private async admitNativeSteerHistoryEntry(entry: WorkbenchSteerHistoryEntry, event: CodexTranscriptRawEvent) {
+    let duplicateRequestId: string | null = null;
+    await this.updateThreadFile(entry.threadId, (file) => {
+      const entries = file.steerEntries ?? [];
+      const existing = entries.find((candidate) => candidate.entryKey === entry.entryKey);
+      if (existing) {
+        if (existing.requestId !== entry.requestId) {
+          duplicateRequestId = entry.requestId;
+        }
+        return file;
+      }
+
+      const dispatchSequence = getNextSteerDispatchSequence(file);
+      return {
+        ...file,
+        lastTouchedAt: now(),
+        nextSteerDispatchSequence: dispatchSequence + 1,
+        steerEntries: sortSteerEntries([...entries, { ...entry, dispatchSequence }]),
+      };
+    });
+    if (duplicateRequestId) {
+      logError(
+        "codex-transcript",
+        `ignored duplicate native steer id for thread ${entry.threadId} from upstream request ${duplicateRequestId}`,
+      );
+    }
+    await this.appendTurnEvent(entry.threadId, entry.turnId, event);
+    await this.touchThread(entry.threadId, null);
+  }
+
+  private async updateNativeSteerAdmissionResult(
+    requestedEntry: WorkbenchSteerHistoryEntry,
+    acknowledgedTurnId: string,
+    errorMessage: string | null,
+    event: CodexTranscriptRawEvent,
+  ) {
+    await this.updateThreadFile(requestedEntry.threadId, (file) => {
+      const entries = file.steerEntries ?? [];
+      let changed = false;
+      const nextEntries = entries.map((entry) => {
+        if (entry.entryKey !== requestedEntry.entryKey || entry.requestId !== requestedEntry.requestId) {
+          return entry;
+        }
+
+        if (entry.status === "sent" || (entry.status === "interrupted" && errorMessage)) {
+          return entry;
+        }
+
+        if (errorMessage) {
+          changed = true;
+          return updateSteerEntryStatus(entry, "failed", event.receivedAt, { error: errorMessage });
+        }
+
+        if (entry.status === "pending" && acknowledgedTurnId && entry.turnId !== acknowledgedTurnId) {
+          changed = true;
+          return { ...entry, turnId: acknowledgedTurnId };
+        }
+
+        return entry;
+      });
+      return changed
+        ? { ...file, lastTouchedAt: now(), steerEntries: sortSteerEntries(nextEntries) }
+        : file;
+    });
+    await this.appendTurnEvent(requestedEntry.threadId, requestedEntry.turnId, event);
+    await this.touchThread(requestedEntry.threadId, null);
   }
 
   async recordBrowseResultEntry(entry: WorkbenchBrowseResultEntry) {
@@ -1193,8 +1406,21 @@ export default class CodexTranscriptStore {
 
   async listSteerHistory(threadId: string) {
     await this.ready();
+    const threadFile = await this.json.read<CodexTranscriptThreadFile | null>(this.threadFilePath(threadId), null);
     const turnFiles = await this.readTurnFiles(threadId);
-    return sortSteerEntries(turnFiles.flatMap((file) => file.steerEntries ?? []));
+    const entriesByKey = new Map<string, WorkbenchSteerHistoryEntry>();
+    for (const entry of threadFile?.steerEntries ?? []) {
+      entriesByKey.set(`native:${entry.entryKey}`, entry);
+    }
+    for (const entry of turnFiles.flatMap((file) => file.steerEntries ?? [])) {
+      const key = entry.clientUserMessageId
+        ? `native:${entry.entryKey}`
+        : `legacy:${entry.turnId}:${entry.entryKey}`;
+      if (!entriesByKey.has(key)) {
+        entriesByKey.set(key, entry);
+      }
+    }
+    return sortSteerEntries([...entriesByKey.values()]);
   }
 
   async listQuestionnaireHistory(threadId: string) {
@@ -1447,6 +1673,17 @@ export default class CodexTranscriptStore {
 
   private async recordThreadSnapshot(thread: Thread) {
     await this.touchThread(thread.id, thread);
+    const relevantTurns = thread.turns.filter(hasNativeSteerReconciliationEvidence);
+    if (relevantTurns.length) {
+      const resolvedAt = now();
+      await this.updateThreadFile(thread.id, (file) => {
+        const entries = file.steerEntries ?? [];
+        const nextEntries = reconcileNativeSteerEntriesForTurns(entries, relevantTurns, resolvedAt);
+        return nextEntries === entries
+          ? file
+          : { ...file, lastTouchedAt: now(), steerEntries: nextEntries };
+      });
+    }
     await Promise.all(thread.turns.map((turn) => this.recordThreadSnapshotTurn(thread.id, turn)));
   }
 
@@ -1479,6 +1716,15 @@ export default class CodexTranscriptStore {
   }
 
   private async recordTurnSnapshot(threadId: string, turn: Turn, event: CodexTranscriptRawEvent) {
+    if (hasNativeSteerReconciliationEvidence(turn)) {
+      await this.updateThreadFile(threadId, (file) => {
+        const entries = file.steerEntries ?? [];
+        const nextEntries = reconcileNativeSteerEntriesForTurns(entries, [turn], event.receivedAt);
+        return nextEntries === entries
+          ? file
+          : { ...file, lastTouchedAt: now(), steerEntries: nextEntries };
+      });
+    }
     await this.updateTurnFile(threadId, turn.id, (file) => {
       const { aliasesByItemId, turn: reconciledTurn } = reconcileSnapshotContextCompactionItemIds(file.turn, turn);
       const mergedTurn = mergeTurnItems(file.turn, reconciledTurn);
@@ -1515,6 +1761,15 @@ export default class CodexTranscriptStore {
   }
 
   private async recordTurnItem(threadId: string, turnId: string, item: ThreadItem, event: CodexTranscriptRawEvent) {
+    if (item.type === "userMessage" && item.clientId?.trim()) {
+      await this.updateThreadFile(threadId, (file) => {
+        const entries = file.steerEntries ?? [];
+        const nextEntries = updateNativeSteerEntriesForUserMessage(entries, turnId, item, event.receivedAt);
+        return nextEntries === entries
+          ? file
+          : { ...file, lastTouchedAt: now(), steerEntries: nextEntries };
+      });
+    }
     await this.updateTurnFile(threadId, turnId, (file) => {
       const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, item.id, item, event.method, createTimelineItemMetadata(event));
       return {

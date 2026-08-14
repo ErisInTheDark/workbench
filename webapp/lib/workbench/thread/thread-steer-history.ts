@@ -73,6 +73,10 @@ function hasCanonicalUserMessage(items: ThreadItem[], entry: WorkbenchSteerHisto
       return false;
     }
 
+    if (entry.canonicalItemId || entry.clientUserMessageId) {
+      return entry.canonicalItemId === item.id
+        || entry.clientUserMessageId === item.clientId;
+    }
     return areUserInputsEquivalentForUserMessageDedupe(item.content, entry.input);
   });
 }
@@ -89,13 +93,19 @@ function createSyntheticSteerHistoryItem(entry: WorkbenchSteerHistoryEntry): Use
   return {
     content: entry.input.map(cloneUserInput),
     id: createSyntheticSteerHistoryItemId(entry),
-    clientId: null,
+    clientId: entry.clientUserMessageId ?? null,
     type: "userMessage",
   };
 }
 
 function sortSteerHistoryEntries(entries: WorkbenchSteerHistoryEntry[]) {
   return [...entries].sort((left, right) => {
+    if (left.dispatchSequence !== null && left.dispatchSequence !== undefined
+      && right.dispatchSequence !== null && right.dispatchSequence !== undefined
+      && left.dispatchSequence !== right.dispatchSequence) {
+      return left.dispatchSequence - right.dispatchSequence;
+    }
+
     if (left.attemptedAt !== right.attemptedAt) {
       return left.attemptedAt - right.attemptedAt;
     }

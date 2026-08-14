@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
+import type { UserInput } from "../../codex/generated/app-server/v2/UserInput.ts";
 import {
   WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS,
   type WorkbenchThreadContextBundle,
@@ -239,6 +240,57 @@ test("builds one rich narrative projection and suppresses embedded plans with th
       .map((record) => record.ref),
     ["plan-block:plan-new:0"],
   );
+});
+
+test("keeps identical native steers correlated to their independent canonical timeline positions", () => {
+  const bundle = createBundle();
+  const duplicateInput: UserInput[] = [{ text: "identical steer", text_elements: [], type: "text" }];
+  bundle.thread.turns = [turn("turn-native", [
+    { clientId: "client-first", content: [...duplicateInput], id: "canonical-first", type: "userMessage" },
+    { id: "agent-between", memoryCitation: null, phase: "commentary", text: "Between deliveries", type: "agentMessage" },
+    { clientId: "client-second", content: [...duplicateInput], id: "canonical-second", type: "userMessage" },
+  ])];
+  bundle.questionnaireEntries = [];
+  bundle.steerEntries = [{
+    attemptedAt: 1,
+    canonicalItemId: "canonical-first",
+    clientUserMessageId: "client-first",
+    dispatchSequence: 1,
+    entryKey: "turn-steer-client:client-first",
+    error: null,
+    input: [...duplicateInput],
+    requestId: "request-first",
+    resolvedAt: 2,
+    status: "sent",
+    threadId: "thread-1",
+    turnId: "turn-native",
+  }, {
+    attemptedAt: 3,
+    canonicalItemId: "canonical-second",
+    clientUserMessageId: "client-second",
+    dispatchSequence: 2,
+    entryKey: "turn-steer-client:client-second",
+    error: null,
+    input: [...duplicateInput],
+    requestId: "request-second",
+    resolvedAt: 4,
+    status: "sent",
+    threadId: "thread-1",
+    turnId: "turn-native",
+  }];
+
+  const narrative = buildWorkbenchThreadRecallRecords(bundle).filter((record) => (
+    record.kind === "user-steer" || record.ref === "agent:agent-between"
+  ));
+  assert.deepEqual(narrative.map((record) => record.ref), [
+    "steer:turn-native:turn-steer-client:client-first",
+    "agent:agent-between",
+    "steer:turn-native:turn-steer-client:client-second",
+  ]);
+  assert.deepEqual(narrative.filter((record) => record.kind === "user-steer").map((record) => record.text), [
+    "identical steer",
+    "identical steer",
+  ]);
 });
 
 test("renders filtered tagged history backward through a long record with exact cursors", () => {

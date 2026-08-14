@@ -92,7 +92,32 @@ function areUserMessagesEquivalentForDedupe(
   left: Extract<ThreadItem, { type: "userMessage" }>,
   right: Extract<ThreadItem, { type: "userMessage" }>,
 ) {
-  return areUserInputsEquivalentForUserMessageDedupe(left.content, right.content);
+  if (left.id === right.id) {
+    return true;
+  }
+
+  if (left.clientId && right.clientId) {
+    return left.clientId === right.clientId;
+  }
+
+  if (!areUserInputsEquivalentForUserMessageDedupe(left.content, right.content)) {
+    return false;
+  }
+
+  const hasConflictingClientIds = Boolean(left.clientId && right.clientId && left.clientId !== right.clientId);
+  if (hasConflictingClientIds) {
+    return false;
+  }
+
+  const leftIsGeneric = isGenericSnapshotItemId(left.id);
+  const rightIsGeneric = isGenericSnapshotItemId(right.id);
+  if (leftIsGeneric !== rightIsGeneric) {
+    return true;
+  }
+
+  const leftIsOptimistic = left.id.startsWith("optimistic-user-message:");
+  const rightIsOptimistic = right.id.startsWith("optimistic-user-message:");
+  return leftIsOptimistic !== rightIsOptimistic;
 }
 
 function normalizeTextSegment(value: string) {
@@ -250,9 +275,15 @@ export function normalizeThreadItems(items: ThreadItem[], options: NormalizeThre
       }
 
       changed = true;
-      dedupedItems[existingIndex] = options.mergeDuplicateItems
+      const mergedItem = options.mergeDuplicateItems
         ? options.mergeDuplicateItems(dedupedItems[existingIndex]!, item)
-        : dedupedItems[existingIndex]!;
+        : item;
+      if (dedupedItems[existingIndex]?.id === item.id) {
+        dedupedItems[existingIndex] = mergedItem;
+        continue;
+      }
+      dedupedItems.splice(existingIndex, 1);
+      dedupedItems.push(mergedItem);
       continue;
     }
 

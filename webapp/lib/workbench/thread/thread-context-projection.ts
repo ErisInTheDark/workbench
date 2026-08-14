@@ -111,6 +111,18 @@ function createItemPositions(turns: readonly Turn[]) {
   return positions;
 }
 
+function createClientItemPositions(turns: readonly Turn[]) {
+  const positions = new Map<string, ThreadPosition>();
+  turns.forEach((turn, turnIndex) => {
+    turn.items.forEach((item, itemIndex) => {
+      if (item.type === "userMessage" && item.clientId) {
+        positions.set(item.clientId, { itemIndex, turnIndex });
+      }
+    });
+  });
+  return positions;
+}
+
 function createTurnItemCounts(turns: readonly Turn[]) {
   return new Map(turns.map((turn) => [turn.id, turn.items.length]));
 }
@@ -119,10 +131,13 @@ function isSteerEntryForUserMessage(
   item: Extract<ThreadItem, { type: "userMessage" }>,
   steerEntries: readonly WorkbenchSteerHistoryEntry[],
 ) {
-  return steerEntries.some((entry) => (
-    entry.canonicalItemId === item.id
-    || areUserInputsEquivalentForUserMessageDedupe(entry.input, item.content)
-  ));
+  return steerEntries.some((entry) => {
+    if (entry.canonicalItemId || entry.clientUserMessageId) {
+      return entry.canonicalItemId === item.id
+        || entry.clientUserMessageId === item.clientId;
+    }
+    return areUserInputsEquivalentForUserMessageDedupe(entry.input, item.content);
+  });
 }
 
 function shouldIncludeUserMessage(
@@ -317,6 +332,7 @@ function pushQuestionnairePieces(
 function resolveSteerPosition(
   entry: WorkbenchSteerHistoryEntry,
   itemPositions: ReadonlyMap<string, ThreadPosition>,
+  clientItemPositions: ReadonlyMap<string, ThreadPosition>,
   turnIndexes: ReadonlyMap<string, number>,
   turnItemCounts: ReadonlyMap<string, number>,
 ) {
@@ -324,6 +340,13 @@ function resolveSteerPosition(
     const canonicalPosition = itemPositions.get(entry.canonicalItemId);
     if (canonicalPosition) {
       return canonicalPosition;
+    }
+  }
+
+  if (entry.clientUserMessageId) {
+    const clientPosition = clientItemPositions.get(entry.clientUserMessageId);
+    if (clientPosition) {
+      return clientPosition;
     }
   }
 
@@ -337,6 +360,7 @@ function pushSteerPieces(
   pieces: MutableContextPiece[],
   bundle: WorkbenchThreadContextBundle,
   itemPositions: ReadonlyMap<string, ThreadPosition>,
+  clientItemPositions: ReadonlyMap<string, ThreadPosition>,
   turnIndexes: ReadonlyMap<string, number>,
   turnItemCounts: ReadonlyMap<string, number>,
   sequence: { value: number },
@@ -346,7 +370,7 @@ function pushSteerPieces(
       continue;
     }
 
-    const position = resolveSteerPosition(entry, itemPositions, turnIndexes, turnItemCounts);
+    const position = resolveSteerPosition(entry, itemPositions, clientItemPositions, turnIndexes, turnItemCounts);
     pieces.push({
       entry,
       input: entry.input,
@@ -368,13 +392,14 @@ function pushSteerPieces(
 
 export function buildWorkbenchThreadContextPieces(bundle: WorkbenchThreadContextBundle): WorkbenchThreadContextPiece[] {
   const itemPositions = createItemPositions(bundle.thread.turns);
+  const clientItemPositions = createClientItemPositions(bundle.thread.turns);
   const turnIndexes = createTurnIndexes(bundle.thread.turns);
   const turnItemCounts = createTurnItemCounts(bundle.thread.turns);
   const pieces: MutableContextPiece[] = [];
   const sequence = { value: 0 };
 
   pushUserMessagePieces(pieces, bundle, sequence);
-  pushSteerPieces(pieces, bundle, itemPositions, turnIndexes, turnItemCounts, sequence);
+  pushSteerPieces(pieces, bundle, itemPositions, clientItemPositions, turnIndexes, turnItemCounts, sequence);
   pushQuestionnairePieces(pieces, bundle, itemPositions, turnIndexes, turnItemCounts, sequence);
   pushPlanBlockPieces(pieces, bundle, sequence);
 

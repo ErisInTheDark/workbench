@@ -42,6 +42,8 @@ export interface CodexTranscriptThreadFile {
   lastTouchedAt: number;
   schemaVersion: number;
   sourceThreadIds: string[];
+  steerEntries?: WorkbenchSteerHistoryEntry[];
+  nextSteerDispatchSequence?: number;
   thread: Thread | null;
   threadId: string;
   turnIndex: CodexTranscriptTurnIndexEntry[];

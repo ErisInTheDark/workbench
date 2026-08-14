@@ -1,3 +1,179 @@
+/*
+ * Exports:
+ * - WorkbenchHarness: supported agent harness identity.
+ * - OrchestratorReloadScope: reloadable orchestrator subsystem identity.
+ * - OrchestratorReloadState: orchestrator reload lifecycle state.
+ * - OrchestratorReloadRequest: orchestrator reload request contract.
+ * - OrchestratorReloadResponse: orchestrator reload response contract.
+ * - WorkbenchLocalCapabilitySettings: local capability settings contract.
+ * - WorkbenchLocalCapabilitySettingsResponse: local capability read response.
+ * - WorkbenchLocalCapabilitySettingsUpdateRequest: local capability update request.
+ * - WorkbenchBrowseCommandRequest: Browse command request contract.
+ * - WorkbenchBrowseCommandResponse: Browse command response contract.
+ * - WorkbenchBrowseSessionMode: Browse headed/headless mode.
+ * - WorkbenchBrowseSessionLifecycleState: Browse session lifecycle state.
+ * - WorkbenchBrowseSessionSource: Browse session ownership source.
+ * - WorkbenchBrowseSessionSummary: Browse session summary contract.
+ * - WorkbenchBrowseSessionListRequest: Browse session list request.
+ * - WorkbenchBrowseSessionListResponse: Browse session list response.
+ * - WorkbenchBrowseSessionControlRequest: Browse session control request.
+ * - WorkbenchBrowseSessionControlResponse: Browse session control response.
+ * - WorkbenchBrowseAgentWaitState: Browse navigation wait state.
+ * - WorkbenchBrowseAgentWaitSelectorState: Browse selector wait state.
+ * - WorkbenchBrowseAgentAction: Browse action union.
+ * - WorkbenchBrowseAgentBaseRequest: common Browse agent request fields.
+ * - WorkbenchBrowseAgentActionName: Browse action name union.
+ * - WorkbenchBrowseAgentSessionRequest: Browse session request fields.
+ * - WorkbenchBrowseAgentBrowserRequest: active-browser request fields.
+ * - WorkbenchBrowseAgentDoctorRequest: Browse doctor request.
+ * - WorkbenchBrowseAgentStatusRequest: Browse status request.
+ * - WorkbenchBrowseAgentOpenRequest: Browse open request.
+ * - WorkbenchBrowseAgentSnapshotRequest: Browse snapshot request.
+ * - WorkbenchBrowseAgentClickRequest: Browse click request.
+ * - WorkbenchBrowseAgentFillRequest: Browse fill request.
+ * - WorkbenchBrowseAgentEvalRequest: Browse evaluation request.
+ * - WorkbenchBrowseAgentGetRequest: Browse property-read request.
+ * - WorkbenchBrowseAgentHighlightRequest: Browse highlight request.
+ * - WorkbenchBrowseAgentIsRequest: Browse predicate request.
+ * - WorkbenchBrowseAgentTypeRequest: Browse type request.
+ * - WorkbenchBrowseAgentKeyRequest: Browse key request.
+ * - WorkbenchBrowseAgentMouseClickRequest: Browse mouse-click request.
+ * - WorkbenchBrowseAgentMouseHoverRequest: Browse mouse-hover request.
+ * - WorkbenchBrowseAgentMouseDragRequest: Browse mouse-drag request.
+ * - WorkbenchBrowseAgentMouseScrollRequest: Browse mouse-scroll request.
+ * - WorkbenchBrowseAgentCursorRequest: Browse cursor request.
+ * - WorkbenchBrowseAgentSelectRequest: Browse select request.
+ * - WorkbenchBrowseAgentSessionsRequest: Browse sessions request.
+ * - WorkbenchBrowseAgentWaitRequest: Browse wait request.
+ * - WorkbenchBrowseAgentNavigationRequest: common Browse navigation request.
+ * - WorkbenchBrowseAgentBackRequest: Browse back request.
+ * - WorkbenchBrowseAgentForwardRequest: Browse forward request.
+ * - WorkbenchBrowseAgentForgetRequest: Browse profile-forget request.
+ * - WorkbenchBrowseAgentReloadRequest: Browse reload request.
+ * - WorkbenchBrowseAgentScreenshotRequest: Browse screenshot request.
+ * - WorkbenchBrowseAgentRefsRequest: Browse refs request.
+ * - WorkbenchBrowseAgentViewportRequest: Browse viewport request.
+ * - WorkbenchBrowseAgentStopRequest: Browse stop request.
+ * - WorkbenchBrowseAgentCleanupRequest: Browse cleanup request.
+ * - WorkbenchBrowseAgentSequenceRequest: Browse action-sequence request.
+ * - WorkbenchBrowseAgentScriptRequest: Browse script request union.
+ * - WorkbenchBrowseAgentScriptBaseRequest: common Browse script fields.
+ * - WorkbenchBrowseAgentScriptInlineRequest: inline Browse script request.
+ * - WorkbenchBrowseAgentScriptFileRequest: file Browse script request.
+ * - WorkbenchBrowseAgentResponse: Browse agent response contract.
+ * - WorkbenchBrowseAgentSequenceResponse: Browse sequence response.
+ * - WorkbenchBrowseAgentSequenceProgressEvent: Browse sequence progress union.
+ * - WorkbenchBrowseResultEntryState: Browse result lifecycle state.
+ * - WorkbenchBrowseResultEntryDetailKind: Browse result detail kind.
+ * - WorkbenchBrowseResultEntry: persisted Browse result contract.
+ * - WorkbenchAgentOption: selectable agent option.
+ * - WorkbenchAgentDefinition: resolved agent definition.
+ * - WorkbenchSkillSummary: selectable skill summary.
+ * - WorkbenchSkillDefinition: resolved skill definition.
+ * - WorkbenchProjectOption: selectable project option.
+ * - WorkbenchProjectRoot: project-root contract.
+ * - WorkbenchProjectsPayload: project-list payload.
+ * - WorkbenchModelOption: selectable model option.
+ * - WorkbenchComposerSettings: composer settings contract.
+ * - WorkbenchComposerProfileScope: composer profile scope.
+ * - WorkbenchComposerProfile: stored composer profile.
+ * - WorkbenchComposerProfileMutation: composer profile mutation union.
+ * - WorkbenchComposerProfileStorePayload: composer profile store payload.
+ * - WorkbenchSubagentRelationship: subagent relationship contract.
+ * - WorkbenchSubagentSummary: subagent summary alias.
+ * - WorkbenchSubagentPage: paginated subagent response.
+ * - WorkbenchComposerProfileSlot: composer profile slot identity.
+ * - WorkbenchComposerProfileSelection: composer profile selection.
+ * - WorkbenchListModelsOptions: model-list options.
+ * - ChangeSummary: file-change summary.
+ * - ThreadSummary: thread-list summary.
+ * - ThreadUnreadBadge: thread unread badge state.
+ * - ThreadPayload: full rendered thread payload.
+ * - WorkbenchThreadDocumentSnapshot: thread document-store snapshot.
+ * - WorkbenchThreadTurnLoadState: turn hydration state.
+ * - WorkbenchThreadTurnHistoryEntry: turn history metadata.
+ * - WorkbenchThreadHydrationRequest: thread hydration request union.
+ * - WorkbenchReadThreadOptions: thread-read options.
+ * - WorkbenchSendThreadMessageOptions: thread-send options.
+ * - WorkbenchThreadComposerAttachmentDraft: draft attachment contract.
+ * - WorkbenchThreadComposerDraft: composer draft contract.
+ * - WorkbenchThreadSavedComposerDraft: persisted composer draft.
+ * - WorkbenchQuestionnaireDraft: questionnaire draft state.
+ * - WorkbenchStoredThreadUnreadState: persisted unread state.
+ * - WorkbenchUserInputOption: questionnaire answer option.
+ * - WorkbenchUserInputQuestion: questionnaire question contract.
+ * - WorkbenchApprovalCommandContext: approval command context.
+ * - WorkbenchUserInputApprovalContext: approval request context.
+ * - WorkbenchUserInputRequest: questionnaire request contract.
+ * - WorkbenchUserInputAnswer: questionnaire answer contract.
+ * - WorkbenchUserInputResponse: questionnaire response contract.
+ * - WorkbenchUserInputControlKind: hidden control request kind.
+ * - WorkbenchSubmitUserInputRequestOptions: questionnaire submission options.
+ * - WorkbenchPendingUserInputRequest: pending questionnaire state.
+ * - WorkbenchQuestionnaireHistoryEntry: questionnaire history entry.
+ * - WorkbenchSteerHistoryStatus: steer delivery lifecycle state.
+ * - WorkbenchSteerHistoryEntry: correlated steer history entry.
+ * - WorkbenchThreadContextReadResponse: context-read response.
+ * - WorkbenchThreadContextBundle: thread context projection bundle.
+ * - WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS: recall response size limit.
+ * - WorkbenchThreadRecallKind: recall record kind.
+ * - WorkbenchThreadRecallSearchRequest: recall search request.
+ * - WorkbenchThreadRecallExpandRequest: recall expansion request.
+ * - WorkbenchThreadRecallRequest: recall request union.
+ * - FileNode: project-tree file node.
+ * - DirectoryNode: project-tree directory node.
+ * - TreeNode: project-tree node union.
+ * - ProjectSnapshot: project snapshot contract.
+ * - ExplorerSnapshot: explorer snapshot contract.
+ * - WorkbenchRouteLoadResult: route-load result.
+ * - WorkbenchCollaborationSuggestion: collaboration suggestion contract.
+ * - WorkbenchCollaborationThreadRegistry: collaboration thread registry.
+ * - WorkbenchCollaborationPostAuthor: collaboration post author.
+ * - WorkbenchCollaborationPostRevisionSource: post revision source.
+ * - WorkbenchCollaborationPostRevision: post revision contract.
+ * - WorkbenchCollaborationPost: collaboration post contract.
+ * - WorkbenchCollaborationState: collaboration state contract.
+ * - WorkbenchCollaborationSurfacePost: UI collaboration post projection.
+ * - WorkbenchCollaborationSurfaceState: UI collaboration state projection.
+ * - WorkbenchCollaborationPostMutationAction: post mutation action.
+ * - WorkbenchCollaborationPostCreateRequest: post creation request.
+ * - WorkbenchCollaborationPostUpdateRequest: post update request.
+ * - WorkbenchCollaborationPostDeleteRequest: post deletion request.
+ * - WorkbenchCollaborationPostMutationRequest: post mutation request union.
+ * - WorkbenchCollaborationPostEndpointMutationRequest: endpoint post mutation request.
+ * - WorkbenchCollaborationPostEndpointUsage: post endpoint usage metadata.
+ * - WorkbenchCollaborationPostEndpointStateResponse: post endpoint state response.
+ * - WorkbenchCollaborationPostMutationResponse: post mutation response.
+ * - WorkbenchCollaborationMemoryEndpointUsage: memory endpoint usage metadata.
+ * - WorkbenchCollaborationMemorySetRequest: memory update request.
+ * - WorkbenchCollaborationMemoryStateResponse: memory state response.
+ * - WorkbenchCollaborationMemoryMutationResponse: memory mutation response.
+ * - WorkbenchCollaborationAdminPostMoveIntent: admin post move intent.
+ * - WorkbenchCollaborationAdminPostMutation: admin post mutation union.
+ * - WorkbenchCollaborationAdminPostMutationRequest: admin post mutation request.
+ * - WorkbenchCollaborationAdminPostMutationResponse: admin post mutation response.
+ * - WorkbenchControls: top-level Workbench command surface.
+ * - WorkbenchThreadGoalSnapshot: thread goal state.
+ * - WorkbenchThreadGoalControls: thread goal command surface.
+ * - WorkbenchBindings: Workbench UI bindings contract.
+ * - FilePayload: file-read payload.
+ * - CreateEntryPayload: project entry creation payload.
+ * - DeleteFileRequest: file deletion request.
+ * - DeleteFileConfirmationRequired: file deletion confirmation response.
+ * - DeleteFilePayload: completed file deletion payload.
+ * - DeleteFileResponse: file deletion response union.
+ * - SaveFilePayload: saved file payload.
+ * - SaveConflictPayload: save conflict payload.
+ * - WorkbenchFileOpenTarget: editor-open target.
+ * - OpenFileInEditorRequest: editor-open request.
+ * - OpenFileInEditorResponse: editor-open response.
+ * - RevealProjectEntryRequest: explorer reveal request.
+ * - RevealProjectEntryResponse: explorer reveal response.
+ * - ResolveExternalFileLinkRootsRequest: external-link root request.
+ * - ExternalFileLinkRoot: resolved external-link root.
+ * - ResolveExternalFileLinkRootsResponse: external-link root response.
+ */
+
 import type { RateLimitSnapshot } from "./codex/generated/app-server/v2/RateLimitSnapshot";
 import type { CommandAction } from "./codex/generated/app-server/v2/CommandAction";
 import type { Thread } from "./codex/generated/app-server/v2/Thread";
@@ -818,6 +994,8 @@ export interface WorkbenchSteerHistoryEntry {
   resolvedAt: number | null;
   requestId: string | null;
   canonicalItemId: string | null;
+  clientUserMessageId?: string | null;
+  dispatchSequence?: number | null;
   error: string | null;
 }
 

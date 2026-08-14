@@ -149,7 +149,12 @@ export class CodexAppServerClient {
       });
     });
 
-    this.send(request);
+    try {
+      this.send(request);
+    } catch (error) {
+      this.pendingResponses.delete(requestId);
+      throw error;
+    }
     return responsePromise;
   }
 

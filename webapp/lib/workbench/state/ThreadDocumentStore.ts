@@ -28,6 +28,7 @@ export interface ThreadDocumentStoreOptions {
 
 export interface ThreadDocumentStore {
   clear: () => boolean;
+  deleteDocumentKey: (key: string) => boolean;
   getDocumentByKey: (key: string) => ThreadPayload | null;
   getDocumentByThreadId: (threadId: string) => ThreadPayload | null;
   getSelectedDocument: () => ThreadPayload | null;
@@ -138,6 +139,22 @@ function ThreadDocumentStore({
       documentsByKey.clear();
       keysByThreadId.clear();
       selectedThreadKey = "";
+      emit();
+      return true;
+    },
+    deleteDocumentKey(key) {
+      const existing = documentsByKey.get(key);
+      if (!existing) {
+        return false;
+      }
+
+      documentsByKey.delete(key);
+      if (keysByThreadId.get(existing.id) === key) {
+        keysByThreadId.delete(existing.id);
+      }
+      if (selectedThreadKey === key) {
+        selectedThreadKey = "";
+      }
       emit();
       return true;
     },
