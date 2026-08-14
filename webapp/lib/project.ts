@@ -6,7 +6,7 @@
  * - normalizeRelativePath: normalize project paths to forward-slash form for client transport. Keywords: path, normalize, relative.
  * - safeResolve/safeResolveProjectPath: resolve and validate project-relative paths inside a selected project root. Keywords: path, resolve, safety.
  * - isPathWithinRoot: test whether an absolute path belongs to a project root. Keywords: path, root, thread filter.
- * - discoverProjects/resolveDiscoveredProject/resolveProjectRoot/getDefaultProjectId: find and resolve selectable git projects and VS Code workspaces, newest HEAD activity first. Keywords: project, workspace, discovery, id, last commit.
+ * - discoverProjects/resolveDiscoveredProject/resolveProjectRootFromProjects/resolveProjectRoot/getDefaultProjectId: find and resolve selectable git projects and VS Code workspaces, newest HEAD activity first. Keywords: project, workspace, discovery, catalog, id, last commit.
  * - createProjectEntry/assertProjectFileCanBeDeleted/deleteProjectFile: create project entries, validate deletion targets, or permanently delete one project file. Keywords: create, delete, file, directory.
  * - buildTree/buildProjectTree: build the visible explorer tree for a project. Keywords: tree, explorer, filesystem.
  * - getProjectSnapshot: assemble the project tree, root info, and git change summary for the client. Keywords: snapshot, project, explorer.
@@ -724,7 +724,13 @@ export async function getDefaultProjectId() {
 }
 
 export async function resolveProjectRoot(projectId?: string | null) {
-  const projects = await discoverProjects();
+  return await resolveProjectRootFromProjects(await discoverProjects(), projectId);
+}
+
+export async function resolveProjectRootFromProjects(
+  projects: readonly WorkbenchProjectOption[],
+  projectId?: string | null,
+) {
   const requestedProjectId = normalizeProjectId(projectId ?? "") || getDefaultProjectIdFromProjects(projects);
   if (!requestedProjectId) {
     throw new Error("No projects were found under the configured projects root.");

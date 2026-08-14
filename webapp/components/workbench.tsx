@@ -1032,7 +1032,10 @@ export default function Workbench () {
   const currentProject = explorer.projects.find((project) => project.id === explorer.currentProjectId) ?? null;
   const activeProjectId = explorer.currentProjectId || route.projectId;
   const collaborationState = collaborationStatesByProjectId[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
-  const refreshBrowseSessions = useCallback(async (projectId = activeProjectId) => {
+  const refreshBrowseSessions = useCallback(async (
+    projectId = activeProjectId,
+    options: { signal?: AbortSignal } = {},
+  ) => {
     if (!projectId) {
       setBrowseSessions([]);
       setBrowseSessionsError("");
@@ -1042,18 +1045,23 @@ export default function Workbench () {
     setIsBrowseSessionsLoading(true);
     setBrowseSessionsError("");
     try {
-      const response = await fetch(`/api/browse/sessions?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" });
+      const response = await fetch(`/api/browse/sessions?projectId=${encodeURIComponent(projectId)}`, {
+        cache: "no-store",
+        signal: options.signal,
+      });
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: "Unable to load Browse sessions." }));
         throw new Error(error.error);
       }
 
       const payload = await response.json() as WorkbenchBrowseSessionListResponse;
-      setBrowseSessions(payload.sessions);
+      if (!options.signal?.aborted) setBrowseSessions(payload.sessions);
     } catch (error) {
-      setBrowseSessionsError(error instanceof Error ? error.message : "Unable to load Browse sessions.");
+      if (!options.signal?.aborted) {
+        setBrowseSessionsError(error instanceof Error ? error.message : "Unable to load Browse sessions.");
+      }
     } finally {
-      setIsBrowseSessionsLoading(false);
+      if (!options.signal?.aborted) setIsBrowseSessionsLoading(false);
     }
   }, [activeProjectId]);
   useEffect(() => {
@@ -1063,12 +1071,21 @@ export default function Workbench () {
       return;
     }
 
-    let cancelled = false;
+    let activeController: AbortController | null = null;
+    let inFlight = false;
     const refresh = async () => {
-      if (cancelled) {
-        return;
+      if (inFlight) return;
+      inFlight = true;
+      const controller = new AbortController();
+      activeController = controller;
+      try {
+        await refreshBrowseSessions(activeProjectId, { signal: controller.signal });
+      } finally {
+        if (activeController === controller) {
+          activeController = null;
+          inFlight = false;
+        }
       }
-      await refreshBrowseSessions(activeProjectId);
     };
     void refresh();
     const timer = window.setInterval(() => {
@@ -1076,7 +1093,7 @@ export default function Workbench () {
     }, 30_000);
 
     return () => {
-      cancelled = true;
+      activeController?.abort();
       window.clearInterval(timer);
     };
   }, [activeProjectId, refreshBrowseSessions]);

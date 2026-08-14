@@ -1017,12 +1017,14 @@ export default class CodexStdioBridge {
   private transcriptLastSkipLabel = "";
   private upstreamInitialized: boolean;
   private upstreamInitializePromise: Promise<void> | null = null;
+  private readonly resolveProjectFromCwd: CodexStdioBridgeOptions["resolveProjectFromCwd"];
   private readonly subagentController: ReloadableWorkbenchSubagentController;
 
   constructor({ appServer, bridgeUrl, initialState, onNotification, resolveProjectFromCwd, sendToClient, storageRoot, subagentStore = new WorkbenchSubagentStore(storageRoot) }: CodexStdioBridgeOptions) {
     this.appServer = appServer;
     this.bridgeUrl = bridgeUrl;
     this.onNotification = onNotification;
+    this.resolveProjectFromCwd = resolveProjectFromCwd;
     this.sendToClient = sendToClient;
     this.storageRoot = storageRoot;
     this.initializeResult = initialState?.initializeResult ?? null;
@@ -2033,7 +2035,26 @@ export default class CodexStdioBridge {
 
     const hydration = readThreadHydration(message);
     const isSubagentBackgroundRead = record?.workbenchReadScope === "subagentBackground";
+    const isThreadRecallRead = record?.workbenchReadScope === "threadRecall";
     const { workbenchReadScope: _workbenchReadScope, ...upstreamParams } = record ?? {};
+    if (isThreadRecallRead) {
+      const preflightRequest: JsonRpcRequest = {
+        method: "thread/read",
+        params: {
+          ...upstreamParams,
+          includeTurns: false,
+          threadId,
+        },
+      };
+      const preflightDispatch = await this.dispatchRequest(preflightRequest, { internal: true });
+      if (!preflightDispatch.response) throw new Error("Thread Recall preflight did not create an internal response.");
+      const preflightResponse = await preflightDispatch.response;
+      if (preflightResponse.error) throw new Error(preflightResponse.error.message);
+      const preflightThread = asRecord(asRecord(preflightResponse.result)?.thread);
+      const threadCwd = asString(preflightThread?.cwd)?.trim() ?? "";
+      if (!threadCwd) throw new Error("Thread Recall preflight did not receive a readable thread CWD.");
+      await this.resolveProjectFromCwd(threadCwd, { endpointName: "Thread Recall" });
+    }
     const readParams = {
       ...upstreamParams,
       includeTurns: isSubagentBackgroundRead ? false : record?.includeTurns ?? true,

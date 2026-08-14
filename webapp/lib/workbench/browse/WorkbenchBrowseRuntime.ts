@@ -3,6 +3,7 @@
  * - WorkbenchBrowseExecutionContext: cwd-derived Browse project ownership. Keywords: browse, cwd, project.
  * - WorkbenchBrowseDaemonTransport: injectable warm daemon transport contract. Keywords: browse, daemon, protocol, test.
  * - WorkbenchBrowseProjectResolver: injected orchestrator project-catalog resolution port. Keywords: browse, project, catalog, ownership.
+ * - WorkbenchBrowseProjectIdResolver: injected project-ID catalog resolution port. Keywords: browse, project id, catalog, ownership.
  * - WorkbenchBrowseRuntimeProfileStore: injectable persistent-profile resolver contract. Keywords: browse, profile, session, test.
  * - default WorkbenchBrowseRuntime: own warm Browse imports, per-session FIFO, daemon bootstrap, deadlines, and retirement. Keywords: browse, runtime, session, queue, timeout.
  */
@@ -10,7 +11,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { appRoot, normalizeRelativePath, resolveProjectRoot } from "../../project";
+import { appRoot, normalizeRelativePath, resolveProjectRoot, type ResolvedProject } from "../../project";
 import type { WorkbenchBrowseCommandRequest, WorkbenchBrowseCommandResponse } from "../../types";
 import { killProcessTreeAsync } from "../../../orchestrator/process-helpers";
 import {
@@ -38,6 +39,10 @@ export type WorkbenchBrowseProjectResolver = (
   cwd: string | null | undefined,
   options?: { endpointName?: string },
 ) => Promise<AgentEndpointProjectResolution>;
+
+export type WorkbenchBrowseProjectIdResolver = (
+  projectId?: string | null,
+) => Promise<ResolvedProject>;
 
 export interface WorkbenchBrowseDaemonTransport {
   cleanupRuntimeFiles(session: string): Promise<void>;
@@ -101,6 +106,7 @@ export default class WorkbenchBrowseRuntime {
   private readonly client: WorkbenchBrowseDaemonTransport;
   private readonly profileStore: WorkbenchBrowseRuntimeProfileStore;
   private readonly retireProcess: WorkbenchBrowseProcessRetirer;
+  private readonly resolveProjectById: WorkbenchBrowseProjectIdResolver;
   private readonly resolveProjectFromCwd: WorkbenchBrowseProjectResolver;
   private readonly sessionTails = new Map<string, Promise<void>>();
 
@@ -108,16 +114,19 @@ export default class WorkbenchBrowseRuntime {
     client = new WorkbenchBrowseDaemonClient(),
     profileStore = new WorkbenchBrowseProfileStore(),
     retireProcess = killProcessTreeAsync,
+    resolveProjectById = resolveProjectRoot,
     resolveProjectFromCwd = resolveAgentEndpointProjectFromCwd,
   }: {
     client?: WorkbenchBrowseDaemonTransport;
     profileStore?: WorkbenchBrowseRuntimeProfileStore;
     retireProcess?: WorkbenchBrowseProcessRetirer;
+    resolveProjectById?: WorkbenchBrowseProjectIdResolver;
     resolveProjectFromCwd?: WorkbenchBrowseProjectResolver;
   } = {}) {
     this.client = client;
     this.profileStore = profileStore;
     this.retireProcess = retireProcess;
+    this.resolveProjectById = resolveProjectById;
     this.resolveProjectFromCwd = resolveProjectFromCwd;
   }
 
@@ -137,7 +146,7 @@ export default class WorkbenchBrowseRuntime {
         workspaceRootPaths: resolution.project.roots.map((root) => root.root),
       };
     }
-    const project = await resolveProjectRoot(request.projectId);
+    const project = await this.resolveProjectById(request.projectId);
     return {
       cwd: path.resolve(project.root),
       owningRootPath: project.root,
@@ -202,6 +211,13 @@ export default class WorkbenchBrowseRuntime {
         throw error;
       }
     }, deadline, signal);
+  }
+
+  async inspectStatus(session: string, timeoutMs = 5_000, signal?: AbortSignal) {
+    const deadline = Date.now() + timeoutMs;
+    return await this.enqueueSession(session, async () => (
+      await this.readStatus(session, remainingTimeout(deadline, session), signal)
+    ), deadline, signal);
   }
 
   async stop(session: string, { force = false, signal, timeoutMs = 5_000 }: { force?: boolean; signal?: AbortSignal; timeoutMs?: number } = {}) {

@@ -22,7 +22,7 @@ import { WebSocketServer } from "next/dist/compiled/ws";
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import { createInitializeCapabilities, createInitializeRequest } from "../lib/codex/protocol";
-import { getCurrentInProgressTurn, getCurrentTurn, hasThreadActiveFlag } from "../lib/codex/thread-state";
+import { getCurrentTurn, isThreadStatusActive } from "../lib/codex/thread-state";
 import type {
     OrchestratorReloadRequest,
     OrchestratorReloadResponse,
@@ -420,9 +420,7 @@ function reloadOrchestratorLogic() {
 }
 
 function isThreadActiveForBrowseCleanup(thread: ThreadReadResponse["thread"]) {
-  return getCurrentInProgressTurn(thread) !== null
-    || hasThreadActiveFlag(thread.status, "waitingOnUserInput")
-    || hasThreadActiveFlag(thread.status, "waitingOnApproval");
+  return isThreadStatusActive(thread.status);
 }
 
 async function readThreadActiveForBrowseCleanup(threadId: string) {
@@ -432,10 +430,9 @@ async function readThreadActiveForBrowseCleanup(threadId: string) {
         id: 0,
         method: "thread/read",
         params: {
-          includeTurns: true,
+          includeTurns: false,
           threadId,
         },
-        workbenchThreadHydration: { mode: "latest" },
       });
       if (response.error) throw new Error(response.error.message);
       return isThreadActiveForBrowseCleanup((response.result as ThreadReadResponse).thread);
@@ -521,6 +518,7 @@ function createBrowseController() {
 function createBrowseRuntime() {
   const { default: Runtime } = loadBrowseRuntimeModule();
   return new Runtime({
+    resolveProjectById: (projectId) => projectCatalogController.resolveProjectById(projectId),
     resolveProjectFromCwd: (cwd, options) => projectCatalogController.resolveAgentEndpointProjectFromCwd(cwd, options),
   });
 }

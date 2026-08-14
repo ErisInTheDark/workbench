@@ -14,8 +14,7 @@ import type {
   WorkbenchThreadRecallRequest,
 } from "../../../../lib/types";
 import { sendServerWorkbenchOrchestratorRequest } from "../../../../lib/codex/server-orchestrator";
-import { isProjectCodexThread, toThreadPayload } from "../../../../lib/codex/thread-adapter";
-import { resolveAgentEndpointProjectFromCwd } from "../../../../lib/workbench/project/agent-endpoint-project";
+import { toThreadPayload } from "../../../../lib/codex/thread-adapter";
 import {
   renderWorkbenchThreadRecallExpansionMarkdown,
   renderWorkbenchThreadRecallSearchMarkdown,
@@ -157,15 +156,10 @@ async function readThreadContextBundle(
     params: {
       includeTurns: true,
       threadId,
+      workbenchReadScope: "threadRecall",
     },
     workbenchThreadHydration: { mode: "legacyFull" },
   });
-  const resolvedProject = await resolveAgentEndpointProjectFromCwd(context.thread.cwd, { endpointName: "Thread Recall" });
-  const projectRootPaths = resolvedProject.project.roots.map((root) => root.root);
-  if (!isProjectCodexThread(context.thread, projectRootPaths)) {
-    throw new Error("That Codex thread does not belong to this project.");
-  }
-
   return {
     browseResultEntries: context.browseResultEntries,
     questionnaireEntries: context.questionnaireEntries,

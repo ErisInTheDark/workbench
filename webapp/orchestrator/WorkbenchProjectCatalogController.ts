@@ -1,22 +1,23 @@
 /*
  * Exports:
- * - WorkbenchProjectCatalogControllerOptions: injected project discovery, CWD resolution, watcher, clock, and TTL controls. Keywords: project, catalog, cache, watcher, test.
+ * - WorkbenchProjectCatalogControllerOptions: injected project discovery, resolution, watcher, clock, logging, and TTL controls. Keywords: project, catalog, cache, watcher, test.
  * - default WorkbenchProjectCatalogController: own the structured project catalog, serialized HTTP payload, coalesced refresh, CWD resolution, and invalidation lifecycle. Keywords: project, catalog, cwd, cache, orchestrator.
  */
 import fs from "node:fs";
 import type http from "node:http";
 
-import { discoverProjects, normalizeRelativePath, projectsRoot } from "../lib/project";
+import { discoverProjects, normalizeRelativePath, projectsRoot, resolveProjectRootFromProjects } from "../lib/project";
 import type { WorkbenchProjectOption, WorkbenchProjectsPayload } from "../lib/types";
 import {
   resolveAgentEndpointProjectFromProjects,
   type AgentEndpointProjectResolution,
 } from "../lib/workbench/project/agent-endpoint-project";
+import { logError as defaultLogError } from "./process-helpers";
 
 const DEFAULT_CACHE_TTL_MS = 15_000;
 const IGNORED_DISCOVERY_SEGMENTS = new Set([".next", "build", "coverage", "dist", "node_modules"]);
 
-type CatalogCacheState = "coalesced" | "hit" | "miss";
+type CatalogCacheState = "coalesced" | "hit" | "miss" | "stale";
 
 interface ProjectWatcher {
   close: () => void;
@@ -34,13 +35,26 @@ type ResolveProjectFromCatalog = (
   options?: { endpointName?: string },
 ) => Promise<AgentEndpointProjectResolution>;
 
+type ResolveProjectByIdFromCatalog = typeof resolveProjectRootFromProjects;
+
 export interface WorkbenchProjectCatalogControllerOptions {
   cacheTtlMs?: number;
   createWatcher?: (rootPath: string, listener: (eventType: string, filename: string | Buffer | null) => void, recursive: boolean) => ProjectWatcher;
   discoverProjects?: typeof discoverProjects;
+  logError?: (message: string) => void;
   now?: () => number;
   projectsRootPath?: string;
+  resolveProjectByIdFromCatalog?: ResolveProjectByIdFromCatalog;
   resolveProjectFromCatalog?: ResolveProjectFromCatalog;
+}
+
+function sanitizeRefreshError(error: unknown) {
+  return (error instanceof Error ? error.message : String(error))
+    .replace(/\b[A-Za-z]:[\\/][^\s"'<>]*/gu, "[path]")
+    .replace(/\b(Bearer\s+)[^\s,]+/giu, "$1[redacted]")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, 500) || "unknown error";
 }
 
 function defaultCreateWatcher(rootPath: string, listener: (eventType: string, filename: string | Buffer | null) => void, recursive: boolean) {
@@ -101,25 +115,31 @@ export default class WorkbenchProjectCatalogController {
   private readonly discoverProjectOptions: typeof discoverProjects;
   private disposed = false;
   private hardStale = false;
+  private readonly logError: NonNullable<WorkbenchProjectCatalogControllerOptions["logError"]>;
   private readonly now: () => number;
   private refreshInFlight: Promise<ProjectCatalogSnapshot> | null = null;
   private readonly projectsRootPath: string;
   private projectsWatcher: ProjectWatcher | null = null;
+  private readonly resolveProjectByIdFromCatalog: ResolveProjectByIdFromCatalog;
   private readonly resolveProjectFromCatalog: ResolveProjectFromCatalog;
 
   constructor({
     cacheTtlMs = DEFAULT_CACHE_TTL_MS,
     createWatcher = defaultCreateWatcher,
     discoverProjects: discoverProjectOptions = discoverProjects,
+    logError = (message) => defaultLogError("project-catalog", message),
     now = Date.now,
     projectsRootPath = projectsRoot,
+    resolveProjectByIdFromCatalog = resolveProjectRootFromProjects,
     resolveProjectFromCatalog = resolveAgentEndpointProjectFromProjects,
   }: WorkbenchProjectCatalogControllerOptions = {}) {
     this.cacheTtlMs = cacheTtlMs;
     this.createWatcher = createWatcher;
     this.discoverProjectOptions = discoverProjectOptions;
+    this.logError = logError;
     this.now = now;
     this.projectsRootPath = projectsRootPath;
+    this.resolveProjectByIdFromCatalog = resolveProjectByIdFromCatalog;
     this.resolveProjectFromCatalog = resolveProjectFromCatalog;
     this.projectsWatcher = this.watchProjects();
   }
@@ -150,13 +170,25 @@ export default class WorkbenchProjectCatalogController {
     options: { endpointName?: string } = {},
   ) {
     this.assertActive();
-    const { catalog, refreshed } = await this.readCatalogForResolution();
+    const { catalog, refresh, refreshed } = await this.readCatalogForResolution();
     try {
       return await this.resolveProjectFromCatalog(catalog.data, cwd, options);
     } catch (firstError) {
       if (refreshed) throw firstError;
-      const refreshedCatalog = await this.refreshCatalog();
+      const refreshedCatalog = await (refresh ?? this.refreshCatalog());
       return await this.resolveProjectFromCatalog(refreshedCatalog.data, cwd, options);
+    }
+  }
+
+  async resolveProjectById(projectId?: string | null) {
+    this.assertActive();
+    const { catalog, refresh, refreshed } = await this.readCatalogForResolution();
+    try {
+      return await this.resolveProjectByIdFromCatalog(catalog.data, projectId);
+    } catch (firstError) {
+      if (refreshed) throw firstError;
+      const refreshedCatalog = await (refresh ?? this.refreshCatalog());
+      return await this.resolveProjectByIdFromCatalog(refreshedCatalog.data, projectId);
     }
   }
 
@@ -168,19 +200,24 @@ export default class WorkbenchProjectCatalogController {
   };
 
   private async readCatalogForResolution() {
-    if (!this.catalog || this.hardStale) {
-      return { catalog: await this.refreshCatalog(), refreshed: true };
+    if (!this.catalog) {
+      return { catalog: await this.refreshCatalog(), refresh: null, refreshed: true };
     }
-    if (this.catalogExpiresAt <= this.now()) {
-      void this.refreshCatalog().catch(() => undefined);
+    let refresh: Promise<ProjectCatalogSnapshot> | null = null;
+    if (this.hardStale || this.catalogExpiresAt <= this.now()) {
+      refresh = this.refreshInBackground();
     }
-    return { catalog: this.catalog, refreshed: false };
+    return { catalog: this.catalog, refresh, refreshed: false };
   }
 
   private async readFreshCatalog(): Promise<{ cacheState: CatalogCacheState; catalog: ProjectCatalogSnapshot }> {
     this.assertActive();
-    if (this.catalog && !this.hardStale && this.catalogExpiresAt > this.now()) {
-      return { cacheState: "hit", catalog: this.catalog };
+    if (this.catalog) {
+      if (!this.hardStale && this.catalogExpiresAt > this.now()) {
+        return { cacheState: "hit", catalog: this.catalog };
+      }
+      this.refreshInBackground();
+      return { cacheState: "stale", catalog: this.catalog };
     }
     const coalesced = this.refreshInFlight;
     return {
@@ -191,11 +228,18 @@ export default class WorkbenchProjectCatalogController {
 
   private async refreshCatalog() {
     this.assertActive();
-    while (true) {
-      const refreshed = await (this.refreshInFlight ?? this.startRefresh());
-      if (!this.hardStale) return refreshed;
-      this.assertActive();
+    return await (this.refreshInFlight ?? this.startRefresh());
+  }
+
+  private refreshInBackground() {
+    const alreadyRefreshing = Boolean(this.refreshInFlight);
+    const refresh = this.refreshCatalog();
+    if (!alreadyRefreshing) {
+      void refresh.catch((error) => {
+        this.logError(`project catalog background refresh failed: ${sanitizeRefreshError(error)}`);
+      });
     }
+    return refresh;
   }
 
   private startRefresh() {

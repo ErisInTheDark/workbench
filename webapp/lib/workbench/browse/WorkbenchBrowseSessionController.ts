@@ -19,7 +19,28 @@ import WorkbenchBrowseRuntime from "./WorkbenchBrowseRuntime";
 import WorkbenchBrowseSessionRegistry, { type WorkbenchBrowseSessionRecord } from "./WorkbenchBrowseSessionRegistry";
 
 const DEFAULT_BROWSE_TIMEOUT_MS = 120_000;
+const MAX_SESSION_STATUS_PROBE_MS = 1_000;
 const SESSION_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,80}$/u;
+
+type BrowseProfilePort = Pick<WorkbenchBrowseProfileStore, "forgetPersistentSession">;
+type BrowseRegistryPort = Pick<WorkbenchBrowseSessionRegistry,
+  | "forget"
+  | "list"
+  | "listByProjectId"
+  | "listByThreadId"
+  | "listOwnedThreadIds"
+  | "listStaleInactiveSessions"
+  | "markThreadActive"
+  | "markThreadInactive"
+  | "remember"
+>;
+type BrowseRuntimePort = Pick<WorkbenchBrowseRuntime,
+  | "inspectStatus"
+  | "listRuntimeSessionNames"
+  | "readRuntimePid"
+  | "resolveExecutionContext"
+  | "stop"
+>;
 
 interface BrowseStatusPayload {
   browserConnected?: boolean;
@@ -35,18 +56,18 @@ interface BrowseStatusPayload {
 }
 
 export default class WorkbenchBrowseSessionController {
-  private readonly profileStore: WorkbenchBrowseProfileStore;
-  private readonly registry: WorkbenchBrowseSessionRegistry;
-  private readonly runtime: WorkbenchBrowseRuntime;
+  private readonly profileStore: BrowseProfilePort;
+  private readonly registry: BrowseRegistryPort;
+  private readonly runtime: BrowseRuntimePort;
 
   constructor({
     runtime = new WorkbenchBrowseRuntime(),
     profileStore = new WorkbenchBrowseProfileStore(),
     registry = new WorkbenchBrowseSessionRegistry(),
   }: {
-    runtime?: WorkbenchBrowseRuntime;
-    profileStore?: WorkbenchBrowseProfileStore;
-    registry?: WorkbenchBrowseSessionRegistry;
+    runtime?: BrowseRuntimePort;
+    profileStore?: BrowseProfilePort;
+    registry?: BrowseRegistryPort;
   } = {}) {
     this.runtime = runtime;
     this.profileStore = profileStore;
@@ -225,7 +246,7 @@ export default class WorkbenchBrowseSessionController {
         cwd: request.cwd ?? null,
         projectId: request.projectId ?? executionContext.projectId,
         threadId: request.threadId ?? null,
-      }, runtimeSessionNames.includes(sessionName), signal)
+      }, runtimeSessionNames.includes(sessionName), request.timeoutMs, signal)
     )));
 
     return {
@@ -320,7 +341,7 @@ export default class WorkbenchBrowseSessionController {
           cwd: request.cwd ?? null,
           projectId: request.projectId ?? projectContext.projectId,
           threadId: request.threadId ?? existing?.threadId ?? null,
-        }, true, signal),
+        }, true, request.timeoutMs, signal),
       stopped: result.ok,
     };
   }
@@ -334,12 +355,17 @@ export default class WorkbenchBrowseSessionController {
       threadId: string | null;
     },
     hasRuntimeFiles: boolean,
+    timeoutMs?: number | null,
     signal?: AbortSignal,
   ): Promise<WorkbenchBrowseSessionSummary> {
     const statusStartedAt = Date.now();
     let statusResult: WorkbenchBrowseCommandResponse;
     try {
-      const statusValue = await this.runtime.status(sessionName, 5_000, signal);
+      const statusValue = await this.runtime.inspectStatus(
+        sessionName,
+        Math.max(1, Math.min(timeoutMs ?? MAX_SESSION_STATUS_PROBE_MS, MAX_SESSION_STATUS_PROBE_MS)),
+        signal,
+      );
       statusResult = {
         durationMs: Date.now() - statusStartedAt,
         exitCode: 0,

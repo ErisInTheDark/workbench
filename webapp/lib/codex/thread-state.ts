@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - hasThreadActiveFlag: detect structured or flattened active-thread flags. Keywords: thread status, active flag, approval.
+ * - isThreadStatusActive: detect structured or flattened active thread status without requiring turns. Keywords: thread status, active, cleanup.
  * - getCurrentTurn: return the newest turn in a thread. Keywords: current turn, latest turn, ordering.
  * - getCurrentInProgressTurn: return the newest turn only when it is still running. Keywords: in progress, active turn.
  * - shouldPreserveLiveTurnItems: compare an incoming turn with an already-seen live turn. Keywords: turn merge, live items, itemsView.
@@ -93,6 +94,14 @@ export function getCurrentInProgressTurn<TTurn extends ThreadLikeTurn>(thread: P
   }
 
   return currentTurn;
+}
+
+export function isThreadStatusActive(status: ThreadLikeStatus) {
+  if (typeof status === "string") {
+    return status.split(":", 1)[0] === "active";
+  }
+
+  return status.type === "active";
 }
 
 export function shouldPreserveLiveTurnItems(incomingTurn: Turn, liveTurn: Turn | undefined) {
