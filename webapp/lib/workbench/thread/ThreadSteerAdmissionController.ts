@@ -11,6 +11,7 @@ import type { TurnSteerResponse } from "../../codex/generated/app-server/v2/Turn
 import type { UserInput } from "../../codex/generated/app-server/v2/UserInput";
 import type { CodexJsonRpcResponse } from "../../codex/protocol";
 import { isCodexJsonRpcFailure } from "../../codex/protocol";
+import { isThreadStatusActive } from "../../codex/thread-state";
 import type { ThreadDocumentStore as ThreadDocumentStoreApi } from "../state/ThreadDocumentStore";
 import type { ThreadSourceStore } from "../state/ThreadSourceStore";
 import type { ThreadOptimisticInputStore } from "./ThreadOptimisticInputStore";
@@ -74,6 +75,7 @@ function ThreadSteerAdmissionController({
       || thread.harness !== "codex"
       || thread.isDraft
       || thread.id !== threadId
+      || !isThreadStatusActive(thread.status)
       || !activeTurnId
     ) {
       throw new Error("The selected Codex thread is no longer ready to accept a steer.");

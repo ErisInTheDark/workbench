@@ -16,3 +16,4 @@ node_modules
 webapp/lib/codex/generated/
 webapp/.debug/
 .workbench/
+audits/

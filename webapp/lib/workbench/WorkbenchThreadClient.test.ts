@@ -13,12 +13,26 @@ import WorkbenchThreadClient from "./WorkbenchThreadClient.ts";
 type Listener = (event: { data?: string }) => void;
 type SocketRequest = { id: number; method: string; params?: Record<string, unknown>; workbenchHarness?: string };
 
-function wireThread(id: string, turnId = `${id}-turn`): Thread {
+function wireThread(
+  id: string,
+  turnId = `${id}-turn`,
+  turnStatus: Thread["turns"][number]["status"] = "inProgress",
+): Thread {
   return {
     agentNickname: null, agentRole: null, cliVersion: "test", createdAt: 1, cwd: "C:/repo", ephemeral: false,
     forkedFromId: null, gitInfo: null, id, modelProvider: "openai", name: null, parentThreadId: null, path: null,
-    preview: "", recencyAt: null, sessionId: `${id}-session`, source: "appServer", status: { activeFlags: [], type: "active" },
-    threadSource: null, turns: [{ completedAt: null, durationMs: null, error: null, id: turnId, items: [], itemsView: "full", startedAt: 1, status: "inProgress" }],
+    preview: "", recencyAt: null, sessionId: `${id}-session`, source: "appServer",
+    status: turnStatus === "inProgress" ? { activeFlags: [], type: "active" } : { type: "idle" },
+    threadSource: null, turns: [{
+      completedAt: turnStatus === "inProgress" ? null : 2,
+      durationMs: turnStatus === "inProgress" ? null : 1,
+      error: null,
+      id: turnId,
+      items: [],
+      itemsView: "full",
+      startedAt: 1,
+      status: turnStatus,
+    }],
     updatedAt: 1,
   };
 }
@@ -457,9 +471,60 @@ test("selection drift during preserved general preparation sends no obsolete ste
   await waitForRequest(socket, "thread/read");
   client.selectThreadPayload(activeThread("codex", "other"));
   socket.respond(readRequest!.id, { thread: wireThread("idle") });
-  assert.equal(await send, null);
+  await assert.rejects(send, /thread changed before the message could be sent/u);
   assert.equal(socket.requests.some((request) => request.method === "turn/steer" && request.params?.threadId === "idle"), false);
   assert.equal(client.getSnapshot().currentThread?.id, "other");
+}));
+
+test("same-selection notification drift rejects before dispatch instead of clearing an unsent message", async () => withClient(async (client, socket) => {
+  const idle = activeThread("codex", "idle", "completed");
+  client.selectThreadPayload(idle);
+  let readRequest: SocketRequest | null = null;
+  FakeWebSocket.intercept = (_target, request) => {
+    if (request.method === "thread/read" && request.params?.threadId === "idle") {
+      readRequest = request;
+      return true;
+    }
+    return false;
+  };
+
+  const send = client.sendThreadMessage(idle, [{ text: "keep me", text_elements: [], type: "text" }]);
+  await waitForRequest(socket, "thread/read");
+  socket.notify("thread/status/changed", {
+    status: { type: "idle" },
+    threadId: "idle",
+  });
+  socket.respond(readRequest!.id, { thread: wireThread("idle", "idle-turn", "completed") });
+
+  await assert.rejects(send, /thread changed before the message could be sent/u);
+  assert.equal(socket.requests.some((request) => request.method === "turn/steer" || request.method === "turn/start"), false);
+  assert.equal(client.getSnapshot().currentThread?.id, "idle");
+}));
+
+test("idle status with a stale in-progress turn uses authoritative preparation and starts a new turn", async () => withClient(async (client, socket) => {
+  const stale = { ...activeThread(), status: "idle" };
+  const completed = wireThread("thread", "turn", "completed");
+  client.selectThreadPayload(stale);
+  FakeWebSocket.intercept = (target, request) => {
+    if (request.method === "thread/read") {
+      queueMicrotask(() => target.respond(request.id, { thread: completed }));
+      return true;
+    }
+    if (request.method === "thread/resume") {
+      queueMicrotask(() => target.respond(request.id, { model: "model", reasoningEffort: null, serviceTier: null, thread: completed }));
+      return true;
+    }
+    if (request.method === "turn/start") {
+      queueMicrotask(() => target.respond(request.id, { turn: wireThread("thread", "new-turn").turns[0] }));
+      return true;
+    }
+    return false;
+  };
+
+  const result = await client.sendThreadMessage(stale, [{ text: "new turn", text_elements: [], type: "text" }]);
+  assert.equal(socket.requests.filter((request) => request.method === "turn/steer").length, 0);
+  assert.equal(socket.requests.filter((request) => request.method === "turn/start").length, 1);
+  assert.equal(result?.turns.at(-1)?.id, "new-turn");
 }));
 
 test("preserved general active steer rejects interruption before acknowledgement", async () => withClient(async (client, socket) => {
@@ -742,7 +807,7 @@ test("project or selection changes during draft list refresh prevent stale gener
   for (const request of deferredLists) {
     socket.respond(request.id, { data: [] });
   }
-  assert.equal(await send, null);
+  await assert.rejects(send, /thread changed before the message could be sent/u);
   assert.equal(socket.requests.some((request) => request.method === "thread/read" && request.params?.threadId === "materialized"), false);
   assert.equal(socket.requests.some((request) => request.method === "turn/steer" && request.params?.threadId === "materialized"), false);
 }));

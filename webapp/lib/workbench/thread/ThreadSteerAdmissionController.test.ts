@@ -68,6 +68,23 @@ test("admission connects, enqueues, sends exact native identity, and settles pen
   assert.deepEqual(setupResult.events, ["connect", "render"]);
 });
 
+test("idle thread status rejects a stale in-progress turn before admission preparation", async () => {
+  let calls = 0;
+  const result = setup(async <TResponse>() => {
+    calls += 1;
+    return { id: 1, result: { turnId: "turn" } } as CodexJsonRpcResponse<TResponse>;
+  });
+  result.sources.update("codex:thread", (source) => ({ ...source, status: "idle" }));
+
+  await assert.rejects(
+    result.controller.admit("thread", [{ text: "new turn", text_elements: [], type: "text" }]),
+    /no longer ready to accept a steer/u,
+  );
+  assert.equal(calls, 0);
+  assert.deepEqual(result.events, []);
+  assert.equal(result.optimisticInputs.apply(thread(), []).turns[0]?.items.length, 0);
+});
+
 test("lifecycle drift during connect rejects before enqueue or steer", async () => {
   let calls = 0;
   const setupResult = setup(async <TResponse>() => {

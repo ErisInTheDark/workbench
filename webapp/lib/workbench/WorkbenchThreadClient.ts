@@ -150,6 +150,7 @@ const EMPTY_ROLLOUT_ERROR_FRAGMENT = "rollout at";
 const EMPTY_ROLLOUT_ERROR_SUFFIX = "is empty";
 const MISSING_ROLLOUT_ERROR_FRAGMENTS = ["no rollout found by id", "no rollout found for thread id"] as const;
 const FRESH_CODEX_THREAD_ROLLOUT_STATUS_MESSAGE = "Started the thread. Its saved rollout is still warming up, so the live view will refresh automatically.";
+const PRE_DISPATCH_MESSAGE_INVALIDATED_ERROR = "The thread changed before the message could be sent. Your draft has been restored.";
 
 type WorkspaceWriteSandboxPolicy = Extract<SandboxPolicy, { type: "workspaceWrite" }>;
 
@@ -4189,7 +4190,9 @@ function WorkbenchThreadClient(
 
     const pendingRequest = state.pendingUserInputRequestsByThreadId.get(thread.id);
     const status = statusRecordsByKey.get(key)?.status ?? source.status;
-    return !pendingRequest && !status?.includes("waitingOnUserInput");
+    return isThreadStatusActive(status)
+      && !pendingRequest
+      && !status.includes("waitingOnUserInput");
   }
 
   async function reconcileAdmittedThreadMessage(context: ReconcileAdmittedThreadMessageContext) {
@@ -4451,7 +4454,7 @@ function WorkbenchThreadClient(
           : threadStartRequest.params,
       });
       if (!isSendProjectCurrent() || !isInitialSendSelectionCurrent()) {
-        return null;
+        throw new Error(PRE_DISPATCH_MESSAGE_INVALIDATED_ERROR);
       }
 
       const startedPayload = toThreadPayload(
@@ -4484,7 +4487,7 @@ function WorkbenchThreadClient(
             || refreshIntentRevision !== steerAdmissionIntentRevision
           ))
         ) {
-          return null;
+          throw new Error(PRE_DISPATCH_MESSAGE_INVALIDATED_ERROR);
         }
       }
     }
@@ -4504,7 +4507,7 @@ function WorkbenchThreadClient(
         workbenchThreadHydration: { mode: "latest" },
       });
       if (!isSendProjectCurrent() || !isThreadOperationFenceCurrent(preparationFence)) {
-        return null;
+        throw new Error(PRE_DISPATCH_MESSAGE_INVALIDATED_ERROR);
       }
       const resumedThreadResponse = await sendBridgeRequest<CodexThreadSessionResponse>(harness, {
         method: "thread/resume",
@@ -4522,7 +4525,7 @@ function WorkbenchThreadClient(
         workbenchThreadHydration: { mode: "latest" },
       });
       if (!isSendProjectCurrent() || !isThreadOperationFenceCurrent(preparationFence)) {
-        return null;
+        throw new Error(PRE_DISPATCH_MESSAGE_INVALIDATED_ERROR);
       }
       const readableThread = toThreadPayload(readableThreadResponse.thread, harness);
       resumedThread = toThreadPayload(
