@@ -2,6 +2,8 @@
  * Exports:
  * - OptimisticInputEntry: one stable optimistic user-input lifecycle record. Keywords: optimistic, input, steer, lifecycle.
  * - OptimisticInputStatus/OptimisticInputPlacement: optimistic rendering state. Keywords: optimistic, status, placement.
+ * - ThreadOptimisticInputStoreOptions: injectable native client-ID factory. Keywords: optimistic, identity, test.
+ * - EnqueueInitialOptimisticInputOptions: native identity and status for one initial message. Keywords: initial, identity, status.
  * - ThreadOptimisticInputStore: owner for optimistic input identity, status, placement, and canonical correlation. Keywords: optimistic, thread, delivery.
  * - default ThreadOptimisticInputStore: create the optimistic input owner. Keywords: optimistic, thread, create.
  */
@@ -32,15 +34,21 @@ export interface OptimisticInputEntry {
 }
 
 export interface ThreadOptimisticInputStoreOptions {
-  createSteerId?: () => string;
+  createClientUserMessageId?: () => string;
+}
+
+export interface EnqueueInitialOptimisticInputOptions {
+  clientUserMessageId?: string | null;
+  status?: OptimisticInputStatus;
 }
 
 export interface ThreadOptimisticInputStore {
   apply: (thread: ThreadPayload, steerHistory: readonly WorkbenchSteerHistoryEntry[]) => ThreadPayload;
   clear: () => void;
   confirmCanonicalUserMessage: (threadKey: string, turnId: string, item: UserMessageItem) => string | null;
+  createClientUserMessageId: () => string;
   deleteThread: (threadKey: string) => void;
-  enqueueInitial: (thread: ThreadPayload, turnId: string, input: UserInput[], status?: OptimisticInputStatus) => OptimisticInputEntry;
+  enqueueInitial: (thread: ThreadPayload, turnId: string, input: UserInput[], options?: EnqueueInitialOptimisticInputOptions) => OptimisticInputEntry;
   enqueueSteer: (thread: ThreadPayload, turnId: string, input: UserInput[], status?: OptimisticInputStatus) => OptimisticInputEntry;
   movePending: (handle: string, turnId: string) => boolean;
   strip: (thread: ThreadPayload) => ThreadPayload;
@@ -68,8 +76,10 @@ function isOptimisticItem(item: ThreadItem) {
 }
 
 function createOptimisticItem(entry: Pick<OptimisticInputEntry, "handle" | "input" | "placement" | "status" | "threadKey">): UserMessageItem {
+  const hasNativeCodexIdentity = entry.threadKey.startsWith("codex:")
+    && (entry.placement === "steer" || !entry.handle.startsWith("local-"));
   return {
-    clientId: entry.threadKey.startsWith("codex:") && entry.placement === "steer" ? entry.handle : null,
+    clientId: hasNativeCodexIdentity ? entry.handle : null,
     content: entry.input.map(cloneUserInput),
     id: `optimistic-user-message:${entry.placement}:${entry.status}:${entry.handle}`,
     type: "userMessage",
@@ -113,7 +123,9 @@ function placeCanonicalInitialUserMessages(items: ThreadItem[], entries: Optimis
       item.type === "userMessage"
       && !isOptimisticItem(item)
       && !isSyntheticSteerHistoryItem(item)
-      && areUserInputsEquivalentForUserMessageDedupe(item.content, entry.input)
+      && (entry.item.clientId
+        ? item.clientId === entry.item.clientId
+        : areUserInputsEquivalentForUserMessageDedupe(item.content, entry.input))
     ));
     if (currentIndex < 0) {
       continue;
@@ -139,7 +151,7 @@ function placeCanonicalInitialUserMessages(items: ThreadItem[], entries: Optimis
   return changed ? nextItems : items;
 }
 
-function ThreadOptimisticInputStore({ createSteerId = () => crypto.randomUUID() }: ThreadOptimisticInputStoreOptions = {}): ThreadOptimisticInputStore {
+function ThreadOptimisticInputStore({ createClientUserMessageId = () => crypto.randomUUID() }: ThreadOptimisticInputStoreOptions = {}): ThreadOptimisticInputStore {
   const entries: OptimisticInputEntry[] = [];
   let nextLocalHandle = 1;
 
@@ -149,7 +161,14 @@ function ThreadOptimisticInputStore({ createSteerId = () => crypto.randomUUID() 
     return nextEntry;
   }
 
-  function enqueue(thread: ThreadPayload, turnId: string, input: UserInput[], placement: OptimisticInputPlacement, status: OptimisticInputStatus) {
+  function enqueue(
+    thread: ThreadPayload,
+    turnId: string,
+    input: UserInput[],
+    placement: OptimisticInputPlacement,
+    status: OptimisticInputStatus,
+    clientUserMessageId?: string | null,
+  ) {
     const threadKey = createThreadDocumentKeyForThread(thread);
     const clonedInput = input.map(cloneUserInput);
     const canonicalMatchBaseline = countCanonicalMatches(thread, turnId, clonedInput);
@@ -161,9 +180,9 @@ function ThreadOptimisticInputStore({ createSteerId = () => crypto.randomUUID() 
       && entry.status !== "interrupted"
       && areUserInputsEquivalentForUserMessageDedupe(entry.input, clonedInput)
     )).length;
-    const handle = thread.harness === "codex" && placement === "steer"
-      ? createSteerId().toLowerCase()
-      : `local-${nextLocalHandle++}`;
+    const handle = clientUserMessageId?.trim().toLowerCase() || (thread.harness === "codex" && placement === "steer"
+      ? createClientUserMessageId().toLowerCase()
+      : `local-${nextLocalHandle++}`);
     const entry: OptimisticInputEntry = {
       canonicalItemId: null,
       canonicalMatchBaseline,
@@ -227,7 +246,7 @@ function ThreadOptimisticInputStore({ createSteerId = () => crypto.randomUUID() 
             return true;
           }
 
-          if (entry.threadKey.startsWith("codex:") && entry.placement === "steer") {
+          if (entry.threadKey.startsWith("codex:") && entry.item.clientId) {
             return !canonicalItems.some((item) => item.type === "userMessage" && !isSyntheticSteerHistoryItem(item) && item.clientId === entry.handle);
           }
 
@@ -253,6 +272,9 @@ function ThreadOptimisticInputStore({ createSteerId = () => crypto.randomUUID() 
     clear() {
       entries.splice(0, entries.length);
     },
+    createClientUserMessageId() {
+      return createClientUserMessageId().toLowerCase();
+    },
     confirmCanonicalUserMessage(threadKey, turnId, item) {
       if (!item.clientId) {
         return null;
@@ -275,8 +297,8 @@ function ThreadOptimisticInputStore({ createSteerId = () => crypto.randomUUID() 
         }
       }
     },
-    enqueueInitial(thread, turnId, input, status = "pending") {
-      return enqueue(thread, turnId, input, "initial", status);
+    enqueueInitial(thread, turnId, input, options = {}) {
+      return enqueue(thread, turnId, input, "initial", options.status ?? "pending", options.clientUserMessageId);
     },
     enqueueSteer(thread, turnId, input, status = "pending") {
       return enqueue(thread, turnId, input, "steer", status);

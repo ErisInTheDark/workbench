@@ -74,6 +74,7 @@ import {
   readStoredHarness,
 } from "../lib/workbench/state/browser-state";
 import WorkbenchComposerProfileController from "../lib/workbench/state/WorkbenchComposerProfileController";
+import { ThreadMessageNotSentError } from "../lib/workbench/thread/thread-message-submission";
 import { createComposerProfilePersistence } from "../lib/workbench/state/composer-profile-api";
 import {
   EMPTY_WORKBENCH_THREAD_SIDEBAR_PREFERENCES,
@@ -1783,7 +1784,7 @@ export default function Workbench () {
     options?: WorkbenchSendThreadMessageOptions,
   ) => {
     if (!controls) {
-      return null;
+      throw new ThreadMessageNotSentError();
     }
 
     const replaceMosaicDraftThread = (materializedThread: ThreadPayload) => {

@@ -3,6 +3,7 @@
  * - ThreadTurnDetails: render one thread turn with grouped commands and typed item sections. Keywords: workbench, thread, turn.
  * - ThreadThreadContent: render all turns for one thread payload without composer chrome. Keywords: workbench, thread, subagent, preview.
  * - ThreadTurnLoadingSkeleton: render a lightweight placeholder for unloaded lazy-history turns. Keywords: workbench, thread, lazy history, skeleton.
+ * - ThreadTurnLoadFailure: render an explicit retry surface for a failed lazy-history read. Keywords: workbench, thread, lazy history, retry.
  * - Local helpers: summarize inputs, group command, reasoning, file, and web-search sequences, and render the supported thread item variants. Keywords: thread items, command sequence, reasoning, rendering.
  * - Refresh boundary: keep runtime exports component-only; reusable hooks and helpers belong in focused modules. Keywords: React Refresh, HMR, boundary.
  */
@@ -147,6 +148,32 @@ export function ThreadTurnLoadingSkeleton ({
           <div className="h-3 w-[82%] animate-pulse rounded bg-[color-mix(in_srgb,var(--text)_8%,transparent)]" />
           <div className="h-3 w-[64%] animate-pulse rounded bg-[color-mix(in_srgb,var(--text)_7%,transparent)]" />
         </div>
+      </div>
+    </section>
+  );
+}
+
+export function ThreadTurnLoadFailure({
+  entry,
+  onRetry,
+}: {
+  entry: WorkbenchThreadTurnHistoryEntry;
+  onRetry: () => void;
+}) {
+  return (
+    <section
+      className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-3"
+      data-thread-turn-load-state={entry.loadState}
+    >
+      <div className="flex items-center justify-between gap-3 text-[0.88em] leading-[1.5] text-muted" role="status">
+        <span>Could not load this previous turn.</span>
+        <button
+          type="button"
+          className="shrink-0 rounded px-2 py-1 font-medium text-text transition-colors hover:bg-[color-mix(in_srgb,var(--text)_8%,transparent)]"
+          onClick={onRetry}
+        >
+          Retry
+        </button>
       </div>
     </section>
   );

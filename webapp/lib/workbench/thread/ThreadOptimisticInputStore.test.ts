@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover optimistic steer identity, delivery placement, and history reconciliation. Keywords: optimistic, steer, delivery, test.
+ * - No production exports; Node tests cover optimistic steer/initial identity, delivery placement, and history reconciliation. Keywords: optimistic, steer, initial, delivery, test.
  */
 
 import assert from "node:assert/strict";
@@ -38,7 +38,7 @@ function history(handle: string, status: WorkbenchSteerHistoryEntry["status"], c
 
 test("two identical steers retain independent handles and canonical placement", () => {
   const ids = ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"];
-  const store = ThreadOptimisticInputStore({ createSteerId: () => ids.shift()! });
+  const store = ThreadOptimisticInputStore({ createClientUserMessageId: () => ids.shift()! });
   const first = store.enqueueSteer(thread(), "turn", input("same"));
   const second = store.enqueueSteer(thread(), "turn", input("same"));
   assert.notEqual(first.handle, second.handle);
@@ -54,14 +54,35 @@ test("two identical steers retain independent handles and canonical placement", 
 test("canonical initial input retains its leading user-message position", () => {
   const store = ThreadOptimisticInputStore();
   const agent: ThreadItem = { id: "agent", memoryCitation: null, phase: null, text: "work", type: "agentMessage" };
-  store.enqueueInitial(thread([agent]), "turn", input("initial"), "sent");
+  store.enqueueInitial(thread([agent]), "turn", input("initial"), { status: "sent" });
   const projected = store.apply(thread([agent, user("canonical", null, "initial")]), []);
   assert.deepEqual(projected.turns[0]?.items.map((item) => item.id), ["canonical", "agent"]);
 });
 
+test("native initial identity collapses only its exact canonical alias", () => {
+  const store = ThreadOptimisticInputStore();
+  const clientUserMessageId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const entry = store.enqueueInitial(thread(), "turn", input("same"), { clientUserMessageId, status: "sent" });
+  assert.equal(entry.item.clientId, clientUserMessageId);
+  const canonical = user("canonical", clientUserMessageId, "same");
+  store.confirmCanonicalUserMessage("codex:thread", "turn", canonical);
+  const projected = store.apply(thread([canonical]), []);
+  assert.deepEqual(projected.turns[0]?.items.map((item) => item.id), ["canonical"]);
+});
+
+test("identical initial messages with different native identities remain distinct", () => {
+  const store = ThreadOptimisticInputStore();
+  const firstId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const secondId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  store.enqueueInitial(thread(), "turn", input("same"), { clientUserMessageId: firstId, status: "sent" });
+  store.enqueueInitial(thread(), "turn", input("same"), { clientUserMessageId: secondId, status: "sent" });
+  const projected = store.apply(thread([user("first", firstId, "same"), user("second", secondId, "same")]), []);
+  assert.deepEqual(projected.turns[0]?.items.map((item) => item.id), ["first", "second"]);
+});
+
 test("exact pending history suppresses only its matching local placeholder", () => {
   const ids = ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"];
-  const store = ThreadOptimisticInputStore({ createSteerId: () => ids.shift()! });
+  const store = ThreadOptimisticInputStore({ createClientUserMessageId: () => ids.shift()! });
   const first = store.enqueueSteer(thread(), "turn", input("same"));
   const second = store.enqueueSteer(thread(), "turn", input("same"));
   const entries = [history(first.handle, "pending"), { ...history(second.handle, "pending"), dispatchSequence: 1 }];
@@ -72,7 +93,7 @@ test("exact pending history suppresses only its matching local placeholder", () 
 });
 
 test("sent is monotonic against delayed failure and aliases stay on one handle", () => {
-  const store = ThreadOptimisticInputStore({ createSteerId: () => "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
+  const store = ThreadOptimisticInputStore({ createClientUserMessageId: () => "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
   const entry = store.enqueueSteer(thread(), "turn", input("same"));
   store.confirmCanonicalUserMessage("codex:thread", "turn", user("generic", entry.handle, "same"));
   store.confirmCanonicalUserMessage("codex:thread", "turn", user("canonical", entry.handle, "same"));
@@ -82,7 +103,7 @@ test("sent is monotonic against delayed failure and aliases stay on one handle",
 });
 
 test("interrupted is monotonic against a delayed failure but canonical delivery still wins", () => {
-  const store = ThreadOptimisticInputStore({ createSteerId: () => "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
+  const store = ThreadOptimisticInputStore({ createClientUserMessageId: () => "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
   const entry = store.enqueueSteer(thread(), "turn", input("same"));
   assert.equal(store.transition(entry.handle, "interrupted"), "interrupted");
   assert.equal(store.transition(entry.handle, "failed"), "interrupted");
@@ -105,7 +126,7 @@ test("clear does not reuse local handles and deleteThread is exact-key scoped", 
 
 test("exact terminal history hides only its own correlated local evidence", () => {
   const ids = ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"];
-  const store = ThreadOptimisticInputStore({ createSteerId: () => ids.shift()! });
+  const store = ThreadOptimisticInputStore({ createClientUserMessageId: () => ids.shift()! });
   const failed = store.enqueueSteer(thread(), "turn", input("same"));
   const pending = store.enqueueSteer(thread(), "turn", input("same"));
   const projected = store.apply(thread(), [history(failed.handle, "failed")]);
@@ -113,7 +134,7 @@ test("exact terminal history hides only its own correlated local evidence", () =
 });
 
 test("sent history without a raw canonical item retains one sent local projection", () => {
-  const store = ThreadOptimisticInputStore({ createSteerId: () => "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
+  const store = ThreadOptimisticInputStore({ createClientUserMessageId: () => "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
   const entry = store.enqueueSteer(thread(), "turn", input("same"));
   const projected = store.apply(thread(), [history(entry.handle, "sent", "canonical")]);
   assert.equal(projected.turns[0]?.items.length, 1);
@@ -127,7 +148,7 @@ test("sent history without a raw canonical item retains one sent local projectio
 });
 
 test("movePending preserves identity and refuses terminal entries", () => {
-  const store = ThreadOptimisticInputStore({ createSteerId: () => "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
+  const store = ThreadOptimisticInputStore({ createClientUserMessageId: () => "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
   const entry = store.enqueueSteer(thread(), "turn", input("same"));
   assert.equal(store.movePending(entry.handle, "other"), true);
   store.transition(entry.handle, "failed");
@@ -135,7 +156,7 @@ test("movePending preserves identity and refuses terminal entries", () => {
 });
 
 test("strip and apply keep optimistic presentation out of raw source", () => {
-  const store = ThreadOptimisticInputStore({ createSteerId: () => "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
+  const store = ThreadOptimisticInputStore({ createClientUserMessageId: () => "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
   store.enqueueSteer(thread(), "turn", input("same"));
   const projected = store.apply(thread(), []);
   assert.equal(projected.turns[0]?.items.length, 1);
@@ -144,7 +165,7 @@ test("strip and apply keep optimistic presentation out of raw source", () => {
 
 test("repeated canonical evidence cannot consume a later identical retry", () => {
   const ids = ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"];
-  const store = ThreadOptimisticInputStore({ createSteerId: () => ids.shift()! });
+  const store = ThreadOptimisticInputStore({ createClientUserMessageId: () => ids.shift()! });
   const first = store.enqueueSteer(thread(), "turn", input("same"));
   const second = store.enqueueSteer(thread(), "turn", input("same"));
   const canonical = user("canonical", first.handle, "same");

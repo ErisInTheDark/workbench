@@ -42,6 +42,7 @@ import {
 } from "../../../lib/workbench/thread/thread-pause-control";
 import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
 import { isWorkbenchSyntheticSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
+import { runThreadComposerSubmission } from "../../../lib/workbench/thread/thread-message-submission";
 import {
   createWorkbenchThreadRecoveryInput,
   isWorkbenchInterruptedThreadRecoveryEligible,
@@ -812,6 +813,10 @@ export default function ThreadComposer ({
   }, []);
 
   useEffect(() => {
+    if (isSending) {
+      return;
+    }
+
     const draftKey = `${thread.id}:${threadComposerDraft?.updatedAt ?? 0}`;
     if (acknowledgedDraftKeyRef.current === draftKey) {
       return;
@@ -839,16 +844,19 @@ export default function ThreadComposer ({
     };
     setValue(nextText);
     setAttachments(nextAttachments);
-  }, [attachments, thread.id, threadComposerDraft, value]);
+  }, [attachments, isSending, thread.id, threadComposerDraft, value]);
 
+  const hasDurableComposerDraft = Boolean(threadComposerDraft);
   useEffect(() => {
-    if (hasPendingUserInputRequest) {
+    if (hasPendingUserInputRequest || isSending) {
       return;
     }
 
     const timeoutId = window.setTimeout(() => {
       if (!value.trim() && attachments.length === 0) {
-        onThreadComposerDraftClearRef.current(thread.id);
+        if (hasDurableComposerDraft) {
+          onThreadComposerDraftClearRef.current(thread.id);
+        }
         return;
       }
 
@@ -862,7 +870,7 @@ export default function ThreadComposer ({
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [attachments, hasPendingUserInputRequest, thread.id, value]);
+  }, [attachments, hasDurableComposerDraft, hasPendingUserInputRequest, isSending, thread.id, value]);
 
   useEffect(() => {
     setActivePicker(null);
@@ -1137,14 +1145,21 @@ export default function ThreadComposer ({
     setError("");
     setValue("");
     setAttachments([]);
-    onThreadComposerDraftClearRef.current(thread.id);
     try {
-      await onSendMessage(thread.id, input);
-      onThreadComposerDraftClearRef.current(thread.id);
-    } catch (submissionError) {
-      setValue(submittedValue);
-      setAttachments(submittedAttachments);
-      setError(submissionError instanceof Error ? submissionError.message : "Unable to send that message.");
+      await runThreadComposerSubmission({
+        clearDurableDraft: () => onThreadComposerDraftClearRef.current(thread.id),
+        preserveDurableDraft: () => onThreadComposerDraftChangeRef.current(thread.id, {
+          attachments: submittedAttachments,
+          text: submittedValue,
+          updatedAt: Date.now(),
+        }),
+        restoreLocalInput: () => {
+          setValue(submittedValue);
+          setAttachments(submittedAttachments);
+        },
+        send: () => onSendMessage(thread.id, input),
+        showError: setError,
+      });
     } finally {
       setIsSending(false);
     }

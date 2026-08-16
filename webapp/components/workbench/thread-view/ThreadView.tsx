@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 
 import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
@@ -74,9 +74,11 @@ import {
 } from "../../../lib/workbench/thread/thread-subagents";
 import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
 import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
+import { ThreadMessageNotSentError } from "../../../lib/workbench/thread/thread-message-submission";
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
-import { ThreadThreadContent, ThreadTurnDetails, ThreadTurnLoadingSkeleton } from "./thread-view-items";
+import { ThreadThreadContent, ThreadTurnDetails, ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./thread-view-items";
+import previousTurnLoadReducer from "./previous-turn-load-state";
 import { getThreadVisibleHistoryEntries } from "./thread-visible-history";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
 import ThreadAgentTabs from "./ThreadAgentTabs";
@@ -699,7 +701,7 @@ export default memo(function ThreadView ({
   ));
   const [subthreadsById, setSubthreadsById] = useState<Record<string, ThreadPayload>>({});
   const [loadingThreadIds, setLoadingThreadIds] = useState<Record<string, true>>({});
-  const [loadingPreviousTurnKeys, setLoadingPreviousTurnKeys] = useState<Record<string, true>>({});
+  const [previousTurnLoadStates, dispatchPreviousTurnLoad] = useReducer(previousTurnLoadReducer, {});
   const [seenItemCountsByThreadId, setSeenItemCountsByThreadId] = useState<Record<string, number>>({});
   const [isLiveActivityOpen, setIsLiveActivityOpen] = useState(readStoredThreadLiveActivityOpen);
   const [workbenchSkills, setWorkbenchSkills] = useState<WorkbenchSkillSummary[]>([]);
@@ -838,18 +840,25 @@ export default memo(function ThreadView ({
   const visibleHistoryEntries = useMemo(() => activeThread ? getThreadVisibleHistoryEntries(activeThread) : [], [activeThread]);
   const loadedTurnsById = useMemo(() => new Map(activeThread?.turns.map((turn) => [turn.id, turn]) ?? []), [activeThread?.turns]);
   const firstVisibleLoadedEntry = visibleHistoryEntries.find((entry) => loadedTurnsById.has(entry.turnId)) ?? null;
+  const firstVisibleLoadedEntryIndex = firstVisibleLoadedEntry
+    ? visibleHistoryEntries.indexOf(firstVisibleLoadedEntry)
+    : -1;
+  const previousTurnEntry = firstVisibleLoadedEntryIndex > 0
+    ? visibleHistoryEntries[firstVisibleLoadedEntryIndex - 1] ?? null
+    : null;
   const previousTurnLoadKey = activeThread && firstVisibleLoadedEntry
     ? `${activeThread.id}:${firstVisibleLoadedEntry.turnId}`
     : "";
+  const previousTurnLoadStatus = previousTurnLoadKey
+    ? previousTurnLoadStates[previousTurnLoadKey]
+    : undefined;
   const visibleHistorySignature = useMemo(() => visibleHistoryEntries
     .map((entry) => `${entry.turnId}:${entry.loadState}:${entry.itemCount}`)
     .join("|"), [visibleHistoryEntries]);
   const canLoadPreviousTurn = Boolean(
     activeThread
-    && firstVisibleLoadedEntry
-    && visibleHistoryEntries
-      .slice(0, visibleHistoryEntries.findIndex((entry) => entry.turnId === firstVisibleLoadedEntry.turnId))
-      .some((entry) => entry.loadState === "unloaded" && !loadedTurnsById.has(entry.turnId)),
+    && previousTurnEntry?.loadState === "unloaded"
+    && !loadedTurnsById.has(previousTurnEntry.turnId),
   );
   const liveActivity = useMemo(() => getLiveThreadActivity({
     pendingUserInputRequest: activePendingUserInputRequest,
@@ -1074,15 +1083,21 @@ export default memo(function ThreadView ({
     void loadNextSubagentPage();
   }, [loadNextSubagentPage, subagentTabLayout.collapsed]);
 
-  const loadPreviousTurn = useCallback(async () => {
-    if (!activeThread || !firstVisibleLoadedEntry || !previousTurnLoadKey || loadingPreviousTurnKeys[previousTurnLoadKey]) {
+  const loadPreviousTurn = useCallback(async ({ retry = false }: { retry?: boolean } = {}) => {
+    if (
+      !activeThread
+      || !firstVisibleLoadedEntry
+      || !previousTurnLoadKey
+      || previousTurnLoadStatus === "loading"
+      || (previousTurnLoadStatus === "failed" && !retry)
+    ) {
       return;
     }
 
     const scrollTarget = scrollAnchorController.findScrollTarget(threadViewRef.current);
     if (
       !scrollTarget
-      || !scrollAnchorController.isNearTop(scrollTarget)
+      || (!retry && !scrollAnchorController.isNearTop(scrollTarget))
     ) {
       return;
     }
@@ -1099,14 +1114,7 @@ export default memo(function ThreadView ({
     const loadGeneration = subthreadLoadGenerationRef.current;
     const targetThreadId = activeThread.id;
     const targetHarness = activeThread.harness;
-    setLoadingPreviousTurnKeys((current) => (
-      current[previousTurnLoadKey]
-        ? current
-        : {
-          ...current,
-          [previousTurnLoadKey]: true,
-        }
-    ));
+    dispatchPreviousTurnLoad({ type: "start", key: previousTurnLoadKey });
 
     try {
       const subagentCwd = getSubagentSummary(subagents, targetThreadId)?.cwd.trim();
@@ -1117,7 +1125,12 @@ export default memo(function ThreadView ({
           mode: "previous",
         },
       });
-      if (!payload || loadGeneration !== subthreadLoadGenerationRef.current) {
+      if (loadGeneration !== subthreadLoadGenerationRef.current) {
+        return;
+      }
+      if (!payload) {
+        pendingPreviousTurnScrollRestoreRef.current = null;
+        dispatchPreviousTurnLoad({ type: "fail", key: previousTurnLoadKey });
         return;
       }
 
@@ -1135,21 +1148,19 @@ export default memo(function ThreadView ({
           };
         });
       }
-    } finally {
-      setLoadingPreviousTurnKeys((current) => {
-        if (!current[previousTurnLoadKey]) {
-          return current;
-        }
-
-        const next = { ...current };
-        delete next[previousTurnLoadKey];
-        return next;
-      });
+      dispatchPreviousTurnLoad({ type: "succeed", key: previousTurnLoadKey });
+    } catch (error) {
+      if (loadGeneration !== subthreadLoadGenerationRef.current) {
+        return;
+      }
+      pendingPreviousTurnScrollRestoreRef.current = null;
+      dispatchPreviousTurnLoad({ type: "fail", key: previousTurnLoadKey });
+      console.error("Previous thread turn load failed.", error);
     }
-  }, [activeThread, firstVisibleLoadedEntry, loadingPreviousTurnKeys, onReadThread, previousTurnLoadKey, scrollAnchorController, subagents, thread.id]);
+  }, [activeThread, firstVisibleLoadedEntry, onReadThread, previousTurnLoadKey, previousTurnLoadStatus, scrollAnchorController, subagents, thread.id]);
 
   const requestPreviousTurnIfAtTop = useCallback(() => {
-    if (!canLoadPreviousTurn || !previousTurnLoadKey || loadingPreviousTurnKeys[previousTurnLoadKey]) {
+    if (!canLoadPreviousTurn || !previousTurnLoadKey || previousTurnLoadStatus) {
       return;
     }
 
@@ -1159,7 +1170,7 @@ export default memo(function ThreadView ({
     }
 
     void loadPreviousTurn();
-  }, [canLoadPreviousTurn, loadPreviousTurn, loadingPreviousTurnKeys, previousTurnLoadKey, scrollAnchorController]);
+  }, [canLoadPreviousTurn, loadPreviousTurn, previousTurnLoadKey, previousTurnLoadStatus, scrollAnchorController]);
 
   useEffect(() => {
     subthreadLoadGenerationRef.current += 1;
@@ -1171,7 +1182,7 @@ export default memo(function ThreadView ({
     setActiveThreadId(thread.id);
     setSubthreadsById({});
     setLoadingThreadIds({});
-    setLoadingPreviousTurnKeys({});
+    dispatchPreviousTurnLoad({ type: "reset" });
     setSeenItemCountsByThreadId({
       [thread.id]: countThreadItems(thread),
     });
@@ -1239,7 +1250,7 @@ export default memo(function ThreadView ({
   useEffect(() => {
     const sentinel = historySentinelRef.current;
     const scrollTarget = scrollAnchorController.findScrollTarget(threadViewRef.current);
-    if (!sentinel || !scrollTarget || !canLoadPreviousTurn || !previousTurnLoadKey || loadingPreviousTurnKeys[previousTurnLoadKey]) {
+    if (!sentinel || !scrollTarget || !canLoadPreviousTurn || !previousTurnLoadKey || previousTurnLoadStatus) {
       return;
     }
 
@@ -1256,7 +1267,7 @@ export default memo(function ThreadView ({
     return () => {
       observer.disconnect();
     };
-  }, [canLoadPreviousTurn, loadPreviousTurn, loadingPreviousTurnKeys, previousTurnLoadKey, scrollAnchorController]);
+  }, [canLoadPreviousTurn, loadPreviousTurn, previousTurnLoadKey, previousTurnLoadStatus, scrollAnchorController]);
 
   useEffect(() => {
     const scrollTarget = scrollAnchorController.findScrollTarget(threadViewRef.current);
@@ -1278,7 +1289,7 @@ export default memo(function ThreadView ({
   }, [activeThread?.id, requestPreviousTurnIfAtTop, scrollAnchorController]);
 
   useEffect(() => {
-    if (!canLoadPreviousTurn || !previousTurnLoadKey || loadingPreviousTurnKeys[previousTurnLoadKey]) {
+    if (!canLoadPreviousTurn || !previousTurnLoadKey || previousTurnLoadStatus) {
       return;
     }
 
@@ -1288,7 +1299,7 @@ export default memo(function ThreadView ({
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [activeThreadContentSignature, canLoadPreviousTurn, loadingPreviousTurnKeys, previousTurnLoadKey, requestPreviousTurnIfAtTop, visibleHistorySignature]);
+  }, [activeThreadContentSignature, canLoadPreviousTurn, previousTurnLoadKey, previousTurnLoadStatus, requestPreviousTurnIfAtTop, visibleHistorySignature]);
 
   useLayoutEffect(() => {
     const pendingRestore = pendingPreviousTurnScrollRestoreRef.current;
@@ -1392,7 +1403,7 @@ export default memo(function ThreadView ({
 
   const handleSendMessage = useCallback(async (_threadId: string, input: UserInput[]) => {
     if (!resolvedActiveThread || !activeProfileSlot) {
-      return;
+      throw new ThreadMessageNotSentError();
     }
 
     const payload = await onSendMessage(resolvedActiveThread, input, {
@@ -1860,10 +1871,7 @@ export default memo(function ThreadView ({
                 ) : null}
                 {visibleHistoryEntries.map((entry) => {
                   const turn = loadedTurnsById.get(entry.turnId);
-                  const isPreviousTurnLoading = Boolean(
-                    firstVisibleLoadedEntry
-                    && loadingPreviousTurnKeys[`${activeThread.id}:${firstVisibleLoadedEntry.turnId}`],
-                  );
+                  const isPreviousTurnBoundary = entry === previousTurnEntry;
                   return turn ? (
                     <ThreadTurnDetails
                       key={entry.turnId}
@@ -1887,11 +1895,17 @@ export default memo(function ThreadView ({
                       hiddenWebSearchItemIds={turn.id === currentTurn?.id && liveActivity?.kind === "webSearch" ? liveActivity.hiddenItemIds : undefined}
                       itemTimeline={entry.itemTimeline}
                     />
-                  ) : isPreviousTurnLoading ? (
+                  ) : isPreviousTurnBoundary && previousTurnLoadStatus === "loading" ? (
                     <ThreadTurnLoadingSkeleton
                       key={entry.turnId}
                       entry={entry}
                       isLoading
+                    />
+                  ) : isPreviousTurnBoundary && previousTurnLoadStatus === "failed" ? (
+                    <ThreadTurnLoadFailure
+                      key={entry.turnId}
+                      entry={entry}
+                      onRetry={() => void loadPreviousTurn({ retry: true })}
                     />
                   ) : null;
                 })}

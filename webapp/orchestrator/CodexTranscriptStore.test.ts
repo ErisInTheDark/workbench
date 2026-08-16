@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover thread-global native steer transcript identity and delivery. Keywords: codex, transcript, steer, test.
+ * - No production exports; Node tests cover thread-global native steer identity, delivery, and scoped context collection. Keywords: codex, transcript, steer, context, test.
  */
 
 import assert from "node:assert/strict";
@@ -10,6 +10,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
+import type { WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry } from "../lib/types";
 import CodexTranscriptStore from "./CodexTranscriptStore";
 import type { JsonRpcRequest } from "./bridge-types";
 import type { CodexTranscriptRawEvent } from "./codex-transcript-types";
@@ -59,6 +60,64 @@ test("native steer admissions are thread-global and sequence ordered", async () 
     ["native-z", 0, "9"],
     ["native-a", 1, "10"],
   ]);
+}));
+
+test("scoped thread context collection reads each sidecar kind for only the selected turns", async () => withStore(async (store) => {
+  const browseEntry = (turnId: string): WorkbenchBrowseResultEntry => ({
+    action: "snapshot",
+    actionIndex: 0,
+    assetUrl: null,
+    commandItemId: null,
+    detailKind: "result",
+    detailLabel: null,
+    detailText: turnId,
+    durationMs: 1,
+    entryKey: `browse:${turnId}`,
+    recordedAt: turnId === "turn-a" ? 1 : 2,
+    session: "research",
+    state: "completed",
+    threadId: "thread",
+    turnId,
+  });
+  const questionnaireEntry = (turnId: string): WorkbenchQuestionnaireHistoryEntry => ({
+    insertAfterItemId: null,
+    insertAfterItemIndex: null,
+    itemId: null,
+    request: { id: `request:${turnId}`, questions: [], submitLabel: "Submit", summary: "", title: "" },
+    requestKey: `questionnaire:${turnId}`,
+    resolvedAt: turnId === "turn-a" ? 1 : 2,
+    response: { answers: {} },
+    threadId: "thread",
+    turnId,
+  });
+
+  for (const turnId of ["turn-a", "turn-b"]) {
+    await store.recordBrowseResultEntry(browseEntry(turnId));
+    await store.recordQuestionnaireResolved(questionnaireEntry(turnId));
+    await store.recordClientRequest(request(turnId === "turn-a" ? 40 : 41, `native:${turnId}`, turnId));
+  }
+
+  const turnFileOwner = store as unknown as {
+    readTurnFiles(threadId: string, options?: { turnIds?: Iterable<string> }): Promise<object[]>;
+  };
+  const readTurnFiles = turnFileOwner.readTurnFiles.bind(turnFileOwner);
+  let turnFileReadCount = 0;
+  turnFileOwner.readTurnFiles = async (...args) => {
+    turnFileReadCount += 1;
+    return await readTurnFiles(...args);
+  };
+
+  const scoped = await store.readThreadContextEntries("thread", { turnIds: ["turn-a"] });
+  assert.equal(turnFileReadCount, 1);
+  assert.deepEqual(scoped.browseResultEntries.map((entry) => entry.turnId), ["turn-a"]);
+  assert.deepEqual(scoped.questionnaireEntries.map((entry) => entry.turnId), ["turn-a"]);
+  assert.deepEqual(scoped.steerEntries.map((entry) => entry.turnId), ["turn-a"]);
+
+  const full = await store.readThreadContextEntries("thread");
+  assert.equal(turnFileReadCount, 2);
+  assert.deepEqual(full.browseResultEntries.map((entry) => entry.turnId), ["turn-a", "turn-b"]);
+  assert.deepEqual(full.questionnaireEntries.map((entry) => entry.turnId), ["turn-a", "turn-b"]);
+  assert.deepEqual(full.steerEntries.map((entry) => entry.turnId), ["turn-a", "turn-b"]);
 }));
 
 test("canonical client identity wins over delayed acknowledgement and failure", async () => withStore(async (store) => {

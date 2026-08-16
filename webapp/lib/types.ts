@@ -93,6 +93,7 @@
  * - WorkbenchThreadTurnLoadState: turn hydration state.
  * - WorkbenchThreadTurnHistoryEntry: turn history metadata.
  * - WorkbenchThreadHydrationRequest: thread hydration request union.
+ * - WorkbenchThreadContextEntryScope: identifies which turn-owned context entries a thread read returned.
  * - WorkbenchReadThreadOptions: thread-read options.
  * - WorkbenchSendThreadMessageOptions: thread-send options.
  * - WorkbenchThreadComposerAttachmentDraft: draft attachment contract.
@@ -1001,9 +1002,15 @@ export interface WorkbenchSteerHistoryEntry {
 
 export interface WorkbenchThreadContextReadResponse {
   browseResultEntries: WorkbenchBrowseResultEntry[];
+  entryScope?: WorkbenchThreadContextEntryScope;
   questionnaireEntries: WorkbenchQuestionnaireHistoryEntry[];
   steerEntries: WorkbenchSteerHistoryEntry[];
   thread: Thread;
+}
+
+export interface WorkbenchThreadContextEntryScope {
+  mode: "turns";
+  turnIds: string[];
 }
 
 export interface WorkbenchThreadContextBundle {

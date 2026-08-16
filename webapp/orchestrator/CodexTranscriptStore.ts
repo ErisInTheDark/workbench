@@ -12,7 +12,7 @@ import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type { JsonValue } from "../lib/codex/generated/app-server/serde_json/JsonValue";
 import { appendCommandOutputDelta, compactCommandOutputPayload } from "../lib/codex/thread-command-output";
 import { areUserInputsEquivalentForUserMessageDedupe, normalizeThreadItems } from "../lib/codex/thread-item-normalization";
-import type { WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadHydrationRequest, WorkbenchThreadTurnHistoryEntry } from "../lib/types";
+import type { WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadContextReadResponse, WorkbenchThreadHydrationRequest, WorkbenchThreadTurnHistoryEntry } from "../lib/types";
 import { normalizeWorkbenchThreadItemTimeline } from "../lib/workbench/thread/thread-item-timeline";
 import AtomicJsonStore from "./AtomicJsonStore";
 import { hydrateThreadWithStoredTurns } from "./codex-transcript-hydration";
@@ -1404,12 +1404,19 @@ export default class CodexTranscriptStore {
     await this.touchThread(threadId, null);
   }
 
-  async listSteerHistory(threadId: string) {
+  async readThreadContextEntries(
+    threadId: string,
+    options: { turnIds?: Iterable<string> } = {},
+  ): Promise<Pick<WorkbenchThreadContextReadResponse, "browseResultEntries" | "questionnaireEntries" | "steerEntries">> {
     await this.ready();
     const threadFile = await this.json.read<CodexTranscriptThreadFile | null>(this.threadFilePath(threadId), null);
-    const turnFiles = await this.readTurnFiles(threadId);
+    const scopedTurnIds = options.turnIds ? new Set(options.turnIds) : null;
+    const turnFiles = await this.readTurnFiles(threadId, scopedTurnIds ? { turnIds: scopedTurnIds } : {});
     const entriesByKey = new Map<string, WorkbenchSteerHistoryEntry>();
     for (const entry of threadFile?.steerEntries ?? []) {
+      if (scopedTurnIds && !scopedTurnIds.has(entry.turnId)) {
+        continue;
+      }
       entriesByKey.set(`native:${entry.entryKey}`, entry);
     }
     for (const entry of turnFiles.flatMap((file) => file.steerEntries ?? [])) {
@@ -1420,19 +1427,23 @@ export default class CodexTranscriptStore {
         entriesByKey.set(key, entry);
       }
     }
-    return sortSteerEntries([...entriesByKey.values()]);
+    return {
+      browseResultEntries: sortBrowseResultEntries(turnFiles.flatMap((file) => file.browseResultEntries ?? [])),
+      questionnaireEntries: sortQuestionnaireEntries(turnFiles.flatMap((file) => file.questionnaireEntries)),
+      steerEntries: sortSteerEntries([...entriesByKey.values()]),
+    };
+  }
+
+  async listSteerHistory(threadId: string) {
+    return (await this.readThreadContextEntries(threadId)).steerEntries;
   }
 
   async listQuestionnaireHistory(threadId: string) {
-    await this.ready();
-    const turnFiles = await this.readTurnFiles(threadId);
-    return sortQuestionnaireEntries(turnFiles.flatMap((file) => file.questionnaireEntries));
+    return (await this.readThreadContextEntries(threadId)).questionnaireEntries;
   }
 
   async listBrowseResultEntries(threadId: string) {
-    await this.ready();
-    const turnFiles = await this.readTurnFiles(threadId);
-    return sortBrowseResultEntries(turnFiles.flatMap((file) => file.browseResultEntries ?? []));
+    return (await this.readThreadContextEntries(threadId)).browseResultEntries;
   }
 
   async hydrateThreadResponse(

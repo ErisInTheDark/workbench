@@ -166,6 +166,7 @@ const TRANSCRIPT_COALESCE_FLUSH_MS = 100;
 const TRANSCRIPT_COALESCE_MAX_BUFFER_BYTES = 512 * 1024;
 const WORKBENCH_REQUEST_SOURCE_FIELD = "workbenchRequestSource";
 const WORKBENCH_THREAD_HYDRATION_FIELD = "workbenchThreadHydration";
+const WORKBENCH_THREAD_CONTEXT_ENTRIES_FIELD = "workbenchThreadContextEntries";
 const WORKBENCH_NOTIFICATION_BROADCAST_METHOD = "workbench/notification/broadcast";
 
 type WorkbenchRequestSource = "autoRefresh" | "internal" | "user";
@@ -341,6 +342,10 @@ function readThreadHydration(message: JsonRpcRequest): WorkbenchThreadHydrationR
     default:
       return null;
   }
+}
+
+function requestsHydratedTurnContextEntries(message: JsonRpcRequest) {
+  return asRecord(message[WORKBENCH_THREAD_CONTEXT_ENTRIES_FIELD])?.mode === "hydratedTurns";
 }
 
 function createUpstreamRequest(message: JsonRpcRequest, upstreamRequestId: number) {
@@ -2088,16 +2093,25 @@ export default class CodexStdioBridge {
     let browseResultEntries: WorkbenchThreadContextReadResponse["browseResultEntries"] = [];
     let questionnaireEntries: WorkbenchThreadContextReadResponse["questionnaireEntries"] = [];
     let steerEntries: WorkbenchThreadContextReadResponse["steerEntries"] = [];
+    let entryScope: WorkbenchThreadContextReadResponse["entryScope"];
     if (!isSubagentBackgroundRead) {
-      [browseResultEntries, questionnaireEntries, steerEntries] = await Promise.all([
-        transcriptStore.listBrowseResultEntries(thread.id),
-        transcriptStore.listQuestionnaireHistory(thread.id),
-        transcriptStore.listSteerHistory(thread.id),
-      ]);
+      const shouldScopeEntries = requestsHydratedTurnContextEntries(message) && hydration?.mode !== "legacyFull";
+      const turnIds = shouldScopeEntries ? thread.turns.map((turn) => turn.id) : null;
+      const entries = await transcriptStore.readThreadContextEntries(
+        thread.id,
+        turnIds ? { turnIds } : {},
+      );
+      browseResultEntries = entries.browseResultEntries;
+      questionnaireEntries = entries.questionnaireEntries;
+      steerEntries = entries.steerEntries;
+      if (turnIds) {
+        entryScope = { mode: "turns", turnIds };
+      }
     }
 
     return {
       browseResultEntries,
+      ...(entryScope ? { entryScope } : {}),
       questionnaireEntries,
       steerEntries,
       thread,
