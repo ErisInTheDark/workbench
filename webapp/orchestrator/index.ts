@@ -22,7 +22,7 @@ import { WebSocketServer } from "next/dist/compiled/ws";
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import { createInitializeCapabilities, createInitializeRequest } from "../lib/codex/protocol";
-import { getCurrentTurn, isThreadStatusActive } from "../lib/codex/thread-state";
+import { getCurrentTurn } from "../lib/codex/thread-state";
 import type {
     OrchestratorReloadRequest,
     OrchestratorReloadResponse,
@@ -30,6 +30,7 @@ import type {
     WorkbenchBrowseResultEntry,
     WorkbenchHarness,
 } from "../lib/types";
+import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest, WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 import {
     normalizeOrchestratorReloadScopes,
     validateOrchestratorReloadScopeCombination,
@@ -55,10 +56,9 @@ import {
     type ProcessSpec,
     type RunningProcess,
 } from "./process-helpers";
-import {
-    loadOrchestratorReloadableModules,
-    reloadOrchestratorReloadableModules,
-} from "./reloadable-modules";
+import OrchestratorFeatureHost from "./OrchestratorFeatureHost";
+import { createOrchestratorFeatureModuleLoader } from "./orchestrator-feature-loader";
+import type { OrchestratorFeatureContext, OrchestratorFeatures, OrchestratorProviderNotification } from "./orchestrator-feature-registry";
 import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
@@ -146,35 +146,47 @@ let lastReloadResponse: OrchestratorReloadResponse = {
   startedAt: null,
   state: "idle",
 };
-let reloadableModules = loadOrchestratorReloadableModules();
-let workbenchAgentCommandController = createAgentCommandController();
-let bridgeRequestController = createBridgeRequestController();
-let legacyMigrationSourceController = createLegacyMigrationSourceController();
 let shuttingDown = false;
 let codexBridge: CodexStdioBridge;
 let opencodeBridge: OpenCodeBridge;
-let browseSessionCleanupSupervisor = createBrowseSessionCleanupSupervisor();
 let browseController: import("./WorkbenchBrowseController").default | null = null;
 let browseRuntime: import("../lib/workbench/browse/WorkbenchBrowseRuntime").default | null = null;
-let nextDevHealthSupervisor = createNextDevHealthSupervisor();
-let projectCatalogController = createProjectCatalogController();
-let projectSnapshotController = createProjectSnapshotController();
+const threadStateLifecycleListeners = new Set<(projectId: string, entry: WorkbenchThreadSidebarEntry) => void>();
+let nextBridgeConnectionId = 0;
+const bridgeClientsByConnectionId = new Map<string, BridgeClient>();
 let opencodeBridgeReloadPromise: Promise<void> | null = null;
 let browseControllerReloadPromise: Promise<void> | null = null;
 let codexAcceptsUpstreamMessages = true;
 let codexRecoverySupervisor: CodexRecoverySupervisor;
-let codexHealthMonitor: import("./CodexHealthMonitor").default;
 let controlledRestartPending = false;
 const codexBridgeTransitionController = new CodexBridgeTransitionController();
 const turnRecoveryHandoffStore = new WorkbenchTurnRecoveryHandoffStore(PROJECT_ROOT);
 const turnRecoveryController = new WorkbenchTurnRecoveryController(
   turnRecoveryHandoffStore,
   (message) => log("turn-recovery", message),
+  async (candidate) => {
+    const params = asRecord(candidate.request.params);
+    const cwd = typeof params?.cwd === "string" ? params.cwd.trim() : "";
+    if (!cwd) {
+      logError("turn-recovery", `Recovery failure for ${candidate.harness}:${candidate.threadId} has no cwd for lifecycle publication.`);
+      return;
+    }
+    const project = await featureHost.run("projectCatalog", (controller) => controller.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench turn recovery" }));
+    await featureHost.run("threadState", (feature) => feature.controller.reportRecoveryFailed(project.project.id, candidate.harness, candidate.threadId));
+  },
 );
 const subagentStore = new WorkbenchSubagentStore(PROJECT_ROOT);
+const featureHost = new OrchestratorFeatureHost<OrchestratorFeatureContext, OrchestratorFeatures, OrchestratorProviderNotification>(
+  createOrchestratorFeatureContext(),
+  createOrchestratorFeatureModuleLoader(),
+  () => {
+    log("orchestrator", "reloaded orchestrator feature registry");
+    for (const client of bridgeConnections) sendJsonToClient(client, { method: "workbench/thread-state/reset", params: {} });
+  },
+);
 
 const copilotBridge = new CopilotBridge({
-  getReloadableModules: () => reloadableModules,
+  getReloadableModules: () => featureHost.get("modules"),
   onNotification: (notification) => {
     broadcastToClients("copilot", notification);
   },
@@ -219,7 +231,6 @@ const codexAppServer = new CodexAppServer({
 codexBridge = createCodexBridge();
 opencodeBridge = createOpenCodeBridge();
 codexRecoverySupervisor = createCodexRecoverySupervisor();
-codexHealthMonitor = createCodexHealthMonitor();
 
 const specs: ProcessSpec[] = [
   {
@@ -237,18 +248,23 @@ function sendJsonToClient(client: BridgeClient, message: unknown) {
 }
 
 function broadcastToClients(harness: HarnessKind, message: JsonRpcNotification) {
-  void subagentStore.observeNotification(harness, message).catch((error) => {
-    logError("subagent-store", error instanceof Error ? error.message : String(error));
-  });
   if (harness === "codex" || harness === "opencode") {
     turnRecoveryController.observeNotification(harness, message);
   }
+  void featureHost.observeProviderNotification({ harness, notification: message }).catch((error) => {
+    logError("thread-state", `failed to observe provider notification: ${error instanceof Error ? error.message : String(error)}`);
+  });
   for (const client of bridgeConnections) {
     sendJsonToClient(client, {
       ...message,
       workbenchHarness: harness,
     });
   }
+}
+
+function publishThreadState(connectionId: string, snapshot: WorkbenchThreadStateSnapshot) {
+  const client = bridgeClientsByConnectionId.get(connectionId);
+  if (client) sendJsonToClient(client, { method: "workbench/thread-state/updated", params: snapshot });
 }
 
 function readHarness(message: JsonRpcRequest): HarnessKind {
@@ -344,11 +360,7 @@ function finalizeReloadResponse(
 
 async function stopAllChildren() {
   codexRecoverySupervisor.dispose();
-  codexHealthMonitor.dispose();
-  browseSessionCleanupSupervisor.dispose();
-  nextDevHealthSupervisor.dispose();
-  projectCatalogController.dispose();
-  projectSnapshotController.dispose();
+  await featureHost.dispose();
 
   for (const entry of processes.values()) {
     if (entry.child && !entry.child.killed) {
@@ -396,31 +408,60 @@ function restartChild(spec: ProcessSpec) {
   return "started";
 }
 
-function reloadOrchestratorLogic() {
-  browseSessionCleanupSupervisor.dispose();
-  codexHealthMonitor.dispose();
-  nextDevHealthSupervisor.dispose();
-  projectCatalogController.dispose();
-  projectSnapshotController.dispose();
-  reloadableModules = reloadOrchestratorReloadableModules();
-  workbenchAgentCommandController = createAgentCommandController();
-  bridgeRequestController = createBridgeRequestController();
-  legacyMigrationSourceController = createLegacyMigrationSourceController();
-  browseSessionCleanupSupervisor = createBrowseSessionCleanupSupervisor();
-  nextDevHealthSupervisor = createNextDevHealthSupervisor();
-  codexHealthMonitor = createCodexHealthMonitor();
-  projectCatalogController = createProjectCatalogController();
-  projectSnapshotController = createProjectSnapshotController();
-  browseSessionCleanupSupervisor.start();
-  nextDevHealthSupervisor.start();
-  if (codexReadyPromise) {
-    void codexReadyPromise.then(() => codexHealthMonitor.start({ armed: true })).catch(() => undefined);
-  }
-  log("orchestrator", "reloaded orchestrator helper modules");
+function createOrchestratorFeatureContext(): OrchestratorFeatureContext {
+  return {
+    browseCleanupOptions: {
+      cleanupStaleInactiveSessions: async (options) => {
+        if (!browseController) return;
+        await runAfterBrowseControllerReload(async () => {
+          if (browseController) await browseController.cleanupStaleInactiveSessions(options);
+        });
+      },
+      readThreadActive: readThreadActiveForBrowseCleanup,
+    },
+    codexHealthOptions: {
+      failureThreshold: CODEX_HEALTH_FAILURE_THRESHOLD,
+      intervalMs: CODEX_HEALTH_INTERVAL_MS,
+      isProbeAllowed: () => codexAcceptsUpstreamMessages && !controlledRestartPending && !codexBridgeTransitionController.isTransitioning,
+      isShuttingDown: () => shuttingDown,
+      log: (message) => log("codex-health", message),
+      logError: (message) => logError("codex-health", message),
+      probe: async () => {
+        const response = await requestLiveCodexWithDeadline({ id: "codex-health", method: "account/read", params: {} });
+        if (response.error) throw new Error(response.error.message);
+      },
+      requestRecovery: (reason) => codexRecoverySupervisor.requestRecovery(reason),
+    },
+    executeBrowseRequest: async (body, signal) => await runAfterBrowseControllerReload(() => getBrowseController().executeBrowseRequest(body, signal)),
+    executeBrowseSessionRequest: async (request, signal) => await runAfterBrowseControllerReload(() => getBrowseController().executeSessionRequest(request, signal)),
+    getCodexReadiness: () => codexReadyPromise,
+    legacyMigrationProjectRoot: PROJECT_ROOT,
+    localOrchestratorOrigin: LOCAL_ORCHESTRATOR_ORIGIN,
+    localWorkbenchOrigin: LOCAL_WORKBENCH_ORIGIN,
+    nextDevHealthOptions: {
+      healthUrl: new URL(NEXT_DEV_HEALTH_PATH, `http://localhost:${NEXT_PORT}`).toString(),
+      intervalMs: NEXT_DEV_HEALTH_INTERVAL_MS,
+      isRestartPending: () => Boolean(processes.get("next-dev")?.restartTimer),
+      isShuttingDown: () => shuttingDown,
+      log: (message) => log("next-dev-health", message),
+      logError: (message) => logError("next-dev-health", message),
+      requestTimeoutMs: NEXT_DEV_HEALTH_REQUEST_TIMEOUT_MS,
+      restartCooldownMs: NEXT_DEV_HEALTH_RESTART_COOLDOWN_MS,
+      restartNextDev: restartNextDevFromWatchdog,
+      serverErrorThreshold: NEXT_DEV_HEALTH_SERVER_ERROR_THRESHOLD,
+    },
+    notifyThreadLifecycle: (projectId, entry) => {
+      for (const listener of threadStateLifecycleListeners) listener(projectId, entry);
+    },
+    publishThreadState,
+    requestHarness: requestLiveHarness,
+    requestSubagent: (request) => requestLiveHarness("codex", request),
+    subagentStore,
+  };
 }
 
-function isThreadActiveForBrowseCleanup(thread: ThreadReadResponse["thread"]) {
-  return isThreadStatusActive(thread.status);
+async function reloadOrchestratorLogic() {
+  await featureHost.reload();
 }
 
 async function readThreadActiveForBrowseCleanup(threadId: string) {
@@ -435,26 +476,15 @@ async function readThreadActiveForBrowseCleanup(threadId: string) {
         },
       });
       if (response.error) throw new Error(response.error.message);
-      return isThreadActiveForBrowseCleanup((response.result as ThreadReadResponse).thread);
+      const result = response.result as { thread?: { status?: string } };
+      const status = result.thread?.status ?? "";
+      return status === "active" || status.startsWith("active:");
     } catch {
       // Try the next harness; preserve sessions if no harness can read the thread.
     }
   }
 
   return null;
-}
-
-function createBrowseSessionCleanupSupervisor() {
-  const Supervisor = reloadableModules.browseSessionCleanupSupervisor.default;
-  return new Supervisor({
-    cleanupStaleInactiveSessions: async (options) => {
-      if (!browseController) return;
-      await runAfterBrowseControllerReload(async () => {
-        if (browseController) await browseController.cleanupStaleInactiveSessions(options);
-      });
-    },
-    readThreadActive: readThreadActiveForBrowseCleanup,
-  });
 }
 
 function loadBrowseControllerModule() {
@@ -518,8 +548,8 @@ function createBrowseController() {
 function createBrowseRuntime() {
   const { default: Runtime } = loadBrowseRuntimeModule();
   return new Runtime({
-    resolveProjectById: (projectId) => projectCatalogController.resolveProjectById(projectId),
-    resolveProjectFromCwd: (cwd, options) => projectCatalogController.resolveAgentEndpointProjectFromCwd(cwd, options),
+    resolveProjectById: (projectId) => featureHost.run("projectCatalog", (controller) => controller.resolveProjectById(projectId)),
+    resolveProjectFromCwd: (cwd, options) => featureHost.run("projectCatalog", (controller) => controller.resolveAgentEndpointProjectFromCwd(cwd, options)),
   });
 }
 
@@ -533,22 +563,6 @@ function getBrowseController() {
   return browseController;
 }
 
-function createNextDevHealthSupervisor() {
-  const Supervisor = reloadableModules.nextDevHealthSupervisor.default;
-  return new Supervisor({
-    healthUrl: new URL(NEXT_DEV_HEALTH_PATH, `http://localhost:${NEXT_PORT}`).toString(),
-    intervalMs: NEXT_DEV_HEALTH_INTERVAL_MS,
-    isRestartPending: () => Boolean(processes.get("next-dev")?.restartTimer),
-    isShuttingDown: () => shuttingDown,
-    log: (message) => log("next-dev-health", message),
-    logError: (message) => logError("next-dev-health", message),
-    requestTimeoutMs: NEXT_DEV_HEALTH_REQUEST_TIMEOUT_MS,
-    restartCooldownMs: NEXT_DEV_HEALTH_RESTART_COOLDOWN_MS,
-    restartNextDev: restartNextDevFromWatchdog,
-    serverErrorThreshold: NEXT_DEV_HEALTH_SERVER_ERROR_THRESHOLD,
-  });
-}
-
 function createCodexRecoverySupervisor() {
   return new CodexRecoverySupervisor({
     initialRetryDelayMs: CODEX_RECOVERY_INITIAL_RETRY_DELAY_MS,
@@ -560,72 +574,28 @@ function createCodexRecoverySupervisor() {
   });
 }
 
-function createCodexHealthMonitor() {
-  const Monitor = reloadableModules.codexHealthMonitor.default;
-  return new Monitor({
-    failureThreshold: CODEX_HEALTH_FAILURE_THRESHOLD,
-    intervalMs: CODEX_HEALTH_INTERVAL_MS,
-    isProbeAllowed: () => codexAcceptsUpstreamMessages
-      && !controlledRestartPending
-      && !codexBridgeTransitionController.isTransitioning,
-    isShuttingDown: () => shuttingDown,
-    log: (message) => log("codex-health", message),
-    logError: (message) => logError("codex-health", message),
-    probe: async () => {
-      const response = await requestLiveCodexWithDeadline({ id: "codex-health", method: "account/read", params: {} });
-      if (response.error) throw new Error(response.error.message);
+function createSubagentThreadStatePort() {
+  return {
+    getEntry: async (projectId: string, harness: WorkbenchHarness, threadId: string) => {
+      const snapshot = await featureHost.run("threadState", (feature) => feature.controller.getSnapshot(projectId));
+      return snapshot.entries.find((entry) => entry.entryKind === "subagent" && entry.identity.harness === harness && entry.identity.threadId === threadId) ?? null;
     },
-    requestRecovery: (reason) => codexRecoverySupervisor.requestRecovery(reason),
-  });
-}
-
-function createProjectSnapshotController() {
-  const Controller = reloadableModules.projectSnapshotController.default;
-  return new Controller();
-}
-
-function createProjectCatalogController() {
-  const Controller = reloadableModules.projectCatalogController.default;
-  return new Controller();
+    mutate: async (request: WorkbenchThreadStateRequest) => {
+      const response = await featureHost.run("threadState", (feature) => feature.controller.handleRequest("subagent-controller", request));
+      if ("error" in response) throw new Error(response.error.message);
+    },
+    subscribe: (listener: (projectId: string, entry: WorkbenchThreadSidebarEntry) => void) => {
+      threadStateLifecycleListeners.add(listener);
+      return () => threadStateLifecycleListeners.delete(listener);
+    },
+  };
 }
 
 function resolveProjectFromCurrentCatalog(
   cwd: string | null | undefined,
   options: { endpointName?: string } = {},
 ) {
-  return projectCatalogController.resolveAgentEndpointProjectFromCwd(cwd, options);
-}
-
-function createBridgeRequestController() {
-  const Controller = reloadableModules.bridgeRequestController.default;
-  return new Controller({
-    requestHarness: requestLiveHarness,
-  });
-}
-
-function createLegacyMigrationSourceController() {
-  const module = reloadableModules.legacyMigrationSourceController;
-  const Controller = module.default;
-  const { allowedProjectIds, capability } = module.readLegacyMigrationSourceConfig(PROJECT_ROOT);
-  return new Controller({
-    allowedProjectIds,
-    capability,
-    requestHarness: requestLiveHarness,
-    resolveProjectFromCwd: async (cwd) => await projectCatalogController.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Legacy migration source" }),
-  });
-}
-
-function createAgentCommandController() {
-  const Controller = reloadableModules.agentCommandController.default;
-  return new Controller(LOCAL_WORKBENCH_ORIGIN, LOCAL_ORCHESTRATOR_ORIGIN, {
-    executeBrowseRequest: async (body, signal) => await runAfterBrowseControllerReload(
-      () => getBrowseController().executeBrowseRequest(body, signal),
-    ),
-    executeSessionRequest: async (request, signal) => await runAfterBrowseControllerReload(
-      () => getBrowseController().executeSessionRequest(request, signal),
-    ),
-    requestSubagent: async (request) => await requestLiveHarness("codex", request),
-  });
+  return featureHost.run("projectCatalog", (controller) => controller.resolveAgentEndpointProjectFromCwd(cwd, options));
 }
 
 async function requestLiveHarness(harness: HarnessKind, request: JsonRpcRequest): Promise<JsonRpcResponse> {
@@ -663,7 +633,7 @@ function restartNextDevFromWatchdog(reason: string) {
 }
 
 async function ensureWorkbenchPromptFiles() {
-  await reloadableModules.workbenchPromptFiles.ensureWorkbenchPromptFiles();
+  await featureHost.get("modules").workbenchPromptFiles.ensureWorkbenchPromptFiles();
 }
 
 async function waitForCodexBridgeReload() {
@@ -825,12 +795,13 @@ function createCodexBridge() {
     },
     storageRoot: PROJECT_ROOT,
     subagentStore,
+    threadState: createSubagentThreadStatePort(),
   });
 }
 
 function createOpenCodeBridge(initialState?: Awaited<ReturnType<OpenCodeBridge["detachForReload"]>>) {
   return new OpenCodeBridge({
-    getReloadableModules: () => reloadableModules,
+    getReloadableModules: () => featureHost.get("modules"),
     initialState,
     onNotification: (notification) => {
       broadcastToClients("opencode", notification);
@@ -854,6 +825,7 @@ async function reloadCodexBridge() {
   }
   codexReadyPromise = null;
 
+  let detached = false;
   try {
     await codexBridgeTransitionController.runTransition(async ({ messagesBeforeTransition }) => {
       await withTimeout(
@@ -864,6 +836,7 @@ async function reloadCodexBridge() {
       const state = await codexBridge.detachForReload({
         idleTimeoutMs: CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS,
       });
+      detached = true;
       const { default: ReloadedCodexStdioBridge } = reloadCodexBridgeModule();
       codexBridge = new ReloadedCodexStdioBridge({
         appServer: codexAppServer,
@@ -878,10 +851,12 @@ async function reloadCodexBridge() {
         },
         storageRoot: PROJECT_ROOT,
         subagentStore,
+        threadState: createSubagentThreadStatePort(),
       });
       log("codex-bridge", "reloaded bridge code without restarting app-server");
     }, { drain: false });
   } catch (error) {
+    if (!detached) throw error;
     codexAcceptsUpstreamMessages = false;
     codexBridge.beginStopping();
     codexRecoverySupervisor.requestRecovery("Codex bridge reload transition failed.");
@@ -930,6 +905,7 @@ async function recoverCodexBridge(reason: string) {
       },
       storageRoot: PROJECT_ROOT,
       subagentStore,
+      threadState: createSubagentThreadStatePort(),
     });
     codexReadyPromise = null;
   }, { drain: false, invalidateGeneration: true });
@@ -1042,7 +1018,7 @@ async function reloadOpenCodeBridge({ restartManagedServer = false }: { restartM
     const state = await opencodeBridge.detachForReload({ restartManagedServer });
     const { OpenCodeBridge: ReloadedOpenCodeBridge } = reloadOpenCodeBridgeModule();
     opencodeBridge = new ReloadedOpenCodeBridge({
-      getReloadableModules: () => reloadableModules,
+      getReloadableModules: () => featureHost.get("modules"),
       initialState: state,
       onNotification: (notification) => {
         broadcastToClients("opencode", notification);
@@ -1074,7 +1050,7 @@ function queueReload(scopes: OrchestratorReloadScope[]) {
       try {
         const shouldRestartOpenCodeServer = scopes.includes("opencode-server");
         if (scopes.includes("orchestrator-logic") || shouldRestartOpenCodeServer) {
-          reloadOrchestratorLogic();
+          await reloadOrchestratorLogic();
         }
 
         if (scopes.includes("orchestrator-logic") || scopes.includes("browse-controller") || scopes.includes("codex-bridge") || scopes.includes("opencode-bridge") || shouldRestartOpenCodeServer) {
@@ -1290,6 +1266,29 @@ async function handleClientMessage(client: BridgeClient, data: Buffer) {
     return;
   }
 
+  if (message.method.startsWith("workbench/thread-state/") && "id" in message) {
+    const connectionId = [...bridgeClientsByConnectionId].find(([, candidate]) => candidate === client)?.[0];
+    if (!connectionId) return;
+    if (message.method === "workbench/thread-state/accepted") {
+      const params = asRecord(message.params) ?? {};
+      try {
+        const harness = params.harness === "codex" || params.harness === "copilot" || params.harness === "opencode" ? params.harness : null;
+        const projectId = typeof params.projectId === "string" ? params.projectId.trim() : "";
+        const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+        const turnId = typeof params.turnId === "string" ? params.turnId.trim() : "";
+        if (!harness || !projectId || !threadId || !turnId) throw new Error("Invalid accepted-intent lifecycle evidence.");
+        const result = await featureHost.run("threadState", (feature) => feature.controller.acceptIntent(connectionId, { harness, projectId, threadId, turnId }));
+        sendJsonToClient(client, { id: message.id, result });
+      } catch (error) {
+        sendJsonToClient(client, { id: message.id, error: { code: -32000, message: error instanceof Error ? error.message : "Accepted-intent publication failed." } });
+      }
+      return;
+    }
+    const result = await featureHost.run("threadState", (feature) => feature.controller.handleRequest(connectionId, { method: message.method, ...(asRecord(message.params) ?? {}) }));
+    sendJsonToClient(client, { id: message.id, ...result });
+    return;
+  }
+
   if (message.method === "initialize" && "id" in message) {
     try {
       await runAfterCodexBridgeReload(async () => {
@@ -1373,30 +1372,30 @@ function startBridgeServer() {
   bridgeServer = http.createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://localhost").pathname;
     if (requestPath === ORCHESTRATOR_AGENT_COMMAND_PATH && request.method === "POST") {
-      void workbenchAgentCommandController.handleHttpRequest(request, response);
+      void featureHost.run("agentCommand", (controller) => controller.handleHttpRequest(request, response));
       return;
     }
     if (requestPath === ORCHESTRATOR_BRIDGE_REQUEST_PATH && request.method === "POST") {
-      void bridgeRequestController.handleHttpRequest(request, response).catch((error) => {
+      void featureHost.run("bridgeRequest", (controller) => controller.handleHttpRequest(request, response)).catch((error) => {
         if (!response.headersSent) sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Bridge request failed." });
       });
       return;
     }
     if (requestPath === ORCHESTRATOR_LEGACY_MIGRATION_SOURCE_PATH) {
-      void legacyMigrationSourceController.handleHttpRequest(request, response).catch((error) => {
+      void featureHost.run("legacyMigrationSource", (controller) => controller.handleHttpRequest(request, response)).catch((error) => {
         if (!response.headersSent) sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Legacy migration source failed." });
       });
       return;
     }
     if (requestPath === ORCHESTRATOR_PROJECTS_PATH && request.method === "GET") {
-      void projectCatalogController.handleHttpRequest(request, response).catch((error) => {
+      void featureHost.run("projectCatalog", (controller) => controller.handleHttpRequest(request, response)).catch((error) => {
         if (!response.headersSent) sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Project discovery failed." });
       });
       return;
     }
 
     if (requestPath === ORCHESTRATOR_TREE_PATH && (request.method === "GET" || request.method === "POST")) {
-      void projectSnapshotController.handleTreeHttpRequest(request, response).catch((error) => {
+      void featureHost.run("projectSnapshot", (controller) => controller.handleTreeHttpRequest(request, response)).catch((error) => {
         if (!response.headersSent) sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Project tree request failed." });
       });
       return;
@@ -1450,6 +1449,8 @@ function startBridgeServer() {
 
   bridgeWebSocketServer.on("connection", (client) => {
     const bridgeClient = client as unknown as BridgeClient;
+    const connectionId = `connection-${++nextBridgeConnectionId}`;
+    bridgeClientsByConnectionId.set(connectionId, bridgeClient);
     bridgeConnections.add(bridgeClient);
     log("codex-bridge", `client connected (${bridgeConnections.size} active)`);
 
@@ -1460,6 +1461,8 @@ function startBridgeServer() {
     });
 
     bridgeClient.once("close", () => {
+      bridgeClientsByConnectionId.delete(connectionId);
+      void featureHost.run("threadState", (feature) => feature.controller.disconnect(connectionId));
       bridgeConnections.delete(bridgeClient);
       log("codex-bridge", `client disconnected (${bridgeConnections.size} active)`);
     });
@@ -1514,9 +1517,9 @@ async function startOrchestrator() {
   await workbenchAgentCliEnvironment.install();
   await ensureWorkbenchPromptFiles();
   startBridgeServer();
-  void ensureCodexReady()
+  const codexReadiness = ensureCodexReady();
+  void codexReadiness
     .then(() => {
-      codexHealthMonitor.start({ armed: true });
       void recoverPersistedHandoff().catch((error) => {
         logError("turn-recovery", `startup handoff recovery failed: ${error instanceof Error ? error.message : String(error)}`);
       });
@@ -1528,11 +1531,10 @@ async function startOrchestrator() {
         `Codex app-server startup readiness failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     });
-  browseSessionCleanupSupervisor.start();
+  await featureHost.start();
   for (const spec of specs) {
     startChild(spec);
   }
-  nextDevHealthSupervisor.start();
 }
 
 void startOrchestrator().catch((error) => {

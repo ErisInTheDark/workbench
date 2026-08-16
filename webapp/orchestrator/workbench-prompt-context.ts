@@ -3,7 +3,7 @@
  * - WORKBENCH_PROMPT_CONTEXT_FIELD: private bridge request key carrying Workbench prompt context. Keywords: prompt, context, bridge.
  * - readWorkbenchPromptContext: parse Workbench prompt context from a bridge request. Keywords: prompt, parser, harness.
  */
-import type { WorkbenchHarness, WorkbenchProjectRoot } from "../lib/types";
+import type { WorkbenchProjectRoot } from "../lib/types";
 import type { WorkbenchPromptContext } from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { JsonRpcRequest } from "./bridge-types";
 
@@ -33,17 +33,6 @@ function readInstructionInjections(value: unknown) {
   }
 
   return Object.keys(injections).length ? injections : undefined;
-}
-
-function readWorkbenchHarness(value: unknown): WorkbenchHarness | null {
-  switch (value) {
-    case "codex":
-    case "copilot":
-    case "opencode":
-      return value;
-    default:
-      return null;
-  }
 }
 
 function readInstructionScope(value: unknown): WorkbenchPromptContext["instructionScope"] {
@@ -82,7 +71,6 @@ export function readWorkbenchPromptContext(message: JsonRpcRequest): WorkbenchPr
 
   return {
     agentPath: asString(value.agentPath),
-    harness: readWorkbenchHarness(value.harness),
     instructionScope: readInstructionScope(value.instructionScope),
     instructionInjections: readInstructionInjections(value.instructionInjections),
     projectId: asString(value.projectId),

@@ -4,6 +4,8 @@
  * - adaptWorkbenchAgentCliResponse: convert known server envelopes into command-oriented output. Keywords: workbench, cli, json, stdout, errors.
  */
 import type { WorkbenchAgentCliRequest } from "./workbench-agent-cli-commands.ts";
+import { renderSubagentListOutput, renderSubagentSettleOutput } from "../subagent/subagent-output";
+import type { WorkbenchSubagentSummary } from "../../types";
 
 export interface WorkbenchAgentCliAdaptedResponse {
   exitCode: number;
@@ -28,8 +30,22 @@ export function adaptWorkbenchAgentCliResponse({
   switch (request.responseKind) {
     case "thread-title":
       return succeeded(`Thread title set: ${readString(payload, "title") || "untitled"}`);
+    case "thread-status":
+      return succeeded(`Thread status set: ${readString(payload, "agentStatus") || "unknown"}`);
     case "subagent-create":
       return succeeded(readString(payload, "threadId") || "");
+    case "subagent-list": {
+      const subagents = Array.isArray(payload?.subagents) ? payload.subagents.filter(isRecord) as unknown as WorkbenchSubagentSummary[] : [];
+      return succeeded(renderSubagentListOutput(subagents, request.body?.settled === true, readString(payload, "nextCursor") || null));
+    }
+    case "subagent-settle": {
+      const settled = Array.isArray(payload?.settled) ? payload.settled.filter(isRecord).flatMap((entry) => {
+        const name = readString(entry, "name");
+        const threadId = readString(entry, "threadId");
+        return name && threadId ? [{ name, threadId }] : [];
+      }) : [];
+      return succeeded(renderSubagentSettleOutput(settled));
+    }
     case "checkpoint-create": {
       const action = readString(request.body, "action");
       const label = action === "diffCheckpoint" ? "Created diff checkpoint" : "Created checkpoint";

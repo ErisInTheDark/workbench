@@ -30,7 +30,11 @@ export default class WorkbenchTurnRecoveryController {
   private readonly generationId = createWorkbenchThreadRecoveryId(`orchestrator:${process.pid}:${Date.now()}`);
   private readonly goalOwnedThreads = new Set<string>();
 
-  constructor(private readonly store: WorkbenchTurnRecoveryHandoffStore, private readonly log: (message: string) => void) {}
+  constructor(
+    private readonly store: WorkbenchTurnRecoveryHandoffStore,
+    private readonly log: (message: string) => void,
+    private readonly reportFailure: (candidate: WorkbenchTurnRecoveryHandoffCandidate, error: unknown) => Promise<void> = async () => undefined,
+  ) {}
 
   observeRequest(harness: WorkbenchRecoveryHarness, request: JsonRpcRequest, now = Date.now()) {
     const params = record(request.params);
@@ -108,7 +112,18 @@ export default class WorkbenchTurnRecoveryController {
   async recover(candidates: WorkbenchTurnRecoveryHandoffCandidate[], port: WorkbenchTurnRecoveryPort, handoff?: WorkbenchTurnRecoveryHandoff) {
     let remaining = [...candidates];
     for (const candidate of candidates) {
-      const result = await port(candidate);
+      let result: WorkbenchTurnRecoveryResult;
+      try {
+        result = await port(candidate);
+      } catch (error) {
+        await this.reportFailure(candidate, error);
+        const currentCandidate = this.candidates.get(candidate.key);
+        if (currentCandidate?.recoveryId === candidate.recoveryId) this.candidates.delete(candidate.key);
+        remaining = remaining.filter((entry) => entry.key !== candidate.key);
+        if (handoff) await this.store.updateCandidates(handoff, remaining);
+        this.log(`Recovery failed for ${candidate.harness}:${candidate.threadId}; moved the thread to Needs attention.`);
+        continue;
+      }
       const currentCandidate = this.candidates.get(candidate.key);
       if (result !== "busy" && currentCandidate?.recoveryId === candidate.recoveryId) {
         this.candidates.delete(candidate.key);

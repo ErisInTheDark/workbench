@@ -236,3 +236,16 @@ test("resolves a hydrated subagent's current profile effort without crossing har
   assert.equal(controller.getProfileReasoningEffort("missing-profile", "codex"), null);
   controller.dispose();
 });
+
+test("keeps UUID draft profile slots isolated and harness-bound", () => {
+  const controller = new WorkbenchComposerProfileController(new MemoryStorage());
+  const profile = controller.createProfile({ ...CODEX_SETTINGS, name: "Draft profile", scope: { kind: "global" } });
+  const first = { draftId: "11111111-1111-4111-8111-111111111111", harness: "codex" as const, kind: "draft" as const, projectId: "project-a" };
+  const second = { ...first, draftId: "22222222-2222-4222-8222-222222222222" };
+
+  assert.equal(controller.selectProfile(first, profile.id), true);
+  assert.deepEqual(controller.getSelection(first), { kind: "profile", profileId: profile.id });
+  assert.deepEqual(controller.getSelection(second), { kind: "custom" });
+  assert.equal(controller.selectProfile({ ...first, harness: "opencode" }, profile.id), false);
+  controller.dispose();
+});

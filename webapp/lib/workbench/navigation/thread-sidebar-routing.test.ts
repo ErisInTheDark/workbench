@@ -1,0 +1,27 @@
+/* No production exports. Tests protect blank, draft, and provider route identity. */
+import assert from "node:assert/strict";
+import test from "node:test";
+import { createThreadHref, parseWorkbenchRouteFromPath } from "./workbench-route";
+import { parseWorkbenchMosaicRouteExpression, serializeWorkbenchMosaicRouteExpression } from "./workbench-mosaic-route";
+
+test("thread routes discriminate blank drafts and provider ids", () => {
+  const draftId = "123e4567-e89b-42d3-a456-426614174000";
+  assert.deepEqual(parseWorkbenchRouteFromPath("/p/@/thread/new").threadTarget, { kind: "new" });
+  assert.deepEqual(parseWorkbenchRouteFromPath(`/p/@/thread/new/${draftId}`).threadTarget, { draftId, kind: "draft" });
+  assert.deepEqual(parseWorkbenchRouteFromPath("/p/@/thread/provider-id").threadTarget, { kind: "provider", threadId: "provider-id" });
+  assert.deepEqual(parseWorkbenchRouteFromPath("/p/@/thread/parent/sub/child").threadTarget, { kind: "subagent", parentThreadId: "parent", threadId: "child" });
+  assert.equal(createThreadHref("p", { kind: "subagent", parentThreadId: "parent", threadId: "child" }), "/p/@/thread/parent/sub/child");
+  assert.equal(createThreadHref("p", { draftId, kind: "draft" }), `/p/@/thread/new/${draftId}`);
+});
+
+test("missing or malformed draft routes never fall through to provider identity", () => {
+  assert.equal(parseWorkbenchRouteFromPath("/p/@/thread/new/not-a-uuid").view, "invalid");
+  assert.equal(parseWorkbenchRouteFromPath("/p/@/thread/new/a/b").view, "invalid");
+  assert.equal(parseWorkbenchRouteFromPath("/p/@/thread/parent/sub").view, "invalid");
+});
+
+test("mosaic routes preserve parent-owned subagent identity", () => {
+  const node = parseWorkbenchMosaicRouteExpression("[thread/parent/sub/child]");
+  assert.equal(node.ok, true);
+  if (node.ok) assert.equal(serializeWorkbenchMosaicRouteExpression(node.node), "[thread/parent/sub/child]");
+});

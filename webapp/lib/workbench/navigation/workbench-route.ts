@@ -3,6 +3,7 @@
  * - WORKBENCH_ROUTE_MARKER: route marker for canonical workbench URLs. Keywords: URL, route, navigation.
  * - WorkbenchRouteView, WorkbenchSettingsScope, WorkbenchRoute, WorkbenchRouteParseResult: normalized route contracts. Keywords: URL source of truth, project, file, thread, settings, mosaic.
  * - createProjectRoute/createFileRoute/createThreadRoute/createSettingsRoute/createCollaborationRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct route objects. Keywords: navigation, route builder.
+ * - getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId: derive parent hydration and selected tab identity. Keywords: thread, subagent, parent.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse browser URL state without mutating history. Keywords: route parser, legacy query, malformed URL.
  * - createWorkbenchHref/createProjectHref/createFileHref/createThreadHref/createSettingsHref/createCollaborationHref: build canonical hrefs. Keywords: links, URL, encode.
  * - isSameWorkbenchRoute/routeHasSelection: compare and classify routes. Keywords: route equality, active selection.
@@ -14,6 +15,7 @@ import {
   type WorkbenchMosaicNode,
 } from "./workbench-mosaic-route";
 import { areDeeplyEqual } from "../deep-equality";
+import { WorkbenchThreadTargetSchema, type WorkbenchThreadTarget } from "../thread/thread-state";
 
 export const WORKBENCH_ROUTE_MARKER = "@";
 
@@ -31,6 +33,7 @@ export interface WorkbenchRoute {
   projectId: string;
   settingsScope: WorkbenchSettingsScope;
   threadId: string;
+  threadTarget: WorkbenchThreadTarget | null;
   view: WorkbenchRouteView;
 }
 
@@ -54,6 +57,7 @@ export function createProjectRoute(projectId: string): WorkbenchRoute {
     projectId,
     settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId: "",
+    threadTarget: null,
     view: "project",
   };
 }
@@ -66,20 +70,35 @@ export function createFileRoute(projectId: string, filePath: string): WorkbenchR
     projectId,
     settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId: "",
+    threadTarget: null,
     view: "file",
   };
 }
 
-export function createThreadRoute(projectId: string, threadId: string): WorkbenchRoute {
+export function createThreadRoute(projectId: string, target: string | WorkbenchThreadTarget): WorkbenchRoute {
+  const threadTarget: WorkbenchThreadTarget = typeof target === "string"
+    ? target === "new" ? { kind: "new" } : { kind: "provider", threadId: target }
+    : WorkbenchThreadTargetSchema.parse(target);
   return {
     error: "",
     filePath: "",
     mosaicNode: null,
     projectId,
     settingsScope: DEFAULT_SETTINGS_SCOPE,
-    threadId,
+    threadId: getWorkbenchThreadTargetRootId(threadTarget),
+    threadTarget,
     view: "thread",
   };
+}
+
+export function getWorkbenchThreadTargetRootId(target: WorkbenchThreadTarget) {
+  if (target.kind === "provider") return target.threadId;
+  if (target.kind === "subagent") return target.parentThreadId;
+  return target.kind === "draft" ? `draft:${target.draftId}` : "new";
+}
+
+export function getWorkbenchThreadTargetSelectedId(target: WorkbenchThreadTarget) {
+  return target.kind === "subagent" ? target.threadId : getWorkbenchThreadTargetRootId(target);
 }
 
 export function createSettingsRoute(projectId: string, settingsScope: WorkbenchSettingsScope = DEFAULT_SETTINGS_SCOPE): WorkbenchRoute {
@@ -90,6 +109,7 @@ export function createSettingsRoute(projectId: string, settingsScope: WorkbenchS
     projectId,
     settingsScope,
     threadId: "",
+    threadTarget: null,
     view: "settings",
   };
 }
@@ -102,6 +122,7 @@ export function createCollaborationRoute(projectId: string): WorkbenchRoute {
     projectId,
     settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId: "",
+    threadTarget: null,
     view: "collaboration",
   };
 }
@@ -114,6 +135,7 @@ export function createMosaicRoute(projectId: string, mosaicNode: WorkbenchMosaic
     projectId,
     settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId: "",
+    threadTarget: null,
     view: "mosaic",
   };
 }
@@ -126,6 +148,7 @@ export function createInvalidWorkbenchRoute(error: string, projectId = ""): Work
     projectId,
     settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId: "",
+    threadTarget: null,
     view: "invalid",
   };
 }
@@ -214,7 +237,18 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
       return createFileRoute(projectId, value);
     }
     if (mode === "thread") {
-      return createThreadRoute(projectId, value);
+      if (valueSegments.value[0] === "new") {
+        if (valueSegments.value.length === 1) return createThreadRoute(projectId, { kind: "new" });
+        if (valueSegments.value.length === 2) {
+          const draft = WorkbenchThreadTargetSchema.safeParse({ draftId: valueSegments.value[1], kind: "draft" });
+          return draft.success ? createThreadRoute(projectId, draft.data) : createInvalidWorkbenchRoute("Invalid durable draft route.", projectId);
+        }
+        return createInvalidWorkbenchRoute("Unexpected durable draft route value.", projectId);
+      }
+      if (valueSegments.value.length === 3 && valueSegments.value[1] === "sub" && valueSegments.value[0] && valueSegments.value[2]) {
+        return createThreadRoute(projectId, { kind: "subagent", parentThreadId: valueSegments.value[0], threadId: valueSegments.value[2] });
+      }
+      return valueSegments.value.length === 1 && value ? createThreadRoute(projectId, { kind: "provider", threadId: value }) : createInvalidWorkbenchRoute("Provider thread IDs must use one segment, or a subagent route must use parent/sub/child.", projectId);
     }
     if (mode === "settings") {
       if (!valueSegments.value.length) {
@@ -297,7 +331,11 @@ export function createWorkbenchHref(route: WorkbenchRoute) {
     return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/file/${encodeRoutePath(route.filePath)}`;
   }
   if (route.view === "thread") {
-    return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/${encodeRoutePath(route.threadId)}`;
+    const target = route.threadTarget ?? (route.threadId === "new" ? { kind: "new" as const } : { kind: "provider" as const, threadId: route.threadId });
+    if (target.kind === "new") return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/new`;
+    if (target.kind === "draft") return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/new/${target.draftId}`;
+    if (target.kind === "subagent") return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/${encodeRouteSegment(target.parentThreadId)}/sub/${encodeRouteSegment(target.threadId)}`;
+    return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/${encodeRouteSegment(target.threadId)}`;
   }
   if (route.view === "settings") {
     return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/settings/${route.settingsScope}`;
@@ -320,8 +358,8 @@ export function createFileHref(projectId: string, filePath: string) {
   return createWorkbenchHref(createFileRoute(projectId, filePath));
 }
 
-export function createThreadHref(projectId: string, threadId: string) {
-  return createWorkbenchHref(createThreadRoute(projectId, threadId));
+export function createThreadHref(projectId: string, target: string | WorkbenchThreadTarget) {
+  return createWorkbenchHref(createThreadRoute(projectId, target));
 }
 
 export function createSettingsHref(projectId: string, settingsScope: WorkbenchSettingsScope = DEFAULT_SETTINGS_SCOPE) {
@@ -343,6 +381,7 @@ export function isSameWorkbenchRoute(left: WorkbenchRoute, right: WorkbenchRoute
     && areDeeplyEqual(left.mosaicNode, right.mosaicNode)
     && left.settingsScope === right.settingsScope
     && left.threadId === right.threadId
+    && areDeeplyEqual(left.threadTarget, right.threadTarget)
     && left.error === right.error;
 }
 

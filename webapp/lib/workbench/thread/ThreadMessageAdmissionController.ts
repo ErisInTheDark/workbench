@@ -69,6 +69,7 @@ interface ThreadMessageAdmissionControllerOptions {
   getLifecycleState: () => ThreadMessageAdmissionLifecycleState;
   getThreadStatus: (thread: ThreadPayload) => string;
   optimisticInputs: ThreadOptimisticInputStore;
+  publishAccepted?: (event: { correlationHandle: string; projectId: string; threadId: string; turnId: string }) => void;
   renderSource: (key: string) => void;
   sources: ThreadSourceStore;
 }
@@ -85,9 +86,13 @@ function ThreadMessageAdmissionController({
   getLifecycleState,
   getThreadStatus,
   optimisticInputs,
+  publishAccepted,
   renderSource,
   sources,
 }: ThreadMessageAdmissionControllerOptions) {
+  function reportAccepted(capture: AdmissionCapture, correlationHandle: string, turnId: string) {
+    publishAccepted?.({ correlationHandle, projectId: capture.projectId, threadId: capture.threadId, turnId });
+  }
   function captureOwner(threadId: string): AdmissionCapture {
     const lifecycle = getLifecycleState();
     const selectedThreadKey = documents.getSelectedThreadKey();
@@ -167,6 +172,7 @@ function ThreadMessageAdmissionController({
         render(capture.selectedThreadKey);
       }
       if (status === "sent") {
+        reportAccepted(capture, entry.handle, activeTurn.id);
         return { handle: entry.handle, kind: "admitted" };
       }
       throw error;
@@ -178,6 +184,7 @@ function ThreadMessageAdmissionController({
         render(capture.selectedThreadKey);
       }
       if (status === "sent") {
+        reportAccepted(capture, entry.handle, activeTurn.id);
         return { handle: entry.handle, kind: "admitted" };
       }
       throw new Error(response.error.message);
@@ -192,6 +199,7 @@ function ThreadMessageAdmissionController({
         render(capture.selectedThreadKey);
       }
       if (status === "sent") {
+        reportAccepted(capture, entry.handle, activeTurn.id);
         return { handle: entry.handle, kind: "admitted" };
       }
       throw new Error("turn/steer returned an empty turn id.");
@@ -214,6 +222,7 @@ function ThreadMessageAdmissionController({
     }
 
     if (acknowledgedTurnId === activeTurn.id) {
+      reportAccepted(capture, entry.handle, acknowledgedTurnId);
       return { handle: entry.handle, kind: "admitted" };
     }
     if (sources.has(capture.selectedThreadKey)) {
@@ -255,6 +264,7 @@ function ThreadMessageAdmissionController({
       threadKey: capture.selectedThreadKey,
       turn,
     });
+    reportAccepted(capture, clientUserMessageId, turn.id);
     return { clientUserMessageId, kind: "turnStarted", turn };
   }
 

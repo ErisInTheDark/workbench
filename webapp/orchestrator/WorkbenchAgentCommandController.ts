@@ -34,8 +34,10 @@ const UNCONFIGURED_DIRECT_PORT: WorkbenchAgentDirectPort = {
 
 const SUBAGENT_ACTION_METHODS = {
   create: "workbench/subagent/create",
+  list: "workbench/subagent/list",
   message: "workbench/subagent/message",
   profiles: "workbench/subagent/profiles",
+  settle: "workbench/subagent/settle",
   stop: "workbench/subagent/stop",
 } as const;
 
@@ -193,6 +195,9 @@ export default class WorkbenchAgentCommandController {
     if (request.path === "/api/subagents" && request.body) {
       return await this.dispatchSubagentRequest(request.body, signal);
     }
+    if ((request.path === "/api/thread-status" || request.path === "/api/thread-title") && request.body) {
+      return await this.dispatchManagedThreadRequest(request.path, request.body, signal);
+    }
     if (request.path.startsWith("/api/browse/sessions")) {
       return await this.direct.executeSessionRequest({ body, method: request.method, url: request.path }, signal);
     }
@@ -200,6 +205,18 @@ export default class WorkbenchAgentCommandController {
       return await this.direct.executeBrowseRequest(body, signal);
     }
     return await this.fetchRequest(this.resolveUrl(request.path), this.buildRequestInit(request, signal));
+  }
+
+  private async dispatchManagedThreadRequest(pathname: string, body: Record<string, unknown>, signal: AbortSignal) {
+    if (!this.direct.requestSubagent) throw new Error("Direct managed-thread dispatch is not configured.");
+    if (signal.aborted) throw signal.reason;
+    const response = await this.direct.requestSubagent({
+      id: 0,
+      method: pathname === "/api/thread-status" ? "workbench/thread/status" : "workbench/thread/title",
+      params: body,
+    });
+    if (response.error) return Response.json({ error: response.error.message }, { status: 400 });
+    return Response.json(response.result ?? {});
   }
 
   private async dispatchSubagentRequest(body: Record<string, unknown>, signal: AbortSignal) {
@@ -221,9 +238,7 @@ export default class WorkbenchAgentCommandController {
       if (response.error) {
         return Response.json({ error: response.error.message }, { status: 400 });
       }
-      return action === "message" || action === "stop"
-        ? new Response(null, { status: 204 })
-        : Response.json(response.result ?? {});
+      return Response.json(response.result ?? {});
     }
 
     const waitId = randomUUID();

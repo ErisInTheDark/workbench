@@ -9,7 +9,7 @@ import type {
   ThreadPayload,
   WorkbenchHarness,
   WorkbenchThreadComposerAttachmentDraft,
-  WorkbenchThreadComposerDraft,
+  WorkbenchComposerInputDraft,
 } from "../../../lib/types";
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
@@ -74,7 +74,7 @@ export default function CollaborationPostComposer ({
   onSubmit,
 }: {
   composerSpellCheck: boolean;
-  draft?: WorkbenchThreadComposerDraft | null;
+  draft?: WorkbenchComposerInputDraft | null;
   harness: WorkbenchHarness;
   highlightSources: InlineMentionHighlightSources;
   id: string;
@@ -100,7 +100,6 @@ export default function CollaborationPostComposer ({
   return (
     <div>
       <ThreadComposer
-        autoExpandSavedDraftShelf={false}
         composerSpellCheck={composerSpellCheck}
         controlsMode="comment"
         highlightSources={highlightSources}
@@ -121,8 +120,6 @@ export default function CollaborationPostComposer ({
         onThreadQuestionnaireDraftChange={() => { }}
         onThreadQuestionnaireDraftClear={() => { }}
         onThreadReasoningEffortChange={() => { }}
-        onThreadSavedComposerDraftDelete={() => { }}
-        onThreadSavedComposerDraftSave={() => { }}
         onThreadServiceTierChange={() => { }}
         pendingUserInputRequest={null}
         leadingActions={cancelButton}
@@ -130,12 +127,10 @@ export default function CollaborationPostComposer ({
         projectRootPath={projectRootPath}
         rateLimits={null}
         sendLabel={label}
-        showSavedDraftControls={false}
         surface={surface}
         thread={thread}
         threadComposerDraft={draft ?? null}
         threadQuestionnaireDraft={null}
-        threadSavedComposerDrafts={[]}
         workspaceRoots={workspaceRoots}
       />
     </div>

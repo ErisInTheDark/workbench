@@ -84,6 +84,7 @@ type CodexStdioBridgeOptions = {
   sendToClient: (client: BridgeClient, message: unknown) => void;
   storageRoot: string;
   subagentStore?: WorkbenchSubagentStore;
+  threadState?: WorkbenchSubagentControllerOptions["threadState"];
 };
 
 type RequestIdAllocator = {
@@ -1025,7 +1026,7 @@ export default class CodexStdioBridge {
   private readonly resolveProjectFromCwd: CodexStdioBridgeOptions["resolveProjectFromCwd"];
   private readonly subagentController: ReloadableWorkbenchSubagentController;
 
-  constructor({ appServer, bridgeUrl, initialState, onNotification, resolveProjectFromCwd, sendToClient, storageRoot, subagentStore = new WorkbenchSubagentStore(storageRoot) }: CodexStdioBridgeOptions) {
+  constructor({ appServer, bridgeUrl, initialState, onNotification, resolveProjectFromCwd, sendToClient, storageRoot, subagentStore = new WorkbenchSubagentStore(storageRoot), threadState }: CodexStdioBridgeOptions) {
     this.appServer = appServer;
     this.bridgeUrl = bridgeUrl;
     this.onNotification = onNotification;
@@ -1043,6 +1044,7 @@ export default class CodexStdioBridge {
         resolveProjectFromCwd,
         storageRoot,
         subagentStore,
+        threadState,
       }),
       initialState: initialState?.subagentControllerState,
       legacyController: initialState?.subagentController,
@@ -1471,20 +1473,29 @@ export default class CodexStdioBridge {
       return message;
     }
 
-    const promptContext = readWorkbenchPromptContext(message);
-    if (!promptContext) {
+    const untrustedPromptContext = readWorkbenchPromptContext(message);
+    if (!untrustedPromptContext) {
       return message;
     }
 
     const params = asMutableParamsRecord(message.params);
     const workbenchPromptFiles = loadFreshWorkbenchPromptFiles();
+    const promptContext = { ...untrustedPromptContext, harness: "codex" as const };
+    const available = workbenchPromptFiles.listWorkbenchInstructionMechanics(promptContext);
+    const filter = (value: string | null, field: string) => workbenchPromptFiles.filterWorkbenchInstructionContent(value, {
+      available,
+      field,
+      harness: "codex",
+      onWarning: (warning) => logError("instruction-filter", `\u001b[31m${warning.field}:${warning.line} ${warning.recovery}: ${warning.source}\u001b[0m`),
+      shell: process.platform === "win32" ? "pwsh" : "bash",
+    });
     if (isPromptAugmentedTurnMethod(method)) {
       const developerInstructions = promptContext.instructionScope === "threadUtilities"
         ? await workbenchPromptFiles.buildWorkbenchThreadUtilityDeveloperInstructions(promptContext)
         : await workbenchPromptFiles.buildWorkbenchCollaborationDeveloperInstructions(promptContext);
       return {
         ...message,
-        params: buildWorkbenchOwnedCollaborationParams(params, developerInstructions),
+        params: buildWorkbenchOwnedCollaborationParams(params, filter(developerInstructions, "collaborationMode.settings.developer_instructions")),
       };
     }
 
@@ -1492,14 +1503,17 @@ export default class CodexStdioBridge {
       const developerInstructions = await workbenchPromptFiles.buildWorkbenchThreadUtilityDeveloperInstructions(promptContext);
       return {
         ...message,
-        params: buildWorkbenchOwnedDeveloperInstructionParams(params, developerInstructions),
+        params: buildWorkbenchOwnedDeveloperInstructionParams(params, filter(developerInstructions, "developerInstructions")),
       };
     }
 
     const promptInstructions = await workbenchPromptFiles.buildWorkbenchPromptInstructions(promptContext);
     return {
       ...message,
-      params: buildWorkbenchOwnedPromptParams(params, promptInstructions),
+      params: buildWorkbenchOwnedPromptParams(params, {
+        baseInstructions: filter(promptInstructions.baseInstructions, "baseInstructions"),
+        developerInstructions: filter(promptInstructions.developerInstructions, "developerInstructions"),
+      }),
     };
   }
 

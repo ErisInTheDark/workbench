@@ -101,7 +101,6 @@ function createPreReloadStoreSurface(store: WorkbenchSubagentStore) {
     getOwned: store.getOwned.bind(store),
     getOwnedMany: store.getOwnedMany.bind(store),
     list: store.list.bind(store),
-    markActivity: store.markActivity.bind(store),
     remove: store.remove.bind(store),
     replace: store.replace.bind(store),
     reserve: store.reserve.bind(store),
@@ -178,6 +177,7 @@ test("creates with one client and delivers a steer before empty questionnaire re
     "thread/start",
     "turn/start",
   ]);
+
   const threadStart = clients[0].calls.find(({ method }) => method === "thread/start");
   const turnStart = clients[0].calls.find(({ method }) => method === "turn/start");
   assert.equal(threadStart?.params.effort, "medium");
@@ -188,7 +188,7 @@ test("creates with one client and delivers a steer before empty questionnaire re
     method: "workbench/subagent/list",
     params: { cwd, limit: 20, parentThreadId: callerThreadId },
   });
-  assert.equal((listedAfterCreate.result as WorkbenchSubagentPage).subagents[0]?.activityStatus, "active");
+  assert.equal((listedAfterCreate.result as WorkbenchSubagentPage).subagents[0]?.activityStatus, "unknown");
 
   const messaged = await controller.handleRequest({
     id: 5,
@@ -214,7 +214,7 @@ test("creates with one client and delivers a steer before empty questionnaire re
     method: "workbench/subagent/list",
     params: { cwd, limit: 20, parentThreadId: callerThreadId },
   });
-  assert.equal((listedAfterStop.result as WorkbenchSubagentPage).subagents[0]?.activityStatus, "inactive");
+  assert.equal((listedAfterStop.result as WorkbenchSubagentPage).subagents[0]?.activityStatus, "unknown");
 
   const denied = await controller.handleRequest({
     id: 8,
@@ -222,7 +222,15 @@ test("creates with one client and delivers a steer before empty questionnaire re
     params: { callerThreadId: "different-parent", cwd, threadId: childThreadId },
   });
   assert.equal(denied.id, 8);
-  assert.match(denied.error?.message ?? "", /not owned by the current thread/u);
+  assert.match(denied.error?.message ?? "", /owned by the current thread/u);
+
+  const nestedCreate = await controller.handleRequest({
+    id: 31,
+    method: "workbench/subagent/create",
+    params: { callerThreadId: childThreadId, cwd, message: "Create another child.", name: "Nana", profileId: profile().id, title: "Nested child" },
+  });
+  assert.match(nestedCreate.error?.message ?? "", /cannot create their own subagents/u);
+  assert.equal(clients.flatMap(({ calls }) => calls).filter(({ method }) => method === "thread/start").length, 1);
 });
 
 test("starts an idle direct parent through the pre-reload store surface", async (context) => {
@@ -314,7 +322,7 @@ test("steers an active direct parent and rejects callers without a relationship"
   assert.match(denied.error?.message ?? "", /not a Workbench subagent with a direct parent/u);
 });
 
-test("tracks durable activity through create, message, and stop", async (context) => {
+test("keeps relationship storage independent from lifecycle through create, message, and stop", async (context) => {
   const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-controller-activity-"));
   context.after(async () => await rm(storageRoot, { force: true, recursive: true }));
   const cwd = process.cwd();
@@ -337,7 +345,7 @@ test("tracks durable activity through create, message, and stop", async (context
     method: "workbench/subagent/list",
     params: { cwd, limit: 20, parentThreadId: callerThreadId },
   });
-  assert.equal((listedAfterCreate.result as WorkbenchSubagentPage).subagents[0]?.activityStatus, "active");
+  assert.equal((listedAfterCreate.result as WorkbenchSubagentPage).subagents[0]?.activityStatus, "unknown");
 
   assert.deepEqual(await controller.handleRequest({
     id: 4,
@@ -354,7 +362,7 @@ test("tracks durable activity through create, message, and stop", async (context
     method: "workbench/subagent/list",
     params: { cwd, limit: 20, parentThreadId: callerThreadId },
   });
-  assert.equal((listedAfterStop.result as WorkbenchSubagentPage).subagents[0]?.activityStatus, "inactive");
+  assert.equal((listedAfterStop.result as WorkbenchSubagentPage).subagents[0]?.activityStatus, "unknown");
 });
 
 test("keeps a created child durable when its first turn fails to start", async (context) => {
@@ -381,7 +389,7 @@ test("keeps a created child durable when its first turn fails to start", async (
     method: "workbench/subagent/list",
     params: { cwd, limit: 20, parentThreadId: callerThreadId },
   });
-  assert.equal((listed.result as WorkbenchSubagentPage).subagents[0]?.activityStatus, "inactive");
+  assert.equal((listed.result as WorkbenchSubagentPage).subagents[0]?.activityStatus, "unknown");
 
   const stopped = await controller.handleRequest({
     id: 4,

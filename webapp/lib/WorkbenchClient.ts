@@ -39,6 +39,8 @@ import WorkbenchFilePanelClient from "./workbench/WorkbenchFilePanelClient";
 import type { WorkbenchFilePanelClientOptions } from "./workbench/WorkbenchFilePanelClient";
 import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
 import WorkbenchThreadClient from "./workbench/WorkbenchThreadClient";
+import ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
+import { WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadStateSnapshot } from "./workbench/thread/thread-state";
 import { getTurnRenderSignature } from "./workbench/thread/thread-item-signature";
 
 const AUTO_REFRESH_INTERVAL_MS = 1500;
@@ -74,6 +76,7 @@ function areExplorerSnapshotsEquivalent(left: ExplorerSnapshot | null, right: Ex
     && (left.tree === right.tree || areDeeplyEqual(left.tree, right.tree))
     && (left.subagents === right.subagents || areDeeplyEqual(left.subagents, right.subagents))
     && (left.threads === right.threads || areDeeplyEqual(left.threads, right.threads))
+    && (left.threadSidebar === right.threadSidebar || areDeeplyEqual(left.threadSidebar, right.threadSidebar))
     && (left.changes === right.changes || areDeeplyEqual(left.changes, right.changes))
     && (left.expandedDirectories === right.expandedDirectories || areDeeplyEqual(left.expandedDirectories, right.expandedDirectories))
     && (left.locallyModifiedPaths === right.locallyModifiedPaths || areDeeplyEqual(left.locallyModifiedPaths, right.locallyModifiedPaths));
@@ -106,8 +109,35 @@ export async function WorkbenchClient(
       }
       emitExplorerStateChange();
     },
-    shouldRunNotificationThreadListRefresh: () => !hasAutoRefreshLeaderState || isAutoRefreshLeader,
   });
+  let threadSidebarSnapshot: WorkbenchThreadStateSnapshot | null = null;
+  let threadSidebarDraftSaveStates: ExplorerSnapshot["threadSidebarDraftSaveStates"] = {};
+  const threadSidebarClient = new ThreadSidebarClient({
+    onChange: (snapshot) => {
+      threadSidebarSnapshot = snapshot;
+      threadClient.installSidebarSnapshot(snapshot);
+      emitExplorerStateChange();
+    },
+    onDraftSaveStateChange: (draftId, state) => {
+      threadSidebarDraftSaveStates = { ...threadSidebarDraftSaveStates, [draftId]: state };
+      emitExplorerStateChange();
+    },
+    transport: {
+      close: async (projectId) => { await threadClient.requestWorkbench("workbench/thread-state/close", { projectId }); },
+      deleteDraft: async (projectId, draftId, clientUpdatedAt) => { await threadClient.requestWorkbench("workbench/thread-state/draft/delete", { clientUpdatedAt, draftId, projectId }); },
+      open: async (projectId) => WorkbenchThreadStateSnapshotSchema.parse(await threadClient.requestWorkbench("workbench/thread-state/open", { projectId })),
+      upsertDraft: async (projectId, draft) => { await threadClient.requestWorkbench("workbench/thread-state/draft/upsert", { draft, projectId }); },
+    },
+  });
+  coordinatorLifecycle.addUnsubscribe(threadClient.onWorkbenchNotification((notification) => {
+    if (notification.method === "workbench/thread-state/updated") {
+      const parsed = WorkbenchThreadStateSnapshotSchema.safeParse(notification.params);
+      if (parsed.success) threadSidebarClient.accept(parsed.data);
+      return;
+    }
+    const projectId = projectClient.getSnapshot().currentProjectId;
+    if (projectId) void threadSidebarClient.open(projectId);
+  }));
   const initialThreadSnapshot = threadClient.getSnapshot();
   const sessionState = SessionState({
     currentThread: initialThreadSnapshot.currentThread,
@@ -128,6 +158,9 @@ export async function WorkbenchClient(
       rootPath: snapshot.rootPath,
       roots: snapshot.roots,
     });
+    if (snapshot.currentProjectId && previousProjectId !== snapshot.currentProjectId) {
+      void threadSidebarClient.open(snapshot.currentProjectId);
+    }
     if (previousProjectId && previousProjectId !== snapshot.currentProjectId) {
       activeFilePath = "";
       void draftStore.hydratePersistedDrafts();
@@ -232,8 +265,27 @@ export async function WorkbenchClient(
       projectFileIndexId: projectSnapshot.projectFileIndexId,
       projectFileIndexKey: projectSnapshot.projectFileIndexKey,
       projectFilePaths: projectSnapshot.projectFilePaths,
-      subagents: threadSnapshot.subagents,
+      subagents: (threadSidebarSnapshot?.entries ?? []).filter((entry): entry is Extract<typeof entry, { entryKind: "subagent" }> => entry.entryKind === "subagent").map((entry) => ({
+        activityStatus: entry.lifecycle.kind === "working" ? "active" : "inactive",
+        createdAt: entry.createdAt,
+        cwd: entry.cwd,
+        directSubagentIndex: entry.directSubagentIndex,
+        harness: entry.identity.harness,
+        lastActivityAt: entry.activityAt,
+        lifecycle: entry.lifecycle,
+        name: entry.name,
+        parentThreadId: entry.parentThreadId,
+        pinned: entry.pinned,
+        profileId: entry.profileId,
+        profileName: entry.profileName,
+        projectId: entry.projectId,
+        threadId: entry.identity.threadId,
+        title: entry.title,
+        updatedAt: entry.updatedAt,
+      })),
       threads: threadSnapshot.threads,
+      threadSidebar: threadSidebarSnapshot,
+      threadSidebarDraftSaveStates,
       isProjectLoading: projectSnapshot.isLoading,
       isThreadsLoading: threadSnapshot.isLoading,
       changes: projectSnapshot.changes,
@@ -384,45 +436,13 @@ export async function WorkbenchClient(
     projectClient.toggleDirectory(path);
   }
 
-  async function refreshThreads() {
-    await threadClient.refreshThreads();
-  }
-
   async function refreshRateLimits() {
     await threadClient.refreshRateLimits();
   }
 
-  async function refreshProjectSidebarData(route: WorkbenchRoute, generation: number) {
-    const projectSnapshot = projectClient.getSnapshot();
-    if (!projectSnapshot.currentProjectId) {
-      emitExplorerStateChange();
-      return;
-    }
-
-    const sidebarRefreshTasks = [
-      () => refreshThreads(),
-      () => threadClient.refreshPendingUserInputRequests(),
-    ];
-
-    await Promise.all(sidebarRefreshTasks.map((task) => task()));
-
-    if (isRouteGenerationActive(route, generation)) {
-      emitExplorerStateChange();
-    }
-  }
-
   function hydrateProjectSidebarData(route: WorkbenchRoute, generation: number, options: { block?: boolean } = {}) {
-    const promise = refreshProjectSidebarData(route, generation).catch(() => {
-      if (isRouteGenerationActive(route, generation)) {
-        emitExplorerStateChange();
-      }
-    });
-
-    if (options.block) {
-      return promise;
-    }
-
-    void promise;
+    void options;
+    if (isRouteGenerationActive(route, generation)) emitExplorerStateChange();
     return Promise.resolve();
   }
 
@@ -599,6 +619,7 @@ export async function WorkbenchClient(
     }
 
     const nextProjectId = projectClient.getSnapshot().currentProjectId;
+    if (nextProjectId) await threadSidebarClient.open(nextProjectId);
     if (nextProjectId && previousProjectId !== nextProjectId) {
       await draftStore.hydratePersistedDrafts();
     }
@@ -606,7 +627,7 @@ export async function WorkbenchClient(
     return "";
   }
 
-  async function applyRoute(route: WorkbenchRoute): Promise<WorkbenchRouteLoadResult> {
+  async function applyRouteOwned(route: WorkbenchRoute): Promise<WorkbenchRouteLoadResult> {
     activeRoute = route;
     const routeGeneration = ++activeRouteGeneration;
 
@@ -655,15 +676,47 @@ export async function WorkbenchClient(
 
     if (route.view === "thread") {
       void hydrateProjectSidebarData(route, routeGeneration);
-      const didOpen = await openThread(route.threadId);
+      const target = route.threadTarget ?? { kind: "provider" as const, threadId: route.threadId };
+      if (target.kind === "new") {
+        const draft = threadClient.createThread("codex", "new");
+        applyThreadPayloadToCurrentView(draft);
+        emitExplorerStateChange();
+        return { ok: true };
+      }
+      if (target.kind === "draft") {
+        const entry = threadSidebarSnapshot?.entries.find((candidate) => candidate.entryKind === "draft" && candidate.draft.draftId === target.draftId);
+        if (!entry || entry.entryKind !== "draft") {
+          threadClient.clearThreadSelection();
+          applyCurrentThreadSelection(null);
+          return { error: "This draft is missing or belongs to another project.", ok: false };
+        }
+        const draft = {
+          ...threadClient.createThread(entry.draft.harness, `draft:${entry.draft.draftId}`),
+          agentPath: entry.draft.agent,
+          model: entry.draft.model,
+          reasoningEffort: entry.draft.reasoningEffort,
+          serviceTier: entry.draft.serviceTier,
+        };
+        applyThreadPayloadToCurrentView(draft);
+        emitExplorerStateChange();
+        return { ok: true };
+      }
+      const rootThreadId = target.kind === "subagent" ? target.parentThreadId : target.threadId;
+      const didOpen = await openThread(rootThreadId, { harness: target.harness });
       reapplyActiveRouteAfterStaleLoad(route, routeGeneration);
       if (!isRouteGenerationActive(route, routeGeneration)) {
         return { ok: false };
       }
-      return didOpen ? { ok: true } : { error: `Thread not found: ${route.threadId}`, ok: false };
+      return didOpen ? { ok: true } : { error: `Thread not found: ${rootThreadId}`, ok: false };
     }
 
     return { error: "Unknown route.", ok: false };
+  }
+
+  async function applyRoute(route: WorkbenchRoute): Promise<WorkbenchRouteLoadResult> {
+    let result: WorkbenchRouteLoadResult = { ok: false };
+    await threadSidebarClient.guardNavigation(async () => { result = await applyRouteOwned(route); });
+    return result;
   }
 
   async function refreshTree({ preserveSelection = false }: { preserveSelection?: boolean } = {}) {
@@ -787,6 +840,8 @@ export async function WorkbenchClient(
     },
     createEntry,
     deleteFile,
+    deleteThreadDraft: (draftId) => threadSidebarClient.delete(draftId),
+    editThreadDraft: (draft) => threadSidebarClient.edit(draft),
     listModels: threadClient.listModels,
     markThreadSeen,
     readThread,
@@ -820,6 +875,9 @@ export async function WorkbenchClient(
       threadClient.setDraftThreadHarness(harness);
     },
     toggleDirectory,
+    updateThreadState: async (request) => {
+      await threadClient.requestWorkbench(request.method, request);
+    },
   };
 
   await draftStore.hydratePersistedDrafts();
@@ -835,6 +893,8 @@ export async function WorkbenchClient(
   }
   startAutoRefresh();
   return () => {
+    threadSidebarClient.bestEffortFlush();
+    void threadSidebarClient.close();
     projectClient.dispose();
     threadClient.dispose();
     coordinatorLifecycle.dispose();

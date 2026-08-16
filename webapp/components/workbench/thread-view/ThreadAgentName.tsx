@@ -6,11 +6,13 @@ import type { WorkbenchSubagentSummary } from "../../../lib/types";
 import { getThreadAgentAccentColor, getThreadAgentLabelParts } from "../../../lib/workbench/thread/thread-subagents";
 
 export default function ThreadAgentName ({
+  accentChromaPercent,
   className = "",
   roleClassName = "text-muted",
   subagent,
   thread,
 }: {
+  accentChromaPercent?: number;
   className?: string;
   roleClassName?: string;
   subagent?: WorkbenchSubagentSummary | null;
@@ -34,7 +36,7 @@ export default function ThreadAgentName ({
 
   return (
     <span className={className}>
-      <span className="font-medium" style={subagent ? { color: getThreadAgentAccentColor(subagent) } : undefined}>{label.nickname}</span>
+      <span className="font-medium" style={subagent ? { color: getThreadAgentAccentColor(subagent, accentChromaPercent) } : undefined}>{label.nickname}</span>
       {hasDistinctRole ? <span className={roleClassName}> ({label.role})</span> : null}
     </span>
   );

@@ -27,7 +27,7 @@ import type {
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { CopilotThreadState } from "./copilot-thread-state";
 import { appendCopilotEventLog, log, logError } from "./process-helpers";
-import type { OrchestratorReloadableModules } from "./reloadable-modules";
+import type { OrchestratorReloadableModules } from "./orchestrator-feature-registry";
 import { isWorkbenchPauseControlRequest, WORKBENCH_PAUSE_CONTROL_KIND } from "../lib/workbench/thread/thread-pause-control";
 import type { WorkbenchPromptContext } from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import { readWorkbenchPromptContext } from "./workbench-prompt-context";
@@ -675,9 +675,7 @@ export class CopilotBridge {
     workbenchOrigin: string | null,
     promptContext: WorkbenchPromptContext | null = null,
   ) {
-    const { buildThreadTitleBootstrapInstructions } = this.getReloadableModules().threadBootstrap;
     const { buildWorkbenchLibraryBootstrapInstructions } = this.getReloadableModules().workbenchLibrary;
-    const hasWorkbenchOrigin = Boolean(workbenchOrigin?.trim());
     const resolvedPromptContext = promptContext
       ? {
         ...promptContext,
@@ -718,16 +716,19 @@ Treat the Workbench instructions below as active for this session. If Copilot-pr
       USER_INPUT_TOOL_SYSTEM_MESSAGE,
       workbenchInstructions,
       workbenchLibraryInstructions,
-      !promptInstructions && hasWorkbenchOrigin
-        ? buildThreadTitleBootstrapInstructions({
-          harness: "copilot",
-          threadId,
-        })
-        : null,
     ]);
+    const filterPromptContext = resolvedPromptContext ?? { harness: "copilot" as const, threadId, workbenchOrigin };
+    const available = this.getReloadableModules().workbenchPromptFiles.listWorkbenchInstructionMechanics(filterPromptContext);
+    const filteredContent = this.getReloadableModules().workbenchPromptFiles.filterWorkbenchInstructionContent(content, {
+      available,
+      field: "copilot.systemMessage",
+      harness: "copilot",
+      onWarning: (warning) => logError("instruction-filter", `\u001b[31m${warning.field}:${warning.line} ${warning.recovery}: ${warning.source}\u001b[0m`),
+      shell: process.platform === "win32" ? "pwsh" : "bash",
+    });
 
     return {
-      content,
+      content: filteredContent,
     };
   }
 

@@ -70,8 +70,10 @@ function stripOuterPlanTag(value: string) {
 function contextPieceKind(piece: WorkbenchThreadContextPiece): WorkbenchThreadRecallKind {
   switch (piece.kind) {
     case "userMessage":
+      if (readWorkbenchSubagentMessageInput(piece.input)) return "agent-message";
       return "user-message";
     case "userSteer":
+      if (readWorkbenchSubagentMessageInput(piece.input)) return "agent-message";
       return "user-steer";
     case "questionnaire":
       return "questionnaire";

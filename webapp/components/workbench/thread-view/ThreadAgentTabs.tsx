@@ -1,11 +1,14 @@
 /*
  * Exports:
- * - default ThreadAgentTabs: render the main-agent tab, pinnable bounded subagent tabs, badges, and the tab-shaped reveal control. Keywords: thread, subagent, tabs, pinned, context menu, pagination, activity.
+ * - default ThreadAgentTabs: render lifecycle-ordered subagent tabs, shared Lock controls, badges, and settled-history disclosure. Keywords: thread, subagent, tabs, lock, lifecycle.
  */
+import type { MouseEvent } from "react";
+
 import type { ThreadPayload, ThreadUnreadBadge, WorkbenchSubagentSummary } from "../../../lib/types";
 import ContextMenuCapability from "../ContextMenuCapability";
 import { ThreadQuestionBadge, ThreadUnreadBadge as ThreadUnreadBadgeView } from "../ThreadStatusBadges";
-import { PinIcon } from "../workbench-icons";
+import { CompletedThreadIcon, LockIcon, NeedsAttentionThreadIcon, RestoreThreadIcon, SettleThreadIcon, StoppedThreadIcon, UnlockIcon, WorkingThreadIcon } from "../workbench-icons";
+import { getThreadAgentAccentColor } from "../../../lib/workbench/thread/thread-subagents";
 import ThreadAgentName from "./ThreadAgentName";
 
 interface TabBadge {
@@ -27,101 +30,149 @@ function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
-const tabClassName = "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[0.78em] font-medium leading-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft";
+function handleThreadLinkClick(event: MouseEvent<HTMLAnchorElement>, onSelect: () => void) {
+  if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  event.preventDefault();
+  onSelect();
+}
 
-function badgeView (badge: TabBadge) {
+const tabClassName = "relative inline-flex min-h-9 items-center gap-1.5 rounded-lg px-1.5 py-1.5 text-[0.95rem] font-medium leading-none transition-[color,opacity] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft";
+const selectedTabClassName = "text-text";
+const unselectedTabClassName = "text-muted opacity-60 hover:opacity-80 hover:text-text";
+
+function SelectedTabUnderline({ color }: { color: string }) {
+  return <span aria-hidden="true" className="pointer-events-none absolute inset-x-1 bottom-0 border-t border-dotted" style={{ borderColor: color }} />;
+}
+
+function badgeView (badge: TabBadge, suppressActivePlaceholder = false) {
   return badge.isQuestion
     ? <ThreadQuestionBadge />
-    : badge.unreadBadge ? <ThreadUnreadBadgeView badge={badge.unreadBadge} /> : null;
+    : badge.unreadBadge && !(suppressActivePlaceholder && badge.unreadBadge.hasActiveTurn && badge.unreadBadge.unreadCount === 0)
+      ? <ThreadUnreadBadgeView badge={badge.unreadBadge} />
+      : null;
+}
+
+function SubagentStatusIcon({ accentChromaPercent, subagent }: { accentChromaPercent?: number; subagent: WorkbenchSubagentSummary | null }) {
+  const lifecycle = subagent?.lifecycle;
+  const Icon = lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : CompletedThreadIcon;
+  return (
+    <span className="inline-flex shrink-0" style={subagent ? { color: getThreadAgentAccentColor(subagent, accentChromaPercent) } : undefined}>
+      <Icon className="size-4" />
+    </span>
+  );
 }
 
 export default function ThreadAgentTabs ({
   activeThreadId,
-  canRevealMore,
+  hasSettledSubagents,
+  getThreadHref,
+  isSettledSubagentsVisible,
   isRevealingMore,
   mainThreadBadge,
   mainThreadId,
-  onRevealMore,
+  onToggleSettledSubagents,
   onSelectThread,
   onTogglePin,
+  onToggleSettlement,
   tabs,
 }: {
   activeThreadId: string;
-  canRevealMore: boolean;
+  getThreadHref: (threadId: string) => string;
+  hasSettledSubagents: boolean;
+  isSettledSubagentsVisible: boolean;
   isRevealingMore: boolean;
   mainThreadBadge: TabBadge;
   mainThreadId: string;
-  onRevealMore: () => void;
+  onToggleSettledSubagents: () => void;
   onSelectThread: (threadId: string) => void;
   onTogglePin: (threadId: string) => void;
+  onToggleSettlement: (threadId: string, settled: boolean) => void;
   tabs: readonly SubagentTab[];
 }) {
-  if (!tabs.length && !canRevealMore) return null;
+  if (!tabs.length && !hasSettledSubagents) return null;
+  const unsettledTabs = tabs.filter((tab) => !tab.subagent?.lifecycle?.settled);
+  const settledTabs = tabs.filter((tab) => tab.subagent?.lifecycle?.settled);
+  const renderTab = (tab: SubagentTab) => {
+    const settled = Boolean(tab.subagent?.lifecycle?.settled);
+    const terminal = tab.subagent?.lifecycle?.kind === "completed" || tab.subagent?.lifecycle?.kind === "stopped";
+    return (
+    <ContextMenuCapability
+      key={tab.id}
+      menu={{
+        id: `subagent-tab:${tab.id}`,
+        label: "Subagent tab actions",
+        items: [
+          ...(!settled ? [{
+          icon: tab.isPinned ? <UnlockIcon className="size-4" /> : <LockIcon className="size-4" />,
+          id: tab.isPinned ? "unlock" : "lock",
+          label: tab.isPinned ? "Unlock subagent" : "Lock subagent",
+          onSelect: () => onTogglePin(tab.id),
+          }] : []),
+          ...(settled ? [{
+            icon: <RestoreThreadIcon className="size-4" />,
+            id: "restore",
+            label: "Restore subagent",
+            onSelect: () => onToggleSettlement(tab.id, false),
+          }] : terminal ? [{
+            icon: <SettleThreadIcon className="size-4" />,
+            id: "settle",
+            label: "Settle subagent",
+            onSelect: () => onToggleSettlement(tab.id, true),
+          }] : []),
+        ],
+      }}
+    >
+      <a
+        aria-busy={tab.isLoading}
+        aria-label={`${tab.subagent?.name ?? "Subagent"}, ${tab.subagent?.lifecycle?.kind ?? "unknown"}${tab.subagent?.lifecycle?.settled ? ", settled" : ""}${tab.isPinned ? ", locked" : ""}`}
+        className={joinClasses(tabClassName, activeThreadId === tab.id ? selectedTabClassName : unselectedTabClassName)}
+        href={getThreadHref(tab.id)}
+        onClick={(event) => handleThreadLinkClick(event, () => onSelectThread(tab.id))}
+      >
+        <SubagentStatusIcon accentChromaPercent={activeThreadId === tab.id ? 90 : 55} subagent={tab.subagent} />
+        {tab.isPinned ? <LockIcon className="size-4 shrink-0" /> : null}
+        <ThreadAgentName accentChromaPercent={activeThreadId === tab.id ? 90 : 55} subagent={tab.subagent} thread={tab.thread} />
+        {tab.suffix ? <span className="text-muted">{tab.suffix}</span> : null}
+        {activeThreadId === tab.id && tab.subagent ? <SelectedTabUnderline color={`color-mix(in srgb, ${getThreadAgentAccentColor(tab.subagent)} 35%, transparent)`} /> : null}
+      </a>
+    </ContextMenuCapability>
+    );
+  };
   return (
     <>
-      <button
-        type="button"
+      <a
         className={joinClasses(
           tabClassName,
           activeThreadId === mainThreadId
-            ? "border-[color-mix(in_srgb,var(--text)_18%,transparent)] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] text-text"
-            : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-transparent text-muted hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text",
+            ? selectedTabClassName
+            : unselectedTabClassName,
         )}
-        onClick={() => onSelectThread(mainThreadId)}
+        href={getThreadHref(mainThreadId)}
+        onClick={(event) => handleThreadLinkClick(event, () => onSelectThread(mainThreadId))}
       >
         <span>Main agent</span>
         {badgeView(mainThreadBadge)}
-      </button>
-      <span className="text-[0.84em] text-muted" aria-hidden="true">|</span>
-      {tabs.map((tab) => (
-        <ContextMenuCapability
-          key={tab.id}
-          menu={{
-            id: `subagent-tab:${tab.id}`,
-            label: "Subagent tab actions",
-            items: [{
-              icon: <PinIcon className="size-4" />,
-              id: tab.isPinned ? "unpin" : "pin",
-              label: tab.isPinned ? "Unpin subagent tab" : "Pin subagent tab",
-              onSelect: () => onTogglePin(tab.id),
-            }],
-          }}
-        >
-          <button
-            type="button"
-            aria-busy={tab.isLoading}
-            className={joinClasses(
-              tabClassName,
-              activeThreadId === tab.id
-                ? "border-[color-mix(in_srgb,var(--text)_18%,transparent)] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] text-text"
-                : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-transparent text-muted hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text",
-              tab.isLoading && activeThreadId !== tab.id && "opacity-70",
-            )}
-            onClick={() => onSelectThread(tab.id)}
-          >
-            {tab.isPinned ? <PinIcon className="size-3.5 shrink-0" /> : null}
-            <ThreadAgentName subagent={tab.subagent} thread={tab.thread} />
-            {tab.suffix ? <span className="text-muted">{tab.suffix}</span> : null}
-            {badgeView(tab.badge)}
-          </button>
-        </ContextMenuCapability>
-      ))}
-      {canRevealMore ? (
+        {activeThreadId === mainThreadId ? <SelectedTabUnderline color="color-mix(in srgb, var(--text) 35%, transparent)" /> : null}
+      </a>
+      {unsettledTabs.map(renderTab)}
+      {hasSettledSubagents ? (
         <button
           type="button"
+          aria-expanded={isSettledSubagentsVisible}
           aria-busy={isRevealingMore}
-          aria-label="Show more subagents"
-          title="Show more subagents"
+          aria-label={`${isSettledSubagentsVisible ? "Hide" : "Show"} settled subagents`}
+          title={`${isSettledSubagentsVisible ? "Hide" : "Show"} settled subagents`}
           disabled={isRevealingMore}
           className={joinClasses(
             tabClassName,
-            "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-transparent text-muted hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text disabled:cursor-wait disabled:opacity-60",
+            `${unselectedTabClassName} disabled:cursor-wait disabled:opacity-60`,
           )}
-          onClick={onRevealMore}
+          onClick={onToggleSettledSubagents}
         >
           <span aria-hidden="true" className="block relative -mt-2 py-1">&hellip;</span>
         </button>
       ) : null}
+      {settledTabs.map(renderTab)}
     </>
   );
 }

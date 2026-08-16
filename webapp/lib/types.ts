@@ -97,8 +97,7 @@
  * - WorkbenchReadThreadOptions: thread-read options.
  * - WorkbenchSendThreadMessageOptions: thread-send options.
  * - WorkbenchThreadComposerAttachmentDraft: draft attachment contract.
- * - WorkbenchThreadComposerDraft: composer draft contract.
- * - WorkbenchThreadSavedComposerDraft: persisted composer draft.
+ * - WorkbenchComposerInputDraft: ephemeral composer input contract used by collaboration editors and durable-draft bindings.
  * - WorkbenchQuestionnaireDraft: questionnaire draft state.
  * - WorkbenchStoredThreadUnreadState: persisted unread state.
  * - WorkbenchUserInputOption: questionnaire answer option.
@@ -185,6 +184,7 @@ import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
 import type { WorkbenchRoute } from "./workbench/navigation/workbench-route";
 import type { ProjectTreeFileCandidate } from "./workbench/project/ProjectTreeFileIndex";
 import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread-item-timeline";
+import type { WorkbenchThreadDraft, WorkbenchThreadStateRequest, WorkbenchThreadStateSnapshot } from "./workbench/thread/thread-state";
 
 export type WorkbenchHarness = "codex" | "copilot" | "opencode";
 export type OrchestratorReloadScope = "browse-controller" | "codex-bridge" | "next-dev" | "opencode-bridge" | "opencode-server" | "orchestrator-logic" | "orchestrator-server";
@@ -763,12 +763,10 @@ export interface WorkbenchComposerProfileStorePayload {
 }
 
 export interface WorkbenchSubagentRelationship {
-  activityStatus: "active" | "inactive" | "unknown";
   createdAt: number;
   cwd: string;
   directSubagentIndex: number;
   harness: WorkbenchHarness;
-  lastActivityAt: number;
   name: string;
   parentThreadId: string;
   profileId: string;
@@ -779,7 +777,12 @@ export interface WorkbenchSubagentRelationship {
   updatedAt: number;
 }
 
-export type WorkbenchSubagentSummary = WorkbenchSubagentRelationship;
+export interface WorkbenchSubagentSummary extends WorkbenchSubagentRelationship {
+  activityStatus: "active" | "inactive" | "unknown";
+  lastActivityAt: number;
+  lifecycle?: import("./workbench/thread/thread-state").WorkbenchThreadLifecycle;
+  pinned?: boolean;
+}
 
 export interface WorkbenchSubagentPage {
   nextCursor: string | null;
@@ -788,6 +791,7 @@ export interface WorkbenchSubagentPage {
 
 export type WorkbenchComposerProfileSlot =
   | { kind: "collaboration-runner"; projectId: string }
+  | { draftId: string; harness: WorkbenchHarness; kind: "draft"; projectId: string }
   | { kind: "new-thread"; projectId: string }
   | { harness: WorkbenchHarness; kind: "thread"; threadId: string };
 
@@ -883,15 +887,10 @@ export interface WorkbenchThreadComposerAttachmentDraft {
   url: string;
 }
 
-export interface WorkbenchThreadComposerDraft {
+export interface WorkbenchComposerInputDraft {
   attachments: WorkbenchThreadComposerAttachmentDraft[];
   text: string;
   updatedAt: number;
-}
-
-export interface WorkbenchThreadSavedComposerDraft extends WorkbenchThreadComposerDraft {
-  createdAt: number;
-  id: string;
 }
 
 export interface WorkbenchQuestionnaireDraft {
@@ -1086,6 +1085,8 @@ export interface ExplorerSnapshot {
   projectFilePaths: readonly string[];
   subagents: WorkbenchSubagentSummary[];
   threads: ThreadSummary[];
+  threadSidebar: WorkbenchThreadStateSnapshot | null;
+  threadSidebarDraftSaveStates: Record<string, WorkbenchThreadDraftSaveState | undefined>;
   isProjectLoading: boolean;
   isThreadsLoading: boolean;
   changes: Record<string, ChangeSummary>;
@@ -1357,10 +1358,15 @@ export interface WorkbenchControls {
   setCurrentThreadServiceTier: (threadId: string, serviceTier: string | null) => void;
   setCurrentThreadComposerSettings: (threadId: string, settings: WorkbenchComposerSettings) => void;
   toggleDirectory: (path: string) => void;
+  updateThreadState: (request: WorkbenchThreadStateRequest) => Promise<void>;
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
   deleteFile: (filePath: string, options?: { confirmUntracked?: boolean }) => Promise<DeleteFileResponse>;
+  deleteThreadDraft: (draftId: string) => Promise<void>;
+  editThreadDraft: (draft: WorkbenchThreadDraft) => void;
   setDraftThreadHarness: (harness: WorkbenchHarness) => void;
 }
+
+export type WorkbenchThreadDraftSaveState = "saving" | "saved" | "failed";
 
 export interface WorkbenchThreadGoalSnapshot {
   error: string | null;

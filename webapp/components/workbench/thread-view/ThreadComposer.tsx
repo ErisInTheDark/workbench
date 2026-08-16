@@ -5,8 +5,7 @@
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 
 import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
@@ -22,8 +21,7 @@ import type {
   WorkbenchQuestionnaireDraft,
   WorkbenchSkillSummary,
   WorkbenchSubmitUserInputRequestOptions,
-  WorkbenchThreadComposerDraft,
-  WorkbenchThreadSavedComposerDraft,
+  WorkbenchComposerInputDraft,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
 import {
@@ -97,36 +95,6 @@ function isCollapsedPreviewInteractiveTarget (
   return Boolean(interactiveTarget && interactiveTarget !== currentTarget);
 }
 
-function ArchiveTrayIcon () {
-  return (
-    <svg viewBox="0 0 20 20" className="h-4.5 w-4.5" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7">
-      <path d="M4.25 3.75h11.5l1 4.25H3.25l1-4.25z" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M3.75 8v7.25c0 .55.45 1 1 1h10.5c.55 0 1-.45 1-1V8" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M7.25 11.25h5.5" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function ArrowUpIcon () {
-  return (
-    <svg viewBox="0 0 20 20" className="h-4.5 w-4.5" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8">
-      <path d="M10 15.75V4.25" strokeLinecap="round" />
-      <path d="M5.75 8.5L10 4.25l4.25 4.25" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function TrashIcon () {
-  return (
-    <svg viewBox="0 0 20 20" className="h-4.5 w-4.5" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7">
-      <path d="M4.25 6.5h11.5" strokeLinecap="round" />
-      <path d="M8.25 3.75h3.5c.28 0 .5.22.5.5V6.5h-4.5V4.25c0-.28.22-.5.5-.5z" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M6.25 6.5l.75 9c.05.52.49.9 1 .9h4c.51 0 .95-.38 1-.9l.75-9" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M8.75 9.5v4.25M11.25 9.5v4.25" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 interface ComposerImageAttachment {
   id: string;
   url: string;
@@ -165,14 +133,6 @@ function areComposerImageAttachmentsEqual(
     const candidate = right[index];
     return Boolean(candidate && attachment.id === candidate.id && attachment.url === candidate.url);
   });
-}
-
-function createSavedDraftId () {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-
-  return `saved-draft:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 }
 
 function isQuestionnaireFallbackAnchorItem (item: ThreadPayload["turns"][number]["items"][number]) {
@@ -245,128 +205,6 @@ function buildPendingUserInputRequestSubmissionOptions (
   };
 }
 
-function formatSavedDraftTimestamp (timestamp: number) {
-  return new Date(timestamp).toLocaleString(undefined, {
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    month: "short",
-  });
-}
-
-function ThreadSavedDraftShelf ({
-  drafts,
-  isExpanded,
-  isRestoreDisabled,
-  onDelete,
-  onExpandChange,
-  onRestore,
-  shelfRef,
-}: {
-  drafts: WorkbenchThreadSavedComposerDraft[];
-  isExpanded: boolean;
-  isRestoreDisabled: boolean;
-  onDelete: (draftId: string) => void;
-  onExpandChange: (isExpanded: boolean) => void;
-  onRestore: (draft: WorkbenchThreadSavedComposerDraft) => void;
-  shelfRef: RefObject<HTMLDivElement | null>;
-}) {
-  if (!drafts.length) {
-    return null;
-  }
-
-  return (
-    <section
-      ref={shelfRef}
-      aria-label="Saved message drafts"
-      className={joinClasses(
-        "group mt-4 transition-all duration-500 ease-out motion-reduce:transition-none",
-        isExpanded ? "pb-4" : "pb-1",
-      )}
-      onFocus={() => {
-        onExpandChange(true);
-      }}
-      onMouseEnter={() => {
-        onExpandChange(true);
-      }}
-    >
-      <div className="flex items-center gap-2 px-1 text-[0.78em] font-medium leading-none text-muted">
-        <ArchiveTrayIcon />
-        <span>Saved drafts</span>
-        <span className="rounded-full bg-[color-mix(in_srgb,var(--text)_8%,transparent)] px-2 py-1 text-[0.88em]">{drafts.length}</span>
-      </div>
-      <div className={joinClasses(
-        "mt-3 grid gap-3 transition-all duration-500 ease-out motion-reduce:transition-none",
-        isExpanded
-          ? "translate-y-0 opacity-100"
-          : "max-h-32 -translate-y-2 overflow-hidden opacity-72 [mask-image:linear-gradient(to_bottom,#000_0%,#000_48%,transparent_100%)]",
-      )}>
-        {(isExpanded ? drafts : drafts.slice(0, 3)).map((draft, index) => (
-          <article
-            key={draft.id}
-            className={joinClasses(
-              "rounded-[1rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-3 transition-all duration-500 ease-out motion-reduce:transition-none",
-              isExpanded
-                ? "translate-y-0 scale-100 opacity-100"
-                : "-mt-1 scale-[0.98] opacity-80",
-            )}
-            style={!isExpanded && index <= 2 ? { transform: `translateY(${-index * 0.42}rem) scale(${1 - index * 0.018})` } : undefined}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <p className="m-0 text-[0.74em] leading-none text-muted">
-                  {formatSavedDraftTimestamp(draft.updatedAt)}
-                </p>
-                <p className="mt-2 mb-0 line-clamp-4 whitespace-pre-wrap break-words text-[0.9em] leading-[1.55] text-text">
-                  {draft.text.trim() || (draft.attachments.length ? "Image draft" : "Empty draft")}
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <button
-                  type="button"
-                  aria-label="Delete saved draft"
-                  title="Delete saved draft"
-                  className="inline-flex size-10 items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-muted transition hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                  onClick={() => {
-                    onDelete(draft.id);
-                  }}
-                >
-                  <TrashIcon />
-                </button>
-                <PrimaryButton
-                  type="button"
-                  aria-label="Restore saved draft to composer"
-                  title="Restore saved draft to composer"
-                  disabled={isRestoreDisabled}
-                  shape="circle"
-                  onClick={() => {
-                    onRestore(draft);
-                  }}
-                >
-                  <ArrowUpIcon />
-                </PrimaryButton>
-              </div>
-            </div>
-            {draft.attachments.length ? (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {draft.attachments.map((attachment, attachmentIndex) => (
-                  <ThreadLightboxImage
-                    key={attachment.id}
-                    alt={`Saved draft image ${attachmentIndex + 1}`}
-                    buttonClassName="h-16 w-16 rounded-[0.8rem]"
-                    imageClassName="h-full w-full object-cover"
-                    src={attachment.url}
-                  />
-                ))}
-              </div>
-            ) : null}
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 export default function ThreadComposer ({
   children,
   canToggleHarness = false,
@@ -384,8 +222,6 @@ export default function ThreadComposer ({
   onThreadComposerDraftClear,
   onThreadQuestionnaireDraftChange,
   onThreadQuestionnaireDraftClear,
-  onThreadSavedComposerDraftDelete,
-  onThreadSavedComposerDraftSave,
   onSubmitUserInputRequest,
   onThreadAgentChange,
   onThreadReasoningEffortChange,
@@ -398,18 +234,13 @@ export default function ThreadComposer ({
   profileSlot,
   workspaceRoots,
   rateLimits,
-  autoExpandSavedDraftShelf = true,
-  savedDraftShelfPortalHost,
   sendLabel = "Send",
-  showSavedDraftControls = true,
   surface = "card",
   stickyMode = false,
   leadingActions,
   trailingActions,
   threadQuestionnaireDraft,
   threadComposerDraft,
-  threadSavedComposerDrafts,
-  useSavedDraftShelfPortal = false,
   knownSkills,
   highlightSources,
   thread,
@@ -426,12 +257,10 @@ export default function ThreadComposer ({
   onResumeThread: (threadId: string) => Promise<void> | void;
   onSendMessage: (threadId: string, input: UserInput[]) => Promise<void>;
   onStopThread: (threadId: string) => Promise<void> | void;
-  onThreadComposerDraftChange: (threadId: string, draft: WorkbenchThreadComposerDraft) => void;
+  onThreadComposerDraftChange: (threadId: string, draft: WorkbenchComposerInputDraft) => void;
   onThreadComposerDraftClear: (threadId: string) => void;
   onThreadQuestionnaireDraftChange: (threadId: string, requestKey: string, draft: WorkbenchQuestionnaireDraft) => void;
   onThreadQuestionnaireDraftClear: (threadId: string, requestKey: string) => void;
-  onThreadSavedComposerDraftDelete: (draftId: string) => void;
-  onThreadSavedComposerDraftSave: (draft: WorkbenchThreadSavedComposerDraft) => void;
   onSubmitUserInputRequest: (
     threadId: string,
     response: WorkbenchUserInputResponse,
@@ -448,18 +277,13 @@ export default function ThreadComposer ({
   profileSlot?: WorkbenchComposerProfileSlot;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
   rateLimits: RateLimitSnapshot | null;
-  autoExpandSavedDraftShelf?: boolean;
-  savedDraftShelfPortalHost?: HTMLElement | null;
   sendLabel?: string;
-  showSavedDraftControls?: boolean;
   surface?: "bare" | "card";
   stickyMode?: boolean;
   leadingActions?: ReactNode;
   trailingActions?: ReactNode;
   threadQuestionnaireDraft: WorkbenchQuestionnaireDraft | null;
-  threadComposerDraft: WorkbenchThreadComposerDraft | null;
-  threadSavedComposerDrafts: WorkbenchThreadSavedComposerDraft[];
-  useSavedDraftShelfPortal?: boolean;
+  threadComposerDraft: WorkbenchComposerInputDraft | null;
   knownSkills: WorkbenchSkillSummary[];
   highlightSources: InlineMentionHighlightSources;
   thread: ThreadPayload;
@@ -494,7 +318,6 @@ export default function ThreadComposer ({
   const [isResuming, setIsResuming] = useState(false);
   const [isRecoveringInterruptedTurn, setIsRecoveringInterruptedTurn] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
-  const [isSavedDraftShelfExpanded, setIsSavedDraftShelfExpanded] = useState(false);
   const [isStickyComposerArmed, setIsStickyComposerArmed] = useState(false);
   const [stickyComposerMotionState, setStickyComposerMotionState] = useState<"idle" | "entering" | "leaving">("idle");
   const [isStickyComposerCollapsed, setIsStickyComposerCollapsed] = useState(false);
@@ -516,7 +339,6 @@ export default function ThreadComposer ({
   const stickyTopSentinelRef = useRef<HTMLDivElement>(null);
   const stickySurfaceRef = useRef<HTMLDivElement>(null);
   const stickyExpandedRef = useRef<HTMLDivElement>(null);
-  const savedDraftShelfRef = useRef<HTMLDivElement>(null);
   const onThreadComposerDraftChangeRef = useRef(onThreadComposerDraftChange);
   const onThreadComposerDraftClearRef = useRef(onThreadComposerDraftClear);
 
@@ -542,7 +364,6 @@ export default function ThreadComposer ({
   const canRecoverInterruptedTurn = isWorkbenchInterruptedThreadRecoveryEligible(thread, controlsMode);
   const isInputDisabled = isSending || isRecoveringInterruptedTurn || isAttaching || isThreadStateBroken || isCopilotAuthRequired;
   const isSendDisabled = isInputDisabled;
-  const isSaveDraftDisabled = hasPendingUserInputRequest || isInputDisabled || (!trimmedValue && !attachments.length);
   const isStopDisabled = !isActiveThread || isStopping;
   const isPauseRequestPending = pauseRequestedAt !== null && !hiddenPauseRequest;
   const isPauseDisabled = !isActiveThread || isPausing || isResuming || isPauseRequestPending;
@@ -902,29 +723,6 @@ export default function ThreadComposer ({
   }, [hiddenPauseRequest, pauseRequestedAt]);
 
   useEffect(() => {
-    if (!autoExpandSavedDraftShelf) {
-      return;
-    }
-
-    const element = savedDraftShelfRef.current;
-    if (!element || typeof IntersectionObserver === "undefined") {
-      return;
-    }
-
-    const observer = new IntersectionObserver(([entry]) => {
-      setIsSavedDraftShelfExpanded(Boolean(entry?.isIntersecting));
-    }, {
-      rootMargin: "0px 0px -18% 0px",
-      threshold: 0.22,
-    });
-    observer.observe(element);
-
-    return () => {
-      observer.disconnect();
-    };
-  }, [autoExpandSavedDraftShelf, threadSavedComposerDrafts.length]);
-
-  useEffect(() => {
     void loadAvailableAgents({ clearBeforeLoad: true });
 
     return () => {
@@ -1068,56 +866,6 @@ export default function ThreadComposer ({
       modelLoadGenerationRef.current += 1;
     };
   }, [isCommentMode, isModelPickerOpen, loadAvailableModels]);
-
-  const buildSavedDraftFromComposer = useCallback((): WorkbenchThreadSavedComposerDraft | null => {
-    if (!value.trim() && attachments.length === 0) {
-      return null;
-    }
-
-    const timestamp = Date.now();
-    return {
-      attachments,
-      createdAt: timestamp,
-      id: createSavedDraftId(),
-      text: value,
-      updatedAt: timestamp,
-    };
-  }, [attachments, value]);
-
-  const saveCurrentComposerForLater = useCallback(() => {
-    const draft = buildSavedDraftFromComposer();
-    if (!draft || isSaveDraftDisabled) {
-      return;
-    }
-
-    onThreadSavedComposerDraftSave(draft);
-    setValue("");
-    setAttachments([]);
-    setError("");
-    onThreadComposerDraftClearRef.current(thread.id);
-    setIsSavedDraftShelfExpanded(true);
-  }, [buildSavedDraftFromComposer, isSaveDraftDisabled, onThreadSavedComposerDraftSave, thread.id]);
-
-  const restoreSavedDraft = useCallback((draft: WorkbenchThreadSavedComposerDraft) => {
-    if (hasPendingUserInputRequest || isInputDisabled) {
-      return;
-    }
-
-    const currentDraft = buildSavedDraftFromComposer();
-    if (currentDraft) {
-      onThreadSavedComposerDraftSave(currentDraft);
-    }
-    onThreadSavedComposerDraftDelete(draft.id);
-    setValue(draft.text);
-    setAttachments(draft.attachments);
-    setError("");
-    onThreadComposerDraftChangeRef.current(thread.id, {
-      attachments: draft.attachments,
-      text: draft.text,
-      updatedAt: Date.now(),
-    });
-    setIsSavedDraftShelfExpanded(false);
-  }, [buildSavedDraftFromComposer, hasPendingUserInputRequest, isInputDisabled, onThreadSavedComposerDraftDelete, onThreadSavedComposerDraftSave, thread.id]);
 
   const submit = async () => {
     if ((!trimmedValue && !attachments.length) || isSendDisabled || isPickerOpen) {
@@ -1368,18 +1116,6 @@ export default function ThreadComposer ({
     </button>
   ) : null;
 
-  const savedDraftShelf = (
-    <ThreadSavedDraftShelf
-      drafts={threadSavedComposerDrafts}
-      isExpanded={isSavedDraftShelfExpanded}
-      isRestoreDisabled={hasPendingUserInputRequest || isInputDisabled}
-      onDelete={onThreadSavedComposerDraftDelete}
-      onExpandChange={setIsSavedDraftShelfExpanded}
-      onRestore={restoreSavedDraft}
-      shelfRef={savedDraftShelfRef}
-    />
-  );
-
   const questionnairePreviewText = visiblePendingUserInputRequest
     ? getThreadUserInputRequestPreviewText(visiblePendingUserInputRequest.request)
     : "";
@@ -1585,23 +1321,6 @@ export default function ThreadComposer ({
                     {questionnaireToggleButton}
                   </div>
                   <div className="flex flex-wrap items-center justify-end gap-2">
-                    {showSavedDraftControls ? (
-                      <button
-                        type="button"
-                        aria-label="Save message draft for later"
-                        title="Save message draft for later"
-                        disabled={isSaveDraftDisabled}
-                        className={joinClasses(
-                          "inline-flex size-10 items-center justify-center rounded-full border transition",
-                          "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] text-muted hover:text-text",
-                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
-                          isSaveDraftDisabled && "cursor-not-allowed opacity-45",
-                        )}
-                        onClick={saveCurrentComposerForLater}
-                      >
-                        <ArchiveTrayIcon />
-                      </button>
-                    ) : null}
                     {showsThreadControls ? (
                     <ThreadComposerRibbon
                       agentLabel={agentButtonLabel}
@@ -1865,11 +1584,6 @@ export default function ThreadComposer ({
     <>
       {composerContent}
       {typeof children === "function" ? children({ isProfilePickerOpen }) : children}
-      {showSavedDraftControls
-        ? useSavedDraftShelfPortal
-          ? (savedDraftShelfPortalHost ? createPortal(savedDraftShelf, savedDraftShelfPortalHost) : null)
-          : savedDraftShelf
-        : null}
     </>
   );
 }

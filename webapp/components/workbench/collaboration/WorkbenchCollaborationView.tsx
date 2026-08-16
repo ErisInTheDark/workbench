@@ -17,7 +17,7 @@ import type {
   WorkbenchCollaborationAdminPostMutation,
   WorkbenchControls,
   WorkbenchHarness,
-  WorkbenchThreadComposerDraft,
+  WorkbenchComposerInputDraft,
 } from "../../../lib/types";
 import {
   COLLABORATION_IMPORTED_SCRATCHPAD_POST_ID,
@@ -120,7 +120,7 @@ interface PromptDraftSource {
   prompt: string;
 }
 
-function createPromptComposerDraftFromPost(post: WorkbenchCollaborationPost): WorkbenchThreadComposerDraft {
+function createPromptComposerDraftFromPost(post: WorkbenchCollaborationPost): WorkbenchComposerInputDraft {
   return {
     attachments: [],
     text: post.prompt ?? "",
@@ -135,11 +135,11 @@ function createPromptDraftSourceFromPost(post: WorkbenchCollaborationPost): Prom
   };
 }
 
-function doesPromptDraftTextMatchSource(draft: WorkbenchThreadComposerDraft, source: PromptDraftSource) {
+function doesPromptDraftTextMatchSource(draft: WorkbenchComposerInputDraft, source: PromptDraftSource) {
   return draft.text.trim() === source.prompt;
 }
 
-function canReplacePromptDraftFromSource(draft: WorkbenchThreadComposerDraft, source: PromptDraftSource) {
+function canReplacePromptDraftFromSource(draft: WorkbenchComposerInputDraft, source: PromptDraftSource) {
   return !draft.attachments.length && doesPromptDraftTextMatchSource(draft, source);
 }
 
@@ -173,13 +173,12 @@ export default function WorkbenchCollaborationView({
   scratchpadPath,
   scratchpadWritableRoot,
   threadDocuments,
-  threadSavedComposerDrafts,
   ...threadViewProps
 }: WorkbenchCollaborationViewProps) {
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   void composerProfileSnapshot;
   const [promptDraftThreadsByPostId, setPromptDraftThreadsByPostId] = useState<Record<string, ThreadPayload | undefined>>({});
-  const [promptComposerDraftsByPostId, setPromptComposerDraftsByPostId] = useState<Record<string, WorkbenchThreadComposerDraft | undefined>>({});
+  const [promptComposerDraftsByPostId, setPromptComposerDraftsByPostId] = useState<Record<string, WorkbenchComposerInputDraft | undefined>>({});
   const [promptStartErrorsByPostId, setPromptStartErrorsByPostId] = useState<Record<string, string | undefined>>({});
   const [mobilePane, setMobilePane] = useState<"scratchpad" | "collaborator">("scratchpad");
   const [collaborationLayout, setCollaborationLayout] = useState(() => readStoredWorkbenchCollaborationLayout(projectId));
@@ -534,7 +533,7 @@ export default function WorkbenchCollaborationView({
     }, 500);
   }, [clearScheduledPromptSave, mutateAdminPostState]);
 
-  const handlePromptDraftChange = useCallback((postId: string, draft: WorkbenchThreadComposerDraft) => {
+  const handlePromptDraftChange = useCallback((postId: string, draft: WorkbenchComposerInputDraft) => {
     setPromptComposerDraftsByPostId((current) => ({
       ...current,
       [postId]: draft,
@@ -723,8 +722,6 @@ export default function WorkbenchCollaborationView({
       onThreadQuestionnaireDraftChange={threadViewProps.onThreadQuestionnaireDraftChange}
       onThreadQuestionnaireDraftClear={threadViewProps.onThreadQuestionnaireDraftClear}
       onThreadReasoningEffortChange={runController.setCollaboratorDraftReasoningEffort}
-      onThreadSavedComposerDraftDelete={threadViewProps.onThreadSavedComposerDraftDelete}
-      onThreadSavedComposerDraftSave={threadViewProps.onThreadSavedComposerDraftSave}
       onThreadServiceTierChange={runController.setCollaboratorDraftServiceTier}
       onThreadSettingsChange={runController.setCollaboratorDraftSettings}
       pendingUserInputRequest={null}
@@ -736,7 +733,6 @@ export default function WorkbenchCollaborationView({
       thread={collaboratorComposerThread}
       threadComposerDraft={runController.collaboratorDraftComposerDraft}
       threadQuestionnaireDraft={null}
-      threadSavedComposerDrafts={threadSavedComposerDrafts}
       workspaceRoots={composerWorkspaceRoots}
     >
       {({ isProfilePickerOpen }) => <ThreadRateLimits canToggleHarness={collaboratorComposerThread.isDraft} harness={collaboratorComposerThread.harness} onHarnessToggle={runController.cycleCollaboratorDraftHarness} rateLimits={rateLimits} showsHarnessControl={!isProfilePickerOpen} />}
@@ -769,7 +765,6 @@ export default function WorkbenchCollaborationView({
         rateLimits={rateLimits}
         thread={runController.effectiveRunThread}
         threadDocuments={threadDocuments}
-        threadSavedComposerDrafts={threadSavedComposerDrafts}
       />
     ) : (
       <ThreadThreadContent
@@ -860,8 +855,6 @@ export default function WorkbenchCollaborationView({
       onThreadReasoningEffortChange={(postId, threadId, reasoningEffort) => {
         updatePromptDraftThread(postId, threadId, (thread) => ({ ...thread, reasoningEffort }));
       }}
-      onThreadSavedComposerDraftDelete={threadViewProps.onThreadSavedComposerDraftDelete}
-      onThreadSavedComposerDraftSave={threadViewProps.onThreadSavedComposerDraftSave}
       onThreadServiceTierChange={(postId, threadId, serviceTier) => {
         updatePromptDraftThread(postId, threadId, (thread) => ({ ...thread, serviceTier }));
       }}

@@ -6,6 +6,7 @@
  */
 
 import type { WorkbenchPanelTarget } from "../layout/workbench-layout";
+import { WorkbenchThreadTargetSchema, type WorkbenchThreadTarget } from "../thread/thread-state";
 
 export type WorkbenchMosaicPanelTarget = Extract<WorkbenchPanelTarget, { readonly kind: "file" } | { readonly kind: "thread" }>;
 
@@ -84,8 +85,25 @@ function encodeMosaicValue(value: string) {
 
 function parseMosaicTarget(rawValue: string): WorkbenchMosaicPanelTarget | null {
   if (rawValue.startsWith("thread/")) {
-    const threadId = decodeMosaicValue(rawValue.slice("thread/".length));
-    return threadId ? { kind: "thread", threadId } : null;
+    const rawThread = rawValue.slice("thread/".length);
+    const rawSegments = rawThread.split("/");
+    let target: WorkbenchThreadTarget | null = null;
+    if (rawSegments[0] === "new") {
+      if (rawSegments.length === 1) target = { kind: "new" };
+      if (rawSegments.length === 2) {
+        const draftId = decodeMosaicValue(rawSegments[1] ?? "");
+        const parsed = WorkbenchThreadTargetSchema.safeParse({ draftId, kind: "draft" });
+        if (parsed.success) target = parsed.data;
+      }
+    } else if (rawSegments.length === 3 && rawSegments[1] === "sub") {
+      const parentThreadId = decodeMosaicValue(rawSegments[0] ?? "");
+      const threadId = decodeMosaicValue(rawSegments[2] ?? "");
+      if (parentThreadId && threadId) target = { kind: "subagent", parentThreadId, threadId };
+    } else if (rawSegments.length === 1) {
+      const threadId = decodeMosaicValue(rawThread);
+      if (threadId) target = { kind: "provider", threadId };
+    }
+    return target ? { kind: "thread", target } : null;
   }
 
   if (rawValue.startsWith("file/")) {
@@ -323,7 +341,15 @@ function serializeWorkbenchMosaicNode(node: WorkbenchMosaicNode): string {
     return `${weightPrefix}[file/${encodeMosaicValue(node.target.filePath)}]${options}`;
   }
 
-  return `${weightPrefix}[thread/${encodeMosaicValue(node.target.threadId)}]${options}`;
+  const threadTarget = node.target.target;
+  const serializedThread = threadTarget.kind === "new"
+    ? "new"
+    : threadTarget.kind === "draft"
+      ? `new/${encodeMosaicValue(threadTarget.draftId)}`
+      : threadTarget.kind === "subagent"
+        ? `${encodeMosaicValue(threadTarget.parentThreadId)}/sub/${encodeMosaicValue(threadTarget.threadId)}`
+        : encodeMosaicValue(threadTarget.threadId);
+  return `${weightPrefix}[thread/${serializedThread}]${options}`;
 }
 
 export function serializeWorkbenchMosaicRouteExpression(node: WorkbenchMosaicNode): string {

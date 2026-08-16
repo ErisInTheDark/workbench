@@ -12,7 +12,7 @@ import type {
   WorkbenchCollaborationPost,
   WorkbenchComposerSettings,
   WorkbenchQuestionnaireDraft,
-  WorkbenchThreadComposerDraft,
+  WorkbenchComposerInputDraft,
 } from "../../../lib/types";
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
@@ -43,13 +43,11 @@ export default function CollaborationPromptComposer ({
   onThreadQuestionnaireDraftChange,
   onThreadQuestionnaireDraftClear,
   onThreadReasoningEffortChange,
-  onThreadSavedComposerDraftDelete,
-  onThreadSavedComposerDraftSave,
   onThreadServiceTierChange,
   onThreadSettingsChange,
 }: {
   composerSpellCheck: boolean;
-  draft: WorkbenchThreadComposerDraft | null;
+  draft: WorkbenchComposerInputDraft | null;
   error: string;
   highlightSources: InlineMentionHighlightSources;
   post: WorkbenchCollaborationPost;
@@ -58,7 +56,7 @@ export default function CollaborationPromptComposer ({
   rateLimits: ThreadComposerProps["rateLimits"];
   thread: ThreadPayload;
   workspaceRoots: readonly WorkspaceFileLinkRoot[];
-  onDraftChange: (postId: string, draft: WorkbenchThreadComposerDraft) => void;
+  onDraftChange: (postId: string, draft: WorkbenchComposerInputDraft) => void;
   onDraftClear: (postId: string) => void;
   onListModels: ThreadComposerProps["onListModels"];
   onStartPromptThread: (postId: string, input: UserInput[], thread: ThreadPayload) => Promise<void>;
@@ -69,8 +67,6 @@ export default function CollaborationPromptComposer ({
   onThreadQuestionnaireDraftChange: (threadId: string, requestKey: string, draft: WorkbenchQuestionnaireDraft) => void;
   onThreadQuestionnaireDraftClear: (threadId: string, requestKey: string) => void;
   onThreadReasoningEffortChange: (postId: string, threadId: string, reasoningEffort: string | null) => void;
-  onThreadSavedComposerDraftDelete: ThreadComposerProps["onThreadSavedComposerDraftDelete"];
-  onThreadSavedComposerDraftSave: ThreadComposerProps["onThreadSavedComposerDraftSave"];
   onThreadServiceTierChange: (postId: string, threadId: string, serviceTier: string | null) => void;
   onThreadSettingsChange: (postId: string, threadId: string, settings: WorkbenchComposerSettings) => void;
 }) {
@@ -125,8 +121,6 @@ export default function CollaborationPromptComposer ({
         onThreadReasoningEffortChange={(threadId, reasoningEffort) => {
           onThreadReasoningEffortChange(post.id, threadId, reasoningEffort);
         }}
-        onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
-        onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
         onThreadServiceTierChange={(threadId, serviceTier) => {
           onThreadServiceTierChange(post.id, threadId, serviceTier);
         }}
@@ -139,7 +133,6 @@ export default function CollaborationPromptComposer ({
         profileSlot={profileSlot}
         rateLimits={rateLimits}
         sendLabel={post.promptThreadId ? "Open thread" : "Start"}
-        showSavedDraftControls={false}
         surface="bare"
         thread={resolvedThread}
         threadComposerDraft={draft ?? {
@@ -148,7 +141,6 @@ export default function CollaborationPromptComposer ({
           updatedAt: post.updatedAt,
         }}
         threadQuestionnaireDraft={null}
-        threadSavedComposerDrafts={[]}
         workspaceRoots={workspaceRoots}
       />
       {error ? (

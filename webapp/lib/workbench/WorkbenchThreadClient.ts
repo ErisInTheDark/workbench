@@ -21,7 +21,6 @@ import type { ThreadGoalClearResponse } from "../codex/generated/app-server/v2/T
 import type { ThreadGoalGetResponse } from "../codex/generated/app-server/v2/ThreadGoalGetResponse";
 import type { ThreadGoalSetResponse } from "../codex/generated/app-server/v2/ThreadGoalSetResponse";
 import type { ThreadItem } from "../codex/generated/app-server/v2/ThreadItem";
-import type { ThreadListResponse } from "../codex/generated/app-server/v2/ThreadListResponse";
 import type { ThreadReadResponse } from "../codex/generated/app-server/v2/ThreadReadResponse";
 import type { ThreadResumeParams } from "../codex/generated/app-server/v2/ThreadResumeParams";
 import type { ThreadResumeResponse } from "../codex/generated/app-server/v2/ThreadResumeResponse";
@@ -38,7 +37,6 @@ import {
 } from "../codex/protocol";
 import {
     formatThreadStatus,
-    getCodexThreadCwdFilterPathsForRoots,
     isProjectCodexThread,
     isProjectCodexThreadAtExpectedCwd,
     toThreadPayload,
@@ -68,6 +66,7 @@ import type {
     WorkbenchThreadContextReadResponse,
     WorkbenchThreadDocumentSnapshot,
     WorkbenchThreadGoalControls,
+    WorkbenchThreadHydrationRequest,
     WorkbenchThreadTurnHistoryEntry,
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
@@ -81,12 +80,7 @@ import {
 } from "./thread/thread-recovery-message";
 import { stopWorkbenchThread } from "./thread/thread-stop";
 import ThreadGoalController from "./thread/ThreadGoalController";
-import {
-    filterSubagentThreadSummaries,
-    getSubagentThreadIds,
-    listWorkbenchSubagents,
-    mergeWorkbenchSubagentSummaries,
-} from "./thread/thread-subagents";
+import type { WorkbenchThreadStateSnapshot } from "./thread/thread-state";
 import {
     getThreadStateChangeTagText as getNormalizedThreadStateChangeTagText,
 } from "./markdown/markdown-parse";
@@ -134,10 +128,8 @@ import ThreadMessageAdmissionController from "./thread/ThreadMessageAdmissionCon
 import { ThreadMessageNotSentError } from "./thread/thread-message-submission";
 
 const THREAD_REFRESH_TASK_ID = "thread-refresh";
-const THREAD_LIST_REFRESH_TASK_ID = "thread-list-refresh";
 const RATE_LIMIT_REFRESH_TASK_ID = "rate-limit-refresh";
 const CODEX_NOTIFICATION_THREAD_REFRESH_DELAY_MS = 350;
-const CODEX_NOTIFICATION_THREAD_LIST_REFRESH_DELAY_MS = 750;
 const ACTIVE_TURN_RATE_LIMIT_REFRESH_INTERVAL_MS = 15_000;
 const AUTO_REFRESH_REQUEST_SOURCE = "autoRefresh";
 const WORKBENCH_PROMPT_CONTEXT_FIELD = "workbenchPromptContext";
@@ -146,7 +138,6 @@ const DEFAULT_WORKFLOW_IDS = ["default"] as const;
 const SUBAGENT_WORKFLOW_IDS = ["subagent"] as const;
 const DRAFT_THREAD_ID = "new";
 const DRAFT_THREAD_ID_PREFIX = "draft:";
-const STABLE_VISIBLE_THREAD_COUNT = 5;
 const EMPTY_ROLLOUT_ERROR_FRAGMENT = "rollout at";
 const EMPTY_ROLLOUT_ERROR_SUFFIX = "is empty";
 const MISSING_ROLLOUT_ERROR_FRAGMENTS = ["no rollout found by id", "no rollout found for thread id"] as const;
@@ -207,7 +198,6 @@ export interface WorkbenchThreadClientOptions {
   onCollaborationStateUpdated?: (projectId: string, state: WorkbenchCollaborationState) => void;
   onStatusMessage?: (message: string) => void;
   onThreadStarted?: (thread: ThreadPayload) => void;
-  shouldRunNotificationThreadListRefresh?: () => boolean;
 }
 
 interface WorkbenchThreadClient {
@@ -218,16 +208,17 @@ interface WorkbenchThreadClient {
   hasThread: (threadId: string) => boolean;
   isCurrentThreadUpToDate: (threadId: string) => boolean;
   isDraftThreadId: (threadId: string) => boolean;
+  installSidebarSnapshot: (snapshot: WorkbenchThreadStateSnapshot | null) => void;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   markThreadSeen: (thread: ThreadPayload) => void;
   openThread: (threadId: string, options?: { harness?: WorkbenchHarness; source?: "open" | "reload" }) => Promise<void>;
+  onWorkbenchNotification: (listener: (notification: { method: "workbench/thread-state/reset" | "workbench/thread-state/updated"; params: unknown }) => void) => () => void;
+  requestWorkbench: <TResponse>(method: string, params: unknown) => Promise<TResponse>;
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
   selectThreadPayload: (thread: ThreadPayload) => void;
   reconcileCurrentThreadFromRead: (threadId: string, harness: WorkbenchHarness) => Promise<void>;
   readCurrentThread: (threadId: string, harness: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
-  refreshPendingUserInputRequests: () => Promise<void>;
   refreshRateLimits: () => Promise<void>;
-  refreshThreads: () => Promise<void>;
   sendThreadMessage: (
     thread: ThreadPayload,
     input: UserInput[],
@@ -767,6 +758,16 @@ function WorkbenchThreadClient(
   lifecycle: LifecycleScope = new LifecycleScope(),
 ): WorkbenchThreadClient {
   const codexClient = new CodexAppServerClient();
+
+  async function requestWorkbench<TResponse>(method: string, params: unknown) {
+    const response = await codexClient.sendRequest<TResponse>({ method, params }, { socketOnly: true });
+    if (isCodexJsonRpcFailure(response)) throw new Error(response.error.message);
+    return response.result;
+  }
+
+  function onWorkbenchNotification(listener: (notification: { method: "workbench/thread-state/reset" | "workbench/thread-state/updated"; params: unknown }) => void) {
+    return codexClient.onWorkbenchNotification(listener);
+  }
   const threadGoals = new ThreadGoalController({
     clear: (params) => sendBridgeRequest<ThreadGoalClearResponse>("codex", { method: "thread/goal/clear", params }),
     get: (params) => sendBridgeRequest<ThreadGoalGetResponse>("codex", { method: "thread/goal/get", params }),
@@ -783,6 +784,31 @@ function WorkbenchThreadClient(
   const stablePreferencesByKey = new Map<string, ThreadStablePreferenceRecord>();
   const statusRecordsByKey = new Map<string, ThreadStatusRecord>();
   const streamingReconciler = new ThreadStreamingReconciler();
+  async function publishAcceptedIntent({
+    correlationHandle,
+    harness,
+    projectId,
+    threadId,
+    turnId,
+  }: {
+    correlationHandle?: string;
+    harness: WorkbenchHarness;
+    projectId: string;
+    threadId: string;
+    turnId: string;
+  }) {
+    try {
+      await requestWorkbench("workbench/thread-state/accepted", {
+        ...(correlationHandle ? { correlationHandle } : {}),
+        harness,
+        projectId,
+        threadId,
+        turnId,
+      });
+    } catch (error) {
+      options.onStatusMessage?.(`The message was admitted, but sidebar lifecycle publication failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   const threadRenderPipeline = new ThreadRenderPipeline({
     canonicalLayer: new ThreadCanonicalLayer({
       normalizeCanonicalThread: (thread) => prepareCanonicalThreadSource(thread) ?? thread,
@@ -798,9 +824,6 @@ function WorkbenchThreadClient(
     visibleLayer: new ThreadVisibleLayer(),
   });
   const optimisticInputs = ThreadOptimisticInputStore();
-  const threadUnreadRefreshInFlightKeys = new Map<string, number>();
-  const latestTurnStartedAtByThreadKey = new Map<string, number>();
-  const latestTurnStartedAtRefreshKeyByThreadKey = new Map<string, string>();
   let disposed = false;
   let projectContextGeneration = 0;
   let messageAdmissionIntentRevision = 0;
@@ -811,8 +834,6 @@ function WorkbenchThreadClient(
   const questionnaireHistoryReadGenerationByKey = new Map<string, number>();
   const steerHistoryReadGenerationByKey = new Map<string, number>();
   const steerHistoryWarningKeys = new Set<string>();
-  let refreshThreadsPromise: Promise<void> | null = null;
-  let refreshThreadsPromiseGeneration = 0;
   const messageAdmissionController = ThreadMessageAdmissionController({
     client: codexClient,
     documents: threadDocuments,
@@ -826,6 +847,9 @@ function WorkbenchThreadClient(
     }),
     getThreadStatus: (thread) => statusRecordsByKey.get(getThreadStateKey(thread.harness, thread.id))?.status ?? thread.status,
     optimisticInputs,
+    publishAccepted: ({ correlationHandle, projectId, threadId, turnId }) => {
+      void publishAcceptedIntent({ correlationHandle, harness: "codex", projectId, threadId, turnId });
+    },
     renderSource: renderOptimisticSource,
     sources: threadSources,
   });
@@ -841,14 +865,6 @@ function WorkbenchThreadClient(
     if (threadDocuments.getSelectedThreadKey() === key) {
       flushSelectedThreadRendering();
     }
-  }
-
-  async function readProjectSubagents(projectRootPaths: readonly string[]) {
-    const summaryGroups = await Promise.all(projectRootPaths.map((cwd) => listWorkbenchSubagents({
-      cwd,
-      signal: AbortSignal.timeout(5_000),
-    })));
-    return mergeWorkbenchSubagentSummaries(summaryGroups);
   }
 
   function serializePendingUserInputRequests() {
@@ -940,79 +956,6 @@ function WorkbenchThreadClient(
     return true;
   }
 
-  async function refreshThreadUnreadState(thread: ThreadSummary) {
-    const key = getThreadStateKey(thread.harness, thread.id);
-    const projectGeneration = projectContextGeneration;
-    if (threadUnreadRefreshInFlightKeys.has(key)) {
-      return false;
-    }
-
-    threadUnreadRefreshInFlightKeys.set(key, projectGeneration);
-    try {
-      const response = await sendBridgeRequest<ThreadReadResponse>(thread.harness, {
-        method: "thread/read",
-        params: {
-          includeTurns: true,
-          threadId: thread.id,
-        },
-        workbenchRequestSource: AUTO_REFRESH_REQUEST_SOURCE,
-        workbenchThreadHydration: { mode: "latest" },
-      });
-
-      const projectRootPaths = getProjectRootPaths(state);
-      if (
-        projectGeneration !== projectContextGeneration
-        || (projectRootPaths.length && !isProjectCodexThread(response.thread, projectRootPaths))
-      ) {
-        return false;
-      }
-
-      if (state.currentThread?.id === thread.id && state.currentThread.harness === thread.harness) {
-        return false;
-      }
-
-      const responsePayload = toThreadPayload(response.thread, thread.harness);
-      return updateStoredThreadUnreadState(
-        toThreadSummary(response.thread, thread.harness),
-        getThreadObservedItemIds(responsePayload),
-        { seedSeenIfMissing: true },
-      );
-    } catch {
-      return false;
-    } finally {
-      if (threadUnreadRefreshInFlightKeys.get(key) === projectGeneration) {
-        threadUnreadRefreshInFlightKeys.delete(key);
-      }
-    }
-  }
-
-  function shouldRefreshThreadUnreadState(thread: ThreadSummary) {
-    if (state.currentThread?.id === thread.id && state.currentThread.harness === thread.harness) {
-      return false;
-    }
-
-    const unreadState = state.threadUnreadStateByKey.get(getThreadStateKey(thread.harness, thread.id));
-    if (!unreadState) {
-      return isThreadStatusActive(thread.status);
-    }
-
-    return unreadState.lastObservedUpdatedAt !== thread.updatedAt
-      || unreadState.lastObservedStatus !== thread.status;
-  }
-
-  async function refreshVisibleThreadUnreadStates(threads: ThreadSummary[]) {
-    const threadsToRefresh = threads.filter(shouldRefreshThreadUnreadState);
-    if (!threadsToRefresh.length) {
-      return;
-    }
-
-    const results = await Promise.allSettled(threadsToRefresh.map((thread) => refreshThreadUnreadState(thread)));
-    if (results.some((result) => result.status === "fulfilled" && result.value)) {
-      state.threads = state.threads.map(buildThreadSummaryWithUnreadBadge);
-      emit();
-    }
-  }
-
   function getSnapshot(): WorkbenchThreadSnapshot {
     return {
       currentThread: state.currentThread,
@@ -1056,17 +999,12 @@ function WorkbenchThreadClient(
   function resetProjectThreadState({ emitChange = true }: { emitChange?: boolean } = {}) {
     projectContextGeneration += 1;
     rateLimitGeneration += 1;
-    refreshThreadsPromiseGeneration += 1;
     for (const harness of ["codex", "copilot", "opencode"] as const) {
       bumpPendingUserInputRequestGeneration(harness);
     }
     messageAdmissionIntentRevision += 1;
 
-    refreshThreadsPromise = null;
     refreshRateLimitsPromisesByHarness.clear();
-    threadUnreadRefreshInFlightKeys.clear();
-    latestTurnStartedAtByThreadKey.clear();
-    latestTurnStartedAtRefreshKeyByThreadKey.clear();
 
     state.subagents = [];
     state.threads = [];
@@ -1434,6 +1372,63 @@ function WorkbenchThreadClient(
       statusRevision: getStatusRevision(threadKey),
       threadKey,
     };
+  }
+
+  function installSidebarSnapshot(snapshot: WorkbenchThreadStateSnapshot | null) {
+    if (!snapshot) {
+      state.subagents = [];
+      state.threads = [];
+      state.threadsError = "";
+      state.hasLoadedThreads = false;
+      state.isLoading = false;
+      emit();
+      return;
+    }
+
+    const priorThreadsByKey = new Map(state.threads.map((thread) => [`${thread.harness}:${thread.id}`, thread]));
+    state.threads = snapshot.entries.flatMap((entry): ThreadSummary[] => {
+      if (entry.entryKind !== "thread") return [];
+      const prior = priorThreadsByKey.get(`${entry.identity.harness}:${entry.identity.threadId}`);
+      const activitySeconds = Math.trunc(entry.activityAt / 1000);
+      return [{
+        agentNickname: prior?.agentNickname ?? null,
+        agentRole: prior?.agentRole ?? null,
+        createdAt: prior?.createdAt ?? activitySeconds,
+        cwd: prior?.cwd ?? state.projectRootPath,
+        forkedFromId: prior?.forkedFromId ?? null,
+        harness: entry.identity.harness,
+        id: entry.identity.threadId,
+        name: entry.title,
+        path: prior?.path ?? null,
+        preview: entry.title,
+        source: prior?.source ?? "workbench",
+        status: entry.lifecycle.kind === "working" ? "active" : "idle",
+        unreadBadge: prior?.unreadBadge ?? null,
+        updatedAt: activitySeconds,
+      }];
+    });
+    state.subagents = snapshot.entries.flatMap((entry): WorkbenchSubagentSummary[] => entry.entryKind === "subagent" ? [{
+      activityStatus: entry.lifecycle.kind === "working" ? "active" : "inactive",
+      createdAt: entry.createdAt,
+      cwd: entry.cwd,
+      directSubagentIndex: entry.directSubagentIndex,
+      harness: entry.identity.harness,
+      lastActivityAt: entry.activityAt,
+      lifecycle: entry.lifecycle,
+      name: entry.name,
+      parentThreadId: entry.parentThreadId,
+      pinned: entry.pinned,
+      profileId: entry.profileId,
+      profileName: entry.profileName,
+      projectId: entry.projectId,
+      threadId: entry.identity.threadId,
+      title: entry.title,
+      updatedAt: entry.updatedAt,
+    }] : []);
+    state.threadsError = snapshot.error ?? "";
+    state.hasLoadedThreads = snapshot.freshness !== "loading";
+    state.isLoading = snapshot.freshness === "loading";
+    emit();
   }
 
   function isThreadOperationOwnerFenceCurrent(fence: ThreadOperationFence) {
@@ -1856,7 +1851,6 @@ function WorkbenchThreadClient(
   }
 
   function markThreadPayloadSeen(thread: ThreadPayload) {
-    rememberLatestTurnStartedAt(thread);
     return updateStoredThreadUnreadState(thread, getThreadObservedItemIds(thread), { markSeen: true });
   }
 
@@ -1890,69 +1884,6 @@ function WorkbenchThreadClient(
 
       return refreshRateLimits(harness);
     });
-  }
-
-  function rememberLatestTurnStartedAt(thread: ThreadPayload) {
-    const latestStartedAt = getLatestTurnStartedAt(thread.turns);
-    const key = getThreadStateKey(thread.harness, thread.id);
-    if (latestStartedAt === null) {
-      latestTurnStartedAtByThreadKey.delete(key);
-      return;
-    }
-
-    latestTurnStartedAtByThreadKey.set(key, latestStartedAt);
-  }
-
-  function getThreadStableVisibleSortTimestamp(thread: ThreadSummary) {
-    return latestTurnStartedAtByThreadKey.get(getThreadStateKey(thread.harness, thread.id))
-      ?? thread.createdAt
-      ?? thread.updatedAt;
-  }
-
-  async function refreshLatestTurnStartedAt(thread: ThreadSummary) {
-    const key = getThreadStateKey(thread.harness, thread.id);
-    const refreshKey = `${thread.status}:${thread.updatedAt}`;
-    const projectGeneration = projectContextGeneration;
-    if (latestTurnStartedAtRefreshKeyByThreadKey.get(key) === refreshKey) {
-      return;
-    }
-
-    try {
-      const response = await sendBridgeRequest<ThreadReadResponse>(thread.harness, {
-        method: "thread/read",
-        params: {
-          includeTurns: true,
-          ...(state.projectRootPath && thread.harness !== "codex" ? { cwd: state.projectRootPath } : {}),
-          threadId: thread.id,
-        },
-        workbenchRequestSource: AUTO_REFRESH_REQUEST_SOURCE,
-        workbenchThreadHydration: { mode: "latest" },
-      });
-
-      const projectRootPaths = getProjectRootPaths(state);
-      if (
-        projectGeneration !== projectContextGeneration
-        || (projectRootPaths.length && !isProjectCodexThread(response.thread, projectRootPaths))
-      ) {
-        return;
-      }
-
-      const latestStartedAt = getLatestTurnStartedAt(response.thread.turns);
-      if (latestStartedAt === null) {
-        latestTurnStartedAtByThreadKey.delete(key);
-        latestTurnStartedAtRefreshKeyByThreadKey.set(key, refreshKey);
-        return;
-      }
-
-      latestTurnStartedAtByThreadKey.set(key, latestStartedAt);
-      latestTurnStartedAtRefreshKeyByThreadKey.set(key, refreshKey);
-    } catch {
-      // Keep the previous stable ordering key if a best-effort metadata read fails.
-    }
-  }
-
-  async function hydrateVisibleThreadStableSortKeys(threads: ThreadSummary[]) {
-    await Promise.all(threads.map((thread) => refreshLatestTurnStartedAt(thread)));
   }
 
   function setCurrentThread(
@@ -3375,150 +3306,6 @@ function WorkbenchThreadClient(
     return null;
   }
 
-  async function refreshThreads() {
-    if (refreshThreadsPromise) {
-      const inFlightGeneration = refreshThreadsPromiseGeneration;
-      await refreshThreadsPromise;
-      if (inFlightGeneration !== projectContextGeneration) {
-        await refreshThreads();
-      }
-      return;
-    }
-
-    const refreshGeneration = projectContextGeneration;
-    refreshThreadsPromiseGeneration = refreshGeneration;
-    let refreshPromise: Promise<void>;
-    refreshPromise = (async () => {
-      const shouldShowLoading = !state.hasLoadedThreads;
-      if (shouldShowLoading) {
-        state.isLoading = true;
-        emit();
-      }
-
-      try {
-        const projectRootPaths = getProjectRootPaths(state);
-        if (!projectRootPaths.length) {
-          state.threads = [];
-          state.threadsError = "";
-          state.hasLoadedThreads = true;
-          state.isLoading = false;
-          emit();
-          return;
-        }
-
-        const subagentResultPromise = readProjectSubagents(projectRootPaths).then(
-          (summaries) => ({ summaries }),
-          (error: unknown) => ({ error }),
-        );
-        const threadResultsPromise = Promise.allSettled((["codex", "copilot", "opencode"] as const).map(async (harness) => {
-          const cwdFilterPaths = harness === "codex"
-            ? getCodexThreadCwdFilterPathsForRoots(projectRootPaths)
-            : null;
-          const response = await sendBridgeRequest<ThreadListResponse>(harness, {
-            method: "thread/list",
-            params: {
-              archived: false,
-              ...(cwdFilterPaths?.length ? { cwd: cwdFilterPaths } : {}),
-              ...(harness === "opencode" && projectRootPaths.length ? { cwd: projectRootPaths } : {}),
-              limit: 50,
-              sortKey: "updated_at",
-            },
-            workbenchRequestSource: AUTO_REFRESH_REQUEST_SOURCE,
-          });
-
-          return response.data
-            .filter((thread) => isWorkbenchThreadInCurrentProject(thread, harness, projectRootPaths))
-            .map((thread) => toThreadSummary(thread, harness));
-        }));
-        const [subagentResult, results] = await Promise.all([subagentResultPromise, threadResultsPromise]);
-        if (refreshGeneration !== projectContextGeneration) {
-          return;
-        }
-        const threads: ThreadSummary[] = [];
-        const errors: string[] = [];
-        const refreshedSubagents = "error" in subagentResult
-          ? state.subagents
-          : subagentResult.summaries;
-        if ("error" in subagentResult) {
-          errors.push(subagentResult.error instanceof Error
-            ? subagentResult.error.message
-            : "Unable to load Workbench subagent metadata.");
-        }
-
-        for (const result of results) {
-          if (result.status === "fulfilled") {
-            threads.push(...result.value);
-            continue;
-          }
-
-          errors.push(result.reason instanceof Error ? result.reason.message : "Unable to load some threads.");
-        }
-
-        const subagentThreadIds = new Set(getSubagentThreadIds(refreshedSubagents));
-        const mainThreads = filterSubagentThreadSummaries(threads, subagentThreadIds);
-        const threadsByRecentItem = mainThreads.sort((left, right) => {
-          if (right.updatedAt !== left.updatedAt) {
-            return right.updatedAt - left.updatedAt;
-          }
-
-          if (left.harness !== right.harness) {
-            return left.harness.localeCompare(right.harness);
-          }
-
-          return left.id.localeCompare(right.id);
-        });
-        const visibleThreads = threadsByRecentItem.slice(0, STABLE_VISIBLE_THREAD_COUNT);
-        await hydrateVisibleThreadStableSortKeys(visibleThreads);
-        const stableVisibleThreads = visibleThreads.sort((left, right) => {
-          const rightStableTimestamp = getThreadStableVisibleSortTimestamp(right);
-          const leftStableTimestamp = getThreadStableVisibleSortTimestamp(left);
-          if (rightStableTimestamp !== leftStableTimestamp) {
-            return rightStableTimestamp - leftStableTimestamp;
-          }
-
-          if (right.updatedAt !== left.updatedAt) {
-            return right.updatedAt - left.updatedAt;
-          }
-
-          if (left.harness !== right.harness) {
-            return left.harness.localeCompare(right.harness);
-          }
-
-          return left.id.localeCompare(right.id);
-        });
-        state.subagents = areDeeplyEqual(state.subagents, refreshedSubagents)
-          ? state.subagents
-          : refreshedSubagents;
-        state.threads = [
-          ...stableVisibleThreads,
-          ...threadsByRecentItem.slice(STABLE_VISIBLE_THREAD_COUNT),
-        ];
-        void refreshVisibleThreadUnreadStates(state.threads);
-        state.threadsError = errors.join(" ");
-        state.hasLoadedThreads = true;
-      } catch (error) {
-        if (refreshGeneration !== projectContextGeneration) {
-          return;
-        }
-
-        state.threads = [];
-        state.threadsError = error instanceof Error ? error.message : "Unable to load threads.";
-        state.hasLoadedThreads = true;
-      } finally {
-        if (refreshThreadsPromise === refreshPromise) {
-          refreshThreadsPromise = null;
-        }
-        if (refreshGeneration === projectContextGeneration) {
-          state.isLoading = false;
-          emit();
-        }
-      }
-    })();
-
-    refreshThreadsPromise = refreshPromise;
-    await refreshPromise;
-  }
-
   async function refreshRateLimits(harness = state.currentThread?.harness ?? "codex") {
     const existingRefresh = refreshRateLimitsPromisesByHarness.get(harness);
     if (existingRefresh) {
@@ -3557,59 +3344,6 @@ function WorkbenchThreadClient(
 
     refreshRateLimitsPromisesByHarness.set(harness, refreshPromise);
     await refreshPromise;
-  }
-
-  async function refreshPendingUserInputRequests() {
-    const projectGeneration = projectContextGeneration;
-    const questionnaireHarnesses = ["codex", "copilot", "opencode"] as const;
-    const results = await Promise.allSettled(questionnaireHarnesses.map(async (harness) => {
-      const generation = getPendingUserInputRequestGeneration(harness);
-      const response = await sendBridgeRequest<{ data?: Array<{
-        controlKind?: WorkbenchPendingUserInputRequest["controlKind"];
-        hidden?: boolean;
-        itemId?: string | null;
-        request: WorkbenchUserInputRequest;
-        requestKey: string;
-        threadId: string;
-        turnId?: string | null;
-      }> }>(harness, {
-        method: "questionnaire/list",
-        params: undefined,
-        workbenchRequestSource: AUTO_REFRESH_REQUEST_SOURCE,
-      });
-      return {
-        generation,
-        harness,
-        pendingRequests: (response.data ?? []).map((entry) => ({
-          controlKind: entry.controlKind ?? null,
-          harness,
-          hidden: entry.hidden || undefined,
-          itemId: entry.itemId ?? null,
-          request: entry.request,
-          requestKey: entry.requestKey,
-          threadId: entry.threadId,
-          turnId: entry.turnId ?? null,
-        })),
-      };
-    }));
-
-    let changed = false;
-    for (const result of results) {
-      if (result.status === "fulfilled") {
-        if (
-          projectGeneration !== projectContextGeneration
-          || getPendingUserInputRequestGeneration(result.value.harness) !== result.value.generation
-        ) {
-          continue;
-        }
-
-        changed = replacePendingUserInputRequests(result.value.harness, result.value.pendingRequests) || changed;
-      }
-    }
-
-    if (changed) {
-      emit();
-    }
   }
 
   function normalizeThreadMessageInput(input: UserInput[] | string) {
@@ -4377,7 +4111,6 @@ function WorkbenchThreadClient(
       if (!payload) {
         return null;
       }
-      await refreshThreads();
       if (
         disposed
         || providerFence.projectContextGeneration !== projectContextGeneration
@@ -4454,6 +4187,9 @@ function WorkbenchThreadClient(
     const workbenchOrigin = readLocalWorkbenchOrigin();
     const isDraftThread = thread.isDraft;
     const shouldBypassCodexDraftBootstrap = harness === "codex" && isDraftThread;
+    const canUseProvidedActiveThread = sendOptions.selectThread === false
+      && !isDraftThread
+      && Boolean(getCurrentInProgressTurn(thread));
     let bootstrapThread: ThreadPayload | null = null;
     const additionalWritableRoots = sendOptions.additionalWritableRoots ?? [];
     const codexWorkspaceSandboxPolicy = harness === "codex"
@@ -4645,23 +4381,16 @@ function WorkbenchThreadClient(
       }
       resolvedThreadId = bootstrapThread.id;
       if (!shouldBypassCodexDraftBootstrap) {
-        const refreshSelectionKey = threadDocuments.getSelectedThreadKey();
-        const refreshIntentRevision = messageAdmissionIntentRevision;
-        await refreshThreads();
         if (
           !isSendProjectCurrent()
-          || (sendOptions.selectThread !== false && (
-            refreshSelectionKey !== threadDocuments.getSelectedThreadKey()
-            || refreshIntentRevision !== messageAdmissionIntentRevision
-          ))
         ) {
           throw new ThreadMessageNotSentError();
         }
       }
     }
 
-    let resumedThread = bootstrapThread;
-    if (!resumedThread || !shouldBypassCodexDraftBootstrap) {
+    let resumedThread = bootstrapThread ?? (canUseProvidedActiveThread ? thread : null);
+    if (!resumedThread || (!shouldBypassCodexDraftBootstrap && !canUseProvidedActiveThread)) {
       const preparationFence = captureThreadOperationFence(harness, resolvedThreadId, {
         selectionBound: sendOptions.selectThread !== false,
       });
@@ -4856,6 +4585,12 @@ function WorkbenchThreadClient(
         return null;
       }
       optimisticTurnId = turnStartResponse.turn.id;
+      await publishAcceptedIntent({
+        harness,
+        projectId: state.projectId,
+        threadId: resolvedThreadId,
+        turnId: optimisticTurnId,
+      });
       if (harness !== "opencode" && !recoveryClientUserMessageId) {
         enqueueOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, normalizedInput, "initial", "sent", resumedThread);
         resumedThread = applyOptimisticUserMessageOverlay({
@@ -4900,12 +4635,6 @@ function WorkbenchThreadClient(
       return thread;
     }
 
-    const clearedPendingRequest = clearPendingUserInputRequest(thread.id);
-    const clearedWaitingFlag = clearThreadWaitingOnUserInputFlag(thread.id);
-    if (clearedPendingRequest || clearedWaitingFlag) {
-      emit();
-    }
-
     const activeTurn = getCurrentInProgressTurn(thread);
     if (!activeTurn) {
       return thread;
@@ -4928,11 +4657,9 @@ function WorkbenchThreadClient(
 
     const refreshedThread = await readThread(thread.id, thread.harness).catch(() => null);
     if (refreshedThread) {
-      await refreshThreads();
       return refreshedThread;
     }
 
-    await refreshThreads();
     return thread;
   }
 
@@ -4970,7 +4697,6 @@ function WorkbenchThreadClient(
       return thread;
     }
 
-    await refreshPendingUserInputRequests();
     return state.currentThread?.id === thread.id && state.currentThread.harness === thread.harness
       ? state.currentThread
       : thread;
@@ -5159,19 +4885,6 @@ function WorkbenchThreadClient(
       });
     }
 
-    if (
-      handling.refreshThreads
-      && (options.shouldRunNotificationThreadListRefresh?.() ?? true)
-      && !lifecycle.has(THREAD_LIST_REFRESH_TASK_ID)
-    ) {
-      lifecycle.scheduleOnce(THREAD_LIST_REFRESH_TASK_ID, CODEX_NOTIFICATION_THREAD_LIST_REFRESH_DELAY_MS, () => {
-        if (disposed) {
-          return;
-        }
-
-        void refreshThreads();
-      });
-    }
   }
 
   function handleCodexNotification(
@@ -5227,6 +4940,15 @@ function WorkbenchThreadClient(
       return;
     }
 
+    if (notification.method === "turn/completed" && notification.params.turn.status === "interrupted") {
+      const pendingRequest = state.pendingUserInputRequestsByThreadId.get(notification.params.threadId);
+      if (pendingRequest?.turnId === notification.params.turn.id) {
+        const clearedPendingRequest = clearPendingUserInputRequest(notification.params.threadId, pendingRequest.requestKey);
+        const clearedWaitingFlag = clearThreadWaitingOnUserInputFlag(notification.params.threadId);
+        if (clearedPendingRequest || clearedWaitingFlag) emit();
+      }
+    }
+
     if (notification.method === "account/rateLimits/updated") {
       void refreshRateLimits(harness);
       return;
@@ -5270,7 +4992,7 @@ function WorkbenchThreadClient(
   });
   lifecycle.addUnsubscribe(unsubscribeCodexNotifications);
   lifecycle.addUnsubscribe(() => {
-    codexClient.close();
+    codexClient.dispose();
   });
 
   function clearThreadSelection() {
@@ -5358,11 +5080,9 @@ function WorkbenchThreadClient(
 
     const refreshedThread = await readThread(thread.id, thread.harness).catch(() => null);
     if (refreshedThread) {
-      await refreshThreads();
       return refreshedThread;
     }
 
-    await refreshThreads();
     return thread;
   }
 
@@ -5449,18 +5169,19 @@ function WorkbenchThreadClient(
     dispose,
     getSnapshot,
     hasThread,
+    installSidebarSnapshot,
     isCurrentThreadUpToDate,
     isDraftThreadId,
     listModels,
     markThreadSeen,
     openThread,
+    onWorkbenchNotification,
+    requestWorkbench,
     readThread,
     selectThreadPayload,
     reconcileCurrentThreadFromRead,
     readCurrentThread,
-    refreshPendingUserInputRequests,
     refreshRateLimits,
-    refreshThreads,
     sendThreadMessage,
     compactThread,
     pauseThread,

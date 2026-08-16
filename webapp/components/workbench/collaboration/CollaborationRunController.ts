@@ -23,7 +23,7 @@ import type {
   WorkbenchPendingUserInputRequest,
   WorkbenchReadThreadOptions,
   WorkbenchSendThreadMessageOptions,
-  WorkbenchThreadComposerDraft,
+  WorkbenchComposerInputDraft,
   WorkbenchThreadDocumentSnapshot,
 } from "../../../lib/types";
 import {
@@ -71,7 +71,7 @@ export interface CollaborationRunControllerState {
   autoWakeCountdownMs: number | null;
   autoWakeProgressPercent: number;
   canContinueSelectedRunThread: boolean;
-  collaboratorDraftComposerDraft: WorkbenchThreadComposerDraft | null;
+  collaboratorDraftComposerDraft: WorkbenchComposerInputDraft | null;
   collaboratorDraftThread: ThreadPayload | null;
   collaboratorError: string;
   collaboratorStatus: CollaboratorRunStatus;
@@ -95,7 +95,7 @@ export interface CollaborationRunControllerState {
   sendComposerMessage: (threadId: string, input: UserInput[]) => Promise<void>;
   sendRunMessage: (thread: ThreadPayload, input: UserInput[], options?: WorkbenchSendThreadMessageOptions) => Promise<ThreadPayload | null>;
   setCollaboratorDraftAgent: (threadId: string, agentPath: string | null) => void;
-  setCollaboratorDraftComposerDraft: (threadId: string, draft: WorkbenchThreadComposerDraft) => void;
+  setCollaboratorDraftComposerDraft: (threadId: string, draft: WorkbenchComposerInputDraft) => void;
   setCollaboratorDraftModel: (threadId: string, model: string) => void;
   setCollaboratorDraftReasoningEffort: (threadId: string, reasoningEffort: string | null) => void;
   setCollaboratorDraftServiceTier: (threadId: string, serviceTier: string | null) => void;
@@ -253,7 +253,7 @@ export default function CollaborationRunController({
   const [continuedRunThreadId, setContinuedRunThreadId] = useState("");
   const [collaboratorThread, setCollaboratorThread] = useState<ThreadPayload | null>(null);
   const [collaboratorDraftThread, setCollaboratorDraftThread] = useState<ThreadPayload | null>(null);
-  const [collaboratorDraftComposerDraft, setCollaboratorDraftComposerDraftState] = useState<WorkbenchThreadComposerDraft | null>(null);
+  const [collaboratorDraftComposerDraft, setCollaboratorDraftComposerDraftState] = useState<WorkbenchComposerInputDraft | null>(null);
   const [collaboratorError, setCollaboratorError] = useState("");
   const [collaboratorWarnings, setCollaboratorWarnings] = useState<string[]>([]);
   const [collaboratorPhase, setCollaboratorPhase] = useState<CollaboratorRunStatus>("idle");

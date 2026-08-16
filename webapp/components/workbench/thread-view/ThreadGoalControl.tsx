@@ -87,7 +87,7 @@ export default function ThreadGoalControl ({
   if (!snapshot.isLoaded || !goal) {
     return children ? (
       <div className="mt-6">
-        <div className="flex flex-wrap items-center gap-2">{children}</div>
+        <div className="flex flex-wrap items-center gap-0.5">{children}</div>
       </div>
     ) : null;
   }

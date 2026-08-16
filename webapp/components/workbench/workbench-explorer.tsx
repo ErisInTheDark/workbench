@@ -10,30 +10,28 @@
  */
 "use client";
 
-import { useEffect, useMemo, useState, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 
 import type {
   ChangeSummary,
-  ThreadSummary,
   TreeNode,
   WorkbenchBrowseSessionSummary,
-  WorkbenchControls,
+  WorkbenchControls
 } from "../../lib/types";
 import type { WorkbenchDragPayload } from "../../lib/workbench/layout/workbench-drag";
+import { getThreadSidebarGroup, type WorkbenchThreadSidebarEntry, type WorkbenchThreadTarget } from "../../lib/workbench/thread/thread-state";
 import ChevronIcon from "./ChevronIcon";
 import ContextMenuCapability from "./ContextMenuCapability";
-import { ThreadQuestionBadge, ThreadUnreadBadge } from "./ThreadStatusBadges";
+import { formatThreadRelativeTimestamp } from "./thread-view/thread-view-formatters";
 import ThreadDisclosure from "./thread-view/ThreadDisclosure";
-import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import {
   workbenchIconButtonClassName,
   workbenchNewEntryButtonClassName,
   workbenchThreadListButtonClassName,
   workbenchThreadListLabelClassName,
 } from "./workbench-class-names";
-import { BrowserSessionIcon, HarnessIcon, PinIcon, SparkleIcon } from "./workbench-icons";
-
-const DEFAULT_VISIBLE_THREAD_COUNT = 5;
+import { BrowserSessionIcon, CompletedThreadIcon, DiscardDraftIcon, DraftThreadIcon, NeedsAttentionThreadIcon, PinIcon, RestoreThreadIcon, SettleThreadIcon, SnoozedThreadIcon, SparkleIcon, StoppedThreadIcon, UnsnoozeThreadIcon, WorkingThreadIcon } from "./workbench-icons";
+import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 
 export function NewEntryIcon () {
   return (
@@ -157,90 +155,187 @@ function ExplorerChangeSummary ({ summary }: { summary: ChangeSummary | null }) 
 }
 
 export function ThreadsList ({
+  attentionLabelsByThreadId = {},
   createThreadLabel = "Create new thread",
-  currentThreadId,
-  getThreadDragPayload,
+  currentTarget,
   getThreadContextMenu,
-  isDraftSelected = false,
-  nodes,
-  pendingQuestionnaireThreadIds,
-  pinnedNodes = [],
+  entries,
+  draftSaveStates = {},
+  getThreadHref,
+  nowMs = Date.now(),
+  onAction,
   onCreateThread,
   onCreateThreadPointerDragStart,
   onThreadPointerDragStart,
   onOpenThread,
 }: {
+  attentionLabelsByThreadId?: Record<string, string | undefined>;
   createThreadLabel?: string;
-  getThreadContextMenu?: (thread: ThreadSummary) => WorkbenchContextMenuDefinition | null;
-  currentThreadId: string;
-  getThreadDragPayload?: (thread: ThreadSummary) => WorkbenchDragPayload | null;
-  isDraftSelected?: boolean;
-  nodes: ThreadSummary[];
-  pendingQuestionnaireThreadIds: ReadonlySet<string>;
-  pinnedNodes?: ThreadSummary[];
+  currentTarget: WorkbenchThreadTarget | null;
+  entries: WorkbenchThreadSidebarEntry[];
+  draftSaveStates?: Record<string, "saving" | "saved" | "failed" | undefined>;
+  getThreadHref: (target: WorkbenchThreadTarget) => string;
+  getThreadContextMenu?: (entry: WorkbenchThreadSidebarEntry) => WorkbenchContextMenuDefinition | null;
+  nowMs?: number;
+  onAction?: (entry: WorkbenchThreadSidebarEntry, action: "discard" | "restore" | "settle" | "unsnooze") => void;
   onCreateThread: () => void;
-  onCreateThreadPointerDragStart?: (event: PointerEvent<HTMLButtonElement>) => void;
-  onThreadPointerDragStart?: (event: PointerEvent<HTMLElement>, thread: ThreadSummary) => void;
-  onOpenThread: (threadId: string) => void;
+  onCreateThreadPointerDragStart?: (event: PointerEvent<HTMLAnchorElement>) => void;
+  onThreadPointerDragStart?: (event: PointerEvent<HTMLElement>, entry: WorkbenchThreadSidebarEntry) => void;
+  onOpenThread: (target: WorkbenchThreadTarget) => void;
 }) {
-  const recentThreads = nodes.slice(0, DEFAULT_VISIBLE_THREAD_COUNT);
-  const olderThreads = nodes.slice(DEFAULT_VISIBLE_THREAD_COUNT);
-  const shouldOpenOlderThreads = olderThreads.some((thread) => thread.id === currentThreadId);
+  const rowRefs = useRef<Array<HTMLAnchorElement | null>>([]);
+  const visibleEntries = entries.filter((entry) => getThreadSidebarGroup(entry) !== "hidden" && entry.entryKind !== "subagent");
+  const targetForEntry = (entry: WorkbenchThreadSidebarEntry): WorkbenchThreadTarget => entry.entryKind === "draft"
+    ? { draftId: entry.draft.draftId, kind: "draft" }
+    : { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId };
+  const targetSelected = (target: WorkbenchThreadTarget) => {
+    if (!currentTarget) return false;
+    if (target.kind === "provider" && currentTarget.kind === "subagent") return target.threadId === currentTarget.parentThreadId
+      && (!target.harness || !currentTarget.harness || target.harness === currentTarget.harness);
+    if (currentTarget.kind !== target.kind) return false;
+    if (target.kind === "new") return true;
+    if (target.kind === "draft" && currentTarget.kind === "draft") return target.draftId === currentTarget.draftId;
+    return target.kind === "provider" && currentTarget.kind === "provider" && target.threadId === currentTarget.threadId
+      && (!target.harness || !currentTarget.harness || target.harness === currentTarget.harness);
+  };
+  const isPinned = (entry: WorkbenchThreadSidebarEntry) => entry.entryKind === "draft" ? entry.metadata.pinned : entry.entryKind === "thread" ? entry.metadata.pinned : entry.pinned;
+  const settledEntries = visibleEntries.filter((entry) => getThreadSidebarGroup(entry) === "other");
+  const shouldOpenOlderThreads = settledEntries.some((entry) => targetSelected(targetForEntry(entry)));
   const [isOlderThreadsOpen, setIsOlderThreadsOpen] = useState(shouldOpenOlderThreads);
-
   useEffect(() => {
-    if (shouldOpenOlderThreads) {
-      setIsOlderThreadsOpen(true);
-    }
+    if (shouldOpenOlderThreads) setIsOlderThreadsOpen(true);
   }, [shouldOpenOlderThreads]);
+  const navigableEntries = visibleEntries.filter((entry) => getThreadSidebarGroup(entry) !== "other" || isOlderThreadsOpen);
+  const groups = [
+    "drafts", "needsAttention", "completed", "working", "snoozed",
+  ] as const;
+  const primaryEntries = groups.flatMap((group) => visibleEntries.filter((entry) => getThreadSidebarGroup(entry) === group));
+  const moveFocus = (event: KeyboardEvent<HTMLAnchorElement>, index: number) => {
+    let next = index;
+    if (event.key === "ArrowDown") next = Math.min(navigableEntries.length - 1, index + 1);
+    else if (event.key === "ArrowUp") next = Math.max(0, index - 1);
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = navigableEntries.length - 1;
+    else return;
+    event.preventDefault();
+    rowRefs.current[next]?.focus();
+  };
 
-  const renderThreads = (threads: ThreadSummary[], options: { pinned?: boolean } = {}) => (
-    <ul className="m-0 p-0">
-      {threads.map((thread) => {
-        const label = thread.name || thread.preview || thread.id;
-        const isCurrent = thread.id === currentThreadId;
-        const hasPendingQuestionnaire = !isCurrent && pendingQuestionnaireThreadIds.has(thread.id);
-        const unreadBadge = isCurrent ? null : thread.unreadBadge;
-
-        return (
-          <li key={`${thread.harness}:${thread.id}`} className="m-0 list-none">
-            <ContextMenuCapability menu={getThreadContextMenu?.(thread) ?? null}>
-              <ThreadListRow
-                active={isCurrent}
-                onClick={() => {
-                  onOpenThread(thread.id);
-                }}
-                title={label}
-              >
-                <span
-                  className="flex w-full min-w-0 items-center justify-between gap-3"
-                  onPointerDown={(event) => {
-                    event.stopPropagation();
-                    onThreadPointerDragStart?.(event, thread);
-                  }}
-                >
-                  <span className="inline-flex min-w-0 items-center gap-2">
-                    {options.pinned ? <PinIcon className="size-4 shrink-0" /> : <HarnessIcon className="size-4 shrink-0" harness={thread.harness} />}
-                    <span className={`${workbenchThreadListLabelClassName}${isCurrent ? " font-semibold" : ""}`}>{label}</span>
-                  </span>
-                  {hasPendingQuestionnaire ? <ThreadQuestionBadge /> : unreadBadge ? <ThreadUnreadBadge badge={unreadBadge} /> : null}
+  const renderEntry = (entry: WorkbenchThreadSidebarEntry) => {
+    const index = navigableEntries.indexOf(entry);
+    const target = targetForEntry(entry);
+    const selected = targetSelected(target);
+    const group = getThreadSidebarGroup(entry);
+    const lifecycle = entry.entryKind === "draft" ? null : entry.lifecycle;
+    const draftSaveState = entry.entryKind === "draft" ? draftSaveStates[entry.draft.draftId] ?? "saved" : null;
+    const attentionLabel = entry.entryKind === "draft" ? "" : attentionLabelsByThreadId[entry.identity.threadId]?.trim() ?? "";
+    const baseStatus = entry.entryKind === "draft"
+      ? draftSaveState === "saving" ? "Draft · Saving" : draftSaveState === "failed" ? "Draft · Save failed" : "Draft"
+      : lifecycle?.kind === "needsAttention" ? attentionLabel || "Needs attention" : lifecycle?.kind === "working" ? "Working" : lifecycle?.kind === "stopped" ? "Stopped" : "Completed";
+    const status = group === "snoozed" ? `${baseStatus}, Snoozed` : baseStatus;
+    const pinned = isPinned(entry);
+    const timestamp = new Date(entry.activityAt);
+    const relativeTime = formatThreadRelativeTimestamp(entry.activityAt / 1000, nowMs);
+    const exactTime = timestamp.toLocaleString();
+    const action = entry.entryKind === "draft" ? "discard" : group === "other" ? "restore" : group === "snoozed" ? "unsnooze" : lifecycle && (lifecycle.kind === "completed" || lifecycle.kind === "stopped") && !lifecycle.settled ? "settle" : null;
+    const Icon = entry.entryKind === "draft" ? DraftThreadIcon : lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
+    const statusClassName = entry.entryKind === "draft"
+      ? draftSaveState === "failed" ? "text-red-600 dark:text-red-300" : draftSaveState === "saving" ? "text-sky-600 dark:text-sky-300" : "text-muted"
+      : lifecycle?.kind === "working"
+        ? "text-sky-600 dark:text-sky-300"
+        : lifecycle?.kind === "needsAttention"
+          ? "text-amber-600 dark:text-amber-300"
+          : lifecycle?.kind === "stopped"
+            ? "text-red-600 dark:text-red-300"
+            : "text-emerald-600 dark:text-emerald-300";
+    const ActionIcon = action === "discard" ? DiscardDraftIcon : action === "restore" ? RestoreThreadIcon : action === "settle" ? SettleThreadIcon : UnsnoozeThreadIcon;
+    const actionLabel = action === "discard" ? "Discard draft" : action === "restore" ? "Restore" : action === "settle" ? "Settle" : "Unsnooze";
+    const rowName = `${entry.title}, ${baseStatus}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
+    const dimmed = !selected && (group === "snoozed" || group === "other");
+    const hasDashedLifecycleBorder = entry.entryKind !== "draft" && (lifecycle?.kind === "needsAttention" || lifecycle?.kind === "working");
+    const hasDashedBorder = hasDashedLifecycleBorder || (entry.entryKind === "draft" && draftSaveState === "saving");
+    const strokeOpacity = entry.entryKind === "draft" && draftSaveState === "saved" ? 0.24 : 1;
+    const compact = group === "other";
+    return (
+      <li key={entry.entryKind === "draft" ? `draft:${entry.draft.draftId}` : `${entry.identity.harness}:${entry.identity.threadId}`} className="group/thread-row relative isolate m-0 grid list-none grid-cols-[minmax(0,1fr)_auto]">
+        <svg aria-hidden="true" className={`pointer-events-none absolute inset-0 z-0 size-full transition-opacity duration-75 ease-out ${statusClassName} ${selected ? "opacity-100" : "opacity-0 group-hover/thread-row:opacity-100 group-focus-within/thread-row:opacity-100"}`}>
+          <rect
+            x="0.5"
+            y="0.5"
+            width="calc(100% - 1px)"
+            height="calc(100% - 1px)"
+            rx="12.8"
+            fill="color-mix(in srgb, var(--text) 4%, transparent)"
+            stroke="currentColor"
+            strokeWidth="1"
+            strokeOpacity={strokeOpacity}
+            strokeDasharray={hasDashedBorder ? "6 4" : undefined}
+            vectorEffect="non-scaling-stroke"
+          />
+        </svg>
+        <ContextMenuCapability menu={getThreadContextMenu?.(entry) ?? null}>
+          <a
+            ref={(node) => { if (index >= 0) rowRefs.current[index] = node; }}
+            href={getThreadHref(target)}
+            role="tab"
+            tabIndex={selected || (!navigableEntries.some((candidate) => targetSelected(targetForEntry(candidate))) && index === 0) ? 0 : -1}
+            aria-selected={selected}
+            aria-label={rowName}
+            title={entry.title}
+            className={`relative z-10 col-span-2 grid min-w-0 cursor-pointer ${compact ? "grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-1.5" : "grid-cols-[minmax(0,1fr)_auto]"} rounded-[0.8rem] border border-transparent px-2 ${compact ? "py-1" : "py-1.5"} outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${dimmed ? " opacity-50 group-hover/thread-row:opacity-100 group-focus-within/thread-row:opacity-100" : ""}`}
+            onClick={(event: MouseEvent<HTMLAnchorElement>) => {
+              if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+              event.preventDefault();
+              onOpenThread(target);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpenThread(target); return; }
+              moveFocus(event, index);
+            }}
+            onPointerDown={(event) => onThreadPointerDragStart?.(event, entry)}
+          >
+            {compact ? (
+              <>
+                <Icon className={`size-3.5 ${statusClassName}`} />
+                <span className={`${workbenchThreadListLabelClassName} truncate${selected ? " font-semibold text-text" : ""}`}>{entry.title}</span>
+                <span className="inline-flex size-4 items-center justify-center">{pinned ? <PinIcon className="size-3.5" /> : null}</span>
+                <time className="text-[0.72rem] text-muted group-hover/thread-row:invisible group-focus-within/thread-row:invisible" dateTime={timestamp.toISOString()} title={exactTime}>{relativeTime}</time>
+              </>
+            ) : (
+              <>
+                <span className={`${workbenchThreadListLabelClassName}${selected ? " font-semibold text-text" : ""}`}>{entry.title}</span>
+                <span aria-hidden="true" />
+                <span className="col-span-2 mt-0.5 grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-1.5 text-[0.72rem] text-muted">
+                  <Icon className={`size-3.5 ${statusClassName}`} />
+                  <span className={`truncate ${statusClassName}`}>{status}</span>
+                  <span className="inline-flex size-4 items-center justify-center">{group === "snoozed" ? <SnoozedThreadIcon className="size-3.5" /> : pinned ? <PinIcon className="size-3.5" /> : null}</span>
+                  <time dateTime={timestamp.toISOString()} title={exactTime}>{relativeTime}</time>
                 </span>
-              </ThreadListRow>
-            </ContextMenuCapability>
-          </li>
-        );
-      })}
-    </ul>
-  );
+              </>
+            )}
+          </a>
+        </ContextMenuCapability>
+        {action ? (
+          <button type="button" aria-label={actionLabel} title={actionLabel} className={`absolute right-1 z-20 hidden cursor-pointer rounded-lg text-muted hover:text-text focus-visible:flex focus-visible:text-text group-hover/thread-row:flex group-focus-within/thread-row:flex ${compact ? "top-1/2 -translate-y-1/2 items-center gap-1 px-1.5 py-1 text-[0.72rem] font-medium" : "top-1 p-1"}`} onClick={(event) => { event.stopPropagation(); onAction?.(entry, action); }} onPointerDown={(event) => event.stopPropagation()}>
+            <ActionIcon className="size-4" />
+            {compact ? <span>{actionLabel}</span> : null}
+          </button>
+        ) : null}
+      </li>
+    );
+  };
 
   return (
     <div className="space-y-1">
-      {pinnedNodes.length ? renderThreads(pinnedNodes, { pinned: true }) : null}
-      <button
-        type="button"
+      <a
+        href={getThreadHref({ kind: "new" })}
         title={createThreadLabel}
-        className={`${workbenchThreadListButtonClassName}${isDraftSelected ? " text-accent" : " text-muted"}`}
-        onClick={onCreateThread}
+        className={`${workbenchThreadListButtonClassName}${currentTarget?.kind === "new" ? " text-accent" : " text-muted"}`}
+        onClick={(event) => {
+          if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+          event.preventDefault();
+          onCreateThread();
+        }}
         onPointerDown={(event) => {
           event.stopPropagation();
           onCreateThreadPointerDragStart?.(event);
@@ -248,24 +343,26 @@ export function ThreadsList ({
       >
         <span className="inline-flex min-w-0 items-center gap-2">
           <SparkleIcon className="size-4 shrink-0" />
-          <span className={`${workbenchThreadListLabelClassName}${isDraftSelected ? " font-semibold" : ""}`}>{createThreadLabel}</span>
+          <span className={`${workbenchThreadListLabelClassName}${currentTarget?.kind === "new" ? " font-semibold" : ""}`}>{createThreadLabel}</span>
         </span>
-      </button>
-      {renderThreads(recentThreads)}
-      {olderThreads.length ? (
-        <ThreadDisclosure
-          className="pt-1"
-          contentClassName="mt-1 pl-6"
-          open={isOlderThreadsOpen}
-          onToggle={(event) => {
-            setIsOlderThreadsOpen(event.currentTarget.open);
-          }}
-          summary="Older threads"
-          summaryClassName="text-[0.78em] leading-[1.5] text-muted"
-        >
-          {renderThreads(olderThreads)}
-        </ThreadDisclosure>
-      ) : null}
+      </a>
+      <div role="tablist" aria-label="Threads" className="min-w-0">
+        {primaryEntries.length ? <ul className="m-0 space-y-1 p-0">{primaryEntries.map(renderEntry)}</ul> : null}
+        {settledEntries.length ? (
+          <ThreadDisclosure
+            className="mt-4"
+            contentClassName="mt-1"
+            open={isOlderThreadsOpen}
+            onToggle={(event) => setIsOlderThreadsOpen(event.currentTarget.open)}
+            summary="Settled threads"
+            summaryClassName="text-[0.72rem] font-medium leading-[1.5] text-muted"
+          >
+            <ul className="m-0 space-y-1 p-0">
+              {settledEntries.map(renderEntry)}
+            </ul>
+          </ThreadDisclosure>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -319,7 +416,7 @@ export function BrowseSessionsList ({
   );
 }
 
-function formatBrowseSessionDetail(session: WorkbenchBrowseSessionSummary) {
+function formatBrowseSessionDetail (session: WorkbenchBrowseSessionSummary) {
   const parts = [
     session.mode,
     session.threadId ? `thread ${session.threadId.slice(0, 8)}` : null,
@@ -450,37 +547,37 @@ export function ExplorerTree ({
               <ContextMenuCapability menu={getNodeContextMenu?.(node) ?? null}>
                 <div className="group/entry-row flex min-w-0 items-center justify-between gap-2">
                   <button
-                  data-role="tree-button"
-                  type="button"
-                  className="inline-flex max-w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:py-0.5"
-                  onClick={() => {
-                    controls?.toggleDirectory(node.path);
-                  }}
-                >
-                  <ChevronIcon
-                    data-role="tree-chevron"
-                    className="mt-0.5 transition-transform"
-                    style={{
-                      width: "1.1rem",
-                      height: "1.1rem",
-                      transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
+                    data-role="tree-button"
+                    type="button"
+                    className="inline-flex max-w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:py-0.5"
+                    onClick={() => {
+                      controls?.toggleDirectory(node.path);
                     }}
-                  />
-                  <span data-role="tree-label" className="min-w-0 truncate">{node.name}</span>
-                  <ExplorerModifiedDot hidden={!isModified} />
-                  <ExplorerChangeSummary summary={changeSummary} />
+                  >
+                    <ChevronIcon
+                      data-role="tree-chevron"
+                      className="mt-0.5 transition-transform"
+                      style={{
+                        width: "1.1rem",
+                        height: "1.1rem",
+                        transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
+                      }}
+                    />
+                    <span data-role="tree-label" className="min-w-0 truncate">{node.name}</span>
+                    <ExplorerModifiedDot hidden={!isModified} />
+                    <ExplorerChangeSummary summary={changeSummary} />
                   </button>
                   <button
-                  type="button"
-                  aria-label={`Create in ${node.name}`}
-                  title={`Create in ${node.name}`}
-                  className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}`}
-                  onClick={() => {
-                    onCreateInDirectory?.(node.path);
-                  }}
-                >
-                  <NewEntryIcon />
-                  <span className="sr-only">{`Create in ${node.name}`}</span>
+                    type="button"
+                    aria-label={`Create in ${node.name}`}
+                    title={`Create in ${node.name}`}
+                    className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}`}
+                    onClick={() => {
+                      onCreateInDirectory?.(node.path);
+                    }}
+                  >
+                    <NewEntryIcon />
+                    <span className="sr-only">{`Create in ${node.name}`}</span>
                   </button>
                 </div>
               </ContextMenuCapability>
@@ -523,27 +620,27 @@ export function ExplorerTree ({
             <ContextMenuCapability menu={getNodeContextMenu?.(node) ?? null}>
               <div className="flex min-w-0 items-center gap-2">
                 <button
-                data-role="tree-button"
-                type="button"
-                aria-disabled={!isOpenable}
-                disabled={!isOpenable}
-                title={isOpenable ? node.name : disabledTitle}
-                className={`inline-flex max-w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-muted disabled:focus-visible:bg-transparent disabled:focus-visible:text-muted md:py-0.5${isCurrent ? " font-semibold text-accent" : ""}`}
-                onPointerDown={(event) => {
-                  if (!isOpenable) {
-                    return;
-                  }
+                  data-role="tree-button"
+                  type="button"
+                  aria-disabled={!isOpenable}
+                  disabled={!isOpenable}
+                  title={isOpenable ? node.name : disabledTitle}
+                  className={`inline-flex max-w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-muted disabled:focus-visible:bg-transparent disabled:focus-visible:text-muted md:py-0.5${isCurrent ? " font-semibold text-accent" : ""}`}
+                  onPointerDown={(event) => {
+                    if (!isOpenable) {
+                      return;
+                    }
 
-                  event.stopPropagation();
-                  onFilePointerDragStart?.(event, node.path);
-                }}
-                onClick={() => {
-                  if (!isOpenable) {
-                    return;
-                  }
+                    event.stopPropagation();
+                    onFilePointerDragStart?.(event, node.path);
+                  }}
+                  onClick={() => {
+                    if (!isOpenable) {
+                      return;
+                    }
 
-                  onOpenFile?.(node.path);
-                }}
+                    onOpenFile?.(node.path);
+                  }}
                 >
                   <ExplorerFileSpacer />
                   <span data-role="tree-label" className="min-w-0 truncate">{node.name}</span>
@@ -552,8 +649,8 @@ export function ExplorerTree ({
                 </button>
               </div>
             </ContextMenuCapability>
-            </li>
-          );
+          </li>
+        );
       })}
     </ul>
   );

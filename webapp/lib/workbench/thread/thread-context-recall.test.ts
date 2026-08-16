@@ -225,9 +225,9 @@ test("builds one rich narrative projection and suppresses embedded plans with th
     records.filter((record) => record.kind === "user-steer").map((record) => record.ref),
     [
       "steer:turn-old:turn-steer:139",
-      "steer:turn-new:turn-steer:139",
     ],
   );
+  assert(records.some((record) => record.ref === "steer:turn-new:turn-steer:139" && record.kind === "agent-message"));
   assert.deepEqual(
     selectWorkbenchThreadRecallRecords(records, ALL_KINDS)
       .filter((record) => record.ref === "agent:plan-new" || record.ref === "plan-block:plan-new:0")

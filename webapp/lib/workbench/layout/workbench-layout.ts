@@ -7,6 +7,21 @@
  */
 
 import type { WorkbenchSettingsScope } from "../navigation/workbench-route";
+import { WorkbenchThreadTargetSchema, type WorkbenchThreadTarget } from "../thread/thread-state";
+
+// @ts-ignore see user-to-implementer-communication.md
+
+function threadTargetsEqual (left: WorkbenchThreadTarget, right: WorkbenchThreadTarget) {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === "new" && right.kind === "new") return true;
+  if (left.kind === "draft" && right.kind === "draft") return left.draftId === right.draftId;
+  if (left.kind === "subagent" && right.kind === "subagent") return left.parentThreadId === right.parentThreadId
+    && left.threadId === right.threadId
+    && left.harness === right.harness;
+  return left.kind === "provider" && right.kind === "provider"
+    && left.threadId === right.threadId
+    && left.harness === right.harness;
+}
 
 export type WorkbenchPanelTarget =
   | {
@@ -28,7 +43,7 @@ export type WorkbenchPanelTarget =
   }
   | {
     readonly kind: "thread";
-    readonly threadId: string;
+    readonly target: WorkbenchThreadTarget;
   };
 
 export type WorkbenchMainLayoutNode =
@@ -78,29 +93,31 @@ function createPanelId() {
   return `panel-${Date.now().toString(36)}-${nextPanelSequence.toString(36)}`;
 }
 
-function isPanelTarget(value: unknown): value is WorkbenchPanelTarget {
+function normalizePanelTarget(value: unknown): WorkbenchPanelTarget | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
+    return null;
   }
 
   const candidate = value as Partial<WorkbenchPanelTarget>;
   if (candidate.kind === "empty") {
-    return true;
+    return { kind: "empty" };
   }
   if (candidate.kind === "collaborationCollaborator" || candidate.kind === "collaborationScratchpad") {
-    return true;
+    return { kind: candidate.kind };
   }
   if (candidate.kind === "file") {
-    return typeof candidate.filePath === "string";
+    return typeof candidate.filePath === "string" ? { filePath: candidate.filePath, kind: "file" } : null;
   }
   if (candidate.kind === "thread") {
-    return typeof candidate.threadId === "string";
+    const raw = value as { target?: unknown; threadId?: unknown };
+    const parsed = WorkbenchThreadTargetSchema.safeParse(raw.target ?? (typeof raw.threadId === "string" ? { kind: "provider", threadId: raw.threadId } : null));
+    return parsed.success ? { kind: "thread", target: parsed.data } : null;
   }
   if (candidate.kind === "settings") {
-    return candidate.scope === "global" || candidate.scope === "project";
+    return candidate.scope === "global" || candidate.scope === "project" ? { kind: "settings", scope: candidate.scope } : null;
   }
 
-  return false;
+  return null;
 }
 
 function isDirection(value: unknown): value is "horizontal" | "vertical" {
@@ -118,10 +135,11 @@ function normalizeNode(value: unknown): WorkbenchMainLayoutNode | null {
 
   const candidate = value as Partial<WorkbenchMainLayoutNode>;
   const id = typeof candidate.id === "string" && candidate.id ? candidate.id : createPanelId();
-  if (candidate.type === "leaf" && isPanelTarget(candidate.target)) {
+  const target = normalizePanelTarget("target" in candidate ? candidate.target : null);
+  if (candidate.type === "leaf" && target) {
     return {
       id,
-      target: candidate.target,
+      target,
       type: "leaf",
     };
   }
@@ -190,7 +208,7 @@ function targetsEqual(left: WorkbenchPanelTarget, right: WorkbenchPanelTarget) {
     return left.filePath === right.filePath;
   }
   if (left.kind === "thread" && right.kind === "thread") {
-    return left.threadId === right.threadId;
+    return threadTargetsEqual(left.target, right.target);
   }
   if (left.kind === "settings" && right.kind === "settings") {
     return left.scope === right.scope;

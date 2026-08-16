@@ -24,6 +24,9 @@ export type WorkbenchAgentCliResponseKind =
   | "native"
   | "orchestrator-reload"
   | "subagent-create"
+  | "subagent-list"
+  | "subagent-settle"
+  | "thread-status"
   | "thread-title";
 
 export interface WorkbenchAgentCliRequest {
@@ -266,24 +269,37 @@ function parseVariables(values: string[]) {
   return variables;
 }
 
+function readSubagentTargets(flags: ParsedFlags) {
+  const threadIds = flags.repeated("--id").map((value) => value.trim());
+  const names = flags.repeated("--name").map((value) => value.trim());
+  if (!threadIds.length && !names.length) throw new Error("At least one --id or --name target is required.");
+  if (threadIds.some((value) => !value) || names.some((value) => !value)) throw new Error("Subagent targets cannot be empty.");
+  if (new Set(threadIds).size !== threadIds.length) throw new Error("--id values must be unique.");
+  if (new Set(names.map((value) => value.toLocaleLowerCase())).size !== names.length) throw new Error("--name values must be unique ignoring case.");
+  return {
+    ...(names.length ? { names } : {}),
+    ...(threadIds.length ? { threadIds } : {}),
+  };
+}
+
 const COMMANDS: readonly CommandDefinition[] = [
   {
     audiences: DEFAULT_HELP_AUDIENCE,
-    description: "List direct children, newest activity first.",
+    description: "List unsettled direct children, or settled history.",
     helpGroups: ["subagent"],
     words: ["subagent", "list"],
-    usage: "wb subagent list [--cursor <cursor>] [--limit <1-20>]",
+    usage: "wb subagent list [--settled [--cursor <cursor>] [--limit <1-20>]]",
     async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(args, { values: ["--cursor", "--limit"] });
+      const flags = new ParsedFlags(args, { boolean: ["--settled"], values: ["--cursor", "--limit"] });
       if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
       const limit = flags.optionalNonNegativeInteger("--limit");
       if (limit !== null && (limit < 1 || limit > 20)) throw new Error("--limit must be between 1 and 20.");
-      return get(queryPath("/api/subagents", {
-        cursor: flags.optional("--cursor"),
-        cwd,
-        limit: limit === null ? null : String(limit),
-        parentThreadId: callerThreadId,
-      }), "json");
+      if (!flags.has("--settled") && (flags.optional("--cursor") || limit !== null)) throw new Error("--cursor and --limit require --settled.");
+      return post("/api/subagents", {
+        action: "list", callerThreadId, cwd, settled: flags.has("--settled"),
+        ...(flags.optional("--cursor") ? { cursor: flags.optional("--cursor")! } : {}),
+        ...(limit !== null ? { limit } : {}),
+      }, "subagent-list");
     },
   },
   {
@@ -315,30 +331,41 @@ const COMMANDS: readonly CommandDefinition[] = [
   },
   {
     audiences: DEFAULT_HELP_AUDIENCE,
-    description: "Wait until any selected child has a pending questionnaire or no active turn.",
+    description: "Wait until any selected child needs attention or reaches a terminal state.",
     helpGroups: ["subagent"],
     words: ["subagent", "wait"],
-    usage: "wb subagent wait --id <id> [--id <id>...]",
+    usage: "wb subagent wait (--id <id> | --name <name>) [...]",
     async build({ args, callerThreadId, cwd, workbenchOrigin }) {
-      const flags = new ParsedFlags(args, { repeatable: ["--id"] });
+      const flags = new ParsedFlags(args, { repeatable: ["--id", "--name"] });
       if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
       return post("/api/subagents", {
-        action: "wait", callerThreadId, cwd, threadIds: flags.requiredRepeated("--id"), ...(workbenchOrigin ? { workbenchOrigin } : {}),
+        action: "wait", callerThreadId, cwd, ...readSubagentTargets(flags), ...(workbenchOrigin ? { workbenchOrigin } : {}),
       });
     },
   },
   {
     audiences: DEFAULT_HELP_AUDIENCE,
-    description: "Stop a direct child thread.",
+    description: "Stop one or more direct child threads.",
     helpGroups: ["subagent"],
     words: ["subagent", "stop"],
-    usage: "wb subagent stop --id <id>",
+    usage: "wb subagent stop (--id <id> | --name <name>) [...]",
     async build({ args, callerThreadId, cwd, workbenchOrigin }) {
-      const flags = new ParsedFlags(args, { values: ["--id"] });
+      const flags = new ParsedFlags(args, { repeatable: ["--id", "--name"] });
       if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
       return post("/api/subagents", {
-        action: "stop", callerThreadId, cwd, threadId: flags.required("--id"), ...(workbenchOrigin ? { workbenchOrigin } : {}),
+        action: "stop", callerThreadId, cwd, ...readSubagentTargets(flags), ...(workbenchOrigin ? { workbenchOrigin } : {}),
       });
+    },
+  },
+  {
+    audiences: DEFAULT_HELP_AUDIENCE,
+    description: "Settle one or more completed or stopped direct children.",
+    helpGroups: ["subagent"],
+    words: ["subagent", "settle"],
+    usage: "wb subagent settle (--id <id> | --name <name>) [...]",
+    async build({ args, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(args, { repeatable: ["--id", "--name"] });
+      return post("/api/subagents", { action: "settle", callerThreadId: requireCallerThreadId(callerThreadId), cwd, ...readSubagentTargets(flags) }, "subagent-settle");
     },
   },
   {
@@ -346,16 +373,17 @@ const COMMANDS: readonly CommandDefinition[] = [
     description: "Message a direct child or parent, steering an active turn or starting an idle one.",
     helpGroups: ["subagent"],
     words: ["subagent", "message"],
-    usage: "wb subagent message (--id <id> | --parent) --message <message>",
+    usage: "wb subagent message (--id <id> | --name <name> | --parent) --message <message>",
     async build({ args, callerThreadId, cwd, workbenchOrigin }) {
-      const flags = new ParsedFlags(args, { boolean: ["--parent"], values: ["--id", "--message"] });
+      const flags = new ParsedFlags(args, { boolean: ["--parent"], values: ["--id", "--name", "--message"] });
       if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
       const threadId = flags.optional("--id")?.trim() ?? "";
+      const name = flags.optional("--name")?.trim() ?? "";
       const parent = flags.has("--parent");
-      if (Boolean(threadId) === parent) throw new Error("Exactly one of --id or --parent is required.");
+      if ([Boolean(threadId), Boolean(name), parent].filter(Boolean).length !== 1) throw new Error("Exactly one of --id, --name, or --parent is required.");
       return post("/api/subagents", {
         action: "message", callerThreadId, cwd, message: flags.required("--message"),
-        ...(parent ? { parent: true } : { threadId }),
+        ...(parent ? { parent: true } : threadId ? { threadId } : { name }),
         ...(workbenchOrigin ? { workbenchOrigin } : {}),
       });
     },
@@ -365,18 +393,23 @@ const COMMANDS: readonly CommandDefinition[] = [
     description: "Set a concise title for a managed thread.",
     helpGroups: ["thread"],
     words: ["thread", "title"],
-    usage: "wb thread title --thread <id> --harness <codex|copilot|opencode> --title <text>",
-    async build({ args }) {
-      const flags = new ParsedFlags(args, { values: [...THREAD_FLAG, "--harness", "--title"] });
-      const harness = flags.required("--harness");
-      if (!["codex", "copilot", "opencode"].includes(harness)) {
-        throw new Error("--harness must be codex, copilot, or opencode.");
-      }
-      return post("/api/thread-title", {
-        harness,
-        threadId: flags.required("--thread"),
-        title: flags.required("--title"),
-      }, "thread-title");
+    usage: "wb thread title --title <text>",
+    async build({ args, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(args, { values: ["--title"] });
+      return post("/api/thread-title", { callerThreadId: requireCallerThreadId(callerThreadId), cwd, title: flags.required("--title") }, "thread-title");
+    },
+  },
+  {
+    audiences: SHARED_HELP_AUDIENCES,
+    description: "Set the exact current turn status for this managed thread.",
+    helpGroups: ["thread"],
+    words: ["thread", "status"],
+    usage: "wb thread status --status <completed|blocked>",
+    async build({ args, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(args, { values: ["--status"] });
+      const status = flags.required("--status");
+      if (status !== "completed" && status !== "blocked") throw new Error("--status must be completed or blocked.");
+      return post("/api/thread-status", { callerThreadId: requireCallerThreadId(callerThreadId), cwd, status }, "thread-status");
     },
   },
   {

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover per-parent migration, activity durability, bounded cursor pages, and parent isolation. Keywords: subagent, store, migration, activity, pagination, test.
+ * - No production exports; Node tests cover per-parent migration, relationship-only durability, bounded cursor pages, and parent isolation. Keywords: subagent, store, migration, relationship, pagination, test.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -18,12 +18,10 @@ function summary(
   overrides: Partial<WorkbenchSubagentRelationship> = {},
 ): WorkbenchSubagentRelationship {
   return {
-    activityStatus: "inactive",
     createdAt: 1,
     cwd: "C:/workspace",
     directSubagentIndex: 0,
     harness: "codex",
-    lastActivityAt: 1,
     name: `Agent ${threadId}`,
     parentThreadId,
     profileId: "profile",
@@ -36,13 +34,13 @@ function summary(
   };
 }
 
-test("migrates the global store into parent files and invalidates previous-process activity", async (context) => {
+test("migrates the global store into parent files and removes legacy lifecycle fields", async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-store-migration-"));
   context.after(async () => await fs.rm(root, { force: true, recursive: true }));
   const runtimePath = path.join(root, ".workbench", "runtime");
   await fs.mkdir(runtimePath, { recursive: true });
-  const legacyActive = summary("parent-a", "child-a", { activityStatus: "active", lastActivityAt: 10, updatedAt: 10 });
-  const { activityStatus: _activityStatus, lastActivityAt: _lastActivityAt, ...legacyUnknown } = summary("parent-b", "child-b", { updatedAt: 20 });
+  const legacyActive = { ...summary("parent-a", "child-a", { updatedAt: 10 }), activityStatus: "active", lastActivityAt: 10, pinned: true };
+  const legacyUnknown = summary("parent-b", "child-b", { updatedAt: 20 });
   await fs.writeFile(path.join(runtimePath, "subagents.json"), JSON.stringify({
     subagents: {
       [legacyActive.threadId]: legacyActive,
@@ -56,17 +54,13 @@ test("migrates the global store into parent files and invalidates previous-proce
   await assert.rejects(fs.access(path.join(runtimePath, "subagents.json")));
   const parentFiles = await fs.readdir(path.join(runtimePath, "subagents"));
   assert.equal(parentFiles.length, 2);
-  assert.equal((await store.list({ parentThreadId: "parent-a", projectId: "project" })).subagents[0]?.activityStatus, "unknown");
-  assert.equal((await store.list({ parentThreadId: "parent-b", projectId: "project" })).subagents[0]?.lastActivityAt, 20);
-
-  await store.observeNotification("codex", {
-    method: "turn/started",
-    params: { threadId: "child-a", turn: { id: "turn-a" } },
-  }, 100);
-  assert.equal((await store.list({ parentThreadId: "parent-a", projectId: "project" })).subagents[0]?.activityStatus, "active");
+  const migrated = (await store.list({ parentThreadId: "parent-a", projectId: "project" })).subagents[0];
+  assert.equal("activityStatus" in (migrated ?? {}), false);
+  assert.equal("lastActivityAt" in (migrated ?? {}), false);
+  assert.equal("pinned" in (migrated ?? {}), false);
   const restarted = new WorkbenchSubagentStore(root);
   await restarted.initialize();
-  assert.equal((await restarted.list({ parentThreadId: "parent-a", projectId: "project" })).subagents[0]?.activityStatus, "unknown");
+  assert.equal((await restarted.list({ parentThreadId: "parent-a", projectId: "project" })).subagents[0]?.threadId, "child-a");
 });
 
 test("repeats a partial migration without replacing a newer parent record", async (context) => {
@@ -96,16 +90,14 @@ test("repeats a partial migration without replacing a newer parent record", asyn
   assert.equal((await restarted.list({ parentThreadId: "parent", projectId: "project" })).subagents[0]?.title, "Newer parent record");
 });
 
-test("keeps parent writes isolated, lists project relationships, and pages activity-sorted records twenty at a time", async (context) => {
+test("keeps parent writes isolated, lists project relationships, and pages newest relationships twenty at a time", async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-store-pages-"));
   context.after(async () => await fs.rm(root, { force: true, recursive: true }));
   const store = new WorkbenchSubagentStore(root);
   await store.initialize();
   for (let index = 0; index < 25; index += 1) {
     await store.reserve(summary("parent-a", `child-${index.toString().padStart(2, "0")}`, {
-      activityStatus: index < 2 ? "active" : index < 4 ? "unknown" : "inactive",
       createdAt: index,
-      lastActivityAt: index,
       updatedAt: index,
     }));
   }
@@ -116,7 +108,7 @@ test("keeps parent writes isolated, lists project relationships, and pages activ
 
   const first = await store.list({ limit: 20, parentThreadId: "parent-a", projectId: "project" });
   assert.equal(first.subagents.length, 20);
-  assert.equal(first.subagents[0]?.activityStatus, "active");
+  assert.equal(first.subagents[0]?.threadId, "child-24");
   assert.ok(first.nextCursor);
   const second = await store.list({ cursor: first.nextCursor, limit: 20, parentThreadId: "parent-a", projectId: "project" });
   assert.equal(second.subagents.length, 5);
@@ -133,19 +125,14 @@ test("keeps parent writes isolated, lists project relationships, and pages activ
   assert.deepEqual((await store.list({ parentThreadId: "parent-b", projectId: "project" })).subagents.map(({ threadId }) => threadId), ["other-child"]);
 });
 
-test("coalesces duplicate activity writes and ignores mismatched harness notifications", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-store-activity-"));
+test("relationship updates do not acquire lifecycle or Lock fields", async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-store-relationship-"));
   context.after(async () => await fs.rm(root, { force: true, recursive: true }));
   const store = new WorkbenchSubagentStore(root);
-  await store.reserve(summary("parent", "child", { activityStatus: "unknown", lastActivityAt: 10 }));
-  assert.equal(await store.markActivity("child", "active", 100, "opencode"), false);
-  assert.equal(await store.markActivity("child", "active", 100, "codex"), true);
-  assert.equal(await store.markActivity("child", "active", 101, "codex"), false);
-  assert.equal(await store.observeNotification("codex", {
-    method: "thread/status/changed",
-    params: { status: { type: "idle" }, threadId: "child" },
-  }, 200), true);
+  const reserved = await store.reserve(summary("parent", "child"));
+  await store.replace("parent", "child", { ...reserved, title: "Updated", updatedAt: 200 });
   const [record] = (await store.list({ parentThreadId: "parent", projectId: "project" })).subagents;
-  assert.equal(record?.activityStatus, "inactive");
-  assert.equal(record?.lastActivityAt, 200);
+  assert.equal(record?.title, "Updated");
+  assert.equal("lifecycle" in (record ?? {}), false);
+  assert.equal("pinned" in (record ?? {}), false);
 });

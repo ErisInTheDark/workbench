@@ -34,7 +34,7 @@ import {
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { OpenCodeLiveThreadState } from "./opencode-live-thread-state";
 import { log, logError } from "./process-helpers";
-import type { OrchestratorReloadableModules } from "./reloadable-modules";
+import type { OrchestratorReloadableModules } from "./orchestrator-feature-registry";
 import type { WorkbenchTurnRecoveryHandoffCandidate } from "./WorkbenchTurnRecoveryHandoffStore";
 import { readWorkbenchPromptContext } from "./workbench-prompt-context";
 
@@ -1042,34 +1042,35 @@ export class OpenCodeBridge {
   }
 
   private async buildTurnSystemPrompt(message: JsonRpcRequest, threadId: string, params: unknown) {
-    const promptContext = readWorkbenchPromptContext(message);
-    if (promptContext) {
+    const untrustedPromptContext = readWorkbenchPromptContext(message);
+    let systemPrompt: string | null;
+    const promptContext = untrustedPromptContext
+      ? { ...untrustedPromptContext, harness: "opencode" as const, threadId: untrustedPromptContext.threadId ?? threadId }
+      : { harness: "opencode" as const, threadId, workbenchOrigin: asString(asRecord(params)?.workbenchOrigin) };
+    if (untrustedPromptContext) {
       const resolvedPromptContext = {
         ...promptContext,
-        harness: "opencode" as const,
-        threadId: promptContext.threadId ?? threadId,
       };
       if (resolvedPromptContext.instructionScope === "threadUtilities") {
         const developerInstructions = await this.getReloadableModules().workbenchPromptFiles.buildWorkbenchThreadUtilityDeveloperInstructions(resolvedPromptContext);
-        return this.getReloadableModules().opencodeWorkbenchInstructions.buildOpenCodeWorkbenchSystemPrompt({
+        systemPrompt = this.getReloadableModules().opencodeWorkbenchInstructions.buildOpenCodeWorkbenchSystemPrompt({
           baseInstructions: null,
           developerInstructions,
         });
+      } else {
+        const instructions = await this.getReloadableModules().workbenchPromptFiles.buildWorkbenchPromptInstructions(resolvedPromptContext);
+        systemPrompt = this.getReloadableModules().opencodeWorkbenchInstructions.buildOpenCodeWorkbenchSystemPrompt(instructions);
       }
-
-      const instructions = await this.getReloadableModules().workbenchPromptFiles.buildWorkbenchPromptInstructions({
-        ...resolvedPromptContext,
-      });
-      return this.getReloadableModules().opencodeWorkbenchInstructions.buildOpenCodeWorkbenchSystemPrompt(instructions);
+    } else {
+      systemPrompt = null;
     }
-
-    const workbenchOrigin = asString(asRecord(params)?.workbenchOrigin);
-    return workbenchOrigin
-      ? this.getReloadableModules().threadBootstrap.buildThreadTitleBootstrapInstructions({
-        harness: "opencode",
-        threadId,
-      })
-      : null;
+    return this.getReloadableModules().workbenchPromptFiles.filterWorkbenchInstructionContent(systemPrompt, {
+      available: this.getReloadableModules().workbenchPromptFiles.listWorkbenchInstructionMechanics(promptContext),
+      field: "opencode.systemPrompt",
+      harness: "opencode",
+      onWarning: (warning) => logError("instruction-filter", `\u001b[31m${warning.field}:${warning.line} ${warning.recovery}: ${warning.source}\u001b[0m`),
+      shell: process.platform === "win32" ? "pwsh" : "bash",
+    });
   }
 
   private async startTurn(message: JsonRpcRequest) {

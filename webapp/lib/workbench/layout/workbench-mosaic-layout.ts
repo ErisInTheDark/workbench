@@ -23,6 +23,7 @@ import {
   createWorkbenchMosaicSplit,
   createWorkbenchMosaicTarget,
 } from "../navigation/workbench-mosaic-route";
+import { areDeeplyEqual } from "../deep-equality";
 
 export interface WorkbenchMosaicLayoutProjection {
   readonly layout: WorkbenchMainLayout;
@@ -54,7 +55,13 @@ function formatLayoutPathId(path: readonly number[]) {
 }
 
 function createMosaicTargetLayoutNodeId(target: WorkbenchMosaicPanelTarget) {
-  const targetValue = target.kind === "file" ? target.filePath : target.threadId;
+  const targetValue = target.kind === "file"
+    ? target.filePath
+    : target.target.kind === "provider"
+      ? target.target.threadId
+      : target.target.kind === "subagent"
+        ? `${target.target.parentThreadId}-sub-${target.target.threadId}`
+        : target.target.kind === "draft" ? `new-${target.target.draftId}` : "new";
   const stableKey = `${target.kind}:${targetValue}`;
   return `mosaic-panel-${target.kind}-${createStableLayoutHash(stableKey)}-${sanitizeLayoutIdPart(targetValue).slice(0, 32)}`;
 }
@@ -80,7 +87,7 @@ function targetsEqual(left: WorkbenchMosaicPanelTarget, right: WorkbenchMosaicPa
     return left.filePath === right.filePath;
   }
 
-  return left.kind === "thread" && right.kind === "thread" && left.threadId === right.threadId;
+  return left.kind === "thread" && right.kind === "thread" && areDeeplyEqual(left.target, right.target);
 }
 
 function containsTarget(node: WorkbenchMosaicNode, target: WorkbenchMosaicPanelTarget): boolean {

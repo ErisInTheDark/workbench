@@ -41,7 +41,7 @@ test("late completion for an older turn cannot retire a newer candidate", async 
   assert.equal(controller.capture(["codex"])[0]?.turnId, "new-turn");
 });
 
-test("handoff progress keeps the first unsettled candidate after a recovery failure", async () => {
+test("handoff recovery failures publish once and retire the failed candidate", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-recovery-progress-"));
   const store = new WorkbenchTurnRecoveryHandoffStore(root);
   const controller = new WorkbenchTurnRecoveryController(store, () => undefined);
@@ -49,13 +49,17 @@ test("handoff progress keeps the first unsettled candidate after a recovery fail
   controller.observeRequest("codex", { id: 2, method: "turn/start", params: { input: [], threadId: "second" } }, 1);
   const handoff = await controller.persistControlledRestart();
   let calls = 0;
-  await assert.rejects(controller.recover(handoff.candidates, async () => {
+  const failures: string[] = [];
+  const reportingController = new WorkbenchTurnRecoveryController(store, () => undefined, async (candidate) => { failures.push(candidate.threadId); });
+  reportingController.loadCandidates(handoff.candidates);
+  await reportingController.recover(handoff.candidates, async () => {
     calls += 1;
     if (calls === 2) throw new Error("recovery failed");
     return "recovered";
-  }, handoff), /recovery failed/u);
+  }, handoff);
   const persisted = await store.load();
-  assert.deepEqual(persisted?.candidates.map((candidate) => candidate.threadId), ["second"]);
+  assert.equal(persisted, null);
+  assert.deepEqual(failures, ["second"]);
 });
 
 test("recovery cannot retire a replacement candidate registered for the same thread", async () => {

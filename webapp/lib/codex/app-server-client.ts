@@ -32,6 +32,7 @@ type PendingResponseHandler = {
 };
 
 type CodexIncomingMessage = CodexJsonRpcResponse<unknown> | CodexAppServerNotification;
+type WorkbenchNotification = { method: "workbench/thread-state/reset" | "workbench/thread-state/updated"; params: unknown };
 
 function isCodexJsonRpcResponse(message: unknown): message is CodexJsonRpcResponse<unknown> {
   return !!message && typeof message === "object" && "id" in message && ("result" in message || "error" in message);
@@ -44,9 +45,15 @@ export class CodexAppServerClient {
     harness: WorkbenchHarness,
   ) => void>();
   private readonly pendingResponses = new Map<number, PendingResponseHandler>();
+  private readonly workbenchNotificationListeners = new Set<(notification: WorkbenchNotification) => void>();
   private readonly nextRequestId = createRequestIdGenerator();
   private connectPromise: Promise<void> | null = null;
+  private socketPromise: Promise<void> | null = null;
   private initialized = false;
+  private disposed = false;
+  private reconnectAttempt = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private url = getCodexAppServerUrl();
   private socket: WebSocket | null = null;
 
   async connect(url = getCodexAppServerUrl()) {
@@ -59,7 +66,8 @@ export class CodexAppServerClient {
       return;
     }
 
-    this.connectPromise = this.openAndInitialize(url);
+    this.url = url;
+    this.connectPromise = this.initializeProvider();
     try {
       await this.connectPromise;
     } finally {
@@ -67,7 +75,28 @@ export class CodexAppServerClient {
     }
   }
 
-  private async openAndInitialize(url: string) {
+  async connectSocket(url = this.url) {
+    if (this.disposed) throw new Error("Codex app-server client is disposed.");
+    this.url = url;
+    if (this.socket?.readyState === WebSocket.OPEN) return;
+    if (this.socketPromise) return await this.socketPromise;
+    this.socketPromise = this.openSocket(url);
+    try { await this.socketPromise; } finally { this.socketPromise = null; }
+  }
+
+  private async initializeProvider() {
+    await this.connectSocket(this.url);
+    if (this.initialized) return;
+    const initializeRequest = createInitializeRequest(0, {
+      capabilities: createInitializeCapabilities({ experimentalApi: true }),
+    });
+    const response = await this.sendRequest<CodexInitializeResponse>({ id: 0, method: initializeRequest.method, params: initializeRequest.params }, { socketOnly: true });
+    if (isCodexJsonRpcFailure(response)) throw new Error(response.error.message);
+    this.send(createInitializedNotification());
+    this.initialized = true;
+  }
+
+  private async openSocket(url: string) {
     const socket = new WebSocket(url);
     this.socket = socket;
 
@@ -81,7 +110,8 @@ export class CodexAppServerClient {
       }
       this.pendingResponses.clear();
       this.initialized = false;
-      this.socket = null;
+      if (this.socket === socket) this.socket = null;
+      if (!this.disposed) this.scheduleReconnect();
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -91,27 +121,38 @@ export class CodexAppServerClient {
       });
     });
 
-    const initializeRequest = createInitializeRequest(0, {
-      capabilities: createInitializeCapabilities({
-        experimentalApi: true,
-      }),
-    });
-    const response = await this.sendRequest<CodexInitializeResponse>({
-      id: 0,
-      method: initializeRequest.method,
-      params: initializeRequest.params,
-    });
+    this.reconnectAttempt = 0;
+  }
 
-    if (isCodexJsonRpcFailure(response)) {
-      throw new Error(response.error.message);
-    }
-
-    this.send(createInitializedNotification());
-    this.initialized = true;
+  private scheduleReconnect() {
+    if (this.reconnectTimer || this.disposed) return;
+    const delay = Math.min(30_000, 250 * 2 ** Math.min(this.reconnectAttempt, 7));
+    this.reconnectAttempt += 1;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connectSocket(this.url).catch(() => this.scheduleReconnect());
+    }, delay);
   }
 
   close(code?: number, reason?: string) {
+    this.disposed = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
     this.socket?.close(code, reason);
+  }
+
+  dispose() {
+    this.disposed = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this.socket?.close();
+    for (const pending of this.pendingResponses.values()) pending.reject(new Error("Codex app-server client disposed."));
+    this.pendingResponses.clear();
+  }
+
+  onWorkbenchNotification(listener: (notification: WorkbenchNotification) => void) {
+    this.workbenchNotificationListeners.add(listener);
+    return () => this.workbenchNotificationListeners.delete(listener);
   }
 
   onNotification(listener: (
@@ -135,7 +176,10 @@ export class CodexAppServerClient {
 
   async sendRequest<TResponse = unknown>(
     message: { id?: number; method: string; params?: unknown } & Record<string, unknown>,
+    options: { socketOnly?: boolean } = {},
   ): Promise<CodexJsonRpcResponse<TResponse>> {
+    if (options.socketOnly) await this.connectSocket();
+    else if (!this.initialized && message.method !== "initialize") await this.connect();
     const requestId = message.id ?? this.nextRequestId();
     const request = {
       ...message,
@@ -164,6 +208,12 @@ export class CodexAppServerClient {
     }
 
     const parsed = JSON.parse(payload) as CodexIncomingMessage;
+
+    const workbenchMessage = parsed as unknown as { method?: string };
+    if (workbenchMessage.method === "workbench/thread-state/updated" || workbenchMessage.method === "workbench/thread-state/reset") {
+      for (const listener of this.workbenchNotificationListeners) listener(parsed as unknown as WorkbenchNotification);
+      return;
+    }
 
     if (isCodexAppServerNotification(parsed)) {
       const handling = classifyCodexAppServerNotification(parsed);

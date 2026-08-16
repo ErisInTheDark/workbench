@@ -5,6 +5,8 @@
  * - ensureWorkbenchPromptFiles: write generated Workbench prompt files and scaffold prompt folders. Keywords: AGENTS, workflows, default agent.
  * - buildWorkbenchPromptInstructions: resolve fresh prompt files and expand Workbench injections for a Codex thread. Keywords: prompt, injections, app-server.
  * - buildWorkbenchThreadUtilityDeveloperInstructions: resolve workflow-free Workbench CLI instructions. Keywords: checkpoints, thread title, thread recall, cli.
+ * - filterWorkbenchInstructionContent: render final instruction fields for the trusted harness, shell, and available mechanics. Keywords: selector, filter, final payload.
+ * - listWorkbenchInstructionMechanics: derive mechanics availability from the same packet predicates used by prompt assembly. Keywords: selector, available, mechanics.
  * - buildWorkbenchCollaborationDeveloperInstructions: build Workbench-owned questionnaire collaboration instructions. Keywords: collaboration mode, plan mode, request_user_input.
  * - default WorkbenchPromptFiles: prompt-file owner namespace. Keywords: prompt, owner, generated files.
  */
@@ -37,6 +39,7 @@ import {
 } from "../agent-paths";
 import WorkbenchServerSettings from "../settings/WorkbenchServerSettings";
 import { WORKBENCH_INJECTION_TEMPLATES } from "./instruction-injections";
+import { filterWorkbenchInstructionContent } from "./instruction-context-filter";
 import {
     WORKBENCH_AGENT_DEFAULT_PROMPT,
     WORKBENCH_AGENT_DEFAULT_TEMPLATE_PROMPT,
@@ -49,6 +52,8 @@ import {
     WORKBENCH_WORKFLOW_SUBAGENT_PROMPT,
     WORKBENCH_WORKFLOW_SUBAGENT_TEMPLATE_PROMPT,
 } from "./workbench-base-prompts";
+
+export { filterWorkbenchInstructionContent };
 
 export interface WorkbenchPromptContext {
   readonly agentPath?: string | null;
@@ -401,9 +406,30 @@ function joinInstructionSections(sections: Array<string | null | undefined>) {
     .join("\n\n") || null;
 }
 
+function isMaterializedPromptThread(context: WorkbenchPromptContext) {
+  const threadId = context.threadId?.trim();
+  return Boolean(threadId && threadId !== "new" && !threadId.startsWith("draft:") && context.workbenchOrigin?.trim());
+}
+
+export function listWorkbenchInstructionMechanics(context: WorkbenchPromptContext) {
+  const available = new Set<string>();
+  if (context.workbenchOrigin?.trim()) {
+    available.add("browse");
+    available.add("orchestrator-reload");
+    available.add("subagents");
+  }
+  if (isMaterializedPromptThread(context)) {
+    available.add("thread-git");
+    available.add("thread-recall");
+    available.add("thread-status");
+    if (!context.subagentName?.trim()) available.add("thread-title");
+  }
+  return available;
+}
+
 function buildThreadTitleInstructions(context: WorkbenchPromptContext) {
   const threadId = context.threadId?.trim();
-  if (!threadId || threadId === "new" || threadId.startsWith("draft:") || !context.workbenchOrigin?.trim()) {
+  if (!threadId || threadId === "new" || threadId.startsWith("draft:") || context.subagentName?.trim() || !context.workbenchOrigin?.trim()) {
     return null;
   }
 
@@ -411,6 +437,17 @@ function buildThreadTitleInstructions(context: WorkbenchPromptContext) {
     harness: context.harness ?? "codex",
     threadId,
   });
+}
+
+function buildThreadStatusInstructions(context: WorkbenchPromptContext) {
+  if (!isMaterializedPromptThread(context)) return null;
+  return `
+## Workbench Thread Status CLI
+
+Thread status tells Workbench whether the current turn is finished or needs attention:
+
+\`wb thread status --status <completed|blocked>\`
+`.trim();
 }
 
 async function buildWorkbenchBrowseInstructions(context: WorkbenchPromptContext) {
@@ -467,19 +504,24 @@ function buildWorkbenchSubagentInstructions(context: WorkbenchPromptContext) {
   return `
 ## Workbench Subagent CLI
 
-Workbench owns subagents exclusively through the allowlisted \`wb subagent\` command suite. No other subagent tools are approved. Run every command from the intended project cwd; the CLI privately supplies that cwd and the current managed thread identity.
+Workbench owns subagents exclusively through the allowlisted \`wb subagent\` command suite. No other subagent tools are approved.
+Run every command from the intended project cwd; the CLI privately supplies that cwd and the current managed thread identity.
 
 ### Managing subagents
-\`wb subagent list [--cursor <cursor>] [--limit <1-20>]\` lists direct children owned by the current thread without contacting their harnesses. Results are activity-sorted metadata pages with at most 20 records and a \`nextCursor\`; pass that cursor to read the next page. \`activityStatus\` is \`active\`, \`inactive\`, or \`unknown\`, where \`unknown\` honestly represents legacy metadata or activity invalidated by an orchestrator restart.
+\`wb subagent list\` lists every unsettled direct child.
+
+\`wb subagent list --settled [--cursor <cursor>] [--limit <1-20>]\` lists settled history.
 
 \`wb subagent profiles\` lists profiles available to this thread. Use a profile ID only as the machine value for \`--profile\`. When talking to the user, always use the profile's user-facing \`name\`, never its ID.
 
-\`wb subagent create --profile <profile id> --name <name> --title <title> --message <message>\` creates and starts a child. Every flag is required. Choose a unique, person-like name the user can use conversationally. Let your active agent identity influence the name, but do not use a task slug, role label, or operation codename; \`--title\` owns the task description. Workbench stores the exact name you provide and does not generate or rewrite it.
+\`wb subagent create --profile <profile-id> --name <name> --title <title> --message <message>\` creates and starts a child. Every flag is required. Choose a unique, person-like name the user can use conversationally. Let your active agent identity influence the name, but do not use a task slug, role label, or operation codename; \`--title\` owns the task description. Workbench preserves display spelling and resolves names case-insensitively.
+
+When replacing a superseded child, choose a new person-like name. Do not append \`2\`, \`II\`, or another version suffix to the old name.
 
 ### Waiting for subagents
-\`wb subagent wait --id <id> [--id <id>...]\` watches any number of direct children and returns as soon as the first watched child has a pending questionnaire or no active turn. It checks existing state immediately, so a child that is already waiting or already finished returns without delay. A singular wait prints the child's trailing commentary plus its questionnaire and options, or its final output. A multiplexed wait also identifies which child triggered and why.
+\`wb subagent wait --name <name> [--name <name>...]\` waits until the first target needs attention, completes, or stops.
 
-Pass every active child in one wait command instead of building separate parallel waits. After a finished child returns, omit its ID from the next wait so the deliberately immediate state check can monitor the remaining active children. Treat the command as a blocking event wait, not as a polling primitive: use a bounded shell timeout and keep the outer execution tool attached for at least that interval. When using \`functions.exec\`, set its \`yield_time_ms\` at least as high as the nested shell command's \`timeout_ms\`. A wait timeout cancels only that wait request, not any child turn.
+Pass every active child in one wait command instead of building separate parallel waits. Treat the command as a blocking event wait, not as a polling primitive. Use a 25-minute shell timeout and keep the outer execution tool attached for the complete wait. A wait timeout cancels only that wait request, not any child turn.
 
 Do not hide waits behind \`Promise.all\`, let an outer wrapper yield into a cell and repeatedly poll that cell with generic \`functions.wait\`, or substitute generic sleeping or idling. Those shapes conceal child questionnaires and completions behind unrelated work.
 
@@ -488,20 +530,45 @@ Do not include pointless "anxiety commentary" between waits. We include a timeou
 Use this command shape when \`functions.exec\` owns the shell call:
 
 \`\`\`\`js
-// @exec: {"yield_time_ms": 125000, "max_output_tokens": 5000}
+// @exec: {"yield_time_ms": 1505000, "max_output_tokens": 5000}
 const result = await tools.shell_command({
-  command: "wb subagent wait --id <first-child-id> --id <second-child-id>",
+  command: "wb subagent wait --name <first-name> --name <second-name>",
   workdir: "<project cwd>",
-  timeout_ms: 120000,
+  timeout_ms: 1500000,
 });
 text(result);
 \`\`\`\`
 
-\`wb subagent message --id <id> --message <message>\` sends ordinary prose to a direct child as a steer. When no turn is active, it starts a new turn.
+\`wb subagent message --name <name> --message <message>\` sends ordinary prose to an unsettled direct child as a steer. When no turn is active, it starts a new turn.
 
 \`wb subagent message --parent --message <message>\` lets a direct child send info to its direct parent.
 
-\`wb subagent stop --id <id>\` is equivalent to the thread stop button.
+\`wb subagent stop --name <name> [--name <name>...]\` stops any number of unsettled direct children.
+
+\`wb subagent settle --name <name> [--name <name>...]\` settles Completed or Stopped children and releases their names for reuse.
+
+<shell:pwsh>
+For a multiline create or message value in PowerShell, use a literal single-quoted here-string:
+
+\`\`\`\`powershell
+wb subagent message --name <name> --message @'
+first line
+second line
+'@
+\`\`\`\`
+</shell:pwsh>
+
+<shell:bash>
+For a multiline create or message value in Bash, use a quoted heredoc:
+
+\`\`\`\`bash
+wb subagent message --name <name> --message "$(cat <<'EOF'
+first line
+second line
+EOF
+)"
+\`\`\`\`
+</shell:bash>
 
 The returned subagent ID is its thread ID and can be used with Workbench Thread Recall. You may operate only on direct children owned by the current thread; sideways and grandchild access fails closed.
 
@@ -694,6 +761,7 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
     buildWorkbenchGitInstructions(context),
     buildWorkbenchSubagentInstructions(context),
     buildThreadTitleInstructions(context),
+    buildThreadStatusInstructions(context),
   ]);
 
   return {
@@ -715,6 +783,7 @@ export async function buildWorkbenchThreadUtilityDeveloperInstructions(
     buildWorkbenchGitInstructions(context),
     buildWorkbenchSubagentInstructions(context),
     buildThreadTitleInstructions(context),
+    buildThreadStatusInstructions(context),
   ]);
 }
 
@@ -751,6 +820,7 @@ This collaboration-mode overlay must not replace the active Workbench workflow, 
     buildWorkbenchGitInstructions(context),
     buildWorkbenchSubagentInstructions(context),
     buildThreadTitleInstructions(context),
+    buildThreadStatusInstructions(context),
   ]);
 }
 
@@ -759,6 +829,7 @@ const WorkbenchPromptFiles = {
   buildWorkbenchPromptInstructions,
   buildWorkbenchThreadUtilityDeveloperInstructions,
   ensureWorkbenchPromptFiles,
+  listWorkbenchInstructionMechanics,
 };
 
 export default WorkbenchPromptFiles;

@@ -5,7 +5,7 @@
  * - renderSubagentWaitResultOutput: identify which child triggered a multiplexed wait while preserving singular output. Keywords: subagent, multiplex, wait, output.
  */
 import type { Thread } from "../../codex/generated/app-server/v2/Thread";
-import type { WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "../../types";
+import type { WorkbenchSubagentSummary, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "../../types";
 
 export function createEmptySubagentQuestionnaireResponse(request: WorkbenchUserInputRequest): WorkbenchUserInputResponse {
   return { answers: Object.fromEntries(request.questions.map((question) => [question.id, { answers: [] }])) };
@@ -58,4 +58,28 @@ export function renderSubagentWaitResultOutput({
   if (!multiplexed) return output;
   const status = outcome === "needs-interaction" ? "needs interaction" : "finished its current turn";
   return [`Subagent ${name} (${threadId}) ${status}.`, output].filter(Boolean).join("\n\n");
+}
+
+export function renderSubagentListOutput(subagents: readonly WorkbenchSubagentSummary[], settled: boolean, nextCursor: string | null) {
+  if (!subagents.length) return settled ? "No settled subagents." : "No unsettled subagents.";
+  const rows = subagents.map((subagent) => {
+    const status = subagent.lifecycle?.kind ?? (subagent.activityStatus === "active" ? "working" : "completed");
+    const control = subagent.pinned ? "Locked" : "Parent-controlled";
+    return [
+      `Name: ${subagent.name}`,
+      `Status: ${status}`,
+      `Title: ${subagent.title}`,
+      `Last activity: ${new Date(subagent.lastActivityAt).toLocaleString()}`,
+      ...(settled ? [`Thread ID: ${subagent.threadId}`, "Resume: use --id"] : [`Control: ${control}`]),
+    ].join("\n");
+  });
+  const hints = [] as string[];
+  if (!settled && subagents.some((subagent) => subagent.pinned)) hints.push("locked: this subagent is user-owned and may send you follow-up messages");
+  if (settled) hints.push("in order to resume a settled thread, use `--id <id>` instead of `--name <name>`");
+  if (settled && nextCursor) hints.push(`Next cursor: ${nextCursor}`);
+  return [...rows, ...hints].join("\n\n");
+}
+
+export function renderSubagentSettleOutput(settled: readonly { name: string; threadId: string }[]) {
+  return settled.length ? settled.map((entry) => `Settled ${entry.name} (${entry.threadId}).`).join("\n") : "No subagents were settled.";
 }

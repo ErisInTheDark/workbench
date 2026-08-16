@@ -77,11 +77,11 @@ after(async () => {
 
 test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", async () => {
   const title = await parseWorkbenchAgentCliCommand([
-    "thread", "title", "--thread", "thread/1", "--harness", "codex", "--title", "A title",
-  ], { cwd: "C:/workspace" });
+    "thread", "title", "--title", "A title",
+  ], { callerThreadId: "thread/1", cwd: "C:/workspace" });
   assert.equal(title.kind, "request");
   assert.deepEqual(title.request, {
-    body: { harness: "codex", threadId: "thread/1", title: "A title" },
+    body: { callerThreadId: "thread/1", cwd: "C:/workspace", title: "A title" },
     method: "POST",
     path: "/api/thread-title",
     responseKind: "thread-title",
@@ -243,13 +243,21 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
     cwd: "C:/workspace",
     workbenchOrigin: "http://localhost:3000",
   };
-  const list = await parseWorkbenchAgentCliCommand(["subagent", "list", "--limit", "20", "--cursor", "next-page"], options);
+  const list = await parseWorkbenchAgentCliCommand(["subagent", "list", "--settled", "--limit", "20", "--cursor", "next-page"], options);
   assert.equal(list.kind, "request");
   assert.deepEqual(list.request, {
-    method: "GET",
-    path: "/api/subagents?cursor=next-page&cwd=C%3A%2Fworkspace&limit=20&parentThreadId=parent-thread",
-    responseKind: "json",
-  });
+    body: {
+      action: "list",
+      callerThreadId: "parent-thread",
+      cursor: "next-page",
+      cwd: "C:/workspace",
+      limit: 20,
+      settled: true,
+    },
+      method: "POST",
+      path: "/api/subagents",
+      responseKind: "subagent-list",
+    });
   const profiles = await parseWorkbenchAgentCliCommand(["subagent", "profiles"], options);
   assert.equal(profiles.kind, "request");
   assert.deepEqual(profiles.request, {

@@ -2,6 +2,8 @@
  * Exports:
  * - CodexIcon/CopilotIcon/OpenCodeIcon/HarnessIcon: render harness-specific icons for thread and rate-limit UI. Keywords: workbench, icon, harness, codex, copilot, opencode.
  * - SaveIcon: render the save control icon with its disabled slash overlay. Keywords: workbench, icon, save.
+ * - DraftThreadIcon/NeedsAttentionThreadIcon/CompletedThreadIcon/WorkingThreadIcon/StoppedThreadIcon: render shared sidebar lifecycle glyphs. Keywords: thread, status, sidebar.
+ * - DiscardDraftIcon/SettleThreadIcon/RestoreThreadIcon/UnsnoozeThreadIcon/SnoozedThreadIcon: render shared sidebar action and snooze glyphs. Keywords: draft, settle, restore, snooze.
  * - BinIcon: render the discard-draft bin icon. Keywords: workbench, icon, reset.
  * - ZoomOutIcon: render the decrease text size icon. Keywords: workbench, icon, zoom.
  * - ZoomInIcon: render the increase text size icon. Keywords: workbench, icon, zoom.
@@ -15,7 +17,7 @@
  * - BrowserSessionIcon: render the Browse session sidebar icon. Keywords: workbench, icon, browse, session.
  * - ReloadIcon: render the local runtime reload icon. Keywords: workbench, icon, reload.
  * - StopIcon/PauseIcon/PlayIcon/ClockIcon/WarningIcon: render shared thread turn and command-status icons. Keywords: workbench, icon, thread, stop, pause, play, progress.
- * - PinIcon: render the pinned thread icon. Keywords: workbench, icon, thread, pin.
+ * - PinIcon/LockIcon/UnlockIcon: render pinned and subagent ownership controls. Keywords: workbench, icon, thread, pin, lock.
  * - FlagIcon: render the Codex goal control icon. Keywords: workbench, icon, thread, goal, flag.
  * - ArchiveIcon: render the thread archive context menu icon. Keywords: workbench, icon, thread, archive.
  * - WrapTextIcon: render the thread codeblock line-wrap toggle icon. Keywords: workbench, icon, thread, code, wrap.
@@ -295,12 +297,39 @@ export function WarningIcon ({ className = "size-4" }: IconProps) {
 
 export function PinIcon ({ className = "size-4" }: IconProps) {
   return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
-      <path d="M7.75 3.75H12.25L11.65 8.35L14.75 11.2V12.5H5.25V11.2L8.35 8.35L7.75 3.75Z" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M10 12.5V17" strokeLinecap="round" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
+      <path d="M12 17v5" />
+      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
     </svg>
   );
 }
+
+export function LockIcon ({ className = "size-4" }: IconProps) {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><rect width="18" height="11" x="3" y="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>;
+}
+
+export function UnlockIcon ({ className = "size-4" }: IconProps) {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><rect width="18" height="11" x="3" y="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 9.9-1" /></svg>;
+}
+
+const bubblePath = "M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719";
+
+function MessageCircleIcon({ className, paths }: IconProps & { paths: readonly string[] }) {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>{paths.map((path) => <path d={path} key={path} />)}</svg>;
+}
+
+export function DraftThreadIcon({ className = "size-4" }: IconProps) {
+  return <MessageCircleIcon className={className} paths={["M10.1 2.182a10 10 0 0 1 3.8 0", "M13.9 21.818a10 10 0 0 1-3.8 0", "M17.609 3.72a10 10 0 0 1 2.69 2.7", "M2.182 13.9a10 10 0 0 1 0-3.8", "M20.28 17.61a10 10 0 0 1-2.7 2.69", "M21.818 10.1a10 10 0 0 1 0 3.8", "M3.721 6.391a10 10 0 0 1 2.7-2.69", "m6.163 21.117-2.906.85a1 1 0 0 1-1.236-1.169l.965-2.98"]} />;
+}
+export function NeedsAttentionThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3", "M12 17h.01"]} />; }
+export function CompletedThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "m9 12 2 2 4-4"]} />; }
+export function WorkingThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "M8 12h.01", "M12 12h.01", "M16 12h.01"]} />; }
+export function StoppedThreadIcon({ className = "size-4" }: IconProps) { return <span className="text-danger"><MessageCircleIcon className={className} paths={[bubblePath, "m15 9-6 6", "m9 9 6 6"]} /></span>; }
+export function DiscardDraftIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={["M18 6 6 18", "m6 6 12 12"]} />; }
+export function SettleThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={["M20 6 9 17l-5-5"]} />; }
+export function RestoreThreadIcon({ className = "size-4" }: IconProps) { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><path d="m5 12 7-7 7 7" /><path d="M12 19V5" /></svg>; }
+export function UnsnoozeThreadIcon({ className = "size-4" }: IconProps) { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2" /><path d="M5 3 2 6" /><path d="m22 6-3-3" /><path d="M6.38 18.7 4 21" /><path d="M17.64 18.67 20 21" /></svg>; }
+export function SnoozedThreadIcon({ className = "size-4" }: IconProps) { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><path d="M4 11h8l-8 10h8" /><path d="M15 4h5l-5 8h5" /></svg>; }
 
 export function FlagIcon ({ className = "size-4" }: IconProps) {
   return (

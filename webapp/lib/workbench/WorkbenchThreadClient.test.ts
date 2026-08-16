@@ -109,6 +109,8 @@ class FakeWebSocket {
     } else if (request.method === "turn/start") {
       const threadId = String(request.params?.threadId ?? "thread");
       queueMicrotask(() => this.respond(request.id, { turn: wireThread(threadId, `${threadId}-started`).turns[0] }));
+    } else if (request.method === "workbench/thread-state/accepted") {
+      queueMicrotask(() => this.respond(request.id, { accepted: true, revision: 1 }));
     } else {
       queueMicrotask(() => this.fail(request.id, `unexpected ${request.method}`));
     }
@@ -305,9 +307,12 @@ test("selected active Codex steers settle at admission and canonical notificatio
       { selectThread: false },
     );
     assert.equal(backgroundResult?.id, "background");
-    assert.ok(socket?.requests.some((request) => (
-      request.method === "turn/steer" && request.params?.threadId === "background"
-    )));
+    const backgroundRequests = socket?.requests.filter((request) => request.params?.threadId === "background") ?? [];
+    const backgroundSteerIndex = backgroundRequests.findIndex((request) => request.method === "turn/steer");
+    const backgroundPreparationIndex = backgroundRequests.findIndex((request) => request.method === "thread/read" || request.method === "thread/resume");
+    assert.ok(backgroundSteerIndex >= 0);
+    assert.ok(backgroundPreparationIndex === -1 || backgroundSteerIndex < backgroundPreparationIndex);
+    assert.equal(backgroundRequests[backgroundSteerIndex]?.params?.expectedTurnId, "background-turn");
   } finally {
     client.dispose();
     globalThis.WebSocket = originalWebSocket;
@@ -377,6 +382,39 @@ test("idle selected Codex resumes once and starts with native identity while pro
     assert.equal(providerSteer?.params?.clientUserMessageId, undefined);
     assert.equal(providerSteer?.workbenchHarness, harness);
   }
+}));
+
+test("an accepted background child turn publishes Working before the send returns", async () => withClient(async (client, socket) => {
+  client.selectThreadPayload(activeThread("codex", "parent"));
+  const child = activeThread("codex", "child", "completed");
+  FakeWebSocket.intercept = (target, request) => {
+    if (request.method === "thread/resume" && request.params?.threadId === "child") {
+      queueMicrotask(() => target.respond(request.id, {
+        model: "model",
+        reasoningEffort: null,
+        serviceTier: null,
+        thread: wireThread("child", "child-turn", "completed"),
+      }));
+      return true;
+    }
+    return false;
+  };
+  const result = await client.sendThreadMessage(
+    child,
+    [{ text: "continue", text_elements: [], type: "text" }],
+    { selectThread: false },
+  );
+  assert.equal(result?.id, "child");
+  const startIndex = socket.requests.findIndex((request) => request.method === "turn/start" && request.params?.threadId === "child");
+  const acceptedIndex = socket.requests.findIndex((request) => request.method === "workbench/thread-state/accepted" && request.params?.threadId === "child");
+  assert.ok(startIndex >= 0);
+  assert.ok(acceptedIndex > startIndex);
+  assert.deepEqual(socket.requests[acceptedIndex]?.params, {
+    harness: "codex",
+    projectId: "project",
+    threadId: "child",
+    turnId: "child-started",
+  });
 }));
 
 test("Copilot and OpenCode user notifications keep their provider-owned turn history path", async () => withClient(async (client, socket) => {
@@ -1107,28 +1145,23 @@ test("project reset fences a late rate-limit success from the previous project",
   assert.equal(client.getSnapshot().rateLimits, null);
 }));
 
-test("project or selection changes during draft list refresh prevent stale general dispatch", async () => withClient(async (client, socket) => {
+test("project changes during draft materialization prevent stale general dispatch without list polling", async () => withClient(async (client, socket) => {
   const draft = { ...activeThread("copilot", "draft", "completed"), isDraft: true, source: "draft" };
   client.selectThreadPayload(draft);
-  const deferredLists: SocketRequest[] = [];
-  FakeWebSocket.intercept = (target, request) => {
+  let startRequest: SocketRequest | null = null;
+  FakeWebSocket.intercept = (_target, request) => {
     if (request.method === "thread/start") {
-      queueMicrotask(() => target.respond(request.id, { thread: wireThread("materialized") }));
-      return true;
-    }
-    if (request.method === "thread/list") {
-      deferredLists.push(request);
+      startRequest = request;
       return true;
     }
     return false;
   };
   const send = client.sendThreadMessage(draft, [{ text: "draft", text_elements: [], type: "text" }]);
-  await waitForRequest(socket, "thread/list");
+  await waitForRequest(socket, "thread/start");
   client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
-  for (const request of deferredLists) {
-    socket.respond(request.id, { data: [] });
-  }
+  socket.respond(startRequest!.id, { thread: wireThread("materialized") });
   await assert.rejects(send, ThreadMessageNotSentError);
+  assert.equal(socket.requests.some((request) => request.method === "thread/list"), false);
   assert.equal(socket.requests.some((request) => request.method === "thread/read" && request.params?.threadId === "materialized"), false);
   assert.equal(socket.requests.some((request) => request.method === "turn/steer" && request.params?.threadId === "materialized"), false);
 }));

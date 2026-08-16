@@ -8,7 +8,6 @@ import { test } from "node:test";
 import type { WorkbenchSubagentSummary } from "../../types.ts";
 import {
   getNextSubagentHydrationBatch,
-  getSubagentPollingBatch,
   getSubagentSummary,
   getSubagentHarness,
   getSubagentThreadIds,
@@ -159,42 +158,29 @@ test("prefers the durable subagent name while preserving the agent role", () => 
   );
 });
 
-test("orders activity deterministically and folds stale non-active children", () => {
-  const now = 60 * 60_000;
-  const active = { ...subagent, activityStatus: "active" as const, lastActivityAt: 1, threadId: "active" };
-  const recentInactive = { ...subagent, lastActivityAt: now - 30 * 60_000, threadId: "recent" };
-  const staleInactive = { ...subagent, lastActivityAt: now - 30 * 60_000 - 1, threadId: "stale" };
-  const staleUnknown = { ...staleInactive, activityStatus: "unknown" as const, threadId: "unknown" };
+test("orders lifecycle deterministically and folds only settled children", () => {
+  const working = { ...subagent, lifecycle: { agent: { agentStatus: "working" as const }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const }, lastActivityAt: 1, threadId: "working" };
+  const attention = { ...subagent, lifecycle: { kind: "needsAttention" as const, reason: "restartRecoveryFailed" as const, settled: false as const }, threadId: "attention" };
+  const terminal = { ...subagent, lifecycle: { kind: "completed" as const, reason: "userCompleted" as const, settled: false }, pinned: true, threadId: "terminal" };
+  const settled = { ...terminal, lifecycle: { ...terminal.lifecycle, settled: true }, pinned: false, threadId: "settled" };
   assert.deepEqual(
-    sortWorkbenchSubagents([recentInactive, staleInactive, active, staleUnknown]).map(({ threadId }) => threadId),
-    ["active", "unknown", "recent", "stale"],
+    sortWorkbenchSubagents([working, settled, terminal, attention]).map(({ threadId }) => threadId),
+    ["attention", "terminal", "working", "settled"],
   );
-  const layout = getSubagentTabLayout([recentInactive, staleInactive, active, staleUnknown], { now });
-  assert.deepEqual(layout.visible.map(({ threadId }) => threadId), ["active", "recent"]);
-  assert.deepEqual(layout.collapsed.map(({ threadId }) => threadId), ["unknown", "stale"]);
+  const layout = getSubagentTabLayout([working, settled, terminal, attention]);
+  assert.deepEqual(layout.visible.map(({ threadId }) => threadId), ["attention", "terminal", "working"]);
+  assert.deepEqual(layout.collapsed.map(({ threadId }) => threadId), ["settled"]);
   assert.deepEqual(
-    getSubagentTabLayout([staleInactive], { now, revealedThreadIds: new Set(["stale"]) }).visible.map(({ threadId }) => threadId),
-    ["stale"],
+    getSubagentTabLayout([settled], { revealedThreadIds: new Set(["settled"]) }).visible.map(({ threadId }) => threadId),
+    ["settled"],
   );
-  const pinnedLayout = getSubagentTabLayout(
-    [recentInactive, staleInactive, active, staleUnknown],
-    { now, pinnedThreadIds: ["stale", "active"] },
-  );
-  assert.deepEqual(pinnedLayout.visible.map(({ threadId }) => threadId), ["stale", "active", "recent"]);
-  assert.deepEqual(pinnedLayout.collapsed.map(({ threadId }) => threadId), ["unknown"]);
 });
 
-test("caps hydration and rotates polling through fair four-thread batches", () => {
+test("caps body hydration to four threads", () => {
   const ids = ["one", "two", "three", "four", "five", "six"];
   assert.deepEqual(getNextSubagentHydrationBatch({
     loadedThreadIds: new Set(["one"]),
     loadingThreadIds: new Set(["two"]),
     threadIds: ids,
   }), ["three", "four", "five", "six"]);
-  const first = getSubagentPollingBatch(ids, 0);
-  assert.deepEqual(first, { nextCursor: 4, threadIds: ["one", "two", "three", "four"] });
-  assert.deepEqual(getSubagentPollingBatch(ids, first.nextCursor), {
-    nextCursor: 2,
-    threadIds: ["five", "six", "one", "two"],
-  });
 });

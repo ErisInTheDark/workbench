@@ -12,7 +12,7 @@ import type {
   WorkbenchCollaborationPost,
   WorkbenchCollaborationState,
   WorkbenchHarness,
-  WorkbenchThreadComposerDraft,
+  WorkbenchComposerInputDraft,
 } from "../../../lib/types";
 import type {
   CollaborationPostDropIntent,
@@ -37,7 +37,7 @@ function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
-function draftFromPost (post: WorkbenchCollaborationPost): WorkbenchThreadComposerDraft {
+function draftFromPost (post: WorkbenchCollaborationPost): WorkbenchComposerInputDraft {
   return {
     attachments: post.attachments ?? [],
     text: post.body,
@@ -229,8 +229,6 @@ export default function CollaborationPostNode ({
   onThreadQuestionnaireDraftChange,
   onThreadQuestionnaireDraftClear,
   onThreadReasoningEffortChange,
-  onThreadSavedComposerDraftDelete,
-  onThreadSavedComposerDraftSave,
   onThreadServiceTierChange,
   onThreadSettingsChange,
   onListModels,
@@ -244,7 +242,7 @@ export default function CollaborationPostNode ({
   post: WorkbenchCollaborationPost;
   projectId: string;
   projectRootPath: string;
-  promptComposerDraftsByPostId: Record<string, WorkbenchThreadComposerDraft | undefined>;
+  promptComposerDraftsByPostId: Record<string, WorkbenchComposerInputDraft | undefined>;
   promptDraftThreadsByPostId: Record<string, ThreadPayload | undefined>;
   promptStartErrorsByPostId: Record<string, string | undefined>;
   rateLimits: CollaborationPromptComposerProps["rateLimits"];
@@ -270,8 +268,6 @@ export default function CollaborationPostNode ({
   onThreadQuestionnaireDraftChange: CollaborationPromptComposerProps["onThreadQuestionnaireDraftChange"];
   onThreadQuestionnaireDraftClear: CollaborationPromptComposerProps["onThreadQuestionnaireDraftClear"];
   onThreadReasoningEffortChange: CollaborationPromptComposerProps["onThreadReasoningEffortChange"];
-  onThreadSavedComposerDraftDelete: CollaborationPromptComposerProps["onThreadSavedComposerDraftDelete"];
-  onThreadSavedComposerDraftSave: CollaborationPromptComposerProps["onThreadSavedComposerDraftSave"];
   onThreadServiceTierChange: CollaborationPromptComposerProps["onThreadServiceTierChange"];
   onThreadSettingsChange: CollaborationPromptComposerProps["onThreadSettingsChange"];
   onListModels: CollaborationPromptComposerProps["onListModels"];
@@ -412,8 +408,6 @@ export default function CollaborationPostNode ({
                 onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
                 onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
                 onThreadReasoningEffortChange={onThreadReasoningEffortChange}
-                onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
-                onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
                 onThreadServiceTierChange={onThreadServiceTierChange}
                 onThreadSettingsChange={onThreadSettingsChange}
               />
@@ -583,8 +577,6 @@ export default function CollaborationPostNode ({
                     onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
                     onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
                     onThreadReasoningEffortChange={onThreadReasoningEffortChange}
-                    onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
-                    onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
                     onThreadServiceTierChange={onThreadServiceTierChange}
                     onThreadSettingsChange={onThreadSettingsChange}
                     onListModels={onListModels}

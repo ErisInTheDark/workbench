@@ -46,7 +46,9 @@ function readState(storage: ComposerProfileStorage | null) {
 }
 
 function getSlotKey(slot: WorkbenchComposerProfileSlot) {
-  return slot.kind === "thread" ? `thread:${slot.harness}:${slot.threadId}` : `${slot.kind}:${slot.projectId}`;
+  if (slot.kind === "thread") return `thread:${slot.harness}:${slot.threadId}`;
+  if (slot.kind === "draft") return `draft:${slot.projectId}:${slot.harness}:${slot.draftId}`;
+  return `${slot.kind}:${slot.projectId}`;
 }
 
 function cloneSettings(settings: WorkbenchComposerSettings): WorkbenchComposerSettings {
@@ -169,7 +171,7 @@ export default class WorkbenchComposerProfileController {
   selectCustom(slot: WorkbenchComposerProfileSlot, pendingSettings?: WorkbenchComposerSettings) { this.setSelection(slot, pendingSettings ? { kind: "custom", pendingSettings: cloneSettings(pendingSettings) } : EMPTY_CUSTOM_SELECTION); }
   selectProfile(slot: WorkbenchComposerProfileSlot, profileId: string) {
     const profile = this.getProfile(profileId);
-    if (!profile || (slot.kind === "thread" && profile.harness !== slot.harness)) return false;
+    if (!profile || ((slot.kind === "thread" || slot.kind === "draft") && profile.harness !== slot.harness)) return false;
     this.setSelection(slot, { kind: "profile", profileId });
     return true;
   }
@@ -177,6 +179,15 @@ export default class WorkbenchComposerProfileController {
   materializeSelection(sourceSlot: WorkbenchComposerProfileSlot, threadId: string, harness: WorkbenchHarness) {
     const selection = this.getSelection(sourceSlot);
     if (selection.kind === "profile" && this.getProfile(selection.profileId)?.harness === harness) this.setSelection({ harness, kind: "thread", threadId }, selection);
+  }
+
+  materializeDraftSelection(sourceSlot: WorkbenchComposerProfileSlot, draftId: string, harness: WorkbenchHarness, projectId: string) {
+    const selection = this.getSelection(sourceSlot);
+    if (selection.kind === "profile" && this.getProfile(selection.profileId)?.harness === harness) {
+      this.setSelection({ draftId, harness, kind: "draft", projectId }, selection);
+    } else if (selection.kind === "custom" && selection.pendingSettings?.harness === harness) {
+      this.setSelection({ draftId, harness, kind: "draft", projectId }, selection);
+    }
   }
 
   private setSelection(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileSelection) {

@@ -27,8 +27,6 @@ export function getCodexAppServerArgs() {
   return [
     "--config",
     "features.multi_agent=false",
-    // "--config",
-    // "agents.enabled=false",
     "app-server",
     "--listen",
     "stdio://",

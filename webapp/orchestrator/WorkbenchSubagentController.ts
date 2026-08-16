@@ -16,6 +16,7 @@ import type {
   WorkbenchHarness,
   WorkbenchPendingUserInputRequest,
   WorkbenchSubagentRelationship,
+  WorkbenchSubagentSummary,
 } from "../lib/types";
 import {
   resolveAgentEndpointProjectFromCwd,
@@ -29,6 +30,7 @@ import {
 } from "../lib/workbench/subagent/subagent-output";
 import { getWorkbenchThreadHarnessCandidates } from "../lib/workbench/thread/thread-harness-candidates";
 import { createWorkbenchSubagentMessageText } from "../lib/workbench/thread/thread-subagent-message";
+import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "../lib/workbench/thread/thread-state";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
@@ -59,7 +61,7 @@ const WORKBENCH_PROMPT_CONTEXT_FIELD = "workbenchPromptContext";
 type WorkbenchSubagentHarnessClient = Pick<CodexAppServerClient, "close" | "connect" | "sendRequest">;
 type WorkbenchSubagentControllerStore = Pick<
   WorkbenchSubagentStore,
-  "getOwned" | "getOwnedMany" | "list" | "markActivity" | "remove" | "replace" | "reserve"
+  "getOwned" | "getOwnedMany" | "list" | "remove" | "replace" | "reserve"
 >;
 
 export interface WorkbenchSubagentControllerOptions {
@@ -68,6 +70,11 @@ export interface WorkbenchSubagentControllerOptions {
   resolveProjectFromCwd?: typeof resolveAgentEndpointProjectFromCwd;
   storageRoot: string;
   subagentStore?: WorkbenchSubagentControllerStore;
+  threadState?: {
+    getEntry(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<WorkbenchThreadSidebarEntry | null>;
+    mutate(request: WorkbenchThreadStateRequest): Promise<void>;
+    subscribe(listener: (projectId: string, entry: WorkbenchThreadSidebarEntry) => void): () => void;
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -122,6 +129,7 @@ export default class WorkbenchSubagentController {
   private readonly profileStore: WorkbenchComposerProfileStore;
   private readonly resolveProjectFromCwd: typeof resolveAgentEndpointProjectFromCwd;
   private readonly subagentStore: WorkbenchSubagentControllerStore;
+  private readonly threadState: WorkbenchSubagentControllerOptions["threadState"];
   private readonly waiters = new Map<string, AbortController>();
 
   constructor({
@@ -130,12 +138,14 @@ export default class WorkbenchSubagentController {
     resolveProjectFromCwd = resolveAgentEndpointProjectFromCwd,
     storageRoot,
     subagentStore = new WorkbenchSubagentStore(storageRoot),
+    threadState,
   }: WorkbenchSubagentControllerOptions) {
     this.bridgeUrl = bridgeUrl;
     this.createHarnessClient = createHarnessClient;
     this.profileStore = new WorkbenchComposerProfileStore(storageRoot);
     this.resolveProjectFromCwd = resolveProjectFromCwd;
     this.subagentStore = subagentStore;
+    this.threadState = threadState;
   }
 
   hasActiveWaiters() { return this.waiters.size > 0; }
@@ -156,6 +166,7 @@ export default class WorkbenchSubagentController {
         case "workbench/subagent/waitCancel": return { id, result: this.cancelWait(params) };
         case "workbench/subagent/message": return { id, result: await this.withHarnessClient((client) => this.message(client, params)) };
         case "workbench/subagent/stop": return { id, result: await this.withHarnessClient((client) => this.stop(client, params)) };
+        case "workbench/subagent/settle": return { id, result: await this.settle(params) };
         default: throw new Error(`Unsupported Workbench subagent method: ${message.method ?? "unknown"}`);
       }
     } catch (error) {
@@ -259,10 +270,24 @@ export default class WorkbenchSubagentController {
   private async list(params: Record<string, unknown>) {
     const cwd = requiredString(params, "cwd");
     const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent list" });
-    const parentThreadId = typeof params.parentThreadId === "string" ? params.parentThreadId.trim() : "";
-    const cursor = typeof params.cursor === "string" ? params.cursor.trim() : null;
-    const limit = typeof params.limit === "number" ? params.limit : null;
-    return await this.subagentStore.list({ cursor, limit, parentThreadId, projectId: project.project.id });
+    const parentThreadId = typeof params.parentThreadId === "string" ? params.parentThreadId.trim() : requiredString(params, "callerThreadId");
+    const relationships = (await this.subagentStore.list({ parentThreadId, projectId: project.project.id })).subagents;
+    const joined: WorkbenchSubagentSummary[] = await Promise.all(relationships.map(async (relationship) => {
+      const entry = await this.threadState?.getEntry(project.project.id, relationship.harness, relationship.threadId);
+      return entry?.entryKind === "subagent"
+        ? { ...relationship, activityStatus: entry.lifecycle.kind === "working" ? "active" as const : "inactive" as const, lastActivityAt: entry.activityAt, lifecycle: entry.lifecycle, pinned: entry.pinned }
+        : { ...relationship, activityStatus: "unknown" as const, lastActivityAt: relationship.updatedAt, pinned: false };
+    }));
+    const wantsSettled = params.settled === true;
+    const filtered = joined.filter((relationship) => Boolean(relationship.lifecycle?.settled) === wantsSettled).sort((left, right) => {
+      const rank = (record: WorkbenchSubagentSummary) => record.lifecycle?.kind === "needsAttention" ? 0 : record.lifecycle?.kind === "completed" || record.lifecycle?.kind === "stopped" ? 1 : 2;
+      return rank(left) - rank(right) || Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || right.lastActivityAt - left.lastActivityAt || left.threadId.localeCompare(right.threadId);
+    });
+    if (!wantsSettled) return { nextCursor: null, subagents: filtered };
+    const offset = typeof params.cursor === "string" && /^\d+$/u.test(params.cursor) ? Number(params.cursor) : 0;
+    const limit = typeof params.limit === "number" ? Math.min(20, Math.max(1, params.limit)) : 20;
+    const subagents = filtered.slice(offset, offset + limit);
+    return { nextCursor: offset + subagents.length < filtered.length ? String(offset + subagents.length) : null, subagents };
   }
 
   private async profiles(params: Record<string, unknown>) {
@@ -288,6 +313,10 @@ export default class WorkbenchSubagentController {
 
   private async create(client: WorkbenchSubagentHarnessClient, params: Record<string, unknown>) {
     const caller = await this.resolveCaller(client, params);
+    const relationships = await this.subagentStore.list({ projectId: caller.project.id });
+    if (relationships.subagents.some(({ threadId }) => threadId === caller.callerThreadId)) {
+      throw new Error("Workbench subagents cannot create their own subagents.");
+    }
     const profileId = requiredString(params, "profileId");
     const name = requiredString(params, "name");
     const title = requiredString(params, "title");
@@ -295,12 +324,18 @@ export default class WorkbenchSubagentController {
     const workbenchOrigin = typeof params.workbenchOrigin === "string" ? params.workbenchOrigin : undefined;
     let result: { threadId: string } | null = null;
     const operation = this.createQueue.catch(() => undefined).then(async () => {
+      const currentRelationships = await this.subagentStore.list({ parentThreadId: caller.callerThreadId, projectId: caller.project.id });
+      const sameName = currentRelationships.subagents.filter((relationship) => relationship.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase());
+      for (const relationship of sameName) {
+        const entry = await this.threadState?.getEntry(caller.project.id, relationship.harness, relationship.threadId);
+        if (!entry || entry.entryKind !== "subagent" || !entry.lifecycle.settled) throw new Error(`An unsettled direct child already owns the name ${relationship.name}.`);
+      }
       const profile = (await this.profileStore.read()).profiles.find((candidate) => candidate.id === profileId);
       if (!profile || (profile.scope.kind === "project" && profile.scope.projectId !== caller.project.id)) throw new Error("That profile is not visible in this cwd project.");
       const reservationId = `pending:${randomUUID()}`;
       const now = Date.now();
       const reservation = await this.subagentStore.reserve({
-        activityStatus: "unknown", createdAt: now, cwd: caller.cwd, harness: profile.harness, lastActivityAt: now,
+        createdAt: now, cwd: caller.cwd, harness: profile.harness,
         name, parentThreadId: caller.callerThreadId, profileId: profile.id, profileName: profile.name,
         projectId: caller.project.id, threadId: reservationId, title, updatedAt: now,
       });
@@ -313,7 +348,7 @@ export default class WorkbenchSubagentController {
         });
         childId = start.thread.id;
         const startedAt = Date.now();
-        const record = { ...reservation, activityStatus: "active" as const, lastActivityAt: startedAt, threadId: childId, updatedAt: startedAt };
+        const record = { ...reservation, threadId: childId, updatedAt: startedAt };
         await this.subagentStore.replace(caller.callerThreadId, reservationId, record);
         await this.requestHarness(client, profile.harness, { method: "thread/name/set", params: { cwd: caller.cwd, name: title, threadId: childId } });
         const turnContext = this.buildPromptContext(caller, profile, childId, name, workbenchOrigin, profile.harness === "codex" ? "threadUtilities" : undefined);
@@ -330,8 +365,6 @@ export default class WorkbenchSubagentController {
       } catch (error) {
         if (!childId) {
           await this.subagentStore.remove(caller.callerThreadId, reservationId);
-        } else {
-          await this.subagentStore.markActivity(childId, "inactive");
         }
         throw new Error(`${error instanceof Error ? error.message : String(error)}${childId ? ` (subagent thread ${childId})` : ""}`);
       }
@@ -346,7 +379,20 @@ export default class WorkbenchSubagentController {
     const callerThreadId = requiredString(params, "callerThreadId");
     const cwd = requiredString(params, "cwd");
     const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
-    const threadId = requiredString(params, "threadId");
+    const requestedName = typeof params.threadName === "string" ? params.threadName.trim() : typeof params.name === "string" ? params.name.trim() : "";
+    let threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+    if (!threadId && requestedName) {
+      const relationships = await this.subagentStore.list({ parentThreadId: callerThreadId, projectId: project.project.id });
+      const matches = relationships.subagents.filter((record) => record.name.trim().toLocaleLowerCase() === requestedName.toLocaleLowerCase());
+      const unsettled = [] as WorkbenchSubagentRelationship[];
+      for (const record of matches) {
+        const entry = await this.threadState?.getEntry(project.project.id, record.harness, record.threadId);
+        if (!entry || entry.entryKind !== "subagent" || !entry.lifecycle.settled) unsettled.push(record);
+      }
+      if (unsettled.length !== 1) throw new Error(unsettled.length ? "That subagent name is ambiguous." : "That unsettled subagent name was not found.");
+      threadId = unsettled[0]!.threadId;
+    }
+    if (!threadId) throw new Error("threadId or threadName is required.");
     const record = await this.subagentStore.getOwned(callerThreadId, project.project.id, threadId);
     if (!record) throw new Error("That subagent is not owned by the current thread.");
     return { caller: { callerThreadId, cwd, project: project.project }, record };
@@ -356,12 +402,39 @@ export default class WorkbenchSubagentController {
     const callerThreadId = requiredString(params, "callerThreadId");
     const cwd = requiredString(params, "cwd");
     const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
-    const threadIds = requiredThreadIds(params);
+    const threadIds = Array.isArray(params.threadIds) || typeof params.threadId === "string" ? requiredThreadIds(params) : [];
+    const rawNames = Array.isArray(params.threadNames) ? params.threadNames : Array.isArray(params.names) ? params.names : [params.threadName ?? params.name];
+    const threadNames = rawNames
+      .map((value) => typeof value === "string" ? value.trim() : "")
+      .filter(Boolean);
+    if (!threadIds.length && !threadNames.length) throw new Error("threadIds or threadNames are required.");
+    if (new Set(threadNames.map((name) => name.toLocaleLowerCase())).size !== threadNames.length) throw new Error("threadNames must be unique.");
+    if (threadNames.length) {
+      const relationships = await this.subagentStore.list({ parentThreadId: callerThreadId, projectId: project.project.id });
+      for (const name of threadNames) {
+        const matches = relationships.subagents.filter((record) => record.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase());
+        const unsettled = [] as WorkbenchSubagentRelationship[];
+        for (const record of matches) {
+          const entry = await this.threadState?.getEntry(project.project.id, record.harness, record.threadId);
+          if (!entry || entry.entryKind !== "subagent" || !entry.lifecycle.settled) unsettled.push(record);
+        }
+        if (unsettled.length !== 1) throw new Error(unsettled.length ? `Subagent name ${name} is ambiguous.` : `Unsettled subagent ${name} was not found.`);
+        threadIds.push(unsettled[0]!.threadId);
+      }
+    }
+    if (new Set(threadIds).size !== threadIds.length) throw new Error("Subagent targets must resolve uniquely.");
     const records = await this.subagentStore.getOwnedMany(callerThreadId, project.project.id, threadIds);
     if (!records) {
       throw new Error("Every requested subagent must be owned by the current thread.");
     }
     return records;
+  }
+
+  private async assertUnlocked(projectId: string, records: readonly WorkbenchSubagentRelationship[]) {
+    if (!this.threadState) return;
+    const entries = await Promise.all(records.map((record) => this.threadState!.getEntry(projectId, record.harness, record.threadId)));
+    const locked = entries.find((entry) => entry?.entryKind === "subagent" && entry.pinned);
+    if (locked?.entryKind === "subagent") throw new Error(`Subagent ${locked.name} is locked: this subagent is user-owned and may send you follow-up messages.`);
   }
 
   private async pendingQuestionnaires(client: WorkbenchSubagentHarnessClient, harness: WorkbenchHarness, cwd: string) {
@@ -378,10 +451,49 @@ export default class WorkbenchSubagentController {
 
   private async wait(client: WorkbenchSubagentHarnessClient, params: Record<string, unknown>) {
     const records = await this.ownedRecords(params);
+    await this.assertUnlocked(records[0]!.projectId, records);
     const waitId = requiredString(params, "waitId");
     if (this.waiters.has(waitId)) throw new Error("That subagent wait id is already active.");
     const controller = new AbortController(); this.waiters.set(waitId, controller);
     try {
+      if (this.threadState) {
+        const recordKeys = new Set(records.map((record) => `${record.harness}:${record.threadId}`));
+        const selectReady = async () => {
+          for (const record of records) {
+            const entry = await this.threadState!.getEntry(record.projectId, record.harness, record.threadId);
+            if (entry?.entryKind === "subagent" && (entry.pinned || entry.lifecycle.kind !== "working")) return { entry, record };
+          }
+          return null;
+        };
+        let ready = await selectReady();
+        if (!ready) {
+          ready = await new Promise<{ entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }>; record: WorkbenchSubagentRelationship }>((resolve, reject) => {
+            const unsubscribe = this.threadState!.subscribe((projectId, entry) => {
+              if (entry.entryKind !== "subagent" || projectId !== records[0]!.projectId || !recordKeys.has(`${entry.identity.harness}:${entry.identity.threadId}`)) return;
+              if (!entry.pinned && entry.lifecycle.kind === "working") return;
+              const record = records.find((candidate) => candidate.threadId === entry.identity.threadId && candidate.harness === entry.identity.harness);
+              if (!record) return;
+              cleanup();
+              resolve({ entry, record });
+            });
+            const onAbort = () => { cleanup(); reject(controller.signal.reason); };
+            const cleanup = () => { unsubscribe(); controller.signal.removeEventListener("abort", onAbort); };
+            controller.signal.addEventListener("abort", onAbort, { once: true });
+          });
+        }
+        if (ready.entry.pinned) return { output: `Subagent ${ready.record.name} (${ready.record.threadId}) was locked by the user.` };
+        const thread = await this.readThread(client, ready.record.harness, ready.record.threadId, ready.record.cwd);
+        const pending = ready.entry.lifecycle.kind === "needsAttention" && ready.entry.lifecycle.reason === "pendingInput"
+          ? await this.pendingQuestionnaire(client, ready.record)
+          : null;
+        return { output: renderSubagentWaitResultOutput({
+          multiplexed: records.length > 1,
+          name: ready.record.name,
+          outcome: pending ? "needs-interaction" : "finished",
+          output: pending ? renderSubagentQuestionnaireOutput(thread, pending.request) : renderSubagentTurnOutput(thread),
+          threadId: ready.record.threadId,
+        }) };
+      }
       while (true) {
         const pendingByScope = new Map<string, Promise<PendingQuestionnaireList["data"]>>();
         const states = await Promise.all(records.map(async (record) => {
@@ -451,6 +563,7 @@ export default class WorkbenchSubagentController {
       return await this.messageParent(client, params);
     }
     const { caller, record } = await this.ownedRecord(params);
+    await this.assertUnlocked(record.projectId, [record]);
     const message = requiredString(params, "message");
     const thread = await this.readThread(client, record.harness, record.threadId, record.cwd);
     const turn = currentTurn(thread);
@@ -461,7 +574,6 @@ export default class WorkbenchSubagentController {
         method: "questionnaire/respond",
         params: { requestKey: pending.requestKey, response: createEmptySubagentQuestionnaireResponse(pending.request), threadId: record.threadId, turnId: pending.turnId },
       });
-      await this.subagentStore.markActivity(record.threadId, "active");
       return {};
     }
     const profile = (await this.profileStore.read()).profiles.find((candidate) => candidate.id === record.profileId);
@@ -475,7 +587,6 @@ export default class WorkbenchSubagentController {
         serviceTier: profile.serviceTier, summary: "detailed", threadId: record.threadId,
       },
     });
-    await this.subagentStore.markActivity(record.threadId, "active");
     return {};
   }
 
@@ -522,11 +633,29 @@ export default class WorkbenchSubagentController {
   }
 
   private async stop(client: WorkbenchSubagentHarnessClient, params: Record<string, unknown>) {
-    const { record } = await this.ownedRecord(params);
-    const thread = await this.readThread(client, record.harness, record.threadId, record.cwd);
-    const turn = currentTurn(thread);
-    if (turn?.status === "inProgress") await this.requestHarness(client, record.harness, { method: "turn/interrupt", params: { cwd: record.cwd, threadId: record.threadId, turnId: turn.id } });
-    await this.subagentStore.markActivity(record.threadId, "inactive");
+    const records = await this.ownedRecords(params);
+    await this.assertUnlocked(records[0]!.projectId, records);
+    for (const record of records) {
+      const thread = await this.readThread(client, record.harness, record.threadId, record.cwd);
+      const turn = currentTurn(thread);
+      if (turn?.status === "inProgress") await this.requestHarness(client, record.harness, { method: "turn/interrupt", params: { cwd: record.cwd, threadId: record.threadId, turnId: turn.id } });
+    }
     return {};
+  }
+
+  private async settle(params: Record<string, unknown>) {
+    if (!this.threadState) throw new Error("Subagent lifecycle state is unavailable.");
+    const records = await this.ownedRecords(params);
+    await this.assertUnlocked(records[0]!.projectId, records);
+    for (const record of records) {
+      const entry = await this.threadState.getEntry(record.projectId, record.harness, record.threadId);
+      if (entry?.entryKind !== "subagent" || (entry.lifecycle.kind !== "completed" && entry.lifecycle.kind !== "stopped")) {
+        throw new Error(`Subagent ${record.name} can be settled only after it is Completed or Stopped.`);
+      }
+    }
+    for (const record of records) {
+      await this.threadState.mutate({ identity: { harness: record.harness, threadId: record.threadId }, method: "workbench/thread-state/settle", projectId: record.projectId });
+    }
+    return { settled: records.map(({ name, threadId }) => ({ name, threadId })) };
   }
 }

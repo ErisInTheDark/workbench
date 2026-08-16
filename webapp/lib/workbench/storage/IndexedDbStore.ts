@@ -13,6 +13,7 @@ export interface IndexedDbObjectStoreDefinition<TStoreName extends string = stri
 
 export interface IndexedDbStoreOptions<TStoreName extends string = string> {
   databaseName: string;
+  onUpgrade?: (database: IDBDatabase, oldVersion: number) => void;
   stores: readonly IndexedDbObjectStoreDefinition<TStoreName>[];
   version: number;
 }
@@ -120,6 +121,7 @@ export default class IndexedDbStore<TStoreName extends string = string> {
 
       request.onupgradeneeded = (event) => {
         const database = request.result;
+        this.options.onUpgrade?.(database, event.oldVersion);
         for (const storeDefinition of this.options.stores) {
           if (
             storeDefinition.deleteBeforeVersion

@@ -11,7 +11,7 @@ import type {
   WorkbenchCollaborationPost,
   WorkbenchCollaborationState,
   WorkbenchHarness,
-  WorkbenchThreadComposerDraft,
+  WorkbenchComposerInputDraft,
 } from "../../../lib/types";
 import type { WorkbenchDragPayload } from "../../../lib/workbench/layout/workbench-drag";
 import type {
@@ -62,8 +62,6 @@ export default function CollaborationThreadedView ({
   onThreadQuestionnaireDraftChange,
   onThreadQuestionnaireDraftClear,
   onThreadReasoningEffortChange,
-  onThreadSavedComposerDraftDelete,
-  onThreadSavedComposerDraftSave,
   onThreadServiceTierChange,
   onThreadSettingsChange,
   onListModels,
@@ -74,7 +72,7 @@ export default function CollaborationThreadedView ({
   highlightSources: InlineMentionHighlightSources;
   projectId: string;
   projectRootPath: string;
-  promptComposerDraftsByPostId: Record<string, WorkbenchThreadComposerDraft | undefined>;
+  promptComposerDraftsByPostId: Record<string, WorkbenchComposerInputDraft | undefined>;
   promptDraftThreadsByPostId: Record<string, ThreadPayload | undefined>;
   promptStartErrorsByPostId: Record<string, string | undefined>;
   rateLimits: CollaborationPromptComposerProps["rateLimits"];
@@ -102,8 +100,6 @@ export default function CollaborationThreadedView ({
   onThreadQuestionnaireDraftChange: CollaborationPromptComposerProps["onThreadQuestionnaireDraftChange"];
   onThreadQuestionnaireDraftClear: CollaborationPromptComposerProps["onThreadQuestionnaireDraftClear"];
   onThreadReasoningEffortChange: CollaborationPromptComposerProps["onThreadReasoningEffortChange"];
-  onThreadSavedComposerDraftDelete: CollaborationPromptComposerProps["onThreadSavedComposerDraftDelete"];
-  onThreadSavedComposerDraftSave: CollaborationPromptComposerProps["onThreadSavedComposerDraftSave"];
   onThreadServiceTierChange: CollaborationPromptComposerProps["onThreadServiceTierChange"];
   onThreadSettingsChange: CollaborationPromptComposerProps["onThreadSettingsChange"];
   onListModels: CollaborationPromptComposerProps["onListModels"];
@@ -174,8 +170,6 @@ export default function CollaborationThreadedView ({
                 onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
                 onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
                 onThreadReasoningEffortChange={onThreadReasoningEffortChange}
-                onThreadSavedComposerDraftDelete={onThreadSavedComposerDraftDelete}
-                onThreadSavedComposerDraftSave={onThreadSavedComposerDraftSave}
                 onThreadServiceTierChange={onThreadServiceTierChange}
                 onThreadSettingsChange={onThreadSettingsChange}
                 onListModels={onListModels}

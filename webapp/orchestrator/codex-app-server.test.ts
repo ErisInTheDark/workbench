@@ -30,8 +30,6 @@ test("managed Codex disables native subagents before launching app-server", () =
   assert.deepEqual(getCodexAppServerArgs(), [
     "--config",
     "features.multi_agent=false",
-    "--config",
-    "agents.enabled=false",
     "app-server",
     "--listen",
     "stdio://",

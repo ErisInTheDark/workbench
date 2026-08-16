@@ -52,12 +52,10 @@ function thread(threadId: string, cwd: string, active: boolean): Thread {
 
 function summary({ cwd, name, projectId, threadId }: { cwd: string; name: string; projectId: string; threadId: string }): WorkbenchSubagentRelationship {
   return {
-    activityStatus: "inactive",
     createdAt: 1,
     cwd,
     directSubagentIndex: 0,
     harness: "codex",
-    lastActivityAt: 1,
     name,
     parentThreadId: callerThreadId,
     profileId: "profile-1",
