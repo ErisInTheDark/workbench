@@ -4,7 +4,7 @@
  * Exports:
  * - default Workbench: client shell for project browsing, editing, and thread interaction. Keywords: workbench, project, editor, thread.
  */
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 
 import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
@@ -28,6 +28,7 @@ import type {
   WorkbenchSendThreadMessageOptions,
   WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadDocumentSnapshot,
+  WorkbenchThreadSidebarStore,
   WorkbenchUserInputResponse
 } from "../lib/types";
 import { areDeeplyEqual } from "../lib/workbench/deep-equality";
@@ -66,14 +67,12 @@ import {
   createProjectRoute,
   createSettingsHref,
   createSettingsRoute,
-  createThreadHref,
   createThreadRoute,
-  getWorkbenchDraftIdFromThreadId,
   getWorkbenchThreadTargetRootId,
   getWorkbenchThreadTargetSelectedId,
   isWorkbenchRouteOwnerOfThread,
   type WorkbenchRoute,
-  type WorkbenchSettingsScope,
+  type WorkbenchSettingsScope
 } from "../lib/workbench/navigation/workbench-route";
 import ProjectTreeFileIndex from "../lib/workbench/project/ProjectTreeFileIndex";
 import { isWorkbenchOpenableFile } from "../lib/workbench/project/tree-utils";
@@ -113,7 +112,7 @@ import {
 } from "../lib/workbench/storage/workbench-draft-storage";
 import { getThreadDocumentFromSnapshot } from "../lib/workbench/thread/thread-document-keys";
 import { ThreadMessageNotSentError } from "../lib/workbench/thread/thread-message-submission";
-import { countDraftPromptTokens, getThreadSidebarGroup, type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadTarget } from "../lib/workbench/thread/thread-state";
+import { countDraftPromptTokens, type WorkbenchThreadDraft, type WorkbenchThreadTarget } from "../lib/workbench/thread/thread-state";
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
 import WorkbenchMainLayoutView from "./workbench/layout/WorkbenchMainLayoutView";
@@ -141,27 +140,20 @@ import {
   FileVisibilityIcon,
   NewEntryIcon,
   SidebarLoadingSkeleton,
-  ThreadsList,
 } from "./workbench/workbench-explorer";
 import {
   ArchiveIcon,
   BackArrowIcon,
   BinIcon,
-  CheckIcon,
   CopyIcon,
   FileMoveIcon,
   GearIcon,
-  PinIcon,
   ReloadIcon,
-  RestoreThreadIcon,
   SaveIcon,
-  SettleThreadIcon,
   SidebarCollapseIcon,
   SidebarExpandIcon,
-  SnoozedThreadIcon,
   SparkleIcon,
   StopIcon,
-  UnsnoozeThreadIcon,
   ZoomInIcon,
   ZoomOutIcon
 } from "./workbench/workbench-icons";
@@ -172,6 +164,7 @@ import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvid
 import WorkbenchOptionCards, { WorkbenchOptionCard } from "./workbench/WorkbenchOptionCards";
 import WorkbenchStepSlider from "./workbench/WorkbenchStepSlider";
 import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/WorkbenchTabIcon";
+import WorkbenchThreadSidebar from "./workbench/WorkbenchThreadSidebar";
 
 const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   currentProjectId: "",
@@ -186,7 +179,6 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   projectFilePaths: ProjectTreeFileIndex.empty.paths,
   subagents: [],
   threads: [],
-  threadSidebar: null,
   isProjectLoading: false,
   isThreadsLoading: false,
   changes: {},
@@ -198,6 +190,7 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   fontSize: 1.08,
   workbenchStorageRootPath: "",
 };
+const EMPTY_THREAD_SIDEBAR_SUBSCRIBE = (_listener: () => void) => () => {};
 
 const EMPTY_THREAD_DOCUMENT_SNAPSHOT: WorkbenchThreadDocumentSnapshot = {
   documentsByKey: {},
@@ -386,12 +379,6 @@ function mosaicContainsThreadTarget (node: WorkbenchMosaicNode | null, threadId:
   return node.children.some((child) => mosaicContainsThreadTarget(child, threadId));
 }
 
-function isThreadSummaryActive (thread: ThreadSummary) {
-  return thread.status === "active"
-    || thread.status.startsWith("active:")
-    || Boolean(thread.unreadBadge?.hasActiveTurn);
-}
-
 function getPanelTargetMosaicNode (target: WorkbenchPanelTarget): WorkbenchMosaicNode | null {
   if (target.kind === "file" || target.kind === "thread") {
     return createWorkbenchMosaicTarget(target);
@@ -534,6 +521,7 @@ export default function Workbench () {
   const currentRouteRef = useRef<WorkbenchRoute>(route);
   currentRouteRef.current = route;
   const [explorer, setExplorer] = useState(INITIAL_EXPLORER_SNAPSHOT);
+  const [threadSidebarStore, setThreadSidebarStore] = useState<WorkbenchThreadSidebarStore | null>(null);
   const [currentThread, setCurrentThread] = useState<ThreadPayload | null>(null);
   const [threadDocuments, setThreadDocuments] = useState<WorkbenchThreadDocumentSnapshot>(EMPTY_THREAD_DOCUMENT_SNAPSHOT);
   const [threadRelativeTimeNowMs, setThreadRelativeTimeNowMs] = useState(() => Date.now());
@@ -761,6 +749,10 @@ export default function Workbench () {
             scheduleWorkbenchStateUpdate(() => {
               setRateLimits(nextRateLimits);
             });
+          },
+          onThreadSidebarStoreReady: (store) => {
+            if (cancelled) return;
+            setThreadSidebarStore(store);
           },
           onControlsReady: (nextControls) => {
             if (cancelled) {
@@ -998,32 +990,20 @@ export default function Workbench () {
     };
   }, [activeProjectId, refreshBrowseSessions]);
   const threadSummariesById = useMemo(() => new Map<string, ThreadSummary>(explorer.threads.map((thread) => [thread.id, thread])), [explorer.threads]);
-  const sidebarEntries = explorer.threadSidebar?.entries ?? [];
   useEffect(() => {
     if (route.view !== "thread" || route.threadTarget?.kind !== "provider") return;
     const providerTarget = route.threadTarget;
     const relationship = explorer.subagents.find((entry) => entry.threadId === providerTarget.threadId
       && (!providerTarget.harness || entry.harness === providerTarget.harness));
-    const sidebarChild = explorer.threadSidebar?.entries.find((entry) => entry.entryKind === "subagent"
-      && entry.identity.threadId === providerTarget.threadId
-      && (!providerTarget.harness || entry.identity.harness === providerTarget.harness));
-    const child = sidebarChild?.entryKind === "subagent" ? sidebarChild : null;
-    const parentThreadId = relationship?.parentThreadId ?? child?.parentThreadId;
+    const parentThreadId = relationship?.parentThreadId;
     if (!parentThreadId) return;
-    const parent = explorer.threadSidebar?.entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === parentThreadId);
     navigateToRoute(createThreadRoute(route.projectId, {
-      ...(parent?.entryKind === "thread"
-        ? { harness: parent.identity.harness }
-        : relationship
-          ? { harness: relationship.harness }
-          : child
-            ? { harness: child.identity.harness }
-            : {}),
+      harness: relationship.harness,
       kind: "subagent",
       parentThreadId,
       threadId: providerTarget.threadId,
     }), { replace: true });
-  }, [explorer.subagents, explorer.threadSidebar?.entries, navigateToRoute, route.projectId, route.threadTarget, route.view]);
+  }, [explorer.subagents, navigateToRoute, route.projectId, route.threadTarget, route.view]);
   const projectFileLinkRoots = useMemo(
     () => createProjectFileLinkRoots(explorer.projects, activeProjectId, explorer.roots),
     [activeProjectId, explorer.projects, explorer.roots],
@@ -1410,100 +1390,6 @@ export default function Workbench () {
     navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, target));
     return true;
   }, [explorer.currentProjectId, navigateToRoute, route]);
-  const stopSidebarThread = useCallback(async (thread: ThreadSummary) => {
-    if (!controls) {
-      return;
-    }
-
-    const payload = await controls.readThread(thread.id, thread.harness);
-    if (!payload) {
-      return;
-    }
-
-    await controls.stopThread(payload);
-  }, [controls]);
-  const mutateSidebarEntry = useCallback((entry: WorkbenchThreadSidebarEntry, method: "archive/set" | "complete" | "pin/set" | "restore" | "settle" | "snooze/set", value?: boolean | "completed" | "stopped") => {
-    if (!controls || !activeProjectId || entry.entryKind === "draft") return;
-    const identity = entry.identity;
-    const request = method === "pin/set"
-      ? { identity, method: "workbench/thread-state/pin/set" as const, pinned: Boolean(value), projectId: activeProjectId }
-      : method === "snooze/set"
-        ? { identity, method: "workbench/thread-state/snooze/set" as const, projectId: activeProjectId, snoozed: Boolean(value) }
-        : method === "archive/set"
-          ? { archived: Boolean(value), identity, method: "workbench/thread-state/archive/set" as const, projectId: activeProjectId }
-          : method === "complete"
-            ? { identity, method: "workbench/thread-state/complete" as const, projectId: activeProjectId, status: value === "stopped" ? "stopped" as const : "completed" as const }
-            : method === "restore"
-              ? { identity, method: "workbench/thread-state/restore" as const, projectId: activeProjectId }
-              : { identity, method: "workbench/thread-state/settle" as const, projectId: activeProjectId };
-    void controls.updateThreadState(request);
-  }, [activeProjectId, controls]);
-  const getThreadContextMenu = useCallback((entry: WorkbenchThreadSidebarEntry): WorkbenchContextMenuDefinition => {
-    const thread = entry.entryKind === "thread" ? threadSummariesById.get(entry.identity.threadId) ?? null : null;
-    const identifier = entry.entryKind === "draft" ? entry.draft.draftId : entry.identity.threadId;
-    const pinned = entry.entryKind === "draft" ? entry.metadata.pinned : entry.entryKind === "thread" ? entry.metadata.pinned : entry.pinned;
-    const group = getThreadSidebarGroup(entry);
-    const terminal = entry.entryKind !== "draft" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped");
-    const items: WorkbenchContextMenuDefinition["items"] = [
-      {
-        icon: <CopyIcon className="size-4" />,
-        id: "copy-id",
-        label: "Copy ID",
-        onSelect: () => { void writeTextToClipboard(identifier); },
-      },
-      ...(thread?.unreadBadge?.unreadCount ? [{
-        icon: <CheckIcon className="size-4" />,
-        id: "mark-read",
-        label: "Mark as read",
-        onSelect: () => {
-          void (async () => {
-            const payload = await controls?.readThread(thread.id, thread.harness);
-            if (payload) {
-              controls?.markThreadSeen(payload);
-            }
-          })();
-        },
-      }] : []),
-      ...(entry.entryKind !== "draft" ? [{
-        icon: <PinIcon className="size-4" />,
-        id: pinned ? "unpin" : "pin",
-        label: pinned ? "Unpin thread" : "Pin thread",
-        onSelect: () => mutateSidebarEntry(entry, "pin/set", !pinned),
-      }] : []),
-      ...(entry.entryKind !== "draft" && (group === "snoozed" || !entry.lifecycle.settled) ? [{
-        icon: group === "snoozed" ? <UnsnoozeThreadIcon className="size-4" /> : <SnoozedThreadIcon className="size-4" />,
-        id: group === "snoozed" ? "unsnooze" : "snooze",
-        label: group === "snoozed" ? "Unsnooze" : "Snooze",
-        onSelect: () => mutateSidebarEntry(entry, "snooze/set", group !== "snoozed"),
-      }] : []),
-      ...(entry.entryKind === "thread" && entry.lifecycle.kind === "needsAttention" ? [{
-        icon: <CheckIcon className="size-4" />, id: "mark-completed", label: "Mark completed", onSelect: () => mutateSidebarEntry(entry, "complete", "completed"),
-      }, {
-        icon: <StopIcon className="size-4" />, id: "mark-stopped", label: "Mark stopped", onSelect: () => mutateSidebarEntry(entry, "complete", "stopped"),
-      }] : []),
-      ...(thread && isThreadSummaryActive(thread) ? [{
-        icon: <StopIcon className="size-4" />,
-        id: "stop",
-        label: "Stop thread",
-        onSelect: () => {
-          void stopSidebarThread(thread);
-        },
-      }] : []),
-      ...(terminal && entry.lifecycle.settled ? [{
-        icon: <RestoreThreadIcon className="size-4" />, id: "restore", label: "Restore", onSelect: () => mutateSidebarEntry(entry, "restore"),
-      }] : terminal ? [{
-        icon: <SettleThreadIcon className="size-4" />, id: "settle", label: "Settle", onSelect: () => mutateSidebarEntry(entry, "settle"),
-      }] : []),
-      ...(terminal ? [{
-        icon: <ArchiveIcon className="size-4" />,
-        id: "archive",
-        label: "Archive thread",
-        onSelect: () => mutateSidebarEntry(entry, "archive/set", true),
-        tone: "danger" as const,
-      }] : []),
-    ];
-    return { id: `thread:${identifier}`, items, label: `Thread actions for ${entry.title}` };
-  }, [controls, mutateSidebarEntry, stopSidebarThread, threadSummariesById]);
   const updateBrowseSession = useCallback(async (session: WorkbenchBrowseSessionSummary, action: "forget" | "stop", options: { force?: boolean } = {}) => {
     if (!activeProjectId) {
       return;
@@ -1726,16 +1612,20 @@ export default function Workbench () {
     return payload;
   }, [composerProfileController, controls, navigateToRoute]);
 
-  const activeSidebarDraft = useMemo(() => {
-    if (route.view !== "thread" || route.threadTarget?.kind !== "draft") {
-      return null;
-    }
-    const draftId = route.threadTarget.draftId;
-    const entry = explorer.threadSidebar?.entries.find((candidate) => (
-      candidate.entryKind === "draft" && candidate.draft.draftId === draftId
-    ));
+  const activeSidebarDraftId = route.view === "thread" && route.threadTarget?.kind === "draft"
+    ? route.threadTarget.draftId
+    : "";
+  const selectActiveSidebarDraft = useCallback((snapshot: ReturnType<WorkbenchThreadSidebarStore["getSnapshot"]>) => {
+    if (!activeSidebarDraftId) return null;
+    const entry = snapshot?.entries.find((candidate) => candidate.entryKind === "draft" && candidate.draft.draftId === activeSidebarDraftId);
     return entry?.entryKind === "draft" ? entry.draft : null;
-  }, [explorer.threadSidebar, route]);
+  }, [activeSidebarDraftId]);
+  const getActiveSidebarDraft = useCallback(() => selectActiveSidebarDraft(threadSidebarStore?.getSnapshot() ?? null), [selectActiveSidebarDraft, threadSidebarStore]);
+  const activeSidebarDraft = useSyncExternalStore(
+    threadSidebarStore?.subscribe ?? EMPTY_THREAD_SIDEBAR_SUBSCRIBE,
+    getActiveSidebarDraft,
+    getActiveSidebarDraft,
+  );
 
   const getSidebarDraftComposerInput = useCallback((draft: WorkbenchThreadDraft | null): WorkbenchComposerInputDraft | null => {
     if (!draft) return null;
@@ -1754,9 +1644,9 @@ export default function Workbench () {
   const getThreadComposerDraftForTarget = useCallback((target: WorkbenchThreadTarget | null | undefined): WorkbenchComposerInputDraft | null => {
     if (!target || target.kind === "new") return null;
     if (target.kind === "provider" || target.kind === "subagent") return threadComposerDraftsByThreadId[target.threadId] ?? null;
-    const entry = explorer.threadSidebar?.entries.find((candidate) => candidate.entryKind === "draft" && candidate.draft.draftId === target.draftId);
+    const entry = threadSidebarStore?.getSnapshot()?.entries.find((candidate) => candidate.entryKind === "draft" && candidate.draft.draftId === target.draftId);
     return entry?.entryKind === "draft" ? getSidebarDraftComposerInput(entry.draft) : null;
-  }, [explorer.threadSidebar, getSidebarDraftComposerInput, threadComposerDraftsByThreadId]);
+  }, [getSidebarDraftComposerInput, threadComposerDraftsByThreadId, threadSidebarStore]);
 
   const activeThreadComposerDraft = useMemo(() => getThreadComposerDraftForTarget(
     route.view === "thread" ? route.threadTarget : null,
@@ -1818,7 +1708,7 @@ export default function Workbench () {
       composerProfileController.materializeDraftSelection(profileSlot, draftId, harness, explorer.currentProjectId);
       navigateToRoute(createThreadRoute(explorer.currentProjectId, { draftId, kind: "draft" }), { replace: true });
     }
-  }, [activeSidebarDraft, composerProfileController, controls, currentThread, explorer.currentProjectId, explorer.threadSidebar, navigateToRoute, route]);
+  }, [activeSidebarDraft, composerProfileController, controls, currentThread, explorer.currentProjectId, navigateToRoute, route]);
 
   const handleThreadComposerDraftClear = useCallback((threadId: string) => {
     if (!explorer.currentProjectId) return;
@@ -2051,6 +1941,10 @@ export default function Workbench () {
   const showFileView = route.view === "file" || mobileMosaicFallbackTarget?.kind === "file";
   const showSettingsView = route.view === "settings";
   const showFullBleedMainView = showMosaicView;
+  const createThreadFromSidebar = useCallback(() => {
+    if (showMosaicView || !controls) return;
+    navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, { kind: "new" }));
+  }, [controls, explorer.currentProjectId, navigateToRoute, route.projectId, showMosaicView]);
   const usesDesktopSidebarCollapse = !isMobile;
   const isEffectiveDesktopSidebarCollapsed = usesDesktopSidebarCollapse && isDesktopSidebarCollapsed;
   const effectiveThreadTarget = mobileMosaicFallbackTarget?.kind === "thread" ? mobileMosaicFallbackTarget.target : route.threadTarget;
@@ -2131,12 +2025,23 @@ export default function Workbench () {
       .map(([threadId]) => threadId)),
     [visibleUserInputRequestsByThreadId],
   );
+  const getSidebarLifecycleSignal = useCallback(() => {
+    const entries = threadSidebarStore?.getSnapshot()?.entries ?? [];
+    if (entries.some((entry) => entry.entryKind !== "draft" && entry.lifecycle.kind === "needsAttention")) return "needsAttention";
+    if (entries.some((entry) => entry.entryKind !== "draft" && entry.lifecycle.kind === "working")) return "working";
+    return "idle";
+  }, [threadSidebarStore]);
+  const sidebarLifecycleSignal = useSyncExternalStore(
+    threadSidebarStore?.subscribe ?? EMPTY_THREAD_SIDEBAR_SUBSCRIBE,
+    getSidebarLifecycleSignal,
+    getSidebarLifecycleSignal,
+  );
   const hasPendingQuestionnaire = Boolean(currentThread
     && pendingQuestionnaireThreadIds.has(currentThread.id)
     && isThreadStatusWaitingOnUserInput(currentThread.status))
-    || sidebarEntries.some((entry) => entry.entryKind !== "draft" && entry.lifecycle.kind === "needsAttention");
+    || sidebarLifecycleSignal === "needsAttention";
   const hasActiveThread = Boolean(currentThread && isThreadStatusActive(currentThread.status))
-    || sidebarEntries.some((entry) => entry.entryKind !== "draft" && entry.lifecycle.kind === "working");
+    || sidebarLifecycleSignal === "working";
   const tabIconState: WorkbenchTabIconState = hasPendingQuestionnaire
     ? "questionnaire"
     : hasActiveThread
@@ -2152,8 +2057,8 @@ export default function Workbench () {
       ? `file:${activeFilePath}`
       : showSettingsView
         ? "settings"
-      : "";
-  const shouldRunRelativeTimeClock = sidebarEntries.length > 0 || (showThreadView && Boolean(threadShellSource));
+        : "";
+  const shouldRunRelativeTimeClock = showThreadView && Boolean(threadShellSource);
   useEffect(() => {
     if (!shouldRunRelativeTimeClock) {
       return;
@@ -3151,62 +3056,22 @@ export default function Workbench () {
                       <div className="flex items-center justify-between gap-3 pr-2 md:pr-4.5">
                         <p className="m-0 text-base font-semibold leading-tight">Threads</p>
                       </div>
-                      {isSidebarThreadsLoading ? (
-                        <SidebarLoadingSkeleton ariaLabel="Loading threads" rows={5} />
-                      ) : (
-                        <nav aria-label="Threads">
-                          <ThreadsList
-                            attentionLabelsByThreadId={threadAttentionLabelsById}
-                            createThreadLabel="Create new thread"
-                            currentTarget={route.view === "thread" ? route.threadTarget : null}
-                            entries={sidebarEntries}
-                            getThreadHref={(target) => createThreadHref(explorer.currentProjectId || route.projectId, target)}
-                            onThreadPointerDragStart={(event, entry) => {
-                              const target = entry.entryKind === "draft"
-                                ? { draftId: entry.draft.draftId, kind: "draft" as const }
-                                : { harness: entry.identity.harness, kind: "provider" as const, threadId: entry.identity.threadId };
-                              beginWorkbenchPointerDrag(event, {
-                                target: { kind: "thread", target },
-                                type: "panel-target",
-                              });
-                            }}
-                            onCreateThreadPointerDragStart={showMosaicView ? (event) => {
-                              beginWorkbenchPointerDrag(event, {
-                                harness,
-                                type: "new-thread",
-                              });
-                            } : undefined}
-                            getThreadContextMenu={getThreadContextMenu}
-                            nowMs={threadRelativeTimeNowMs}
-                            onAction={(entry, action) => {
-                              if (entry.entryKind === "draft") {
-                                if (action === "discard") void controls?.deleteThreadDraft(entry.draft.draftId);
-                                return;
-                              }
-                              if (action === "settle") mutateSidebarEntry(entry, "settle");
-                              if (action === "restore") mutateSidebarEntry(entry, "restore");
-                              if (action === "unsnooze") mutateSidebarEntry(entry, "snooze/set", false);
-                            }}
-                            onCreateThread={() => {
-                              if (showMosaicView) {
-                                return;
-                              }
-                              if (!controls) {
-                                return;
-                              }
-                              navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, { kind: "new" }));
-                            }}
-                            onOpenThread={(target) => {
-                              void openThreadFromExplorer(target);
-                            }}
-                          />
-                        </nav>
-                      )}
-                      {explorer.threadsError || explorer.threadSidebar?.error ? (
-                        <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted">
-                          {explorer.threadSidebar?.error ?? explorer.threadsError}
-                        </p>
-                      ) : null}
+                      <WorkbenchThreadSidebar
+                        attentionLabelsByThreadId={threadAttentionLabelsById}
+                        controls={controls}
+                        currentTarget={route.view === "thread" ? route.threadTarget : null}
+                        harness={harness}
+                        isProjectLoading={isSidebarProjectLoading}
+                        isThreadsLoading={isSidebarThreadsLoading}
+                        onBeginPointerDrag={beginWorkbenchPointerDrag}
+                        onCreateThread={createThreadFromSidebar}
+                        onOpenThread={openThreadFromExplorer}
+                        projectId={explorer.currentProjectId || route.projectId}
+                        showMosaicView={showMosaicView}
+                        store={threadSidebarStore}
+                        threadSummariesById={threadSummariesById}
+                        threadsError={explorer.threadsError}
+                      />
                     </section>
 
                     <section

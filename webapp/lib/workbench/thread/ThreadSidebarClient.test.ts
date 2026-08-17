@@ -1,4 +1,4 @@
-/* No production exports. Tests protect optimistic draft queues, revisions, and leave-safe flushing. */
+/* No production exports. Tests protect subscriptions, optimistic draft queues, revisions, and leave-safe flushing. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import ThreadSidebarClient from "./ThreadSidebarClient.ts";
@@ -69,6 +69,37 @@ test("activity updates reorder only the matching observed thread", async () => {
   client.acceptActivity({ activityAt: 50, identity: { harness: "codex", threadId: "thread" }, projectId: "project", revision: 2, updateKind: "activity" });
   assert.equal(installed.at(-1)?.entries[0]?.activityAt, 50);
   assert.equal(installed.at(-1)?.revision, 2);
+});
+
+test("external-store subscribers receive each installed snapshot and can unsubscribe", async () => {
+  const initial: WorkbenchThreadSidebarSnapshot = {
+    ...snapshot(1),
+    entries: [{
+      activityAt: 1,
+      entryKind: "thread",
+      identity: { harness: "codex", threadId: "thread" },
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      title: "Thread",
+    }],
+  };
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: { close: async () => undefined, deleteDraft: async () => undefined, open: async () => initial, upsertDraft: async () => undefined },
+  });
+  await client.open("project");
+  let notifications = 0;
+  const unsubscribe = client.subscribe(() => { notifications += 1; });
+
+  client.acceptActivity({ activityAt: 50, identity: { harness: "codex", threadId: "thread" }, projectId: "project", revision: 2, updateKind: "activity" });
+  assert.equal(notifications, 1);
+  assert.equal(client.getSnapshot()?.revision, 2);
+  assert.equal(client.getSnapshot()?.entries[0]?.activityAt, 50);
+
+  unsubscribe();
+  client.acceptActivity({ activityAt: 60, identity: { harness: "codex", threadId: "thread" }, projectId: "project", revision: 3, updateKind: "activity" });
+  assert.equal(notifications, 1);
+  assert.equal(client.getSnapshot()?.revision, 3);
 });
 
 test("materialized draft becomes a working thread before its in-flight save settles", async () => {

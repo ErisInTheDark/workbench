@@ -75,13 +75,27 @@ test("existing-thread composer drafts keep their keyed owner through active suba
 test("provider child routes canonicalize from durable subagent relationships", async () => {
   const source = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
   assert.match(source, /explorer\.subagents\.find/u);
-  assert.match(source, /relationship\?\.parentThreadId \?\? child\?\.parentThreadId/u);
+  assert.match(source, /const parentThreadId = relationship\?\.parentThreadId/u);
+  assert.doesNotMatch(source, /explorer\.threadSidebar/u);
   assert.match(source, /const handleSelectedThreadChange = useCallback/u);
   assert.match(source, /selectedThreadId=\{selectedThreadIdForView\}/u);
   assert.match(source, /onSelectedThreadChange=\{handleSelectedThreadChange\}/u);
   assert.match(source, /kind: "subagent"/u);
   assert.match(source, /parentThreadId,/u);
   assert.match(source, /threadId: providerTarget\.threadId/u);
+});
+
+test("live sidebar state subscribes below the Workbench root", async () => {
+  const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
+  const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebar.tsx", import.meta.url), "utf8");
+  const clientSource = await readFile(new URL("../../lib/WorkbenchClient.ts", import.meta.url), "utf8");
+  assert.match(workbenchSource, /onThreadSidebarStoreReady/u);
+  assert.match(workbenchSource, /<WorkbenchThreadSidebar/u);
+  assert.doesNotMatch(workbenchSource, /explorer\.threadSidebar/u);
+  assert.match(sidebarSource, /useSyncExternalStore/u);
+  assert.match(sidebarSource, /store\?\.subscribe/u);
+  assert.match(clientSource, /onThreadSidebarStoreReady\?\.\(threadSidebarClient\)/u);
+  assert.doesNotMatch(clientSource, /threadSidebar: threadSidebarSnapshot/u);
 });
 
 test("blank thread routes render their private draft and preserve one view instance through promotion", async () => {

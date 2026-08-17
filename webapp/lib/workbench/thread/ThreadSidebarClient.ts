@@ -1,8 +1,9 @@
 /*
  * Exports:
  * - ThreadSidebarTransport/ThreadSidebarClientOptions/ThreadSidebarAcceptedIntent: pushed snapshot, mutation ports, and provider-confirmed local admission. Keywords: browser, websocket, drafts, intent.
- * - default ThreadSidebarClient: browser observation, revision, optimistic draft, and leave-safe queue owner. Keywords: sidebar, debounce, flush.
+ * - default ThreadSidebarClient: subscribable browser observation, revision, optimistic draft, and leave-safe queue owner. Keywords: sidebar, external store, debounce, flush.
  */
+import type { WorkbenchThreadSidebarStore } from "../../types";
 import { createDraftTitle, sortThreadSidebarEntries, type WorkbenchHarnessId, type WorkbenchThreadActivityUpdate, type WorkbenchThreadDraft, type WorkbenchThreadSidebarSnapshot } from "./thread-state";
 
 export interface ThreadSidebarTransport {
@@ -30,12 +31,21 @@ interface DraftQueue {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
-export default class ThreadSidebarClient {
+export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore {
   private projectId: string | null = null;
   private revision = -1;
   private snapshot: WorkbenchThreadSidebarSnapshot | null = null;
+  private readonly listeners = new Set<() => void>();
   private readonly queues = new Map<string, DraftQueue>();
   constructor(private readonly options: ThreadSidebarClientOptions) {}
+
+  readonly getSnapshot = () => this.snapshot;
+  readonly subscribe = (listener: () => void) => {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
 
   async open(projectId: string) {
     if (this.projectId === projectId && this.snapshot) return;
@@ -57,7 +67,7 @@ export default class ThreadSidebarClient {
       : entry);
     this.revision = update.revision;
     this.snapshot = { ...this.snapshot, entries: sortThreadSidebarEntries(entries), revision: update.revision };
-    this.options.onChange(this.snapshot);
+    this.publish();
   }
   edit(draft: WorkbenchThreadDraft) {
     if (draft.projectId !== this.projectId) throw new Error("The draft does not belong to the observed project.");
@@ -109,7 +119,7 @@ export default class ThreadSidebarClient {
           entry,
         ]),
       };
-      this.options.onChange(this.snapshot);
+      this.publish();
     }
     return inFlight;
   }
@@ -122,7 +132,7 @@ export default class ThreadSidebarClient {
     this.queues.delete(draftId);
     if (this.snapshot) {
       this.snapshot = { ...this.snapshot, entries: this.snapshot.entries.filter((entry) => entry.entryKind !== "draft" || entry.draft.draftId !== draftId) };
-      this.options.onChange(this.snapshot);
+      this.publish();
     }
   }
   async flush() { for (const [id, queue] of this.queues) await this.flushQueue(id, queue); }
@@ -133,8 +143,8 @@ export default class ThreadSidebarClient {
     this.revision = -1;
     this.install(await this.options.transport.open(this.projectId));
   }
-  async close() { if (!this.projectId) return; await this.flush(); const projectId = this.projectId; this.projectId = null; this.snapshot = null; this.options.onChange(null); await this.options.transport.close(projectId).catch((error: unknown) => { console.warn("Unable to close the thread sidebar observation.", error); }); }
-  private install(snapshot: WorkbenchThreadSidebarSnapshot) { if (snapshot.revision <= this.revision) return; this.revision = snapshot.revision; this.snapshot = snapshot; this.options.onChange(snapshot); }
+  async close() { if (!this.projectId) return; await this.flush(); const projectId = this.projectId; this.projectId = null; this.snapshot = null; this.publish(); await this.options.transport.close(projectId).catch((error: unknown) => { console.warn("Unable to close the thread sidebar observation.", error); }); }
+  private install(snapshot: WorkbenchThreadSidebarSnapshot) { if (snapshot.revision <= this.revision) return; this.revision = snapshot.revision; this.snapshot = snapshot; this.publish(); }
   private installOptimisticDraft(draft: WorkbenchThreadDraft) {
     if (!this.snapshot) return;
     const entry = {
@@ -151,7 +161,7 @@ export default class ThreadSidebarClient {
         entry,
       ]),
     };
-    this.options.onChange(this.snapshot);
+    this.publish();
   }
   private async flushQueue(id: string, queue: DraftQueue) {
     if (queue.timer) { clearTimeout(queue.timer); queue.timer = null; }
@@ -165,7 +175,7 @@ export default class ThreadSidebarClient {
       await queue.inFlight;
       if (this.snapshot?.error?.startsWith("Draft save failed:")) {
         this.snapshot = { ...this.snapshot, error: null };
-        this.options.onChange(this.snapshot);
+        this.publish();
       }
     } catch (error) {
       if (queue.retired) return;
@@ -173,11 +183,15 @@ export default class ThreadSidebarClient {
       if (this.snapshot) {
         const message = error instanceof Error ? error.message : "Unable to save this draft.";
         this.snapshot = { ...this.snapshot, error: `Draft save failed: ${message}`.slice(0, 500), freshness: "partial" };
-        this.options.onChange(this.snapshot);
+        this.publish();
       }
       this.edit(queue.draft);
       throw error;
     }
     if (queue.draft) await this.flushQueue(id, queue);
+  }
+  private publish() {
+    this.options.onChange(this.snapshot);
+    for (const listener of this.listeners) listener();
   }
 }

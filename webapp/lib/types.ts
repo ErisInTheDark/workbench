@@ -125,6 +125,7 @@
  * - TreeNode: project-tree node union.
  * - ProjectSnapshot: project snapshot contract.
  * - ExplorerSnapshot: explorer snapshot contract.
+ * - WorkbenchThreadSidebarStore: read-only live sidebar store contract.
  * - WorkbenchRouteLoadResult: route-load result.
  * - WorkbenchControls: top-level Workbench command surface.
  * - WorkbenchThreadGoalSnapshot: thread goal state.
@@ -1059,7 +1060,6 @@ export interface ExplorerSnapshot {
   projectFilePaths: readonly string[];
   subagents: WorkbenchSubagentSummary[];
   threads: ThreadSummary[];
-  threadSidebar: WorkbenchThreadSidebarSnapshot | null;
   isProjectLoading: boolean;
   isThreadsLoading: boolean;
   changes: Record<string, ChangeSummary>;
@@ -1070,6 +1070,11 @@ export interface ExplorerSnapshot {
   threadsError: string;
   fontSize: number;
   workbenchStorageRootPath: string;
+}
+
+export interface WorkbenchThreadSidebarStore {
+  getSnapshot: () => WorkbenchThreadSidebarSnapshot | null;
+  subscribe: (listener: () => void) => () => void;
 }
 
 export interface WorkbenchRouteLoadResult {
@@ -1139,6 +1144,7 @@ export interface WorkbenchBindings {
   onThreadDocumentsChange?: (snapshot: WorkbenchThreadDocumentSnapshot) => void;
   onPendingUserInputRequestsChange?: (requestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>) => void;
   onRateLimitsChange?: (rateLimits: RateLimitSnapshot | null) => void;
+  onThreadSidebarStoreReady?: (store: WorkbenchThreadSidebarStore) => void;
   onControlsReady?: (controls: WorkbenchControls) => void;
 }
 

@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - initWorkbench: wire the workbench DOM, one bridge transport, pushed project/sidebar state, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, websocket.
+ * - areExplorerSnapshotsEquivalent: compare root-visible explorer semantics while excluding sidebar-only activity ordering. Keywords: explorer, equality, render boundary.
  */
 
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
@@ -16,7 +17,9 @@ import type {
     WorkbenchRouteLoadResult,
     WorkbenchReadThreadOptions,
     WorkbenchSendThreadMessageOptions,
+    WorkbenchSubagentSummary,
     WorkbenchThreadDocumentSnapshot,
+    ThreadSummary,
 } from "./types";
 import { areDeeplyEqual } from "./workbench/deep-equality";
 import {
@@ -52,7 +55,67 @@ type MountedWorkbenchControls = WorkbenchControls & {
   ) => ReturnType<typeof WorkbenchFilePanelClient>;
 };
 
-function areExplorerSnapshotsEquivalent(left: ExplorerSnapshot | null, right: ExplorerSnapshot) {
+function areThreadUnreadBadgesEquivalent(left: ThreadSummary["unreadBadge"], right: ThreadSummary["unreadBadge"]) {
+  return left === right || Boolean(left && right
+    && left.unreadCount === right.unreadCount
+    && left.hasActiveTurn === right.hasActiveTurn);
+}
+
+function areThreadSummariesEquivalent(left: ThreadSummary, right: ThreadSummary) {
+  return left.id === right.id
+    && left.harness === right.harness
+    && left.name === right.name
+    && left.preview === right.preview
+    && left.createdAt === right.createdAt
+    && left.status === right.status
+    && left.cwd === right.cwd
+    && left.source === right.source
+    && left.path === right.path
+    && left.forkedFromId === right.forkedFromId
+    && left.agentNickname === right.agentNickname
+    && left.agentRole === right.agentRole
+    && areThreadUnreadBadgesEquivalent(left.unreadBadge, right.unreadBadge);
+}
+
+function areThreadSummaryCollectionsEquivalent(left: readonly ThreadSummary[], right: readonly ThreadSummary[]) {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  const rightByKey = new Map(right.map((thread) => [`${thread.harness}:${thread.id}`, thread]));
+  return left.every((thread) => {
+    const match = rightByKey.get(`${thread.harness}:${thread.id}`);
+    return Boolean(match && areThreadSummariesEquivalent(thread, match));
+  });
+}
+
+function areSubagentSummariesEquivalent(left: WorkbenchSubagentSummary, right: WorkbenchSubagentSummary) {
+  return left.activityStatus === right.activityStatus
+    && left.createdAt === right.createdAt
+    && left.cwd === right.cwd
+    && left.directSubagentIndex === right.directSubagentIndex
+    && left.harness === right.harness
+    && left.name === right.name
+    && left.parentThreadId === right.parentThreadId
+    && left.profileId === right.profileId
+    && left.profileName === right.profileName
+    && left.projectId === right.projectId
+    && left.threadId === right.threadId
+    && left.title === right.title
+    && left.updatedAt === right.updatedAt
+    && left.pinned === right.pinned
+    && (left.lifecycle === right.lifecycle || areDeeplyEqual(left.lifecycle, right.lifecycle));
+}
+
+function areSubagentSummaryCollectionsEquivalent(left: readonly WorkbenchSubagentSummary[], right: readonly WorkbenchSubagentSummary[]) {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  const rightByKey = new Map(right.map((subagent) => [`${subagent.harness}:${subagent.threadId}`, subagent]));
+  return left.every((subagent) => {
+    const match = rightByKey.get(`${subagent.harness}:${subagent.threadId}`);
+    return Boolean(match && areSubagentSummariesEquivalent(subagent, match));
+  });
+}
+
+export function areExplorerSnapshotsEquivalent(left: ExplorerSnapshot | null, right: ExplorerSnapshot) {
   if (!left) {
     return false;
   }
@@ -74,9 +137,8 @@ function areExplorerSnapshotsEquivalent(left: ExplorerSnapshot | null, right: Ex
     && (left.projects === right.projects || areDeeplyEqual(left.projects, right.projects))
     && (left.roots === right.roots || areDeeplyEqual(left.roots, right.roots))
     && (left.tree === right.tree || areDeeplyEqual(left.tree, right.tree))
-    && (left.subagents === right.subagents || areDeeplyEqual(left.subagents, right.subagents))
-    && (left.threads === right.threads || areDeeplyEqual(left.threads, right.threads))
-    && (left.threadSidebar === right.threadSidebar || areDeeplyEqual(left.threadSidebar, right.threadSidebar))
+    && areSubagentSummaryCollectionsEquivalent(left.subagents, right.subagents)
+    && areThreadSummaryCollectionsEquivalent(left.threads, right.threads)
     && (left.changes === right.changes || areDeeplyEqual(left.changes, right.changes))
     && (left.expandedDirectories === right.expandedDirectories || areDeeplyEqual(left.expandedDirectories, right.expandedDirectories))
     && (left.locallyModifiedPaths === right.locallyModifiedPaths || areDeeplyEqual(left.locallyModifiedPaths, right.locallyModifiedPaths));
@@ -303,7 +365,6 @@ export async function WorkbenchClient(
         updatedAt: entry.updatedAt,
       })),
       threads: threadSnapshot.threads,
-      threadSidebar: threadSidebarSnapshot,
       isProjectLoading: projectSnapshot.isLoading,
       isThreadsLoading: threadSnapshot.isLoading,
       changes: projectSnapshot.changes,
@@ -835,6 +896,7 @@ export async function WorkbenchClient(
   emitPendingUserInputRequestsChange();
   emitRateLimitsChange();
   await applyRoute(activeRoute);
+  workbenchBindings.onThreadSidebarStoreReady?.(threadSidebarClient);
   workbenchBindings.onControlsReady?.(controls);
   if (sessionState.currentThreadId || activeRoute.view === "thread") {
     void refreshRateLimits();

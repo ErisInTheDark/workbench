@@ -85,3 +85,4 @@ wb orchestrator reload [--orchestrator-logic] [--browse-controller] [--codex-bri
 - Do not run any `pnpm` script other than `test` or `typecheck` for agent validation.
 - Do not invoke `tsx` or another ad hoc test runner directly; use the project-owned `pnpm test` script.
 - Do not broaden a reload beyond the subsystem changed.
+- Do not use browser testing unless approved by the user.

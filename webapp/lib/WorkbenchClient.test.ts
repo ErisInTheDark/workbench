@@ -1,0 +1,106 @@
+/*
+ * Exports:
+ * - No production exports; regression tests protect the explorer/sidebar render boundary. Keywords: explorer, sidebar, equality, React.
+ */
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import type { ExplorerSnapshot, ThreadSummary, WorkbenchSubagentSummary } from "./types.ts";
+import { areExplorerSnapshotsEquivalent } from "./WorkbenchClient.ts";
+
+const thread = (id: string, updatedAt: number): ThreadSummary => ({
+  agentNickname: null,
+  agentRole: null,
+  createdAt: 1,
+  cwd: "C:/repo",
+  forkedFromId: null,
+  harness: "codex",
+  id,
+  name: id,
+  path: null,
+  preview: id,
+  source: "workbench",
+  status: "active",
+  unreadBadge: { hasActiveTurn: true, unreadCount: 1 },
+  updatedAt,
+});
+
+const subagent = (threadId: string, lastActivityAt: number): WorkbenchSubagentSummary => ({
+  activityStatus: "active",
+  createdAt: 1,
+  cwd: "C:/repo",
+  directSubagentIndex: 0,
+  harness: "codex",
+  lastActivityAt,
+  lifecycle: { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+  name: threadId,
+  parentThreadId: "parent",
+  pinned: false,
+  profileId: "profile",
+  profileName: "Profile",
+  projectId: "project",
+  threadId,
+  title: threadId,
+  updatedAt: 1,
+});
+
+const explorer = (): ExplorerSnapshot => ({
+  changes: {},
+  currentPath: "",
+  currentProjectId: "project",
+  currentThreadId: "",
+  expandedDirectories: [],
+  fontSize: 16,
+  isProjectLoading: false,
+  isThreadsLoading: false,
+  locallyModifiedPaths: [],
+  projectFileCandidates: [],
+  projectFileIndexId: "index",
+  projectFileIndexKey: "key",
+  projectFilePaths: [],
+  projects: [],
+  root: "repo",
+  rootPath: "C:/repo",
+  roots: [],
+  subagents: [subagent("subagent-a", 10), subagent("subagent-b", 20)],
+  threads: [thread("thread-a", 10), thread("thread-b", 20)],
+  threadsError: "",
+  tree: [],
+  workbenchStorageRootPath: "C:/repo/.workbench",
+});
+
+test("activity timestamps and activity ordering do not invalidate the root explorer snapshot", () => {
+  const current = explorer();
+  const activityOnly: ExplorerSnapshot = {
+    ...current,
+    subagents: [
+      { ...current.subagents[1]!, lastActivityAt: 200 },
+      { ...current.subagents[0]!, lastActivityAt: 100 },
+    ],
+    threads: [
+      { ...current.threads[1]!, updatedAt: 200 },
+      { ...current.threads[0]!, updatedAt: 100 },
+    ],
+  };
+
+  assert.equal(areExplorerSnapshotsEquivalent(current, activityOnly), true);
+});
+
+test("semantic thread and subagent changes invalidate the root explorer snapshot", () => {
+  const current = explorer();
+  const changedSnapshots: ExplorerSnapshot[] = [
+    { ...current, threads: current.threads.slice(1) },
+    { ...current, threads: current.threads.map((value, index) => index === 0 ? { ...value, preview: "renamed" } : value) },
+    { ...current, threads: current.threads.map((value, index) => index === 0 ? { ...value, status: "idle" } : value) },
+    { ...current, threads: current.threads.map((value, index) => index === 0 ? { ...value, unreadBadge: { hasActiveTurn: false, unreadCount: 0 } } : value) },
+    { ...current, subagents: current.subagents.slice(1) },
+    { ...current, subagents: current.subagents.map((value, index) => index === 0 ? { ...value, title: "renamed" } : value) },
+    { ...current, subagents: current.subagents.map((value, index) => index === 0 ? { ...value, parentThreadId: "other-parent" } : value) },
+    { ...current, subagents: current.subagents.map((value, index) => index === 0 ? { ...value, pinned: true } : value) },
+    { ...current, subagents: current.subagents.map((value, index) => index === 0 ? { ...value, lifecycle: { kind: "completed", reason: "providerInactive", settled: false } } : value) },
+  ];
+
+  for (const changed of changedSnapshots) {
+    assert.equal(areExplorerSnapshotsEquivalent(current, changed), false);
+  }
+});
