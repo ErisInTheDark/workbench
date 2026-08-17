@@ -229,7 +229,7 @@ export function ThreadsList ({
     const baseStatus = entry.entryKind === "draft"
       ? "Draft"
       : lifecycle?.kind === "needsAttention" ? attentionLabel || "Needs attention" : lifecycle?.kind === "working" ? "Working" : lifecycle?.kind === "stopped" ? "Stopped" : "Completed";
-    const status = group === "snoozed" ? `${baseStatus}, Snoozed` : baseStatus;
+    const status = baseStatus;
     const pinned = isPinned(entry);
     const timestamp = new Date(entry.activityAt);
     const relativeTime = formatThreadRelativeTimestamp(entry.activityAt / 1000, nowMs);

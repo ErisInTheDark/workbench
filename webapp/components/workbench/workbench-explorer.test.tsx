@@ -46,6 +46,7 @@ test("threads render one flat tablist with lifecycle borders and all settled row
   assert.match(source, /actionLabel === "restore"|action === "restore"/u);
   assert.match(source, /attentionLabelsByThreadId/u);
   assert.match(source, /font-semibold text-text/u);
+  assert.doesNotMatch(source, /\$\{baseStatus\}, Snoozed/u);
 });
 
 test("agent tabs keep a persistent settled toggle and a straight accent-colored selector", async () => {
