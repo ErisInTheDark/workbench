@@ -158,7 +158,7 @@ import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
 import type { WorkbenchRoute } from "./workbench/navigation/workbench-route";
 import type { ProjectTreeFileCandidate } from "./workbench/project/ProjectTreeFileIndex";
 import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread-item-timeline";
-import type { WorkbenchThreadDraft, WorkbenchThreadStateRequest, WorkbenchThreadStateSnapshot } from "./workbench/thread/thread-state";
+import type { WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state";
 
 export type WorkbenchHarness = "codex" | "copilot" | "opencode";
 export type OrchestratorReloadScope = "browse-controller" | "codex-bridge" | "next-dev" | "opencode-bridge" | "opencode-server" | "orchestrator-logic" | "orchestrator-server";
@@ -850,6 +850,7 @@ export interface WorkbenchSendThreadMessageOptions {
   additionalWritableRoots?: string[];
   composerProfileSlot?: WorkbenchComposerProfileSlot;
   instructionInjections?: Record<string, string>;
+  onThreadCreated?: (thread: ThreadPayload) => void;
   onThreadMaterialized?: (thread: ThreadPayload) => void;
   selectThread?: boolean;
   workflowIds?: string[];
@@ -1058,8 +1059,7 @@ export interface ExplorerSnapshot {
   projectFilePaths: readonly string[];
   subagents: WorkbenchSubagentSummary[];
   threads: ThreadSummary[];
-  threadSidebar: WorkbenchThreadStateSnapshot | null;
-  threadSidebarDraftSaveStates: Record<string, WorkbenchThreadDraftSaveState | undefined>;
+  threadSidebar: WorkbenchThreadSidebarSnapshot | null;
   isProjectLoading: boolean;
   isThreadsLoading: boolean;
   changes: Record<string, ChangeSummary>;
@@ -1115,8 +1115,6 @@ export interface WorkbenchControls {
   setDraftThreadHarness: (harness: WorkbenchHarness) => void;
 }
 
-export type WorkbenchThreadDraftSaveState = "saving" | "saved" | "failed";
-
 export interface WorkbenchThreadGoalSnapshot {
   error: string | null;
   goal: ThreadGoal | null;
@@ -1153,7 +1151,7 @@ export interface FilePayload {
   mtimeMs: number;
 }
 
-export interface CreateEntryPayload extends ProjectSnapshot {
+export interface CreateEntryPayload {
   path: string;
   type: "directory" | "file";
 }
@@ -1171,7 +1169,7 @@ export interface DeleteFileConfirmationRequired {
   tracked: false;
 }
 
-export interface DeleteFilePayload extends ProjectSnapshot {
+export interface DeleteFilePayload {
   confirmationRequired?: false;
   path: string;
   tracked: boolean;

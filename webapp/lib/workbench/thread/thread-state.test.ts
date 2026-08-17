@@ -1,7 +1,7 @@
 /* No production exports. Tests protect strict lifecycle, grouping, ordering, and draft rules. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { countDraftPromptTokens, createDraftTitle, getThreadSidebarGroup, normalizeWorkbenchActivityTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, WorkbenchThreadLifecycleSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
+import { countDraftPromptTokens, createDraftTitle, getThreadSidebarGroup, normalizeWorkbenchActivityTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
 
 test("provider activity timestamps normalize seconds without double-converting milliseconds", () => {
   assert.equal(normalizeWorkbenchActivityTimestampMs(1_723_456_789), 1_723_456_789_000);
@@ -14,6 +14,43 @@ test("draft threshold and title follow prompt text only", () => {
   assert.equal(createDraftTitle("\n  First   line \nsecond"), "First line");
 });
 
+test("thread titles ignore identifier-shaped provider names and prefer the first user preview", () => {
+  const id = "123e4567-e89b-42d3-a456-426614174000";
+  assert.equal(resolveWorkbenchThreadTitle({ id, name: id, preview: "  First user message\nsecond line" }), "First user message");
+  assert.equal(resolveWorkbenchThreadTitle({ id, name: "New thread", preview: "First user message" }), "First user message");
+  assert.equal(resolveWorkbenchThreadTitle({ id, name: "Useful title", preview: "First user message" }), "Useful title");
+  assert.equal(resolveWorkbenchThreadTitle({ id, name: "550e8400-e29b-41d4-a716-446655440000", preview: "" }), "New thread");
+});
+
+test("multiplexed updates strictly distinguish sidebar, activity, and project payloads", () => {
+  assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
+    entries: [], error: null, freshness: "fresh", projectId: "project", revision: 1,
+  }).success, true);
+  assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
+    activityAt: 10, identity: { harness: "codex", threadId: "thread" }, projectId: "project", revision: 2, updateKind: "activity",
+  }).success, true);
+  const projectUpdate = WorkbenchThreadStateSnapshotSchema.safeParse({
+    projectId: "project",
+    revision: 3,
+    snapshot: {
+      changes: {}, projectId: "project", root: "Project", rootPath: "C:/project",
+      roots: [{ id: "project", isPrimary: true, name: "Project", relativePath: "project", rootPath: "C:/project" }],
+      tree: [{ isIgnored: true, name: ".env.local", path: ".env.local", type: "file" }], workbenchStorageRootPath: "C:/workbench",
+    },
+    updateKind: "project",
+  });
+  assert.equal(projectUpdate.success, true);
+  assert.equal(projectUpdate.success && "snapshot" in projectUpdate.data && projectUpdate.data.snapshot.tree[0]?.type === "file"
+    ? projectUpdate.data.snapshot.tree[0].isIgnored
+    : null, true);
+  assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
+    activityAt: 10, projectId: "project", revision: 4, updateKind: "activity",
+  }).success, false);
+  assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
+    entries: [], error: null, freshness: "fresh", projectId: "project", revision: 5, updateKind: "sidebar",
+  }).success, false);
+});
+
 test("strict lifecycle rejects impossible combinations", () => {
   assert.equal(WorkbenchThreadLifecycleSchema.safeParse({ kind: "working", reason: "acceptedIntent", settled: true, agent: { agentStatus: "working", turnId: "t" } }).success, false);
   assert.equal(WorkbenchThreadLifecycleSchema.safeParse({ kind: "needsAttention", reason: "pendingInput", settled: false, turnId: "t" }).success, false);
@@ -21,7 +58,7 @@ test("strict lifecycle rejects impossible combinations", () => {
   assert.equal(WorkbenchThreadLifecycleSchema.safeParse({ kind: "completed", reason: "providerInactive", settled: false }).success, true);
 });
 
-test("exact-turn transitions reject stale completion and settlement is a terminal-only toggle", () => {
+test("exact-turn transitions reject stale completion and stopped settlement becomes completed", () => {
   const working = reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId: "new" });
   assert.equal(reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "completed", turnId: "old" }), working);
   const completed = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "completed", turnId: "new" });
@@ -29,6 +66,12 @@ test("exact-turn transitions reject stale completion and settlement is a termina
   const settled = reduceWorkbenchThreadLifecycle(completed, { kind: "settle" });
   assert.equal(settled.settled, true);
   assert.deepEqual(reduceWorkbenchThreadLifecycle(settled, { kind: "restore" }), completed);
+  const stopped = reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "interrupted", turnId: "new" });
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(stopped, { kind: "settle" }), {
+    kind: "completed",
+    reason: "userCompleted",
+    settled: true,
+  });
   assert.equal(reduceWorkbenchThreadLifecycle(working, { kind: "restore" }), working);
 });
 

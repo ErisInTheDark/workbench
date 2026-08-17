@@ -25,6 +25,7 @@ import * as copilotThreadState from "./copilot-thread-state";
 import * as opencodeLiveThreadState from "./opencode-live-thread-state";
 import * as opencodeThreadState from "./opencode-thread-state";
 import * as opencodeWorkbenchInstructions from "./opencode-workbench-instructions";
+import { log } from "./process-helpers";
 
 export type OrchestratorReloadableModules = {
   copilotThreadState: Pick<typeof copilotThreadState, "applyCopilotEvent" | "cloneThread" | "createThreadState" | "formatPromptFromInput" | "INITIALIZE_RESULT" | "metadataToThread">;
@@ -82,6 +83,8 @@ export function createOrchestratorFeatureGeneration(
   const projectSnapshot = new WorkbenchProjectSnapshotController();
   const threadState = new WorkbenchThreadStateFeature({
     listSubagents: (projectId) => context.subagentStore.list({ projectId }),
+    log: (message) => log("thread-state-ws", message),
+    projectState: projectSnapshot,
     publish: (connectionId, snapshot) => { if (lease.isCurrent()) context.publishThreadState(connectionId, snapshot); },
     requestHarness: context.requestHarness,
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),

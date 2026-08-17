@@ -3,12 +3,15 @@
  * - WorkbenchProjectState: owned project list, selected tree, and explorer persistence state for the workbench. Keywords: workbench, project, tree, state.
  * - WorkbenchProjectSnapshot: readonly projection of the project list and selected project state. Keywords: workbench, project, snapshot, explorer.
  * - WorkbenchProjectListener: subscriber signature for project client state changes. Keywords: workbench, project, subscribe.
+ * - WorkbenchProjectTransport: project mutation and refresh requests carried by the existing Workbench bridge. Keywords: workbench, project, transport, websocket.
+ * - WorkbenchProjectClientOptions: injected project transport and error boundary. Keywords: workbench, project, client, options.
  * - cloneTreeNodes: deep-clone recursive tree node arrays for safe project snapshots. Keywords: workbench, project, tree, clone.
  * - WorkbenchProjectClient: public surface for the workbench project sub-client. Keywords: workbench, project, client, dispose, select.
  * - default WorkbenchProjectClient: create the project sub-client that owns project discovery, tree refresh, entry creation/deletion, and directory expansion state. Keywords: workbench, project, tree, entries, delete, default export.
  */
 
-import type { ChangeSummary, CreateEntryPayload, DeleteFileRequest, DeleteFileResponse, ProjectSnapshot, TreeNode, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchProjectsPayload } from "../types";
+import type { ChangeSummary, CreateEntryPayload, DeleteFileResponse, ProjectSnapshot, TreeNode, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchProjectsPayload } from "../types";
+import type { WorkbenchProjectStateUpdate } from "./project/project-state";
 import { areDeeplyEqual } from "./deep-equality";
 import ProjectTreeFileIndex, { type ProjectTreeFileCandidate, type ProjectTreeFileIndex as ProjectTreeFileIndexRecord } from "./project/ProjectTreeFileIndex";
 import { persistExpandedDirectories, readStoredExpandedDirectories } from "./state/browser-state";
@@ -61,6 +64,7 @@ export interface WorkbenchProjectSnapshot {
 export type WorkbenchProjectListener = (snapshot: WorkbenchProjectSnapshot) => void;
 
 interface WorkbenchProjectClient {
+  accept: (update: WorkbenchProjectStateUpdate) => void;
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
   deleteFile: (filePath: string, options?: { confirmUntracked?: boolean }) => Promise<DeleteFileResponse>;
   dispose: () => void;
@@ -68,9 +72,21 @@ interface WorkbenchProjectClient {
   getSnapshot: () => WorkbenchProjectSnapshot;
   selectInitialProject: () => Promise<void>;
   selectProjectStrict: (projectId: string) => Promise<boolean>;
-  refreshProject: () => Promise<ProjectSnapshot>;
+  refreshProject: () => Promise<void>;
+  resetObservation: () => void;
   subscribe: (listener: WorkbenchProjectListener) => () => void;
   toggleDirectory: (path: string) => boolean;
+}
+
+export interface WorkbenchProjectTransport {
+  createEntry(projectId: string, parentPath: string, name: string, type: "directory" | "file"): Promise<CreateEntryPayload>;
+  deleteFile(projectId: string, filePath: string, options: { confirmUntracked?: boolean }): Promise<DeleteFileResponse>;
+  refresh(projectId: string): Promise<void>;
+}
+
+export interface WorkbenchProjectClientOptions {
+  onError?: (message: string) => void;
+  transport: WorkbenchProjectTransport;
 }
 
 function createInitialProjectState(): WorkbenchProjectState {
@@ -90,10 +106,10 @@ function createInitialProjectState(): WorkbenchProjectState {
   };
 }
 
-function WorkbenchProjectClient(): WorkbenchProjectClient {
+function WorkbenchProjectClient({ onError = () => undefined, transport }: WorkbenchProjectClientOptions): WorkbenchProjectClient {
   const listeners = new Set<WorkbenchProjectListener>();
   const state = createInitialProjectState();
-  let projectLoadGeneration = 0;
+  let projectRevision = -1;
   let snapshotDirty = true;
   let snapshot: WorkbenchProjectSnapshot | null = null;
 
@@ -170,7 +186,6 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
   }
 
   function applyProjectOption(project: WorkbenchProjectOption, options: { loading?: boolean } = {}) {
-    projectLoadGeneration += 1;
     state.currentProjectId = project.id;
     state.root = project.name || project.id;
     state.rootPath = project.rootPath;
@@ -180,6 +195,17 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
     state.changes = {};
     state.hasLoadedProject = false;
     state.isLoading = options.loading ?? state.isLoading;
+    projectRevision = -1;
+  }
+
+  function accept(update: WorkbenchProjectStateUpdate) {
+    if (update.projectId !== state.currentProjectId || update.revision <= projectRevision) return;
+    projectRevision = update.revision;
+    if (applyProjectSnapshot(update.snapshot)) emit();
+  }
+
+  function resetObservation() {
+    projectRevision = -1;
   }
 
   async function refreshProjects() {
@@ -199,11 +225,7 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
     return true;
   }
 
-  async function refreshProject({ refreshProjectList = true }: { refreshProjectList?: boolean } = {}) {
-    let didProjectListChange = false;
-    if (refreshProjectList) {
-      didProjectListChange = await refreshProjects();
-    }
+  async function refreshProject() {
     if (!state.currentProjectId) {
       const didChange = state.root !== "No projects"
         || state.rootPath !== ""
@@ -222,53 +244,15 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
       state.changes = {};
       state.hasLoadedProject = true;
       state.isLoading = false;
-      if (didProjectListChange || didChange) {
+      if (didChange) {
         emit();
       }
-      return {
-        changes: {},
-        projectId: "",
-        root: state.root,
-        rootPath: state.rootPath,
-        roots: [],
-        tree: [],
-        workbenchStorageRootPath: state.workbenchStorageRootPath,
-      };
+      return;
     }
-
-    const refreshProjectId = state.currentProjectId;
-    const refreshGeneration = ++projectLoadGeneration;
-
-    const shouldShowLoading = !state.hasLoadedProject;
-    if (shouldShowLoading && !state.isLoading) {
-      state.isLoading = true;
-      markSnapshotDirty();
-      emit();
-    }
-
     try {
-      const response = await fetch(`/api/tree?projectId=${encodeURIComponent(state.currentProjectId)}`, { cache: "no-store" });
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: "Unable to load project." }));
-        throw new Error(error.error);
-      }
-
-      const payload = await response.json() as ProjectSnapshot;
-      if (refreshGeneration !== projectLoadGeneration || payload.projectId !== refreshProjectId) {
-        return payload;
-      }
-
-      const didProjectChange = applyProjectSnapshot(payload);
-      if (didProjectListChange || didProjectChange) {
-        emit();
-      }
-      return payload;
+      await transport.refresh(state.currentProjectId);
     } catch (error) {
-      if (refreshGeneration === projectLoadGeneration && state.isLoading) {
-        state.isLoading = false;
-        markSnapshotDirty();
-        emit();
-      }
+      onError(error instanceof Error ? error.message : "Unable to refresh the project.");
       throw error;
     }
   }
@@ -278,26 +262,7 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
       throw new Error("Select a project before creating files.");
     }
 
-    const response = await fetch("/api/tree", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        projectId: state.currentProjectId,
-        parentPath,
-        name,
-        type,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "Unable to create entry." }));
-      throw new Error(error.error);
-    }
-
-    const payload = await response.json() as CreateEntryPayload;
-    applyProjectSnapshot(payload);
+    const payload = await transport.createEntry(state.currentProjectId, parentPath, name, type);
 
     if (parentPath) {
       state.expandedDirectories.add(parentPath);
@@ -316,29 +281,7 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
       throw new Error("Select a project before deleting files.");
     }
 
-    const request: DeleteFileRequest = {
-      confirmUntracked: options.confirmUntracked === true,
-      path: filePath,
-      projectId: state.currentProjectId,
-    };
-    const response = await fetch("/api/tree", {
-      method: "DELETE",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(request),
-    });
-    const payload = await response.json().catch(() => ({ error: "Unable to delete file." })) as DeleteFileResponse | { error?: string } | null;
-    if (response.status === 409 && payload && "confirmationRequired" in payload && payload.confirmationRequired) {
-      return payload;
-    }
-    if (!response.ok || !payload || !("tree" in payload)) {
-      throw new Error(payload && "error" in payload && typeof payload.error === "string" ? payload.error : "Unable to delete file.");
-    }
-
-    applyProjectSnapshot(payload);
-    emit();
-    return payload;
+    return await transport.deleteFile(state.currentProjectId, filePath, options);
   }
 
   async function selectProjectStrict(projectId: string) {
@@ -368,7 +311,6 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
     applyProjectOption(project, { loading: true });
     state.expandedDirectories = new Set(readStoredExpandedDirectories(projectId));
     emit();
-    await refreshProject({ refreshProjectList: false });
     return true;
   }
 
@@ -381,9 +323,6 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
       emit();
     } else if (didRefreshProjectsChange) {
       emit();
-    }
-    if (state.currentProjectId) {
-      await refreshProject({ refreshProjectList: false });
     }
   }
 
@@ -436,6 +375,7 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
   }
 
   return {
+    accept,
     createEntry,
     deleteFile,
     dispose,
@@ -444,6 +384,7 @@ function WorkbenchProjectClient(): WorkbenchProjectClient {
     selectInitialProject,
     selectProjectStrict,
     refreshProject,
+    resetObservation,
     subscribe,
     toggleDirectory,
   };

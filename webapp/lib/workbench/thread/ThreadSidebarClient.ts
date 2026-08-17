@@ -3,33 +3,29 @@
  * - ThreadSidebarTransport/ThreadSidebarClientOptions: pushed snapshot and mutation ports. Keywords: browser, websocket, drafts.
  * - default ThreadSidebarClient: browser observation, revision, optimistic draft, and leave-safe queue owner. Keywords: sidebar, debounce, flush.
  */
-import type { WorkbenchThreadDraftSaveState } from "../../types";
-import { createDraftTitle, sortThreadSidebarEntries, type WorkbenchThreadDraft, type WorkbenchThreadStateSnapshot } from "./thread-state";
+import { createDraftTitle, sortThreadSidebarEntries, type WorkbenchThreadActivityUpdate, type WorkbenchThreadDraft, type WorkbenchThreadSidebarSnapshot } from "./thread-state";
 
 export interface ThreadSidebarTransport {
   close(projectId: string): Promise<void>;
   deleteDraft(projectId: string, draftId: string, clientUpdatedAt: number): Promise<void>;
-  open(projectId: string): Promise<WorkbenchThreadStateSnapshot>;
+  open(projectId: string): Promise<WorkbenchThreadSidebarSnapshot>;
   upsertDraft(projectId: string, draft: WorkbenchThreadDraft): Promise<void>;
 }
 export interface ThreadSidebarClientOptions {
-  onChange: (snapshot: WorkbenchThreadStateSnapshot | null) => void;
-  onDraftSaveStateChange?: (draftId: string, state: WorkbenchThreadDraftSaveState) => void;
+  onChange: (snapshot: WorkbenchThreadSidebarSnapshot | null) => void;
   transport: ThreadSidebarTransport;
 }
 
 interface DraftQueue {
   draft: WorkbenchThreadDraft | null;
   inFlight: Promise<void> | null;
-  lastAcceptedClientUpdatedAt: number;
-  state: WorkbenchThreadDraftSaveState;
   timer: ReturnType<typeof setTimeout> | null;
 }
 
 export default class ThreadSidebarClient {
   private projectId: string | null = null;
   private revision = -1;
-  private snapshot: WorkbenchThreadStateSnapshot | null = null;
+  private snapshot: WorkbenchThreadSidebarSnapshot | null = null;
   private readonly queues = new Map<string, DraftQueue>();
   constructor(private readonly options: ThreadSidebarClientOptions) {}
 
@@ -45,12 +41,20 @@ export default class ThreadSidebarClient {
       this.install({ entries: [], error: message.slice(0, 500), freshness: "partial", projectId, revision: 0 });
     }
   }
-  accept(snapshot: WorkbenchThreadStateSnapshot) { if (snapshot.projectId === this.projectId && snapshot.revision > this.revision) this.install(snapshot); }
+  accept(snapshot: WorkbenchThreadSidebarSnapshot) { if (snapshot.projectId === this.projectId && snapshot.revision > this.revision) this.install(snapshot); }
+  acceptActivity(update: WorkbenchThreadActivityUpdate) {
+    if (update.projectId !== this.projectId || update.revision <= this.revision || !this.snapshot) return;
+    const entries = this.snapshot.entries.map((entry) => entry.entryKind !== "draft" && entry.identity.harness === update.identity.harness && entry.identity.threadId === update.identity.threadId
+      ? { ...entry, activityAt: update.activityAt }
+      : entry);
+    this.revision = update.revision;
+    this.snapshot = { ...this.snapshot, entries: sortThreadSidebarEntries(entries), revision: update.revision };
+    this.options.onChange(this.snapshot);
+  }
   edit(draft: WorkbenchThreadDraft) {
     if (draft.projectId !== this.projectId) throw new Error("The draft does not belong to the observed project.");
-    const queue = this.queues.get(draft.draftId) ?? { draft: null, inFlight: null, lastAcceptedClientUpdatedAt: -1, state: "saved" as const, timer: null };
+    const queue = this.queues.get(draft.draftId) ?? { draft: null, inFlight: null, timer: null };
     queue.draft = draft;
-    this.setSaveState(draft.draftId, queue, "saving");
     if (queue.timer) clearTimeout(queue.timer);
     queue.timer = setTimeout(() => {
       queue.timer = null;
@@ -74,9 +78,13 @@ export default class ThreadSidebarClient {
   async flush() { for (const [id, queue] of this.queues) await this.flushQueue(id, queue); }
   async guardNavigation(action: () => void | Promise<void>) { await this.flush(); await action(); }
   bestEffortFlush() { void this.flush().catch(() => undefined); }
-  getDraftSaveState(draftId: string): WorkbenchThreadDraftSaveState { return this.queues.get(draftId)?.state ?? "saved"; }
+  async reopen() {
+    if (!this.projectId) return;
+    this.revision = -1;
+    this.install(await this.options.transport.open(this.projectId));
+  }
   async close() { if (!this.projectId) return; await this.flush(); const projectId = this.projectId; this.projectId = null; this.snapshot = null; this.options.onChange(null); await this.options.transport.close(projectId).catch((error: unknown) => { console.warn("Unable to close the thread sidebar observation.", error); }); }
-  private install(snapshot: WorkbenchThreadStateSnapshot) { if (snapshot.revision <= this.revision) return; this.revision = snapshot.revision; this.snapshot = snapshot; this.options.onChange(snapshot); }
+  private install(snapshot: WorkbenchThreadSidebarSnapshot) { if (snapshot.revision <= this.revision) return; this.revision = snapshot.revision; this.snapshot = snapshot; this.options.onChange(snapshot); }
   private installOptimisticDraft(draft: WorkbenchThreadDraft) {
     if (!this.snapshot) return;
     const entry = {
@@ -95,11 +103,6 @@ export default class ThreadSidebarClient {
     };
     this.options.onChange(this.snapshot);
   }
-  private setSaveState(draftId: string, queue: DraftQueue, state: WorkbenchThreadDraftSaveState) {
-    if (queue.state === state) return;
-    queue.state = state;
-    this.options.onDraftSaveStateChange?.(draftId, state);
-  }
   private async flushQueue(id: string, queue: DraftQueue) {
     if (queue.timer) { clearTimeout(queue.timer); queue.timer = null; }
     if (queue.inFlight) await queue.inFlight;
@@ -109,15 +112,12 @@ export default class ThreadSidebarClient {
     queue.inFlight = this.options.transport.upsertDraft(projectId, draft).finally(() => { queue.inFlight = null; });
     try {
       await queue.inFlight;
-      queue.lastAcceptedClientUpdatedAt = Math.max(queue.lastAcceptedClientUpdatedAt, draft.clientUpdatedAt);
-      if (!queue.draft) this.setSaveState(id, queue, "saved");
       if (this.snapshot?.error?.startsWith("Draft save failed:")) {
         this.snapshot = { ...this.snapshot, error: null };
         this.options.onChange(this.snapshot);
       }
     } catch (error) {
       if (!queue.draft || queue.draft.clientUpdatedAt < draft.clientUpdatedAt) queue.draft = draft;
-      this.setSaveState(id, queue, "failed");
       if (this.snapshot) {
         const message = error instanceof Error ? error.message : "Unable to save this draft.";
         this.snapshot = { ...this.snapshot, error: `Draft save failed: ${message}`.slice(0, 500), freshness: "partial" };

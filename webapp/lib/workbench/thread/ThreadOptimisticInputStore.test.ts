@@ -8,7 +8,7 @@ import { test } from "node:test";
 
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
 import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "../../types.ts";
-import ThreadOptimisticInputStore from "./ThreadOptimisticInputStore.ts";
+import ThreadOptimisticInputStore, { isPendingInitialOptimisticInputItem } from "./ThreadOptimisticInputStore.ts";
 import { applySteerHistoryToThread } from "./thread-steer-history.ts";
 
 function input(text: string) {
@@ -57,6 +57,15 @@ test("canonical initial input retains its leading user-message position", () => 
   store.enqueueInitial(thread([agent]), "turn", input("initial"), { status: "sent" });
   const projected = store.apply(thread([agent, user("canonical", null, "initial")]), []);
   assert.deepEqual(projected.turns[0]?.items.map((item) => item.id), ["canonical", "agent"]);
+});
+
+test("connecting state derives only from pending initial optimistic input", () => {
+  const store = ThreadOptimisticInputStore();
+  const pending = store.enqueueInitial(thread(), "turn", input("initial"));
+  assert.equal(isPendingInitialOptimisticInputItem(pending.item), true);
+  store.transition(pending.handle, "sent");
+  const sent = store.apply(thread(), []).turns[0]?.items[0];
+  assert.equal(sent ? isPendingInitialOptimisticInputItem(sent) : null, false);
 });
 
 test("native initial identity collapses only its exact canonical alias", () => {

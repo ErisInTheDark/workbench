@@ -4,6 +4,7 @@
  * - OptimisticInputStatus/OptimisticInputPlacement: optimistic rendering state. Keywords: optimistic, status, placement.
  * - ThreadOptimisticInputStoreOptions: injectable native client-ID factory. Keywords: optimistic, identity, test.
  * - EnqueueInitialOptimisticInputOptions: native identity and status for one initial message. Keywords: initial, identity, status.
+ * - isPendingInitialOptimisticInputItem: derive pre-admission connecting state from optimistic item truth. Keywords: connecting, initial, pending.
  * - ThreadOptimisticInputStore: owner for optimistic input identity, status, placement, and canonical correlation. Keywords: optimistic, thread, delivery.
  * - default ThreadOptimisticInputStore: create the optimistic input owner. Keywords: optimistic, thread, create.
  */
@@ -73,6 +74,10 @@ function cloneUserInput(input: UserInput): UserInput {
 
 function isOptimisticItem(item: ThreadItem) {
   return item.type === "userMessage" && item.id.startsWith("optimistic-user-message:");
+}
+
+export function isPendingInitialOptimisticInputItem(item: ThreadItem) {
+  return item.type === "userMessage" && item.id.startsWith("optimistic-user-message:initial:pending:");
 }
 
 function createOptimisticItem(entry: Pick<OptimisticInputEntry, "handle" | "input" | "placement" | "status" | "threadKey">): UserMessageItem {

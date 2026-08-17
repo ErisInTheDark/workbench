@@ -2,14 +2,18 @@
  * Exports:
  * - WorkbenchThreadTargetSchema/WorkbenchThreadTarget: canonical blank, draft, provider, and parent-owned subagent identity. Keywords: route, draft, provider, subagent.
  * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts. Keywords: zod, lifecycle, sidebar.
- * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema: pushed project snapshot protocol. Keywords: orchestrator, websocket, revision.
+ * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchThreadActivityUpdateSchema: full sidebar state and tiny activity delta contracts. Keywords: sidebar, websocket, revision.
+ * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema: multiplexed sidebar, activity, project, and request protocol. Keywords: orchestrator, websocket, revision.
  * - getThreadSidebarGroup/sortThreadSidebarEntries: exhaustive visible grouping and stable activity ordering. Keywords: grouping, pin, sort.
  * - normalizeWorkbenchActivityTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary. Keywords: timestamp, provider, normalization.
+ * - resolveWorkbenchThreadTitle: choose a meaningful provider name, first-message preview, or neutral fallback. Keywords: title, preview, uuid.
  * - reduceWorkbenchThreadLifecycle/projectWorkbenchThreadSidebarEntries: exact-turn transitions and direct-child status projection. Keywords: working, attention, completed, stopped, parent.
  * - countDraftPromptTokens/createDraftTitle: durable draft materialization and title rules. Keywords: draft, threshold, title.
  */
 
 import { z } from "zod";
+
+import { WorkbenchProjectStateUpdateSchema } from "../project/project-state";
 
 export const WorkbenchHarnessSchema = z.enum(["codex", "copilot", "opencode"]);
 export type WorkbenchHarnessId = z.infer<typeof WorkbenchHarnessSchema>;
@@ -136,19 +140,36 @@ export const WorkbenchThreadSidebarEntrySchema = z.discriminatedUnion("entryKind
 export type WorkbenchThreadSidebarEntry = z.infer<typeof WorkbenchThreadSidebarEntrySchema>;
 export type WorkbenchTopLevelThreadSidebarEntry = z.infer<typeof TopLevelEntrySchema>;
 
-export const WorkbenchThreadStateSnapshotSchema = z.object({
+export const WorkbenchThreadSidebarSnapshotSchema = z.object({
   entries: z.array(WorkbenchThreadSidebarEntrySchema),
   error: z.string().max(500).nullable(),
   freshness: z.enum(["loading", "fresh", "partial"]),
   projectId: z.string().min(1),
   revision: z.number().int().nonnegative(),
 }).strict();
+export type WorkbenchThreadSidebarSnapshot = z.infer<typeof WorkbenchThreadSidebarSnapshotSchema>;
+
+export const WorkbenchThreadActivityUpdateSchema = z.object({
+  activityAt: z.number().int().nonnegative(),
+  identity: ThreadIdentitySchema,
+  projectId: z.string().min(1),
+  revision: z.number().int().nonnegative(),
+  updateKind: z.literal("activity"),
+}).strict();
+export type WorkbenchThreadActivityUpdate = z.infer<typeof WorkbenchThreadActivityUpdateSchema>;
+
+export const WorkbenchThreadStateSnapshotSchema = z.union([
+  WorkbenchThreadSidebarSnapshotSchema,
+  WorkbenchThreadActivityUpdateSchema,
+  WorkbenchProjectStateUpdateSchema,
+]);
 export type WorkbenchThreadStateSnapshot = z.infer<typeof WorkbenchThreadStateSnapshotSchema>;
 
 const ProjectRequestBase = z.object({ projectId: z.string().trim().min(1) }).strict();
 export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", [
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/open") }),
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/close") }),
+  ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/intent/accept"), title: z.string().trim().min(1), turnId: z.string().trim().min(1) }),
   ProjectRequestBase.extend({ draft: WorkbenchThreadDraftSchema, method: z.literal("workbench/thread-state/draft/upsert") }),
   ProjectRequestBase.extend({ clientUpdatedAt: z.number().int().nonnegative(), draftId: CanonicalUuidSchema, method: z.literal("workbench/thread-state/draft/delete") }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/pin/set"), pinned: z.boolean() }),
@@ -164,6 +185,35 @@ export type WorkbenchThreadSidebarGroup = "drafts" | "needsAttention" | "complet
 
 export function normalizeWorkbenchActivityTimestampMs(timestamp: number) {
   return Math.trunc(timestamp < 100_000_000_000 ? timestamp * 1000 : timestamp);
+}
+
+const UUID_TITLE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const DEFAULT_THREAD_TITLE_PATTERN = /^new thread$/iu;
+
+function normalizeThreadTitleCandidate(value: string | null | undefined, maxLength = 80) {
+  const firstLine = value?.split(/\r?\n/u).map((line) => line.trim()).find(Boolean) ?? "";
+  const title = firstLine.replace(/\s+/gu, " ");
+  return title.length <= maxLength ? title : `${title.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+export function resolveWorkbenchThreadTitle({
+  fallback = "New thread",
+  id,
+  name,
+  preview,
+}: {
+  fallback?: string;
+  id: string;
+  name: string | null | undefined;
+  preview: string | null | undefined;
+}) {
+  const normalizedId = id.trim();
+  const normalizedName = normalizeThreadTitleCandidate(name);
+  if (normalizedName && normalizedName !== normalizedId && !UUID_TITLE_PATTERN.test(normalizedName) && !DEFAULT_THREAD_TITLE_PATTERN.test(normalizedName)) {
+    return normalizedName;
+  }
+  const normalizedPreview = normalizeThreadTitleCandidate(preview);
+  return normalizedPreview && normalizedPreview !== normalizedId ? normalizedPreview : fallback;
 }
 
 export function getThreadSidebarGroup(entry: WorkbenchThreadSidebarEntry): WorkbenchThreadSidebarGroup {
@@ -253,6 +303,10 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
     }
     case "settle":
       if (current?.kind !== "completed" && current?.kind !== "stopped") return current!;
+      if (current.kind === "stopped") {
+        const agent = "agent" in current ? current.agent : undefined;
+        return { ...(agent ? { agent } : {}), kind: "completed", reason: "userCompleted", settled: true };
+      }
       return { ...current, settled: true };
     case "restore":
       if (current?.kind !== "completed" && current?.kind !== "stopped") return current!;
@@ -284,7 +338,5 @@ export function countDraftPromptTokens(text: string) {
 }
 
 export function createDraftTitle(text: string, maxLength = 80) {
-  const firstLine = text.split(/\r?\n/u).map((line) => line.trim()).find(Boolean) ?? "Draft";
-  const title = firstLine.replace(/\s+/gu, " ");
-  return title.length <= maxLength ? title : `${title.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+  return normalizeThreadTitleCandidate(text, maxLength) || "Draft";
 }

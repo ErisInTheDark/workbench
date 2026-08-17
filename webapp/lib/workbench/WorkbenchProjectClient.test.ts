@@ -1,0 +1,141 @@
+/*
+ * Exports:
+ * - No production exports; Node tests protect pushed project snapshots, revision isolation, catalog-only selection, and bridge mutations. Keywords: project, client, websocket, revision, test.
+ */
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import type { ProjectSnapshot, WorkbenchProjectOption } from "../types";
+import WorkbenchProjectClient, { type WorkbenchProjectTransport } from "./WorkbenchProjectClient";
+
+function createProject(projectId: string): WorkbenchProjectOption {
+  return {
+    id: projectId,
+    kind: "git",
+    lastCommitTimeMs: null,
+    name: projectId,
+    relativePath: projectId,
+    rootPath: `C:/projects/${projectId}`,
+    roots: [{ id: projectId, isPrimary: true, name: projectId, relativePath: projectId, rootPath: `C:/projects/${projectId}` }],
+  };
+}
+
+function createSnapshot(projectId: string, fileName = "README.md"): ProjectSnapshot {
+  return {
+    changes: {},
+    projectId,
+    root: projectId,
+    rootPath: `C:/projects/${projectId}`,
+    roots: createProject(projectId).roots,
+    tree: [{ name: fileName, path: fileName, type: "file" }],
+    workbenchStorageRootPath: "C:/projects/workbench",
+  };
+}
+
+function installProjectsFetch(projects: WorkbenchProjectOption[]) {
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+  globalThis.fetch = (async (input) => {
+    requests.push(String(input));
+    return new Response(JSON.stringify({ data: projects, rootPath: "C:/projects" }), {
+      headers: { "Content-Type": "application/json" },
+      status: 200,
+    });
+  }) as typeof fetch;
+  return {
+    requests,
+    restore() { globalThis.fetch = originalFetch; },
+  };
+}
+
+function createTransport() {
+  const calls: string[] = [];
+  const transport: WorkbenchProjectTransport = {
+    async createEntry(projectId, parentPath, name, type) {
+      calls.push(`create:${projectId}:${parentPath}:${name}:${type}`);
+      return { path: parentPath ? `${parentPath}/${name}` : name, type };
+    },
+    async deleteFile(projectId, filePath, options) {
+      calls.push(`delete:${projectId}:${filePath}:${options.confirmUntracked === true}`);
+      return { path: filePath, tracked: true };
+    },
+    async refresh(projectId) {
+      calls.push(`refresh:${projectId}`);
+    },
+  };
+  return { calls, transport };
+}
+
+test("project selection loads only the catalog and waits for a pushed tree snapshot", async () => {
+  const fetchHarness = installProjectsFetch([createProject("alpha")]);
+  try {
+    const { transport } = createTransport();
+    const client = WorkbenchProjectClient({ transport });
+    assert.equal(await client.selectProjectStrict("alpha"), true);
+    assert.deepEqual(fetchHarness.requests, ["/api/projects"]);
+    assert.equal(client.getSnapshot().currentProjectId, "alpha");
+    assert.equal(client.getSnapshot().isLoading, true);
+    assert.deepEqual(client.getSnapshot().tree, []);
+
+    client.accept({ projectId: "alpha", revision: 0, snapshot: createSnapshot("alpha"), updateKind: "project" });
+    assert.equal(client.getSnapshot().isLoading, false);
+    assert.equal(client.getSnapshot().tree[0]?.name, "README.md");
+    client.dispose();
+  } finally {
+    fetchHarness.restore();
+  }
+});
+
+test("project updates reject stale and foreign revisions", async () => {
+  const fetchHarness = installProjectsFetch([createProject("alpha"), createProject("beta")]);
+  try {
+    const { transport } = createTransport();
+    const client = WorkbenchProjectClient({ transport });
+    await client.selectProjectStrict("alpha");
+    client.accept({ projectId: "alpha", revision: 2, snapshot: createSnapshot("alpha", "new.ts"), updateKind: "project" });
+    client.accept({ projectId: "alpha", revision: 1, snapshot: createSnapshot("alpha", "stale.ts"), updateKind: "project" });
+    client.accept({ projectId: "beta", revision: 3, snapshot: createSnapshot("beta", "foreign.ts"), updateKind: "project" });
+    assert.equal(client.getSnapshot().tree[0]?.name, "new.ts");
+    client.dispose();
+  } finally {
+    fetchHarness.restore();
+  }
+});
+
+test("observation reset accepts a restarted revision without clearing the best-known tree", async () => {
+  const fetchHarness = installProjectsFetch([createProject("alpha")]);
+  try {
+    const { transport } = createTransport();
+    const client = WorkbenchProjectClient({ transport });
+    await client.selectProjectStrict("alpha");
+    client.accept({ projectId: "alpha", revision: 5, snapshot: createSnapshot("alpha", "best-known.ts"), updateKind: "project" });
+    client.resetObservation();
+    assert.equal(client.getSnapshot().tree[0]?.name, "best-known.ts");
+    client.accept({ projectId: "alpha", revision: 0, snapshot: createSnapshot("alpha", "after-reload.ts"), updateKind: "project" });
+    assert.equal(client.getSnapshot().tree[0]?.name, "after-reload.ts");
+    client.dispose();
+  } finally {
+    fetchHarness.restore();
+  }
+});
+
+test("refresh, create, and delete use the injected bridge transport", async () => {
+  const fetchHarness = installProjectsFetch([createProject("alpha")]);
+  try {
+    const { calls, transport } = createTransport();
+    const client = WorkbenchProjectClient({ transport });
+    await client.selectProjectStrict("alpha");
+    await client.refreshProject();
+    assert.equal(await client.createEntry("src", "new.ts", "file"), "src/new.ts");
+    assert.deepEqual(await client.deleteFile("src/old.ts", { confirmUntracked: true }), { path: "src/old.ts", tracked: true });
+    assert.deepEqual(calls, [
+      "refresh:alpha",
+      "create:alpha:src:new.ts:file",
+      "delete:alpha:src/old.ts:true",
+    ]);
+    assert.deepEqual(fetchHarness.requests, ["/api/projects"]);
+    client.dispose();
+  } finally {
+    fetchHarness.restore();
+  }
+});

@@ -8,6 +8,8 @@
  * - truncateThreadText: shorten thread text for summaries without breaking words awkwardly. Keywords: workbench, thread, summary.
  */
 
+import { resolveWorkbenchThreadTitle } from "../../../lib/workbench/thread/thread-state";
+
 export function formatThreadTimestamp (timestampSeconds: number) {
   return new Date(timestampSeconds * 1000).toLocaleString();
 }
@@ -85,7 +87,7 @@ export function humanizeThreadLabel (value: string) {
 }
 
 export function getThreadTitle (thread: { id: string; name: string | null; preview: string }) {
-  return thread.name || thread.preview || thread.id;
+  return resolveWorkbenchThreadTitle(thread);
 }
 
 export function truncateThreadText (value: string, maxLength = 120) {

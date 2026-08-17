@@ -2,23 +2,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import ThreadSidebarClient from "./ThreadSidebarClient.ts";
-import type { WorkbenchThreadDraft, WorkbenchThreadStateSnapshot } from "./thread-state.ts";
+import type { WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot } from "./thread-state.ts";
 
 const draft = (prompt: string, clientUpdatedAt: number): WorkbenchThreadDraft => ({
   agent: null, attachments: [], clientUpdatedAt, composerSettings: {}, createdAt: 1,
   draftId: "00000000-0000-4000-8000-000000000001", harness: "codex", model: null,
   profileId: null, projectId: "project", prompt, reasoningEffort: null, serviceTier: null, updatedAt: clientUpdatedAt,
 });
-const snapshot = (revision: number): WorkbenchThreadStateSnapshot => ({ entries: [], error: null, freshness: "fresh", projectId: "project", revision });
+const snapshot = (revision: number): WorkbenchThreadSidebarSnapshot => ({ entries: [], error: null, freshness: "fresh", projectId: "project", revision });
 
 test("optimistic edits keep the newest value through one single-flight flush", async () => {
   const writes: WorkbenchThreadDraft[] = [];
   let releaseFirst: (() => void) | null = null;
   const first = new Promise<void>((resolve) => { releaseFirst = resolve; });
-  const states: string[] = [];
   const client = new ThreadSidebarClient({
     onChange: () => undefined,
-    onDraftSaveStateChange: (_id, state) => states.push(state),
     transport: {
       close: async () => undefined,
       deleteDraft: async () => undefined,
@@ -35,12 +33,10 @@ test("optimistic edits keep the newest value through one single-flight flush", a
   await flushing;
   await client.flush();
   assert.deepEqual(writes.map((value) => value.prompt), ["first value here", "newest value here"]);
-  assert.equal(client.getDraftSaveState(draft("", 0).draftId), "saved");
-  assert.deepEqual(states, ["saving", "saved"]);
 });
 
 test("newer pushed revisions win and foreign project revisions are ignored", async () => {
-  const installed: Array<WorkbenchThreadStateSnapshot | null> = [];
+  const installed: Array<WorkbenchThreadSidebarSnapshot | null> = [];
   const client = new ThreadSidebarClient({
     onChange: (value) => installed.push(value),
     transport: { close: async () => undefined, deleteDraft: async () => undefined, open: async () => snapshot(2), upsertDraft: async () => undefined },
@@ -52,14 +48,35 @@ test("newer pushed revisions win and foreign project revisions are ignored", asy
   assert.deepEqual(installed.map((value) => value?.revision), [2, 3]);
 });
 
+test("activity updates reorder only the matching observed thread", async () => {
+  const installed: Array<WorkbenchThreadSidebarSnapshot | null> = [];
+  const initial: WorkbenchThreadSidebarSnapshot = {
+    ...snapshot(1),
+    entries: [{
+      activityAt: 1,
+      entryKind: "thread",
+      identity: { harness: "codex", threadId: "thread" },
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      title: "Thread",
+    }],
+  };
+  const client = new ThreadSidebarClient({
+    onChange: (value) => installed.push(value),
+    transport: { close: async () => undefined, deleteDraft: async () => undefined, open: async () => initial, upsertDraft: async () => undefined },
+  });
+  await client.open("project");
+  client.acceptActivity({ activityAt: 50, identity: { harness: "codex", threadId: "thread" }, projectId: "project", revision: 2, updateKind: "activity" });
+  assert.equal(installed.at(-1)?.entries[0]?.activityAt, 50);
+  assert.equal(installed.at(-1)?.revision, 2);
+});
+
 test("failed navigation flush preserves the route and re-enters the same debounced edit path", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
   let navigated = false;
   let attempts = 0;
-  const states: string[] = [];
   const client = new ThreadSidebarClient({
     onChange: () => undefined,
-    onDraftSaveStateChange: (_id, state) => states.push(state),
     transport: {
       close: async () => undefined,
       deleteDraft: async () => undefined,
@@ -74,14 +91,10 @@ test("failed navigation flush preserves the route and re-enters the same debounc
   client.edit(draft("keep this route here", 2));
   await assert.rejects(client.guardNavigation(() => { navigated = true; }), /disk busy/u);
   assert.equal(navigated, false);
-  assert.equal(client.getDraftSaveState(draft("", 0).draftId), "saving");
-  assert.deepEqual(states, ["saving", "failed", "saving"]);
 
   context.mock.timers.tick(500);
   assert.equal(attempts, 2);
   await client.flush();
-  assert.equal(client.getDraftSaveState(draft("", 0).draftId), "saved");
-  assert.deepEqual(states, ["saving", "failed", "saving", "saved"]);
 });
 
 test("close flushes the newest draft before releasing project observation", async () => {

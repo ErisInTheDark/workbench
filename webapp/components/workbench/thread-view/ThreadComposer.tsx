@@ -257,7 +257,7 @@ export default function ThreadComposer ({
   onResumeThread: (threadId: string) => Promise<void> | void;
   onSendMessage: (threadId: string, input: UserInput[]) => Promise<void>;
   onStopThread: (threadId: string) => Promise<void> | void;
-  onThreadComposerDraftChange: (threadId: string, draft: WorkbenchComposerInputDraft) => void;
+  onThreadComposerDraftChange: (threadId: string, draft: WorkbenchComposerInputDraft, reason?: "autosave" | "submission") => void;
   onThreadComposerDraftClear: (threadId: string) => void;
   onThreadQuestionnaireDraftChange: (threadId: string, requestKey: string, draft: WorkbenchQuestionnaireDraft) => void;
   onThreadQuestionnaireDraftClear: (threadId: string, requestKey: string) => void;
@@ -675,8 +675,14 @@ export default function ThreadComposer ({
 
     const timeoutId = window.setTimeout(() => {
       if (!value.trim() && attachments.length === 0) {
-        if (hasDurableComposerDraft) {
+        if (hasDurableComposerDraft && !thread.isDraft) {
           onThreadComposerDraftClearRef.current(thread.id);
+        } else if (hasDurableComposerDraft) {
+          onThreadComposerDraftChangeRef.current(thread.id, {
+            attachments: [],
+            text: "",
+            updatedAt: Date.now(),
+          });
         }
         return;
       }
@@ -900,7 +906,7 @@ export default function ThreadComposer ({
           attachments: submittedAttachments,
           text: submittedValue,
           updatedAt: Date.now(),
-        }),
+        }, "submission"),
         restoreLocalInput: () => {
           setValue(submittedValue);
           setAttachments(submittedAttachments);

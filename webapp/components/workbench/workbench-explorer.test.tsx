@@ -36,6 +36,11 @@ test("threads render one flat tablist with lifecycle borders and all settled row
   assert.match(source, /href=\{getThreadHref\(\{ kind: "new" \}\)\}/u);
   assert.match(source, /event\.preventDefault\(\);[\s\S]*?onOpenThread\(target\)/u);
   assert.doesNotMatch(source, /Retry draft save|onRetryDraft/u);
+  assert.doesNotMatch(source, /Draft · Saving|Draft · Save failed|draftSaveStates/u);
+  assert.match(source, /entry\.entryKind === "draft"[\s\S]*?\? "text-muted"/u);
+  assert.match(source, /flex flex-col gap-1/u);
+  assert.match(source, /compact \|\| action === "settle"/u);
+  assert.match(source, /action === "settle" \? "top-1 items-center gap-1/u);
   assert.match(source, /className="mt-1"/u);
   assert.doesNotMatch(source, /summaryClassName="px-2/u);
   assert.match(source, /actionLabel === "restore"|action === "restore"/u);
@@ -71,9 +76,24 @@ test("provider child routes canonicalize from durable subagent relationships", a
   assert.match(source, /explorer\.subagents\.find/u);
   assert.match(source, /relationship\?\.parentThreadId \?\? child\?\.parentThreadId/u);
   assert.match(source, /const handleSelectedThreadChange = useCallback/u);
-  assert.match(source, /selectedThreadId=\{effectiveSelectedThreadId\}/u);
+  assert.match(source, /selectedThreadId=\{selectedThreadIdForView\}/u);
   assert.match(source, /onSelectedThreadChange=\{handleSelectedThreadChange\}/u);
   assert.match(source, /kind: "subagent"/u);
   assert.match(source, /parentThreadId,/u);
   assert.match(source, /threadId: providerTarget\.threadId/u);
+});
+
+test("blank thread routes render their private draft and preserve one view instance through promotion", async () => {
+  const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
+  const threadViewSource = await readFile(new URL("./thread-view/ThreadView.tsx", import.meta.url), "utf8");
+  const clientSource = await readFile(new URL("../lib/WorkbenchClient.ts", import.meta.url), "utf8");
+  assert.match(workbenchSource, /isThreadOwnedByEffectiveRoute\(currentThread\)/u);
+  assert.match(workbenchSource, /isWorkbenchRouteOwnerOfThread\(effectiveThreadRoute, getThreadViewInstanceKey\(thread\)\)/u);
+  assert.doesNotMatch(workbenchSource, /currentThread\?\.id === effectiveThreadId/u);
+  assert.match(workbenchSource, /key=\{`\$\{activeProjectId\}:\$\{threadViewInstanceKey\}`\}/u);
+  assert.match(workbenchSource, /viewInstanceKey=\{threadViewInstanceKey\}/u);
+  assert.match(threadViewSource, /\[projectId, scrollAnchorController, viewInstanceKey\]/u);
+  assert.doesNotMatch(threadViewSource, /\[projectId, scrollAnchorController, thread\.id\]/u);
+  assert.match(clientSource, /onThreadCreated: \(createdThread\) => \{[\s\S]*?applyThreadPayloadToCurrentView\(createdThread, "Connecting thread\."\)/u);
+  assert.match(clientSource, /sessionState\.currentThreadId === createdThreadId[\s\S]*?applyThreadPayloadToCurrentView\(thread\)/u);
 });

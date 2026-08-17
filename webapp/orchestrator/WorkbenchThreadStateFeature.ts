@@ -1,14 +1,15 @@
 /*
  * Exports:
- * - WorkbenchThreadStateFeatureContext: stable ports required by the reloadable sidebar/lifecycle owner. Keywords: dependency injection, thread state.
- * - normalizeProviderSidebarEntry/normalizeSubagentProviderLifecycle/mapProviderLifecycleNotification: normalize provider rows, subagent defaults, and pushed lifecycle notifications. Keywords: timestamp, lifecycle, harness.
- * - default WorkbenchThreadStateFeature: own reconciliation, managed status commands, notification observation, and the current controller. Keywords: sidebar, lifecycle, reloadable feature.
+ * - WorkbenchThreadStateFeatureContext: stable ports required by the reloadable sidebar, lifecycle, and shared project-observation owner. Keywords: dependency injection, thread state, project.
+ * - normalizeProviderSidebarEntry/normalizeSubagentProviderLifecycle/mapProviderLifecycleNotification/mapProviderActivityNotification: normalize provider rows, subagent defaults, lifecycle, and activity notifications. Keywords: timestamp, lifecycle, harness.
+ * - default WorkbenchThreadStateFeature: own reconciliation, project observation, managed status commands, notification observation, and the current controller. Keywords: sidebar, project, lifecycle, reloadable feature.
  */
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import { getCurrentTurn } from "../lib/codex/thread-state";
 import { normalizeThreadTitle } from "../lib/thread-bootstrap";
 import type { WorkbenchHarness } from "../lib/types";
-import { normalizeWorkbenchActivityTimestampMs, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
+import { normalizeWorkbenchActivityTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchThreadStateController, { type WorkbenchObservedLifecycleEvent } from "./WorkbenchThreadStateController";
 
@@ -18,6 +19,12 @@ interface SubagentRelationshipList { subagents: Array<{ createdAt: number; cwd: 
 
 export interface WorkbenchThreadStateFeatureContext {
   listSubagents(projectId: string): Promise<SubagentRelationshipList>;
+  log?: (message: string) => void;
+  projectState: {
+    getCurrentUpdate(projectId: string): WorkbenchProjectStateUpdate | null;
+    handleRequest(projectId: string, request: WorkbenchProjectStateRequest): Promise<unknown>;
+    observe(projectId: string, publish: (update: WorkbenchProjectStateUpdate) => void): () => void;
+  };
   publish(connectionId: string, snapshot: WorkbenchThreadStateSnapshot): void;
   requestHarness(harness: HarnessKind, request: JsonRpcRequest): Promise<JsonRpcResponse>;
   resolveProjectById(projectId: string): Promise<ProjectRecord>;
@@ -45,7 +52,11 @@ export function normalizeProviderSidebarEntry(harness: HarnessKind, value: unkno
       ? { agent: { agentStatus: "working", ...(turnId ? { turnId } : {}) }, kind: "working", reason: "acceptedIntent", settled: false }
       : { kind: "completed", reason: "providerInactive", settled: true },
     metadata: { archived: false, pinned: false, snoozed: false },
-    title: typeof record.name === "string" && record.name.trim() ? record.name : typeof record.preview === "string" && record.preview.trim() ? record.preview : threadId,
+    title: resolveWorkbenchThreadTitle({
+      id: threadId,
+      name: typeof record.name === "string" ? record.name : null,
+      preview: typeof record.preview === "string" ? record.preview : null,
+    }),
   };
 }
 
@@ -82,11 +93,19 @@ export function mapProviderLifecycleNotification(notification: JsonRpcNotificati
   return null;
 }
 
+export function mapProviderActivityNotification(notification: JsonRpcNotification) {
+  if (notification.method !== "turn/started" && notification.method !== "item/started" && notification.method !== "item/completed") return null;
+  const params = asRecord(notification.params);
+  return typeof params?.threadId === "string" && params.threadId.trim() ? params.threadId : null;
+}
+
 export default class WorkbenchThreadStateFeature {
   readonly controller: WorkbenchThreadStateController;
 
   constructor(private readonly context: WorkbenchThreadStateFeatureContext) {
     this.controller = new WorkbenchThreadStateController({
+      log: context.log,
+      projectState: context.projectState,
       publish: context.publish,
       reconcileProject: (projectId, signal) => this.reconcileProject(projectId, signal),
       resolveProjectRoot: async (projectId) => (await context.resolveProjectById(projectId)).rootPath,
@@ -95,7 +114,19 @@ export default class WorkbenchThreadStateFeature {
 
   async observeProviderNotification(harness: HarnessKind, notification: JsonRpcNotification) {
     const mapped = mapProviderLifecycleNotification(notification);
-    if (mapped) await this.controller.observeLifecycle(harness, mapped.threadId, mapped.event);
+    if (mapped) {
+      await this.controller.observeLifecycle(harness, mapped.threadId, mapped.event);
+      return;
+    }
+    if (notification.method === "thread/name/updated") {
+      const params = asRecord(notification.params);
+      const threadId = typeof params?.threadId === "string" ? params.threadId.trim() : "";
+      const title = normalizeThreadTitle(typeof params?.name === "string" ? params.name : null);
+      if (threadId && title) await this.controller.observeTitle(harness, threadId, title);
+      return;
+    }
+    const activityThreadId = mapProviderActivityNotification(notification);
+    if (activityThreadId) await this.controller.observeActivity(harness, activityThreadId);
   }
 
   async handleManagedThreadRequest(request: JsonRpcRequest): Promise<JsonRpcResponse> {
@@ -108,6 +139,7 @@ export default class WorkbenchThreadStateFeature {
         if (!title) throw new Error("--title requires non-empty text.");
         const response = await this.context.requestHarness(resolved.harness, { id, method: "thread/name/set", params: { cwd: resolved.cwd, name: title, threadId: resolved.thread.id } });
         if (response.error) throw new Error(response.error.message);
+        await this.controller.setTitle(resolved.projectId, resolved.harness, resolved.thread.id, title);
         return { id, result: { harness: resolved.harness, threadId: resolved.thread.id, title } };
       }
       if (request.method === "workbench/thread/status") {

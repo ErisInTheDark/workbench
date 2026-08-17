@@ -18,8 +18,8 @@ class FakeWebSocket {
   closeCalls = 0;
   private readonly listeners = new Map<string, Listener[]>();
 
-  constructor(_url: string) {
-    queueMicrotask(() => this.emit("open", {}));
+  constructor(_url: string, autoOpen = true) {
+    if (autoOpen) queueMicrotask(() => this.emit("open", {}));
   }
 
   addEventListener(type: string, listener: Listener) {
@@ -47,12 +47,35 @@ class FakeWebSocket {
     this.emit("message", { data: JSON.stringify({ id, result }) });
   }
 
-  private emit(type: string, event: { data?: string }) {
+  protected emit(type: string, event: { data?: string }) {
     for (const listener of this.listeners.get(type) ?? []) {
       listener(event);
     }
   }
 }
+
+test("a socket that errors before opening is closed before replacement", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  const sockets: FakeWebSocket[] = [];
+  globalThis.WebSocket = class extends FakeWebSocket {
+    constructor(url: string) {
+      const shouldFail = sockets.length === 0;
+      super(url, !shouldFail);
+      sockets.push(this);
+      if (shouldFail) queueMicrotask(() => this.emit("error", {}));
+    }
+  } as unknown as typeof WebSocket;
+  try {
+    const client = new CodexAppServerClient();
+    await assert.rejects(client.connectSocket("ws://test"), /Failed to connect/u);
+    assert.equal(sockets[0]?.closeCalls, 1);
+    await client.connectSocket("ws://test");
+    assert.equal(sockets.length, 2);
+    client.close();
+  } finally {
+    globalThis.WebSocket = originalWebSocket;
+  }
+});
 
 test("sendRequest removes a pending handler when socket send throws", async () => {
   const originalWebSocket = globalThis.WebSocket;

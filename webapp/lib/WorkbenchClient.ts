@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - initWorkbench: wire the workbench DOM, polling, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, polling.
+ * - initWorkbench: wire the workbench DOM, one bridge transport, pushed project/sidebar state, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, websocket.
  */
 
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
@@ -21,13 +21,13 @@ import type {
 import { areDeeplyEqual } from "./workbench/deep-equality";
 import {
     createProjectRoute,
+    isWorkbenchRouteOwnerOfThread,
     type WorkbenchRoute,
 } from "./workbench/navigation/workbench-route";
 import {
     readStoredHarness,
     readStoredFontSize,
 } from "./workbench/state/browser-state";
-import ActiveTabRefreshLeader from "./workbench/state/ActiveTabRefreshLeader";
 import FileDraftStore from "./workbench/state/FileDraftStore";
 import LifecycleScope from "./workbench/state/LifecycleScope";
 import SessionState from "./workbench/state/SessionState";
@@ -39,11 +39,11 @@ import WorkbenchFilePanelClient from "./workbench/WorkbenchFilePanelClient";
 import type { WorkbenchFilePanelClientOptions } from "./workbench/WorkbenchFilePanelClient";
 import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
 import WorkbenchThreadClient from "./workbench/WorkbenchThreadClient";
+import { WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema } from "./workbench/project/project-state";
 import ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
-import { WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadStateSnapshot } from "./workbench/thread/thread-state";
+import { WorkbenchThreadSidebarSnapshotSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarSnapshot } from "./workbench/thread/thread-state";
 import { getTurnRenderSignature } from "./workbench/thread/thread-item-signature";
-
-const AUTO_REFRESH_INTERVAL_MS = 1500;
+import reportClientSchemaError from "./workbench/report-client-schema-error";
 
 type MountedWorkbenchControls = WorkbenchControls & {
   createFilePanelClient: (
@@ -93,47 +93,56 @@ export async function WorkbenchClient(
   let reportStatusMessage = (_message: string) => {};
   let activeRoute: WorkbenchRoute = workbenchBindings.initialRoute ?? createProjectRoute("");
   let activeRouteGeneration = 0;
-  const projectClient = WorkbenchProjectClient();
-  let hasAutoRefreshLeaderState = false;
-  let isAutoRefreshLeader = false;
   const threadClient = WorkbenchThreadClient({
     onStatusMessage: (message) => {
       reportStatusMessage(message);
     },
     onThreadStarted: (thread) => {
-      if (activeRoute.view !== "thread" || activeRoute.threadId !== thread.id) {
+      if (!isWorkbenchRouteOwnerOfThread(activeRoute, thread.id)) {
         return;
       }
       emitExplorerStateChange();
     },
   });
-  let threadSidebarSnapshot: WorkbenchThreadStateSnapshot | null = null;
-  let threadSidebarDraftSaveStates: ExplorerSnapshot["threadSidebarDraftSaveStates"] = {};
+  const projectClient = WorkbenchProjectClient({
+    onError: (message) => reportStatusMessage(message),
+    transport: {
+      createEntry: async (projectId, parentPath, name, type) => WorkbenchCreateEntryResultSchema.parse(await threadClient.requestWorkbench("workbench/thread-state/project/entry/create", { name, parentPath, projectId, type })),
+      deleteFile: async (projectId, filePath, options) => WorkbenchDeleteFileResultSchema.parse(await threadClient.requestWorkbench("workbench/thread-state/project/file/delete", { confirmUntracked: options.confirmUntracked, path: filePath, projectId })),
+      refresh: async (projectId) => { await threadClient.requestWorkbench("workbench/thread-state/project/refresh", { projectId }); },
+    },
+  });
+  let threadSidebarSnapshot: WorkbenchThreadSidebarSnapshot | null = null;
   const threadSidebarClient = new ThreadSidebarClient({
     onChange: (snapshot) => {
       threadSidebarSnapshot = snapshot;
       threadClient.installSidebarSnapshot(snapshot);
       emitExplorerStateChange();
     },
-    onDraftSaveStateChange: (draftId, state) => {
-      threadSidebarDraftSaveStates = { ...threadSidebarDraftSaveStates, [draftId]: state };
-      emitExplorerStateChange();
-    },
     transport: {
       close: async (projectId) => { await threadClient.requestWorkbench("workbench/thread-state/close", { projectId }); },
       deleteDraft: async (projectId, draftId, clientUpdatedAt) => { await threadClient.requestWorkbench("workbench/thread-state/draft/delete", { clientUpdatedAt, draftId, projectId }); },
-      open: async (projectId) => WorkbenchThreadStateSnapshotSchema.parse(await threadClient.requestWorkbench("workbench/thread-state/open", { projectId })),
+      open: async (projectId) => WorkbenchThreadSidebarSnapshotSchema.parse(await threadClient.requestWorkbench("workbench/thread-state/open", { projectId })),
       upsertDraft: async (projectId, draft) => { await threadClient.requestWorkbench("workbench/thread-state/draft/upsert", { draft, projectId }); },
     },
   });
   coordinatorLifecycle.addUnsubscribe(threadClient.onWorkbenchNotification((notification) => {
     if (notification.method === "workbench/thread-state/updated") {
       const parsed = WorkbenchThreadStateSnapshotSchema.safeParse(notification.params);
-      if (parsed.success) threadSidebarClient.accept(parsed.data);
+      if (!parsed.success) {
+        reportClientSchemaError("Rejected workbench thread-state update", parsed.error);
+        return;
+      }
+      if ("updateKind" in parsed.data) {
+        if (parsed.data.updateKind === "project") projectClient.accept(parsed.data);
+        else threadSidebarClient.acceptActivity(parsed.data);
+      } else {
+        threadSidebarClient.accept(parsed.data);
+      }
       return;
     }
-    const projectId = projectClient.getSnapshot().currentProjectId;
-    if (projectId) void threadSidebarClient.open(projectId);
+    projectClient.resetObservation();
+    void threadSidebarClient.reopen();
   }));
   const initialThreadSnapshot = threadClient.getSnapshot();
   const sessionState = SessionState({
@@ -155,9 +164,6 @@ export async function WorkbenchClient(
       rootPath: snapshot.rootPath,
       roots: snapshot.roots,
     });
-    if (snapshot.currentProjectId && previousProjectId !== snapshot.currentProjectId) {
-      void threadSidebarClient.open(snapshot.currentProjectId);
-    }
     if (previousProjectId && previousProjectId !== snapshot.currentProjectId) {
       activeFilePath = "";
       void draftStore.hydratePersistedDrafts();
@@ -175,7 +181,7 @@ export async function WorkbenchClient(
       || lastSnapshot.currentThreadId !== snapshot.currentThreadId
     ) {
       const nextThreadId = snapshot.currentThread?.id ?? snapshot.currentThreadId;
-      if (activeRoute.view === "thread" && nextThreadId === activeRoute.threadId) {
+      if (isWorkbenchRouteOwnerOfThread(activeRoute, nextThreadId)) {
         applyCurrentThreadSelection(snapshot.currentThread);
       }
     }
@@ -236,9 +242,6 @@ export async function WorkbenchClient(
     return true;
   }
 
-  async function refreshCurrentFileFromDiskIfSafe() {
-  }
-
   function getLocallyModifiedPaths() {
     const modifiedPaths = new Set<string>();
     for (const filePath of draftStore.getLocallyModifiedPaths()) {
@@ -282,7 +285,6 @@ export async function WorkbenchClient(
       })),
       threads: threadSnapshot.threads,
       threadSidebar: threadSidebarSnapshot,
-      threadSidebarDraftSaveStates,
       isProjectLoading: projectSnapshot.isLoading,
       isThreadsLoading: threadSnapshot.isLoading,
       changes: projectSnapshot.changes,
@@ -488,7 +490,26 @@ export async function WorkbenchClient(
     input: UserInput[],
     options: WorkbenchSendThreadMessageOptions = {},
   ) {
-    const payload = await threadClient.sendThreadMessage(thread, input, options);
+    let createdThreadId = "";
+    let payload: ThreadPayload | null;
+    try {
+      payload = await threadClient.sendThreadMessage(thread, input, {
+        ...options,
+        onThreadCreated: (createdThread) => {
+          createdThreadId = createdThread.id;
+          if (options.selectThread !== false && sessionState.currentThreadId === thread.id) {
+            applyThreadPayloadToCurrentView(createdThread, "Connecting thread.");
+          }
+          options.onThreadCreated?.(createdThread);
+        },
+      });
+    } catch (error) {
+      if (createdThreadId && sessionState.currentThreadId === createdThreadId) {
+        applyThreadPayloadToCurrentView(thread);
+        emitExplorerStateChange();
+      }
+      throw error;
+    }
     if (!payload) {
       return null;
     }
@@ -675,7 +696,7 @@ export async function WorkbenchClient(
       void hydrateProjectSidebarData(route, routeGeneration);
       const target = route.threadTarget ?? { kind: "provider" as const, threadId: route.threadId };
       if (target.kind === "new") {
-        const draft = threadClient.createThread("codex", "new");
+        const draft = threadClient.createThread("codex", `draft:${crypto.randomUUID()}`);
         applyThreadPayloadToCurrentView(draft);
         emitExplorerStateChange();
         return { ok: true };
@@ -714,95 +735,6 @@ export async function WorkbenchClient(
     let result: WorkbenchRouteLoadResult = { ok: false };
     await threadSidebarClient.guardNavigation(async () => { result = await applyRouteOwned(route); });
     return result;
-  }
-
-  async function refreshTree({ preserveSelection = false }: { preserveSelection?: boolean } = {}) {
-    if (projectClient.getSnapshot().currentProjectId) {
-      await projectClient.refreshProject();
-    } else {
-      await projectClient.selectInitialProject();
-    }
-
-    const shouldBlockOnSidebarData = Boolean(sessionState.currentThreadId || activeRoute.view === "thread");
-
-    if (shouldBlockOnSidebarData) {
-      await hydrateProjectSidebarData(activeRoute, activeRouteGeneration, { block: true });
-      emitExplorerStateChange();
-    } else {
-      emitExplorerStateChange();
-      void hydrateProjectSidebarData(activeRoute, activeRouteGeneration);
-    }
-
-    if (preserveSelection && activeRoute.view === "thread" && sessionState.currentThreadId === activeRoute.threadId) {
-      const currentThreadId = sessionState.currentThreadId;
-      if (sessionState.currentThread?.isDraft && sessionState.currentThread.id === currentThreadId) {
-        return;
-      }
-
-      if (threadClient.hasThread(currentThreadId)) {
-        if (!threadClient.isCurrentThreadUpToDate(currentThreadId)) {
-          await openThread(currentThreadId, { source: "reload" });
-        }
-        if (sessionState.currentThreadId === currentThreadId) {
-          return;
-        }
-      } else if (sessionState.currentThread && !sessionState.currentThread.isDraft) {
-        return;
-      } else {
-        threadClient.clearThreadSelection();
-        applyCurrentThreadSelection(null);
-        emitExplorerStateChange();
-      }
-    }
-
-    if (preserveSelection && activeRoute.view === "file" && activeFilePath === activeRoute.filePath) {
-      const currentPath = activeFilePath;
-      await refreshCurrentFileFromDiskIfSafe();
-      if (activeFilePath === currentPath) {
-        return;
-      }
-    }
-  }
-
-  async function runAutoRefresh() {
-    try {
-      await refreshTree({ preserveSelection: true });
-    } catch {
-      // Keep polling even if a transient refresh request fails.
-    }
-  }
-
-  function scheduleAutoRefresh() {
-    coordinatorLifecycle.scheduleRepeat("workbench-auto-refresh", AUTO_REFRESH_INTERVAL_MS, runAutoRefresh);
-  }
-
-  function stopAutoRefresh() {
-    coordinatorLifecycle.cancel("workbench-auto-refresh");
-  }
-
-  function startAutoRefresh() {
-    const leader = new ActiveTabRefreshLeader({
-      onLeadershipChange: (isLeader) => {
-        hasAutoRefreshLeaderState = true;
-        isAutoRefreshLeader = isLeader;
-        if (!isLeader) {
-          stopAutoRefresh();
-          return;
-        }
-
-        void runAutoRefresh();
-        scheduleAutoRefresh();
-      },
-      storageKey: "workbench:auto-refresh-leader",
-    });
-    coordinatorLifecycle.addUnsubscribe(() => {
-      leader.dispose();
-    });
-    hasAutoRefreshLeaderState = true;
-    isAutoRefreshLeader = leader.current;
-    if (leader.current) {
-      scheduleAutoRefresh();
-    }
   }
 
   const controls: MountedWorkbenchControls = {
@@ -888,7 +820,6 @@ export async function WorkbenchClient(
   if (sessionState.currentThreadId || activeRoute.view === "thread") {
     void refreshRateLimits();
   }
-  startAutoRefresh();
   return () => {
     threadSidebarClient.bestEffortFlush();
     void threadSidebarClient.close();

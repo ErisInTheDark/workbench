@@ -67,6 +67,7 @@ import {
 } from "../../../lib/workbench/thread/thread-subagents";
 import type { WorkbenchThreadStateRequest } from "../../../lib/workbench/thread/thread-state";
 import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
+import { isPendingInitialOptimisticInputItem } from "../../../lib/workbench/thread/ThreadOptimisticInputStore";
 import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import { ThreadMessageNotSentError } from "../../../lib/workbench/thread/thread-message-submission";
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
@@ -417,6 +418,15 @@ function getLiveThreadActivity ({
     return null;
   }
 
+  if (turn.items.some(isPendingInitialOptimisticInputItem)) {
+    return {
+      body: null,
+      hiddenItemId: null,
+      kind: "reasoning",
+      title: "Connecting",
+    };
+  }
+
   const reasoningStep = getCurrentReasoningStep(turn);
   if (reasoningStep) {
     return {
@@ -628,6 +638,7 @@ export default memo(function ThreadView ({
   threadGoalControls,
   threadQuestionnaireDraftsByKey,
   thread,
+  viewInstanceKey = thread.id,
 }: {
   composerSpellCheck: boolean;
   contained?: boolean;
@@ -655,7 +666,7 @@ export default memo(function ThreadView ({
     response: WorkbenchUserInputResponse,
     options?: WorkbenchSubmitUserInputRequestOptions,
   ) => Promise<void>;
-  onThreadComposerDraftChange: (threadId: string, draft: WorkbenchComposerInputDraft) => void;
+  onThreadComposerDraftChange: (threadId: string, draft: WorkbenchComposerInputDraft, reason?: "autosave" | "submission") => void;
   onThreadComposerDraftClear: (threadId: string) => void;
   onThreadQuestionnaireDraftChange: (threadId: string, requestKey: string, draft: WorkbenchQuestionnaireDraft) => void;
   onThreadQuestionnaireDraftClear: (threadId: string, requestKey: string) => void;
@@ -683,6 +694,7 @@ export default memo(function ThreadView ({
   threadGoalControls: WorkbenchThreadGoalControls | null;
   threadQuestionnaireDraftsByKey: Record<string, WorkbenchQuestionnaireDraft | undefined>;
   thread: ThreadPayload;
+  viewInstanceKey?: string;
 }) {
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const [activeThreadId, setActiveThreadId] = useState(selectedThreadId ?? thread.id);
@@ -1076,7 +1088,7 @@ export default memo(function ThreadView ({
     setSeenItemCountsByThreadId({
       [thread.id]: countThreadItems(thread),
     });
-  }, [projectId, scrollAnchorController, thread.id]);
+  }, [projectId, scrollAnchorController, viewInstanceKey]);
 
   useEffect(() => {
     let cancelled = false;

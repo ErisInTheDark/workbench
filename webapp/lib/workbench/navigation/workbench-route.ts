@@ -3,10 +3,10 @@
  * - WORKBENCH_ROUTE_MARKER: route marker for canonical workbench URLs. Keywords: URL, route, navigation.
  * - WorkbenchRouteView, WorkbenchSettingsScope, WorkbenchRoute, WorkbenchRouteParseResult: normalized route contracts. Keywords: URL source of truth, project, file, thread, settings, mosaic.
  * - createProjectRoute/createFileRoute/createThreadRoute/createSettingsRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct route objects. Keywords: navigation, route builder.
- * - getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId: derive parent hydration and selected tab identity. Keywords: thread, subagent, parent.
+ * - getWorkbenchDraftIdFromThreadId/getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId: derive durable draft, parent hydration, and selected tab identity. Keywords: thread, draft, subagent, parent.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse browser URL state without mutating history. Keywords: route parser, legacy query, malformed URL.
  * - createWorkbenchHref/createProjectHref/createFileHref/createThreadHref/createSettingsHref: build canonical hrefs. Keywords: links, URL, encode.
- * - isSameWorkbenchRoute/routeHasSelection: compare and classify routes. Keywords: route equality, active selection.
+ * - isSameWorkbenchRoute/routeHasSelection/isWorkbenchRouteOwnerOfThread: compare, classify, and fence route-owned thread transitions. Keywords: route equality, active selection, draft promotion.
  */
 
 import {
@@ -99,6 +99,21 @@ export function getWorkbenchThreadTargetRootId(target: WorkbenchThreadTarget) {
 
 export function getWorkbenchThreadTargetSelectedId(target: WorkbenchThreadTarget) {
   return target.kind === "subagent" ? target.threadId : getWorkbenchThreadTargetRootId(target);
+}
+
+export function getWorkbenchDraftIdFromThreadId(threadId: string) {
+  if (!threadId.startsWith("draft:")) return null;
+  const parsed = WorkbenchThreadTargetSchema.safeParse({ draftId: threadId.slice("draft:".length), kind: "draft" });
+  return parsed.success && parsed.data.kind === "draft" ? parsed.data.draftId : null;
+}
+
+export function isWorkbenchRouteOwnerOfThread(route: WorkbenchRoute, threadId: string) {
+  if (route.view !== "thread" || !route.threadTarget) return false;
+  const target = route.threadTarget;
+  if (target.kind === "new") return threadId.startsWith("draft:");
+  if (target.kind === "draft") return threadId === `draft:${target.draftId}`;
+  if (target.kind === "provider") return threadId === target.threadId;
+  return threadId === target.threadId || threadId === target.parentThreadId;
 }
 
 export function createSettingsRoute(projectId: string, settingsScope: WorkbenchSettingsScope = DEFAULT_SETTINGS_SCOPE): WorkbenchRoute {

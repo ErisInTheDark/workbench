@@ -1,7 +1,7 @@
 /* No production exports. Tests protect blank, draft, and provider route identity. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createThreadHref, parseWorkbenchRouteFromPath } from "./workbench-route";
+import { createThreadHref, getWorkbenchDraftIdFromThreadId, isWorkbenchRouteOwnerOfThread, parseWorkbenchRouteFromPath } from "./workbench-route";
 import { parseWorkbenchMosaicRouteExpression, serializeWorkbenchMosaicRouteExpression } from "./workbench-mosaic-route";
 
 test("thread routes discriminate blank drafts and provider ids", () => {
@@ -12,6 +12,26 @@ test("thread routes discriminate blank drafts and provider ids", () => {
   assert.deepEqual(parseWorkbenchRouteFromPath("/p/@/thread/parent/sub/child").threadTarget, { kind: "subagent", parentThreadId: "parent", threadId: "child" });
   assert.equal(createThreadHref("p", { kind: "subagent", parentThreadId: "parent", threadId: "child" }), "/p/@/thread/parent/sub/child");
   assert.equal(createThreadHref("p", { draftId, kind: "draft" }), `/p/@/thread/new/${draftId}`);
+});
+
+test("blank routes own their private future draft identity without owning unrelated drafts", () => {
+  const blank = parseWorkbenchRouteFromPath("/p/@/thread/new");
+  assert.equal(isWorkbenchRouteOwnerOfThread(blank, "draft:123e4567-e89b-42d3-a456-426614174000"), true);
+  assert.equal(isWorkbenchRouteOwnerOfThread(blank, "provider"), false);
+  const draft = parseWorkbenchRouteFromPath("/p/@/thread/new/123e4567-e89b-42d3-a456-426614174000");
+  assert.equal(isWorkbenchRouteOwnerOfThread(draft, "draft:123e4567-e89b-42d3-a456-426614174000"), true);
+  assert.equal(isWorkbenchRouteOwnerOfThread(draft, "draft:223e4567-e89b-42d3-a456-426614174000"), false);
+  assert.equal(isWorkbenchRouteOwnerOfThread(draft, "provider"), false);
+  const provider = parseWorkbenchRouteFromPath("/p/@/thread/provider");
+  assert.equal(isWorkbenchRouteOwnerOfThread(provider, "provider"), true);
+  assert.equal(isWorkbenchRouteOwnerOfThread(provider, "draft:123e4567-e89b-42d3-a456-426614174000"), false);
+});
+
+test("private draft thread ids expose only canonical durable draft identities", () => {
+  const draftId = "123e4567-e89b-42d3-a456-426614174000";
+  assert.equal(getWorkbenchDraftIdFromThreadId(`draft:${draftId}`), draftId);
+  assert.equal(getWorkbenchDraftIdFromThreadId("draft:not-a-uuid"), null);
+  assert.equal(getWorkbenchDraftIdFromThreadId("provider"), null);
 });
 
 test("missing or malformed draft routes never fall through to provider identity", () => {

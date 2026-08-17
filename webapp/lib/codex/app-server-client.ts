@@ -116,7 +116,11 @@ export class CodexAppServerClient {
 
     await new Promise<void>((resolve, reject) => {
       socket.addEventListener("open", () => resolve(), { once: true });
-      socket.addEventListener("error", () => reject(new Error("Failed to connect to Codex app-server.")), {
+      socket.addEventListener("error", () => {
+        if (this.socket === socket) this.socket = null;
+        socket.close();
+        reject(new Error("Failed to connect to Codex app-server."));
+      }, {
         once: true,
       });
     });

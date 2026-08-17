@@ -29,6 +29,7 @@
 ## Contracts, Sources, and Equality
 
 - Keep shared client/server code synchronized through shared types. Do not use `any` or `unknown` in shared contracts, and do not leave API contracts or state flow half-migrated.
+- When a browser boundary rejects server, bridge, or WebSocket data with Zod, call `reportClientSchemaError` from `webapp/lib/workbench/report-client-schema-error.ts` before returning. Keep the report bounded and sanitized; never serialize the rejected payload or its values. Expected local validation of user input, URLs, or persisted layout state does not need remote-boundary logging when its rejection is fully handled.
 - For app-core, shared-contract, thread-rendering, route, or instruction-generation changes, work in compile-safe vertical slices. Preserve compatibility until all consumers are migrated, and do not leave the app or workflow/checkpoint endpoints broken while awaiting user input.
 - Edit Workbench-owned prompt and workflow sources under `webapp/lib/workbench/instructions/`, not generated Workbench-library files. Confirm the source-to-generated path before planning.
 - Do not use `JSON.stringify` for equality. Compare explicit fields when the owner has meaningful equality rules, use the shared deep-equality utility for JSON-like structural data, and reserve stable serializers for serialization, signatures, logs, cache keys, request bodies, or display text.
@@ -47,6 +48,7 @@
 - Keep project discovery coalesced and `cwd`-validated with watcher invalidation and a bounded soft refresh. Do not reintroduce per-request project walks, and keep explorer tree snapshot caching separate from project discovery.
 - Preserve an active subagent controller across a bridge reload only while it owns active waiters. Ordinary bridge reloads may recreate the controller but must not restart the stable Codex app-server.
 - Give every new long-lived orchestrator subsystem an explicit reload/disposal boundary.
+- Treat `webapp/orchestrator/index.ts` and other files outside the reloadable orchestrator feature/module graph as non-reloadable process-shell code. Do not edit one without explicit user approval that names the file and calls out the full-process restart and validation cost. Prefer implementing behavior in the reloadable feature/module graph.
 
 ## Commands and Permission Boundaries
 

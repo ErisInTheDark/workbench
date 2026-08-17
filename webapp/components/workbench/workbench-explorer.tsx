@@ -160,7 +160,6 @@ export function ThreadsList ({
   currentTarget,
   getThreadContextMenu,
   entries,
-  draftSaveStates = {},
   getThreadHref,
   nowMs = Date.now(),
   onAction,
@@ -173,7 +172,6 @@ export function ThreadsList ({
   createThreadLabel?: string;
   currentTarget: WorkbenchThreadTarget | null;
   entries: WorkbenchThreadSidebarEntry[];
-  draftSaveStates?: Record<string, "saving" | "saved" | "failed" | undefined>;
   getThreadHref: (target: WorkbenchThreadTarget) => string;
   getThreadContextMenu?: (entry: WorkbenchThreadSidebarEntry) => WorkbenchContextMenuDefinition | null;
   nowMs?: number;
@@ -227,10 +225,9 @@ export function ThreadsList ({
     const selected = targetSelected(target);
     const group = getThreadSidebarGroup(entry);
     const lifecycle = entry.entryKind === "draft" ? null : entry.lifecycle;
-    const draftSaveState = entry.entryKind === "draft" ? draftSaveStates[entry.draft.draftId] ?? "saved" : null;
     const attentionLabel = entry.entryKind === "draft" ? "" : attentionLabelsByThreadId[entry.identity.threadId]?.trim() ?? "";
     const baseStatus = entry.entryKind === "draft"
-      ? draftSaveState === "saving" ? "Draft · Saving" : draftSaveState === "failed" ? "Draft · Save failed" : "Draft"
+      ? "Draft"
       : lifecycle?.kind === "needsAttention" ? attentionLabel || "Needs attention" : lifecycle?.kind === "working" ? "Working" : lifecycle?.kind === "stopped" ? "Stopped" : "Completed";
     const status = group === "snoozed" ? `${baseStatus}, Snoozed` : baseStatus;
     const pinned = isPinned(entry);
@@ -240,7 +237,7 @@ export function ThreadsList ({
     const action = entry.entryKind === "draft" ? "discard" : group === "other" ? "restore" : group === "snoozed" ? "unsnooze" : lifecycle && (lifecycle.kind === "completed" || lifecycle.kind === "stopped") && !lifecycle.settled ? "settle" : null;
     const Icon = entry.entryKind === "draft" ? DraftThreadIcon : lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
     const statusClassName = entry.entryKind === "draft"
-      ? draftSaveState === "failed" ? "text-red-600 dark:text-red-300" : draftSaveState === "saving" ? "text-sky-600 dark:text-sky-300" : "text-muted"
+      ? "text-muted"
       : lifecycle?.kind === "working"
         ? "text-sky-600 dark:text-sky-300"
         : lifecycle?.kind === "needsAttention"
@@ -253,8 +250,8 @@ export function ThreadsList ({
     const rowName = `${entry.title}, ${baseStatus}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
     const dimmed = !selected && (group === "snoozed" || group === "other");
     const hasDashedLifecycleBorder = entry.entryKind !== "draft" && (lifecycle?.kind === "needsAttention" || lifecycle?.kind === "working");
-    const hasDashedBorder = hasDashedLifecycleBorder || (entry.entryKind === "draft" && draftSaveState === "saving");
-    const strokeOpacity = entry.entryKind === "draft" && draftSaveState === "saved" ? 0.24 : 1;
+    const hasDashedBorder = hasDashedLifecycleBorder;
+    const strokeOpacity = entry.entryKind === "draft" ? 0.24 : 1;
     const compact = group === "other";
     return (
       <li key={entry.entryKind === "draft" ? `draft:${entry.draft.draftId}` : `${entry.identity.harness}:${entry.identity.threadId}`} className="group/thread-row relative isolate m-0 grid list-none grid-cols-[minmax(0,1fr)_auto]">
@@ -316,9 +313,9 @@ export function ThreadsList ({
           </a>
         </ContextMenuCapability>
         {action ? (
-          <button type="button" aria-label={actionLabel} title={actionLabel} className={`absolute right-1 z-20 hidden cursor-pointer rounded-lg text-muted hover:text-text focus-visible:flex focus-visible:text-text group-hover/thread-row:flex group-focus-within/thread-row:flex ${compact ? "top-1/2 -translate-y-1/2 items-center gap-1 px-1.5 py-1 text-[0.72rem] font-medium" : "top-1 p-1"}`} onClick={(event) => { event.stopPropagation(); onAction?.(entry, action); }} onPointerDown={(event) => event.stopPropagation()}>
+          <button type="button" aria-label={actionLabel} title={actionLabel} className={`absolute right-1 z-20 hidden cursor-pointer rounded-lg text-muted hover:text-text focus-visible:flex focus-visible:text-text group-hover/thread-row:flex group-focus-within/thread-row:flex ${compact ? "top-1/2 -translate-y-1/2 items-center gap-1 px-1.5 py-1 text-[0.72rem] font-medium" : action === "settle" ? "top-1 items-center gap-1 px-1.5 py-1 text-[0.72rem] font-medium" : "top-1 p-1"}`} onClick={(event) => { event.stopPropagation(); onAction?.(entry, action); }} onPointerDown={(event) => event.stopPropagation()}>
             <ActionIcon className="size-4" />
-            {compact ? <span>{actionLabel}</span> : null}
+            {compact || action === "settle" ? <span>{actionLabel}</span> : null}
           </button>
         ) : null}
       </li>
@@ -347,7 +344,7 @@ export function ThreadsList ({
         </span>
       </a>
       <div role="tablist" aria-label="Threads" className="min-w-0">
-        {primaryEntries.length ? <ul className="m-0 space-y-1 p-0">{primaryEntries.map(renderEntry)}</ul> : null}
+        {primaryEntries.length ? <ul className="m-0 flex flex-col gap-1 p-0">{primaryEntries.map(renderEntry)}</ul> : null}
         {settledEntries.length ? (
           <ThreadDisclosure
             className="mt-4"
@@ -357,7 +354,7 @@ export function ThreadsList ({
             summary="Settled threads"
             summaryClassName="text-[0.72rem] font-medium leading-[1.5] text-muted"
           >
-            <ul className="m-0 space-y-1 p-0">
+            <ul className="m-0 flex flex-col gap-1 p-0">
               {settledEntries.map(renderEntry)}
             </ul>
           </ThreadDisclosure>

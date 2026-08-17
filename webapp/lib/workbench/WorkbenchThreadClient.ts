@@ -79,7 +79,7 @@ import {
 } from "./thread/thread-recovery-message";
 import { stopWorkbenchThread } from "./thread/thread-stop";
 import ThreadGoalController from "./thread/ThreadGoalController";
-import type { WorkbenchThreadStateSnapshot } from "./thread/thread-state";
+import type { WorkbenchThreadSidebarSnapshot } from "./thread/thread-state";
 import {
     getThreadStateChangeTagText as getNormalizedThreadStateChangeTagText,
 } from "./markdown/markdown-parse";
@@ -206,7 +206,7 @@ interface WorkbenchThreadClient {
   hasThread: (threadId: string) => boolean;
   isCurrentThreadUpToDate: (threadId: string) => boolean;
   isDraftThreadId: (threadId: string) => boolean;
-  installSidebarSnapshot: (snapshot: WorkbenchThreadStateSnapshot | null) => void;
+  installSidebarSnapshot: (snapshot: WorkbenchThreadSidebarSnapshot | null) => void;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   markThreadSeen: (thread: ThreadPayload) => void;
   openThread: (threadId: string, options?: { harness?: WorkbenchHarness; source?: "open" | "reload" }) => Promise<void>;
@@ -787,20 +787,22 @@ function WorkbenchThreadClient(
     harness,
     projectId,
     threadId,
+    title,
     turnId,
   }: {
     correlationHandle?: string;
     harness: WorkbenchHarness;
     projectId: string;
     threadId: string;
+    title: string;
     turnId: string;
   }) {
     try {
-      await requestWorkbench("workbench/thread-state/accepted", {
+      await requestWorkbench("workbench/thread-state/intent/accept", {
         ...(correlationHandle ? { correlationHandle } : {}),
-        harness,
+        identity: { harness, threadId },
         projectId,
-        threadId,
+        title,
         turnId,
       });
     } catch (error) {
@@ -846,7 +848,7 @@ function WorkbenchThreadClient(
     getThreadStatus: (thread) => statusRecordsByKey.get(getThreadStateKey(thread.harness, thread.id))?.status ?? thread.status,
     optimisticInputs,
     publishAccepted: ({ correlationHandle, projectId, threadId, turnId }) => {
-      void publishAcceptedIntent({ correlationHandle, harness: "codex", projectId, threadId, turnId });
+      void publishAcceptedIntent({ correlationHandle, harness: "codex", projectId, threadId, title: "New thread", turnId });
     },
     renderSource: renderOptimisticSource,
     sources: threadSources,
@@ -1372,7 +1374,7 @@ function WorkbenchThreadClient(
     };
   }
 
-  function installSidebarSnapshot(snapshot: WorkbenchThreadStateSnapshot | null) {
+  function installSidebarSnapshot(snapshot: WorkbenchThreadSidebarSnapshot | null) {
     if (!snapshot) {
       state.subagents = [];
       state.threads = [];
@@ -3809,11 +3811,14 @@ function WorkbenchThreadClient(
     }
 
     switch (notification.method) {
-      case "thread/started":
+      case "thread/started": {
+        const summary = toThreadSummary(notification.params.thread, harness);
         return updateCurrentThreadFields({
-          ...toThreadSummary(notification.params.thread, harness),
+          ...summary,
           isDraft: false,
+          preview: summary.preview.trim() || state.currentThread.preview,
         });
+      }
       case "thread/status/changed":
         {
           const status = state.pendingUserInputRequestsByThreadId.has(notification.params.threadId)
@@ -4008,6 +4013,8 @@ function WorkbenchThreadClient(
   async function reconcileAdmittedThreadMessage(context: ReconcileAdmittedThreadMessageContext) {
     const {
       harness,
+      isDraftThread,
+      optimisticTurnId,
       resolvedThreadId,
       resumedThread,
       selectedModel,
@@ -4073,6 +4080,14 @@ function WorkbenchThreadClient(
           resumedThread.serviceTier,
           resumedThread.agentPath,
         );
+      }
+
+      if (isDraftThread && optimisticTurnId) {
+        refreshedThread = {
+          ...refreshedThread,
+          turnHistory: refreshedThread.turnHistory.filter((entry) => entry.turnId === optimisticTurnId || entry.itemCount > 0),
+          turns: refreshedThread.turns.filter((turn) => turn.id === optimisticTurnId || turn.items.length > 0),
+        };
       }
 
       if (!isThreadOperationFenceCurrent(providerFence)) {
@@ -4178,16 +4193,22 @@ function WorkbenchThreadClient(
         : state.currentThread?.agentPath ?? readStoredHarnessAgent(harness)
     ));
     const normalizedInput = normalizeThreadMessageInput(input);
+    const firstMessagePreview = normalizedInput.find((entry) => entry.type === "text")?.text ?? "";
     const recoveryClientUserMessageId = isWorkbenchThreadRecoveryInput(normalizedInput)
       ? createWorkbenchThreadRecoveryId()
       : null;
     const workbenchOrigin = readLocalWorkbenchOrigin();
     const isDraftThread = thread.isDraft;
+    const initialClientUserMessageId = harness === "codex" && isDraftThread && !recoveryClientUserMessageId
+      ? optimisticInputs.createClientUserMessageId()
+      : null;
     const shouldBypassCodexDraftBootstrap = harness === "codex" && isDraftThread;
     const canUseProvidedActiveThread = sendOptions.selectThread === false
       && !isDraftThread
       && Boolean(getCurrentInProgressTurn(thread));
     let bootstrapThread: ThreadPayload | null = null;
+    let connectingTurnId: string | null = null;
+    let pendingInitialOptimisticHandle: string | null = null;
     const additionalWritableRoots = sendOptions.additionalWritableRoots ?? [];
     const codexWorkspaceSandboxPolicy = harness === "codex"
       ? createWorkspaceWriteSandboxPolicy([
@@ -4373,10 +4394,32 @@ function WorkbenchThreadClient(
         persistThreadServiceTier(harness, startedPayload.id, selectedServiceTier);
       }
       bootstrapThread = startedPayload;
-      if (sendOptions.selectThread !== false && !isDraftThread) {
+      resolvedThreadId = bootstrapThread.id;
+      if (isDraftThread) {
+        connectingTurnId = `workbench:connecting:${crypto.randomUUID()}`;
+        const connectingTurn = createStreamingTurn(connectingTurnId);
+        const connectingThread: ThreadPayload = {
+          ...startedPayload,
+          preview: firstMessagePreview || startedPayload.preview,
+          status: "active",
+          turnHistory: [createLoadedTurnHistoryEntry(connectingTurn)],
+          turns: [connectingTurn],
+        };
+        const pendingEntry = optimisticInputs.enqueueInitial(connectingThread, connectingTurnId, normalizedInput, {
+          clientUserMessageId: initialClientUserMessageId,
+        });
+        pendingInitialOptimisticHandle = pendingEntry.handle;
+        const connectingKey = getThreadStateKey(connectingThread.harness, connectingThread.id);
+        bumpOverlayRevisionForKey(connectingKey, "optimisticRevision");
+        if (sendOptions.selectThread !== false) {
+          setCurrentThread(connectingThread);
+        } else {
+          installAuthoritativeThreadSource(connectingThread);
+        }
+        sendOptions.onThreadCreated?.(projectThreadSource(connectingKey) ?? connectingThread);
+      } else if (sendOptions.selectThread !== false) {
         setCurrentThread(bootstrapThread);
       }
-      resolvedThreadId = bootstrapThread.id;
       if (!shouldBypassCodexDraftBootstrap) {
         if (
           !isSendProjectCurrent()
@@ -4553,51 +4596,75 @@ function WorkbenchThreadClient(
             : null;
         })()
         : null;
-      const turnStartResponse = await sendBridgeRequest<TurnStartResponse>(harness, {
-        method: "turn/start",
-        ...(codexFirstTurnCollaborationMode
-          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext("codex", resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds, "threadUtilities") }
-          : harness === "opencode"
-          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds) }
-          : {}),
-        params: {
-          ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
-          ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
-          ...(codexFirstTurnCollaborationMode ? { collaborationMode: codexFirstTurnCollaborationMode } : {}),
-          input: normalizedInput,
-          ...(selectedReasoningEffort ? { effort: selectedReasoningEffort } : {}),
-          ...(selectedModel ? { model: selectedModel } : {}),
-          ...(harness === "codex" ? { serviceTier: selectedServiceTier } : {}),
-          ...(codexWorkspaceSandboxPolicy ? { sandboxPolicy: codexWorkspaceSandboxPolicy } : {}),
-          ...(recoveryClientUserMessageId ? { clientUserMessageId: recoveryClientUserMessageId } : {}),
-          summary: DEFAULT_TURN_REASONING_SUMMARY,
-          threadId: resolvedThreadId,
-        } as TurnStartParams & {
-          agentPath?: string;
-          collaborationMode?: ReturnType<typeof createQuestionnaireCollaborationMode>;
-          cwd?: string;
-        },
-      });
+      let turnStartResponse: TurnStartResponse;
+      try {
+        turnStartResponse = await sendBridgeRequest<TurnStartResponse>(harness, {
+          method: "turn/start",
+          ...(codexFirstTurnCollaborationMode
+            ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext("codex", resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds, "threadUtilities") }
+            : harness === "opencode"
+            ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds) }
+            : {}),
+          params: {
+            ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
+            ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
+            ...(codexFirstTurnCollaborationMode ? { collaborationMode: codexFirstTurnCollaborationMode } : {}),
+            input: normalizedInput,
+            ...(selectedReasoningEffort ? { effort: selectedReasoningEffort } : {}),
+            ...(selectedModel ? { model: selectedModel } : {}),
+            ...(harness === "codex" ? { serviceTier: selectedServiceTier } : {}),
+            ...(codexWorkspaceSandboxPolicy ? { sandboxPolicy: codexWorkspaceSandboxPolicy } : {}),
+            ...(recoveryClientUserMessageId || initialClientUserMessageId
+              ? { clientUserMessageId: recoveryClientUserMessageId ?? initialClientUserMessageId }
+              : {}),
+            summary: DEFAULT_TURN_REASONING_SUMMARY,
+            threadId: resolvedThreadId,
+          } as TurnStartParams & {
+            agentPath?: string;
+            collaborationMode?: ReturnType<typeof createQuestionnaireCollaborationMode>;
+            cwd?: string;
+          },
+        });
+      } catch (error) {
+        if (pendingInitialOptimisticHandle) {
+          optimisticInputs.transition(pendingInitialOptimisticHandle, "failed");
+          bumpOverlayRevisionForKey(getThreadStateKey(harness, resolvedThreadId), "optimisticRevision");
+        }
+        throw error;
+      }
       if (!isSendProjectCurrent() || !isThreadOperationFenceCurrent(turnStartFence)) {
         return null;
       }
       optimisticTurnId = turnStartResponse.turn.id;
+      if (pendingInitialOptimisticHandle) {
+        optimisticInputs.movePending(pendingInitialOptimisticHandle, optimisticTurnId);
+        optimisticInputs.transition(pendingInitialOptimisticHandle, "sent");
+        bumpOverlayRevisionForKey(getThreadStateKey(harness, resolvedThreadId), "optimisticRevision");
+      }
       await publishAcceptedIntent({
         harness,
         projectId: state.projectId,
         threadId: resolvedThreadId,
+        title: firstMessagePreview || "New thread",
         turnId: optimisticTurnId,
       });
-      if (harness !== "opencode" && !recoveryClientUserMessageId) {
+      if (!pendingInitialOptimisticHandle && harness !== "opencode" && !recoveryClientUserMessageId) {
         enqueueOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, normalizedInput, "initial", "sent", resumedThread);
-        resumedThread = applyOptimisticUserMessageOverlay({
-          ...resumedThread,
-          status: isThreadStatusActive(resumedThread.status) ? resumedThread.status : "active",
-          turns: resumedThread.turns.some((turn) => turn.id === turnStartResponse.turn.id)
-            ? resumedThread.turns.map((turn) => turn.id === turnStartResponse.turn.id ? turnStartResponse.turn : turn)
-            : [...resumedThread.turns, turnStartResponse.turn],
-        }) ?? resumedThread;
       }
+      resumedThread = applyOptimisticUserMessageOverlay({
+        ...resumedThread,
+        preview: firstMessagePreview || resumedThread.preview,
+        status: isThreadStatusActive(resumedThread.status) ? resumedThread.status : "active",
+        turnHistory: isDraftThread
+          ? [createLoadedTurnHistoryEntry(turnStartResponse.turn)]
+          : resumedThread.turnHistory,
+        turns: isDraftThread
+          ? [turnStartResponse.turn]
+          : [
+            ...resumedThread.turns.filter((turn) => turn.id !== connectingTurnId && turn.id !== turnStartResponse.turn.id),
+            turnStartResponse.turn,
+          ],
+      }) ?? resumedThread;
       if (sendOptions.selectThread !== false) {
         if (harness !== "opencode") {
           setCurrentThread(resumedThread);

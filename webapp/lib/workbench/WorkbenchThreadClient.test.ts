@@ -109,7 +109,7 @@ class FakeWebSocket {
     } else if (request.method === "turn/start") {
       const threadId = String(request.params?.threadId ?? "thread");
       queueMicrotask(() => this.respond(request.id, { turn: wireThread(threadId, `${threadId}-started`).turns[0] }));
-    } else if (request.method === "workbench/thread-state/accepted") {
+    } else if (request.method === "workbench/thread-state/intent/accept") {
       queueMicrotask(() => this.respond(request.id, { accepted: true, revision: 1 }));
     } else {
       queueMicrotask(() => this.fail(request.id, `unexpected ${request.method}`));
@@ -406,13 +406,13 @@ test("an accepted background child turn publishes Working before the send return
   );
   assert.equal(result?.id, "child");
   const startIndex = socket.requests.findIndex((request) => request.method === "turn/start" && request.params?.threadId === "child");
-  const acceptedIndex = socket.requests.findIndex((request) => request.method === "workbench/thread-state/accepted" && request.params?.threadId === "child");
+  const acceptedIndex = socket.requests.findIndex((request) => request.method === "workbench/thread-state/intent/accept" && (request.params?.identity as { threadId?: string } | undefined)?.threadId === "child");
   assert.ok(startIndex >= 0);
   assert.ok(acceptedIndex > startIndex);
   assert.deepEqual(socket.requests[acceptedIndex]?.params, {
-    harness: "codex",
+    identity: { harness: "codex", threadId: "child" },
     projectId: "project",
-    threadId: "child",
+    title: "continue",
     turnId: "child-started",
   });
 }));
@@ -1166,9 +1166,10 @@ test("project changes during draft materialization prevent stale general dispatc
   assert.equal(socket.requests.some((request) => request.method === "turn/steer" && request.params?.threadId === "materialized"), false);
 }));
 
-test("draft materialization waits for turn admission and is skipped on start failure", async () => withClient(async (client, socket) => {
+test("draft projection precedes admission and materialization is skipped on start failure", async () => withClient(async (client, socket) => {
   const draft = { ...activeThread("codex", "draft:one", "completed"), isDraft: true, source: "draft" };
   client.selectThreadPayload(draft);
+  const created: string[] = [];
   const materialized: string[] = [];
   let startRequest: SocketRequest | null = null;
   FakeWebSocket.intercept = (target, request) => {
@@ -1184,30 +1185,63 @@ test("draft materialization waits for turn admission and is skipped on start fai
   };
 
   const send = client.sendThreadMessage(draft, [{ text: "draft", text_elements: [], type: "text" }], {
+    onThreadCreated: (thread) => created.push(thread.id),
     onThreadMaterialized: (thread) => materialized.push(thread.id),
   });
   await waitForRequest(socket, "turn/start");
+  assert.deepEqual(created, ["materialized"]);
   assert.deepEqual(materialized, []);
-  assert.equal(client.getSnapshot().currentThread?.id, "draft:one");
+  assert.equal(client.getSnapshot().currentThread?.id, "materialized");
+  assert.equal(client.getSnapshot().currentThread?.preview, "draft");
+  assert.equal(client.getSnapshot().currentThread?.turns.length, 1);
+  assert.match(client.getSnapshot().currentThread?.turns[0]?.id ?? "", /^workbench:connecting:/u);
+  const startedNotificationThread = wireThread("materialized", "old", "completed");
+  startedNotificationThread.name = "New thread";
+  socket.notify("thread/started", { thread: startedNotificationThread });
+  assert.equal(client.getSnapshot().currentThread?.preview, "draft");
+  const failedPendingItemId = client.getSnapshot().currentThread?.turns.at(-1)?.items[0]?.id ?? "";
+  assert.match(failedPendingItemId, /^optimistic-user-message:initial:pending:/u);
   socket.fail(startRequest!.id, "start failed");
   await assert.rejects(send, /start failed/u);
   assert.deepEqual(materialized, []);
 
+  client.selectThreadPayload(draft);
+  let admittedStartRequest: SocketRequest | null = null;
   FakeWebSocket.intercept = (target, request) => {
     if (request.method === "thread/start") {
       queueMicrotask(() => target.respond(request.id, { thread: wireThread("materialized", "old", "completed") }));
       return true;
     }
     if (request.method === "turn/start") {
-      queueMicrotask(() => target.respond(request.id, { turn: wireThread("materialized", "new-turn").turns[0] }));
+      admittedStartRequest = request;
       return true;
     }
     return false;
   };
-  assert.ok(await client.sendThreadMessage(draft, [{ text: "draft", text_elements: [], type: "text" }], {
+  const admittedInput = [
+    { text: "draft", text_elements: [], type: "text" as const },
+    { type: "image" as const, url: "data:image/png;base64,AAAA" },
+  ];
+  const admittedSend = client.sendThreadMessage(draft, admittedInput, {
+    onThreadCreated: (thread) => created.push(thread.id),
     onThreadMaterialized: (thread) => materialized.push(thread.id),
-  }));
+  });
+  await waitForRequest(socket, "turn/start", 1);
+  assert.equal(client.getSnapshot().currentThread?.turns.length, 1);
+  assert.match(client.getSnapshot().currentThread?.turns[0]?.id ?? "", /^workbench:connecting:/u);
+  const admittedPendingItemId = client.getSnapshot().currentThread?.turns.at(-1)?.items[0]?.id ?? "";
+  assert.match(admittedPendingItemId, /^optimistic-user-message:initial:pending:/u);
+  const clientUserMessageId = String(admittedStartRequest?.params?.clientUserMessageId ?? "");
+  assert.match(clientUserMessageId, /^[0-9a-f-]{36}$/u);
+  const admittedTurn = wireThread("materialized", "new-turn").turns[0]!;
+  admittedTurn.items = [{ clientId: clientUserMessageId, content: admittedInput, id: "canonical-draft", type: "userMessage" }];
+  socket.respond(admittedStartRequest!.id, { turn: admittedTurn });
+  const admitted = await admittedSend;
+  assert.ok(admitted);
+  assert.deepEqual(created, ["materialized", "materialized"]);
   assert.deepEqual(materialized, ["materialized"]);
+  assert.deepEqual(admitted.turns.map((turn) => turn.id), ["new-turn"]);
+  assert.deepEqual(admitted.turns.at(-1)?.items.filter((item) => item.type === "userMessage").map((item) => item.id), ["canonical-draft"]);
 }));
 
 test("steer-history reads are latest-wins, retain the last success, and warn once per failure streak", async () => {
