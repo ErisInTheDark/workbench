@@ -28,12 +28,6 @@ export type WorkbenchPanelTarget =
     readonly kind: "empty";
   }
   | {
-    readonly kind: "collaborationCollaborator";
-  }
-  | {
-    readonly kind: "collaborationScratchpad";
-  }
-  | {
     readonly filePath: string;
     readonly kind: "file";
   }
@@ -101,9 +95,6 @@ function normalizePanelTarget(value: unknown): WorkbenchPanelTarget | null {
   const candidate = value as Partial<WorkbenchPanelTarget>;
   if (candidate.kind === "empty") {
     return { kind: "empty" };
-  }
-  if (candidate.kind === "collaborationCollaborator" || candidate.kind === "collaborationScratchpad") {
-    return { kind: candidate.kind };
   }
   if (candidate.kind === "file") {
     return typeof candidate.filePath === "string" ? { filePath: candidate.filePath, kind: "file" } : null;
@@ -213,10 +204,6 @@ function targetsEqual(left: WorkbenchPanelTarget, right: WorkbenchPanelTarget) {
   if (left.kind === "settings" && right.kind === "settings") {
     return left.scope === right.scope;
   }
-  if (left.kind === "collaborationCollaborator" || left.kind === "collaborationScratchpad") {
-    return true;
-  }
-
   return left.kind === "empty";
 }
 

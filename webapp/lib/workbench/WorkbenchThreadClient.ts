@@ -49,7 +49,6 @@ import type {
     ThreadPayload,
     ThreadSummary,
     WorkbenchBrowseResultEntry,
-    WorkbenchCollaborationState,
     WorkbenchComposerSettings,
     WorkbenchHarness,
     WorkbenchListModelsOptions,
@@ -195,7 +194,6 @@ export interface WorkbenchThreadSnapshot {
 export type WorkbenchThreadListener = (snapshot: WorkbenchThreadSnapshot) => void;
 
 export interface WorkbenchThreadClientOptions {
-  onCollaborationStateUpdated?: (projectId: string, state: WorkbenchCollaborationState) => void;
   onStatusMessage?: (message: string) => void;
   onThreadStarted?: (thread: ThreadPayload) => void;
 }
@@ -3916,7 +3914,6 @@ function WorkbenchThreadClient(
       case "questionnaire/requested":
       case "questionnaire/resolved":
       case "browse/result/recorded":
-      case "collaboration/state/updated":
       case "model/rerouted":
       case "model/verification":
       case "turn/moderationMetadata":
@@ -4894,11 +4891,6 @@ function WorkbenchThreadClient(
   ) {
     if (harness === "codex" && (notification.method === "thread/goal/updated" || notification.method === "thread/goal/cleared")) {
       threadGoals.observeNotification(notification);
-    }
-
-    if (notification.method === "collaboration/state/updated") {
-      options.onCollaborationStateUpdated?.(notification.params.projectId, notification.params.state);
-      return;
     }
 
     if (notification.method === "questionnaire/requested") {

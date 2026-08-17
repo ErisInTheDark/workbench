@@ -59,12 +59,6 @@ export function adaptWorkbenchAgentCliResponse({
       return adaptBrowseSessionControl(request, payload);
     case "orchestrator-reload":
       return adaptOrchestratorReload(payload, text);
-    case "collaboration-post-mutation":
-      return adaptCollaborationPostMutation(request, payload);
-    case "collaboration-memory-read":
-      return raw(readString(payload, "memory"));
-    case "collaboration-memory-write":
-      return succeeded(readString(payload, "message") || "Collaboration memory updated.");
     case "json":
       return raw(formatJson(payload, text));
     case "native":
@@ -117,24 +111,6 @@ function adaptOrchestratorReload(payload: Record<string, unknown> | null, fallba
     `Applied: ${applied.length ? applied.join(", ") : "none"}`,
     `Queued: ${queued.length ? queued.join(", ") : "none"}`,
   ].join("\n"));
-}
-
-function adaptCollaborationPostMutation(
-  request: WorkbenchAgentCliRequest,
-  payload: Record<string, unknown> | null,
-): WorkbenchAgentCliAdaptedResponse {
-  const action = readString(request.body, "action");
-  const postId = readString(payload, "postId") || readString(request.body, "postId");
-  if (action === "delete") {
-    return succeeded(`Deleted Collaboration post ${postId || "(unknown post)"}`);
-  }
-  const projected = {
-    action: readString(payload, "action") || action,
-    message: readString(payload, "message"),
-    postId,
-    ...(payload && isRecord(payload.post) ? { post: payload.post } : {}),
-  };
-  return raw(`${JSON.stringify(projected, null, 2)}\n`);
 }
 
 function readError(payload: Record<string, unknown> | null) {

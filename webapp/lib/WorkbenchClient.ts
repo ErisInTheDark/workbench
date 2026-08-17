@@ -97,9 +97,6 @@ export async function WorkbenchClient(
   let hasAutoRefreshLeaderState = false;
   let isAutoRefreshLeader = false;
   const threadClient = WorkbenchThreadClient({
-    onCollaborationStateUpdated: (projectId, state) => {
-      workbenchBindings.onCollaborationStateUpdated?.(projectId, state);
-    },
     onStatusMessage: (message) => {
       reportStatusMessage(message);
     },
@@ -652,7 +649,7 @@ export async function WorkbenchClient(
       return { ok: false };
     }
 
-    if (route.view === "project" || route.view === "settings" || route.view === "collaboration" || route.view === "mosaic") {
+    if (route.view === "project" || route.view === "settings" || route.view === "mosaic") {
       activeFilePath = "";
       threadClient.clearThreadSelection();
       applyCurrentThreadSelection(null);

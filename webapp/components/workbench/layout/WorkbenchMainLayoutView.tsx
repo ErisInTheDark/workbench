@@ -51,9 +51,7 @@ function joinClasses(...values: Array<string | false | null | undefined>) {
 }
 
 function isPanelScrollOwnedByContent(target: WorkbenchPanelTarget) {
-  return target.kind === "thread"
-    || target.kind === "collaborationCollaborator"
-    || target.kind === "collaborationScratchpad";
+  return target.kind === "thread";
 }
 
 function getDropPlacementFromPoint(panel: HTMLElement, clientX: number, clientY: number): WorkbenchDropPlacement {

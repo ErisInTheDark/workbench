@@ -2,10 +2,10 @@
  * Exports:
  * - WORKBENCH_ROUTE_MARKER: route marker for canonical workbench URLs. Keywords: URL, route, navigation.
  * - WorkbenchRouteView, WorkbenchSettingsScope, WorkbenchRoute, WorkbenchRouteParseResult: normalized route contracts. Keywords: URL source of truth, project, file, thread, settings, mosaic.
- * - createProjectRoute/createFileRoute/createThreadRoute/createSettingsRoute/createCollaborationRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct route objects. Keywords: navigation, route builder.
+ * - createProjectRoute/createFileRoute/createThreadRoute/createSettingsRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct route objects. Keywords: navigation, route builder.
  * - getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId: derive parent hydration and selected tab identity. Keywords: thread, subagent, parent.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse browser URL state without mutating history. Keywords: route parser, legacy query, malformed URL.
- * - createWorkbenchHref/createProjectHref/createFileHref/createThreadHref/createSettingsHref/createCollaborationHref: build canonical hrefs. Keywords: links, URL, encode.
+ * - createWorkbenchHref/createProjectHref/createFileHref/createThreadHref/createSettingsHref: build canonical hrefs. Keywords: links, URL, encode.
  * - isSameWorkbenchRoute/routeHasSelection: compare and classify routes. Keywords: route equality, active selection.
  */
 
@@ -23,7 +23,7 @@ const LEGACY_FILE_SEARCH_PARAM = "file";
 const LEGACY_THREAD_SEARCH_PARAM = "thread";
 const DEFAULT_SETTINGS_SCOPE: WorkbenchSettingsScope = "global";
 
-export type WorkbenchRouteView = "project" | "file" | "thread" | "settings" | "collaboration" | "mosaic" | "invalid";
+export type WorkbenchRouteView = "project" | "file" | "thread" | "settings" | "mosaic" | "invalid";
 export type WorkbenchSettingsScope = "global" | "project";
 
 export interface WorkbenchRoute {
@@ -111,19 +111,6 @@ export function createSettingsRoute(projectId: string, settingsScope: WorkbenchS
     threadId: "",
     threadTarget: null,
     view: "settings",
-  };
-}
-
-export function createCollaborationRoute(projectId: string): WorkbenchRoute {
-  return {
-    error: "",
-    filePath: "",
-    mosaicNode: null,
-    projectId,
-    settingsScope: DEFAULT_SETTINGS_SCOPE,
-    threadId: "",
-    threadTarget: null,
-    view: "collaboration",
   };
 }
 
@@ -265,13 +252,6 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
 
       return createSettingsRoute(projectId, settingsScope);
     }
-    if (mode === "collaboration") {
-      if (valueSegments.value.length) {
-        return createInvalidWorkbenchRoute(`Unexpected collaboration route value: ${value}`, projectId);
-      }
-
-      return createCollaborationRoute(projectId);
-    }
     return createInvalidWorkbenchRoute(`Unknown workbench route mode: ${mode}`, projectId);
   }
 
@@ -340,9 +320,6 @@ export function createWorkbenchHref(route: WorkbenchRoute) {
   if (route.view === "settings") {
     return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/settings/${route.settingsScope}`;
   }
-  if (route.view === "collaboration") {
-    return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/collaboration`;
-  }
   if (route.view === "mosaic" && route.mosaicNode) {
     return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/mosaic/${serializeWorkbenchMosaicRouteExpression(route.mosaicNode)}`;
   }
@@ -366,10 +343,6 @@ export function createSettingsHref(projectId: string, settingsScope: WorkbenchSe
   return createWorkbenchHref(createSettingsRoute(projectId, settingsScope));
 }
 
-export function createCollaborationHref(projectId: string) {
-  return createWorkbenchHref(createCollaborationRoute(projectId));
-}
-
 export function createMosaicHref(projectId: string, mosaicNode: WorkbenchMosaicNode) {
   return createWorkbenchHref(createMosaicRoute(projectId, mosaicNode));
 }
@@ -386,5 +359,5 @@ export function isSameWorkbenchRoute(left: WorkbenchRoute, right: WorkbenchRoute
 }
 
 export function routeHasSelection(route: WorkbenchRoute) {
-  return route.view === "file" || route.view === "thread" || route.view === "collaboration" || route.view === "mosaic";
+  return route.view === "file" || route.view === "thread" || route.view === "mosaic";
 }

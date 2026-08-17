@@ -1,14 +1,12 @@
 /*
  * Exports:
  * - WorkbenchSubagentCommand/parseWorkbenchSubagentCommand: parse semantic subagent actions, create metadata, ordered child thread IDs, and messages from wb commands. Keywords: workbench, cli, subagent, parse, create, metadata, thread ids, message.
- * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb title, subagent, reload, and Collaboration commands. Keywords: workbench, cli, title, subagent, collaboration.
+ * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb title, subagent, and reload commands. Keywords: workbench, cli, title, subagent, reload.
  */
 import type { CommandAction } from "../../../codex/generated/app-server/v2/CommandAction";
 
 import { CommandMatcher } from "./core";
 import type { CommandMatcherDefinition } from "./types";
-
-const WB_PREFIX = /^wb(?:\.cmd)?\s+/iu;
 
 export type WorkbenchSubagentCommandAction = "create" | "list" | "message" | "profiles" | "stop" | "wait";
 
@@ -172,35 +170,6 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         remainingCommand: null,
         stop: true,
         summaryParts: [CommandMatcher.Text(label)],
-      });
-    },
-  }),
-  CommandMatcher({
-    id: "workbench-cli.collaboration",
-    match: ({ stage }) => {
-      const normalized = stage.text.trim();
-      if (!WB_PREFIX.test(normalized) || !/^wb(?:\.cmd)?\s+collaboration\s+/iu.test(normalized)) {
-        return null;
-      }
-      const action = normalized.match(/^wb(?:\.cmd)?\s+collaboration\s+(posts|memory)\s+(read|create|update|delete|write)\b/iu);
-      if (!action) {
-        return null;
-      }
-      const owner = action[1] === "posts" ? "Collaboration posts" : "Collaboration memory";
-      const verb = action[2] === "read" ? "Read"
-        : action[2] === "create" ? "Created"
-        : action[2] === "update" ? "Updated"
-        : action[2] === "delete" ? "Deleted"
-        : "Updated";
-      const ongoingVerb = action[2] === "read" ? "Reading"
-        : action[2] === "create" ? "Creating"
-        : action[2] === "delete" ? "Deleting"
-        : "Updating";
-      return CommandMatcher.Result({
-        ongoingSummaryParts: [CommandMatcher.Text(`${ongoingVerb} ${owner.toLowerCase()}`)],
-        remainingCommand: null,
-        stop: true,
-        summaryParts: [CommandMatcher.Text(`${verb} ${owner.toLowerCase()}`)],
       });
     },
   }),

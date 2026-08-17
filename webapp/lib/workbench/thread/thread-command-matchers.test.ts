@@ -212,7 +212,6 @@ test("all Workbench CLI matcher families show the alternate install cwd name", (
     "wb browse sessions --thread thread-id",
     "wb git add --thread thread-id -- file.ts",
     "wb git checkpoint diff --thread thread-id --commit abc",
-    "wb collaboration memory read",
   ];
   for (const command of commands) {
     const display = getThreadCommandDisplay({

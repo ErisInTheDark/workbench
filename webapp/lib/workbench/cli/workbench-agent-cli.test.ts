@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -346,25 +346,12 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
   ], options)).kind, "error");
 });
 
-test("loads Collaboration content from files and rejects conflicting sources", async () => {
-  const bodyPath = path.join(temporaryDirectoryPath, "body.md");
-  await writeFile(bodyPath, "# Visible body\n", "utf8");
-  const parsed = await parseWorkbenchAgentCliCommand([
-    "collaboration", "posts", "create", "--parent", "post-1", "--body-file", bodyPath,
-  ], { cwd: "C:/workspace" });
-  assert.equal(parsed.kind, "request");
-  assert.deepEqual(parsed.request.body, {
-    action: "create",
-    body: "# Visible body\n",
-    cwd: "C:/workspace",
-    parentId: "post-1",
-  });
-
-  const conflicting = await parseWorkbenchAgentCliCommand([
-    "collaboration", "posts", "create", "--parent", "post-1", "--body", "literal", "--body-file", bodyPath,
-  ]);
-  assert.equal(conflicting.kind, "error");
-  assert.match(conflicting.error, /mutually exclusive/u);
+test("rejects removed Collaboration commands", async () => {
+  const parsed = await parseWorkbenchAgentCliCommand(["collaboration", "posts", "read"]);
+  assert.equal(parsed.kind, "error");
+  if (parsed.kind === "error") {
+    assert.match(parsed.error, /Unsupported wb command/u);
+  }
 });
 
 test("rejects arbitrary request capabilities and unsafe restore", async () => {
@@ -385,11 +372,11 @@ test("renders complete root help and exact focused Git and orchestrator help", a
   assert.deepEqual(root, { help: WORKBENCH_AGENT_CLI_HELP, kind: "help" });
   assert.match(WORKBENCH_AGENT_CLI_HELP, /^Usage:\n/u);
   assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git checkpoint restore/u);
-  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb collaboration memory write/u);
-  assert.match(WORKBENCH_AGENT_CLI_HELP, /Help commands:\n  wb subagent --help \[--thread <id>\][\s\S]*  wb collaboration memory --help \[--thread <id>\]/u);
-  assert.match(WORKBENCH_AGENT_CLI_HELP, /  wb thread recall --help \[--thread <id>\]/u);
+  assert.doesNotMatch(WORKBENCH_AGENT_CLI_HELP, /wb collaboration/u);
+  assert.match(WORKBENCH_AGENT_CLI_HELP, /Help commands:\n  wb subagent --help/u);
+  assert.match(WORKBENCH_AGENT_CLI_HELP, /  wb thread recall --help/u);
   assert.match(WORKBENCH_AGENT_CLI_HELP, /  wb git checkpoint --help/u);
-  assert.doesNotMatch(WORKBENCH_AGENT_CLI_HELP, /Workbench agent CLI|Compatibility alias|--hard|--orchestrator-server/u);
+  assert.doesNotMatch(WORKBENCH_AGENT_CLI_HELP, /Workbench agent CLI|Compatibility alias|--hard|--orchestrator-server|--help \[--thread/u);
 
   const git = await parseWorkbenchAgentCliCommand(["git", "--help"]);
   assert.deepEqual(git, {
@@ -435,43 +422,6 @@ Use the narrowest applicable scope.
 `,
     kind: "help",
   });
-});
-
-test("filters help by the validated caller thread without building commands", async () => {
-  const seenContexts: Array<{ cwd: string; threadId: string }> = [];
-  const options = {
-    callerThreadId: "current-thread",
-    cwd: "C:/workspace",
-    readTextFile: async () => { throw new Error("help must not read files"); },
-    resolveHelpAudience: async (context: { cwd: string; threadId: string }) => {
-      seenContexts.push(context);
-      return "collaborator" as const;
-    },
-  };
-  const collaborator = await parseWorkbenchAgentCliCommand(["--help", "--thread", "current-thread"], options);
-  assert.equal(collaborator.kind, "help");
-  if (collaborator.kind === "help") {
-    assert.match(collaborator.help, /wb thread recall/u);
-    assert.match(collaborator.help, /wb collaboration posts read/u);
-    assert.match(collaborator.help, /wb thread --help \[--thread <id>\]/u);
-    assert.match(collaborator.help, /wb collaboration memory --help \[--thread <id>\]/u);
-    assert.doesNotMatch(collaborator.help, /wb git |wb browse |wb subagent |wb orchestrator /u);
-  }
-  assert.deepEqual(seenContexts, [{ cwd: "C:/workspace", threadId: "current-thread" }]);
-
-  const unavailable = await parseWorkbenchAgentCliCommand([
-    "git", "commit", "--help", "--thread", "current-thread",
-  ], options);
-  assert.deepEqual(unavailable, {
-    error: "wb git help is not relevant to this thread.\nRun wb --help --thread <id> to list relevant commands.",
-    kind: "error",
-  });
-  const mismatched = await parseWorkbenchAgentCliCommand(["--help", "--thread", "other-thread"], options);
-  assert.deepEqual(mismatched, {
-    error: "Thread-filtered help must use the current managed Workbench thread id.",
-    kind: "error",
-  });
-  assert.equal(seenContexts.length, 2);
 });
 
 test("routes canonical, compatibility, and leaf help to the nearest owning group", async () => {
@@ -575,39 +525,6 @@ test("generates executable POSIX and working Windows shims", async (context) => 
     context.skip("Windows shim execution is only available on Windows.");
     return;
   }
-  const multilineBody = "# Visible body\n\n- first | second";
-  const multilinePrompt = "Inspect line one\nInspect line two";
-  const multilineResult = await execFileAsync("powershell.exe", [
-    "-NoProfile",
-    "-Command",
-    [
-      "$body = @'",
-      multilineBody,
-      "'@",
-      "$prompt = @'",
-      multilinePrompt,
-      "'@",
-      "wb collaboration posts create --parent post-multiline --body $body --prompt $prompt",
-    ].join("\n"),
-  ], {
-    cwd: temporaryDirectoryPath,
-    env: { ...env, Path: env.PATH },
-  });
-  assert.equal(multilineResult.stderr, "");
-  const multilinePost = [...requests].reverse().find((request) => {
-    if (request.url !== "/api/collaboration/posts" || request.method !== "POST") {
-      return false;
-    }
-    return (JSON.parse(request.body) as { parentId?: string }).parentId === "post-multiline";
-  });
-  assert.deepEqual(JSON.parse(multilinePost?.body ?? "{}"), {
-    action: "create",
-    body: multilineBody,
-    cwd: temporaryDirectoryPath.replace(/\\/gu, "/"),
-    parentId: "post-multiline",
-    prompt: multilinePrompt,
-  });
-
   delete env.WORKBENCH_ORIGIN;
   reloadStatusReadCount = 0;
   const result = await execFileAsync(installed.windowsShimPath, [
@@ -715,9 +632,6 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     stdout: "child-thread\n",
   });
   assert.equal(adapt("native", "## Context\n").stdout, "## Context\n");
-  assert.equal(adapt("collaboration-memory-read", { memory: "remember this" }).stdout, "remember this");
-  assert.equal(adapt("collaboration-memory-write", { message: "Collaboration memory replaced." }).stdout, "Collaboration memory replaced.\n");
-  assert.equal(adapt("collaboration-post-mutation", { postId: "post-1" }, { action: "delete", postId: "post-1" }).stdout, "Deleted Collaboration post post-1\n");
   assert.equal(adapt("json", { sessions: [{ name: "research" }] }).stdout, '{\n  "sessions": [\n    {\n      "name": "research"\n    }\n  ]\n}\n');
   assert.deepEqual(adapt("native", { error: "Plain failure" }, {}, false), {
     exitCode: 1,

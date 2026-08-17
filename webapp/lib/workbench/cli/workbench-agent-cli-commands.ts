@@ -1,12 +1,9 @@
 /*
  * Exports:
  * - WorkbenchAgentCliRequest/WorkbenchAgentCliParseResult: normalized allowlisted CLI request and parse result contracts. Keywords: workbench, cli, request, parse.
- * - WorkbenchAgentCliThreadHelpAudience/WorkbenchAgentCliCapabilitiesRequest/WorkbenchAgentCliCapabilitiesResponse: thread-aware help capability contracts. Keywords: workbench, cli, help, audience, capabilities.
  * - WORKBENCH_AGENT_CLI_HELP: complete agent-facing command reference. Keywords: workbench, cli, help, commands.
  * - parseWorkbenchAgentCliCommand: parse one allowlisted wb command into a fixed Workbench request. Keywords: workbench, cli, allowlist, cwd.
  */
-import { readFile } from "node:fs/promises";
-
 import { ORCHESTRATOR_ALL_RELOAD_SCOPES } from "../orchestrator-reload";
 
 type JsonPrimitive = boolean | number | string | null;
@@ -17,9 +14,6 @@ export type WorkbenchAgentCliResponseKind =
   | "browse-session-control"
   | "checkpoint-create"
   | "checkpoint-restore"
-  | "collaboration-memory-read"
-  | "collaboration-memory-write"
-  | "collaboration-post-mutation"
   | "json"
   | "native"
   | "orchestrator-reload"
@@ -42,28 +36,15 @@ export type WorkbenchAgentCliParseResult =
   | { error: string; kind: "error" }
   | { kind: "request"; request: WorkbenchAgentCliRequest };
 
-export type WorkbenchAgentCliThreadHelpAudience = "collaborator" | "default";
-
-export interface WorkbenchAgentCliCapabilitiesRequest {
-  cwd: string;
-  threadId: string;
-}
-
-export interface WorkbenchAgentCliCapabilitiesResponse {
-  helpAudience: WorkbenchAgentCliThreadHelpAudience;
-}
-
 interface CommandBuildContext {
   args: string[];
   callerThreadId: string | null;
   cwd: string;
-  readTextFile: (filePath: string) => Promise<string>;
   workbenchOrigin: string | null;
 }
 
 interface CommandDefinition {
   aliases?: readonly (readonly string[])[];
-  audiences: readonly WorkbenchAgentCliThreadHelpAudience[];
   build: (context: CommandBuildContext) => Promise<WorkbenchAgentCliRequest>;
   description: string;
   helpGroups: readonly string[];
@@ -176,9 +157,6 @@ class ParsedFlags {
 }
 
 const THREAD_FLAG = ["--thread"] as const;
-const DEFAULT_HELP_AUDIENCE = ["default"] as const;
-const SHARED_HELP_AUDIENCES = ["default", "collaborator"] as const;
-const COLLABORATOR_HELP_AUDIENCE = ["collaborator"] as const;
 const RELOAD_SWITCHES = [
   "--orchestrator-logic",
   "--browse-controller",
@@ -205,30 +183,6 @@ function preservePowerShellTrailingPaths(args: string[]) {
     }
   }
   return args;
-}
-
-async function readLiteralOrFile(
-  flags: ParsedFlags,
-  literalFlag: string,
-  fileFlag: string,
-  readTextFile: CommandBuildContext["readTextFile"],
-  { required = false }: { required?: boolean } = {},
-) {
-  const literal = flags.optional(literalFlag);
-  const filePath = flags.optional(fileFlag);
-  if (literal !== null && filePath !== null) {
-    throw new Error(`${literalFlag} and ${fileFlag} are mutually exclusive.`);
-  }
-  if (literal !== null) {
-    return literal;
-  }
-  if (filePath !== null) {
-    return await readTextFile(filePath);
-  }
-  if (required) {
-    throw new Error(`${literalFlag} or ${fileFlag} is required.`);
-  }
-  return null;
 }
 
 function queryPath(pathname: string, values: Record<string, string | readonly string[] | null>) {
@@ -284,7 +238,6 @@ function readSubagentTargets(flags: ParsedFlags) {
 
 const COMMANDS: readonly CommandDefinition[] = [
   {
-    audiences: DEFAULT_HELP_AUDIENCE,
     description: "List unsettled direct children, or settled history.",
     helpGroups: ["subagent"],
     words: ["subagent", "list"],
@@ -303,7 +256,6 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
-    audiences: DEFAULT_HELP_AUDIENCE,
     description: "List the subagent profiles available to this thread.",
     helpGroups: ["subagent"],
     words: ["subagent", "profiles"],
@@ -315,7 +267,6 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
-    audiences: DEFAULT_HELP_AUDIENCE,
     description: "Create and start a direct child, then print its thread ID.",
     helpGroups: ["subagent"],
     words: ["subagent", "create"],
@@ -330,7 +281,6 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
-    audiences: DEFAULT_HELP_AUDIENCE,
     description: "Wait until any selected child needs attention or reaches a terminal state.",
     helpGroups: ["subagent"],
     words: ["subagent", "wait"],
@@ -344,7 +294,6 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
-    audiences: DEFAULT_HELP_AUDIENCE,
     description: "Stop one or more direct child threads.",
     helpGroups: ["subagent"],
     words: ["subagent", "stop"],
@@ -358,7 +307,6 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
-    audiences: DEFAULT_HELP_AUDIENCE,
     description: "Settle one or more completed or stopped direct children.",
     helpGroups: ["subagent"],
     words: ["subagent", "settle"],
@@ -369,7 +317,6 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
-    audiences: DEFAULT_HELP_AUDIENCE,
     description: "Message a direct child or parent, steering an active turn or starting an idle one.",
     helpGroups: ["subagent"],
     words: ["subagent", "message"],
@@ -389,7 +336,6 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
-    audiences: SHARED_HELP_AUDIENCES,
     description: "Set a concise title for a managed thread.",
     helpGroups: ["thread"],
     words: ["thread", "title"],
@@ -400,7 +346,6 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
-    audiences: SHARED_HELP_AUDIENCES,
     description: "Set the exact current turn status for this managed thread.",
     helpGroups: ["thread"],
     words: ["thread", "status"],
@@ -414,7 +359,6 @@ const COMMANDS: readonly CommandDefinition[] = [
   },
   {
     aliases: [["thread", "context", "search"]],
-    audiences: SHARED_HELP_AUDIENCES,
     description: "Search visible narrative history and return stable result references.",
     helpGroups: ["thread", "thread-recall"],
     words: ["thread", "recall", "search"],
@@ -438,7 +382,6 @@ const COMMANDS: readonly CommandDefinition[] = [
   },
   {
     aliases: [["thread", "context", "expand"]],
-    audiences: SHARED_HELP_AUDIENCES,
     description: "Read one referenced record through fixed-budget content pages.",
     helpGroups: ["thread", "thread-recall"],
     words: ["thread", "recall", "expand"],
@@ -454,7 +397,6 @@ const COMMANDS: readonly CommandDefinition[] = [
   },
   {
     aliases: [["thread", "context"]],
-    audiences: SHARED_HELP_AUDIENCES,
     description: "Read filtered history newest-first, or continue before an emitted cursor.",
     helpGroups: ["thread", "thread-recall"],
     words: ["thread", "recall"],
@@ -469,7 +411,6 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   ...(["add", "unstage"] as const).map((action): CommandDefinition => ({
-    audiences: DEFAULT_HELP_AUDIENCE,
     description: action === "add"
       ? "Add currently changed files beneath the paths to this thread's commit selection."
       : "Remove exact files or descendants from this thread's commit selection.",
@@ -490,7 +431,6 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   })),
   {
-    audiences: DEFAULT_HELP_AUDIENCE,
     description: "Commit only this thread's selected files, then clear the selection on success.",
     helpGroups: ["git"],
     words: ["git", "commit"],
@@ -509,7 +449,6 @@ const COMMANDS: readonly CommandDefinition[] = [
   },
   ...(["baseline", "create-diff"] as const).map((action): CommandDefinition => ({
     aliases: [["checkpoint", action]],
-    audiences: DEFAULT_HELP_AUDIENCE,
     description: action === "baseline"
       ? "Capture the current worktree as a hidden baseline checkpoint."
       : "Preserve the current worktree as an explicit diff checkpoint.",
@@ -527,7 +466,6 @@ const COMMANDS: readonly CommandDefinition[] = [
   })),
   {
     aliases: [["checkpoint", "diff"]],
-    audiences: DEFAULT_HELP_AUDIENCE,
     description: "Summarize worktree changes since the specified checkpoint.",
     helpGroups: ["git-checkpoint"],
     words: ["git", "checkpoint", "diff"],
@@ -544,7 +482,6 @@ const COMMANDS: readonly CommandDefinition[] = [
   },
   {
     aliases: [["checkpoint", "file-diff"]],
-    audiences: DEFAULT_HELP_AUDIENCE,
     description: "Show the unified diff for one file since the specified checkpoint.",
     helpGroups: ["git-checkpoint"],
     words: ["git", "checkpoint", "file-diff"],
@@ -562,7 +499,6 @@ const COMMANDS: readonly CommandDefinition[] = [
   },
   {
     aliases: [["checkpoint", "restore"]],
-    audiences: DEFAULT_HELP_AUDIENCE,
     description: "Restore the specified checkpoint after explicit confirmation.",
     helpGroups: ["git-checkpoint"],
     words: ["git", "checkpoint", "restore"],
@@ -582,7 +518,6 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
-    audiences: DEFAULT_HELP_AUDIENCE,
     description: "Run inline BrowseMD commands or one project BrowseMD script.",
     helpGroups: ["browse"],
     words: ["browse", "run"],
@@ -609,7 +544,6 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
-    audiences: DEFAULT_HELP_AUDIENCE,
     description: "Run the explicitly gated raw Browse CLI passthrough.",
     helpGroups: ["browse"],
     words: ["browse", "raw"],
@@ -627,7 +561,6 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
-    audiences: DEFAULT_HELP_AUDIENCE,
     description: "List Workbench-known browser sessions for the thread.",
     helpGroups: ["browse"],
     words: ["browse", "sessions"],
@@ -638,7 +571,6 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   ...(["stop", "forget"] as const).map((action): CommandDefinition => ({
-    audiences: DEFAULT_HELP_AUDIENCE,
     description: action === "stop"
       ? "Stop a browser session without deleting persistent profile data."
       : "Forget a stopped session and delete its persistent profile data.",
@@ -660,7 +592,6 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   })),
   {
-    audiences: DEFAULT_HELP_AUDIENCE,
     description: "Reload selected Workbench runtime subsystems and wait for terminal reload status.",
     helpGroups: ["orchestrator"],
     words: ["orchestrator", "reload"],
@@ -684,99 +615,6 @@ const COMMANDS: readonly CommandDefinition[] = [
         ...post("/api/orchestrator/reload", { scopes }, "orchestrator-reload"),
         waitForReload: true,
       };
-    },
-  },
-  {
-    audiences: COLLABORATOR_HELP_AUDIENCE,
-    description: "Read the current post tree and allowed operations.",
-    helpGroups: ["collaboration", "collaboration-posts"],
-    words: ["collaboration", "posts", "read"],
-    usage: "wb collaboration posts read",
-    async build({ args, cwd }) {
-      new ParsedFlags(args, {});
-      return get(queryPath("/api/collaboration/posts", { cwd }), "json");
-    },
-  },
-  {
-    audiences: COLLABORATOR_HELP_AUDIENCE,
-    description: "Create an agent post under an eligible user-authored leaf.",
-    helpGroups: ["collaboration", "collaboration-posts"],
-    words: ["collaboration", "posts", "create"],
-    usage: "wb collaboration posts create --parent <id> (--body <markdown> | --body-file <file>) [--prompt <text> | --prompt-file <file>]",
-    async build({ args, cwd, readTextFile }) {
-      const flags = new ParsedFlags(args, { values: ["--parent", "--body", "--body-file", "--prompt", "--prompt-file"] });
-      const body = await readLiteralOrFile(flags, "--body", "--body-file", readTextFile, { required: true });
-      const prompt = await readLiteralOrFile(flags, "--prompt", "--prompt-file", readTextFile);
-      return post("/api/collaboration/posts", {
-        action: "create",
-        body: body as string,
-        cwd,
-        parentId: flags.required("--parent"),
-        ...(prompt !== null ? { prompt } : {}),
-      }, "collaboration-post-mutation");
-    },
-  },
-  {
-    audiences: COLLABORATOR_HELP_AUDIENCE,
-    description: "Update a current editable agent-authored leaf.",
-    helpGroups: ["collaboration", "collaboration-posts"],
-    words: ["collaboration", "posts", "update"],
-    usage: "wb collaboration posts update --post <id> (--body <markdown> | --body-file <file>) [--prompt <text> | --prompt-file <file> | --clear-prompt]",
-    async build({ args, cwd, readTextFile }) {
-      const flags = new ParsedFlags(args, {
-        boolean: ["--clear-prompt"],
-        values: ["--post", "--body", "--body-file", "--prompt", "--prompt-file"],
-      });
-      const body = await readLiteralOrFile(flags, "--body", "--body-file", readTextFile, { required: true });
-      const prompt = await readLiteralOrFile(flags, "--prompt", "--prompt-file", readTextFile);
-      if (flags.has("--clear-prompt") && prompt !== null) {
-        throw new Error("--clear-prompt cannot be combined with --prompt or --prompt-file.");
-      }
-      return post("/api/collaboration/posts", {
-        action: "update",
-        body: body as string,
-        cwd,
-        postId: flags.required("--post"),
-        ...(flags.has("--clear-prompt") ? { prompt: null } : prompt !== null ? { prompt } : {}),
-      }, "collaboration-post-mutation");
-    },
-  },
-  {
-    audiences: COLLABORATOR_HELP_AUDIENCE,
-    description: "Delete an obsolete current editable agent-authored leaf.",
-    helpGroups: ["collaboration", "collaboration-posts"],
-    words: ["collaboration", "posts", "delete"],
-    usage: "wb collaboration posts delete --post <id>",
-    async build({ args, cwd }) {
-      const flags = new ParsedFlags(args, { values: ["--post"] });
-      return post("/api/collaboration/posts", {
-        action: "delete",
-        cwd,
-        postId: flags.required("--post"),
-      }, "collaboration-post-mutation");
-    },
-  },
-  {
-    audiences: COLLABORATOR_HELP_AUDIENCE,
-    description: "Print the current private next-run memory.",
-    helpGroups: ["collaboration", "collaboration-memory"],
-    words: ["collaboration", "memory", "read"],
-    usage: "wb collaboration memory read",
-    async build({ args, cwd }) {
-      new ParsedFlags(args, {});
-      return get(queryPath("/api/collaboration/memory", { cwd }), "collaboration-memory-read");
-    },
-  },
-  {
-    audiences: COLLABORATOR_HELP_AUDIENCE,
-    description: "Replace private next-run memory with literal text or file contents.",
-    helpGroups: ["collaboration", "collaboration-memory"],
-    words: ["collaboration", "memory", "write"],
-    usage: "wb collaboration memory write (--memory <text> | --memory-file <file>)",
-    async build({ args, cwd, readTextFile }) {
-      const flags = new ParsedFlags(args, { values: ["--memory", "--memory-file"] });
-      const memory = await readLiteralOrFile(flags, "--memory", "--memory-file", readTextFile, { required: true });
-      return post("/api/collaboration/memory", { cwd, memory: memory as string }, "collaboration-memory-write");
     },
   },
 ];
@@ -806,12 +644,6 @@ const ROOT_HELP_COMMAND_ORDER = [
   "browse stop",
   "browse forget",
   "orchestrator reload",
-  "collaboration posts read",
-  "collaboration posts create",
-  "collaboration posts update",
-  "collaboration posts delete",
-  "collaboration memory read",
-  "collaboration memory write",
 ] as const;
 
 const HELP_GROUPS: readonly HelpGroupDefinition[] = [
@@ -899,46 +731,6 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     usage: "wb orchestrator reload [--all] [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--opencode-bridge] [--opencode-server] [--next-dev]",
     words: ["orchestrator"],
   },
-  {
-    commandOrder: [
-      "collaboration posts read",
-      "collaboration posts create",
-      "collaboration posts update",
-      "collaboration posts delete",
-      "collaboration memory read",
-      "collaboration memory write",
-    ],
-    footer: "Project ownership is derived from the current working directory.",
-    key: "collaboration",
-    usage: "wb collaboration <group> <command> [options]",
-    words: ["collaboration"],
-  },
-  {
-    commandOrder: [
-      "collaboration posts read",
-      "collaboration posts create",
-      "collaboration posts update",
-      "collaboration posts delete",
-    ],
-    footer: [
-      "On update, omit prompt options to preserve the existing prompt.",
-      "Use --clear-prompt to remove the existing prompt.",
-      "Literal and file options for the same field are mutually exclusive.",
-    ].join("\n"),
-    key: "collaboration-posts",
-    usage: "wb collaboration posts <command> [options]",
-    words: ["collaboration", "posts"],
-  },
-  {
-    commandOrder: ["collaboration memory read", "collaboration memory write"],
-    footer: [
-      "Writing replaces the entire previous memory.",
-      "Do not write when there is no useful memory update.",
-    ].join("\n"),
-    key: "collaboration-memory",
-    usage: "wb collaboration memory <command> [options]",
-    words: ["collaboration", "memory"],
-  },
 ];
 
 function commandKey(command: CommandDefinition) {
@@ -953,47 +745,30 @@ function orderCommands(commands: readonly CommandDefinition[], order: readonly s
   ));
 }
 
-function isCommandVisible(command: CommandDefinition, audience: WorkbenchAgentCliThreadHelpAudience | "all") {
-  return audience === "all" || command.audiences.includes(audience);
-}
-
-function renderRootHelp(audience: WorkbenchAgentCliThreadHelpAudience | "all") {
-  const commands = orderCommands(
-    COMMANDS.filter((command) => isCommandVisible(command, audience)),
-    ROOT_HELP_COMMAND_ORDER,
-  );
-  const helpGroups = HELP_GROUPS.filter((group) => COMMANDS.some((command) => (
-    command.helpGroups.includes(group.key) && isCommandVisible(command, audience)
-  )));
+function renderRootHelp() {
+  const commands = orderCommands(COMMANDS, ROOT_HELP_COMMAND_ORDER);
+  const helpGroups = HELP_GROUPS.filter((group) => COMMANDS.some((command) => command.helpGroups.includes(group.key)));
   return [
     "Usage:",
-    "  wb --help [--thread <id>]",
+    "  wb --help",
     "  wb <command> [options]",
     "",
     "Commands:",
     ...commands.map((command) => `  ${command.usage}`),
     "",
     "Help commands:",
-    ...helpGroups.map((group) => `  wb ${group.words.join(" ")} --help [--thread <id>]`),
+    ...helpGroups.map((group) => `  wb ${group.words.join(" ")} --help`),
     "",
-    "Pass --thread <current-thread-id> to hide commands that are not relevant to that thread.",
     "Project ownership is derived from the current working directory.",
     "",
   ].join("\n");
 }
 
-function renderGroupHelp(
-  group: HelpGroupDefinition,
-  audience: WorkbenchAgentCliThreadHelpAudience | "all",
-) {
+function renderGroupHelp(group: HelpGroupDefinition) {
   const commands = orderCommands(
-    COMMANDS.filter((command) => command.helpGroups.includes(group.key) && isCommandVisible(command, audience)),
+    COMMANDS.filter((command) => command.helpGroups.includes(group.key)),
     group.commandOrder ?? [],
   );
-  if (!commands.length) {
-    return null;
-  }
-
   const commandSection = group.options
     ? group.options
     : [
@@ -1026,83 +801,30 @@ function matchHelpGroup(argv: readonly string[]) {
     .sort((left, right) => right.words.length - left.words.length)[0]?.group ?? null;
 }
 
-function parseHelpThreadId(argv: readonly string[], callerThreadId: string | null) {
-  const indexes = argv.flatMap((argument, index) => argument === "--thread" ? [index] : []);
-  if (indexes.length > 1) {
-    throw new Error("--thread may only be supplied once for help.");
-  }
-  if (!indexes.length) {
-    return null;
-  }
-
-  const value = argv[indexes[0] + 1]?.trim();
-  if (!value || value.startsWith("--")) {
-    throw new Error("--thread requires a value for help.");
-  }
-  if (!callerThreadId) {
-    throw new Error("Thread-filtered help requires a managed Workbench thread identity.");
-  }
-  if (value !== callerThreadId) {
-    throw new Error("Thread-filtered help must use the current managed Workbench thread id.");
-  }
-  return value;
-}
-
 function helpPath(argv: readonly string[]) {
   if (argv[0] === "help") {
     return [];
   }
-  const threadIndex = argv.indexOf("--thread");
-  return argv.filter((_, index) => (
-    argv[index] !== "--help"
-    && (threadIndex < 0 || (index !== threadIndex && index !== threadIndex + 1))
-  ));
+  return argv.filter((argument) => argument !== "--help");
 }
 
-export const WORKBENCH_AGENT_CLI_HELP = renderRootHelp("all");
+export const WORKBENCH_AGENT_CLI_HELP = renderRootHelp();
 
 export async function parseWorkbenchAgentCliCommand(
   argv: string[],
   {
     cwd = process.cwd(),
     callerThreadId = process.env.WORKBENCH_THREAD_ID?.trim() || process.env.CODEX_THREAD_ID?.trim() || null,
-    readTextFile = async (filePath: string) => await readFile(filePath, "utf8"),
-    resolveHelpAudience,
     workbenchOrigin = process.env.WORKBENCH_ORIGIN?.trim() || null,
   }: {
     callerThreadId?: string | null;
     cwd?: string;
-    readTextFile?: CommandBuildContext["readTextFile"];
-    resolveHelpAudience?: (context: {
-      cwd: string;
-      threadId: string;
-    }) => Promise<WorkbenchAgentCliThreadHelpAudience>;
     workbenchOrigin?: string | null;
   } = {},
 ): Promise<WorkbenchAgentCliParseResult> {
   if (!argv.length || argv.includes("--help") || argv[0] === "help") {
-    try {
-      const threadId = parseHelpThreadId(argv, callerThreadId);
-      const audience = threadId
-        ? await resolveHelpAudience?.({ cwd, threadId })
-        : "all";
-      if (!audience) {
-        throw new Error("Thread-filtered help is unavailable.");
-      }
-      const group = matchHelpGroup(helpPath(argv));
-      if (!group) {
-        return { help: renderRootHelp(audience), kind: "help" };
-      }
-      const help = renderGroupHelp(group, audience);
-      return help
-        ? { help, kind: "help" }
-        : {
-          error: `wb ${group.words.join(" ")} help is not relevant to this thread.\nRun wb --help --thread <id> to list relevant commands.`,
-          kind: "error",
-        };
-    } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error), kind: "error" };
-    }
+    const group = matchHelpGroup(helpPath(argv));
+    return { help: group ? renderGroupHelp(group) : renderRootHelp(), kind: "help" };
   }
 
   const matched = COMMANDS.flatMap((definition) => (
@@ -1117,7 +839,7 @@ export async function parseWorkbenchAgentCliCommand(
   try {
     return {
       kind: "request",
-      request: await matched.definition.build({ args: argv.slice(matched.words.length), callerThreadId, cwd, readTextFile, workbenchOrigin }),
+      request: await matched.definition.build({ args: argv.slice(matched.words.length), callerThreadId, cwd, workbenchOrigin }),
     };
   } catch (error) {
     return {

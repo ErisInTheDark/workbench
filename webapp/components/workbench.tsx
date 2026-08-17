@@ -13,7 +13,6 @@ import type {
   WorkbenchBrowseSessionControlResponse,
   WorkbenchBrowseSessionListResponse,
   WorkbenchBrowseSessionSummary,
-  WorkbenchCollaborationState,
   WorkbenchComposerInputDraft,
   WorkbenchComposerSettings,
   WorkbenchControls,
@@ -31,20 +30,6 @@ import type {
   WorkbenchThreadDocumentSnapshot,
   WorkbenchUserInputResponse
 } from "../lib/types";
-import {
-  claimWorkbenchCollaborationStateAutoWake,
-  readWorkbenchCollaborationState,
-  writeWorkbenchCollaborationState,
-} from "../lib/workbench/collaboration/collaboration-registry-api";
-import {
-  createWorkbenchCollaborationScratchpadRelativePath,
-  createWorkbenchCollaborationScratchpadWritableRoot,
-} from "../lib/workbench/collaboration/collaboration-scratchpad-path";
-import {
-  EMPTY_WORKBENCH_COLLABORATION_STATE,
-  normalizeWorkbenchCollaborationState,
-  selectLatestWorkbenchCollaborationState,
-} from "../lib/workbench/collaboration/collaboration-state";
 import { areDeeplyEqual } from "../lib/workbench/deep-equality";
 import { writeTextToClipboard } from "../lib/workbench/dom/clipboard";
 import type { WorkbenchDragPayload } from "../lib/workbench/layout/workbench-drag";
@@ -76,8 +61,6 @@ import {
   type WorkbenchMosaicPanelTarget,
 } from "../lib/workbench/navigation/workbench-mosaic-route";
 import {
-  createCollaborationHref,
-  createCollaborationRoute,
   createFileRoute,
   createMosaicRoute,
   createProjectRoute,
@@ -130,7 +113,6 @@ import { getThreadDocumentFromSnapshot } from "../lib/workbench/thread/thread-do
 import { ThreadMessageNotSentError } from "../lib/workbench/thread/thread-message-submission";
 import { countDraftPromptTokens, getThreadSidebarGroup, type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadTarget } from "../lib/workbench/thread/thread-state";
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
-import WorkbenchCollaborationView from "./workbench/collaboration/WorkbenchCollaborationView";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
 import WorkbenchMainLayoutView from "./workbench/layout/WorkbenchMainLayoutView";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
@@ -164,7 +146,6 @@ import {
   BackArrowIcon,
   BinIcon,
   CheckIcon,
-  CollaborationIcon,
   CopyIcon,
   FileMoveIcon,
   GearIcon,
@@ -242,43 +223,6 @@ const SETTINGS_ORDER: WorkbenchSettingKey[] = [
 const DEFAULT_LOCAL_CAPABILITY_SETTINGS: WorkbenchLocalCapabilitySettings = {
   browseRawCommandsEnabled: false,
 };
-const COLLABORATION_STATE_STORAGE_KEY = "workbench:collaboration:thread-states";
-
-function readStoredCollaborationStates () {
-  try {
-    const parsed = JSON.parse(
-      window.localStorage.getItem(COLLABORATION_STATE_STORAGE_KEY)
-      ?? window.localStorage.getItem("workbench:collaboration:thread-registries")
-      ?? "{}",
-    ) as Record<string, unknown>;
-    return Object.fromEntries(Object.entries(parsed).map(([projectId, value]) => [projectId, normalizeWorkbenchCollaborationState(value)]));
-  } catch {
-    return {};
-  }
-}
-
-function writeStoredCollaborationStates (statesByProjectId: Record<string, WorkbenchCollaborationState>) {
-  try {
-    window.localStorage.setItem(COLLABORATION_STATE_STORAGE_KEY, JSON.stringify(statesByProjectId));
-  } catch {
-    // Collaboration remains usable when localStorage is unavailable.
-  }
-}
-
-function areCollaborationStatesEqual (
-  left: WorkbenchCollaborationState,
-  right: WorkbenchCollaborationState,
-) {
-  return areDeeplyEqual(
-    normalizeWorkbenchCollaborationState(left),
-    normalizeWorkbenchCollaborationState(right),
-  );
-}
-
-function hasCollaborationStateData (state: WorkbenchCollaborationState) {
-  return !areCollaborationStatesEqual(state, EMPTY_WORKBENCH_COLLABORATION_STATE);
-}
-
 const EDITOR_FONT_CLASS_NAMES: Record<WorkbenchEditorFontFamily, string> = {
   mono: "font-mono",
   sans: "font-sans",
@@ -649,14 +593,6 @@ export default function Workbench () {
   const [sidebarDropTargetId, setSidebarDropTargetId] = useState<WorkbenchSidebarSectionId | "end" | null>(null);
   const [threadComposerDraftsByThreadId, setThreadComposerDraftsByThreadId] = useState<Record<string, WorkbenchComposerInputDraft | undefined>>({});
   const [threadQuestionnaireDraftsByKey, setThreadQuestionnaireDraftsByKey] = useState<Record<string, WorkbenchQuestionnaireDraft | undefined>>({});
-  const [collaborationStatesByProjectId, setCollaborationStatesByProjectId] = useState<Record<string, WorkbenchCollaborationState>>(() => {
-    if (typeof window === "undefined") {
-      return {};
-    }
-
-    return readStoredCollaborationStates();
-  });
-  const collaborationRegistryHydrationGenerationRef = useRef(0);
   const editorRef = useRef<HTMLDivElement>(null);
   const mainPaneRef = useRef<HTMLElement>(null);
   const customCaretRef = useRef<HTMLDivElement>(null);
@@ -817,24 +753,6 @@ export default function Workbench () {
               setLocallyResolvedUserInputRequestKeysByThreadId((current) => (
                 pruneResolvedUserInputRequestKeys(current, requestsByThreadId)
               ));
-            });
-          },
-          onCollaborationStateUpdated: (projectId, state) => {
-            scheduleWorkbenchStateUpdate(() => {
-              setCollaborationStatesByProjectId((current) => {
-                const existing = current[projectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
-                const nextState = selectLatestWorkbenchCollaborationState(existing, state);
-                if (areCollaborationStatesEqual(existing, nextState)) {
-                  return current;
-                }
-
-                const next = {
-                  ...current,
-                  [projectId]: nextState,
-                };
-                writeStoredCollaborationStates(next);
-                return next;
-              });
             });
           },
           onRateLimitsChange: (nextRateLimits) => {
@@ -1012,7 +930,6 @@ export default function Workbench () {
   const modifiedPaths = new Set(explorer.locallyModifiedPaths);
   const currentProject = explorer.projects.find((project) => project.id === explorer.currentProjectId) ?? null;
   const activeProjectId = explorer.currentProjectId || route.projectId;
-  const collaborationState = collaborationStatesByProjectId[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
   const refreshBrowseSessions = useCallback(async (
     projectId = activeProjectId,
     options: { signal?: AbortSignal } = {},
@@ -1078,12 +995,8 @@ export default function Workbench () {
       window.clearInterval(timer);
     };
   }, [activeProjectId, refreshBrowseSessions]);
-  const collaborationThreadIdSet = useMemo(() => new Set(collaborationState.runThreadIds), [collaborationState.runThreadIds]);
-  const collaborationThreadSummaries = useMemo(() => explorer.threads.filter((thread) => collaborationThreadIdSet.has(thread.id)), [collaborationThreadIdSet, explorer.threads]);
   const threadSummariesById = useMemo(() => new Map<string, ThreadSummary>(explorer.threads.map((thread) => [thread.id, thread])), [explorer.threads]);
-  const sidebarEntries = useMemo(() => (explorer.threadSidebar?.entries ?? []).filter((entry) => (
-    entry.entryKind === "draft" || (entry.entryKind === "thread" && !collaborationThreadIdSet.has(entry.identity.threadId))
-  )), [collaborationThreadIdSet, explorer.threadSidebar?.entries]);
+  const sidebarEntries = explorer.threadSidebar?.entries ?? [];
   useEffect(() => {
     if (route.view !== "thread" || route.threadTarget?.kind !== "provider") return;
     const providerTarget = route.threadTarget;
@@ -1109,68 +1022,6 @@ export default function Workbench () {
       threadId: providerTarget.threadId,
     }), { replace: true });
   }, [explorer.subagents, explorer.threadSidebar?.entries, navigateToRoute, route.projectId, route.threadTarget, route.view]);
-  useEffect(() => {
-    if (!activeProjectId) {
-      return;
-    }
-
-    const generation = collaborationRegistryHydrationGenerationRef.current + 1;
-    collaborationRegistryHydrationGenerationRef.current = generation;
-    let cancelled = false;
-
-    void readWorkbenchCollaborationState(activeProjectId)
-      .then(async (diskState) => {
-        if (cancelled || collaborationRegistryHydrationGenerationRef.current !== generation) {
-          return;
-        }
-
-        const localState = collaborationStatesByProjectId[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
-        const mergedState = hasCollaborationStateData(localState)
-          ? selectLatestWorkbenchCollaborationState(diskState, localState)
-          : diskState;
-        setCollaborationStatesByProjectId((current) => {
-          const existing = current[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
-          if (areCollaborationStatesEqual(existing, mergedState)) {
-            return current;
-          }
-
-          const next = {
-            ...current,
-            [activeProjectId]: mergedState,
-          };
-          writeStoredCollaborationStates(next);
-          return next;
-        });
-
-        if (mergedState.updatedAt > diskState.updatedAt && !areCollaborationStatesEqual(diskState, mergedState)) {
-          const savedState = await writeWorkbenchCollaborationState(activeProjectId, mergedState);
-          if (cancelled || collaborationRegistryHydrationGenerationRef.current !== generation) {
-            return;
-          }
-
-          setCollaborationStatesByProjectId((current) => {
-            const existing = current[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
-            if (areCollaborationStatesEqual(existing, savedState)) {
-              return current;
-            }
-
-            const next = {
-              ...current,
-              [activeProjectId]: savedState,
-            };
-            writeStoredCollaborationStates(next);
-            return next;
-          });
-        }
-      })
-      .catch(() => {
-        // Browser-local Collaboration state remains usable when disk sync is unavailable.
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeProjectId]);
   const projectFileLinkRoots = useMemo(
     () => createProjectFileLinkRoots(explorer.projects, activeProjectId, explorer.roots),
     [activeProjectId, explorer.projects, explorer.roots],
@@ -1188,8 +1039,6 @@ export default function Workbench () {
     ? projectSettingsByProjectId[explorer.currentProjectId] ?? createDefaultProjectWorkbenchSettings()
     : createDefaultProjectWorkbenchSettings();
   const resolvedSettings = resolveWorkbenchSettings(globalSettings, projectSettings);
-  const collaborationScratchpadPath = createWorkbenchCollaborationScratchpadRelativePath(activeProjectId);
-  const collaborationScratchpadWritableRoot = createWorkbenchCollaborationScratchpadWritableRoot(explorer.workbenchStorageRootPath, activeProjectId);
   const showUnopenableFiles = resolvedSettings.showUnopenableFiles;
   const visibleTree = useMemo(
     () => {
@@ -2178,16 +2027,15 @@ export default function Workbench () {
   const showThreadView = route.view === "thread" || mobileMosaicFallbackTarget?.kind === "thread";
   const showFileView = route.view === "file" || mobileMosaicFallbackTarget?.kind === "file";
   const showSettingsView = route.view === "settings";
-  const showCollaborationView = route.view === "collaboration";
-  const showFullBleedMainView = showMosaicView || showCollaborationView;
+  const showFullBleedMainView = showMosaicView;
   const usesDesktopSidebarCollapse = !isMobile;
   const isEffectiveDesktopSidebarCollapsed = usesDesktopSidebarCollapse && isDesktopSidebarCollapsed;
   const effectiveThreadTarget = mobileMosaicFallbackTarget?.kind === "thread" ? mobileMosaicFallbackTarget.target : route.threadTarget;
   const effectiveThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetRootId(effectiveThreadTarget) : route.threadId;
   const effectiveSelectedThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetSelectedId(effectiveThreadTarget) : effectiveThreadId;
   const effectiveFilePath = mobileMosaicFallbackTarget?.kind === "file" ? mobileMosaicFallbackTarget.filePath : route.filePath;
-  const showEmptyState = !showThreadView && !showFileView && !showSettingsView && !showCollaborationView && !showMosaicView;
-  const showRouteError = Boolean(selectionError) && !showThreadView && !showFileView && !showSettingsView && !showCollaborationView && !showMosaicView;
+  const showEmptyState = !showThreadView && !showFileView && !showSettingsView && !showMosaicView;
+  const showRouteError = Boolean(selectionError) && !showThreadView && !showFileView && !showSettingsView && !showMosaicView;
   if (currentThread) {
     retainedThreadRef.current = currentThread;
   }
@@ -2263,9 +2111,7 @@ export default function Workbench () {
       ? `file:${activeFilePath}`
       : showSettingsView
         ? "settings"
-        : showCollaborationView
-          ? "collaboration"
-          : "";
+        : "";
   useEffect(() => {
     if (!showThreadView || !threadShellSource) {
       return;
@@ -2702,10 +2548,6 @@ export default function Workbench () {
     if (payload.type === "new-thread") {
       return "New thread";
     }
-    if (payload.type === "collaboration-post") {
-      const post = collaborationState.posts[payload.postId];
-      return post?.body.split(/\r?\n/).find((line) => line.trim())?.trim() || "Collaboration post";
-    }
     if (payload.target.kind === "file") {
       return payload.target.filePath;
     }
@@ -2714,7 +2556,7 @@ export default function Workbench () {
     }
 
     return payload.target.kind;
-  }, [collaborationState.posts]);
+  }, []);
 
   useEffect(() => {
     if (!isMobile || mobilePane !== "editor" || !mainPaneScrollKey) {
@@ -3120,91 +2962,6 @@ export default function Workbench () {
     }
   };
 
-  const handleCollaborationStateChange = useCallback((state: WorkbenchCollaborationState, options?: { persist?: boolean }) => {
-    if (!activeProjectId) {
-      return;
-    }
-
-    const normalizedState = normalizeWorkbenchCollaborationState(state);
-    setCollaborationStatesByProjectId((current) => {
-      const existing = current[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
-      if (areCollaborationStatesEqual(existing, normalizedState)) {
-        return current;
-      }
-
-      const next = {
-        ...current,
-        [activeProjectId]: normalizedState,
-      };
-      writeStoredCollaborationStates(next);
-      return next;
-    });
-    if (options?.persist === false) {
-      return;
-    }
-
-    void writeWorkbenchCollaborationState(activeProjectId, normalizedState)
-      .then((savedState) => {
-        setCollaborationStatesByProjectId((current) => {
-          const existing = current[activeProjectId] ?? EMPTY_WORKBENCH_COLLABORATION_STATE;
-          if (areCollaborationStatesEqual(existing, savedState)) {
-            return current;
-          }
-
-          const next = {
-            ...current,
-            [activeProjectId]: savedState,
-          };
-          writeStoredCollaborationStates(next);
-          return next;
-        });
-      })
-      .catch(() => {
-        // Browser-local Collaboration state remains usable when disk sync is unavailable.
-      });
-  }, [activeProjectId]);
-
-  const handleStartCollaborationSuggestionThread = useCallback(async (
-    input: UserInput[],
-    draftThread: ThreadPayload,
-  ): Promise<{ status: "started"; threadId: string } | { error: string; status: "failed" }> => {
-    if (!controls) {
-      return {
-        error: "Workbench controls are not ready.",
-        status: "failed",
-      };
-    };
-
-    try {
-      let materializedThreadId = "";
-      const payload = await sendThreadMessage(draftThread, input, {
-        composerProfileSlot: { kind: "new-thread", projectId: activeProjectId },
-        onThreadMaterialized: (materializedThread) => {
-          materializedThreadId = materializedThread.id;
-        },
-        selectThread: false,
-      });
-
-      const threadId = payload?.id || materializedThreadId;
-      if (!threadId) {
-        return {
-          error: "Workbench did not return a thread id for the started suggestion.",
-          status: "failed",
-        };
-      }
-
-      return {
-        status: "started",
-        threadId,
-      };
-    } catch (error) {
-      return {
-        error: error instanceof Error ? error.message : "Unable to start suggestion thread.",
-        status: "failed",
-      };
-    }
-  }, [activeProjectId, controls, sendThreadMessage]);
-
   return (
     <WorkbenchComposerProfileProvider controller={composerProfileController}>
       <WorkbenchContextMenuProvider>
@@ -3328,20 +3085,6 @@ export default function Workbench () {
                           </button>
                         ) : null}
                       </div>
-                    </section>
-
-                    <section className="pb-4 pr-2 md:pr-4.5">
-                      <a
-                        href={createCollaborationHref(activeProjectId)}
-                        className={`flex min-w-0 items-center gap-3 rounded-lg px-2 py-2 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:-ml-2${showCollaborationView ? " bg-accent-soft text-accent" : " text-muted"}`}
-                        onClick={(event) => {
-                          event.preventDefault();
-                          navigateToRoute(createCollaborationRoute(explorer.currentProjectId || route.projectId));
-                        }}
-                      >
-                        <CollaborationIcon />
-                        <span className="min-w-0 truncate text-[0.95rem] font-semibold">Collaboration</span>
-                      </a>
                     </section>
 
                     <section
@@ -3841,77 +3584,6 @@ export default function Workbench () {
                           : SETTINGS_ORDER.map((key) => renderProjectSettingRow(key))}
                       </div>
                     </section>
-                  </div>
-                ) : null}
-                {showCollaborationView && !shouldRenderMainLayout ? (
-                  <div className="h-full min-h-0">
-                    <WorkbenchCollaborationView
-                      activeDrag={activeWorkbenchDrag}
-                      collaborationState={collaborationState}
-                      collaborationThreadSummaries={collaborationThreadSummaries}
-                      composerSpellCheck={resolvedSettings.composerSpellCheck}
-                      controls={controls}
-                      editorFontClassName={editorFontClassName}
-                      fontSizeRem={resolvedSettings.editorFontSize}
-                      harness={harness}
-                      isMobile={isMobile}
-                      isProjectLoading={explorer.isProjectLoading}
-                      knownSubagents={explorer.subagents}
-                      livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
-                      onCollaborationStateChange={handleCollaborationStateChange}
-                      onClaimAutoWake={claimWorkbenchCollaborationStateAutoWake}
-                      onDraftHarnessChange={handleHarnessChange}
-                      onListModels={listThreadModels}
-                      onPauseThread={pauseThread}
-                      onReadThread={readThread}
-                      onResumeThread={resumeThread}
-                      onThreadSeen={markThreadSeen}
-                      onCompactThread={compactThread}
-                      onSendMessage={sendThreadMessage}
-                      onStopThread={stopThread}
-                      onSubmitUserInputRequest={submitUserInputRequest}
-                      onThreadComposerDraftChange={handleThreadComposerDraftChange}
-                      onThreadComposerDraftClear={handleThreadComposerDraftClear}
-                      onThreadQuestionnaireDraftChange={handleThreadQuestionnaireDraftChange}
-                      onThreadQuestionnaireDraftClear={handleThreadQuestionnaireDraftClear}
-                      onThreadAgentChange={setThreadAgent}
-                      onThreadReasoningEffortChange={setThreadReasoningEffort}
-                      onThreadServiceTierChange={setThreadServiceTier}
-                      onThreadSettingsChange={setThreadComposerSettings}
-                      onOpenThreadFromPromptPost={(threadId) => {
-                        navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, threadId));
-                      }}
-                      onPointerDrop={endWorkbenchPointerDrag}
-                      onPostPointerDragStart={(event, post) => {
-                        beginWorkbenchPointerDrag(event, {
-                          postId: post.id,
-                          type: "collaboration-post",
-                        });
-                      }}
-                      onStartThreadFromPrompt={handleStartCollaborationSuggestionThread}
-                      onThreadModelChange={setThreadModel}
-                      onUpdateThreadState={controls.updateThreadState}
-                      onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
-                      projectFileCandidates={explorer.projectFileCandidates}
-                      projectChanges={explorer.changes}
-                      projectFileIndexId={explorer.projectFileIndexId}
-                      projectFileLinkRoots={projectFileLinkRoots}
-                      projectFilePaths={explorer.projectFilePaths}
-                      projectId={activeProjectId}
-                      projectRootPath={explorer.rootPath}
-                      projectRoots={explorer.roots}
-                      rateLimits={rateLimits}
-                      scratchpadPath={collaborationScratchpadPath}
-                      scratchpadWritableRoot={collaborationScratchpadWritableRoot}
-                      threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
-                      threadComposerDraft={activeThreadComposerDraft}
-                      threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
-                      threadDocuments={threadDocuments}
-                      threadGoalControls={controls?.threadGoals ?? null}
-                      threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
-                      selectedThreadId={effectiveSelectedThreadId}
-                      onSelectedThreadChange={handleSelectedThreadChange}
-                    />
                   </div>
                 ) : null}
                 {showRouteError && !shouldRenderMainLayout ? (

@@ -24,7 +24,6 @@ import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type {
     WorkbenchApprovalCommandContext,
     WorkbenchBrowseResultEntry,
-    WorkbenchCollaborationState,
     WorkbenchQuestionnaireHistoryEntry,
     WorkbenchThreadContextReadResponse,
     WorkbenchThreadHydrationRequest,
@@ -32,7 +31,6 @@ import type {
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
 } from "../lib/types";
-import { normalizeWorkbenchCollaborationState } from "../lib/workbench/collaboration/collaboration-state";
 import type { WorkbenchPromptInstructions } from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import { isWorkbenchPauseControlRequest, WORKBENCH_PAUSE_CONTROL_KIND } from "../lib/workbench/thread/thread-pause-control";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
@@ -168,8 +166,6 @@ const TRANSCRIPT_COALESCE_MAX_BUFFER_BYTES = 512 * 1024;
 const WORKBENCH_REQUEST_SOURCE_FIELD = "workbenchRequestSource";
 const WORKBENCH_THREAD_HYDRATION_FIELD = "workbenchThreadHydration";
 const WORKBENCH_THREAD_CONTEXT_ENTRIES_FIELD = "workbenchThreadContextEntries";
-const WORKBENCH_NOTIFICATION_BROADCAST_METHOD = "workbench/notification/broadcast";
-
 type WorkbenchRequestSource = "autoRefresh" | "internal" | "user";
 
 type CoalescedTranscriptNotification = {
@@ -190,46 +186,6 @@ function isJsonRpcNotification(message: unknown): message is JsonRpcNotification
     && "method" in message
     && "params" in message
     && !("id" in message);
-}
-
-function readCollaborationStateUpdatedNotification(value: unknown): JsonRpcNotification {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("A Collaboration state notification object is required.");
-  }
-
-  const candidate = value as Record<string, unknown>;
-  if (candidate.method !== "collaboration/state/updated") {
-    throw new Error("Unsupported Workbench notification method.");
-  }
-
-  const params = candidate.params;
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
-    throw new Error("A Collaboration state notification params object is required.");
-  }
-
-  const candidateParams = params as Record<string, unknown>;
-  const projectId = typeof candidateParams.projectId === "string" ? candidateParams.projectId.trim() : "";
-  if (!projectId) {
-    throw new Error("A Collaboration state notification project id is required.");
-  }
-
-  const state: WorkbenchCollaborationState = normalizeWorkbenchCollaborationState(candidateParams.state);
-  return {
-    method: "collaboration/state/updated",
-    params: {
-      projectId,
-      state,
-    },
-  };
-}
-
-function readWorkbenchNotificationBroadcastParams(value: unknown): JsonRpcNotification {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Workbench notification broadcast params are required.");
-  }
-
-  const candidate = value as Record<string, unknown>;
-  return readCollaborationStateUpdatedNotification(candidate.notification);
 }
 
 function isJsonRpcServerRequest(message: unknown): message is ServerRequest {
@@ -1338,11 +1294,6 @@ export default class CodexStdioBridge {
             id: requestId,
             result: await this.respondToQuestionnaire(message.params),
           };
-        case WORKBENCH_NOTIFICATION_BROADCAST_METHOD:
-          return {
-            id: requestId,
-            result: this.broadcastWorkbenchNotification(message.params),
-          };
         default:
           return null;
       }
@@ -1367,12 +1318,6 @@ export default class CodexStdioBridge {
     if (!this.acceptingWork) {
       throw new Error("Codex bridge is reloading.");
     }
-  }
-
-  private broadcastWorkbenchNotification(params: unknown) {
-    const notification = readWorkbenchNotificationBroadcastParams(params);
-    this.onNotification(notification);
-    return { ok: true };
   }
 
   private send(message: unknown) {

@@ -12,7 +12,6 @@
  * - PanelMinimizeIcon/PanelExpandIcon: render mosaic panel minimize controls. Keywords: workbench, icon, panel.
  * - PanelCloseIcon: render the mosaic panel close control. Keywords: workbench, icon, panel, close.
  * - GearIcon: render the settings navigation icon. Keywords: workbench, icon, settings.
- * - CollaborationIcon: render the collaboration navigation icon. Keywords: workbench, icon, collaboration.
  * - BlocksIcon: render the Lucide-style composer profile control icon. Keywords: workbench, icon, composer, profile, blocks.
  * - BrowserSessionIcon: render the Browse session sidebar icon. Keywords: workbench, icon, browse, session.
  * - ReloadIcon: render the local runtime reload icon. Keywords: workbench, icon, reload.
@@ -24,7 +23,6 @@
  * - PreviewIcon: render the thread codeblock preview toggle icon. Keywords: workbench, icon, thread, code, preview.
  * - CopyIcon: render thread copy action icons for context menus and code blocks. Keywords: workbench, icon, thread, copy.
  * - CheckIcon: render the thread codeblock copied confirmation icon. Keywords: workbench, icon, thread, code, copied.
- * - TagAddIcon/TagCheckIcon: render Collaboration tag add and save icons. Keywords: workbench, icon, collaboration, tag.
  * - SparkleIcon/ReplyArrowIcon: render shared creation and reply action icons. Keywords: workbench, icon, create, sparkle, reply.
  * - FileAddIcon/FileDeleteIcon/FileUpdateIcon/FileMoveIcon: render thread file-change kind icons. Keywords: workbench, icon, file change, add, delete, update, move.
  */
@@ -210,15 +208,6 @@ export function GearIcon () {
   );
 }
 
-export function CollaborationIcon () {
-  return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true" className="size-5">
-      <path d="M4.25 4.75H15.75V13.25H8.25L4.25 16.25V4.75Z" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M7.25 8H12.75M7.25 10.5H10.75" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 export function BlocksIcon ({ className = "size-4" }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" className={className} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -392,22 +381,6 @@ export function CheckIcon ({ className = "size-4" }: { className?: string }) {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className={className}>
       <path d="M4.5 10.35L8.15 14L15.5 6.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-export function TagAddIcon ({ className = "size-4" }: IconProps) {
-  return (
-    <svg viewBox="0 0 16 16" className={className} aria-hidden="true">
-      <path d="M8 3.5v9M3.5 8h9" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" />
-    </svg>
-  );
-}
-
-export function TagCheckIcon ({ className = "size-4" }: IconProps) {
-  return (
-    <svg viewBox="0 0 16 16" className={className} aria-hidden="true">
-      <path d="m3.5 8.3 3 3 6-6.6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
     </svg>
   );
 }

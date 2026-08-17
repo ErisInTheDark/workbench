@@ -97,7 +97,7 @@
  * - WorkbenchReadThreadOptions: thread-read options.
  * - WorkbenchSendThreadMessageOptions: thread-send options.
  * - WorkbenchThreadComposerAttachmentDraft: draft attachment contract.
- * - WorkbenchComposerInputDraft: ephemeral composer input contract used by collaboration editors and durable-draft bindings.
+ * - WorkbenchComposerInputDraft: ephemeral composer input contract used by rich editors and durable-draft bindings.
  * - WorkbenchQuestionnaireDraft: questionnaire draft state.
  * - WorkbenchStoredThreadUnreadState: persisted unread state.
  * - WorkbenchUserInputOption: questionnaire answer option.
@@ -126,32 +126,6 @@
  * - ProjectSnapshot: project snapshot contract.
  * - ExplorerSnapshot: explorer snapshot contract.
  * - WorkbenchRouteLoadResult: route-load result.
- * - WorkbenchCollaborationSuggestion: collaboration suggestion contract.
- * - WorkbenchCollaborationThreadRegistry: collaboration thread registry.
- * - WorkbenchCollaborationPostAuthor: collaboration post author.
- * - WorkbenchCollaborationPostRevisionSource: post revision source.
- * - WorkbenchCollaborationPostRevision: post revision contract.
- * - WorkbenchCollaborationPost: collaboration post contract.
- * - WorkbenchCollaborationState: collaboration state contract.
- * - WorkbenchCollaborationSurfacePost: UI collaboration post projection.
- * - WorkbenchCollaborationSurfaceState: UI collaboration state projection.
- * - WorkbenchCollaborationPostMutationAction: post mutation action.
- * - WorkbenchCollaborationPostCreateRequest: post creation request.
- * - WorkbenchCollaborationPostUpdateRequest: post update request.
- * - WorkbenchCollaborationPostDeleteRequest: post deletion request.
- * - WorkbenchCollaborationPostMutationRequest: post mutation request union.
- * - WorkbenchCollaborationPostEndpointMutationRequest: endpoint post mutation request.
- * - WorkbenchCollaborationPostEndpointUsage: post endpoint usage metadata.
- * - WorkbenchCollaborationPostEndpointStateResponse: post endpoint state response.
- * - WorkbenchCollaborationPostMutationResponse: post mutation response.
- * - WorkbenchCollaborationMemoryEndpointUsage: memory endpoint usage metadata.
- * - WorkbenchCollaborationMemorySetRequest: memory update request.
- * - WorkbenchCollaborationMemoryStateResponse: memory state response.
- * - WorkbenchCollaborationMemoryMutationResponse: memory mutation response.
- * - WorkbenchCollaborationAdminPostMoveIntent: admin post move intent.
- * - WorkbenchCollaborationAdminPostMutation: admin post mutation union.
- * - WorkbenchCollaborationAdminPostMutationRequest: admin post mutation request.
- * - WorkbenchCollaborationAdminPostMutationResponse: admin post mutation response.
  * - WorkbenchControls: top-level Workbench command surface.
  * - WorkbenchThreadGoalSnapshot: thread goal state.
  * - WorkbenchThreadGoalControls: thread goal command surface.
@@ -790,7 +764,6 @@ export interface WorkbenchSubagentPage {
 }
 
 export type WorkbenchComposerProfileSlot =
-  | { kind: "collaboration-runner"; projectId: string }
   | { draftId: string; harness: WorkbenchHarness; kind: "draft"; projectId: string }
   | { kind: "new-thread"; projectId: string }
   | { harness: WorkbenchHarness; kind: "thread"; threadId: string };
@@ -1104,230 +1077,6 @@ export interface WorkbenchRouteLoadResult {
   ok: boolean;
 }
 
-export interface WorkbenchCollaborationSuggestion {
-  id: string;
-  materializedThreadId?: string;
-  prompt: string;
-  rationale?: string;
-  scratchpadImageIds?: string[];
-  title: string;
-  updatedAt: number;
-}
-
-export interface WorkbenchCollaborationThreadRegistry {
-  autoWakeEnabled: boolean;
-  currentThreadId: string;
-  dismissedSuggestionIds: string[];
-  lastAppliedSuggestionPatchSignature: string;
-  lastAutoWakeAt: number;
-  lastRunSummary: string;
-  suggestions: Record<string, WorkbenchCollaborationSuggestion>;
-  threadIds: string[];
-}
-
-export type WorkbenchCollaborationPostAuthor = "agent" | "user";
-
-export type WorkbenchCollaborationPostRevisionSource = "agent" | "restore" | "user";
-
-export interface WorkbenchCollaborationPostRevision {
-  attachments?: WorkbenchThreadComposerAttachmentDraft[];
-  body: string;
-  createdAt: number;
-  id: string;
-  prompt?: string;
-  source: WorkbenchCollaborationPostRevisionSource;
-}
-
-export interface WorkbenchCollaborationPost {
-  attachments?: WorkbenchThreadComposerAttachmentDraft[];
-  author: WorkbenchCollaborationPostAuthor;
-  body: string;
-  childIds: string[];
-  createdAt: number;
-  id: string;
-  isCollapsed?: boolean;
-  parentId: string | null;
-  prompt?: string;
-  promptThreadId?: string;
-  revisions: WorkbenchCollaborationPostRevision[];
-  tags: string[];
-  updatedAt: number;
-}
-
-export interface WorkbenchCollaborationState {
-  autoWakeEnabled: boolean;
-  lastAppliedPostPatchSignature: string;
-  lastAppliedRunMemorySignature: string;
-  lastAutoWakeAt: number;
-  lastRunMemory: string;
-  posts: Record<string, WorkbenchCollaborationPost>;
-  rootPostIds: string[];
-  runThreadIds: string[];
-  tags: string[];
-  updatedAt: number;
-  version: 2;
-}
-
-export type WorkbenchCollaborationSurfacePost = Omit<WorkbenchCollaborationPost, "revisions">;
-
-export type WorkbenchCollaborationSurfaceState = Omit<WorkbenchCollaborationState, "posts"> & {
-  posts: Record<string, WorkbenchCollaborationSurfacePost>;
-};
-
-export type WorkbenchCollaborationPostMutationAction = "create" | "delete" | "update";
-
-export interface WorkbenchCollaborationPostCreateRequest {
-  action: "create";
-  body: string;
-  parentId: string;
-  postId?: string;
-  prompt?: string;
-}
-
-export interface WorkbenchCollaborationPostUpdateRequest {
-  action: "update";
-  body: string;
-  postId: string;
-  prompt?: string | null;
-}
-
-export interface WorkbenchCollaborationPostDeleteRequest {
-  action: "delete";
-  postId: string;
-}
-
-export type WorkbenchCollaborationPostMutationRequest =
-  | WorkbenchCollaborationPostCreateRequest
-  | WorkbenchCollaborationPostDeleteRequest
-  | WorkbenchCollaborationPostUpdateRequest;
-
-export type WorkbenchCollaborationPostEndpointMutationRequest = WorkbenchCollaborationPostMutationRequest & {
-  cwd: string;
-  projectId?: string | null;
-};
-
-export interface WorkbenchCollaborationPostEndpointUsage {
-  endpoint: string;
-  rules: string[];
-}
-
-export interface WorkbenchCollaborationPostEndpointStateResponse {
-  projectId: string;
-  state: WorkbenchCollaborationSurfaceState;
-  usage: WorkbenchCollaborationPostEndpointUsage;
-}
-
-export interface WorkbenchCollaborationPostMutationResponse extends WorkbenchCollaborationPostEndpointStateResponse {
-  action: WorkbenchCollaborationPostMutationAction;
-  message: string;
-  ok: true;
-  post?: WorkbenchCollaborationSurfacePost;
-  postId?: string;
-}
-
-export interface WorkbenchCollaborationMemoryEndpointUsage {
-  endpoint: string;
-  rules: string[];
-}
-
-export interface WorkbenchCollaborationMemorySetRequest {
-  cwd: string;
-  memory?: string | null;
-  projectId?: string | null;
-}
-
-export interface WorkbenchCollaborationMemoryStateResponse {
-  memory: string;
-  projectId: string;
-  state: WorkbenchCollaborationSurfaceState;
-  usage: WorkbenchCollaborationMemoryEndpointUsage;
-}
-
-export interface WorkbenchCollaborationMemoryMutationResponse extends WorkbenchCollaborationMemoryStateResponse {
-  message: string;
-  ok: true;
-  preserved: boolean;
-}
-
-export type WorkbenchCollaborationAdminPostMoveIntent =
-  | { type: "after"; targetPostId: string }
-  | { type: "before"; targetPostId: string }
-  | { type: "inside"; targetPostId: string };
-
-export type WorkbenchCollaborationAdminPostMutation =
-  | {
-    action: "createPost";
-    attachments?: WorkbenchThreadComposerAttachmentDraft[];
-    body: string;
-    parentId: string | null;
-    postId: string;
-    prompt?: string;
-  }
-  | {
-    action: "createTag";
-    tag: string;
-  }
-  | {
-    action: "deletePost";
-    postId: string;
-  }
-  | {
-    action: "materializePromptThread";
-    postId: string;
-    prompt: string;
-    promptThreadId: string;
-  }
-  | {
-    action: "movePost";
-    intent: WorkbenchCollaborationAdminPostMoveIntent;
-    postId: string;
-  }
-  | {
-    action: "removePostTag";
-    postId: string;
-    tag: string;
-  }
-  | {
-    action: "restorePostRevision";
-    postId: string;
-    revisionId: string;
-  }
-  | {
-    action: "setPostCollapsed";
-    isCollapsed: boolean;
-    postId: string;
-  }
-  | {
-    action: "tagPost";
-    postId: string;
-    tag: string;
-  }
-  | {
-    action: "updatePostPrompt";
-    basePostUpdatedAt?: number;
-    basePrompt?: string;
-    postId: string;
-    prompt: string;
-  }
-  | {
-    action: "updatePost";
-    attachments?: WorkbenchThreadComposerAttachmentDraft[];
-    body: string;
-    postId: string;
-    prompt?: string;
-  };
-
-export interface WorkbenchCollaborationAdminPostMutationRequest {
-  mutation: WorkbenchCollaborationAdminPostMutation;
-  projectId: string;
-}
-
-export interface WorkbenchCollaborationAdminPostMutationResponse {
-  mutation: WorkbenchCollaborationAdminPostMutation;
-  ok: true;
-  projectId: string;
-  state: WorkbenchCollaborationState;
-}
 
 export interface WorkbenchControls {
   applyRoute: (route: WorkbenchRoute) => Promise<WorkbenchRouteLoadResult>;
@@ -1391,7 +1140,6 @@ export interface WorkbenchBindings {
   onCurrentThreadChange?: (thread: ThreadPayload | null) => void;
   onThreadDocumentsChange?: (snapshot: WorkbenchThreadDocumentSnapshot) => void;
   onPendingUserInputRequestsChange?: (requestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>) => void;
-  onCollaborationStateUpdated?: (projectId: string, state: WorkbenchCollaborationState) => void;
   onRateLimitsChange?: (rateLimits: RateLimitSnapshot | null) => void;
   onControlsReady?: (controls: WorkbenchControls) => void;
 }
