@@ -77,6 +77,31 @@ function sanitizeLogValue(value: unknown) {
   return String(value ?? "unknown").replace(/[^a-zA-Z0-9_./:-]/gu, "?").slice(0, 160);
 }
 
+function describeRequestField(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  if (typeof value === "string") return `${key}=string(${value.length})`;
+  if (value === null) return `${key}=null`;
+  if (Array.isArray(value)) return `${key}=array(${value.length})`;
+  return `${key}=${typeof value}`;
+}
+
+function describeInvalidRequest(input: object, issue: { code: string; message: string; path: PropertyKey[] }) {
+  const record = input as Record<string, unknown>;
+  const identity = record.identity && typeof record.identity === "object" && !Array.isArray(record.identity)
+    ? record.identity as Record<string, unknown>
+    : {};
+  const path = issue.path.length ? issue.path.map(sanitizeLogValue).join(".") : "root";
+  return [
+    `issueCode=${sanitizeLogValue(issue.code)}`,
+    `issuePath=${path}`,
+    `issueMessage=${sanitizeError(issue.message)}`,
+    `keys=${Object.keys(record).sort().map(sanitizeLogValue).join(",") || "none"}`,
+    `fields=${["projectId", "title", "turnId"].map((key) => describeRequestField(record, key)).join(",")}`,
+    `identityKeys=${Object.keys(identity).sort().map(sanitizeLogValue).join(",") || "none"}`,
+    `identityFields=${["harness", "threadId"].map((key) => describeRequestField(identity, key)).join(",")}`,
+  ].join(" ");
+}
+
 export default class WorkbenchThreadStateController {
   private active = true;
   private readonly connectionProjects = new Map<string, string>();
@@ -127,7 +152,11 @@ export default class WorkbenchThreadStateController {
       }
     }
     const parsed = WorkbenchThreadStateRequestSchema.safeParse(input);
-    if (!parsed.success) return { error: { code: "invalidThreadStateMutation", message: parsed.error.issues[0]?.message ?? "Invalid thread-state request." } };
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      if (issue) this.options.log?.(`request invalid method=${sanitizeLogValue((input as { method?: unknown }).method)} ${describeInvalidRequest(input, issue)}`);
+      return { error: { code: "invalidThreadStateMutation", message: issue?.message ?? "Invalid thread-state request." } };
+    }
     const request = parsed.data;
     switch (request.method) {
       case "workbench/thread-state/open": return { result: await this.open(connectionId, request.projectId) };

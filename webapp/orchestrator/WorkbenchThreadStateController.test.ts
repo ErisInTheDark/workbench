@@ -144,7 +144,7 @@ test("an observer joining before the first project snapshot receives the normal 
   await controller.dispose();
 });
 
-test("request telemetry reports lifecycle without logging request payloads", async () => {
+test("request telemetry reports bounded validation evidence without logging request values", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-telemetry-"));
   const logs: string[] = [];
   let now = 10;
@@ -159,8 +159,40 @@ test("request telemetry reports lifecycle without logging request payloads", asy
   const response = await controller.handleRequest("observer", { method: "not-a-real-method", secret: "never-log-me" });
   assert.equal("error" in response, true);
   assert.match(logs[0] ?? "", /request started connection=observer method=not-a-real-method/u);
-  assert.match(logs[1] ?? "", /request completed connection=observer method=not-a-real-method outcome=error/u);
+  assert.match(logs[1] ?? "", /request invalid method=not-a-real-method issueCode=invalid_union issuePath=method/u);
+  assert.match(logs[2] ?? "", /request completed connection=observer method=not-a-real-method outcome=error/u);
   assert.equal(logs.join("\n").includes("never-log-me"), false);
+  await controller.dispose();
+});
+
+test("invalid accepted intent telemetry identifies strict-contract drift without logging field values", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-invalid-intent-"));
+  const logs: string[] = [];
+  const controller = new WorkbenchThreadStateController({
+    log: (message) => logs.push(message),
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async () => [],
+    resolveProjectRoot: async () => root,
+  });
+  const response = await controller.handleRequest("observer", {
+    correlationHandle: "secret-correlation-value",
+    identity: { harness: "codex", threadId: "secret-thread-id" },
+    method: "workbench/thread-state/intent/accept",
+    projectId: "secret-project-id",
+    title: "secret title contents",
+    turnId: "secret-turn-id",
+  });
+  assert.equal("error" in response, true);
+  const diagnostic = logs.find((message) => message.includes("request invalid")) ?? "";
+  assert.match(diagnostic, /issueCode=unrecognized_keys issuePath=root/u);
+  assert.match(diagnostic, /issueMessage=Unrecognized key/u);
+  assert.match(diagnostic, /keys=correlationHandle,identity,method,projectId,title,turnId/u);
+  assert.match(diagnostic, /fields=projectId=string\(17\),title=string\(21\),turnId=string\(14\)/u);
+  assert.match(diagnostic, /identityKeys=harness,threadId identityFields=harness=string\(5\),threadId=string\(16\)/u);
+  for (const secret of ["secret-correlation-value", "secret-thread-id", "secret-project-id", "secret title contents", "secret-turn-id"]) {
+    assert.equal(logs.join("\n").includes(secret), false);
+  }
   await controller.dispose();
 });
 
