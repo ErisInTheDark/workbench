@@ -1008,8 +1008,8 @@ export default function Workbench () {
     () => createProjectFileLinkRoots(explorer.projects, activeProjectId, explorer.roots),
     [activeProjectId, explorer.projects, explorer.roots],
   );
-  const isSidebarProjectLoading = explorer.isProjectLoading || (Boolean(route.projectId) && route.projectId !== explorer.currentProjectId);
-  const isSidebarThreadsLoading = explorer.isThreadsLoading || isSidebarProjectLoading;
+  const isProjectIdentityLoading = Boolean(route.projectId) && route.projectId !== explorer.currentProjectId;
+  const isProjectTreeLoading = isProjectIdentityLoading || (explorer.isProjectLoading && explorer.tree.length === 0);
   const currentProjectDisplayName = currentProject
     ? `${currentProject.name || currentProject.id}${currentProject.kind === "workspace" ? " workspace" : ""}`
     : null;
@@ -1024,13 +1024,13 @@ export default function Workbench () {
   const showUnopenableFiles = resolvedSettings.showUnopenableFiles;
   const visibleTree = useMemo(
     () => {
-      if (isSidebarProjectLoading) {
+      if (isProjectTreeLoading) {
         return [];
       }
 
       return showUnopenableFiles ? explorer.tree : filterVisibleTreeNodes(explorer.tree);
     },
-    [explorer.tree, isSidebarProjectLoading, showUnopenableFiles],
+    [explorer.tree, isProjectTreeLoading, showUnopenableFiles],
   );
   const projectTabLabel = getProjectTabLabel(currentProjectDisplayName ?? explorer.root);
   const settingsScope = route.view === "settings" ? route.settingsScope : "global";
@@ -3005,11 +3005,11 @@ export default function Workbench () {
                         <button
                           type="button"
                           className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-lg px-2 py-2 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-                          title={isSidebarProjectLoading ? "Loading project" : currentProjectTitle}
+                          title={isProjectIdentityLoading ? "Loading project" : currentProjectTitle}
                           onClick={openProjectPicker}
                         >
                           <span className="min-w-0 relative -top-0.5">
-                            {isSidebarProjectLoading ? (
+                            {isProjectIdentityLoading ? (
                               <span className="block h-6 w-40 max-w-full rounded-md workbench-skeleton" aria-hidden="true" />
                             ) : (
                               <span className="block truncate text-xl font-semibold leading-tight text-text">{currentProjectDisplayName ?? (explorer.currentProjectId || "No project")}</span>
@@ -3061,8 +3061,6 @@ export default function Workbench () {
                         controls={controls}
                         currentTarget={route.view === "thread" ? route.threadTarget : null}
                         harness={harness}
-                        isProjectLoading={isSidebarProjectLoading}
-                        isThreadsLoading={isSidebarThreadsLoading}
                         onBeginPointerDrag={beginWorkbenchPointerDrag}
                         onCreateThread={createThreadFromSidebar}
                         onOpenThread={openThreadFromExplorer}
@@ -3070,7 +3068,6 @@ export default function Workbench () {
                         showMosaicView={showMosaicView}
                         store={threadSidebarStore}
                         threadSummariesById={threadSummariesById}
-                        threadsError={explorer.threadsError}
                       />
                     </section>
 
@@ -3108,7 +3105,7 @@ export default function Workbench () {
                             type="button"
                             aria-label={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
                             aria-pressed={showUnopenableFiles}
-                            disabled={!explorer.currentProjectId || isSidebarProjectLoading}
+                            disabled={!explorer.currentProjectId || isProjectTreeLoading}
                             title={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
                             className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}${showUnopenableFiles ? " bg-accent-soft text-accent" : ""}`}
                             onClick={() => {
@@ -3125,7 +3122,7 @@ export default function Workbench () {
                             aria-label="Create in project"
                             title="Create in project"
                             className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}`}
-                            disabled={!explorer.currentProjectId || isSidebarProjectLoading}
+                            disabled={!explorer.currentProjectId || isProjectTreeLoading}
                             onClick={() => {
                               openCreateDialog("");
                             }}
@@ -3135,12 +3132,12 @@ export default function Workbench () {
                           </button>
                         </div>
                       </div>
-                      {!explorer.projects.length && !isSidebarProjectLoading ? (
+                      {!explorer.projects.length && !isProjectIdentityLoading ? (
                         <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted md:pr-4.5">
                           No projects were found.
                         </p>
                       ) : null}
-                      {isSidebarProjectLoading ? (
+                      {isProjectTreeLoading ? (
                         <SidebarLoadingSkeleton ariaLabel="Loading project files" rows={8} />
                       ) : (
                         <nav id="file-tree" aria-label="Project files">

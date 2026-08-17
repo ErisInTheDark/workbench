@@ -1,10 +1,11 @@
 /*
  * Exports:
- * - WorkbenchThreadStateControllerOptions/WorkbenchObservedLifecycleEvent: catalog, project-state ports, and identity-owned provider lifecycle input. Keywords: ownership, reconciliation, notification.
+ * - WorkbenchThreadStateControllerOptions/WorkbenchThreadReconciliationFailure/WorkbenchObservedLifecycleEvent: catalog, project-state ports, progressive reconciliation, and identity-owned provider lifecycle input. Keywords: ownership, reconciliation, notification.
  * - default WorkbenchThreadStateController: own the shared project observer set, durable thread metadata, and pushed sidebar lifecycle. Keywords: drafts, project, lifecycle, observation.
  */
 import path from "node:path";
 
+import type { WorkbenchProjectsPayload } from "../lib/types";
 import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
 import {
   WorkbenchThreadDraftSchema,
@@ -19,6 +20,7 @@ import {
   type WorkbenchLifecycleEvent,
   type WorkbenchThreadLifecycle,
   type WorkbenchThreadDraft,
+  type WorkbenchHarnessId,
   type WorkbenchThreadActivityUpdate,
   type WorkbenchThreadSidebarEntry,
   type WorkbenchThreadSidebarSnapshot,
@@ -32,6 +34,7 @@ interface StoredThreadMetadata { archived: boolean; harness: "codex" | "copilot"
 interface StoredProjectState { drafts: WorkbenchThreadDraft[]; threads: StoredThreadMetadata[]; version: 1 }
 
 export interface WorkbenchThreadStateControllerOptions {
+  getProjectCatalog: () => WorkbenchProjectsPayload;
   log?: (message: string) => void;
   now?: () => number;
   projectState: {
@@ -40,8 +43,17 @@ export interface WorkbenchThreadStateControllerOptions {
     observe: (projectId: string, publish: (update: WorkbenchProjectStateUpdate) => void) => () => void;
   };
   publish: (connectionId: string, snapshot: WorkbenchThreadStateSnapshot) => void;
-  reconcileProject: (projectId: string, signal: AbortSignal) => Promise<WorkbenchThreadSidebarEntry[]>;
+  reconcileProject: (
+    projectId: string,
+    signal: AbortSignal,
+    acceptProviderSnapshot: (harness: WorkbenchHarnessId, entries: WorkbenchThreadSidebarEntry[]) => void,
+  ) => Promise<WorkbenchThreadReconciliationFailure[]>;
   resolveProjectRoot: (projectId: string) => Promise<string>;
+}
+
+export interface WorkbenchThreadReconciliationFailure {
+  harness: WorkbenchHarnessId;
+  message: string;
 }
 
 export type WorkbenchObservedLifecycleEvent =
@@ -110,6 +122,7 @@ export default class WorkbenchThreadStateController {
   private readonly options: WorkbenchThreadStateControllerOptions;
   private readonly projects = new Map<string, ProjectState>();
   private readonly operationQueues = new Map<string, Promise<void>>();
+  private readonly reconciliationPromises = new Set<Promise<void>>();
   private readonly subscribers = new Set<(projectId: string, entry: WorkbenchThreadSidebarEntry) => void>();
 
   constructor(options: WorkbenchThreadStateControllerOptions) {
@@ -182,19 +195,24 @@ export default class WorkbenchThreadStateController {
     this.connectionProjects.set(connectionId, projectId);
     const wasUnobserved = state.observers.size === 0;
     state.observers.add(connectionId);
+    let currentProjectUpdate: WorkbenchProjectStateUpdate | null = null;
     if (wasUnobserved) {
       state.stopProjectObservation = this.options.projectState.observe(projectId, (update) => this.publishUpdate(state, update));
       setTimeout(() => {
         if (this.active && state.observers.size) void this.reconcile(projectId, state);
       }, 0);
     } else {
-      const currentProjectUpdate = this.options.projectState.getCurrentUpdate(projectId);
+      currentProjectUpdate = this.options.projectState.getCurrentUpdate(projectId);
       if (currentProjectUpdate) {
         this.options.publish(connectionId, currentProjectUpdate);
         this.options.log?.(`project replayed connection=${sanitizeLogValue(connectionId)} project=${sanitizeLogValue(projectId)} revision=${currentProjectUpdate.revision}`);
       }
     }
-    return this.snapshot(projectId, state);
+    return {
+      catalog: this.options.getProjectCatalog(),
+      project: currentProjectUpdate ?? this.options.projectState.getCurrentUpdate(projectId),
+      sidebar: this.snapshot(projectId, state),
+    };
   }
 
   async close(connectionId: string, expectedProjectId?: string) {
@@ -208,6 +226,7 @@ export default class WorkbenchThreadStateController {
       state.generation += 1;
       state.abort?.abort();
       state.abort = null;
+      state.reconcilePromise = null;
       state.stopProjectObservation?.();
       state.stopProjectObservation = null;
     }
@@ -353,7 +372,7 @@ export default class WorkbenchThreadStateController {
       state.stopProjectObservation?.();
       state.stopProjectObservation = null;
     }
-    await Promise.allSettled([...this.operationQueues.values(), ...[...this.projects.values()].map((state) => state.reconcilePromise)]);
+    await Promise.allSettled([...this.operationQueues.values(), ...this.reconciliationPromises]);
     await this.json.waitForIdle();
   }
 
@@ -420,48 +439,64 @@ export default class WorkbenchThreadStateController {
     const abort = new AbortController();
     state.abort?.abort();
     state.abort = abort;
-    state.freshness = "loading";
-    state.reconcilePromise = this.options.reconcileProject(projectId, abort.signal).then((entries) => {
+    const reconcilePromise = this.options.reconcileProject(projectId, abort.signal, (harness, entries) => {
       if (!this.active || generation !== state.generation || !state.observers.size) return;
-      const providerKeys = new Set<string>();
-      for (const candidate of entries) {
-        const parsed = WorkbenchThreadSidebarEntrySchema.safeParse(candidate);
-        if (!parsed.success || parsed.data.entryKind === "draft") continue;
-        const key = entryKey(parsed.data);
-        providerKeys.add(key);
-        const overlay = state.overlays.get(key);
-        if (parsed.data.entryKind === "subagent") {
-          state.entries.set(key, overlay ? { ...parsed.data, lifecycle: overlay.lifecycle, pinned: overlay.pinned } : parsed.data);
-          continue;
-        }
-        const metadata = overlay?.archived
-          ? { archived: true as const, pinned: false as const, snoozed: false as const }
-          : { archived: false as const, pinned: overlay?.pinned ?? parsed.data.metadata.pinned, snoozed: overlay?.snoozed ?? parsed.data.metadata.snoozed };
-        state.entries.set(key, overlay ? {
-          ...parsed.data,
-          lifecycle: overlay.lifecycle,
-          metadata,
-          title: parsed.data.title === "New thread" && overlay.titleFallback ? overlay.titleFallback : parsed.data.title,
-        } : parsed.data);
-      }
-      for (const [key, entry] of state.entries) {
-        const isAcceptedIntentAwaitingProvider = entry.entryKind !== "draft"
-          && entry.lifecycle.kind === "working"
-          && entry.lifecycle.reason === "acceptedIntent";
-        if (entry.entryKind !== "draft" && !providerKeys.has(key) && !isAcceptedIntentAwaitingProvider) {
-          state.entries.delete(key);
-        }
-      }
+      this.installProviderSnapshot(state, harness, entries);
       state.error = null;
-      state.freshness = "fresh";
+      state.freshness = "partial";
+      this.publish(projectId, state);
+    }).then((failures) => {
+      if (!this.active || generation !== state.generation || !state.observers.size) return;
+      state.error = failures.length
+        ? failures.map((failure) => `${failure.harness}: ${sanitizeError(failure.message)}`).join("; ").slice(0, 500)
+        : null;
+      state.freshness = failures.length ? "partial" : "fresh";
       this.publish(projectId, state);
     }, (error) => {
       if (generation !== state.generation || abort.signal.aborted) return;
       state.error = sanitizeError(error);
       state.freshness = "partial";
       this.publish(projectId, state);
-    }).finally(() => { if (state.reconcilePromise) state.reconcilePromise = null; if (state.abort === abort) state.abort = null; });
-    return state.reconcilePromise;
+    }).finally(() => {
+      this.reconciliationPromises.delete(reconcilePromise);
+      if (state.reconcilePromise === reconcilePromise) state.reconcilePromise = null;
+      if (state.abort === abort) state.abort = null;
+    });
+    state.reconcilePromise = reconcilePromise;
+    this.reconciliationPromises.add(reconcilePromise);
+    return reconcilePromise;
+  }
+
+  private installProviderSnapshot(state: ProjectState, harness: WorkbenchHarnessId, entries: WorkbenchThreadSidebarEntry[]) {
+    const providerKeys = new Set<string>();
+    for (const candidate of entries) {
+      const parsed = WorkbenchThreadSidebarEntrySchema.safeParse(candidate);
+      if (!parsed.success || parsed.data.entryKind === "draft" || parsed.data.identity.harness !== harness) continue;
+      const key = entryKey(parsed.data);
+      providerKeys.add(key);
+      const overlay = state.overlays.get(key);
+      if (parsed.data.entryKind === "subagent") {
+        state.entries.set(key, overlay ? { ...parsed.data, lifecycle: overlay.lifecycle, pinned: overlay.pinned } : parsed.data);
+        continue;
+      }
+      const metadata = overlay?.archived
+        ? { archived: true as const, pinned: false as const, snoozed: false as const }
+        : { archived: false as const, pinned: overlay?.pinned ?? parsed.data.metadata.pinned, snoozed: overlay?.snoozed ?? parsed.data.metadata.snoozed };
+      state.entries.set(key, overlay ? {
+        ...parsed.data,
+        lifecycle: overlay.lifecycle,
+        metadata,
+        title: parsed.data.title === "New thread" && overlay.titleFallback ? overlay.titleFallback : parsed.data.title,
+      } : parsed.data);
+    }
+    for (const [key, entry] of state.entries) {
+      const isAcceptedIntentAwaitingProvider = entry.entryKind !== "draft"
+        && entry.lifecycle.kind === "working"
+        && entry.lifecycle.reason === "acceptedIntent";
+      if (entry.entryKind !== "draft" && entry.identity.harness === harness && !providerKeys.has(key) && !isAcceptedIntentAwaitingProvider) {
+        state.entries.delete(key);
+      }
+    }
   }
 
   private enqueue(key: string, operation: () => Promise<void>) {

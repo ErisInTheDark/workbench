@@ -86,6 +86,28 @@ test("project selection loads only the catalog and waits for a pushed tree snaps
   }
 });
 
+test("route identity accepts a pushed tree before catalog enrichment and can roll back", () => {
+  const { transport } = createTransport();
+  const client = WorkbenchProjectClient({ transport });
+  const rollback = client.beginProjectSelection("alpha");
+  assert.equal(client.getSnapshot().currentProjectId, "alpha");
+  assert.equal(client.getSnapshot().isLoading, true);
+
+  client.accept({ projectId: "alpha", revision: 0, snapshot: createSnapshot("alpha", "instant.ts"), updateKind: "project" });
+  client.installCatalog({ data: [createProject("alpha")], rootPath: "C:/projects" });
+  assert.equal(client.getSnapshot().tree[0]?.name, "instant.ts");
+  assert.equal(client.getSnapshot().isLoading, false);
+  assert.equal(client.getSnapshot().projects[0]?.id, "alpha");
+
+  const rollbackUnknown = client.beginProjectSelection("missing");
+  assert.equal(client.getSnapshot().currentProjectId, "missing");
+  rollbackUnknown?.();
+  assert.equal(client.getSnapshot().currentProjectId, "alpha");
+  assert.equal(client.getSnapshot().tree[0]?.name, "instant.ts");
+  rollback?.();
+  client.dispose();
+});
+
 test("project updates reject stale and foreign revisions", async () => {
   const fetchHarness = installProjectsFetch([createProject("alpha"), createProject("beta")]);
   try {

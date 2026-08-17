@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchProjectCatalogControllerOptions: injected project discovery, resolution, watcher, clock, logging, and TTL controls. Keywords: project, catalog, cache, watcher, test.
- * - default WorkbenchProjectCatalogController: own the structured project catalog, serialized HTTP payload, coalesced refresh, CWD resolution, and invalidation lifecycle. Keywords: project, catalog, cwd, cache, orchestrator.
+ * - default WorkbenchProjectCatalogController: own the structured project catalog, JIT snapshot replay, serialized HTTP payload, coalesced refresh, CWD resolution, and invalidation lifecycle. Keywords: project, catalog, cwd, cache, orchestrator.
  */
 import fs from "node:fs";
 import type http from "node:http";
@@ -26,6 +26,7 @@ interface ProjectWatcher {
 
 interface ProjectCatalogSnapshot {
   data: WorkbenchProjectOption[];
+  payload: WorkbenchProjectsPayload;
   serialized: string;
 }
 
@@ -192,6 +193,12 @@ export default class WorkbenchProjectCatalogController {
     }
   }
 
+  getCurrentSnapshot() {
+    this.assertActive();
+    if (!this.catalog) throw new Error("The project catalog has not been loaded.");
+    return this.catalog.payload;
+  }
+
   invalidate = () => {
     if (this.disposed) return;
     this.catalogExpiresAt = 0;
@@ -250,7 +257,7 @@ export default class WorkbenchProjectCatalogController {
         data,
         rootPath: normalizeRelativePath(this.projectsRootPath),
       };
-      const catalog = { data, serialized: JSON.stringify(payload) };
+      const catalog = { data, payload, serialized: JSON.stringify(payload) };
       if (!this.disposed && this.catalogGeneration === generation) {
         this.catalog = catalog;
         this.catalogExpiresAt = this.now() + this.cacheTtlMs;

@@ -3,6 +3,7 @@
  * - WorkbenchThreadTargetSchema/WorkbenchThreadTarget: canonical blank, draft, provider, and parent-owned subagent identity. Keywords: route, draft, provider, subagent.
  * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts. Keywords: zod, lifecycle, sidebar.
  * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchThreadActivityUpdateSchema: full sidebar state and tiny activity delta contracts. Keywords: sidebar, websocket, revision.
+ * - WorkbenchThreadStateOpenResultSchema/WorkbenchThreadStateOpenResult: atomic catalog, tree, and sidebar observation bootstrap. Keywords: open, bootstrap, snapshot.
  * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema: multiplexed sidebar, activity, project, and request protocol. Keywords: orchestrator, websocket, revision.
  * - getThreadSidebarGroup/sortThreadSidebarEntries: exhaustive visible grouping and stable activity ordering. Keywords: grouping, pin, sort.
  * - normalizeWorkbenchActivityTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary. Keywords: timestamp, provider, normalization.
@@ -13,7 +14,7 @@
 
 import { z } from "zod";
 
-import { WorkbenchProjectStateUpdateSchema } from "../project/project-state";
+import { WorkbenchProjectsPayloadSchema, WorkbenchProjectStateUpdateSchema } from "../project/project-state";
 
 export const WorkbenchHarnessSchema = z.enum(["codex", "copilot", "opencode"]);
 export type WorkbenchHarnessId = z.infer<typeof WorkbenchHarnessSchema>;
@@ -148,6 +149,13 @@ export const WorkbenchThreadSidebarSnapshotSchema = z.object({
   revision: z.number().int().nonnegative(),
 }).strict();
 export type WorkbenchThreadSidebarSnapshot = z.infer<typeof WorkbenchThreadSidebarSnapshotSchema>;
+
+export const WorkbenchThreadStateOpenResultSchema = z.object({
+  catalog: WorkbenchProjectsPayloadSchema,
+  project: WorkbenchProjectStateUpdateSchema.nullable(),
+  sidebar: WorkbenchThreadSidebarSnapshotSchema,
+}).strict();
+export type WorkbenchThreadStateOpenResult = z.infer<typeof WorkbenchThreadStateOpenResultSchema>;
 
 export const WorkbenchThreadActivityUpdateSchema = z.object({
   activityAt: z.number().int().nonnegative(),

@@ -11,9 +11,10 @@
  */
 
 import type { ChangeSummary, CreateEntryPayload, DeleteFileResponse, ProjectSnapshot, TreeNode, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchProjectsPayload } from "../types";
-import type { WorkbenchProjectStateUpdate } from "./project/project-state";
+import { WorkbenchProjectsPayloadSchema, type WorkbenchProjectStateUpdate } from "./project/project-state";
 import { areDeeplyEqual } from "./deep-equality";
 import ProjectTreeFileIndex, { type ProjectTreeFileCandidate, type ProjectTreeFileIndex as ProjectTreeFileIndexRecord } from "./project/ProjectTreeFileIndex";
+import reportClientSchemaError from "./report-client-schema-error";
 import { persistExpandedDirectories, readStoredExpandedDirectories } from "./state/browser-state";
 
 export function cloneTreeNodes(nodes: TreeNode[]): TreeNode[] {
@@ -65,11 +66,13 @@ export type WorkbenchProjectListener = (snapshot: WorkbenchProjectSnapshot) => v
 
 interface WorkbenchProjectClient {
   accept: (update: WorkbenchProjectStateUpdate) => void;
+  beginProjectSelection: (projectId: string) => (() => void) | null;
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
   deleteFile: (filePath: string, options?: { confirmUntracked?: boolean }) => Promise<DeleteFileResponse>;
   dispose: () => void;
   expandPath: (filePath: string) => boolean;
   getSnapshot: () => WorkbenchProjectSnapshot;
+  installCatalog: (payload: WorkbenchProjectsPayload) => boolean;
   selectInitialProject: () => Promise<void>;
   selectProjectStrict: (projectId: string) => Promise<boolean>;
   refreshProject: () => Promise<void>;
@@ -198,6 +201,91 @@ function WorkbenchProjectClient({ onError = () => undefined, transport }: Workbe
     projectRevision = -1;
   }
 
+  function restoreProjectState(previous: WorkbenchProjectState, previousProjectRevision: number) {
+    state.changes = { ...previous.changes };
+    state.currentProjectId = previous.currentProjectId;
+    state.expandedDirectories = new Set(previous.expandedDirectories);
+    state.fileIndex = previous.fileIndex;
+    state.hasLoadedProject = previous.hasLoadedProject;
+    state.isLoading = previous.isLoading;
+    state.projects = previous.projects.map((project) => ({ ...project, roots: project.roots.map((root) => ({ ...root })) }));
+    state.root = previous.root;
+    state.rootPath = previous.rootPath;
+    state.roots = previous.roots.map((root) => ({ ...root }));
+    state.tree = cloneTreeNodes(previous.tree);
+    state.workbenchStorageRootPath = previous.workbenchStorageRootPath;
+    projectRevision = previousProjectRevision;
+    markSnapshotDirty();
+  }
+
+  function captureProjectState(): WorkbenchProjectState {
+    return {
+      changes: { ...state.changes },
+      currentProjectId: state.currentProjectId,
+      expandedDirectories: new Set(state.expandedDirectories),
+      fileIndex: state.fileIndex,
+      hasLoadedProject: state.hasLoadedProject,
+      isLoading: state.isLoading,
+      projects: state.projects.map((project) => ({ ...project, roots: project.roots.map((root) => ({ ...root })) })),
+      root: state.root,
+      rootPath: state.rootPath,
+      roots: state.roots.map((root) => ({ ...root })),
+      tree: cloneTreeNodes(state.tree),
+      workbenchStorageRootPath: state.workbenchStorageRootPath,
+    };
+  }
+
+  function beginProjectSelection(projectId: string) {
+    const nextProjectId = projectId.trim();
+    if (!nextProjectId || state.currentProjectId === nextProjectId) return null;
+    const previousState = captureProjectState();
+    const previousProjectRevision = projectRevision;
+    const project = state.projects.find((candidate) => candidate.id === nextProjectId);
+    if (project) applyProjectOption(project, { loading: true });
+    else {
+      state.currentProjectId = nextProjectId;
+      state.root = nextProjectId;
+      state.rootPath = "";
+      state.roots = [];
+      state.tree = [];
+      state.fileIndex = ProjectTreeFileIndex.empty;
+      state.changes = {};
+      state.hasLoadedProject = false;
+      state.isLoading = true;
+      projectRevision = -1;
+    }
+    state.expandedDirectories = new Set(readStoredExpandedDirectories(nextProjectId));
+    emit();
+    return () => {
+      if (state.currentProjectId !== nextProjectId) return;
+      restoreProjectState(previousState, previousProjectRevision);
+      emit();
+    };
+  }
+
+  function applyCatalog(payload: WorkbenchProjectsPayload) {
+    const didProjectsChange = !areDeeplyEqual(state.projects, payload.data);
+    if (didProjectsChange) state.projects = payload.data.map((project) => ({ ...project, roots: project.roots.map((root) => ({ ...root })) }));
+    const currentProject = state.projects.find((project) => project.id === state.currentProjectId);
+    let didMetadataChange = false;
+    if (currentProject && !state.hasLoadedProject) {
+      didMetadataChange = state.root !== (currentProject.name || currentProject.id)
+        || state.rootPath !== currentProject.rootPath
+        || !areDeeplyEqual(state.roots, currentProject.roots);
+      state.root = currentProject.name || currentProject.id;
+      state.rootPath = currentProject.rootPath;
+      state.roots = currentProject.roots.map((root) => ({ ...root }));
+    }
+    if (didProjectsChange || didMetadataChange) markSnapshotDirty();
+    return didProjectsChange || didMetadataChange;
+  }
+
+  function installCatalog(payload: WorkbenchProjectsPayload) {
+    const didChange = applyCatalog(payload);
+    if (didChange) emit();
+    return didChange;
+  }
+
   function accept(update: WorkbenchProjectStateUpdate) {
     if (update.projectId !== state.currentProjectId || update.revision <= projectRevision) return;
     projectRevision = update.revision;
@@ -215,14 +303,12 @@ function WorkbenchProjectClient({ onError = () => undefined, transport }: Workbe
       throw new Error(error.error, { cause: error.cause });
     }
 
-    const payload = await response.json() as WorkbenchProjectsPayload;
-    if (areDeeplyEqual(state.projects, payload.data)) {
-      return false;
+    const parsed = WorkbenchProjectsPayloadSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      reportClientSchemaError("Rejected Workbench project catalog response", parsed.error);
+      throw new Error("The project catalog response was invalid.");
     }
-
-    state.projects = payload.data;
-    markSnapshotDirty();
-    return true;
+    return applyCatalog(parsed.data);
   }
 
   async function refreshProject() {
@@ -285,19 +371,12 @@ function WorkbenchProjectClient({ onError = () => undefined, transport }: Workbe
   }
 
   async function selectProjectStrict(projectId: string) {
-    const cachedProject = state.projects.find((candidate) => candidate.id === projectId);
-    if (cachedProject && state.currentProjectId !== projectId) {
-      applyProjectOption(cachedProject, { loading: true });
-      state.expandedDirectories = new Set(readStoredExpandedDirectories(projectId));
-      emit();
-    }
+    const rollbackSelection = beginProjectSelection(projectId);
 
     const didRefreshProjectsChange = await refreshProjects();
     const project = state.projects.find((candidate) => candidate.id === projectId);
     if (!project) {
-      if (didRefreshProjectsChange) {
-        emit();
-      }
+      rollbackSelection?.();
       return false;
     }
 
@@ -308,9 +387,8 @@ function WorkbenchProjectClient({ onError = () => undefined, transport }: Workbe
       return true;
     }
 
-    applyProjectOption(project, { loading: true });
-    state.expandedDirectories = new Set(readStoredExpandedDirectories(projectId));
-    emit();
+    const didMetadataChange = applyCatalog({ data: state.projects, rootPath: "" });
+    if (didRefreshProjectsChange || didMetadataChange) emit();
     return true;
   }
 
@@ -376,11 +454,13 @@ function WorkbenchProjectClient({ onError = () => undefined, transport }: Workbe
 
   return {
     accept,
+    beginProjectSelection,
     createEntry,
     deleteFile,
     dispose,
     expandPath,
     getSnapshot,
+    installCatalog,
     selectInitialProject,
     selectProjectStrict,
     refreshProject,

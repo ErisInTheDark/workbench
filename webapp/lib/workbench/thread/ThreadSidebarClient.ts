@@ -32,6 +32,7 @@ interface DraftQueue {
 }
 
 export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore {
+  private isOpen = false;
   private projectId: string | null = null;
   private revision = -1;
   private snapshot: WorkbenchThreadSidebarSnapshot | null = null;
@@ -48,15 +49,19 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   };
 
   async open(projectId: string) {
-    if (this.projectId === projectId && this.snapshot) return;
+    if (this.projectId === projectId && this.snapshot && this.isOpen) return true;
     if (this.projectId && this.projectId !== projectId) await this.close();
     this.projectId = projectId;
+    this.isOpen = false;
     this.revision = -1;
     try {
       this.install(await this.options.transport.open(projectId));
+      this.isOpen = true;
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to open the thread sidebar.";
       this.install({ entries: [], error: message.slice(0, 500), freshness: "partial", projectId, revision: 0 });
+      return false;
     }
   }
   accept(snapshot: WorkbenchThreadSidebarSnapshot) { if (snapshot.projectId === this.projectId && snapshot.revision > this.revision) this.install(snapshot); }
@@ -143,7 +148,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     this.revision = -1;
     this.install(await this.options.transport.open(this.projectId));
   }
-  async close() { if (!this.projectId) return; await this.flush(); const projectId = this.projectId; this.projectId = null; this.snapshot = null; this.publish(); await this.options.transport.close(projectId).catch((error: unknown) => { console.warn("Unable to close the thread sidebar observation.", error); }); }
+  async close() { if (!this.projectId) return; await this.flush(); const projectId = this.projectId; this.projectId = null; this.isOpen = false; this.snapshot = null; this.publish(); await this.options.transport.close(projectId).catch((error: unknown) => { console.warn("Unable to close the thread sidebar observation.", error); }); }
   private install(snapshot: WorkbenchThreadSidebarSnapshot) { if (snapshot.revision <= this.revision) return; this.revision = snapshot.revision; this.snapshot = snapshot; this.publish(); }
   private installOptimisticDraft(draft: WorkbenchThreadDraft) {
     if (!this.snapshot) return;

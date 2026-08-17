@@ -49,8 +49,6 @@ interface WorkbenchThreadSidebarProps {
   controls: WorkbenchControls | null;
   currentTarget: WorkbenchThreadTarget | null;
   harness: WorkbenchHarness;
-  isProjectLoading: boolean;
-  isThreadsLoading: boolean;
   onBeginPointerDrag: (event: PointerEvent<HTMLElement>, payload: WorkbenchDragPayload) => void;
   onCreateThread: () => void;
   onOpenThread: (target: WorkbenchThreadTarget) => void;
@@ -58,7 +56,6 @@ interface WorkbenchThreadSidebarProps {
   showMosaicView: boolean;
   store: WorkbenchThreadSidebarStore | null;
   threadSummariesById: ReadonlyMap<string, ThreadSummary>;
-  threadsError: string;
 }
 
 export default memo(function WorkbenchThreadSidebar({
@@ -66,8 +63,6 @@ export default memo(function WorkbenchThreadSidebar({
   controls,
   currentTarget,
   harness,
-  isProjectLoading,
-  isThreadsLoading,
   onBeginPointerDrag,
   onCreateThread,
   onOpenThread,
@@ -75,7 +70,6 @@ export default memo(function WorkbenchThreadSidebar({
   showMosaicView,
   store,
   threadSummariesById,
-  threadsError,
 }: WorkbenchThreadSidebarProps) {
   const selectSnapshot = useCallback((snapshot: ReturnType<WorkbenchThreadSidebarStore["getSnapshot"]>) => snapshot, []);
   const snapshot = useThreadSidebarSelection(store, selectSnapshot);
@@ -180,10 +174,11 @@ export default memo(function WorkbenchThreadSidebar({
     return { id: `thread:${identifier}`, items, label: `Thread actions for ${entry.title}` };
   }, [controls, mutateEntry, stopThread, threadSummariesById]);
 
-  const error = snapshot?.error ?? threadsError;
-  if (isProjectLoading || isThreadsLoading || !snapshot) {
+  const isMatchingSnapshot = snapshot?.projectId === projectId;
+  if (!snapshot || !isMatchingSnapshot || (snapshot.freshness === "loading" && snapshot.entries.length === 0)) {
     return <SidebarLoadingSkeleton ariaLabel="Loading threads" rows={5} />;
   }
+  const error = snapshot.error ?? "";
 
   return (
     <>

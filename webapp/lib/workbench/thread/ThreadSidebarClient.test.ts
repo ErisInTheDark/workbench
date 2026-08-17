@@ -102,6 +102,31 @@ test("external-store subscribers receive each installed snapshot and can unsubsc
   assert.equal(client.getSnapshot()?.revision, 3);
 });
 
+test("open reports observation admission while retaining bounded failure state", async () => {
+  let shouldFail = true;
+  let openAttempts = 0;
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: {
+      close: async () => undefined,
+      deleteDraft: async () => undefined,
+      open: async () => {
+        openAttempts += 1;
+        if (shouldFail) throw new Error("Observation unavailable");
+        return snapshot(1);
+      },
+      upsertDraft: async () => undefined,
+    },
+  });
+  assert.equal(await client.open("project"), false);
+  assert.equal(client.getSnapshot()?.freshness, "partial");
+  assert.match(client.getSnapshot()?.error ?? "", /Observation unavailable/u);
+  shouldFail = false;
+  assert.equal(await client.open("project"), true);
+  assert.equal(openAttempts, 2);
+  assert.equal(client.getSnapshot()?.error, null);
+});
+
 test("materialized draft becomes a working thread before its in-flight save settles", async () => {
   const installed: Array<WorkbenchThreadSidebarSnapshot | null> = [];
   let releaseSave: (() => void) | null = null;

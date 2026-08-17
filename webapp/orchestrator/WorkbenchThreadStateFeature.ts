@@ -7,17 +7,18 @@
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import { getCurrentTurn } from "../lib/codex/thread-state";
 import { normalizeThreadTitle } from "../lib/thread-bootstrap";
-import type { WorkbenchHarness } from "../lib/types";
+import type { WorkbenchHarness, WorkbenchProjectsPayload } from "../lib/types";
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
 import { normalizeWorkbenchActivityTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import WorkbenchThreadStateController, { type WorkbenchObservedLifecycleEvent } from "./WorkbenchThreadStateController";
+import WorkbenchThreadStateController, { type WorkbenchObservedLifecycleEvent, type WorkbenchThreadReconciliationFailure } from "./WorkbenchThreadStateController";
 
 interface ProjectRecord { id: string; rootPath: string }
 interface ProjectResolution { cwd: string; project: ProjectRecord }
 interface SubagentRelationshipList { subagents: Array<{ createdAt: number; cwd: string; directSubagentIndex: number; harness: WorkbenchHarness; name: string; parentThreadId: string; profileId: string; profileName: string; projectId: string; threadId: string; title: string; updatedAt: number }> }
 
 export interface WorkbenchThreadStateFeatureContext {
+  getProjectCatalog(): WorkbenchProjectsPayload;
   listSubagents(projectId: string): Promise<SubagentRelationshipList>;
   log?: (message: string) => void;
   projectState: {
@@ -105,9 +106,10 @@ export default class WorkbenchThreadStateFeature {
   constructor(private readonly context: WorkbenchThreadStateFeatureContext) {
     this.controller = new WorkbenchThreadStateController({
       log: context.log,
+      getProjectCatalog: context.getProjectCatalog,
       projectState: context.projectState,
       publish: context.publish,
-      reconcileProject: (projectId, signal) => this.reconcileProject(projectId, signal),
+      reconcileProject: (projectId, signal, acceptProviderSnapshot) => this.reconcileProject(projectId, signal, acceptProviderSnapshot),
       resolveProjectRoot: async (projectId) => (await context.resolveProjectById(projectId)).rootPath,
     });
   }
@@ -161,35 +163,63 @@ export default class WorkbenchThreadStateFeature {
 
   async dispose() { await this.controller.dispose(); }
 
-  private async reconcileProject(projectId: string, signal: AbortSignal) {
-    const project = await this.context.resolveProjectById(projectId);
-    const providerEntries: WorkbenchThreadSidebarEntry[] = [];
-    for (const harness of ["codex", "copilot", "opencode"] as const) {
-      let cursor: string | null = null;
-      do {
+  private async reconcileProject(
+    projectId: string,
+    signal: AbortSignal,
+    acceptProviderSnapshot: (harness: WorkbenchHarness, entries: WorkbenchThreadSidebarEntry[]) => void,
+  ) {
+    const [project, relationships] = await Promise.all([
+      this.context.resolveProjectById(projectId),
+      this.context.listSubagents(projectId),
+    ]);
+    const results = await Promise.all((["codex", "copilot", "opencode"] as const).map(async (harness): Promise<WorkbenchThreadReconciliationFailure | null> => {
+      try {
+        const providerEntries = await this.listProviderEntries(harness, project.rootPath, signal);
+        acceptProviderSnapshot(harness, this.projectProviderEntries(projectId, harness, providerEntries, relationships));
+        return null;
+      } catch (error) {
         if (signal.aborted) throw signal.reason ?? new Error("Thread-state reconciliation cancelled.");
-        const response = await this.context.requestHarness(harness, { id: `thread-state:${harness}`, method: "thread/list", params: { archived: false, cwd: project.rootPath, cursor, limit: 50 } });
-        if (response.error) throw new Error(response.error.message);
-        const result = asRecord(response.result);
-        for (const candidate of Array.isArray(result?.data) ? result.data : []) {
-          const entry = normalizeProviderSidebarEntry(harness, candidate);
-          if (entry) providerEntries.push(entry);
-        }
-        cursor = typeof result?.nextCursor === "string" && result.nextCursor ? result.nextCursor : null;
-      } while (cursor);
-    }
-    const relationships = await this.context.listSubagents(projectId);
-    const relationshipKeys = new Set(relationships.subagents.map((relationship) => `${relationship.harness}:${relationship.threadId}`));
-    const topLevelEntries = providerEntries.filter((entry) => entry.entryKind !== "thread" || !relationshipKeys.has(`${entry.identity.harness}:${entry.identity.threadId}`));
-    const providerByKey = new Map(providerEntries.filter((entry): entry is Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => entry.entryKind === "thread").map((entry) => [`${entry.identity.harness}:${entry.identity.threadId}`, entry]));
-    return [...topLevelEntries, ...relationships.subagents.map((relationship): WorkbenchThreadSidebarEntry => {
-      const provider = providerByKey.get(`${relationship.harness}:${relationship.threadId}`);
+        return { harness, message: error instanceof Error ? error.message : String(error) };
+      }
+    }));
+    return results.filter((failure): failure is WorkbenchThreadReconciliationFailure => Boolean(failure));
+  }
+
+  private async listProviderEntries(harness: WorkbenchHarness, rootPath: string, signal: AbortSignal) {
+    const entries: WorkbenchThreadSidebarEntry[] = [];
+    let cursor: string | null = null;
+    do {
+      if (signal.aborted) throw signal.reason ?? new Error("Thread-state reconciliation cancelled.");
+      const response = await this.context.requestHarness(harness, { id: `thread-state:${harness}`, method: "thread/list", params: { archived: false, cwd: rootPath, cursor, limit: 50 } });
+      if (response.error) throw new Error(response.error.message);
+      const result = asRecord(response.result);
+      for (const candidate of Array.isArray(result?.data) ? result.data : []) {
+        const entry = normalizeProviderSidebarEntry(harness, candidate);
+        if (entry) entries.push(entry);
+      }
+      cursor = typeof result?.nextCursor === "string" && result.nextCursor ? result.nextCursor : null;
+    } while (cursor);
+    return entries;
+  }
+
+  private projectProviderEntries(
+    projectId: string,
+    harness: WorkbenchHarness,
+    providerEntries: WorkbenchThreadSidebarEntry[],
+    relationships: SubagentRelationshipList,
+  ) {
+    const harnessRelationships = relationships.subagents.filter((relationship) => relationship.harness === harness);
+    const relationshipKeys = new Set(harnessRelationships.map((relationship) => relationship.threadId));
+    const topLevelEntries = providerEntries.filter((entry) => entry.entryKind !== "thread" || !relationshipKeys.has(entry.identity.threadId));
+    const providerById = new Map(providerEntries.filter((entry): entry is Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => entry.entryKind === "thread").map((entry) => [entry.identity.threadId, entry]));
+    return [...topLevelEntries, ...harnessRelationships.map((relationship): WorkbenchThreadSidebarEntry => {
+      const provider = providerById.get(relationship.threadId);
       return {
         activityAt: provider?.activityAt ?? relationship.updatedAt, createdAt: relationship.createdAt, cwd: relationship.cwd,
-        directSubagentIndex: relationship.directSubagentIndex, entryKind: "subagent", identity: { harness: relationship.harness, threadId: relationship.threadId },
+        directSubagentIndex: relationship.directSubagentIndex, entryKind: "subagent", identity: { harness, threadId: relationship.threadId },
         lifecycle: normalizeSubagentProviderLifecycle(provider?.lifecycle), name: relationship.name,
         parentThreadId: relationship.parentThreadId, pinned: false, profileId: relationship.profileId, profileName: relationship.profileName,
-        projectId: relationship.projectId, title: relationship.title, updatedAt: relationship.updatedAt,
+        projectId, title: relationship.title, updatedAt: relationship.updatedAt,
       };
     })];
   }

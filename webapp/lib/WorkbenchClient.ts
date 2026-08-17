@@ -44,7 +44,7 @@ import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
 import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./workbench/WorkbenchThreadClient";
 import { WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema } from "./workbench/project/project-state";
 import ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
-import { WorkbenchThreadSidebarSnapshotSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarSnapshot } from "./workbench/thread/thread-state";
+import { WorkbenchThreadStateOpenResultSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarSnapshot } from "./workbench/thread/thread-state";
 import { getTurnRenderSignature } from "./workbench/thread/thread-item-signature";
 import reportClientSchemaError from "./workbench/report-client-schema-error";
 
@@ -188,10 +188,16 @@ export async function WorkbenchClient(
     transport: {
       close: async (projectId) => { await threadClient.requestWorkbench("workbench/thread-state/close", { projectId }); },
       deleteDraft: async (projectId, draftId, clientUpdatedAt) => { await threadClient.requestWorkbench("workbench/thread-state/draft/delete", { clientUpdatedAt, draftId, projectId }); },
-      open: async (projectId) => WorkbenchThreadSidebarSnapshotSchema.parse(await threadClient.requestWorkbench("workbench/thread-state/open", { projectId })),
+      open: async (projectId) => {
+        const result = WorkbenchThreadStateOpenResultSchema.parse(await threadClient.requestWorkbench("workbench/thread-state/open", { projectId }));
+        projectClient.installCatalog(result.catalog);
+        if (result.project) projectClient.accept(result.project);
+        return result.sidebar;
+      },
       upsertDraft: async (projectId, draft) => { await threadClient.requestWorkbench("workbench/thread-state/draft/upsert", { draft, projectId }); },
     },
   });
+  workbenchBindings.onThreadSidebarStoreReady?.(threadSidebarClient);
   coordinateAcceptedIntent = async (event) => {
     await threadSidebarClient.acceptIntent({
       ...(event.draftId ? { draftId: event.draftId } : {}),
@@ -712,12 +718,17 @@ export async function WorkbenchClient(
     const previousProjectId = projectClient.getSnapshot().currentProjectId;
     if (!route.projectId) {
       await projectClient.selectInitialProject();
-    } else if (!await projectClient.selectProjectStrict(route.projectId)) {
-      return `Project not found: ${route.projectId}`;
+    } else {
+      const rollbackSelection = projectClient.beginProjectSelection(route.projectId);
+      if (!await threadSidebarClient.open(route.projectId)) {
+        rollbackSelection?.();
+        if (previousProjectId && previousProjectId !== route.projectId) await threadSidebarClient.open(previousProjectId);
+        return `Project not found or unavailable: ${route.projectId}`;
+      }
     }
 
     const nextProjectId = projectClient.getSnapshot().currentProjectId;
-    if (nextProjectId) await threadSidebarClient.open(nextProjectId);
+    if (!route.projectId && nextProjectId) await threadSidebarClient.open(nextProjectId);
     if (nextProjectId && previousProjectId !== nextProjectId) {
       await draftStore.hydratePersistedDrafts();
     }
@@ -889,14 +900,12 @@ export async function WorkbenchClient(
     },
   };
 
-  await draftStore.hydratePersistedDrafts();
   emitExplorerStateChange();
   emitCurrentThreadChange();
   emitThreadDocumentsChange();
   emitPendingUserInputRequestsChange();
   emitRateLimitsChange();
   await applyRoute(activeRoute);
-  workbenchBindings.onThreadSidebarStoreReady?.(threadSidebarClient);
   workbenchBindings.onControlsReady?.(controls);
   if (sessionState.currentThreadId || activeRoute.view === "thread") {
     void refreshRateLimits();

@@ -37,30 +37,67 @@ function projectState(overrides: {
   };
 }
 
+function projectCatalog() {
+  return { data: [], rootPath: "C:/projects" };
+}
+
+async function waitFor(predicate: () => boolean, message: string) {
+  const deadline = Date.now() + 1_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(message);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
 test("observations are reference counted and warm snapshots do not duplicate reconciliation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-state-"));
-  const published: string[] = [];
+  const published: Array<{ connectionId: string; revision: number }> = [];
   let reconciliations = 0;
   let projectObservationStarts = 0;
   let projectObservationStops = 0;
+  const knownEntry: WorkbenchThreadSidebarEntry = {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "known" },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Known",
+  };
   const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
     projectState: projectState({ observe: () => { projectObservationStarts += 1; return () => { projectObservationStops += 1; }; } }),
-    publish: (connectionId) => published.push(connectionId),
-    reconcileProject: async () => { reconciliations += 1; return []; },
+    publish: (connectionId, snapshot) => {
+      if (!("updateKind" in snapshot)) published.push({ connectionId, revision: snapshot.revision });
+    },
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      reconciliations += 1;
+      acceptProviderSnapshot("codex", [knownEntry]);
+      return [];
+    },
     resolveProjectRoot: async () => root,
   });
   const first = await controller.open("a", "project");
-  assert.equal(first.freshness, "loading");
-  await controller.open("b", "project");
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(first.sidebar.freshness, "loading");
+  await waitFor(() => reconciliations === 1, "Initial reconciliation did not start.");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const second = await controller.open("b", "project");
+  assert.equal(second.sidebar.freshness, "fresh");
+  assert.equal(second.sidebar.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "known"), true);
+  assert.deepEqual(second.catalog, projectCatalog());
   assert.equal(reconciliations, 1);
   assert.equal(projectObservationStarts, 1);
-  assert.deepEqual(new Set(published), new Set(["a", "b"]));
+  await controller.refresh("project");
+  assert.equal(reconciliations, 2);
+  assert.deepEqual(new Set(published.map((entry) => entry.connectionId)), new Set(["a", "b"]));
+  for (const connectionId of ["a", "b"]) {
+    const revisions = published.filter((entry) => entry.connectionId === connectionId).map((entry) => entry.revision);
+    assert.deepEqual(revisions, [...revisions].sort((left, right) => left - right));
+    assert.equal(new Set(revisions).size, revisions.length);
+  }
   await controller.close("a");
   assert.equal(projectObservationStops, 0);
   await controller.close("b");
   assert.equal(projectObservationStops, 1);
-  await controller.refresh("project");
   await controller.dispose();
 });
 
@@ -73,6 +110,7 @@ test("concurrent first opens share one project initialization and observation", 
   let observationStarts = 0;
   let observationStops = 0;
   const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
     projectState: projectState({
       observe: () => { observationStarts += 1; return () => { observationStops += 1; }; },
     }),
@@ -104,6 +142,7 @@ test("a late project observer receives the best-known snapshot without starting 
   let currentUpdateReads = 0;
   let observationStarts = 0;
   const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
     projectState: projectState({
       getCurrentUpdate: () => { currentUpdateReads += 1; return update; },
       observe: () => { observationStarts += 1; return () => undefined; },
@@ -113,10 +152,12 @@ test("a late project observer receives the best-known snapshot without starting 
     resolveProjectRoot: async () => root,
   });
   await controller.open("first", "project");
-  await controller.open("late", "project");
+  const late = await controller.open("late", "project");
   const projectPublications = publications.filter((entry) => "updateKind" in entry.snapshot && entry.snapshot.updateKind === "project");
   assert.deepEqual(projectPublications.map((entry) => ({ connectionId: entry.connectionId, revision: entry.snapshot.revision })), [{ connectionId: "late", revision: 7 }]);
-  assert.equal(currentUpdateReads, 1);
+  assert.equal(late.project?.revision, 7);
+  assert.deepEqual(late.catalog, projectCatalog());
+  assert.equal(currentUpdateReads, 2);
   assert.equal(observationStarts, 1);
   await controller.dispose();
 });
@@ -126,6 +167,7 @@ test("an observer joining before the first project snapshot receives the normal 
   const publications: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
   let publishProject = (_update: WorkbenchProjectStateUpdate) => undefined;
   const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
     projectState: projectState({
       observe: (_projectId, publish) => { publishProject = publish; return () => undefined; },
     }),
@@ -145,16 +187,69 @@ test("an observer joining before the first project snapshot receives the normal 
   await controller.dispose();
 });
 
+test("aborted background reconciliation never downgrades or blocks a warm reopen", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-warm-reopen-"));
+  let reconciliationCount = 0;
+  let staleAccept: ((harness: "codex", entries: WorkbenchThreadSidebarEntry[]) => void) | null = null;
+  let releaseStale = () => undefined;
+  const known = {
+    activityAt: 1,
+    entryKind: "thread" as const,
+    identity: { harness: "codex" as const, threadId: "known" },
+    lifecycle: { kind: "completed" as const, reason: "providerInactive" as const, settled: true },
+    metadata: { archived: false as const, pinned: false, snoozed: false },
+    title: "Known",
+  };
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      reconciliationCount += 1;
+      if (reconciliationCount === 1 || reconciliationCount === 3) {
+        acceptProviderSnapshot("codex", [known]);
+        return [];
+      }
+      staleAccept = acceptProviderSnapshot as typeof staleAccept;
+      return await new Promise((resolve) => { releaseStale = () => resolve([]); });
+    },
+    resolveProjectRoot: async () => root,
+  });
+  await controller.open("first", "project");
+  await waitFor(() => reconciliationCount === 1, "Initial reconciliation did not start.");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal((await controller.getSnapshot("project")).freshness, "fresh");
+
+  await controller.refresh("project");
+  assert.equal(reconciliationCount, 2);
+  assert.equal((await controller.getSnapshot("project")).freshness, "fresh");
+  await controller.close("first");
+  const reopened = await controller.open("reopened", "project");
+  assert.equal(reopened.sidebar.freshness, "fresh");
+  assert.equal(reopened.sidebar.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "known"), true);
+  await waitFor(() => reconciliationCount === 3, "Reopened observation did not start a new reconciliation.");
+
+  staleAccept?.("codex", [{ ...known, identity: { harness: "codex", threadId: "stale" }, title: "Stale" }]);
+  releaseStale();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal((await controller.getSnapshot("project")).entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "stale"), false);
+  await controller.dispose();
+});
+
 test("request telemetry reports bounded validation evidence without logging request values", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-telemetry-"));
   const logs: string[] = [];
   let now = 10;
   const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
     log: (message) => logs.push(message),
     now: () => now++,
     projectState: projectState(),
     publish: () => undefined,
-    reconcileProject: async () => [],
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      acceptProviderSnapshot("codex", []);
+      return [];
+    },
     resolveProjectRoot: async () => root,
   });
   const response = await controller.handleRequest("observer", { method: "not-a-real-method", secret: "never-log-me" });
@@ -170,6 +265,7 @@ test("invalid accepted intent telemetry identifies strict-contract drift without
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-invalid-intent-"));
   const logs: string[] = [];
   const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
     log: (message) => logs.push(message),
     projectState: projectState(),
     publish: () => undefined,
@@ -202,6 +298,7 @@ test("accepted intent survives provider discovery lag and releases after its lif
   const published: WorkbenchThreadSidebarEntry[] = [];
   const publishedSnapshots: WorkbenchThreadStateSnapshot[] = [];
   const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
     now: () => 42,
     publish: (_connectionId, snapshot) => {
       publishedSnapshots.push(snapshot);
@@ -210,7 +307,10 @@ test("accepted intent survives provider discovery lag and releases after its lif
       if (entry) published.push(entry);
     },
     projectState: projectState(),
-    reconcileProject: async () => [],
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      acceptProviderSnapshot("codex", []);
+      return [];
+    },
     resolveProjectRoot: async () => root,
   });
   await controller.open("observer", "project");
@@ -275,9 +375,13 @@ test("provider completion auto-completes subagents while top-level turns still n
   };
   const parent: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = { ...working("parent"), lifecycle: { kind: "completed", reason: "providerInactive", settled: true } };
   const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
     projectState: projectState(),
     publish: () => undefined,
-    reconcileProject: async () => [parent, working("top"), child],
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      acceptProviderSnapshot("codex", [parent, working("top"), child]);
+      return [];
+    },
     resolveProjectRoot: async () => root,
   });
   await controller.open("observer", "project");
@@ -307,9 +411,13 @@ test("restoring a terminal thread persists across provider reconciliation", asyn
     title: "Terminal",
   };
   const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
     projectState: projectState(),
     publish: () => undefined,
-    reconcileProject: async () => [terminal],
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      acceptProviderSnapshot("codex", [terminal]);
+      return [];
+    },
     resolveProjectRoot: async () => root,
   });
   await controller.open("observer", "project");

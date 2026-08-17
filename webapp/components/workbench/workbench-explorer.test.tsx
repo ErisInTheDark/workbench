@@ -98,6 +98,31 @@ test("live sidebar state subscribes below the Workbench root", async () => {
   assert.doesNotMatch(clientSource, /threadSidebar: threadSidebarSnapshot/u);
 });
 
+test("jit project bootstrap exposes available slices before unrelated hydration", async () => {
+  const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
+  const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebar.tsx", import.meta.url), "utf8");
+  const clientSource = await readFile(new URL("../../lib/WorkbenchClient.ts", import.meta.url), "utf8");
+  const storeReadyIndex = clientSource.indexOf("workbenchBindings.onThreadSidebarStoreReady?.(threadSidebarClient)");
+  const initialRouteHydrationIndex = clientSource.indexOf("await applyRoute(activeRoute);");
+  const beginSelectionIndex = clientSource.indexOf("projectClient.beginProjectSelection(route.projectId)");
+  const openObservationIndex = clientSource.indexOf("threadSidebarClient.open(route.projectId)");
+
+  assert.notEqual(storeReadyIndex, -1);
+  assert.notEqual(initialRouteHydrationIndex, -1);
+  assert.ok(storeReadyIndex < initialRouteHydrationIndex);
+  assert.notEqual(beginSelectionIndex, -1);
+  assert.notEqual(openObservationIndex, -1);
+  assert.ok(beginSelectionIndex < openObservationIndex);
+  assert.doesNotMatch(clientSource, /selectProjectStrict\(route\.projectId\)/u);
+  assert.doesNotMatch(sidebarSource, /isProjectLoading|isThreadsLoading|threadsError/u);
+  assert.match(sidebarSource, /snapshot\.freshness === "loading" && snapshot\.entries\.length === 0/u);
+  assert.match(workbenchSource, /const isProjectIdentityLoading =/u);
+  assert.match(workbenchSource, /const isProjectTreeLoading =/u);
+  assert.doesNotMatch(workbenchSource, /isSidebarThreadsLoading|explorer\.threadSidebar/u);
+  assert.match(clientSource, /emitRateLimitsChange\(\);\s*await applyRoute\(activeRoute\);/u);
+  assert.doesNotMatch(clientSource, /emitRateLimitsChange\(\);\s*await draftStore\.hydratePersistedDrafts\(\);/u);
+});
+
 test("blank thread routes render their private draft and preserve one view instance through promotion", async () => {
   const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
   const threadViewSource = await readFile(new URL("./thread-view/ThreadView.tsx", import.meta.url), "utf8");

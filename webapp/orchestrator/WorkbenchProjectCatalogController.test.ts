@@ -133,6 +133,7 @@ function createHarness() {
 test("reuses one structured catalog for repeated CWD resolution", async () => {
   const harness = createHarness();
   assert.equal((await harness.controller.resolveAgentEndpointProjectFromCwd("C:/projects/alpha/src")).project.id, "alpha");
+  assert.deepEqual(harness.controller.getCurrentSnapshot(), { data: [createProject("alpha")], rootPath: "C:/projects" });
   assert.equal((await harness.controller.resolveAgentEndpointProjectFromCwd("C:/projects/alpha/test")).project.id, "alpha");
   assert.equal(harness.discoveryReads, 1);
   assert.equal(harness.watchers[0]?.recursive, false);

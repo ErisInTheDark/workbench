@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - WorkbenchProjectsPayloadSchema: strict project catalog wire contract. Keywords: project, catalog, schema.
  * - WorkbenchProjectSnapshotSchema: strict project tree and change-summary wire contract. Keywords: project, tree, snapshot, schema.
  * - WorkbenchProjectStateUpdateSchema/WorkbenchProjectStateUpdate: successful pushed project snapshot update. Keywords: project, websocket, revision.
  * - WorkbenchProjectStateRequestSchema/WorkbenchProjectStateRequest: refresh, create, and delete requests carried by the existing project observation. Keywords: project, mutation, websocket.
@@ -7,7 +8,7 @@
  */
 import { z } from "zod";
 
-import type { TreeNode } from "../../types";
+import type { TreeNode, WorkbenchProjectOption, WorkbenchProjectsPayload } from "../../types";
 
 const ChangeSummarySchema = z.object({ additions: z.number(), deletions: z.number() }).strict();
 const WorkbenchProjectRootSchema = z.object({
@@ -17,6 +18,25 @@ const WorkbenchProjectRootSchema = z.object({
   relativePath: z.string(),
   rootPath: z.string(),
 }).strict();
+
+const WorkbenchProjectOptionSchema = z.object({
+  id: z.string().min(1),
+  kind: z.enum(["git", "workspace", "workbench-library"]),
+  lastCommitTimeMs: z.number().nullable().nonoptional(),
+  name: z.string(),
+  relativePath: z.string(),
+  rootPath: z.string(),
+  roots: z.array(WorkbenchProjectRootSchema),
+  workspacePath: z.string().optional(),
+}).strict().transform((project): WorkbenchProjectOption => ({
+  ...project,
+  lastCommitTimeMs: project.lastCommitTimeMs ?? null,
+}));
+
+export const WorkbenchProjectsPayloadSchema = z.object({
+  data: z.array(WorkbenchProjectOptionSchema),
+  rootPath: z.string(),
+}).strict().transform((payload): WorkbenchProjectsPayload => payload);
 
 const TreeNodeSchema: z.ZodType<TreeNode> = z.lazy(() => z.discriminatedUnion("type", [
   z.object({ isIgnored: z.boolean().optional(), name: z.string(), path: z.string(), type: z.literal("file") }).strict(),

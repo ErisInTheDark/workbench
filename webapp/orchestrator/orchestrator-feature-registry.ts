@@ -82,6 +82,7 @@ export function createOrchestratorFeatureGeneration(
   const projectCatalog = new WorkbenchProjectCatalogController();
   const projectSnapshot = new WorkbenchProjectSnapshotController();
   const threadState = new WorkbenchThreadStateFeature({
+    getProjectCatalog: () => projectCatalog.getCurrentSnapshot(),
     listSubagents: (projectId) => context.subagentStore.list({ projectId }),
     log: (message) => log("thread-state-ws", message),
     projectState: projectSnapshot,
