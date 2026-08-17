@@ -10,12 +10,13 @@ import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/Rat
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type {
   ExplorerSnapshot, FilePayload, OpenFileInEditorRequest, OrchestratorReloadRequest, OrchestratorReloadResponse, RevealProjectEntryRequest, ThreadPayload, ThreadSummary, TreeNode,
-  WorkbenchCollaborationState,
-  WorkbenchComposerSettings,
-  WorkbenchControls,
   WorkbenchBrowseSessionControlResponse,
   WorkbenchBrowseSessionListResponse,
   WorkbenchBrowseSessionSummary,
+  WorkbenchCollaborationState,
+  WorkbenchComposerInputDraft,
+  WorkbenchComposerSettings,
+  WorkbenchControls,
   WorkbenchFileOpenTarget,
   WorkbenchHarness,
   WorkbenchListModelsOptions,
@@ -27,7 +28,6 @@ import type {
   WorkbenchReadThreadOptions,
   WorkbenchSendThreadMessageOptions,
   WorkbenchSubmitUserInputRequestOptions,
-  WorkbenchComposerInputDraft,
   WorkbenchThreadDocumentSnapshot,
   WorkbenchUserInputResponse
 } from "../lib/types";
@@ -37,12 +37,44 @@ import {
   writeWorkbenchCollaborationState,
 } from "../lib/workbench/collaboration/collaboration-registry-api";
 import {
+  createWorkbenchCollaborationScratchpadRelativePath,
+  createWorkbenchCollaborationScratchpadWritableRoot,
+} from "../lib/workbench/collaboration/collaboration-scratchpad-path";
+import {
   EMPTY_WORKBENCH_COLLABORATION_STATE,
   normalizeWorkbenchCollaborationState,
   selectLatestWorkbenchCollaborationState,
 } from "../lib/workbench/collaboration/collaboration-state";
 import { areDeeplyEqual } from "../lib/workbench/deep-equality";
+import { writeTextToClipboard } from "../lib/workbench/dom/clipboard";
+import type { WorkbenchDragPayload } from "../lib/workbench/layout/workbench-drag";
+import WorkbenchMainLayout, {
+  type WorkbenchDropPlacement,
+  type WorkbenchMainLayout as WorkbenchMainLayoutState,
+  type WorkbenchPanelTarget,
+} from "../lib/workbench/layout/workbench-layout";
+import {
+  readStoredWorkbenchSidebarSectionOrder,
+  writeStoredWorkbenchSidebarSectionOrder,
+  type WorkbenchSidebarSectionId,
+} from "../lib/workbench/layout/workbench-layout-storage";
+import {
+  applyWorkbenchMosaicDrop,
+  applyWorkbenchMosaicResize,
+  closeWorkbenchMosaicTarget,
+  createWorkbenchMainLayoutFromMosaic,
+  moveWorkbenchMosaicTarget,
+  replaceWorkbenchMosaicTarget,
+  updateWorkbenchMosaicPanelOptions,
+} from "../lib/workbench/layout/workbench-mosaic-layout";
+import type { WorkspaceFileLinkRoot } from "../lib/workbench/markdown/markdown-links";
 import { useWorkbenchRoute } from "../lib/workbench/navigation/use-workbench-route";
+import {
+  createWorkbenchMosaicSplit,
+  createWorkbenchMosaicTarget,
+  type WorkbenchMosaicNode,
+  type WorkbenchMosaicPanelTarget,
+} from "../lib/workbench/navigation/workbench-mosaic-route";
 import {
   createCollaborationHref,
   createCollaborationRoute,
@@ -58,26 +90,12 @@ import {
   type WorkbenchRoute,
   type WorkbenchSettingsScope,
 } from "../lib/workbench/navigation/workbench-route";
-import {
-  createWorkbenchMosaicSplit,
-  createWorkbenchMosaicTarget,
-  type WorkbenchMosaicNode,
-  type WorkbenchMosaicPanelTarget,
-} from "../lib/workbench/navigation/workbench-mosaic-route";
 import ProjectTreeFileIndex from "../lib/workbench/project/ProjectTreeFileIndex";
 import { isWorkbenchOpenableFile } from "../lib/workbench/project/tree-utils";
-import type { WorkspaceFileLinkRoot } from "../lib/workbench/markdown/markdown-links";
-import {
-  createWorkbenchCollaborationScratchpadRelativePath,
-  createWorkbenchCollaborationScratchpadWritableRoot,
-} from "../lib/workbench/collaboration/collaboration-scratchpad-path";
 import {
   persistHarness,
   readStoredHarness,
 } from "../lib/workbench/state/browser-state";
-import WorkbenchComposerProfileController from "../lib/workbench/state/WorkbenchComposerProfileController";
-import { ThreadMessageNotSentError } from "../lib/workbench/thread/thread-message-submission";
-import { countDraftPromptTokens, getThreadSidebarGroup, type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadTarget } from "../lib/workbench/thread/thread-state";
 import { createComposerProfilePersistence } from "../lib/workbench/state/composer-profile-api";
 import {
   getPreferredMobilePane,
@@ -99,6 +117,7 @@ import {
   type WorkbenchProjectSettings,
   type WorkbenchSettingKey,
 } from "../lib/workbench/state/workbench-settings";
+import WorkbenchComposerProfileController from "../lib/workbench/state/WorkbenchComposerProfileController";
 import {
   deletePersistedThreadComposerDraft,
   deletePersistedThreadQuestionnaireDraft,
@@ -108,52 +127,30 @@ import {
   putPersistedThreadQuestionnaireDraft,
 } from "../lib/workbench/storage/workbench-draft-storage";
 import { getThreadDocumentFromSnapshot } from "../lib/workbench/thread/thread-document-keys";
-import { writeTextToClipboard } from "../lib/workbench/dom/clipboard";
+import { ThreadMessageNotSentError } from "../lib/workbench/thread/thread-message-submission";
+import { countDraftPromptTokens, getThreadSidebarGroup, type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadTarget } from "../lib/workbench/thread/thread-state";
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
-import ThreadLoadingSkeleton from "./workbench/thread-view/ThreadLoadingSkeleton";
-import ThreadView from "./workbench/thread-view/ThreadView";
-import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
-import useThreadActivityTimestamp from "./workbench/thread-view/use-thread-activity-timestamp";
 import WorkbenchCollaborationView from "./workbench/collaboration/WorkbenchCollaborationView";
-import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuContext";
-import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
-import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfileProvider";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
 import WorkbenchMainLayoutView from "./workbench/layout/WorkbenchMainLayoutView";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
+import PrimaryButton from "./workbench/PrimaryButton";
 import ProjectPicker from "./workbench/ProjectPicker";
-import WorkbenchMainLayout, {
-  type WorkbenchDropPlacement,
-  type WorkbenchMainLayout as WorkbenchMainLayoutState,
-  type WorkbenchPanelTarget,
-} from "../lib/workbench/layout/workbench-layout";
-import type { WorkbenchDragPayload } from "../lib/workbench/layout/workbench-drag";
+import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
+import ThreadLoadingSkeleton from "./workbench/thread-view/ThreadLoadingSkeleton";
+import ThreadView from "./workbench/thread-view/ThreadView";
+import useThreadActivityTimestamp from "./workbench/thread-view/use-thread-activity-timestamp";
 import {
-  applyWorkbenchMosaicDrop,
-  applyWorkbenchMosaicResize,
-  closeWorkbenchMosaicTarget,
-  createWorkbenchMainLayoutFromMosaic,
-  moveWorkbenchMosaicTarget,
-  replaceWorkbenchMosaicTarget,
-  updateWorkbenchMosaicPanelOptions,
-} from "../lib/workbench/layout/workbench-mosaic-layout";
-import {
-  readStoredWorkbenchSidebarSectionOrder,
-  writeStoredWorkbenchSidebarSectionOrder,
-  type WorkbenchSidebarSectionId,
-} from "../lib/workbench/layout/workbench-layout-storage";
-import {
-  workbenchDiffGutterClassName,
   workbenchFloatingToolbarClassName,
   workbenchFloatingToolbarGroupClassName,
   workbenchIconButtonClassName,
   workbenchNewEntryButtonClassName,
-  workbenchRevisionHoverToolbarClassName,
+  workbenchRevisionHoverToolbarClassName
 } from "./workbench/workbench-class-names";
+import { dialogButtonClassName } from "./workbench/workbench-dialog-styles";
 import {
   WorkbenchDialog,
 } from "./workbench/workbench-dialogs";
-import { dialogButtonClassName } from "./workbench/workbench-dialog-styles";
 import {
   BrowseSessionsList,
   ExplorerTree,
@@ -186,8 +183,10 @@ import {
   ZoomOutIcon
 } from "./workbench/workbench-icons";
 import WorkbenchAmbientCanvas, { type WorkbenchAmbientCanvasVariant } from "./workbench/WorkbenchAmbientCanvas";
+import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfileProvider";
+import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuContext";
+import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
 import WorkbenchOptionCards, { WorkbenchOptionCard } from "./workbench/WorkbenchOptionCards";
-import PrimaryButton from "./workbench/PrimaryButton";
 import WorkbenchStepSlider from "./workbench/WorkbenchStepSlider";
 import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/WorkbenchTabIcon";
 
@@ -245,7 +244,7 @@ const DEFAULT_LOCAL_CAPABILITY_SETTINGS: WorkbenchLocalCapabilitySettings = {
 };
 const COLLABORATION_STATE_STORAGE_KEY = "workbench:collaboration:thread-states";
 
-function readStoredCollaborationStates() {
+function readStoredCollaborationStates () {
   try {
     const parsed = JSON.parse(
       window.localStorage.getItem(COLLABORATION_STATE_STORAGE_KEY)
@@ -258,7 +257,7 @@ function readStoredCollaborationStates() {
   }
 }
 
-function writeStoredCollaborationStates(statesByProjectId: Record<string, WorkbenchCollaborationState>) {
+function writeStoredCollaborationStates (statesByProjectId: Record<string, WorkbenchCollaborationState>) {
   try {
     window.localStorage.setItem(COLLABORATION_STATE_STORAGE_KEY, JSON.stringify(statesByProjectId));
   } catch {
@@ -266,7 +265,7 @@ function writeStoredCollaborationStates(statesByProjectId: Record<string, Workbe
   }
 }
 
-function areCollaborationStatesEqual(
+function areCollaborationStatesEqual (
   left: WorkbenchCollaborationState,
   right: WorkbenchCollaborationState,
 ) {
@@ -276,7 +275,7 @@ function areCollaborationStatesEqual(
   );
 }
 
-function hasCollaborationStateData(state: WorkbenchCollaborationState) {
+function hasCollaborationStateData (state: WorkbenchCollaborationState) {
   return !areCollaborationStatesEqual(state, EMPTY_WORKBENCH_COLLABORATION_STATE);
 }
 
@@ -290,7 +289,7 @@ const EDITOR_FONT_SIZE_OPTIONS = [0.9, 1, 1.08, 1.18, 1.32, 1.48].map((value, in
   value,
 }));
 
-function createUniqueFileLinkRootId(id: string, usedIds: Set<string>) {
+function createUniqueFileLinkRootId (id: string, usedIds: Set<string>) {
   const baseId = id.trim() || "root";
   let candidateId = baseId;
   let suffix = 2;
@@ -303,7 +302,7 @@ function createUniqueFileLinkRootId(id: string, usedIds: Set<string>) {
   return candidateId;
 }
 
-function createProjectFileLinkRoots(
+function createProjectFileLinkRoots (
   projects: readonly WorkbenchProjectOption[],
   currentProjectId: string,
   currentRoots: readonly ExplorerSnapshot["roots"][number][],
@@ -407,7 +406,7 @@ function formatWorkbenchPageTitle (projectName: string | null | undefined) {
   return normalizedProjectName ? `${normalizedProjectName} / Workbench` : "Workbench";
 }
 
-function getFirstMosaicTarget(node: WorkbenchMosaicNode | null): WorkbenchMosaicPanelTarget | null {
+function getFirstMosaicTarget (node: WorkbenchMosaicNode | null): WorkbenchMosaicPanelTarget | null {
   if (!node) {
     return null;
   }
@@ -426,11 +425,11 @@ function getFirstMosaicTarget(node: WorkbenchMosaicNode | null): WorkbenchMosaic
   return null;
 }
 
-function getRouteMosaicFallbackTarget(routeNode: WorkbenchMosaicNode | null, isMobile: boolean): WorkbenchMosaicPanelTarget | null {
+function getRouteMosaicFallbackTarget (routeNode: WorkbenchMosaicNode | null, isMobile: boolean): WorkbenchMosaicPanelTarget | null {
   return isMobile ? getFirstMosaicTarget(routeNode) : null;
 }
 
-function mosaicContainsThreadTarget(node: WorkbenchMosaicNode | null, threadId: string): boolean {
+function mosaicContainsThreadTarget (node: WorkbenchMosaicNode | null, threadId: string): boolean {
   if (!node) {
     return false;
   }
@@ -442,13 +441,13 @@ function mosaicContainsThreadTarget(node: WorkbenchMosaicNode | null, threadId: 
   return node.children.some((child) => mosaicContainsThreadTarget(child, threadId));
 }
 
-function isThreadSummaryActive(thread: ThreadSummary) {
+function isThreadSummaryActive (thread: ThreadSummary) {
   return thread.status === "active"
     || thread.status.startsWith("active:")
     || Boolean(thread.unreadBadge?.hasActiveTurn);
 }
 
-function getPanelTargetMosaicNode(target: WorkbenchPanelTarget): WorkbenchMosaicNode | null {
+function getPanelTargetMosaicNode (target: WorkbenchPanelTarget): WorkbenchMosaicNode | null {
   if (target.kind === "file" || target.kind === "thread") {
     return createWorkbenchMosaicTarget(target);
   }
@@ -456,7 +455,7 @@ function getPanelTargetMosaicNode(target: WorkbenchPanelTarget): WorkbenchMosaic
   return null;
 }
 
-function createInitialMosaicNode(
+function createInitialMosaicNode (
   currentTarget: WorkbenchPanelTarget,
   droppedTarget: WorkbenchPanelTarget,
   placement: WorkbenchDropPlacement,
@@ -1595,63 +1594,63 @@ export default function Workbench () {
     const group = getThreadSidebarGroup(entry);
     const terminal = entry.entryKind !== "draft" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped");
     const items: WorkbenchContextMenuDefinition["items"] = [
-        {
-          icon: <CopyIcon className="size-4" />,
-          id: "copy-id",
-          label: "Copy ID",
-          onSelect: () => { void writeTextToClipboard(identifier); },
+      {
+        icon: <CopyIcon className="size-4" />,
+        id: "copy-id",
+        label: "Copy ID",
+        onSelect: () => { void writeTextToClipboard(identifier); },
+      },
+      ...(thread?.unreadBadge?.unreadCount ? [{
+        icon: <CheckIcon className="size-4" />,
+        id: "mark-read",
+        label: "Mark as read",
+        onSelect: () => {
+          void (async () => {
+            const payload = await controls?.readThread(thread.id, thread.harness);
+            if (payload) {
+              controls?.markThreadSeen(payload);
+            }
+          })();
         },
-        ...(thread?.unreadBadge?.unreadCount ? [{
-          icon: <CheckIcon className="size-4" />,
-          id: "mark-read",
-          label: "Mark as read",
-          onSelect: () => {
-            void (async () => {
-              const payload = await controls?.readThread(thread.id, thread.harness);
-              if (payload) {
-                controls?.markThreadSeen(payload);
-              }
-            })();
-          },
-        }] : []),
-        ...(entry.entryKind !== "draft" ? [{
-          icon: <PinIcon className="size-4" />,
-          id: pinned ? "unpin" : "pin",
-          label: pinned ? "Unpin thread" : "Pin thread",
-          onSelect: () => mutateSidebarEntry(entry, "pin/set", !pinned),
-        }] : []),
-        ...(entry.entryKind !== "draft" && (group === "snoozed" || !entry.lifecycle.settled) ? [{
-          icon: group === "snoozed" ? <UnsnoozeThreadIcon className="size-4" /> : <SnoozedThreadIcon className="size-4" />,
-          id: group === "snoozed" ? "unsnooze" : "snooze",
-          label: group === "snoozed" ? "Unsnooze" : "Snooze",
-          onSelect: () => mutateSidebarEntry(entry, "snooze/set", group !== "snoozed"),
-        }] : []),
-        ...(entry.entryKind === "thread" && entry.lifecycle.kind === "needsAttention" ? [{
-          icon: <CheckIcon className="size-4" />, id: "mark-completed", label: "Mark completed", onSelect: () => mutateSidebarEntry(entry, "complete", "completed"),
-        }, {
-          icon: <StopIcon className="size-4" />, id: "mark-stopped", label: "Mark stopped", onSelect: () => mutateSidebarEntry(entry, "complete", "stopped"),
-        }] : []),
-        ...(thread && isThreadSummaryActive(thread) ? [{
-          icon: <StopIcon className="size-4" />,
-          id: "stop",
-          label: "Stop thread",
-          onSelect: () => {
-            void stopSidebarThread(thread);
-          },
-        }] : []),
-        ...(terminal && entry.lifecycle.settled ? [{
-          icon: <RestoreThreadIcon className="size-4" />, id: "restore", label: "Restore", onSelect: () => mutateSidebarEntry(entry, "restore"),
-        }] : terminal ? [{
-          icon: <SettleThreadIcon className="size-4" />, id: "settle", label: "Settle", onSelect: () => mutateSidebarEntry(entry, "settle"),
-        }] : []),
-        ...(terminal ? [{
-          icon: <ArchiveIcon className="size-4" />,
-          id: "archive",
-          label: "Archive thread",
-          onSelect: () => mutateSidebarEntry(entry, "archive/set", true),
-          tone: "danger" as const,
-        }] : []),
-      ];
+      }] : []),
+      ...(entry.entryKind !== "draft" ? [{
+        icon: <PinIcon className="size-4" />,
+        id: pinned ? "unpin" : "pin",
+        label: pinned ? "Unpin thread" : "Pin thread",
+        onSelect: () => mutateSidebarEntry(entry, "pin/set", !pinned),
+      }] : []),
+      ...(entry.entryKind !== "draft" && (group === "snoozed" || !entry.lifecycle.settled) ? [{
+        icon: group === "snoozed" ? <UnsnoozeThreadIcon className="size-4" /> : <SnoozedThreadIcon className="size-4" />,
+        id: group === "snoozed" ? "unsnooze" : "snooze",
+        label: group === "snoozed" ? "Unsnooze" : "Snooze",
+        onSelect: () => mutateSidebarEntry(entry, "snooze/set", group !== "snoozed"),
+      }] : []),
+      ...(entry.entryKind === "thread" && entry.lifecycle.kind === "needsAttention" ? [{
+        icon: <CheckIcon className="size-4" />, id: "mark-completed", label: "Mark completed", onSelect: () => mutateSidebarEntry(entry, "complete", "completed"),
+      }, {
+        icon: <StopIcon className="size-4" />, id: "mark-stopped", label: "Mark stopped", onSelect: () => mutateSidebarEntry(entry, "complete", "stopped"),
+      }] : []),
+      ...(thread && isThreadSummaryActive(thread) ? [{
+        icon: <StopIcon className="size-4" />,
+        id: "stop",
+        label: "Stop thread",
+        onSelect: () => {
+          void stopSidebarThread(thread);
+        },
+      }] : []),
+      ...(terminal && entry.lifecycle.settled ? [{
+        icon: <RestoreThreadIcon className="size-4" />, id: "restore", label: "Restore", onSelect: () => mutateSidebarEntry(entry, "restore"),
+      }] : terminal ? [{
+        icon: <SettleThreadIcon className="size-4" />, id: "settle", label: "Settle", onSelect: () => mutateSidebarEntry(entry, "settle"),
+      }] : []),
+      ...(terminal ? [{
+        icon: <ArchiveIcon className="size-4" />,
+        id: "archive",
+        label: "Archive thread",
+        onSelect: () => mutateSidebarEntry(entry, "archive/set", true),
+        tone: "danger" as const,
+      }] : []),
+    ];
     return { id: `thread:${identifier}`, items, label: `Thread actions for ${entry.title}` };
   }, [controls, mutateSidebarEntry, stopSidebarThread, threadSummariesById]);
   const updateBrowseSession = useCallback(async (session: WorkbenchBrowseSessionSummary, action: "forget" | "stop", options: { force?: boolean } = {}) => {
@@ -2262,11 +2261,11 @@ export default function Workbench () {
     ? `thread:${activeThreadId}`
     : showFileView
       ? `file:${activeFilePath}`
-    : showSettingsView
-      ? "settings"
-      : showCollaborationView
-        ? "collaboration"
-      : "";
+      : showSettingsView
+        ? "settings"
+        : showCollaborationView
+          ? "collaboration"
+          : "";
   useEffect(() => {
     if (!showThreadView || !threadShellSource) {
       return;
@@ -3208,1277 +3207,1277 @@ export default function Workbench () {
 
   return (
     <WorkbenchComposerProfileProvider controller={composerProfileController}>
-    <WorkbenchContextMenuProvider>
-      <div
-        className={`relative isolate h-dvh overflow-hidden md:grid md:min-h-screen md:h-auto md:overflow-visible md:items-start${isEffectiveDesktopSidebarCollapsed
-          ? " md:grid-cols-[minmax(0,1fr)]"
-          : " md:grid-cols-[minmax(16rem,21rem)_1fr]"
-        }`}
-        onClickCapture={handleWorkbenchClickCapture}
-        onClick={handleWorkbenchProjectFileLinkClick}
-      >
-      {ambientCanvasVariant ? <WorkbenchAmbientCanvas variant={ambientCanvasVariant} /> : null}
-      <WorkbenchTabIcon state={tabIconState} />
-      {isEffectiveDesktopSidebarCollapsed ? (
-        <>
-          <button
-            type="button"
-            aria-label="Show sidebar"
-            title="Show sidebar"
-            className={`${workbenchIconButtonClassName} fixed left-3 top-3 z-40 hidden text-muted md:inline-flex`}
-            onClick={() => {
-              setIsDesktopSidebarCollapsed(false);
-            }}
-          >
-            <SidebarExpandIcon />
-            <span className="sr-only">Show sidebar</span>
-          </button>
-          {showMosaicView ? (
-            <button
-              type="button"
-              aria-label="Drag to create a new thread panel"
-              title="Drag to create a new thread panel"
-              className={`${workbenchIconButtonClassName} fixed left-14 top-3 z-40 hidden cursor-grab text-muted active:cursor-grabbing md:inline-flex`}
-              onClick={(event) => {
-                event.preventDefault();
-              }}
-              onPointerDown={(event) => {
-                beginWorkbenchPointerDrag(event, {
-                  harness,
-                  type: "new-thread",
-                });
-              }}
-            >
-              <SparkleIcon className="size-5" />
-              <span className="sr-only">Drag to create a new thread panel</span>
-            </button>
-          ) : null}
-        </>
-      ) : null}
-      {activeWorkbenchDrag ? (
+      <WorkbenchContextMenuProvider>
         <div
-          ref={workbenchDragGhostRef}
-          className="pointer-events-none fixed z-50 max-w-[18rem] truncate rounded-[0.7rem] bg-[color-mix(in_srgb,var(--bg)_88%,transparent)] px-3 py-1.5 text-[0.78rem] font-medium text-text shadow-float backdrop-blur"
-          style={{
-            left: 0,
-            top: 0,
-            transform: `translate3d(${activeWorkbenchDrag.x + 12}px, ${activeWorkbenchDrag.y + 12}px, 0)`,
-          }}
+          className={`relative isolate h-dvh overflow-hidden md:grid md:min-h-screen md:h-auto md:overflow-visible md:items-start${isEffectiveDesktopSidebarCollapsed
+            ? " md:grid-cols-[minmax(0,1fr)]"
+            : " md:grid-cols-[minmax(16rem,21rem)_1fr]"
+            }`}
+          onClickCapture={handleWorkbenchClickCapture}
+          onClick={handleWorkbenchProjectFileLinkClick}
         >
-          {getWorkbenchDragGhostLabel(activeWorkbenchDrag.payload)}
-        </div>
-      ) : null}
-      <div
-        className="mobile-workbench-track flex h-dvh w-[200vw] overflow-hidden transition-transform duration-200 ease-out md:contents md:h-auto md:w-auto md:overflow-visible md:transform-none"
-        style={mobileTrackStyle}
-      >
-        <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden px-5 py-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:px-6${isEffectiveDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
-          <div className="-ml-3 min-h-0 flex-1 overflow-hidden text-[0.95rem] leading-6">
+          {ambientCanvasVariant ? <WorkbenchAmbientCanvas variant={ambientCanvasVariant} /> : null}
+          <WorkbenchTabIcon state={tabIconState} />
+          {isEffectiveDesktopSidebarCollapsed ? (
+            <>
+              <button
+                type="button"
+                aria-label="Show sidebar"
+                title="Show sidebar"
+                className={`${workbenchIconButtonClassName} fixed left-3 top-3 z-40 hidden text-muted md:inline-flex`}
+                onClick={() => {
+                  setIsDesktopSidebarCollapsed(false);
+                }}
+              >
+                <SidebarExpandIcon />
+                <span className="sr-only">Show sidebar</span>
+              </button>
+              {showMosaicView ? (
+                <button
+                  type="button"
+                  aria-label="Drag to create a new thread panel"
+                  title="Drag to create a new thread panel"
+                  className={`${workbenchIconButtonClassName} fixed left-14 top-3 z-40 hidden cursor-grab text-muted active:cursor-grabbing md:inline-flex`}
+                  onClick={(event) => {
+                    event.preventDefault();
+                  }}
+                  onPointerDown={(event) => {
+                    beginWorkbenchPointerDrag(event, {
+                      harness,
+                      type: "new-thread",
+                    });
+                  }}
+                >
+                  <SparkleIcon className="size-5" />
+                  <span className="sr-only">Drag to create a new thread panel</span>
+                </button>
+              ) : null}
+            </>
+          ) : null}
+          {activeWorkbenchDrag ? (
             <div
-              className="flex h-full w-[200%] flex-row-reverse transition-transform duration-200 ease-out"
-              style={{ transform: sidebarTrackTransform }}
+              ref={workbenchDragGhostRef}
+              className="pointer-events-none fixed z-50 max-w-[18rem] truncate rounded-[0.7rem] bg-[color-mix(in_srgb,var(--bg)_88%,transparent)] px-3 py-1.5 text-[0.78rem] font-medium text-text shadow-float backdrop-blur"
+              style={{
+                left: 0,
+                top: 0,
+                transform: `translate3d(${activeWorkbenchDrag.x + 12}px, ${activeWorkbenchDrag.y + 12}px, 0)`,
+              }}
             >
-              <div className="explorer-scrollbar flex min-h-0 w-1/2 flex-col overflow-y-auto pb-8 pl-2 pr-2">
-                <section
-                  className={`relative space-y-2 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "project" ? " opacity-45" : ""}`}
-                  {...getSidebarSectionDragProps("project")}
-                  onPointerDown={(event) => {
-                    beginWorkbenchPointerDrag(event, { sectionId: "project", type: "sidebar-section" });
-                  }}
-                  onPointerMove={() => {
-                    if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "project") {
-                      setSidebarDropTargetId("project");
-                    }
-                  }}
-                  onPointerUp={() => {
-                    if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "project") {
-                      moveSidebarSection(activeWorkbenchDrag.payload.sectionId, "project");
-                      endWorkbenchPointerDrag();
-                    }
-                  }}
-                >
-                  {sidebarDropTargetId === "project" ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
-                  <div className="flex min-w-0 items-center gap-1">
-                    <button
-                      type="button"
-                      className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-lg px-2 py-2 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:-ml-2"
-                      title={isSidebarProjectLoading ? "Loading project" : currentProjectTitle}
-                      onClick={openProjectPicker}
-                    >
-                      <span className="min-w-0 relative -top-0.5">
-                        {isSidebarProjectLoading ? (
-                          <span className="block h-6 w-40 max-w-full rounded-md workbench-skeleton" aria-hidden="true" />
-                        ) : (
-                          <span className="block truncate text-xl font-semibold leading-tight text-text">{currentProjectDisplayName ?? (explorer.currentProjectId || "No project")}</span>
-                        )}
-                      </span>
-                      <span className="shrink-0 relative -top-0.5 text-muted" aria-hidden="true">‹</span>
-                    </button>
-                    {usesDesktopSidebarCollapse ? (
-                      <button
-                        type="button"
-                        aria-label="Hide sidebar"
-                        title="Hide sidebar"
-                        className={`${workbenchIconButtonClassName} hidden shrink-0 text-muted md:inline-flex`}
-                        onClick={() => {
-                          setIsDesktopSidebarCollapsed(true);
-                        }}
-                      >
-                        <SidebarCollapseIcon />
-                        <span className="sr-only">Hide sidebar</span>
-                      </button>
-                    ) : null}
-                  </div>
-                </section>
-
-                <section className="pb-4 pr-2 md:pr-4.5">
-                  <a
-                    href={createCollaborationHref(activeProjectId)}
-                    className={`flex min-w-0 items-center gap-3 rounded-lg px-2 py-2 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:-ml-2${showCollaborationView ? " bg-accent-soft text-accent" : " text-muted"}`}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      navigateToRoute(createCollaborationRoute(explorer.currentProjectId || route.projectId));
-                    }}
-                  >
-                    <CollaborationIcon />
-                    <span className="min-w-0 truncate text-[0.95rem] font-semibold">Collaboration</span>
-                  </a>
-                </section>
-
-                <section
-                  className={`relative space-y-2 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "threads" ? " opacity-45" : ""}`}
-                  {...getSidebarSectionDragProps("threads")}
-                  onPointerDown={(event) => {
-                    beginWorkbenchPointerDrag(event, { sectionId: "threads", type: "sidebar-section" });
-                  }}
-                  onPointerMove={() => {
-                    if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "threads") {
-                      setSidebarDropTargetId("threads");
-                    }
-                  }}
-                  onPointerUp={() => {
-                    if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "threads") {
-                      moveSidebarSection(activeWorkbenchDrag.payload.sectionId, "threads");
-                      endWorkbenchPointerDrag();
-                    }
-                  }}
-                >
-                  {sidebarDropTargetId === "threads" ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
-                  <div className="flex items-center justify-between gap-3 pr-2 md:pr-4.5">
-                    <p className="m-0 text-base font-semibold leading-tight">Threads</p>
-                  </div>
-                  {isSidebarThreadsLoading ? (
-                    <SidebarLoadingSkeleton ariaLabel="Loading threads" rows={5} />
-                  ) : (
-                    <nav aria-label="Threads">
-                      <ThreadsList
-                        attentionLabelsByThreadId={threadAttentionLabelsById}
-                        createThreadLabel="Create new thread"
-                        currentTarget={route.view === "thread" ? route.threadTarget : null}
-                        draftSaveStates={explorer.threadSidebarDraftSaveStates}
-                        entries={sidebarEntries}
-                        getThreadHref={(target) => createThreadHref(explorer.currentProjectId || route.projectId, target)}
-                        onThreadPointerDragStart={(event, entry) => {
-                          const target = entry.entryKind === "draft"
-                            ? { draftId: entry.draft.draftId, kind: "draft" as const }
-                            : { harness: entry.identity.harness, kind: "provider" as const, threadId: entry.identity.threadId };
-                          beginWorkbenchPointerDrag(event, {
-                            target: { kind: "thread", target },
-                            type: "panel-target",
-                          });
-                        }}
-                        onCreateThreadPointerDragStart={showMosaicView ? (event) => {
-                          beginWorkbenchPointerDrag(event, {
-                            harness,
-                            type: "new-thread",
-                          });
-                        } : undefined}
-                        getThreadContextMenu={getThreadContextMenu}
-                        onAction={(entry, action) => {
-                          if (entry.entryKind === "draft") {
-                            if (action === "discard") void controls?.deleteThreadDraft(entry.draft.draftId);
-                            return;
-                          }
-                          if (action === "settle") mutateSidebarEntry(entry, "settle");
-                          if (action === "restore") mutateSidebarEntry(entry, "restore");
-                          if (action === "unsnooze") mutateSidebarEntry(entry, "snooze/set", false);
-                        }}
-                        onCreateThread={() => {
-                          if (showMosaicView) {
-                            return;
-                          }
-                          if (!controls) {
-                            return;
-                          }
-                          navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, { kind: "new" }));
-                        }}
-                        onOpenThread={(target) => {
-                          void openThreadFromExplorer(target);
-                        }}
-                      />
-                    </nav>
-                  )}
-                  {explorer.threadsError || explorer.threadSidebar?.error ? (
-                    <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted">
-                      {explorer.threadSidebar?.error ?? explorer.threadsError}
-                    </p>
-                  ) : null}
-                </section>
-
-                <section
-                  className={`relative space-y-2 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "files" ? " opacity-45" : ""}`}
-                  {...getSidebarSectionDragProps("files")}
-                  onPointerDown={(event) => {
-                    beginWorkbenchPointerDrag(event, { sectionId: "files", type: "sidebar-section" });
-                  }}
-                  onPointerMove={() => {
-                    if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "files") {
-                      setSidebarDropTargetId("files");
-                    }
-                  }}
-                  onPointerUp={() => {
-                    if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "files") {
-                      moveSidebarSection(activeWorkbenchDrag.payload.sectionId, "files");
-                      endWorkbenchPointerDrag();
-                    }
-                  }}
-                >
-                  {sidebarDropTargetId === "files" ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
-                  <div className="group/entry-row flex items-center justify-between gap-3 pr-2 md:pr-4.5">
-                    <button
-                      type="button"
-                      className="m-0 rounded-lg px-2 py-1.5 text-left text-base font-semibold leading-tight transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:-ml-2 md:py-0.5"
-                      onClick={() => {
-                        clearSelectionFromUi();
-                      }}
-                    >
-                      Project
-                    </button>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        aria-label={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
-                        aria-pressed={showUnopenableFiles}
-                        disabled={!explorer.currentProjectId || isSidebarProjectLoading}
-                        title={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
-                        className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}${showUnopenableFiles ? " bg-accent-soft text-accent" : ""}`}
-                        onClick={() => {
-                          updateProjectSetting("showUnopenableFiles", !showUnopenableFiles);
-                        }}
-                      >
-                        <FileVisibilityIcon visible={showUnopenableFiles} />
-                        <span className="sr-only">
-                          {showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        aria-label="Create in project"
-                        title="Create in project"
-                        className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}`}
-                        disabled={!explorer.currentProjectId || isSidebarProjectLoading}
-                        onClick={() => {
-                          openCreateDialog("");
-                        }}
-                      >
-                        <NewEntryIcon />
-                        <span className="sr-only">Create in project</span>
-                      </button>
-                    </div>
-                  </div>
-                  {!explorer.projects.length && !isSidebarProjectLoading ? (
-                    <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted md:pr-4.5">
-                      No projects were found.
-                    </p>
-                  ) : null}
-                  {isSidebarProjectLoading ? (
-                    <SidebarLoadingSkeleton ariaLabel="Loading project files" rows={8} />
-                  ) : (
-                    <nav id="file-tree" aria-label="Project files">
-                      <ExplorerTree
-                        changes={explorer.changes}
-                        controls={workbenchControls}
-                        currentPath={activeFilePath}
-                        expandedDirectories={expandedDirectories}
-                        getFileDragPayload={(path) => ({
-                          target: { filePath: path, kind: "file" },
-                          type: "panel-target",
-                        })}
-                        getNodeContextMenu={getProjectNodeContextMenu}
-                        isFileOpenable={canOpenFileFromExplorer}
-                        modifiedPaths={modifiedPaths}
-                        nodes={visibleTree}
-                        onCreateInDirectory={openCreateDialog}
-                        onFilePointerDragStart={(event, path) => {
-                          beginWorkbenchPointerDrag(event, {
-                            target: { filePath: path, kind: "file" },
-                            type: "panel-target",
-                          });
-                        }}
-                        onOpenFile={(path) => {
-                          void openFileFromExplorer(path);
-                        }}
-                      />
-                    </nav>
-                  )}
-                  {projectActionError ? (
-                    <p className="m-0 pr-2 text-[0.84rem] leading-6 text-danger md:pr-4.5">{projectActionError}</p>
-                  ) : null}
-                </section>
-                {browseSessions.length ? (
-                  <section
-                    className={`relative space-y-2 pt-6 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "browseSessions" ? " opacity-45" : ""}`}
-                    {...getSidebarSectionDragProps("browseSessions")}
-                    onPointerDown={(event) => {
-                      beginWorkbenchPointerDrag(event, { sectionId: "browseSessions", type: "sidebar-section" });
-                    }}
-                    onPointerMove={() => {
-                      if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "browseSessions") {
-                        setSidebarDropTargetId("browseSessions");
-                      }
-                    }}
-                    onPointerUp={() => {
-                      if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "browseSessions") {
-                        moveSidebarSection(activeWorkbenchDrag.payload.sectionId, "browseSessions");
-                        endWorkbenchPointerDrag();
-                      }
-                    }}
-                  >
-                    {sidebarDropTargetId === "browseSessions" ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
-                    <div className="flex items-center justify-between gap-3 pr-2 md:pr-4.5">
-                      <p className="m-0 text-base font-semibold leading-tight">Browse sessions</p>
-                    </div>
-                    <BrowseSessionsList
-                      getSessionContextMenu={getBrowseSessionContextMenu}
-                      isLoading={isBrowseSessionsLoading}
-                      sessions={browseSessions}
-                    />
-                    {browseSessionsError ? (
-                      <p className="m-0 pr-2 text-[0.84rem] leading-6 text-danger">
-                        {browseSessionsError}
-                      </p>
-                    ) : null}
-                  </section>
-                ) : null}
-                <div
-                  className="relative h-5 shrink-0"
-                  style={{ order: sidebarSectionOrder.length }}
-                  onPointerMove={() => {
-                    if (activeWorkbenchDrag?.payload.type === "sidebar-section") {
-                      setSidebarDropTargetId("end");
-                    }
-                  }}
-                  onPointerUp={() => {
-                    if (activeWorkbenchDrag?.payload.type === "sidebar-section") {
-                      moveSidebarSectionToEnd(activeWorkbenchDrag.payload.sectionId);
-                      endWorkbenchPointerDrag();
-                    }
-                  }}
-                >
-                  {sidebarDropTargetId === "end" ? <div className="pointer-events-none absolute left-2 right-6 top-2 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
-                </div>
-                <footer
-                  className="pr-2 pt-4 pb-1 md:pr-4.5"
-                  style={{ order: sidebarSectionOrder.length + 1 }}
-                >
-                  <div className="flex items-center gap-1">
-                    <a
-                      aria-label="Open settings"
-                      href={createSettingsHref(activeProjectId, "global")}
-                      title="Open settings"
-                      className={`${workbenchIconButtonClassName} text-muted`}
-                      onClick={openSettingsFromLink}
-                    >
-                      <GearIcon />
-                      <span className="sr-only">Open settings</span>
-                    </a>
-                    <button
-                      type="button"
-                      aria-label={isReloadingRuntime ? "Reloading local runtime" : "Reload local runtime"}
-                      title={isReloadingRuntime ? "Reloading local runtime" : "Reload local runtime"}
-                      className={`${workbenchIconButtonClassName}${isReloadingRuntime ? " text-accent" : " text-muted"}`}
-                      disabled={isReloadingRuntime}
-                      onClick={() => {
-                        void reloadLocalRuntime();
-                      }}
-                    >
-                      <ReloadIcon />
-                      <span className="sr-only">
-                        {isReloadingRuntime ? "Reloading local runtime" : "Reload local runtime"}
-                      </span>
-                    </button>
-                  </div>
-                  {reloadMessage ? (
-                    <p className="mt-2 text-[0.84rem] leading-6 text-muted">{reloadMessage}</p>
-                  ) : null}
-                  {reloadError ? (
-                    <p className="mt-2 text-[0.84rem] leading-6 text-danger">{reloadError}</p>
-                  ) : null}
-                </footer>
-              </div>
-
-              <ProjectPicker
-                ref={projectsPaneRef}
-                activeProjectId={activeProjectId}
-                onKeyDown={handleProjectsPaneKeyDown}
-                onProjectLinkClick={selectProjectFromLink}
-                projects={explorer.projects}
-              />
-
+              {getWorkbenchDragGhostLabel(activeWorkbenchDrag.payload)}
             </div>
-          </div>
-        </aside>
+          ) : null}
+          <div
+            className="mobile-workbench-track flex h-dvh w-[200vw] overflow-hidden transition-transform duration-200 ease-out md:contents md:h-auto md:w-auto md:overflow-visible md:transform-none"
+            style={mobileTrackStyle}
+          >
+            <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden px-5 py-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:px-6${isEffectiveDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
+              <div className="-ml-3 min-h-0 flex-1 overflow-hidden text-[0.95rem] leading-6">
+                <div
+                  className="flex h-full w-[200%] flex-row-reverse transition-transform duration-200 ease-out"
+                  style={{ transform: sidebarTrackTransform }}
+                >
+                  <div className="explorer-scrollbar flex min-h-0 w-1/2 flex-col overflow-y-auto pb-8 pr-2">
+                    <section
+                      className={`relative space-y-2 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "project" ? " opacity-45" : ""}`}
+                      {...getSidebarSectionDragProps("project")}
+                      onPointerDown={(event) => {
+                        beginWorkbenchPointerDrag(event, { sectionId: "project", type: "sidebar-section" });
+                      }}
+                      onPointerMove={() => {
+                        if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "project") {
+                          setSidebarDropTargetId("project");
+                        }
+                      }}
+                      onPointerUp={() => {
+                        if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "project") {
+                          moveSidebarSection(activeWorkbenchDrag.payload.sectionId, "project");
+                          endWorkbenchPointerDrag();
+                        }
+                      }}
+                    >
+                      {sidebarDropTargetId === "project" ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
+                      <div className="flex min-w-0 items-center gap-1">
+                        <button
+                          type="button"
+                          className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-lg px-2 py-2 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+                          title={isSidebarProjectLoading ? "Loading project" : currentProjectTitle}
+                          onClick={openProjectPicker}
+                        >
+                          <span className="min-w-0 relative -top-0.5">
+                            {isSidebarProjectLoading ? (
+                              <span className="block h-6 w-40 max-w-full rounded-md workbench-skeleton" aria-hidden="true" />
+                            ) : (
+                              <span className="block truncate text-xl font-semibold leading-tight text-text">{currentProjectDisplayName ?? (explorer.currentProjectId || "No project")}</span>
+                            )}
+                          </span>
+                          <span className="shrink-0 relative -top-0.5 text-muted" aria-hidden="true">‹</span>
+                        </button>
+                        {usesDesktopSidebarCollapse ? (
+                          <button
+                            type="button"
+                            aria-label="Hide sidebar"
+                            title="Hide sidebar"
+                            className={`${workbenchIconButtonClassName} hidden shrink-0 text-muted md:inline-flex`}
+                            onClick={() => {
+                              setIsDesktopSidebarCollapsed(true);
+                            }}
+                          >
+                            <SidebarCollapseIcon />
+                            <span className="sr-only">Hide sidebar</span>
+                          </button>
+                        ) : null}
+                      </div>
+                    </section>
 
-        <main
-          ref={mainPaneRef}
-          className={`explorer-scrollbar flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden overflow-y-auto md:w-auto${showFullBleedMainView
-            ? " px-5 pb-5 md:h-screen md:min-h-0 md:overflow-hidden md:px-0 md:pb-0"
-            : " px-5 pb-5 md:h-auto md:min-h-screen md:overflow-visible md:px-6 md:pb-5"
-          }`}
-        >
-          <header
-            ref={shellHeaderRef}
-            className={`
+                    <section className="pb-4 pr-2 md:pr-4.5">
+                      <a
+                        href={createCollaborationHref(activeProjectId)}
+                        className={`flex min-w-0 items-center gap-3 rounded-lg px-2 py-2 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:-ml-2${showCollaborationView ? " bg-accent-soft text-accent" : " text-muted"}`}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          navigateToRoute(createCollaborationRoute(explorer.currentProjectId || route.projectId));
+                        }}
+                      >
+                        <CollaborationIcon />
+                        <span className="min-w-0 truncate text-[0.95rem] font-semibold">Collaboration</span>
+                      </a>
+                    </section>
+
+                    <section
+                      className={`relative space-y-2 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "threads" ? " opacity-45" : ""}`}
+                      {...getSidebarSectionDragProps("threads")}
+                      onPointerDown={(event) => {
+                        beginWorkbenchPointerDrag(event, { sectionId: "threads", type: "sidebar-section" });
+                      }}
+                      onPointerMove={() => {
+                        if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "threads") {
+                          setSidebarDropTargetId("threads");
+                        }
+                      }}
+                      onPointerUp={() => {
+                        if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "threads") {
+                          moveSidebarSection(activeWorkbenchDrag.payload.sectionId, "threads");
+                          endWorkbenchPointerDrag();
+                        }
+                      }}
+                    >
+                      {sidebarDropTargetId === "threads" ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
+                      <div className="flex items-center justify-between gap-3 pr-2 md:pr-4.5">
+                        <p className="m-0 text-base font-semibold leading-tight">Threads</p>
+                      </div>
+                      {isSidebarThreadsLoading ? (
+                        <SidebarLoadingSkeleton ariaLabel="Loading threads" rows={5} />
+                      ) : (
+                        <nav aria-label="Threads">
+                          <ThreadsList
+                            attentionLabelsByThreadId={threadAttentionLabelsById}
+                            createThreadLabel="Create new thread"
+                            currentTarget={route.view === "thread" ? route.threadTarget : null}
+                            draftSaveStates={explorer.threadSidebarDraftSaveStates}
+                            entries={sidebarEntries}
+                            getThreadHref={(target) => createThreadHref(explorer.currentProjectId || route.projectId, target)}
+                            onThreadPointerDragStart={(event, entry) => {
+                              const target = entry.entryKind === "draft"
+                                ? { draftId: entry.draft.draftId, kind: "draft" as const }
+                                : { harness: entry.identity.harness, kind: "provider" as const, threadId: entry.identity.threadId };
+                              beginWorkbenchPointerDrag(event, {
+                                target: { kind: "thread", target },
+                                type: "panel-target",
+                              });
+                            }}
+                            onCreateThreadPointerDragStart={showMosaicView ? (event) => {
+                              beginWorkbenchPointerDrag(event, {
+                                harness,
+                                type: "new-thread",
+                              });
+                            } : undefined}
+                            getThreadContextMenu={getThreadContextMenu}
+                            onAction={(entry, action) => {
+                              if (entry.entryKind === "draft") {
+                                if (action === "discard") void controls?.deleteThreadDraft(entry.draft.draftId);
+                                return;
+                              }
+                              if (action === "settle") mutateSidebarEntry(entry, "settle");
+                              if (action === "restore") mutateSidebarEntry(entry, "restore");
+                              if (action === "unsnooze") mutateSidebarEntry(entry, "snooze/set", false);
+                            }}
+                            onCreateThread={() => {
+                              if (showMosaicView) {
+                                return;
+                              }
+                              if (!controls) {
+                                return;
+                              }
+                              navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, { kind: "new" }));
+                            }}
+                            onOpenThread={(target) => {
+                              void openThreadFromExplorer(target);
+                            }}
+                          />
+                        </nav>
+                      )}
+                      {explorer.threadsError || explorer.threadSidebar?.error ? (
+                        <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted">
+                          {explorer.threadSidebar?.error ?? explorer.threadsError}
+                        </p>
+                      ) : null}
+                    </section>
+
+                    <section
+                      className={`relative space-y-2 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "files" ? " opacity-45" : ""}`}
+                      {...getSidebarSectionDragProps("files")}
+                      onPointerDown={(event) => {
+                        beginWorkbenchPointerDrag(event, { sectionId: "files", type: "sidebar-section" });
+                      }}
+                      onPointerMove={() => {
+                        if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "files") {
+                          setSidebarDropTargetId("files");
+                        }
+                      }}
+                      onPointerUp={() => {
+                        if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "files") {
+                          moveSidebarSection(activeWorkbenchDrag.payload.sectionId, "files");
+                          endWorkbenchPointerDrag();
+                        }
+                      }}
+                    >
+                      {sidebarDropTargetId === "files" ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
+                      <div className="group/entry-row flex items-center justify-between gap-3 pr-2 md:pr-4.5">
+                        <button
+                          type="button"
+                          className="m-0 rounded-lg px-2 py-1.5 text-left text-base font-semibold leading-tight transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:-ml-2 md:py-0.5"
+                          onClick={() => {
+                            clearSelectionFromUi();
+                          }}
+                        >
+                          Project
+                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            aria-label={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
+                            aria-pressed={showUnopenableFiles}
+                            disabled={!explorer.currentProjectId || isSidebarProjectLoading}
+                            title={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
+                            className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}${showUnopenableFiles ? " bg-accent-soft text-accent" : ""}`}
+                            onClick={() => {
+                              updateProjectSetting("showUnopenableFiles", !showUnopenableFiles);
+                            }}
+                          >
+                            <FileVisibilityIcon visible={showUnopenableFiles} />
+                            <span className="sr-only">
+                              {showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            aria-label="Create in project"
+                            title="Create in project"
+                            className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}`}
+                            disabled={!explorer.currentProjectId || isSidebarProjectLoading}
+                            onClick={() => {
+                              openCreateDialog("");
+                            }}
+                          >
+                            <NewEntryIcon />
+                            <span className="sr-only">Create in project</span>
+                          </button>
+                        </div>
+                      </div>
+                      {!explorer.projects.length && !isSidebarProjectLoading ? (
+                        <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted md:pr-4.5">
+                          No projects were found.
+                        </p>
+                      ) : null}
+                      {isSidebarProjectLoading ? (
+                        <SidebarLoadingSkeleton ariaLabel="Loading project files" rows={8} />
+                      ) : (
+                        <nav id="file-tree" aria-label="Project files">
+                          <ExplorerTree
+                            changes={explorer.changes}
+                            controls={workbenchControls}
+                            currentPath={activeFilePath}
+                            expandedDirectories={expandedDirectories}
+                            getFileDragPayload={(path) => ({
+                              target: { filePath: path, kind: "file" },
+                              type: "panel-target",
+                            })}
+                            getNodeContextMenu={getProjectNodeContextMenu}
+                            isFileOpenable={canOpenFileFromExplorer}
+                            modifiedPaths={modifiedPaths}
+                            nodes={visibleTree}
+                            onCreateInDirectory={openCreateDialog}
+                            onFilePointerDragStart={(event, path) => {
+                              beginWorkbenchPointerDrag(event, {
+                                target: { filePath: path, kind: "file" },
+                                type: "panel-target",
+                              });
+                            }}
+                            onOpenFile={(path) => {
+                              void openFileFromExplorer(path);
+                            }}
+                          />
+                        </nav>
+                      )}
+                      {projectActionError ? (
+                        <p className="m-0 pr-2 text-[0.84rem] leading-6 text-danger md:pr-4.5">{projectActionError}</p>
+                      ) : null}
+                    </section>
+                    {browseSessions.length ? (
+                      <section
+                        className={`relative space-y-2 pt-6 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "browseSessions" ? " opacity-45" : ""}`}
+                        {...getSidebarSectionDragProps("browseSessions")}
+                        onPointerDown={(event) => {
+                          beginWorkbenchPointerDrag(event, { sectionId: "browseSessions", type: "sidebar-section" });
+                        }}
+                        onPointerMove={() => {
+                          if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "browseSessions") {
+                            setSidebarDropTargetId("browseSessions");
+                          }
+                        }}
+                        onPointerUp={() => {
+                          if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "browseSessions") {
+                            moveSidebarSection(activeWorkbenchDrag.payload.sectionId, "browseSessions");
+                            endWorkbenchPointerDrag();
+                          }
+                        }}
+                      >
+                        {sidebarDropTargetId === "browseSessions" ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
+                        <div className="flex items-center justify-between gap-3 pr-2 md:pr-4.5">
+                          <p className="m-0 text-base font-semibold leading-tight">Browse sessions</p>
+                        </div>
+                        <BrowseSessionsList
+                          getSessionContextMenu={getBrowseSessionContextMenu}
+                          isLoading={isBrowseSessionsLoading}
+                          sessions={browseSessions}
+                        />
+                        {browseSessionsError ? (
+                          <p className="m-0 pr-2 text-[0.84rem] leading-6 text-danger">
+                            {browseSessionsError}
+                          </p>
+                        ) : null}
+                      </section>
+                    ) : null}
+                    <div
+                      className="relative h-5 shrink-0"
+                      style={{ order: sidebarSectionOrder.length }}
+                      onPointerMove={() => {
+                        if (activeWorkbenchDrag?.payload.type === "sidebar-section") {
+                          setSidebarDropTargetId("end");
+                        }
+                      }}
+                      onPointerUp={() => {
+                        if (activeWorkbenchDrag?.payload.type === "sidebar-section") {
+                          moveSidebarSectionToEnd(activeWorkbenchDrag.payload.sectionId);
+                          endWorkbenchPointerDrag();
+                        }
+                      }}
+                    >
+                      {sidebarDropTargetId === "end" ? <div className="pointer-events-none absolute left-2 right-6 top-2 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
+                    </div>
+                    <footer
+                      className="pr-2 pt-4 pb-1 md:pr-4.5"
+                      style={{ order: sidebarSectionOrder.length + 1 }}
+                    >
+                      <div className="flex items-center gap-1">
+                        <a
+                          aria-label="Open settings"
+                          href={createSettingsHref(activeProjectId, "global")}
+                          title="Open settings"
+                          className={`${workbenchIconButtonClassName} text-muted`}
+                          onClick={openSettingsFromLink}
+                        >
+                          <GearIcon />
+                          <span className="sr-only">Open settings</span>
+                        </a>
+                        <button
+                          type="button"
+                          aria-label={isReloadingRuntime ? "Reloading local runtime" : "Reload local runtime"}
+                          title={isReloadingRuntime ? "Reloading local runtime" : "Reload local runtime"}
+                          className={`${workbenchIconButtonClassName}${isReloadingRuntime ? " text-accent" : " text-muted"}`}
+                          disabled={isReloadingRuntime}
+                          onClick={() => {
+                            void reloadLocalRuntime();
+                          }}
+                        >
+                          <ReloadIcon />
+                          <span className="sr-only">
+                            {isReloadingRuntime ? "Reloading local runtime" : "Reload local runtime"}
+                          </span>
+                        </button>
+                      </div>
+                      {reloadMessage ? (
+                        <p className="mt-2 text-[0.84rem] leading-6 text-muted">{reloadMessage}</p>
+                      ) : null}
+                      {reloadError ? (
+                        <p className="mt-2 text-[0.84rem] leading-6 text-danger">{reloadError}</p>
+                      ) : null}
+                    </footer>
+                  </div>
+
+                  <ProjectPicker
+                    ref={projectsPaneRef}
+                    activeProjectId={activeProjectId}
+                    onKeyDown={handleProjectsPaneKeyDown}
+                    onProjectLinkClick={selectProjectFromLink}
+                    projects={explorer.projects}
+                  />
+
+                </div>
+              </div>
+            </aside>
+
+            <main
+              ref={mainPaneRef}
+              className={`explorer-scrollbar flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden overflow-y-auto md:w-auto${showFullBleedMainView
+                ? " px-5 pb-5 md:h-screen md:min-h-0 md:overflow-hidden md:px-0 md:pb-0"
+                : " px-5 pb-5 md:h-auto md:min-h-screen md:overflow-visible md:px-6 md:pb-5"
+                }`}
+            >
+              <header
+                ref={shellHeaderRef}
+                className={`
               sticky top-0 z-10 transform-gpu py-3 transition-[translate,opacity] duration-200 ease-out will-change-translate motion-reduce:transition-none -mx-5 px-5 md:-mx-6 md:px-6
               md:translate-y-0 md:opacity-100
               ${isMobileShellHeaderVisible
-                ? "-translate-y-1 opacity-100"
-                : "pointer-events-none -translate-y-[calc(100%+0.75rem)] opacity-0"
-              }
+                    ? "-translate-y-1 opacity-100"
+                    : "pointer-events-none -translate-y-[calc(100%+0.75rem)] opacity-0"
+                  }
             `}
-            hidden={!shouldShowShellHeader}
-          >
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-0 -z-10 md:mx-auto md:max-w-[58rem] bg-[linear-gradient(to_bottom,var(--shell-fade-bg)_calc(100%-var(--spacing)*6),transparent)] md:backdrop-blur-none"
-            />
-            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-              <div className="order-2 min-w-0 md:order-1" hidden={Boolean(currentThread?.isDraft)}>
-                <p id="file-path" ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
-                  {isThreadShellTitleLoading ? (
-                    <span className="block h-4 w-48 max-w-[60vw] rounded-full workbench-skeleton" aria-hidden="true" />
-                  ) : showThreadView ? threadShellTitle : showSettingsView ? "Settings" : "Select a file"}
-                </p>
-                <p id="status-line" ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted">
-                  {showThreadView ? threadShellStatusLabel : showSettingsView ? "Theme and local Workbench preferences." : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
-                </p>
-              </div>
-              <div className="order-1 flex items-center justify-between gap-3 md:order-2 md:ml-auto md:flex-none md:justify-end">
-                <button
-                  type="button"
-                  aria-label="Back to file explorer"
-                  title="Back to file explorer"
-                  hidden={!isMobile || mobilePane !== "editor"}
-                  className={`${workbenchIconButtonClassName} shrink-0 md:hidden`}
-                  onClick={() => {
-                    navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId));
-                  }}
-                >
-                  <BackArrowIcon />
-                  <span className="sr-only">Back to file explorer</span>
-                </button>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    id="zoom-out"
-                    ref={zoomOutButtonRef}
-                    type="button"
-                    title="Decrease editor text size"
-                    aria-label="Decrease editor text size"
-                    className={workbenchIconButtonClassName}
-                  >
-                    <ZoomOutIcon />
-                    <span className="sr-only">Decrease editor text size</span>
-                  </button>
-                  <button
-                    id="zoom-in"
-                    ref={zoomInButtonRef}
-                    type="button"
-                    title="Increase editor text size"
-                    aria-label="Increase editor text size"
-                    className={workbenchIconButtonClassName}
-                  >
-                    <ZoomInIcon />
-                    <span className="sr-only">Increase editor text size</span>
-                  </button>
-                </div>
-                <div className="flex items-center gap-1.5" hidden={Boolean(currentThread) || showThreadView || showSettingsView}>
-                  <button
-                    id="save-file"
-                    ref={saveFileButtonRef}
-                    type="button"
-                    title="Save current file"
-                    aria-label="Save current file"
-                    className={workbenchIconButtonClassName}
-                    data-invalid="false"
-                  >
-                    <SaveIcon />
-                    <span className="sr-only">Save current file</span>
-                  </button>
-                  <button
-                    id="reset-draft"
-                    ref={resetDraftButtonRef}
-                    type="button"
-                    title="Discard the current draft"
-                    aria-label="Discard the current draft"
-                    className={workbenchIconButtonClassName}
-                  >
-                    <BinIcon />
-                    <span className="sr-only">Discard the current draft</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </header>
-
-          <section
-            className={`relative md:min-h-0 md:flex-1${showFullBleedMainView ? " min-h-0 overflow-hidden" : ""}`}
-            aria-busy={isSelectionPending}
-          >
-            {showThreadView && !shouldRenderMainLayout ? (
-              isThreadViewReady && threadForThreadView ? (
-                <ThreadView
-                  key={`${activeProjectId}:${threadForThreadView.id}`}
-                  thread={threadForThreadView}
-                  composerSpellCheck={resolvedSettings.composerSpellCheck}
-                  fontSizeRem={resolvedSettings.editorFontSize}
-                  livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
-                  onDraftHarnessChange={handleHarnessChange}
-                  onListModels={listThreadModels}
-                  onPauseThread={pauseThread}
-                  onReadThread={readThread}
-                  onResumeThread={resumeThread}
-                  onThreadSeen={markThreadSeen}
-                  onCompactThread={compactThread}
-                  onSendMessage={sendThreadMessage}
-                  onStopThread={stopThread}
-                  onSubmitUserInputRequest={submitUserInputRequest}
-                  onThreadComposerDraftChange={handleThreadComposerDraftChange}
-                  onThreadComposerDraftClear={handleThreadComposerDraftClear}
-                  onThreadQuestionnaireDraftChange={handleThreadQuestionnaireDraftChange}
-                  onThreadQuestionnaireDraftClear={handleThreadQuestionnaireDraftClear}
-                  onThreadAgentChange={setThreadAgent}
-                  onThreadReasoningEffortChange={setThreadReasoningEffort}
-                  onThreadServiceTierChange={setThreadServiceTier}
-                  onThreadSettingsChange={setThreadComposerSettings}
-                  onThreadModelChange={setThreadModel}
-                  onUpdateThreadState={controls.updateThreadState}
-                  selectedThreadId={effectiveSelectedThreadId}
-                  onSelectedThreadChange={handleSelectedThreadChange}
-                  onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
-                  projectId={activeProjectId}
-                  projectFileCandidates={explorer.projectFileCandidates}
-                  projectFileIndexId={explorer.projectFileIndexId}
-                  projectFilePaths={explorer.projectFilePaths}
-                  projectFileLinkRoots={projectFileLinkRoots}
-                  projectRootPath={explorer.rootPath}
-                  projectRoots={explorer.roots}
-                  knownSubagents={explorer.subagents}
-                  rateLimits={rateLimits}
-                  threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
-                  threadComposerDraft={activeThreadComposerDraft}
-                  threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
-                  threadDocuments={threadDocuments}
-                  threadGoalControls={controls.threadGoals}
-                  threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
+                hidden={!shouldShowShellHeader}
+              >
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 -z-10 md:mx-auto md:max-w-[58rem] bg-[linear-gradient(to_bottom,var(--shell-fade-bg)_calc(100%-var(--spacing)*6),transparent)] md:backdrop-blur-none"
                 />
-              ) : selectionError ? (
-                <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
-                  <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
-                    <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">Thread</p>
-                    <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open thread</p>
-                    <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{selectionError}</p>
+                <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                  <div className="order-2 min-w-0 md:order-1" hidden={Boolean(currentThread?.isDraft)}>
+                    <p id="file-path" ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
+                      {isThreadShellTitleLoading ? (
+                        <span className="block h-4 w-48 max-w-[60vw] rounded-full workbench-skeleton" aria-hidden="true" />
+                      ) : showThreadView ? threadShellTitle : showSettingsView ? "Settings" : "Select a file"}
+                    </p>
+                    <p id="status-line" ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted">
+                      {showThreadView ? threadShellStatusLabel : showSettingsView ? "Theme and local Workbench preferences." : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
+                    </p>
                   </div>
-                </div>
-              ) : (
-                <ThreadLoadingSkeleton fillAvailableHeight />
-              )
-            ) : null}
-            {showSettingsView && !shouldRenderMainLayout ? (
-              <div className="mx-auto flex w-full max-w-[56rem] flex-col gap-8 py-8">
-                <section className="space-y-6">
-                  <div className="flex flex-wrap items-end justify-between gap-4">
-                    <div className="space-y-2">
-                      <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">Preferences</p>
-                      <h1 className="m-0 text-[1.65rem] font-semibold leading-tight text-text">Settings</h1>
-                    </div>
-                    <div className="flex min-w-0 items-end gap-4" role="tablist" aria-label="Settings scope">
-                      <a
-                        href={createSettingsHref(activeProjectId, "global")}
-                        role="tab"
-                        aria-selected={settingsScope === "global"}
-                        className={`border-b-2 px-0 pb-1 text-[0.9rem] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${settingsScope === "global"
-                          ? " border-text text-text"
-                          : " border-transparent text-muted hover:text-text"}`}
-                        onClick={(event) => {
-                          openSettingsScopeFromLink(event, "global");
-                        }}
+                  <div className="order-1 flex items-center justify-between gap-3 md:order-2 md:ml-auto md:flex-none md:justify-end">
+                    <button
+                      type="button"
+                      aria-label="Back to file explorer"
+                      title="Back to file explorer"
+                      hidden={!isMobile || mobilePane !== "editor"}
+                      className={`${workbenchIconButtonClassName} shrink-0 md:hidden`}
+                      onClick={() => {
+                        navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId));
+                      }}
+                    >
+                      <BackArrowIcon />
+                      <span className="sr-only">Back to file explorer</span>
+                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        id="zoom-out"
+                        ref={zoomOutButtonRef}
+                        type="button"
+                        title="Decrease editor text size"
+                        aria-label="Decrease editor text size"
+                        className={workbenchIconButtonClassName}
                       >
-                        Global
-                      </a>
-                      <a
-                        href={createSettingsHref(activeProjectId, "project")}
-                        role="tab"
-                        aria-selected={settingsScope === "project"}
-                        className={`min-w-0 border-b-2 px-0 pb-1 text-[0.9rem] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${settingsScope === "project"
-                          ? " border-text text-text"
-                          : " border-transparent text-muted hover:text-text"}`}
-                        onClick={(event) => {
-                          openSettingsScopeFromLink(event, "project");
-                        }}
+                        <ZoomOutIcon />
+                        <span className="sr-only">Decrease editor text size</span>
+                      </button>
+                      <button
+                        id="zoom-in"
+                        ref={zoomInButtonRef}
+                        type="button"
+                        title="Increase editor text size"
+                        aria-label="Increase editor text size"
+                        className={workbenchIconButtonClassName}
                       >
-                        <span className="block max-w-[12rem] truncate">{projectTabLabel}</span>
-                      </a>
+                        <ZoomInIcon />
+                        <span className="sr-only">Increase editor text size</span>
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-1.5" hidden={Boolean(currentThread) || showThreadView || showSettingsView}>
+                      <button
+                        id="save-file"
+                        ref={saveFileButtonRef}
+                        type="button"
+                        title="Save current file"
+                        aria-label="Save current file"
+                        className={workbenchIconButtonClassName}
+                        data-invalid="false"
+                      >
+                        <SaveIcon />
+                        <span className="sr-only">Save current file</span>
+                      </button>
+                      <button
+                        id="reset-draft"
+                        ref={resetDraftButtonRef}
+                        type="button"
+                        title="Discard the current draft"
+                        aria-label="Discard the current draft"
+                        className={workbenchIconButtonClassName}
+                      >
+                        <BinIcon />
+                        <span className="sr-only">Discard the current draft</span>
+                      </button>
                     </div>
                   </div>
-
-                  <div className="space-y-7" role="tabpanel">
-                    {settingsScope === "global"
-                      ? (
-                        <>
-                          {SETTINGS_ORDER.map((key) => renderGlobalSettingRow(key))}
-                          {renderLocalCapabilitySettings()}
-                        </>
-                      )
-                      : SETTINGS_ORDER.map((key) => renderProjectSettingRow(key))}
-                  </div>
-                </section>
-              </div>
-            ) : null}
-            {showCollaborationView && !shouldRenderMainLayout ? (
-              <div className="h-full min-h-0">
-                <WorkbenchCollaborationView
-                  activeDrag={activeWorkbenchDrag}
-                  collaborationState={collaborationState}
-                  collaborationThreadSummaries={collaborationThreadSummaries}
-                  composerSpellCheck={resolvedSettings.composerSpellCheck}
-                  controls={controls}
-                  editorFontClassName={editorFontClassName}
-                  fontSizeRem={resolvedSettings.editorFontSize}
-                  harness={harness}
-                  isMobile={isMobile}
-                  isProjectLoading={explorer.isProjectLoading}
-                  knownSubagents={explorer.subagents}
-                  livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
-                  onCollaborationStateChange={handleCollaborationStateChange}
-                  onClaimAutoWake={claimWorkbenchCollaborationStateAutoWake}
-                  onDraftHarnessChange={handleHarnessChange}
-                  onListModels={listThreadModels}
-                  onPauseThread={pauseThread}
-                  onReadThread={readThread}
-                  onResumeThread={resumeThread}
-                  onThreadSeen={markThreadSeen}
-                  onCompactThread={compactThread}
-                  onSendMessage={sendThreadMessage}
-                  onStopThread={stopThread}
-                  onSubmitUserInputRequest={submitUserInputRequest}
-                  onThreadComposerDraftChange={handleThreadComposerDraftChange}
-                  onThreadComposerDraftClear={handleThreadComposerDraftClear}
-                  onThreadQuestionnaireDraftChange={handleThreadQuestionnaireDraftChange}
-                  onThreadQuestionnaireDraftClear={handleThreadQuestionnaireDraftClear}
-                  onThreadAgentChange={setThreadAgent}
-                  onThreadReasoningEffortChange={setThreadReasoningEffort}
-                  onThreadServiceTierChange={setThreadServiceTier}
-                  onThreadSettingsChange={setThreadComposerSettings}
-                  onOpenThreadFromPromptPost={(threadId) => {
-                    navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, threadId));
-                  }}
-                  onPointerDrop={endWorkbenchPointerDrag}
-                  onPostPointerDragStart={(event, post) => {
-                    beginWorkbenchPointerDrag(event, {
-                      postId: post.id,
-                      type: "collaboration-post",
-                    });
-                  }}
-                  onStartThreadFromPrompt={handleStartCollaborationSuggestionThread}
-                  onThreadModelChange={setThreadModel}
-                  onUpdateThreadState={controls.updateThreadState}
-                  onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
-                  projectFileCandidates={explorer.projectFileCandidates}
-                  projectChanges={explorer.changes}
-                  projectFileIndexId={explorer.projectFileIndexId}
-                  projectFileLinkRoots={projectFileLinkRoots}
-                  projectFilePaths={explorer.projectFilePaths}
-                  projectId={activeProjectId}
-                  projectRootPath={explorer.rootPath}
-                  projectRoots={explorer.roots}
-                  rateLimits={rateLimits}
-                  scratchpadPath={collaborationScratchpadPath}
-                  scratchpadWritableRoot={collaborationScratchpadWritableRoot}
-                  threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
-                  threadComposerDraft={activeThreadComposerDraft}
-                  threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
-                  threadDocuments={threadDocuments}
-                  threadGoalControls={controls?.threadGoals ?? null}
-                  threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
-                  selectedThreadId={effectiveSelectedThreadId}
-                  onSelectedThreadChange={handleSelectedThreadChange}
-                />
-              </div>
-            ) : null}
-            {showRouteError && !shouldRenderMainLayout ? (
-              <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
-                <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
-                  <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">Route</p>
-                  <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open route</p>
-                  <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{selectionError}</p>
                 </div>
-              </div>
-            ) : showEmptyState && !shouldRenderMainLayout ? (
-              <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
-                <div className="flex w-full max-w-[42rem] flex-col gap-8">
-                  <PrimaryButton
-                    type="button"
-                    className="w-fit gap-2"
-                    onClick={() => {
-                      if (!controls) {
-                        return;
-                      }
-                      const draftThread = controls.createThreadDraft(harness);
-                      navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, draftThread.id));
-                    }}
-                  >
-                    <span className="inline-flex size-4 items-center justify-center text-[1.05em] leading-none">+</span>
-                    <span>Create new thread</span>
-                  </PrimaryButton>
-                  {quickOpenPaths.length ? (
-                    <div className="space-y-2">
-                      {quickOpenPaths.map((path) => (
-                        <button
-                          key={path}
-                          type="button"
-                          className="flex w-full items-start justify-between gap-4 rounded-[1.15rem] px-4 py-3 text-left transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
-                          onClick={() => {
-                            void openFileFromExplorer(path);
-                          }}
-                          title={path}
-                        >
-                          <span className="min-w-0 space-y-1">
-                            <span className="inline-flex min-w-0 items-center gap-2">
-                              <span className="block truncate text-[0.95rem] font-medium text-text">{path}</span>
-                              {modifiedPaths.has(path) ? (
-                                <span
-                                  aria-hidden="true"
-                                  className="inline-block h-2 w-2 shrink-0 rounded-full bg-[#d0ad12]"
-                                />
-                              ) : null}
-                            </span>
-                            <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.78rem] text-muted">
-                              <span>{formatQuickOpenTimestamp(quickOpenUpdatedAtByPath[path])}</span>
-                              {explorer.changes[path] ? (
-                                <span>{formatQuickOpenChangeSummary(explorer.changes[path].additions, explorer.changes[path].deletions)}</span>
-                              ) : null}
-                              {modifiedPaths.has(path) ? (
-                                <span>Draft</span>
-                              ) : null}
-                            </span>
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
-            {shouldRenderMainLayout && mainLayoutForRender && (!showFileView || isFileViewReady || activeWorkbenchDrag?.payload.type === "panel-target") ? (
-              <WorkbenchMainLayoutView
-                activeDrag={activeWorkbenchDrag}
-                layout={mainLayoutForRender}
-                onFocusPanel={() => { }}
-                onLayoutChange={updateMainLayout}
-                onPanelDrop={handleMainLayoutPanelDrop}
-                onPointerDrop={endWorkbenchPointerDrag}
-                onSplitResize={resizeMosaicSplit}
-                renderPanel={({ isFocused, mosaicPanel, panelId, target }) => {
-                  const panelZoomDelta = mosaicPanel?.zoomDelta ?? 0;
-                  const panelFontSizeRem = clampEditorFontSize(resolvedSettings.editorFontSize + panelZoomDelta * 0.08);
-                  const isMinimized = Boolean(mosaicPanel?.minimized);
-                  const isMinimizedVertical = isMinimized && mosaicPanel?.parentDirection === "horizontal";
-                  const hasSidebarRestoreInset = isEffectiveDesktopSidebarCollapsed
-                    && showMosaicView
-                    && panelId === mainLayoutForRender.focusedPanelId;
-                  const updatePanelZoomDelta = (zoomDelta: number) => {
-                    updateMosaicPanelOptions(panelId, { zoomDelta: zoomDelta || undefined });
-                  };
-                  const togglePanelMinimized = () => {
-                    updateMosaicPanelOptions(panelId, { minimized: !isMinimized || undefined });
-                  };
-                  if (target.kind === "file") {
-                    return (
-                      <WorkbenchFilePanel
-                        contained={showMosaicView}
-                        controls={controls}
-                        editorFontClassName={editorFontClassName}
-                        fontSizeRem={panelFontSizeRem}
-                        hasSidebarRestoreInset={hasSidebarRestoreInset}
-                        isFocused={isFocused}
-                        isMinimized={isMinimized}
-                        isMinimizedVertical={isMinimizedVertical}
-                        onClose={showMosaicView ? () => {
-                          closeMosaicPanel(target);
-                        } : undefined}
-                        onFocus={() => { }}
-                        onHeaderPointerDragStart={showMosaicView ? (event) => {
-                          beginWorkbenchPointerDrag(event, {
-                            sourcePanelId: panelId,
-                            target,
-                            type: "panel-target",
-                          });
-                        } : undefined}
-                        onMinimizeToggle={showMosaicView ? togglePanelMinimized : undefined}
-                        onPanelZoomDeltaChange={showMosaicView ? updatePanelZoomDelta : undefined}
-                        panelZoomDelta={panelZoomDelta}
-                        path={target.filePath}
-                        spellCheck={resolvedSettings.editorSpellCheck}
-                      />
-                    );
-                  }
+              </header>
 
-                  if (target.kind === "thread") {
-                    return (
-                      <WorkbenchThreadPanel
-                        composerSpellCheck={resolvedSettings.composerSpellCheck}
-                        fallbackThreadSummary={target.target.kind === "provider" || target.target.kind === "subagent" ? threadSummariesById.get(getWorkbenchThreadTargetRootId(target.target)) ?? null : null}
-                        fontSizeRem={resolvedSettings.editorFontSize}
-                        hasSidebarRestoreInset={hasSidebarRestoreInset}
-                        isFocused={isFocused}
-                        isMinimized={isMinimized}
-                        isMinimizedVertical={isMinimizedVertical}
-                        knownSubagents={explorer.subagents}
-                        livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
-                        onDraftHarnessChange={handleHarnessChange}
-                        onListModels={listThreadModels}
-                        onPauseThread={pauseThread}
-                        onReadThread={readThread}
-                        onResumeThread={resumeThread}
-                        onThreadSeen={markThreadSeen}
-                        onCompactThread={compactThread}
-                        onCreateDraftThread={() => controls?.createThreadDraft(harness) ?? null}
-                        onSendMessage={sendThreadMessage}
-                        onStopThread={stopThread}
-                        onSubmitUserInputRequest={submitUserInputRequest}
-                        onThreadComposerDraftChange={handleThreadComposerDraftChange}
-                        onThreadComposerDraftClear={handleThreadComposerDraftClear}
-                        onThreadQuestionnaireDraftChange={handleThreadQuestionnaireDraftChange}
-                        onThreadQuestionnaireDraftClear={handleThreadQuestionnaireDraftClear}
-                        onThreadAgentChange={setThreadAgent}
-                        onThreadReasoningEffortChange={setThreadReasoningEffort}
-                        onThreadServiceTierChange={setThreadServiceTier}
-                        onThreadSettingsChange={setThreadComposerSettings}
-                        onThreadModelChange={setThreadModel}
-                        onUpdateThreadState={controls.updateThreadState}
-                        selectedThreadId={getWorkbenchThreadTargetSelectedId(target.target)}
-                        onSelectedThreadChange={(selectedThreadId) => {
-                          if (!route.mosaicNode || target.target.kind === "new" || target.target.kind === "draft") return;
-                          const rootThreadId = getWorkbenchThreadTargetRootId(target.target);
-                          const nextTarget: WorkbenchMosaicPanelTarget = {
-                            kind: "thread",
-                            target: selectedThreadId === rootThreadId
-                              ? { harness: target.target.harness, kind: "provider", threadId: rootThreadId }
-                              : { harness: target.target.harness, kind: "subagent", parentThreadId: rootThreadId, threadId: selectedThreadId },
-                          };
-                          navigateToRoute(createMosaicRoute(route.projectId, replaceWorkbenchMosaicTarget(route.mosaicNode, target, nextTarget)));
-                        }}
-                        onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
-                        projectId={activeProjectId}
-                        projectFileCandidates={explorer.projectFileCandidates}
-                        projectFileIndexId={explorer.projectFileIndexId}
-                        projectFilePaths={explorer.projectFilePaths}
-                        projectRootPath={explorer.rootPath}
-                        projectRoots={explorer.roots}
-                        rateLimits={rateLimits}
-                        threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
-                        threadComposerDraft={getThreadComposerDraftForTarget(target.target)}
-                        threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
-                        threadDocuments={threadDocuments}
-                        threadGoalControls={controls?.threadGoals ?? null}
-                        threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
-                        onClose={showMosaicView ? () => {
-                          closeMosaicPanel(target);
-                        } : undefined}
-                        onHeaderPointerDragStart={showMosaicView ? (event) => {
-                          beginWorkbenchPointerDrag(event, {
-                            sourcePanelId: panelId,
-                            target,
-                            type: "panel-target",
-                          });
-                        } : undefined}
-                        onMinimizeToggle={showMosaicView ? togglePanelMinimized : undefined}
-                        onPanelZoomDeltaChange={showMosaicView ? updatePanelZoomDelta : undefined}
-                        panelZoomDelta={panelZoomDelta}
-                        thread={target.target.kind === "provider" || target.target.kind === "subagent" ? getThreadDocumentFromSnapshot(threadDocuments, getWorkbenchThreadTargetRootId(target.target)) ?? mosaicDraftThreadsById[getWorkbenchThreadTargetRootId(target.target)] ?? (currentThread?.id === getWorkbenchThreadTargetRootId(target.target) ? currentThread : null) : null}
-                        threadId={getWorkbenchThreadTargetRootId(target.target)}
-                      />
-                    );
-                  }
-
-                  return (
+              <section
+                className={`relative md:min-h-0 md:flex-1${showFullBleedMainView ? " min-h-0 overflow-hidden" : ""}`}
+                aria-busy={isSelectionPending}
+              >
+                {showThreadView && !shouldRenderMainLayout ? (
+                  isThreadViewReady && threadForThreadView ? (
+                    <ThreadView
+                      key={`${activeProjectId}:${threadForThreadView.id}`}
+                      thread={threadForThreadView}
+                      composerSpellCheck={resolvedSettings.composerSpellCheck}
+                      fontSizeRem={resolvedSettings.editorFontSize}
+                      livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
+                      onDraftHarnessChange={handleHarnessChange}
+                      onListModels={listThreadModels}
+                      onPauseThread={pauseThread}
+                      onReadThread={readThread}
+                      onResumeThread={resumeThread}
+                      onThreadSeen={markThreadSeen}
+                      onCompactThread={compactThread}
+                      onSendMessage={sendThreadMessage}
+                      onStopThread={stopThread}
+                      onSubmitUserInputRequest={submitUserInputRequest}
+                      onThreadComposerDraftChange={handleThreadComposerDraftChange}
+                      onThreadComposerDraftClear={handleThreadComposerDraftClear}
+                      onThreadQuestionnaireDraftChange={handleThreadQuestionnaireDraftChange}
+                      onThreadQuestionnaireDraftClear={handleThreadQuestionnaireDraftClear}
+                      onThreadAgentChange={setThreadAgent}
+                      onThreadReasoningEffortChange={setThreadReasoningEffort}
+                      onThreadServiceTierChange={setThreadServiceTier}
+                      onThreadSettingsChange={setThreadComposerSettings}
+                      onThreadModelChange={setThreadModel}
+                      onUpdateThreadState={controls.updateThreadState}
+                      selectedThreadId={effectiveSelectedThreadId}
+                      onSelectedThreadChange={handleSelectedThreadChange}
+                      onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
+                      projectId={activeProjectId}
+                      projectFileCandidates={explorer.projectFileCandidates}
+                      projectFileIndexId={explorer.projectFileIndexId}
+                      projectFilePaths={explorer.projectFilePaths}
+                      projectFileLinkRoots={projectFileLinkRoots}
+                      projectRootPath={explorer.rootPath}
+                      projectRoots={explorer.roots}
+                      knownSubagents={explorer.subagents}
+                      rateLimits={rateLimits}
+                      threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
+                      threadComposerDraft={activeThreadComposerDraft}
+                      threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
+                      threadDocuments={threadDocuments}
+                      threadGoalControls={controls.threadGoals}
+                      threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
+                    />
+                  ) : selectionError ? (
                     <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
-                      <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
-                        <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">Workbench</p>
-                        <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Drop a file or thread here</p>
+                      <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
+                        <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">Thread</p>
+                        <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open thread</p>
+                        <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{selectionError}</p>
                       </div>
                     </div>
-                  );
-                }}
-              />
-            ) : null}
-            {showFileView && !selectionError && isFileViewReady && !shouldRenderMainLayout ? (
-              <WorkbenchFilePanel
-                controls={controls}
-                editorFontClassName={editorFontClassName}
-                fontSizeRem={resolvedSettings.editorFontSize}
-                isFocused
-                onFocus={() => { }}
-                path={effectiveFilePath}
-                spellCheck={resolvedSettings.editorSpellCheck}
-              />
-            ) : null}
-            {showFileView && selectionError ? (
-              <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
-                <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
-                  <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">File</p>
-                  <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open file</p>
-                  <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{selectionError}</p>
-                </div>
-              </div>
-            ) : null}
-            {showFileView && !selectionError && !isFileViewReady ? (
-              <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
-                <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
-                  <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">File</p>
-                  <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Loading file...</p>
-                  <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{effectiveFilePath}</p>
-                </div>
-              </div>
-            ) : null}
-          </section>
+                  ) : (
+                    <ThreadLoadingSkeleton fillAvailableHeight />
+                  )
+                ) : null}
+                {showSettingsView && !shouldRenderMainLayout ? (
+                  <div className="mx-auto flex w-full max-w-[56rem] flex-col gap-8 py-8">
+                    <section className="space-y-6">
+                      <div className="flex flex-wrap items-end justify-between gap-4">
+                        <div className="space-y-2">
+                          <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">Preferences</p>
+                          <h1 className="m-0 text-[1.65rem] font-semibold leading-tight text-text">Settings</h1>
+                        </div>
+                        <div className="flex min-w-0 items-end gap-4" role="tablist" aria-label="Settings scope">
+                          <a
+                            href={createSettingsHref(activeProjectId, "global")}
+                            role="tab"
+                            aria-selected={settingsScope === "global"}
+                            className={`border-b-2 px-0 pb-1 text-[0.9rem] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${settingsScope === "global"
+                              ? " border-text text-text"
+                              : " border-transparent text-muted hover:text-text"}`}
+                            onClick={(event) => {
+                              openSettingsScopeFromLink(event, "global");
+                            }}
+                          >
+                            Global
+                          </a>
+                          <a
+                            href={createSettingsHref(activeProjectId, "project")}
+                            role="tab"
+                            aria-selected={settingsScope === "project"}
+                            className={`min-w-0 border-b-2 px-0 pb-1 text-[0.9rem] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${settingsScope === "project"
+                              ? " border-text text-text"
+                              : " border-transparent text-muted hover:text-text"}`}
+                            onClick={(event) => {
+                              openSettingsScopeFromLink(event, "project");
+                            }}
+                          >
+                            <span className="block max-w-[12rem] truncate">{projectTabLabel}</span>
+                          </a>
+                        </div>
+                      </div>
 
-          <WorkbenchDialog
-            id="save-conflict-dialog"
-            dialogRef={saveConflictDialogRef}
-            titleId="save-conflict-title"
-            summaryId="save-conflict-summary"
-            eyebrow="Write conflict"
-            title="This file changed on disk"
-            actions={
-              <>
-                <button
-                  id="save-conflict-keep-editing"
-                  ref={saveConflictKeepEditingButtonRef}
-                  type="button"
-                  className={dialogButtonClassName}
-                >
-                  Keep editing
-                </button>
-                <button
-                  id="save-conflict-reload"
-                  ref={saveConflictReloadButtonRef}
-                  type="button"
-                  className={dialogButtonClassName}
-                >
-                  Reload from disk
-                </button>
-                <button
-                  id="save-conflict-overwrite"
-                  ref={saveConflictOverwriteButtonRef}
-                  type="button"
-                  className={dialogButtonClassName}
-                >
-                  Overwrite anyway
-                </button>
-              </>
-            }
-          >
-            <>
-              <p id="save-conflict-summary" ref={saveConflictSummaryRef} className="mt-3 text-sm leading-6 text-muted">
-                Reload from disk to discard your unsaved editor state, or overwrite anyway to write what is currently in the editor.
-              </p>
-              <p id="save-conflict-expected" ref={saveConflictExpectedRef} className="mt-3 text-[0.84rem] tracking-[0.02em] text-muted" />
-              <p id="save-conflict-actual" ref={saveConflictActualRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted" />
-            </>
-          </WorkbenchDialog>
+                      <div className="space-y-7" role="tabpanel">
+                        {settingsScope === "global"
+                          ? (
+                            <>
+                              {SETTINGS_ORDER.map((key) => renderGlobalSettingRow(key))}
+                              {renderLocalCapabilitySettings()}
+                            </>
+                          )
+                          : SETTINGS_ORDER.map((key) => renderProjectSettingRow(key))}
+                      </div>
+                    </section>
+                  </div>
+                ) : null}
+                {showCollaborationView && !shouldRenderMainLayout ? (
+                  <div className="h-full min-h-0">
+                    <WorkbenchCollaborationView
+                      activeDrag={activeWorkbenchDrag}
+                      collaborationState={collaborationState}
+                      collaborationThreadSummaries={collaborationThreadSummaries}
+                      composerSpellCheck={resolvedSettings.composerSpellCheck}
+                      controls={controls}
+                      editorFontClassName={editorFontClassName}
+                      fontSizeRem={resolvedSettings.editorFontSize}
+                      harness={harness}
+                      isMobile={isMobile}
+                      isProjectLoading={explorer.isProjectLoading}
+                      knownSubagents={explorer.subagents}
+                      livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
+                      onCollaborationStateChange={handleCollaborationStateChange}
+                      onClaimAutoWake={claimWorkbenchCollaborationStateAutoWake}
+                      onDraftHarnessChange={handleHarnessChange}
+                      onListModels={listThreadModels}
+                      onPauseThread={pauseThread}
+                      onReadThread={readThread}
+                      onResumeThread={resumeThread}
+                      onThreadSeen={markThreadSeen}
+                      onCompactThread={compactThread}
+                      onSendMessage={sendThreadMessage}
+                      onStopThread={stopThread}
+                      onSubmitUserInputRequest={submitUserInputRequest}
+                      onThreadComposerDraftChange={handleThreadComposerDraftChange}
+                      onThreadComposerDraftClear={handleThreadComposerDraftClear}
+                      onThreadQuestionnaireDraftChange={handleThreadQuestionnaireDraftChange}
+                      onThreadQuestionnaireDraftClear={handleThreadQuestionnaireDraftClear}
+                      onThreadAgentChange={setThreadAgent}
+                      onThreadReasoningEffortChange={setThreadReasoningEffort}
+                      onThreadServiceTierChange={setThreadServiceTier}
+                      onThreadSettingsChange={setThreadComposerSettings}
+                      onOpenThreadFromPromptPost={(threadId) => {
+                        navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, threadId));
+                      }}
+                      onPointerDrop={endWorkbenchPointerDrag}
+                      onPostPointerDragStart={(event, post) => {
+                        beginWorkbenchPointerDrag(event, {
+                          postId: post.id,
+                          type: "collaboration-post",
+                        });
+                      }}
+                      onStartThreadFromPrompt={handleStartCollaborationSuggestionThread}
+                      onThreadModelChange={setThreadModel}
+                      onUpdateThreadState={controls.updateThreadState}
+                      onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
+                      projectFileCandidates={explorer.projectFileCandidates}
+                      projectChanges={explorer.changes}
+                      projectFileIndexId={explorer.projectFileIndexId}
+                      projectFileLinkRoots={projectFileLinkRoots}
+                      projectFilePaths={explorer.projectFilePaths}
+                      projectId={activeProjectId}
+                      projectRootPath={explorer.rootPath}
+                      projectRoots={explorer.roots}
+                      rateLimits={rateLimits}
+                      scratchpadPath={collaborationScratchpadPath}
+                      scratchpadWritableRoot={collaborationScratchpadWritableRoot}
+                      threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
+                      threadComposerDraft={activeThreadComposerDraft}
+                      threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
+                      threadDocuments={threadDocuments}
+                      threadGoalControls={controls?.threadGoals ?? null}
+                      threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
+                      selectedThreadId={effectiveSelectedThreadId}
+                      onSelectedThreadChange={handleSelectedThreadChange}
+                    />
+                  </div>
+                ) : null}
+                {showRouteError && !shouldRenderMainLayout ? (
+                  <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
+                    <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
+                      <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">Route</p>
+                      <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open route</p>
+                      <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{selectionError}</p>
+                    </div>
+                  </div>
+                ) : showEmptyState && !shouldRenderMainLayout ? (
+                  <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
+                    <div className="flex w-full max-w-[42rem] flex-col gap-8">
+                      <PrimaryButton
+                        type="button"
+                        className="w-fit gap-2"
+                        onClick={() => {
+                          if (!controls) {
+                            return;
+                          }
+                          const draftThread = controls.createThreadDraft(harness);
+                          navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, draftThread.id));
+                        }}
+                      >
+                        <span className="inline-flex size-4 items-center justify-center text-[1.05em] leading-none">+</span>
+                        <span>Create new thread</span>
+                      </PrimaryButton>
+                      {quickOpenPaths.length ? (
+                        <div className="space-y-2">
+                          {quickOpenPaths.map((path) => (
+                            <button
+                              key={path}
+                              type="button"
+                              className="flex w-full items-start justify-between gap-4 rounded-[1.15rem] px-4 py-3 text-left transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
+                              onClick={() => {
+                                void openFileFromExplorer(path);
+                              }}
+                              title={path}
+                            >
+                              <span className="min-w-0 space-y-1">
+                                <span className="inline-flex min-w-0 items-center gap-2">
+                                  <span className="block truncate text-[0.95rem] font-medium text-text">{path}</span>
+                                  {modifiedPaths.has(path) ? (
+                                    <span
+                                      aria-hidden="true"
+                                      className="inline-block h-2 w-2 shrink-0 rounded-full bg-[#d0ad12]"
+                                    />
+                                  ) : null}
+                                </span>
+                                <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.78rem] text-muted">
+                                  <span>{formatQuickOpenTimestamp(quickOpenUpdatedAtByPath[path])}</span>
+                                  {explorer.changes[path] ? (
+                                    <span>{formatQuickOpenChangeSummary(explorer.changes[path].additions, explorer.changes[path].deletions)}</span>
+                                  ) : null}
+                                  {modifiedPaths.has(path) ? (
+                                    <span>Draft</span>
+                                  ) : null}
+                                </span>
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+                {shouldRenderMainLayout && mainLayoutForRender && (!showFileView || isFileViewReady || activeWorkbenchDrag?.payload.type === "panel-target") ? (
+                  <WorkbenchMainLayoutView
+                    activeDrag={activeWorkbenchDrag}
+                    layout={mainLayoutForRender}
+                    onFocusPanel={() => { }}
+                    onLayoutChange={updateMainLayout}
+                    onPanelDrop={handleMainLayoutPanelDrop}
+                    onPointerDrop={endWorkbenchPointerDrag}
+                    onSplitResize={resizeMosaicSplit}
+                    renderPanel={({ isFocused, mosaicPanel, panelId, target }) => {
+                      const panelZoomDelta = mosaicPanel?.zoomDelta ?? 0;
+                      const panelFontSizeRem = clampEditorFontSize(resolvedSettings.editorFontSize + panelZoomDelta * 0.08);
+                      const isMinimized = Boolean(mosaicPanel?.minimized);
+                      const isMinimizedVertical = isMinimized && mosaicPanel?.parentDirection === "horizontal";
+                      const hasSidebarRestoreInset = isEffectiveDesktopSidebarCollapsed
+                        && showMosaicView
+                        && panelId === mainLayoutForRender.focusedPanelId;
+                      const updatePanelZoomDelta = (zoomDelta: number) => {
+                        updateMosaicPanelOptions(panelId, { zoomDelta: zoomDelta || undefined });
+                      };
+                      const togglePanelMinimized = () => {
+                        updateMosaicPanelOptions(panelId, { minimized: !isMinimized || undefined });
+                      };
+                      if (target.kind === "file") {
+                        return (
+                          <WorkbenchFilePanel
+                            contained={showMosaicView}
+                            controls={controls}
+                            editorFontClassName={editorFontClassName}
+                            fontSizeRem={panelFontSizeRem}
+                            hasSidebarRestoreInset={hasSidebarRestoreInset}
+                            isFocused={isFocused}
+                            isMinimized={isMinimized}
+                            isMinimizedVertical={isMinimizedVertical}
+                            onClose={showMosaicView ? () => {
+                              closeMosaicPanel(target);
+                            } : undefined}
+                            onFocus={() => { }}
+                            onHeaderPointerDragStart={showMosaicView ? (event) => {
+                              beginWorkbenchPointerDrag(event, {
+                                sourcePanelId: panelId,
+                                target,
+                                type: "panel-target",
+                              });
+                            } : undefined}
+                            onMinimizeToggle={showMosaicView ? togglePanelMinimized : undefined}
+                            onPanelZoomDeltaChange={showMosaicView ? updatePanelZoomDelta : undefined}
+                            panelZoomDelta={panelZoomDelta}
+                            path={target.filePath}
+                            spellCheck={resolvedSettings.editorSpellCheck}
+                          />
+                        );
+                      }
 
-          <WorkbenchDialog
-            id="reset-draft-dialog"
-            dialogRef={resetDraftDialogRef}
-            titleId="reset-draft-title"
-            summaryId="reset-draft-summary"
-            eyebrow="Discard draft"
-            title="Reset this draft?"
-            actions={
-              <>
-                <button
-                  id="reset-draft-cancel"
-                  ref={resetDraftCancelButtonRef}
-                  type="button"
-                  className={dialogButtonClassName}
-                >
-                  Cancel
-                </button>
-                <button
-                  id="reset-draft-head"
-                  ref={resetDraftHeadButtonRef}
-                  type="button"
-                  className={dialogButtonClassName}
-                >
-                  Reset to HEAD
-                </button>
-                <button
-                  id="reset-draft-saved"
-                  ref={resetDraftSavedButtonRef}
-                  type="button"
-                  className={dialogButtonClassName}
-                >
-                  Reset to saved
-                </button>
-              </>
-            }
-          >
-            <p id="reset-draft-summary" className="mt-3 text-sm leading-6 text-muted">
-              Reset to saved discards the current draft and reloads the file from disk. Reset to HEAD overwrites the file on disk with the current git HEAD version, then reloads it here.
-            </p>
-          </WorkbenchDialog>
+                      if (target.kind === "thread") {
+                        return (
+                          <WorkbenchThreadPanel
+                            composerSpellCheck={resolvedSettings.composerSpellCheck}
+                            fallbackThreadSummary={target.target.kind === "provider" || target.target.kind === "subagent" ? threadSummariesById.get(getWorkbenchThreadTargetRootId(target.target)) ?? null : null}
+                            fontSizeRem={resolvedSettings.editorFontSize}
+                            hasSidebarRestoreInset={hasSidebarRestoreInset}
+                            isFocused={isFocused}
+                            isMinimized={isMinimized}
+                            isMinimizedVertical={isMinimizedVertical}
+                            knownSubagents={explorer.subagents}
+                            livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
+                            onDraftHarnessChange={handleHarnessChange}
+                            onListModels={listThreadModels}
+                            onPauseThread={pauseThread}
+                            onReadThread={readThread}
+                            onResumeThread={resumeThread}
+                            onThreadSeen={markThreadSeen}
+                            onCompactThread={compactThread}
+                            onCreateDraftThread={() => controls?.createThreadDraft(harness) ?? null}
+                            onSendMessage={sendThreadMessage}
+                            onStopThread={stopThread}
+                            onSubmitUserInputRequest={submitUserInputRequest}
+                            onThreadComposerDraftChange={handleThreadComposerDraftChange}
+                            onThreadComposerDraftClear={handleThreadComposerDraftClear}
+                            onThreadQuestionnaireDraftChange={handleThreadQuestionnaireDraftChange}
+                            onThreadQuestionnaireDraftClear={handleThreadQuestionnaireDraftClear}
+                            onThreadAgentChange={setThreadAgent}
+                            onThreadReasoningEffortChange={setThreadReasoningEffort}
+                            onThreadServiceTierChange={setThreadServiceTier}
+                            onThreadSettingsChange={setThreadComposerSettings}
+                            onThreadModelChange={setThreadModel}
+                            onUpdateThreadState={controls.updateThreadState}
+                            selectedThreadId={getWorkbenchThreadTargetSelectedId(target.target)}
+                            onSelectedThreadChange={(selectedThreadId) => {
+                              if (!route.mosaicNode || target.target.kind === "new" || target.target.kind === "draft") return;
+                              const rootThreadId = getWorkbenchThreadTargetRootId(target.target);
+                              const nextTarget: WorkbenchMosaicPanelTarget = {
+                                kind: "thread",
+                                target: selectedThreadId === rootThreadId
+                                  ? { harness: target.target.harness, kind: "provider", threadId: rootThreadId }
+                                  : { harness: target.target.harness, kind: "subagent", parentThreadId: rootThreadId, threadId: selectedThreadId },
+                              };
+                              navigateToRoute(createMosaicRoute(route.projectId, replaceWorkbenchMosaicTarget(route.mosaicNode, target, nextTarget)));
+                            }}
+                            onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
+                            projectId={activeProjectId}
+                            projectFileCandidates={explorer.projectFileCandidates}
+                            projectFileIndexId={explorer.projectFileIndexId}
+                            projectFilePaths={explorer.projectFilePaths}
+                            projectRootPath={explorer.rootPath}
+                            projectRoots={explorer.roots}
+                            rateLimits={rateLimits}
+                            threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
+                            threadComposerDraft={getThreadComposerDraftForTarget(target.target)}
+                            threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
+                            threadDocuments={threadDocuments}
+                            threadGoalControls={controls?.threadGoals ?? null}
+                            threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
+                            onClose={showMosaicView ? () => {
+                              closeMosaicPanel(target);
+                            } : undefined}
+                            onHeaderPointerDragStart={showMosaicView ? (event) => {
+                              beginWorkbenchPointerDrag(event, {
+                                sourcePanelId: panelId,
+                                target,
+                                type: "panel-target",
+                              });
+                            } : undefined}
+                            onMinimizeToggle={showMosaicView ? togglePanelMinimized : undefined}
+                            onPanelZoomDeltaChange={showMosaicView ? updatePanelZoomDelta : undefined}
+                            panelZoomDelta={panelZoomDelta}
+                            thread={target.target.kind === "provider" || target.target.kind === "subagent" ? getThreadDocumentFromSnapshot(threadDocuments, getWorkbenchThreadTargetRootId(target.target)) ?? mosaicDraftThreadsById[getWorkbenchThreadTargetRootId(target.target)] ?? (currentThread?.id === getWorkbenchThreadTargetRootId(target.target) ? currentThread : null) : null}
+                            threadId={getWorkbenchThreadTargetRootId(target.target)}
+                          />
+                        );
+                      }
 
-          <WorkbenchDialog
-            id="delete-file-dialog"
-            titleId="delete-file-title"
-            summaryId="delete-file-summary"
-            eyebrow="Permanent deletion"
-            title="Permanently delete this untracked file?"
-            isOpen={Boolean(pendingDeleteFilePath)}
-            onBackdropClick={closeDeleteFileDialog}
-            actions={
-              <>
-                <button
-                  type="button"
-                  className={dialogButtonClassName}
-                  onClick={closeDeleteFileDialog}
-                  disabled={isDeletingFile}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className={`${dialogButtonClassName} text-danger`}
-                  onClick={() => {
-                    void deleteProjectFile(pendingDeleteFilePath, true);
-                  }}
-                  disabled={isDeletingFile}
-                >
-                  Delete permanently
-                </button>
-              </>
-            }
-          >
-            <>
-              <p id="delete-file-summary" className="mt-3 text-sm leading-6 text-muted">
-                Git cannot restore this file. This also discards its saved Workbench draft.
-              </p>
-              <p className="mt-3 break-all text-[0.84rem] leading-6 text-text">{pendingDeleteFilePath}</p>
-              {deleteDialogError ? <p className="mt-3 text-sm leading-6 text-danger">{deleteDialogError}</p> : null}
-            </>
-          </WorkbenchDialog>
+                      return (
+                        <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
+                          <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
+                            <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">Workbench</p>
+                            <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Drop a file or thread here</p>
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
+                ) : null}
+                {showFileView && !selectionError && isFileViewReady && !shouldRenderMainLayout ? (
+                  <WorkbenchFilePanel
+                    controls={controls}
+                    editorFontClassName={editorFontClassName}
+                    fontSizeRem={resolvedSettings.editorFontSize}
+                    isFocused
+                    onFocus={() => { }}
+                    path={effectiveFilePath}
+                    spellCheck={resolvedSettings.editorSpellCheck}
+                  />
+                ) : null}
+                {showFileView && selectionError ? (
+                  <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
+                    <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
+                      <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">File</p>
+                      <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open file</p>
+                      <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{selectionError}</p>
+                    </div>
+                  </div>
+                ) : null}
+                {showFileView && !selectionError && !isFileViewReady ? (
+                  <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
+                    <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
+                      <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">File</p>
+                      <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Loading file...</p>
+                      <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{effectiveFilePath}</p>
+                    </div>
+                  </div>
+                ) : null}
+              </section>
 
-          <WorkbenchDialog
-            id="create-entry-dialog"
-            titleId="create-entry-title"
-            summaryId="create-entry-summary"
-            eyebrow="Create entry"
-            title={`New item in ${createDialogParentLabel}`}
-            isOpen={isCreateDialogOpen}
-            onBackdropClick={closeCreateDialog}
-            actions={
-              <>
-                <button
-                  id="create-entry-cancel"
-                  type="button"
-                  className={dialogButtonClassName}
-                  onClick={closeCreateDialog}
-                  disabled={isCreatingEntry}
-                >
-                  Cancel
-                </button>
-                <button
-                  id="create-entry-folder"
-                  type="button"
-                  className={dialogButtonClassName}
-                  onClick={() => {
-                    void handleCreateEntry("directory");
-                  }}
-                  disabled={isCreatingEntry}
-                >
-                  Make folder
-                </button>
-                <button
-                  id="create-entry-file"
-                  type="button"
-                  className={dialogButtonClassName}
-                  onClick={() => {
-                    void handleCreateEntry("file");
-                  }}
-                  disabled={isCreatingEntry}
-                >
-                  Make file
-                </button>
-              </>
-            }
-          >
-            <>
-              <p id="create-entry-summary" className="mt-3 text-sm leading-6 text-muted">
-                Enter a name for the new file or folder. New files are created as markdown files.
-              </p>
-              <label className="mt-4 block text-sm text-muted" htmlFor="create-entry-name">
-                Name
-              </label>
-              <input
-                id="create-entry-name"
-                type="text"
-                value={createEntryName}
-                autoFocus
-                onChange={(event) => {
-                  setCreateEntryName(event.target.value);
-                  if (createDialogError) {
-                    setCreateDialogError("");
-                  }
-                }}
-                className="mt-2 w-full rounded-xl bg-[color-mix(in_srgb,var(--bg)_86%,transparent)] px-3 py-2 text-base outline-none ring-0 transition focus:bg-[color-mix(in_srgb,var(--bg)_94%,transparent)]"
-                placeholder="chapter-notes"
-              />
-              {createDialogError ? (
-                <p className="mt-3 text-sm leading-6 text-danger">{createDialogError}</p>
-              ) : null}
-            </>
-          </WorkbenchDialog>
-        </main>
-      </div>
+              <WorkbenchDialog
+                id="save-conflict-dialog"
+                dialogRef={saveConflictDialogRef}
+                titleId="save-conflict-title"
+                summaryId="save-conflict-summary"
+                eyebrow="Write conflict"
+                title="This file changed on disk"
+                actions={
+                  <>
+                    <button
+                      id="save-conflict-keep-editing"
+                      ref={saveConflictKeepEditingButtonRef}
+                      type="button"
+                      className={dialogButtonClassName}
+                    >
+                      Keep editing
+                    </button>
+                    <button
+                      id="save-conflict-reload"
+                      ref={saveConflictReloadButtonRef}
+                      type="button"
+                      className={dialogButtonClassName}
+                    >
+                      Reload from disk
+                    </button>
+                    <button
+                      id="save-conflict-overwrite"
+                      ref={saveConflictOverwriteButtonRef}
+                      type="button"
+                      className={dialogButtonClassName}
+                    >
+                      Overwrite anyway
+                    </button>
+                  </>
+                }
+              >
+                <>
+                  <p id="save-conflict-summary" ref={saveConflictSummaryRef} className="mt-3 text-sm leading-6 text-muted">
+                    Reload from disk to discard your unsaved editor state, or overwrite anyway to write what is currently in the editor.
+                  </p>
+                  <p id="save-conflict-expected" ref={saveConflictExpectedRef} className="mt-3 text-[0.84rem] tracking-[0.02em] text-muted" />
+                  <p id="save-conflict-actual" ref={saveConflictActualRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted" />
+                </>
+              </WorkbenchDialog>
 
-      <div
-        id="floating-toolbar"
-        ref={floatingToolbarRef}
-        className={workbenchFloatingToolbarClassName}
-        hidden
-      >
-        <div className={workbenchFloatingToolbarGroupClassName} data-toolbar-group="inline">
-          <button
-            data-command="bold"
-            type="button"
-            title="Bold"
-            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+              <WorkbenchDialog
+                id="reset-draft-dialog"
+                dialogRef={resetDraftDialogRef}
+                titleId="reset-draft-title"
+                summaryId="reset-draft-summary"
+                eyebrow="Discard draft"
+                title="Reset this draft?"
+                actions={
+                  <>
+                    <button
+                      id="reset-draft-cancel"
+                      ref={resetDraftCancelButtonRef}
+                      type="button"
+                      className={dialogButtonClassName}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      id="reset-draft-head"
+                      ref={resetDraftHeadButtonRef}
+                      type="button"
+                      className={dialogButtonClassName}
+                    >
+                      Reset to HEAD
+                    </button>
+                    <button
+                      id="reset-draft-saved"
+                      ref={resetDraftSavedButtonRef}
+                      type="button"
+                      className={dialogButtonClassName}
+                    >
+                      Reset to saved
+                    </button>
+                  </>
+                }
+              >
+                <p id="reset-draft-summary" className="mt-3 text-sm leading-6 text-muted">
+                  Reset to saved discards the current draft and reloads the file from disk. Reset to HEAD overwrites the file on disk with the current git HEAD version, then reloads it here.
+                </p>
+              </WorkbenchDialog>
+
+              <WorkbenchDialog
+                id="delete-file-dialog"
+                titleId="delete-file-title"
+                summaryId="delete-file-summary"
+                eyebrow="Permanent deletion"
+                title="Permanently delete this untracked file?"
+                isOpen={Boolean(pendingDeleteFilePath)}
+                onBackdropClick={closeDeleteFileDialog}
+                actions={
+                  <>
+                    <button
+                      type="button"
+                      className={dialogButtonClassName}
+                      onClick={closeDeleteFileDialog}
+                      disabled={isDeletingFile}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className={`${dialogButtonClassName} text-danger`}
+                      onClick={() => {
+                        void deleteProjectFile(pendingDeleteFilePath, true);
+                      }}
+                      disabled={isDeletingFile}
+                    >
+                      Delete permanently
+                    </button>
+                  </>
+                }
+              >
+                <>
+                  <p id="delete-file-summary" className="mt-3 text-sm leading-6 text-muted">
+                    Git cannot restore this file. This also discards its saved Workbench draft.
+                  </p>
+                  <p className="mt-3 break-all text-[0.84rem] leading-6 text-text">{pendingDeleteFilePath}</p>
+                  {deleteDialogError ? <p className="mt-3 text-sm leading-6 text-danger">{deleteDialogError}</p> : null}
+                </>
+              </WorkbenchDialog>
+
+              <WorkbenchDialog
+                id="create-entry-dialog"
+                titleId="create-entry-title"
+                summaryId="create-entry-summary"
+                eyebrow="Create entry"
+                title={`New item in ${createDialogParentLabel}`}
+                isOpen={isCreateDialogOpen}
+                onBackdropClick={closeCreateDialog}
+                actions={
+                  <>
+                    <button
+                      id="create-entry-cancel"
+                      type="button"
+                      className={dialogButtonClassName}
+                      onClick={closeCreateDialog}
+                      disabled={isCreatingEntry}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      id="create-entry-folder"
+                      type="button"
+                      className={dialogButtonClassName}
+                      onClick={() => {
+                        void handleCreateEntry("directory");
+                      }}
+                      disabled={isCreatingEntry}
+                    >
+                      Make folder
+                    </button>
+                    <button
+                      id="create-entry-file"
+                      type="button"
+                      className={dialogButtonClassName}
+                      onClick={() => {
+                        void handleCreateEntry("file");
+                      }}
+                      disabled={isCreatingEntry}
+                    >
+                      Make file
+                    </button>
+                  </>
+                }
+              >
+                <>
+                  <p id="create-entry-summary" className="mt-3 text-sm leading-6 text-muted">
+                    Enter a name for the new file or folder. New files are created as markdown files.
+                  </p>
+                  <label className="mt-4 block text-sm text-muted" htmlFor="create-entry-name">
+                    Name
+                  </label>
+                  <input
+                    id="create-entry-name"
+                    type="text"
+                    value={createEntryName}
+                    autoFocus
+                    onChange={(event) => {
+                      setCreateEntryName(event.target.value);
+                      if (createDialogError) {
+                        setCreateDialogError("");
+                      }
+                    }}
+                    className="mt-2 w-full rounded-xl bg-[color-mix(in_srgb,var(--bg)_86%,transparent)] px-3 py-2 text-base outline-none ring-0 transition focus:bg-[color-mix(in_srgb,var(--bg)_94%,transparent)]"
+                    placeholder="chapter-notes"
+                  />
+                  {createDialogError ? (
+                    <p className="mt-3 text-sm leading-6 text-danger">{createDialogError}</p>
+                  ) : null}
+                </>
+              </WorkbenchDialog>
+            </main>
+          </div>
+
+          <div
+            id="floating-toolbar"
+            ref={floatingToolbarRef}
+            className={workbenchFloatingToolbarClassName}
+            hidden
           >
-            b
-          </button>
-          <button
-            data-command="italic"
-            type="button"
-            title="Italic"
-            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+            <div className={workbenchFloatingToolbarGroupClassName} data-toolbar-group="inline">
+              <button
+                data-command="bold"
+                type="button"
+                title="Bold"
+                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+              >
+                b
+              </button>
+              <button
+                data-command="italic"
+                type="button"
+                title="Italic"
+                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+              >
+                i
+              </button>
+              <button
+                data-command="inline-code"
+                type="button"
+                title="Inline code"
+                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+              >
+                code
+              </button>
+              <button
+                data-command="comment"
+                type="button"
+                title="Inline comment"
+                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+              >
+                note
+              </button>
+              <button
+                data-command="del"
+                type="button"
+                title="Deleted text"
+                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+              >
+                del
+              </button>
+              <button
+                data-command="ins"
+                type="button"
+                title="Inserted text"
+                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+              >
+                ins
+              </button>
+            </div>
+            <div className={workbenchFloatingToolbarGroupClassName} data-toolbar-group="block">
+              <button
+                data-command="h1"
+                type="button"
+                title="Heading 1"
+                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+              >
+                h1
+              </button>
+              <button
+                data-command="h2"
+                type="button"
+                title="Heading 2"
+                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+              >
+                h2
+              </button>
+              <button
+                data-command="unordered-list"
+                type="button"
+                title="Bullets"
+                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+              >
+                ul
+              </button>
+              <button
+                data-command="ordered-list"
+                type="button"
+                title="Numbers"
+                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+              >
+                ol
+              </button>
+              <button
+                data-command="quote"
+                type="button"
+                title="Quote"
+                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+              >
+                &gt;
+              </button>
+            </div>
+          </div>
+
+          <div
+            id="revision-hover-toolbar"
+            ref={revisionHoverToolbarRef}
+            className={workbenchRevisionHoverToolbarClassName}
+            hidden
           >
-            i
-          </button>
-          <button
-            data-command="inline-code"
-            type="button"
-            title="Inline code"
-            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-          >
-            code
-          </button>
-          <button
-            data-command="comment"
-            type="button"
-            title="Inline comment"
-            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-          >
-            note
-          </button>
-          <button
-            data-command="del"
-            type="button"
-            title="Deleted text"
-            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-          >
-            del
-          </button>
-          <button
-            data-command="ins"
-            type="button"
-            title="Inserted text"
-            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-          >
-            ins
-          </button>
+            <button
+              id="revision-hover-accept"
+              ref={revisionHoverAcceptButtonRef}
+              type="button"
+              title="Accept revision"
+              className="pointer-events-auto min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+            >
+              accept
+            </button>
+            <button
+              id="revision-hover-reject"
+              ref={revisionHoverRejectButtonRef}
+              type="button"
+              title="Reject revision"
+              className="pointer-events-auto min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+            >
+              reject
+            </button>
+          </div>
         </div>
-        <div className={workbenchFloatingToolbarGroupClassName} data-toolbar-group="block">
-          <button
-            data-command="h1"
-            type="button"
-            title="Heading 1"
-            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-          >
-            h1
-          </button>
-          <button
-            data-command="h2"
-            type="button"
-            title="Heading 2"
-            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-          >
-            h2
-          </button>
-          <button
-            data-command="unordered-list"
-            type="button"
-            title="Bullets"
-            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-          >
-            ul
-          </button>
-          <button
-            data-command="ordered-list"
-            type="button"
-            title="Numbers"
-            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-          >
-            ol
-          </button>
-          <button
-            data-command="quote"
-            type="button"
-            title="Quote"
-            className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-          >
-            &gt;
-          </button>
-        </div>
-      </div>
-
-      <div
-        id="revision-hover-toolbar"
-        ref={revisionHoverToolbarRef}
-        className={workbenchRevisionHoverToolbarClassName}
-        hidden
-      >
-        <button
-          id="revision-hover-accept"
-          ref={revisionHoverAcceptButtonRef}
-          type="button"
-          title="Accept revision"
-          className="pointer-events-auto min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-        >
-          accept
-        </button>
-        <button
-          id="revision-hover-reject"
-          ref={revisionHoverRejectButtonRef}
-          type="button"
-          title="Reject revision"
-          className="pointer-events-auto min-w-8 rounded-full px-3 py-1 text-sm transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-        >
-          reject
-        </button>
-      </div>
-      </div>
-    </WorkbenchContextMenuProvider>
+      </WorkbenchContextMenuProvider>
     </WorkbenchComposerProfileProvider>
   );
 }
