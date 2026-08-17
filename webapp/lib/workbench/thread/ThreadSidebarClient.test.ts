@@ -71,6 +71,69 @@ test("activity updates reorder only the matching observed thread", async () => {
   assert.equal(installed.at(-1)?.revision, 2);
 });
 
+test("materialized draft becomes a working thread before its in-flight save settles", async () => {
+  const installed: Array<WorkbenchThreadSidebarSnapshot | null> = [];
+  let releaseSave: (() => void) | null = null;
+  const save = new Promise<void>((resolve) => { releaseSave = resolve; });
+  const client = new ThreadSidebarClient({
+    onChange: (value) => installed.push(value),
+    transport: {
+      close: async () => undefined,
+      deleteDraft: async () => undefined,
+      open: async () => snapshot(1),
+      upsertDraft: async () => await save,
+    },
+  });
+  await client.open("project");
+  client.edit(draft("materialize this", 2));
+  const flushing = client.flush();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const accepting = client.acceptIntent({
+    draftId: draft("", 2).draftId,
+    identity: { harness: "codex", threadId: "materialized" },
+    title: "Materialized thread",
+    turnId: "turn",
+  });
+  const optimisticEntries = installed.at(-1)?.entries ?? [];
+  assert.equal(optimisticEntries.some((entry) => entry.entryKind === "draft"), false);
+  assert.equal(optimisticEntries.some((entry) => entry.entryKind === "thread" && entry.identity.threadId === "materialized" && entry.lifecycle.kind === "working"), true);
+  let acceptanceSettled = false;
+  void accepting.then(() => { acceptanceSettled = true; });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(acceptanceSettled, false);
+  releaseSave?.();
+  await Promise.all([accepting, flushing]);
+  assert.equal(acceptanceSettled, true);
+});
+
+test("accepted intent immediately revives a stopped thread and a newer snapshot remains authoritative", async () => {
+  const installed: Array<WorkbenchThreadSidebarSnapshot | null> = [];
+  const stoppedEntry: WorkbenchThreadSidebarSnapshot["entries"][number] = {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "thread" },
+    lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "old-turn" },
+    metadata: { archived: false, pinned: true, snoozed: false },
+    title: "Thread",
+  };
+  const client = new ThreadSidebarClient({
+    onChange: (value) => installed.push(value),
+    transport: { close: async () => undefined, deleteDraft: async () => undefined, open: async () => ({ ...snapshot(1), entries: [stoppedEntry] }), upsertDraft: async () => undefined },
+  });
+  await client.open("project");
+  await client.acceptIntent({ identity: stoppedEntry.identity, title: "Thread", turnId: "new-turn" });
+  const optimistic = installed.at(-1)?.entries[0];
+  assert.equal(optimistic?.entryKind, "thread");
+  if (optimistic?.entryKind === "thread") {
+    assert.equal(optimistic.lifecycle.kind, "working");
+    assert.equal(optimistic.metadata.pinned, true);
+  }
+  client.accept({ ...snapshot(2), entries: [{ ...stoppedEntry, lifecycle: { kind: "completed", reason: "providerInactive", settled: false } }] });
+  const authoritative = installed.at(-1)?.entries[0];
+  assert.equal(authoritative?.entryKind, "thread");
+  if (authoritative?.entryKind === "thread") assert.equal(authoritative.lifecycle.kind, "completed");
+});
+
 test("failed navigation flush preserves the route and re-enters the same debounced edit path", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
   let navigated = false;

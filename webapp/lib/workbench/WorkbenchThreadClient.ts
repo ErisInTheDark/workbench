@@ -3,6 +3,7 @@
  * - WorkbenchThreadState: owned thread, rate-limit, and model cache state for the workbench. Keywords: workbench, thread, state, codex.
  * - WorkbenchThreadSnapshot: readonly projection of the current thread client state. Keywords: workbench, thread, snapshot, rate limits.
  * - WorkbenchThreadListener: subscriber signature for thread client state changes. Keywords: workbench, thread, subscribe.
+ * - WorkbenchAcceptedIntent: provider-confirmed sidebar admission evidence handed to the workbench coordinator. Keywords: workbench, thread, sidebar, intent.
  * - WorkbenchThreadClientOptions: creation options for the thread client manager hooks. Keywords: workbench, thread, status, callbacks.
  * - WorkbenchThreadClient: public surface for thread transport, draft threads, and notification handling. Keywords: workbench, thread, client, dispose.
  * - default WorkbenchThreadClient: create the thread sub-client that owns Codex, Copilot, or OpenCode thread state and notifications. Keywords: workbench, thread, codex, copilot, opencode, default export.
@@ -193,9 +194,19 @@ export interface WorkbenchThreadSnapshot {
 
 export type WorkbenchThreadListener = (snapshot: WorkbenchThreadSnapshot) => void;
 
+export interface WorkbenchAcceptedIntent {
+  draftId?: string;
+  harness: WorkbenchHarness;
+  projectId: string;
+  threadId: string;
+  title: string;
+  turnId: string;
+}
+
 export interface WorkbenchThreadClientOptions {
   onStatusMessage?: (message: string) => void;
   onThreadStarted?: (thread: ThreadPayload) => void;
+  publishAcceptedIntent?: (event: WorkbenchAcceptedIntent) => Promise<void>;
 }
 
 interface WorkbenchThreadClient {
@@ -783,14 +794,14 @@ function WorkbenchThreadClient(
   const statusRecordsByKey = new Map<string, ThreadStatusRecord>();
   const streamingReconciler = new ThreadStreamingReconciler();
   async function publishAcceptedIntent({
-    correlationHandle,
+    draftId,
     harness,
     projectId,
     threadId,
     title,
     turnId,
   }: {
-    correlationHandle?: string;
+    draftId?: string;
     harness: WorkbenchHarness;
     projectId: string;
     threadId: string;
@@ -798,13 +809,17 @@ function WorkbenchThreadClient(
     turnId: string;
   }) {
     try {
-      await requestWorkbench("workbench/thread-state/intent/accept", {
-        ...(correlationHandle ? { correlationHandle } : {}),
-        identity: { harness, threadId },
-        projectId,
-        title,
-        turnId,
-      });
+      if (options.publishAcceptedIntent) {
+        await options.publishAcceptedIntent({ ...(draftId ? { draftId } : {}), harness, projectId, threadId, title, turnId });
+      } else {
+        await requestWorkbench("workbench/thread-state/intent/accept", {
+          ...(draftId ? { draftId } : {}),
+          identity: { harness, threadId },
+          projectId,
+          title,
+          turnId,
+        });
+      }
     } catch (error) {
       options.onStatusMessage?.(`The message was admitted, but sidebar lifecycle publication failed: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -847,8 +862,8 @@ function WorkbenchThreadClient(
     }),
     getThreadStatus: (thread) => statusRecordsByKey.get(getThreadStateKey(thread.harness, thread.id))?.status ?? thread.status,
     optimisticInputs,
-    publishAccepted: ({ correlationHandle, projectId, threadId, turnId }) => {
-      void publishAcceptedIntent({ correlationHandle, harness: "codex", projectId, threadId, title: "New thread", turnId });
+    publishAccepted: ({ projectId, threadId, turnId }) => {
+      void publishAcceptedIntent({ harness: "codex", projectId, threadId, title: "New thread", turnId });
     },
     renderSource: renderOptimisticSource,
     sources: threadSources,
@@ -1431,12 +1446,16 @@ function WorkbenchThreadClient(
     emit();
   }
 
-  function isThreadOperationOwnerFenceCurrent(fence: ThreadOperationFence) {
+  function isThreadOperationIdentityCurrent(fence: ThreadOperationFence) {
     return !disposed
       && fence.projectContextGeneration === projectContextGeneration
       && fence.projectId === state.projectId
       && fence.projectRootPath === state.projectRootPath
-      && (fence.selectedThreadKey === null || fence.selectedThreadKey === threadDocuments.getSelectedThreadKey())
+      && (fence.selectedThreadKey === null || fence.selectedThreadKey === threadDocuments.getSelectedThreadKey());
+  }
+
+  function isThreadOperationOwnerFenceCurrent(fence: ThreadOperationFence) {
+    return isThreadOperationIdentityCurrent(fence)
       && fence.sourceRevision === threadSources.getRevision(fence.threadKey)
       && fence.stablePreferenceRevision === getStablePreferenceRevision(fence.threadKey)
       && fence.statusRevision === getStatusRevision(fence.threadKey);
@@ -1453,11 +1472,7 @@ function WorkbenchThreadClient(
   }
 
   function isHistoricalThreadReadFenceCurrent(fence: ThreadOperationFence) {
-    return !disposed
-      && fence.projectContextGeneration === projectContextGeneration
-      && fence.projectId === state.projectId
-      && fence.projectRootPath === state.projectRootPath
-      && (fence.selectedThreadKey === null || fence.selectedThreadKey === threadDocuments.getSelectedThreadKey())
+    return isThreadOperationIdentityCurrent(fence)
       && threadSources.has(fence.threadKey);
   }
 
@@ -2340,6 +2355,7 @@ function WorkbenchThreadClient(
       agentRole: incomingThread.agentRole ?? liveThread.agentRole,
       model: incomingThread.model ?? liveThread.model,
       name: incomingThread.name ?? liveThread.name,
+      preview: incomingThread.preview.trim() ? incomingThread.preview : liveThread.preview,
       reasoningEffort: incomingThread.reasoningEffort ?? liveThread.reasoningEffort,
       serviceTier: incomingThread.serviceTier ?? liveThread.serviceTier,
       turnHistory,
@@ -4199,6 +4215,9 @@ function WorkbenchThreadClient(
       : null;
     const workbenchOrigin = readLocalWorkbenchOrigin();
     const isDraftThread = thread.isDraft;
+    const materializingDraftId = isDraftThread && thread.id.startsWith(DRAFT_THREAD_ID_PREFIX)
+      ? thread.id.slice(DRAFT_THREAD_ID_PREFIX.length)
+      : undefined;
     const initialClientUserMessageId = harness === "codex" && isDraftThread && !recoveryClientUserMessageId
       ? optimisticInputs.createClientUserMessageId()
       : null;
@@ -4632,16 +4651,25 @@ function WorkbenchThreadClient(
         }
         throw error;
       }
-      if (!isSendProjectCurrent() || !isThreadOperationFenceCurrent(turnStartFence)) {
+      if (
+        !isSendProjectCurrent()
+        || !isThreadOperationIdentityCurrent(turnStartFence)
+      ) {
         return null;
       }
-      optimisticTurnId = turnStartResponse.turn.id;
+      const liveThread = threadSources.get(turnStartFence.threadKey) ?? resumedThread;
+      const admittedTurn = mergeLiveStreamingTurn(
+        turnStartResponse.turn,
+        liveThread.turns.find((turn) => turn.id === turnStartResponse.turn.id),
+      );
+      optimisticTurnId = admittedTurn.id;
       if (pendingInitialOptimisticHandle) {
         optimisticInputs.movePending(pendingInitialOptimisticHandle, optimisticTurnId);
         optimisticInputs.transition(pendingInitialOptimisticHandle, "sent");
         bumpOverlayRevisionForKey(getThreadStateKey(harness, resolvedThreadId), "optimisticRevision");
       }
-      await publishAcceptedIntent({
+      void publishAcceptedIntent({
+        ...(materializingDraftId ? { draftId: materializingDraftId } : {}),
         harness,
         projectId: state.projectId,
         threadId: resolvedThreadId,
@@ -4649,30 +4677,30 @@ function WorkbenchThreadClient(
         turnId: optimisticTurnId,
       });
       if (!pendingInitialOptimisticHandle && harness !== "opencode" && !recoveryClientUserMessageId) {
-        enqueueOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, normalizedInput, "initial", "sent", resumedThread);
+        enqueueOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, normalizedInput, "initial", "sent", liveThread);
       }
       resumedThread = applyOptimisticUserMessageOverlay({
-        ...resumedThread,
-        preview: firstMessagePreview || resumedThread.preview,
-        status: isThreadStatusActive(resumedThread.status) ? resumedThread.status : "active",
+        ...liveThread,
+        preview: firstMessagePreview || liveThread.preview,
+        status: isThreadStatusActive(liveThread.status) ? liveThread.status : "active",
         turnHistory: isDraftThread
-          ? [createLoadedTurnHistoryEntry(turnStartResponse.turn)]
-          : resumedThread.turnHistory,
+          ? [createLoadedTurnHistoryEntry(admittedTurn)]
+          : liveThread.turnHistory,
         turns: isDraftThread
-          ? [turnStartResponse.turn]
+          ? [admittedTurn]
           : [
-            ...resumedThread.turns.filter((turn) => turn.id !== connectingTurnId && turn.id !== turnStartResponse.turn.id),
-            turnStartResponse.turn,
+            ...liveThread.turns.filter((turn) => turn.id !== connectingTurnId && turn.id !== admittedTurn.id),
+            admittedTurn,
           ],
-      }) ?? resumedThread;
+      }) ?? liveThread;
+      if (isDraftThread) {
+        sendOptions.onThreadMaterialized?.(resumedThread);
+      }
       if (sendOptions.selectThread !== false) {
         if (harness !== "opencode") {
           setCurrentThread(resumedThread);
           options.onThreadStarted?.(resumedThread);
         }
-      }
-      if (isDraftThread) {
-        sendOptions.onThreadMaterialized?.(resumedThread);
       }
     }
 

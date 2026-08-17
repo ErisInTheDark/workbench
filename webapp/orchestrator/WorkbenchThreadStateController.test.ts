@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import WorkbenchThreadStateController from "./WorkbenchThreadStateController";
+import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 import type { WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 
@@ -199,9 +200,11 @@ test("invalid accepted intent telemetry identifies strict-contract drift without
 test("accepted intent survives provider discovery lag and releases after its lifecycle advances", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-accepted-"));
   const published: WorkbenchThreadSidebarEntry[] = [];
+  const publishedSnapshots: WorkbenchThreadStateSnapshot[] = [];
   const controller = new WorkbenchThreadStateController({
     now: () => 42,
     publish: (_connectionId, snapshot) => {
+      publishedSnapshots.push(snapshot);
       if (!("entries" in snapshot)) return;
       const entry = snapshot.entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "provider");
       if (entry) published.push(entry);
@@ -212,7 +215,19 @@ test("accepted intent survives provider discovery lag and releases after its lif
   });
   await controller.open("observer", "project");
   await new Promise((resolve) => setTimeout(resolve, 0));
+  const draftId = "00000000-0000-4000-8000-000000000001";
+  await controller.handleRequest("observer", {
+    draft: {
+      agent: null, attachments: [], clientUpdatedAt: 2, composerSettings: {}, createdAt: 1,
+      draftId, harness: "codex", model: null, profileId: null, projectId: "project",
+      prompt: "First user message", reasoningEffort: null, serviceTier: null, updatedAt: 2,
+    },
+    method: "workbench/thread-state/draft/upsert",
+    projectId: "project",
+  });
+  publishedSnapshots.length = 0;
   const response = await controller.handleRequest("observer", {
+    draftId,
     identity: { harness: "codex", threadId: "provider" },
     method: "workbench/thread-state/intent/accept",
     projectId: "project",
@@ -226,6 +241,15 @@ test("accepted intent survives provider discovery lag and releases after its lif
   assert.equal(entry.lifecycle.kind, "working");
   assert.equal(entry?.activityAt, 42);
   assert.equal(published.at(-1)?.title, "First user message");
+  assert.equal(publishedSnapshots.length, 1);
+  assert.equal("entries" in publishedSnapshots[0]!, true);
+  if ("entries" in publishedSnapshots[0]!) {
+    assert.equal(publishedSnapshots[0].entries.some((candidate) => candidate.entryKind === "draft"), false);
+    assert.equal(publishedSnapshots[0].entries.some((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "provider"), true);
+  }
+  const stored = JSON.parse(await fs.readFile(path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment("project")}.json`), "utf8")) as { drafts: unknown[]; threads: Array<{ threadId?: string }> };
+  assert.deepEqual(stored.drafts, []);
+  assert.equal(stored.threads.some((candidate) => candidate.threadId === "provider"), true);
   await controller.refresh("project");
   await new Promise((resolve) => setTimeout(resolve, 0));
   const laggingEntry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "provider");

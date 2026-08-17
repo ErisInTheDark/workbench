@@ -8,7 +8,7 @@ import { test } from "node:test";
 
 import type { Thread } from "../codex/generated/app-server/v2/Thread.ts";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadTurnHistoryEntry } from "../types.ts";
-import WorkbenchThreadClient from "./WorkbenchThreadClient.ts";
+import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./WorkbenchThreadClient.ts";
 import { ThreadMessageNotSentError } from "./thread/thread-message-submission.ts";
 
 type Listener = (event: { data?: string }) => void;
@@ -370,6 +370,12 @@ test("idle selected Codex resumes once and starts with native identity while pro
   assert.equal(socket.requests.filter((request) => request.method === "thread/resume" && request.params?.threadId === "idle").length, 1);
   assert.equal(socket.requests.some((request) => request.method === "thread/read" && request.params?.threadId === "idle"), false);
   assert.equal(socket.requests.some((request) => request.method === "turn/steer" && request.params?.threadId === "idle"), false);
+  assert.deepEqual(socket.requests.find((request) => request.method === "workbench/thread-state/intent/accept" && (request.params?.identity as { threadId?: string } | undefined)?.threadId === "idle")?.params, {
+    identity: { harness: "codex", threadId: "idle" },
+    projectId: "project",
+    title: "New thread",
+    turnId: "idle-started",
+  });
 
   FakeWebSocket.intercept = null;
 
@@ -1166,8 +1172,48 @@ test("project changes during draft materialization prevent stale general dispatc
   assert.equal(socket.requests.some((request) => request.method === "turn/steer" && request.params?.threadId === "materialized"), false);
 }));
 
-test("draft projection precedes admission and materialization is skipped on start failure", async () => withClient(async (client, socket) => {
-  const draft = { ...activeThread("codex", "draft:one", "completed"), isDraft: true, source: "draft" };
+test("project changes after draft turn dispatch prevent acceptance and materialization", async () => {
+  const acceptedIntents: WorkbenchAcceptedIntent[] = [];
+  await withClient(async (client, socket) => {
+    const draft = { ...activeThread("codex", "draft:00000000-0000-4000-8000-000000000002", "completed"), isDraft: true, source: "draft" };
+    const materialized: string[] = [];
+    let startRequest: SocketRequest | null = null;
+    client.selectThreadPayload(draft);
+    FakeWebSocket.intercept = (target, request) => {
+      if (request.method === "thread/start") {
+        queueMicrotask(() => target.respond(request.id, { thread: wireThread("materialized-after-dispatch", "old", "completed") }));
+        return true;
+      }
+      if (request.method === "turn/start") {
+        startRequest = request;
+        return true;
+      }
+      return false;
+    };
+
+    const send = client.sendThreadMessage(draft, [{ text: "draft", text_elements: [], type: "text" }], {
+      onThreadMaterialized: (thread) => materialized.push(thread.id),
+    });
+    await waitForRequest(socket, "turn/start");
+    client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
+    socket.respond(startRequest!.id, { turn: wireThread("materialized-after-dispatch", "new-turn").turns[0] });
+
+    assert.equal(await send, null);
+    assert.deepEqual(acceptedIntents, []);
+    assert.deepEqual(materialized, []);
+  }, {
+    publishAcceptedIntent: async (event) => { acceptedIntents.push(event); },
+  });
+});
+
+test("draft projection precedes admission and materialization is skipped on start failure", async () => {
+  const acceptedIntents: WorkbenchAcceptedIntent[] = [];
+  let markAcceptedIntentObserved!: () => void;
+  const acceptedIntentObserved = new Promise<void>((resolve) => { markAcceptedIntentObserved = resolve; });
+  let releaseAcceptedIntent: (() => void) | null = null;
+  const acceptedIntentPending = new Promise<void>((resolve) => { releaseAcceptedIntent = resolve; });
+  await withClient(async (client, socket) => {
+  const draft = { ...activeThread("codex", "draft:00000000-0000-4000-8000-000000000001", "completed"), isDraft: true, source: "draft" };
   client.selectThreadPayload(draft);
   const created: string[] = [];
   const materialized: string[] = [];
@@ -1234,15 +1280,40 @@ test("draft projection precedes admission and materialization is skipped on star
   const clientUserMessageId = String(admittedStartRequest?.params?.clientUserMessageId ?? "");
   assert.match(clientUserMessageId, /^[0-9a-f-]{36}$/u);
   const admittedTurn = wireThread("materialized", "new-turn").turns[0]!;
-  admittedTurn.items = [{ clientId: clientUserMessageId, content: admittedInput, id: "canonical-draft", type: "userMessage" }];
+  socket.notify("turn/started", { threadId: "materialized", turn: admittedTurn });
+  socket.notify("item/started", {
+    item: { clientId: clientUserMessageId, content: admittedInput, id: "canonical-draft", type: "userMessage" },
+    threadId: "materialized",
+    turnId: "new-turn",
+  });
   socket.respond(admittedStartRequest!.id, { turn: admittedTurn });
+  await acceptedIntentObserved;
+  assert.deepEqual(acceptedIntents, [{
+    draftId: "00000000-0000-4000-8000-000000000001",
+    harness: "codex",
+    projectId: "project",
+    threadId: "materialized",
+    title: "draft",
+    turnId: "new-turn",
+  }]);
+  assert.deepEqual(materialized, ["materialized"]);
+  releaseAcceptedIntent?.();
   const admitted = await admittedSend;
   assert.ok(admitted);
+  assert.equal(admitted.preview, "draft");
+  assert.equal(client.getSnapshot().currentThread?.preview, "draft");
   assert.deepEqual(created, ["materialized", "materialized"]);
   assert.deepEqual(materialized, ["materialized"]);
   assert.deepEqual(admitted.turns.map((turn) => turn.id), ["new-turn"]);
   assert.deepEqual(admitted.turns.at(-1)?.items.filter((item) => item.type === "userMessage").map((item) => item.id), ["canonical-draft"]);
-}));
+  }, {
+    publishAcceptedIntent: async (event) => {
+      acceptedIntents.push(event);
+      markAcceptedIntentObserved();
+      await acceptedIntentPending;
+    },
+  });
+});
 
 test("steer-history reads are latest-wins, retain the last success, and warn once per failure streak", async () => {
   const statusMessages: string[] = [];

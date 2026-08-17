@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - ThreadSidebarTransport/ThreadSidebarClientOptions: pushed snapshot and mutation ports. Keywords: browser, websocket, drafts.
+ * - ThreadSidebarTransport/ThreadSidebarClientOptions/ThreadSidebarAcceptedIntent: pushed snapshot, mutation ports, and provider-confirmed local admission. Keywords: browser, websocket, drafts, intent.
  * - default ThreadSidebarClient: browser observation, revision, optimistic draft, and leave-safe queue owner. Keywords: sidebar, debounce, flush.
  */
-import { createDraftTitle, sortThreadSidebarEntries, type WorkbenchThreadActivityUpdate, type WorkbenchThreadDraft, type WorkbenchThreadSidebarSnapshot } from "./thread-state";
+import { createDraftTitle, sortThreadSidebarEntries, type WorkbenchHarnessId, type WorkbenchThreadActivityUpdate, type WorkbenchThreadDraft, type WorkbenchThreadSidebarSnapshot } from "./thread-state";
 
 export interface ThreadSidebarTransport {
   close(projectId: string): Promise<void>;
@@ -15,10 +15,18 @@ export interface ThreadSidebarClientOptions {
   onChange: (snapshot: WorkbenchThreadSidebarSnapshot | null) => void;
   transport: ThreadSidebarTransport;
 }
+export interface ThreadSidebarAcceptedIntent {
+  activityAt?: number;
+  draftId?: string;
+  identity: { harness: WorkbenchHarnessId; threadId: string };
+  title: string;
+  turnId: string;
+}
 
 interface DraftQueue {
   draft: WorkbenchThreadDraft | null;
   inFlight: Promise<void> | null;
+  retired: boolean;
   timer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -53,7 +61,8 @@ export default class ThreadSidebarClient {
   }
   edit(draft: WorkbenchThreadDraft) {
     if (draft.projectId !== this.projectId) throw new Error("The draft does not belong to the observed project.");
-    const queue = this.queues.get(draft.draftId) ?? { draft: null, inFlight: null, timer: null };
+    const queue = this.queues.get(draft.draftId) ?? { draft: null, inFlight: null, retired: false, timer: null };
+    if (queue.retired) return;
     queue.draft = draft;
     if (queue.timer) clearTimeout(queue.timer);
     queue.timer = setTimeout(() => {
@@ -62,6 +71,47 @@ export default class ThreadSidebarClient {
     }, 500);
     this.queues.set(draft.draftId, queue);
     this.installOptimisticDraft(draft);
+  }
+  acceptIntent(intent: ThreadSidebarAcceptedIntent) {
+    const queue = intent.draftId ? this.queues.get(intent.draftId) : null;
+    if (queue?.timer) clearTimeout(queue.timer);
+    if (queue) {
+      queue.draft = null;
+      queue.retired = true;
+      queue.timer = null;
+    }
+    const inFlight = queue?.inFlight?.catch(() => undefined) ?? Promise.resolve();
+    if (intent.draftId && queue) {
+      void inFlight.finally(() => {
+        if (this.queues.get(intent.draftId!) === queue) this.queues.delete(intent.draftId!);
+      });
+    }
+    if (this.snapshot) {
+      const existing = this.snapshot.entries.find((entry) => entry.entryKind === "thread"
+        && entry.identity.harness === intent.identity.harness
+        && entry.identity.threadId === intent.identity.threadId);
+      const entry = {
+        activityAt: intent.activityAt ?? Date.now(),
+        entryKind: "thread" as const,
+        identity: intent.identity,
+        lifecycle: { agent: { agentStatus: "working" as const, turnId: intent.turnId }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const },
+        metadata: existing?.entryKind === "thread" ? existing.metadata : { archived: false as const, pinned: false, snoozed: false },
+        title: existing?.entryKind === "thread" ? existing.title : intent.title,
+      };
+      this.snapshot = {
+        ...this.snapshot,
+        entries: sortThreadSidebarEntries([
+          ...this.snapshot.entries.filter((candidate) => {
+            if (candidate.entryKind === "draft") return candidate.draft.draftId !== intent.draftId;
+            if (candidate.entryKind === "subagent") return true;
+            return candidate.identity.harness !== intent.identity.harness || candidate.identity.threadId !== intent.identity.threadId;
+          }),
+          entry,
+        ]),
+      };
+      this.options.onChange(this.snapshot);
+    }
+    return inFlight;
   }
   async delete(draftId: string, clientUpdatedAt = Date.now()) {
     const queue = this.queues.get(draftId);
@@ -106,6 +156,7 @@ export default class ThreadSidebarClient {
   private async flushQueue(id: string, queue: DraftQueue) {
     if (queue.timer) { clearTimeout(queue.timer); queue.timer = null; }
     if (queue.inFlight) await queue.inFlight;
+    if (queue.retired) return;
     const draft = queue.draft; const projectId = this.projectId;
     if (!draft || !projectId) return;
     queue.draft = null;
@@ -117,6 +168,7 @@ export default class ThreadSidebarClient {
         this.options.onChange(this.snapshot);
       }
     } catch (error) {
+      if (queue.retired) return;
       if (!queue.draft || queue.draft.clientUpdatedAt < draft.clientUpdatedAt) queue.draft = draft;
       if (this.snapshot) {
         const message = error instanceof Error ? error.message : "Unable to save this draft.";

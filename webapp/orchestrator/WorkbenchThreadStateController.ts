@@ -162,6 +162,7 @@ export default class WorkbenchThreadStateController {
       case "workbench/thread-state/open": return { result: await this.open(connectionId, request.projectId) };
       case "workbench/thread-state/close": await this.close(connectionId, request.projectId); return { result: { accepted: true } };
       case "workbench/thread-state/intent/accept": return { result: await this.acceptIntent(connectionId, {
+        draftId: request.draftId,
         harness: request.identity.harness,
         projectId: request.projectId,
         threadId: request.identity.threadId,
@@ -214,8 +215,13 @@ export default class WorkbenchThreadStateController {
 
   async disconnect(connectionId: string) { await this.close(connectionId); }
 
-  async acceptIntent(connectionId: string, input: { harness: "codex" | "copilot" | "opencode"; projectId: string; threadId: string; title?: string; turnId: string }) {
+  async acceptIntent(connectionId: string, input: { draftId?: string; harness: "codex" | "copilot" | "opencode"; projectId: string; threadId: string; title?: string; turnId: string }) {
     if (this.connectionProjects.get(connectionId) !== input.projectId) throw new Error("The accepted intent does not belong to this connection's observed project.");
+    if (input.draftId) {
+      const state = await this.getProject(input.projectId);
+      state.drafts.delete(input.draftId);
+      state.entries.delete(`draft:${input.draftId}`);
+    }
     const providerEntry: WorkbenchThreadSidebarEntry = {
       activityAt: this.now(), entryKind: "thread", identity: { harness: input.harness, threadId: input.threadId },
       lifecycle: { agent: { agentStatus: "working", turnId: input.turnId }, kind: "working", reason: "acceptedIntent", settled: false },

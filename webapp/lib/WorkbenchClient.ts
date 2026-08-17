@@ -38,7 +38,7 @@ import {
 import WorkbenchFilePanelClient from "./workbench/WorkbenchFilePanelClient";
 import type { WorkbenchFilePanelClientOptions } from "./workbench/WorkbenchFilePanelClient";
 import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
-import WorkbenchThreadClient from "./workbench/WorkbenchThreadClient";
+import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./workbench/WorkbenchThreadClient";
 import { WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema } from "./workbench/project/project-state";
 import ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
 import { WorkbenchThreadSidebarSnapshotSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarSnapshot } from "./workbench/thread/thread-state";
@@ -93,6 +93,9 @@ export async function WorkbenchClient(
   let reportStatusMessage = (_message: string) => {};
   let activeRoute: WorkbenchRoute = workbenchBindings.initialRoute ?? createProjectRoute("");
   let activeRouteGeneration = 0;
+  let coordinateAcceptedIntent: (event: WorkbenchAcceptedIntent) => Promise<void> = async (_event) => {
+    throw new Error("The thread sidebar coordinator is not ready.");
+  };
   const threadClient = WorkbenchThreadClient({
     onStatusMessage: (message) => {
       reportStatusMessage(message);
@@ -103,6 +106,7 @@ export async function WorkbenchClient(
       }
       emitExplorerStateChange();
     },
+    publishAcceptedIntent: (event) => coordinateAcceptedIntent(event),
   });
   const projectClient = WorkbenchProjectClient({
     onError: (message) => reportStatusMessage(message),
@@ -126,6 +130,21 @@ export async function WorkbenchClient(
       upsertDraft: async (projectId, draft) => { await threadClient.requestWorkbench("workbench/thread-state/draft/upsert", { draft, projectId }); },
     },
   });
+  coordinateAcceptedIntent = async (event) => {
+    await threadSidebarClient.acceptIntent({
+      ...(event.draftId ? { draftId: event.draftId } : {}),
+      identity: { harness: event.harness, threadId: event.threadId },
+      title: event.title,
+      turnId: event.turnId,
+    });
+    await threadClient.requestWorkbench("workbench/thread-state/intent/accept", {
+      ...(event.draftId ? { draftId: event.draftId } : {}),
+      identity: { harness: event.harness, threadId: event.threadId },
+      projectId: event.projectId,
+      title: event.title,
+      turnId: event.turnId,
+    });
+  };
   coordinatorLifecycle.addUnsubscribe(threadClient.onWorkbenchNotification((notification) => {
     if (notification.method === "workbench/thread-state/updated") {
       const parsed = WorkbenchThreadStateSnapshotSchema.safeParse(notification.params);

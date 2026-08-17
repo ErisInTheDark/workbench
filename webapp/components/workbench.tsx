@@ -1628,8 +1628,8 @@ export default function Workbench () {
       throw new ThreadMessageNotSentError();
     }
     const submittedRoute = currentRouteRef.current;
-    const submittedDraftId = thread.isDraft ? getWorkbenchDraftIdFromThreadId(thread.id) : null;
     let createdThread: ThreadPayload | null = null;
+    let didMaterialize = false;
 
     const replaceMosaicDraftThread = (materializedThread: ThreadPayload, removeDraftState: boolean) => {
       if (removeDraftState) {
@@ -1695,12 +1695,7 @@ export default function Workbench () {
           replaceCurrentDraftThreadRoute(materializedThread, false);
         },
         onThreadMaterialized: (materializedThread) => {
-          if (submittedDraftId) {
-            void controls.deleteThreadDraft(submittedDraftId).catch((error: unknown) => {
-              const message = error instanceof Error ? error.message : String(error);
-              console.error(`Unable to delete materialized thread draft ${submittedDraftId}: ${message.slice(0, 500)}`);
-            });
-          }
+          didMaterialize = true;
           if (options?.composerProfileSlot) {
             composerProfileController.materializeSelection(options.composerProfileSlot, materializedThread.id, materializedThread.harness);
           }
@@ -1714,7 +1709,7 @@ export default function Workbench () {
       payload = await controls.sendThreadMessage(thread, input, materializedOptions);
     } catch (error) {
       const currentRoute = currentRouteRef.current;
-      if (createdThread && isWorkbenchRouteOwnerOfThread(currentRoute, createdThread.id)) {
+      if (!didMaterialize && createdThread && isWorkbenchRouteOwnerOfThread(currentRoute, createdThread.id)) {
         navigateToRoute(submittedRoute, { replace: true });
       }
       throw error;
