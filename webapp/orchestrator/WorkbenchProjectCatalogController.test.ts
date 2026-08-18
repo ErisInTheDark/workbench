@@ -150,6 +150,23 @@ test("coalesces concurrent initial catalog discovery", async () => {
   assert.equal(harness.discoveryReads, 1);
 });
 
+test("ensureLoaded coalesces with initial resolution and makes the snapshot synchronously available", async () => {
+  const harness = createHarness();
+  const gate = deferred<WorkbenchProjectOption[]>();
+  harness.setReader(async () => await gate.promise);
+
+  const loading = harness.controller.ensureLoaded();
+  const resolution = harness.controller.resolveProjectById("alpha");
+  assert.equal(harness.discoveryReads, 1);
+  gate.resolve([createProject("alpha")]);
+
+  assert.equal((await resolution).id, "alpha");
+  await loading;
+  await harness.controller.ensureLoaded();
+  assert.deepEqual(harness.controller.getCurrentSnapshot(), { data: [createProject("alpha")], rootPath: "C:/projects" });
+  assert.equal(harness.discoveryReads, 1);
+});
+
 test("watcher invalidation serves a known CWD while one background refresh runs", async () => {
   const harness = createHarness();
   await harness.controller.resolveAgentEndpointProjectFromCwd("C:/projects/alpha/src");

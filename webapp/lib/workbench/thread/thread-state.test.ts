@@ -58,6 +58,26 @@ test("strict lifecycle rejects impossible combinations", () => {
   assert.equal(WorkbenchThreadLifecycleSchema.safeParse({ kind: "completed", reason: "providerInactive", settled: false }).success, true);
 });
 
+test("lifecycle parsing preserves two attention variants and normalizes legacy reasons", () => {
+  assert.deepEqual(WorkbenchThreadLifecycleSchema.parse({ kind: "needsAttention", reason: "noActiveTurn", settled: false }), {
+    kind: "needsAttention", reason: "noActiveTurn", settled: false,
+  });
+  assert.deepEqual(WorkbenchThreadLifecycleSchema.parse({ kind: "needsAttention", reason: "pendingInput", requestKey: "request", settled: false, turnId: "turn" }), {
+    kind: "needsAttention", reason: "pendingInput", requestKey: "request", settled: false, turnId: "turn",
+  });
+  for (const lifecycle of [
+    { agent: { agentStatus: "blocked", turnId: "turn" }, kind: "needsAttention", reason: "agentBlocked", settled: false },
+    { agent: { agentStatus: "working", turnId: "turn" }, kind: "needsAttention", reason: "turnEnded", settled: false },
+    { kind: "needsAttention", reason: "restartRecoveryFailed", settled: false },
+    { kind: "needsAttention", reason: "providerSystemError", settled: false },
+  ]) {
+    assert.deepEqual(WorkbenchThreadLifecycleSchema.parse(lifecycle), { kind: "needsAttention", reason: "noActiveTurn", settled: false });
+  }
+  assert.deepEqual(WorkbenchThreadLifecycleSchema.parse({ kind: "completed", reason: "providerInactive", settled: true }), {
+    kind: "completed", reason: "providerInactive", settled: true,
+  });
+});
+
 test("exact-turn transitions reject stale completion and stopped settlement becomes completed", () => {
   const working = reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId: "new" });
   assert.equal(reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "completed", turnId: "old" }), working);
@@ -73,6 +93,11 @@ test("exact-turn transitions reject stale completion and stopped settlement beco
     settled: true,
   });
   assert.equal(reduceWorkbenchThreadLifecycle(working, { kind: "restore" }), working);
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(completed, { kind: "userNeedsAttention" }), {
+    kind: "needsAttention", reason: "noActiveTurn", settled: false,
+  });
+  const pendingInput = reduceWorkbenchThreadLifecycle(working, { kind: "pendingInput", requestKey: "request", turnId: "new" });
+  assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, { kind: "userNeedsAttention" }), pendingInput);
 });
 
 test("grouping keeps terminal status while settlement moves it to other", () => {
@@ -100,7 +125,7 @@ test("completed parent status derives attention before working without mutating 
     profileId: "default", profileName: "Default", projectId: "project", title: threadId, updatedAt: 2,
   });
   const working = child("working", { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false });
-  const attention = child("attention", { agent: { agentStatus: "working", turnId: "turn" }, kind: "needsAttention", reason: "turnEnded", settled: false });
+  const attention = child("attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false });
   const projectedWorking = projectWorkbenchThreadSidebarEntries([parent, working])[0]!;
   const projectedAttention = projectWorkbenchThreadSidebarEntries([parent, working, attention])[0]!;
   assert.equal(projectedWorking.entryKind === "draft" ? null : projectedWorking.lifecycle.kind, "working");

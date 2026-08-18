@@ -166,6 +166,12 @@ export default class WorkbenchProjectCatalogController {
     }
   }
 
+  async ensureLoaded() {
+    this.assertActive();
+    if (this.catalog) return;
+    await this.refreshCatalog();
+  }
+
   async resolveAgentEndpointProjectFromCwd(
     cwd: string | null | undefined,
     options: { endpointName?: string } = {},

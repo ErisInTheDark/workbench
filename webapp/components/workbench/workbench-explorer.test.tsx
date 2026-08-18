@@ -98,6 +98,16 @@ test("live sidebar state subscribes below the Workbench root", async () => {
   assert.doesNotMatch(clientSource, /threadSidebar: threadSidebarSnapshot/u);
 });
 
+test("thread context actions separate idle attention from pending input", async () => {
+  const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebar.tsx", import.meta.url), "utf8");
+  assert.match(sidebarSource, /method: "workbench\/thread-state\/attention\/mark"/u);
+  assert.match(sidebarSource, /label: "Needs attention"/u);
+  assert.match(sidebarSource, /label: "Complete"/u);
+  assert.match(sidebarSource, /label: "Stop"/u);
+  assert.match(sidebarSource, /entry\.lifecycle\.reason === "noActiveTurn"/u);
+  assert.match(sidebarSource, /entry\.entryKind === "thread" && terminal/u);
+});
+
 test("jit project bootstrap exposes available slices before unrelated hydration", async () => {
   const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
   const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebar.tsx", import.meta.url), "utf8");

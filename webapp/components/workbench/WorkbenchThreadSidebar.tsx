@@ -17,6 +17,7 @@ import {
   ArchiveIcon,
   CheckIcon,
   CopyIcon,
+  NeedsAttentionThreadIcon,
   PinIcon,
   RestoreThreadIcon,
   SettleThreadIcon,
@@ -94,7 +95,7 @@ export default memo(function WorkbenchThreadSidebar({
     if (payload) await controls.stopThread(payload);
   }, [controls]);
 
-  const mutateEntry = useCallback((entry: WorkbenchThreadSidebarEntry, method: "archive/set" | "complete" | "pin/set" | "restore" | "settle" | "snooze/set", value?: boolean | "completed" | "stopped") => {
+  const mutateEntry = useCallback((entry: WorkbenchThreadSidebarEntry, method: "archive/set" | "attention/mark" | "complete" | "pin/set" | "restore" | "settle" | "snooze/set", value?: boolean | "completed" | "stopped") => {
     if (!controls || !projectId || entry.entryKind === "draft") return;
     const identity = entry.identity;
     const request = method === "pin/set"
@@ -103,7 +104,9 @@ export default memo(function WorkbenchThreadSidebar({
         ? { identity, method: "workbench/thread-state/snooze/set" as const, projectId, snoozed: Boolean(value) }
         : method === "archive/set"
           ? { archived: Boolean(value), identity, method: "workbench/thread-state/archive/set" as const, projectId }
-          : method === "complete"
+          : method === "attention/mark"
+            ? { identity, method: "workbench/thread-state/attention/mark" as const, projectId }
+            : method === "complete"
             ? { identity, method: "workbench/thread-state/complete" as const, projectId, status: value === "stopped" ? "stopped" as const : "completed" as const }
             : method === "restore"
               ? { identity, method: "workbench/thread-state/restore" as const, projectId }
@@ -147,10 +150,16 @@ export default memo(function WorkbenchThreadSidebar({
         label: group === "snoozed" ? "Unsnooze" : "Snooze",
         onSelect: () => mutateEntry(entry, "snooze/set", group !== "snoozed"),
       }] : []),
-      ...(entry.entryKind === "thread" && entry.lifecycle.kind === "needsAttention" ? [{
-        icon: <CheckIcon className="size-4" />, id: "mark-completed", label: "Mark completed", onSelect: () => mutateEntry(entry, "complete", "completed"),
+      ...(entry.entryKind === "thread" && entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "noActiveTurn" ? [{
+        icon: <CheckIcon className="size-4" />, id: "mark-completed", label: "Complete", onSelect: () => mutateEntry(entry, "complete", "completed"),
       }, {
-        icon: <StopIcon className="size-4" />, id: "mark-stopped", label: "Mark stopped", onSelect: () => mutateEntry(entry, "complete", "stopped"),
+        icon: <StopIcon className="size-4" />, id: "mark-stopped", label: "Stop", onSelect: () => mutateEntry(entry, "complete", "stopped"),
+      }] : []),
+      ...(entry.entryKind === "thread" && terminal ? [{
+        icon: <NeedsAttentionThreadIcon className="size-4" />,
+        id: "mark-needs-attention",
+        label: "Needs attention",
+        onSelect: () => mutateEntry(entry, "attention/mark"),
       }] : []),
       ...(thread && isThreadSummaryActive(thread) ? [{
         icon: <StopIcon className="size-4" />,

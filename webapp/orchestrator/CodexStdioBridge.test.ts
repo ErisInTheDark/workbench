@@ -212,3 +212,43 @@ test("context reads bypass the operation queue and negotiate scoped entries with
     await fs.rm(root, { force: true, recursive: true });
   }
 });
+
+test("observational internal thread lists skip transcripts without forwarding the marker", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-observational-test-"));
+  const upstreamRequests: JsonRpcRequest[] = [];
+  let bridge!: CodexStdioBridge;
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      upstreamRequests.push(message);
+      queueMicrotask(() => { void bridge.handleUpstreamMessage({ id: message.id ?? null, result: { data: [], nextCursor: null } }); });
+    },
+  } as unknown as CodexAppServer;
+  bridge = new CodexStdioBridge({
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    onNotification() {},
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    await bridge.handleServerRequest({
+      id: 1,
+      method: "thread/list",
+      params: { cwd: "C:/repo" },
+      workbenchRequestSource: "autoRefresh",
+    });
+    await bridge.waitForIdle();
+    assert.equal("workbenchRequestSource" in (upstreamRequests[0] ?? {}), false);
+    const instrumentation = bridge as unknown as {
+      transcriptAutoRefreshSkippedCount: number;
+      transcriptLabelCounts: Map<string, number>;
+    };
+    assert.equal(instrumentation.transcriptAutoRefreshSkippedCount, 2);
+    assert.equal(instrumentation.transcriptLabelCounts.get("client-request") ?? 0, 0);
+    assert.equal(instrumentation.transcriptLabelCounts.get("upstream-response:thread/list") ?? 0, 0);
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});

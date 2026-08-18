@@ -17,9 +17,9 @@ function deferred<TValue>() {
   return { promise, resolve };
 }
 
-async function startController(controller: WorkbenchAgentCommandController) {
+async function startController(controller: WorkbenchAgentCommandController, onHandled: () => void = () => undefined) {
   const server = http.createServer((request, response) => {
-    void controller.handleHttpRequest(request, response);
+    void controller.handleHttpRequest(request, response).finally(onHandled);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address() as AddressInfo;
@@ -254,6 +254,103 @@ test("passes caller cancellation into genuine remaining fetches", async () => {
     request.on("error", () => undefined);
     request.end(body);
     await started.promise;
+    request.destroy();
+    assert.match((await aborted.promise).message, /disconnected/u);
+  } finally {
+    await server.close();
+  }
+});
+
+test("reload admission releases the handler before terminal polling completes", async () => {
+  const handled = deferred<void>();
+  const pollStarted = deferred<void>();
+  const terminal = deferred<Response>();
+  const fetchRequest: typeof fetch = async (_input, init) => {
+    if (init?.method === "POST") {
+      return Response.json({
+        appliedScopes: [], completedAt: null, error: null, ok: true,
+        queuedScopes: [], requestedScopes: ["orchestrator-logic"], startedAt: 1, state: "running",
+      });
+    }
+    pollStarted.resolve();
+    return await terminal.promise;
+  };
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:3002",
+    "http://127.0.0.1:4500",
+    createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+    fetchRequest,
+  );
+  const server = await startController(controller, () => handled.resolve());
+  try {
+    let clientSettled = false;
+    const client = fetch(`${server.origin}/orchestrator/agent-command`, {
+      body: agentCommandBody(["orchestrator", "reload", "--orchestrator-logic"]),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    }).then((response) => {
+      clientSettled = true;
+      return response;
+    });
+
+    await handled.promise;
+    assert.equal(clientSettled, false);
+    await pollStarted.promise;
+    terminal.resolve(Response.json({
+      appliedScopes: ["orchestrator-logic"], completedAt: 2, error: null, ok: true,
+      queuedScopes: [], requestedScopes: ["orchestrator-logic"], startedAt: 1, state: "succeeded",
+    }));
+
+    const response = await client;
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "Reload succeeded.\nApplied: orchestrator-logic\nQueued: none\n");
+  } finally {
+    await server.close();
+  }
+});
+
+test("disconnecting after reload admission aborts terminal polling", async () => {
+  const handled = deferred<void>();
+  const pollStarted = deferred<AbortSignal>();
+  const aborted = deferred<Error>();
+  const fetchRequest: typeof fetch = async (_input, init) => {
+    if (init?.method === "POST") {
+      return Response.json({
+        appliedScopes: [], completedAt: null, error: null, ok: true,
+        queuedScopes: [], requestedScopes: ["orchestrator-logic"], startedAt: 1, state: "running",
+      });
+    }
+    const signal = init?.signal;
+    assert.ok(signal);
+    pollStarted.resolve(signal);
+    return await new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        const error = signal.reason instanceof Error ? signal.reason : new Error("aborted");
+        aborted.resolve(error);
+        reject(error);
+      }, { once: true });
+    });
+  };
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:3002",
+    "http://127.0.0.1:4500",
+    createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+    fetchRequest,
+  );
+  const server = await startController(controller, () => handled.resolve());
+  try {
+    const body = agentCommandBody(["orchestrator", "reload", "--orchestrator-logic"]);
+    const request = http.request(`${server.origin}/orchestrator/agent-command`, {
+      headers: {
+        "Content-Length": Buffer.byteLength(body),
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      method: "POST",
+    });
+    request.on("error", () => undefined);
+    request.end(body);
+    await handled.promise;
+    await pollStarted.promise;
     request.destroy();
     assert.match((await aborted.promise).message, /disconnected/u);
   } finally {

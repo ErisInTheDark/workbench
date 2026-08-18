@@ -160,7 +160,7 @@ test("prefers the durable subagent name while preserving the agent role", () => 
 
 test("orders lifecycle deterministically and folds only settled children", () => {
   const working = { ...subagent, lifecycle: { agent: { agentStatus: "working" as const }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const }, lastActivityAt: 1, threadId: "working" };
-  const attention = { ...subagent, lifecycle: { kind: "needsAttention" as const, reason: "restartRecoveryFailed" as const, settled: false as const }, threadId: "attention" };
+  const attention = { ...subagent, lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const }, threadId: "attention" };
   const terminal = { ...subagent, lifecycle: { kind: "completed" as const, reason: "userCompleted" as const, settled: false }, pinned: true, threadId: "terminal" };
   const settled = { ...terminal, lifecycle: { ...terminal.lifecycle, settled: true }, pinned: false, threadId: "settled" };
   assert.deepEqual(

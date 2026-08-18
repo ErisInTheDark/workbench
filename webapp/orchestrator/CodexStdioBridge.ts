@@ -61,7 +61,9 @@ type PendingClientResponse = {
 
 type PendingInternalResponse = {
   internal: true;
+  method: string | null;
   reject: (reason?: unknown) => void;
+  requestSource: WorkbenchRequestSource;
   resolve: (value: JsonRpcResponse) => void;
   threadHydration: WorkbenchThreadHydrationRequest | null;
   upstreamRequest: JsonRpcRequest;
@@ -1340,7 +1342,9 @@ export default class CodexStdioBridge {
     },
   ) {
     const upstreamRequestId = this.nextUpstreamRequestId();
-    const requestSource: WorkbenchRequestSource = internal ? "internal" : readRequestSource(message);
+    const requestSource: WorkbenchRequestSource = internal
+      ? message[WORKBENCH_REQUEST_SOURCE_FIELD] === "autoRefresh" ? "autoRefresh" : "internal"
+      : readRequestSource(message);
     const method = typeof message.method === "string" ? message.method : null;
     const threadHydration = readThreadHydration(message);
     const upstreamMessage = createUpstreamRequest(
@@ -1355,7 +1359,9 @@ export default class CodexStdioBridge {
         rejectResponse = reject;
         this.pendingResponses.set(upstreamRequestId, {
           internal: true,
+          method,
           reject,
+          requestSource,
           resolve,
           threadHydration,
           upstreamRequest: upstreamMessage,
@@ -1366,7 +1372,11 @@ export default class CodexStdioBridge {
         rejectResponse(signal?.reason instanceof Error ? signal.reason : new Error("Codex internal request was cancelled."));
       };
       signal?.addEventListener("abort", abortPendingResponse, { once: true });
-      void this.captureTranscript("client-request", () => this.ensureTranscriptStore().recordClientRequest(upstreamMessage));
+      if (shouldCapturePollingTranscript(method, requestSource)) {
+        void this.captureTranscript("client-request", () => this.ensureTranscriptStore().recordClientRequest(upstreamMessage));
+      } else {
+        this.recordSkippedAutoRefreshTranscript(`client-request:${method ?? "unknown"}`);
+      }
       try {
         this.send(upstreamMessage);
       } catch (error) {
@@ -1517,8 +1527,7 @@ export default class CodexStdioBridge {
 
     this.pendingResponses.delete(Number(message.id));
     let hydratedMessage = message;
-    const shouldCaptureTranscript = isPendingInternalResponse(pending)
-      || shouldCapturePollingTranscript(pending.method, pending.requestSource);
+    const shouldCaptureTranscript = shouldCapturePollingTranscript(pending.method, pending.requestSource);
     if (shouldHydrateThreadResponse(pending.upstreamRequest)) {
       try {
         hydratedMessage = await this.ensureTranscriptStore().hydrateThreadResponse(pending.upstreamRequest, message, {

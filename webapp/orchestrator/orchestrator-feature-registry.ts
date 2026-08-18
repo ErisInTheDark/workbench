@@ -90,6 +90,7 @@ export function createOrchestratorFeatureGeneration(
     requestHarness: context.requestHarness,
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
     resolveProjectFromCwd: (cwd, options) => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
+    storageRoot: context.legacyMigrationProjectRoot,
   });
   threadState.controller.subscribe(context.notifyThreadLifecycle);
   const { allowedProjectIds, capability } = readLegacyMigrationSourceConfig(context.legacyMigrationProjectRoot);
@@ -108,16 +109,22 @@ export function createOrchestratorFeatureGeneration(
   const browseSessionCleanup = new BrowseSessionCleanupSupervisor({
     ...context.browseCleanupOptions,
     cleanupStaleInactiveSessions: async (options) => {
-      if (lease.isCurrent()) await context.browseCleanupOptions.cleanupStaleInactiveSessions(options);
+      if (!lease.isCurrent()) {
+        browseSessionCleanup.dispose();
+        return;
+      }
+      await context.browseCleanupOptions.cleanupStaleInactiveSessions(options);
     },
   });
   const nextDevHealth = new NextDevHealthSupervisor({
     ...context.nextDevHealthOptions,
+    isShuttingDown: () => !lease.isCurrent() || context.nextDevHealthOptions.isShuttingDown(),
     restartNextDev: (reason) => lease.isCurrent() && context.nextDevHealthOptions.restartNextDev(reason),
   });
   const codexHealth = new CodexHealthMonitor({
     ...context.codexHealthOptions,
     isProbeAllowed: () => lease.isCurrent() && context.codexHealthOptions.isProbeAllowed(),
+    isShuttingDown: () => !lease.isCurrent() || context.codexHealthOptions.isShuttingDown(),
     requestRecovery: (reason) => { if (lease.isCurrent()) context.codexHealthOptions.requestRecovery(reason); },
   });
   const features: OrchestratorFeatures = { agentCommand, bridgeRequest, browseSessionCleanup, codexHealth, legacyMigrationSource, modules, nextDevHealth, projectCatalog, projectSnapshot, threadState };
@@ -134,7 +141,8 @@ export function createOrchestratorFeatureGeneration(
     observeProviderNotification: async ({ harness, notification }) => {
       if (lease.isCurrent()) await threadState.observeProviderNotification(harness, notification);
     },
-    start: () => {
+    start: async () => {
+      await projectCatalog.ensureLoaded();
       browseSessionCleanup.start();
       nextDevHealth.start();
       const readiness = context.getCodexReadiness();

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchAgentCommandController: parse native-shell wb argv, directly dispatch Browse and subagent requests, adapt output, and stream native responses. Keywords: workbench, agent, command, shell, orchestrator, transport, subagent.
+ * - default WorkbenchAgentCommandController: parse native-shell wb argv, directly dispatch requests, release reload admission leases before terminal polling, adapt output, and stream native responses. Keywords: workbench, agent, command, shell, orchestrator, reload, transport, subagent.
  */
 import { randomUUID } from "node:crypto";
 import type http from "node:http";
@@ -150,20 +150,11 @@ export default class WorkbenchAgentCommandController {
         sendText(response, 400, `${parsed.error}\n`);
         return;
       }
-      const upstream = parsed.request.waitForReload
-        ? await this.runReloadRequest(parsed.request, signal)
-        : await this.dispatchRequest(parsed.request, signal);
-      const streamsNative = upstream.ok && (
-        parsed.request.responseKind === "native"
-        || upstream.headers.get("content-type")?.includes("application/x-ndjson")
-      );
-      if (streamsNative) {
-        await writeNativeResponse(response, upstream, signal);
+      if (parsed.request.waitForReload) {
+        await this.admitReloadRequest(parsed.request, response, signal);
         return;
       }
-      const text = await upstream.text();
-      const adapted = adaptWorkbenchAgentCliResponse({ httpOk: upstream.ok, request: parsed.request, text });
-      sendText(response, adapted.exitCode === 0 ? 200 : 400, adapted.exitCode === 0 ? adapted.stdout : adapted.stderr);
+      await this.writeCliResponse(parsed.request, response, await this.dispatchRequest(parsed.request, signal), signal);
     } catch (error) {
       if (signal.aborted) return;
       sendText(response, 500, `${error instanceof Error ? error.message : String(error)}\n`);
@@ -273,10 +264,35 @@ export default class WorkbenchAgentCommandController {
     return new URL(requestPath, this.nextOrigin);
   }
 
-  private async runReloadRequest(request: WorkbenchAgentCliRequest, signal: AbortSignal) {
-    let response = await this.fetchRequest(this.resolveUrl(request.path), this.buildRequestInit(request, signal));
-    if (!response.ok) return response;
-    let text = await response.text();
+  private async admitReloadRequest(request: WorkbenchAgentCliRequest, response: http.ServerResponse, signal: AbortSignal) {
+    const admission = await this.fetchRequest(this.resolveUrl(request.path), this.buildRequestInit(request, signal));
+    const text = await admission.text();
+    if (!admission.ok || readReloadState(text) !== "running") {
+      await this.writeCliResponse(request, response, new Response(text, { headers: admission.headers, status: admission.status }), signal);
+      return;
+    }
+
+    // Terminal polling intentionally outlives the feature-generation lease. The open HTTP response owns its deadline and cancellation.
+    void this.completeReloadResponse(request, response, signal, text);
+  }
+
+  private async completeReloadResponse(
+    request: WorkbenchAgentCliRequest,
+    target: http.ServerResponse,
+    signal: AbortSignal,
+    initialText: string,
+  ) {
+    try {
+      await this.writeCliResponse(request, target, await this.pollReloadRequest(request, signal, initialText), signal);
+    } catch (error) {
+      if (signal.aborted) return;
+      sendText(target, 500, `${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  }
+
+  private async pollReloadRequest(request: WorkbenchAgentCliRequest, signal: AbortSignal, initialText: string) {
+    let response: Response | null = null;
+    let text = initialText;
     let state = readReloadState(text);
     const deadline = Date.now() + RELOAD_TIMEOUT_MS;
     while (state === "running" && Date.now() < deadline) {
@@ -294,7 +310,26 @@ export default class WorkbenchAgentCommandController {
     if (state === "running") {
       return new Response(JSON.stringify({ error: `Workbench orchestrator reload did not settle within ${RELOAD_TIMEOUT_MS}ms.` }), { status: 504 });
     }
-    return new Response(text, { headers: response.headers, status: response.status });
+    return new Response(text, { headers: response?.headers, status: response?.status ?? 200 });
+  }
+
+  private async writeCliResponse(
+    request: WorkbenchAgentCliRequest,
+    response: http.ServerResponse,
+    upstream: Response,
+    signal: AbortSignal,
+  ) {
+    const streamsNative = upstream.ok && (
+      request.responseKind === "native"
+      || upstream.headers.get("content-type")?.includes("application/x-ndjson")
+    );
+    if (streamsNative) {
+      await writeNativeResponse(response, upstream, signal);
+      return;
+    }
+    const text = await upstream.text();
+    const adapted = adaptWorkbenchAgentCliResponse({ httpOk: upstream.ok, request, text });
+    sendText(response, adapted.exitCode === 0 ? 200 : 400, adapted.exitCode === 0 ? adapted.stdout : adapted.stderr);
   }
 }
 

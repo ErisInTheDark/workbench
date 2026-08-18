@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ExplorerSnapshot, ThreadSummary, WorkbenchSubagentSummary } from "./types.ts";
-import { areExplorerSnapshotsEquivalent } from "./WorkbenchClient.ts";
+import type { WorkbenchThreadSidebarSnapshot } from "./workbench/thread/thread-state.ts";
+import { areExplorerSnapshotsEquivalent, openWorkbenchThreadStateObservation } from "./WorkbenchClient.ts";
 
 const thread = (id: string, updatedAt: number): ThreadSummary => ({
   agentNickname: null,
@@ -67,6 +68,72 @@ const explorer = (): ExplorerSnapshot => ({
   threadsError: "",
   tree: [],
   workbenchStorageRootPath: "C:/repo/.workbench",
+});
+
+const sidebar = (): WorkbenchThreadSidebarSnapshot => ({
+  entries: [], error: null, freshness: "fresh", projectId: "project", revision: 1,
+});
+
+test("thread-state open installs the version-2 composite bootstrap", async () => {
+  const requests: Array<{ projectId: string; version?: 2 }> = [];
+  const catalogs: unknown[] = [];
+  const result = await openWorkbenchThreadStateObservation({
+    acceptProject: () => undefined,
+    installCatalog: (catalog) => { catalogs.push(catalog); },
+    projectId: "project",
+    request: async (params) => {
+      requests.push(params);
+      return { catalog: { data: [], rootPath: "C:/projects" }, project: null, sidebar: sidebar() };
+    },
+  });
+  assert.deepEqual(requests, [{ projectId: "project", version: 2 }]);
+  assert.equal(result.projectId, "project");
+  assert.equal(catalogs.length, 1);
+});
+
+test("thread-state open retries legacy only for an unsupported version field", async () => {
+  const requests: Array<{ projectId: string; version?: 2 }> = [];
+  const result = await openWorkbenchThreadStateObservation({
+    acceptProject: () => undefined,
+    installCatalog: () => undefined,
+    projectId: "project",
+    request: async (params) => {
+      requests.push(params);
+      if (params.version === 2) throw new Error('Unrecognized key: "version"');
+      return sidebar();
+    },
+  });
+  assert.deepEqual(requests, [{ projectId: "project", version: 2 }, { projectId: "project" }]);
+  assert.equal(result.projectId, "project");
+});
+
+test("thread-state open accepts a composite bootstrap from the versionless compatibility retry", async () => {
+  const requests: Array<{ projectId: string; version?: 2 }> = [];
+  const catalogs: unknown[] = [];
+  const result = await openWorkbenchThreadStateObservation({
+    acceptProject: () => undefined,
+    installCatalog: (catalog) => { catalogs.push(catalog); },
+    projectId: "project",
+    request: async (params) => {
+      requests.push(params);
+      if (params.version === 2) throw new Error('Unrecognized key: "version"');
+      return { catalog: { data: [], rootPath: "C:/projects" }, project: null, sidebar: sidebar() };
+    },
+  });
+  assert.deepEqual(requests, [{ projectId: "project", version: 2 }, { projectId: "project" }]);
+  assert.equal(result.projectId, "project");
+  assert.equal(catalogs.length, 1);
+});
+
+test("thread-state open does not hide malformed version-2 payloads behind legacy fallback", async () => {
+  let requests = 0;
+  await assert.rejects(openWorkbenchThreadStateObservation({
+    acceptProject: () => undefined,
+    installCatalog: () => undefined,
+    projectId: "project",
+    request: async () => { requests += 1; return { sidebar: sidebar() }; },
+  }), /thread-state open response was invalid/u);
+  assert.equal(requests, 1);
 });
 
 test("activity timestamps and activity ordering do not invalidate the root explorer snapshot", () => {

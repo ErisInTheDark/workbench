@@ -41,6 +41,18 @@ function projectCatalog() {
   return { data: [], rootPath: "C:/projects" };
 }
 
+function projectOption(id: string, rootPath: string) {
+  return {
+    id,
+    kind: "git" as const,
+    lastCommitTimeMs: null,
+    name: id,
+    relativePath: id,
+    rootPath,
+    roots: [{ id, isPrimary: true, name: id, relativePath: id, rootPath }],
+  };
+}
+
 async function waitFor(predicate: () => boolean, message: string) {
   const deadline = Date.now() + 1_000;
   while (!predicate()) {
@@ -71,10 +83,11 @@ test("observations are reference counted and warm snapshots do not duplicate rec
     },
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       reconciliations += 1;
-      acceptProviderSnapshot("codex", [knownEntry]);
+      acceptProviderSnapshot("codex", [knownEntry], { complete: true });
       return [];
     },
     resolveProjectRoot: async () => root,
+    storageRoot: root,
   });
   const first = await controller.open("a", "project");
   assert.equal(first.sidebar.freshness, "loading");
@@ -101,6 +114,55 @@ test("observations are reference counted and warm snapshots do not duplicate rec
   await controller.dispose();
 });
 
+test("incomplete provider snapshots retain unseen rows until an authoritative snapshot arrives", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-progressive-"));
+  const oldEntry: WorkbenchThreadSidebarEntry = {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "old" },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Old",
+  };
+  const newEntry = { ...oldEntry, activityAt: 2, identity: { harness: "codex" as const, threadId: "new" }, title: "New" };
+  let reconciliation = 0;
+  let incompleteInstalled = false;
+  let releaseFinal = () => undefined;
+  const finalGate = new Promise<void>((resolve) => { releaseFinal = resolve; });
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      reconciliation += 1;
+      if (reconciliation === 1) {
+        acceptProviderSnapshot("codex", [oldEntry], { complete: true });
+        return [];
+      }
+      acceptProviderSnapshot("codex", [newEntry], { complete: false });
+      incompleteInstalled = true;
+      await finalGate;
+      acceptProviderSnapshot("codex", [newEntry], { complete: true });
+      return [];
+    },
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+  await controller.open("observer", "project");
+  await waitFor(() => reconciliation === 1, "Initial provider snapshot was not installed.");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const refreshing = controller.refresh("project");
+  await waitFor(() => incompleteInstalled, "Incomplete provider snapshot was not installed.");
+  const incomplete = await controller.getSnapshot("project");
+  assert.deepEqual(incomplete.entries.filter((entry) => entry.entryKind !== "draft").map((entry) => entry.identity.threadId).sort(), ["new", "old"]);
+  releaseFinal();
+  await refreshing;
+  const complete = await controller.getSnapshot("project");
+  assert.deepEqual(complete.entries.filter((entry) => entry.entryKind !== "draft").map((entry) => entry.identity.threadId), ["new"]);
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
 test("concurrent first opens share one project initialization and observation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-concurrent-open-"));
   let releaseRoot = (_root: string) => undefined;
@@ -117,10 +179,11 @@ test("concurrent first opens share one project initialization and observation", 
     publish: () => undefined,
     reconcileProject: async () => { reconciliations += 1; return []; },
     resolveProjectRoot: async () => { projectLoads += 1; return await rootGate; },
+    storageRoot: root,
   });
   const firstOpen = controller.open("first", "project");
   const secondOpen = controller.open("second", "project");
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await waitFor(() => projectLoads === 1, "Shared project initialization did not resolve the project root.");
   assert.equal(projectLoads, 1);
   releaseRoot(root);
   await Promise.all([firstOpen, secondOpen]);
@@ -133,6 +196,115 @@ test("concurrent first opens share one project initialization and observation", 
   await controller.close("second");
   assert.equal(observationStops, 1);
   await controller.dispose();
+});
+
+test("project-local thread state copies centrally without deleting or modifying legacy data", async () => {
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-central-"));
+  const legacyRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-legacy-"));
+  const centralWinsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-central-wins-"));
+  const fileName = (projectId: string) => `${encodeTranscriptPathSegment(projectId)}.json`;
+  const statePath = (root: string, projectId: string) => path.join(root, ".workbench", "runtime", "thread-state", fileName(projectId));
+  const draft = (projectId: string, draftId: string, prompt: string) => ({
+    agent: null, attachments: [], clientUpdatedAt: 1, composerSettings: {}, createdAt: 1,
+    draftId, harness: "codex" as const, model: null, profileId: null, projectId, prompt,
+    reasoningEffort: null, serviceTier: null, updatedAt: 1,
+  });
+  const migratedDraft = draft("migrated", "00000000-0000-4000-8000-000000000011", "Migrated draft");
+  const staleDraft = draft("central-wins", "00000000-0000-4000-8000-000000000012", "Stale legacy draft");
+  const centralDraft = draft("central-wins", "00000000-0000-4000-8000-000000000013", "Central draft");
+  await fs.mkdir(path.dirname(statePath(legacyRoot, "migrated")), { recursive: true });
+  await fs.writeFile(statePath(legacyRoot, "migrated"), JSON.stringify({ drafts: [migratedDraft], threads: [], version: 1 }), "utf8");
+  await fs.mkdir(path.dirname(statePath(centralWinsRoot, "central-wins")), { recursive: true });
+  await fs.writeFile(statePath(centralWinsRoot, "central-wins"), JSON.stringify({ drafts: [staleDraft], threads: [], version: 1 }), "utf8");
+  await fs.writeFile(path.join(centralWinsRoot, ".workbench", "keep.txt"), "keep", "utf8");
+  await fs.mkdir(path.dirname(statePath(storageRoot, "central-wins")), { recursive: true });
+  await fs.writeFile(statePath(storageRoot, "central-wins"), JSON.stringify({ drafts: [centralDraft], threads: [], version: 2 }), "utf8");
+
+  const resolvedProjects: string[] = [];
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: () => ({
+      data: [projectOption("migrated", legacyRoot), projectOption("central-wins", centralWinsRoot)],
+      rootPath: storageRoot,
+    }),
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async () => [],
+    resolveProjectRoot: async (projectId) => {
+      resolvedProjects.push(projectId);
+      return projectId === "migrated" ? legacyRoot : centralWinsRoot;
+    },
+    storageRoot,
+  });
+  const [migratedOpen, centralOpen] = await Promise.all([
+    controller.open("migrated-observer", "migrated"),
+    controller.open("central-observer", "central-wins"),
+  ]);
+  assert.equal(migratedOpen.sidebar.entries.some((entry) => entry.entryKind === "draft" && entry.draft.prompt === "Migrated draft"), true);
+  assert.equal(centralOpen.sidebar.entries.some((entry) => entry.entryKind === "draft" && entry.draft.prompt === "Central draft"), true);
+  assert.equal(centralOpen.sidebar.entries.some((entry) => entry.entryKind === "draft" && entry.draft.prompt === "Stale legacy draft"), false);
+  assert.deepEqual(resolvedProjects, ["migrated"]);
+  const stored = JSON.parse(await fs.readFile(statePath(storageRoot, "migrated"), "utf8")) as { version?: number };
+  assert.equal(stored.version, 2);
+  assert.deepEqual(JSON.parse(await fs.readFile(statePath(legacyRoot, "migrated"), "utf8")), { drafts: [migratedDraft], threads: [], version: 1 });
+  assert.deepEqual(JSON.parse(await fs.readFile(statePath(centralWinsRoot, "central-wins"), "utf8")), { drafts: [staleDraft], threads: [], version: 1 });
+  assert.equal(await fs.readFile(path.join(centralWinsRoot, ".workbench", "keep.txt"), "utf8"), "keep");
+  await controller.dispose();
+  await Promise.all([storageRoot, legacyRoot, centralWinsRoot].map((root) => fs.rm(root, { force: true, recursive: true })));
+});
+
+test("constructing and disposing does not enumerate projects or start migration", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-no-startup-migration-"));
+  let catalogReads = 0;
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: () => { catalogReads += 1; throw new Error("catalog unavailable"); },
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async () => [],
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+  assert.equal(catalogReads, 0);
+  await controller.dispose();
+  assert.equal(catalogReads, 0);
+  await fs.rm(root, { force: true, recursive: true });
+});
+
+test("disposal fences late reconciliation without awaiting its provider request", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-dispose-reconcile-"));
+  const publications: WorkbenchThreadStateSnapshot[] = [];
+  let reconciliationStarted = false;
+  let releaseReconciliation = () => undefined;
+  const reconciliationGate = new Promise<void>((resolve) => { releaseReconciliation = resolve; });
+  const lateEntry: WorkbenchThreadSidebarEntry = {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "late" },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Late",
+  };
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: (_connectionId, snapshot) => { publications.push(snapshot); },
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      reconciliationStarted = true;
+      await reconciliationGate;
+      acceptProviderSnapshot("codex", [lateEntry], { complete: true });
+      return [];
+    },
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+  await controller.open("observer", "project");
+  await waitFor(() => reconciliationStarted, "Reconciliation did not start.");
+  let disposed = false;
+  await controller.dispose().then(() => { disposed = true; });
+  assert.equal(disposed, true);
+  releaseReconciliation();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(publications, []);
+  await fs.rm(root, { force: true, recursive: true });
 });
 
 test("a late project observer receives the best-known snapshot without starting another observation", async () => {
@@ -150,6 +322,7 @@ test("a late project observer receives the best-known snapshot without starting 
     publish: (connectionId, snapshot) => publications.push({ connectionId, snapshot }),
     reconcileProject: async () => [],
     resolveProjectRoot: async () => root,
+    storageRoot: root,
   });
   await controller.open("first", "project");
   const late = await controller.open("late", "project");
@@ -174,6 +347,7 @@ test("an observer joining before the first project snapshot receives the normal 
     publish: (connectionId, snapshot) => publications.push({ connectionId, snapshot }),
     reconcileProject: async () => [],
     resolveProjectRoot: async () => root,
+    storageRoot: root,
   });
   await controller.open("first", "project");
   await controller.open("joining", "project");
@@ -207,13 +381,14 @@ test("aborted background reconciliation never downgrades or blocks a warm reopen
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       reconciliationCount += 1;
       if (reconciliationCount === 1 || reconciliationCount === 3) {
-        acceptProviderSnapshot("codex", [known]);
+        acceptProviderSnapshot("codex", [known], { complete: true });
         return [];
       }
       staleAccept = acceptProviderSnapshot as typeof staleAccept;
       return await new Promise((resolve) => { releaseStale = () => resolve([]); });
     },
     resolveProjectRoot: async () => root,
+    storageRoot: root,
   });
   await controller.open("first", "project");
   await waitFor(() => reconciliationCount === 1, "Initial reconciliation did not start.");
@@ -247,10 +422,11 @@ test("request telemetry reports bounded validation evidence without logging requ
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", []);
+      acceptProviderSnapshot("codex", [], { complete: true });
       return [];
     },
     resolveProjectRoot: async () => root,
+    storageRoot: root,
   });
   const response = await controller.handleRequest("observer", { method: "not-a-real-method", secret: "never-log-me" });
   assert.equal("error" in response, true);
@@ -271,6 +447,7 @@ test("invalid accepted intent telemetry identifies strict-contract drift without
     publish: () => undefined,
     reconcileProject: async () => [],
     resolveProjectRoot: async () => root,
+    storageRoot: root,
   });
   const response = await controller.handleRequest("observer", {
     correlationHandle: "secret-correlation-value",
@@ -308,10 +485,11 @@ test("accepted intent survives provider discovery lag and releases after its lif
     },
     projectState: projectState(),
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", []);
+      acceptProviderSnapshot("codex", [], { complete: true });
       return [];
     },
     resolveProjectRoot: async () => root,
+    storageRoot: root,
   });
   await controller.open("observer", "project");
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -379,10 +557,11 @@ test("provider completion auto-completes subagents while top-level turns still n
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", [parent, working("top"), child]);
+      acceptProviderSnapshot("codex", [parent, working("top"), child], { complete: true });
       return [];
     },
     resolveProjectRoot: async () => root,
+    storageRoot: root,
   });
   await controller.open("observer", "project");
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -402,6 +581,7 @@ test("provider completion auto-completes subagents while top-level turns still n
 
 test("restoring a terminal thread persists across provider reconciliation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-restore-"));
+  let publications = 0;
   const terminal: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 1,
     entryKind: "thread",
@@ -413,20 +593,29 @@ test("restoring a terminal thread persists across provider reconciliation", asyn
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
     projectState: projectState(),
-    publish: () => undefined,
+    publish: (_connectionId, snapshot) => { if ("entries" in snapshot) publications += 1; },
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", [terminal]);
+      acceptProviderSnapshot("codex", [terminal], { complete: true });
       return [];
     },
     resolveProjectRoot: async () => root,
+    storageRoot: root,
   });
   await controller.open("observer", "project");
   await new Promise((resolve) => setTimeout(resolve, 0));
-  await controller.handleRequest("observer", {
+  publications = 0;
+  const jsonOwner = controller as unknown as { json: { write(filePath: string, value: unknown): Promise<void> } };
+  const write = jsonOwner.json.write.bind(jsonOwner.json);
+  let writes = 0;
+  jsonOwner.json.write = async (filePath, value) => { writes += 1; await write(filePath, value); };
+  const responses = await Promise.all(Array.from({ length: 10 }, () => controller.handleRequest("observer", {
     identity: terminal.identity,
     method: "workbench/thread-state/restore",
     projectId: "project",
-  });
+  })));
+  assert.equal(writes, 1);
+  assert.equal(publications, 1);
+  assert.equal(new Set(responses.map((response) => (response as { result?: { revision?: number } }).result?.revision ?? null)).size, 1);
   const restored = (await controller.getSnapshot("project")).entries[0];
   assert.equal(restored?.entryKind === "thread" ? restored.lifecycle.settled : null, false);
   assert.equal(restored?.entryKind === "thread" ? restored.metadata.pinned : null, true);
@@ -435,4 +624,55 @@ test("restoring a terminal thread persists across provider reconciliation", asyn
   const reconciled = (await controller.getSnapshot("project")).entries[0];
   assert.equal(reconciled?.entryKind === "thread" ? reconciled.lifecycle.settled : null, false);
   await controller.dispose();
+});
+
+test("manual attention persists across reconciliation and pending input rejects terminal mutations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-manual-attention-"));
+  const terminal: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "terminal" },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
+    metadata: { archived: false, pinned: true, snoozed: true },
+    title: "Terminal",
+  };
+  const pending: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    ...terminal,
+    identity: { harness: "codex", threadId: "pending" },
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "request", settled: false, turnId: "turn" },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Pending",
+  };
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      acceptProviderSnapshot("codex", [terminal, pending], { complete: true });
+      return [];
+    },
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+  await controller.open("observer", "project");
+  await controller.refresh("project");
+  const marked = await controller.handleRequest("observer", {
+    identity: terminal.identity, method: "workbench/thread-state/attention/mark", projectId: "project",
+  });
+  assert.equal("result" in marked ? (marked.result as { accepted?: boolean }).accepted : false, true);
+  let entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
+  assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
+  assert.deepEqual(entry?.entryKind === "thread" ? entry.metadata : null, terminal.metadata);
+  await controller.refresh("project");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
+  assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
+  const rejected = await controller.handleRequest("observer", {
+    identity: pending.identity, method: "workbench/thread-state/complete", projectId: "project", status: "completed",
+  });
+  assert.equal("result" in rejected ? (rejected.result as { accepted?: boolean }).accepted : true, false);
+  const pendingAfter = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "pending");
+  assert.deepEqual(pendingAfter?.entryKind === "thread" ? pendingAfter.lifecycle : null, pending.lifecycle);
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
 });

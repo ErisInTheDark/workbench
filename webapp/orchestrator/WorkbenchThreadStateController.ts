@@ -3,9 +3,11 @@
  * - WorkbenchThreadStateControllerOptions/WorkbenchThreadReconciliationFailure/WorkbenchObservedLifecycleEvent: catalog, project-state ports, progressive reconciliation, and identity-owned provider lifecycle input. Keywords: ownership, reconciliation, notification.
  * - default WorkbenchThreadStateController: own the shared project observer set, durable thread metadata, and pushed sidebar lifecycle. Keywords: drafts, project, lifecycle, observation.
  */
+import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { WorkbenchProjectsPayload } from "../lib/types";
+import { areDeeplyEqual } from "../lib/workbench/deep-equality";
 import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
 import {
   WorkbenchThreadDraftSchema,
@@ -24,6 +26,7 @@ import {
   type WorkbenchThreadActivityUpdate,
   type WorkbenchThreadSidebarEntry,
   type WorkbenchThreadSidebarSnapshot,
+  type WorkbenchThreadStateOpenResult,
   type WorkbenchThreadStateRequest,
   type WorkbenchThreadStateSnapshot,
 } from "../lib/workbench/thread/thread-state";
@@ -31,7 +34,8 @@ import AtomicJsonStore from "./AtomicJsonStore";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 
 interface StoredThreadMetadata { archived: boolean; harness: "codex" | "copilot" | "opencode"; lifecycle: WorkbenchThreadLifecycle; pinned: boolean; snoozed: boolean; threadId: string; titleFallback?: string }
-interface StoredProjectState { drafts: WorkbenchThreadDraft[]; threads: StoredThreadMetadata[]; version: 1 }
+interface StoredProjectStateV1 { drafts: WorkbenchThreadDraft[]; threads: StoredThreadMetadata[]; version: 1 }
+interface StoredProjectState { drafts: WorkbenchThreadDraft[]; threads: StoredThreadMetadata[]; version: 2 }
 
 export interface WorkbenchThreadStateControllerOptions {
   getProjectCatalog: () => WorkbenchProjectsPayload;
@@ -46,9 +50,10 @@ export interface WorkbenchThreadStateControllerOptions {
   reconcileProject: (
     projectId: string,
     signal: AbortSignal,
-    acceptProviderSnapshot: (harness: WorkbenchHarnessId, entries: WorkbenchThreadSidebarEntry[]) => void,
+    acceptProviderSnapshot: (harness: WorkbenchHarnessId, entries: WorkbenchThreadSidebarEntry[], options: { complete: boolean }) => void,
   ) => Promise<WorkbenchThreadReconciliationFailure[]>;
   resolveProjectRoot: (projectId: string) => Promise<string>;
+  storageRoot: string;
 }
 
 export interface WorkbenchThreadReconciliationFailure {
@@ -72,7 +77,6 @@ interface ProjectState {
   overlays: Map<string, StoredThreadMetadata>;
   reconcilePromise: Promise<void> | null;
   revision: number;
-  root: string;
   stopProjectObservation: (() => void) | null;
 }
 
@@ -121,7 +125,7 @@ export default class WorkbenchThreadStateController {
   private readonly now: () => number;
   private readonly options: WorkbenchThreadStateControllerOptions;
   private readonly projects = new Map<string, ProjectState>();
-  private readonly operationQueues = new Map<string, Promise<void>>();
+  private readonly operationQueues = new Map<string, Promise<unknown>>();
   private readonly reconciliationPromises = new Set<Promise<void>>();
   private readonly subscribers = new Set<(projectId: string, entry: WorkbenchThreadSidebarEntry) => void>();
 
@@ -172,7 +176,7 @@ export default class WorkbenchThreadStateController {
     }
     const request = parsed.data;
     switch (request.method) {
-      case "workbench/thread-state/open": return { result: await this.open(connectionId, request.projectId) };
+      case "workbench/thread-state/open": return { result: await this.open(connectionId, request.projectId, request.version ?? 1) };
       case "workbench/thread-state/close": await this.close(connectionId, request.projectId); return { result: { accepted: true } };
       case "workbench/thread-state/intent/accept": return { result: await this.acceptIntent(connectionId, {
         draftId: request.draftId,
@@ -188,7 +192,11 @@ export default class WorkbenchThreadStateController {
     }
   }
 
-  async open(connectionId: string, projectId: string) {
+  async open(connectionId: string, projectId: string): Promise<WorkbenchThreadStateOpenResult>;
+  async open(connectionId: string, projectId: string, version: 2): Promise<WorkbenchThreadStateOpenResult>;
+  async open(connectionId: string, projectId: string, version: 1): Promise<WorkbenchThreadSidebarSnapshot>;
+  async open(connectionId: string, projectId: string, version: 1 | 2): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResult>;
+  async open(connectionId: string, projectId: string, version: 1 | 2 = 2): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResult> {
     const priorProjectId = this.connectionProjects.get(connectionId);
     if (priorProjectId && priorProjectId !== projectId) await this.close(connectionId, priorProjectId);
     const state = await this.getProject(projectId);
@@ -208,10 +216,12 @@ export default class WorkbenchThreadStateController {
         this.options.log?.(`project replayed connection=${sanitizeLogValue(connectionId)} project=${sanitizeLogValue(projectId)} revision=${currentProjectUpdate.revision}`);
       }
     }
+    const sidebar = this.snapshot(projectId, state);
+    if (version === 1) return sidebar;
     return {
       catalog: this.options.getProjectCatalog(),
       project: currentProjectUpdate ?? this.options.projectState.getCurrentUpdate(projectId),
-      sidebar: this.snapshot(projectId, state),
+      sidebar,
     };
   }
 
@@ -263,40 +273,42 @@ export default class WorkbenchThreadStateController {
 
   async applyLifecycle(projectId: string, harness: "codex" | "copilot" | "opencode", threadId: string, event: WorkbenchLifecycleEvent, providerEntry?: WorkbenchThreadSidebarEntry) {
     const state = await this.getProject(projectId);
-    const activeBefore = this.countActiveQueueEntries(state);
     const key = `${harness}:${threadId}`;
-    if (!state.entries.has(key) && providerEntry?.entryKind === "thread" && entryKey(providerEntry) === key) state.entries.set(key, providerEntry);
-    const existing = state.entries.get(key);
-    if (!existing || existing.entryKind === "draft") return null;
-    const ownedEvent = existing.entryKind === "subagent" && event.kind === "turnCompleted" && event.status === "completed"
-      ? { kind: "agentStatus" as const, status: "completed" as const, turnId: event.turnId }
-      : event;
-    const lifecycle = reduceWorkbenchThreadLifecycle(existing.lifecycle, ownedEvent);
-    const shouldUnsnooze = existing.entryKind === "thread" && existing.metadata.snoozed && existing.lifecycle.kind === "working" && (lifecycle.kind === "needsAttention" || lifecycle.kind === "completed" || lifecycle.kind === "stopped");
-    const next = existing.entryKind === "subagent"
-      ? { ...existing, activityAt: this.now(), lifecycle }
-      : {
-        ...existing,
-        activityAt: this.now(),
-        lifecycle,
-        metadata: existing.metadata.archived
-          ? { archived: true as const, pinned: false as const, snoozed: false as const }
-          : { ...existing.metadata, snoozed: shouldUnsnooze ? false : existing.metadata.snoozed },
-      };
-    const parsedNext = WorkbenchThreadSidebarEntrySchema.parse(next);
-    if (parsedNext.entryKind === "draft") throw new Error("Lifecycle transitions cannot produce draft entries.");
-    state.entries.set(key, parsedNext);
-    state.overlays.set(key, this.overlayFromEntry(parsedNext));
-    if (activeBefore > 0 && this.countActiveQueueEntries(state) === 0) {
-      for (const [candidateKey, candidate] of state.entries) {
-        if (candidate.entryKind !== "subagent" && !candidate.metadata.archived && candidate.metadata.snoozed) {
-          state.entries.set(candidateKey, WorkbenchThreadSidebarEntrySchema.parse({ ...candidate, metadata: { ...candidate.metadata, snoozed: false } }));
+    return await this.enqueue(`${projectId}:thread:${key}`, async () => {
+      const activeBefore = this.countActiveQueueEntries(state);
+      if (!state.entries.has(key) && providerEntry?.entryKind === "thread" && entryKey(providerEntry) === key) state.entries.set(key, providerEntry);
+      const existing = state.entries.get(key);
+      if (!existing || existing.entryKind === "draft") return null;
+      const ownedEvent = existing.entryKind === "subagent" && event.kind === "turnCompleted" && event.status === "completed"
+        ? { kind: "agentStatus" as const, status: "completed" as const, turnId: event.turnId }
+        : event;
+      const lifecycle = reduceWorkbenchThreadLifecycle(existing.lifecycle, ownedEvent);
+      const shouldUnsnooze = existing.entryKind === "thread" && existing.metadata.snoozed && existing.lifecycle.kind === "working" && (lifecycle.kind === "needsAttention" || lifecycle.kind === "completed" || lifecycle.kind === "stopped");
+      const next = existing.entryKind === "subagent"
+        ? { ...existing, activityAt: this.now(), lifecycle }
+        : {
+          ...existing,
+          activityAt: this.now(),
+          lifecycle,
+          metadata: existing.metadata.archived
+            ? { archived: true as const, pinned: false as const, snoozed: false as const }
+            : { ...existing.metadata, snoozed: shouldUnsnooze ? false : existing.metadata.snoozed },
+        };
+      const parsedNext = WorkbenchThreadSidebarEntrySchema.parse(next);
+      if (parsedNext.entryKind === "draft") throw new Error("Lifecycle transitions cannot produce draft entries.");
+      state.entries.set(key, parsedNext);
+      state.overlays.set(key, this.overlayFromEntry(parsedNext));
+      if (activeBefore > 0 && this.countActiveQueueEntries(state) === 0) {
+        for (const [candidateKey, candidate] of state.entries) {
+          if (candidate.entryKind !== "subagent" && !candidate.metadata.archived && candidate.metadata.snoozed) {
+            state.entries.set(candidateKey, WorkbenchThreadSidebarEntrySchema.parse({ ...candidate, metadata: { ...candidate.metadata, snoozed: false } }));
+          }
         }
       }
-    }
-    await this.persist(projectId, state);
-    this.publish(projectId, state, parsedNext);
-    return parsedNext;
+      await this.persist(projectId, state);
+      this.publish(projectId, state, parsedNext);
+      return parsedNext;
+    });
   }
 
   async observeLifecycle(harness: "codex" | "copilot" | "opencode", threadId: string, event: WorkbenchObservedLifecycleEvent) {
@@ -348,15 +360,18 @@ export default class WorkbenchThreadStateController {
   async setTitle(projectId: string, harness: "codex" | "copilot" | "opencode", threadId: string, title: string) {
     const state = await this.getProject(projectId);
     const key = `${harness}:${threadId}`;
-    const entry = state.entries.get(key);
-    if (!entry || entry.entryKind === "draft") return null;
-    const next = WorkbenchThreadSidebarEntrySchema.parse({ ...entry, title });
-    if (next.entryKind === "draft") return null;
-    state.entries.set(key, next);
-    state.overlays.set(key, this.overlayFromEntry(next));
-    await this.persist(projectId, state);
-    this.publish(projectId, state, next);
-    return next;
+    return await this.enqueue(`${projectId}:thread:${key}`, async () => {
+      const entry = state.entries.get(key);
+      if (!entry || entry.entryKind === "draft") return null;
+      const next = WorkbenchThreadSidebarEntrySchema.parse({ ...entry, title });
+      if (next.entryKind === "draft") return null;
+      if (areDeeplyEqual(entry, next)) return next;
+      state.entries.set(key, next);
+      state.overlays.set(key, this.overlayFromEntry(next));
+      await this.persist(projectId, state);
+      this.publish(projectId, state, next);
+      return next;
+    });
   }
 
   async getSnapshot(projectId: string) {
@@ -372,7 +387,7 @@ export default class WorkbenchThreadStateController {
       state.stopProjectObservation?.();
       state.stopProjectObservation = null;
     }
-    await Promise.allSettled([...this.operationQueues.values(), ...this.reconciliationPromises]);
+    await Promise.allSettled(this.operationQueues.values());
     await this.json.waitForIdle();
   }
 
@@ -381,8 +396,7 @@ export default class WorkbenchThreadStateController {
     if (current) return current;
     await this.enqueue(`${projectId}:project:load`, async () => {
       if (this.projects.has(projectId)) return;
-      const root = await this.options.resolveProjectRoot(projectId);
-      const stored = await this.json.read<StoredProjectState>(this.filePath(root, projectId), { drafts: [], threads: [], version: 1 });
+      const stored = await this.loadProjectStorage(projectId);
       const drafts = new Map<string, WorkbenchThreadDraft>();
       for (const candidate of Array.isArray(stored.drafts) ? stored.drafts : []) {
         const parsed = WorkbenchThreadDraftSchema.safeParse(candidate);
@@ -407,7 +421,7 @@ export default class WorkbenchThreadStateController {
         };
         overlays.set(`${overlay.harness}:${overlay.threadId}`, overlay);
       }
-      const state: ProjectState = { abort: null, drafts, entries, error: null, freshness: "loading", generation: 0, observers: new Set(), overlays, reconcilePromise: null, revision: 0, root, stopProjectObservation: null };
+      const state: ProjectState = { abort: null, drafts, entries, error: null, freshness: "loading", generation: 0, observers: new Set(), overlays, reconcilePromise: null, revision: 0, stopProjectObservation: null };
       this.projects.set(projectId, state);
     });
     const loaded = this.projects.get(projectId);
@@ -415,7 +429,46 @@ export default class WorkbenchThreadStateController {
     return loaded;
   }
 
-  private filePath(root: string, projectId: string) { return path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment(projectId)}.json`); }
+  private loadProjectStorage(projectId: string) {
+    return this.enqueue(`${projectId}:storage:migrate`, async (): Promise<StoredProjectState> => {
+      const canonicalPath = this.filePath(projectId);
+      const canonicalExists = await this.fileExists(canonicalPath);
+      if (canonicalExists) {
+        const stored = await this.json.read<StoredProjectState | StoredProjectStateV1>(canonicalPath, { drafts: [], threads: [], version: 2 });
+        const canonical = this.toStoredProjectState(stored);
+        if (stored.version !== 2) await this.json.write(canonicalPath, canonical);
+        return canonical;
+      }
+
+      const projectRoot = await this.options.resolveProjectRoot(projectId);
+      const legacyPath = this.legacyFilePath(projectRoot, projectId);
+      if (!await this.fileExists(legacyPath)) return { drafts: [], threads: [], version: 2 };
+      const legacy = await this.json.read<StoredProjectStateV1>(legacyPath, { drafts: [], threads: [], version: 1 });
+      const canonical = this.toStoredProjectState(legacy);
+      await this.json.write(canonicalPath, canonical);
+      return canonical;
+    });
+  }
+
+  private toStoredProjectState(stored: Partial<StoredProjectState | StoredProjectStateV1>): StoredProjectState {
+    return {
+      drafts: Array.isArray(stored.drafts) ? stored.drafts : [],
+      threads: Array.isArray(stored.threads) ? stored.threads : [],
+      version: 2,
+    };
+  }
+
+  private async fileExists(filePath: string) {
+    try {
+      return (await fs.stat(filePath)).isFile();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return false;
+      throw error;
+    }
+  }
+
+  private filePath(projectId: string) { return path.join(this.options.storageRoot, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment(projectId)}.json`); }
+  private legacyFilePath(projectRoot: string, projectId: string) { return path.join(projectRoot, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment(projectId)}.json`); }
   private draftEntry(draft: WorkbenchThreadDraft): WorkbenchThreadSidebarEntry { return { activityAt: draft.updatedAt, draft, entryKind: "draft", metadata: { archived: false, pinned: false, snoozed: false }, title: draft.prompt.trim().split(/\r?\n/u).find(Boolean)?.trim().replace(/\s+/gu, " ") || "Draft" }; }
   private snapshot(projectId: string, state: ProjectState): WorkbenchThreadSidebarSnapshot { return { entries: sortThreadSidebarEntries(projectWorkbenchThreadSidebarEntries([...state.entries.values()])).filter((entry) => getThreadSidebarGroup(entry) !== "hidden"), error: state.error, freshness: state.freshness, projectId, revision: state.revision }; }
   private countActiveQueueEntries(state: ProjectState) { return [...state.entries.values()].filter((entry) => { const group = getThreadSidebarGroup(entry); return group === "drafts" || group === "needsAttention" || group === "completed" || group === "working"; }).length; }
@@ -439,9 +492,9 @@ export default class WorkbenchThreadStateController {
     const abort = new AbortController();
     state.abort?.abort();
     state.abort = abort;
-    const reconcilePromise = this.options.reconcileProject(projectId, abort.signal, (harness, entries) => {
+    const reconcilePromise = this.options.reconcileProject(projectId, abort.signal, (harness, entries, options) => {
       if (!this.active || generation !== state.generation || !state.observers.size) return;
-      this.installProviderSnapshot(state, harness, entries);
+      this.installProviderSnapshot(state, harness, entries, options);
       state.error = null;
       state.freshness = "partial";
       this.publish(projectId, state);
@@ -467,7 +520,12 @@ export default class WorkbenchThreadStateController {
     return reconcilePromise;
   }
 
-  private installProviderSnapshot(state: ProjectState, harness: WorkbenchHarnessId, entries: WorkbenchThreadSidebarEntry[]) {
+  private installProviderSnapshot(
+    state: ProjectState,
+    harness: WorkbenchHarnessId,
+    entries: WorkbenchThreadSidebarEntry[],
+    { complete }: { complete: boolean },
+  ) {
     const providerKeys = new Set<string>();
     for (const candidate of entries) {
       const parsed = WorkbenchThreadSidebarEntrySchema.safeParse(candidate);
@@ -489,6 +547,7 @@ export default class WorkbenchThreadStateController {
         title: parsed.data.title === "New thread" && overlay.titleFallback ? overlay.titleFallback : parsed.data.title,
       } : parsed.data);
     }
+    if (!complete) return;
     for (const [key, entry] of state.entries) {
       const isAcceptedIntentAwaitingProvider = entry.entryKind !== "draft"
         && entry.lifecycle.kind === "working"
@@ -499,7 +558,7 @@ export default class WorkbenchThreadStateController {
     }
   }
 
-  private enqueue(key: string, operation: () => Promise<void>) {
+  private enqueue<TValue>(key: string, operation: () => Promise<TValue>) {
     const previous = this.operationQueues.get(key) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(operation);
     this.operationQueues.set(key, next);
@@ -536,38 +595,60 @@ export default class WorkbenchThreadStateController {
   private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/open" | "workbench/thread-state/close" | "workbench/thread-state/draft/upsert" | "workbench/thread-state/draft/delete" }>) {
     const state = await this.getProject(request.projectId);
     const key = `${request.identity.harness}:${request.identity.threadId}`;
-    const entry = state.entries.get(key);
-    if (!entry || entry.entryKind === "draft") return { accepted: false, revision: state.revision };
-    let next = entry;
-    if (request.method === "workbench/thread-state/pin/set") next = entry.entryKind === "subagent"
-      ? { ...entry, pinned: request.pinned }
-      : entry.metadata.archived
-        ? entry
-        : { ...entry, metadata: { archived: false as const, pinned: request.pinned, snoozed: entry.metadata.snoozed } };
-    if (entry.entryKind === "thread" && !entry.metadata.archived && request.method === "workbench/thread-state/snooze/set" && !(entry.lifecycle.settled && request.snoozed)) next = { ...entry, metadata: { archived: false, pinned: entry.metadata.pinned, snoozed: request.snoozed } };
-    if (request.method === "workbench/thread-state/settle" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) {
-      const lifecycle = reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "settle" });
-      next = entry.entryKind === "subagent"
-        ? { ...entry, lifecycle, pinned: false }
-        : { ...entry, lifecycle, metadata: entry.metadata.archived ? entry.metadata : { ...entry.metadata, snoozed: false } };
-    }
-    if (request.method === "workbench/thread-state/restore" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, lifecycle: reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "restore" }) };
-    if (entry.entryKind === "thread" && request.method === "workbench/thread-state/complete") next = {
-      ...entry,
-      lifecycle: reduceWorkbenchThreadLifecycle(entry.lifecycle, request.status === "stopped" ? { kind: "userStopped" } : { kind: "userCompleted" }),
-    };
-    if (entry.entryKind === "thread" && request.method === "workbench/thread-state/archive/set" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, metadata: request.archived ? { archived: true, pinned: false, snoozed: false } : { archived: false, pinned: false, snoozed: false } };
-    const parsed = WorkbenchThreadSidebarEntrySchema.safeParse(next);
-    if (!parsed.success) return { accepted: false, revision: state.revision };
-    state.entries.set(key, parsed.data);
-    if (parsed.data.entryKind !== "draft") state.overlays.set(key, this.overlayFromEntry(parsed.data));
-    await this.persist(request.projectId, state); this.publish(request.projectId, state, parsed.data);
-    return { accepted: true, revision: state.revision };
+    return await this.enqueue(`${request.projectId}:thread:${key}`, async () => {
+      const entry = state.entries.get(key);
+      if (!entry || entry.entryKind === "draft") return { accepted: false, revision: state.revision };
+      if (request.method === "workbench/thread-state/complete"
+        && (entry.entryKind !== "thread" || entry.lifecycle.kind !== "needsAttention" || entry.lifecycle.reason !== "noActiveTurn")) {
+        return { accepted: false, revision: state.revision };
+      }
+      if (request.method === "workbench/thread-state/attention/mark"
+        && (entry.entryKind !== "thread" || (entry.lifecycle.kind !== "completed" && entry.lifecycle.kind !== "stopped"))) {
+        return { accepted: false, revision: state.revision };
+      }
+      let next = entry;
+      if (request.method === "workbench/thread-state/pin/set") next = entry.entryKind === "subagent"
+        ? { ...entry, pinned: request.pinned }
+        : entry.metadata.archived
+          ? entry
+          : { ...entry, metadata: { archived: false as const, pinned: request.pinned, snoozed: entry.metadata.snoozed } };
+      if (entry.entryKind === "thread" && !entry.metadata.archived && request.method === "workbench/thread-state/snooze/set" && !(entry.lifecycle.settled && request.snoozed)) next = { ...entry, metadata: { archived: false, pinned: entry.metadata.pinned, snoozed: request.snoozed } };
+      if (request.method === "workbench/thread-state/settle" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) {
+        const lifecycle = reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "settle" });
+        next = entry.entryKind === "subagent"
+          ? { ...entry, lifecycle, pinned: false }
+          : { ...entry, lifecycle, metadata: entry.metadata.archived ? entry.metadata : { ...entry.metadata, snoozed: false } };
+      }
+      if (request.method === "workbench/thread-state/restore" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, lifecycle: reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "restore" }) };
+      if (entry.entryKind === "thread"
+        && request.method === "workbench/thread-state/attention/mark"
+        && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = {
+        ...entry,
+        lifecycle: reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "userNeedsAttention" }),
+      };
+      if (entry.entryKind === "thread"
+        && request.method === "workbench/thread-state/complete"
+        && entry.lifecycle.kind === "needsAttention"
+        && entry.lifecycle.reason === "noActiveTurn") next = {
+        ...entry,
+        lifecycle: reduceWorkbenchThreadLifecycle(entry.lifecycle, request.status === "stopped" ? { kind: "userStopped" } : { kind: "userCompleted" }),
+      };
+      if (entry.entryKind === "thread" && request.method === "workbench/thread-state/archive/set" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, metadata: request.archived ? { archived: true, pinned: false, snoozed: false } : { archived: false, pinned: false, snoozed: false } };
+      const parsed = WorkbenchThreadSidebarEntrySchema.safeParse(next);
+      if (!parsed.success) return { accepted: false, revision: state.revision };
+      if (areDeeplyEqual(entry, parsed.data)) return { accepted: true, revision: state.revision };
+      state.entries.set(key, parsed.data);
+      if (parsed.data.entryKind !== "draft") state.overlays.set(key, this.overlayFromEntry(parsed.data));
+      await this.persist(request.projectId, state); this.publish(request.projectId, state, parsed.data);
+      return { accepted: true, revision: state.revision };
+    });
   }
 
   private persist(projectId: string, state: ProjectState) {
-    const threads = [...state.overlays.values()];
-    return this.json.write(this.filePath(state.root, projectId), { drafts: [...state.drafts.values()], threads, version: 1 } satisfies StoredProjectState);
+    return this.enqueue(`${projectId}:storage:write`, async () => {
+      const threads = [...state.overlays.values()];
+      await this.json.write(this.filePath(projectId), { drafts: [...state.drafts.values()], threads, version: 2 } satisfies StoredProjectState);
+    });
   }
 
   private overlayFromEntry(entry: Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>): StoredThreadMetadata {

@@ -30,6 +30,7 @@ export interface WorkbenchThreadStateFeatureContext {
   requestHarness(harness: HarnessKind, request: JsonRpcRequest): Promise<JsonRpcResponse>;
   resolveProjectById(projectId: string): Promise<ProjectRecord>;
   resolveProjectFromCwd(cwd: string, options?: { endpointName?: string }): Promise<ProjectResolution>;
+  storageRoot: string;
 }
 
 function asRecord(value: unknown) {
@@ -102,6 +103,7 @@ export function mapProviderActivityNotification(notification: JsonRpcNotificatio
 
 export default class WorkbenchThreadStateFeature {
   readonly controller: WorkbenchThreadStateController;
+  private paginationQueue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly context: WorkbenchThreadStateFeatureContext) {
     this.controller = new WorkbenchThreadStateController({
@@ -111,6 +113,7 @@ export default class WorkbenchThreadStateFeature {
       publish: context.publish,
       reconcileProject: (projectId, signal, acceptProviderSnapshot) => this.reconcileProject(projectId, signal, acceptProviderSnapshot),
       resolveProjectRoot: async (projectId) => (await context.resolveProjectById(projectId)).rootPath,
+      storageRoot: context.storageRoot,
     });
   }
 
@@ -166,7 +169,7 @@ export default class WorkbenchThreadStateFeature {
   private async reconcileProject(
     projectId: string,
     signal: AbortSignal,
-    acceptProviderSnapshot: (harness: WorkbenchHarness, entries: WorkbenchThreadSidebarEntry[]) => void,
+    acceptProviderSnapshot: (harness: WorkbenchHarness, entries: WorkbenchThreadSidebarEntry[], options: { complete: boolean }) => void,
   ) {
     const [project, relationships] = await Promise.all([
       this.context.resolveProjectById(projectId),
@@ -174,8 +177,10 @@ export default class WorkbenchThreadStateFeature {
     ]);
     const results = await Promise.all((["codex", "copilot", "opencode"] as const).map(async (harness): Promise<WorkbenchThreadReconciliationFailure | null> => {
       try {
-        const providerEntries = await this.listProviderEntries(harness, project.rootPath, signal);
-        acceptProviderSnapshot(harness, this.projectProviderEntries(projectId, harness, providerEntries, relationships));
+        const providerEntries = await this.listProviderEntries(harness, project.rootPath, signal, (entries) => {
+          acceptProviderSnapshot(harness, this.projectProviderEntries(projectId, harness, entries, relationships), { complete: false });
+        });
+        acceptProviderSnapshot(harness, this.projectProviderEntries(projectId, harness, providerEntries, relationships), { complete: true });
         return null;
       } catch (error) {
         if (signal.aborted) throw signal.reason ?? new Error("Thread-state reconciliation cancelled.");
@@ -185,12 +190,32 @@ export default class WorkbenchThreadStateFeature {
     return results.filter((failure): failure is WorkbenchThreadReconciliationFailure => Boolean(failure));
   }
 
-  private async listProviderEntries(harness: WorkbenchHarness, rootPath: string, signal: AbortSignal) {
+  private async listProviderEntries(
+    harness: WorkbenchHarness,
+    rootPath: string,
+    signal: AbortSignal,
+    acceptFirstPage: (entries: WorkbenchThreadSidebarEntry[]) => void,
+  ) {
     const entries: WorkbenchThreadSidebarEntry[] = [];
     let cursor: string | null = null;
+    let page = 0;
     do {
       if (signal.aborted) throw signal.reason ?? new Error("Thread-state reconciliation cancelled.");
-      const response = await this.context.requestHarness(harness, { id: `thread-state:${harness}`, method: "thread/list", params: { archived: false, cwd: rootPath, cursor, limit: 50 } });
+      const request = {
+        id: `thread-state:${harness}`,
+        method: "thread/list",
+        params: {
+          archived: false,
+          cwd: rootPath,
+          cursor,
+          limit: 50,
+          ...(harness === "codex" ? { sortDirection: "desc", sortKey: "updated_at", useStateDbOnly: true } : {}),
+        },
+        ...(harness === "codex" ? { workbenchRequestSource: "autoRefresh" } : {}),
+      } satisfies JsonRpcRequest;
+      const response = page === 0
+        ? await this.context.requestHarness(harness, request)
+        : await this.enqueuePagination(() => this.context.requestHarness(harness, request));
       if (response.error) throw new Error(response.error.message);
       const result = asRecord(response.result);
       for (const candidate of Array.isArray(result?.data) ? result.data : []) {
@@ -198,8 +223,16 @@ export default class WorkbenchThreadStateFeature {
         if (entry) entries.push(entry);
       }
       cursor = typeof result?.nextCursor === "string" && result.nextCursor ? result.nextCursor : null;
+      if (page === 0 && cursor) acceptFirstPage(entries);
+      page += 1;
     } while (cursor);
     return entries;
+  }
+
+  private async enqueuePagination<TValue>(operation: () => Promise<TValue>) {
+    const next = this.paginationQueue.catch(() => undefined).then(operation);
+    this.paginationQueue = next.catch(() => undefined);
+    return await next;
   }
 
   private projectProviderEntries(
