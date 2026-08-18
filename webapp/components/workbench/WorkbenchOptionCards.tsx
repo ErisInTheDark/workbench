@@ -8,6 +8,8 @@
 
 import type { ReactNode } from "react";
 
+import { WorkbenchCheckboxMarker } from "./WorkbenchCheckbox";
+
 type WorkbenchOptionCardsProps<T extends string | boolean | number> = {
   ariaLabel: string;
   columns?: "one" | "two";
@@ -62,17 +64,20 @@ export function WorkbenchOptionCard ({
   );
   const optionBody = (
     <>
-      <span
-        id={markerId}
-        aria-hidden="true"
-        className={joinClasses(
-          "mt-1 inline-flex h-4 w-4 shrink-0 border transition",
-          isSingleChoice ? "rounded-full" : "rounded-[0.28rem]",
-          isChecked
-            ? "border-[color-mix(in_srgb,var(--text)_40%,transparent)] bg-[color-mix(in_srgb,var(--text)_86%,var(--bg)_14%)]"
-            : "border-[color-mix(in_srgb,var(--text)_22%,transparent)] bg-transparent",
-        )}
-      />
+      {isSingleChoice ? (
+        <span
+          id={markerId}
+          aria-hidden="true"
+          className={joinClasses(
+            "mt-1 inline-flex size-4 shrink-0 rounded-full border transition",
+            isChecked
+              ? "border-[color-mix(in_srgb,var(--text)_40%,transparent)] bg-[color-mix(in_srgb,var(--text)_86%,var(--bg)_14%)]"
+              : "border-[color-mix(in_srgb,var(--text)_22%,transparent)] bg-transparent",
+          )}
+        />
+      ) : (
+        <WorkbenchCheckboxMarker checked={isChecked} className="mt-1" disabled={disabled} />
+      )}
       <span className="min-w-0">
         <span className="block text-[0.86em] font-medium leading-[1.5] text-text">
           {label}

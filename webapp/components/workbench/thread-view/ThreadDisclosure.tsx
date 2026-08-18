@@ -30,12 +30,14 @@ type ThreadDisclosureProps = Omit<ComponentPropsWithoutRef<"details">, "children
 
 function isSummaryActionTarget(target: EventTarget | null) {
   return target instanceof Element
-    && Boolean(target.closest("a, button, [data-thread-summary-action='true']"));
+    && Boolean(target.closest("a, button, input, label, select, textarea, [data-thread-summary-action='true']"));
 }
 
 function shouldPreventSummaryActionDefault(target: EventTarget | null) {
-  return target instanceof Element
-    && Boolean(target.closest("button, [data-thread-summary-action='true']"));
+  if (!(target instanceof Element) || target.closest("input, label, select, textarea")) {
+    return false;
+  }
+  return Boolean(target.closest("button, [data-thread-summary-action='true']"));
 }
 
 export default function ThreadDisclosure ({

@@ -488,8 +488,19 @@ test("deprecated checkpoint baseline returns a migration guide without creating 
   assert.equal(canonical.kind, "help");
   assert.match(canonical.help, /checkpoint baseline has been replaced/u);
   assert.match(canonical.help, /checkpoint plan/u);
+  assert.match(canonical.help, /full Git-visible worktree through Git's object database; they do not copy the workspace/u);
+  assert.match(canonical.help, /verifies those planned paths are clean against HEAD, then snapshots the full Git-visible worktree/u);
+  assert.match(canonical.help, /verified planned set, not the storage scope or an ownership boundary/u);
   assert.match(canonical.help, /checkpoint implement --amend/u);
+  assert.match(canonical.help, /additional paths to be clean and unchanged since the implementation checkpoint/u);
+  assert.match(canonical.help, /preserving the original snapshot tree and parent/u);
+  assert.match(canonical.help, /returned by --amend for any further amendment/u);
+  assert.match(canonical.help, /exact path list on compare, diff, restore, or commit selects that operation from the full snapshot/u);
+  assert.match(canonical.help, /verified planned set does not restrict it/u);
+  assert.match(canonical.help, /After Review, or after a later approved plan starts a new implementation arc/u);
   assert.match(canonical.help, /checkpoint commit/u);
+  assert.match(canonical.help, /Omit the optional description when the title already explains the commit/u);
+  assert.match(canonical.help, /Add a description only when it communicates useful context that the title cannot/u);
   assert.doesNotMatch(WORKBENCH_AGENT_CLI_HELP, /checkpoint baseline/u);
 });
 

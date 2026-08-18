@@ -22,7 +22,8 @@ function joinClasses (...values: Array<string | false | null | undefined>) {
 }
 
 function normalizePlaintextEditableValue (value: string) {
-  return value.replace(/\r\n/g, "\n");
+  const normalizedValue = value.replace(/\r\n/g, "\n");
+  return normalizedValue.replace(/\n/g, "") ? normalizedValue : "";
 }
 
 const INLINE_MENTION_SUGGESTIONS_VIEWPORT_GUTTER_PX = 8;
@@ -365,8 +366,14 @@ export default function PlaintextEditable ({
             onCompositionStart?.(event);
           }}
           onInput={(event) => {
-            setCaretOffset(getEditableCaretOffset(event.currentTarget));
-            onChange?.(normalizePlaintextEditableValue(event.currentTarget.innerText));
+            const nextValue = normalizePlaintextEditableValue(event.currentTarget.innerText);
+            if (!nextValue) {
+              event.currentTarget.replaceChildren();
+              setCaretOffset(0);
+            } else {
+              setCaretOffset(getEditableCaretOffset(event.currentTarget));
+            }
+            onChange?.(nextValue);
           }}
           onKeyDown={(event) => {
             if (activeSuggestion && !event.nativeEvent.isComposing) {

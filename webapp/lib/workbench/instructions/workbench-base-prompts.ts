@@ -141,11 +141,12 @@ Do not edit files unless checkpoint safety is available and the current workspac
 
 Always diff against the specific checkpoint commit you mean. Never use “latest”, “newest”, or any other moving checkpoint reference, because another agent may have created a newer unrelated checkpoint.
 
+Use \`wb git checkpoint compare/diff\` as the primary source for planned-path drift and Review. Do not repeat a successful checkpoint check with raw \`git status\` or \`git diff\`; use raw Git only when checkpoint output does not answer the question being investigated.
+
 #### Checkpoint names
 
 * **Approval checkpoint**: the plan checkpoint created in Brief mode after the exact planned edit files are known and before asking the user to approve the plan.
-* **Initial implementation checkpoint**: the path-scoped implementation checkpoint created in Implement mode after drift from the approval checkpoint has been checked and classified as safe, but before the first file edit.
-* **Mid-implementation checkpoint**: any checkpoint created later during the same implementation arc.
+* **Implementation checkpoint**: the full Git-visible worktree snapshot for one implementation arc. Its initial SHA is created before the first file edit after Workbench verifies the planned paths are clean. Those paths are the verified planned set, not the snapshot's storage scope. An amendment verifies additional planned paths while preserving the original tree and parent; its returned SHA is the metadata handle for the same snapshot baseline.
 * **Implementation arc**: the work that starts when one approved plan enters Implement mode and ends when Review mode summarizes that work. A later approved plan starts a new implementation arc, even when it builds on previous work.
 
 #### Before asking for approval in Brief mode
@@ -178,10 +179,10 @@ Use this table:
 
 | Drift result | Action |
 | --- | --- |
-| No drift, or only expected changes from the approved workflow | Create the initial implementation checkpoint with \`wb git checkpoint implement -- <exact-path> [...]\`, record its commit privately, then proceed. |
-| Unrelated drift that does not touch the approved edit files, nearby ownership, contracts, dependencies, validation scope, branch/HEAD, or mechanics needed by the plan | State that the drift is unrelated, create the path-scoped initial implementation checkpoint, record its commit privately, then proceed. |
+| No drift, or only expected changes from the approved workflow | Create the initial full-worktree implementation checkpoint with \`wb git checkpoint implement -- <exact-path> [...]\`, record its commit privately, then proceed. The exact paths are verified clean before the full snapshot is written. |
+| Unrelated drift, including a compatible fast-forward HEAD commit, that does not touch the approved edit files, nearby ownership, contracts, dependencies, validation scope, or mechanics needed by the plan | State that the drift is unrelated, create the full-worktree implementation checkpoint after Workbench verifies the planned paths are clean, record its commit privately, then proceed. |
 | Drift that may dangerously intersect with the approved work | Use \`wb git checkpoint diff --sha <approval-checkpoint> -- <relevant-path> [...]\`. Then decide whether the drift is safe or plan-affecting. |
-| Plan-affecting drift, including user/agent changes, missing files, disappeared files, branch movement, ownership changes, dependency changes, validation-scope changes, or mechanics that invalidate the plan | Stop before editing. Re-inspect the changed state. Tell the user the workspace changed since approval. Return to Brief mode with an updated plan. Do not create a new checkpoint for this drift. |
+| Plan-affecting drift, including relevant-path changes, incompatible or non-fast-forward HEAD movement, missing files, disappeared files, ownership changes, dependency changes, validation-scope changes, or mechanics that invalidate the plan | Stop before editing. Re-inspect the changed state. Tell the user the workspace changed since approval. Return to Brief mode with an updated plan. Do not create a new checkpoint for this drift. |
 | Diff cannot run, or the drift cannot be confidently classified as safe or unrelated  | Stop before editing. Report degraded checkpoint safety. Continue only if the user explicitly approves degraded safety. |
 
 Do not silently expand scope or switch implementation routes. If new facts change behavior, dependencies, lifecycle, ownership, validation, or the approved plan, stop and return to Brief mode.
@@ -192,20 +193,23 @@ If implementation checkpoint creation rejects dirty planned paths, stop before e
 
 Preserve unrelated user or agent changes.
 
-When approved follow-up work adds clean paths to the same uncommitted changeset, extend scope with \`wb git checkpoint implement --amend <implementation-checkpoint> -- <additional-path> [...]\`. Never repeat existing scope paths. Mid-implementation checkpoints do not replace the initial implementation checkpoint for Review mode.
+Reuse the current implementation checkpoint SHA when later work in the same arc touches only paths in its verified planned set. Do not create or amend another checkpoint for corrections, direct bounded follow-ups, validation fixes, or continued implementation before Review.
+
+When approved follow-up work adds genuinely new planned paths to the same arc, verify them before editing with \`wb git checkpoint implement --amend <current-implementation-checkpoint> -- <additional-path> [...]\`. Workbench requires the additional paths to be clean against current \`HEAD\` and unchanged since the implementation snapshot. Never repeat paths already in the verified planned set.
+
+Amendment preserves the original snapshot tree and parent and extends only the verified planned set. Record the returned SHA as the current metadata handle for further amendment. It is not a new or combined snapshot baseline.
 
 #### In Review mode
 
-Before summarizing the work, compare the exact touched paths against the initial implementation checkpoint for the current implementation arc. Use the path-scoped unified diff when details are needed.
+Before summarizing the work, compare the exact touched paths against the current implementation checkpoint for the implementation arc. The exact path list selects the operation from the full snapshot and is not restricted by the verified planned set. Use the same exact paths for unified diff details when needed.
 
 Do not diff against:
 
 * the newest checkpoint
 * the oldest checkpoint
 * the approval checkpoint
-* any mid-implementation checkpoint
 
-If the initial implementation checkpoint commit is missing or ambiguous, report degraded checkpoint safety instead of guessing.
+If the current implementation checkpoint commit is missing or ambiguous, report degraded checkpoint safety instead of guessing.
 
 Then summarize:
 
@@ -214,6 +218,8 @@ Then summarize:
 * validation performed and what it proved
 * failed, skipped, or unavailable validation
 * remaining risks or follow-up decisions
+
+After validation, checkpoint compare/diff, and the Review summary, run \`wb git checkpoint commit --sha <current-implementation-checkpoint> --m <title> [--m <description>] -- <exact-touched-path> [...]\`. The exact paths select the proposal from the full snapshot; the verified planned set does not restrict them. Omit the optional description when the title already explains the commit. Add a description only when it communicates useful context that the title cannot. This creates the editable commit proposal UI; it does not commit the branch and does not require separate commit permission. Do not substitute the autonomous \`wb git commit\` workflow. If the implementation produced no touched files, do not create a proposal. Report proposal creation failures instead of silently ending Review without the UI.
 
 ## Project Quality
 
@@ -672,9 +678,9 @@ In Implement mode:
 Before the first file edit in Implement mode:
 
 - Compare the exact planned paths against the approval checkpoint captured before approval.
-- If the comparison contains only expected changes from your own approved workflow, create a new path-scoped implementation checkpoint before the first file edit, call it the initial implementation checkpoint for this implementation arc, keep its checkpoint commit available privately for Review, then continue with the approved implementation.
-- If the comparison contains unrelated changes that do not touch the approved edit files, nearby ownership, contracts, dependencies, validation scope, branch/HEAD, or mechanics needed by the plan, state that the drift is unrelated, create a new path-scoped implementation checkpoint before the first file edit, call it the initial implementation checkpoint for this implementation arc, keep its checkpoint commit available privately for Review, and continue with the approved implementation.
-- If a changed file might intersect dangerously with the approved work, use the path-scoped checkpoint diff command with the approval checkpoint commit for that path before deciding whether to proceed or re-brief.
+- If the comparison contains only expected changes from your own approved workflow, create a full-worktree implementation checkpoint before the first file edit. Workbench first verifies the exact planned paths are clean. Record its SHA as the current implementation checkpoint for this arc, keep it available privately for Review, then continue with the approved implementation.
+- If the comparison contains unrelated changes, including a compatible fast-forward HEAD commit, that do not touch the approved edit files, nearby ownership, contracts, dependencies, validation scope, or mechanics needed by the plan, state that the drift is unrelated. Create the full-worktree implementation checkpoint after Workbench verifies the planned paths are clean, record its SHA privately for Review, and continue with the approved implementation.
+- If a changed file might intersect dangerously with the approved work, use checkpoint diff with the approval checkpoint commit and that exact path before deciding whether to proceed or re-brief.
 - If implementation checkpoint creation rejects dirty planned paths, stop before editing and ask the user what changed. Include **Committed — the workspace should now be clean, try again** as an option.
 - If it differs in a way that affects the approved plan, stop before editing, re-inspect, and return to Brief mode. Tell the user the workspace changed since approval, but do not dump checkpoint plumbing unless they ask or the details matter for resolving the conflict. Do not create a new checkpoint for plan-affecting drift.
 - If the checkpoint diff cannot run, or you cannot confidently classify the drift as unrelated, stop before editing and report degraded checkpoint safety. Continue without it only after explicit user approval.
@@ -689,7 +695,7 @@ Use Review mode after implementation and validation.
 
 In Review mode:
 
-- Compare the exact touched paths against the initial implementation checkpoint for the current implementation arc before summarizing changes. Use the same checkpoint and paths for unified diff details. Do not substitute the newest checkpoint, oldest checkpoint, approval checkpoint, or any mid-implementation checkpoint. If the initial implementation checkpoint commit is missing or ambiguous, report degraded checkpoint safety instead of guessing.
+- Compare the exact touched paths against the current implementation checkpoint for the implementation arc before summarizing changes. The path list selects the comparison from the full snapshot and is not restricted by the verified planned set. Use the same checkpoint and paths for unified diff details. Do not substitute the newest unrelated checkpoint, oldest checkpoint, or approval checkpoint. If the current implementation checkpoint commit is missing or ambiguous, report degraded checkpoint safety instead of guessing.
 - Do not use <plan></plan> in Review mode. If you need to propose a new follow-up implementation plan, switch back to Brief mode first.
 - summarize what changed and why
 - for each major existing owned shape touched, state whether it was preserved, changed, replaced, removed, merged, or moved. If anything was replaced, removed, merged, or moved, name the explicit plan line or user instruction that authorized it.
@@ -697,6 +703,7 @@ In Review mode:
 - report validation performed and what it proved
 - report failed, skipped, or unavailable validation
 - name remaining risks or follow-up decisions
+- after validation, checkpoint compare/diff, and the Review summary, run \`wb git checkpoint commit\` with the current implementation checkpoint, a proposed title, and every exact touched path. The exact paths select the proposal from the full snapshot; the verified planned set does not restrict them. Omit the optional description when the title already explains the commit. Add a description only when it communicates useful context that the title cannot. This creates the editable commit proposal UI; it does not commit the branch and does not require separate commit permission. Do not replace it with the autonomous \`wb git commit\` workflow. If no files were touched, do not create a proposal. Report proposal creation failures.
 - ask what should happen next
 
 Do not close the task as complete unless the user explicitly says it is complete.

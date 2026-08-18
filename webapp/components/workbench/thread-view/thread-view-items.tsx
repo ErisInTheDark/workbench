@@ -42,6 +42,7 @@ import {
   isThreadContextMatcherClaim,
   parseWorkbenchSubagentCommand,
   parseBrowseSequenceCommandOutput,
+  parseGitCheckpointCommitCommand,
   parseGitCheckpointCompareOutput,
   parseGitCheckpointDiffArtifactId,
   parseGitCheckpointDiffOutput,
@@ -1426,6 +1427,12 @@ function buildCommandSequenceRenderSegments({
       projectRootPath,
       workspaceRoots,
     });
+    if (isGitCheckpointCommitMatcherClaim(commandDisplay.claimedBy)) {
+      flushPendingCommands();
+      flushPendingSubagentWaits();
+      segments.push({ items: [item], kind: "commands" });
+      continue;
+    }
     const subagentCommand = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand, item.commandActions);
     if (subagentCommand?.action === "wait" && subagentCommand.threadIds.length) {
       flushPendingCommands();
@@ -1653,6 +1660,9 @@ function ThreadCommandExecutionDetails ({
   const checkpointProposalId = isGitCheckpointCommitMatcherClaim(commandDisplay.claimedBy)
     ? parseGitCheckpointProposalId(item.aggregatedOutput ?? "")
     : null;
+  const checkpointCommitIntent = isGitCheckpointCommitMatcherClaim(commandDisplay.claimedBy)
+    ? parseGitCheckpointCommitCommand(commandDisplay.unwrappedCommand)
+    : null;
   const isBrowseCommand = isBrowseCommandMatcherClaim(commandDisplay.claimedBy);
   const shouldRenderCheckpointDiff = checkpointDiffChanges !== null
     && (!item.aggregatedOutput?.trim() || Boolean(checkpointDiffArtifactId) || checkpointDiffChanges.length > 0);
@@ -1668,6 +1678,22 @@ function ThreadCommandExecutionDetails ({
   ), [browseResultEntries, commandDisplay.detailRows, isBrowseCommand, item.aggregatedOutput, item.id, item.status]);
   const shouldHideCommandOutput = commandDisplay.hideCommandOutput
     && (commandDetailRows.length > 0 || !item.aggregatedOutput?.trim());
+  if (checkpointCommitIntent) {
+    return (
+      <ThreadCheckpointCommitItem
+        commandOutcome={commandOutcome}
+        cwd={item.cwd}
+        intent={checkpointCommitIntent}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        projectRootPath={projectRootPath}
+        proposalId={checkpointProposalId}
+        sourceItemId={item.id}
+        threadId={threadId}
+        workspaceRoots={workspaceRoots}
+      />
+    );
+  }
   if (
     subagentCommand?.action === "wait"
     && subagentCommand.threadIds.length
@@ -1857,18 +1883,7 @@ function ThreadCommandExecutionDetails ({
             command={item.command}
             output={item.aggregatedOutput}
           />
-        ) : shouldHideCommandOutput ? null : checkpointProposalId && commandOutcome === "completed" ? (
-          <ThreadCheckpointCommitItem
-            cwd={item.cwd}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            proposalId={checkpointProposalId}
-            sourceItemId={item.id}
-            threadId={threadId}
-            workspaceRoots={workspaceRoots}
-          />
-        ) : checkpointCompareChanges && commandOutcome === "completed" ? (
+        ) : shouldHideCommandOutput ? null : checkpointCompareChanges && commandOutcome === "completed" ? (
           <ThreadCheckpointCompareItem
             changes={checkpointCompareChanges}
             projectFilePaths={projectFilePaths}

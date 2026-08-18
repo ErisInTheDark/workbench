@@ -2,7 +2,7 @@
  * Exports:
  * - default WorkbenchGitCheckpointController: own scoped checkpoint creation, comparison, proposals, and Git commit transitions. Keywords: git, checkpoint, scope, proposal, commit.
  * - GitCheckpointDirtyPathsError: identify implementation paths that must be clean before checkpoint creation. Keywords: git, checkpoint, dirty paths.
- * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult: typed controller operation results. Keywords: git, checkpoint, result.
+ * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt: typed controller operation results. Keywords: git, checkpoint, proposal, result.
  */
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -79,6 +79,14 @@ export interface GitCheckpointDiffResult extends GitCheckpointCompareResult {
   diff: string;
 }
 
+export interface GitCheckpointProposalReceipt {
+  baseCommit: string;
+  description: string;
+  paths: string[];
+  proposalId: string;
+  title: string;
+}
+
 interface ReadCheckpointResult {
   checkpointCommit: string;
   checkpointRef: string;
@@ -89,6 +97,12 @@ interface ReadProposalResult {
   metadata: ProposalMetadata;
   proposalCommit: string;
   proposalRef: string;
+}
+
+interface HeadMovement {
+  changedPaths: string[];
+  currentHead: string;
+  kind: "fast-forward" | "incompatible" | "same";
 }
 
 export class GitCheckpointDirtyPathsError extends Error {
@@ -210,22 +224,38 @@ async function writeWorktreeTree(repoRoot: string) {
   });
 }
 
-async function writeScopedWorktreeTree(repoRoot: string, paths: string[]) {
+async function writeScopedWorktreeTree(repoRoot: string, paths: string[], baseTreeish = "HEAD") {
   return await withTemporaryIndex(async (indexPath) => {
     const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-    await runGit(repoRoot, ["read-tree", "HEAD"], env);
-    await runGit(repoRoot, ["add", "-A", "--", ...paths.map(literalPathspec)], env);
+    await runGit(repoRoot, ["read-tree", baseTreeish], env);
+    const matchedPaths = [...new Set(parseNullPaths(await runGit(repoRoot, [
+      "ls-files",
+      "-z",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "--",
+      ...paths.map(literalPathspec),
+    ], env)))].sort((left, right) => left.localeCompare(right));
+    if (matchedPaths.length) {
+      await runGit(repoRoot, ["add", "-A", "--", ...matchedPaths.map(literalPathspec)], env);
+    }
     return (await runGit(repoRoot, ["write-tree"], env)).trim();
   });
 }
 
-async function writeAmendedTree(repoRoot: string, checkpointCommit: string, addedPaths: string[]) {
+async function writeTreeWithPathsFromSource(
+  repoRoot: string,
+  baseTreeish: string,
+  sourceTreeish: string,
+  paths: string[],
+) {
   return await withTemporaryIndex(async (indexPath, directory) => {
     const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-    const patchPath = path.join(directory, "amend.patch");
-    await runGit(repoRoot, ["read-tree", checkpointCommit], env);
+    const patchPath = path.join(directory, "paths.patch");
+    await runGit(repoRoot, ["read-tree", baseTreeish], env);
     const patch = await runGit(repoRoot, [
-      "diff", "--binary", "--no-renames", checkpointCommit, "HEAD", "--", ...addedPaths.map(literalPathspec),
+      "diff", "--binary", "--no-renames", baseTreeish, sourceTreeish, "--", ...paths.map(literalPathspec),
     ]);
     if (patch) {
       await fs.writeFile(patchPath, patch, "utf8");
@@ -312,18 +342,28 @@ function diffArtifactPath(threadId: string, artifactId: string) {
   );
 }
 
-function enforceScope(metadata: CheckpointMetadata | null, paths: string[]) {
-  if (metadata?.kind !== "implement") return;
-  const outsideScope = paths.filter((candidate) => !metadata.scopePaths.some((scopePath) => (
-    candidate === scopePath || candidate.startsWith(`${scopePath}/`)
-  )));
-  if (outsideScope.length) throw new Error(`Checkpoint paths are outside implementation scope: ${outsideScope.join(", ")}`);
-}
-
 async function listChangedPaths(repoRoot: string, from: string, to: string, paths: string[]) {
   return parseNullPaths(await runGit(repoRoot, [
     "diff", "--name-only", "-z", "--no-renames", from, to, "--", ...paths.map(literalPathspec),
   ])).sort((left, right) => left.localeCompare(right));
+}
+
+async function classifyHeadMovement(
+  repoRoot: string,
+  baseCommit: string,
+  paths: string[],
+): Promise<HeadMovement> {
+  const currentHead = (await runGit(repoRoot, ["rev-parse", "HEAD"])).trim();
+  if (currentHead === baseCommit) return { changedPaths: [], currentHead, kind: "same" };
+  const commitsOnlyOnBase = (await runGit(repoRoot, [
+    "rev-list", "--max-count=1", `${currentHead}..${baseCommit}`,
+  ])).trim();
+  if (commitsOnlyOnBase) return { changedPaths: [], currentHead, kind: "incompatible" };
+  return {
+    changedPaths: await listChangedPaths(repoRoot, baseCommit, currentHead, paths),
+    currentHead,
+    kind: "fast-forward",
+  };
 }
 
 async function buildFileChanges(repoRoot: string, from: string, to: string, paths: string[]) {
@@ -385,6 +425,26 @@ function commitMessage(title: string, description: string) {
   return description.trim() ? `${normalizedTitle}\n\n${description.trim()}\n` : `${normalizedTitle}\n`;
 }
 
+async function buildProposalResult(
+  repoRoot: string,
+  metadata: ProposalMetadata,
+  target: string,
+  includeNewerAvailable = false,
+): Promise<GitCheckpointProposal> {
+  return {
+    baseCommit: metadata.baseCommit,
+    changes: await buildFileChanges(repoRoot, metadata.baseCommit, target, metadata.paths),
+    committedSha: metadata.committedSha,
+    description: metadata.description,
+    includeNewerAvailable,
+    paths: metadata.paths,
+    proposalId: metadata.proposalId,
+    status: metadata.status,
+    title: metadata.title,
+    unavailableReason: metadata.unavailableReason,
+  };
+}
+
 export default class WorkbenchGitCheckpointController {
   async createPlan({ cwd, threadId }: ControllerInput): Promise<GitCheckpointCreateResult> {
     const repoRoot = await resolveRepoRoot(cwd);
@@ -414,20 +474,32 @@ export default class WorkbenchGitCheckpointController {
       )));
       if (overlapping.length) throw new Error(`Amend paths are already covered by implementation scope: ${overlapping.join(", ")}`);
     }
-    const currentTree = await writeWorktreeTree(repoRoot);
+    const currentTree = existing
+      ? await writeScopedWorktreeTree(repoRoot, paths)
+      : await writeWorktreeTree(repoRoot);
     const dirtyPaths = await listChangedPaths(repoRoot, "HEAD", currentTree, paths);
     if (dirtyPaths.length) throw new GitCheckpointDirtyPathsError(dirtyPaths);
 
     let scopePaths = paths;
     let tree = currentTree;
     let amendedFrom: string | null = null;
+    let parent = (await runGit(repoRoot, ["rev-parse", "HEAD"])).trim();
     if (existing?.metadata?.kind === "implement") {
+      const changedSinceCheckpoint = await listChangedPaths(
+        repoRoot,
+        existing.checkpointCommit,
+        currentTree,
+        paths,
+      );
+      if (changedSinceCheckpoint.length) {
+        throw new Error(`Implementation amendment paths changed since checkpoint: ${changedSinceCheckpoint.join(", ")}`);
+      }
       amendedFrom = existing.checkpointCommit;
       scopePaths = [...existing.metadata.scopePaths, ...paths].sort((left, right) => left.localeCompare(right));
-      tree = await writeAmendedTree(repoRoot, existing.checkpointCommit, paths);
+      tree = (await runGit(repoRoot, ["rev-parse", `${existing.checkpointCommit}^{tree}`])).trim();
+      parent = (await runGit(repoRoot, ["rev-parse", `${existing.checkpointCommit}^`])).trim();
     }
 
-    const parent = (await runGit(repoRoot, ["rev-parse", "HEAD"])).trim();
     const metadata: CheckpointMetadata = { amendedFrom, kind: "implement", scopePaths, version: 1 };
     const checkpointCommit = await createCommitFromTree(repoRoot, tree, parent, checkpointMessage(metadata));
     const checkpointRef = await createCheckpointRef(repoRoot, threadId, checkpointCommit);
@@ -438,8 +510,7 @@ export default class WorkbenchGitCheckpointController {
     const repoRoot = await resolveRepoRoot(cwd);
     const paths = normalizePaths(repoRoot, rawPaths);
     const checkpoint = await readCheckpoint(repoRoot, threadId, checkpointCommit);
-    enforceScope(checkpoint.metadata, paths);
-    const currentTree = await writeWorktreeTree(repoRoot);
+    const currentTree = await writeScopedWorktreeTree(repoRoot, paths);
     return {
       changes: await buildFileChanges(repoRoot, checkpoint.checkpointCommit, currentTree, paths),
       checkpointCommit: checkpoint.checkpointCommit,
@@ -463,20 +534,24 @@ export default class WorkbenchGitCheckpointController {
     paths: rawPaths,
     threadId,
     title,
-  }: ScopedCheckpointInput & { description: string; title: string }): Promise<GitCheckpointProposal> {
+  }: ScopedCheckpointInput & { description: string; title: string }): Promise<GitCheckpointProposalReceipt> {
     const repoRoot = await resolveRepoRoot(cwd);
     const requestedPaths = normalizePaths(repoRoot, rawPaths);
     const checkpoint = await readCheckpoint(repoRoot, threadId, checkpointCommit);
-    enforceScope(checkpoint.metadata, requestedPaths);
-    const baseCommit = (await runGit(repoRoot, ["rev-parse", "HEAD"])).trim();
     const checkpointParent = (await runGit(repoRoot, ["rev-parse", `${checkpoint.checkpointCommit}^`])).trim();
-    if (checkpointParent !== baseCommit) throw new Error("Checkpoint parent differs from current HEAD. Create a new implementation checkpoint before proposing a commit.");
-    const currentTree = await writeWorktreeTree(repoRoot);
-    const changedPaths = new Set(await listChangedPaths(repoRoot, checkpoint.checkpointCommit, currentTree, requestedPaths));
+    const headMovement = await classifyHeadMovement(repoRoot, checkpointParent, requestedPaths);
+    if (headMovement.kind === "incompatible") {
+      throw new Error("Repository HEAD moved incompatibly after the implementation checkpoint. Create a new implementation checkpoint before proposing a commit.");
+    }
+    if (headMovement.changedPaths.length) {
+      throw new Error(`Proposed paths changed in committed history after the implementation checkpoint: ${headMovement.changedPaths.join(", ")}`);
+    }
+    const baseCommit = headMovement.currentHead;
+    const proposalTree = await writeScopedWorktreeTree(repoRoot, requestedPaths, baseCommit);
+    const changedPaths = new Set(await listChangedPaths(repoRoot, baseCommit, proposalTree, requestedPaths));
     const unchangedPaths = requestedPaths.filter((filePath) => !changedPaths.has(filePath));
     if (unchangedPaths.length) throw new Error(`Every proposed path must identify an exact changed file: ${unchangedPaths.join(", ")}`);
     const paths = requestedPaths;
-    const proposalTree = await writeScopedWorktreeTree(repoRoot, paths);
     const proposalId = randomUUID();
     const metadata: ProposalMetadata = {
       baseCommit,
@@ -493,7 +568,13 @@ export default class WorkbenchGitCheckpointController {
     commitMessage(metadata.title, metadata.description);
     const proposalCommit = await createCommitFromTree(repoRoot, proposalTree, baseCommit, proposalMessage(metadata));
     await runGit(repoRoot, ["update-ref", `${proposalNamespace(threadId)}/${proposalId}`, proposalCommit, ""]);
-    return await this.getProposal({ cwd: repoRoot, includeNewer: false, proposalId, threadId });
+    return {
+      baseCommit,
+      description: metadata.description,
+      paths: metadata.paths,
+      proposalId,
+      title: metadata.title,
+    } satisfies GitCheckpointProposalReceipt;
   }
 
   async getProposal({
@@ -504,13 +585,32 @@ export default class WorkbenchGitCheckpointController {
   }: ControllerInput & { includeNewer: boolean; proposalId: string }): Promise<GitCheckpointProposal> {
     const repoRoot = await resolveRepoRoot(cwd);
     let proposal = await readProposal(repoRoot, threadId, proposalId);
+    let currentTree: string | null = null;
     if (proposal.metadata.status === "proposed") {
-      const currentHead = (await runGit(repoRoot, ["rev-parse", "HEAD"])).trim();
-      let unavailableReason: string | null = currentHead === proposal.metadata.baseCommit
-        ? null
-        : "The repository HEAD moved after this proposal was created.";
-      const currentTree = await writeWorktreeTree(repoRoot);
+      const headMovement = await classifyHeadMovement(repoRoot, proposal.metadata.baseCommit, proposal.metadata.paths);
+      let unavailableReason: string | null = headMovement.kind === "incompatible"
+        ? "The repository HEAD moved incompatibly after this proposal was created."
+        : headMovement.changedPaths.length
+          ? `Proposed paths changed in committed history: ${headMovement.changedPaths.join(", ")}`
+          : null;
+      if (!unavailableReason && headMovement.kind === "fast-forward") {
+        const rebasedTree = await writeTreeWithPathsFromSource(
+          repoRoot,
+          headMovement.currentHead,
+          proposal.proposalCommit,
+          proposal.metadata.paths,
+        );
+        proposal = await transitionProposal(repoRoot, proposal, {
+          ...proposal.metadata,
+          baseCommit: headMovement.currentHead,
+        }, rebasedTree);
+      }
       if (!unavailableReason) {
+        currentTree = await writeScopedWorktreeTree(
+          repoRoot,
+          proposal.metadata.paths,
+          proposal.metadata.baseCommit,
+        );
         const changedNow = new Set(await listChangedPaths(
           repoRoot,
           proposal.metadata.baseCommit,
@@ -529,26 +629,15 @@ export default class WorkbenchGitCheckpointController {
       }
     }
 
-    const currentTree = await writeWorktreeTree(repoRoot);
     const includeNewerAvailable = proposal.metadata.status === "proposed"
+      && currentTree !== null
       && (await listChangedPaths(repoRoot, proposal.proposalCommit, currentTree, proposal.metadata.paths)).length > 0;
     const target = proposal.metadata.status === "committed" && proposal.metadata.committedSha
       ? proposal.metadata.committedSha
-      : includeNewer && includeNewerAvailable
+      : includeNewer && includeNewerAvailable && currentTree
         ? currentTree
         : proposal.proposalCommit;
-    return {
-      baseCommit: proposal.metadata.baseCommit,
-      changes: await buildFileChanges(repoRoot, proposal.metadata.baseCommit, target, proposal.metadata.paths),
-      committedSha: proposal.metadata.committedSha,
-      description: proposal.metadata.description,
-      includeNewerAvailable,
-      paths: proposal.metadata.paths,
-      proposalId: proposal.metadata.proposalId,
-      status: proposal.metadata.status,
-      title: proposal.metadata.title,
-      unavailableReason: proposal.metadata.unavailableReason,
-    };
+    return await buildProposalResult(repoRoot, proposal.metadata, target, includeNewerAvailable);
   }
 
   async commitProposal({
@@ -570,7 +659,7 @@ export default class WorkbenchGitCheckpointController {
     const proposal = await readProposal(repoRoot, threadId, proposalId);
     const message = commitMessage(title, description);
     const targetTree = includeNewer && currentState.includeNewerAvailable
-      ? await writeScopedWorktreeTree(repoRoot, proposal.metadata.paths)
+      ? await writeScopedWorktreeTree(repoRoot, proposal.metadata.paths, proposal.metadata.baseCommit)
       : (await runGit(repoRoot, ["rev-parse", `${proposal.proposalCommit}^{tree}`])).trim();
     const committedSha = await createCommitFromTree(repoRoot, targetTree, proposal.metadata.baseCommit, message);
     const committedMetadata: ProposalMetadata = {
@@ -602,7 +691,7 @@ export default class WorkbenchGitCheckpointController {
       "",
     ].join("\n"));
     await runGit(repoRoot, ["reset", "--mixed", "--quiet", committedSha, "--", ...proposal.metadata.paths.map(literalPathspec)]);
-    return await this.getProposal({ cwd: repoRoot, includeNewer: false, proposalId, threadId });
+    return await buildProposalResult(repoRoot, committedMetadata, committedSha);
   }
 
   async readLegacyDiffArtifact({ artifactId, threadId }: { artifactId: string; threadId: string }) {
@@ -623,10 +712,10 @@ export default class WorkbenchGitCheckpointController {
   }: CheckpointInput & { confirmRestore?: boolean; paths?: string[] }) {
     if (!rawPaths?.length && !confirmRestore) throw new Error("Checkpoint restore requires confirmation or selected paths.");
     const repoRoot = await resolveRepoRoot(cwd);
-    const checkpoint = await readRestorableCheckpoint(repoRoot, threadId, checkpointCommit);
-    const currentTree = await writeWorktreeTree(repoRoot);
 
     if (!rawPaths?.length) {
+      const checkpoint = await readRestorableCheckpoint(repoRoot, threadId, checkpointCommit);
+      const currentTree = await writeWorktreeTree(repoRoot);
       const changedPaths = parseNullPaths(await runGit(repoRoot, [
         "diff", "--name-only", "-z", "--no-renames", checkpoint.checkpointCommit, currentTree, "--", ".",
       ]));
@@ -648,6 +737,16 @@ export default class WorkbenchGitCheckpointController {
     }
 
     const paths = normalizePaths(repoRoot, rawPaths);
+    const checkpoint = await readCheckpoint(repoRoot, threadId, checkpointCommit);
+    const checkpointParent = (await runGit(repoRoot, ["rev-parse", `${checkpoint.checkpointCommit}^`])).trim();
+    const headMovement = await classifyHeadMovement(repoRoot, checkpointParent, paths);
+    if (headMovement.kind === "incompatible") {
+      throw new Error("Repository HEAD moved incompatibly after this checkpoint. Ask the user before restoring selected paths.");
+    }
+    if (headMovement.changedPaths.length) {
+      throw new Error(`Selected restore paths changed in committed history after this checkpoint: ${headMovement.changedPaths.join(", ")}`);
+    }
+    const currentTree = await writeScopedWorktreeTree(repoRoot, paths);
     const changedPaths = await listChangedPaths(repoRoot, checkpoint.checkpointCommit, currentTree, paths);
     const checkpointPaths = new Set(parseNullPaths(await runGit(repoRoot, [
       "ls-tree", "-r", "--name-only", "-z", checkpoint.checkpointCommit, "--", ...paths.map(literalPathspec),

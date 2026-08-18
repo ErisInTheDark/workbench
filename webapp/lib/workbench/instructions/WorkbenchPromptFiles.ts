@@ -5,6 +5,7 @@
  * - ensureWorkbenchPromptFiles: write generated Workbench prompt files and scaffold prompt folders. Keywords: AGENTS, workflows, default agent.
  * - buildWorkbenchPromptInstructions: resolve fresh prompt files and expand Workbench injections for a Codex thread. Keywords: prompt, injections, app-server.
  * - buildWorkbenchThreadUtilityDeveloperInstructions: resolve workflow-free Workbench CLI instructions. Keywords: checkpoints, thread title, thread recall, cli.
+ * - buildWorkbenchGitInstructions: render pure managed-thread Git command and checkpoint instructions. Keywords: git, checkpoint, commit, prompt.
  * - filterWorkbenchInstructionContent: render final instruction fields for the trusted harness, shell, and available mechanics. Keywords: selector, filter, final payload.
  * - listWorkbenchInstructionMechanics: derive mechanics availability from the same packet predicates used by prompt assembly. Keywords: selector, available, mechanics.
  * - buildWorkbenchCollaborationDeveloperInstructions: build Workbench-owned questionnaire collaboration instructions. Keywords: collaboration mode, plan mode, request_user_input.
@@ -606,7 +607,7 @@ The base history command is required after compaction; search and paginated expa
 `.trim();
 }
 
-function buildWorkbenchGitInstructions(context: WorkbenchPromptContext) {
+export function buildWorkbenchGitInstructions(context: WorkbenchPromptContext) {
   const threadId = context.threadId?.trim();
   if (!threadId || threadId === "new" || threadId.startsWith("draft:") || !context.workbenchOrigin?.trim()) {
     return null;
@@ -643,6 +644,10 @@ Checkpoint refs are convenience state, not a security boundary. Do not use them 
 
 Use these exact CLI shapes so Workbench can match and render checkpoint operations. Workbench owns the Git plumbing and uses a temporary index internally, so agents should not run raw \`git update-ref\` checkpoint scripts themselves.
 
+Plan and implementation checkpoints snapshot the full Git-visible worktree as structurally shared Git objects. They do not copy the workspace. Unchanged blobs and trees are reused; only changed and non-ignored untracked content creates new objects.
+
+Use \`wb git checkpoint compare/diff\` as the primary source for planned-path drift and Review. Do not repeat a successful checkpoint check with raw \`git status\` or \`git diff\`; use raw Git only when checkpoint output does not answer the question being investigated.
+
 ### Create an approval plan checkpoint
 
 Run after entering Brief mode once the exact planned edit files are known; call this returned checkpoint commit the approval checkpoint.
@@ -651,35 +656,45 @@ Run after entering Brief mode once the exact planned edit files are known; call 
 
 ### Create an implementation checkpoint
 
-After approval drift is classified safe, name every exact planned edit path. Workbench rejects the checkpoint if any selected path is dirty. If that happens, stop and ask the user what changed; include **Committed — the workspace should now be clean, try again** as an option. Never clean, restore, or stage the paths to bypass this guard.
+After approval drift is classified safe, name every exact planned edit path. Workbench verifies that those planned paths are clean against \`HEAD\`, then snapshots the full Git-visible worktree. The recorded paths are the verified planned set; they are not the checkpoint's storage scope or an ownership boundary.
+
+If Workbench rejects a dirty planned path, stop and ask the user what changed; include **Committed — the workspace should now be clean, try again** as an option. Never clean, restore, or stage the paths to bypass this guard.
 
 \`wb git checkpoint implement -- <path> [<path>...]\`
 
-When bugfixing or tweaking an existing uncommitted implementation, extend its stored scope only with additional clean paths. Do not repeat paths already covered by the checkpoint.
+One implementation arc has one implementation snapshot baseline. Reuse its current checkpoint SHA when later work touches only paths in the verified planned set. Do not create or amend another checkpoint for corrections, direct bounded follow-ups, validation fixes, or continued implementation before Review.
+
+Only when the same active arc gains genuinely new planned paths, verify them before editing with the amendment command below. Workbench requires each additional path to be clean against current \`HEAD\` and unchanged since the implementation snapshot. Amendment preserves the original snapshot tree and parent and extends only the verified planned set. Do not repeat paths already in that set.
+
+Record the SHA returned by amendment as the current metadata handle for any further amendment. It carries the extended verified planned set, but it does not establish a new snapshot baseline.
 
 \`wb git checkpoint implement --amend <implementation-checkpoint-sha> -- <additional-path> [<additional-path>...]\`
 
 ### Compare against a specific checkpoint
 
-Run immediately after entering Implement mode before editing by passing the approval checkpoint commit and the exact planned paths. Run again after entering Review mode by passing the initial implementation checkpoint and its touched paths. Do not substitute the newest checkpoint or guess from thread history. Implementation checkpoint scope is mechanically enforced.
+Run immediately after entering Implement mode before editing by passing the approval checkpoint commit and the exact planned paths. Run again after entering Review mode by passing the current implementation checkpoint and its touched paths. Do not substitute the newest unrelated checkpoint or guess from thread history.
+
+The exact path list selects the compare operation from the checkpoint's full snapshot. It is not restricted by the verified planned set.
 
 \`wb git checkpoint compare --sha <checkpoint-commit-sha> -- <path> [<path>...]\`
 
 ### Read unified diff content
 
-Use the same exact checkpoint and relevant path list when unified diff content is needed to classify drift or inspect implementation details.
+Use the same exact checkpoint and relevant path list when unified diff content is needed to classify drift or inspect implementation details. The exact path list selects the diff operation from the full snapshot.
 
 \`wb git checkpoint diff --sha <checkpoint-commit-sha> -- <path> [<path>...]\`
 
-### Propose a checkpoint-scoped commit in Review
+### Propose a selected-path commit in Review
 
-After validation and review, create an editable commit proposal from the implementation checkpoint and exact touched paths. The proposal freezes that file set and its current contents. The user can include or exclude newer edits to those same files; no other files can enter the proposal.
+After validation and checkpoint compare/diff, the agent must run this command with the current implementation checkpoint, a proposed title, and every exact touched path. The exact paths select the proposal from the full snapshot; the verified planned set does not restrict them. Omit the optional description when the title already explains the commit. Add a description only when it communicates useful context that the title cannot. This creates the editable commit proposal UI; it does not commit the branch and does not require separate commit permission. Do not replace it with the autonomous \`wb git commit\` workflow. If the implementation produced no touched files, do not create a proposal. Report proposal creation failures instead of silently ending Review without the UI.
+
+The proposal freezes that file set and its current contents. The user can include or exclude newer edits to those same files; no other files can enter the proposal. Workbench rebases the frozen selected files across compatible fast-forward commits that do not change them. Committed changes to selected files or incompatible HEAD movement make the proposal unavailable. A final atomic branch update prevents a concurrent commit from being overwritten.
 
 \`wb git checkpoint commit --sha <implementation-checkpoint-sha> --m <title> [--m <description>] -- <path> [<path>...]\`
 
 ### Restore selected paths after explicit user request
 
-First run the checkpoint diff or another preview. Pass every file or directory to restore after \`--\`; Workbench restores only those paths from the specified checkpoint, removes selected paths that were created after it, and leaves the real Git index unchanged. The repository root is not a valid selected path. Workbench blocks when the checkpoint parent is not the current HEAD.
+First run the checkpoint diff or another preview. Pass every file or directory to restore after \`--\`; Workbench restores only those paths from the specified checkpoint, removes selected paths that were created after it, and leaves the real Git index unchanged. The repository root is not a valid selected path. Compatible fast-forward commits to unrelated paths do not block selected-path restore. Workbench blocks when selected paths changed in committed history or HEAD moved incompatibly.
 
 \`wb git checkpoint restore --commit <checkpoint-commit-sha> -- <path> [<path>...]\`
 
@@ -832,6 +847,7 @@ This collaboration-mode overlay must not replace the active Workbench workflow, 
 
 const WorkbenchPromptFiles = {
   buildWorkbenchCollaborationDeveloperInstructions,
+  buildWorkbenchGitInstructions,
   buildWorkbenchPromptInstructions,
   buildWorkbenchThreadUtilityDeveloperInstructions,
   ensureWorkbenchPromptFiles,

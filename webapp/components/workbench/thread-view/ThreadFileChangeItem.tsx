@@ -2,6 +2,7 @@
  * Exports:
  * - default ThreadFileChangeItem: render one or more adjacent fileChange items with per-file counts and expandable unified diffs. Keywords: workbench, thread, file change, diff.
  * - ThreadFileChangeList: render reusable file-change rows from already-shaped file update changes. Keywords: workbench, thread, file change, diff list.
+ * - ThreadFileChangeTotals: render shared cumulative addition and deletion counts. Keywords: workbench, thread, file change, totals.
  * - Local helpers: format paths, summary labels, and change totals for thread file changes. Keywords: additions, deletions, path display.
  */
 "use client";
@@ -25,17 +26,21 @@ type FileUpdateChange = FileChangeItem["changes"][number];
 
 interface ParsedFileChange {
   change: FileUpdateChange;
+  detailsAvailable: boolean;
   diff: ParsedUnifiedDiff;
   displayPath: string;
   movePathDisplay: string | null;
   sourceChangeIndex: number;
   sourceItemId: string;
+  summaryTotals: { additions: number; deletions: number };
 }
 
 export interface ThreadFileChangeListChange {
   change: FileUpdateChange;
+  detailsAvailable?: boolean;
   sourceChangeIndex?: number;
   sourceItemId?: string;
+  summaryTotals?: { additions: number; deletions: number };
 }
 
 interface FileChangePresentation {
@@ -47,7 +52,7 @@ function assertNeverFileChangeKind (kind: never): never {
   throw new Error(`Unsupported file change kind: ${JSON.stringify(kind)}`);
 }
 
-function DiffChangeTotals ({
+export function ThreadFileChangeTotals ({
   additions,
   deletions,
 }: {
@@ -142,21 +147,14 @@ function ThreadFileChangeDetails ({
   projectFilePaths?: readonly string[];
   projectId?: string | null;
 }) {
-  const presentation = getFileChangePresentation(parsedChange.change);
-
   return (
     <div className="space-y-3">
-      <div className="space-y-1">
-        <p className="m-0 text-[0.78em] leading-[1.6] text-muted">
-          {presentation.label} file
+      {parsedChange.movePathDisplay ? (
+        <p className="m-0 flex flex-wrap items-baseline gap-2 text-[0.78em] leading-[1.6] text-muted">
+          <span>From</span>
+          <ProjectFilePath className="max-w-full align-baseline" disambiguationPaths={projectFilePaths} path={parsedChange.movePathDisplay} projectId={projectId} />
         </p>
-        {parsedChange.movePathDisplay ? (
-          <p className="m-0 flex flex-wrap items-baseline gap-2 text-[0.78em] leading-[1.6] text-muted">
-            <span>From</span>
-            <ProjectFilePath className="max-w-full align-baseline" disambiguationPaths={projectFilePaths} path={parsedChange.movePathDisplay} projectId={projectId} />
-          </p>
-        ) : null}
-      </div>
+      ) : null}
       {parsedChange.change.diff.trim() ? (
         <ThreadCodeDisplay diff={parsedChange.diff} preview variant="diff" />
       ) : (
@@ -184,9 +182,9 @@ function ThreadFileChangeSummary ({
       </span>
       <ThreadSummaryText text={presentation.label} />
       <ProjectFilePath className="max-w-full shrink min-w-0 align-baseline text-[0.82em]" disambiguationPaths={projectFilePaths} path={parsedChange.displayPath} projectId={projectId} />
-      <DiffChangeTotals
-        additions={parsedChange.diff.additions}
-        deletions={parsedChange.diff.deletions}
+      <ThreadFileChangeTotals
+        additions={parsedChange.summaryTotals.additions}
+        deletions={parsedChange.summaryTotals.deletions}
       />
     </span>
   );
@@ -205,32 +203,46 @@ export function ThreadFileChangeList ({
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const parsedChanges: ParsedFileChange[] = changes.map((entry, index) => ({
-    change: entry.change,
-    diff: parseFileChangeDiff(entry.change),
-    displayPath: toWorkspaceDisplayPath(entry.change.path, { projectRootPath: projectRootPath ?? "", workspaceRoots }) ?? entry.change.path,
-    movePathDisplay: entry.change.kind.type === "update" && entry.change.kind.move_path
-      ? toWorkspaceDisplayPath(entry.change.kind.move_path, { projectRootPath: projectRootPath ?? "", workspaceRoots }) ?? entry.change.kind.move_path
-      : null,
-    sourceChangeIndex: entry.sourceChangeIndex ?? index,
-    sourceItemId: entry.sourceItemId ?? "file-change-list",
-  }));
+  const parsedChanges: ParsedFileChange[] = changes.map((entry, index) => {
+    const diff = parseFileChangeDiff(entry.change);
+    return {
+      change: entry.change,
+      detailsAvailable: entry.detailsAvailable ?? true,
+      diff,
+      displayPath: toWorkspaceDisplayPath(entry.change.path, { projectRootPath: projectRootPath ?? "", workspaceRoots }) ?? entry.change.path,
+      movePathDisplay: entry.change.kind.type === "update" && entry.change.kind.move_path
+        ? toWorkspaceDisplayPath(entry.change.kind.move_path, { projectRootPath: projectRootPath ?? "", workspaceRoots }) ?? entry.change.kind.move_path
+        : null,
+      sourceChangeIndex: entry.sourceChangeIndex ?? index,
+      sourceItemId: entry.sourceItemId ?? "file-change-list",
+      summaryTotals: entry.summaryTotals ?? {
+        additions: diff.additions,
+        deletions: diff.deletions,
+      },
+    };
+  });
 
   return (
     <div className="space-y-1.5 py-2">
-      {parsedChanges.length ? parsedChanges.map((change, index) => (
-        <ThreadDisclosure
-          key={`${change.sourceItemId}:change:${change.sourceChangeIndex}:${change.change.path}:${index}`}
-          className="py-0.5"
-          contentClassName="mt-2 pl-6"
-          summary={(
-            <ThreadFileChangeSummary parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} />
-          )}
-          summaryClassName="text-[0.92em] leading-[1.6] text-muted"
-        >
-          <ThreadFileChangeDetails parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} />
-        </ThreadDisclosure>
-      )) : (
+      {parsedChanges.length ? parsedChanges.map((change, index) => {
+        const key = `${change.sourceItemId}:change:${change.sourceChangeIndex}:${change.change.path}:${index}`;
+        const summary = <ThreadFileChangeSummary parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} />;
+        return change.detailsAvailable ? (
+          <ThreadDisclosure
+            key={key}
+            className="py-0.5"
+            contentClassName="mt-2 pl-6"
+            summary={summary}
+            summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+          >
+            <ThreadFileChangeDetails parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} />
+          </ThreadDisclosure>
+        ) : (
+          <div key={key} className="py-0.5 pl-6 text-[0.92em] leading-[1.6] text-muted">
+            {summary}
+          </div>
+        );
+      }) : (
         <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No changed files captured.</p>
       )}
     </div>

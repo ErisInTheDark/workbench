@@ -55,10 +55,10 @@ export default function ThreadPreviewFrame ({
 }: ThreadPreviewFrameProps) {
   const normalizedScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
   const frameClassName = joinClasses(
-    "relative min-w-0 max-w-full before:absolute before:inset-0 before:-z-1 before:hidden before:content-[''] before:border-y before:border-[color-mix(in_srgb,var(--text)_10%,transparent)] md:before:block",
+    "relative min-w-0 before:absolute before:inset-0 before:-z-1 before:hidden before:content-[''] before:border-y before:border-[color-mix(in_srgb,var(--text)_10%,transparent)] md:before:block",
     backgroundClassName,
     getEdgeBleedClassName(edgeBleed),
-    edgeOffset === "left" && "-ml-8",
+    edgeOffset === "left" ? "-ml-6 max-w-none" : "max-w-full",
     mode === "scroll" && "flex overflow-hidden",
     className,
   );

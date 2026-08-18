@@ -4,11 +4,13 @@
  * - isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: detect specialized checkpoint renderers. Keywords: checkpoint, matcher, renderer.
  * - parseGitCheckpointCompareOutput: parse per-file checkpoint change counts. Keywords: checkpoint, compare, additions, deletions.
  * - parseGitCheckpointProposalId: parse the durable proposal id from CLI output. Keywords: checkpoint, proposal, commit.
+ * - parseGitCheckpointCommitCommand/GitCheckpointCommitCommandIntent: read immediate proposal-card intent from canonical command arguments. Keywords: checkpoint, proposal, title, paths.
  * - parseGitCheckpointDiffArtifactId/parseGitCheckpointDiffOutput: preserve legacy and inline unified diff rendering. Keywords: checkpoint, diff, artifact.
  */
 import type { FileUpdateChange } from "../../../codex/generated/app-server/v2/FileUpdateChange";
 import { parseUnifiedDiffFileChanges } from "../thread-file-diff";
 import { CommandMatcher } from "./core";
+import { tokenizeCommand } from "./helpers";
 import type { CommandMatcherDefinition } from "./types";
 
 const CHECKPOINT_COMPARE_MATCHER_ID = "git-checkpoint.compare";
@@ -17,6 +19,13 @@ const CHECKPOINT_COMMIT_MATCHER_ID = "git-checkpoint.commit";
 const CHECKPOINT_DIFF_ARTIFACT_PATTERN = /^Full diff artifact:\s*([a-f0-9]{64})\s*$/im;
 const CHECKPOINT_PROPOSAL_PATTERN = /^Workbench checkpoint proposal:\s*([A-Za-z0-9._-]+)\s*$/im;
 const CHECKPOINT_COMPARE_LINE_PATTERN = /^([ADMU])\t\+(\d+)\t-(\d+)\t(.+)$/u;
+
+export interface GitCheckpointCommitCommandIntent {
+  checkpointCommit: string;
+  description: string;
+  paths: string[];
+  title: string;
+}
 
 function createMatcher({
   command,
@@ -127,6 +136,35 @@ export function parseGitCheckpointCompareOutput(output: string) {
 
 export function parseGitCheckpointProposalId(output: string) {
   return CHECKPOINT_PROPOSAL_PATTERN.exec(String(output ?? ""))?.[1] ?? null;
+}
+
+export function parseGitCheckpointCommitCommand(command: string): GitCheckpointCommitCommandIntent | null {
+  const tokens = tokenizeCommand(String(command ?? "").trim());
+  if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "")) return null;
+  let cursor = 1;
+  if (tokens[cursor] === "git") cursor += 1;
+  if (tokens[cursor] !== "checkpoint" || tokens[cursor + 1] !== "commit") return null;
+  cursor += 2;
+
+  let checkpointCommit = "";
+  const messages: string[] = [];
+  for (; cursor < tokens.length && tokens[cursor] !== "--"; cursor += 1) {
+    const flag = tokens[cursor];
+    const value = tokens[cursor + 1];
+    if ((flag !== "--sha" && flag !== "--m") || !value) return null;
+    if (flag === "--sha") checkpointCommit = value;
+    else messages.push(value);
+    cursor += 1;
+  }
+  if (tokens[cursor] !== "--") return null;
+  const paths = tokens.slice(cursor + 1);
+  if (!checkpointCommit || messages.length < 1 || messages.length > 2 || !paths.length) return null;
+  return {
+    checkpointCommit,
+    description: messages[1] ?? "",
+    paths,
+    title: messages[0],
+  };
 }
 
 export function parseGitCheckpointDiffOutput(output: string): FileUpdateChange[] {

@@ -11,6 +11,7 @@
  * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text. Keywords: path, command, relative, display.
  * - pathsEqual: compare normalized Workbench paths with platform-appropriate case semantics. Keywords: path, equality, windows, posix.
  * - summarizeDisplayParts: flatten structured command-summary parts into plain text. Keywords: thread, command, summary, text.
+ * - tokenizeCommand: split a command line into shell-ish quoted argument tokens. Keywords: command, shell, quotes, arguments.
  */
 
 import {
@@ -64,6 +65,43 @@ export function buildCommandPathPart(
 
 export function collapseWhitespace(value: string) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+export function tokenizeCommand(value: string) {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: string | null = null;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote) {
+      if (character === quote) {
+        quote = null;
+      } else if (character === "\\" && quote === '"' && value[index + 1]) {
+        current += value[index + 1];
+        index += 1;
+      } else {
+        current += character;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+    } else if (/\s/u.test(character)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+    } else {
+      current += character;
+    }
+  }
+  if (quote) {
+    return null;
+  }
+  if (current) {
+    tokens.push(current);
+  }
+  return tokens;
 }
 
 export function createEmptyCommandSummaryStats(): ThreadCommandSummaryStats {

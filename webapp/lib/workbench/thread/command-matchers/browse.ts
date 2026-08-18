@@ -5,6 +5,7 @@
  * - parseBrowseSequenceCommandOutput: parse streamed or complete Browse output into semantic result metadata. Keywords: browse, output, detail rows.
  */
 import { CommandMatcher } from "./core";
+import { tokenizeCommand } from "./helpers";
 import type { CommandMatcherDefinition, ThreadCommandDetailRow, ThreadCommandDisplayPart } from "./types";
 
 const BROWSE_MATCHER_ID = "browse.command";
@@ -87,43 +88,6 @@ function summarizeBrowseCommand(commandText: string): BrowseCommandSummary | nul
     return { ongoingSummaryParts, session, summaryParts };
   }
   return null;
-}
-
-function tokenizeCommand(value: string) {
-  const tokens: string[] = [];
-  let current = "";
-  let quote: string | null = null;
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value[index];
-    if (quote) {
-      if (character === quote) {
-        quote = null;
-      } else if (character === "\\" && quote === '"' && value[index + 1]) {
-        current += value[index + 1];
-        index += 1;
-      } else {
-        current += character;
-      }
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-    } else if (/\s/u.test(character)) {
-      if (current) {
-        tokens.push(current);
-        current = "";
-      }
-    } else {
-      current += character;
-    }
-  }
-  if (quote) {
-    return null;
-  }
-  if (current) {
-    tokens.push(current);
-  }
-  return tokens;
 }
 
 function readFlag(tokens: string[], flag: string) {

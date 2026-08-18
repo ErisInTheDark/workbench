@@ -98,15 +98,6 @@ function ThreadUnifiedDiff ({
       className="grid w-max min-w-full"
       style={{ gridTemplateColumns: `${lineNumberWidth + 4}ch ${lineNumberWidth + 4}ch 3rem ${contentColumn}` }}
     >
-      {diff.headers.length ? (
-        <div className="col-span-4 px-0 py-2 font-mono text-[0.78em] leading-[1.65] text-muted">
-          {diff.headers.map((line, index) => (
-            <div key={`header:${index}`} className="whitespace-pre">
-              {line || " "}
-            </div>
-          ))}
-        </div>
-      ) : null}
       {diff.hunks.map((hunk, hunkIndex) => (
         <Fragment key={`hunk:${hunkIndex}`}>
           <div

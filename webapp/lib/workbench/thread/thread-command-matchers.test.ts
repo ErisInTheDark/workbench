@@ -11,6 +11,7 @@ import {
   getThreadCommandExecutionOutcome,
   getThreadCommandOutcomeDisplay,
   parseGitCheckpointCompareOutput,
+  parseGitCheckpointCommitCommand,
   parseGitCheckpointProposalId,
   parseWorkbenchSubagentCommand,
 } from "./thread-command-matchers.ts";
@@ -362,6 +363,23 @@ test("Workbench Git commands receive bounded selection, commit, and checkpoint s
     "M\t+4\t-2\tsrc/file.ts",
   ].join("\n")), [{ additions: 4, deletions: 2, path: "src/file.ts", status: "M" }]);
   assert.equal(parseGitCheckpointProposalId("Workbench checkpoint proposal: proposal-one\n"), "proposal-one");
+  assert.deepEqual(parseGitCheckpointCommitCommand(
+    'wb git checkpoint commit --sha abc1234 --m "Polish checkpoint cards" --m "Keep quoted context useful." -- src/one.ts "src/two words.ts"',
+  ), {
+    checkpointCommit: "abc1234",
+    description: "Keep quoted context useful.",
+    paths: ["src/one.ts", "src/two words.ts"],
+    title: "Polish checkpoint cards",
+  });
+  assert.deepEqual(parseGitCheckpointCommitCommand(
+    "wb checkpoint commit --sha abc1234 --m Title -- src/one.ts",
+  ), {
+    checkpointCommit: "abc1234",
+    description: "",
+    paths: ["src/one.ts"],
+    title: "Title",
+  });
+  assert.equal(parseGitCheckpointCommitCommand("wb git checkpoint commit --sha abc -- src/one.ts"), null);
 });
 
 test("PowerShell numbered reads resolve a preceding literal path assignment", () => {
