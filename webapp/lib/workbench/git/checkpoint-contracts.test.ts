@@ -10,15 +10,37 @@ import {
   GitCheckpointRequestSchema,
 } from "./checkpoint-contracts.ts";
 
-test("checkpoint requests require exact scoped paths for implementation and comparison", () => {
+test("plan and arc requests encode claimed-path defaults and successor refs", () => {
   assert.equal(GitCheckpointRequestSchema.safeParse({
-    action: "implement",
+    action: "plan",
+    cwd: "C:/repo",
+    intentName: "Update A",
+    paths: ["src/a.ts"],
+    threadId: "thread-one",
+  }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "plan",
+    cwd: "C:/repo",
+    intentName: "Update A",
+    paths: [],
+    threadId: "thread-one",
+  }).success, false);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcAdd",
+    checkpointCommit: "abcdef1",
+    cwd: "C:/repo",
+    threadId: "thread-one",
+  }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcRemove",
+    checkpointCommit: "abcdef1",
     cwd: "C:/repo",
     paths: ["src/a.ts"],
     threadId: "thread-one",
   }).success, true);
   assert.equal(GitCheckpointRequestSchema.safeParse({
-    action: "implement",
+    action: "arcRemove",
+    checkpointCommit: "abcdef1",
     cwd: "C:/repo",
     paths: [],
     threadId: "thread-one",
@@ -28,7 +50,15 @@ test("checkpoint requests require exact scoped paths for implementation and comp
     checkpointCommit: "abcdef1",
     cwd: "C:/repo",
     threadId: "thread-one",
-  }).success, false);
+  }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "proposalCreate",
+    checkpointCommit: "abcdef1",
+    cwd: "C:/repo",
+    description: "",
+    threadId: "thread-one",
+    title: "Update A",
+  }).success, true);
 });
 
 test("proposal contracts keep paths mandatory and terminal metadata explicit", () => {

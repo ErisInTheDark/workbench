@@ -12,9 +12,10 @@ import {
   commitGitCheckpointProposal,
   compareGitCheckpoint,
   createGitCheckpointProposal,
-  createGitImplementationCheckpoint,
-  createGitPlanCheckpoint,
+  createGitPlan,
   diffGitCheckpoint,
+  addToGitArc,
+  removeFromGitArc,
   readGitCheckpointDiffArtifact,
   readGitCheckpointProposal,
   restoreGitCheckpoint,
@@ -65,31 +66,41 @@ export async function POST(request: NextRequest) {
 
     switch (input.action) {
       case "plan":
-        return jsonResponse(await createGitPlanCheckpoint(common));
-      case "implement":
-        return jsonResponse(await createGitImplementationCheckpoint({
+        return jsonResponse(await createGitPlan({
           ...common,
-          ...(input.amendCheckpoint ? { amendCheckpoint: input.amendCheckpoint } : {}),
+          intentName: input.intentName,
+          paths: input.paths,
+        }));
+      case "arcAdd":
+        return jsonResponse(await addToGitArc({
+          ...common,
+          checkpointCommit: input.checkpointCommit,
+          ...(input.paths ? { paths: input.paths } : {}),
+        }));
+      case "arcRemove":
+        return jsonResponse(await removeFromGitArc({
+          ...common,
+          checkpointCommit: input.checkpointCommit,
           paths: input.paths,
         }));
       case "compare":
         return jsonResponse(await compareGitCheckpoint({
           ...common,
           checkpointCommit: input.checkpointCommit,
-          paths: input.paths,
+          ...(input.paths ? { paths: input.paths } : {}),
         }));
       case "diff":
         return textResponse((await diffGitCheckpoint({
           ...common,
           checkpointCommit: input.checkpointCommit,
-          paths: input.paths,
+          ...(input.paths ? { paths: input.paths } : {}),
         })).diff);
       case "proposalCreate":
         return jsonResponse(await createGitCheckpointProposal({
           ...common,
           checkpointCommit: input.checkpointCommit,
           description: input.description,
-          paths: input.paths,
+          ...(input.paths ? { paths: input.paths } : {}),
           title: input.title,
         }));
       case "proposalState":

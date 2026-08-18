@@ -48,13 +48,13 @@ export function adaptWorkbenchAgentCliResponse({
     }
     case "checkpoint-create": {
       const action = readString(request.body, "action");
-      const label = action === "plan" ? "Created plan checkpoint" : "Created implementation checkpoint";
+      const label = action === "plan" ? "Created Git plan" : "Created successor arc ref";
       return succeeded(`${label} ${readString(payload, "checkpointCommit") || "(unknown commit)"}`);
     }
     case "checkpoint-compare": {
       const changes = Array.isArray(payload?.changes) ? payload.changes.filter(isRecord) : [];
       return succeeded([
-        "Workbench checkpoint comparison",
+        "Workbench arc comparison",
         ...changes.map((change) => {
           const kind = isRecord(change.kind) ? readString(change.kind, "type").slice(0, 1).toUpperCase() : "M";
           const additions = typeof change.additions === "number" ? change.additions : 0;
@@ -65,20 +65,20 @@ export function adaptWorkbenchAgentCliResponse({
     }
     case "checkpoint-proposal": {
       const proposalId = readString(payload, "proposalId");
-      return succeeded(`Workbench checkpoint proposal: ${proposalId || "(unknown proposal)"}`);
+      return succeeded(`Workbench arc proposal: ${proposalId || "(unknown proposal)"}`);
     }
     case "checkpoint-restore": {
       const checkpointCommit = readString(payload, "checkpointCommit") || "(unknown commit)";
       if (!Array.isArray(request.body?.paths)) {
-        return succeeded(`Restored checkpoint ${checkpointCommit}`);
+        return succeeded(`Restored arc ${checkpointCommit}`);
       }
 
       const restoredPaths = readStringArray(payload, "restoredPaths");
       if (!restoredPaths.length) {
-        return succeeded(`Selected paths already matched checkpoint ${checkpointCommit}`);
+        return succeeded(`Selected paths already matched arc ${checkpointCommit}`);
       }
       return succeeded([
-        `Restored ${restoredPaths.length} ${restoredPaths.length === 1 ? "path" : "paths"} from checkpoint ${checkpointCommit}:`,
+        `Restored ${restoredPaths.length} ${restoredPaths.length === 1 ? "path" : "paths"} from arc ${checkpointCommit}:`,
         ...restoredPaths,
       ].join("\n"));
     }

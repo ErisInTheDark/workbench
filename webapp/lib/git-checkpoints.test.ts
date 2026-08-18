@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover full checkpoints, verified paths, amendment, proposals, commit isolation, and restore. Keywords: git, checkpoint, proposal, restore, test.
+ * - No production exports; Node tests cover full checkpoints, arc claims, proposals, commit isolation, and restore. Keywords: git, checkpoint, arc, proposal, restore, test.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -14,19 +14,21 @@ import {
   commitGitCheckpointProposal,
   compareGitCheckpoint,
   createGitCheckpointProposal,
-  createGitImplementationCheckpoint,
-  createGitPlanCheckpoint,
+  createGitPlan,
   diffGitCheckpoint,
+  addToGitArc,
   readGitCheckpointProposal,
+  removeFromGitArc,
   restoreGitCheckpoint,
   restoreGitCheckpointPaths,
 } from "./git-checkpoints.ts";
 
 const execFileAsync = promisify(execFile);
+const checkpointCases: Array<{ name: string; run: (context: TestContext) => Promise<void> }> = [];
 let templateRoot = "";
 
 function checkpointTest(name: string, run: (context: TestContext) => Promise<void>) {
-  test(name, { concurrency: true }, run);
+  checkpointCases.push({ name, run });
 }
 
 async function git(cwd: string, args: string[]) {
@@ -82,7 +84,12 @@ after(async () => {
 
 checkpointTest("restores only selected checkpoint paths while preserving the ordinary index and unrelated worktree changes", async (context) => {
   const { repoRoot } = await createRepository(context);
-  const checkpoint = await createGitPlanCheckpoint({ cwd: repoRoot, threadId: "thread-one" });
+  const checkpoint = await createGitPlan({
+    cwd: repoRoot,
+    intentName: "Restore selected paths",
+    paths: ["selected.txt"],
+    threadId: "thread-one",
+  });
   await write(repoRoot, "selected.txt", "selected lint change\n");
   await fs.rm(path.join(repoRoot, "deleted.txt"));
   await write(repoRoot, "created.txt", "created by lint\n");
@@ -159,23 +166,25 @@ checkpointTest("restores only selected checkpoint paths while preserving the ord
     cwd: repoRoot,
     filePaths: ["selected.txt"],
     threadId: "thread-one",
-  }), /Selected restore paths changed in committed history.*selected\.txt/u);
+  }), /Selected restore paths no longer match the arc baseline.*selected\.txt/u);
 });
 
-checkpointTest("implementation checkpoints reject dirty planned paths and snapshot the full worktree", async (context) => {
+checkpointTest("plans reject dirty claimed paths and snapshot the full worktree", async (context) => {
   const { repoRoot } = await createRepository(context);
   await write(repoRoot, "selected.txt", "already dirty\n");
-  await assert.rejects(createGitImplementationCheckpoint({
+  await assert.rejects(createGitPlan({
     cwd: repoRoot,
+    intentName: "Update selected",
     paths: ["selected.txt"],
     threadId: "thread-one",
-  }), /Implementation checkpoint paths must be clean: selected\.txt/u);
+  }), /Plan paths must be clean against HEAD: selected\.txt/u);
 
   await git(repoRoot, ["restore", "--", "selected.txt"]);
   await write(repoRoot, "unrelated.txt", "unrelated dirty at checkpoint\n");
   await write(repoRoot, "untracked-at-checkpoint.txt", "untracked checkpoint content\n");
-  const checkpoint = await createGitImplementationCheckpoint({
+  const checkpoint = await createGitPlan({
     cwd: repoRoot,
+    intentName: "Update selected",
     paths: ["selected.txt"],
     threadId: "thread-one",
   });
@@ -186,6 +195,12 @@ checkpointTest("implementation checkpoints reject dirty planned paths and snapsh
   );
   await write(repoRoot, "selected.txt", "implementation\n");
   await write(repoRoot, "unrelated.txt", "later unrelated change\n");
+  const arcComparison = await compareGitCheckpoint({
+    checkpointCommit: checkpoint.checkpointCommit,
+    cwd: repoRoot,
+    threadId: "thread-one",
+  });
+  assert.deepEqual(arcComparison.changes.map((change) => change.path), ["selected.txt"]);
   const comparison = await compareGitCheckpoint({
     checkpointCommit: checkpoint.checkpointCommit,
     cwd: repoRoot,
@@ -196,41 +211,77 @@ checkpointTest("implementation checkpoints reject dirty planned paths and snapsh
   assert.match((await diffGitCheckpoint({
     checkpointCommit: checkpoint.checkpointCommit,
     cwd: repoRoot,
-    paths: ["selected.txt"],
     threadId: "thread-one",
   })).diff, /implementation/u);
   const proposal = await createGitCheckpointProposal({
     checkpointCommit: checkpoint.checkpointCommit,
     cwd: repoRoot,
     description: "",
-    paths: ["selected.txt", "unrelated.txt"],
+    paths: ["selected.txt"],
     threadId: "thread-one",
     title: "Commit selected work",
   });
-  assert.deepEqual(proposal.paths, ["selected.txt", "unrelated.txt"]);
+  assert.deepEqual(proposal.paths, ["selected.txt"]);
   assert.equal("changes" in proposal, false);
 });
 
-checkpointTest("amending preserves the full baseline and verifies only new clean unchanged paths", async (context) => {
+checkpointTest("arc additions preserve the full baseline and verify continuation before new paths", async (context) => {
   const { repoRoot } = await createRepository(context);
-  const original = await createGitImplementationCheckpoint({
+  await write(repoRoot, "later-claim.txt", "captured before plan\n");
+  const original = await createGitPlan({
     cwd: repoRoot,
+    intentName: "Update selected",
     paths: ["selected.txt"],
     threadId: "thread-one",
   });
   const originalTree = (await git(repoRoot, ["rev-parse", `${original.checkpointCommit}^{tree}`])).trim();
   const originalParent = (await git(repoRoot, ["rev-parse", `${original.checkpointCommit}^`])).trim();
-  await write(repoRoot, "selected.txt", "first implementation\n");
-  const amended = await createGitImplementationCheckpoint({
-    amendCheckpoint: original.checkpointCommit,
+  await assert.rejects(removeFromGitArc({
+    checkpointCommit: original.checkpointCommit,
     cwd: repoRoot,
-    paths: ["planned-new.tsx", "unrelated.txt"],
+    paths: ["selected.txt"],
+    threadId: "thread-one",
+  }), /must leave at least one claimed path/u);
+  await write(repoRoot, "selected.txt", "first implementation\n");
+  const continuation = await addToGitArc({
+    checkpointCommit: original.checkpointCommit,
+    cwd: repoRoot,
     threadId: "thread-one",
   });
-  assert.deepEqual(amended.scopePaths, ["planned-new.tsx", "selected.txt", "unrelated.txt"]);
+  assert.deepEqual(continuation.scopePaths, ["selected.txt"]);
+  assert.equal((await git(repoRoot, ["rev-parse", `${continuation.checkpointCommit}^{tree}`])).trim(), originalTree);
+  assert.equal((await git(repoRoot, ["rev-parse", `${continuation.checkpointCommit}^`])).trim(), originalParent);
+
+  await write(repoRoot, "head-only.txt", "compatible committed change\n");
+  await git(repoRoot, ["add", "--", "head-only.txt", "later-claim.txt"]);
+  await git(repoRoot, ["commit", "-m", "advance unrelated head"]);
+  const compatibleHead = (await git(repoRoot, ["rev-parse", "HEAD"])).trim();
+  const compatibleContinuation = await addToGitArc({
+    checkpointCommit: continuation.checkpointCommit,
+    cwd: repoRoot,
+    threadId: "thread-one",
+  });
+  const amended = await addToGitArc({
+    checkpointCommit: compatibleContinuation.checkpointCommit,
+    cwd: repoRoot,
+    paths: ["literal[1].txt", "planned-new.tsx", "later-claim.txt", "unrelated.txt"],
+    threadId: "thread-one",
+  });
+  assert.deepEqual(amended.scopePaths, ["later-claim.txt", "literal[1].txt", "planned-new.tsx", "selected.txt", "unrelated.txt"]);
   assert.equal((await git(repoRoot, ["rev-parse", `${amended.checkpointCommit}^{tree}`])).trim(), originalTree);
-  assert.equal((await git(repoRoot, ["rev-parse", `${amended.checkpointCommit}^`])).trim(), originalParent);
+  assert.equal((await git(repoRoot, ["rev-parse", `${compatibleContinuation.checkpointCommit}^`])).trim(), compatibleHead);
+  assert.equal((await git(repoRoot, ["rev-parse", `${amended.checkpointCommit}^`])).trim(), compatibleHead);
   await write(repoRoot, "planned-new.tsx", "export default function PlannedNew() {}\n");
+  await write(repoRoot, "later-claim.txt", "implementation after claim\n");
+  const laterClaimProposal = await createGitCheckpointProposal({
+    checkpointCommit: amended.checkpointCommit,
+    cwd: repoRoot,
+    description: "",
+    paths: ["later-claim.txt"],
+    threadId: "thread-one",
+    title: "Commit later claim",
+  });
+  assert.deepEqual(laterClaimProposal.paths, ["later-claim.txt"]);
   const comparison = await compareGitCheckpoint({
     checkpointCommit: amended.checkpointCommit,
     cwd: repoRoot,
@@ -239,59 +290,109 @@ checkpointTest("amending preserves the full baseline and verifies only new clean
   });
   assert.deepEqual(comparison.changes.map((change) => change.path), ["planned-new.tsx", "selected.txt"]);
   assert.equal(comparison.changes.find((change) => change.path === "planned-new.tsx")?.kind.type, "add");
-  await assert.rejects(createGitImplementationCheckpoint({
-    amendCheckpoint: amended.checkpointCommit,
+
+  await write(repoRoot, "unrelated.txt", "dirty before remove\n");
+  await assert.rejects(removeFromGitArc({
+    checkpointCommit: amended.checkpointCommit,
+    cwd: repoRoot,
+    paths: ["unrelated.txt"],
+    threadId: "thread-one",
+  }), /Arc remove paths must be clean against HEAD: unrelated\.txt/u);
+  await git(repoRoot, ["restore", "--", "unrelated.txt"]);
+  const reduced = await removeFromGitArc({
+    checkpointCommit: amended.checkpointCommit,
+    cwd: repoRoot,
+    paths: ["unrelated.txt"],
+    threadId: "thread-one",
+  });
+  assert.deepEqual(reduced.scopePaths, ["later-claim.txt", "literal[1].txt", "planned-new.tsx", "selected.txt"]);
+  assert.equal((await git(repoRoot, ["rev-parse", `${reduced.checkpointCommit}^{tree}`])).trim(), originalTree);
+  assert.equal((await git(repoRoot, ["rev-parse", `${reduced.checkpointCommit}^`])).trim(), compatibleHead);
+  assert.equal(await fs.readFile(path.join(repoRoot, "unrelated.txt"), "utf8"), "unrelated checkpoint\n");
+  await assert.rejects(removeFromGitArc({
+    checkpointCommit: reduced.checkpointCommit,
+    cwd: repoRoot,
+    paths: ["literal1.txt"],
+    threadId: "thread-one",
+  }), /must exactly match claimed entries: literal1\.txt/u);
+
+  await assert.rejects(addToGitArc({
+    checkpointCommit: reduced.checkpointCommit,
     cwd: repoRoot,
     paths: ["selected.txt"],
     threadId: "thread-one",
   }), /already covered/u);
 
   await write(repoRoot, "deleted.txt", "dirty amendment path\n");
-  await assert.rejects(createGitImplementationCheckpoint({
-    amendCheckpoint: amended.checkpointCommit,
+  await assert.rejects(addToGitArc({
+    checkpointCommit: reduced.checkpointCommit,
     cwd: repoRoot,
     paths: ["deleted.txt"],
     threadId: "thread-one",
-  }), /Implementation checkpoint paths must be clean: deleted\.txt/u);
+  }), /Plan paths must be clean against HEAD: deleted\.txt/u);
   await git(repoRoot, ["restore", "--", "deleted.txt"]);
 
   await write(repoRoot, "literal1.txt", "committed after checkpoint\n");
   await git(repoRoot, ["add", "--", "literal1.txt"]);
   await git(repoRoot, ["commit", "-m", "change later planned path"]);
-  await assert.rejects(createGitImplementationCheckpoint({
-    amendCheckpoint: amended.checkpointCommit,
+  await assert.rejects(addToGitArc({
+    checkpointCommit: reduced.checkpointCommit,
     cwd: repoRoot,
     paths: ["literal1.txt"],
     threadId: "thread-one",
-  }), /Implementation amendment paths changed since checkpoint: literal1\.txt/u);
+  }), /New arc paths changed since the original plan: literal1\.txt/u);
+
+  await git(repoRoot, ["add", "--", "selected.txt"]);
+  await git(repoRoot, ["commit", "-m", "commit claimed path"]);
+  await assert.rejects(addToGitArc({
+    checkpointCommit: reduced.checkpointCommit,
+    cwd: repoRoot,
+    threadId: "thread-one",
+  }), /Claimed paths no longer match the arc baseline.*selected\.txt/u);
+  await assert.rejects(removeFromGitArc({
+    checkpointCommit: reduced.checkpointCommit,
+    cwd: repoRoot,
+    paths: ["literal[1].txt"],
+    threadId: "thread-one",
+  }), /Retained paths no longer match the arc baseline.*selected\.txt/u);
 });
 
 checkpointTest("proposal file sets stay frozen while newer selected edits remain optional", async (context) => {
   const { repoRoot } = await createRepository(context);
-  const checkpoint = await createGitImplementationCheckpoint({
+  const checkpoint = await createGitPlan({
     cwd: repoRoot,
+    intentName: "Freeze proposal files",
     paths: ["deleted.txt", "literal[1].txt", "selected.txt", "unrelated.txt"],
     threadId: "thread-one",
   });
   await write(repoRoot, "selected.txt", "proposed version\n");
   await write(repoRoot, "deleted.txt", "proposed newer-path version\n");
   await write(repoRoot, "literal[1].txt", "proposed clean-path version\n");
+  const arcProposal = await createGitCheckpointProposal({
+    checkpointCommit: checkpoint.checkpointCommit,
+    cwd: repoRoot,
+    description: "",
+    threadId: "thread-one",
+    title: "Commit arc changes",
+  });
+  assert.deepEqual(arcProposal.paths, ["deleted.txt", "literal[1].txt", "selected.txt"]);
   await assert.rejects(createGitCheckpointProposal({
     checkpointCommit: checkpoint.checkpointCommit,
     cwd: repoRoot,
     description: "",
-    paths: ["selected.txt", "unrelated.txt"],
+    paths: ["outside.txt"],
     threadId: "thread-one",
-    title: "Reject clean path",
-  }), /Every proposed path must identify an exact changed file: unrelated\.txt/u);
+    title: "Reject outside path",
+  }), /must stay within the arc's claimed set: outside\.txt/u);
   const proposal = await createGitCheckpointProposal({
     checkpointCommit: checkpoint.checkpointCommit,
     cwd: repoRoot,
     description: "Frozen proposal",
-    paths: ["selected.txt"],
+    paths: ["selected.txt", "unrelated.txt"],
     threadId: "thread-one",
     title: "Commit selected",
   });
+  assert.deepEqual(proposal.paths, ["selected.txt"]);
   const newerProposal = await createGitCheckpointProposal({
     checkpointCommit: checkpoint.checkpointCommit,
     cwd: repoRoot,
@@ -382,8 +483,9 @@ checkpointTest("proposal file sets stay frozen while newer selected edits remain
 checkpointTest("proposals rebase across compatible commits and reject selected or incompatible history", async (context) => {
   const { repoRoot } = await createRepository(context);
   const rootCommit = (await git(repoRoot, ["rev-parse", "HEAD"])).trim();
-  const checkpoint = await createGitImplementationCheckpoint({
+  const checkpoint = await createGitPlan({
     cwd: repoRoot,
+    intentName: "Rebase proposal",
     paths: ["deleted.txt", "literal[1].txt", "selected.txt"],
     threadId: "thread-one",
   });
@@ -471,4 +573,10 @@ checkpointTest("proposals rebase across compatible commits and reject selected o
   });
   assert.equal(incompatible.status, "unavailable");
   assert.match(incompatible.unavailableReason ?? "", /HEAD moved incompatibly/u);
+});
+
+test("Git checkpoint controller operations", { concurrency: true }, async (context) => {
+  await Promise.all(checkpointCases.map(async ({ name, run }) => (
+    await context.test(name, { concurrency: true }, run)
+  )));
 });

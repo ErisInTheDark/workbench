@@ -16,30 +16,41 @@ const checkpointBaseRequest = {
 };
 
 export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("plan"), ...checkpointBaseRequest }),
   z.object({
-    action: z.literal("implement"),
-    amendCheckpoint: checkpointSha.optional(),
+    action: z.literal("plan"),
+    intentName: nonEmptyString,
+    paths: checkpointPaths,
+    ...checkpointBaseRequest,
+  }),
+  z.object({
+    action: z.literal("arcAdd"),
+    checkpointCommit: checkpointSha,
+    paths: checkpointPaths.optional(),
+    ...checkpointBaseRequest,
+  }),
+  z.object({
+    action: z.literal("arcRemove"),
+    checkpointCommit: checkpointSha,
     paths: checkpointPaths,
     ...checkpointBaseRequest,
   }),
   z.object({
     action: z.literal("compare"),
     checkpointCommit: checkpointSha,
-    paths: checkpointPaths,
+    paths: checkpointPaths.optional(),
     ...checkpointBaseRequest,
   }),
   z.object({
     action: z.literal("diff"),
     checkpointCommit: checkpointSha,
-    paths: checkpointPaths,
+    paths: checkpointPaths.optional(),
     ...checkpointBaseRequest,
   }),
   z.object({
     action: z.literal("proposalCreate"),
     checkpointCommit: checkpointSha,
     description: z.string(),
-    paths: checkpointPaths,
+    paths: checkpointPaths.optional(),
     title: nonEmptyString,
     ...checkpointBaseRequest,
   }),

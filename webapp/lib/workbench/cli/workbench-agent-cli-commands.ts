@@ -89,7 +89,7 @@ class ParsedFlags {
 
     for (let index = 0; index < optionArgs.length; index += 1) {
       const flag = optionArgs[index];
-      if (!flag.startsWith("--")) {
+      if (!flag.startsWith("-")) {
         throw new Error(`Unexpected argument: ${flag}`);
       }
       if (booleanFlags.has(flag)) {
@@ -100,7 +100,7 @@ class ParsedFlags {
         throw new Error(`Unsupported option: ${flag}`);
       }
       const value = optionArgs[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (!value || value.startsWith("-")) {
         throw new Error(`${flag} requires a value.`);
       }
       index += 1;
@@ -159,26 +159,27 @@ class ParsedFlags {
 }
 
 const THREAD_FLAG = ["--thread"] as const;
-const LEGACY_CHECKPOINT_BASELINE_MIGRATION_GUIDE = [
-  "wb git checkpoint baseline has been replaced.",
+const LEGACY_CHECKPOINT_MIGRATION_GUIDE = [
+  "wb git checkpoint commands have been replaced by the named plan and arc workflow.",
   "",
-  "Use the current managed checkpoint workflow:",
-  "1. In Brief mode, create the approval checkpoint: wb git checkpoint plan. Plan checkpoints snapshot the full Git-visible worktree through Git's object database; they do not copy the workspace.",
-  "2. After approval, compare the exact planned paths: wb git checkpoint compare --sha <plan-sha> -- <path> [<path>...]",
-  "3. When that drift is safe, create the implementation checkpoint: wb git checkpoint implement -- <path> [<path>...]. Workbench verifies those planned paths are clean against HEAD, then snapshots the full Git-visible worktree.",
-  "4. Reuse that implementation checkpoint throughout the implementation arc. The recorded paths are the verified planned set, not the storage scope or an ownership boundary.",
-  "5. If the same active arc gains genuinely new planned paths, verify them before editing with: wb git checkpoint implement --amend <implementation-sha> -- <additional-path> [<additional-path>...]",
-  "6. Amendment requires the additional paths to be clean and unchanged since the implementation checkpoint. It extends the verified planned set while preserving the original snapshot tree and parent.",
-  "7. Use the SHA returned by --amend for any further amendment so Workbench sees the extended verified set. Its snapshot baseline is still the original tree and parent.",
-  "8. After Review, or after a later approved plan starts a new implementation arc, do not amend the earlier arc's checkpoint. Start the managed checkpoint workflow again.",
-  "9. In Review mode, summarize touched paths with: wb git checkpoint compare --sha <implementation-sha> -- <path> [<path>...]",
-  "10. Read unified diff content with: wb git checkpoint diff --sha <implementation-sha> -- <path> [<path>...]",
-  "11. Propose the frozen-file-set commit with: wb git checkpoint commit --sha <implementation-sha> --m <title> [--m <description>] -- <path> [<path>...]",
-  "12. The exact path list on compare, diff, restore, or commit selects that operation from the full snapshot. The verified planned set does not restrict it.",
-  "13. Omit the optional description when the title already explains the commit. Add a description only when it communicates useful context that the title cannot.",
+  "Use these commands:",
+  "1. In Brief mode, create the one clean named baseline: wb git arc plan -m <short-intent> -- <path> [<path>...]",
+  "2. After approval, inspect the claimed files without creating another ref: wb git arc start --ref <ref>",
+  "3. Keep using the returned ref through implementation and Review.",
+  "4. To validate a later continuation without adding files: wb git arc add --ref <current-ref>",
+  "5. To validate and claim genuinely new clean files: wb git arc add --ref <current-ref> -- <additional-path> [<additional-path>...]",
+  "6. Always replace the current ref with the ref returned by arc add.",
+  "7. To relinquish exact clean claims: wb git arc remove --ref <current-ref> -- <claimed-path> [<claimed-path>...]",
+  "8. Always replace the current ref with the ref returned by arc remove.",
+  "9. Summarize the arc: wb git arc compare --ref <ref> [-- <path> [<path>...]]",
+  "10. Read unified diff content: wb git arc diff --ref <ref> [-- <path> [<path>...]]",
+  "11. Propose the commit: wb git arc propose --ref <ref> -m <fresh-title> [-m <optional-description>] [-- <claimed-path> [<claimed-path>...]]",
+  "12. Restore selected paths: wb git arc restore --ref <ref> -- <path> [<path>...]",
+  "13. Restore the full arc only after explicit user direction: wb git arc restore --ref <ref> --confirm",
   "",
-  "Implementation checkpoint paths must be clean. If Workbench rejects dirty paths, stop and ask the user what changed; do not clean or restore them automatically.",
-  "Do not use checkpoint create-diff or checkpoint file-diff. This guide reflects the current instructions and CLI.",
+  "Plan and newly added paths must be clean against HEAD. If Workbench rejects them, stop and ask the user what changed; do not clean or restore them automatically.",
+  "Arc add checks committed HEAD movement across the existing claimed set even when no new paths are supplied.",
+  "Omit explicit compare, diff, or proposal paths to use the arc's claimed set. Proposal subsets must stay inside that set.",
   "",
 ].join("\n");
 const RELOAD_SWITCHES = [
@@ -209,7 +210,7 @@ function preservePowerShellTrailingPaths(args: string[], {
       continue;
     }
     if (boolean.includes(args[index])) continue;
-    if (!args[index].startsWith("--")) {
+    if (!args[index].startsWith("-")) {
       return [...args.slice(0, index), "--", ...args.slice(index)];
     }
   }
@@ -479,125 +480,140 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
-    aliases: [["checkpoint", "plan"]],
-    description: "Capture the current worktree as a hidden plan checkpoint.",
-    helpGroups: ["git-checkpoint"],
-    words: ["git", "checkpoint", "plan"],
-    usage: "wb git checkpoint plan",
+    description: "Create one clean named Git plan and claim its files.",
+    helpGroups: ["git-arc"],
+    words: ["git", "arc", "plan"],
+    usage: "wb git arc plan -m <short-intent> -- <path> [<path>...]",
     async build({ args, callerThreadId, cwd }) {
-      new ParsedFlags(args, {});
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["-m"] }), {
+        trailing: true,
+        values: ["-m"],
+      });
+      if (!flags.trailing.length) throw new Error("Plan paths are required after --.");
       return post("/api/git-checkpoint", {
         action: "plan",
         cwd,
-        threadId: requireCallerThreadId(callerThreadId),
-      }, "checkpoint-create");
-    },
-  },
-  {
-    aliases: [["checkpoint", "implement"]],
-    description: "Snapshot the full worktree after verifying planned paths, or verify additional planned paths.",
-    helpGroups: ["git-checkpoint"],
-    words: ["git", "checkpoint", "implement"],
-    usage: "wb git checkpoint implement [--amend <sha>] -- <path> [<path>...]",
-    async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, {
-        values: ["--amend"],
-      }), { trailing: true, values: ["--amend"] });
-      if (!flags.trailing.length) throw new Error("Implementation checkpoint paths are required after --.");
-      return post("/api/git-checkpoint", {
-        action: "implement",
-        ...(flags.optional("--amend") ? { amendCheckpoint: flags.optional("--amend")! } : {}),
-        cwd,
+        intentName: flags.required("-m"),
         paths: flags.trailing,
         threadId: requireCallerThreadId(callerThreadId),
       }, "checkpoint-create");
     },
   },
   {
-    aliases: [["checkpoint", "compare"]],
-    description: "Show per-file change counts for selected checkpoint paths.",
-    helpGroups: ["git-checkpoint"],
-    words: ["git", "checkpoint", "compare"],
-    usage: "wb git checkpoint compare --sha <sha> -- <path> [<path>...]",
+    description: "Compare a plan's claimed files before implementation without creating another ref.",
+    helpGroups: ["git-arc"],
+    words: ["git", "arc", "start"],
+    usage: "wb git arc start --ref <ref>",
     async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["--sha"] }), {
-        trailing: true,
-        values: ["--sha"],
-      });
-      if (!flags.trailing.length) throw new Error("Checkpoint compare paths are required after --.");
+      const flags = new ParsedFlags(args, { values: ["--ref"] });
       return post("/api/git-checkpoint", {
         action: "compare",
-        checkpointCommit: flags.required("--sha"),
+        checkpointCommit: flags.required("--ref"),
         cwd,
-        paths: flags.trailing,
         threadId: requireCallerThreadId(callerThreadId),
       }, "checkpoint-compare");
     },
   },
   {
-    aliases: [["checkpoint", "diff"]],
-    description: "Show unified diff content for selected checkpoint paths.",
-    helpGroups: ["git-checkpoint"],
-    words: ["git", "checkpoint", "diff"],
-    usage: "wb git checkpoint diff --sha <sha> -- <path> [<path>...]",
+    description: "Validate arc continuation and optionally claim additional clean paths.",
+    helpGroups: ["git-arc"],
+    words: ["git", "arc", "add"],
+    usage: "wb git arc add --ref <ref> [-- <additional-path> [<additional-path>...]]",
     async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["--sha"] }), {
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["--ref"] }), {
         trailing: true,
-        values: ["--sha"],
+        values: ["--ref"],
       });
-      if (!flags.trailing.length) throw new Error("Checkpoint diff paths are required after --.");
       return post("/api/git-checkpoint", {
-        action: "diff",
-        checkpointCommit: flags.required("--sha"),
+        action: "arcAdd",
+        checkpointCommit: flags.required("--ref"),
         cwd,
-        paths: flags.trailing,
+        ...(flags.trailing.length ? { paths: flags.trailing } : {}),
         threadId: requireCallerThreadId(callerThreadId),
-      });
+      }, "checkpoint-create");
     },
   },
   {
-    aliases: [["checkpoint", "commit"]],
-    description: "Create a durable editable commit proposal for selected checkpoint paths.",
-    helpGroups: ["git-checkpoint"],
-    words: ["git", "checkpoint", "commit"],
-    usage: "wb git checkpoint commit --sha <sha> --m <title> [--m <description>] -- <path> [<path>...]",
+    description: "Relinquish exact clean claims without changing working-tree files.",
+    helpGroups: ["git-arc"],
+    words: ["git", "arc", "remove"],
+    usage: "wb git arc remove --ref <ref> -- <claimed-path> [<claimed-path>...]",
     async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["--sha", "--m"] }), {
-        repeatable: ["--m"],
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["--ref"] }), {
         trailing: true,
-        values: ["--sha"],
+        values: ["--ref"],
       });
-      if (!flags.trailing.length) throw new Error("Checkpoint commit paths are required after --.");
-      const messages = flags.requiredRepeated("--m");
-      if (messages.length > 2) throw new Error("Checkpoint commit accepts at most two --m values.");
+      if (!flags.trailing.length) throw new Error("Arc remove requires at least one claimed path after --.");
+      return post("/api/git-checkpoint", {
+        action: "arcRemove",
+        checkpointCommit: flags.required("--ref"),
+        cwd,
+        paths: flags.trailing,
+        threadId: requireCallerThreadId(callerThreadId),
+      }, "checkpoint-create");
+    },
+  },
+  ...(["compare", "diff"] as const).map((action): CommandDefinition => ({
+    description: action === "compare"
+      ? "Show per-file change counts for an arc's claimed set or selected paths."
+      : "Show unified diff content for an arc's claimed set or selected paths.",
+    helpGroups: ["git-arc"],
+    words: ["git", "arc", action],
+    usage: `wb git arc ${action} --ref <ref> [-- <path> [<path>...]]`,
+    async build({ args, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["--ref"] }), {
+        trailing: true,
+        values: ["--ref"],
+      });
+      return post("/api/git-checkpoint", {
+        action,
+        checkpointCommit: flags.required("--ref"),
+        cwd,
+        ...(flags.trailing.length ? { paths: flags.trailing } : {}),
+        threadId: requireCallerThreadId(callerThreadId),
+      }, action === "compare" ? "checkpoint-compare" : undefined);
+    },
+  })),
+  {
+    description: "Create a durable editable commit proposal from an arc's claimed changes or a subset.",
+    helpGroups: ["git-arc"],
+    words: ["git", "arc", "propose"],
+    usage: "wb git arc propose --ref <ref> -m <title> [-m <description>] [-- <claimed-path> [<claimed-path>...]]",
+    async build({ args, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["--ref", "-m"] }), {
+        repeatable: ["-m"],
+        trailing: true,
+        values: ["--ref"],
+      });
+      const messages = flags.requiredRepeated("-m");
+      if (messages.length > 2) throw new Error("Arc proposal accepts at most two -m values.");
       return post("/api/git-checkpoint", {
         action: "proposalCreate",
-        checkpointCommit: flags.required("--sha"),
+        checkpointCommit: flags.required("--ref"),
         cwd,
         description: messages[1] ?? "",
-        paths: flags.trailing,
+        ...(flags.trailing.length ? { paths: flags.trailing } : {}),
         threadId: requireCallerThreadId(callerThreadId),
         title: messages[0],
       }, "checkpoint-proposal");
     },
   },
   {
-    aliases: [["checkpoint", "restore"]],
-    description: "Restore selected paths from a checkpoint, or restore the full checkpoint after explicit confirmation.",
-    helpGroups: ["git-checkpoint"],
-    words: ["git", "checkpoint", "restore"],
-    usage: "wb git checkpoint restore --commit <sha> (--confirm | -- <path> [<path>...])",
+    description: "Restore selected paths from an arc, or restore its full snapshot after explicit confirmation.",
+    helpGroups: ["git-arc"],
+    words: ["git", "arc", "restore"],
+    usage: "wb git arc restore --ref <ref> (--confirm | -- <path> [<path>...])",
     async build({ args, callerThreadId, cwd }) {
       const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, {
         boolean: ["--confirm"],
-        values: ["--commit"],
-      }), { boolean: ["--confirm"], trailing: true, values: ["--commit"] });
+        values: ["--ref"],
+      }), { boolean: ["--confirm"], trailing: true, values: ["--ref"] });
       if (!flags.trailing.length && !flags.has("--confirm")) {
-        throw new Error("Full checkpoint restore requires --confirm; otherwise provide paths after --.");
+        throw new Error("Full arc restore requires --confirm; otherwise provide paths after --.");
       }
       return post("/api/git-checkpoint", {
         action: "restore",
-        checkpointCommit: flags.required("--commit"),
+        checkpointCommit: flags.required("--ref"),
         ...(flags.has("--confirm") ? { confirmRestore: true } : {}),
         cwd,
         ...(flags.trailing.length ? { paths: flags.trailing } : {}),
@@ -721,12 +737,14 @@ const ROOT_HELP_COMMAND_ORDER = [
   "git add",
   "git unstage",
   "git commit",
-  "git checkpoint plan",
-  "git checkpoint implement",
-  "git checkpoint compare",
-  "git checkpoint diff",
-  "git checkpoint commit",
-  "git checkpoint restore",
+  "git arc plan",
+  "git arc start",
+  "git arc add",
+  "git arc remove",
+  "git arc compare",
+  "git arc diff",
+  "git arc propose",
+  "git arc restore",
   "browse run",
   "browse raw",
   "browse sessions",
@@ -778,22 +796,23 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     words: ["git"],
   },
   {
-    aliases: [["checkpoint"]],
     commandOrder: [
-      "git checkpoint plan",
-      "git checkpoint implement",
-      "git checkpoint compare",
-      "git checkpoint diff",
-      "git checkpoint commit",
-      "git checkpoint restore",
+      "git arc plan",
+      "git arc start",
+      "git arc add",
+      "git arc remove",
+      "git arc compare",
+      "git arc diff",
+      "git arc propose",
+      "git arc restore",
     ],
     footer: [
-      "Pass paths after -- to restore only those files or directories from the checkpoint.",
-      "Use --confirm without paths only when the user explicitly requested a full checkpoint restore.",
+      "Pass paths after -- to restore only those files or directories from the arc snapshot.",
+      "Use --confirm without paths only when the user explicitly requested a full arc restore.",
     ].join("\n"),
-    key: "git-checkpoint",
-    usage: "wb git checkpoint <command> [options]",
-    words: ["git", "checkpoint"],
+    key: "git-arc",
+    usage: "wb git arc <command> [options]",
+    words: ["git", "arc"],
   },
   {
     commandOrder: ["browse run", "browse sessions", "browse stop", "browse forget", "browse raw"],
@@ -916,18 +935,11 @@ export async function parseWorkbenchAgentCliCommand(
     workbenchOrigin?: string | null;
   } = {},
 ): Promise<WorkbenchAgentCliParseResult> {
-  const isLegacyCheckpointBaseline = (
-    argv.length === 3
-    && argv[0] === "git"
-    && argv[1] === "checkpoint"
-    && argv[2] === "baseline"
-  ) || (
-    argv.length === 2
-    && argv[0] === "checkpoint"
-    && argv[1] === "baseline"
-  );
-  if (isLegacyCheckpointBaseline) {
-    return { help: LEGACY_CHECKPOINT_BASELINE_MIGRATION_GUIDE, kind: "help" };
+  const isLegacyCheckpointCommand = (
+    argv[0] === "git" && argv[1] === "checkpoint"
+  ) || argv[0] === "checkpoint" || (argv[0] === "git" && argv[1] === "plan");
+  if (isLegacyCheckpointCommand) {
+    return { help: LEGACY_CHECKPOINT_MIGRATION_GUIDE, kind: "help" };
   }
 
   if (!argv.length || argv.includes("--help") || argv[0] === "help") {

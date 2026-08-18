@@ -214,7 +214,7 @@ test("all Workbench CLI matcher families show the alternate install cwd name", (
     "wb thread recall --thread thread-id",
     "wb browse sessions --thread thread-id",
     "wb git add --thread thread-id -- file.ts",
-    "wb git checkpoint diff --sha abc -- file.ts",
+    "wb git arc diff --ref abc -- file.ts",
   ];
   for (const command of commands) {
     const display = getThreadCommandDisplay({
@@ -278,7 +278,7 @@ test("raw commands receive an explicit ongoing fallback", () => {
   assert.equal(getThreadCommandOutcomeDisplay(display, "timedOut").summaryText, "Timed out running mystery-command --flag");
 });
 
-test("Workbench Git commands receive bounded selection, commit, and checkpoint summaries", () => {
+test("Workbench Git commands receive bounded selection, commit, plan, and arc summaries", () => {
   const selection = getThreadCommandDisplay({
     command: "wb git add --worktree C:/workspace/.worktrees/lab -- src/file.ts",
     commandActions: [],
@@ -299,72 +299,84 @@ test("Workbench Git commands receive bounded selection, commit, and checkpoint s
   assert.equal(commit.summaryText, "Committed selected files");
   assert.equal(commit.ongoingSummaryText, "Committing selected files");
 
-  for (const command of [
-    "wb git checkpoint diff --sha abc -- src/file.ts",
-    "wb checkpoint diff --sha abc -- src/file.ts",
-  ]) {
-    const checkpoint = getThreadCommandDisplay({
-      command,
-      commandActions: [],
-      cwd: PROJECT_ROOT,
-      projectRootPath: PROJECT_ROOT,
-    });
-    assert.equal(checkpoint.claimedBy, "git-checkpoint.diff");
-    assert.equal(checkpoint.summaryText, "Diffed against git checkpoint");
-  }
+  const diff = getThreadCommandDisplay({
+    command: "wb git arc diff --ref abc -- src/file.ts",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(diff.claimedBy, "git-arc.diff");
+  assert.equal(diff.summaryText, "Diffed Git arc");
 
   const plan = getThreadCommandDisplay({
+    command: "wb git arc plan -m Update -- src/file.ts",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(plan.claimedBy, "git-arc.plan");
+  assert.equal(plan.summaryText, "Created Git plan");
+
+  const legacyCheckpoint = getThreadCommandDisplay({
     command: "wb git checkpoint plan",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(plan.claimedBy, "git-checkpoint.plan");
-  assert.equal(plan.summaryText, "Created plan checkpoint");
+  assert.doesNotMatch(String(legacyCheckpoint.claimedBy), /git-(?:checkpoint|arc|plan)/u);
 
-  const legacyBaseline = getThreadCommandDisplay({
-    command: "wb git checkpoint baseline",
+  const addition = getThreadCommandDisplay({
+    command: "wb git arc add --ref abc -- src/new.ts",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(legacyBaseline.claimedBy, "git-checkpoint.baseline-migration");
-  assert.equal(legacyBaseline.summaryText, "Read checkpoint migration guide");
+  assert.equal(addition.claimedBy, "git-arc.add");
+  assert.equal(addition.summaryText, "Extended Git arc");
 
-  const implementation = getThreadCommandDisplay({
-    command: "wb git checkpoint implement --amend abc -- src/new.ts",
+  const removal = getThreadCommandDisplay({
+    command: "wb git arc remove --ref abc -- src/old.ts",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(implementation.claimedBy, "git-checkpoint.implement");
-  assert.equal(implementation.summaryText, "Created implementation checkpoint");
+  assert.equal(removal.claimedBy, "git-arc.remove");
+  assert.equal(removal.summaryText, "Reduced Git arc");
+
+  const start = getThreadCommandDisplay({
+    command: "wb git arc start --ref abc",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(start.claimedBy, "git-arc.start");
+  assert.equal(start.summaryText, "Checked Git arc");
 
   const compare = getThreadCommandDisplay({
-    command: "wb git checkpoint compare --sha abc -- src/file.ts",
+    command: "wb git arc compare --ref abc -- src/file.ts",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(compare.claimedBy, "git-checkpoint.compare");
-  assert.equal(compare.summaryText, "Compared against git checkpoint");
+  assert.equal(compare.claimedBy, "git-arc.compare");
+  assert.equal(compare.summaryText, "Compared Git arc");
 
   const proposal = getThreadCommandDisplay({
-    command: "wb git checkpoint commit --sha abc --m Title -- src/file.ts",
+    command: "wb git arc propose --ref abc -m Title -- src/file.ts",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(proposal.claimedBy, "git-checkpoint.commit");
-  assert.equal(proposal.summaryText, "Proposed checkpoint commit");
+  assert.equal(proposal.claimedBy, "git-arc.propose");
+  assert.equal(proposal.summaryText, "Proposed arc commit");
 
   assert.deepEqual(parseGitCheckpointCompareOutput([
-    "Workbench checkpoint comparison",
+    "Workbench arc comparison",
     "M\t+4\t-2\tsrc/file.ts",
   ].join("\n")), [{ additions: 4, deletions: 2, path: "src/file.ts", status: "M" }]);
-  assert.equal(parseGitCheckpointProposalId("Workbench checkpoint proposal: proposal-one\n"), "proposal-one");
+  assert.equal(parseGitCheckpointProposalId("Workbench arc proposal: proposal-one\n"), "proposal-one");
   assert.deepEqual(parseGitCheckpointCommitCommand(
-    'wb git checkpoint commit --sha abc1234 --m "Polish checkpoint cards" --m "Keep quoted context useful." -- src/one.ts "src/two words.ts"',
+    'wb git arc propose --ref abc1234 -m "Polish checkpoint cards" -m "Keep quoted context useful." -- src/one.ts "src/two words.ts"',
   ), {
     checkpointCommit: "abc1234",
     description: "Keep quoted context useful.",
@@ -372,14 +384,15 @@ test("Workbench Git commands receive bounded selection, commit, and checkpoint s
     title: "Polish checkpoint cards",
   });
   assert.deepEqual(parseGitCheckpointCommitCommand(
-    "wb checkpoint commit --sha abc1234 --m Title -- src/one.ts",
+    "wb git arc propose --ref abc1234 -m Title",
   ), {
     checkpointCommit: "abc1234",
     description: "",
-    paths: ["src/one.ts"],
+    paths: [],
     title: "Title",
   });
-  assert.equal(parseGitCheckpointCommitCommand("wb git checkpoint commit --sha abc -- src/one.ts"), null);
+  assert.equal(parseGitCheckpointCommitCommand("wb git arc propose --ref abc -- src/one.ts"), null);
+  assert.equal(parseGitCheckpointCommitCommand("wb git checkpoint commit --sha abc --m Title -- src/one.ts"), null);
 });
 
 test("PowerShell numbered reads resolve a preceding literal path assignment", () => {

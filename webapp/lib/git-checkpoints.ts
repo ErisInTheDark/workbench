@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - createGitPlanCheckpoint/createGitImplementationCheckpoint: compatibility facade for scoped checkpoint creation. Keywords: git, checkpoint, plan, implement.
+ * - createGitPlan/addToGitArc/removeFromGitArc: create one scoped plan baseline or update its claimed arc paths. Keywords: git, checkpoint, plan, arc.
  * - compareGitCheckpoint/diffGitCheckpoint: compatibility facade for path-scoped checkpoint inspection. Keywords: git, checkpoint, compare, diff.
  * - createGitCheckpointProposal/readGitCheckpointProposal/commitGitCheckpointProposal: compatibility facade for durable commit proposals. Keywords: git, checkpoint, proposal, commit.
  * - readGitCheckpointDiffArtifact: preserve historical checkpoint diff transcript artifacts. Keywords: git, checkpoint, diff, artifact.
@@ -10,8 +10,9 @@ import WorkbenchGitCheckpointController from "./workbench/git/WorkbenchGitCheckp
 
 const controller = new WorkbenchGitCheckpointController();
 
-export const createGitPlanCheckpoint = controller.createPlan.bind(controller);
-export const createGitImplementationCheckpoint = controller.createImplementation.bind(controller);
+export const createGitPlan = controller.createPlan.bind(controller);
+export const addToGitArc = controller.addToArc.bind(controller);
+export const removeFromGitArc = controller.removeFromArc.bind(controller);
 export const compareGitCheckpoint = controller.compare.bind(controller);
 export const diffGitCheckpoint = controller.diff.bind(controller);
 export const createGitCheckpointProposal = controller.createProposal.bind(controller);

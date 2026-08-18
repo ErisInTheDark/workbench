@@ -63,6 +63,9 @@ export default function ThreadCheckpointCommitCard({
   const additions = proposal?.changes.reduce((total, change) => total + change.additions, 0) ?? 0;
   const deletions = proposal?.changes.reduce((total, change) => total + change.deletions, 0) ?? 0;
   const fileCount = proposal?.changes.length ?? paths.length;
+  const changeSummary = proposal || paths.length
+    ? `${fileCount} changed ${fileCount === 1 ? "file" : "files"}`
+    : "Arc changes";
 
   return (
     <article aria-label="Checkpoint commit proposal" className="my-2 w-full rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] px-3 py-2.5" data-thread-checkpoint-card="true">
@@ -98,7 +101,7 @@ export default function ThreadCheckpointCommitCard({
           summary={(
             <span className="flex min-w-0 w-full flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <span className="inline-flex min-w-0 items-baseline gap-2">
-                <span>{fileCount} changed {fileCount === 1 ? "file" : "files"}</span>
+                <span>{changeSummary}</span>
                 {proposal ? <ThreadFileChangeTotals additions={additions} deletions={deletions} /> : null}
               </span>
               <span
@@ -157,7 +160,7 @@ export default function ThreadCheckpointCommitCard({
               projectRootPath={projectRootPath}
               workspaceRoots={workspaceRoots}
             />
-          ) : (
+          ) : paths.length ? (
             <div className="space-y-1 py-2">
               {paths.map((path) => (
                 <div className="min-w-0 text-[0.78em] leading-[1.6] text-muted" key={path}>
@@ -165,6 +168,10 @@ export default function ThreadCheckpointCommitCard({
                 </div>
               ))}
             </div>
+          ) : (
+            <p className="m-0 py-2 text-[0.78em] leading-[1.6] text-muted">
+              The arc&apos;s claimed changes will appear here.
+            </p>
           )}
         </ThreadDisclosure>
       </div>

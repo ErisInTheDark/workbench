@@ -44,7 +44,7 @@ test("in-progress checkpoint commit commands render an immediate standalone card
       id: "turn-one",
       items: [{
         aggregatedOutput: null,
-        command: "wb git checkpoint commit --sha abc1234 --m \"Immediate proposal\" -- src/one.ts src/two.ts",
+        command: "wb git arc propose --ref abc1234 -m \"Immediate proposal\" -- src/one.ts src/two.ts",
         commandActions: [],
         cwd: "C:/workspace",
         durationMs: null,
@@ -92,6 +92,29 @@ test("pending checkpoint proposal cards render command intent without a loading 
   assert.match(html, /<button[^>]*disabled=""/u);
   assert.match(html, />Commit<\/span>/u);
   assert.doesNotMatch(html, /Loading commit proposal/u);
+});
+
+test("pending arc-wide proposal cards show an honest summary before enrichment", () => {
+  const html = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
+    committing: false,
+    description: "",
+    includeNewer: false,
+    onCommit: () => undefined,
+    onDescriptionChange: () => undefined,
+    onIncludeNewerChange: () => undefined,
+    onRetry: () => undefined,
+    onTitleChange: () => undefined,
+    paths: [],
+    projectRootPath: "C:/workspace",
+    sourceItemId: "proposal-command",
+    state: { status: "pending" },
+    title: "Immediate proposal",
+  }));
+
+  assert.match(html, /Immediate proposal/u);
+  assert.match(html, /Arc changes/u);
+  assert.match(html, /claimed changes will appear here/u);
+  assert.doesNotMatch(html, /0 changed files|Loading commit proposal/u);
 });
 
 test("checkpoint commit progress uses the shared pill spinning border", () => {

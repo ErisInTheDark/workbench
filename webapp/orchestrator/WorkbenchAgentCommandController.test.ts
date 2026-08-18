@@ -95,7 +95,7 @@ test("renders complete help without an internal capability request", async () =>
       method: "POST",
     });
     assert.equal(response.status, 200);
-    assert.match(await response.text(), /wb git checkpoint restore/u);
+    assert.match(await response.text(), /wb git arc restore/u);
   } finally {
     await server.close();
   }

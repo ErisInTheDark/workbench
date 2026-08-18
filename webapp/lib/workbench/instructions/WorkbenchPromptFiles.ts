@@ -630,9 +630,9 @@ When the control-plane project owns the thread but the files belong to another r
 
 Each managed thread owns an isolated selection list for each Git worktree. \`wb git commit\` runs host-side \`git add\` for the selected files followed by a path-limited \`git commit --only\`, then clears the selection after success. Unrelated ordinary staged files remain staged and excluded. Failures retain the selection; because the add is real, a later commit failure may leave the selected files staged in the ordinary Git index.
 
-## Workbench Git Checkpoints
+## Workbench Git Plans and Arcs
 
-Workbench supports hidden Git checkpoints for agent workflow baselines through the canonical \`wb git checkpoint\` command family. Checkpoints are real local Git commit objects stored under per-worktree refs, not visible branch commits.
+Workbench stores agent workflow baselines as real local Git commit objects under hidden per-worktree refs. A plan creates the one baseline for an arc; starting the arc does not create another ref.
 
 This thread's checkpoint namespace is owned by Workbench and scoped to the current Git worktree:
 
@@ -640,69 +640,73 @@ This thread's checkpoint namespace is owned by Workbench and scoped to the curre
 refs/worktree/agents/${threadId}/checkpoints
 \`\`\`
 
-Checkpoint refs are convenience state, not a security boundary. Do not use them to store secrets unless the repo state is already allowed to contain those secrets.
+Plan and arc refs are convenience state, not a security boundary. Do not use them to store secrets unless the repo state is already allowed to contain those secrets.
 
 Use these exact CLI shapes so Workbench can match and render checkpoint operations. Workbench owns the Git plumbing and uses a temporary index internally, so agents should not run raw \`git update-ref\` checkpoint scripts themselves.
 
-Plan and implementation checkpoints snapshot the full Git-visible worktree as structurally shared Git objects. They do not copy the workspace. Unchanged blobs and trees are reused; only changed and non-ignored untracked content creates new objects.
+Plans snapshot the full Git-visible worktree as structurally shared Git objects. They do not copy the workspace. Unchanged blobs and trees are reused; only changed and non-ignored untracked content creates new objects. The stored claimed paths select ordinary arc operations; they are not the snapshot's storage scope.
 
-Use \`wb git checkpoint compare/diff\` as the primary source for planned-path drift and Review. Do not repeat a successful checkpoint check with raw \`git status\` or \`git diff\`; use raw Git only when checkpoint output does not answer the question being investigated.
+Use \`wb git arc compare/diff\` as the primary source for planned-path drift and Review. Do not repeat a successful arc check with raw \`git status\` or \`git diff\`; use raw Git only when arc output does not answer the question being investigated.
 
-### Create an approval plan checkpoint
+### Create the plan
 
-Run after entering Brief mode once the exact planned edit files are known; call this returned checkpoint commit the approval checkpoint.
+Run after entering Brief mode once the exact planned edit files are known. Give the changeset a short intent name and name every planned path. Workbench requires those paths to be clean against current \`HEAD\`, then creates the full-worktree snapshot and records the claimed set. Keep the returned ref SHA as the current arc ref.
 
-\`wb git checkpoint plan\`
+\`wb git arc plan -m <short-intent> -- <path> [<path>...]\`
 
-### Create an implementation checkpoint
+If Workbench rejects a dirty planned path, stop and ask the user what changed; include **Committed — the workspace should now be clean, try again** as an option. Never clean, restore, or stage paths to bypass this guard.
 
-After approval drift is classified safe, name every exact planned edit path. Workbench verifies that those planned paths are clean against \`HEAD\`, then snapshots the full Git-visible worktree. The recorded paths are the verified planned set; they are not the checkpoint's storage scope or an ownership boundary.
+### Start implementation
 
-If Workbench rejects a dirty planned path, stop and ask the user what changed; include **Committed — the workspace should now be clean, try again** as an option. Never clean, restore, or stage the paths to bypass this guard.
+Immediately after entering Implement mode, inspect the plan's claimed paths. This command creates no ref. If it reports drift, classify that drift before editing and return to Brief mode when it affects the plan.
 
-\`wb git checkpoint implement -- <path> [<path>...]\`
+\`wb git arc start --ref <current-ref>\`
 
-One implementation arc has one implementation snapshot baseline. Reuse its current checkpoint SHA when later work touches only paths in the verified planned set. Do not create or amend another checkpoint for corrections, direct bounded follow-ups, validation fixes, or continued implementation before Review.
+Reuse the current ref for corrections, direct bounded follow-ups, validation fixes, and continued implementation before Review.
 
-Only when the same active arc gains genuinely new planned paths, verify them before editing with the amendment command below. Workbench requires each additional path to be clean against current \`HEAD\` and unchanged since the implementation snapshot. Amendment preserves the original snapshot tree and parent and extends only the verified planned set. Do not repeat paths already in that set.
+### Continue or extend the arc
 
-Record the SHA returned by amendment as the current metadata handle for any further amendment. It carries the extended verified planned set, but it does not establish a new snapshot baseline.
+Run \`arc add\` when a later implementation pass needs a fresh continuation guard or the active arc gains genuinely new planned paths. Every call checks whether committed content still matches the fixed snapshot for the existing claimed set. Incompatible HEAD movement or changed committed content rejects even when no new paths are supplied.
 
-\`wb git checkpoint implement --amend <implementation-checkpoint-sha> -- <additional-path> [<additional-path>...]\`
+Additional paths must be clean against current \`HEAD\`, unchanged since the original plan, and outside the existing claimed set. The returned successor ref preserves the original snapshot tree, advances its parent to the accepted current \`HEAD\`, and stores the extended claimed set. Always replace the current ref with the returned ref.
 
-### Compare against a specific checkpoint
+\`wb git arc add --ref <current-ref> [-- <additional-path> [<additional-path>...]]\`
 
-Run immediately after entering Implement mode before editing by passing the approval checkpoint commit and the exact planned paths. Run again after entering Review mode by passing the current implementation checkpoint and its touched paths. Do not substitute the newest unrelated checkpoint or guess from thread history.
+### Remove clean claims
 
-The exact path list selects the compare operation from the checkpoint's full snapshot. It is not restricted by the verified planned set.
+Run \`arc remove\` only when the active arc no longer owns exact claimed entries. Workbench rejects requested entries with working-tree changes, non-exact claims, removal of the final claim, incompatible HEAD movement, or changed committed content under retained claims. It changes no working-tree or index content.
 
-\`wb git checkpoint compare --sha <checkpoint-commit-sha> -- <path> [<path>...]\`
+The returned successor ref preserves the original snapshot tree, advances its parent to the accepted current \`HEAD\`, and stores the reduced claimed set. Always replace the current ref with the returned ref.
 
-### Read unified diff content
+\`wb git arc remove --ref <current-ref> -- <claimed-path> [<claimed-path>...]\`
 
-Use the same exact checkpoint and relevant path list when unified diff content is needed to classify drift or inspect implementation details. The exact path list selects the diff operation from the full snapshot.
+### Compare or diff the arc
 
-\`wb git checkpoint diff --sha <checkpoint-commit-sha> -- <path> [<path>...]\`
+Omit paths to inspect the claimed set. Explicit paths select diagnostics from the full snapshot. Do not substitute the newest unrelated ref or guess from thread history.
 
-### Propose a selected-path commit in Review
+\`wb git arc compare --ref <current-ref> [-- <path> [<path>...]]\`
 
-After validation and checkpoint compare/diff, the agent must run this command with the current implementation checkpoint, a proposed title, and every exact touched path. The exact paths select the proposal from the full snapshot; the verified planned set does not restrict them. Omit the optional description when the title already explains the commit. Add a description only when it communicates useful context that the title cannot. This creates the editable commit proposal UI; it does not commit the branch and does not require separate commit permission. Do not replace it with the autonomous \`wb git commit\` workflow. If the implementation produced no touched files, do not create a proposal. Report proposal creation failures instead of silently ending Review without the UI.
+\`wb git arc diff --ref <current-ref> [-- <path> [<path>...]]\`
+
+### Propose a commit in Review
+
+After validation and arc compare/diff, run this command with the current ref and a fresh proposed title. Omit paths to use every changed file under the claimed set, or provide a claimed subset. Workbench derives exact changed files and excludes claimed paths that ended unchanged. The optional description is for useful context that the title cannot communicate. This creates the editable commit proposal UI; it does not commit the branch and does not require separate commit permission. Do not replace it with the autonomous \`wb git commit\` workflow.
 
 The proposal freezes that file set and its current contents. The user can include or exclude newer edits to those same files; no other files can enter the proposal. Workbench rebases the frozen selected files across compatible fast-forward commits that do not change them. Committed changes to selected files or incompatible HEAD movement make the proposal unavailable. A final atomic branch update prevents a concurrent commit from being overwritten.
 
-\`wb git checkpoint commit --sha <implementation-checkpoint-sha> --m <title> [--m <description>] -- <path> [<path>...]\`
+\`wb git arc propose --ref <current-ref> -m <fresh-title> [-m <optional-description>] [-- <claimed-path> [<claimed-path>...]]\`
 
 ### Restore selected paths after explicit user request
 
-First run the checkpoint diff or another preview. Pass every file or directory to restore after \`--\`; Workbench restores only those paths from the specified checkpoint, removes selected paths that were created after it, and leaves the real Git index unchanged. The repository root is not a valid selected path. Compatible fast-forward commits to unrelated paths do not block selected-path restore. Workbench blocks when selected paths changed in committed history or HEAD moved incompatibly.
+First run the arc diff or another preview. Pass every file or directory to restore after \`--\`; Workbench restores only those paths from the specified arc snapshot, removes selected paths that were created after it, and leaves the real Git index unchanged. The repository root is not a valid selected path. Compatible fast-forward commits to unrelated paths do not block selected-path restore. Workbench blocks when selected committed content no longer matches the arc baseline or HEAD moved incompatibly.
 
-\`wb git checkpoint restore --commit <checkpoint-commit-sha> -- <path> [<path>...]\`
+\`wb git arc restore --ref <current-ref> -- <path> [<path>...]\`
 
-### Restore a full checkpoint after explicit user request
+### Restore a full arc after explicit user request
 
-Use the path form instead when only part of the worktree must be restored. Full restore uses a checkpoint commit sha supplied by the user or selected from the thread's checkpoint output. The CLI requires \`--confirm\`, and Workbench blocks when the checkpoint parent is not the current HEAD.
+Use the path form instead when only part of the worktree must be restored. Full restore uses an arc ref SHA supplied by the user or selected from the thread's arc output. The CLI requires \`--confirm\`, and Workbench blocks when the arc parent is not the current HEAD.
 
-\`wb git checkpoint restore --commit <checkpoint-commit-sha> --confirm\`
+\`wb git arc restore --ref <current-ref> --confirm\`
 `.trim();
 }
 

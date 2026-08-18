@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchGitCheckpointController: own scoped checkpoint creation, comparison, proposals, and Git commit transitions. Keywords: git, checkpoint, scope, proposal, commit.
- * - GitCheckpointDirtyPathsError: identify implementation paths that must be clean before checkpoint creation. Keywords: git, checkpoint, dirty paths.
+ * - default WorkbenchGitCheckpointController: own scoped plan creation, arc claims, comparison, proposals, and Git commit transitions. Keywords: git, checkpoint, arc, scope, proposal, commit.
+ * - GitCheckpointDirtyPathsError: identify paths that must be clean before an arc operation. Keywords: git, checkpoint, dirty paths.
  * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt: typed controller operation results. Keywords: git, checkpoint, proposal, result.
  */
 import { execFile, spawn } from "node:child_process";
@@ -24,14 +24,15 @@ const CHECKPOINT_METADATA_MARKER = "workbench-git-checkpoint-v1";
 const PROPOSAL_METADATA_MARKER = "workbench-git-checkpoint-proposal-v1";
 const CHECKPOINT_DIFF_ARTIFACT_PATTERN = /^[a-f0-9]{64}$/u;
 
-type CheckpointKind = "implement" | "plan";
+type CheckpointKind = "arc" | "implement" | "plan";
 type ProposalStatus = "committed" | "proposed" | "unavailable";
 
 interface CheckpointMetadata {
   amendedFrom: string | null;
   kind: CheckpointKind;
+  intentName?: string;
   scopePaths: string[];
-  version: 1;
+  version: 1 | 2;
 }
 
 interface ProposalMetadata {
@@ -57,7 +58,7 @@ interface CheckpointInput extends ControllerInput {
 }
 
 interface ScopedCheckpointInput extends CheckpointInput {
-  paths: string[];
+  paths?: string[];
 }
 
 export interface GitCheckpointCreateResult {
@@ -108,11 +109,26 @@ interface HeadMovement {
 export class GitCheckpointDirtyPathsError extends Error {
   readonly dirtyPaths: string[];
 
-  constructor(dirtyPaths: string[]) {
-    super(`Implementation checkpoint paths must be clean: ${dirtyPaths.join(", ")}`);
+  constructor(dirtyPaths: string[], operation = "Plan") {
+    super(`${operation} paths must be clean against HEAD: ${dirtyPaths.join(", ")}`);
     this.name = "GitCheckpointDirtyPathsError";
     this.dirtyPaths = dirtyPaths;
   }
+}
+
+function isArcMetadata(metadata: CheckpointMetadata | null): metadata is CheckpointMetadata {
+  return Boolean(metadata && (metadata.kind === "arc" || metadata.kind === "implement") && metadata.scopePaths.length);
+}
+
+function requireArcMetadata(checkpoint: ReadCheckpointResult) {
+  if (!isArcMetadata(checkpoint.metadata)) {
+    throw new Error("This checkpoint does not contain a claimed file set. Create a new plan with wb git arc plan.");
+  }
+  return checkpoint.metadata;
+}
+
+function pathIsCoveredBy(candidate: string, scopePath: string) {
+  return candidate === scopePath || candidate.startsWith(`${scopePath}/`);
 }
 
 async function runGit(cwd: string, args: string[], env: NodeJS.ProcessEnv = process.env) {
@@ -350,17 +366,26 @@ async function listChangedPaths(repoRoot: string, from: string, to: string, path
 
 async function classifyHeadMovement(
   repoRoot: string,
-  baseCommit: string,
+  ancestryBaseCommit: string,
   paths: string[],
+  contentBaseline = ancestryBaseCommit,
 ): Promise<HeadMovement> {
   const currentHead = (await runGit(repoRoot, ["rev-parse", "HEAD"])).trim();
-  if (currentHead === baseCommit) return { changedPaths: [], currentHead, kind: "same" };
+  if (currentHead === ancestryBaseCommit) {
+    return {
+      changedPaths: contentBaseline === currentHead
+        ? []
+        : await listChangedPaths(repoRoot, contentBaseline, currentHead, paths),
+      currentHead,
+      kind: "same",
+    };
+  }
   const commitsOnlyOnBase = (await runGit(repoRoot, [
-    "rev-list", "--max-count=1", `${currentHead}..${baseCommit}`,
+    "rev-list", "--max-count=1", `${currentHead}..${ancestryBaseCommit}`,
   ])).trim();
   if (commitsOnlyOnBase) return { changedPaths: [], currentHead, kind: "incompatible" };
   return {
-    changedPaths: await listChangedPaths(repoRoot, baseCommit, currentHead, paths),
+    changedPaths: await listChangedPaths(repoRoot, contentBaseline, currentHead, paths),
     currentHead,
     kind: "fast-forward",
   };
@@ -446,45 +471,63 @@ async function buildProposalResult(
 }
 
 export default class WorkbenchGitCheckpointController {
-  async createPlan({ cwd, threadId }: ControllerInput): Promise<GitCheckpointCreateResult> {
-    const repoRoot = await resolveRepoRoot(cwd);
-    const tree = await writeWorktreeTree(repoRoot);
-    const parent = (await runGit(repoRoot, ["rev-parse", "HEAD"])).trim();
-    const metadata: CheckpointMetadata = { amendedFrom: null, kind: "plan", scopePaths: [], version: 1 };
-    const checkpointCommit = await createCommitFromTree(repoRoot, tree, parent, checkpointMessage(metadata));
-    const checkpointRef = await createCheckpointRef(repoRoot, threadId, checkpointCommit);
-    return { checkpointCommit, checkpointRef, kind: "plan", repoRoot, scopePaths: [] };
-  }
-
-  async createImplementation({
-    amendCheckpoint,
+  async createPlan({
     cwd,
+    intentName,
     paths: rawPaths,
     threadId,
-  }: ControllerInput & { amendCheckpoint?: string; paths: string[] }): Promise<GitCheckpointCreateResult> {
+  }: ControllerInput & { intentName: string; paths: string[] }): Promise<GitCheckpointCreateResult> {
     const repoRoot = await resolveRepoRoot(cwd);
     const paths = normalizePaths(repoRoot, rawPaths);
-    const existing = amendCheckpoint
-      ? await readCheckpoint(repoRoot, threadId, amendCheckpoint)
-      : null;
-    if (existing && existing.metadata?.kind !== "implement") throw new Error("Only an implementation checkpoint can be amended.");
-    if (existing?.metadata?.kind === "implement") {
-      const overlapping = paths.filter((candidate) => existing.metadata!.scopePaths.some((scopePath) => (
-        candidate === scopePath || candidate.startsWith(`${scopePath}/`) || scopePath.startsWith(`${candidate}/`)
-      )));
-      if (overlapping.length) throw new Error(`Amend paths are already covered by implementation scope: ${overlapping.join(", ")}`);
-    }
-    const currentTree = existing
-      ? await writeScopedWorktreeTree(repoRoot, paths)
-      : await writeWorktreeTree(repoRoot);
-    const dirtyPaths = await listChangedPaths(repoRoot, "HEAD", currentTree, paths);
+    const tree = await writeWorktreeTree(repoRoot);
+    const parent = (await runGit(repoRoot, ["rev-parse", "HEAD"])).trim();
+    const dirtyPaths = await listChangedPaths(repoRoot, parent, tree, paths);
     if (dirtyPaths.length) throw new GitCheckpointDirtyPathsError(dirtyPaths);
+    const metadata: CheckpointMetadata = {
+      amendedFrom: null,
+      intentName: intentName.trim(),
+      kind: "arc",
+      scopePaths: paths,
+      version: 2,
+    };
+    const checkpointCommit = await createCommitFromTree(repoRoot, tree, parent, checkpointMessage(metadata));
+    const checkpointRef = await createCheckpointRef(repoRoot, threadId, checkpointCommit);
+    return { checkpointCommit, checkpointRef, kind: "arc", repoRoot, scopePaths: paths };
+  }
 
-    let scopePaths = paths;
-    let tree = currentTree;
-    let amendedFrom: string | null = null;
-    let parent = (await runGit(repoRoot, ["rev-parse", "HEAD"])).trim();
-    if (existing?.metadata?.kind === "implement") {
+  async addToArc({
+    checkpointCommit,
+    cwd,
+    paths: rawPaths = [],
+    threadId,
+  }: CheckpointInput & { paths?: string[] }): Promise<GitCheckpointCreateResult> {
+    const repoRoot = await resolveRepoRoot(cwd);
+    const paths = rawPaths.length ? normalizePaths(repoRoot, rawPaths) : [];
+    const existing = await readCheckpoint(repoRoot, threadId, checkpointCommit);
+    const metadata = requireArcMetadata(existing);
+    const parent = (await runGit(repoRoot, ["rev-parse", `${existing.checkpointCommit}^`])).trim();
+    const headMovement = await classifyHeadMovement(
+      repoRoot,
+      parent,
+      metadata.scopePaths,
+      existing.checkpointCommit,
+    );
+    if (headMovement.kind === "incompatible") {
+      throw new Error("Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
+    }
+    if (headMovement.changedPaths.length) {
+      throw new Error(`Claimed paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
+    }
+
+    const overlapping = paths.filter((candidate) => metadata.scopePaths.some((scopePath) => (
+      pathIsCoveredBy(candidate, scopePath) || pathIsCoveredBy(scopePath, candidate)
+    )));
+    if (overlapping.length) throw new Error(`Arc paths are already covered by the claimed set: ${overlapping.join(", ")}`);
+
+    if (paths.length) {
+      const currentTree = await writeScopedWorktreeTree(repoRoot, paths);
+      const dirtyPaths = await listChangedPaths(repoRoot, "HEAD", currentTree, paths);
+      if (dirtyPaths.length) throw new GitCheckpointDirtyPathsError(dirtyPaths);
       const changedSinceCheckpoint = await listChangedPaths(
         repoRoot,
         existing.checkpointCommit,
@@ -492,24 +535,79 @@ export default class WorkbenchGitCheckpointController {
         paths,
       );
       if (changedSinceCheckpoint.length) {
-        throw new Error(`Implementation amendment paths changed since checkpoint: ${changedSinceCheckpoint.join(", ")}`);
+        throw new Error(`New arc paths changed since the original plan: ${changedSinceCheckpoint.join(", ")}`);
       }
-      amendedFrom = existing.checkpointCommit;
-      scopePaths = [...existing.metadata.scopePaths, ...paths].sort((left, right) => left.localeCompare(right));
-      tree = (await runGit(repoRoot, ["rev-parse", `${existing.checkpointCommit}^{tree}`])).trim();
-      parent = (await runGit(repoRoot, ["rev-parse", `${existing.checkpointCommit}^`])).trim();
     }
 
-    const metadata: CheckpointMetadata = { amendedFrom, kind: "implement", scopePaths, version: 1 };
-    const checkpointCommit = await createCommitFromTree(repoRoot, tree, parent, checkpointMessage(metadata));
-    const checkpointRef = await createCheckpointRef(repoRoot, threadId, checkpointCommit);
-    return { checkpointCommit, checkpointRef, kind: "implement", repoRoot, scopePaths };
+    const scopePaths = [...metadata.scopePaths, ...paths].sort((left, right) => left.localeCompare(right));
+    const tree = (await runGit(repoRoot, ["rev-parse", `${existing.checkpointCommit}^{tree}`])).trim();
+    const nextMetadata: CheckpointMetadata = {
+      amendedFrom: existing.checkpointCommit,
+      ...(metadata.intentName ? { intentName: metadata.intentName } : {}),
+      kind: "arc",
+      scopePaths,
+      version: 2,
+    };
+    const nextCommit = await createCommitFromTree(repoRoot, tree, headMovement.currentHead, checkpointMessage(nextMetadata));
+    const checkpointRef = await createCheckpointRef(repoRoot, threadId, nextCommit);
+    return { checkpointCommit: nextCommit, checkpointRef, kind: "arc", repoRoot, scopePaths };
+  }
+
+  async removeFromArc({
+    checkpointCommit,
+    cwd,
+    paths: rawPaths,
+    threadId,
+  }: CheckpointInput & { paths: string[] }): Promise<GitCheckpointCreateResult> {
+    const repoRoot = await resolveRepoRoot(cwd);
+    const paths = normalizePaths(repoRoot, rawPaths);
+    const existing = await readCheckpoint(repoRoot, threadId, checkpointCommit);
+    const metadata = requireArcMetadata(existing);
+    const unknownPaths = paths.filter((candidate) => !metadata.scopePaths.includes(candidate));
+    if (unknownPaths.length) {
+      throw new Error(`Arc remove paths must exactly match claimed entries: ${unknownPaths.join(", ")}`);
+    }
+
+    const currentTree = await writeScopedWorktreeTree(repoRoot, paths);
+    const dirtyPaths = await listChangedPaths(repoRoot, "HEAD", currentTree, paths);
+    if (dirtyPaths.length) throw new GitCheckpointDirtyPathsError(dirtyPaths, "Arc remove");
+
+    const removedPaths = new Set(paths);
+    const scopePaths = metadata.scopePaths.filter((candidate) => !removedPaths.has(candidate));
+    if (!scopePaths.length) throw new Error("Arc remove must leave at least one claimed path.");
+
+    const parent = (await runGit(repoRoot, ["rev-parse", `${existing.checkpointCommit}^`])).trim();
+    const headMovement = await classifyHeadMovement(
+      repoRoot,
+      parent,
+      scopePaths,
+      existing.checkpointCommit,
+    );
+    if (headMovement.kind === "incompatible") {
+      throw new Error("Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
+    }
+    if (headMovement.changedPaths.length) {
+      throw new Error(`Retained paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
+    }
+
+    const tree = (await runGit(repoRoot, ["rev-parse", `${existing.checkpointCommit}^{tree}`])).trim();
+    const nextMetadata: CheckpointMetadata = {
+      amendedFrom: existing.checkpointCommit,
+      ...(metadata.intentName ? { intentName: metadata.intentName } : {}),
+      kind: "arc",
+      scopePaths,
+      version: 2,
+    };
+    const nextCommit = await createCommitFromTree(repoRoot, tree, headMovement.currentHead, checkpointMessage(nextMetadata));
+    const checkpointRef = await createCheckpointRef(repoRoot, threadId, nextCommit);
+    return { checkpointCommit: nextCommit, checkpointRef, kind: "arc", repoRoot, scopePaths };
   }
 
   async compare({ checkpointCommit, cwd, paths: rawPaths, threadId }: ScopedCheckpointInput): Promise<GitCheckpointCompareResult> {
     const repoRoot = await resolveRepoRoot(cwd);
-    const paths = normalizePaths(repoRoot, rawPaths);
     const checkpoint = await readCheckpoint(repoRoot, threadId, checkpointCommit);
+    const metadata = requireArcMetadata(checkpoint);
+    const paths = rawPaths?.length ? normalizePaths(repoRoot, rawPaths) : normalizePaths(repoRoot, metadata.scopePaths);
     const currentTree = await writeScopedWorktreeTree(repoRoot, paths);
     return {
       changes: await buildFileChanges(repoRoot, checkpoint.checkpointCommit, currentTree, paths),
@@ -536,22 +634,36 @@ export default class WorkbenchGitCheckpointController {
     title,
   }: ScopedCheckpointInput & { description: string; title: string }): Promise<GitCheckpointProposalReceipt> {
     const repoRoot = await resolveRepoRoot(cwd);
-    const requestedPaths = normalizePaths(repoRoot, rawPaths);
     const checkpoint = await readCheckpoint(repoRoot, threadId, checkpointCommit);
+    const checkpointMetadata = requireArcMetadata(checkpoint);
+    const requestedPaths = rawPaths?.length
+      ? normalizePaths(repoRoot, rawPaths)
+      : normalizePaths(repoRoot, checkpointMetadata.scopePaths);
+    if (rawPaths?.length) {
+      const outsideClaim = requestedPaths.filter((candidate) => (
+        !checkpointMetadata.scopePaths.some((scopePath) => pathIsCoveredBy(candidate, scopePath))
+      ));
+      if (outsideClaim.length) {
+        throw new Error(`Proposed paths must stay within the arc's claimed set: ${outsideClaim.join(", ")}`);
+      }
+    }
     const checkpointParent = (await runGit(repoRoot, ["rev-parse", `${checkpoint.checkpointCommit}^`])).trim();
-    const headMovement = await classifyHeadMovement(repoRoot, checkpointParent, requestedPaths);
+    const headMovement = await classifyHeadMovement(
+      repoRoot,
+      checkpointParent,
+      requestedPaths,
+      checkpoint.checkpointCommit,
+    );
     if (headMovement.kind === "incompatible") {
-      throw new Error("Repository HEAD moved incompatibly after the implementation checkpoint. Create a new implementation checkpoint before proposing a commit.");
+      throw new Error("Repository HEAD moved incompatibly after this arc began. Create a new plan before proposing a commit.");
     }
     if (headMovement.changedPaths.length) {
-      throw new Error(`Proposed paths changed in committed history after the implementation checkpoint: ${headMovement.changedPaths.join(", ")}`);
+      throw new Error(`Proposed paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
     }
     const baseCommit = headMovement.currentHead;
     const proposalTree = await writeScopedWorktreeTree(repoRoot, requestedPaths, baseCommit);
-    const changedPaths = new Set(await listChangedPaths(repoRoot, baseCommit, proposalTree, requestedPaths));
-    const unchangedPaths = requestedPaths.filter((filePath) => !changedPaths.has(filePath));
-    if (unchangedPaths.length) throw new Error(`Every proposed path must identify an exact changed file: ${unchangedPaths.join(", ")}`);
-    const paths = requestedPaths;
+    const paths = await listChangedPaths(repoRoot, baseCommit, proposalTree, requestedPaths);
+    if (!paths.length) throw new Error("The selected arc paths do not contain any working-tree changes to propose.");
     const proposalId = randomUUID();
     const metadata: ProposalMetadata = {
       baseCommit,
@@ -715,6 +827,7 @@ export default class WorkbenchGitCheckpointController {
 
     if (!rawPaths?.length) {
       const checkpoint = await readRestorableCheckpoint(repoRoot, threadId, checkpointCommit);
+      requireArcMetadata(checkpoint);
       const currentTree = await writeWorktreeTree(repoRoot);
       const changedPaths = parseNullPaths(await runGit(repoRoot, [
         "diff", "--name-only", "-z", "--no-renames", checkpoint.checkpointCommit, currentTree, "--", ".",
@@ -738,13 +851,19 @@ export default class WorkbenchGitCheckpointController {
 
     const paths = normalizePaths(repoRoot, rawPaths);
     const checkpoint = await readCheckpoint(repoRoot, threadId, checkpointCommit);
+    requireArcMetadata(checkpoint);
     const checkpointParent = (await runGit(repoRoot, ["rev-parse", `${checkpoint.checkpointCommit}^`])).trim();
-    const headMovement = await classifyHeadMovement(repoRoot, checkpointParent, paths);
+    const headMovement = await classifyHeadMovement(
+      repoRoot,
+      checkpointParent,
+      paths,
+      checkpoint.checkpointCommit,
+    );
     if (headMovement.kind === "incompatible") {
       throw new Error("Repository HEAD moved incompatibly after this checkpoint. Ask the user before restoring selected paths.");
     }
     if (headMovement.changedPaths.length) {
-      throw new Error(`Selected restore paths changed in committed history after this checkpoint: ${headMovement.changedPaths.join(", ")}`);
+      throw new Error(`Selected restore paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
     }
     const currentTree = await writeScopedWorktreeTree(repoRoot, paths);
     const changedPaths = await listChangedPaths(repoRoot, checkpoint.checkpointCommit, currentTree, paths);
