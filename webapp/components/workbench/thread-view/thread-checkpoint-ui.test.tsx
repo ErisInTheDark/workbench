@@ -89,8 +89,56 @@ test("pending checkpoint proposal cards render command intent without a loading 
   assert.match(html, /2 changed files/u);
   assert.match(html, /data-placeholder="Optional description"/u);
   assert.match(html, /color-mix\(in_srgb,var\(--text\)_32%,transparent\)/u);
-  assert.match(html, /<button[^>]*disabled=""[^>]*>Commit<\/button>/u);
+  assert.match(html, /<button[^>]*disabled=""/u);
+  assert.match(html, />Commit<\/span>/u);
   assert.doesNotMatch(html, /Loading commit proposal/u);
+});
+
+test("checkpoint commit progress uses the shared pill spinning border", () => {
+  const html = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
+    committing: true,
+    description: "",
+    includeNewer: false,
+    onCommit: () => undefined,
+    onDescriptionChange: () => undefined,
+    onIncludeNewerChange: () => undefined,
+    onRetry: () => undefined,
+    onTitleChange: () => undefined,
+    paths: ["src/one.ts"],
+    sourceItemId: "proposal-command",
+    state: { status: "pending" },
+    title: "Immediate proposal",
+  }));
+
+  assert.match(html, />Committing\.\.\.</u);
+  assert.match(html, /data-workbench-spinning-border="true"/u);
+  assert.equal(html.match(/data-workbench-spinning-border-trail="true"/gu)?.length, 2);
+});
+
+test("pending steers use the shared spinning border", () => {
+  const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    threadId: "thread-one",
+    turn: {
+      completedAt: null,
+      durationMs: null,
+      error: null,
+      id: "turn-one",
+      items: [{
+        clientId: "steer-one",
+        content: [{ text: "Queued steer", text_elements: [], type: "text" }],
+        id: "optimistic-user-message:steer:pending:one",
+        type: "userMessage",
+      }],
+      itemsView: "full",
+      startedAt: null,
+      status: "inProgress",
+    },
+  }));
+
+  assert.match(html, /data-thread-user-message-state="pending-steer"/u);
+  assert.match(html, /data-workbench-spinning-border="true"/u);
+  assert.equal(html.match(/data-workbench-spinning-border-trail="true"/gu)?.length, 2);
+  assert.doesNotMatch(html, /thread-pending-steer-message/u);
 });
 
 test("loaded checkpoint proposal cards keep actions in the summary and clean expanded diffs", () => {

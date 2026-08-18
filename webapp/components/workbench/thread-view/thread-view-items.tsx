@@ -51,6 +51,7 @@ import {
   type ThreadCommandDetailTarget,
 } from "../../../lib/workbench/thread/thread-command-matchers";
 import { getSubagentSummary } from "../../../lib/workbench/thread/thread-subagents";
+import WorkbenchSpinningBorder from "../WorkbenchSpinningBorder";
 import {
   formatThreadDuration,
   formatThreadTimestamp,
@@ -747,11 +748,21 @@ function ThreadUserMessageItem ({
 
   const steerState = getSteerUserMessageState(item);
   const isDecoratedSteer = steerState !== null;
-  const steerMessageClass = steerState ? ` thread-${steerState}-steer-message px-0.5 py-0.5` : "";
+  const steerMessageClass = steerState === "pending"
+    ? " relative isolate overflow-hidden rounded-[1.4rem]"
+    : steerState === "unsent"
+      ? " thread-unsent-steer-message px-0.5 py-0.5"
+      : "";
+  const decoratedSteerSurfaceClass = steerState === "pending"
+    ? " relative z-10 rounded-[1.4rem] border-[3px] border-transparent bg-[color:color-mix(in_srgb,var(--text)_6%,var(--shell-fade-bg))] [clip-path:padding-box] px-4 py-3"
+    : isDecoratedSteer
+      ? " relative z-10 rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3"
+      : "";
   return (
     <section className="flex flex-col items-end py-2" data-thread-user-message-state={steerState ? `${steerState}-steer` : undefined}>
       <div className={`w-full max-w-[42rem]${isDecoratedSteer ? steerMessageClass : " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3"}`}>
-        <div className={`space-y-2 text-left${isDecoratedSteer ? " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3" : ""}`}>
+        {steerState === "pending" ? <WorkbenchSpinningBorder radius="1.4rem" /> : null}
+        <div className={`space-y-2 text-left${decoratedSteerSurfaceClass}`}>
           {item.content.length ? item.content.map((content, index) => (
             <ThreadUserInputLine
               key={`${item.id}:content:${index}:${content.type}`}

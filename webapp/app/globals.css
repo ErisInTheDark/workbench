@@ -850,59 +850,116 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     animation: thread-thinking-shimmer 1.45s linear infinite;
   }
 
-  .thread-pending-steer-message,
+  .workbench-spinning-border-host {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    container-type: size;
+    pointer-events: none;
+  }
+
+  .workbench-spinning-border {
+    --workbench-spinning-border-width: 2px;
+    --workbench-spinning-border-inner-radius: max(
+      0px,
+      calc(var(--workbench-spinning-border-radius) - var(--workbench-spinning-border-width))
+    );
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    border-radius: var(--workbench-spinning-border-radius);
+    clip-path: shape(
+      evenodd from var(--workbench-spinning-border-radius) 0,
+      hline to calc(100% - var(--workbench-spinning-border-radius)),
+      arc to 100% var(--workbench-spinning-border-radius) of var(--workbench-spinning-border-radius) cw,
+      vline to calc(100% - var(--workbench-spinning-border-radius)),
+      arc to calc(100% - var(--workbench-spinning-border-radius)) 100% of var(--workbench-spinning-border-radius) cw,
+      hline to var(--workbench-spinning-border-radius),
+      arc to 0 calc(100% - var(--workbench-spinning-border-radius)) of var(--workbench-spinning-border-radius) cw,
+      vline to var(--workbench-spinning-border-radius),
+      arc to var(--workbench-spinning-border-radius) 0 of var(--workbench-spinning-border-radius) cw,
+      close,
+      move to calc(var(--workbench-spinning-border-width) + var(--workbench-spinning-border-inner-radius)) var(--workbench-spinning-border-width),
+      hline to calc(100% - var(--workbench-spinning-border-width) - var(--workbench-spinning-border-inner-radius)),
+      arc to calc(100% - var(--workbench-spinning-border-width)) calc(var(--workbench-spinning-border-width) + var(--workbench-spinning-border-inner-radius)) of var(--workbench-spinning-border-inner-radius) cw,
+      vline to calc(100% - var(--workbench-spinning-border-width) - var(--workbench-spinning-border-inner-radius)),
+      arc to calc(100% - var(--workbench-spinning-border-width) - var(--workbench-spinning-border-inner-radius)) calc(100% - var(--workbench-spinning-border-width)) of var(--workbench-spinning-border-inner-radius) cw,
+      hline to calc(var(--workbench-spinning-border-width) + var(--workbench-spinning-border-inner-radius)),
+      arc to var(--workbench-spinning-border-width) calc(100% - var(--workbench-spinning-border-width) - var(--workbench-spinning-border-inner-radius)) of var(--workbench-spinning-border-inner-radius) cw,
+      vline to calc(var(--workbench-spinning-border-width) + var(--workbench-spinning-border-inner-radius)),
+      arc to calc(var(--workbench-spinning-border-width) + var(--workbench-spinning-border-inner-radius)) var(--workbench-spinning-border-width) of var(--workbench-spinning-border-inner-radius) cw,
+      close
+    );
+    contain: paint;
+    container-type: size;
+  }
+
+  .workbench-spinning-border-trail {
+    --workbench-spinning-border-color: color-mix(in srgb, var(--text), var(--accent) 50%);
+    --workbench-spinning-border-motion-outset: calc(min(100cqi, 100cqb) / 4);
+    --workbench-spinning-border-long-side: max(100cqi, 100cqb);
+    --workbench-spinning-border-short-side: min(100cqi, 100cqb);
+    --workbench-spinning-border-squareness-boost: calc(
+      var(--workbench-spinning-border-short-side) * var(--workbench-spinning-border-short-side)
+      / var(--workbench-spinning-border-long-side)
+    );
+    position: absolute;
+    width: calc(var(--workbench-spinning-border-long-side) + var(--workbench-spinning-border-squareness-boost));
+    height: calc(
+      (
+        var(--workbench-spinning-border-long-side)
+        + var(--workbench-spinning-border-short-side)
+        + var(--workbench-spinning-border-squareness-boost)
+      ) / 2
+    );
+    background: radial-gradient(var(--workbench-spinning-border-color), transparent 50%);
+    opacity: 0.92;
+    offset-path: inset(
+      calc(var(--workbench-spinning-border-motion-outset) * -1)
+      round calc(var(--spacing) * 20)
+    ) border-box;
+    offset-anchor: 50% 50%;
+    offset-rotate: auto;
+  }
+
+  .workbench-spinning-border-trail-first {
+    offset-distance: 0%;
+    animation: workbench-spinning-border-first 3.6s linear infinite;
+  }
+
+  .workbench-spinning-border-trail-second {
+    offset-distance: 50%;
+    animation: workbench-spinning-border-second 3.6s linear infinite;
+  }
+
+  @container (width > 20rem) {
+    .workbench-spinning-border-trail {
+      animation-duration: 8s;
+    }
+  }
+
+  @container (width > 36rem) {
+    .workbench-spinning-border-trail {
+      animation-duration: 12s;
+    }
+  }
+
   .thread-unsent-steer-message {
     position: relative;
     isolation: isolate;
     overflow: hidden;
   }
 
-  .thread-pending-control-button-active {
-    position: relative;
-    isolation: isolate;
-    overflow: visible;
-  }
-
-  .thread-pending-steer-message,
   .thread-unsent-steer-message {
     border-radius: 1.4rem;
   }
 
-  .thread-pending-steer-message::before,
-  .thread-pending-steer-message::after,
-  .thread-pending-control-button-active::before,
   .thread-unsent-steer-message::before,
   .thread-unsent-steer-message::after {
     content: "";
     position: absolute;
     pointer-events: none;
     border-radius: inherit;
-  }
-
-  .thread-pending-steer-message::before,
-  .thread-pending-control-button-active::before {
-    aspect-ratio: 1 / 1;
-    --color: color-mix(in srgb, var(--text), var(--accent) 50%);
-    background: conic-gradient(transparent, 
-      var(--color) 180deg, transparent 180deg, 
-    var(--color));
-    opacity: .5;
-    inset: 50% auto auto 50%;
-    min-height: 100%;
-    translate: -50% -50%;
-    width: max(100%, 18rem);
-    z-index: -2;
-    animation: thread-pending-steer-spin 3.6s linear infinite;
-  }
-
-  .thread-pending-control-button-active::before {
-    z-index: -1;
-    width: max(100%, 3.2rem);
-  }
-
-  .thread-pending-control-button-active > * {
-    position: relative;
-    z-index: 1;
   }
 
   .thread-unsent-steer-message::before {
@@ -915,16 +972,21 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     opacity: 0.46;
   }
 
-  .thread-pending-steer-message::after,
   .thread-unsent-steer-message::after {
     inset: calc(var(--spacing) * 0.5);
     z-index: -1;
     background: var(--shell-fade-bg);
   }
 
-  @keyframes thread-pending-steer-spin {
+  @keyframes workbench-spinning-border-first {
     to {
-      rotate: z 360deg;
+      offset-distance: 100%;
+    }
+  }
+
+  @keyframes workbench-spinning-border-second {
+    to {
+      offset-distance: 150%;
     }
   }
 
@@ -940,8 +1002,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
 
   @media (prefers-reduced-motion: reduce) {
     .workbench-skeleton,
-    .thread-pending-steer-message::before,
-    .thread-pending-control-button-active::before,
+    .workbench-spinning-border-trail,
     .thread-thinking-text {
       animation: none;
       background-position: 50% 50%;
