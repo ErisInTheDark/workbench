@@ -2,7 +2,7 @@
  * Exports:
  * - runtime: force the checkpoint route onto the Node.js runtime for Git and filesystem access. Keywords: api, git checkpoint, node runtime.
  * - dynamic: disable static caching for checkpoint operations. Keywords: api, git checkpoint, dynamic.
- * - POST: execute hidden Workbench Git checkpoint baseline, explicit diff, file diff, diff checkpoint, and restore actions. Keywords: api, git checkpoint, drift, restore.
+ * - POST: execute hidden Workbench Git checkpoint baseline, diff, file diff, diff checkpoint, full restore, and path restore actions. Keywords: api, git checkpoint, drift, restore.
  */
 import path from "node:path";
 
@@ -14,6 +14,7 @@ import {
   diffGitCheckpointFile,
   readGitCheckpointDiffArtifact,
   restoreGitCheckpoint,
+  restoreGitCheckpointPaths,
   type GitCheckpointPurpose,
 } from "../../../lib/git-checkpoints";
 import { resolveProjectRoot } from "../../../lib/project";
@@ -37,6 +38,17 @@ function readString(value: unknown) {
 
 function readBoolean(value: unknown) {
   return value === true;
+}
+
+function readStringArray(value: unknown) {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || !entry.trim())) {
+    throw new Error("Checkpoint restore paths must be a non-empty string array.");
+  }
+
+  return value.map((entry) => entry.trim());
 }
 
 function normalizeDiffView(value: unknown): GitCheckpointDiffView {
@@ -150,6 +162,16 @@ export async function POST(request: NextRequest) {
     const checkpointCommit = readString(body?.checkpointCommit);
     if (!checkpointCommit) {
       return NextResponse.json({ error: "A checkpoint commit is required for restore." }, { status: 400 });
+    }
+
+    const restorePaths = readStringArray(body?.paths);
+    if (restorePaths.length) {
+      return jsonResponse(await restoreGitCheckpointPaths({
+        checkpointCommit,
+        cwd: resolvedCwd,
+        filePaths: restorePaths,
+        threadId,
+      }));
     }
 
     return jsonResponse(await restoreGitCheckpoint({

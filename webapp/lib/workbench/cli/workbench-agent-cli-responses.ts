@@ -51,8 +51,21 @@ export function adaptWorkbenchAgentCliResponse({
       const label = action === "diffCheckpoint" ? "Created diff checkpoint" : "Created checkpoint";
       return succeeded(`${label} ${readString(payload, "checkpointCommit") || "(unknown commit)"}`);
     }
-    case "checkpoint-restore":
-      return succeeded(`Restored checkpoint ${readString(payload, "checkpointCommit") || "(unknown commit)"}`);
+    case "checkpoint-restore": {
+      const checkpointCommit = readString(payload, "checkpointCommit") || "(unknown commit)";
+      if (!Array.isArray(request.body?.paths)) {
+        return succeeded(`Restored checkpoint ${checkpointCommit}`);
+      }
+
+      const restoredPaths = readStringArray(payload, "restoredPaths");
+      if (!restoredPaths.length) {
+        return succeeded(`Selected paths already matched checkpoint ${checkpointCommit}`);
+      }
+      return succeeded([
+        `Restored ${restoredPaths.length} ${restoredPaths.length === 1 ? "path" : "paths"} from checkpoint ${checkpointCommit}:`,
+        ...restoredPaths,
+      ].join("\n"));
+    }
     case "browse-command":
       return adaptBrowseCommand(payload, text);
     case "browse-session-control":

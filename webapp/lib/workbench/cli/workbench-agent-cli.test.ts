@@ -220,7 +220,32 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     "checkpoint", "restore", "--commit", "abc", "--confirm",
   ], gitOptions);
   assert.equal(checkpointRestore.kind, "request");
+  assert.deepEqual(checkpointRestore.request.body, {
+    action: "restore",
+    checkpointCommit: "abc",
+    confirmRestore: true,
+    cwd: "C:/workspace",
+    threadId: "thread-1",
+  });
   assert.equal(checkpointRestore.request.responseKind, "checkpoint-restore");
+
+  const checkpointPathRestore = await parseWorkbenchAgentCliCommand([
+    "checkpoint", "restore", "--commit", "abc", "--", "src/one.ts", "src/two.ts",
+  ], gitOptions);
+  assert.equal(checkpointPathRestore.kind, "request");
+  assert.deepEqual(checkpointPathRestore.request.body, {
+    action: "restore",
+    checkpointCommit: "abc",
+    cwd: "C:/workspace",
+    paths: ["src/one.ts", "src/two.ts"],
+    threadId: "thread-1",
+  });
+
+  const powerShellCheckpointPathRestore = await parseWorkbenchAgentCliCommand([
+    "git", "checkpoint", "restore", "--commit", "abc", "src/one.ts", "src/two.ts",
+  ], gitOptions);
+  assert.equal(powerShellCheckpointPathRestore.kind, "request");
+  assert.deepEqual(powerShellCheckpointPathRestore.request, checkpointPathRestore.request);
 
   const browse = await parseWorkbenchAgentCliCommand([
     "browse", "run", "--thread", "thread-1", "--session", "research",
@@ -359,6 +384,7 @@ test("rejects arbitrary request capabilities and unsafe restore", async () => {
     ["request", "--url", "http://localhost:3002/api/file"],
     ["checkpoint", "diff", "--thread", "thread-1", "--commit", "abc", "--project-id", "other"],
     ["checkpoint", "restore", "--thread", "thread-1", "--commit", "abc"],
+    ["checkpoint", "restore", "--commit", "abc"],
     ["thread", "recall", "search", "--thread", "thread-1", "--query", "text", "--limit", "many"],
     ["thread", "recall", "expand", "--thread", "thread-1", "--ref", "agent:item", "--before", "-1"],
   ]) {
@@ -372,6 +398,7 @@ test("renders complete root help and exact focused Git and orchestrator help", a
   assert.deepEqual(root, { help: WORKBENCH_AGENT_CLI_HELP, kind: "help" });
   assert.match(WORKBENCH_AGENT_CLI_HELP, /^Usage:\n/u);
   assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git checkpoint restore/u);
+  assert.match(WORKBENCH_AGENT_CLI_HELP, /--confirm \| -- <path> \[<path>\.\.\.\]/u);
   assert.doesNotMatch(WORKBENCH_AGENT_CLI_HELP, /wb collaboration/u);
   assert.match(WORKBENCH_AGENT_CLI_HELP, /Help commands:\n  wb subagent --help/u);
   assert.match(WORKBENCH_AGENT_CLI_HELP, /  wb thread recall --help/u);
@@ -626,6 +653,14 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
   assert.equal(adapt("checkpoint-create", { checkpointCommit: "abc" }, { action: "baseline" }).stdout, "Created checkpoint abc\n");
   assert.equal(adapt("checkpoint-create", { checkpointCommit: "def" }, { action: "diffCheckpoint" }).stdout, "Created diff checkpoint def\n");
   assert.equal(adapt("checkpoint-restore", { checkpointCommit: "abc" }).stdout, "Restored checkpoint abc\n");
+  assert.equal(adapt("checkpoint-restore", {
+    checkpointCommit: "abc",
+    restoredPaths: ["src/one.ts", "src/two.ts"],
+  }, { paths: ["src/one.ts", "src/two.ts"] }).stdout, "Restored 2 paths from checkpoint abc:\nsrc/one.ts\nsrc/two.ts\n");
+  assert.equal(adapt("checkpoint-restore", {
+    checkpointCommit: "abc",
+    restoredPaths: [],
+  }, { paths: ["src/one.ts"] }).stdout, "Selected paths already matched checkpoint abc\n");
   assert.deepEqual(adapt("subagent-create", { threadId: "child-thread" }), {
     exitCode: 0,
     stderr: "",

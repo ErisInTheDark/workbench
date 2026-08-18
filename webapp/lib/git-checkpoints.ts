@@ -4,11 +4,13 @@
  * - GitCheckpointCreateResult: created checkpoint commit/ref metadata returned by checkpoint operations. Keywords: git, checkpoint, create.
  * - GitCheckpointDiffResult: checkpoint diff metadata, compact summary, full diff, and artifact id. Keywords: git, checkpoint, diff, artifact.
  * - GitCheckpointFileDiffResult: per-file checkpoint diff metadata and unified diff text. Keywords: git, checkpoint, file diff, pathspec.
+ * - GitCheckpointPathRestoreResult: bounded checkpoint restore metadata and normalized restored paths. Keywords: git, checkpoint, restore, paths.
  * - createGitCheckpoint: capture the current non-ignored repo worktree in a per-worktree checkpoint ref. Keywords: git, checkpoint, commit-tree.
  * - diffGitCheckpoint: diff the current non-ignored repo worktree against a specific checkpoint. Keywords: git, checkpoint, diff.
  * - diffGitCheckpointFile: diff one repo file in the current non-ignored worktree against a specific checkpoint. Keywords: git, checkpoint, file diff.
  * - readGitCheckpointDiffArtifact: read a stored full checkpoint diff artifact by thread and id. Keywords: git, checkpoint, diff, artifact.
  * - restoreGitCheckpoint: restore a checkpoint commit to the worktree after explicit confirmation. Keywords: git, checkpoint, restore.
+ * - restoreGitCheckpointPaths: restore selected files or directories from a checkpoint without changing the real index. Keywords: git, checkpoint, restore, paths.
  */
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -49,6 +51,14 @@ export interface GitCheckpointFileDiffResult {
   repoRoot: string;
 }
 
+export interface GitCheckpointPathRestoreResult {
+  checkpointCommit: string;
+  checkpointRef: string;
+  repoRoot: string;
+  restored: true;
+  restoredPaths: string[];
+}
+
 interface GitCheckpointOperationInput {
   cwd: string;
   threadId: string;
@@ -65,6 +75,11 @@ interface GitCheckpointDiffInput extends GitCheckpointOperationInput {
 interface GitCheckpointRestoreInput extends GitCheckpointOperationInput {
   checkpointCommit: string;
   confirmRestore: boolean;
+}
+
+interface GitCheckpointPathRestoreInput extends GitCheckpointOperationInput {
+  checkpointCommit: string;
+  filePaths: string[];
 }
 
 interface GitCheckpointFileDiffInput extends GitCheckpointDiffInput {
@@ -149,6 +164,43 @@ function normalizeGitCheckpointFilePath(repoRoot: string, filePath: string) {
   return relativePath;
 }
 
+function normalizeGitCheckpointRestorePaths(repoRoot: string, filePaths: string[]) {
+  if (!Array.isArray(filePaths) || !filePaths.length) {
+    throw new Error("Checkpoint path restore requires at least one path.");
+  }
+
+  const normalizedPaths = filePaths.map((filePath) => {
+    const trimmedFilePath = String(filePath ?? "").trim();
+    if (!trimmedFilePath) {
+      throw new Error("Checkpoint restore paths must not be empty.");
+    }
+
+    const absolutePath = path.isAbsolute(trimmedFilePath)
+      ? path.resolve(trimmedFilePath)
+      : path.resolve(repoRoot, trimmedFilePath);
+    if (!isPathWithinRoot(absolutePath, repoRoot)) {
+      throw new Error("Checkpoint restore paths must stay inside the Git repository.");
+    }
+
+    const relativePath = path.relative(repoRoot, absolutePath).replace(/\\/g, "/");
+    if (!relativePath || relativePath.startsWith("../")) {
+      throw new Error("Checkpoint path restore cannot target the repository root. Use the confirmed full restore instead.");
+    }
+
+    return relativePath;
+  });
+
+  return [...new Set(normalizedPaths)];
+}
+
+function toLiteralGitPathspec(relativePath: string) {
+  return `:(top,literal)${relativePath}`;
+}
+
+function parseNullTerminatedPaths(output: string) {
+  return output.split("\0").filter(Boolean);
+}
+
 async function writeCurrentWorktreeTree(repoRoot: string) {
   const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-agent-index-"));
   const indexPath = path.join(tempDirectory, "index");
@@ -191,6 +243,52 @@ async function readCheckpointCommit(repoRoot: string, threadId: string, checkpoi
     checkpointCommit: resolvedCheckpointCommit,
     checkpointRef,
   };
+}
+
+async function readRestorableCheckpoint(repoRoot: string, threadId: string, checkpointCommit: string) {
+  const checkpoint = await readCheckpointCommit(repoRoot, threadId, checkpointCommit);
+  const checkpointParent = (await runGit(repoRoot, ["rev-parse", `${checkpoint.checkpointCommit}^`])).trim();
+  const currentHead = (await runGit(repoRoot, ["rev-parse", "HEAD"])).trim();
+  if (checkpointParent !== currentHead) {
+    throw new Error("Checkpoint parent differs from current HEAD. Ask the user before overriding.");
+  }
+
+  return checkpoint;
+}
+
+async function listChangedPaths({
+  checkpointCommit,
+  currentTree,
+  diffFilter,
+  pathspecs,
+  repoRoot,
+}: {
+  checkpointCommit: string;
+  currentTree: string;
+  diffFilter: string;
+  pathspecs: string[];
+  repoRoot: string;
+}) {
+  return parseNullTerminatedPaths(await runGit(repoRoot, [
+    "diff",
+    "--name-only",
+    "-z",
+    "--no-renames",
+    `--diff-filter=${diffFilter}`,
+    checkpointCommit,
+    currentTree,
+    "--",
+    ...pathspecs,
+  ]));
+}
+
+async function removeCheckpointAddedPaths(repoRoot: string, addedPaths: string[]) {
+  for (const relativePath of addedPaths) {
+    const absolutePath = path.resolve(repoRoot, relativePath);
+    if (isPathWithinRoot(absolutePath, repoRoot)) {
+      await fs.rm(absolutePath, { force: true, recursive: true });
+    }
+  }
 }
 
 export async function createGitCheckpoint({
@@ -347,27 +445,17 @@ export async function restoreGitCheckpoint({
   const {
     checkpointCommit: resolvedCheckpointCommit,
     checkpointRef,
-  } = await readCheckpointCommit(repoRoot, threadId, checkpointCommit);
-
-  const checkpointParent = (await runGit(repoRoot, ["rev-parse", `${resolvedCheckpointCommit}^`])).trim();
-  const currentHead = (await runGit(repoRoot, ["rev-parse", "HEAD"])).trim();
-  if (checkpointParent !== currentHead) {
-    throw new Error("Checkpoint parent differs from current HEAD. Ask the user before overriding.");
-  }
+  } = await readRestorableCheckpoint(repoRoot, threadId, checkpointCommit);
 
   const currentTree = await writeCurrentWorktreeTree(repoRoot);
-  const addedPaths = (await runGit(repoRoot, ["diff", "--name-only", "--diff-filter=A", resolvedCheckpointCommit, currentTree]))
-    .split(/\r?\n/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  for (const relativePath of addedPaths) {
-    const absolutePath = path.resolve(repoRoot, relativePath);
-    if (!isPathWithinRoot(absolutePath, repoRoot)) {
-      continue;
-    }
-
-    await fs.rm(absolutePath, { force: true, recursive: true });
-  }
+  const addedPaths = await listChangedPaths({
+    checkpointCommit: resolvedCheckpointCommit,
+    currentTree,
+    diffFilter: "A",
+    pathspecs: ["."],
+    repoRoot,
+  });
+  await removeCheckpointAddedPaths(repoRoot, addedPaths);
 
   await runGit(repoRoot, ["restore", "--source", resolvedCheckpointCommit, "--worktree", "--", "."]);
   return {
@@ -375,6 +463,58 @@ export async function restoreGitCheckpoint({
     checkpointRef,
     repoRoot,
     restored: true,
+  };
+}
+
+export async function restoreGitCheckpointPaths({
+  checkpointCommit,
+  cwd,
+  filePaths,
+  threadId,
+}: GitCheckpointPathRestoreInput): Promise<GitCheckpointPathRestoreResult> {
+  const repoRoot = await resolveRepoRoot(cwd);
+  const normalizedPaths = normalizeGitCheckpointRestorePaths(repoRoot, filePaths);
+  const pathspecs = normalizedPaths.map(toLiteralGitPathspec);
+  const {
+    checkpointCommit: resolvedCheckpointCommit,
+    checkpointRef,
+  } = await readRestorableCheckpoint(repoRoot, threadId, checkpointCommit);
+  const currentTree = await writeCurrentWorktreeTree(repoRoot);
+  const [addedPaths, sourceBackedPaths] = await Promise.all([
+    listChangedPaths({
+      checkpointCommit: resolvedCheckpointCommit,
+      currentTree,
+      diffFilter: "A",
+      pathspecs,
+      repoRoot,
+    }),
+    listChangedPaths({
+      checkpointCommit: resolvedCheckpointCommit,
+      currentTree,
+      diffFilter: "DMRTUXB",
+      pathspecs,
+      repoRoot,
+    }),
+  ]);
+
+  await removeCheckpointAddedPaths(repoRoot, addedPaths);
+  if (sourceBackedPaths.length) {
+    await runGit(repoRoot, [
+      "restore",
+      "--source",
+      resolvedCheckpointCommit,
+      "--worktree",
+      "--",
+      ...sourceBackedPaths.map(toLiteralGitPathspec),
+    ]);
+  }
+
+  return {
+    checkpointCommit: resolvedCheckpointCommit,
+    checkpointRef,
+    repoRoot,
+    restored: true,
+    restoredPaths: [...new Set([...addedPaths, ...sourceBackedPaths])].sort((left, right) => left.localeCompare(right)),
   };
 }
 

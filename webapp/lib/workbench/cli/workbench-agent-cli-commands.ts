@@ -171,13 +171,20 @@ function requireCallerThreadId(callerThreadId: string | null) {
   return callerThreadId;
 }
 
-function preservePowerShellTrailingPaths(args: string[]) {
+function preservePowerShellTrailingPaths(args: string[], {
+  boolean = [],
+  values = ["--worktree"],
+}: {
+  boolean?: readonly string[];
+  values?: readonly string[];
+} = {}) {
   if (args.includes("--")) return args;
   for (let index = 0; index < args.length; index += 1) {
-    if (args[index] === "--worktree") {
+    if (values.includes(args[index])) {
       index += 1;
       continue;
     }
+    if (boolean.includes(args[index])) continue;
     if (!args[index].startsWith("--")) {
       return [...args.slice(0, index), "--", ...args.slice(index)];
     }
@@ -499,20 +506,24 @@ const COMMANDS: readonly CommandDefinition[] = [
   },
   {
     aliases: [["checkpoint", "restore"]],
-    description: "Restore the specified checkpoint after explicit confirmation.",
+    description: "Restore selected paths from a checkpoint, or restore the full checkpoint after explicit confirmation.",
     helpGroups: ["git-checkpoint"],
     words: ["git", "checkpoint", "restore"],
-    usage: "wb git checkpoint restore --commit <sha> --confirm",
+    usage: "wb git checkpoint restore --commit <sha> (--confirm | -- <path> [<path>...])",
     async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(args, { boolean: ["--confirm"], values: ["--commit"] });
-      if (!flags.has("--confirm")) {
-        throw new Error("Checkpoint restore requires --confirm.");
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, {
+        boolean: ["--confirm"],
+        values: ["--commit"],
+      }), { boolean: ["--confirm"], trailing: true, values: ["--commit"] });
+      if (!flags.trailing.length && !flags.has("--confirm")) {
+        throw new Error("Full checkpoint restore requires --confirm; otherwise provide paths after --.");
       }
       return post("/api/git-checkpoint", {
         action: "restore",
         checkpointCommit: flags.required("--commit"),
-        confirmRestore: true,
+        ...(flags.has("--confirm") ? { confirmRestore: true } : {}),
         cwd,
+        ...(flags.trailing.length ? { paths: flags.trailing } : {}),
         threadId: requireCallerThreadId(callerThreadId),
       }, "checkpoint-restore");
     },
@@ -697,6 +708,10 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
       "git checkpoint file-diff",
       "git checkpoint restore",
     ],
+    footer: [
+      "Pass paths after -- to restore only those files or directories from the checkpoint.",
+      "Use --confirm without paths only when the user explicitly requested a full checkpoint restore.",
+    ].join("\n"),
     key: "git-checkpoint",
     usage: "wb git checkpoint <command> [options]",
     words: ["git", "checkpoint"],

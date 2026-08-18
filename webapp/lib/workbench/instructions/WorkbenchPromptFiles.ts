@@ -38,8 +38,8 @@ import {
     normalizeWorkbenchAgentPath,
 } from "../agent-paths";
 import WorkbenchServerSettings from "../settings/WorkbenchServerSettings";
-import { WORKBENCH_INJECTION_TEMPLATES } from "./instruction-injections";
 import { filterWorkbenchInstructionContent } from "./instruction-context-filter";
+import { WORKBENCH_INJECTION_TEMPLATES } from "./instruction-injections";
 import {
     WORKBENCH_AGENT_DEFAULT_PROMPT,
     WORKBENCH_AGENT_DEFAULT_TEMPLATE_PROMPT,
@@ -667,9 +667,15 @@ Do not run this as part of normal Review mode. Use only when the user explicitly
 
 \`wb git checkpoint create-diff\`
 
-### Restore a checkpoint after explicit user request
+### Restore selected paths after explicit user request
 
-Only restore when the user asks for a checkpoint restore. First run the diff command or another preview. Restore uses a checkpoint commit sha supplied by the user or selected from the thread's checkpoint output. The CLI requires \`--confirm\`, and Workbench blocks when the checkpoint parent is not the current HEAD.
+First run the checkpoint diff or another preview. Pass every file or directory to restore after \`--\`; Workbench restores only those paths from the specified checkpoint, removes selected paths that were created after it, and leaves the real Git index unchanged. The repository root is not a valid selected path. Workbench blocks when the checkpoint parent is not the current HEAD.
+
+\`wb git checkpoint restore --commit <checkpoint-commit-sha> -- <path> [<path>...]\`
+
+### Restore a full checkpoint after explicit user request
+
+Use the path form instead when only part of the worktree must be restored. Full restore uses a checkpoint commit sha supplied by the user or selected from the thread's checkpoint output. The CLI requires \`--confirm\`, and Workbench blocks when the checkpoint parent is not the current HEAD.
 
 \`wb git checkpoint restore --commit <checkpoint-commit-sha> --confirm\`
 `.trim();
