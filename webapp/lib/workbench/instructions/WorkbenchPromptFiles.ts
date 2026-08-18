@@ -643,29 +643,39 @@ Checkpoint refs are convenience state, not a security boundary. Do not use them 
 
 Use these exact CLI shapes so Workbench can match and render checkpoint operations. Workbench owns the Git plumbing and uses a temporary index internally, so agents should not run raw \`git update-ref\` checkpoint scripts themselves.
 
-### Create a baseline checkpoint
+### Create an approval plan checkpoint
 
-Run after entering Brief mode for an approved-plan baseline; call this returned checkpoint commit the approval checkpoint. Also run in Implement mode after the start-of-implementation checkpoint diff is classified safe and before the first file edit; call that returned checkpoint commit the initial implementation checkpoint for the current implementation arc.
+Run after entering Brief mode once the exact planned edit files are known; call this returned checkpoint commit the approval checkpoint.
 
-\`wb git checkpoint baseline\`
+\`wb git checkpoint plan\`
 
-### Diff against a specific checkpoint
+### Create an implementation checkpoint
 
-Run immediately after entering Implement mode before editing by passing the approval checkpoint commit. Run again after entering Review mode before summarizing changes by passing the initial implementation checkpoint commit for the current implementation arc. Do not omit \`checkpointCommit\`, do not substitute the newest checkpoint, and do not guess from thread history; parallel agents may create unrelated newer checkpoints. The command output is a compact checkpoint diff summary for agent review. Workbench stores the full unified diff separately and renders it for the user in the UI.
+After approval drift is classified safe, name every exact planned edit path. Workbench rejects the checkpoint if any selected path is dirty. If that happens, stop and ask the user what changed; include **Committed — the workspace should now be clean, try again** as an option. Never clean, restore, or stage the paths to bypass this guard.
 
-\`wb git checkpoint diff --commit <checkpoint-commit-sha>\`
+\`wb git checkpoint implement -- <path> [<path>...]\`
 
-### Diff a specific file against a specific checkpoint
+When bugfixing or tweaking an existing uncommitted implementation, extend its stored scope only with additional clean paths. Do not repeat paths already covered by the checkpoint.
 
-Use after the compact checkpoint diff when a changed file may dangerously intersect with the approved edit files, nearby ownership, contracts, dependencies, validation scope, branch/HEAD, or mechanics needed by the plan. Use the same \`checkpointCommit\` as the compact diff you are investigating. Replace \`<repo-relative-path>\` with a changed file path from that compact summary. The command returns that file's unified diff only.
+\`wb git checkpoint implement --amend <implementation-checkpoint-sha> -- <additional-path> [<additional-path>...]\`
 
-\`wb git checkpoint file-diff --commit <checkpoint-commit-sha> --file <repo-relative-path>\`
+### Compare against a specific checkpoint
 
-### Create a diff checkpoint
+Run immediately after entering Implement mode before editing by passing the approval checkpoint commit and the exact planned paths. Run again after entering Review mode by passing the initial implementation checkpoint and its touched paths. Do not substitute the newest checkpoint or guess from thread history. Implementation checkpoint scope is mechanically enforced.
 
-Do not run this as part of normal Review mode. Use only when the user explicitly asks to preserve the current state as a checkpoint.
+\`wb git checkpoint compare --sha <checkpoint-commit-sha> -- <path> [<path>...]\`
 
-\`wb git checkpoint create-diff\`
+### Read unified diff content
+
+Use the same exact checkpoint and relevant path list when unified diff content is needed to classify drift or inspect implementation details.
+
+\`wb git checkpoint diff --sha <checkpoint-commit-sha> -- <path> [<path>...]\`
+
+### Propose a checkpoint-scoped commit in Review
+
+After validation and review, create an editable commit proposal from the implementation checkpoint and exact touched paths. The proposal freezes that file set and its current contents. The user can include or exclude newer edits to those same files; no other files can enter the proposal.
+
+\`wb git checkpoint commit --sha <implementation-checkpoint-sha> --m <title> [--m <description>] -- <path> [<path>...]\`
 
 ### Restore selected paths after explicit user request
 

@@ -1,192 +1,134 @@
 /*
  * Exports:
- * - runtime: force the checkpoint route onto the Node.js runtime for Git and filesystem access. Keywords: api, git checkpoint, node runtime.
+ * - runtime: force checkpoint operations onto the Node.js runtime for Git and filesystem access. Keywords: api, git checkpoint, node runtime.
  * - dynamic: disable static caching for checkpoint operations. Keywords: api, git checkpoint, dynamic.
- * - POST: execute hidden Workbench Git checkpoint baseline, diff, file diff, diff checkpoint, full restore, and path restore actions. Keywords: api, git checkpoint, drift, restore.
+ * - POST: execute typed plan, implementation, compare, diff, proposal, restore, and legacy artifact actions. Keywords: api, git checkpoint, proposal, restore.
  */
 import path from "node:path";
 
 import { NextRequest, NextResponse } from "next/server";
 
 import {
-  createGitCheckpoint,
+  commitGitCheckpointProposal,
+  compareGitCheckpoint,
+  createGitCheckpointProposal,
+  createGitImplementationCheckpoint,
+  createGitPlanCheckpoint,
   diffGitCheckpoint,
-  diffGitCheckpointFile,
   readGitCheckpointDiffArtifact,
+  readGitCheckpointProposal,
   restoreGitCheckpoint,
   restoreGitCheckpointPaths,
-  type GitCheckpointPurpose,
 } from "../../../lib/git-checkpoints";
 import { resolveProjectRoot } from "../../../lib/project";
+import { GitCheckpointRequestSchema } from "../../../lib/workbench/git/checkpoint-contracts";
 import { resolveAgentEndpointProjectFromCwd } from "../../../lib/workbench/project/agent-endpoint-project";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type GitCheckpointAction = "baseline" | "diff" | "diffCheckpoint" | "fileDiff" | "restore";
-type GitCheckpointDiffView = "compact" | "full";
-
-function normalizeAction(value: unknown): GitCheckpointAction | null {
-  return value === "baseline" || value === "diff" || value === "diffCheckpoint" || value === "fileDiff" || value === "restore"
-    ? value
-    : null;
-}
-
-function readString(value: unknown) {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function readBoolean(value: unknown) {
-  return value === true;
-}
-
-function readStringArray(value: unknown) {
-  if (value === undefined) {
-    return [];
+async function resolveLegacyCwd(body: { cwd?: string; projectId?: string }) {
+  if (body.cwd?.trim()) {
+    return (await resolveAgentEndpointProjectFromCwd(body.cwd, { endpointName: "Checkpoint" })).cwd;
   }
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || !entry.trim())) {
-    throw new Error("Checkpoint restore paths must be a non-empty string array.");
-  }
-
-  return value.map((entry) => entry.trim());
+  return path.resolve((await resolveProjectRoot(body.projectId?.trim() ?? "")).root);
 }
 
-function normalizeDiffView(value: unknown): GitCheckpointDiffView {
-  return value === "full" ? "full" : "compact";
-}
-
-async function resolveCheckpointCwd({
-  cwd,
-  projectId,
-}: {
-  cwd: string;
-  projectId: string;
-}) {
-  if (cwd) {
-    return (await resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Checkpoint" })).cwd;
-  }
-
-  return path.resolve((await resolveProjectRoot(projectId)).root);
-}
-
-function jsonResponse(payload: unknown) {
-  return NextResponse.json(payload, {
-    headers: {
-      "Cache-Control": "no-store",
-    },
-  });
+function jsonResponse(payload: object) {
+  return NextResponse.json(payload, { headers: { "Cache-Control": "no-store" } });
 }
 
 function textResponse(payload: string) {
   return new NextResponse(payload, {
-    headers: {
-      "Cache-Control": "no-store",
-      "Content-Type": "text/plain; charset=utf-8",
-    },
+    headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
   });
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const action = normalizeAction(body?.action);
-    const threadId = readString(body?.threadId);
-    const cwd = readString(body?.cwd);
-    const projectId = readString(body?.projectId);
-
-    if (!action) {
-      return NextResponse.json({ error: "A valid checkpoint action is required." }, { status: 400 });
+    const rawBody = await request.json();
+    if (rawBody?.action === "diff" && rawBody?.view === "full") {
+      const threadId = typeof rawBody.threadId === "string" ? rawBody.threadId.trim() : "";
+      const diffArtifactId = typeof rawBody.diffArtifactId === "string" ? rawBody.diffArtifactId.trim() : "";
+      if (!threadId || !diffArtifactId) throw new Error("A thread id and checkpoint diff artifact id are required.");
+      await resolveLegacyCwd(rawBody);
+      return textResponse(await readGitCheckpointDiffArtifact({ diffArtifactId, threadId }));
     }
 
-    if (!threadId) {
-      return NextResponse.json({ error: "A thread id is required." }, { status: 400 });
+    const parsed = GitCheckpointRequestSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Invalid checkpoint request." }, { status: 400 });
     }
+    const input = parsed.data;
+    const cwd = (await resolveAgentEndpointProjectFromCwd(input.cwd, { endpointName: "Checkpoint" })).cwd;
+    const common = { cwd, threadId: input.threadId };
 
-    const resolvedCwd = await resolveCheckpointCwd({ cwd, projectId });
-
-    if (action === "baseline" || action === "diffCheckpoint") {
-      const purpose: GitCheckpointPurpose = action === "baseline" ? "baseline" : "diff";
-      return jsonResponse(await createGitCheckpoint({
-        cwd: resolvedCwd,
-        purpose,
-        threadId,
-      }));
-    }
-
-    if (action === "diff") {
-      const diffView = normalizeDiffView(body?.view);
-      if (diffView === "full") {
-        const diffArtifactId = readString(body?.diffArtifactId);
-        if (!diffArtifactId) {
-          return NextResponse.json({ error: "A checkpoint diff artifact id is required for full diff view." }, { status: 400 });
-        }
-
-        return textResponse(await readGitCheckpointDiffArtifact({
-          diffArtifactId,
-          threadId,
+    switch (input.action) {
+      case "plan":
+        return jsonResponse(await createGitPlanCheckpoint(common));
+      case "implement":
+        return jsonResponse(await createGitImplementationCheckpoint({
+          ...common,
+          ...(input.amendCheckpoint ? { amendCheckpoint: input.amendCheckpoint } : {}),
+          paths: input.paths,
         }));
-      }
-
-      const checkpointCommit = readString(body?.checkpointCommit);
-      if (!checkpointCommit) {
-        return NextResponse.json({ error: "A checkpoint commit is required for diff." }, { status: 400 });
-      }
-
-      const result = await diffGitCheckpoint({
-        checkpointCommit,
-        cwd: resolvedCwd,
-        threadId,
-      });
-      return textResponse(result.summary);
+      case "compare":
+        return jsonResponse(await compareGitCheckpoint({
+          ...common,
+          checkpointCommit: input.checkpointCommit,
+          paths: input.paths,
+        }));
+      case "diff":
+        return textResponse((await diffGitCheckpoint({
+          ...common,
+          checkpointCommit: input.checkpointCommit,
+          paths: input.paths,
+        })).diff);
+      case "proposalCreate":
+        return jsonResponse(await createGitCheckpointProposal({
+          ...common,
+          checkpointCommit: input.checkpointCommit,
+          description: input.description,
+          paths: input.paths,
+          title: input.title,
+        }));
+      case "proposalState":
+        return jsonResponse(await readGitCheckpointProposal({
+          ...common,
+          includeNewer: input.includeNewer,
+          proposalId: input.proposalId,
+        }));
+      case "proposalCommit":
+        return jsonResponse(await commitGitCheckpointProposal({
+          ...common,
+          description: input.description,
+          includeNewer: input.includeNewer,
+          proposalId: input.proposalId,
+          title: input.title,
+        }));
+      case "readDiffArtifact":
+        return textResponse(await readGitCheckpointDiffArtifact({
+          diffArtifactId: input.diffArtifactId,
+          threadId: input.threadId,
+        }));
+      case "restore":
+        return input.paths?.length
+          ? jsonResponse(await restoreGitCheckpointPaths({
+            ...common,
+            checkpointCommit: input.checkpointCommit,
+            filePaths: input.paths,
+          }))
+          : jsonResponse(await restoreGitCheckpoint({
+            ...common,
+            checkpointCommit: input.checkpointCommit,
+            confirmRestore: input.confirmRestore === true,
+          }));
     }
-
-    if (action === "fileDiff") {
-      const filePath = readString(body?.filePath);
-      if (!filePath) {
-        return NextResponse.json({ error: "A checkpoint file diff path is required." }, { status: 400 });
-      }
-      const checkpointCommit = readString(body?.checkpointCommit);
-      if (!checkpointCommit) {
-        return NextResponse.json({ error: "A checkpoint commit is required for file diff." }, { status: 400 });
-      }
-
-      const result = await diffGitCheckpointFile({
-        checkpointCommit,
-        cwd: resolvedCwd,
-        filePath,
-        threadId,
-      });
-      return textResponse(result.diff);
-    }
-
-    const checkpointCommit = readString(body?.checkpointCommit);
-    if (!checkpointCommit) {
-      return NextResponse.json({ error: "A checkpoint commit is required for restore." }, { status: 400 });
-    }
-
-    const restorePaths = readStringArray(body?.paths);
-    if (restorePaths.length) {
-      return jsonResponse(await restoreGitCheckpointPaths({
-        checkpointCommit,
-        cwd: resolvedCwd,
-        filePaths: restorePaths,
-        threadId,
-      }));
-    }
-
-    return jsonResponse(await restoreGitCheckpoint({
-      checkpointCommit,
-      confirmRestore: readBoolean(body?.confirmRestore),
-      cwd: resolvedCwd,
-      threadId,
-    }));
   } catch (error) {
     return NextResponse.json({
       error: error instanceof Error ? error.message : "Unable to run git checkpoint operation.",
     }, {
-      headers: {
-        "Cache-Control": "no-store",
-      },
+      headers: { "Cache-Control": "no-store" },
       status: 400,
     });
   }

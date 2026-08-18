@@ -10,6 +10,8 @@ import {
   getThreadCommandDisplay,
   getThreadCommandExecutionOutcome,
   getThreadCommandOutcomeDisplay,
+  parseGitCheckpointCompareOutput,
+  parseGitCheckpointProposalId,
   parseWorkbenchSubagentCommand,
 } from "./thread-command-matchers.ts";
 
@@ -211,7 +213,7 @@ test("all Workbench CLI matcher families show the alternate install cwd name", (
     "wb thread recall --thread thread-id",
     "wb browse sessions --thread thread-id",
     "wb git add --thread thread-id -- file.ts",
-    "wb git checkpoint diff --thread thread-id --commit abc",
+    "wb git checkpoint diff --sha abc -- file.ts",
   ];
   for (const command of commands) {
     const display = getThreadCommandDisplay({
@@ -297,8 +299,8 @@ test("Workbench Git commands receive bounded selection, commit, and checkpoint s
   assert.equal(commit.ongoingSummaryText, "Committing selected files");
 
   for (const command of [
-    "wb git checkpoint diff --thread thread-1 --commit abc",
-    "wb checkpoint diff --thread thread-1 --commit abc",
+    "wb git checkpoint diff --sha abc -- src/file.ts",
+    "wb checkpoint diff --sha abc -- src/file.ts",
   ]) {
     const checkpoint = getThreadCommandDisplay({
       command,
@@ -309,6 +311,57 @@ test("Workbench Git commands receive bounded selection, commit, and checkpoint s
     assert.equal(checkpoint.claimedBy, "git-checkpoint.diff");
     assert.equal(checkpoint.summaryText, "Diffed against git checkpoint");
   }
+
+  const plan = getThreadCommandDisplay({
+    command: "wb git checkpoint plan",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(plan.claimedBy, "git-checkpoint.plan");
+  assert.equal(plan.summaryText, "Created plan checkpoint");
+
+  const legacyBaseline = getThreadCommandDisplay({
+    command: "wb git checkpoint baseline",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(legacyBaseline.claimedBy, "git-checkpoint.baseline-migration");
+  assert.equal(legacyBaseline.summaryText, "Read checkpoint migration guide");
+
+  const implementation = getThreadCommandDisplay({
+    command: "wb git checkpoint implement --amend abc -- src/new.ts",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(implementation.claimedBy, "git-checkpoint.implement");
+  assert.equal(implementation.summaryText, "Created implementation checkpoint");
+
+  const compare = getThreadCommandDisplay({
+    command: "wb git checkpoint compare --sha abc -- src/file.ts",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(compare.claimedBy, "git-checkpoint.compare");
+  assert.equal(compare.summaryText, "Compared against git checkpoint");
+
+  const proposal = getThreadCommandDisplay({
+    command: "wb git checkpoint commit --sha abc --m Title -- src/file.ts",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(proposal.claimedBy, "git-checkpoint.commit");
+  assert.equal(proposal.summaryText, "Proposed checkpoint commit");
+
+  assert.deepEqual(parseGitCheckpointCompareOutput([
+    "Workbench checkpoint comparison",
+    "M\t+4\t-2\tsrc/file.ts",
+  ].join("\n")), [{ additions: 4, deletions: 2, path: "src/file.ts", status: "M" }]);
+  assert.equal(parseGitCheckpointProposalId("Workbench checkpoint proposal: proposal-one\n"), "proposal-one");
 });
 
 test("PowerShell numbered reads resolve a preceding literal path assignment", () => {

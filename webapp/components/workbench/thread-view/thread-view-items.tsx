@@ -36,12 +36,16 @@ import {
   getThreadCommandExecutionOutcome,
   getThreadCommandOutcomeDisplay,
   isBrowseCommandMatcherClaim,
+  isGitCheckpointCommitMatcherClaim,
+  isGitCheckpointCompareMatcherClaim,
   isGitCheckpointDiffMatcherClaim,
   isThreadContextMatcherClaim,
   parseWorkbenchSubagentCommand,
   parseBrowseSequenceCommandOutput,
+  parseGitCheckpointCompareOutput,
   parseGitCheckpointDiffArtifactId,
   parseGitCheckpointDiffOutput,
+  parseGitCheckpointProposalId,
   type ThreadCommandDetailRow,
   type ThreadCommandDetailTarget,
 } from "../../../lib/workbench/thread/thread-command-matchers";
@@ -53,6 +57,8 @@ import {
   truncateThreadText,
 } from "./thread-view-formatters";
 import { ThreadCommandSummary } from "./thread-view-primitives";
+import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
+import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadCheckpointDiffItem from "./ThreadCheckpointDiffItem";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
 import ThreadCommandDetails from "./ThreadCommandDetails";
@@ -1641,6 +1647,12 @@ function ThreadCommandExecutionDetails ({
   const checkpointDiffArtifactId = isGitCheckpointDiffMatcherClaim(commandDisplay.claimedBy)
     ? parseGitCheckpointDiffArtifactId(item.aggregatedOutput ?? "")
     : null;
+  const checkpointCompareChanges = isGitCheckpointCompareMatcherClaim(commandDisplay.claimedBy)
+    ? parseGitCheckpointCompareOutput(item.aggregatedOutput ?? "")
+    : null;
+  const checkpointProposalId = isGitCheckpointCommitMatcherClaim(commandDisplay.claimedBy)
+    ? parseGitCheckpointProposalId(item.aggregatedOutput ?? "")
+    : null;
   const isBrowseCommand = isBrowseCommandMatcherClaim(commandDisplay.claimedBy);
   const shouldRenderCheckpointDiff = checkpointDiffChanges !== null
     && (!item.aggregatedOutput?.trim() || Boolean(checkpointDiffArtifactId) || checkpointDiffChanges.length > 0);
@@ -1845,7 +1857,26 @@ function ThreadCommandExecutionDetails ({
             command={item.command}
             output={item.aggregatedOutput}
           />
-        ) : shouldHideCommandOutput ? null : shouldRenderCheckpointDiff ? (
+        ) : shouldHideCommandOutput ? null : checkpointProposalId && commandOutcome === "completed" ? (
+          <ThreadCheckpointCommitItem
+            cwd={item.cwd}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            proposalId={checkpointProposalId}
+            sourceItemId={item.id}
+            threadId={threadId}
+            workspaceRoots={workspaceRoots}
+          />
+        ) : checkpointCompareChanges && commandOutcome === "completed" ? (
+          <ThreadCheckpointCompareItem
+            changes={checkpointCompareChanges}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            workspaceRoots={workspaceRoots}
+          />
+        ) : shouldRenderCheckpointDiff ? (
           <ThreadCheckpointDiffItem
             cwd={item.cwd}
             output={item.aggregatedOutput ?? ""}

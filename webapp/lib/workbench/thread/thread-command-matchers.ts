@@ -8,9 +8,10 @@
  * - ThreadCommandDisplay: parsed command-summary metadata for thread command rendering. Keywords: thread, command, summary, shell, omit.
  * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text. Keywords: path, command, relative, display.
  * - isBrowseCommandMatcherClaim/parseBrowseSequenceCommandOutput: detect and parse wb Browse command output. Keywords: browse, sequence, command, cli.
- * - isGitCheckpointDiffMatcherClaim: detect checkpoint diff matcher ids for specialized command-output rendering. Keywords: thread, command, checkpoint, diff.
+ * - isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: detect checkpoint matcher ids for specialized rendering. Keywords: thread, command, checkpoint, compare, diff, commit.
  * - isThreadContextMatcherClaim: detect thread context endpoint commands for dedicated disclosure rendering. Keywords: thread, context, disclosure.
  * - parseWorkbenchSubagentCommand: parse semantic wb subagent actions for specialized thread rendering. Keywords: workbench, subagent, command, parse.
+ * - parseGitCheckpointCompareOutput/parseGitCheckpointProposalId: parse checkpoint comparison and proposal output. Keywords: checkpoint, compare, proposal.
  * - parseGitCheckpointDiffArtifactId: parse compact checkpoint diff output for a stored full-diff artifact id. Keywords: checkpoint, diff, artifact.
  * - parseGitCheckpointDiffOutput: parse checkpoint diff command output into file-change display entries. Keywords: checkpoint, diff, file change.
  * - getThreadCommandDisplay: unwrap shell launchers and describe common command patterns with staged shell matchers. Keywords: thread, command, matcher, shell.
@@ -31,9 +32,13 @@ import { COPILOT_COMMAND_MATCHERS } from "./command-matchers/copilot-tool-calls"
 import { CommandMatcher, runThreadCommandMatchers } from "./command-matchers/core";
 import {
   GIT_CHECKPOINT_COMMAND_MATCHERS,
+  isGitCheckpointCommitMatcherClaim,
+  isGitCheckpointCompareMatcherClaim,
   isGitCheckpointDiffMatcherClaim,
+  parseGitCheckpointCompareOutput,
   parseGitCheckpointDiffArtifactId,
   parseGitCheckpointDiffOutput,
+  parseGitCheckpointProposalId,
 } from "./command-matchers/git-checkpoints";
 import { GIT_COMMAND_MATCHERS } from "./command-matchers/git-commands";
 import {
@@ -198,7 +203,18 @@ const COMMAND_BLOCK_SUMMARY_CATEGORIES: Array<{
 ];
 
 export { CommandMatcher, formatThreadCommandPath };
-export { isBrowseCommandMatcherClaim, isGitCheckpointDiffMatcherClaim, isThreadContextMatcherClaim, parseBrowseSequenceCommandOutput, parseGitCheckpointDiffArtifactId, parseGitCheckpointDiffOutput };
+export {
+  isBrowseCommandMatcherClaim,
+  isGitCheckpointCommitMatcherClaim,
+  isGitCheckpointCompareMatcherClaim,
+  isGitCheckpointDiffMatcherClaim,
+  isThreadContextMatcherClaim,
+  parseBrowseSequenceCommandOutput,
+  parseGitCheckpointCompareOutput,
+  parseGitCheckpointDiffArtifactId,
+  parseGitCheckpointDiffOutput,
+  parseGitCheckpointProposalId,
+};
 export { parseWorkbenchSubagentCommand };
 export type {
     ThreadCommandDisplay,

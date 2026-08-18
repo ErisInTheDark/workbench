@@ -12,7 +12,9 @@ type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 export type WorkbenchAgentCliResponseKind =
   | "browse-command"
   | "browse-session-control"
+  | "checkpoint-compare"
   | "checkpoint-create"
+  | "checkpoint-proposal"
   | "checkpoint-restore"
   | "json"
   | "native"
@@ -157,6 +159,22 @@ class ParsedFlags {
 }
 
 const THREAD_FLAG = ["--thread"] as const;
+const LEGACY_CHECKPOINT_BASELINE_MIGRATION_GUIDE = [
+  "wb git checkpoint baseline has been replaced.",
+  "",
+  "Use the current managed checkpoint workflow:",
+  "1. In Brief mode, create the approval checkpoint: wb git checkpoint plan",
+  "2. After approval, compare the exact planned paths: wb git checkpoint compare --sha <plan-sha> -- <path> [<path>...]",
+  "3. When that drift is safe, create the clean implementation checkpoint: wb git checkpoint implement -- <path> [<path>...]",
+  "4. For new clean paths added to the same uncommitted changeset: wb git checkpoint implement --amend <implementation-sha> -- <additional-path> [<additional-path>...]",
+  "5. In Review mode, summarize touched paths with: wb git checkpoint compare --sha <implementation-sha> -- <path> [<path>...]",
+  "6. Read unified diff content with: wb git checkpoint diff --sha <implementation-sha> -- <path> [<path>...]",
+  "7. Propose the frozen-file-set commit with: wb git checkpoint commit --sha <implementation-sha> --m <title> [--m <description>] -- <path> [<path>...]",
+  "",
+  "Implementation checkpoint paths must be clean. If Workbench rejects dirty paths, stop and ask the user what changed; do not clean or restore them automatically.",
+  "Do not use checkpoint create-diff or checkpoint file-diff. This guide reflects the current instructions and CLI.",
+  "",
+].join("\n");
 const RELOAD_SWITCHES = [
   "--orchestrator-logic",
   "--browse-controller",
@@ -454,54 +472,107 @@ const COMMANDS: readonly CommandDefinition[] = [
       });
     },
   },
-  ...(["baseline", "create-diff"] as const).map((action): CommandDefinition => ({
-    aliases: [["checkpoint", action]],
-    description: action === "baseline"
-      ? "Capture the current worktree as a hidden baseline checkpoint."
-      : "Preserve the current worktree as an explicit diff checkpoint.",
+  {
+    aliases: [["checkpoint", "plan"]],
+    description: "Capture the current worktree as a hidden plan checkpoint.",
     helpGroups: ["git-checkpoint"],
-    words: ["git", "checkpoint", action],
-    usage: `wb git checkpoint ${action}`,
+    words: ["git", "checkpoint", "plan"],
+    usage: "wb git checkpoint plan",
     async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(args, {});
+      new ParsedFlags(args, {});
       return post("/api/git-checkpoint", {
-        action: action === "create-diff" ? "diffCheckpoint" : "baseline",
+        action: "plan",
         cwd,
         threadId: requireCallerThreadId(callerThreadId),
       }, "checkpoint-create");
     },
-  })),
+  },
+  {
+    aliases: [["checkpoint", "implement"]],
+    description: "Capture a clean path-scoped implementation checkpoint, or extend an existing implementation scope.",
+    helpGroups: ["git-checkpoint"],
+    words: ["git", "checkpoint", "implement"],
+    usage: "wb git checkpoint implement [--amend <sha>] -- <path> [<path>...]",
+    async build({ args, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, {
+        values: ["--amend"],
+      }), { trailing: true, values: ["--amend"] });
+      if (!flags.trailing.length) throw new Error("Implementation checkpoint paths are required after --.");
+      return post("/api/git-checkpoint", {
+        action: "implement",
+        ...(flags.optional("--amend") ? { amendCheckpoint: flags.optional("--amend")! } : {}),
+        cwd,
+        paths: flags.trailing,
+        threadId: requireCallerThreadId(callerThreadId),
+      }, "checkpoint-create");
+    },
+  },
+  {
+    aliases: [["checkpoint", "compare"]],
+    description: "Show per-file change counts for selected checkpoint paths.",
+    helpGroups: ["git-checkpoint"],
+    words: ["git", "checkpoint", "compare"],
+    usage: "wb git checkpoint compare --sha <sha> -- <path> [<path>...]",
+    async build({ args, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["--sha"] }), {
+        trailing: true,
+        values: ["--sha"],
+      });
+      if (!flags.trailing.length) throw new Error("Checkpoint compare paths are required after --.");
+      return post("/api/git-checkpoint", {
+        action: "compare",
+        checkpointCommit: flags.required("--sha"),
+        cwd,
+        paths: flags.trailing,
+        threadId: requireCallerThreadId(callerThreadId),
+      }, "checkpoint-compare");
+    },
+  },
   {
     aliases: [["checkpoint", "diff"]],
-    description: "Summarize worktree changes since the specified checkpoint.",
+    description: "Show unified diff content for selected checkpoint paths.",
     helpGroups: ["git-checkpoint"],
     words: ["git", "checkpoint", "diff"],
-    usage: "wb git checkpoint diff --commit <sha>",
+    usage: "wb git checkpoint diff --sha <sha> -- <path> [<path>...]",
     async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(args, { values: ["--commit"] });
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["--sha"] }), {
+        trailing: true,
+        values: ["--sha"],
+      });
+      if (!flags.trailing.length) throw new Error("Checkpoint diff paths are required after --.");
       return post("/api/git-checkpoint", {
         action: "diff",
-        checkpointCommit: flags.required("--commit"),
+        checkpointCommit: flags.required("--sha"),
         cwd,
+        paths: flags.trailing,
         threadId: requireCallerThreadId(callerThreadId),
       });
     },
   },
   {
-    aliases: [["checkpoint", "file-diff"]],
-    description: "Show the unified diff for one file since the specified checkpoint.",
+    aliases: [["checkpoint", "commit"]],
+    description: "Create a durable editable commit proposal for selected checkpoint paths.",
     helpGroups: ["git-checkpoint"],
-    words: ["git", "checkpoint", "file-diff"],
-    usage: "wb git checkpoint file-diff --commit <sha> --file <path>",
+    words: ["git", "checkpoint", "commit"],
+    usage: "wb git checkpoint commit --sha <sha> --m <title> [--m <description>] -- <path> [<path>...]",
     async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(args, { values: ["--commit", "--file"] });
-      return post("/api/git-checkpoint", {
-        action: "fileDiff",
-        checkpointCommit: flags.required("--commit"),
-        cwd,
-        filePath: flags.required("--file"),
-        threadId: requireCallerThreadId(callerThreadId),
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["--sha", "--m"] }), {
+        repeatable: ["--m"],
+        trailing: true,
+        values: ["--sha"],
       });
+      if (!flags.trailing.length) throw new Error("Checkpoint commit paths are required after --.");
+      const messages = flags.requiredRepeated("--m");
+      if (messages.length > 2) throw new Error("Checkpoint commit accepts at most two --m values.");
+      return post("/api/git-checkpoint", {
+        action: "proposalCreate",
+        checkpointCommit: flags.required("--sha"),
+        cwd,
+        description: messages[1] ?? "",
+        paths: flags.trailing,
+        threadId: requireCallerThreadId(callerThreadId),
+        title: messages[0],
+      }, "checkpoint-proposal");
     },
   },
   {
@@ -644,10 +715,11 @@ const ROOT_HELP_COMMAND_ORDER = [
   "git add",
   "git unstage",
   "git commit",
-  "git checkpoint baseline",
-  "git checkpoint create-diff",
+  "git checkpoint plan",
+  "git checkpoint implement",
+  "git checkpoint compare",
   "git checkpoint diff",
-  "git checkpoint file-diff",
+  "git checkpoint commit",
   "git checkpoint restore",
   "browse run",
   "browse raw",
@@ -702,10 +774,11 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
   {
     aliases: [["checkpoint"]],
     commandOrder: [
-      "git checkpoint baseline",
-      "git checkpoint create-diff",
+      "git checkpoint plan",
+      "git checkpoint implement",
+      "git checkpoint compare",
       "git checkpoint diff",
-      "git checkpoint file-diff",
+      "git checkpoint commit",
       "git checkpoint restore",
     ],
     footer: [
@@ -837,6 +910,20 @@ export async function parseWorkbenchAgentCliCommand(
     workbenchOrigin?: string | null;
   } = {},
 ): Promise<WorkbenchAgentCliParseResult> {
+  const isLegacyCheckpointBaseline = (
+    argv.length === 3
+    && argv[0] === "git"
+    && argv[1] === "checkpoint"
+    && argv[2] === "baseline"
+  ) || (
+    argv.length === 2
+    && argv[0] === "checkpoint"
+    && argv[1] === "baseline"
+  );
+  if (isLegacyCheckpointBaseline) {
+    return { help: LEGACY_CHECKPOINT_BASELINE_MIGRATION_GUIDE, kind: "help" };
+  }
+
   if (!argv.length || argv.includes("--help") || argv[0] === "help") {
     const group = matchHelpGroup(helpPath(argv));
     return { help: group ? renderGroupHelp(group) : renderRootHelp(), kind: "help" };

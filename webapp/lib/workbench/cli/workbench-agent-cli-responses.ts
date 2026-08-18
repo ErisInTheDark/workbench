@@ -48,8 +48,24 @@ export function adaptWorkbenchAgentCliResponse({
     }
     case "checkpoint-create": {
       const action = readString(request.body, "action");
-      const label = action === "diffCheckpoint" ? "Created diff checkpoint" : "Created checkpoint";
+      const label = action === "plan" ? "Created plan checkpoint" : "Created implementation checkpoint";
       return succeeded(`${label} ${readString(payload, "checkpointCommit") || "(unknown commit)"}`);
+    }
+    case "checkpoint-compare": {
+      const changes = Array.isArray(payload?.changes) ? payload.changes.filter(isRecord) : [];
+      return succeeded([
+        "Workbench checkpoint comparison",
+        ...changes.map((change) => {
+          const kind = isRecord(change.kind) ? readString(change.kind, "type").slice(0, 1).toUpperCase() : "M";
+          const additions = typeof change.additions === "number" ? change.additions : 0;
+          const deletions = typeof change.deletions === "number" ? change.deletions : 0;
+          return `${kind || "M"}\t+${additions}\t-${deletions}\t${readString(change, "path")}`;
+        }),
+      ].join("\n"));
+    }
+    case "checkpoint-proposal": {
+      const proposalId = readString(payload, "proposalId");
+      return succeeded(`Workbench checkpoint proposal: ${proposalId || "(unknown proposal)"}`);
     }
     case "checkpoint-restore": {
       const checkpointCommit = readString(payload, "checkpointCommit") || "(unknown commit)";

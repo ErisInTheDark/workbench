@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests cover scoped instruction-mechanics availability. Keywords: instructions, title, status, subagent.
+ * - No production exports; tests cover scoped instruction-mechanics availability, including thread-owned Git workflows. Keywords: instructions, title, status, subagent, git checkpoint.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -12,6 +12,7 @@ test("materialized top-level threads expose title/status while subagents omit ti
   assert.equal(topLevel.has("thread-title"), true);
   assert.equal(topLevel.has("thread-status"), true);
   assert.equal(topLevel.has("subagents"), true);
+  assert.equal(topLevel.has("thread-git"), true);
 
   const subagent = listWorkbenchInstructionMechanics({ harness: "codex", subagentName: "Akari", threadId: "thread-2", workbenchOrigin: "http://localhost" });
   assert.equal(subagent.has("thread-title"), false);

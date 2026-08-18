@@ -192,29 +192,56 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   assert.equal((await parseWorkbenchAgentCliCommand(["git", "add", "--", "src/file.ts"], { callerThreadId: null, cwd: "C:/workspace" })).kind, "error");
 
   const checkpoint = await parseWorkbenchAgentCliCommand([
-    "checkpoint", "file-diff", "--commit", "abc", "--file", "src/file.ts",
+    "checkpoint", "compare", "--sha", "abc", "--", "src/file.ts",
   ], gitOptions);
   assert.equal(checkpoint.kind, "request");
   assert.deepEqual(checkpoint.request.body, {
-    action: "fileDiff",
+    action: "compare",
     checkpointCommit: "abc",
     cwd: "C:/workspace",
-    filePath: "src/file.ts",
+    paths: ["src/file.ts"],
     threadId: "thread-1",
   });
-  assert.equal(checkpoint.request.responseKind, "native");
+  assert.equal(checkpoint.request.responseKind, "checkpoint-compare");
 
   const canonicalCheckpoint = await parseWorkbenchAgentCliCommand([
-    "git", "checkpoint", "file-diff", "--commit", "abc", "--file", "src/file.ts",
+    "git", "checkpoint", "compare", "--sha", "abc", "--", "src/file.ts",
   ], gitOptions);
   assert.equal(canonicalCheckpoint.kind, "request");
   assert.deepEqual(canonicalCheckpoint.request, checkpoint.request);
 
   const checkpointDiff = await parseWorkbenchAgentCliCommand([
-    "checkpoint", "diff", "--commit", "abc",
+    "checkpoint", "diff", "--sha", "abc", "--", "src/file.ts",
   ], gitOptions);
   assert.equal(checkpointDiff.kind, "request");
   assert.equal(checkpointDiff.request.responseKind, "native");
+
+  const implementation = await parseWorkbenchAgentCliCommand([
+    "checkpoint", "implement", "--amend", "abc", "--", "src/new.ts",
+  ], gitOptions);
+  assert.equal(implementation.kind, "request");
+  assert.deepEqual(implementation.request.body, {
+    action: "implement",
+    amendCheckpoint: "abc",
+    cwd: "C:/workspace",
+    paths: ["src/new.ts"],
+    threadId: "thread-1",
+  });
+
+  const proposal = await parseWorkbenchAgentCliCommand([
+    "checkpoint", "commit", "--sha", "abc", "--m", "Title", "--m", "Description", "--", "src/file.ts",
+  ], gitOptions);
+  assert.equal(proposal.kind, "request");
+  assert.deepEqual(proposal.request.body, {
+    action: "proposalCreate",
+    checkpointCommit: "abc",
+    cwd: "C:/workspace",
+    description: "Description",
+    paths: ["src/file.ts"],
+    threadId: "thread-1",
+    title: "Title",
+  });
+  assert.equal(proposal.request.responseKind, "checkpoint-proposal");
 
   const checkpointRestore = await parseWorkbenchAgentCliCommand([
     "checkpoint", "restore", "--commit", "abc", "--confirm",
@@ -382,7 +409,7 @@ test("rejects removed Collaboration commands", async () => {
 test("rejects arbitrary request capabilities and unsafe restore", async () => {
   for (const args of [
     ["request", "--url", "http://localhost:3002/api/file"],
-    ["checkpoint", "diff", "--thread", "thread-1", "--commit", "abc", "--project-id", "other"],
+    ["checkpoint", "diff", "--thread", "thread-1", "--sha", "abc", "--", "src/file.ts"],
     ["checkpoint", "restore", "--thread", "thread-1", "--commit", "abc"],
     ["checkpoint", "restore", "--commit", "abc"],
     ["thread", "recall", "search", "--thread", "thread-1", "--query", "text", "--limit", "many"],
@@ -398,6 +425,9 @@ test("renders complete root help and exact focused Git and orchestrator help", a
   assert.deepEqual(root, { help: WORKBENCH_AGENT_CLI_HELP, kind: "help" });
   assert.match(WORKBENCH_AGENT_CLI_HELP, /^Usage:\n/u);
   assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git checkpoint restore/u);
+  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git checkpoint implement \[--amend <sha>\] -- <path>/u);
+  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git checkpoint commit --sha <sha> --m <title>/u);
+  assert.doesNotMatch(WORKBENCH_AGENT_CLI_HELP, /checkpoint create-diff|checkpoint baseline|checkpoint file-diff/u);
   assert.match(WORKBENCH_AGENT_CLI_HELP, /--confirm \| -- <path> \[<path>\.\.\.\]/u);
   assert.doesNotMatch(WORKBENCH_AGENT_CLI_HELP, /wb collaboration/u);
   assert.match(WORKBENCH_AGENT_CLI_HELP, /Help commands:\n  wb subagent --help/u);
@@ -449,6 +479,18 @@ Use the narrowest applicable scope.
 `,
     kind: "help",
   });
+});
+
+test("deprecated checkpoint baseline returns a migration guide without creating a request", async () => {
+  const canonical = await parseWorkbenchAgentCliCommand(["git", "checkpoint", "baseline"]);
+  const alias = await parseWorkbenchAgentCliCommand(["checkpoint", "baseline"]);
+  assert.deepEqual(alias, canonical);
+  assert.equal(canonical.kind, "help");
+  assert.match(canonical.help, /checkpoint baseline has been replaced/u);
+  assert.match(canonical.help, /checkpoint plan/u);
+  assert.match(canonical.help, /checkpoint implement --amend/u);
+  assert.match(canonical.help, /checkpoint commit/u);
+  assert.doesNotMatch(WORKBENCH_AGENT_CLI_HELP, /checkpoint baseline/u);
 });
 
 test("routes canonical, compatibility, and leaf help to the nearest owning group", async () => {
@@ -650,8 +692,9 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     stderr: "",
     stdout: "Thread title set: Clean output\n",
   });
-  assert.equal(adapt("checkpoint-create", { checkpointCommit: "abc" }, { action: "baseline" }).stdout, "Created checkpoint abc\n");
-  assert.equal(adapt("checkpoint-create", { checkpointCommit: "def" }, { action: "diffCheckpoint" }).stdout, "Created diff checkpoint def\n");
+  assert.equal(adapt("checkpoint-create", { checkpointCommit: "abc" }, { action: "plan" }).stdout, "Created plan checkpoint abc\n");
+  assert.equal(adapt("checkpoint-create", { checkpointCommit: "def" }, { action: "implement" }).stdout, "Created implementation checkpoint def\n");
+  assert.equal(adapt("checkpoint-proposal", { proposalId: "proposal-one" }).stdout, "Workbench checkpoint proposal: proposal-one\n");
   assert.equal(adapt("checkpoint-restore", { checkpointCommit: "abc" }).stdout, "Restored checkpoint abc\n");
   assert.equal(adapt("checkpoint-restore", {
     checkpointCommit: "abc",

@@ -143,8 +143,8 @@ Always diff against the specific checkpoint commit you mean. Never use “latest
 
 #### Checkpoint names
 
-* **Approval checkpoint**: the baseline checkpoint created in Brief mode after the exact planned edit files are known and before asking the user to approve the plan.
-* **Initial implementation checkpoint**: the baseline checkpoint created in Implement mode after drift from the approval checkpoint has been checked and classified as safe, but before the first file edit.
+* **Approval checkpoint**: the plan checkpoint created in Brief mode after the exact planned edit files are known and before asking the user to approve the plan.
+* **Initial implementation checkpoint**: the path-scoped implementation checkpoint created in Implement mode after drift from the approval checkpoint has been checked and classified as safe, but before the first file edit.
 * **Mid-implementation checkpoint**: any checkpoint created later during the same implementation arc.
 * **Implementation arc**: the work that starts when one approved plan enters Implement mode and ends when Review mode summarizes that work. A later approved plan starts a new implementation arc, even when it builds on previous work.
 
@@ -154,7 +154,7 @@ For any plan that would edit files:
 
 1. Identify the exact existing files you plan to edit.
 2. Confirm that Workbench Git Checkpoint instructions are available.
-3. Create a baseline checkpoint through \`wb git checkpoint baseline\`.
+3. Create a plan checkpoint through \`wb git checkpoint plan\`.
 4. Treat that checkpoint as the approval checkpoint.
 5. Keep the checkpoint commit privately available for later drift checks.
 6. In the user-facing plan, name the planned edit files, but do not print checkpoint plumbing unless it is needed to explain a problem.
@@ -170,7 +170,7 @@ If the approved touch set changes later, return to Brief mode, create a new appr
 After the user explicitly approves the current plan:
 
 1. Enter Implement mode.
-2. Diff the current repo state against the approval checkpoint commit.
+2. Compare the exact planned paths against the approval checkpoint commit with \`wb git checkpoint compare --sha <approval-checkpoint> -- <path> [...]\`.
 3. Use that exact approval checkpoint commit in the diff command.
 4. Classify any drift before editing.
 
@@ -178,23 +178,25 @@ Use this table:
 
 | Drift result | Action |
 | --- | --- |
-| No drift, or only expected changes from the approved workflow | Create the initial implementation checkpoint, record its commit privately, then proceed. |
-| Unrelated drift that does not touch the approved edit files, nearby ownership, contracts, dependencies, validation scope, branch/HEAD, or mechanics needed by the plan | State that the drift is unrelated, create the initial implementation checkpoint, record its commit privately, then proceed. |
-| Drift that may dangerously intersect with the approved work | Use the checkpoint file-diff command against the approval checkpoint commit for the relevant paths. Then decide whether the drift is safe or plan-affecting. |
+| No drift, or only expected changes from the approved workflow | Create the initial implementation checkpoint with \`wb git checkpoint implement -- <exact-path> [...]\`, record its commit privately, then proceed. |
+| Unrelated drift that does not touch the approved edit files, nearby ownership, contracts, dependencies, validation scope, branch/HEAD, or mechanics needed by the plan | State that the drift is unrelated, create the path-scoped initial implementation checkpoint, record its commit privately, then proceed. |
+| Drift that may dangerously intersect with the approved work | Use \`wb git checkpoint diff --sha <approval-checkpoint> -- <relevant-path> [...]\`. Then decide whether the drift is safe or plan-affecting. |
 | Plan-affecting drift, including user/agent changes, missing files, disappeared files, branch movement, ownership changes, dependency changes, validation-scope changes, or mechanics that invalidate the plan | Stop before editing. Re-inspect the changed state. Tell the user the workspace changed since approval. Return to Brief mode with an updated plan. Do not create a new checkpoint for this drift. |
 | Diff cannot run, or the drift cannot be confidently classified as safe or unrelated  | Stop before editing. Report degraded checkpoint safety. Continue only if the user explicitly approves degraded safety. |
 
 Do not silently expand scope or switch implementation routes. If new facts change behavior, dependencies, lifecycle, ownership, validation, or the approved plan, stop and return to Brief mode.
 
+If implementation checkpoint creation rejects dirty planned paths, stop before editing and ask the user what changed. Include **Committed — the workspace should now be clean, try again** as an option. Do not alter the dirty paths to manufacture a clean checkpoint.
+
 #### During implementation
 
 Preserve unrelated user or agent changes.
 
-Mid-implementation checkpoints may be created if useful, but they do not replace the initial implementation checkpoint for Review mode.
+When approved follow-up work adds clean paths to the same uncommitted changeset, extend scope with \`wb git checkpoint implement --amend <implementation-checkpoint> -- <additional-path> [...]\`. Never repeat existing scope paths. Mid-implementation checkpoints do not replace the initial implementation checkpoint for Review mode.
 
 #### In Review mode
 
-Before summarizing the work, diff against the initial implementation checkpoint for the current implementation arc.
+Before summarizing the work, compare the exact touched paths against the initial implementation checkpoint for the current implementation arc. Use the path-scoped unified diff when details are needed.
 
 Do not diff against:
 
@@ -617,7 +619,7 @@ In Brief mode:
 Before presenting a plan that edits files:
 
 - Name the exact files you intend to edit.
-- Create a baseline checkpoint before asking for approval. If checkpoint instructions are unavailable, stop and report degraded checkpoint safety instead of silently substituting ad hoc file checks.
+- Create a plan checkpoint before asking for approval. If checkpoint instructions are unavailable, stop and report degraded checkpoint safety instead of silently substituting ad hoc file checks.
 - Do not include checkpoint plumbing in the plan unless the user asks or a file-state problem needs to be explained.
 - If the exact edit set is still unknown, the plan must be for further inspection or diagnostics, not implementation.
 - If the exact edit set is known but the implementation mechanics, ownership, or chosen route are still unknown, the plan must also be for further inspection or diagnostics instead of implementation approval.
@@ -644,7 +646,7 @@ Approval applies only to the exact user-visible planned edit set and the plan's 
 
 If the user approves the plan with a clear bounded constraint that only narrows the plan, carry that constraint into Implement mode. If the user adds scope, replaces the route, changes ownership, changes lifecycle, changes contracts, changes validation scope, changes mechanics, or leaves the remaining plan ambiguous, return to Brief mode with an updated plan.
 
-If the user otherwise expands the requested files or scope, replaces ownership, changes behavior, or changes implementation route, return to Brief mode, present the revised exact edit set, and create a new baseline checkpoint before asking for approval again. Use non-checkpoint verification only if the user explicitly approves degraded safety.
+If the user otherwise expands the requested files or scope, replaces ownership, changes behavior, or changes implementation route, return to Brief mode, present the revised exact edit set, and create a new plan checkpoint before asking for approval again. Use non-checkpoint verification only if the user explicitly approves degraded safety.
 
 If the user asks for more investigation, return to Inspect mode.
 
@@ -669,10 +671,11 @@ In Implement mode:
 
 Before the first file edit in Implement mode:
 
-- Diff the current repo state against the approval checkpoint captured before approval.
-- If the diff contains only expected changes from your own approved workflow, create a new baseline checkpoint before the first file edit, call it the initial implementation checkpoint for this implementation arc, keep its checkpoint commit available privately for Review, then continue with the approved implementation.
-- If the diff contains unrelated changes that do not touch the approved edit files, nearby ownership, contracts, dependencies, validation scope, branch/HEAD, or mechanics needed by the plan, state that the drift is unrelated, create a new baseline checkpoint before the first file edit, call it the initial implementation checkpoint for this implementation arc, keep its checkpoint commit available privately for Review, and continue with the approved implementation.
-- If a changed file might intersect dangerously with the approved work, use the checkpoint file-diff command with the approval checkpoint commit for that path before deciding whether to proceed or re-brief.
+- Compare the exact planned paths against the approval checkpoint captured before approval.
+- If the comparison contains only expected changes from your own approved workflow, create a new path-scoped implementation checkpoint before the first file edit, call it the initial implementation checkpoint for this implementation arc, keep its checkpoint commit available privately for Review, then continue with the approved implementation.
+- If the comparison contains unrelated changes that do not touch the approved edit files, nearby ownership, contracts, dependencies, validation scope, branch/HEAD, or mechanics needed by the plan, state that the drift is unrelated, create a new path-scoped implementation checkpoint before the first file edit, call it the initial implementation checkpoint for this implementation arc, keep its checkpoint commit available privately for Review, and continue with the approved implementation.
+- If a changed file might intersect dangerously with the approved work, use the path-scoped checkpoint diff command with the approval checkpoint commit for that path before deciding whether to proceed or re-brief.
+- If implementation checkpoint creation rejects dirty planned paths, stop before editing and ask the user what changed. Include **Committed — the workspace should now be clean, try again** as an option.
 - If it differs in a way that affects the approved plan, stop before editing, re-inspect, and return to Brief mode. Tell the user the workspace changed since approval, but do not dump checkpoint plumbing unless they ask or the details matter for resolving the conflict. Do not create a new checkpoint for plan-affecting drift.
 - If the checkpoint diff cannot run, or you cannot confidently classify the drift as unrelated, stop before editing and report degraded checkpoint safety. Continue without it only after explicit user approval.
 
@@ -686,7 +689,7 @@ Use Review mode after implementation and validation.
 
 In Review mode:
 
-- Diff against the initial implementation checkpoint for the current implementation arc before summarizing changes. Do not diff against the newest checkpoint, oldest checkpoint, or any mid-implementation checkpoint. If the initial implementation checkpoint commit is missing or ambiguous, report degraded checkpoint safety instead of guessing.
+- Compare the exact touched paths against the initial implementation checkpoint for the current implementation arc before summarizing changes. Use the same checkpoint and paths for unified diff details. Do not substitute the newest checkpoint, oldest checkpoint, approval checkpoint, or any mid-implementation checkpoint. If the initial implementation checkpoint commit is missing or ambiguous, report degraded checkpoint safety instead of guessing.
 - Do not use <plan></plan> in Review mode. If you need to propose a new follow-up implementation plan, switch back to Brief mode first.
 - summarize what changed and why
 - for each major existing owned shape touched, state whether it was preserved, changed, replaced, removed, merged, or moved. If anything was replaced, removed, merged, or moved, name the explicit plan line or user instruction that authorized it.
@@ -795,7 +798,7 @@ After resume, interruption, or a long delay, verify the newest user request and 
 
 Assume approval is not actionable unless the current context preserves the exact approved plan, exact edit set, checkpoint baseline, and implementation boundaries.
 
-If the exact plan, edit set, checkpoint baseline, or boundaries are missing, return to Brief mode, restate the recovered plan, create a new baseline checkpoint for the planned work, and ask for approval again before editing. Use non-checkpoint verification only if the user explicitly approves degraded safety.
+If the exact plan, edit set, checkpoint baseline, or boundaries are missing, return to Brief mode, restate the recovered plan, create a new plan checkpoint for the planned work, and ask for approval again before editing. Use non-checkpoint verification only if the user explicitly approves degraded safety.
 
 ### Rollbacks or known-bad work
 
