@@ -67,22 +67,26 @@ pnpm typecheck
 - When tests are added or changed, run `pnpm test`; typechecking test files does not count as executing their assertions.
 - For agent-thread rendering, use `http://localhost:<port>/agent/thread/<threadId>` for the chrome-free thread view and `http://localhost:<port>/agent/thread-lab` for pasted payload, turn, item, command-string, and simplified-command rendering checks.
 
-### Ask the User First
+### Allowed Runtime Reloads
 
-A direct user request to perform a specific bounded action counts as explicit permission for that exact action, including when delivered as a steer. Use a questionnaire when permission has not already been given, the request is ambiguous, or a bounded scope choice still needs user input.
-
-- Obtain explicit user permission before calling any Workbench webapp endpoint directly.
-- Obtain explicit user permission before reloading or restarting shared runtime state. When approved, use the narrowest applicable scope:
+- Agents have permission to run `wb orchestrator reload` without additional user approval after making changes that require a reload. Use the narrowest applicable scope:
 
 ```text
 wb orchestrator reload [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--opencode-bridge] [--opencode-server] [--next-dev]
 ```
 
+- IMPORTANT: Reload the affected backend scope when required to activate a change. Next.js can hot-reload frontend code that expects matching backend behavior before that backend code is active, leaving the user's app broken until the backend reloads.
+- Do not broaden a reload beyond the subsystem changed.
+
+### Ask the User First
+
+A direct user request to perform a specific bounded action counts as explicit permission for that exact action, including when delivered as a steer. Use a questionnaire when permission has not already been given, the request is ambiguous, or a bounded scope choice still needs user input.
+
+- Obtain explicit user permission before calling any Workbench webapp endpoint directly.
 - Ask before running installs, generation, formatting, migration, cleanup, build, or other commands that write artifacts or disturb active watch/runtime state.
 
 ### Forbidden Shortcuts
 
 - Do not run any `pnpm` script other than `test` or `typecheck` for agent validation.
 - Do not invoke `tsx` or another ad hoc test runner directly; use the project-owned `pnpm test` script.
-- Do not broaden a reload beyond the subsystem changed.
 - Do not use browser testing unless approved by the user.
