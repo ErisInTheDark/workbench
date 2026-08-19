@@ -16,6 +16,7 @@ import {
   WorkbenchThreadStateRequestSchema,
   getWorkbenchLifecycleTurnId,
   getThreadSidebarGroup,
+  isWorkbenchThreadStatusProviderOwned,
   projectWorkbenchThreadSidebarEntries,
   reduceWorkbenchThreadLifecycle,
   sortThreadSidebarEntries,
@@ -601,9 +602,14 @@ export default class WorkbenchThreadStateController {
       if (request.method === "workbench/thread-state/status/set" && (
         entry.entryKind !== "thread"
         || entry.metadata.archived
-        || entry.lifecycle.kind === "working"
-        || (entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput")
+        || isWorkbenchThreadStatusProviderOwned(entry.lifecycle)
       )) {
+        return { accepted: false, revision: state.revision };
+      }
+      const canSettle = entry.lifecycle.kind === "completed"
+        || entry.lifecycle.kind === "stopped"
+        || (entry.entryKind === "thread" && entry.lifecycle.kind === "needsAttention" && !isWorkbenchThreadStatusProviderOwned(entry.lifecycle));
+      if (request.method === "workbench/thread-state/settle" && !canSettle) {
         return { accepted: false, revision: state.revision };
       }
       let next = entry;
@@ -613,7 +619,7 @@ export default class WorkbenchThreadStateController {
           ? entry
           : { ...entry, metadata: { archived: false as const, pinned: request.pinned, snoozed: entry.metadata.snoozed } };
       if (entry.entryKind === "thread" && !entry.metadata.archived && request.method === "workbench/thread-state/snooze/set" && !(entry.lifecycle.settled && request.snoozed)) next = { ...entry, metadata: { archived: false, pinned: entry.metadata.pinned, snoozed: request.snoozed } };
-      if (request.method === "workbench/thread-state/settle" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) {
+      if (request.method === "workbench/thread-state/settle") {
         const lifecycle = reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "settle" });
         next = entry.entryKind === "subagent"
           ? { ...entry, lifecycle, pinned: false }

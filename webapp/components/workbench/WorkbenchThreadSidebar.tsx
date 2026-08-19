@@ -11,7 +11,7 @@ import { writeTextToClipboard } from "../../lib/workbench/dom/clipboard";
 import type { WorkbenchDragPayload } from "../../lib/workbench/layout/workbench-drag";
 import { createThreadHref } from "../../lib/workbench/navigation/workbench-route";
 import type { WorkbenchThreadTarget } from "../../lib/workbench/thread/thread-state";
-import { getThreadSidebarGroup, type WorkbenchThreadSidebarEntry } from "../../lib/workbench/thread/thread-state";
+import { getThreadSidebarGroup, isWorkbenchThreadStatusProviderOwned, type WorkbenchThreadSidebarEntry } from "../../lib/workbench/thread/thread-state";
 import { SidebarLoadingSkeleton, ThreadsList } from "./workbench-explorer";
 import {
   ArchiveIcon,
@@ -157,7 +157,7 @@ export default memo(function WorkbenchThreadSidebar({
           disabled: entry.lifecycle.settled,
           icon: <SnoozedThreadIcon className="size-4" />,
           id: "snooze",
-          label: snoozed ? "Unsnooze thread" : "Snooze thread",
+          label: snoozed ? "Wake" : "Snooze thread",
           onSelect: () => mutateEntry(entry, "snooze/set", !snoozed),
         }],
         id: "priority",
@@ -168,8 +168,7 @@ export default memo(function WorkbenchThreadSidebar({
     }
 
     if (entry.entryKind === "thread") {
-      const pendingInput = entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput";
-      const providerOwned = entry.lifecycle.kind === "working" || pendingInput;
+      const providerOwned = isWorkbenchThreadStatusProviderOwned(entry.lifecycle);
       const selectStatus = (status: "completed" | "needsAttention" | "stopped") => {
         if (providerOwned) {
           if (status === "stopped" && thread) void stopThread(thread);
@@ -244,9 +243,10 @@ export default memo(function WorkbenchThreadSidebar({
               if (action === "discard") void controls?.deleteThreadDraft(entry.draft.draftId);
               return;
             }
+            if (action === "complete") mutateEntry(entry, "status/set", "completed");
             if (action === "settle") mutateEntry(entry, "settle");
             if (action === "restore") mutateEntry(entry, "restore");
-            if (action === "unsnooze") mutateEntry(entry, "snooze/set", false);
+            if (action === "wake") mutateEntry(entry, "snooze/set", false);
           }}
           onCreateThread={onCreateThread}
           onCreateThreadPointerDragStart={showMosaicView ? (event) => {

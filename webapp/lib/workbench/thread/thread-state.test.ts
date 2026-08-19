@@ -1,7 +1,7 @@
 /* No production exports. Tests protect strict lifecycle, grouping, ordering, and draft rules. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { countDraftPromptTokens, createDraftTitle, getThreadSidebarGroup, normalizeWorkbenchActivityTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
+import { countDraftPromptTokens, createDraftTitle, getThreadSidebarGroup, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchActivityTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
 
 test("provider activity timestamps normalize seconds without double-converting milliseconds", () => {
   assert.equal(normalizeWorkbenchActivityTimestampMs(1_723_456_789), 1_723_456_789_000);
@@ -87,7 +87,7 @@ test("lifecycle parsing preserves two attention variants and normalizes legacy r
   });
 });
 
-test("exact-turn transitions reject stale completion and stopped settlement becomes completed", () => {
+test("exact-turn transitions reject stale completion and manual settlement becomes completed", () => {
   const working = reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId: "new" });
   assert.equal(reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "completed", turnId: "old" }), working);
   const completed = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "completed", turnId: "new" });
@@ -97,6 +97,13 @@ test("exact-turn transitions reject stale completion and stopped settlement beco
   assert.deepEqual(reduceWorkbenchThreadLifecycle(settled, { kind: "restore" }), completed);
   const stopped = reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "interrupted", turnId: "new" });
   assert.deepEqual(reduceWorkbenchThreadLifecycle(stopped, { kind: "settle" }), {
+    kind: "completed",
+    reason: "userCompleted",
+    settled: true,
+  });
+  const attention = reduceWorkbenchThreadLifecycle(completed, { kind: "userNeedsAttention" });
+  assert.equal(isWorkbenchThreadStatusProviderOwned(attention), false);
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(attention, { kind: "settle" }), {
     kind: "completed",
     reason: "userCompleted",
     settled: true,
@@ -112,6 +119,8 @@ test("exact-turn transitions reject stale completion and stopped settlement beco
     kind: "completed", reason: "userCompleted", settled: false,
   });
   const pendingInput = reduceWorkbenchThreadLifecycle(working, { kind: "pendingInput", requestKey: "request", turnId: "new" });
+  assert.equal(isWorkbenchThreadStatusProviderOwned(pendingInput), true);
+  assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, { kind: "settle" }), pendingInput);
   assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, { kind: "userNeedsAttention" }), pendingInput);
 });
 

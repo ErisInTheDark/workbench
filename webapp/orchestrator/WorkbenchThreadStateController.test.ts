@@ -628,6 +628,7 @@ test("restoring a terminal thread persists across provider reconciliation", asyn
 
 test("manual status persists, restores settled threads, and rejects provider-owned lifecycles", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-manual-attention-"));
+  const published: WorkbenchThreadStateSnapshot[] = [];
   const terminal: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 1,
     entryKind: "thread",
@@ -653,7 +654,7 @@ test("manual status persists, restores settled threads, and rejects provider-own
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
     projectState: projectState(),
-    publish: () => undefined,
+    publish: (_connectionId, snapshot) => published.push(snapshot),
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       acceptProviderSnapshot("codex", [terminal, pending, working], { complete: true });
       return [];
@@ -681,12 +682,34 @@ test("manual status persists, restores settled threads, and rejects provider-own
   await new Promise<void>((resolve) => setImmediate(resolve));
   entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
   assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
+  const settledAttention = await controller.handleRequest("observer", {
+    identity: terminal.identity, method: "workbench/thread-state/settle", projectId: "project",
+  });
+  assert.equal("result" in settledAttention ? (settledAttention.result as { accepted?: boolean }).accepted : false, true);
+  entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
+  assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, { kind: "completed", reason: "userCompleted", settled: true });
+  assert.deepEqual(entry?.entryKind === "thread" ? entry.metadata : null, { ...terminal.metadata, snoozed: false });
+  const lastPublished = published.at(-1);
+  const publishedEntry = lastPublished && "entries" in lastPublished
+    ? lastPublished.entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal")
+    : null;
+  assert.deepEqual(publishedEntry?.entryKind === "thread" ? publishedEntry.lifecycle : null, { kind: "completed", reason: "userCompleted", settled: true });
+  await controller.refresh("project");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
+  assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, { kind: "completed", reason: "userCompleted", settled: true });
   const rejected = await controller.handleRequest("observer", {
     identity: pending.identity, method: "workbench/thread-state/status/set", projectId: "project", status: "completed",
   });
   assert.equal("result" in rejected ? (rejected.result as { accepted?: boolean }).accepted : true, false);
   const pendingAfter = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "pending");
   assert.deepEqual(pendingAfter?.entryKind === "thread" ? pendingAfter.lifecycle : null, pending.lifecycle);
+  const pendingSettleRejected = await controller.handleRequest("observer", {
+    identity: pending.identity, method: "workbench/thread-state/settle", projectId: "project",
+  });
+  assert.equal("result" in pendingSettleRejected ? (pendingSettleRejected.result as { accepted?: boolean }).accepted : true, false);
+  const pendingAfterSettle = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "pending");
+  assert.deepEqual(pendingAfterSettle?.entryKind === "thread" ? pendingAfterSettle.lifecycle : null, pending.lifecycle);
   const workingRejected = await controller.handleRequest("observer", {
     identity: working.identity, method: "workbench/thread-state/status/set", projectId: "project", status: "stopped",
   });

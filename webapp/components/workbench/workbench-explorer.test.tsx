@@ -19,7 +19,11 @@ test("threads render one flat tablist with lifecycle borders and all settled row
   assert.match(source, /settledEntries\.map\(renderEntry\)/u);
   assert.doesNotMatch(source, /pinnedSettledEntries/u);
   assert.doesNotMatch(source, /<h3/u);
-  assert.match(source, /grid-cols-\[auto_minmax\(0,1fr\)_auto_auto\]/u);
+  assert.match(source, /grid-cols-\[minmax\(0,1fr\)_auto\]/u);
+  assert.match(source, /grid-cols-\[auto_minmax\(0,1fr\)_auto\]/u);
+  assert.match(source, /grid-cols-\[minmax\(0,1fr\)_auto\] px-2 pt-1\.5/u);
+  assert.match(source, /grid-cols-\[auto_minmax\(0,1fr\)_auto_auto\][\s\S]*?px-2 pb-1\.5/u);
+  assert.doesNotMatch(source, /grid-cols-subgrid/u);
   assert.match(source, /<rect/u);
   assert.match(source, /rx="12\.8"/u);
   assert.match(source, /fill="color-mix\(in srgb, var\(--text\) 4%, transparent\)"/u);
@@ -28,7 +32,8 @@ test("threads render one flat tablist with lifecycle borders and all settled row
   assert.match(source, /transition-opacity duration-75 ease-out/u);
   assert.match(source, /group-hover\/thread-row:opacity-100 group-focus-within\/thread-row:opacity-100/u);
   assert.doesNotMatch(source, /repeating-linear-gradient/u);
-  assert.match(source, /hasDashedLifecycleBorder/u);
+  assert.match(source, /hasDashedBorder = entry\.entryKind === "draft" \|\| lifecycle\?\.kind === "needsAttention" \|\| lifecycle\?\.kind === "stopped"/u);
+  assert.doesNotMatch(source, /hasDashedLifecycleBorder/u);
   assert.match(source, /hover:text-text focus-visible:flex focus-visible:text-text/u);
   assert.match(source, /aria-label=\{actionLabel\}[\s\S]*?cursor-pointer/u);
   assert.doesNotMatch(source, /aria-label=\{actionLabel\}[\s\S]*?hover:bg-/u);
@@ -39,8 +44,17 @@ test("threads render one flat tablist with lifecycle borders and all settled row
   assert.doesNotMatch(source, /Draft · Saving|Draft · Save failed|draftSaveStates/u);
   assert.match(source, /entry\.entryKind === "draft"[\s\S]*?\? "text-muted"/u);
   assert.match(source, /flex flex-col gap-1/u);
-  assert.match(source, /compact \|\| action === "settle"/u);
-  assert.match(source, /action === "settle" \? "top-1 items-center gap-1/u);
+  assert.match(source, /canComplete = entry\.entryKind === "thread" && !isWorkbenchThreadStatusProviderOwned\(entry\.lifecycle\)/u);
+  assert.match(source, /canComplete && isShiftPressed \? "settle" : baseAction/u);
+  assert.match(source, /event\.shiftKey \|\| event\.detail > 1/u);
+  assert.match(source, /action === "complete" \? "Completed"/u);
+  assert.match(source, /: "Wake"/u);
+  assert.match(source, /action === "discard" \? null : <span>\{actionLabel\}<\/span>/u);
+  assert.match(source, /col-start-3 row-start-1[\s\S]*?group-hover\/thread-row:invisible/u);
+  assert.match(source, /row-start-1 -mt-1 -mb-1 ml-0 mr-0/u);
+  assert.doesNotMatch(source, /workbenchThreadListLabelClassName\} mr-1\.5 truncate/u);
+  assert.ok(source.includes('<div className="pointer-events-none relative z-10 min-w-0">'));
+  assert.doesNotMatch(source, /absolute right-1|top-1\/2|-translate-y-1\/2/u);
   assert.match(source, /className="mt-1"/u);
   assert.doesNotMatch(source, /summaryClassName="px-2/u);
   assert.match(source, /actionLabel === "restore"|action === "restore"/u);
@@ -125,6 +139,10 @@ test("thread context actions group priority checkboxes and canonical status radi
   assert.match(sidebarSource, /void stopThread\(thread\)/u);
   assert.match(sidebarSource, /checked: pinned/u);
   assert.match(sidebarSource, /checked: snoozed/u);
+  assert.match(sidebarSource, /label: snoozed \? "Wake" : "Snooze thread"/u);
+  assert.match(sidebarSource, /action === "complete"[\s\S]*?"status\/set", "completed"/u);
+  assert.match(sidebarSource, /action === "wake"[\s\S]*?"snooze\/set", false/u);
+  assert.doesNotMatch(sidebarSource, /Unsnooze thread/u);
   assert.doesNotMatch(sidebarSource, /Mark as read|markThreadSeen|label: "Stop thread"|id: "stop"/u);
 });
 

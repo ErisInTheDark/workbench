@@ -8,7 +8,7 @@
  * - getThreadSidebarGroup/sortThreadSidebarEntries: exhaustive visible grouping and stable activity ordering. Keywords: grouping, pin, sort.
  * - normalizeWorkbenchActivityTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary. Keywords: timestamp, provider, normalization.
  * - resolveWorkbenchThreadTitle: choose a meaningful provider name, first-message preview, or neutral fallback. Keywords: title, preview, uuid.
- * - reduceWorkbenchThreadLifecycle/projectWorkbenchThreadSidebarEntries: exact-turn transitions and direct-child status projection. Keywords: working, attention, completed, stopped, parent.
+ * - isWorkbenchThreadStatusProviderOwned/reduceWorkbenchThreadLifecycle/projectWorkbenchThreadSidebarEntries: manual-status eligibility, exact-turn transitions, and direct-child status projection. Keywords: working, attention, completed, stopped, parent.
  * - countDraftPromptTokens/createDraftTitle: durable draft materialization and title rules. Keywords: draft, threshold, title.
  */
 
@@ -279,6 +279,10 @@ export function getWorkbenchLifecycleTurnId(lifecycle: WorkbenchThreadLifecycle 
   return "agent" in lifecycle && lifecycle.agent ? lifecycle.agent.turnId ?? null : null;
 }
 
+export function isWorkbenchThreadStatusProviderOwned(lifecycle: WorkbenchThreadLifecycle) {
+  return lifecycle.kind === "working" || (lifecycle.kind === "needsAttention" && lifecycle.reason === "pendingInput");
+}
+
 export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle | null, event: WorkbenchLifecycleEvent): WorkbenchThreadLifecycle {
   const currentTurnId = getWorkbenchLifecycleTurnId(current);
   switch (event.kind) {
@@ -319,6 +323,11 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
       return { ...(agent ? { agent } : {}), kind: "stopped", reason: "userMarkedStopped", settled: false };
     }
     case "settle":
+      if (current?.kind === "needsAttention") {
+        return current.reason === "noActiveTurn"
+          ? { kind: "completed", reason: "userCompleted", settled: true }
+          : current;
+      }
       if (current?.kind !== "completed" && current?.kind !== "stopped") return current!;
       if (current.kind === "stopped") {
         const agent = "agent" in current ? current.agent : undefined;

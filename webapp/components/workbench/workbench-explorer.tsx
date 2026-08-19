@@ -10,7 +10,7 @@
  */
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 
 import type {
   ChangeSummary,
@@ -19,7 +19,7 @@ import type {
   WorkbenchControls
 } from "../../lib/types";
 import type { WorkbenchDragPayload } from "../../lib/workbench/layout/workbench-drag";
-import { getThreadSidebarGroup, type WorkbenchThreadSidebarEntry, type WorkbenchThreadTarget } from "../../lib/workbench/thread/thread-state";
+import { getThreadSidebarGroup, isWorkbenchThreadStatusProviderOwned, type WorkbenchThreadSidebarEntry, type WorkbenchThreadTarget } from "../../lib/workbench/thread/thread-state";
 import ChevronIcon from "./ChevronIcon";
 import ContextMenuCapability from "./ContextMenuCapability";
 import { formatThreadRelativeTimestamp } from "./thread-view/thread-view-formatters";
@@ -175,7 +175,7 @@ export function ThreadsList ({
   getThreadHref: (target: WorkbenchThreadTarget) => string;
   getThreadContextMenu?: (entry: WorkbenchThreadSidebarEntry) => WorkbenchContextMenuDefinition | null;
   nowMs?: number;
-  onAction?: (entry: WorkbenchThreadSidebarEntry, action: "discard" | "restore" | "settle" | "unsnooze") => void;
+  onAction?: (entry: WorkbenchThreadSidebarEntry, action: "complete" | "discard" | "restore" | "settle" | "wake") => void;
   onCreateThread: () => void;
   onCreateThreadPointerDragStart?: (event: PointerEvent<HTMLAnchorElement>) => void;
   onThreadPointerDragStart?: (event: PointerEvent<HTMLElement>, entry: WorkbenchThreadSidebarEntry) => void;
@@ -200,15 +200,33 @@ export function ThreadsList ({
   const settledEntries = visibleEntries.filter((entry) => getThreadSidebarGroup(entry) === "other");
   const shouldOpenOlderThreads = settledEntries.some((entry) => targetSelected(targetForEntry(entry)));
   const [isOlderThreadsOpen, setIsOlderThreadsOpen] = useState(shouldOpenOlderThreads);
+  const [isShiftPressed, setIsShiftPressed] = useState(false);
   useEffect(() => {
     if (shouldOpenOlderThreads) setIsOlderThreadsOpen(true);
   }, [shouldOpenOlderThreads]);
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Shift") setIsShiftPressed(true);
+    };
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key === "Shift") setIsShiftPressed(false);
+    };
+    const handleBlur = () => setIsShiftPressed(false);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", handleBlur);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, []);
   const navigableEntries = visibleEntries.filter((entry) => getThreadSidebarGroup(entry) !== "other" || isOlderThreadsOpen);
   const groups = [
     "drafts", "needsAttention", "completed", "working", "snoozed",
   ] as const;
   const primaryEntries = groups.flatMap((group) => visibleEntries.filter((entry) => getThreadSidebarGroup(entry) === group));
-  const moveFocus = (event: KeyboardEvent<HTMLAnchorElement>, index: number) => {
+  const moveFocus = (event: ReactKeyboardEvent<HTMLAnchorElement>, index: number) => {
     let next = index;
     if (event.key === "ArrowDown") next = Math.min(navigableEntries.length - 1, index + 1);
     else if (event.key === "ArrowUp") next = Math.max(0, index - 1);
@@ -234,7 +252,9 @@ export function ThreadsList ({
     const timestamp = new Date(entry.activityAt);
     const relativeTime = formatThreadRelativeTimestamp(entry.activityAt / 1000, nowMs);
     const exactTime = timestamp.toLocaleString();
-    const action = entry.entryKind === "draft" ? "discard" : group === "other" ? "restore" : group === "snoozed" ? "unsnooze" : lifecycle && (lifecycle.kind === "completed" || lifecycle.kind === "stopped") && !lifecycle.settled ? "settle" : null;
+    const canComplete = entry.entryKind === "thread" && !isWorkbenchThreadStatusProviderOwned(entry.lifecycle) && (entry.lifecycle.kind === "needsAttention" || entry.lifecycle.kind === "stopped");
+    const baseAction = entry.entryKind === "draft" ? "discard" : group === "other" ? "restore" : group === "snoozed" ? "wake" : canComplete ? "complete" : lifecycle?.kind === "completed" && !lifecycle.settled ? "settle" : null;
+    const action = canComplete && isShiftPressed ? "settle" : baseAction;
     const Icon = entry.entryKind === "draft" ? DraftThreadIcon : lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
     const statusClassName = entry.entryKind === "draft"
       ? "text-muted"
@@ -245,16 +265,21 @@ export function ThreadsList ({
           : lifecycle?.kind === "stopped"
             ? "text-red-600 dark:text-red-300"
             : "text-emerald-600 dark:text-emerald-300";
-    const ActionIcon = action === "discard" ? DiscardDraftIcon : action === "restore" ? RestoreThreadIcon : action === "settle" ? SettleThreadIcon : UnsnoozeThreadIcon;
-    const actionLabel = action === "discard" ? "Discard draft" : action === "restore" ? "Restore" : action === "settle" ? "Settle" : "Unsnooze";
+    const ActionIcon = action === "discard" ? DiscardDraftIcon : action === "restore" ? RestoreThreadIcon : action === "wake" ? UnsnoozeThreadIcon : SettleThreadIcon;
+    const actionLabel = action === "complete" ? "Completed" : action === "discard" ? "Discard draft" : action === "restore" ? "Restore" : action === "settle" ? "Settle" : "Wake";
     const rowName = `${entry.title}, ${baseStatus}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
     const dimmed = !selected && (group === "snoozed" || group === "other");
-    const hasDashedLifecycleBorder = entry.entryKind !== "draft" && (lifecycle?.kind === "needsAttention" || lifecycle?.kind === "working");
-    const hasDashedBorder = hasDashedLifecycleBorder;
+    const hasDashedBorder = entry.entryKind === "draft" || lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped";
     const strokeOpacity = entry.entryKind === "draft" ? 0.24 : 1;
     const compact = group === "other";
+    const actionButton = action ? (
+      <button type="button" aria-label={actionLabel} title={actionLabel} className={`pointer-events-auto z-20 row-start-1 -mt-1 -mb-1 ml-0 mr-0 hidden cursor-pointer items-center rounded-lg text-muted hover:text-text focus-visible:flex focus-visible:text-text group-hover/thread-row:flex group-focus-within/thread-row:flex ${compact ? "col-start-3 self-center" : "col-start-2 self-start"} ${action === "discard" ? "p-1" : "gap-1 px-1.5 py-1 text-[0.72rem] font-medium"}`} onClick={(event) => { event.stopPropagation(); onAction?.(entry, canComplete && (event.shiftKey || event.detail > 1) ? "settle" : action); }} onPointerDown={(event) => event.stopPropagation()}>
+        <ActionIcon className="size-4" />
+        {action === "discard" ? null : <span>{actionLabel}</span>}
+      </button>
+    ) : null;
     return (
-      <li key={entry.entryKind === "draft" ? `draft:${entry.draft.draftId}` : `${entry.identity.harness}:${entry.identity.threadId}`} className="group/thread-row relative isolate m-0 grid list-none grid-cols-[minmax(0,1fr)_auto]">
+      <li key={entry.entryKind === "draft" ? `draft:${entry.draft.draftId}` : `${entry.identity.harness}:${entry.identity.threadId}`} className={`group/thread-row relative isolate m-0 list-none${dimmed ? " opacity-50 hover:opacity-100 focus-within:opacity-100" : ""}`}>
         <svg aria-hidden="true" className={`pointer-events-none absolute inset-0 z-0 size-full transition-opacity duration-75 ease-out ${statusClassName} ${selected ? "opacity-100" : "opacity-0 group-hover/thread-row:opacity-100 group-focus-within/thread-row:opacity-100"}`}>
           <rect
             x="0.5"
@@ -279,7 +304,7 @@ export function ThreadsList ({
             aria-selected={selected}
             aria-label={rowName}
             title={entry.title}
-            className={`relative z-10 col-span-2 grid min-w-0 cursor-pointer ${compact ? "grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-1.5" : "grid-cols-[minmax(0,1fr)_auto]"} rounded-[0.8rem] border border-transparent px-2 ${compact ? "py-1" : "py-1.5"} outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${dimmed ? " opacity-50 group-hover/thread-row:opacity-100 group-focus-within/thread-row:opacity-100" : ""}`}
+            className="absolute inset-0 z-10 cursor-pointer rounded-[0.8rem] border border-transparent outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
             onClick={(event: MouseEvent<HTMLAnchorElement>) => {
               if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
               event.preventDefault();
@@ -290,34 +315,32 @@ export function ThreadsList ({
               moveFocus(event, index);
             }}
             onPointerDown={(event) => onThreadPointerDragStart?.(event, entry)}
-          >
-            {compact ? (
-              <>
-                <Icon className={`size-3.5 ${statusClassName}`} />
-                <span className={`${workbenchThreadListLabelClassName} truncate${selected ? " font-semibold text-text" : ""}`}>{entry.title}</span>
-                <span className="inline-flex size-4 items-center justify-center">{pinned ? <PinIcon className="size-3.5" /> : null}</span>
-                <time className="text-[0.72rem] text-muted group-hover/thread-row:invisible group-focus-within/thread-row:invisible" dateTime={timestamp.toISOString()} title={exactTime}>{relativeTime}</time>
-              </>
-            ) : (
-              <>
-                <span className={`${workbenchThreadListLabelClassName}${selected ? " font-semibold text-text" : ""}`}>{entry.title}</span>
-                <span aria-hidden="true" />
-                <span className="col-span-2 mt-0.5 grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-1.5 text-[0.72rem] text-muted">
-                  <Icon className={`size-3.5 ${statusClassName}`} />
-                  <span className={`truncate ${statusClassName}`}>{status}</span>
-                  <span className="inline-flex size-4 items-center justify-center">{group === "snoozed" ? <SnoozedThreadIcon className="size-3.5" /> : pinned ? <PinIcon className="size-3.5" /> : null}</span>
-                  <time dateTime={timestamp.toISOString()} title={exactTime}>{relativeTime}</time>
-                </span>
-              </>
-            )}
-          </a>
+          />
         </ContextMenuCapability>
-        {action ? (
-          <button type="button" aria-label={actionLabel} title={actionLabel} className={`absolute right-1 z-20 hidden cursor-pointer rounded-lg text-muted hover:text-text focus-visible:flex focus-visible:text-text group-hover/thread-row:flex group-focus-within/thread-row:flex ${compact ? "top-1/2 -translate-y-1/2 items-center gap-1 px-1.5 py-1 text-[0.72rem] font-medium" : action === "settle" ? "top-1 items-center gap-1 px-1.5 py-1 text-[0.72rem] font-medium" : "top-1 p-1"}`} onClick={(event) => { event.stopPropagation(); onAction?.(entry, action); }} onPointerDown={(event) => event.stopPropagation()}>
-            <ActionIcon className="size-4" />
-            {compact || action === "settle" ? <span>{actionLabel}</span> : null}
-          </button>
-        ) : null}
+        {compact ? (
+          <div className="pointer-events-none relative z-10 grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center px-2 py-1">
+            <Icon className={`mr-1.5 size-3.5 ${statusClassName}`} />
+            <span className={`${workbenchThreadListLabelClassName} truncate${selected ? " font-semibold text-text" : ""}`}>{entry.title}</span>
+            <span className="col-start-3 row-start-1 inline-flex items-center gap-1.5 text-[0.72rem] text-muted group-hover/thread-row:invisible group-focus-within/thread-row:invisible">
+              <span className="inline-flex size-4 items-center justify-center">{pinned ? <PinIcon className="size-3.5" /> : null}</span>
+              <time dateTime={timestamp.toISOString()} title={exactTime}>{relativeTime}</time>
+            </span>
+            {actionButton}
+          </div>
+        ) : (
+          <div className="pointer-events-none relative z-10 min-w-0">
+            <div className="pointer-events-none grid min-w-0 grid-cols-[minmax(0,1fr)_auto] px-2 pt-1.5">
+              <span className={`${workbenchThreadListLabelClassName}${selected ? " font-semibold text-text" : ""}`}>{entry.title}</span>
+              {actionButton}
+            </div>
+            <div className="pointer-events-none mt-0.5 grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-1.5 px-2 pb-1.5 text-[0.72rem] text-muted">
+              <Icon className={`size-3.5 ${statusClassName}`} />
+              <span className={`truncate ${statusClassName}`}>{status}</span>
+              <span className="inline-flex size-4 items-center justify-center">{group === "snoozed" ? <SnoozedThreadIcon className="size-3.5" /> : pinned ? <PinIcon className="size-3.5" /> : null}</span>
+              <time dateTime={timestamp.toISOString()} title={exactTime}>{relativeTime}</time>
+            </div>
+          </div>
+        )}
       </li>
     );
   };
