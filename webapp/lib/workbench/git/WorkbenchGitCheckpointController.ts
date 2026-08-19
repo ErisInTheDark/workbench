@@ -1503,7 +1503,11 @@ export default class WorkbenchGitCheckpointController {
     let successorRef: string | null = null;
     if (remainingPaths.length) {
       const fullWorktree = await repository.writeWorktreeTree();
-      const baselineTree = await repository.writeTreeWithPathsFromSource(fullWorktree, committedSha, remainingPaths);
+      const baselineTree = await repository.writeTreeWithPathsFromSource(
+        fullWorktree,
+        committedSha,
+        sourceMetadata.scopePaths,
+      );
       const successorMetadata: CheckpointMetadata = {
         amendedFrom: source.checkpointCommit,
         ...(sourceMetadata.intentDescription ? { intentDescription: sourceMetadata.intentDescription } : {}),
@@ -1511,7 +1515,7 @@ export default class WorkbenchGitCheckpointController {
         kind: "arc",
         priorProposalId: proposalId,
         registryLifecycle: true,
-        scopePaths: remainingPaths,
+        scopePaths: sourceMetadata.scopePaths,
         version: 3,
       };
       successorCommit = await repository.createCommitFromTree(
@@ -1529,7 +1533,7 @@ export default class WorkbenchGitCheckpointController {
       : successorCommit
         ? await registry.prepareClaim({
           checkpointCommit: successorCommit,
-          claimedPaths: remainingPaths,
+          claimedPaths: sourceMetadata.scopePaths,
           harness,
           intentDescription: active.intentDescription,
           intentName: sourceMetadata.intentName ?? active.intentName,

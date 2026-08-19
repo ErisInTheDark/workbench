@@ -209,7 +209,7 @@ const LEGACY_CHECKPOINT_MIGRATION_GUIDE = [
   "Plan and arc add paths must be clean against HEAD. Arc adopt is only for paths that already contain workspace changes.",
   "If Review finds more work while a proposal is pending, arc continue retires that stale proposal and continues the active arc. Use arc add only when that pass also claims new clean paths.",
   "Starting checks sibling claim collisions. Active claims prevent thread settlement until they are committed, cleanly unclaimed, or explicitly restored.",
-  "A partial commit keeps only its remaining changed files claimed. Arc continue returns that successor instead of creating another baseline.",
+  "A partial commit advances the baseline and keeps the full active set claimed. Use arc remove to release clean paths intentionally. Arc continue returns that successor instead of creating another baseline.",
   "If Workbench rejects a claim or continuation, stop and inspect the reported owner or drift. Do not clean or restore paths automatically.",
   "Omit explicit compare, diff, or proposal paths to use the arc's claimed set. Proposal subsets must stay inside that set.",
   "",

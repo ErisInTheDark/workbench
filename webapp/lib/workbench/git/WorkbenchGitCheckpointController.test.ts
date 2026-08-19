@@ -372,7 +372,7 @@ test("failed arc adoption publishes neither a successor ref nor a replacement re
   assert.deepEqual(await registry.find({ harness: "codex", threadId: "adopt-owner" }), activeBefore);
 });
 
-test("partial proposal commit atomically records and returns the remaining-file successor", async (context) => {
+test("partial proposal commits retain the full claim set and advance every retained baseline", async (context) => {
   const { repository, source } = await createRepository(context);
   const controller = new WorkbenchGitCheckpointController();
   await createTranscript(repository, "codex", "partial-thread");
@@ -409,18 +409,16 @@ test("partial proposal commit atomically records and returns the remaining-file 
     title: "commit one",
   });
   const active = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
-  assert.deepEqual(active?.claimedPaths, ["two.txt"]);
+  assert.deepEqual(active?.claimedPaths, ["one.txt", "two.txt"]);
   assert.notEqual(active?.checkpointCommit, plan.checkpointCommit);
+  assert.equal(await git(source, ["show", `${active?.checkpointCommit}:one.txt`]), "committed one\n");
+  assert.equal(await git(source, ["show", `${active?.checkpointCommit}:two.txt`]), "two\n");
 
-  const continued = await controller.continueArc({
-    checkpointCommit: plan.checkpointCommit,
-    cwd: source,
-    harness: "codex",
-    threadId: "partial-thread",
-  });
-  assert.equal(continued.checkpointCommit, active?.checkpointCommit);
-  assert.deepEqual(continued.scopePaths, ["two.txt"]);
   assert.equal(await fs.readFile(path.join(source, "two.txt"), "utf8"), "remaining two\n");
+
+  await fs.writeFile(path.join(source, "one.txt"), "revised committed one\n");
+  const compared = await controller.compare({ cwd: source, harness: "codex", threadId: "partial-thread" });
+  assert.deepEqual(compared.changes.map((change) => change.path), ["one.txt", "two.txt"]);
 });
 
 test("amend proposals inherit messages, replace unpushed HEAD, and supersede the prior proposal", async (context) => {

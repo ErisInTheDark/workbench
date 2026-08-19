@@ -203,7 +203,7 @@ If Review finds more implementation work while a proposal is pending, run \`wb g
 
 When approved work no longer owns exact claimed entries, run \`wb git arc remove -- <claimed-path> [...]\`. Workbench rejects dirty removals, non-exact claims, or drift under retained claims. It changes no working-tree or index content. Record a returned successor SHA when claims remain. Removing the final clean claim releases the arc and leaves no active successor.
 
-After any proposal is committed, use the same \`wb git arc continue --ref <current-ref>\` command before follow-up implementation. A partial commit returns its existing remaining-file successor. A complete commit creates one fresh baseline at current HEAD. Replace the current ref with the returned ref.
+After any proposal is committed, use the same \`wb git arc continue --ref <current-ref>\` command before follow-up implementation. A partial commit advances the baseline and keeps the full active set claimed; use \`arc remove\` to release clean paths intentionally. A complete commit creates one fresh baseline at current HEAD. Replace the current ref with the returned ref.
 
 #### In Review mode
 

@@ -666,7 +666,7 @@ After start, active-registry commands resolve this thread's current arc. Do not 
 
 ### Continue the arc
 
-Before another implementation pass on the same claimed files, run \`arc continue\` with the current remembered ref. If a proposal is pending, continuation makes it unavailable before returning the successor. If a proposal was committed, a partial commit returns its existing remaining-file successor and a complete commit creates one fresh baseline at current \`HEAD\`. Always replace your remembered ref with the returned ref.
+Before another implementation pass on the same claimed files, run \`arc continue\` with the current remembered ref. If a proposal is pending, continuation makes it unavailable before returning the successor. If a proposal was committed, a partial commit advances the baseline and keeps the full active set claimed; use \`arc remove\` to release clean paths intentionally. A complete commit creates one fresh baseline at current \`HEAD\`. Always replace your remembered ref with the returned ref.
 
 \`wb git arc continue --ref <current-ref>\`
 
