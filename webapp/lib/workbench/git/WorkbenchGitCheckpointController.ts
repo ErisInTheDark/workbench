@@ -18,65 +18,45 @@ import type {
   GitCheckpointFileChange,
   GitCheckpointProposal,
 } from "./checkpoint-contracts";
-import GitArcRegistry, { type GitArcRegistryEntry } from "./GitArcRegistry";
+import GitArcRegistry, { REGISTRY_REF, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitArcPublishState from "./GitArcPublishState";
 import GitArcProposalCache from "./GitArcProposalCache";
 import GitArcPathMover, { type GitArcResolvedMove } from "./GitArcPathMover";
-import WorkbenchGitRepository from "./WorkbenchGitRepository";
+import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
+import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
+import WorkbenchGitHistoryRewriter from "./WorkbenchGitHistoryRewriter";
+import {
+  type ArcOutcome,
+  CHECKPOINT_METADATA_MARKER,
+  checkpointMessage,
+  checkpointNamespace,
+  type CheckpointKind,
+  type CheckpointMetadata,
+  type GitArcHarness,
+  type GitArcProposalStatus,
+  legacyCheckpointNamespace,
+  legacyProposalNamespace,
+  normalizeCommit,
+  normalizeThreadId,
+  outcomeRef,
+  parseMarkedMetadata,
+  PROPOSAL_METADATA_MARKER,
+  proposalMessage,
+  proposalNamespace,
+  type ProposalMetadata,
+  remapProposalMetadata,
+} from "./git-arc-storage";
+
+export type { GitArcProposalStatus } from "./git-arc-storage";
 
 const execFileAsync = promisify(execFile);
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
-const CHECKPOINT_COMMIT_PATTERN = /^[a-f0-9]{7,64}$/iu;
-const CHECKPOINT_METADATA_MARKER = "workbench-git-checkpoint-v1";
-const PROPOSAL_METADATA_MARKER = "workbench-git-checkpoint-proposal-v1";
 const CHECKPOINT_DIFF_ARTIFACT_PATTERN = /^[a-f0-9]{64}$/u;
-
-type CheckpointKind = "arc" | "implement" | "plan";
-type GitArcHarness = "codex" | "copilot" | "opencode";
-export type GitArcProposalStatus = "committed" | "proposed" | "superseded" | "unavailable";
-
-interface CheckpointMetadata {
-  amendedFrom: string | null;
-  intentDescription?: string;
-  kind: CheckpointKind;
-  intentName?: string;
-  priorProposalId?: string;
-  registryLifecycle?: true;
-  scopePaths: string[];
-  version: 1 | 2 | 3;
-}
-
-interface ProposalMetadata {
-  amendTargetSha: string | null;
-  baseCommit: string;
-  committedSha: string | null;
-  description: string;
-  liveBaseCommit: string;
-  livePaths: string[];
-  mode: "amend" | "commit";
-  paths: string[];
-  proposalId: string;
-  sourceCheckpoint: string;
-  status: GitArcProposalStatus;
-  supersededByProposalId: string | null;
-  supersededBySha: string | null;
-  title: string;
-  unavailableReason: string | null;
-  version: 1 | 2;
-}
 
 export interface GitArcActiveClaim extends GitArcRegistryEntry {
   proposalStatus: GitArcProposalStatus | null;
 }
 
-interface ArcOutcome {
-  committedSha: string | null;
-  proposalId: string | null;
-  sourceCheckpoint: string;
-  status: "committed" | "continued" | "partial" | "proposed" | "released";
-  successorCheckpoint: string | null;
-  version: 1;
-}
 
 interface ControllerInput {
   cwd: string;
@@ -216,39 +196,10 @@ async function resolveRepoRoot(cwd: string) {
   return path.resolve(repoRoot);
 }
 
-function normalizeThreadId(threadId: string) {
-  const normalized = String(threadId ?? "")
-    .trim()
-    .replace(/[^A-Za-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  if (!normalized) throw new Error("A checkpoint thread id is required.");
-  return normalized;
-}
-
 function normalizeHarness(harness: string | undefined): GitArcHarness {
   const normalized = String(harness ?? "codex").trim().toLowerCase();
   if (normalized === "codex" || normalized === "copilot" || normalized === "opencode") return normalized;
   throw new Error("A valid checkpoint harness is required.");
-}
-
-function checkpointNamespace(harness: GitArcHarness, threadId: string) {
-  return `refs/worktree/agents/${harness}/${normalizeThreadId(threadId)}/checkpoints`;
-}
-
-function legacyCheckpointNamespace(threadId: string) {
-  return `refs/worktree/agents/${normalizeThreadId(threadId)}/checkpoints`;
-}
-
-function proposalNamespace(harness: GitArcHarness, threadId: string) {
-  return `refs/worktree/agents/${harness}/${normalizeThreadId(threadId)}/checkpoint-proposals`;
-}
-
-function legacyProposalNamespace(threadId: string) {
-  return `refs/worktree/agents/${normalizeThreadId(threadId)}/checkpoint-proposals`;
-}
-
-function outcomeRef(harness: GitArcHarness, threadId: string, sourceCheckpoint: string) {
-  return `refs/worktree/agents/${harness}/${normalizeThreadId(threadId)}/arc-outcomes/${normalizeCommit(sourceCheckpoint)}`;
 }
 
 async function readArcOutcome(
@@ -279,12 +230,6 @@ async function prepareArcOutcome(
   const previous = await repository.readRef(ref);
   const blob = await repository.writeBlob(`${JSON.stringify(outcome)}\n`);
   return { newValue: blob, oldValue: previous ?? "0".repeat(40), ref };
-}
-
-function normalizeCommit(commit: string) {
-  const normalized = String(commit ?? "").trim();
-  if (!CHECKPOINT_COMMIT_PATTERN.test(normalized)) throw new Error("Invalid checkpoint commit.");
-  return normalized;
 }
 
 function isWithinRoot(candidatePath: string, rootPath: string) {
@@ -397,27 +342,11 @@ async function createCommitFromTree(
   }
 }
 
-function checkpointMessage(metadata: CheckpointMetadata) {
-  return `${CHECKPOINT_METADATA_MARKER}\n${JSON.stringify(metadata)}\n`;
-}
-
-function proposalMessage(metadata: ProposalMetadata) {
-  return `${PROPOSAL_METADATA_MARKER}\n${JSON.stringify(metadata)}\n`;
-}
-
-function parseMarkedMetadata<T>(message: string, marker: string): T | null {
-  const [firstLine, ...rest] = message.trim().split(/\r?\n/u);
-  if (firstLine !== marker || !rest.length) return null;
-  try {
-    return JSON.parse(rest.join("\n")) as T;
-  } catch {
-    throw new Error("Checkpoint metadata is invalid.");
-  }
-}
-
 async function createCheckpointRef(repoRoot: string, harness: GitArcHarness, threadId: string, commit: string) {
   const checkpointRef = await checkpointRefName(repoRoot, harness, threadId, commit);
-  await runGit(repoRoot, ["update-ref", checkpointRef, commit]);
+  await new WorkbenchGitRepository(repoRoot).updateRefs([
+    { newValue: commit, oldValue: "0".repeat(40), ref: checkpointRef },
+  ]);
   return checkpointRef;
 }
 
@@ -429,11 +358,22 @@ async function checkpointRefName(repoRoot: string, harness: GitArcHarness, threa
 
 async function readCheckpoint(repoRoot: string, harness: GitArcHarness, threadId: string, rawCommit: string): Promise<ReadCheckpointResult> {
   const commit = normalizeCommit(rawCommit);
-  const checkpointCommit = (await runGit(repoRoot, ["rev-parse", "--verify", `${commit}^{commit}`])).trim();
-  const checkpointRef = (await runGit(repoRoot, [
+  const repository = new WorkbenchGitRepository(repoRoot);
+  let checkpointCommit = await repository.resolveCommit(commit);
+  let checkpointRef = (await runGit(repoRoot, [
     "for-each-ref", "--format=%(refname)", "--points-at", checkpointCommit, "--count=1",
     checkpointNamespace(harness, threadId), legacyCheckpointNamespace(threadId),
   ])).trim();
+  if (!checkpointRef) {
+    const remapped = await new GitArcHistoryRewriter(repository).resolveAlias(checkpointCommit);
+    if (remapped !== checkpointCommit) {
+      checkpointCommit = await repository.resolveCommit(remapped);
+      checkpointRef = (await runGit(repoRoot, [
+        "for-each-ref", "--format=%(refname)", "--points-at", checkpointCommit, "--count=1",
+        checkpointNamespace(harness, threadId), legacyCheckpointNamespace(threadId),
+      ])).trim();
+    }
+  }
   if (!checkpointRef) throw new Error("Checkpoint commit is not in this thread/worktree checkpoint timeline.");
   const message = await runGit(repoRoot, ["show", "-s", "--format=%B", checkpointCommit]);
   return {
@@ -561,7 +501,9 @@ async function transitionProposal(
     metadata.baseCommit,
     proposalMessage(metadata),
   );
-  await runGit(repoRoot, ["update-ref", proposal.proposalRef, stateCommit, proposal.proposalCommit]);
+  await new WorkbenchGitRepository(repoRoot).updateRefs([
+    { newValue: stateCommit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef },
+  ]);
   return { ...proposal, metadata, proposalCommit: stateCommit };
 }
 
@@ -1445,10 +1387,143 @@ export default class WorkbenchGitCheckpointController {
     }
     const repository = new WorkbenchGitRepository(repoRoot);
     if (proposal.metadata.mode === "amend") {
-      await new GitArcPublishState(repository).requireAmendableCurrentHead({ refresh: false });
-      if (await repository.currentHead() !== proposal.metadata.amendTargetSha) {
-        throw new Error("Repository HEAD changed after this amend proposal was created.");
-      }
+      const message = commitMessage(title, description);
+      const targetTree = includeNewer && resolved.includeNewerAvailable
+        ? resolved.currentTree!
+        : await repository.resolveTree(proposal.proposalCommit);
+      const source = await readCheckpoint(repoRoot, harness, threadId, proposal.metadata.sourceCheckpoint);
+      const sourceMetadata = requireArcMetadata(source);
+      const priorProposal = sourceMetadata.priorProposalId
+        ? await readProposal(repoRoot, harness, threadId, sourceMetadata.priorProposalId)
+        : null;
+      const supersededPrior = priorProposal?.metadata.status === "committed"
+        && priorProposal.metadata.committedSha === proposal.metadata.amendTargetSha
+        ? priorProposal
+        : null;
+      const oldOutcomeRef = outcomeRef(harness, threadId, source.checkpointCommit);
+      let committedMetadata: ProposalMetadata | null = null;
+      const rewritten = await new WorkbenchGitHistoryRewriter(repository).amend({
+        excludeArcRefs: [
+          proposal.proposalRef,
+          REGISTRY_REF,
+          oldOutcomeRef,
+          ...(supersededPrior ? [supersededPrior.proposalRef] : []),
+        ],
+        expectedHead: proposal.metadata.amendTargetSha,
+        message,
+        paths: proposal.metadata.livePaths,
+        target: proposal.metadata.amendTargetSha,
+        targetTree,
+        mutatePlan: async ({ amendedCommit, arcPlan }) => {
+          const remappedSource = arcPlan.commits.get(source.checkpointCommit) ?? source.checkpointCommit;
+          committedMetadata = {
+            ...remapProposalMetadata(proposal.metadata, arcPlan.commits),
+            amendTargetSha: amendedCommit,
+            committedSha: amendedCommit,
+            description: description.trim(),
+            liveBaseCommit: amendedCommit,
+            sourceCheckpoint: remappedSource,
+            status: "committed",
+            title: title.trim(),
+            unavailableReason: null,
+          };
+          const stateCommit = await repository.createCommitFromTree(
+            targetTree,
+            committedMetadata.baseCommit,
+            proposalMessage(committedMetadata),
+          );
+          const updates: GitRefUpdate[] = [
+            { newValue: stateCommit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef },
+          ];
+          const replaceRefs = [proposal.proposalRef, REGISTRY_REF];
+
+          if (supersededPrior) {
+            const priorMetadata: ProposalMetadata = {
+              ...remapProposalMetadata(supersededPrior.metadata, arcPlan.commits),
+              committedSha: amendedCommit,
+              status: "superseded",
+              supersededByProposalId: proposalId,
+              supersededBySha: amendedCommit,
+            };
+            const priorState = await repository.createCommitFromTree(
+              await repository.resolveTree(supersededPrior.proposalCommit),
+              priorMetadata.baseCommit,
+              proposalMessage(priorMetadata),
+            );
+            updates.push({ newValue: priorState, oldValue: supersededPrior.proposalCommit, ref: supersededPrior.proposalRef });
+            replaceRefs.push(supersededPrior.proposalRef);
+          }
+
+          const currentTree = await repository.writeScopedWorktreeTree(sourceMetadata.scopePaths, amendedCommit);
+          const remainingPaths = await repository.listChangedPaths(amendedCommit, currentTree, sourceMetadata.scopePaths);
+          let successorCommit: string | null = null;
+          if (remainingPaths.length) {
+            const fullWorktree = await repository.writeWorktreeTree();
+            const baselineTree = await repository.writeTreeWithPathsFromSource(fullWorktree, amendedCommit, remainingPaths);
+            successorCommit = await repository.createCommitFromTree(baselineTree, amendedCommit, checkpointMessage({
+              amendedFrom: remappedSource,
+              ...(sourceMetadata.intentDescription ? { intentDescription: sourceMetadata.intentDescription } : {}),
+              ...(sourceMetadata.intentName ? { intentName: sourceMetadata.intentName } : {}),
+              kind: "arc",
+              priorProposalId: proposalId,
+              registryLifecycle: true,
+              scopePaths: remainingPaths,
+              version: 3,
+            }));
+            updates.push({
+              newValue: successorCommit,
+              oldValue: "0".repeat(40),
+              ref: await checkpointRefName(repoRoot, harness, threadId, successorCommit),
+            });
+          }
+          const registry = new GitArcRegistry(repository);
+          const active = await registry.find({ harness, threadId });
+          const registryMutation = !active ? null : successorCommit
+            ? await registry.prepareClaim({
+              checkpointCommit: successorCommit,
+              claimedPaths: remainingPaths,
+              harness,
+              intentDescription: active.intentDescription,
+              intentName: sourceMetadata.intentName ?? active.intentName,
+              proposalId,
+              threadId,
+            }, {
+              commitRemaps: arcPlan.commits,
+              expectedCheckpointCommit: source.checkpointCommit,
+            })
+            : await registry.prepareRelease({ harness, threadId }, {
+              commitRemaps: arcPlan.commits,
+              expectedCheckpointCommit: source.checkpointCommit,
+            });
+          const registryUpdate = registryMutation?.update
+            ?? (!active ? await registry.prepareCommitRemap(arcPlan.commits) : null);
+          if (registryUpdate) updates.push(registryUpdate);
+
+          const oldOutcome = await repository.readRef(oldOutcomeRef);
+          const nextOutcomeRef = outcomeRef(harness, threadId, remappedSource);
+          const outcomeBlob = await repository.writeBlob(`${JSON.stringify({
+            committedSha: amendedCommit,
+            proposalId,
+            sourceCheckpoint: remappedSource,
+            status: successorCommit ? "partial" : "committed",
+            successorCheckpoint: successorCommit,
+            version: 1,
+          } satisfies ArcOutcome)}\n`);
+          updates.push({
+            newValue: outcomeBlob,
+            oldValue: oldOutcomeRef === nextOutcomeRef ? oldOutcome ?? "0".repeat(40) : "0".repeat(40),
+            ref: nextOutcomeRef,
+          });
+          replaceRefs.push(oldOutcomeRef, nextOutcomeRef);
+          return {
+            deletes: oldOutcome && oldOutcomeRef !== nextOutcomeRef ? [{ oldValue: oldOutcome, ref: oldOutcomeRef }] : [],
+            replaceRefs,
+            updates,
+          };
+        },
+      });
+      if (!committedMetadata) throw new Error("Amend proposal metadata was not committed.");
+      return await buildProposalResult(repoRoot, committedMetadata, rewritten.amendedCommit, harness, threadId);
     }
     const message = commitMessage(title, description);
     const targetTree = includeNewer && resolved.includeNewerAvailable
@@ -1472,7 +1547,7 @@ export default class WorkbenchGitCheckpointController {
     const source = await readCheckpoint(repoRoot, harness, threadId, proposal.metadata.sourceCheckpoint);
     const sourceMetadata = requireArcMetadata(source);
     let supersededProposalUpdate: { newValue: string; oldValue: string; ref: string } | null = null;
-    if (proposal.metadata.mode === "amend" && sourceMetadata.priorProposalId) {
+    if (sourceMetadata.priorProposalId) {
       const priorProposal = await readProposal(repoRoot, harness, threadId, sourceMetadata.priorProposalId);
       if (
         priorProposal.metadata.status === "committed"

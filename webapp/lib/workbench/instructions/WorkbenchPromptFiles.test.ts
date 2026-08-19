@@ -49,6 +49,19 @@ test("managed Git instructions describe the concise arc move workflow", () => {
   assert.doesNotMatch(instructions, /journal|process death|rollback failure/iu);
 });
 
+test("managed Git instructions describe safe linear commit amendments", () => {
+  const instructions = buildWorkbenchGitInstructions({
+    harness: "codex",
+    threadId: "thread-1",
+    workbenchOrigin: "http://localhost",
+  });
+  assert(instructions);
+  assert.match(instructions, /wb git commit --amend <commit-sha> --message <message>/u);
+  assert.match(instructions, /linear first-parent stack/u);
+  assert.match(instructions, /without checking out intermediate history/u);
+  assert.match(instructions, /does not run commit hooks/u);
+});
+
 test("arc instructions make guarded commands authoritative for workspace state", () => {
   const instructions = buildWorkbenchGitInstructions({
     harness: "codex",

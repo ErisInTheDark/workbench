@@ -624,11 +624,15 @@ When workflows or the user explicitly authorize a commit, use Workbench's bounde
 
 \`wb git commit --message <message>\`
 
+\`wb git commit --amend <commit-sha> --message <message>\`
+
 When the control-plane project owns the thread but the files belong to another registered worktree of the same repository, keep the command cwd in the control-plane project and add \`--worktree <absolute-path>\` to each add, unstage, and commit command. The explicit worktree selects the Git execution root and the thread's per-worktree selection namespace; it does not reinterpret thread identity.
 
 \`wb git add\` records the exact files that are currently changed beneath the requested paths. It does not snapshot their contents or modify the repository's ordinary Git index. Later edits to a selected file are included when \`wb git commit\` reads that file's current contents. \`wb git unstage\` removes exact selected files or selected descendants of a requested directory; use \`.\` to clear the thread's selection.
 
 Each managed thread owns an isolated selection list for each Git worktree. \`wb git commit\` runs host-side \`git add\` for the selected files followed by a path-limited \`git commit --only\`, then clears the selection after success. Unrelated ordinary staged files remain staged and excluded. Failures retain the selection; because the add is real, a later commit failure may leave the selected files staged in the ordinary Git index.
+
+Use \`--amend <commit-sha>\` only for an exact unpushed commit on the current branch's linear first-parent stack. Workbench builds replacement commits and remaps affected arc refs with Git plumbing without checking out intermediate history. Merge ranges, signed commits, conflicts, detached HEAD, pushed targets, and unknown remote state reject before ref publication. Old checkpoint SHAs resolve through the Workbench rewrite map. The plumbing amend path does not run commit hooks.
 
 ## Workbench Git Plans and Arcs
 

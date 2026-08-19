@@ -205,6 +205,17 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     paths: ["src/file.ts"],
     threadId: "thread-1",
   });
+  const amendCommit = await parseWorkbenchAgentCliCommand([
+    "git", "commit", "--amend", "a".repeat(40), "--message", "Rewrite history",
+  ], gitOptions);
+  assert.equal(amendCommit.kind, "request");
+  assert.deepEqual(amendCommit.request.body, {
+    action: "commit",
+    amendTarget: "a".repeat(40),
+    cwd: "C:/workspace",
+    message: "Rewrite history",
+    threadId: "thread-1",
+  });
 
   const start = await parseWorkbenchAgentCliCommand([
     "git", "arc", "start", "--ref", "abc",
@@ -552,8 +563,8 @@ Commands:
   wb git unstage [--worktree <absolute-path>] -- <path> [<path>...]
     Remove exact files or descendants from this thread's commit selection.
 
-  wb git commit [--worktree <absolute-path>] --message <message>
-    Commit only this thread's selected files, then clear the selection on success.
+  wb git commit [--worktree <absolute-path>] [--amend <commit-sha>] --message <message>
+    Commit selected files, or amend them into one linear unpushed ancestor, then clear the selection on success.
 
 Run from the repository root and use . with add to select all changed files.
 Run from the repository root and use . with unstage to clear the thread selection.

@@ -500,15 +500,17 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   })),
   {
-    description: "Commit only this thread's selected files, then clear the selection on success.",
+    description: "Commit selected files, or amend them into one linear unpushed ancestor, then clear the selection on success.",
     helpGroups: ["git"],
     words: ["git", "commit"],
-    usage: "wb git commit [--worktree <absolute-path>] --message <message>",
+    usage: "wb git commit [--worktree <absolute-path>] [--amend <commit-sha>] --message <message>",
     async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(args, { values: ["--message", "--worktree"] });
+      const flags = new ParsedFlags(args, { values: ["--amend", "--message", "--worktree"] });
       const targetWorktree = flags.optional("--worktree");
+      const amendTarget = flags.optional("--amend");
       return post("/api/git", {
         action: "commit",
+        ...(amendTarget ? { amendTarget } : {}),
         cwd,
         message: flags.required("--message"),
         ...(targetWorktree ? { targetWorktree } : {}),

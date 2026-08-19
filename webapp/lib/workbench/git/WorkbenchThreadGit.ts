@@ -14,6 +14,8 @@ import { promisify } from "node:util";
 
 import { isPathWithinRoot, normalizeRelativePath } from "../../project";
 import { workbenchLibraryRoot } from "../../workbench-library-paths";
+import WorkbenchGitHistoryRewriter from "./WorkbenchGitHistoryRewriter";
+import WorkbenchGitRepository from "./WorkbenchGitRepository";
 
 const execFileAsync = promisify(execFile);
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
@@ -37,9 +39,12 @@ export interface WorkbenchThreadGitSelectionResult {
 }
 
 export interface WorkbenchThreadGitCommitResult {
+  amendedCommit?: string;
   commit: string;
   committedPaths: string[];
+  rewrittenCommitCount?: number;
   selectedPaths: string[];
+  warnings?: string[];
 }
 
 function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {
@@ -210,7 +215,7 @@ export default class WorkbenchThreadGit {
     };
   }
 
-  async commit(message: string): Promise<WorkbenchThreadGitCommitResult> {
+  async commit(message: string, amendTarget?: string): Promise<WorkbenchThreadGitCommitResult> {
     const normalizedMessage = message.trim();
     if (!normalizedMessage) throw new Error("A commit message is required.");
     await this.recoverStaleTransactions();
@@ -219,6 +224,21 @@ export default class WorkbenchThreadGit {
     if (!selectedPaths.length) {
       await fs.rm(claimedDirectoryPath, { force: true, recursive: true });
       throw new Error("This thread has no selected files to commit.");
+    }
+
+    if (amendTarget) {
+      try {
+        const result = await new WorkbenchGitHistoryRewriter(new WorkbenchGitRepository(this.repoRoot)).amend({
+          message: normalizedMessage,
+          paths: selectedPaths,
+          target: amendTarget,
+        });
+        await fs.rm(claimedDirectoryPath, { force: true, recursive: true });
+        return { ...result, selectedPaths };
+      } catch (error) {
+        await this.restoreClaimedSelection(claimedDirectoryPath);
+        throw error;
+      }
     }
 
     const temporaryDirectoryPath = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-git-"));

@@ -7,6 +7,8 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { prewarmWorkbenchGitTestFixtures } from "../lib/workbench/git/WorkbenchGitTestFixtures";
+
 const EXCLUDED_DIRECTORY_NAMES = new Set([".next", "build", "coverage", "dist", "generated", "node_modules"]);
 const TEST_FILE_PATTERN = /\.test\.tsx?$/u;
 const TEST_TIMEOUT_MS = 30_000;
@@ -21,7 +23,10 @@ function comparePaths(left: string, right: string) {
 }
 
 export default class ProjectTestRunner {
-  constructor(private readonly projectRoot = process.cwd()) {}
+  constructor(
+    private readonly projectRoot = process.cwd(),
+    private readonly prewarmTestFixtures: (files: readonly string[]) => Promise<void> = prewarmWorkbenchGitTestFixtures,
+  ) {}
 
   async discoverTestFiles(inputs: readonly string[] = ["."]) {
     const discovered = new Set<string>();
@@ -33,6 +38,11 @@ export default class ProjectTestRunner {
     const files = await this.discoverTestFiles(inputs);
     if (files.length === 0) throw new Error(`No .test.ts or .test.tsx files found under: ${inputs.join(", ")}`);
 
+    await this.prewarmTestFixtures(files);
+    return await this.runTestFiles(files);
+  }
+
+  protected async runTestFiles(files: readonly string[]) {
     const reporter = pathToFileURL(path.join(this.projectRoot, "scripts", "concise-test-reporter.mjs")).href;
     const testArguments = files.map((file) => path.relative(this.projectRoot, file).replaceAll("\\", "/"));
     return await new Promise<TestProcessResult>((resolve, reject) => {

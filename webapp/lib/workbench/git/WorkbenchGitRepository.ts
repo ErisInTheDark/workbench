@@ -15,6 +15,7 @@ const execFileAsync = promisify(execFile);
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
 const COMMIT_PATTERN = /^[a-f0-9]{7,64}$/iu;
 const WORKBENCH_TRANSCRIPT_EXCLUSION = ":(top,glob,exclude).workbench/transcripts/**";
+export const GIT_STATE_GENERATION_REF = "refs/worktree/workbench/state-generation";
 
 export interface GitHeadMovement {
   changedPaths: string[];
@@ -28,6 +29,24 @@ export interface GitRefUpdate {
   ref: string;
 }
 
+export interface GitCommitIdentity {
+  authorDate: string;
+  authorEmail: string;
+  authorName: string;
+  committerDate: string;
+  committerEmail: string;
+  committerName: string;
+  message: string;
+  parents: string[];
+  signed: boolean;
+  tree: string;
+}
+
+export interface GitCommitBatch {
+  commits: Map<string, GitCommitIdentity>;
+  errors: Map<string, string>;
+}
+
 function isWithinRoot(candidatePath: string, rootPath: string) {
   const candidate = path.resolve(candidatePath).replace(/\\/g, "/").toLowerCase();
   const root = path.resolve(rootPath).replace(/\\/g, "/").toLowerCase();
@@ -36,6 +55,36 @@ function isWithinRoot(candidatePath: string, rootPath: string) {
 
 function parseNullPaths(output: string) {
   return output.split("\0").filter(Boolean);
+}
+
+function parseCommitActor(line: string, label: string) {
+  const match = /^(.*) <([^<>]*)> (\d+) ([+-]\d{4})$/u.exec(line);
+  if (!match) throw new Error(`Git commit ${label} metadata is invalid.`);
+  return { date: `${match[3]} ${match[4]}`, email: match[2]!, name: match[1]! };
+}
+
+function parseRawCommit(contents: Buffer): GitCommitIdentity {
+  const separator = contents.indexOf("\n\n");
+  if (separator < 0) throw new Error("Git commit headers are invalid.");
+  const headers = contents.subarray(0, separator).toString("utf8").split("\n");
+  const value = (name: string) => headers.find((line) => line.startsWith(`${name} `))?.slice(name.length + 1) ?? "";
+  const tree = value("tree");
+  const parents = headers.filter((line) => line.startsWith("parent ")).map((line) => line.slice(7));
+  const author = parseCommitActor(value("author"), "author");
+  const committer = parseCommitActor(value("committer"), "committer");
+  if (!tree) throw new Error("Git commit tree metadata is invalid.");
+  return {
+    authorDate: author.date,
+    authorEmail: author.email,
+    authorName: author.name,
+    committerDate: committer.date,
+    committerEmail: committer.email,
+    committerName: committer.name,
+    message: contents.subarray(separator + 2).toString("utf8"),
+    parents,
+    signed: headers.some((line) => line.startsWith("gpgsig ") || line.startsWith("gpgsig-sha256 ")),
+    tree,
+  };
 }
 
 export default class WorkbenchGitRepository {
@@ -76,11 +125,11 @@ export default class WorkbenchGitRepository {
     return await WorkbenchGitRepository.runAt(this.root, args, env);
   }
 
-  async runWithInput(args: string[], input: string) {
+  async runWithInput(args: string[], input: string, env: NodeJS.ProcessEnv = process.env) {
     return await new Promise<string>((resolve, reject) => {
       const child = spawn("git", args, {
         cwd: this.root,
-        env: process.env,
+        env,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       });
@@ -93,6 +142,28 @@ export default class WorkbenchGitRepository {
       child.once("error", reject);
       child.once("close", (code) => {
         if (code === 0) resolve(stdout);
+        else reject(new Error(stderr.trim() || `git ${args[0] ?? "command"} failed with exit code ${code}.`));
+      });
+      child.stdin.end(input);
+    });
+  }
+
+  async runBufferWithInput(args: string[], input: string, env: NodeJS.ProcessEnv = process.env) {
+    return await new Promise<Buffer>((resolve, reject) => {
+      const child = spawn("git", args, {
+        cwd: this.root,
+        env,
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      });
+      const stdout: Buffer[] = [];
+      let stderr = "";
+      child.stdout.on("data", (chunk: Buffer) => { stdout.push(chunk); });
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+      child.once("error", reject);
+      child.once("close", (code) => {
+        if (code === 0) resolve(Buffer.concat(stdout));
         else reject(new Error(stderr.trim() || `git ${args[0] ?? "command"} failed with exit code ${code}.`));
       });
       child.stdin.end(input);
@@ -164,6 +235,62 @@ export default class WorkbenchGitRepository {
     return (await this.run(["rev-parse", `${commit}^`])).trim();
   }
 
+  async isAncestor(ancestor: string, descendant: string) {
+    return await this.succeeds(["merge-base", "--is-ancestor", ancestor, descendant]);
+  }
+
+  async readCommit(commit: string): Promise<GitCommitIdentity> {
+    const batch = await this.readCommits([commit]);
+    const metadata = batch.commits.get(commit);
+    if (metadata) return metadata;
+    throw new Error(batch.errors.get(commit) ?? `Unable to read commit metadata for ${commit}.`);
+  }
+
+  async readCommits(commits: string[]): Promise<GitCommitBatch> {
+    const requested = [...new Set(commits)];
+    const result: GitCommitBatch = { commits: new Map(), errors: new Map() };
+    if (!requested.length) return result;
+    const output = await this.runBufferWithInput(["cat-file", "--batch"], `${requested.join("\n")}\n`);
+    let offset = 0;
+    for (const requestedCommit of requested) {
+      const headerEnd = output.indexOf(0x0a, offset);
+      if (headerEnd < 0) {
+        result.errors.set(requestedCommit, "Git cat-file batch output ended before its object header.");
+        break;
+      }
+      const header = output.subarray(offset, headerEnd).toString("utf8");
+      offset = headerEnd + 1;
+      const missing = /^([a-f0-9]+) missing$/iu.exec(header);
+      if (missing) {
+        result.errors.set(requestedCommit, `Git object ${missing[1]} is missing.`);
+        continue;
+      }
+      const match = /^([a-f0-9]+) (\S+) (\d+)$/iu.exec(header);
+      if (!match) {
+        result.errors.set(requestedCommit, `Git cat-file returned an invalid object header: ${header}`);
+        continue;
+      }
+      const size = Number(match[3]);
+      const objectEnd = offset + size;
+      if (!Number.isSafeInteger(size) || size < 0 || objectEnd > output.length) {
+        result.errors.set(requestedCommit, `Git object ${match[1]} has an invalid size.`);
+        break;
+      }
+      const contents = output.subarray(offset, objectEnd);
+      offset = objectEnd + 1;
+      if (match[2] !== "commit") {
+        result.errors.set(requestedCommit, `Git object ${match[1]} is not a commit.`);
+        continue;
+      }
+      try {
+        result.commits.set(requestedCommit, parseRawCommit(contents));
+      } catch (error) {
+        result.errors.set(requestedCommit, error instanceof Error ? error.message : String(error));
+      }
+    }
+    return result;
+  }
+
   async readCommitMessage(commit: string) {
     return await this.run(["show", "-s", "--format=%B", commit]);
   }
@@ -204,13 +331,31 @@ export default class WorkbenchGitRepository {
     await this.run(["update-ref", "-d", ref, ...(oldValue !== undefined ? [oldValue] : [])]);
   }
 
-  async updateRefs(updates: GitRefUpdate[], deletes: Array<{ oldValue?: string; ref: string }> = []) {
+  async updateRefs(
+    updates: GitRefUpdate[],
+    deletes: Array<{ oldValue?: string; ref: string }> = [],
+    options: { expectedStateGeneration?: string | null } = {},
+  ) {
+    const updatesGeneration = updates.some(({ ref }) => ref === GIT_STATE_GENERATION_REF);
+    const deletesGeneration = deletes.some(({ ref }) => ref === GIT_STATE_GENERATION_REF);
+    const advancesGeneration = !updatesGeneration && !deletesGeneration && (updates.length > 0 || deletes.length > 0);
+    const generationValue = advancesGeneration
+      ? updates.find(({ ref }) => ref !== GIT_STATE_GENERATION_REF)?.newValue
+        ?? deletes.find(({ ref }) => ref !== GIT_STATE_GENERATION_REF)?.oldValue
+        ?? null
+      : null;
     const lines = ["start"];
     for (const update of updates) {
       lines.push(`update ${update.ref} ${update.newValue}${update.oldValue !== undefined ? ` ${update.oldValue}` : ""}`);
     }
     for (const deletion of deletes) {
       lines.push(`delete ${deletion.ref}${deletion.oldValue !== undefined ? ` ${deletion.oldValue}` : ""}`);
+    }
+    if (generationValue) {
+      const expected = options.expectedStateGeneration === undefined
+        ? ""
+        : ` ${options.expectedStateGeneration ?? "0".repeat(40)}`;
+      lines.push(`update ${GIT_STATE_GENERATION_REF} ${generationValue}${expected}`);
     }
     lines.push("prepare", "commit", "");
     await this.runWithInput(["update-ref", "--stdin"], lines.join("\n"));
@@ -271,15 +416,73 @@ export default class WorkbenchGitRepository {
     });
   }
 
-  async createCommitFromTree(tree: string, parent: string, message: string) {
+  async createCommitFromTree(
+    tree: string,
+    parent: string | string[],
+    message: string,
+    identity?: Omit<GitCommitIdentity, "message" | "parents" | "signed" | "tree">,
+  ) {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-git-message-"));
     const messagePath = path.join(directory, "message.txt");
     try {
       await fs.writeFile(messagePath, message, "utf8");
-      return (await this.run(["commit-tree", tree, "-p", parent, "-F", messagePath])).trim();
+      const parents = Array.isArray(parent) ? parent : [parent];
+      const env = identity ? {
+        ...process.env,
+        GIT_AUTHOR_DATE: identity.authorDate,
+        GIT_AUTHOR_EMAIL: identity.authorEmail,
+        GIT_AUTHOR_NAME: identity.authorName,
+        GIT_COMMITTER_DATE: identity.committerDate,
+        GIT_COMMITTER_EMAIL: identity.committerEmail,
+        GIT_COMMITTER_NAME: identity.committerName,
+      } : process.env;
+      return (await this.run([
+        "commit-tree", tree, "--no-gpg-sign", ...parents.flatMap((candidate) => ["-p", candidate]), "-F", messagePath,
+      ], env)).trim();
     } finally {
       await fs.rm(directory, { force: true, recursive: true });
     }
+  }
+
+  async mergeTree(base: string, left: string, right: string) {
+    try {
+      const output = await this.run(["merge-tree", "--write-tree", `--merge-base=${base}`, left, right]);
+      return output.trim().split(/\r?\n/u)[0] ?? "";
+    } catch (error) {
+      throw new Error(`Commit rewrite conflicts while merging changes after ${base}.`, { cause: error });
+    }
+  }
+
+  async firstParentRange(target: string, head: string) {
+    const commits = (await this.run(["rev-list", "--reverse", "--first-parent", head]))
+      .split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
+    const targetIndex = commits.indexOf(target);
+    if (targetIndex < 0) throw new Error("Amend target is not on the current branch's first-parent chain.");
+    return commits.slice(targetIndex);
+  }
+
+  async listRefsWithValues(...namespaces: string[]) {
+    const output = await this.run(["for-each-ref", "--format=%(refname)%00%(objectname)", ...namespaces]);
+    const refs = output.split(/\r?\n/u).filter(Boolean).map((line) => {
+      const [ref = "", value = ""] = line.split("\0");
+      return { ref, value };
+    });
+    const values = [...new Set(refs.map(({ value }) => value).filter(Boolean))];
+    if (!values.length) return [];
+    const typeOutput = await this.runWithInput(
+      ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+      `${values.join("\n")}\n`,
+    );
+    const types = new Map<string, string>();
+    for (const line of typeOutput.split(/\r?\n/u).filter(Boolean)) {
+      const match = /^([a-f0-9]+) (\S+)$/iu.exec(line);
+      if (match) types.set(match[1]!, match[2]!);
+    }
+    return refs.map(({ ref, value }) => ({ objectType: types.get(value) ?? "missing", ref, value }));
+  }
+
+  async shortCommit(commit: string) {
+    return (await this.run(["rev-parse", "--short", commit])).trim();
   }
 
   async listChangedPaths(from: string, to: string, paths: string[]) {

@@ -50,11 +50,16 @@ export async function POST(request: NextRequest) {
     const threadGit = await WorkbenchThreadGit.create({ cwd: resolved.cwd, targetWorktree, threadId });
 
     if (action === "commit") {
-      const result = await threadGit.commit(readString(body.message));
+      const amendTarget = readString(body.amendTarget) || undefined;
+      const result = await threadGit.commit(readString(body.message), amendTarget);
       return new NextResponse([
-        `Committed ${result.commit}`,
+        ...(result.amendedCommit ? [
+          `Amended ${amendTarget} as ${result.amendedCommit}`,
+          `Rewritten HEAD ${result.commit} (${result.rewrittenCommitCount} commits)`,
+        ] : [`Committed ${result.commit}`]),
         `Committed files (${result.committedPaths.length}):`,
         ...result.committedPaths.map((filePath) => `  ${filePath}`),
+        ...(result.warnings?.map((warning) => `Warning: ${warning}`) ?? []),
         "",
       ].join("\n"), {
         headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },

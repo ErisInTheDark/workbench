@@ -5,7 +5,7 @@
  */
 import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
 
-const REGISTRY_REF = "refs/worktree/workbench/active-arcs";
+export const REGISTRY_REF = "refs/worktree/workbench/active-arcs";
 
 export interface GitArcIdentity {
   harness: string;
@@ -47,7 +47,8 @@ export interface GitArcRegistryMutation {
 }
 
 export interface GitArcRegistryReplaceOptions {
-  expectedCheckpointCommit: string;
+  commitRemaps?: ReadonlyMap<string, string>;
+  expectedCheckpointCommit?: string;
 }
 
 function normalizeIdentityPart(value: string, label: string) {
@@ -70,6 +71,17 @@ function parseState(contents: string): GitArcRegistryState {
   return { entries: parsed.entries, version: 1 };
 }
 
+function remapState(state: GitArcRegistryState, commits?: ReadonlyMap<string, string>): GitArcRegistryState {
+  if (!commits?.size) return state;
+  return {
+    entries: state.entries.map((entry) => ({
+      ...entry,
+      checkpointCommit: commits.get(entry.checkpointCommit) ?? entry.checkpointCommit,
+    })),
+    version: 1,
+  };
+}
+
 export default class GitArcRegistry {
   constructor(private readonly repository: WorkbenchGitRepository) {}
 
@@ -89,14 +101,24 @@ export default class GitArcRegistry {
     return (await this.read()).state.entries;
   }
 
+  async prepareCommitRemap(commits: ReadonlyMap<string, string>) {
+    const { blob, state } = await this.read();
+    if (!blob) return null;
+    const entries = remapState(state, commits).entries;
+    if (entries.every((entry, index) => entry.checkpointCommit === state.entries[index]?.checkpointCommit)) return null;
+    const nextBlob = await this.repository.writeBlob(`${JSON.stringify({ entries, version: 1 } satisfies GitArcRegistryState)}\n`);
+    return { newValue: nextBlob, oldValue: blob, ref: REGISTRY_REF };
+  }
+
   async prepareClaim(
     entry: Omit<GitArcRegistryEntry, "updatedAt">,
     options?: GitArcRegistryReplaceOptions,
   ): Promise<GitArcRegistryMutation> {
-    const { blob, state } = await this.read();
+    const { blob, state: storedState } = await this.read();
     const key = identityKey(entry);
-    const current = state.entries.find((candidate) => identityKey(candidate) === key) ?? null;
-    if (options) {
+    const current = storedState.entries.find((candidate) => identityKey(candidate) === key) ?? null;
+    const state = remapState(storedState, options?.commitRemaps);
+    if (options?.expectedCheckpointCommit) {
       if (!current) throw new Error("This thread no longer owns an active Git arc.");
       if (current.checkpointCommit !== options.expectedCheckpointCommit) {
         throw new Error("This thread's active Git arc changed before the registry update completed.");
@@ -127,16 +149,17 @@ export default class GitArcRegistry {
   }
 
   async prepareRelease(identity: GitArcIdentity, options?: GitArcRegistryReplaceOptions): Promise<GitArcRegistryMutation | null> {
-    const { blob, state } = await this.read();
+    const { blob, state: storedState } = await this.read();
     const key = identityKey(identity);
-    const current = state.entries.find((candidate) => identityKey(candidate) === key) ?? null;
-    if (options) {
+    const current = storedState.entries.find((candidate) => identityKey(candidate) === key) ?? null;
+    if (options?.expectedCheckpointCommit) {
       if (!current) throw new Error("This thread no longer owns an active Git arc.");
       if (current.checkpointCommit !== options.expectedCheckpointCommit) {
         throw new Error("This thread's active Git arc changed before the registry update completed.");
       }
     }
     if (!blob || !current) return null;
+    const state = remapState(storedState, options?.commitRemaps);
     const entries = state.entries.filter((candidate) => identityKey(candidate) !== key);
     const nextState = { entries, version: 1 } satisfies GitArcRegistryState;
     const nextBlob = await this.repository.writeBlob(`${JSON.stringify(nextState)}\n`);

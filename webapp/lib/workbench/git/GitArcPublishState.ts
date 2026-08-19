@@ -29,6 +29,10 @@ export default class GitArcPublishState {
   async classifyCurrentHead({ refresh = true }: { refresh?: boolean } = {}): Promise<GitArcCommitPublishState> {
     const headRef = await this.repository.symbolicHead();
     if (!headRef) return { kind: "detached" };
+    return await this.classifyCommit(await this.repository.currentHead(), { refresh });
+  }
+
+  async classifyCommit(commit: string, { refresh = true }: { refresh?: boolean } = {}): Promise<GitArcCommitPublishState> {
     const remotes = await this.repository.remotes();
     if (!remotes.length) return { kind: "unpushed" };
     if (refresh) {
@@ -41,12 +45,19 @@ export default class GitArcPublishState {
         };
       }
     }
-    const head = await this.repository.currentHead();
     const containingRefs: string[] = [];
     for (const ref of await this.repository.listRefs("refs/remotes")) {
-      if (await this.repository.refContainsCommit(ref, head)) containingRefs.push(ref);
+      if (await this.repository.refContainsCommit(ref, commit)) containingRefs.push(ref);
     }
     return containingRefs.length ? { kind: "pushed", refs: containingRefs } : { kind: "unpushed" };
+  }
+
+  async requireAmendableCommit(commit: string, options: { refresh?: boolean } = {}) {
+    const state = await this.classifyCommit(commit, options);
+    if (state.kind === "unpushed") return;
+    if (state.kind === "pushed") throw new Error(`Commit is already present on remote refs: ${state.refs.join(", ")}`);
+    if (state.kind === "detached") throw new Error("Detached HEAD is unsafe for an amend.");
+    throw new Error(state.reason);
   }
 
   async requireAmendableCurrentHead(options: { refresh?: boolean } = {}) {

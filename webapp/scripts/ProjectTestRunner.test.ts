@@ -32,3 +32,24 @@ test("fails clearly when no TypeScript tests match", async (context) => {
 
   await assert.rejects(() => new ProjectTestRunner(root).run(), /No \.test\.ts or \.test\.tsx files found under: \./u);
 });
+
+test("prewarms selected fixtures before starting the Node test process", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-prewarm-order-"));
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const testFile = path.join(root, "prepared.test.ts");
+  await writeFile(testFile, "");
+  const events: string[] = [];
+
+  class RecordingRunner extends ProjectTestRunner {
+    protected override async runTestFiles(files: readonly string[]) {
+      events.push(`run:${files.map((file) => path.basename(file)).join(",")}`);
+      return { exitCode: 0, signal: null };
+    }
+  }
+
+  const runner = new RecordingRunner(root, async (files) => {
+    events.push(`prewarm:${files.map((file) => path.basename(file)).join(",")}`);
+  });
+  assert.deepEqual(await runner.run(), { exitCode: 0, signal: null });
+  assert.deepEqual(events, ["prewarm:prepared.test.ts", "run:prepared.test.ts"]);
+});
