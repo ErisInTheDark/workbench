@@ -7,13 +7,27 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry } from "../lib/types";
 import CodexTranscriptStore from "./CodexTranscriptStore";
 import type { JsonRpcRequest } from "./bridge-types";
 import type { CodexTranscriptRawEvent } from "./codex-transcript-types";
+import { CODEX_TRANSCRIPT_SCHEMA_VERSION } from "./codex-transcript-version";
+
+function captureProcessStderr(context: TestContext) {
+  const stderr: string[] = [];
+  const originalStderrWrite = process.stderr.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    stderr.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  context.after(() => {
+    process.stderr.write = originalStderrWrite;
+  });
+  return stderr;
+}
 
 function request(id: number, clientUserMessageId: string, expectedTurnId = "turn-a"): JsonRpcRequest {
   return {
@@ -51,6 +65,22 @@ async function withStore(run: (store: CodexTranscriptStore) => Promise<void>) {
     await fs.rm(root, { force: true, recursive: true });
   }
 }
+
+test("a new empty transcript store completes every migration", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-transcript-empty-test-"));
+  const store = new CodexTranscriptStore(root);
+  try {
+    await store.dispose();
+    const migrationState = JSON.parse(await fs.readFile(path.join(root, ".workbench", "transcripts", "codex", "migration.json"), "utf8")) as {
+      migratedAt?: unknown;
+      schemaVersion?: unknown;
+    };
+    assert.equal(migrationState.schemaVersion, CODEX_TRANSCRIPT_SCHEMA_VERSION);
+    assert.equal(typeof migrationState.migratedAt, "number");
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
 
 test("native steer admissions are thread-global and sequence ordered", async () => withStore(async (store) => {
   await store.recordClientRequest(request(9, "native-z", "turn-a"));
@@ -139,15 +169,20 @@ test("canonical client identity wins over delayed acknowledgement and failure", 
   });
 }));
 
-test("a duplicate native id from another upstream request cannot mutate the first", async () => withStore(async (store) => {
-  await store.recordClientRequest(request(1, "native"));
-  await store.recordClientRequest(request(2, "native"));
-  await store.recordClientRequestFailure(request(2, "native"), "wrong request failed");
-  const entries = await store.listSteerHistory("thread");
-  assert.equal(entries.length, 1);
-  assert.equal(entries[0]?.requestId, "1");
-  assert.equal(entries[0]?.status, "pending");
-}));
+test("a duplicate native id from another upstream request cannot mutate the first", async (context) => {
+  const stderr = captureProcessStderr(context);
+  await withStore(async (store) => {
+    await store.recordClientRequest(request(1, "native"));
+    await store.recordClientRequest(request(2, "native"));
+    await store.recordClientRequestFailure(request(2, "native"), "wrong request failed");
+    const entries = await store.listSteerHistory("thread");
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]?.requestId, "1");
+    assert.equal(entries[0]?.status, "pending");
+  });
+  assert.equal(stderr.length, 1);
+  assert.match(stderr[0]!, /ignored duplicate native steer id for thread thread from upstream request 2/u);
+});
 
 test("a delayed admission failure cannot overwrite interruption evidence", async () => withStore(async (store) => {
   const original = request(3, "native");

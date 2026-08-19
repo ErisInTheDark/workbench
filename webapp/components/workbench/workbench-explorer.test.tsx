@@ -89,7 +89,7 @@ test("agent tabs keep a persistent settled toggle and a straight accent-colored 
   assert.match(source, /href=\{getThreadHref\(mainThreadId\)\}/u);
   assert.match(source, /handleThreadLinkClick/u);
   assert.match(source, /threadSidebarStore\?\.getSnapshot\(\)\?\.entries\.find/u);
-  assert.match(source, /entry\.identity\.harness === mainThreadHarness/u);
+  assert.match(source, /candidate\.identity\.harness === mainThreadHarness/u);
   assert.match(source, /<ThreadLifecycleStatusIcon lifecycle=\{mainThreadLifecycle\} \/>\s*<span>Main agent<\/span>/u);
   assert.doesNotMatch(source, /badge|unread|ThreadQuestionBadge/u);
 });
@@ -189,7 +189,7 @@ test("jit project bootstrap exposes available slices before unrelated hydration"
 test("blank thread routes render their private draft and preserve one view instance through promotion", async () => {
   const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
   const threadViewSource = await readFile(new URL("./thread-view/ThreadView.tsx", import.meta.url), "utf8");
-  const clientSource = await readFile(new URL("../lib/WorkbenchClient.ts", import.meta.url), "utf8");
+  const clientSource = await readFile(new URL("../../lib/WorkbenchClient.ts", import.meta.url), "utf8");
   assert.match(workbenchSource, /isThreadOwnedByEffectiveRoute\(currentThread\)/u);
   assert.match(workbenchSource, /isWorkbenchRouteOwnerOfThread\(effectiveThreadRoute, getThreadViewInstanceKey\(thread\)\)/u);
   assert.doesNotMatch(workbenchSource, /currentThread\?\.id === effectiveThreadId/u);

@@ -118,6 +118,7 @@ export default async function migrateV2(rootDirectoryPath: string, _jsonStore: A
   const threadsDirectoryPath = path.join(rootDirectoryPath, "threads");
   const threadDirectories = await listThreadDirectories(threadsDirectoryPath);
   const total = threadDirectories.length;
+  if (total === 0) return;
   const counts: CleanupCounts = {
     deleted: 0,
     errors: 0,

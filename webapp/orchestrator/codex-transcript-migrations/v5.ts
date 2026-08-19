@@ -195,6 +195,7 @@ async function runBackgroundCommandOutputCompaction(rootDirectoryPath: string, c
   const startedAt = Date.now();
   const threadsDirectoryPath = path.join(rootDirectoryPath, "threads");
   const threadDirectoryNames = await listThreadDirectoryNames(threadsDirectoryPath);
+  if (threadDirectoryNames.length === 0) return;
   let filesSinceYield = 0;
   let lastLoggedAt = Date.now();
 

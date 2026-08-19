@@ -124,8 +124,12 @@ test("thread-state open accepts a composite bootstrap from the versionless compa
   assert.equal(catalogs.length, 1);
 });
 
-test("thread-state open does not hide malformed version-2 payloads behind legacy fallback", async () => {
+test("thread-state open does not hide malformed version-2 payloads behind legacy fallback", async (context) => {
   let requests = 0;
+  const diagnostics: string[] = [];
+  const originalConsoleError = console.error;
+  console.error = (...values) => { diagnostics.push(values.map(String).join(" ")); };
+  context.after(() => { console.error = originalConsoleError; });
   await assert.rejects(openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
     installCatalog: () => undefined,
@@ -133,6 +137,10 @@ test("thread-state open does not hide malformed version-2 payloads behind legacy
     request: async () => { requests += 1; return { sidebar: sidebar() }; },
   }), /thread-state open response was invalid/u);
   assert.equal(requests, 1);
+  assert.equal(diagnostics.length, 1);
+  assert.match(diagnostics[0]!, /Rejected Workbench thread-state open response/u);
+  assert.match(diagnostics[0]!, /catalog: Invalid input/u);
+  assert.match(diagnostics[0]!, /project: Invalid input/u);
 });
 
 test("activity timestamps and activity ordering do not invalidate the root explorer snapshot", () => {

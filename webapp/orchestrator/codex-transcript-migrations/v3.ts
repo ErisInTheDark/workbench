@@ -224,6 +224,10 @@ export async function queueCodexTranscriptRequestSidecarCleanup(rootDirectoryPat
 
   const threadsDirectoryPath = path.join(rootDirectoryPath, "threads");
   const threadDirectoryNames = await listThreadDirectories(threadsDirectoryPath);
+  if (threadDirectoryNames.length === 0) {
+    activeCleanupRoots.delete(resolvedRootDirectoryPath);
+    return;
+  }
   const counts: CleanupCounts = {
     deleted: 0,
     errors: 0,

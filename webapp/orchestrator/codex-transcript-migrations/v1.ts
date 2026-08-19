@@ -17,6 +17,19 @@ type CleanupCounts = {
   visited: number;
 };
 
+async function hasDirectoryEntries(directoryPath: string) {
+  let directory: Awaited<ReturnType<typeof fs.opendir>> | null = null;
+  try {
+    directory = await fs.opendir(directoryPath);
+    return await directory.read() !== null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return false;
+    throw error;
+  } finally {
+    await directory?.close();
+  }
+}
+
 function isRawJournal(fileName: string) {
   return fileName.endsWith(".ndjson");
 }
@@ -97,6 +110,7 @@ async function removeReclaimableArtifacts(rootDirectoryPath: string, directoryPa
 }
 
 async function runBackgroundCleanup(threadsDirectoryPath: string) {
+  if (!await hasDirectoryEntries(threadsDirectoryPath)) return;
   const startedAt = Date.now();
   const counts: CleanupCounts = {
     deleted: 0,
