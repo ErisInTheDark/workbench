@@ -8,10 +8,10 @@
  * - ThreadCommandDisplay: parsed command-summary metadata for thread command rendering. Keywords: thread, command, summary, shell, omit.
  * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text. Keywords: path, command, relative, display.
  * - isBrowseCommandMatcherClaim/parseBrowseSequenceCommandOutput: detect and parse wb Browse command output. Keywords: browse, sequence, command, cli.
- * - isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: detect checkpoint matcher ids for specialized rendering. Keywords: thread, command, checkpoint, compare, diff, commit.
+ * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: detect arc matcher ids for specialized rendering. Keywords: thread, command, git, arc, compare, diff, commit.
  * - isThreadContextMatcherClaim: detect thread context endpoint commands for dedicated disclosure rendering. Keywords: thread, context, disclosure.
  * - parseWorkbenchSubagentCommand: parse semantic wb subagent actions for specialized thread rendering. Keywords: workbench, subagent, command, parse.
- * - parseGitCheckpointCommitCommand/parseGitCheckpointCompareOutput/parseGitCheckpointProposalId: parse checkpoint command intent, comparison, and proposal output. Keywords: checkpoint, compare, proposal.
+ * - parseGitArcCommand/parseGitArcReceipt/parseGitCheckpointCommitCommand/parseGitCheckpointCompareOutput/parseGitCheckpointProposalId: parse arc commands, receipts, comparison, and proposal output. Keywords: git, arc, checkpoint, compare, proposal.
  * - parseGitCheckpointDiffArtifactId: parse compact checkpoint diff output for a stored full-diff artifact id. Keywords: checkpoint, diff, artifact.
  * - parseGitCheckpointDiffOutput: parse checkpoint diff command output into file-change display entries. Keywords: checkpoint, diff, file change.
  * - getThreadCommandDisplay: unwrap shell launchers and describe common command patterns with staged shell matchers. Keywords: thread, command, matcher, shell.
@@ -23,24 +23,28 @@
 import type { CommandAction } from "../../codex/generated/app-server/v2/CommandAction";
 import type { CommandExecutionStatus } from "../../codex/generated/app-server/v2/CommandExecutionStatus";
 import {
-  BROWSE_COMMAND_MATCHERS,
-  isBrowseCommandMatcherClaim,
-  parseBrowseSequenceCommandOutput,
+    BROWSE_COMMAND_MATCHERS,
+    isBrowseCommandMatcherClaim,
+    parseBrowseSequenceCommandOutput,
 } from "./command-matchers/browse";
 import { CMD_COMMAND_MATCHERS } from "./command-matchers/cmd";
 import { COPILOT_COMMAND_MATCHERS } from "./command-matchers/copilot-tool-calls";
 import { CommandMatcher, runThreadCommandMatchers } from "./command-matchers/core";
 import {
-  GIT_CHECKPOINT_COMMAND_MATCHERS,
-  type GitCheckpointCommitCommandIntent,
-  isGitCheckpointCommitMatcherClaim,
-  isGitCheckpointCompareMatcherClaim,
-  isGitCheckpointDiffMatcherClaim,
-  parseGitCheckpointCompareOutput,
-  parseGitCheckpointCommitCommand,
-  parseGitCheckpointDiffArtifactId,
-  parseGitCheckpointDiffOutput,
-  parseGitCheckpointProposalId,
+    getGitArcMatcherAction,
+    GIT_CHECKPOINT_COMMAND_MATCHERS,
+    type GitArcCommandIntent,
+    type GitCheckpointCommitCommandIntent,
+    isGitCheckpointCommitMatcherClaim,
+    isGitCheckpointCompareMatcherClaim,
+    isGitCheckpointDiffMatcherClaim,
+    parseGitArcCommand,
+    parseGitArcReceipt,
+    parseGitCheckpointCommitCommand,
+    parseGitCheckpointCompareOutput,
+    parseGitCheckpointDiffArtifactId,
+    parseGitCheckpointDiffOutput,
+    parseGitCheckpointProposalId,
 } from "./command-matchers/git-checkpoints";
 import { GIT_COMMAND_MATCHERS } from "./command-matchers/git-commands";
 import {
@@ -58,27 +62,27 @@ import { POSIX_COMMAND_MATCHERS } from "./command-matchers/posix";
 import { POWERSHELL_COMMAND_MATCHERS } from "./command-matchers/powershell";
 import { COMMON_COMMAND_MATCHERS } from "./command-matchers/shared";
 import {
-  isThreadContextMatcherClaim,
-  THREAD_CONTEXT_COMMAND_MATCHERS,
-} from "./command-matchers/thread-context";
-import {
     consumeNextCommandStage,
     getCommandShellGroup,
     unwrapShellCommand,
 } from "./command-matchers/shells";
+import {
+    isThreadContextMatcherClaim,
+    THREAD_CONTEXT_COMMAND_MATCHERS,
+} from "./command-matchers/thread-context";
 import type {
     CommandDisplayContext,
     ParsedCommandDisplayContext,
-    ThreadCommandDisplay,
-    ThreadCommandDisplayPart,
     ThreadCommandDetailRow,
     ThreadCommandDetailTarget,
+    ThreadCommandDisplay,
+    ThreadCommandDisplayPart,
     ThreadCommandSummaryDisplay,
     ThreadCommandSummaryStats,
 } from "./command-matchers/types";
 import {
-  parseWorkbenchSubagentCommand,
-  WORKBENCH_CLI_COMMAND_MATCHERS,
+    parseWorkbenchSubagentCommand,
+    WORKBENCH_CLI_COMMAND_MATCHERS,
 } from "./command-matchers/workbench-cli";
 
 type KnownCommandSummaryStatKey = Exclude<keyof ThreadCommandSummaryStats, "otherCommands">;
@@ -204,29 +208,28 @@ const COMMAND_BLOCK_SUMMARY_CATEGORIES: Array<{
   },
 ];
 
-export { CommandMatcher, formatThreadCommandPath };
 export {
-  isBrowseCommandMatcherClaim,
-  isGitCheckpointCommitMatcherClaim,
-  isGitCheckpointCompareMatcherClaim,
-  isGitCheckpointDiffMatcherClaim,
-  isThreadContextMatcherClaim,
-  parseBrowseSequenceCommandOutput,
-  parseGitCheckpointCompareOutput,
-  parseGitCheckpointCommitCommand,
-  parseGitCheckpointDiffArtifactId,
-  parseGitCheckpointDiffOutput,
-  parseGitCheckpointProposalId,
+    CommandMatcher, formatThreadCommandPath, getGitArcMatcherAction,
+    isBrowseCommandMatcherClaim,
+    isGitCheckpointCommitMatcherClaim,
+    isGitCheckpointCompareMatcherClaim,
+    isGitCheckpointDiffMatcherClaim,
+    isThreadContextMatcherClaim,
+    parseBrowseSequenceCommandOutput,
+    parseGitArcCommand,
+    parseGitArcReceipt, parseGitCheckpointCommitCommand, parseGitCheckpointCompareOutput, parseGitCheckpointDiffArtifactId,
+    parseGitCheckpointDiffOutput,
+    parseGitCheckpointProposalId, parseWorkbenchSubagentCommand
 };
-export { parseWorkbenchSubagentCommand };
 export type {
-  GitCheckpointCommitCommandIntent,
-  ThreadCommandDisplay,
-  ThreadCommandDisplayPart,
-  ThreadCommandDetailRow,
-  ThreadCommandDetailTarget,
-  ThreadCommandSummaryDisplay,
-  ThreadCommandSummaryStats
+    GitArcCommandIntent,
+    GitCheckpointCommitCommandIntent,
+    ThreadCommandDetailRow,
+    ThreadCommandDetailTarget,
+    ThreadCommandDisplay,
+    ThreadCommandDisplayPart,
+    ThreadCommandSummaryDisplay,
+    ThreadCommandSummaryStats
 };
 
 export type ThreadCommandExecutionOutcome = "completed" | "declined" | "failed" | "inProgress" | "timedOut";

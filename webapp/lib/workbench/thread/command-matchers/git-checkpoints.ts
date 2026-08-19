@@ -1,22 +1,34 @@
 /*
  * Exports:
  * - GIT_CHECKPOINT_COMMAND_MATCHERS: distinct command summaries for named arc plan and lifecycle operations. Keywords: thread, command, matcher, git arc.
- * - isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: detect specialized checkpoint renderers. Keywords: checkpoint, matcher, renderer.
+ * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: detect specialized arc renderers. Keywords: git, arc, matcher, renderer.
+ * - parseGitArcCommand/GitArcCommandIntent: read canonical arc action, ref, name, and selected paths. Keywords: git, arc, command, parser.
+ * - parseGitArcReceipt: decode persisted successful arc presentation metadata. Keywords: git, arc, receipt, parser.
  * - parseGitCheckpointCompareOutput: parse per-file checkpoint change counts. Keywords: checkpoint, compare, additions, deletions.
  * - parseGitCheckpointProposalId: parse the durable proposal id from CLI output. Keywords: checkpoint, proposal, commit.
  * - parseGitCheckpointCommitCommand/GitCheckpointCommitCommandIntent: read immediate proposal-card intent from canonical command arguments. Keywords: checkpoint, proposal, title, paths.
  * - parseGitCheckpointDiffArtifactId/parseGitCheckpointDiffOutput: preserve legacy and inline unified diff rendering. Keywords: checkpoint, diff, artifact.
  */
 import type { FileUpdateChange } from "../../../codex/generated/app-server/v2/FileUpdateChange";
+import {
+  parseGitArcReceipt,
+  type GitArcAction,
+} from "../../git/git-arc-receipts";
 import { parseUnifiedDiffFileChanges } from "../thread-file-diff";
 import { CommandMatcher } from "./core";
 import { tokenizeCommand } from "./helpers";
 import type { CommandMatcherDefinition } from "./types";
 
-const ARC_START_MATCHER_ID = "git-arc.start";
-const ARC_COMPARE_MATCHER_ID = "git-arc.compare";
-const ARC_DIFF_MATCHER_ID = "git-arc.diff";
-const ARC_PROPOSE_MATCHER_ID = "git-arc.propose";
+const ARC_MATCHER_IDS = {
+  add: "git-arc.add",
+  compare: "git-arc.compare",
+  diff: "git-arc.diff",
+  plan: "git-arc.plan",
+  propose: "git-arc.propose",
+  remove: "git-arc.remove",
+  restore: "git-arc.restore",
+  start: "git-arc.start",
+} as const satisfies Record<GitArcAction, string>;
 const CHECKPOINT_DIFF_ARTIFACT_PATTERN = /^Full diff artifact:\s*([a-f0-9]{64})\s*$/im;
 const CHECKPOINT_PROPOSAL_PATTERN = /^Workbench arc proposal:\s*([A-Za-z0-9._-]+)\s*$/im;
 const CHECKPOINT_COMPARE_LINE_PATTERN = /^([ADMU])\t\+(\d+)\t-(\d+)\t(.+)$/u;
@@ -26,6 +38,13 @@ export interface GitCheckpointCommitCommandIntent {
   description: string;
   paths: string[];
   title: string;
+}
+
+export interface GitArcCommandIntent {
+  action: GitArcAction;
+  intentName: string | null;
+  paths: string[];
+  ref: string | null;
 }
 
 function createMatcher({
@@ -59,55 +78,55 @@ function createMatcher({
 export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+plan(?:\s|$)/iu,
-    id: "git-arc.plan",
+    id: ARC_MATCHER_IDS.plan,
     ongoing: "Creating Git plan",
     stats: { gitCheckpointCreates: 1 },
     summary: "Created Git plan",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+start(?:\s|$)/iu,
-    id: ARC_START_MATCHER_ID,
+    id: ARC_MATCHER_IDS.start,
     ongoing: "Checking Git arc",
     stats: { gitCheckpointDiffs: 1 },
     summary: "Checked Git arc",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+add(?:\s|$)/iu,
-    id: "git-arc.add",
+    id: ARC_MATCHER_IDS.add,
     ongoing: "Extending Git arc",
     stats: { gitCheckpointCreates: 1 },
     summary: "Extended Git arc",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+remove(?:\s|$)/iu,
-    id: "git-arc.remove",
+    id: ARC_MATCHER_IDS.remove,
     ongoing: "Reducing Git arc",
     stats: { gitCheckpointCreates: 1 },
     summary: "Reduced Git arc",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+compare(?:\s|$)/iu,
-    id: ARC_COMPARE_MATCHER_ID,
+    id: ARC_MATCHER_IDS.compare,
     ongoing: "Comparing Git arc",
     stats: { gitCheckpointDiffs: 1 },
     summary: "Compared Git arc",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+diff(?:\s|$)/iu,
-    id: ARC_DIFF_MATCHER_ID,
+    id: ARC_MATCHER_IDS.diff,
     ongoing: "Diffing Git arc",
     stats: { gitCheckpointDiffs: 1 },
     summary: "Diffed Git arc",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+propose(?:\s|$)/iu,
-    id: ARC_PROPOSE_MATCHER_ID,
+    id: ARC_MATCHER_IDS.propose,
     ongoing: "Creating arc commit proposal",
     summary: "Proposed arc commit",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+restore(?:\s|$)/iu,
-    id: "git-arc.restore",
+    id: ARC_MATCHER_IDS.restore,
     ongoing: "Restoring Git arc",
     stats: { gitCheckpointRestores: 1 },
     summary: "Restored Git arc",
@@ -119,15 +138,51 @@ function includesMatcher(claimedBy: string | null | undefined, matcherId: string
 }
 
 export function isGitCheckpointCompareMatcherClaim(claimedBy: string | null | undefined) {
-  return includesMatcher(claimedBy, ARC_START_MATCHER_ID) || includesMatcher(claimedBy, ARC_COMPARE_MATCHER_ID);
+  return includesMatcher(claimedBy, ARC_MATCHER_IDS.start) || includesMatcher(claimedBy, ARC_MATCHER_IDS.compare);
 }
 
 export function isGitCheckpointDiffMatcherClaim(claimedBy: string | null | undefined) {
-  return includesMatcher(claimedBy, ARC_DIFF_MATCHER_ID);
+  return includesMatcher(claimedBy, ARC_MATCHER_IDS.diff);
 }
 
 export function isGitCheckpointCommitMatcherClaim(claimedBy: string | null | undefined) {
-  return includesMatcher(claimedBy, ARC_PROPOSE_MATCHER_ID);
+  return includesMatcher(claimedBy, ARC_MATCHER_IDS.propose);
+}
+
+export function getGitArcMatcherAction(claimedBy: string | null | undefined): GitArcAction | null {
+  for (const [action, matcherId] of Object.entries(ARC_MATCHER_IDS) as Array<[GitArcAction, string]>) {
+    if (includesMatcher(claimedBy, matcherId)) return action;
+  }
+  return null;
+}
+
+export function parseGitArcCommand(command: string): GitArcCommandIntent | null {
+  const tokens = tokenizeCommand(String(command ?? "").trim());
+  if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "")) return null;
+  let cursor = tokens[1] === "git" ? 2 : 1;
+  if (tokens[cursor] !== "arc") return null;
+  const action = tokens[cursor + 1] as GitArcAction | undefined;
+  if (!action || !(action in ARC_MATCHER_IDS)) return null;
+  cursor += 2;
+
+  let intentName: string | null = null;
+  let ref: string | null = null;
+  for (; cursor < tokens.length && tokens[cursor] !== "--"; cursor += 1) {
+    const flag = tokens[cursor];
+    const value = tokens[cursor + 1];
+    if (!value || (flag !== "--ref" && flag !== "-m")) return null;
+    if (flag === "--ref") {
+      if (ref) return null;
+      ref = value;
+    } else if (action === "plan" && intentName === null) {
+      intentName = value;
+    }
+    cursor += 1;
+  }
+  const paths = tokens[cursor] === "--" ? tokens.slice(cursor + 1) : [];
+  if (action === "plan") return intentName && paths.length ? { action, intentName, paths, ref: null } : null;
+  if (!ref) return null;
+  return { action, intentName: null, paths, ref };
 }
 
 export function parseGitCheckpointCompareOutput(output: string) {
@@ -174,6 +229,8 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
     title: messages[0],
   };
 }
+
+export { parseGitArcReceipt };
 
 export function parseGitCheckpointDiffOutput(output: string): FileUpdateChange[] {
   return parseUnifiedDiffFileChanges(output).map((change) => ({

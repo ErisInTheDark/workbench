@@ -16,6 +16,7 @@ import type {
   GitCheckpointFileChange,
   GitCheckpointProposal,
 } from "./checkpoint-contracts";
+import GitArcProposalCache from "./GitArcProposalCache";
 
 const execFileAsync = promisify(execFile);
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
@@ -64,6 +65,7 @@ interface ScopedCheckpointInput extends CheckpointInput {
 export interface GitCheckpointCreateResult {
   checkpointCommit: string;
   checkpointRef: string;
+  intentName: string | null;
   kind: CheckpointKind;
   repoRoot: string;
   scopePaths: string[];
@@ -73,7 +75,9 @@ export interface GitCheckpointCompareResult {
   changes: GitCheckpointFileChange[];
   checkpointCommit: string;
   checkpointRef: string;
+  intentName: string | null;
   repoRoot: string;
+  scopePaths: string[];
 }
 
 export interface GitCheckpointDiffResult extends GitCheckpointCompareResult {
@@ -83,8 +87,11 @@ export interface GitCheckpointDiffResult extends GitCheckpointCompareResult {
 export interface GitCheckpointProposalReceipt {
   baseCommit: string;
   description: string;
+  intentName: string | null;
   paths: string[];
   proposalId: string;
+  scopePaths: string[];
+  sourceCheckpoint: string;
   title: string;
 }
 
@@ -454,11 +461,12 @@ async function buildProposalResult(
   repoRoot: string,
   metadata: ProposalMetadata,
   target: string,
+  threadId: string,
   includeNewerAvailable = false,
 ): Promise<GitCheckpointProposal> {
   return {
     baseCommit: metadata.baseCommit,
-    changes: await buildFileChanges(repoRoot, metadata.baseCommit, target, metadata.paths),
+    changes: await buildProposalFileChanges(repoRoot, metadata, target, threadId),
     committedSha: metadata.committedSha,
     description: metadata.description,
     includeNewerAvailable,
@@ -468,6 +476,26 @@ async function buildProposalResult(
     title: metadata.title,
     unavailableReason: metadata.unavailableReason,
   };
+}
+
+async function buildProposalFileChanges(
+  repoRoot: string,
+  metadata: ProposalMetadata,
+  target: string,
+  threadId: string,
+) {
+  const [baseTree, targetTree] = await Promise.all([
+    runGit(repoRoot, ["rev-parse", `${metadata.baseCommit}^{tree}`]).then((value) => value.trim()),
+    runGit(repoRoot, ["rev-parse", `${target}^{tree}`]).then((value) => value.trim()),
+  ]);
+  return await new GitArcProposalCache(repoRoot).readOrBuild({
+    baseTree,
+    build: async () => await buildFileChanges(repoRoot, metadata.baseCommit, target, metadata.paths),
+    paths: metadata.paths,
+    proposalId: metadata.proposalId,
+    targetTree,
+    threadId,
+  });
 }
 
 export default class WorkbenchGitCheckpointController {
@@ -492,7 +520,14 @@ export default class WorkbenchGitCheckpointController {
     };
     const checkpointCommit = await createCommitFromTree(repoRoot, tree, parent, checkpointMessage(metadata));
     const checkpointRef = await createCheckpointRef(repoRoot, threadId, checkpointCommit);
-    return { checkpointCommit, checkpointRef, kind: "arc", repoRoot, scopePaths: paths };
+    return {
+      checkpointCommit,
+      checkpointRef,
+      intentName: metadata.intentName ?? null,
+      kind: "arc",
+      repoRoot,
+      scopePaths: paths,
+    };
   }
 
   async addToArc({
@@ -550,7 +585,14 @@ export default class WorkbenchGitCheckpointController {
     };
     const nextCommit = await createCommitFromTree(repoRoot, tree, headMovement.currentHead, checkpointMessage(nextMetadata));
     const checkpointRef = await createCheckpointRef(repoRoot, threadId, nextCommit);
-    return { checkpointCommit: nextCommit, checkpointRef, kind: "arc", repoRoot, scopePaths };
+    return {
+      checkpointCommit: nextCommit,
+      checkpointRef,
+      intentName: nextMetadata.intentName ?? null,
+      kind: "arc",
+      repoRoot,
+      scopePaths,
+    };
   }
 
   async removeFromArc({
@@ -600,7 +642,14 @@ export default class WorkbenchGitCheckpointController {
     };
     const nextCommit = await createCommitFromTree(repoRoot, tree, headMovement.currentHead, checkpointMessage(nextMetadata));
     const checkpointRef = await createCheckpointRef(repoRoot, threadId, nextCommit);
-    return { checkpointCommit: nextCommit, checkpointRef, kind: "arc", repoRoot, scopePaths };
+    return {
+      checkpointCommit: nextCommit,
+      checkpointRef,
+      intentName: nextMetadata.intentName ?? null,
+      kind: "arc",
+      repoRoot,
+      scopePaths,
+    };
   }
 
   async compare({ checkpointCommit, cwd, paths: rawPaths, threadId }: ScopedCheckpointInput): Promise<GitCheckpointCompareResult> {
@@ -613,7 +662,9 @@ export default class WorkbenchGitCheckpointController {
       changes: await buildFileChanges(repoRoot, checkpoint.checkpointCommit, currentTree, paths),
       checkpointCommit: checkpoint.checkpointCommit,
       checkpointRef: checkpoint.checkpointRef,
+      intentName: metadata.intentName ?? null,
       repoRoot,
+      scopePaths: metadata.scopePaths,
     };
   }
 
@@ -679,12 +730,16 @@ export default class WorkbenchGitCheckpointController {
     };
     commitMessage(metadata.title, metadata.description);
     const proposalCommit = await createCommitFromTree(repoRoot, proposalTree, baseCommit, proposalMessage(metadata));
+    await buildProposalFileChanges(repoRoot, metadata, proposalCommit, threadId);
     await runGit(repoRoot, ["update-ref", `${proposalNamespace(threadId)}/${proposalId}`, proposalCommit, ""]);
     return {
       baseCommit,
       description: metadata.description,
+      intentName: checkpointMetadata.intentName ?? null,
       paths: metadata.paths,
       proposalId,
+      scopePaths: checkpointMetadata.scopePaths,
+      sourceCheckpoint: checkpoint.checkpointCommit,
       title: metadata.title,
     } satisfies GitCheckpointProposalReceipt;
   }
@@ -749,7 +804,7 @@ export default class WorkbenchGitCheckpointController {
       : includeNewer && includeNewerAvailable && currentTree
         ? currentTree
         : proposal.proposalCommit;
-    return await buildProposalResult(repoRoot, proposal.metadata, target, includeNewerAvailable);
+    return await buildProposalResult(repoRoot, proposal.metadata, target, threadId, includeNewerAvailable);
   }
 
   async commitProposal({
@@ -803,7 +858,7 @@ export default class WorkbenchGitCheckpointController {
       "",
     ].join("\n"));
     await runGit(repoRoot, ["reset", "--mixed", "--quiet", committedSha, "--", ...proposal.metadata.paths.map(literalPathspec)]);
-    return await buildProposalResult(repoRoot, committedMetadata, committedSha);
+    return await buildProposalResult(repoRoot, committedMetadata, committedSha, threadId);
   }
 
   async readLegacyDiffArtifact({ artifactId, threadId }: { artifactId: string; threadId: string }) {
@@ -827,7 +882,7 @@ export default class WorkbenchGitCheckpointController {
 
     if (!rawPaths?.length) {
       const checkpoint = await readRestorableCheckpoint(repoRoot, threadId, checkpointCommit);
-      requireArcMetadata(checkpoint);
+      const metadata = requireArcMetadata(checkpoint);
       const currentTree = await writeWorktreeTree(repoRoot);
       const changedPaths = parseNullPaths(await runGit(repoRoot, [
         "diff", "--name-only", "-z", "--no-renames", checkpoint.checkpointCommit, currentTree, "--", ".",
@@ -844,14 +899,16 @@ export default class WorkbenchGitCheckpointController {
       return {
         checkpointCommit: checkpoint.checkpointCommit,
         checkpointRef: checkpoint.checkpointRef,
+        intentName: metadata.intentName ?? null,
         repoRoot,
         restored: true as const,
+        scopePaths: metadata.scopePaths,
       };
     }
 
     const paths = normalizePaths(repoRoot, rawPaths);
     const checkpoint = await readCheckpoint(repoRoot, threadId, checkpointCommit);
-    requireArcMetadata(checkpoint);
+    const metadata = requireArcMetadata(checkpoint);
     const checkpointParent = (await runGit(repoRoot, ["rev-parse", `${checkpoint.checkpointCommit}^`])).trim();
     const headMovement = await classifyHeadMovement(
       repoRoot,
@@ -884,9 +941,11 @@ export default class WorkbenchGitCheckpointController {
     return {
       checkpointCommit: checkpoint.checkpointCommit,
       checkpointRef: checkpoint.checkpointRef,
+      intentName: metadata.intentName ?? null,
       repoRoot,
       restored: true as const,
       restoredPaths: [...new Set(changedPaths)].sort((left, right) => left.localeCompare(right)),
+      scopePaths: metadata.scopePaths,
     };
   }
 }

@@ -20,6 +20,7 @@ import {
   type WorkbenchAgentCliRequest,
 } from "./workbench-agent-cli-commands.ts";
 import { adaptWorkbenchAgentCliResponse } from "./workbench-agent-cli-responses.ts";
+import { parseGitArcReceipt } from "../git/git-arc-receipts.ts";
 
 const execFileAsync = promisify(execFile);
 const shellSourcePath = fileURLToPath(new URL("./workbench-agent-cli.sh", import.meta.url));
@@ -213,7 +214,7 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     cwd: "C:/workspace",
     threadId: "thread-1",
   });
-  assert.equal(start.request.responseKind, "checkpoint-compare");
+  assert.equal(start.request.responseKind, "git-arc-start");
 
   const compare = await parseWorkbenchAgentCliCommand([
     "git", "arc", "compare", "--ref", "abc", "--", "src/file.ts",
@@ -226,12 +227,13 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     paths: ["src/file.ts"],
     threadId: "thread-1",
   });
+  assert.equal(compare.request.responseKind, "git-arc-compare");
 
   const checkpointDiff = await parseWorkbenchAgentCliCommand([
     "git", "arc", "diff", "--ref", "abc",
   ], gitOptions);
   assert.equal(checkpointDiff.kind, "request");
-  assert.equal(checkpointDiff.request.responseKind, "native");
+  assert.equal(checkpointDiff.request.responseKind, "git-arc-diff");
 
   const continuation = await parseWorkbenchAgentCliCommand([
     "git", "arc", "add", "--ref", "abc",
@@ -268,7 +270,7 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     threadId: "thread-1",
     title: "Title",
   });
-  assert.equal(proposal.request.responseKind, "checkpoint-proposal");
+  assert.equal(proposal.request.responseKind, "git-arc-propose");
 
   const checkpointRestore = await parseWorkbenchAgentCliCommand([
     "git", "arc", "restore", "--ref", "abc", "--confirm",
@@ -281,7 +283,7 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     cwd: "C:/workspace",
     threadId: "thread-1",
   });
-  assert.equal(checkpointRestore.request.responseKind, "checkpoint-restore");
+  assert.equal(checkpointRestore.request.responseKind, "git-arc-restore");
 
   const checkpointPathRestore = await parseWorkbenchAgentCliCommand([
     "git", "arc", "restore", "--ref", "abc", "--", "src/one.ts", "src/two.ts",
@@ -727,18 +729,36 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     stderr: "",
     stdout: "Thread title set: Clean output\n",
   });
-  assert.equal(adapt("checkpoint-create", { checkpointCommit: "abc" }, { action: "plan" }).stdout, "Created Git plan abc\n");
-  assert.equal(adapt("checkpoint-create", { checkpointCommit: "def" }, { action: "arcAdd" }).stdout, "Created successor arc ref def\n");
-  assert.equal(adapt("checkpoint-proposal", { proposalId: "proposal-one" }).stdout, "Workbench arc proposal: proposal-one\n");
-  assert.equal(adapt("checkpoint-restore", { checkpointCommit: "abc" }).stdout, "Restored arc abc\n");
-  assert.equal(adapt("checkpoint-restore", {
-    checkpointCommit: "abc",
+  const planRef = "a".repeat(40);
+  const successorRef = "b".repeat(40);
+  const planResponse = adapt("git-arc-plan", {
+    checkpointCommit: planRef,
+    intentName: "Polish arc UI",
+    scopePaths: ["src/one.ts"],
+  }, { action: "plan", paths: ["src/one.ts"] });
+  assert.match(planResponse.stdout, new RegExp(`^Created Git plan ${planRef}\\n`, "u"));
+  assert.deepEqual(parseGitArcReceipt(planResponse.stdout), {
+    action: "plan",
+    claimedPaths: ["src/one.ts"],
+    intentName: "Polish arc UI",
+    ref: planRef,
+    selectedPaths: ["src/one.ts"],
+    version: 1,
+  });
+  assert.match(adapt("git-arc-add", { checkpointCommit: successorRef }, { action: "arcAdd" }).stdout, /^Created successor arc ref/u);
+  assert.match(adapt("git-arc-propose", {
+    proposalId: "proposal-one",
+    sourceCheckpoint: successorRef,
+  }).stdout, /^Workbench arc proposal: proposal-one/u);
+  assert.match(adapt("git-arc-restore", { checkpointCommit: successorRef }).stdout, /^Restored arc/u);
+  assert.match(adapt("git-arc-restore", {
+    checkpointCommit: successorRef,
     restoredPaths: ["src/one.ts", "src/two.ts"],
-  }, { paths: ["src/one.ts", "src/two.ts"] }).stdout, "Restored 2 paths from arc abc:\nsrc/one.ts\nsrc/two.ts\n");
-  assert.equal(adapt("checkpoint-restore", {
-    checkpointCommit: "abc",
+  }, { paths: ["src/one.ts", "src/two.ts"] }).stdout, /^Restored 2 paths from arc/u);
+  assert.match(adapt("git-arc-restore", {
+    checkpointCommit: successorRef,
     restoredPaths: [],
-  }, { paths: ["src/one.ts"] }).stdout, "Selected paths already matched arc abc\n");
+  }, { paths: ["src/one.ts"] }).stdout, /^Selected paths already matched arc/u);
   assert.deepEqual(adapt("subagent-create", { threadId: "child-thread" }), {
     exitCode: 0,
     stderr: "",

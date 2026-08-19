@@ -395,6 +395,23 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
   assert.equal(parseGitCheckpointCommitCommand("wb git checkpoint commit --sha abc --m Title -- src/one.ts"), null);
 });
 
+test("PowerShell-wrapped arc proposals preserve escaped messages and apostrophes", () => {
+  const display = getThreadCommandDisplay({
+    command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "wb git arc propose --ref 27e60cc1019da6a4013c574ea9391c56bb0f582b -m \"Group thread context menu controls\" -m \"Add grouped controls and preserve Chiri's lifecycle status.\""`,
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+
+  assert.equal(display.claimedBy, "git-arc.propose");
+  assert.deepEqual(parseGitCheckpointCommitCommand(display.unwrappedCommand), {
+    checkpointCommit: "27e60cc1019da6a4013c574ea9391c56bb0f582b",
+    description: "Add grouped controls and preserve Chiri's lifecycle status.",
+    paths: [],
+    title: "Group thread context menu controls",
+  });
+});
+
 test("PowerShell numbered reads resolve a preceding literal path assignment", () => {
   const display = getThreadCommandDisplay({
     command: String.raw`"c:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command '$p='"'"'webapp\\lib\\workbench\\thread\\command-matchers\\workbench-cli.ts'"'"'; $c=Get-Content $p; $c[80..116]'`,

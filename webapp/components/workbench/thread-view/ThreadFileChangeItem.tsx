@@ -30,6 +30,7 @@ interface ParsedFileChange {
   diff: ParsedUnifiedDiff;
   displayPath: string;
   movePathDisplay: string | null;
+  presentationLabel?: string;
   sourceChangeIndex: number;
   sourceItemId: string;
   summaryTotals: { additions: number; deletions: number };
@@ -38,6 +39,7 @@ interface ParsedFileChange {
 export interface ThreadFileChangeListChange {
   change: FileUpdateChange;
   detailsAvailable?: boolean;
+  presentationLabel?: string;
   sourceChangeIndex?: number;
   sourceItemId?: string;
   summaryTotals?: { additions: number; deletions: number };
@@ -180,7 +182,7 @@ function ThreadFileChangeSummary ({
       <span className="inline-flex shrink-0 self-center text-muted -mt-0.5" aria-hidden="true">
         {presentation.icon}
       </span>
-      <ThreadSummaryText text={presentation.label} />
+      <ThreadSummaryText text={parsedChange.presentationLabel ?? presentation.label} />
       <ProjectFilePath className="max-w-full shrink min-w-0 align-baseline text-[0.82em]" disambiguationPaths={projectFilePaths} path={parsedChange.displayPath} projectId={projectId} />
       <ThreadFileChangeTotals
         additions={parsedChange.summaryTotals.additions}
@@ -213,6 +215,7 @@ export function ThreadFileChangeList ({
       movePathDisplay: entry.change.kind.type === "update" && entry.change.kind.move_path
         ? toWorkspaceDisplayPath(entry.change.kind.move_path, { projectRootPath: projectRootPath ?? "", workspaceRoots }) ?? entry.change.kind.move_path
         : null,
+      presentationLabel: entry.presentationLabel,
       sourceChangeIndex: entry.sourceChangeIndex ?? index,
       sourceItemId: entry.sourceItemId ?? "file-change-list",
       summaryTotals: entry.summaryTotals ?? {

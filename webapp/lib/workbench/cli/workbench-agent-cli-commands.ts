@@ -12,10 +12,14 @@ type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 export type WorkbenchAgentCliResponseKind =
   | "browse-command"
   | "browse-session-control"
-  | "checkpoint-compare"
-  | "checkpoint-create"
-  | "checkpoint-proposal"
-  | "checkpoint-restore"
+  | "git-arc-add"
+  | "git-arc-compare"
+  | "git-arc-diff"
+  | "git-arc-plan"
+  | "git-arc-propose"
+  | "git-arc-remove"
+  | "git-arc-restore"
+  | "git-arc-start"
   | "json"
   | "native"
   | "orchestrator-reload"
@@ -496,7 +500,7 @@ const COMMANDS: readonly CommandDefinition[] = [
         intentName: flags.required("-m"),
         paths: flags.trailing,
         threadId: requireCallerThreadId(callerThreadId),
-      }, "checkpoint-create");
+      }, "git-arc-plan");
     },
   },
   {
@@ -511,7 +515,7 @@ const COMMANDS: readonly CommandDefinition[] = [
         checkpointCommit: flags.required("--ref"),
         cwd,
         threadId: requireCallerThreadId(callerThreadId),
-      }, "checkpoint-compare");
+      }, "git-arc-start");
     },
   },
   {
@@ -530,7 +534,7 @@ const COMMANDS: readonly CommandDefinition[] = [
         cwd,
         ...(flags.trailing.length ? { paths: flags.trailing } : {}),
         threadId: requireCallerThreadId(callerThreadId),
-      }, "checkpoint-create");
+      }, "git-arc-add");
     },
   },
   {
@@ -550,7 +554,7 @@ const COMMANDS: readonly CommandDefinition[] = [
         cwd,
         paths: flags.trailing,
         threadId: requireCallerThreadId(callerThreadId),
-      }, "checkpoint-create");
+      }, "git-arc-remove");
     },
   },
   ...(["compare", "diff"] as const).map((action): CommandDefinition => ({
@@ -571,7 +575,7 @@ const COMMANDS: readonly CommandDefinition[] = [
         cwd,
         ...(flags.trailing.length ? { paths: flags.trailing } : {}),
         threadId: requireCallerThreadId(callerThreadId),
-      }, action === "compare" ? "checkpoint-compare" : undefined);
+      }, action === "compare" ? "git-arc-compare" : "git-arc-diff");
     },
   })),
   {
@@ -595,7 +599,7 @@ const COMMANDS: readonly CommandDefinition[] = [
         ...(flags.trailing.length ? { paths: flags.trailing } : {}),
         threadId: requireCallerThreadId(callerThreadId),
         title: messages[0],
-      }, "checkpoint-proposal");
+      }, "git-arc-propose");
     },
   },
   {
@@ -618,7 +622,7 @@ const COMMANDS: readonly CommandDefinition[] = [
         cwd,
         ...(flags.trailing.length ? { paths: flags.trailing } : {}),
         threadId: requireCallerThreadId(callerThreadId),
-      }, "checkpoint-restore");
+      }, "git-arc-restore");
     },
   },
   {

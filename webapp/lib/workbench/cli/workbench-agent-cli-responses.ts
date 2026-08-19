@@ -6,11 +6,39 @@
 import type { WorkbenchAgentCliRequest } from "./workbench-agent-cli-commands.ts";
 import { renderSubagentListOutput, renderSubagentSettleOutput } from "../subagent/subagent-output";
 import type { WorkbenchSubagentSummary } from "../../types";
+import { formatGitArcReceipt, type GitArcAction } from "../git/git-arc-receipts";
 
 export interface WorkbenchAgentCliAdaptedResponse {
   exitCode: number;
   stderr: string;
   stdout: string;
+}
+
+function createArcReceipt(
+  action: GitArcAction,
+  payload: Record<string, unknown> | null,
+  request: WorkbenchAgentCliRequest,
+) {
+  const ref = readString(payload, action === "propose" ? "sourceCheckpoint" : "checkpointCommit");
+  if (!ref) return null;
+  const selectedPaths = action === "propose"
+    ? readStringArray(payload, "paths")
+    : readStringArray(request.body ?? null, "paths");
+  return formatGitArcReceipt({
+    action,
+    claimedPaths: readStringArray(payload, "scopePaths"),
+    intentName: readString(payload, "intentName") || null,
+    ...(action === "propose" && readString(payload, "proposalId")
+      ? { proposalId: readString(payload, "proposalId") }
+      : {}),
+    ref,
+    ...(selectedPaths.length ? { selectedPaths } : {}),
+    version: 1,
+  });
+}
+
+function appendArcReceipt(lines: string[], receipt: string | null) {
+  return receipt ? [...lines, receipt] : lines;
 }
 
 export function adaptWorkbenchAgentCliResponse({
@@ -46,14 +74,22 @@ export function adaptWorkbenchAgentCliResponse({
       }) : [];
       return succeeded(renderSubagentSettleOutput(settled));
     }
-    case "checkpoint-create": {
-      const action = readString(request.body, "action");
+    case "git-arc-plan":
+    case "git-arc-add":
+    case "git-arc-remove": {
+      const action = request.responseKind === "git-arc-plan"
+        ? "plan"
+        : request.responseKind === "git-arc-add" ? "add" : "remove";
       const label = action === "plan" ? "Created Git plan" : "Created successor arc ref";
-      return succeeded(`${label} ${readString(payload, "checkpointCommit") || "(unknown commit)"}`);
+      return succeeded(appendArcReceipt([
+        `${label} ${readString(payload, "checkpointCommit") || "(unknown commit)"}`,
+      ], createArcReceipt(action, payload, request)).join("\n"));
     }
-    case "checkpoint-compare": {
+    case "git-arc-start":
+    case "git-arc-compare": {
+      const action = request.responseKind === "git-arc-start" ? "start" : "compare";
       const changes = Array.isArray(payload?.changes) ? payload.changes.filter(isRecord) : [];
-      return succeeded([
+      return succeeded(appendArcReceipt([
         "Workbench arc comparison",
         ...changes.map((change) => {
           const kind = isRecord(change.kind) ? readString(change.kind, "type").slice(0, 1).toUpperCase() : "M";
@@ -61,26 +97,33 @@ export function adaptWorkbenchAgentCliResponse({
           const deletions = typeof change.deletions === "number" ? change.deletions : 0;
           return `${kind || "M"}\t+${additions}\t-${deletions}\t${readString(change, "path")}`;
         }),
-      ].join("\n"));
+      ], createArcReceipt(action, payload, request)).join("\n"));
     }
-    case "checkpoint-proposal": {
+    case "git-arc-diff":
+      return succeeded(appendArcReceipt([
+        readString(payload, "diff"),
+      ].filter(Boolean), createArcReceipt("diff", payload, request)).join("\n"));
+    case "git-arc-propose": {
       const proposalId = readString(payload, "proposalId");
-      return succeeded(`Workbench arc proposal: ${proposalId || "(unknown proposal)"}`);
+      return succeeded(appendArcReceipt([
+        `Workbench arc proposal: ${proposalId || "(unknown proposal)"}`,
+      ], createArcReceipt("propose", payload, request)).join("\n"));
     }
-    case "checkpoint-restore": {
+    case "git-arc-restore": {
       const checkpointCommit = readString(payload, "checkpointCommit") || "(unknown commit)";
+      const receipt = createArcReceipt("restore", payload, request);
       if (!Array.isArray(request.body?.paths)) {
-        return succeeded(`Restored arc ${checkpointCommit}`);
+        return succeeded(appendArcReceipt([`Restored arc ${checkpointCommit}`], receipt).join("\n"));
       }
 
       const restoredPaths = readStringArray(payload, "restoredPaths");
       if (!restoredPaths.length) {
-        return succeeded(`Selected paths already matched arc ${checkpointCommit}`);
+        return succeeded(appendArcReceipt([`Selected paths already matched arc ${checkpointCommit}`], receipt).join("\n"));
       }
-      return succeeded([
+      return succeeded(appendArcReceipt([
         `Restored ${restoredPaths.length} ${restoredPaths.length === 1 ? "path" : "paths"} from arc ${checkpointCommit}:`,
         ...restoredPaths,
-      ].join("\n"));
+      ], receipt).join("\n"));
     }
     case "browse-command":
       return adaptBrowseCommand(payload, text);
@@ -151,8 +194,8 @@ function readString(record: Record<string, unknown> | null | undefined, key: str
   return typeof value === "string" ? value : "";
 }
 
-function readStringArray(record: Record<string, unknown>, key: string) {
-  const value = record[key];
+function readStringArray(record: Record<string, unknown> | null | undefined, key: string) {
+  const value = record?.[key];
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 

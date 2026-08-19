@@ -90,11 +90,11 @@ export async function POST(request: NextRequest) {
           ...(input.paths ? { paths: input.paths } : {}),
         }));
       case "diff":
-        return textResponse((await diffGitCheckpoint({
+        return jsonResponse(await diffGitCheckpoint({
           ...common,
           checkpointCommit: input.checkpointCommit,
           ...(input.paths ? { paths: input.paths } : {}),
-        })).diff);
+        }));
       case "proposalCreate":
         return jsonResponse(await createGitCheckpointProposal({
           ...common,

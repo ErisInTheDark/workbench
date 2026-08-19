@@ -8,10 +8,10 @@
 import type { GitCheckpointProposal } from "../../../lib/workbench/git/checkpoint-contracts";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import PrimaryButton from "../PrimaryButton";
-import ProjectFilePath from "../ProjectFilePath";
 import WorkbenchCheckbox from "../WorkbenchCheckbox";
 import { CheckIcon } from "../workbench-icons";
 import PlaintextEditable from "./PlaintextEditable";
+import GitArcIcon from "./GitArcIcon";
 import ThreadDisclosure from "./ThreadDisclosure";
 import {
   ThreadFileChangeList,
@@ -69,25 +69,30 @@ export default function ThreadCheckpointCommitCard({
 
   return (
     <article aria-label="Checkpoint commit proposal" className="my-2 w-full rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] px-3 py-2.5" data-thread-checkpoint-card="true">
-      <div className="space-y-1" data-thread-checkpoint-card-content="true">
-        <PlaintextEditable
-          ariaLabel="Commit title"
-          className="min-h-6 w-full bg-transparent px-0 py-0.5 text-[0.94em] font-medium outline-none data-[empty=true]:before:text-muted data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent"
-          onChange={onTitleChange}
-          placeholder="Commit title"
-          readOnly={terminal}
-          value={title}
-        />
-        {!terminal || description.trim() ? (
+      <div className="flex min-w-0 gap-2" data-thread-checkpoint-card-content="true">
+        <span className="mt-1 inline-flex size-5 shrink-0 items-center justify-center text-muted" aria-hidden="true">
+          <GitArcIcon action="propose" className="size-5" />
+        </span>
+        <div className="min-w-0 flex-1 space-y-1">
           <PlaintextEditable
-            ariaLabel="Commit description"
-            className="min-h-7 w-full whitespace-pre-wrap bg-transparent px-0 py-0.5 text-[0.8em] leading-5 text-muted outline-none data-[empty=true]:before:text-[color:color-mix(in_srgb,var(--text)_32%,transparent)] data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent focus:text-text"
-            onChange={onDescriptionChange}
-            placeholder="Optional description"
+            ariaLabel="Commit title"
+            className="min-h-6 w-full bg-transparent px-0 py-0.5 text-[0.94em] font-medium outline-none data-[empty=true]:before:text-muted data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent"
+            onChange={onTitleChange}
+            placeholder="Commit title"
             readOnly={terminal}
-            value={description}
+            value={title}
           />
-        ) : null}
+          {!terminal || description.trim() ? (
+            <PlaintextEditable
+              ariaLabel="Commit description"
+              className="min-h-7 w-full whitespace-pre-wrap bg-transparent px-0 py-0.5 text-[0.8em] leading-5 text-muted outline-none data-[empty=true]:before:text-[color:color-mix(in_srgb,var(--text)_32%,transparent)] data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent focus:text-text"
+              onChange={onDescriptionChange}
+              placeholder="Optional description"
+              readOnly={terminal}
+              value={description}
+            />
+          ) : null}
+        </div>
       </div>
 
       {state.status === "error" ? (
@@ -97,7 +102,7 @@ export default function ThreadCheckpointCommitCard({
       <div data-thread-checkpoint-card-changes="true">
         <ThreadDisclosure
           className="mt-1.5 py-0.5"
-          contentClassName="mt-1 rounded-[0.65rem] bg-[#1112] px-2"
+          contentClassName="mt-1 rounded-[0.65rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-2"
           summary={(
             <span className="flex min-w-0 w-full flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <span className="inline-flex min-w-0 items-baseline gap-2">
@@ -161,13 +166,23 @@ export default function ThreadCheckpointCommitCard({
               workspaceRoots={workspaceRoots}
             />
           ) : paths.length ? (
-            <div className="space-y-1 py-2">
-              {paths.map((path) => (
-                <div className="min-w-0 text-[0.78em] leading-[1.6] text-muted" key={path}>
-                  <ProjectFilePath className="max-w-full" disambiguationPaths={projectFilePaths} path={path} projectId={projectId} />
-                </div>
-              ))}
-            </div>
+            <ThreadFileChangeList
+              changes={paths.map((path, index) => ({
+                change: {
+                  diff: "",
+                  kind: { move_path: null, type: "update" as const },
+                  path,
+                },
+                detailsAvailable: false,
+                presentationLabel: "Changed",
+                sourceChangeIndex: index,
+                sourceItemId,
+              }))}
+              projectFilePaths={projectFilePaths}
+              projectId={projectId}
+              projectRootPath={projectRootPath}
+              workspaceRoots={workspaceRoots}
+            />
           ) : (
             <p className="m-0 py-2 text-[0.78em] leading-[1.6] text-muted">
               The arc&apos;s claimed changes will appear here.

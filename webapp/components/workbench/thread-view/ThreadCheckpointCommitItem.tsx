@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import {
@@ -52,7 +52,7 @@ export default function ThreadCheckpointCommitItem({
 }: {
   commandOutcome: ThreadCommandExecutionOutcome;
   cwd: string;
-  intent: GitCheckpointCommitCommandIntent;
+  intent: GitCheckpointCommitCommandIntent | null;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
@@ -62,10 +62,11 @@ export default function ThreadCheckpointCommitItem({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const [includeNewer, setIncludeNewer] = useState(false);
-  const [title, setTitle] = useState(intent.title);
-  const [description, setDescription] = useState(intent.description);
+  const [title, setTitle] = useState(intent?.title ?? "");
+  const [description, setDescription] = useState(intent?.description ?? "");
   const [committing, setCommitting] = useState(false);
   const [state, setState] = useState<CheckpointCommitCardState>({ status: "pending" });
+  const hydratedFallbackIntent = useRef(intent !== null);
 
   const loadProposal = useCallback(async (signal?: AbortSignal) => {
     if (!proposalId) return;
@@ -79,10 +80,11 @@ export default function ThreadCheckpointCommitItem({
         signal,
       }));
       if (signal?.aborted) return;
-      if (proposal.status !== "proposed") {
+      if (!hydratedFallbackIntent.current || proposal.status !== "proposed") {
         setTitle(proposal.title);
         setDescription(proposal.description);
       }
+      hydratedFallbackIntent.current = true;
       if (!proposal.includeNewerAvailable && includeNewer) setIncludeNewer(false);
       setState({ proposal, status: "loaded" });
     } catch (error) {
@@ -163,7 +165,7 @@ export default function ThreadCheckpointCommitItem({
       onIncludeNewerChange={setIncludeNewer}
       onRetry={() => void loadProposal()}
       onTitleChange={setTitle}
-      paths={intent.paths}
+      paths={intent?.paths ?? []}
       projectFilePaths={projectFilePaths}
       projectId={projectId}
       projectRootPath={projectRootPath}

@@ -35,6 +35,7 @@ import {
   getThreadCommandDisplay,
   getThreadCommandExecutionOutcome,
   getThreadCommandOutcomeDisplay,
+  getGitArcMatcherAction,
   isBrowseCommandMatcherClaim,
   isGitCheckpointCommitMatcherClaim,
   isGitCheckpointCompareMatcherClaim,
@@ -47,6 +48,8 @@ import {
   parseGitCheckpointDiffArtifactId,
   parseGitCheckpointDiffOutput,
   parseGitCheckpointProposalId,
+  parseGitArcCommand,
+  parseGitArcReceipt,
   type ThreadCommandDetailRow,
   type ThreadCommandDetailTarget,
 } from "../../../lib/workbench/thread/thread-command-matchers";
@@ -62,6 +65,7 @@ import { ThreadCommandSummary } from "./thread-view-primitives";
 import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadCheckpointDiffItem from "./ThreadCheckpointDiffItem";
+import ThreadGitArcItem from "./ThreadGitArcItem";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
 import ThreadCommandDetails from "./ThreadCommandDetails";
 import ThreadContextCompactionItem from "./ThreadContextCompactionItem";
@@ -1376,6 +1380,7 @@ function isThreadContextCommandItem({
 
 type CommandSequenceRenderSegment =
   | { items: CommandItem[]; kind: "commands" }
+  | { item: CommandItem; kind: "gitArc" }
   | { item: CommandItem; kind: "subagent" }
   | { group: ThreadSubagentWaitRenderGroup<CommandItem>; kind: "subagentWait" }
   | { item: CommandItem; kind: "threadContext" };
@@ -1438,10 +1443,10 @@ function buildCommandSequenceRenderSegments({
       projectRootPath,
       workspaceRoots,
     });
-    if (isGitCheckpointCommitMatcherClaim(commandDisplay.claimedBy)) {
+    if (getGitArcMatcherAction(commandDisplay.claimedBy)) {
       flushPendingCommands();
       flushPendingSubagentWaits();
-      segments.push({ items: [item], kind: "commands" });
+      segments.push({ item, kind: "gitArc" });
       continue;
     }
     const subagentCommand = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand, item.commandActions);
@@ -1671,6 +1676,16 @@ function ThreadCommandExecutionDetails ({
   const checkpointProposalId = isGitCheckpointCommitMatcherClaim(commandDisplay.claimedBy)
     ? parseGitCheckpointProposalId(item.aggregatedOutput ?? "")
     : null;
+  const gitArcReceipt = parseGitArcReceipt(item.aggregatedOutput ?? "");
+  const gitArcAction = getGitArcMatcherAction(commandDisplay.claimedBy);
+  const gitArcCommandIntent = gitArcAction
+    ? parseGitArcCommand(commandDisplay.unwrappedCommand) ?? {
+      action: gitArcAction,
+      intentName: gitArcReceipt?.intentName ?? null,
+      paths: gitArcReceipt?.selectedPaths ?? [],
+      ref: gitArcReceipt?.ref ?? null,
+    }
+    : null;
   const checkpointCommitIntent = isGitCheckpointCommitMatcherClaim(commandDisplay.claimedBy)
     ? parseGitCheckpointCommitCommand(commandDisplay.unwrappedCommand)
     : null;
@@ -1689,7 +1704,7 @@ function ThreadCommandExecutionDetails ({
   ), [browseResultEntries, commandDisplay.detailRows, isBrowseCommand, item.aggregatedOutput, item.id, item.status]);
   const shouldHideCommandOutput = commandDisplay.hideCommandOutput
     && (commandDetailRows.length > 0 || !item.aggregatedOutput?.trim());
-  if (checkpointCommitIntent) {
+  if (checkpointCommitIntent || (gitArcAction === "propose" && (checkpointProposalId || gitArcReceipt?.proposalId))) {
     return (
       <ThreadCheckpointCommitItem
         commandOutcome={commandOutcome}
@@ -1698,9 +1713,47 @@ function ThreadCommandExecutionDetails ({
         projectFilePaths={projectFilePaths}
         projectId={projectId}
         projectRootPath={projectRootPath}
-        proposalId={checkpointProposalId}
+        proposalId={checkpointProposalId ?? gitArcReceipt?.proposalId ?? null}
         sourceItemId={item.id}
         threadId={threadId}
+        workspaceRoots={workspaceRoots}
+      />
+    );
+  }
+  if (gitArcCommandIntent && gitArcCommandIntent.action !== "propose") {
+    const operationDetails = checkpointCompareChanges?.length ? (
+      <ThreadCheckpointCompareItem
+        changes={checkpointCompareChanges}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        projectRootPath={projectRootPath}
+        workspaceRoots={workspaceRoots}
+      />
+    ) : shouldRenderCheckpointDiff ? (
+      <ThreadCheckpointDiffItem
+        cwd={item.cwd}
+        output={item.aggregatedOutput ?? ""}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        projectRootPath={projectRootPath}
+        sourceItemId={item.id}
+        threadId={threadId}
+        workspaceRoots={workspaceRoots}
+      />
+    ) : null;
+    return (
+      <ThreadGitArcItem
+        commandIntent={gitArcCommandIntent}
+        durationMs={item.durationMs}
+        failureReason={commandOutcome === "failed" || commandOutcome === "declined" || commandOutcome === "timedOut"
+          ? item.aggregatedOutput
+          : null}
+        operationDetails={operationDetails}
+        outcome={commandOutcome}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        projectRootPath={projectRootPath}
+        receipt={gitArcReceipt}
         workspaceRoots={workspaceRoots}
       />
     );
@@ -2135,13 +2188,13 @@ function ThreadCommandSequence ({
             threadCwdPath={threadCwdPath}
             workspaceRoots={workspaceRoots}
           />
-        ) : segment.kind === "subagent" ? (
+        ) : segment.kind === "gitArc" || segment.kind === "subagent" ? (
           <ThreadCommandExecutionDetails
             browseResultEntries={browseResultEntries}
             inlineMentionSources={inlineMentionSources}
             isMostRecent={isMostRecent && index === renderSegments.length - 1}
             item={segment.item}
-            key={`subagent:${segment.item.id}`}
+            key={`${segment.kind}:${segment.item.id}`}
             knownSkills={knownSkills}
             projectFilePaths={projectFilePaths}
             projectId={projectId}

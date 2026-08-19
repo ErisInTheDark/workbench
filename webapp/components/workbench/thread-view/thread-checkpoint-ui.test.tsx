@@ -12,6 +12,7 @@ import WorkbenchCheckbox from "../WorkbenchCheckbox";
 import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadCodeDisplay from "./ThreadCodeDisplay";
+import ThreadGitArcItem from "./ThreadGitArcItem";
 import { ThreadTurnDetails } from "./thread-view-items";
 
 test("checkpoint compare uses established file-change rows without empty disclosures", () => {
@@ -68,6 +69,204 @@ test("in-progress checkpoint commit commands render an immediate standalone card
   assert.doesNotMatch(html, /Creating checkpoint commit proposal/u);
 });
 
+test("PowerShell-wrapped proposals render the standalone card from command text", () => {
+  const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    threadId: "thread-one",
+    turn: {
+      completedAt: null,
+      durationMs: 4_000,
+      error: null,
+      id: "turn-one",
+      items: [{
+        aggregatedOutput: "Workbench arc proposal: proposal-one\n",
+        command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "wb git arc propose --ref 27e60cc1019da6a4013c574ea9391c56bb0f582b -m \"Group thread context menu controls\" -m \"Preserve Chiri's lifecycle status.\""`,
+        commandActions: [],
+        cwd: "C:/workspace",
+        durationMs: 4_000,
+        exitCode: 0,
+        id: "proposal-command",
+        processId: null,
+        source: "agent",
+        status: "completed",
+        type: "commandExecution",
+      }],
+      itemsView: "full",
+      startedAt: null,
+      status: "completed",
+    },
+  }));
+
+  assert.match(html, /data-thread-checkpoint-card="true"/u);
+  assert.match(html, /Group thread context menu controls/u);
+  assert.match(html, /Preserve Chiri&#x27;s lifecycle status\./u);
+  assert.doesNotMatch(html, /Working dir:|pwsh\.exe/u);
+});
+
+test("arc lifecycle commands render compact receipt-backed cards", () => {
+  const ref = "a".repeat(40);
+  const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    threadId: "thread-one",
+    turn: {
+      completedAt: null,
+      durationMs: 4_000,
+      error: null,
+      id: "turn-one",
+      items: [{
+        aggregatedOutput: `Created Git plan ${ref}\nWorkbench arc receipt: {"action":"plan","claimedPaths":["src/one.ts","src/two.ts"],"intentName":"Polish arc UI","ref":"${ref}","selectedPaths":["src/one.ts","src/two.ts"],"version":1}\n`,
+        command: `wb git arc plan -m "Polish arc UI" -- src/one.ts src/two.ts`,
+        commandActions: [],
+        cwd: "C:/workspace",
+        durationMs: 4_000,
+        exitCode: 0,
+        id: "plan-command",
+        processId: null,
+        source: "agent",
+        status: "completed",
+        type: "commandExecution",
+      }],
+      itemsView: "full",
+      startedAt: null,
+      status: "completed",
+    },
+  }));
+
+  assert.match(html, /data-thread-git-arc-card="plan"/u);
+  assert.match(html, /<details[^>]*open=""/u);
+  assert.match(html, /Planned/u);
+  assert.match(html, /Polish arc UI/u);
+  assert.match(html, /aaaaaaaa/u);
+  assert.match(html, /src\/one\.ts/u);
+  assert.doesNotMatch(html, /Created Git plan [a-f0-9]{40}/u);
+});
+
+test("arc lifecycle cards stay outside adjacent generic command groups", () => {
+  const ref = "a".repeat(40);
+  const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    threadId: "thread-one",
+    turn: {
+      completedAt: null,
+      durationMs: 5_000,
+      error: null,
+      id: "turn-one",
+      items: [
+        {
+          aggregatedOutput: `Restored 1 selected path from Git arc ${ref}\nWorkbench arc receipt: {"action":"restore","claimedPaths":["src/one.ts","src/two.ts"],"intentName":"Polish arc UI","ref":"${ref}","selectedPaths":["src/one.ts"],"version":1}\n`,
+          command: `wb git arc restore --ref ${ref} -- src/one.ts`,
+          commandActions: [],
+          cwd: "C:/workspace",
+          durationMs: 4_000,
+          exitCode: 0,
+          id: "restore-command",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          type: "commandExecution",
+        },
+        {
+          aggregatedOutput: "False\n",
+          command: "Test-Path -LiteralPath 'src/one.ts'",
+          commandActions: [],
+          cwd: "C:/workspace",
+          durationMs: 1_000,
+          exitCode: 0,
+          id: "check-command",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          type: "commandExecution",
+        },
+      ],
+      itemsView: "full",
+      startedAt: null,
+      status: "completed",
+    },
+  }));
+
+  assert.match(html, /data-thread-git-arc-card="restore"/u);
+  assert.match(html, />Restored</u);
+  assert.match(html, /src\/one\.ts/u);
+  assert.doesNotMatch(html, /Restored a git checkpoint, checked 1 path/u);
+});
+
+test("arc cards keep main evidence open and nest the complete claimed set", () => {
+  const previousRef = "a".repeat(40);
+  const currentRef = "b".repeat(40);
+  const receipt = {
+    action: "add" as const,
+    claimedPaths: ["src/existing.ts", "src/new.ts"],
+    intentName: "Polish arc UI",
+    ref: currentRef,
+    selectedPaths: ["src/new.ts"],
+    version: 1 as const,
+  };
+  const addHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: { action: "add", intentName: null, paths: ["src/new.ts"], ref: previousRef },
+    durationMs: 4_000,
+    outcome: "completed",
+    receipt,
+  }));
+
+  const selectedPathIndex = addHtml.indexOf("src/new.ts");
+  const nestedClaimsIndex = addHtml.indexOf("2 claimed files");
+  assert(selectedPathIndex >= 0);
+  assert(nestedClaimsIndex > selectedPathIndex);
+  assert.equal(addHtml.match(/open=""/gu)?.length, 1);
+  assert.match(addHtml, />Claimed</u);
+  assert.doesNotMatch(addHtml, />Claimed files</u);
+  assert.match(addHtml, /Polish arc UI/u);
+
+  const compareHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: { action: "compare", intentName: null, paths: [], ref: currentRef },
+    durationMs: 5_000,
+    operationDetails: createElement("span", { "data-main-change": true }, "Changed file evidence"),
+    outcome: "completed",
+    receipt: { ...receipt, action: "compare" as const, selectedPaths: undefined },
+  }));
+  assert(compareHtml.indexOf("Changed file evidence") < compareHtml.indexOf("2 claimed files"));
+  assert.equal(compareHtml.match(/open=""/gu)?.length, 1);
+});
+
+test("arc cards omit empty filler and describe failed claims precisely", () => {
+  const ref = "a".repeat(40);
+  const startHtml = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    threadId: "thread-one",
+    turn: {
+      completedAt: null,
+      durationMs: 5_000,
+      error: null,
+      id: "turn-one",
+      items: [{
+        aggregatedOutput: `Workbench arc comparison\nWorkbench arc receipt: {"action":"start","claimedPaths":["src/one.ts"],"intentName":"Polish arc UI","ref":"${ref}","version":1}\n`,
+        command: `wb git arc start --ref ${ref}`,
+        commandActions: [],
+        cwd: "C:/workspace",
+        durationMs: 5_000,
+        exitCode: 0,
+        id: "start-command",
+        processId: null,
+        source: "agent",
+        status: "completed",
+        type: "commandExecution",
+      }],
+      itemsView: "full",
+      startedAt: null,
+      status: "completed",
+    },
+  }));
+  assert.doesNotMatch(startHtml, /No changed files captured|Claimed files will appear/u);
+  assert.match(startHtml, /1 claimed file/u);
+
+  const failedAddHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: { action: "add", intentName: null, paths: ["src/new.ts"], ref: "a".repeat(40) },
+    durationMs: 5_000,
+    failureReason: "The selected path is dirty.",
+    outcome: "failed",
+    receipt: null,
+  }));
+  assert.match(failedAddHtml, /Attempted to claim/u);
+  assert.match(failedAddHtml, /The selected path is dirty\./u);
+});
+
 test("pending checkpoint proposal cards render command intent without a loading replacement", () => {
   const html = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
     committing: false,
@@ -89,6 +288,11 @@ test("pending checkpoint proposal cards render command intent without a loading 
   assert.match(html, /2 changed files/u);
   assert.match(html, /data-placeholder="Optional description"/u);
   assert.match(html, /color-mix\(in_srgb,var\(--text\)_32%,transparent\)/u);
+  assert.match(html, />Changed</u);
+  assert.match(html, /src\/one\.ts/u);
+  assert.match(html, /src\/two\.ts/u);
+  assert.match(html, /bg-\[color-mix\(in_srgb,var\(--text\)_4%,transparent\)\]/u);
+  assert.doesNotMatch(html, /bg-\[#1112\]/u);
   assert.match(html, /<button[^>]*disabled=""/u);
   assert.match(html, />Commit<\/span>/u);
   assert.doesNotMatch(html, /Loading commit proposal/u);

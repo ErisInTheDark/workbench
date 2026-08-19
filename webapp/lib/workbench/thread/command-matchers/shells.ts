@@ -560,7 +560,7 @@ function unwrapAdjacentQuotedCommandFragments(value: string) {
     index = fragment.nextIndex;
   }
 
-  return fragmentCount > 1 ? unwrappedValue : null;
+  return fragmentCount > 0 ? unwrappedValue : null;
 }
 
 function readQuotedCommandFragment(value: string, startIndex: number, quoteCharacter: "\"" | "'") {

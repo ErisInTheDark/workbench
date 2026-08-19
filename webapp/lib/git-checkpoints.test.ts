@@ -359,6 +359,9 @@ checkpointTest("arc additions preserve the full baseline and verify continuation
 
 checkpointTest("proposal file sets stay frozen while newer selected edits remain optional", async (context) => {
   const { repoRoot } = await createRepository(context);
+  const encodedThreadId = Buffer.from("thread-one", "utf8").toString("base64url");
+  await write(repoRoot, ".git/info/exclude", ".workbench/\n");
+  await write(repoRoot, `.workbench/transcripts/codex/threads/${encodedThreadId}/thread.json`, "{}\n");
   const checkpoint = await createGitPlan({
     cwd: repoRoot,
     intentName: "Freeze proposal files",
@@ -393,6 +396,30 @@ checkpointTest("proposal file sets stay frozen while newer selected edits remain
     title: "Commit selected",
   });
   assert.deepEqual(proposal.paths, ["selected.txt"]);
+  const proposalCacheDirectory = path.join(
+    repoRoot,
+    ".workbench",
+    "transcripts",
+    "codex",
+    "threads",
+    encodedThreadId,
+    "artifacts",
+    "git-arc-proposals",
+    proposal.proposalId,
+  );
+  const proposalCacheFiles = await fs.readdir(proposalCacheDirectory);
+  assert.equal(proposalCacheFiles.length, 1);
+  const proposalCachePath = path.join(proposalCacheDirectory, proposalCacheFiles[0]);
+  const cacheBeforeRead = await fs.stat(proposalCachePath);
+  const cachedPreview = await readGitCheckpointProposal({
+    cwd: repoRoot,
+    includeNewer: false,
+    proposalId: proposal.proposalId,
+    threadId: "thread-one",
+  });
+  const cacheAfterRead = await fs.stat(proposalCachePath);
+  assert.match(cachedPreview.changes[0]?.diff ?? "", /proposed version/u);
+  assert.equal(cacheAfterRead.mtimeMs, cacheBeforeRead.mtimeMs);
   const newerProposal = await createGitCheckpointProposal({
     checkpointCommit: checkpoint.checkpointCommit,
     cwd: repoRoot,
