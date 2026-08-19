@@ -10,6 +10,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { parseUnifiedDiff } from "../../../lib/workbench/thread/thread-file-diff";
 import { getGitArcMatcherAction, getThreadCommandDisplay } from "../../../lib/workbench/thread/thread-command-matchers";
 import WorkbenchCheckbox from "../WorkbenchCheckbox";
+import GitArcIcon from "./GitArcIcon";
 import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
 import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
@@ -60,6 +61,15 @@ function proposedCheckpointState(status: "proposed" | "superseded" | "unavailabl
     status: "loaded" as const,
   };
 }
+
+test("arc continue reuses the start icon without changing restore", () => {
+  const startIcon = renderToStaticMarkup(createElement(GitArcIcon, { action: "start" }));
+  const continueIcon = renderToStaticMarkup(createElement(GitArcIcon, { action: "continue" }));
+  const restoreIcon = renderToStaticMarkup(createElement(GitArcIcon, { action: "restore" }));
+
+  assert.equal(continueIcon, startIcon);
+  assert.notEqual(continueIcon, restoreIcon);
+});
 
 test("checkpoint compare uses established file-change rows without empty disclosures", () => {
   const html = renderToStaticMarkup(createElement(ThreadCheckpointCompareItem, {

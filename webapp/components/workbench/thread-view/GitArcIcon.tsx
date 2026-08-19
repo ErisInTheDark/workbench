@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcIcon: render the matching square action glyph for one Git arc command. Keywords: git, arc, icon, plan, start, add, remove, compare, restore.
+ * - default GitArcIcon: render the matching square action glyph for one Git arc command. Keywords: git, arc, icon, plan, start, continue, add, remove, compare, restore.
  * - GitArcClaimIcon: render the flag marker used by claimed-file rows. Keywords: git, arc, icon, claim, file.
  */
 import type { ReactNode } from "react";
@@ -31,7 +31,7 @@ export default function GitArcIcon({ action, className = "size-4" }: { action: G
       </SvgFrame>
     );
   }
-  if (action === "start") {
+  if (action === "start" || action === "continue") {
     return (
       <SvgFrame className={className}>
         <rect x="3" y="3" width="18" height="18" rx="2" />
