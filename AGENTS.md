@@ -82,7 +82,7 @@ wb orchestrator reload [--orchestrator-logic] [--browse-controller] [--codex-bri
 
 A direct user request to perform a specific bounded action counts as explicit permission for that exact action, including when delivered as a steer. Use a questionnaire when permission has not already been given, the request is ambiguous, or a bounded scope choice still needs user input.
 
-- Obtain explicit user permission before calling any Workbench webapp endpoint directly.
+- Obtain explicit user permission before calling any non-GET Workbench webapp endpoint directly.
 - Ask before running installs, generation, formatting, migration, cleanup, build, or other commands that write artifacts or disturb active watch/runtime state.
 
 ### Forbidden Shortcuts
