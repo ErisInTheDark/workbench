@@ -666,15 +666,13 @@ After start, active-registry commands resolve this thread's current arc. Do not 
 
 ### Continue the arc
 
-Before another implementation pass on the same claimed files, run \`arc continue\` with the current remembered ref. If a proposal is pending, continuation makes it unavailable before returning the successor. If a proposal was committed, a partial commit advances the baseline and keeps the full active set claimed; use \`arc remove\` to release clean paths intentionally. A complete commit creates one fresh baseline at current \`HEAD\`. Always replace your remembered ref with the returned ref.
+Before follow-up work on the same claimed files, run \`arc continue\` with the remembered ref. Do not ask whether a proposal was committed. The command resolves that state. Use its returned successor. Partial commits keep all claims. Use \`arc remove\` to release clean paths. Do not commit a known-bad proposal. If committed state moved, re-inspect and create a new plan. If it reports a claim collision, ask the user to reply with **Claim released — retry the approved plan**. That reply preserves approval. Retry the arc command. Continue Implement if it succeeds and the approved plan still fits. Rebrief only if the retry finds a plan-affecting change. For any other rejection, stop and follow the reported recovery.
 
 \`wb git arc continue --ref <current-ref>\`
 
 ### Extend the active arc
 
-Run \`arc add\` only with genuinely new clean paths that extend the active claim set. It verifies the existing claimed baseline against committed \`HEAD\`, continues the arc, and returns the successor ref. Replace your remembered ref with that SHA; active commands continue to resolve the registry without a ref.
-
-If Review finds more implementation work while a proposal is pending, use \`arc continue\` when the claimed set is unchanged. Use \`arc add\` when the next pass also claims new clean paths. Either command makes the frozen proposal unavailable and returns the successor ref. Do not commit a known-bad proposal merely to continue its arc.
+After continuation, run \`arc add\` only for new clean paths. It checks the claimed baseline and returns a successor. Remember the newest ref.
 
 \`wb git arc add -- <additional-clean-path> [<additional-clean-path>...]\`
 
@@ -718,7 +716,7 @@ Omit paths to inspect the claimed set. Explicit paths select diagnostics from th
 
 ### Propose a commit in Review
 
-After validation and arc compare/diff, run this command with a fresh proposed title. Omit paths to use every changed file under the active claimed set, or provide a claimed subset. Workbench derives exact changed files and excludes claimed paths that ended unchanged. The optional description is for useful context that the title cannot communicate. This creates the editable commit proposal UI; it does not commit the branch and does not require separate commit permission. Do not replace it with the autonomous \`wb git commit\` workflow.
+After validation and arc compare/diff, run this command with a fresh title. Omit paths to use all changed claimed files. Provide paths only for a narrower subset. This opens the proposal UI and does not commit. Do not use \`wb git commit\`. A failure keeps Review open. Fix it and retry. If user input or an external change is required, use the blocked path. Do not use the final channel.
 
 The proposal freezes that file set and its current contents. The user can include or exclude newer edits to those same files; no other files can enter the proposal. Workbench rebases the frozen selected files across compatible fast-forward commits that do not change them. Committed changes to selected files or incompatible HEAD movement make the proposal unavailable. A final atomic branch update prevents a concurrent commit from being overwritten.
 

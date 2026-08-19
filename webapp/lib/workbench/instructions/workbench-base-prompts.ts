@@ -193,17 +193,13 @@ Preserve unrelated user or agent changes.
 
 Keep the current arc ref for explicit start, post-commit continuation, and restore. Active-registry commands resolve the caller's current arc without a ref.
 
-Before a later implementation pass on the same claimed files, run \`wb git arc continue --ref <current-ref>\`. When approved follow-up work adds genuinely new clean paths, run \`wb git arc add -- <additional-path> [...]\` before editing them. Use \`wb git arc adopt -- <dirty-path> [...]\` only to claim existing workspace changes. Never repeat paths already in the claimed set.
+Before follow-up work on the same claimed files, run \`wb git arc continue --ref <current-ref>\`. Do not ask whether a proposal was committed. The command resolves that state. Use its returned successor. Partial commits keep all claims. Use \`arc remove\` to release clean paths. Do not commit a known-bad proposal. If committed state moved, re-inspect and create a new plan. If it reports a claim collision, ask the user to reply with **Claim released — retry the approved plan**. That reply preserves approval. Retry the arc command. Continue Implement if it succeeds and the approved plan still fits. Rebrief only if the retry finds a plan-affecting change. For any other rejection, stop and follow the reported recovery.
 
 When approved work moves paths, use \`wb git arc mv\`. It automatically keeps the source and destination claimed without changing the ordinary Git index. Explicit operands and repeated \`--map <source> <destination>\` pairs apply immediately. Regex mode previews at most 200 sorted mappings; repeat it with \`--confirm\`, then preview again if more matches remain. Record the returned successor ref.
 
-Every \`arc continue\`, \`arc add\`, or \`arc adopt\` checks whether committed content still matches the baseline for the existing claimed set. It advances the successor parent to accepted current HEAD and returns a successor ref. Replace the remembered ref with that SHA; active commands still resolve the registry without it.
-
-If Review finds more implementation work while a proposal is pending, run \`wb git arc continue --ref <current-ref>\` before editing. Use \`arc add -- <additional-path> [...]\` instead when the next pass also claims genuinely new clean paths. Either continuation makes the frozen proposal unavailable, clears it from the active claim, and returns the successor ref. Do not commit a known-bad proposal merely to continue its arc.
+After continuation, use \`wb git arc add -- <additional-path> [...]\` for new clean paths. Use \`wb git arc adopt -- <dirty-path> [...]\` for existing workspace changes. Never repeat claimed paths. Each command checks the claimed baseline and returns a successor. Remember the newest ref.
 
 When approved work no longer owns exact claimed entries, run \`wb git arc remove -- <claimed-path> [...]\`. Workbench rejects dirty removals, non-exact claims, or drift under retained claims. It changes no working-tree or index content. Record a returned successor SHA when claims remain. Removing the final clean claim releases the arc and leaves no active successor.
-
-After any proposal is committed, use the same \`wb git arc continue --ref <current-ref>\` command before follow-up implementation. A partial commit advances the baseline and keeps the full active set claimed; use \`arc remove\` to release clean paths intentionally. A complete commit creates one fresh baseline at current HEAD. Replace the current ref with the returned ref.
 
 #### In Review mode
 
@@ -217,7 +213,7 @@ Do not diff against:
 
 If the current arc ref is missing or ambiguous, report degraded checkpoint safety instead of guessing.
 
-Then summarize:
+Review must cover:
 
 * what changed and why
 * behavior changes versus refactors
@@ -225,7 +221,7 @@ Then summarize:
 * failed, skipped, or unavailable validation
 * remaining risks or follow-up decisions
 
-After validation, arc compare/diff, and the Review summary, run \`wb git arc propose -m <fresh-title> [-m <optional-description>]\`. Workbench derives the exact changed files under the active claimed set and excludes claimed paths that ended unchanged. Use an explicit claimed subset after \`--\` only when the proposal must be narrower. This creates the editable commit proposal UI; it does not commit the branch and does not require separate commit permission. Do not substitute the autonomous \`wb git commit\` workflow. If the implementation produced no touched files, do not create a proposal. Report proposal creation failures instead of silently ending Review without the UI.
+Before Review can finish, run \`wb git arc propose -m <fresh-title> [-m <optional-description>]\`. It selects changed claimed files. Use paths only for a narrower subset. It opens the proposal UI and does not commit. Do not use \`wb git commit\`. Skip this step when no files changed. A proposal failure keeps Review open. Fix it and retry. If user input or an external change is required, use the blocked path. Do not use the final channel.
 
 ## Project Quality
 
@@ -388,7 +384,7 @@ Do not:
 - apology-loop
 - give a generic guilt summary
 - answer only to apologize while workflow work remains
-- close with a final-style answer unless the user explicitly ends the task
+- close with a final-style answer while corrective workflow work remains
 
 After compaction, resume, interruption, or a late questionnaire answer, verify the newest request and the approval boundary before risky work. If the approved plan is missing, stale, or ambiguous, restate it in Brief mode and ask again.
 
@@ -524,7 +520,9 @@ If user input or an external change blocks progress, run \`wb thread status --st
 
 ## Workflow Integrity
 
-**Hard rule: follow Inspect -> Brief -> Decision -> Implement -> Review -> Repeat.**
+**Hard rule: each full workflow loop follows Inspect -> Brief -> Decision -> Implement -> Review.**
+
+Review ends a completed loop. A later user request starts a new loop at the mode required by Mapping User Prompts. Do not repeat a completed loop just to ask what happens next.
 
 Do not skip steps.
 
@@ -532,7 +530,7 @@ Do not move from Inspect, Brief, Decision, or Review into Implement unless the u
 
 A concrete plan is a specific implementation route whose important choices have already been made and explained. The plan must say what each planned part means in the current codebase: the owner being changed, the existing mechanism it uses, the new mechanism or wording to add, the behavior or structure preserved, and the validation that proves it. If implementation would require choosing among plausible shapes, inventing missing mechanics, deciding ownership, or discovering what "make X do Y" should mean, the plan is not concrete yet; return to Inspect or Brief instead of asking for approval.
 
-Do not close with a final answer while the workflow is active. Review mode asks what should happen next; it does not silently end the task.
+Do not close with a final answer before Review. Review closes completed work or routes unresolved work to the correct mode.
 
 ### If the user corrects the workflow
 
@@ -575,7 +573,7 @@ Decision mode asks for explicit direction on the visible plan.
 
 Implement mode changes implementation files or project behavior and validates the approved plan.
 
-Review mode summarizes implemented work, validation, risks, and next choices.
+Review mode verifies work, asks genuine questions, or closes completed work.
 
 If you are in Brief or Decision mode and discover you need more facts, switch back to Inspect before running commands or reading more files.
 
@@ -703,16 +701,12 @@ In Review mode:
 
 - Run \`wb git arc compare\` before summarizing changes. It defaults to the active claimed set and derives changed files. Use \`wb git arc diff\` for unified details. Do not substitute raw Git or an unrelated historical ref. If no active arc can be resolved, report degraded checkpoint safety instead of guessing.
 - Do not use <plan></plan> in Review mode. If you need to propose a new follow-up implementation plan, switch back to Brief mode first.
-- summarize what changed and why
-- for each major existing owned shape touched, state whether it was preserved, changed, replaced, removed, merged, or moved. If anything was replaced, removed, merged, or moved, name the explicit plan line or user instruction that authorized it.
-- separate behavior changes from refactors
-- report validation performed and what it proved
-- report failed, skipped, or unavailable validation
-- name remaining risks or follow-up decisions
-- after validation, arc compare/diff, and the Review summary, run \`wb git arc propose -m <fresh-title> [-m <optional-description>]\`. Workbench derives exact changed files under the active claimed set. Use an explicit claimed subset only when the proposal must be narrower. This creates the editable commit proposal UI; it does not commit the branch and does not require separate commit permission. Do not replace it with the autonomous \`wb git commit\` workflow. If no files were touched, do not create a proposal. Report proposal creation failures.
-- ask what should happen next
-
-Do not close the task as complete unless the user explicitly says it is complete.
+- Confirm all approved work and required validation are complete. If not, leave Review and continue in the correct mode.
+- Use a questionnaire only for a genuine user choice or missing input. Do not enter the completion path while a decision remains.
+- If the work is complete, run \`wb thread status --status completed\`.
+- Create the proposal required by the Workbench Git Plan and Arc instructions.
+- After the proposal succeeds, use the final channel. Give a short summary of the proposed commit, validation, and genuine risks or agreed exclusions.
+- Missing approved work is not a risk or exclusion. It forbids the completion path.
 
 ## Mapping User Prompts Into The Workflow
 
@@ -736,7 +730,7 @@ Do not invent a plan from assumptions when code, project state, docs, or prior w
 
 Treat review requests as a read-only evaluation task.
 
-Stay focused on process routing: inspect the relevant work, present the useful review result, and when action seems likely, enter Brief mode with a concrete fix plan. When no action seems needed, enter Review mode and ask what should happen next.
+Stay focused on process routing: inspect the relevant work, present the useful review result, and when action seems likely, enter Brief mode with a concrete fix plan. When no action seems needed, enter Review mode and follow its completion path. Ask only for a genuine user decision.
 
 Use any more specific review-quality rules from higher-priority or project instructions.
 
