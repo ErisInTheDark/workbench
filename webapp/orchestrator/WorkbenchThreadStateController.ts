@@ -36,8 +36,9 @@ import AtomicJsonStore from "./AtomicJsonStore";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 
 interface StoredThreadMetadata { archived: boolean; harness: "codex" | "copilot" | "opencode"; lifecycle: WorkbenchThreadLifecycle; pinned: boolean; snoozed: boolean; threadId: string; titleFallback?: string }
-interface StoredProjectStateV1 { drafts: WorkbenchThreadDraft[]; threads: StoredThreadMetadata[]; version: 1 }
-interface StoredProjectState { drafts: WorkbenchThreadDraft[]; threads: StoredThreadMetadata[]; version: 2 }
+type StoredThreadDraft = WorkbenchThreadDraft & { pinned?: boolean; snoozed?: boolean };
+interface StoredProjectStateV1 { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 1 }
+interface StoredProjectState { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 2 }
 
 export interface WorkbenchThreadStateControllerOptions {
   getProjectCatalog: () => WorkbenchProjectsPayload;
@@ -92,6 +93,15 @@ interface ProjectState {
 function entryKey(entry: WorkbenchThreadSidebarEntry) {
   if (entry.entryKind === "draft") return `draft:${entry.draft.draftId}`;
   return `${entry.identity.harness}:${entry.identity.threadId}`;
+}
+
+function parseStoredDraft(candidate: unknown) {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+  const { pinned, snoozed, ...draftCandidate } = candidate as Record<string, unknown>;
+  const draft = WorkbenchThreadDraftSchema.safeParse(draftCandidate);
+  return draft.success
+    ? { draft: draft.data, metadata: { archived: false as const, pinned: pinned === true, snoozed: snoozed === true } }
+    : null;
 }
 
 function sanitizeError(error: unknown) {
@@ -198,6 +208,8 @@ export default class WorkbenchThreadStateController {
       }) };
       case "workbench/thread-state/draft/upsert": return { result: await this.upsertDraft(request.projectId, request.draft) };
       case "workbench/thread-state/draft/delete": return { result: await this.deleteDraft(request.projectId, request.draftId, request.clientUpdatedAt) };
+      case "workbench/thread-state/draft/pin/set":
+      case "workbench/thread-state/draft/snooze/set": return { result: await this.mutateDraft(request) };
       default: return { result: await this.mutateThread(request) };
     }
   }
@@ -256,15 +268,18 @@ export default class WorkbenchThreadStateController {
 
   async acceptIntent(connectionId: string, input: { draftId?: string; harness: "codex" | "copilot" | "opencode"; projectId: string; threadId: string; title?: string; turnId: string }) {
     if (this.connectionProjects.get(connectionId) !== input.projectId) throw new Error("The accepted intent does not belong to this connection's observed project.");
+    let draftPinned = false;
     if (input.draftId) {
       const state = await this.getProject(input.projectId);
+      const draftEntry = state.entries.get(`draft:${input.draftId}`);
+      draftPinned = draftEntry?.entryKind === "draft" ? draftEntry.metadata.pinned : false;
       state.drafts.delete(input.draftId);
       state.entries.delete(`draft:${input.draftId}`);
     }
     const providerEntry: WorkbenchThreadSidebarEntry = {
       activityAt: this.now(), entryKind: "thread", identity: { harness: input.harness, threadId: input.threadId },
       lifecycle: { agent: { agentStatus: "working", turnId: input.turnId }, kind: "working", reason: "acceptedIntent", settled: false },
-      metadata: { archived: false, pinned: false, snoozed: false }, title: input.title?.trim() || input.threadId,
+      metadata: { archived: false, pinned: draftPinned, snoozed: false }, title: input.title?.trim() || input.threadId,
     };
     const entry = await this.applyLifecycle(input.projectId, input.harness, input.threadId, { kind: "acceptedIntent", turnId: input.turnId }, providerEntry);
     if (!entry) throw new Error("The accepted intent does not identify a known provider thread.");
@@ -441,12 +456,13 @@ export default class WorkbenchThreadStateController {
       if (this.projects.has(projectId)) return;
       const stored = await this.loadProjectStorage(projectId);
       const drafts = new Map<string, WorkbenchThreadDraft>();
-      for (const candidate of Array.isArray(stored.drafts) ? stored.drafts : []) {
-        const parsed = WorkbenchThreadDraftSchema.safeParse(candidate);
-        if (parsed.success && parsed.data.projectId === projectId) drafts.set(parsed.data.draftId, parsed.data);
-      }
       const entries = new Map<string, WorkbenchThreadSidebarEntry>();
-      for (const draft of drafts.values()) entries.set(`draft:${draft.draftId}`, this.draftEntry(draft));
+      for (const candidate of Array.isArray(stored.drafts) ? stored.drafts : []) {
+        const parsed = parseStoredDraft(candidate);
+        if (!parsed || parsed.draft.projectId !== projectId) continue;
+        drafts.set(parsed.draft.draftId, parsed.draft);
+        entries.set(`draft:${parsed.draft.draftId}`, this.draftEntry(parsed.draft, parsed.metadata));
+      }
       const overlays = new Map<string, StoredThreadMetadata>();
       for (const candidate of Array.isArray(stored.threads) ? stored.threads : []) {
         if (!candidate || typeof candidate !== "object") continue;
@@ -512,7 +528,7 @@ export default class WorkbenchThreadStateController {
 
   private filePath(projectId: string) { return path.join(this.options.storageRoot, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment(projectId)}.json`); }
   private legacyFilePath(projectRoot: string, projectId: string) { return path.join(projectRoot, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment(projectId)}.json`); }
-  private draftEntry(draft: WorkbenchThreadDraft): WorkbenchThreadSidebarEntry { return { activityAt: draft.updatedAt, draft, entryKind: "draft", metadata: { archived: false, pinned: false, snoozed: false }, title: draft.prompt.trim().split(/\r?\n/u).find(Boolean)?.trim().replace(/\s+/gu, " ") || "Draft" }; }
+  private draftEntry(draft: WorkbenchThreadDraft, metadata = { archived: false as const, pinned: false, snoozed: false }): WorkbenchThreadSidebarEntry { return { activityAt: draft.updatedAt, draft, entryKind: "draft", metadata, title: draft.prompt.trim().split(/\r?\n/u).find(Boolean)?.trim().replace(/\s+/gu, " ") || "Draft" }; }
   private snapshot(projectId: string, state: ProjectState): WorkbenchThreadSidebarSnapshot { return { entries: sortThreadSidebarEntries(projectWorkbenchThreadSidebarEntries([...state.entries.values()])).filter((entry) => getThreadSidebarGroup(entry) !== "hidden"), error: state.error, freshness: state.freshness, projectId, revision: state.revision }; }
   private countActiveQueueEntries(state: ProjectState) { return [...state.entries.values()].filter((entry) => { const group = getThreadSidebarGroup(entry); return group === "drafts" || group === "needsAttention" || group === "completed" || group === "working"; }).length; }
 
@@ -623,7 +639,8 @@ export default class WorkbenchThreadStateController {
       const timestamp = this.now();
       const accepted = WorkbenchThreadDraftSchema.parse({ ...draft, createdAt: current?.createdAt ?? timestamp, projectId, updatedAt: timestamp });
       state.drafts.set(accepted.draftId, accepted);
-      const entry = this.draftEntry(accepted);
+      const existingEntry = state.entries.get(`draft:${accepted.draftId}`);
+      const entry = this.draftEntry(accepted, existingEntry?.entryKind === "draft" ? existingEntry.metadata : undefined);
       state.entries.set(entryKey(entry), entry);
       await this.persist(projectId, state);
       this.publish(projectId, state, entry);
@@ -642,7 +659,27 @@ export default class WorkbenchThreadStateController {
     return { accepted: true, revision: state.revision };
   }
 
-  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/open" | "workbench/thread-state/close" | "workbench/thread-state/refresh" | "workbench/thread-state/draft/upsert" | "workbench/thread-state/draft/delete" }>) {
+  private async mutateDraft(request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/draft/pin/set" | "workbench/thread-state/draft/snooze/set" }>) {
+    const state = await this.getProject(request.projectId);
+    return await this.enqueue(`${request.projectId}:draft:${request.draftId}`, async () => {
+      const key = `draft:${request.draftId}`;
+      const entry = state.entries.get(key);
+      if (!entry || entry.entryKind !== "draft") return { accepted: false, revision: state.revision };
+      const next = WorkbenchThreadSidebarEntrySchema.parse({
+        ...entry,
+        metadata: request.method === "workbench/thread-state/draft/pin/set"
+          ? { ...entry.metadata, pinned: request.pinned }
+          : { ...entry.metadata, snoozed: request.snoozed },
+      });
+      if (areDeeplyEqual(entry, next)) return { accepted: true, revision: state.revision };
+      state.entries.set(key, next);
+      await this.persist(request.projectId, state);
+      this.publish(request.projectId, state, next);
+      return { accepted: true, revision: state.revision };
+    });
+  }
+
+  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/open" | "workbench/thread-state/close" | "workbench/thread-state/refresh" | "workbench/thread-state/draft/upsert" | "workbench/thread-state/draft/delete" | "workbench/thread-state/draft/pin/set" | "workbench/thread-state/draft/snooze/set" }>) {
     const state = await this.getProject(request.projectId);
     const key = `${request.identity.harness}:${request.identity.threadId}`;
     const mutate = async () => await this.enqueue(`${request.projectId}:thread:${key}`, async () => {
@@ -708,8 +745,16 @@ export default class WorkbenchThreadStateController {
 
   private persist(projectId: string, state: ProjectState) {
     return this.enqueue(`${projectId}:storage:write`, async () => {
+      const drafts = [...state.drafts.values()].map((draft): StoredThreadDraft => {
+        const entry = state.entries.get(`draft:${draft.draftId}`);
+        return {
+          ...draft,
+          pinned: entry?.entryKind === "draft" ? entry.metadata.pinned : false,
+          snoozed: entry?.entryKind === "draft" ? entry.metadata.snoozed : false,
+        };
+      });
       const threads = [...state.overlays.values()];
-      await this.json.write(this.filePath(projectId), { drafts: [...state.drafts.values()], threads, version: 2 } satisfies StoredProjectState);
+      await this.json.write(this.filePath(projectId), { drafts, threads, version: 2 } satisfies StoredProjectState);
     });
   }
 

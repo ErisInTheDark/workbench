@@ -1,7 +1,7 @@
 /* No production exports. Tests protect strict lifecycle, grouping, ordering, and draft rules. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { countDraftPromptTokens, createDraftTitle, getThreadSidebarGroup, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchActivityTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
+import { countDraftPromptTokens, createDraftTitle, getThreadSidebarGroup, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchActivityTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, sortThreadSidebarEntries, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
 
 test("provider activity timestamps normalize seconds without double-converting milliseconds", () => {
   assert.equal(normalizeWorkbenchActivityTimestampMs(1_723_456_789), 1_723_456_789_000);
@@ -65,6 +65,27 @@ test("manual status request accepts exactly the three radio statuses", () => {
   }
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, status: "working" }).success, false);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, status: "idle" }).success, false);
+});
+
+test("draft priority requests use draft identity and drive shared grouping and ordering", () => {
+  const draftId = "00000000-0000-4000-8000-000000000001";
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ draftId, method: "workbench/thread-state/draft/pin/set", pinned: true, projectId: "project" }).success, true);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ draftId, method: "workbench/thread-state/draft/snooze/set", projectId: "project", snoozed: true }).success, true);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ method: "workbench/thread-state/draft/pin/set", pinned: true, projectId: "project" }).success, false);
+  const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> = {
+    activityAt: 1,
+    draft: {
+      agent: null, attachments: [], clientUpdatedAt: 1, composerSettings: {}, createdAt: 1,
+      draftId, harness: "codex", model: null, profileId: null, projectId: "project", prompt: "Pinned draft",
+      reasoningEffort: null, serviceTier: null, updatedAt: 1,
+    },
+    entryKind: "draft",
+    metadata: { archived: false, pinned: true, snoozed: true },
+    title: "Pinned draft",
+  };
+  assert.equal(getThreadSidebarGroup(entry), "snoozed");
+  const first = sortThreadSidebarEntries([{ ...entry, metadata: { ...entry.metadata, pinned: false } }, entry])[0];
+  assert.equal(first?.entryKind === "draft" ? first.metadata.pinned : null, true);
 });
 
 test("lifecycle parsing preserves two attention variants and normalizes legacy reasons", () => {

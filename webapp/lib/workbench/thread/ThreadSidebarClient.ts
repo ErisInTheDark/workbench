@@ -105,12 +105,17 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
       const existing = this.snapshot.entries.find((entry) => entry.entryKind === "thread"
         && entry.identity.harness === intent.identity.harness
         && entry.identity.threadId === intent.identity.threadId);
+      const sourceDraft = intent.draftId
+        ? this.snapshot.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === intent.draftId)
+        : null;
       const entry = {
         activityAt: intent.activityAt ?? Date.now(),
         entryKind: "thread" as const,
         identity: intent.identity,
         lifecycle: { agent: { agentStatus: "working" as const, turnId: intent.turnId }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const },
-        metadata: existing?.entryKind === "thread" ? existing.metadata : { archived: false as const, pinned: false, snoozed: false },
+        metadata: existing?.entryKind === "thread"
+          ? existing.metadata
+          : { archived: false as const, pinned: sourceDraft?.entryKind === "draft" ? sourceDraft.metadata.pinned : false, snoozed: false },
         title: existing?.entryKind === "thread" ? existing.title : intent.title,
       };
       this.snapshot = {
@@ -152,11 +157,12 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   private install(snapshot: WorkbenchThreadSidebarSnapshot) { if (snapshot.revision <= this.revision) return; this.revision = snapshot.revision; this.snapshot = snapshot; this.publish(); }
   private installOptimisticDraft(draft: WorkbenchThreadDraft) {
     if (!this.snapshot) return;
+    const existing = this.snapshot.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === draft.draftId);
     const entry = {
       activityAt: draft.updatedAt,
       draft,
       entryKind: "draft" as const,
-      metadata: { archived: false as const, pinned: false, snoozed: false },
+      metadata: existing?.entryKind === "draft" ? existing.metadata : { archived: false as const, pinned: false, snoozed: false },
       title: createDraftTitle(draft.prompt),
     };
     this.snapshot = {

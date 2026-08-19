@@ -139,6 +139,10 @@ test("thread context actions group priority checkboxes and canonical status radi
   assert.match(sidebarSource, /void stopThread\(thread\)/u);
   assert.match(sidebarSource, /checked: pinned/u);
   assert.match(sidebarSource, /checked: snoozed/u);
+  assert.match(sidebarSource, /workbench\/thread-state\/draft\/pin\/set/u);
+  assert.match(sidebarSource, /workbench\/thread-state\/draft\/snooze\/set/u);
+  assert.match(sidebarSource, /disabled: entry\.entryKind !== "draft" && entry\.lifecycle\.settled/u);
+  assert.doesNotMatch(sidebarSource, /if \(entry\.entryKind !== "draft"\) \{\s*const snoozed/u);
   assert.match(sidebarSource, /label: snoozed \? "Wake" : "Snooze thread"/u);
   assert.match(sidebarSource, /action === "complete"[\s\S]*?"status\/set", "completed"/u);
   assert.match(sidebarSource, /action === "wake"[\s\S]*?"snooze\/set", false/u);

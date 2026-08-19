@@ -35,6 +35,22 @@ test("optimistic edits keep the newest value through one single-flight flush", a
   assert.deepEqual(writes.map((value) => value.prompt), ["first value here", "newest value here"]);
 });
 
+test("optimistic draft edits preserve pushed pin and snooze metadata", async () => {
+  const source = draft("keep priority", 1);
+  const initial: WorkbenchThreadSidebarSnapshot = {
+    ...snapshot(1),
+    entries: [{ activityAt: 1, draft: source, entryKind: "draft", metadata: { archived: false, pinned: true, snoozed: true }, title: "keep priority" }],
+  };
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: { close: async () => undefined, deleteDraft: async () => undefined, open: async () => initial, upsertDraft: async () => undefined },
+  });
+  await client.open("project");
+  client.edit(draft("keep newer priority", 2));
+  const optimistic = client.getSnapshot()?.entries[0];
+  assert.deepEqual(optimistic?.entryKind === "draft" ? optimistic.metadata : null, { archived: false, pinned: true, snoozed: true });
+});
+
 test("newer pushed revisions win and foreign project revisions are ignored", async () => {
   const installed: Array<WorkbenchThreadSidebarSnapshot | null> = [];
   const client = new ThreadSidebarClient({
@@ -129,6 +145,7 @@ test("open reports observation admission while retaining bounded failure state",
 
 test("materialized draft becomes a working thread before its in-flight save settles", async () => {
   const installed: Array<WorkbenchThreadSidebarSnapshot | null> = [];
+  const source = draft("materialize this", 2);
   let releaseSave: (() => void) | null = null;
   const save = new Promise<void>((resolve) => { releaseSave = resolve; });
   const client = new ThreadSidebarClient({
@@ -136,12 +153,15 @@ test("materialized draft becomes a working thread before its in-flight save sett
     transport: {
       close: async () => undefined,
       deleteDraft: async () => undefined,
-      open: async () => snapshot(1),
+      open: async () => ({
+        ...snapshot(1),
+        entries: [{ activityAt: 2, draft: source, entryKind: "draft", metadata: { archived: false, pinned: true, snoozed: true }, title: "materialize this" }],
+      }),
       upsertDraft: async () => await save,
     },
   });
   await client.open("project");
-  client.edit(draft("materialize this", 2));
+  client.edit(source);
   const flushing = client.flush();
   await new Promise((resolve) => setTimeout(resolve, 0));
   const accepting = client.acceptIntent({
@@ -153,6 +173,8 @@ test("materialized draft becomes a working thread before its in-flight save sett
   const optimisticEntries = installed.at(-1)?.entries ?? [];
   assert.equal(optimisticEntries.some((entry) => entry.entryKind === "draft"), false);
   assert.equal(optimisticEntries.some((entry) => entry.entryKind === "thread" && entry.identity.threadId === "materialized" && entry.lifecycle.kind === "working"), true);
+  const materialized = optimisticEntries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "materialized");
+  assert.deepEqual(materialized?.entryKind === "thread" ? materialized.metadata : null, { archived: false, pinned: true, snoozed: false });
   let acceptanceSettled = false;
   void accepting.then(() => { acceptanceSettled = true; });
   await new Promise((resolve) => setTimeout(resolve, 0));

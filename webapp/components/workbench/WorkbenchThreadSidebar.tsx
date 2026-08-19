@@ -90,7 +90,12 @@ export default memo(function WorkbenchThreadSidebar({
   }, [controls]);
 
   const mutateEntry = useCallback((entry: WorkbenchThreadSidebarEntry, method: "archive/set" | "pin/set" | "restore" | "settle" | "snooze/set" | "status/set", value?: boolean | "completed" | "needsAttention" | "stopped") => {
-    if (!controls || !projectId || entry.entryKind === "draft") return;
+    if (!controls || !projectId) return;
+    if (entry.entryKind === "draft") {
+      if (method === "pin/set") void controls.updateThreadState({ draftId: entry.draft.draftId, method: "workbench/thread-state/draft/pin/set", pinned: Boolean(value), projectId });
+      if (method === "snooze/set") void controls.updateThreadState({ draftId: entry.draft.draftId, method: "workbench/thread-state/draft/snooze/set", projectId, snoozed: Boolean(value) });
+      return;
+    }
     const identity = entry.identity;
     const request = method === "pin/set"
       ? { identity, method: "workbench/thread-state/pin/set" as const, pinned: Boolean(value), projectId }
@@ -143,29 +148,27 @@ export default memo(function WorkbenchThreadSidebar({
       onSelect: () => { void writeTextToClipboard(identifier); },
     });
 
-    if (entry.entryKind !== "draft") {
-      const snoozed = group === "snoozed";
-      items.push({ id: "priority-separator", kind: "separator" }, {
-        controls: [{
-          checked: pinned,
-          icon: <PinIcon className="size-4" />,
-          id: "pin",
-          label: pinned ? "Unpin thread" : "Pin thread",
-          onSelect: () => mutateEntry(entry, "pin/set", !pinned),
-        }, {
-          checked: snoozed,
-          disabled: entry.lifecycle.settled,
-          icon: <SnoozedThreadIcon className="size-4" />,
-          id: "snooze",
-          label: snoozed ? "Wake" : "Snooze thread",
-          onSelect: () => mutateEntry(entry, "snooze/set", !snoozed),
-        }],
-        id: "priority",
-        kind: "control-group",
-        label: "Priority",
-        presentation: "independent",
-      });
-    }
+    const snoozed = group === "snoozed";
+    items.push({ id: "priority-separator", kind: "separator" }, {
+      controls: [{
+        checked: pinned,
+        icon: <PinIcon className="size-4" />,
+        id: "pin",
+        label: pinned ? "Unpin thread" : "Pin thread",
+        onSelect: () => mutateEntry(entry, "pin/set", !pinned),
+      }, {
+        checked: snoozed,
+        disabled: entry.entryKind !== "draft" && entry.lifecycle.settled,
+        icon: <SnoozedThreadIcon className="size-4" />,
+        id: "snooze",
+        label: snoozed ? "Wake" : "Snooze thread",
+        onSelect: () => mutateEntry(entry, "snooze/set", !snoozed),
+      }],
+      id: "priority",
+      kind: "control-group",
+      label: "Priority",
+      presentation: "independent",
+    });
 
     if (entry.entryKind === "thread") {
       const providerOwned = isWorkbenchThreadStatusProviderOwned(entry.lifecycle);

@@ -255,11 +255,16 @@ test("project-local thread state copies centrally without deleting or modifying 
   assert.equal(migratedOpen.sidebar.entries.some((entry) => entry.entryKind === "draft" && entry.draft.prompt === "Migrated draft"), true);
   assert.equal(centralOpen.sidebar.entries.some((entry) => entry.entryKind === "draft" && entry.draft.prompt === "Central draft"), true);
   assert.equal(centralOpen.sidebar.entries.some((entry) => entry.entryKind === "draft" && entry.draft.prompt === "Stale legacy draft"), false);
+  const migratedEntry = migratedOpen.sidebar.entries.find((entry) => entry.entryKind === "draft" && entry.draft.prompt === "Migrated draft");
+  const centralEntry = centralOpen.sidebar.entries.find((entry) => entry.entryKind === "draft" && entry.draft.prompt === "Central draft");
+  assert.deepEqual(migratedEntry?.entryKind === "draft" ? migratedEntry.metadata : null, { archived: false, pinned: false, snoozed: false });
+  assert.deepEqual(centralEntry?.entryKind === "draft" ? centralEntry.metadata : null, { archived: false, pinned: false, snoozed: false });
   assert.deepEqual(resolvedProjects, ["migrated"]);
   const stored = JSON.parse(await fs.readFile(statePath(storageRoot, "migrated"), "utf8")) as { version?: number };
   assert.equal(stored.version, 2);
   assert.deepEqual(JSON.parse(await fs.readFile(statePath(legacyRoot, "migrated"), "utf8")), { drafts: [migratedDraft], threads: [], version: 1 });
   assert.deepEqual(JSON.parse(await fs.readFile(statePath(centralWinsRoot, "central-wins"), "utf8")), { drafts: [staleDraft], threads: [], version: 1 });
+  assert.deepEqual(JSON.parse(await fs.readFile(statePath(storageRoot, "central-wins"), "utf8")), { drafts: [centralDraft], threads: [], version: 2 });
   assert.equal(await fs.readFile(path.join(centralWinsRoot, ".workbench", "keep.txt"), "utf8"), "keep");
   await controller.dispose();
   await Promise.all([storageRoot, legacyRoot, centralWinsRoot].map((root) => fs.rm(root, { force: true, recursive: true })));
@@ -483,6 +488,43 @@ test("invalid accepted intent telemetry identifies strict-contract drift without
   await controller.dispose();
 });
 
+test("draft priority survives autosave and controller restart without a storage migration", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-draft-priority-"));
+  const draftId = "00000000-0000-4000-8000-000000000001";
+  const createController = () => new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async () => [],
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+  const original = createController();
+  await original.open("observer", "project");
+  const value = {
+    agent: null, attachments: [], clientUpdatedAt: 1, composerSettings: {}, createdAt: 1,
+    draftId, harness: "codex" as const, model: null, profileId: null, projectId: "project", prompt: "Priority draft",
+    reasoningEffort: null, serviceTier: null, updatedAt: 1,
+  };
+  await original.handleRequest("observer", { draft: value, method: "workbench/thread-state/draft/upsert", projectId: "project" });
+  await original.handleRequest("observer", { draftId, method: "workbench/thread-state/draft/pin/set", pinned: true, projectId: "project" });
+  await original.handleRequest("observer", { draftId, method: "workbench/thread-state/draft/snooze/set", projectId: "project", snoozed: true });
+  await original.handleRequest("observer", { draft: { ...value, clientUpdatedAt: 2, prompt: "Updated priority draft", updatedAt: 2 }, method: "workbench/thread-state/draft/upsert", projectId: "project" });
+  let entry = (await original.getSnapshot("project")).entries.find((candidate) => candidate.entryKind === "draft" && candidate.draft.draftId === draftId);
+  assert.deepEqual(entry?.entryKind === "draft" ? entry.metadata : null, { archived: false, pinned: true, snoozed: true });
+  await original.dispose();
+
+  const reopened = createController();
+  const opened = await reopened.open("reopened", "project");
+  entry = opened.sidebar.entries.find((candidate) => candidate.entryKind === "draft" && candidate.draft.draftId === draftId);
+  assert.equal(entry?.entryKind === "draft" ? entry.draft.prompt : null, "Updated priority draft");
+  assert.deepEqual(entry?.entryKind === "draft" ? entry.metadata : null, { archived: false, pinned: true, snoozed: true });
+  const stored = JSON.parse(await fs.readFile(path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment("project")}.json`), "utf8")) as { drafts: Array<{ pinned?: boolean; snoozed?: boolean }>; version?: number };
+  assert.equal(stored.version, 2);
+  assert.deepEqual(stored.drafts.map(({ pinned, snoozed }) => ({ pinned, snoozed })), [{ pinned: true, snoozed: true }]);
+  await reopened.dispose();
+});
+
 test("accepted intent survives provider discovery lag and releases after its lifecycle advances", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-accepted-"));
   const published: WorkbenchThreadSidebarEntry[] = [];
@@ -516,6 +558,8 @@ test("accepted intent survives provider discovery lag and releases after its lif
     method: "workbench/thread-state/draft/upsert",
     projectId: "project",
   });
+  await controller.handleRequest("observer", { draftId, method: "workbench/thread-state/draft/pin/set", pinned: true, projectId: "project" });
+  await controller.handleRequest("observer", { draftId, method: "workbench/thread-state/draft/snooze/set", projectId: "project", snoozed: true });
   publishedSnapshots.length = 0;
   const response = await controller.handleRequest("observer", {
     draftId,
@@ -530,6 +574,7 @@ test("accepted intent survives provider discovery lag and releases after its lif
   assert.ok(entry && entry.entryKind !== "draft");
   assert.equal(entry?.title, "First user message");
   assert.equal(entry.lifecycle.kind, "working");
+  assert.deepEqual(entry.entryKind === "thread" ? entry.metadata : null, { archived: false, pinned: true, snoozed: false });
   assert.equal(entry?.activityAt, 42);
   assert.equal(published.at(-1)?.title, "First user message");
   assert.equal(publishedSnapshots.length, 1);
