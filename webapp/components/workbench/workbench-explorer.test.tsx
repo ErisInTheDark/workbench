@@ -15,7 +15,7 @@ test("threads render one flat tablist with lifecycle borders and all settled row
   assert.match(source, /event\.key === "Home"/u);
   assert.match(source, /event\.key === "End"/u);
   assert.match(source, /summary="Settled threads"/u);
-  assert.match(source, /settledEntries\.map\(renderEntry\)/u);
+  assert.match(source, /displayedSettledEntries\.map\(renderEntry\)/u);
   assert.doesNotMatch(source, /pinnedSettledEntries/u);
   assert.doesNotMatch(source, /<h3/u);
   assert.match(source, /grid-cols-\[minmax\(0,1fr\)_auto\]/u);
@@ -60,6 +60,18 @@ test("threads render one flat tablist with lifecycle borders and all settled row
   assert.match(source, /attentionLabelsByThreadId/u);
   assert.match(source, /font-semibold text-text/u);
   assert.doesNotMatch(source, /\$\{baseStatus\}, Snoozed/u);
+});
+
+test("settled threads stay user-controlled and reveal at most 50 more rows per click", async () => {
+  const source = await readFile(new URL("./WorkbenchThreadList.tsx", import.meta.url), "utf8");
+  assert.match(source, /const SETTLED_THREAD_PAGE_SIZE = 50/u);
+  assert.match(source, /const \[isOlderThreadsOpen, setIsOlderThreadsOpen\] = useState\(false\)/u);
+  assert.doesNotMatch(source, /shouldOpenOlderThreads/u);
+  assert.match(source, /settledEntries\.slice\(0, settledEntryLimit\)/u);
+  assert.match(source, /Math\.min\(SETTLED_THREAD_PAGE_SIZE, remainingSettledEntryCount\)/u);
+  assert.match(source, /setSettledEntryLimit\(\(current\) => current \+ SETTLED_THREAD_PAGE_SIZE\)/u);
+  assert.match(source, /Load \{nextSettledEntryCount\} more/u);
+  assert.match(source, /isOlderThreadsOpen \? \[\.\.\.primaryEntries, \.\.\.displayedSettledEntries\] : primaryEntries/u);
 });
 
 test("agent tabs keep a persistent settled toggle and a straight accent-colored selector", async () => {

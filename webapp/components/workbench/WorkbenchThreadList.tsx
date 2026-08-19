@@ -50,6 +50,7 @@ import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuConte
 import WorkbenchTooltip from "./WorkbenchTooltip";
 
 type ThreadStatusIcon = ComponentType<{ className?: string }>;
+const SETTLED_THREAD_PAGE_SIZE = 50;
 
 function ThreadTooltipContent({
   claimedPaths,
@@ -159,12 +160,9 @@ export default function WorkbenchThreadList({
   };
   const isPinned = (entry: WorkbenchThreadSidebarEntry) => entry.entryKind === "draft" ? entry.metadata.pinned : entry.entryKind === "thread" ? entry.metadata.pinned : entry.pinned;
   const settledEntries = visibleEntries.filter((entry) => getThreadSidebarGroup(entry) === "other");
-  const shouldOpenOlderThreads = settledEntries.some((entry) => targetSelected(targetForEntry(entry)));
-  const [isOlderThreadsOpen, setIsOlderThreadsOpen] = useState(shouldOpenOlderThreads);
+  const [isOlderThreadsOpen, setIsOlderThreadsOpen] = useState(false);
+  const [settledEntryLimit, setSettledEntryLimit] = useState(SETTLED_THREAD_PAGE_SIZE);
   const [isShiftPressed, setIsShiftPressed] = useState(false);
-  useEffect(() => {
-    if (shouldOpenOlderThreads) setIsOlderThreadsOpen(true);
-  }, [shouldOpenOlderThreads]);
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Shift") setIsShiftPressed(true);
@@ -182,9 +180,12 @@ export default function WorkbenchThreadList({
       window.removeEventListener("blur", handleBlur);
     };
   }, []);
-  const navigableEntries = visibleEntries.filter((entry) => getThreadSidebarGroup(entry) !== "other" || isOlderThreadsOpen);
   const groups = ["drafts", "needsAttention", "completed", "working", "snoozed"] as const;
   const primaryEntries = groups.flatMap((group) => visibleEntries.filter((entry) => getThreadSidebarGroup(entry) === group));
+  const displayedSettledEntries = settledEntries.slice(0, settledEntryLimit);
+  const remainingSettledEntryCount = settledEntries.length - displayedSettledEntries.length;
+  const nextSettledEntryCount = Math.min(SETTLED_THREAD_PAGE_SIZE, remainingSettledEntryCount);
+  const navigableEntries = isOlderThreadsOpen ? [...primaryEntries, ...displayedSettledEntries] : primaryEntries;
   const moveFocus = (event: ReactKeyboardEvent<HTMLAnchorElement>, index: number) => {
     let next = index;
     if (event.key === "ArrowDown") next = Math.min(navigableEntries.length - 1, index + 1);
@@ -372,8 +373,18 @@ export default function WorkbenchThreadList({
             summaryClassName="text-[0.72rem] font-medium leading-[1.5] text-muted"
           >
             <ul className="m-0 flex flex-col gap-1 p-0">
-              {settledEntries.map(renderEntry)}
+              {displayedSettledEntries.map(renderEntry)}
             </ul>
+            {remainingSettledEntryCount > 0 ? (
+              <button
+                type="button"
+                aria-label={`Load ${nextSettledEntryCount} more settled threads`}
+                className={`${workbenchThreadListButtonClassName} mt-1 justify-center text-center text-[0.72rem] font-medium text-muted`}
+                onClick={() => setSettledEntryLimit((current) => current + SETTLED_THREAD_PAGE_SIZE)}
+              >
+                Load {nextSettledEntryCount} more
+              </button>
+            ) : null}
           </ThreadDisclosure>
         ) : null}
       </div>
