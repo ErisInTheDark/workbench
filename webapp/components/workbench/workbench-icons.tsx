@@ -18,7 +18,7 @@
  * - StopIcon/PauseIcon/PlayIcon/ClockIcon/WarningIcon: render shared thread turn and command-status icons. Keywords: workbench, icon, thread, stop, pause, play, progress.
  * - PinIcon/LockIcon/UnlockIcon: render pinned and subagent ownership controls. Keywords: workbench, icon, thread, pin, lock.
  * - FlagIcon: render the Codex goal control icon. Keywords: workbench, icon, thread, goal, flag.
- * - ArchiveIcon: render the thread archive context menu icon. Keywords: workbench, icon, thread, archive.
+ * - OpenThreadIcon/ArchiveIcon: render thread navigation and archive context-menu icons. Keywords: workbench, icon, thread, open, archive.
  * - WrapTextIcon: render the thread codeblock line-wrap toggle icon. Keywords: workbench, icon, thread, code, wrap.
  * - PreviewIcon: render the thread codeblock preview toggle icon. Keywords: workbench, icon, thread, code, preview.
  * - CopyIcon: render thread copy action icons for context menus and code blocks. Keywords: workbench, icon, thread, copy.
@@ -313,7 +313,7 @@ export function DraftThreadIcon({ className = "size-4" }: IconProps) {
 export function NeedsAttentionThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3", "M12 17h.01"]} />; }
 export function CompletedThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "m9 12 2 2 4-4"]} />; }
 export function WorkingThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "M8 12h.01", "M12 12h.01", "M16 12h.01"]} />; }
-export function StoppedThreadIcon({ className = "size-4" }: IconProps) { return <span className="text-danger"><MessageCircleIcon className={className} paths={[bubblePath, "m15 9-6 6", "m9 9 6 6"]} /></span>; }
+export function StoppedThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "m15 9-6 6", "m9 9 6 6"]} />; }
 export function DiscardDraftIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={["M18 6 6 18", "m6 6 12 12"]} />; }
 export function SettleThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={["M20 6 9 17l-5-5"]} />; }
 export function RestoreThreadIcon({ className = "size-4" }: IconProps) { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><path d="m5 12 7-7 7 7" /><path d="M12 19V5" /></svg>; }
@@ -334,6 +334,15 @@ export function FlagIcon ({ className = "size-4" }: IconProps) {
       xmlns="http://www.w3.org/2000/svg"
     >
       <path d="M6 22V2.8a.8.8 0 0 1 1.17-.71l11.38 5.69a.8.8 0 0 1 0 1.44L6 15.5" />
+    </svg>
+  );
+}
+
+export function OpenThreadIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
+      <path d="M4 10H15.5" strokeLinecap="round" />
+      <path d="M11.5 6L15.5 10L11.5 14" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

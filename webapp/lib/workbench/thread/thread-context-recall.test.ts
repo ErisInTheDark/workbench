@@ -203,7 +203,6 @@ function createBundle(): WorkbenchThreadContextBundle {
           },
         ]),
       ],
-      unreadBadge: null,
       updatedAt: 2,
     },
   };

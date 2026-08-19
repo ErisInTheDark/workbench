@@ -22,7 +22,6 @@ const thread = (id: string, updatedAt: number): ThreadSummary => ({
   preview: id,
   source: "workbench",
   status: "active",
-  unreadBadge: { hasActiveTurn: true, unreadCount: 1 },
   updatedAt,
 });
 
@@ -159,7 +158,6 @@ test("semantic thread and subagent changes invalidate the root explorer snapshot
     { ...current, threads: current.threads.slice(1) },
     { ...current, threads: current.threads.map((value, index) => index === 0 ? { ...value, preview: "renamed" } : value) },
     { ...current, threads: current.threads.map((value, index) => index === 0 ? { ...value, status: "idle" } : value) },
-    { ...current, threads: current.threads.map((value, index) => index === 0 ? { ...value, unreadBadge: { hasActiveTurn: false, unreadCount: 0 } } : value) },
     { ...current, subagents: current.subagents.slice(1) },
     { ...current, subagents: current.subagents.map((value, index) => index === 0 ? { ...value, title: "renamed" } : value) },
     { ...current, subagents: current.subagents.map((value, index) => index === 0 ? { ...value, parentThreadId: "other-parent" } : value) },

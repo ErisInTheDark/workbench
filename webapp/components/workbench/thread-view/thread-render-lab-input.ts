@@ -269,7 +269,6 @@ function createLabThreadPayload(turns: Turn[], cwd = "c:/git/web/workbench"): Th
     forkedFromId: null,
     agentNickname: null,
     agentRole: null,
-    unreadBadge: null,
     model: null,
     reasoningEffort: null,
     serviceTier: null,

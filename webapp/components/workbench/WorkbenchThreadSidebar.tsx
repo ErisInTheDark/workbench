@@ -15,15 +15,15 @@ import { getThreadSidebarGroup, type WorkbenchThreadSidebarEntry } from "../../l
 import { SidebarLoadingSkeleton, ThreadsList } from "./workbench-explorer";
 import {
   ArchiveIcon,
-  CheckIcon,
+  CompletedThreadIcon,
   CopyIcon,
   NeedsAttentionThreadIcon,
+  OpenThreadIcon,
   PinIcon,
   RestoreThreadIcon,
   SettleThreadIcon,
   SnoozedThreadIcon,
-  StopIcon,
-  UnsnoozeThreadIcon,
+  StoppedThreadIcon,
 } from "./workbench-icons";
 import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 
@@ -37,12 +37,6 @@ function useThreadSidebarSelection<T>(
   const subscribe = useCallback((listener: () => void) => store?.subscribe(listener) ?? EMPTY_UNSUBSCRIBE, [store]);
   const getSelection = useCallback(() => selector(store?.getSnapshot() ?? null), [selector, store]);
   return useSyncExternalStore(subscribe, getSelection, getSelection);
-}
-
-function isThreadSummaryActive(thread: ThreadSummary) {
-  return thread.status === "active"
-    || thread.status.startsWith("active:")
-    || Boolean(thread.unreadBadge?.hasActiveTurn);
 }
 
 interface WorkbenchThreadSidebarProps {
@@ -95,7 +89,7 @@ export default memo(function WorkbenchThreadSidebar({
     if (payload) await controls.stopThread(payload);
   }, [controls]);
 
-  const mutateEntry = useCallback((entry: WorkbenchThreadSidebarEntry, method: "archive/set" | "attention/mark" | "complete" | "pin/set" | "restore" | "settle" | "snooze/set", value?: boolean | "completed" | "stopped") => {
+  const mutateEntry = useCallback((entry: WorkbenchThreadSidebarEntry, method: "archive/set" | "pin/set" | "restore" | "settle" | "snooze/set" | "status/set", value?: boolean | "completed" | "needsAttention" | "stopped") => {
     if (!controls || !projectId || entry.entryKind === "draft") return;
     const identity = entry.identity;
     const request = method === "pin/set"
@@ -104,10 +98,8 @@ export default memo(function WorkbenchThreadSidebar({
         ? { identity, method: "workbench/thread-state/snooze/set" as const, projectId, snoozed: Boolean(value) }
         : method === "archive/set"
           ? { archived: Boolean(value), identity, method: "workbench/thread-state/archive/set" as const, projectId }
-          : method === "attention/mark"
-            ? { identity, method: "workbench/thread-state/attention/mark" as const, projectId }
-            : method === "complete"
-            ? { identity, method: "workbench/thread-state/complete" as const, projectId, status: value === "stopped" ? "stopped" as const : "completed" as const }
+          : method === "status/set"
+            ? { identity, method: "workbench/thread-state/status/set" as const, projectId, status: value === "needsAttention" ? "needsAttention" as const : value === "stopped" ? "stopped" as const : "completed" as const }
             : method === "restore"
               ? { identity, method: "workbench/thread-state/restore" as const, projectId }
               : { identity, method: "workbench/thread-state/settle" as const, projectId };
@@ -120,68 +112,115 @@ export default memo(function WorkbenchThreadSidebar({
     const pinned = entry.entryKind === "draft" ? entry.metadata.pinned : entry.entryKind === "thread" ? entry.metadata.pinned : entry.pinned;
     const group = getThreadSidebarGroup(entry);
     const terminal = entry.entryKind !== "draft" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped");
-    const items: WorkbenchContextMenuDefinition["items"] = [
-      {
-        icon: <CopyIcon className="size-4" />,
-        id: "copy-id",
-        label: "Copy ID",
-        onSelect: () => { void writeTextToClipboard(identifier); },
-      },
-      ...(thread?.unreadBadge?.unreadCount ? [{
-        icon: <CheckIcon className="size-4" />,
-        id: "mark-read",
-        label: "Mark as read",
-        onSelect: () => {
-          void (async () => {
-            const payload = await controls?.readThread(thread.id, thread.harness);
-            if (payload) controls?.markThreadSeen(payload);
-          })();
-        },
-      }] : []),
-      ...(entry.entryKind !== "draft" ? [{
-        icon: <PinIcon className="size-4" />,
-        id: pinned ? "unpin" : "pin",
-        label: pinned ? "Unpin thread" : "Pin thread",
-        onSelect: () => mutateEntry(entry, "pin/set", !pinned),
-      }] : []),
-      ...(entry.entryKind !== "draft" && (group === "snoozed" || !entry.lifecycle.settled) ? [{
-        icon: group === "snoozed" ? <UnsnoozeThreadIcon className="size-4" /> : <SnoozedThreadIcon className="size-4" />,
-        id: group === "snoozed" ? "unsnooze" : "snooze",
-        label: group === "snoozed" ? "Unsnooze" : "Snooze",
-        onSelect: () => mutateEntry(entry, "snooze/set", group !== "snoozed"),
-      }] : []),
-      ...(entry.entryKind === "thread" && entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "noActiveTurn" ? [{
-        icon: <CheckIcon className="size-4" />, id: "mark-completed", label: "Complete", onSelect: () => mutateEntry(entry, "complete", "completed"),
-      }, {
-        icon: <StopIcon className="size-4" />, id: "mark-stopped", label: "Stop", onSelect: () => mutateEntry(entry, "complete", "stopped"),
-      }] : []),
-      ...(entry.entryKind === "thread" && terminal ? [{
-        icon: <NeedsAttentionThreadIcon className="size-4" />,
-        id: "mark-needs-attention",
-        label: "Needs attention",
-        onSelect: () => mutateEntry(entry, "attention/mark"),
-      }] : []),
-      ...(thread && isThreadSummaryActive(thread) ? [{
-        icon: <StopIcon className="size-4" />,
-        id: "stop",
-        label: "Stop thread",
-        onSelect: () => { void stopThread(thread); },
-      }] : []),
-      ...(terminal && entry.lifecycle.settled ? [{
-        icon: <RestoreThreadIcon className="size-4" />, id: "restore", label: "Restore", onSelect: () => mutateEntry(entry, "restore"),
-      }] : terminal ? [{
-        icon: <SettleThreadIcon className="size-4" />, id: "settle", label: "Settle", onSelect: () => mutateEntry(entry, "settle"),
-      }] : []),
-      ...(terminal ? [{
+    const target = entry.entryKind === "draft"
+      ? { draftId: entry.draft.draftId, kind: "draft" as const }
+      : { harness: entry.identity.harness, kind: "provider" as const, threadId: entry.identity.threadId };
+    const items: WorkbenchContextMenuDefinition["items"] = [{
+      icon: <OpenThreadIcon className="size-4" />,
+      id: "open",
+      label: "Open",
+      onSelect: () => onOpenThread(target),
+    }];
+
+    if (terminal) {
+      items.push(entry.lifecycle.settled ? {
+        icon: <RestoreThreadIcon className="size-4" />,
+        id: "restore",
+        label: "Restore",
+        onSelect: () => mutateEntry(entry, "restore"),
+      } : {
+        icon: <SettleThreadIcon className="size-4" />,
+        id: "settle",
+        label: "Settle",
+        onSelect: () => mutateEntry(entry, "settle"),
+      });
+    }
+
+    items.push({
+      icon: <CopyIcon className="size-4" />,
+      id: "copy-id",
+      label: "Copy ID",
+      onSelect: () => { void writeTextToClipboard(identifier); },
+    });
+
+    if (entry.entryKind !== "draft") {
+      const snoozed = group === "snoozed";
+      items.push({ id: "priority-separator", kind: "separator" }, {
+        controls: [{
+          checked: pinned,
+          icon: <PinIcon className="size-4" />,
+          id: "pin",
+          label: pinned ? "Unpin thread" : "Pin thread",
+          onSelect: () => mutateEntry(entry, "pin/set", !pinned),
+        }, {
+          checked: snoozed,
+          disabled: entry.lifecycle.settled,
+          icon: <SnoozedThreadIcon className="size-4" />,
+          id: "snooze",
+          label: snoozed ? "Unsnooze thread" : "Snooze thread",
+          onSelect: () => mutateEntry(entry, "snooze/set", !snoozed),
+        }],
+        id: "priority",
+        kind: "control-group",
+        label: "Priority",
+        presentation: "independent",
+      });
+    }
+
+    if (entry.entryKind === "thread") {
+      const pendingInput = entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput";
+      const providerOwned = entry.lifecycle.kind === "working" || pendingInput;
+      const selectStatus = (status: "completed" | "needsAttention" | "stopped") => {
+        if (providerOwned) {
+          if (status === "stopped" && thread) void stopThread(thread);
+          return;
+        }
+        if (entry.lifecycle.kind !== status) mutateEntry(entry, "status/set", status);
+      };
+      items.push({ id: "status-separator", kind: "separator" }, {
+        controls: [{
+          checked: entry.lifecycle.kind === "needsAttention",
+          disabled: entry.lifecycle.kind === "working",
+          icon: <NeedsAttentionThreadIcon className="size-4" />,
+          id: "needs-attention",
+          label: "Needs attention",
+          onSelect: () => selectStatus("needsAttention"),
+          tone: "needs-attention",
+        }, {
+          checked: entry.lifecycle.kind === "completed",
+          disabled: providerOwned,
+          icon: <CompletedThreadIcon className="size-4" />,
+          id: "completed",
+          label: "Completed",
+          onSelect: () => selectStatus("completed"),
+          tone: "completed",
+        }, {
+          checked: entry.lifecycle.kind === "stopped",
+          disabled: providerOwned && !thread,
+          icon: <StoppedThreadIcon className="size-4" />,
+          id: "stopped",
+          label: "Stopped",
+          onSelect: () => selectStatus("stopped"),
+          tone: "stopped",
+        }],
+        id: "status",
+        kind: "control-group",
+        label: "Status",
+        presentation: "connected",
+      });
+    }
+
+    if (terminal) {
+      items.push({ id: "archive-separator", kind: "separator" }, {
         icon: <ArchiveIcon className="size-4" />,
         id: "archive",
         label: "Archive thread",
         onSelect: () => mutateEntry(entry, "archive/set", true),
-        tone: "danger" as const,
-      }] : []),
-    ];
+        tone: "danger",
+      });
+    }
     return { id: `thread:${identifier}`, items, label: `Thread actions for ${entry.title}` };
-  }, [controls, mutateEntry, stopThread, threadSummariesById]);
+  }, [mutateEntry, onOpenThread, stopThread, threadSummariesById]);
 
   const isMatchingSnapshot = snapshot?.projectId === projectId;
   if (!snapshot || !isMatchingSnapshot || (snapshot.freshness === "loading" && snapshot.entries.length === 0)) {

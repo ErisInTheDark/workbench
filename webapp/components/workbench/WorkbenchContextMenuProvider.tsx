@@ -4,125 +4,16 @@
  */
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 
 import WorkbenchContextMenuContext, {
   type WorkbenchContextMenuController,
   type WorkbenchContextMenuRequest,
 } from "./WorkbenchContextMenuContext";
-
-const CONTEXT_MENU_VIEWPORT_PADDING = 8;
+import WorkbenchContextMenuSurface from "./WorkbenchContextMenuSurface";
 
 interface ActiveWorkbenchContextMenu extends WorkbenchContextMenuRequest {
   generation: number;
-}
-
-function clampMenuPosition(value: number, size: number, viewportSize: number) {
-  return Math.max(
-    CONTEXT_MENU_VIEWPORT_PADDING,
-    Math.min(value, viewportSize - size - CONTEXT_MENU_VIEWPORT_PADDING),
-  );
-}
-
-function WorkbenchContextMenuSurface ({
-  menu,
-  onClose,
-}: {
-  menu: ActiveWorkbenchContextMenu;
-  onClose: () => void;
-}) {
-  const menuRef = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState({ left: menu.x, top: menu.y });
-
-  useLayoutEffect(() => {
-    const element = menuRef.current;
-    if (!element) {
-      setPosition({ left: menu.x, top: menu.y });
-      return;
-    }
-
-    const rect = element.getBoundingClientRect();
-    setPosition({
-      left: clampMenuPosition(menu.x, rect.width, window.innerWidth),
-      top: clampMenuPosition(menu.y, rect.height, window.innerHeight),
-    });
-  }, [menu.generation, menu.x, menu.y]);
-
-  useEffect(() => {
-    function handlePointerDown(event: PointerEvent) {
-      if (menuRef.current?.contains(event.target as Node)) {
-        return;
-      }
-
-      onClose();
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    }
-
-    function handleScrollIntent(event: TouchEvent | WheelEvent) {
-      if (menuRef.current?.contains(event.target as Node)) {
-        return;
-      }
-
-      onClose();
-    }
-
-    window.addEventListener("pointerdown", handlePointerDown, true);
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("resize", onClose);
-    window.addEventListener("touchmove", handleScrollIntent, { capture: true, passive: true });
-    window.addEventListener("wheel", handleScrollIntent, { capture: true, passive: true });
-    return () => {
-      window.removeEventListener("pointerdown", handlePointerDown, true);
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("resize", onClose);
-      window.removeEventListener("touchmove", handleScrollIntent, true);
-      window.removeEventListener("wheel", handleScrollIntent, true);
-    };
-  }, [onClose]);
-
-  return (
-    <div
-      ref={menuRef}
-      role="menu"
-      aria-label={menu.menu.label}
-      className="fixed z-50 min-w-48 max-w-[min(18rem,calc(100vw-1rem))] rounded-[1.25rem] bg-[color-mix(in_srgb,var(--bg)_90%,transparent)] p-1 text-sm shadow-float backdrop-blur-xl"
-      style={{ left: position.left, top: position.top }}
-    >
-      {menu.menu.items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          role="menuitem"
-          disabled={item.disabled}
-          data-tone={item.tone ?? "default"}
-          className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-muted data-[tone=danger]:text-danger data-[tone=danger]:hover:bg-[color-mix(in_srgb,var(--danger)_14%,transparent)] data-[tone=danger]:hover:text-danger data-[tone=danger]:focus-visible:bg-[color-mix(in_srgb,var(--danger)_14%,transparent)] data-[tone=danger]:focus-visible:text-danger"
-          onClick={() => {
-            if (item.disabled) {
-              return;
-            }
-
-            onClose();
-            item.onSelect();
-          }}
-        >
-          {item.icon ? <span className="inline-flex size-4 shrink-0 items-center justify-center">{item.icon}</span> : null}
-          <span className="min-w-0 truncate">{item.label}</span>
-        </button>
-      ))}
-    </div>
-  );
 }
 
 export default function WorkbenchContextMenuProvider ({ children }: { children: ReactNode }) {
@@ -149,7 +40,15 @@ export default function WorkbenchContextMenuProvider ({ children }: { children: 
   return (
     <WorkbenchContextMenuContext.Provider value={controller}>
       {children}
-      {activeContextMenu ? <WorkbenchContextMenuSurface menu={activeContextMenu} onClose={closeContextMenu} /> : null}
+      {activeContextMenu ? (
+        <WorkbenchContextMenuSurface
+          generation={activeContextMenu.generation}
+          menu={activeContextMenu.menu}
+          onClose={closeContextMenu}
+          x={activeContextMenu.x}
+          y={activeContextMenu.y}
+        />
+      ) : null}
     </WorkbenchContextMenuContext.Provider>
   );
 }

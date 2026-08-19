@@ -23,7 +23,7 @@ function thread(items: ThreadItem[] = []): ThreadPayload {
   return {
     agentNickname: null, agentPath: null, agentRole: null, browseResultEntries: [], createdAt: 1, cwd: "C:/repo",
     forkedFromId: null, harness: "codex", id: "thread", isDraft: false, model: null, name: null, path: null, preview: "",
-    reasoningEffort: null, serviceTier: null, source: "codex", status: "active", tokenUsage: null, turnHistory: [], unreadBadge: null,
+    reasoningEffort: null, serviceTier: null, source: "codex", status: "active", tokenUsage: null, turnHistory: [],
     turns: [{ completedAt: null, durationMs: null, error: null, id: "turn", items, itemsView: "full", startedAt: 1, status: "inProgress" }], updatedAt: 1,
   };
 }

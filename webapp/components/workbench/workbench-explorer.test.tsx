@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; static regression checks cover flat thread-row accessibility, lifecycle styling, and subagent tab controls. Keywords: explorer, sidebar, tablist, keyboard.
+ * - No production exports; static regression checks cover thread-row accessibility, grouped context actions, lifecycle styling, and agent tabs. Keywords: explorer, sidebar, context menu, tablist, keyboard.
  */
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -63,6 +63,10 @@ test("agent tabs keep a persistent settled toggle and a straight accent-colored 
   assert.match(source, /href=\{getThreadHref\(tab\.id\)\}/u);
   assert.match(source, /href=\{getThreadHref\(mainThreadId\)\}/u);
   assert.match(source, /handleThreadLinkClick/u);
+  assert.match(source, /threadSidebarStore\?\.getSnapshot\(\)\?\.entries\.find/u);
+  assert.match(source, /entry\.identity\.harness === mainThreadHarness/u);
+  assert.match(source, /<ThreadLifecycleStatusIcon lifecycle=\{mainThreadLifecycle\} \/>\s*<span>Main agent<\/span>/u);
+  assert.doesNotMatch(source, /badge|unread|ThreadQuestionBadge/u);
 });
 
 test("existing-thread composer drafts keep their keyed owner through active subagent selection", async () => {
@@ -98,14 +102,30 @@ test("live sidebar state subscribes below the Workbench root", async () => {
   assert.doesNotMatch(clientSource, /threadSidebar: threadSidebarSnapshot/u);
 });
 
-test("thread context actions separate idle attention from pending input", async () => {
+test("thread context actions group priority checkboxes and canonical status radios", async () => {
   const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebar.tsx", import.meta.url), "utf8");
-  assert.match(sidebarSource, /method: "workbench\/thread-state\/attention\/mark"/u);
+  const openIndex = sidebarSource.indexOf('id: "open"');
+  const settleIndex = sidebarSource.indexOf('id: "settle"');
+  const copyIndex = sidebarSource.indexOf('id: "copy-id"');
+  const priorityIndex = sidebarSource.indexOf('id: "priority"');
+  const statusIndex = sidebarSource.indexOf('id: "status"');
+  const archiveIndex = sidebarSource.indexOf('id: "archive"');
+  assert.ok(openIndex >= 0 && settleIndex > openIndex && copyIndex > settleIndex);
+  assert.ok(priorityIndex > copyIndex && statusIndex > priorityIndex && archiveIndex > statusIndex);
+  assert.match(sidebarSource, /presentation: "independent"/u);
+  assert.match(sidebarSource, /presentation: "connected"/u);
+  assert.match(sidebarSource, /method: "workbench\/thread-state\/status\/set"/u);
   assert.match(sidebarSource, /label: "Needs attention"/u);
-  assert.match(sidebarSource, /label: "Complete"/u);
-  assert.match(sidebarSource, /label: "Stop"/u);
-  assert.match(sidebarSource, /entry\.lifecycle\.reason === "noActiveTurn"/u);
-  assert.match(sidebarSource, /entry\.entryKind === "thread" && terminal/u);
+  assert.match(sidebarSource, /label: "Completed"/u);
+  assert.match(sidebarSource, /label: "Stopped"/u);
+  assert.match(sidebarSource, /tone: "needs-attention"/u);
+  assert.match(sidebarSource, /tone: "completed"/u);
+  assert.match(sidebarSource, /tone: "stopped"/u);
+  assert.match(sidebarSource, /status === "stopped" && thread/u);
+  assert.match(sidebarSource, /void stopThread\(thread\)/u);
+  assert.match(sidebarSource, /checked: pinned/u);
+  assert.match(sidebarSource, /checked: snoozed/u);
+  assert.doesNotMatch(sidebarSource, /Mark as read|markThreadSeen|label: "Stop thread"|id: "stop"/u);
 });
 
 test("jit project bootstrap exposes available slices before unrelated hydration", async () => {

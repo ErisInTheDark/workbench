@@ -217,7 +217,6 @@ test("profile resolution preserves the thread payload contract", () => {
     tokenUsage: null,
     turnHistory: [],
     turns: [],
-    unreadBadge: null,
     updatedAt: 1,
   } satisfies ThreadPayload);
 

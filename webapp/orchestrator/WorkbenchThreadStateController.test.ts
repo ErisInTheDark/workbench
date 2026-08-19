@@ -626,7 +626,7 @@ test("restoring a terminal thread persists across provider reconciliation", asyn
   await controller.dispose();
 });
 
-test("manual attention persists across reconciliation and pending input rejects terminal mutations", async () => {
+test("manual status persists, restores settled threads, and rejects provider-owned lifecycles", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-manual-attention-"));
   const terminal: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 1,
@@ -643,12 +643,19 @@ test("manual attention persists across reconciliation and pending input rejects 
     metadata: { archived: false, pinned: false, snoozed: false },
     title: "Pending",
   };
+  const working: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    ...terminal,
+    identity: { harness: "codex", threadId: "working" },
+    lifecycle: { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Working",
+  };
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", [terminal, pending], { complete: true });
+      acceptProviderSnapshot("codex", [terminal, pending, working], { complete: true });
       return [];
     },
     resolveProjectRoot: async () => root,
@@ -656,23 +663,42 @@ test("manual attention persists across reconciliation and pending input rejects 
   });
   await controller.open("observer", "project");
   await controller.refresh("project");
+  const settledSameStatus = await controller.handleRequest("observer", {
+    identity: terminal.identity, method: "workbench/thread-state/status/set", projectId: "project", status: "completed",
+  });
+  assert.equal("result" in settledSameStatus ? (settledSameStatus.result as { accepted?: boolean }).accepted : false, true);
+  let entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
+  assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, terminal.lifecycle);
+  assert.deepEqual(entry?.entryKind === "thread" ? entry.metadata : null, terminal.metadata);
   const marked = await controller.handleRequest("observer", {
-    identity: terminal.identity, method: "workbench/thread-state/attention/mark", projectId: "project",
+    identity: terminal.identity, method: "workbench/thread-state/status/set", projectId: "project", status: "needsAttention",
   });
   assert.equal("result" in marked ? (marked.result as { accepted?: boolean }).accepted : false, true);
-  let entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
+  entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
   assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
-  assert.deepEqual(entry?.entryKind === "thread" ? entry.metadata : null, terminal.metadata);
+  assert.deepEqual(entry?.entryKind === "thread" ? entry.metadata : null, { ...terminal.metadata, snoozed: false });
   await controller.refresh("project");
   await new Promise<void>((resolve) => setImmediate(resolve));
   entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
   assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
   const rejected = await controller.handleRequest("observer", {
-    identity: pending.identity, method: "workbench/thread-state/complete", projectId: "project", status: "completed",
+    identity: pending.identity, method: "workbench/thread-state/status/set", projectId: "project", status: "completed",
   });
   assert.equal("result" in rejected ? (rejected.result as { accepted?: boolean }).accepted : true, false);
   const pendingAfter = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "pending");
   assert.deepEqual(pendingAfter?.entryKind === "thread" ? pendingAfter.lifecycle : null, pending.lifecycle);
+  const workingRejected = await controller.handleRequest("observer", {
+    identity: working.identity, method: "workbench/thread-state/status/set", projectId: "project", status: "stopped",
+  });
+  assert.equal("result" in workingRejected ? (workingRejected.result as { accepted?: boolean }).accepted : true, false);
+  const workingAfter = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "working");
+  assert.deepEqual(workingAfter?.entryKind === "thread" ? workingAfter.lifecycle : null, working.lifecycle);
+  const sameStatus = await controller.handleRequest("observer", {
+    identity: terminal.identity, method: "workbench/thread-state/status/set", projectId: "project", status: "needsAttention",
+  });
+  assert.equal("result" in sameStatus ? (sameStatus.result as { accepted?: boolean }).accepted : false, true);
+  entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
+  assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
   await controller.dispose();
   await fs.rm(root, { force: true, recursive: true });
 });

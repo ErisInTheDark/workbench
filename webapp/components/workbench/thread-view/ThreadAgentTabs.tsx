@@ -1,23 +1,17 @@
 /*
  * Exports:
- * - default ThreadAgentTabs: render lifecycle-ordered subagent tabs, shared Lock controls, badges, and settled-history disclosure. Keywords: thread, subagent, tabs, lock, lifecycle.
+ * - default ThreadAgentTabs: render lifecycle-ordered agent tabs, shared Lock controls, status icons, and settled-history disclosure. Keywords: thread, subagent, tabs, lock, lifecycle.
  */
-import type { MouseEvent } from "react";
+import { useCallback, useSyncExternalStore, type MouseEvent } from "react";
 
-import type { ThreadPayload, ThreadUnreadBadge, WorkbenchSubagentSummary } from "../../../lib/types";
+import type { ThreadPayload, WorkbenchSubagentSummary, WorkbenchThreadSidebarStore } from "../../../lib/types";
+import type { WorkbenchThreadLifecycle } from "../../../lib/workbench/thread/thread-state";
 import ContextMenuCapability from "../ContextMenuCapability";
-import { ThreadQuestionBadge, ThreadUnreadBadge as ThreadUnreadBadgeView } from "../ThreadStatusBadges";
 import { CompletedThreadIcon, LockIcon, NeedsAttentionThreadIcon, RestoreThreadIcon, SettleThreadIcon, StoppedThreadIcon, UnlockIcon, WorkingThreadIcon } from "../workbench-icons";
 import { getThreadAgentAccentColor } from "../../../lib/workbench/thread/thread-subagents";
 import ThreadAgentName from "./ThreadAgentName";
 
-interface TabBadge {
-  isQuestion: boolean;
-  unreadBadge: ThreadUnreadBadge | null;
-}
-
 interface SubagentTab {
-  badge: TabBadge;
   id: string;
   isPinned: boolean;
   isLoading: boolean;
@@ -39,24 +33,19 @@ function handleThreadLinkClick(event: MouseEvent<HTMLAnchorElement>, onSelect: (
 const tabClassName = "relative inline-flex min-h-9 items-center gap-1.5 rounded-lg px-1.5 py-1.5 text-[0.95rem] font-medium leading-none transition-[color,opacity] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft";
 const selectedTabClassName = "text-text";
 const unselectedTabClassName = "text-muted opacity-60 hover:opacity-80 hover:text-text";
+const EMPTY_THREAD_SIDEBAR_SUBSCRIBE = () => () => undefined;
 
 function SelectedTabUnderline({ color }: { color: string }) {
   return <span aria-hidden="true" className="pointer-events-none absolute inset-x-1 bottom-0 border-t border-dotted" style={{ borderColor: color }} />;
 }
 
-function badgeView (badge: TabBadge, suppressActivePlaceholder = false) {
-  return badge.isQuestion
-    ? <ThreadQuestionBadge />
-    : badge.unreadBadge && !(suppressActivePlaceholder && badge.unreadBadge.hasActiveTurn && badge.unreadBadge.unreadCount === 0)
-      ? <ThreadUnreadBadgeView badge={badge.unreadBadge} />
-      : null;
-}
-
-function SubagentStatusIcon({ accentChromaPercent, subagent }: { accentChromaPercent?: number; subagent: WorkbenchSubagentSummary | null }) {
-  const lifecycle = subagent?.lifecycle;
+function ThreadLifecycleStatusIcon({ accentChromaPercent, lifecycle, subagent }: { accentChromaPercent?: number; lifecycle: WorkbenchThreadLifecycle | null; subagent?: WorkbenchSubagentSummary | null }) {
   const Icon = lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : CompletedThreadIcon;
   return (
-    <span className="inline-flex shrink-0" style={subagent ? { color: getThreadAgentAccentColor(subagent, accentChromaPercent) } : undefined}>
+    <span
+      className={joinClasses("inline-flex shrink-0", lifecycle?.kind === "stopped" && "text-red-600 dark:text-red-300")}
+      style={subagent && lifecycle?.kind !== "stopped" ? { color: getThreadAgentAccentColor(subagent, accentChromaPercent) } : undefined}
+    >
       <Icon className="size-4" />
     </span>
   );
@@ -68,27 +57,42 @@ export default function ThreadAgentTabs ({
   getThreadHref,
   isSettledSubagentsVisible,
   isRevealingMore,
-  mainThreadBadge,
+  mainThreadHarness,
   mainThreadId,
   onToggleSettledSubagents,
   onSelectThread,
   onTogglePin,
   onToggleSettlement,
   tabs,
+  threadSidebarStore,
 }: {
   activeThreadId: string;
   getThreadHref: (threadId: string) => string;
   hasSettledSubagents: boolean;
   isSettledSubagentsVisible: boolean;
   isRevealingMore: boolean;
-  mainThreadBadge: TabBadge;
+  mainThreadHarness: ThreadPayload["harness"];
   mainThreadId: string;
   onToggleSettledSubagents: () => void;
   onSelectThread: (threadId: string) => void;
   onTogglePin: (threadId: string) => void;
   onToggleSettlement: (threadId: string, settled: boolean) => void;
   tabs: readonly SubagentTab[];
+  threadSidebarStore: WorkbenchThreadSidebarStore | null;
 }) {
+  const getMainThreadLifecycle = useCallback(() => {
+    const entry = threadSidebarStore?.getSnapshot()?.entries.find((candidate) => (
+      candidate.entryKind !== "draft"
+      && candidate.identity.harness === mainThreadHarness
+      && candidate.identity.threadId === mainThreadId
+    ));
+    return entry && entry.entryKind !== "draft" ? entry.lifecycle : null;
+  }, [mainThreadHarness, mainThreadId, threadSidebarStore]);
+  const mainThreadLifecycle = useSyncExternalStore(
+    threadSidebarStore?.subscribe ?? EMPTY_THREAD_SIDEBAR_SUBSCRIBE,
+    getMainThreadLifecycle,
+    getMainThreadLifecycle,
+  );
   if (!tabs.length && !hasSettledSubagents) return null;
   const unsettledTabs = tabs.filter((tab) => !tab.subagent?.lifecycle?.settled);
   const settledTabs = tabs.filter((tab) => tab.subagent?.lifecycle?.settled);
@@ -129,7 +133,7 @@ export default function ThreadAgentTabs ({
         href={getThreadHref(tab.id)}
         onClick={(event) => handleThreadLinkClick(event, () => onSelectThread(tab.id))}
       >
-        <SubagentStatusIcon accentChromaPercent={activeThreadId === tab.id ? 90 : 55} subagent={tab.subagent} />
+        <ThreadLifecycleStatusIcon accentChromaPercent={activeThreadId === tab.id ? 90 : 55} lifecycle={tab.subagent?.lifecycle ?? null} subagent={tab.subagent} />
         {tab.isPinned ? <LockIcon className="size-4 shrink-0" /> : null}
         <ThreadAgentName accentChromaPercent={activeThreadId === tab.id ? 90 : 55} subagent={tab.subagent} thread={tab.thread} />
         {tab.suffix ? <span className="text-muted">{tab.suffix}</span> : null}
@@ -150,8 +154,8 @@ export default function ThreadAgentTabs ({
         href={getThreadHref(mainThreadId)}
         onClick={(event) => handleThreadLinkClick(event, () => onSelectThread(mainThreadId))}
       >
+        <ThreadLifecycleStatusIcon lifecycle={mainThreadLifecycle} />
         <span>Main agent</span>
-        {badgeView(mainThreadBadge)}
         {activeThreadId === mainThreadId ? <SelectedTabUnderline color="color-mix(in srgb, var(--text) 35%, transparent)" /> : null}
       </a>
       {unsettledTabs.map(renderTab)}

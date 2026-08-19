@@ -87,7 +87,6 @@
  * - WorkbenchListModelsOptions: model-list options.
  * - ChangeSummary: file-change summary.
  * - ThreadSummary: thread-list summary.
- * - ThreadUnreadBadge: thread unread badge state.
  * - ThreadPayload: full rendered thread payload.
  * - WorkbenchThreadDocumentSnapshot: thread document-store snapshot.
  * - WorkbenchThreadTurnLoadState: turn hydration state.
@@ -99,7 +98,6 @@
  * - WorkbenchThreadComposerAttachmentDraft: draft attachment contract.
  * - WorkbenchComposerInputDraft: ephemeral composer input contract used by rich editors and durable-draft bindings.
  * - WorkbenchQuestionnaireDraft: questionnaire draft state.
- * - WorkbenchStoredThreadUnreadState: persisted unread state.
  * - WorkbenchUserInputOption: questionnaire answer option.
  * - WorkbenchUserInputQuestion: questionnaire question contract.
  * - WorkbenchApprovalCommandContext: approval command context.
@@ -796,12 +794,6 @@ export interface ThreadSummary {
   forkedFromId: string | null;
   agentNickname: string | null;
   agentRole: string | null;
-  unreadBadge: ThreadUnreadBadge | null;
-}
-
-export interface ThreadUnreadBadge {
-  unreadCount: number;
-  hasActiveTurn: boolean;
 }
 
 export interface ThreadPayload extends ThreadSummary {
@@ -873,13 +865,6 @@ export interface WorkbenchQuestionnaireDraft {
   customValues: Record<string, string>;
   selectedValues: Record<string, string[]>;
   updatedAt: number;
-}
-
-export interface WorkbenchStoredThreadUnreadState {
-  lastObservedStatus: string;
-  lastObservedUpdatedAt: number;
-  lastSeenItemId: string | null;
-  observedItemIds: string[];
 }
 
 export interface WorkbenchUserInputOption {
@@ -1088,7 +1073,6 @@ export interface WorkbenchControls {
   createThreadDraft: (harness: WorkbenchHarness, options?: { select?: boolean; threadId?: string }) => ThreadPayload;
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
   refreshRateLimits: () => Promise<void>;
-  markThreadSeen: (thread: ThreadPayload) => void;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   sendThreadMessage: (
     thread: ThreadPayload,

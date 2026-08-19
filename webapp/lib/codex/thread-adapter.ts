@@ -157,7 +157,6 @@ export function toThreadSummary(thread: Thread, harness: WorkbenchHarness = "cod
     forkedFromId: thread.forkedFromId,
     agentNickname: thread.agentNickname,
     agentRole: thread.agentRole,
-    unreadBadge: null,
   };
 }
 

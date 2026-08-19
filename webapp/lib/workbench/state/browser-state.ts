@@ -1,7 +1,7 @@
 /**
  * Exports:
  * - DEFAULT_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE: editor font size defaults and bounds. Keywords: editor zoom, font size, clamp.
- * - EXPANDED_DIRECTORIES_STORAGE_KEY, FONT_SIZE_STORAGE_KEY, HARNESS_STORAGE_KEY, HARNESS_MODEL_STORAGE_KEY, HARNESS_MODEL_EFFORT_STORAGE_KEY, HARNESS_SERVICE_TIER_STORAGE_KEY, HARNESS_AGENT_STORAGE_KEY, THREAD_SERVICE_TIER_STORAGE_KEY, THREAD_TOKEN_USAGE_STORAGE_KEY, THREAD_UNREAD_STATE_STORAGE_KEY, THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY, WORKBENCH_THEME_STORAGE_KEY: localStorage keys for persisted explorer, editor, harness, model, effort, draft and thread service tiers, agent, thread token usage, thread unread state, live activity disclosure state, and theme. Keywords: localStorage, explorer, font size, harness, model, effort, service tier, agent, threads, token usage, live activity, theme.
+ * - EXPANDED_DIRECTORIES_STORAGE_KEY, FONT_SIZE_STORAGE_KEY, HARNESS_STORAGE_KEY, HARNESS_MODEL_STORAGE_KEY, HARNESS_MODEL_EFFORT_STORAGE_KEY, HARNESS_SERVICE_TIER_STORAGE_KEY, HARNESS_AGENT_STORAGE_KEY, THREAD_SERVICE_TIER_STORAGE_KEY, THREAD_TOKEN_USAGE_STORAGE_KEY, THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY, WORKBENCH_THEME_STORAGE_KEY: localStorage keys for persisted explorer, editor, harness, model, effort, draft and thread service tiers, agent, thread token usage, live activity disclosure state, and theme. Keywords: localStorage, explorer, font size, harness, model, effort, service tier, agent, threads, token usage, live activity, theme.
  * - readStoredExpandedDirectories: read and normalize persisted expanded directory paths for a project. Keywords: localStorage, explorer tree, expanded directories, browser state.
  * - persistExpandedDirectories: persist expanded directory paths for a project from a provided collection. Keywords: localStorage, explorer tree, persistence, directories.
  * - readStoredFontSize: read and clamp the persisted editor font size. Keywords: localStorage, editor zoom, font size, clamp.
@@ -13,7 +13,6 @@
  * - readStoredThreadServiceTier/persistThreadServiceTier: persist presence-aware service-tier preferences for materialized threads. Keywords: localStorage, codex, thread, service tier, fast.
  * - readStoredHarnessAgent/persistHarnessAgent: persist the preferred agent file for each harness. Keywords: localStorage, codex, copilot, opencode, harness, agent.
  * - readStoredThreadTokenUsage/persistThreadTokenUsage/clearStoredThreadTokenUsage: persist latest per-thread token usage when the harness only sends it as a live notification. Keywords: localStorage, thread, token usage, context.
- * - readStoredThreadUnreadState/persistThreadUnreadState: persist per-thread unread tracking for sidebar badges. Keywords: localStorage, threads, unread, badges.
  * - readStoredThreadLiveActivityOpen/persistThreadLiveActivityOpen: persist the shared thread live activity disclosure state. Keywords: localStorage, thread, reasoning, subagent, disclosure.
  * - readStoredWorkbenchTheme/persistWorkbenchTheme: persist the selected visual theme. Keywords: localStorage, theme, settings, appearance.
  * - readLocalWorkbenchOrigin: read the local loopback workbench origin for agent bootstrap URLs. Keywords: localhost, loopback, URL, workbench, bootstrap.
@@ -21,7 +20,7 @@
 
 import type { ThreadTokenUsage } from "../../codex/generated/app-server/v2/ThreadTokenUsage";
 import type { TokenUsageBreakdown } from "../../codex/generated/app-server/v2/TokenUsageBreakdown";
-import type { WorkbenchHarness, WorkbenchStoredThreadUnreadState } from "../../types";
+import type { WorkbenchHarness } from "../../types";
 import { normalizeWorkbenchAgentPath } from "../agent-paths";
 import {
   DEFAULT_EDITOR_FONT_SIZE,
@@ -44,33 +43,8 @@ export const HARNESS_SERVICE_TIER_STORAGE_KEY = "workbench:harness-service-tiers
 export const HARNESS_AGENT_STORAGE_KEY = "workbench:harness-agents";
 export const THREAD_SERVICE_TIER_STORAGE_KEY = "workbench:thread-service-tiers";
 export const THREAD_TOKEN_USAGE_STORAGE_KEY = "workbench:thread-token-usage";
-export const THREAD_UNREAD_STATE_STORAGE_KEY = "workbench:thread-unread-state";
 export const THREAD_LIVE_ACTIVITY_OPEN_STORAGE_KEY = "workbench:thread-live-activity-open";
 export const WORKBENCH_THEME_STORAGE_KEY = "workbench:theme";
-
-function normalizeStoredThreadUnreadState(value: unknown): WorkbenchStoredThreadUnreadState | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-
-  const candidate = value as Partial<WorkbenchStoredThreadUnreadState>;
-  if (
-    typeof candidate.lastObservedStatus !== "string"
-    || !Number.isFinite(candidate.lastObservedUpdatedAt)
-    || !("lastSeenItemId" in candidate)
-    || (candidate.lastSeenItemId !== null && typeof candidate.lastSeenItemId !== "string")
-    || !Array.isArray(candidate.observedItemIds)
-  ) {
-    return null;
-  }
-
-  return {
-    lastObservedStatus: candidate.lastObservedStatus,
-    lastObservedUpdatedAt: Math.max(0, Math.trunc(candidate.lastObservedUpdatedAt)),
-    lastSeenItemId: candidate.lastSeenItemId,
-    observedItemIds: candidate.observedItemIds.filter((itemId): itemId is string => typeof itemId === "string"),
-  };
-}
 
 function normalizeTokenUsageBreakdown(value: unknown): TokenUsageBreakdown | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -424,37 +398,6 @@ export function clearStoredThreadTokenUsage(harness: WorkbenchHarness, threadId:
     window.localStorage.setItem(THREAD_TOKEN_USAGE_STORAGE_KEY, JSON.stringify(parsedValue));
   } catch {
     // Ignore storage failures and keep the live token usage state working.
-  }
-}
-
-export function readStoredThreadUnreadState() {
-  try {
-    const rawValue = window.localStorage.getItem(THREAD_UNREAD_STATE_STORAGE_KEY);
-    if (!rawValue) {
-      return {};
-    }
-
-    const parsedValue = JSON.parse(rawValue);
-    if (!parsedValue || typeof parsedValue !== "object" || Array.isArray(parsedValue)) {
-      return {};
-    }
-
-    return Object.fromEntries(
-      Object.entries(parsedValue).flatMap(([key, value]) => {
-        const normalizedValue = normalizeStoredThreadUnreadState(value);
-        return normalizedValue ? [[key, normalizedValue]] : [];
-      }),
-    );
-  } catch {
-    return {};
-  }
-}
-
-export function persistThreadUnreadState(stateByKey: Record<string, WorkbenchStoredThreadUnreadState>) {
-  try {
-    window.localStorage.setItem(THREAD_UNREAD_STATE_STORAGE_KEY, JSON.stringify(stateByKey));
-  } catch {
-    // Ignore storage failures and keep the in-memory unread badge state working.
   }
 }
 

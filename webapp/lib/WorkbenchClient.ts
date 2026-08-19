@@ -57,12 +57,6 @@ type MountedWorkbenchControls = WorkbenchControls & {
   ) => ReturnType<typeof WorkbenchFilePanelClient>;
 };
 
-function areThreadUnreadBadgesEquivalent(left: ThreadSummary["unreadBadge"], right: ThreadSummary["unreadBadge"]) {
-  return left === right || Boolean(left && right
-    && left.unreadCount === right.unreadCount
-    && left.hasActiveTurn === right.hasActiveTurn);
-}
-
 function areThreadSummariesEquivalent(left: ThreadSummary, right: ThreadSummary) {
   return left.id === right.id
     && left.harness === right.harness
@@ -75,8 +69,7 @@ function areThreadSummariesEquivalent(left: ThreadSummary, right: ThreadSummary)
     && left.path === right.path
     && left.forkedFromId === right.forkedFromId
     && left.agentNickname === right.agentNickname
-    && left.agentRole === right.agentRole
-    && areThreadUnreadBadgesEquivalent(left.unreadBadge, right.unreadBadge);
+    && left.agentRole === right.agentRole;
 }
 
 function areThreadSummaryCollectionsEquivalent(left: readonly ThreadSummary[], right: readonly ThreadSummary[]) {
@@ -616,10 +609,6 @@ export async function WorkbenchClient(
     return await threadClient.readThread(threadId, harness, options);
   }
 
-  function markThreadSeen(thread: ThreadPayload) {
-    threadClient.markThreadSeen(thread);
-  }
-
   async function sendThreadMessage(
     thread: ThreadPayload,
     input: UserInput[],
@@ -912,7 +901,6 @@ export async function WorkbenchClient(
     deleteThreadDraft: (draftId) => threadSidebarClient.delete(draftId),
     editThreadDraft: (draft) => threadSidebarClient.edit(draft),
     listModels: threadClient.listModels,
-    markThreadSeen,
     readThread,
     refreshRateLimits,
     sendThreadMessage,

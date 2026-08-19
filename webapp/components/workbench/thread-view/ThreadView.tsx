@@ -11,12 +11,12 @@ import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserI
 import { getCurrentInProgressTurn, mergeTurnsPreservingLiveItems } from "../../../lib/codex/thread-state";
 import type {
   ThreadPayload,
-  ThreadUnreadBadge,
+  WorkbenchBrowseResultEntry,
+  WorkbenchComposerInputDraft,
   WorkbenchComposerProfileSlot,
   WorkbenchComposerSettings,
   WorkbenchHarness,
   WorkbenchListModelsOptions,
-  WorkbenchBrowseResultEntry,
   WorkbenchModelOption,
   WorkbenchPendingUserInputRequest,
   WorkbenchProjectRoot,
@@ -26,9 +26,9 @@ import type {
   WorkbenchSkillSummary,
   WorkbenchSubagentSummary,
   WorkbenchSubmitUserInputRequestOptions,
-  WorkbenchComposerInputDraft,
   WorkbenchThreadDocumentSnapshot,
   WorkbenchThreadGoalControls,
+  WorkbenchThreadSidebarStore,
   WorkbenchThreadTurnHistoryEntry,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
@@ -55,6 +55,10 @@ import {
   type BuildInlineMentionCandidatesOptions,
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
+import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
+import { ThreadMessageNotSentError } from "../../../lib/workbench/thread/thread-message-submission";
+import type { WorkbenchThreadStateRequest } from "../../../lib/workbench/thread/thread-state";
+import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import {
   filterSubagentsByParentThreadId,
   getNextSubagentHydrationBatch,
@@ -65,30 +69,25 @@ import {
   getThreadAgentTabLabel,
   sortWorkbenchSubagents,
 } from "../../../lib/workbench/thread/thread-subagents";
-import type { WorkbenchThreadStateRequest } from "../../../lib/workbench/thread/thread-state";
-import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
 import { isPendingInitialOptimisticInputItem } from "../../../lib/workbench/thread/ThreadOptimisticInputStore";
-import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
-import { ThreadMessageNotSentError } from "../../../lib/workbench/thread/thread-message-submission";
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
-import { ThreadThreadContent, ThreadTurnDetails, ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./thread-view-items";
 import previousTurnLoadReducer from "./previous-turn-load-state";
-import { getThreadVisibleHistoryEntries } from "./thread-visible-history";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
+import { ThreadTurnDetails, ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./thread-view-items";
+import { getThreadVisibleHistoryEntries } from "./thread-visible-history";
+import {
+  getThreadWebSearchLiveLabel,
+  isThreadWebSearchPlaceholder,
+} from "./thread-web-search-state";
 import ThreadAgentTabs from "./ThreadAgentTabs";
 import ThreadComposer from "./ThreadComposer";
 import ThreadContextStatus from "./ThreadContextStatus";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadGoalControl from "./ThreadGoalControl";
 import ThreadMarkdown from "./ThreadMarkdown";
-import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadRateLimits from "./ThreadRateLimits";
 import ThreadScrollAnchorController, { type ThreadScrollSnapshot } from "./ThreadScrollAnchorController";
-import {
-  getThreadWebSearchLiveLabel,
-  isThreadWebSearchPlaceholder,
-} from "./thread-web-search-state";
 import {
   ThreadWebSearchActionRow,
 } from "./ThreadWebSearchItem";
@@ -173,35 +172,6 @@ function useStableRelatedThreadsById ({
   }, [stableThreadsById]);
 
   return stableThreadsById;
-}
-
-function countThreadItems (thread: Pick<ThreadPayload, "turns">) {
-  return thread.turns.reduce((total, turn) => total + turn.items.length, 0);
-}
-
-function getThreadSeenBoundarySignature (thread: Pick<ThreadPayload, "harness" | "id" | "status" | "turnHistory" | "turns" | "updatedAt">) {
-  const latestTurn = thread.turns.at(-1);
-  const latestItem = latestTurn?.items.at(-1);
-  const latestHistoryEntry = thread.turnHistory.at(-1);
-  const latestHistoryItemId = latestHistoryEntry?.itemIds?.at(-1) ?? "";
-  return [
-    thread.harness,
-    thread.id,
-    thread.status,
-    thread.updatedAt,
-    thread.turns.length,
-    latestTurn?.id ?? "",
-    latestTurn?.status ?? "",
-    latestTurn?.items.length ?? 0,
-    latestItem?.id ?? "",
-    latestItem?.type ?? "",
-    thread.turnHistory.length,
-    latestHistoryEntry?.turnId ?? "",
-    latestHistoryEntry?.status ?? "",
-    latestHistoryEntry?.loadState ?? "",
-    latestHistoryEntry?.itemCount ?? 0,
-    latestHistoryItemId,
-  ].join("|");
 }
 
 function orderTurnsByHistory (turns: ThreadPayload["turns"], history: WorkbenchThreadTurnHistoryEntry[]) {
@@ -605,7 +575,6 @@ export default memo(function ThreadView ({
   onPauseThread,
   onReadThread,
   onResumeThread,
-  onThreadSeen,
   onCompactThread,
   onSendMessage,
   onStopThread,
@@ -636,6 +605,7 @@ export default memo(function ThreadView ({
   threadComposerDraftsByThreadId,
   threadDocuments,
   threadGoalControls,
+  threadSidebarStore,
   threadQuestionnaireDraftsByKey,
   thread,
   viewInstanceKey = thread.id,
@@ -653,7 +623,6 @@ export default memo(function ThreadView ({
   onPauseThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   onReadThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
   onResumeThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
-  onThreadSeen: (thread: ThreadPayload) => void;
   onCompactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   onSendMessage: (
     thread: ThreadPayload,
@@ -692,6 +661,7 @@ export default memo(function ThreadView ({
   threadComposerDraftsByThreadId: Record<string, WorkbenchComposerInputDraft | undefined>;
   threadDocuments: WorkbenchThreadDocumentSnapshot;
   threadGoalControls: WorkbenchThreadGoalControls | null;
+  threadSidebarStore: WorkbenchThreadSidebarStore | null;
   threadQuestionnaireDraftsByKey: Record<string, WorkbenchQuestionnaireDraft | undefined>;
   thread: ThreadPayload;
   viewInstanceKey?: string;
@@ -702,7 +672,6 @@ export default memo(function ThreadView ({
   const [subthreadsById, setSubthreadsById] = useState<Record<string, ThreadPayload>>({});
   const [loadingThreadIds, setLoadingThreadIds] = useState<Record<string, true>>({});
   const [previousTurnLoadStates, dispatchPreviousTurnLoad] = useReducer(previousTurnLoadReducer, {});
-  const [seenItemCountsByThreadId, setSeenItemCountsByThreadId] = useState<Record<string, number>>({});
   const [isLiveActivityOpen, setIsLiveActivityOpen] = useState(readStoredThreadLiveActivityOpen);
   const [workbenchSkills, setWorkbenchSkills] = useState<WorkbenchSkillSummary[]>([]);
   const threadViewRef = useRef<HTMLDivElement>(null);
@@ -764,12 +733,12 @@ export default memo(function ThreadView ({
   const activeSubagentSummary = activeThread ? getSubagentSummary(subagents, activeThread.id) : null;
   const resolvedActiveThread = profileResolvedActiveThread && !profileResolvedActiveThread.reasoningEffort && activeSubagentSummary
     ? {
-        ...profileResolvedActiveThread,
-        reasoningEffort: composerProfileController.getProfileReasoningEffort(
-          activeSubagentSummary.profileId,
-          profileResolvedActiveThread.harness,
-        ),
-      }
+      ...profileResolvedActiveThread,
+      reasoningEffort: composerProfileController.getProfileReasoningEffort(
+        activeSubagentSummary.profileId,
+        profileResolvedActiveThread.harness,
+      ),
+    }
     : profileResolvedActiveThread;
   void composerProfileSnapshot;
   const activeThreadIdentity = activeThread ? `${activeThread.harness}:${activeThread.id}` : "";
@@ -828,7 +797,6 @@ export default memo(function ThreadView ({
       activeThread.id,
       activeThread.status,
       activeThread.turns.length,
-      countThreadItems(activeThread),
       latestTurn?.id ?? "",
       latestTurn?.status ?? "",
       latestTurn?.items.length ?? 0,
@@ -837,7 +805,6 @@ export default memo(function ThreadView ({
       activePendingUserInputRequest?.requestKey ?? "",
     ].join("|");
   }, [activePendingUserInputRequest?.requestKey, activeThread, liveActivity?.kind, visibleHistorySignature]);
-  const threadSeenBoundarySignature = useMemo(() => getThreadSeenBoundarySignature(thread), [thread]);
   const workspaceFileLinkRoots = useMemo(() => (
     projectFileLinkRoots ?? (projectRoots && projectRoots.length > 1
       ? projectRoots.map((root) => ({ id: root.id, rootPath: root.rootPath }))
@@ -891,22 +858,6 @@ export default memo(function ThreadView ({
     });
   }, [scrollAnchorController]);
 
-  const markThreadSeen = useCallback((threadId: string, payload: ThreadPayload | null | undefined) => {
-    if (!payload) {
-      return;
-    }
-
-    const totalItems = countThreadItems(payload);
-    setSeenItemCountsByThreadId((current) => (
-      current[threadId] === totalItems
-        ? current
-        : {
-          ...current,
-          [threadId]: totalItems,
-        }
-    ));
-  }, []);
-
   const loadSubthread = useCallback(async (
     threadId: string,
     harness: WorkbenchHarness,
@@ -956,14 +907,6 @@ export default memo(function ThreadView ({
           [threadId]: mergedPayload,
         };
       });
-      setSeenItemCountsByThreadId((current) => (
-        current[threadId] !== undefined
-          ? current
-          : {
-            ...current,
-            [threadId]: countThreadItems(payload),
-          }
-      ));
       return payload;
     } finally {
       setLoadingThreadIds((current) => {
@@ -1085,9 +1028,6 @@ export default memo(function ThreadView ({
     setSubthreadsById({});
     setLoadingThreadIds({});
     dispatchPreviousTurnLoad({ type: "reset" });
-    setSeenItemCountsByThreadId({
-      [thread.id]: countThreadItems(thread),
-    });
   }, [projectId, scrollAnchorController, viewInstanceKey]);
 
   useEffect(() => {
@@ -1258,10 +1198,6 @@ export default memo(function ThreadView ({
     };
   }, [activeThread?.id, scheduleScrollToBottom, scrollAnchorController]);
 
-  useEffect(() => {
-    onThreadSeen(thread);
-  }, [onThreadSeen, threadSeenBoundarySignature]);
-
   useEffect(() => () => {
     if (bottomScrollFrameRef.current !== null) {
       window.cancelAnimationFrame(bottomScrollFrameRef.current);
@@ -1272,14 +1208,6 @@ export default memo(function ThreadView ({
     });
     codeBlockCopyResetTimersRef.current.clear();
   }, []);
-
-  useEffect(() => {
-    if (!activeThread) {
-      return;
-    }
-
-    markThreadSeen(activeThread.id, activeThread);
-  }, [activeThread, markThreadSeen]);
 
   const handleSubthreadSelection = useCallback((threadId: string) => {
     setActiveThreadId(threadId);
@@ -1586,54 +1514,6 @@ export default memo(function ThreadView ({
     onThreadCodeBlockWrapChange(nextValue);
   }, [handleCodeBlockCopy, handleSvgCodeBlockPreviewToggle, onThreadCodeBlockWrapChange, syncCodeBlockWrapDomState]);
 
-  const getTabBadge = useCallback((threadId: string, payload: ThreadPayload | null | undefined): { isQuestion: boolean; unreadBadge: ThreadUnreadBadge | null } => {
-    const hasPendingQuestion = Boolean(livePendingUserInputRequestsByThreadId[threadId]);
-    if (hasPendingQuestion) {
-      return {
-        isQuestion: true,
-        unreadBadge: null,
-      };
-    }
-
-    if (!payload) {
-      return {
-        isQuestion: false,
-        unreadBadge: null,
-      };
-    }
-
-    const hasActiveTurn = Boolean(getCurrentInProgressTurn(payload));
-    const totalItems = countThreadItems(payload);
-    const seenItemCount = seenItemCountsByThreadId[threadId] ?? totalItems;
-    const unreadCount = Math.max(0, totalItems - seenItemCount);
-
-    if (hasActiveTurn) {
-      return {
-        isQuestion: false,
-        unreadBadge: {
-          unreadCount,
-          hasActiveTurn: true,
-        },
-      };
-    }
-
-    if (threadId === thread.id && unreadCount > 0) {
-      return {
-        isQuestion: false,
-        unreadBadge: {
-          unreadCount,
-          hasActiveTurn: false,
-        },
-      };
-    }
-
-    return {
-      isQuestion: false,
-      unreadBadge: null,
-    };
-  }, [livePendingUserInputRequestsByThreadId, seenItemCountsByThreadId, thread.id]);
-
-  const mainThreadBadge = getTabBadge(thread.id, thread);
   const handleComposerHarnessToggle = () => {
     if (!activeThread?.isDraft) return;
     const harnesses: WorkbenchHarness[] = ["codex", "copilot", "opencode"];
@@ -1713,17 +1593,17 @@ export default memo(function ThreadView ({
       hasSettledSubagents={hasSettledSubagents}
       isSettledSubagentsVisible={areSettledSubagentsVisible}
       isRevealingMore={false}
-      mainThreadBadge={mainThreadBadge}
+      mainThreadHarness={thread.harness}
       mainThreadId={thread.id}
       onToggleSettledSubagents={handleToggleSettledSubagents}
       onSelectThread={handleSubthreadSelection}
       onTogglePin={handleSubagentPinToggle}
       onToggleSettlement={handleSubagentSettlementToggle}
+      threadSidebarStore={threadSidebarStore}
       tabs={tabDefinitions.map((tab) => {
         const tabThread = relatedThreadsById[tab.id] ?? null;
         return {
           ...tab,
-          badge: getTabBadge(tab.id, tabThread),
           isPinned: pinnedSubagentThreadIdSet.has(tab.id),
           subagent: getSubagentSummary(subagents, tab.id),
           thread: tabThread,

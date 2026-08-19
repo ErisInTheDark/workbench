@@ -1,7 +1,7 @@
 /* No production exports. Tests protect strict lifecycle, grouping, ordering, and draft rules. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { countDraftPromptTokens, createDraftTitle, getThreadSidebarGroup, normalizeWorkbenchActivityTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
+import { countDraftPromptTokens, createDraftTitle, getThreadSidebarGroup, normalizeWorkbenchActivityTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
 
 test("provider activity timestamps normalize seconds without double-converting milliseconds", () => {
   assert.equal(normalizeWorkbenchActivityTimestampMs(1_723_456_789), 1_723_456_789_000);
@@ -58,6 +58,15 @@ test("strict lifecycle rejects impossible combinations", () => {
   assert.equal(WorkbenchThreadLifecycleSchema.safeParse({ kind: "completed", reason: "providerInactive", settled: false }).success, true);
 });
 
+test("manual status request accepts exactly the three radio statuses", () => {
+  const request = { identity: { harness: "codex", threadId: "thread" }, method: "workbench/thread-state/status/set", projectId: "project" };
+  for (const status of ["needsAttention", "completed", "stopped"]) {
+    assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, status }).success, true);
+  }
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, status: "working" }).success, false);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, status: "idle" }).success, false);
+});
+
 test("lifecycle parsing preserves two attention variants and normalizes legacy reasons", () => {
   assert.deepEqual(WorkbenchThreadLifecycleSchema.parse({ kind: "needsAttention", reason: "noActiveTurn", settled: false }), {
     kind: "needsAttention", reason: "noActiveTurn", settled: false,
@@ -95,6 +104,12 @@ test("exact-turn transitions reject stale completion and stopped settlement beco
   assert.equal(reduceWorkbenchThreadLifecycle(working, { kind: "restore" }), working);
   assert.deepEqual(reduceWorkbenchThreadLifecycle(completed, { kind: "userNeedsAttention" }), {
     kind: "needsAttention", reason: "noActiveTurn", settled: false,
+  });
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(completed, { kind: "userStopped" }), {
+    agent: { agentStatus: "completed", turnId: "new" }, kind: "stopped", reason: "userMarkedStopped", settled: false,
+  });
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(stopped, { kind: "userCompleted" }), {
+    kind: "completed", reason: "userCompleted", settled: false,
   });
   const pendingInput = reduceWorkbenchThreadLifecycle(working, { kind: "pendingInput", requestKey: "request", turnId: "new" });
   assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, { kind: "userNeedsAttention" }), pendingInput);

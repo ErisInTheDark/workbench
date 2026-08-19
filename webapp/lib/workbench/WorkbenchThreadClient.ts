@@ -60,7 +60,6 @@ import type {
     WorkbenchReadThreadOptions,
     WorkbenchSendThreadMessageOptions,
     WorkbenchSteerHistoryEntry,
-    WorkbenchStoredThreadUnreadState,
     WorkbenchSubagentSummary,
     WorkbenchSubmitUserInputRequestOptions,
     WorkbenchThreadContextReadResponse,
@@ -92,7 +91,6 @@ import {
     persistHarnessServiceTier,
     persistThreadServiceTier,
     persistThreadTokenUsage,
-    persistThreadUnreadState,
     readLocalWorkbenchOrigin,
     readStoredHarnessAgent,
     readStoredHarnessModel,
@@ -100,7 +98,6 @@ import {
     readStoredHarnessServiceTier,
     readStoredThreadServiceTier,
     readStoredThreadTokenUsage,
-    readStoredThreadUnreadState,
 } from "./state/browser-state";
 import LifecycleScope from "./state/LifecycleScope";
 import ThreadDocumentStore from "./state/ThreadDocumentStore";
@@ -175,7 +172,6 @@ export interface WorkbenchThreadState {
   browseResultEntriesByThreadId: Map<string, WorkbenchBrowseResultEntry[]>;
   steerHistoryByThreadId: Map<string, WorkbenchSteerHistoryEntry[]>;
   subagents: WorkbenchSubagentSummary[];
-  threadUnreadStateByKey: Map<string, WorkbenchStoredThreadUnreadState>;
   threads: ThreadSummary[];
   threadsError: string;
 }
@@ -219,7 +215,6 @@ interface WorkbenchThreadClient {
   isDraftThreadId: (threadId: string) => boolean;
   installSidebarSnapshot: (snapshot: WorkbenchThreadSidebarSnapshot | null) => void;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
-  markThreadSeen: (thread: ThreadPayload) => void;
   openThread: (threadId: string, options?: { harness?: WorkbenchHarness; source?: "open" | "reload" }) => Promise<void>;
   onWorkbenchNotification: (listener: (notification: { method: "workbench/thread-state/reset" | "workbench/thread-state/updated"; params: unknown }) => void) => () => void;
   requestWorkbench: <TResponse>(method: string, params: unknown) => Promise<TResponse>;
@@ -369,7 +364,6 @@ function createInitialThreadState(): WorkbenchThreadState {
     browseResultEntriesByThreadId: new Map(),
     steerHistoryByThreadId: new Map(),
     subagents: [],
-    threadUnreadStateByKey: new Map(),
     threads: [],
     threadsError: "",
   };
@@ -426,26 +420,6 @@ function addThreadActiveFlag(status: string, flag: ThreadActiveFlag) {
   const [, activeFlags = ""] = status.split(":", 2);
   const nextFlags = Array.from(new Set([...activeFlags.split(",").filter(Boolean), flag]));
   return nextFlags.length ? `active:${nextFlags.join(",")}` : "active";
-}
-
-function getThreadItemIds(turns: Turn[]) {
-  return turns.flatMap((turn) => turn.items.map((item) => item.id));
-}
-
-function getThreadObservedItemIds(thread: Pick<ThreadPayload, "turnHistory" | "turns">) {
-  const historyItemIds = thread.turnHistory.flatMap((entry) => entry.itemIds ?? []);
-  return historyItemIds.length ? historyItemIds : getThreadItemIds(thread.turns);
-}
-
-function countUnreadThreadItems(state: WorkbenchStoredThreadUnreadState) {
-  if (!state.lastSeenItemId) {
-    return state.observedItemIds.length;
-  }
-
-  const lastSeenIndex = state.observedItemIds.lastIndexOf(state.lastSeenItemId);
-  return lastSeenIndex >= 0
-    ? Math.max(0, state.observedItemIds.length - lastSeenIndex - 1)
-    : 0;
 }
 
 function getLatestTurnStartedAt(turns: Turn[]) {
@@ -869,8 +843,6 @@ function WorkbenchThreadClient(
     sources: threadSources,
   });
 
-  state.threadUnreadStateByKey = new Map(Object.entries(readStoredThreadUnreadState()));
-
   function emitStatusMessage(message: string) {
     options.onStatusMessage?.(message);
   }
@@ -894,83 +866,6 @@ function WorkbenchThreadClient(
     pendingUserInputRequestGenerationsByHarness.set(harness, getPendingUserInputRequestGeneration(harness) + 1);
   }
 
-  function persistUnreadStateSnapshot() {
-    persistThreadUnreadState(Object.fromEntries(state.threadUnreadStateByKey.entries()));
-  }
-
-  function buildThreadSummaryWithUnreadBadge(thread: ThreadSummary): ThreadSummary {
-    const unreadState = state.threadUnreadStateByKey.get(getThreadStateKey(thread.harness, thread.id));
-    const hasActiveTurn = isThreadStatusActive(thread.status);
-    if (!unreadState) {
-      return hasActiveTurn
-        ? {
-          ...thread,
-          unreadBadge: {
-            unreadCount: 0,
-            hasActiveTurn: true,
-          },
-        }
-        : thread;
-    }
-
-    const unreadCount = countUnreadThreadItems(unreadState);
-    if (!hasActiveTurn && unreadCount === 0) {
-      return thread.unreadBadge ? { ...thread, unreadBadge: null } : thread;
-    }
-
-    const unreadBadge = {
-      unreadCount,
-      hasActiveTurn,
-    };
-
-    return thread.unreadBadge?.unreadCount === unreadBadge.unreadCount
-      && thread.unreadBadge.hasActiveTurn === unreadBadge.hasActiveTurn
-      ? thread
-      : {
-        ...thread,
-        unreadBadge,
-      };
-  }
-
-  function updateStoredThreadUnreadState(
-    thread: Pick<ThreadSummary, "id" | "harness" | "status" | "updatedAt">,
-    observedItemIds: string[],
-    { markSeen = false, seedSeenIfMissing = false }: { markSeen?: boolean; seedSeenIfMissing?: boolean } = {},
-  ) {
-    const key = getThreadStateKey(thread.harness, thread.id);
-    const previous = state.threadUnreadStateByKey.get(key);
-    const lastObservedItemId = observedItemIds.at(-1) ?? null;
-    const lastSeenItemId = markSeen
-      ? lastObservedItemId
-      : previous
-        ? previous.lastSeenItemId
-        : seedSeenIfMissing
-          ? lastObservedItemId
-          : null;
-
-    const nextState: WorkbenchStoredThreadUnreadState = {
-      lastObservedStatus: thread.status,
-      lastObservedUpdatedAt: thread.updatedAt,
-      lastSeenItemId,
-      observedItemIds,
-    };
-
-    if (
-      previous
-      && previous.lastObservedStatus === nextState.lastObservedStatus
-      && previous.lastObservedUpdatedAt === nextState.lastObservedUpdatedAt
-      && previous.lastSeenItemId === nextState.lastSeenItemId
-      && previous.observedItemIds.length === nextState.observedItemIds.length
-      && previous.observedItemIds.every((itemId, index) => itemId === nextState.observedItemIds[index])
-    ) {
-      return false;
-    }
-
-    state.threadUnreadStateByKey.set(key, nextState);
-    persistUnreadStateSnapshot();
-    return true;
-  }
-
   function getSnapshot(): WorkbenchThreadSnapshot {
     return {
       currentThread: state.currentThread,
@@ -980,7 +875,7 @@ function WorkbenchThreadClient(
       rateLimits: state.rateLimits,
       subagents: state.subagents,
       threadDocuments: threadDocuments.getSnapshot(),
-      threads: state.threads.map(buildThreadSummaryWithUnreadBadge),
+      threads: state.threads,
       threadsError: state.threadsError,
     };
   }
@@ -1418,7 +1313,6 @@ function WorkbenchThreadClient(
         preview: entry.title,
         source: prior?.source ?? "workbench",
         status: entry.lifecycle.kind === "working" ? "active" : "idle",
-        unreadBadge: prior?.unreadBadge ?? null,
         updatedAt: activitySeconds,
       }];
     });
@@ -1643,12 +1537,7 @@ function WorkbenchThreadClient(
   }
 
   function setProjectedCurrentThread(nextThread: ThreadPayload | null) {
-    const unreadStateChanged = nextThread ? markThreadPayloadSeen(nextThread) : false;
     if (areThreadPayloadsEquivalent(state.currentThread, nextThread)) {
-      if (unreadStateChanged) {
-        state.threads = state.threads.map(buildThreadSummaryWithUnreadBadge);
-        emit();
-      }
       return;
     }
 
@@ -1863,19 +1752,6 @@ function WorkbenchThreadClient(
       setRateLimits(rateLimits);
     }
     return true;
-  }
-
-  function markThreadPayloadSeen(thread: ThreadPayload) {
-    return updateStoredThreadUnreadState(thread, getThreadObservedItemIds(thread), { markSeen: true });
-  }
-
-  function markThreadSeen(thread: ThreadPayload) {
-    if (!markThreadPayloadSeen(thread)) {
-      return;
-    }
-
-    state.threads = state.threads.map(buildThreadSummaryWithUnreadBadge);
-    emit();
   }
 
   function scheduleActiveTurnRateLimitRefresh() {
@@ -2461,10 +2337,7 @@ function WorkbenchThreadClient(
       }
 
       changed = true;
-      return buildThreadSummaryWithUnreadBadge({
-        ...thread,
-        status: nextStatus,
-      });
+      return { ...thread, status: nextStatus };
     });
 
     return changed;
@@ -2492,10 +2365,7 @@ function WorkbenchThreadClient(
       }
 
       changed = true;
-      return buildThreadSummaryWithUnreadBadge({
-        ...thread,
-        status: nextStatus,
-      });
+      return { ...thread, status: nextStatus };
     });
 
     return changed;
@@ -2578,7 +2448,6 @@ function WorkbenchThreadClient(
     forkedFromId: null,
     agentNickname: null,
     agentRole: null,
-    unreadBadge: null,
     tokenUsage: null,
     turnHistory: [],
     turns: [],
@@ -5260,7 +5129,6 @@ function WorkbenchThreadClient(
     isCurrentThreadUpToDate,
     isDraftThreadId,
     listModels,
-    markThreadSeen,
     openThread,
     onWorkbenchNotification,
     requestWorkbench,

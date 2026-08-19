@@ -1501,10 +1501,6 @@ export default function Workbench () {
     return await controls.readThread(threadId, nextHarness, options);
   }, [controls]);
 
-  const markThreadSeen = useCallback((thread: ThreadPayload) => {
-    controls?.markThreadSeen(thread);
-  }, [controls]);
-
   const sendThreadMessage = useCallback(async (
     thread: ThreadPayload,
     input: UserInput[],
@@ -3393,7 +3389,6 @@ export default function Workbench () {
                       onPauseThread={pauseThread}
                       onReadThread={readThread}
                       onResumeThread={resumeThread}
-                      onThreadSeen={markThreadSeen}
                       onCompactThread={compactThread}
                       onSendMessage={sendThreadMessage}
                       onStopThread={stopThread}
@@ -3425,6 +3420,7 @@ export default function Workbench () {
                       threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
                       threadDocuments={threadDocuments}
                       threadGoalControls={controls.threadGoals}
+                      threadSidebarStore={threadSidebarStore}
                       threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
                       viewInstanceKey={threadViewInstanceKey}
                     />
@@ -3626,7 +3622,6 @@ export default function Workbench () {
                             onPauseThread={pauseThread}
                             onReadThread={readThread}
                             onResumeThread={resumeThread}
-                            onThreadSeen={markThreadSeen}
                             onCompactThread={compactThread}
                             onCreateDraftThread={() => controls?.createThreadDraft(harness) ?? null}
                             onSendMessage={sendThreadMessage}
@@ -3667,6 +3662,7 @@ export default function Workbench () {
                             threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
                             threadDocuments={threadDocuments}
                             threadGoalControls={controls?.threadGoals ?? null}
+                            threadSidebarStore={threadSidebarStore}
                             threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
                             onClose={showMosaicView ? () => {
                               closeMosaicPanel(target);

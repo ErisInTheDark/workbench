@@ -598,12 +598,12 @@ export default class WorkbenchThreadStateController {
     return await this.enqueue(`${request.projectId}:thread:${key}`, async () => {
       const entry = state.entries.get(key);
       if (!entry || entry.entryKind === "draft") return { accepted: false, revision: state.revision };
-      if (request.method === "workbench/thread-state/complete"
-        && (entry.entryKind !== "thread" || entry.lifecycle.kind !== "needsAttention" || entry.lifecycle.reason !== "noActiveTurn")) {
-        return { accepted: false, revision: state.revision };
-      }
-      if (request.method === "workbench/thread-state/attention/mark"
-        && (entry.entryKind !== "thread" || (entry.lifecycle.kind !== "completed" && entry.lifecycle.kind !== "stopped"))) {
+      if (request.method === "workbench/thread-state/status/set" && (
+        entry.entryKind !== "thread"
+        || entry.metadata.archived
+        || entry.lifecycle.kind === "working"
+        || (entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput")
+      )) {
         return { accepted: false, revision: state.revision };
       }
       let next = entry;
@@ -620,19 +620,17 @@ export default class WorkbenchThreadStateController {
           : { ...entry, lifecycle, metadata: entry.metadata.archived ? entry.metadata : { ...entry.metadata, snoozed: false } };
       }
       if (request.method === "workbench/thread-state/restore" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, lifecycle: reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "restore" }) };
-      if (entry.entryKind === "thread"
-        && request.method === "workbench/thread-state/attention/mark"
-        && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = {
-        ...entry,
-        lifecycle: reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "userNeedsAttention" }),
-      };
-      if (entry.entryKind === "thread"
-        && request.method === "workbench/thread-state/complete"
-        && entry.lifecycle.kind === "needsAttention"
-        && entry.lifecycle.reason === "noActiveTurn") next = {
-        ...entry,
-        lifecycle: reduceWorkbenchThreadLifecycle(entry.lifecycle, request.status === "stopped" ? { kind: "userStopped" } : { kind: "userCompleted" }),
-      };
+      if (entry.entryKind === "thread" && request.method === "workbench/thread-state/status/set" && entry.lifecycle.kind !== request.status) {
+        const lifecycle = reduceWorkbenchThreadLifecycle(
+          entry.lifecycle,
+          request.status === "needsAttention"
+            ? { kind: "userNeedsAttention" }
+            : request.status === "stopped"
+              ? { kind: "userStopped" }
+              : { kind: "userCompleted" },
+        );
+        next = { ...entry, lifecycle, metadata: { ...entry.metadata, snoozed: false } };
+      }
       if (entry.entryKind === "thread" && request.method === "workbench/thread-state/archive/set" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, metadata: request.archived ? { archived: true, pinned: false, snoozed: false } : { archived: false, pinned: false, snoozed: false } };
       const parsed = WorkbenchThreadSidebarEntrySchema.safeParse(next);
       if (!parsed.success) return { accepted: false, revision: state.revision };
