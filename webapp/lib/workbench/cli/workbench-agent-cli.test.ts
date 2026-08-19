@@ -280,6 +280,42 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     threadId: "thread-1",
   });
 
+  const move = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "mv", "src/old.ts", "src/new.ts",
+  ], gitOptions);
+  assert.equal(move.kind, "request");
+  assert.equal(move.request.responseKind, "git-arc-mv");
+  assert.deepEqual(move.request.body, {
+    action: "arcMove",
+    cwd: "C:/workspace",
+    harness: "codex",
+    move: { kind: "operands", operands: ["src/old.ts", "src/new.ts"] },
+    threadId: "thread-1",
+  });
+
+  const regexMove = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "mv", "--regex", "^src/(.+)$", "--replace", "tests/$1", "--", "src",
+  ], gitOptions);
+  assert.equal(regexMove.kind, "request");
+  assert.deepEqual(regexMove.request.body, {
+    action: "arcMove",
+    cwd: "C:/workspace",
+    harness: "codex",
+    move: { confirm: false, kind: "regex", pattern: "^src/(.+)$", replacement: "tests/$1", roots: ["src"] },
+    threadId: "thread-1",
+  });
+  const launcherNormalizedRegexMove = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "mv", "--confirm", "--regex", "^src/(.+)$", "--replace", "tests/$1", "src",
+  ], gitOptions);
+  assert.equal(launcherNormalizedRegexMove.kind, "request");
+  assert.deepEqual(launcherNormalizedRegexMove.request.body, {
+    action: "arcMove",
+    cwd: "C:/workspace",
+    harness: "codex",
+    move: { confirm: true, kind: "regex", pattern: "^src/(.+)$", replacement: "tests/$1", roots: ["src"] },
+    threadId: "thread-1",
+  });
+
   const removal = await parseWorkbenchAgentCliCommand([
     "git", "arc", "remove", "--", "src/file.ts",
   ], gitOptions);
@@ -492,6 +528,7 @@ test("renders complete root help and exact focused Git and orchestrator help", a
   assert.match(WORKBENCH_AGENT_CLI_HELP, /^Usage:\n/u);
   assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc plan -m <short-intent>/u);
   assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc add -- <additional-path>/u);
+  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc mv/u);
   assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc adopt -- <path>/u);
   assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc remove -- <claimed-path>/u);
   assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc propose \[--amend\]/u);
@@ -781,6 +818,36 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     version: 1,
   });
   assert.match(adapt("git-arc-add", { checkpointCommit: successorRef }, { action: "arcAdd" }).stdout, /^Created successor arc ref/u);
+  const movePreview = adapt("git-arc-mv", {
+    additionalClaims: ["src/old.ts", "tests/old.ts"],
+    checkpointCommit: planRef,
+    intentName: "Move tests",
+    mappings: [{ destination: "tests/old.ts", source: "src/old.ts" }],
+    matchedPathCount: 3,
+    mode: "preview",
+    remainingMatchCount: 2,
+    scopePaths: ["src/existing.ts"],
+  }, { action: "arcMove" });
+  assert.match(movePreview.stdout, /^This command will rename the following files:/u);
+  assert.match(movePreview.stdout, /1 of 3 matching paths.*2 matching paths remain/u);
+  assert.match(movePreview.stdout, /Use the command again with --confirm/u);
+  assert.deepEqual(parseGitArcReceipt(movePreview.stdout), {
+    action: "mv",
+    additionalClaims: ["src/old.ts", "tests/old.ts"],
+    claimedPaths: ["src/existing.ts"],
+    intentName: "Move tests",
+    mappings: [{ destination: "tests/old.ts", source: "src/old.ts" }],
+    matchedPathCount: 3,
+    mode: "preview",
+    ref: planRef,
+    remainingMatchCount: 2,
+    version: 1,
+  });
+  assert.match(adapt("git-arc-mv", {
+    additionalClaims: ["tests/old.ts"], checkpointCommit: successorRef,
+    mappings: [{ destination: "tests/old.ts", source: "src/old.ts" }],
+    matchedPathCount: 1, mode: "applied", remainingMatchCount: 0, scopePaths: ["src/old.ts", "tests/old.ts"],
+  }, { action: "arcMove" }).stdout, /^Moved 1 path\./u);
   assert.match(adapt("git-arc-propose", {
     proposalId: "proposal-one",
     sourceCheckpoint: successorRef,

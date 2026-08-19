@@ -5,9 +5,27 @@
  * - parseWorkbenchAgentCliCommand: parse one allowlisted wb command into a fixed Workbench request. Keywords: workbench, cli, allowlist, cwd.
  */
 import { ORCHESTRATOR_ALL_RELOAD_SCOPES } from "../orchestrator-reload";
+import { parseGitArcMoveArguments, type GitArcMoveArguments } from "../git/git-arc-move-arguments";
 
 type JsonPrimitive = boolean | number | string | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+
+function gitArcMoveArgumentsToJson(move: GitArcMoveArguments): { [key: string]: JsonValue } {
+  if (move.kind === "operands") return { kind: move.kind, operands: [...move.operands] };
+  if (move.kind === "maps") {
+    return {
+      kind: move.kind,
+      mappings: move.mappings.map(({ destination, source }) => ({ destination, source })),
+    };
+  }
+  return {
+    confirm: move.confirm,
+    kind: move.kind,
+    pattern: move.pattern,
+    replacement: move.replacement,
+    roots: [...move.roots],
+  };
+}
 
 export type WorkbenchAgentCliResponseKind =
   | "browse-command"
@@ -17,6 +35,7 @@ export type WorkbenchAgentCliResponseKind =
   | "git-arc-compare"
   | "git-arc-continue"
   | "git-arc-diff"
+  | "git-arc-mv"
   | "git-arc-plan"
   | "git-arc-propose"
   | "git-arc-remove"
@@ -176,14 +195,16 @@ const LEGACY_CHECKPOINT_MIGRATION_GUIDE = [
   "4. Before a later pass on the same files, continue from the remembered ref: wb git arc continue --ref <current-ref>",
   "5. Continue while adding genuinely new clean paths: wb git arc add -- <additional-path> [<additional-path>...]",
   "6. Adopt existing dirty workspace paths: wb git arc adopt -- <dirty-path> [<dirty-path>...]",
-  "7. Relinquish exact clean claims: wb git arc remove -- <claimed-path> [<claimed-path>...]",
-  "8. Record successors returned by add, adopt, remove, or continue for later continuation. Final clean removal releases the arc without an active successor.",
-  "9. Summarize or inspect the active arc: wb git arc compare [-- <path> [<path>...]] / wb git arc diff [-- <path> [<path>...]]",
-  "10. Propose a normal commit: wb git arc propose -m <fresh-title> [-m <optional-description>] [-- <claimed-path> [<claimed-path>...]]",
-  "11. Amend exact current unpushed HEAD: wb git arc propose --amend [-m <replacement-title> [-m <replacement-description>]]",
-  "12. Use the same arc continue command after a proposal is committed and before follow-up work.",
-  "13. Restore selected paths: wb git arc restore --ref <ref> -- <path> [<path>...]",
-  "14. Restore the full arc only after explicit user direction: wb git arc restore --ref <ref> --confirm",
+  "7. Move paths and claim both sides: wb git arc mv <source>... <destination> / wb git arc mv --map <source> <destination> [...].",
+  "8. Preview up to 200 regex moves, then repeat with --confirm: wb git arc mv --regex <pattern> --replace <replacement> -- <root> [...].",
+  "9. Relinquish exact clean claims: wb git arc remove -- <claimed-path> [<claimed-path>...]",
+  "10. Record successors returned by add, adopt, mv, remove, or continue for later continuation. Final clean removal releases the arc without an active successor.",
+  "11. Summarize or inspect the active arc: wb git arc compare [-- <path> [<path>...]] / wb git arc diff [-- <path> [<path>...]]",
+  "12. Propose a normal commit: wb git arc propose -m <fresh-title> [-m <optional-description>] [-- <claimed-path> [<claimed-path>...]]",
+  "13. Amend exact current unpushed HEAD: wb git arc propose --amend [-m <replacement-title> [-m <replacement-description>]]",
+  "14. Use the same arc continue command after a proposal is committed and before follow-up work.",
+  "15. Restore selected paths: wb git arc restore --ref <ref> -- <path> [<path>...]",
+  "16. Restore the full arc only after explicit user direction: wb git arc restore --ref <ref> --confirm",
   "",
   "Plan and arc add paths must be clean against HEAD. Arc adopt is only for paths that already contain workspace changes.",
   "If Review finds more work while a proposal is pending, arc continue retires that stale proposal and continues the active arc. Use arc add only when that pass also claims new clean paths.",
@@ -589,6 +610,24 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
+    description: "Move paths while automatically claiming the source and destination sides in this thread's active arc.",
+    helpGroups: ["git-arc"],
+    words: ["git", "arc", "mv"],
+    usage: "wb git arc mv (<source>... <destination> | --map <source> <destination>... | [--confirm] --regex <pattern> --replace <replacement> -- <root> [<root>...])",
+    async build({ args, callerHarness, callerThreadId, cwd }) {
+      const normalizedArgs = args.includes("--regex") || args.includes("--replace")
+        ? preservePowerShellTrailingPaths(args, { boolean: ["--confirm"], values: ["--regex", "--replace"] })
+        : args;
+      return post("/api/git-checkpoint", {
+        action: "arcMove",
+        cwd,
+        harness: requireCallerHarness(callerHarness),
+        move: gitArcMoveArgumentsToJson(parseGitArcMoveArguments(normalizedArgs)),
+        threadId: requireCallerThreadId(callerThreadId),
+      }, "git-arc-mv");
+    },
+  },
+  {
     description: "Relinquish exact clean claims without changing working-tree files.",
     helpGroups: ["git-arc"],
     words: ["git", "arc", "remove"],
@@ -797,6 +836,7 @@ const ROOT_HELP_COMMAND_ORDER = [
   "git arc start",
   "git arc continue",
   "git arc add",
+  "git arc mv",
   "git arc remove",
   "git arc compare",
   "git arc diff",
@@ -858,6 +898,7 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
       "git arc start",
       "git arc continue",
       "git arc add",
+      "git arc mv",
       "git arc remove",
       "git arc compare",
       "git arc diff",

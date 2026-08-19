@@ -3,12 +3,33 @@
  * - GitCheckpointRequestSchema/GitCheckpointRequest: validate every stateless checkpoint route action. Keywords: git, checkpoint, request, Zod.
  * - GitCheckpointFileChangeSchema/GitCheckpointFileChange: shared per-file compare and diff presentation. Keywords: git, checkpoint, file change.
  * - GitCheckpointProposalSchema/GitCheckpointProposal: shared durable proposal state shown in thread UI. Keywords: git, checkpoint, proposal, commit.
+ * - GitArcMoveMappingSchema/GitArcMoveRequestSchema: validate bounded explicit and regex arc move requests. Keywords: git, arc, move, mapping.
  */
 import { z } from "zod";
 
 const nonEmptyString = z.string().trim().min(1);
 const checkpointSha = nonEmptyString.regex(/^[a-f0-9]{7,64}$/iu);
 const checkpointPaths = z.array(nonEmptyString).min(1);
+
+export const GitArcMoveMappingSchema = z.object({
+  destination: nonEmptyString,
+  source: nonEmptyString,
+});
+
+export const GitArcMoveRequestSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("operands"), operands: z.array(nonEmptyString).min(2) }),
+  z.object({ kind: z.literal("maps"), mappings: z.array(GitArcMoveMappingSchema).min(1).max(200) }),
+  z.object({
+    confirm: z.boolean(),
+    kind: z.literal("regex"),
+    pattern: nonEmptyString,
+    replacement: z.string(),
+    roots: checkpointPaths,
+  }),
+]);
+
+export type GitArcMoveMapping = z.infer<typeof GitArcMoveMappingSchema>;
+export type GitArcMoveRequest = z.infer<typeof GitArcMoveRequestSchema>;
 
 const checkpointBaseRequest = {
   cwd: nonEmptyString,
@@ -47,6 +68,11 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("arcRemove"),
     paths: checkpointPaths,
+    ...checkpointBaseRequest,
+  }),
+  z.object({
+    action: z.literal("arcMove"),
+    move: GitArcMoveRequestSchema,
     ...checkpointBaseRequest,
   }),
   z.object({

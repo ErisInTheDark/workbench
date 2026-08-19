@@ -26,6 +26,13 @@ function createArcReceipt(
     : readStringArray(request.body ?? null, "paths");
   return formatGitArcReceipt({
     action,
+    ...(action === "mv" ? {
+      additionalClaims: readStringArray(payload, "additionalClaims"),
+      matchedPathCount: readNumber(payload, "matchedPathCount"),
+      mappings: readMappings(payload),
+      mode: readString(payload, "mode") === "preview" ? "preview" as const : "applied" as const,
+      remainingMatchCount: readNumber(payload, "remainingMatchCount"),
+    } : {}),
     claimedPaths: readStringArray(payload, "scopePaths"),
     intentName: readString(payload, "intentName") || null,
     ...(action === "propose" && readString(payload, "proposalId")
@@ -107,6 +114,33 @@ export function adaptWorkbenchAgentCliResponse({
           return `${kind || "M"}\t+${additions}\t-${deletions}\t${readString(change, "path")}`;
         }),
       ], createArcReceipt(action, payload, request)).join("\n"));
+    }
+    case "git-arc-mv": {
+      const mappings = readMappings(payload);
+      const additionalClaims = readStringArray(payload, "additionalClaims");
+      const matchedPathCount = readNumber(payload, "matchedPathCount") ?? mappings.length;
+      const remainingMatchCount = readNumber(payload, "remainingMatchCount") ?? 0;
+      const preview = readString(payload, "mode") === "preview";
+      const lines = preview
+        ? [
+          "This command will rename the following files:",
+          ...mappings.map(({ destination, source }) => `${source} -> ${destination}`),
+          ...(remainingMatchCount > 0 ? [
+            `${mappings.length} of ${matchedPathCount} matching paths are included in this batch. ${remainingMatchCount} matching paths remain.`,
+          ] : []),
+          ...(additionalClaims.length ? ["This command will additionally claim:", ...additionalClaims] : []),
+          "Use the command again with --confirm to complete this batch if it looks correct."
+            + (remainingMatchCount > 0 ? " Then preview again to map the remaining paths." : ""),
+        ]
+        : [
+          `Moved ${mappings.length} ${mappings.length === 1 ? "path" : "paths"}.`,
+          ...mappings.map(({ destination, source }) => `${source} -> ${destination}`),
+          ...(remainingMatchCount > 0 ? [
+            `${remainingMatchCount} matching paths remained when this batch ran. Preview again for the next batch.`,
+          ] : []),
+          ...(additionalClaims.length ? ["Additionally claimed:", ...additionalClaims] : []),
+        ];
+      return succeeded(appendArcReceipt(lines, createArcReceipt("mv", payload, request)).join("\n"));
     }
     case "git-arc-diff":
       return succeeded(appendArcReceipt([
@@ -206,6 +240,22 @@ function readString(record: Record<string, unknown> | null | undefined, key: str
 function readStringArray(record: Record<string, unknown> | null | undefined, key: string) {
   const value = record?.[key];
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+function readNumber(record: Record<string, unknown> | null | undefined, key: string) {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : undefined;
+}
+
+function readMappings(record: Record<string, unknown> | null | undefined) {
+  const value = record?.mappings;
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((mapping) => {
+    if (!isRecord(mapping)) return [];
+    const source = readString(mapping, "source");
+    const destination = readString(mapping, "destination");
+    return source && destination ? [{ destination, source }] : [];
+  });
 }
 
 function parseRecord(value: string) {

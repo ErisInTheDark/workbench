@@ -14,6 +14,7 @@ import {
   parseGitArcReceipt,
   type GitArcAction,
 } from "../../git/git-arc-receipts";
+import { parseGitArcMoveArguments, type GitArcMoveArguments } from "../../git/git-arc-move-arguments";
 import { parseUnifiedDiffFileChanges } from "../thread-file-diff";
 import { CommandMatcher } from "./core";
 import { tokenizeCommand } from "./helpers";
@@ -25,6 +26,7 @@ const ARC_MATCHER_IDS = {
   compare: "git-arc.compare",
   continue: "git-arc.continue",
   diff: "git-arc.diff",
+  mv: "git-arc.mv",
   plan: "git-arc.plan",
   propose: "git-arc.propose",
   remove: "git-arc.remove",
@@ -45,6 +47,7 @@ export interface GitCheckpointCommitCommandIntent {
 export interface GitArcCommandIntent {
   action: GitArcAction;
   intentName: string | null;
+  move?: GitArcMoveArguments;
   paths: string[];
   ref: string | null;
 }
@@ -113,6 +116,21 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     stats: { gitCheckpointCreates: 1 },
     summary: "Adopted workspace changes",
   }),
+  CommandMatcher({
+    id: ARC_MATCHER_IDS.mv,
+    match: ({ stage }) => {
+      const intent = parseGitArcCommand(stage.text.trim());
+      if (intent?.action !== "mv") return null;
+      const preview = intent.move?.kind === "regex" && !intent.move.confirm;
+      return CommandMatcher.Result({
+        ongoingSummaryParts: [CommandMatcher.Text(preview ? "Previewing Git arc moves" : "Moving Git arc paths")],
+        remainingCommand: null,
+        stop: true,
+        summaryParts: [CommandMatcher.Text(preview ? "Previewed Git arc moves" : "Moved Git arc paths")],
+        ...(!preview ? { summaryStats: { gitCheckpointCreates: 1 } } : {}),
+      });
+    },
+  }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+remove(?:\s|$)/iu,
     id: ARC_MATCHER_IDS.remove,
@@ -180,6 +198,20 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
   const action = tokens[cursor + 1] as GitArcAction | undefined;
   if (!action || !(action in ARC_MATCHER_IDS)) return null;
   cursor += 2;
+
+  if (action === "mv") {
+    try {
+      const move = parseGitArcMoveArguments(tokens.slice(cursor));
+      const paths = move.kind === "operands"
+        ? move.operands
+        : move.kind === "maps"
+          ? move.mappings.flatMap(({ destination, source }) => [source, destination])
+          : move.roots;
+      return { action, intentName: null, move, paths, ref: null };
+    } catch {
+      return null;
+    }
+  }
 
   let intentName: string | null = null;
   let ref: string | null = null;

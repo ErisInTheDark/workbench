@@ -61,6 +61,24 @@ test("plan and arc requests encode claimed-path defaults and successor refs", ()
     threadId: "thread-one",
   }).success, false);
   assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcMove",
+    cwd: "C:/repo",
+    move: { kind: "operands", operands: ["src/a.ts", "src/b.ts"] },
+    threadId: "thread-one",
+  }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcMove",
+    cwd: "C:/repo",
+    move: { confirm: false, kind: "regex", pattern: "^src/(.+)$", replacement: "tests/$1", roots: ["src"] },
+    threadId: "thread-one",
+  }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcMove",
+    cwd: "C:/repo",
+    move: { kind: "maps", mappings: Array.from({ length: 201 }, (_, index) => ({ destination: `to/${index}`, source: `from/${index}` })) },
+    threadId: "thread-one",
+  }).success, false);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
     action: "compare",
     cwd: "C:/repo",
     threadId: "thread-one",

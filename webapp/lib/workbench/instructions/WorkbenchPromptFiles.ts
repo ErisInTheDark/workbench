@@ -682,6 +682,22 @@ Use \`arc adopt\` only for existing dirty workspace paths that must join the act
 
 \`wb git arc adopt -- <dirty-path> [<dirty-path>...]\`
 
+### Move paths within the active arc
+
+Use \`arc mv\` for approved path moves. It keeps the ordinary Git index unchanged, adds the minimal source and destination claims, and returns a successor ref that you must remember.
+
+\`wb git arc mv <source> <destination>\`
+
+\`wb git arc mv <source>... <existing-destination-directory>\`
+
+\`wb git arc mv --map <source> <destination> [--map <source> <destination>...]\`
+
+Regex mode previews at most 200 sorted mappings. Review the preview, repeat it with \`--confirm\`, then preview again when the command reports more matches.
+
+\`wb git arc mv --regex <pattern> --replace <replacement> -- <root> [<root>...]\`
+
+\`wb git arc mv --confirm --regex <pattern> --replace <replacement> -- <root> [<root>...]\`
+
 ### Remove clean claims
 
 Run \`arc remove\` only when the active arc no longer owns exact claimed entries. Workbench rejects requested entries with working-tree changes, non-exact claims, incompatible HEAD movement, or changed committed content under retained claims. It changes no working-tree or index content.

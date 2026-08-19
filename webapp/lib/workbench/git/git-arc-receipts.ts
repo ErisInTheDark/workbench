@@ -8,11 +8,16 @@ import { z } from "zod";
 const RECEIPT_PREFIX = "Workbench arc receipt: ";
 
 const GitArcReceiptSchema = z.object({
-  action: z.enum(["add", "adopt", "compare", "continue", "diff", "plan", "propose", "remove", "restore", "start"]),
+  action: z.enum(["add", "adopt", "compare", "continue", "diff", "mv", "plan", "propose", "remove", "restore", "start"]),
+  additionalClaims: z.array(z.string().min(1)).optional(),
   claimedPaths: z.array(z.string().min(1)),
   intentName: z.string().min(1).nullable(),
   proposalId: z.string().min(1).optional(),
   ref: z.string().regex(/^[a-f0-9]{7,64}$/iu),
+  matchedPathCount: z.number().int().nonnegative().optional(),
+  mappings: z.array(z.object({ destination: z.string().min(1), source: z.string().min(1) })).optional(),
+  mode: z.enum(["applied", "preview"]).optional(),
+  remainingMatchCount: z.number().int().nonnegative().optional(),
   selectedPaths: z.array(z.string().min(1)).optional(),
   version: z.literal(1),
 });

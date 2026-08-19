@@ -3,7 +3,7 @@
  * - default WorkbenchGitCheckpointController: own scoped plan creation, arc claims, comparison, proposals, and Git commit transitions. Keywords: git, checkpoint, arc, scope, proposal, commit.
  * - GitArcActiveClaim/GitArcProposalStatus: expose resolved active-claim proposal lifecycle for thread-state projection. Keywords: git, arc, claim, proposal, status.
  * - GitCheckpointDirtyPathsError: identify paths that must be clean before an arc operation. Keywords: git, checkpoint, dirty paths.
- * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt: typed controller operation results. Keywords: git, checkpoint, proposal, result.
+ * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt/GitArcMoveResult: typed controller operation results. Keywords: git, checkpoint, arc, move, proposal, result.
  */
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -14,12 +14,14 @@ import { promisify } from "node:util";
 
 import { projectRoot } from "../../project";
 import type {
+  GitArcMoveRequest,
   GitCheckpointFileChange,
   GitCheckpointProposal,
 } from "./checkpoint-contracts";
 import GitArcRegistry, { type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitArcPublishState from "./GitArcPublishState";
 import GitArcProposalCache from "./GitArcProposalCache";
+import GitArcPathMover, { type GitArcResolvedMove } from "./GitArcPathMover";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 
 const execFileAsync = promisify(execFile);
@@ -121,6 +123,14 @@ export interface GitCheckpointProposalReceipt {
   scopePaths: string[];
   sourceCheckpoint: string;
   title: string;
+}
+
+export interface GitArcMoveResult extends GitCheckpointCreateResult {
+  additionalClaims: string[];
+  mappings: GitArcResolvedMove[];
+  matchedPathCount: number;
+  mode: "applied" | "preview";
+  remainingMatchCount: number;
 }
 
 interface ReadCheckpointResult {
@@ -736,6 +746,7 @@ export default class WorkbenchGitCheckpointController {
     scopePaths,
     threadId,
     tree,
+    withPublish,
   }: {
     active: GitArcRegistryEntry;
     harness: GitArcHarness;
@@ -746,6 +757,7 @@ export default class WorkbenchGitCheckpointController {
     scopePaths: string[];
     threadId: string;
     tree: string;
+    withPublish?: (publish: () => Promise<void>) => Promise<void>;
   }): Promise<GitCheckpointCreateResult> {
     const nextMetadata: CheckpointMetadata = {
       amendedFrom: active.checkpointCommit,
@@ -783,12 +795,14 @@ export default class WorkbenchGitCheckpointController {
       successorCheckpoint: checkpointCommit,
       version: 1,
     });
-    await repository.updateRefs([
+    const publish = async () => await repository.updateRefs([
       ...(proposalUpdate ? [proposalUpdate] : []),
       { newValue: checkpointCommit, oldValue: "0".repeat(40), ref: checkpointRef },
       outcomeUpdate,
       ...(registryMutation.update ? [registryMutation.update] : []),
     ]);
+    if (withPublish) await withPublish(publish);
+    else await publish();
     return {
       checkpointCommit,
       checkpointRef,
@@ -1173,6 +1187,63 @@ export default class WorkbenchGitCheckpointController {
     return await this.createActiveSuccessor({
       active, harness, metadata, parent: headMovement.currentHead, registry, repository, scopePaths, threadId, tree,
     });
+  }
+
+  async moveInArc({ cwd, harness: rawHarness, move, threadId }: ControllerInput & { move: GitArcMoveRequest }): Promise<GitArcMoveResult> {
+    const { active, checkpoint, harness, metadata, registry, repository } = await this.requireActiveArc({ cwd, harness: rawHarness, threadId });
+    const parent = await repository.resolveParent(checkpoint.checkpointCommit);
+    const headMovement = await repository.classifyHeadMovement(parent, metadata.scopePaths, checkpoint.checkpointCommit);
+    if (headMovement.kind === "incompatible") {
+      throw new Error("Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
+    }
+    if (headMovement.changedPaths.length) {
+      throw new Error(`Claimed paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
+    }
+
+    const mover = new GitArcPathMover(repository);
+    const resolved = await mover.resolve(move);
+    const candidates = [...new Set(resolved.mappings.flatMap(({ destination, source }) => [source, destination]))]
+      .sort((left, right) => left.length - right.length || left.localeCompare(right));
+    const additionalClaims: string[] = [];
+    for (const candidate of candidates) {
+      if ([...metadata.scopePaths, ...additionalClaims].some((scopePath) => pathIsCoveredBy(candidate, scopePath))) continue;
+      additionalClaims.push(candidate);
+    }
+    const scopePaths = [...metadata.scopePaths, ...additionalClaims].sort((left, right) => left.localeCompare(right));
+
+    if (move.kind === "regex" && !move.confirm) {
+      return {
+        additionalClaims,
+        checkpointCommit: checkpoint.checkpointCommit,
+        checkpointRef: checkpoint.checkpointRef,
+        intentName: metadata.intentName ?? null,
+        kind: "arc",
+        mappings: resolved.mappings,
+        matchedPathCount: resolved.matchedPathCount,
+        mode: "preview",
+        remainingMatchCount: resolved.remainingMatchCount,
+        repoRoot: repository.root,
+        scopePaths: metadata.scopePaths,
+      };
+    }
+
+    const tree = await repository.writeTreeWithPathsFromSource(
+      headMovement.currentHead,
+      checkpoint.checkpointCommit,
+      metadata.scopePaths,
+    );
+    const successor = await this.createActiveSuccessor({
+      active, harness, metadata, parent: headMovement.currentHead, registry, repository, scopePaths, threadId, tree,
+      withPublish: async (publish) => await mover.apply(resolved.mappings, publish),
+    });
+    return {
+      ...successor,
+      additionalClaims,
+      mappings: resolved.mappings,
+      matchedPathCount: resolved.matchedPathCount,
+      mode: "applied",
+      remainingMatchCount: resolved.remainingMatchCount,
+    };
   }
 
   async compare({ cwd, harness: rawHarness, paths: rawPaths, threadId }: ControllerInput & { paths?: string[] }): Promise<GitCheckpointCompareResult> {

@@ -22,12 +22,17 @@ export interface WorkbenchGitArcFeatureOptions {
 }
 
 const CLAIM_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
-  "arcAdd", "arcAdopt", "arcContinue", "arcRemove", "arcStart", "proposalCommit", "proposalCreate", "restore",
+  "arcAdd", "arcAdopt", "arcContinue", "arcMove", "arcRemove", "arcStart", "proposalCommit", "proposalCreate", "restore",
 ]);
 const CLAIM_START_ACTIONS = new Set<GitCheckpointRequest["action"]>(["arcContinue", "arcStart"]);
 
 function sanitizeError(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 500);
+}
+
+function mutatesClaims(request: GitCheckpointRequest) {
+  return CLAIM_MUTATION_ACTIONS.has(request.action)
+    && !(request.action === "arcMove" && request.move.kind === "regex" && !request.move.confirm);
 }
 
 async function readBody(request: http.IncomingMessage) {
@@ -100,7 +105,7 @@ export default class WorkbenchGitArcFeature {
           }));
           throw new Error(`Arc claims overlap active sibling work: ${details.join("; ")}`);
         }
-        if (response.ok && CLAIM_MUTATION_ACTIONS.has(request.action)) {
+        if (response.ok && mutatesClaims(request)) {
           if (CLAIM_START_ACTIONS.has(request.action)) {
             const after = await this.options.getThreadClaimContext(project.project.id, request.harness, request.threadId);
             if (after?.lifecycle.settled) {
@@ -134,6 +139,7 @@ export default class WorkbenchGitArcFeature {
       case "arcContinue": return Response.json(await this.controller.continueArc({ ...common, checkpointCommit: input.checkpointCommit }));
       case "arcAdd": return Response.json(await this.controller.addToArc({ ...common, paths: input.paths }));
       case "arcAdopt": return Response.json(await this.controller.adoptIntoArc({ ...common, paths: input.paths }));
+      case "arcMove": return Response.json(await this.controller.moveInArc({ ...common, move: input.move }));
       case "arcRemove": return Response.json(await this.controller.removeFromArc({ ...common, paths: input.paths }));
       case "compare": return Response.json(await this.controller.compare({
         ...common, ...(input.paths ? { paths: input.paths } : {}),

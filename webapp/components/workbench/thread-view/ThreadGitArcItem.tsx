@@ -11,6 +11,7 @@ import GitArcIcon from "./GitArcIcon";
 import ThreadClaimedFileList from "./ThreadClaimedFileList";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
+import ThreadGitArcMoveList from "./ThreadGitArcMoveList";
 
 const ACTION_LABELS = {
   add: { completed: "Extended", failed: "Failed to extend", inProgress: "Extending" },
@@ -18,6 +19,7 @@ const ACTION_LABELS = {
   compare: { completed: "Compared", failed: "Failed to compare", inProgress: "Comparing" },
   continue: { completed: "Continued", failed: "Failed to continue", inProgress: "Continuing" },
   diff: { completed: "Diffed", failed: "Failed to diff", inProgress: "Diffing" },
+  mv: { completed: "Moved", failed: "Failed to move", inProgress: "Moving" },
   plan: { completed: "Planned", failed: "Failed to plan", inProgress: "Planning" },
   remove: { completed: "Reduced", failed: "Failed to reduce", inProgress: "Reducing" },
   restore: { completed: "Restored", failed: "Failed to restore", inProgress: "Restoring" },
@@ -26,6 +28,20 @@ const ACTION_LABELS = {
 
 function actionState(outcome: ThreadCommandExecutionOutcome) {
   return outcome === "completed" ? "completed" : outcome === "inProgress" ? "inProgress" : "failed";
+}
+
+function attemptedMoveMappings(commandIntent: GitArcCommandIntent) {
+  const move = commandIntent.move;
+  if (!move || move.kind === "regex") return [];
+  if (move.kind === "maps") return move.mappings;
+  if (move.operands.length === 2) {
+    return [{ destination: move.operands[1]!, source: move.operands[0]! }];
+  }
+  const destination = move.operands.at(-1)!;
+  return move.operands.slice(0, -1).map((source) => ({
+    destination: `${destination.replace(/[\\/]+$/u, "")}/${source.split(/[\\/]/u).at(-1)}`,
+    source,
+  }));
 }
 
 export default function ThreadGitArcItem({
@@ -71,11 +87,18 @@ export default function ThreadGitArcItem({
     );
   }
   const state = actionState(outcome);
-  const labels = ACTION_LABELS[commandIntent.action];
+  const movePreview = commandIntent.action === "mv" && (
+    receipt?.mode === "preview"
+    || (!receipt && commandIntent.move?.kind === "regex" && !commandIntent.move.confirm)
+  );
+  const labels = movePreview
+    ? { completed: "Previewed", failed: "Failed to preview moves", inProgress: "Previewing moves" }
+    : ACTION_LABELS[commandIntent.action];
   const planName = receipt?.intentName ?? commandIntent.intentName ?? "Git arc";
   const ref = receipt?.ref ?? commandIntent.ref;
   const claimedPaths = receipt?.claimedPaths ?? [];
   const selectedPaths = receipt?.selectedPaths ?? commandIntent.paths;
+  const moveMappings = commandIntent.action === "mv" ? receipt?.mappings ?? attemptedMoveMappings(commandIntent) : [];
   const primaryPaths = commandIntent.action === "plan"
     ? claimedPaths.length ? claimedPaths : selectedPaths
     : commandIntent.action === "add" || commandIntent.action === "adopt" || commandIntent.action === "remove" || commandIntent.action === "restore"
@@ -98,7 +121,13 @@ export default function ThreadGitArcItem({
         leadingLabel={`${commandIntent.action} Git arc`}
         summary={(
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-            <span className={state === "failed" ? "text-[color:var(--danger)]" : "text-text"}>{labels[state]}</span>
+            <span className={state === "failed" ? "text-[color:var(--danger)]" : "text-text"}>
+              {commandIntent.action === "mv" && state === "completed"
+                ? movePreview
+                  ? `Previewed ${moveMappings.length} ${moveMappings.length === 1 ? "move" : "moves"}`
+                  : `Moved ${moveMappings.length} ${moveMappings.length === 1 ? "path" : "paths"}`
+                : labels[state]}
+            </span>
             <span className="min-w-0 truncate font-medium text-text">{planName}</span>
             {ref ? <span className="font-mono text-[0.86em] text-muted">{ref.slice(0, 8)}</span> : null}
             {durationMs !== null ? <ThreadDurationText durationMs={durationMs} /> : null}
@@ -106,6 +135,14 @@ export default function ThreadGitArcItem({
         )}
         summaryClassName="text-[0.82em] leading-[1.45] text-muted"
       >
+        {commandIntent.action === "mv" ? (
+          <ThreadGitArcMoveList
+            mappings={moveMappings}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            workspaceRoots={workspaceRoots}
+          />
+        ) : null}
         {operationDetails ? <div>{operationDetails}</div> : null}
         {primaryPaths.length ? (
           <ThreadClaimedFileList

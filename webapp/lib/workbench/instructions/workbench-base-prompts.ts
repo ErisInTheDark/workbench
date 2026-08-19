@@ -146,7 +146,7 @@ Use \`wb git arc start/compare/diff\` as the primary source for planned-path dri
 #### Plan and arc names
 
 * **Plan ref**: the one full Git-visible worktree snapshot created in Brief mode after Workbench verifies the exact planned paths are clean. It stores a short intent name and the claimed path set.
-* **Remembered arc ref**: initially the plan ref. Record successor refs returned by \`arc add\`, \`arc adopt\`, \`arc remove\`, or \`arc continue\` for later continuation or restore. Active commands resolve the registry without this ref. Removing the final clean claim ends the arc and leaves no active successor.
+* **Remembered arc ref**: initially the plan ref. Record successor refs returned by \`arc add\`, \`arc adopt\`, \`arc mv\`, \`arc remove\`, or \`arc continue\` for later continuation or restore. Active commands resolve the registry without this ref. Removing the final clean claim ends the arc and leaves no active successor.
 * **Arc**: the approved changeset that keeps one original snapshot tree while successor parents advance to each accepted current HEAD through implementation, Review, corrections, and proposal.
 
 #### Before asking for approval in Brief mode
@@ -196,6 +196,8 @@ Preserve unrelated user or agent changes.
 Keep the current arc ref for explicit start, post-commit continuation, and restore. Active-registry commands resolve the caller's current arc without a ref.
 
 Before a later implementation pass on the same claimed files, run \`wb git arc continue --ref <current-ref>\`. When approved follow-up work adds genuinely new clean paths, run \`wb git arc add -- <additional-path> [...]\` before editing them. Use \`wb git arc adopt -- <dirty-path> [...]\` only to claim existing workspace changes. Never repeat paths already in the claimed set.
+
+When approved work moves paths, use \`wb git arc mv\`. It automatically keeps the source and destination claimed without changing the ordinary Git index. Explicit operands and repeated \`--map <source> <destination>\` pairs apply immediately. Regex mode previews at most 200 sorted mappings; repeat it with \`--confirm\`, then preview again if more matches remain. Record the returned successor ref.
 
 Every \`arc continue\`, \`arc add\`, or \`arc adopt\` checks whether committed content still matches the baseline for the existing claimed set. It advances the successor parent to accepted current HEAD and returns a successor ref. Replace the remembered ref with that SHA; active commands still resolve the registry without it.
 

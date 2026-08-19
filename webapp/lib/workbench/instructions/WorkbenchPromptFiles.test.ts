@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  buildWorkbenchGitInstructions,
   listWorkbenchInstructionMechanics,
 } from "./WorkbenchPromptFiles.ts";
 
@@ -27,4 +28,19 @@ test("blank and durable drafts expose no managed-thread mechanics", () => {
     assert.equal(available.has("thread-title"), false);
     assert.equal(available.has("thread-status"), false);
   }
+});
+
+test("managed Git instructions describe the concise arc move workflow", () => {
+  const instructions = buildWorkbenchGitInstructions({
+    harness: "codex",
+    threadId: "thread-1",
+    workbenchOrigin: "http://localhost",
+  });
+  assert(instructions);
+  assert.match(instructions, /wb git arc mv <source> <destination>/u);
+  assert.match(instructions, /--map <source> <destination>/u);
+  assert.match(instructions, /previews at most 200 sorted mappings/u);
+  assert.match(instructions, /repeat it with `--confirm`/u);
+  assert.match(instructions, /minimal source and destination claims/u);
+  assert.doesNotMatch(instructions, /journal|process death|rollback failure/iu);
 });

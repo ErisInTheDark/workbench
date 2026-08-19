@@ -13,6 +13,7 @@ import {
   parseGitCheckpointCompareOutput,
   parseGitCheckpointCommitCommand,
   parseGitCheckpointProposalId,
+  parseGitArcCommand,
   parseWorkbenchSubagentCommand,
 } from "./thread-command-matchers.ts";
 
@@ -342,6 +343,38 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
   });
   assert.equal(adoption.claimedBy, "git-arc.adopt");
   assert.equal(adoption.summaryText, "Adopted workspace changes");
+
+  const movePreview = getThreadCommandDisplay({
+    command: "wb git arc mv --regex ^src/(.+)$ --replace tests/$1 -- src",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(movePreview.claimedBy, "git-arc.mv");
+  assert.equal(movePreview.summaryText, "Previewed Git arc moves");
+  assert.equal(movePreview.ongoingSummaryText, "Previewing Git arc moves");
+
+  const moveApplied = getThreadCommandDisplay({
+    command: "wb git arc mv src/one.ts tests/src/one.ts",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(moveApplied.claimedBy, "git-arc.mv");
+  assert.equal(moveApplied.summaryText, "Moved Git arc paths");
+  assert.deepEqual(parseGitArcCommand("wb git arc mv --map src/one.ts tests/one.ts --map src/two.ts tests/two.ts"), {
+    action: "mv",
+    intentName: null,
+    move: {
+      kind: "maps",
+      mappings: [
+        { destination: "tests/one.ts", source: "src/one.ts" },
+        { destination: "tests/two.ts", source: "src/two.ts" },
+      ],
+    },
+    paths: ["src/one.ts", "tests/one.ts", "src/two.ts", "tests/two.ts"],
+    ref: null,
+  });
 
   const removal = getThreadCommandDisplay({
     command: "wb git arc remove -- src/old.ts",

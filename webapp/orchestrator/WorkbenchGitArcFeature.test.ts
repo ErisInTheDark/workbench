@@ -80,3 +80,29 @@ test("successful Git responses survive a failed thread claim refresh", async (co
   assert.equal(reported.mock.callCount(), 1);
   assert.match(String(reported.mock.calls[0]?.arguments[0]), /operation succeeded.*projection exploded/u);
 });
+
+test("arc move previews do not refresh claims while applied moves do", async () => {
+  let refreshCount = 0;
+  const feature = new WorkbenchGitArcFeature({
+    getThreadClaimContext: async () => null,
+    refreshThreadClaim: async () => { refreshCount += 1; },
+    resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+  Object.defineProperty(feature, "dispatch", { value: async () => Response.json({ ok: true }) });
+
+  const common = { cwd: "C:/Git/Project", harness: "codex", threadId: "thread-one" } as const;
+  assert.equal((await feature.executeRequest({
+    action: "arcMove",
+    move: { confirm: false, kind: "regex", pattern: "^src/(.+)$", replacement: "tests/$1", roots: ["src"] },
+    ...common,
+  })).status, 200);
+  assert.equal(refreshCount, 0);
+
+  assert.equal((await feature.executeRequest({
+    action: "arcMove",
+    move: { kind: "operands", operands: ["src/a.ts", "tests/a.ts"] },
+    ...common,
+  })).status, 200);
+  assert.equal(refreshCount, 1);
+});

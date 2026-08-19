@@ -402,6 +402,104 @@ test("arc cards keep main evidence open and nest the complete claimed set", () =
   assert.equal(compareHtml.match(/open=""/gu)?.length, 1);
 });
 
+test("arc move cards distinguish previewed mappings from applied mappings", () => {
+  const ref = "c".repeat(40);
+  const move = {
+    confirm: false,
+    kind: "regex" as const,
+    pattern: String.raw`^src/(?!tests/)(.+\.test\.tsx?)$`,
+    replacement: "src/tests/$1",
+    roots: ["src"],
+  };
+  const mappings = [{
+    destination: "src/tests/widgets/widget.test.tsx",
+    source: "src/widgets/widget.test.tsx",
+  }];
+  const previewHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: { action: "mv", intentName: null, move, paths: ["src"], ref: null },
+    durationMs: 320,
+    outcome: "completed",
+    receipt: {
+      action: "mv",
+      additionalClaims: ["src/widgets/widget.test.tsx", "src/tests/widgets/widget.test.tsx"],
+      claimedPaths: ["src/existing.ts"],
+      intentName: "Move tests",
+      mappings,
+      matchedPathCount: 3,
+      mode: "preview",
+      ref,
+      remainingMatchCount: 2,
+      version: 1,
+    },
+  }));
+
+  assert.match(previewHtml, /Previewed 1 move/u);
+  assert.match(previewHtml, /src\/widgets\/widget\.test\.tsx/u);
+  assert.match(previewHtml, /tests\/widgets\/widget\.test\.tsx/u);
+  assert.match(previewHtml, /d="M5 12h14"/u);
+  assert.match(previewHtml, /d="m12 5 7 7-7 7"/u);
+  assert.match(previewHtml, /d="m12 16 4-4-4-4"/u);
+  assert.doesNotMatch(previewHtml, /Would move|Batch|matching paths|Would additionally claim/u);
+
+  const appliedHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: { action: "mv", intentName: null, move: { ...move, confirm: true }, paths: ["src"], ref: null },
+    durationMs: 410,
+    outcome: "completed",
+    receipt: {
+      action: "mv",
+      additionalClaims: ["src/widgets/widget.test.tsx", "src/tests/widgets/widget.test.tsx"],
+      claimedPaths: ["src/existing.ts", "src/tests/widgets/widget.test.tsx", "src/widgets/widget.test.tsx"],
+      intentName: "Move tests",
+      mappings,
+      matchedPathCount: 3,
+      mode: "applied",
+      ref,
+      remainingMatchCount: 2,
+      version: 1,
+    },
+  }));
+
+  assert.match(appliedHtml, /Moved 1 path/u);
+  assert.match(appliedHtml, /3 claimed files/u);
+  assert.doesNotMatch(appliedHtml, />Moved<|Batch|matching paths|Additionally claimed/u);
+});
+
+test("failed regex and explicit arc move cards use distinct truthful labels", () => {
+  const previewFailure = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: {
+      action: "mv",
+      intentName: null,
+      move: { confirm: false, kind: "regex", pattern: "[", replacement: "tests/$1", roots: ["src"] },
+      paths: ["src"],
+      ref: null,
+    },
+    durationMs: 5,
+    failureReason: "The regex is invalid.",
+    outcome: "failed",
+    receipt: null,
+  }));
+  assert.match(previewFailure, /Failed to preview moves/u);
+  assert.doesNotMatch(previewFailure, /Failed to move/u);
+
+  const appliedFailure = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: {
+      action: "mv",
+      intentName: null,
+      move: { kind: "operands", operands: ["src/one.ts", "tests/one.ts"] },
+      paths: ["src/one.ts", "tests/one.ts"],
+      ref: null,
+    },
+    durationMs: 5,
+    failureReason: "The destination already exists.",
+    outcome: "failed",
+    receipt: null,
+  }));
+  assert.match(appliedFailure, /Failed to move/u);
+  assert.match(appliedFailure, /src\/one\.ts/u);
+  assert.match(appliedFailure, /tests\/one\.ts/u);
+  assert.doesNotMatch(appliedFailure, /Attempted to restore/u);
+});
+
 test("arc cards omit empty filler and describe failed claims precisely", () => {
   const ref = "a".repeat(40);
   const startHtml = renderToStaticMarkup(createElement(ThreadTurnDetails, {
