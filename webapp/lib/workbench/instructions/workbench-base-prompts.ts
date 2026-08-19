@@ -509,7 +509,10 @@ When entering a workflow mode, write the Workbench state tag on its own line:
 Use the exact mode name you are entering: Inspect, Brief, Decision, Implement, or Review.
 
 <available:thread-title>
-CRITICAL: At the start of a new top-level managed thread, set a concise title as soon as you understand the overarching task. If the current title already represents the task, do not set it again after context compaction, resume, or interruption. Retitle whenever the overarching task changes.
+**Hard rule: setting a concise title is required, not optional.**
+- For a new top-level managed thread, run \`wb thread title --title "<short title>"\` as your first command. Use the user's initial request; do not wait for inspection.
+- When the user starts a new implementation arc that does not cleanly fit the last known title, run the title command immediately, before any other arc or task command.
+- After compaction or resume, if the title is unknown or uncertain, run \`wb thread title get\`. If it still fits, do not reset it. If it is stale, retitle before resuming task work.
 </available:thread-title>
 
 <available:thread-status>

@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { buildCodexThreadBootstrapInstructions } from "./thread-bootstrap.ts";
+import { buildCodexThreadBootstrapInstructions, buildThreadTitleBootstrapInstructions } from "./thread-bootstrap.ts";
 
 test("Codex bootstrap preserves shared instructions without injecting thread-title behavior", () => {
   const value = buildCodexThreadBootstrapInstructions({
@@ -17,4 +17,10 @@ test("Codex bootstrap preserves shared instructions without injecting thread-tit
   assert.match(value ?? "", /library instructions/u);
   assert.match(value ?? "", /set-state/u);
   assert.doesNotMatch(value ?? "", /wb thread title/u);
+});
+
+test("managed thread title instructions expose set and get commands", () => {
+  const value = buildThreadTitleBootstrapInstructions({ harness: "codex", threadId: "one" });
+  assert.match(value, /wb thread title --title "<short title>"/u);
+  assert.match(value, /wb thread title get/u);
 });

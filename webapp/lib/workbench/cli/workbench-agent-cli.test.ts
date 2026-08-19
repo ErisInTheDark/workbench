@@ -82,10 +82,21 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   ], { callerThreadId: "thread/1", cwd: "C:/workspace" });
   assert.equal(title.kind, "request");
   assert.deepEqual(title.request, {
-    body: { callerThreadId: "thread/1", cwd: "C:/workspace", title: "A title" },
+    body: { action: "set", callerThreadId: "thread/1", cwd: "C:/workspace", title: "A title" },
     method: "POST",
     path: "/api/thread-title",
     responseKind: "thread-title",
+  });
+
+  const titleGet = await parseWorkbenchAgentCliCommand([
+    "thread", "title", "get",
+  ], { callerThreadId: "thread/1", cwd: "C:/workspace" });
+  assert.equal(titleGet.kind, "request");
+  assert.deepEqual(titleGet.request, {
+    body: { action: "get", callerThreadId: "thread/1", cwd: "C:/workspace" },
+    method: "POST",
+    path: "/api/thread-title",
+    responseKind: "thread-title-get",
   });
 
   const recall = await parseWorkbenchAgentCliCommand([
@@ -811,6 +822,11 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     exitCode: 0,
     stderr: "",
     stdout: "Thread title set: Clean output\n",
+  });
+  assert.deepEqual(adapt("thread-title-get", { title: "Current task" }), {
+    exitCode: 0,
+    stderr: "",
+    stdout: "Thread title: Current task\n",
   });
   const planRef = "a".repeat(40);
   const successorRef = "b".repeat(40);

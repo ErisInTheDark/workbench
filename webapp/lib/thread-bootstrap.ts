@@ -3,7 +3,7 @@
  * - normalizeThreadTitle: trim and normalize candidate thread titles into a short UI-safe value. Keywords: thread title, normalize, truncate.
  * - MODE_STATE_TAG_INSTRUCTIONS: shared injected guidance for agent-visible operating mode changes. Keywords: mode, state tag, thread markdown.
  * - WORKBENCH_FILE_LINK_INSTRUCTIONS: shared injected guidance for agent-visible clickable file links. Keywords: thread markdown, file links, paths.
- * - buildThreadTitleBootstrapInstructions: create hidden bootstrap instructions for setting a thread title through wb. Keywords: thread title, instructions, cli, bootstrap.
+ * - buildThreadTitleBootstrapInstructions: create managed-thread CLI instructions for setting and reading a thread title through wb. Keywords: thread title, instructions, cli, bootstrap.
  * - buildCodexThreadBootstrapInstructions: compose optional Codex agent activation/definition content together with the shared title bootstrap instructions. Keywords: codex, agent, developer instructions, bootstrap.
  */
 import type { WorkbenchAgentDefinition, WorkbenchHarness } from "./types";
@@ -104,6 +104,8 @@ export function buildThreadTitleBootstrapInstructions(_context: {
 ## Workbench Thread Title CLI
 
 \`wb thread title --title "<short title>"\`
+
+\`wb thread title get\`
 
 `.trimStart();
 }

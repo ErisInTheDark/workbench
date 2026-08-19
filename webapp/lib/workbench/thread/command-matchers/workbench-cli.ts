@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkbenchSubagentCommand/parseWorkbenchSubagentCommand: parse semantic subagent actions, create metadata, ordered child thread IDs, and messages from wb commands. Keywords: workbench, cli, subagent, parse, create, metadata, thread ids, message.
+ * - WorkbenchThreadTitleCommand/parseWorkbenchThreadTitleCommand/isWorkbenchThreadTitleSetMatcherClaim: parse title set/get actions and identify standalone title-set displays. Keywords: workbench, cli, thread, title, parse, matcher.
  * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb title, subagent, and reload commands. Keywords: workbench, cli, title, subagent, reload.
  */
 import type { CommandAction } from "../../../codex/generated/app-server/v2/CommandAction";
@@ -19,6 +20,10 @@ export interface WorkbenchSubagentCommand {
   title: string | null;
   toParent: boolean;
 }
+
+export type WorkbenchThreadTitleCommand =
+  | { action: "get" }
+  | { action: "set"; title: string };
 
 function readValue(command: string, startIndex: number) {
   let index = startIndex;
@@ -100,20 +105,53 @@ export function parseWorkbenchSubagentCommand(
   return parseSingleWorkbenchSubagentCommand(command);
 }
 
+function parseSingleWorkbenchThreadTitleCommand(command: string): WorkbenchThreadTitleCommand | null {
+  const normalized = command.trim();
+  if (/^wb(?:\.cmd)?\s+thread\s+title\s+get(?:\s|$)/iu.test(normalized)) return { action: "get" };
+  if (!/^wb(?:\.cmd)?\s+thread\s+title(?:\s|$)/iu.test(normalized)) return null;
+  const title = readFlagValue(normalized, "title");
+  return title ? { action: "set", title } : null;
+}
+
+export function parseWorkbenchThreadTitleCommand(
+  command: string,
+  commandActions: readonly CommandAction[] = [],
+): WorkbenchThreadTitleCommand | null {
+  for (const action of commandActions) {
+    const parsedAction = parseSingleWorkbenchThreadTitleCommand(action.command);
+    if (parsedAction) return parsedAction;
+  }
+  return parseSingleWorkbenchThreadTitleCommand(command);
+}
+
+export function isWorkbenchThreadTitleSetMatcherClaim(claimedBy: string | null | undefined) {
+  return claimedBy?.split(",").includes("workbench-cli.thread-title-set") ?? false;
+}
+
 export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
-    id: "workbench-cli.thread-title",
+    id: "workbench-cli.thread-title-set",
     match: ({ stage, summaryParts }) => {
-      if (summaryParts.length || !/^wb(?:\.cmd)?\s+thread\s+title(?:\s|$)/iu.test(stage.text.trim())) {
-        return null;
-      }
+      const command = parseSingleWorkbenchThreadTitleCommand(stage.text);
+      if (summaryParts.length || command?.action !== "set") return null;
       return CommandMatcher.Result({
-        hide: true,
-        omitFromDisplay: true,
-        ongoingSummaryParts: [],
+        ongoingSummaryParts: [CommandMatcher.Text(`Setting task: ${command.title}`)],
         remainingCommand: null,
         stop: true,
-        summaryParts: [],
+        summaryParts: [CommandMatcher.Text(`Task: ${command.title}`)],
+      });
+    },
+  }),
+  CommandMatcher({
+    id: "workbench-cli.thread-title-get",
+    match: ({ stage, summaryParts }) => {
+      const command = parseSingleWorkbenchThreadTitleCommand(stage.text);
+      if (summaryParts.length || command?.action !== "get") return null;
+      return CommandMatcher.Result({
+        ongoingSummaryParts: [CommandMatcher.Text("Checking thread title")],
+        remainingCommand: null,
+        stop: true,
+        summaryParts: [CommandMatcher.Text("Checked thread title")],
       });
     },
   }),

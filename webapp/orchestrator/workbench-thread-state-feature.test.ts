@@ -226,3 +226,54 @@ test("deep provider pages serialize across projects while both newest pages star
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });
 });
+
+test("managed title reads use the validated provider thread without mirrored title state", async () => {
+  const requests: Array<{ harness: string; method: string; params: unknown }> = [];
+  const feature = new WorkbenchThreadStateFeature({
+    getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
+    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    listSubagents: async () => ({ subagents: [] }),
+    projectState: {
+      getCurrentUpdate: () => null,
+      handleRequest: async () => ({ accepted: true }),
+      observe: () => () => undefined,
+    },
+    publish: () => undefined,
+    requestHarness: async (harness, request) => {
+      requests.push({ harness, method: request.method, params: request.params });
+      if (harness !== "codex") return { id: request.id ?? null, error: { code: -32000, message: "Not found" } };
+      return {
+        id: request.id ?? null,
+        result: {
+          thread: {
+            cwd: "C:/workspace",
+            id: "thread-one",
+            name: "Current task",
+            preview: "Initial request",
+          },
+        },
+      };
+    },
+    resolveProjectById: async () => ({ id: "project", rootPath: "C:/workspace" }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: "C:/workspace" } }),
+    storageRoot: "C:/storage",
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+
+  const response = await feature.handleManagedThreadRequest({
+    id: 1,
+    method: "workbench/thread/title",
+    params: { action: "get", callerThreadId: "thread-one", cwd: "C:/workspace" },
+  });
+
+  assert.deepEqual(response, {
+    id: 1,
+    result: { harness: "codex", threadId: "thread-one", title: "Current task" },
+  });
+  assert.deepEqual(requests, [{
+    harness: "codex",
+    method: "thread/read",
+    params: { cwd: "C:/workspace", includeTurns: true, threadId: "thread-one" },
+  }]);
+  await feature.dispose();
+});

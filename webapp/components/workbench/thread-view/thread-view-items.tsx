@@ -41,7 +41,9 @@ import {
   isGitCheckpointCompareMatcherClaim,
   isGitCheckpointDiffMatcherClaim,
   isThreadContextMatcherClaim,
+  isWorkbenchThreadTitleSetMatcherClaim,
   parseWorkbenchSubagentCommand,
+  parseWorkbenchThreadTitleCommand,
   parseBrowseSequenceCommandOutput,
   parseGitCheckpointCommitCommand,
   parseGitCheckpointCompareOutput,
@@ -83,6 +85,7 @@ import ThreadSubagentIncomingMessage from "./ThreadSubagentIncomingMessage";
 import ThreadSubagentMessageItem from "./ThreadSubagentMessageItem";
 import ThreadSubagentStopItem from "./ThreadSubagentStopItem";
 import ThreadSubagentWaitItem from "./ThreadSubagentWaitItem";
+import ThreadTitleCommandItem from "./ThreadTitleCommandItem";
 import ThreadUserImage from "./ThreadUserImage";
 import ThreadWebSearchItem, {
   ThreadWebSearchSequence,
@@ -1383,7 +1386,8 @@ type CommandSequenceRenderSegment =
   | { item: CommandItem; kind: "gitArc" }
   | { item: CommandItem; kind: "subagent" }
   | { group: ThreadSubagentWaitRenderGroup<CommandItem>; kind: "subagentWait" }
-  | { item: CommandItem; kind: "threadContext" };
+  | { item: CommandItem; kind: "threadContext" }
+  | { item: CommandItem; kind: "threadTitle"; title: string };
 
 function buildCommandSequenceRenderSegments({
   items,
@@ -1443,6 +1447,15 @@ function buildCommandSequenceRenderSegments({
       projectRootPath,
       workspaceRoots,
     });
+    const threadTitleCommand = isWorkbenchThreadTitleSetMatcherClaim(commandDisplay.claimedBy)
+      ? parseWorkbenchThreadTitleCommand(commandDisplay.unwrappedCommand, item.commandActions)
+      : null;
+    if (threadTitleCommand?.action === "set") {
+      flushPendingCommands();
+      flushPendingSubagentWaits();
+      segments.push({ item, kind: "threadTitle", title: threadTitleCommand.title });
+      continue;
+    }
     if (getGitArcMatcherAction(commandDisplay.claimedBy)) {
       flushPendingCommands();
       flushPendingSubagentWaits();
@@ -2187,6 +2200,13 @@ function ThreadCommandSequence ({
             )}
             threadCwdPath={threadCwdPath}
             workspaceRoots={workspaceRoots}
+          />
+        ) : segment.kind === "threadTitle" ? (
+          <ThreadTitleCommandItem
+            failureText={segment.item.aggregatedOutput}
+            key={`thread-title:${segment.item.id}`}
+            outcome={getThreadCommandExecutionOutcome(segment.item.status, segment.item.exitCode)}
+            title={segment.title}
           />
         ) : segment.kind === "gitArc" || segment.kind === "subagent" ? (
           <ThreadCommandExecutionDetails

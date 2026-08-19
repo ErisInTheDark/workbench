@@ -34,6 +34,15 @@ test("blank and durable drafts expose no managed-thread mechanics", () => {
   }
 });
 
+test("default workflow requires title commands before new-thread and new-arc work", () => {
+  assert.match(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, /setting a concise title is required, not optional/u);
+  assert.match(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, /as your first command/u);
+  assert.match(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, /do not wait for inspection/u);
+  assert.match(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, /before any other arc or task command/u);
+  assert.match(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, /wb thread title get/u);
+  assert.match(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, /retitle before resuming task work/u);
+});
+
 test("managed Git instructions describe the concise arc move workflow", () => {
   const instructions = buildWorkbenchGitInstructions({
     harness: "codex",

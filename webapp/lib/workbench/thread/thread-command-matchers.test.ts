@@ -15,6 +15,7 @@ import {
   parseGitCheckpointProposalId,
   parseGitArcCommand,
   parseWorkbenchSubagentCommand,
+  parseWorkbenchThreadTitleCommand,
 } from "./thread-command-matchers.ts";
 
 const PROJECT_ROOT = "C:/git/web/workbench";
@@ -146,6 +147,34 @@ test("Workbench subagent commands share one semantic parser", () => {
   assert.equal(parentMessageDisplay.summaryText, "Messaged parent");
   assert.equal(parentMessageDisplay.ongoingSummaryText, "Messaging parent");
 
+});
+
+test("Workbench thread title commands distinguish standalone sets from grouped reads", () => {
+  assert.deepEqual(parseWorkbenchThreadTitleCommand('wb thread title --title "Trace cache invalidation"'), {
+    action: "set",
+    title: "Trace cache invalidation",
+  });
+  assert.deepEqual(parseWorkbenchThreadTitleCommand("wb thread title get"), { action: "get" });
+
+  const titleSet = getThreadCommandDisplay({
+    command: 'wb thread title --title "Trace cache invalidation"',
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(titleSet.claimedBy, "workbench-cli.thread-title-set");
+  assert.equal(titleSet.omitFromDisplay, false);
+  assert.equal(titleSet.summaryText, "Task: Trace cache invalidation");
+
+  const titleGet = getThreadCommandDisplay({
+    command: "wb thread title get",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(titleGet.claimedBy, "workbench-cli.thread-title-get");
+  assert.equal(titleGet.summaryText, "Checked thread title");
+  assert.equal(titleGet.ongoingSummaryText, "Checking thread title");
 });
 
 test("Workbench subagent create commands expose metadata through PowerShell wrappers", () => {

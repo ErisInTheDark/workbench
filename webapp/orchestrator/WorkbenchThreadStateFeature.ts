@@ -161,6 +161,21 @@ export default class WorkbenchThreadStateFeature {
       const params = asRecord(request.params) ?? {};
       const resolved = await this.resolveManagedThread(params);
       if (request.method === "workbench/thread/title") {
+        if (params.action === "get") {
+          return {
+            id,
+            result: {
+              harness: resolved.harness,
+              threadId: resolved.thread.id,
+              title: resolveWorkbenchThreadTitle({
+                id: resolved.thread.id,
+                name: resolved.thread.name,
+                preview: resolved.thread.preview,
+              }),
+            },
+          };
+        }
+        if (params.action !== "set") throw new Error("A thread title action is required.");
         const title = normalizeThreadTitle(typeof params.title === "string" ? params.title : null);
         if (!title) throw new Error("--title requires non-empty text.");
         const response = await this.context.requestHarness(resolved.harness, { id, method: "thread/name/set", params: { cwd: resolved.cwd, name: title, threadId: resolved.thread.id } });

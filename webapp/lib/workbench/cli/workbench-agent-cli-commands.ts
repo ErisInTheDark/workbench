@@ -48,6 +48,7 @@ export type WorkbenchAgentCliResponseKind =
   | "subagent-list"
   | "subagent-settle"
   | "thread-status"
+  | "thread-title-get"
   | "thread-title";
 
 export interface WorkbenchAgentCliRequest {
@@ -405,13 +406,22 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
+    description: "Get the current title for a managed thread.",
+    helpGroups: ["thread"],
+    words: ["thread", "title", "get"],
+    usage: "wb thread title get",
+    async build({ callerThreadId, cwd }) {
+      return post("/api/thread-title", { action: "get", callerThreadId: requireCallerThreadId(callerThreadId), cwd }, "thread-title-get");
+    },
+  },
+  {
     description: "Set a concise title for a managed thread.",
     helpGroups: ["thread"],
     words: ["thread", "title"],
     usage: "wb thread title --title <text>",
     async build({ args, callerThreadId, cwd }) {
       const flags = new ParsedFlags(args, { values: ["--title"] });
-      return post("/api/thread-title", { callerThreadId: requireCallerThreadId(callerThreadId), cwd, title: flags.required("--title") }, "thread-title");
+      return post("/api/thread-title", { action: "set", callerThreadId: requireCallerThreadId(callerThreadId), cwd, title: flags.required("--title") }, "thread-title");
     },
   },
   {
@@ -828,6 +838,7 @@ const ROOT_HELP_COMMAND_ORDER = [
   "subagent stop",
   "subagent message",
   "thread title",
+  "thread title get",
   "thread recall",
   "thread recall search",
   "thread recall expand",
@@ -864,7 +875,7 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     words: ["subagent"],
   },
   {
-    commandOrder: ["thread title", "thread recall", "thread recall search", "thread recall expand"],
+    commandOrder: ["thread title", "thread title get", "thread recall", "thread recall search", "thread recall expand"],
     key: "thread",
     usage: "wb thread <command> [options]",
     words: ["thread"],

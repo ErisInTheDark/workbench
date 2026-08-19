@@ -63,6 +63,8 @@ export function adaptWorkbenchAgentCliResponse({
   }
 
   switch (request.responseKind) {
+    case "thread-title-get":
+      return succeeded(`Thread title: ${readString(payload, "title") || "untitled"}`);
     case "thread-title":
       return succeeded(`Thread title set: ${readString(payload, "title") || "untitled"}`);
     case "thread-status":

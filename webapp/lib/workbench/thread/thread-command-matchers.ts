@@ -10,7 +10,7 @@
  * - isBrowseCommandMatcherClaim/parseBrowseSequenceCommandOutput: detect and parse wb Browse command output. Keywords: browse, sequence, command, cli.
  * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: detect arc matcher ids for specialized rendering. Keywords: thread, command, git, arc, compare, diff, commit.
  * - isThreadContextMatcherClaim: detect thread context endpoint commands for dedicated disclosure rendering. Keywords: thread, context, disclosure.
- * - parseWorkbenchSubagentCommand: parse semantic wb subagent actions for specialized thread rendering. Keywords: workbench, subagent, command, parse.
+ * - parseWorkbenchSubagentCommand/parseWorkbenchThreadTitleCommand/isWorkbenchThreadTitleSetMatcherClaim: parse semantic wb subagent/title actions and identify standalone title sets. Keywords: workbench, subagent, title, command, parse.
  * - parseGitArcCommand/parseGitArcReceipt/parseGitCheckpointCommitCommand/parseGitCheckpointCompareOutput/parseGitCheckpointProposalId: parse arc commands, receipts, comparison, and proposal output. Keywords: git, arc, checkpoint, compare, proposal.
  * - parseGitCheckpointDiffArtifactId: parse compact checkpoint diff output for a stored full-diff artifact id. Keywords: checkpoint, diff, artifact.
  * - parseGitCheckpointDiffOutput: parse checkpoint diff command output into file-change display entries. Keywords: checkpoint, diff, file change.
@@ -81,7 +81,9 @@ import type {
     ThreadCommandSummaryStats,
 } from "./command-matchers/types";
 import {
+    isWorkbenchThreadTitleSetMatcherClaim,
     parseWorkbenchSubagentCommand,
+    parseWorkbenchThreadTitleCommand,
     WORKBENCH_CLI_COMMAND_MATCHERS,
 } from "./command-matchers/workbench-cli";
 
@@ -215,11 +217,12 @@ export {
     isGitCheckpointCompareMatcherClaim,
     isGitCheckpointDiffMatcherClaim,
     isThreadContextMatcherClaim,
+    isWorkbenchThreadTitleSetMatcherClaim,
     parseBrowseSequenceCommandOutput,
     parseGitArcCommand,
     parseGitArcReceipt, parseGitCheckpointCommitCommand, parseGitCheckpointCompareOutput, parseGitCheckpointDiffArtifactId,
     parseGitCheckpointDiffOutput,
-    parseGitCheckpointProposalId, parseWorkbenchSubagentCommand
+    parseGitCheckpointProposalId, parseWorkbenchSubagentCommand, parseWorkbenchThreadTitleCommand
 };
 export type {
     GitArcCommandIntent,
