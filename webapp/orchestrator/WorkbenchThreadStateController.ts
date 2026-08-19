@@ -23,6 +23,7 @@ import {
   type WorkbenchLifecycleEvent,
   type WorkbenchThreadLifecycle,
   type WorkbenchThreadDraft,
+  type WorkbenchGitArcFileClaim,
   type WorkbenchHarnessId,
   type WorkbenchThreadActivityUpdate,
   type WorkbenchThreadSidebarEntry,
@@ -53,13 +54,20 @@ export interface WorkbenchThreadStateControllerOptions {
     signal: AbortSignal,
     acceptProviderSnapshot: (harness: WorkbenchHarnessId, entries: WorkbenchThreadSidebarEntry[], options: { complete: boolean }) => void,
   ) => Promise<WorkbenchThreadReconciliationFailure[]>;
+  resolveFileClaim: (projectId: string, harness: WorkbenchHarnessId, threadId: string) => Promise<WorkbenchGitArcFileClaim | null>;
   resolveProjectRoot: (projectId: string) => Promise<string>;
+  runFileClaimTransition: <TValue>(projectId: string, operation: () => Promise<TValue>) => Promise<TValue>;
   storageRoot: string;
 }
 
 export interface WorkbenchThreadReconciliationFailure {
   harness: WorkbenchHarnessId;
   message: string;
+}
+
+export interface WorkbenchThreadClaimContext {
+  lifecycle: WorkbenchThreadLifecycle;
+  title: string;
 }
 
 export type WorkbenchObservedLifecycleEvent =
@@ -179,6 +187,7 @@ export default class WorkbenchThreadStateController {
     switch (request.method) {
       case "workbench/thread-state/open": return { result: await this.open(connectionId, request.projectId, request.version ?? 1) };
       case "workbench/thread-state/close": await this.close(connectionId, request.projectId); return { result: { accepted: true } };
+      case "workbench/thread-state/refresh": return { result: await this.refresh(request.projectId) };
       case "workbench/thread-state/intent/accept": return { result: await this.acceptIntent(connectionId, {
         draftId: request.draftId,
         harness: request.identity.harness,
@@ -380,6 +389,39 @@ export default class WorkbenchThreadStateController {
     return this.snapshot(projectId, state);
   }
 
+  async getThreadClaimContext(projectId: string, harness: WorkbenchHarnessId, threadId: string): Promise<WorkbenchThreadClaimContext | null> {
+    const state = await this.getProject(projectId);
+    const key = `${harness}:${threadId}`;
+    const entry = state.entries.get(key);
+    const stored = await this.loadProjectStorage(projectId);
+    const storedEntry = stored.threads.find((candidate) => candidate.harness === harness && candidate.threadId === threadId);
+    const storedLifecycle = WorkbenchThreadLifecycleSchema.safeParse(storedEntry?.lifecycle);
+    const lifecycle = storedLifecycle.success
+      ? storedLifecycle.data
+      : entry && entry.entryKind !== "draft" ? entry.lifecycle : null;
+    if (!lifecycle) return null;
+    return {
+      lifecycle,
+      title: entry?.title ?? storedEntry?.titleFallback?.trim() ?? threadId,
+    };
+  }
+
+  async refreshFileClaim(projectId: string, harness: WorkbenchHarnessId, threadId: string) {
+    const state = await this.getProject(projectId);
+    const key = `${harness}:${threadId}`;
+    return await this.enqueue(`${projectId}:thread:${key}`, async () => {
+      const entry = state.entries.get(key);
+      if (!entry || entry.entryKind === "draft") return null;
+      const fileClaim = await this.options.resolveFileClaim(projectId, harness, threadId);
+      const next = WorkbenchThreadSidebarEntrySchema.parse({ ...entry, fileClaim });
+      if (next.entryKind === "draft") return null;
+      if (areDeeplyEqual(entry, next)) return next;
+      state.entries.set(key, next);
+      this.publish(projectId, state, next);
+      return next;
+    });
+  }
+
   async dispose() {
     this.active = false;
     for (const state of this.projects.values()) {
@@ -535,7 +577,12 @@ export default class WorkbenchThreadStateController {
       providerKeys.add(key);
       const overlay = state.overlays.get(key);
       if (parsed.data.entryKind === "subagent") {
-        state.entries.set(key, overlay ? { ...parsed.data, lifecycle: overlay.lifecycle, pinned: overlay.pinned } : parsed.data);
+        const lifecycle = overlay?.lifecycle ?? parsed.data.lifecycle;
+        state.entries.set(key, overlay ? {
+          ...parsed.data,
+          lifecycle: parsed.data.fileClaim && lifecycle.settled ? { ...lifecycle, settled: false as const } : lifecycle,
+          pinned: overlay.pinned,
+        } : parsed.data);
         continue;
       }
       const metadata = overlay?.archived
@@ -543,7 +590,9 @@ export default class WorkbenchThreadStateController {
         : { archived: false as const, pinned: overlay?.pinned ?? parsed.data.metadata.pinned, snoozed: overlay?.snoozed ?? parsed.data.metadata.snoozed };
       state.entries.set(key, overlay ? {
         ...parsed.data,
-        lifecycle: overlay.lifecycle,
+        lifecycle: parsed.data.fileClaim && overlay.lifecycle.settled
+          ? { ...overlay.lifecycle, settled: false as const }
+          : overlay.lifecycle,
         metadata,
         title: parsed.data.title === "New thread" && overlay.titleFallback ? overlay.titleFallback : parsed.data.title,
       } : parsed.data);
@@ -593,10 +642,10 @@ export default class WorkbenchThreadStateController {
     return { accepted: true, revision: state.revision };
   }
 
-  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/open" | "workbench/thread-state/close" | "workbench/thread-state/draft/upsert" | "workbench/thread-state/draft/delete" }>) {
+  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/open" | "workbench/thread-state/close" | "workbench/thread-state/refresh" | "workbench/thread-state/draft/upsert" | "workbench/thread-state/draft/delete" }>) {
     const state = await this.getProject(request.projectId);
     const key = `${request.identity.harness}:${request.identity.threadId}`;
-    return await this.enqueue(`${request.projectId}:thread:${key}`, async () => {
+    const mutate = async () => await this.enqueue(`${request.projectId}:thread:${key}`, async () => {
       const entry = state.entries.get(key);
       if (!entry || entry.entryKind === "draft") return { accepted: false, revision: state.revision };
       if (request.method === "workbench/thread-state/status/set" && (
@@ -610,6 +659,12 @@ export default class WorkbenchThreadStateController {
         || entry.lifecycle.kind === "stopped"
         || (entry.entryKind === "thread" && entry.lifecycle.kind === "needsAttention" && !isWorkbenchThreadStatusProviderOwned(entry.lifecycle));
       if (request.method === "workbench/thread-state/settle" && !canSettle) {
+        return { accepted: false, revision: state.revision };
+      }
+      if (
+        request.method === "workbench/thread-state/settle"
+        && await this.options.resolveFileClaim(request.projectId, entry.identity.harness, entry.identity.threadId)
+      ) {
         return { accepted: false, revision: state.revision };
       }
       let next = entry;
@@ -646,6 +701,9 @@ export default class WorkbenchThreadStateController {
       await this.persist(request.projectId, state); this.publish(request.projectId, state, parsed.data);
       return { accepted: true, revision: state.revision };
     });
+    return request.method === "workbench/thread-state/settle"
+      ? await this.options.runFileClaimTransition(request.projectId, mutate)
+      : await mutate();
   }
 
   private persist(projectId: string, state: ProjectState) {

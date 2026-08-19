@@ -122,7 +122,7 @@ export default memo(function WorkbenchThreadSidebar({
       onSelect: () => onOpenThread(target),
     }];
 
-    if (terminal) {
+    if (terminal && (entry.lifecycle.settled || !entry.fileClaim)) {
       items.push(entry.lifecycle.settled ? {
         icon: <RestoreThreadIcon className="size-4" />,
         id: "restore",

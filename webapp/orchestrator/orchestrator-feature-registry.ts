@@ -16,6 +16,7 @@ import NextDevHealthSupervisor, { type NextDevHealthSupervisorOptions } from "./
 import type { OrchestratorFeatureGeneration, OrchestratorFeatureLease } from "./OrchestratorFeatureHost";
 import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
 import WorkbenchBridgeRequestController from "./WorkbenchBridgeRequestController";
+import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import WorkbenchLegacyMigrationSourceController, { readLegacyMigrationSourceConfig } from "./WorkbenchLegacyMigrationSourceController";
 import WorkbenchOrchestratorHttpRouter from "./WorkbenchOrchestratorHttpRouter";
 import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
@@ -65,6 +66,7 @@ export interface OrchestratorFeatures {
   bridgeRequest: WorkbenchBridgeRequestController;
   browseSessionCleanup: BrowseSessionCleanupSupervisor;
   codexHealth: CodexHealthMonitor;
+  gitArc: WorkbenchGitArcFeature;
   legacyMigrationSource: WorkbenchLegacyMigrationSourceController;
   modules: OrchestratorReloadableModules;
   nextDevHealth: NextDevHealthSupervisor;
@@ -85,8 +87,22 @@ export function createOrchestratorFeatureGeneration(
   const modules = createModules();
   const projectCatalog = new WorkbenchProjectCatalogController();
   const projectSnapshot = new WorkbenchProjectSnapshotController();
-  const threadState = new WorkbenchThreadStateFeature({
+  let threadState: WorkbenchThreadStateFeature | null = null;
+  const gitArc = new WorkbenchGitArcFeature({
+    getThreadClaimContext: async (projectId, harness, threadId) => {
+      if (!threadState) throw new Error("Thread state is not ready for Git arc ownership.");
+      return await threadState.controller.getThreadClaimContext(projectId, harness, threadId);
+    },
+    refreshThreadClaim: async (projectId, harness, threadId) => {
+      if (!threadState) throw new Error("Thread state is not ready for Git arc publication.");
+      await threadState.controller.refreshFileClaim(projectId, harness, threadId);
+    },
+    resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Git arc" }),
+    transitions: context.threadTransitions,
+  });
+  threadState = new WorkbenchThreadStateFeature({
     getProjectCatalog: () => projectCatalog.getCurrentSnapshot(),
+    gitArcs: gitArc,
     listSubagents: (projectId) => context.subagentStore.list({ projectId }),
     log: (message) => log("thread-state-ws", message),
     projectState: projectSnapshot,
@@ -95,6 +111,7 @@ export function createOrchestratorFeatureGeneration(
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
     resolveProjectFromCwd: (cwd, options) => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
     storageRoot: context.legacyMigrationProjectRoot,
+    transitions: context.threadTransitions,
   });
   threadState.controller.subscribe(context.notifyThreadLifecycle);
   const { allowedProjectIds, capability } = readLegacyMigrationSourceConfig(context.legacyMigrationProjectRoot);
@@ -105,6 +122,7 @@ export function createOrchestratorFeatureGeneration(
   const bridgeRequest = new WorkbenchBridgeRequestController({ requestHarness: context.requestHarness });
   const agentCommand = new WorkbenchAgentCommandController(context.localWorkbenchOrigin, context.localOrchestratorOrigin, {
     executeBrowseRequest: context.executeBrowseRequest,
+    executeGitArcRequest: async (body) => await gitArc.executeRequest(body),
     executeSessionRequest: context.executeBrowseSessionRequest,
     requestSubagent: async (request) => request.method?.startsWith("workbench/thread/")
       ? await threadState.handleManagedThreadRequest(request)
@@ -113,6 +131,7 @@ export function createOrchestratorFeatureGeneration(
   const orchestratorHttp = new WorkbenchOrchestratorHttpRouter({
     agentCommand,
     bridgeRequest,
+    gitArc,
     legacyMigrationSource,
     projectCatalog,
     projectSnapshot,
@@ -138,7 +157,7 @@ export function createOrchestratorFeatureGeneration(
     isShuttingDown: () => !lease.isCurrent() || context.codexHealthOptions.isShuttingDown(),
     requestRecovery: (reason) => { if (lease.isCurrent()) context.codexHealthOptions.requestRecovery(reason); },
   });
-  const features: OrchestratorFeatures = { agentCommand, bridgeRequest, browseSessionCleanup, codexHealth, legacyMigrationSource, modules, nextDevHealth, orchestratorHttp, projectCatalog, projectSnapshot, threadState };
+  const features: OrchestratorFeatures = { agentCommand, bridgeRequest, browseSessionCleanup, codexHealth, gitArc, legacyMigrationSource, modules, nextDevHealth, orchestratorHttp, projectCatalog, projectSnapshot, threadState };
   return {
     dispose: async () => {
       codexHealth.dispose();

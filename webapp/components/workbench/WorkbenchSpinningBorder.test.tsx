@@ -31,9 +31,29 @@ test("PrimaryButton uses the shared border for pending pills", () => {
 
   assert.match(html, />Committing\.\.\.</u);
   assert.match(html, /data-workbench-spinning-border="true"/u);
-  assert.match(html, /inset-\[2px\]/u);
+  assert.match(html, /inset-\[3px\]/u);
   assert.match(html, /disabled:\[color:color-mix\(in_srgb,var\(--text\)_32%,transparent\)\]/u);
   assert.doesNotMatch(html, /disabled:\[color:color-mix\(in_srgb,var\(--text\)_10%,transparent\)\]/u);
+});
+
+test("PrimaryButton exposes opt-in danger hold confirmation without changing its normal state", () => {
+  const html = renderToStaticMarkup(createElement(PrimaryButton, {
+    children: "Hold to restore & unclaim",
+    holdToConfirmMs: 2000,
+    tone: "danger",
+  }));
+
+  assert.match(html, /data-hold-to-confirm-ms="2000"/u);
+  assert.match(html, /data-tone="danger"/u);
+  assert.match(html, /enabled:hover:\[--primary-button-bg:color-mix\(in_srgb,var\(--danger\)_48%,var\(--shell-fade-bg\)_52%\)\]/u);
+  assert.match(html, /enabled:focus-visible:\[color:var\(--text\)\]/u);
+  assert.match(html, /data-\[confirming=true\]:\[--primary-button-bg:color-mix\(in_srgb,var\(--danger\)_72%,var\(--shell-fade-bg\)_28%\)\]/u);
+  assert.match(html, /data-primary-button-confirmation-rail="true"/u);
+  assert.match(html, /data-primary-button-confirmation-progress="true"/u);
+  assert.match(html, /absolute inset-x-0 bottom-0 h-1\.5/u);
+  assert.match(html, /bg-\[color:var\(--text\)\]/u);
+  assert.match(html, /transform:scaleX\(0\);transition-duration:0ms/u);
+  assert.doesNotMatch(html, /data-confirming="true"/u);
 });
 
 test("PrimaryButton keeps ordinary disabled actions visually quieter", () => {

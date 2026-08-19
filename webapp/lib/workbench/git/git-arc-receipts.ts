@@ -8,7 +8,7 @@ import { z } from "zod";
 const RECEIPT_PREFIX = "Workbench arc receipt: ";
 
 const GitArcReceiptSchema = z.object({
-  action: z.enum(["add", "compare", "diff", "plan", "propose", "remove", "restore", "start"]),
+  action: z.enum(["add", "adopt", "compare", "continue", "diff", "plan", "propose", "remove", "restore", "start"]),
   claimedPaths: z.array(z.string().min(1)),
   intentName: z.string().min(1).nullable(),
   proposalId: z.string().min(1).optional(),

@@ -1,20 +1,32 @@
 /*
  * Exports:
- * - default PrimaryButton: render high-emphasis Workbench action buttons with layered backgrounds, disabled states, and optional pending halo support. Keywords: primary, button, action, halo.
- * - Local helpers: class joining and shape-specific button layout classes. Keywords: button, class names, shape.
+ * - default PrimaryButton: render high-emphasis Workbench actions with optional pending halos and hold confirmation. Keywords: primary, button, action, halo, confirm, danger.
+ * - Local helpers: class joining, confirmation-key matching, and shape/tone layout classes. Keywords: button, class names, shape, keyboard.
  */
 "use client";
 
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ButtonHTMLAttributes,
+  type ReactNode,
+  type TransitionEvent,
+} from "react";
 
 import WorkbenchSpinningBorder from "./WorkbenchSpinningBorder";
 
 type PrimaryButtonShape = "pill" | "circle";
+type PrimaryButtonTone = "danger" | "default";
+type HoldSource = "keyboard" | "pointer";
 
 type PrimaryButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   children: ReactNode;
+  holdToConfirmMs?: number;
   pendingHalo?: boolean;
   shape?: PrimaryButtonShape;
+  tone?: PrimaryButtonTone;
 };
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
@@ -27,7 +39,6 @@ const baseClassName = [
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]",
   "disabled:cursor-not-allowed",
   "[--primary-button-bg:color-mix(in_srgb,white_14%,var(--shell-fade-bg)_86%)]",
-  "enabled:hover:[--primary-button-bg:color-mix(in_srgb,white_20%,var(--shell-fade-bg)_80%)]",
   "disabled:[--primary-button-bg:color-mix(in_srgb,white_7%,var(--shell-fade-bg)_93%)]",
 ].join(" ");
 
@@ -36,29 +47,146 @@ const shapeClassNames: Record<PrimaryButtonShape, string> = {
   pill: "rounded-full px-4 py-2 text-[0.84rem]",
 };
 
+const toneClassNames: Record<PrimaryButtonTone, string> = {
+  default: "enabled:hover:[--primary-button-bg:color-mix(in_srgb,white_20%,var(--shell-fade-bg)_80%)]",
+  danger: [
+    "enabled:hover:[--primary-button-bg:color-mix(in_srgb,var(--danger)_48%,var(--shell-fade-bg)_52%)]",
+    "enabled:hover:[color:var(--text)]",
+    "enabled:focus-visible:[--primary-button-bg:color-mix(in_srgb,var(--danger)_48%,var(--shell-fade-bg)_52%)]",
+    "enabled:focus-visible:[color:var(--text)]",
+    "enabled:focus-visible:ring-[color:color-mix(in_srgb,var(--danger)_48%,transparent)]",
+    "data-[confirming=true]:[--primary-button-bg:color-mix(in_srgb,var(--danger)_72%,var(--shell-fade-bg)_28%)]",
+    "data-[confirming=true]:[color:var(--text)]",
+  ].join(" "),
+};
+
+function isConfirmationKey (key: string) {
+  return key === "Enter" || key === " ";
+}
+
 export default function PrimaryButton ({
   children,
   className,
+  disabled,
+  holdToConfirmMs,
+  onBlur,
+  onClick,
+  onKeyDown,
+  onKeyUp,
+  onPointerCancel,
+  onPointerDown,
+  onPointerLeave,
+  onPointerUp,
   pendingHalo = false,
   shape = "pill",
+  tone = "default",
   type = "button",
   ...buttonProps
 }: PrimaryButtonProps) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const confirmedClickRef = useRef(false);
+  const holdSourceRef = useRef<HoldSource | null>(null);
+  const [holdSource, setHoldSource] = useState<HoldSource | null>(null);
   const showSpinningBorder = pendingHalo;
-  const isDisabled = Boolean(buttonProps.disabled);
+  const isDisabled = Boolean(disabled);
+  const confirmationMs = typeof holdToConfirmMs === "number" && Number.isFinite(holdToConfirmMs) && holdToConfirmMs > 0
+    ? holdToConfirmMs
+    : null;
+  const confirmationEnabled = confirmationMs !== null;
+
+  const cancelHold = useCallback((source?: HoldSource) => {
+    if (source && holdSourceRef.current !== source) return;
+    holdSourceRef.current = null;
+    setHoldSource(null);
+  }, []);
+
+  const beginHold = useCallback((source: HoldSource) => {
+    if (!confirmationEnabled || isDisabled || holdSourceRef.current) return;
+    holdSourceRef.current = source;
+    setHoldSource(source);
+  }, [confirmationEnabled, isDisabled]);
+
+  useEffect(() => {
+    if (isDisabled) cancelHold();
+  }, [cancelHold, isDisabled]);
+
+  useEffect(() => () => {
+    holdSourceRef.current = null;
+  }, []);
+
+  function confirmHold (event: TransitionEvent<HTMLSpanElement>) {
+    if (event.propertyName !== "transform" || !holdSourceRef.current) return;
+    confirmedClickRef.current = true;
+    buttonRef.current?.click();
+    confirmedClickRef.current = false;
+    cancelHold();
+  }
 
   return (
     <button
       {...buttonProps}
+      ref={buttonRef}
       type={type}
+      data-confirming={holdSource ? "true" : undefined}
+      data-hold-to-confirm-ms={confirmationMs ?? undefined}
+      data-tone={tone}
+      disabled={disabled}
       className={joinClasses(
         baseClassName,
         shapeClassNames[shape],
+        toneClassNames[tone],
         pendingHalo
           ? "disabled:[color:color-mix(in_srgb,var(--text)_32%,transparent)]"
           : "disabled:[color:color-mix(in_srgb,var(--text)_10%,transparent)]",
         className,
       )}
+      onBlur={(event) => {
+        onBlur?.(event);
+        cancelHold();
+      }}
+      onClick={(event) => {
+        if (!confirmationEnabled || confirmedClickRef.current) {
+          onClick?.(event);
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onKeyDown={(event) => {
+        onKeyDown?.(event);
+        if (!confirmationEnabled || event.defaultPrevented) return;
+        if (event.key === "Escape") {
+          cancelHold("keyboard");
+          return;
+        }
+        if (!isConfirmationKey(event.key)) return;
+        event.preventDefault();
+        if (!event.repeat) beginHold("keyboard");
+      }}
+      onKeyUp={(event) => {
+        onKeyUp?.(event);
+        if (!confirmationEnabled) return;
+        if (!isConfirmationKey(event.key)) return;
+        event.preventDefault();
+        cancelHold("keyboard");
+      }}
+      onPointerCancel={(event) => {
+        onPointerCancel?.(event);
+        cancelHold("pointer");
+      }}
+      onPointerDown={(event) => {
+        onPointerDown?.(event);
+        if (event.defaultPrevented || event.button !== 0 || !event.isPrimary) return;
+        beginHold("pointer");
+      }}
+      onPointerLeave={(event) => {
+        onPointerLeave?.(event);
+        cancelHold("pointer");
+      }}
+      onPointerUp={(event) => {
+        onPointerUp?.(event);
+        cancelHold("pointer");
+      }}
     >
       {showSpinningBorder ? <WorkbenchSpinningBorder radius="50cqb" /> : null}
       <span
@@ -72,6 +200,28 @@ export default function PrimaryButton ({
         )}
       />
       <span className="relative z-20 inline-flex items-center justify-center">{children}</span>
+      {confirmationEnabled ? (
+        <span
+          aria-hidden="true"
+          className={joinClasses(
+            "pointer-events-none absolute inset-0 z-30 overflow-hidden rounded-[inherit] transition-opacity duration-100",
+            holdSource ? "opacity-100" : "opacity-0",
+          )}
+          data-primary-button-confirmation-rail="true"
+        >
+          <span className="absolute inset-x-0 bottom-0 h-1.5 bg-[color-mix(in_srgb,var(--text)_18%,transparent)]">
+            <span
+              className="block h-full origin-left bg-[color:var(--text)] transition-transform ease-linear"
+              data-primary-button-confirmation-progress="true"
+              onTransitionEnd={confirmHold}
+              style={{
+                transform: holdSource ? "scaleX(1)" : "scaleX(0)",
+                transitionDuration: holdSource ? `${confirmationMs}ms` : "0ms",
+              }}
+            />
+          </span>
+        </span>
+      ) : null}
     </button>
   );
 }

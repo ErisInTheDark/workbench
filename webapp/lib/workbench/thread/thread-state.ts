@@ -112,6 +112,17 @@ export const WorkbenchThreadLifecycleSchema = z.union([
   : lifecycle);
 export type WorkbenchThreadLifecycle = z.infer<typeof WorkbenchThreadLifecycleSchema>;
 
+export const WorkbenchGitArcFileClaimSchema = z.object({
+  checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
+  claimedPaths: z.array(z.string().min(1)).min(1),
+  intentDescription: z.string(),
+  intentName: z.string().min(1),
+  proposalId: z.string().min(1).nullable(),
+  proposalStatus: z.enum(["committed", "proposed", "superseded", "unavailable"]).nullable().optional(),
+  updatedAt: z.string().min(1),
+}).strict();
+export type WorkbenchGitArcFileClaim = z.infer<typeof WorkbenchGitArcFileClaimSchema>;
+
 const VisibleMetadataSchema = z.object({ archived: z.literal(false), pinned: z.boolean(), snoozed: z.boolean() }).strict();
 const ArchivedMetadataSchema = z.object({ archived: z.literal(true), pinned: z.literal(false), snoozed: z.literal(false) }).strict();
 const TopLevelMetadataSchema = z.union([VisibleMetadataSchema, ArchivedMetadataSchema]);
@@ -124,6 +135,7 @@ const DraftEntrySchema = SidebarCommonSchema.extend({
 }).strict();
 const TopLevelEntrySchema = SidebarCommonSchema.extend({
   entryKind: z.literal("thread"),
+  fileClaim: WorkbenchGitArcFileClaimSchema.nullable().optional(),
   identity: ThreadIdentitySchema,
   lifecycle: WorkbenchThreadLifecycleSchema,
   metadata: TopLevelMetadataSchema,
@@ -133,6 +145,7 @@ const SubagentEntrySchema = SidebarCommonSchema.extend({
   cwd: z.string().min(1),
   directSubagentIndex: z.number().int().nonnegative(),
   entryKind: z.literal("subagent"),
+  fileClaim: WorkbenchGitArcFileClaimSchema.nullable().optional(),
   identity: ThreadIdentitySchema,
   lifecycle: WorkbenchThreadLifecycleSchema,
   name: z.string().trim().min(1),
@@ -186,6 +199,7 @@ const ProjectRequestBase = z.object({ projectId: z.string().trim().min(1) }).str
 export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", [
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/open"), version: z.literal(2).optional() }),
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/close") }),
+  ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/refresh") }),
   ProjectRequestBase.extend({ draftId: CanonicalUuidSchema.optional(), identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/intent/accept"), title: z.string().trim().min(1), turnId: z.string().trim().min(1) }),
   ProjectRequestBase.extend({ draft: WorkbenchThreadDraftSchema, method: z.literal("workbench/thread-state/draft/upsert") }),
   ProjectRequestBase.extend({ clientUpdatedAt: z.number().int().nonnegative(), draftId: CanonicalUuidSchema, method: z.literal("workbench/thread-state/draft/delete") }),

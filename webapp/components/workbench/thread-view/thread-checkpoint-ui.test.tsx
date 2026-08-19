@@ -4,15 +4,19 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createElement, isValidElement, type KeyboardEvent, type ReactNode } from "react";
+import { createElement, Fragment, isValidElement, type KeyboardEvent, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { parseUnifiedDiff } from "../../../lib/workbench/thread/thread-file-diff";
+import { getGitArcMatcherAction, getThreadCommandDisplay } from "../../../lib/workbench/thread/thread-command-matchers";
 import WorkbenchCheckbox from "../WorkbenchCheckbox";
 import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
+import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadCodeDisplay from "./ThreadCodeDisplay";
 import ThreadGitArcItem from "./ThreadGitArcItem";
+import ThreadGitArcLifecycleCard from "./ThreadGitArcLifecycleCard";
+import ThreadGitArcPresentationContext, { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
 import { ThreadTurnDetails } from "./thread-view-items";
 
 interface EditableElementProps {
@@ -35,17 +39,21 @@ function findEditableProps(node: ReactNode): EditableElementProps[] {
     : descendants;
 }
 
-function proposedCheckpointState(status: "proposed" | "unavailable" = "proposed") {
+function proposedCheckpointState(status: "proposed" | "superseded" | "unavailable" = "proposed") {
   return {
     proposal: {
+      amendTargetSha: null,
       baseCommit: "a".repeat(40),
       changes: [],
       committedSha: null,
       description: "Commit description",
       includeNewerAvailable: false,
+      mode: "commit" as const,
       paths: ["src/one.ts"],
       proposalId: "proposal-one",
       status,
+      supersededByProposalId: null,
+      supersededBySha: null,
       title: "Commit title",
       unavailableReason: status === "unavailable" ? "Unavailable." : null,
     },
@@ -73,8 +81,72 @@ test("checkpoint compare uses established file-change rows without empty disclos
   assert.doesNotMatch(html, /No diff captured/u);
 });
 
+test("terminal arc presentation hoists one proposal controller and leaves a transcript pointer", () => {
+  const shared = {
+    commandOutcome: "completed" as const,
+    cwd: "C:/workspace",
+    intent: {
+      amend: false,
+      description: "",
+      paths: ["src/one.ts"],
+      title: "Harden arc ownership workflow",
+    },
+    proposalId: "def81282-proposal-one",
+    sourceItemId: "proposal-item",
+    threadId: "thread-one",
+  };
+  const html = renderToStaticMarkup(createElement(ThreadGitArcPresentationContext.Provider, {
+    value: { harness: "opencode", hoistedProposalId: "def81282-proposal-one" },
+    children: createElement(Fragment, null,
+      createElement(ThreadCheckpointCommitItem, shared),
+      createElement(ThreadCheckpointCommitItem, { ...shared, hoisted: true, sourceItemId: "lifecycle-proposal" }),
+    ),
+  }));
+  assert.equal((html.match(/>Commit</gu) ?? []).length, 1);
+  assert.match(html, /data-thread-git-arc-card="propose"/u);
+  assert.match(html, />Proposed</u);
+  assert.match(html, /Harden arc ownership workflow/u);
+  assert.match(html, /def81282/u);
+  assert.doesNotMatch(html, /\[proposed a commit\]/u);
+  assert.match(html, /id="thread-checkpoint-proposal-def81282-proposal-one"/u);
+  assert.equal((html.match(/data-thread-checkpoint-card="true"/gu) ?? []).length, 1);
+});
+
+test("terminal arc release action distinguishes clean claims from dirty work", () => {
+  assert.equal(getGitArcClaimReleaseAction(0), "unclaim");
+  assert.equal(getGitArcClaimReleaseAction(1), "restore");
+});
+
+test("terminal proposals and claim resolution share one lifecycle card", () => {
+  const html = renderToStaticMarkup(createElement(ThreadGitArcLifecycleCard, {
+    claim: {
+      checkpointCommit: "a".repeat(40),
+      claimedPaths: ["src/one.ts", "src/two.ts"],
+      intentDescription: "Keep the lifecycle visible.",
+      intentName: "Harden arc lifecycle",
+      proposalId: "proposal-one",
+      proposalStatus: "proposed",
+      updatedAt: "2026-08-19T00:00:00.000Z",
+    },
+    cwd: "C:/workspace",
+    harness: "codex",
+    onReleased: async () => undefined,
+    projectRootPath: "C:/workspace",
+    threadId: "thread-one",
+  }));
+
+  assert.equal((html.match(/data-thread-git-arc-lifecycle-card="true"/gu) ?? []).length, 1);
+  assert.equal((html.match(/data-thread-checkpoint-card="true"/gu) ?? []).length, 1);
+  assert.match(html, /data-thread-checkpoint-card-embedded="true"/u);
+  assert.match(html, /data-thread-git-arc-resolution="true"/u);
+  assert.match(html, /2 claimed files/u);
+  assert.match(html, /Checking claimed files/u);
+  assert.doesNotMatch(html, /Harden arc lifecycle/u);
+});
+
 test("in-progress checkpoint commit commands render an immediate standalone card", () => {
   const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    projectRootPath: "C:/workspace",
     threadId: "thread-one",
     turn: {
       completedAt: null,
@@ -83,7 +155,7 @@ test("in-progress checkpoint commit commands render an immediate standalone card
       id: "turn-one",
       items: [{
         aggregatedOutput: null,
-        command: "wb git arc propose --ref abc1234 -m \"Immediate proposal\" -- src/one.ts src/two.ts",
+        command: "wb git arc propose -m \"Immediate proposal\" -- src/one.ts src/two.ts",
         commandActions: [],
         cwd: "C:/workspace",
         durationMs: null,
@@ -109,6 +181,8 @@ test("in-progress checkpoint commit commands render an immediate standalone card
 
 test("PowerShell-wrapped proposals render the standalone card from command text", () => {
   const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    defaultOpenCompletedWork: true,
+    projectRootPath: "C:/workspace",
     threadId: "thread-one",
     turn: {
       completedAt: null,
@@ -117,7 +191,7 @@ test("PowerShell-wrapped proposals render the standalone card from command text"
       id: "turn-one",
       items: [{
         aggregatedOutput: "Workbench arc proposal: proposal-one\n",
-        command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "wb git arc propose --ref 27e60cc1019da6a4013c574ea9391c56bb0f582b -m \"Group thread context menu controls\" -m \"Preserve Chiri's lifecycle status.\""`,
+        command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "wb git arc propose -m \"Group thread context menu controls\" -m \"Preserve Chiri's lifecycle status.\""`,
         commandActions: [],
         cwd: "C:/workspace",
         durationMs: 4_000,
@@ -140,9 +214,71 @@ test("PowerShell-wrapped proposals render the standalone card from command text"
   assert.doesNotMatch(html, /Working dir:|pwsh\.exe/u);
 });
 
+test("matched proposal invocations keep their card when intent enrichment fails", () => {
+  const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    projectRootPath: "C:/workspace",
+    threadId: "thread-one",
+    turn: {
+      completedAt: null,
+      durationMs: null,
+      error: null,
+      id: "turn-one",
+      items: [{
+        aggregatedOutput: null,
+        command: "wb git arc propose --unexpected",
+        commandActions: [],
+        cwd: "C:/workspace",
+        durationMs: null,
+        exitCode: null,
+        id: "proposal-command",
+        processId: null,
+        source: "agent",
+        status: "inProgress",
+        type: "commandExecution",
+      }],
+      itemsView: "full",
+      startedAt: null,
+      status: "inProgress",
+    },
+  }));
+
+  assert.match(html, /data-thread-checkpoint-card="true"/u);
+  assert.doesNotMatch(html, /Creating arc commit proposal/u);
+});
+
+test("superseded proposal cards preserve their terminal history", () => {
+  const html = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
+    committing: false,
+    description: "",
+    includeNewer: false,
+    onCommit: () => undefined,
+    onDescriptionChange: () => undefined,
+    onIncludeNewerChange: () => undefined,
+    onRetry: () => undefined,
+    onTitleChange: () => undefined,
+    paths: ["src/one.ts"],
+    sourceItemId: "proposal-command",
+    state: proposedCheckpointState("superseded"),
+    title: "Old proposal",
+  }));
+
+  assert.match(html, />Superseded</u);
+  assert.doesNotMatch(html, />Commit<\/span>/u);
+});
+
 test("arc lifecycle commands render compact receipt-backed cards", () => {
   const ref = "a".repeat(40);
+  const display = getThreadCommandDisplay({
+    command: `wb git arc plan -m "Polish arc UI" -- src/one.ts src/two.ts`,
+    commandActions: [],
+    cwd: "C:/workspace",
+    projectRootPath: "C:/workspace",
+  });
+  assert.equal(display.claimedBy, "git-arc.plan");
+  assert.equal(getGitArcMatcherAction(display.claimedBy), "plan");
   const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    defaultOpenCompletedWork: true,
+    projectRootPath: "C:/workspace",
     threadId: "thread-one",
     turn: {
       completedAt: null,
@@ -180,6 +316,8 @@ test("arc lifecycle commands render compact receipt-backed cards", () => {
 test("arc lifecycle cards stay outside adjacent generic command groups", () => {
   const ref = "a".repeat(40);
   const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    defaultOpenCompletedWork: true,
+    projectRootPath: "C:/workspace",
     threadId: "thread-one",
     turn: {
       completedAt: null,
@@ -238,7 +376,7 @@ test("arc cards keep main evidence open and nest the complete claimed set", () =
     version: 1 as const,
   };
   const addHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
-    commandIntent: { action: "add", intentName: null, paths: ["src/new.ts"], ref: previousRef },
+    commandIntent: { action: "add", intentName: null, paths: ["src/new.ts"], ref: null },
     durationMs: 4_000,
     outcome: "completed",
     receipt,
@@ -254,7 +392,7 @@ test("arc cards keep main evidence open and nest the complete claimed set", () =
   assert.match(addHtml, /Polish arc UI/u);
 
   const compareHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
-    commandIntent: { action: "compare", intentName: null, paths: [], ref: currentRef },
+    commandIntent: { action: "compare", intentName: null, paths: [], ref: null },
     durationMs: 5_000,
     operationDetails: createElement("span", { "data-main-change": true }, "Changed file evidence"),
     outcome: "completed",
@@ -267,6 +405,8 @@ test("arc cards keep main evidence open and nest the complete claimed set", () =
 test("arc cards omit empty filler and describe failed claims precisely", () => {
   const ref = "a".repeat(40);
   const startHtml = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    defaultOpenCompletedWork: true,
+    projectRootPath: "C:/workspace",
     threadId: "thread-one",
     turn: {
       completedAt: null,
@@ -295,7 +435,7 @@ test("arc cards omit empty filler and describe failed claims precisely", () => {
   assert.match(startHtml, /1 claimed file/u);
 
   const failedAddHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
-    commandIntent: { action: "add", intentName: null, paths: ["src/new.ts"], ref: "a".repeat(40) },
+    commandIntent: { action: "add", intentName: null, paths: ["src/new.ts"], ref: null },
     durationMs: 5_000,
     failureReason: "The selected path is dirty.",
     outcome: "failed",
@@ -326,10 +466,8 @@ test("pending checkpoint proposal cards render command intent without a loading 
   assert.match(html, /2 changed files/u);
   assert.match(html, /data-placeholder="Optional description"/u);
   assert.match(html, /color-mix\(in_srgb,var\(--text\)_32%,transparent\)/u);
-  assert.match(html, />Changed</u);
-  assert.match(html, /src\/one\.ts/u);
-  assert.match(html, /src\/two\.ts/u);
-  assert.match(html, /bg-\[color-mix\(in_srgb,var\(--text\)_4%,transparent\)\]/u);
+  assert.match(html, /2 changed files/u);
+  assert.match(html, /bg-\[color-mix\(in_srgb,var\(--text\)_2%,transparent\)\]/u);
   assert.doesNotMatch(html, /bg-\[#1112\]/u);
   assert.match(html, /<button[^>]*disabled=""/u);
   assert.match(html, />Commit<\/span>/u);
@@ -355,7 +493,8 @@ test("pending arc-wide proposal cards show an honest summary before enrichment",
 
   assert.match(html, /Immediate proposal/u);
   assert.match(html, /Arc changes/u);
-  assert.match(html, /claimed changes will appear here/u);
+  assert.match(html, /Arc changes/u);
+  assert.doesNotMatch(html, /claimed changes will appear here/u);
   assert.doesNotMatch(html, /0 changed files|Loading commit proposal/u);
 });
 
@@ -460,6 +599,7 @@ test("loaded checkpoint proposal cards keep actions in the summary and clean exp
     sourceItemId: "proposal-command",
     state: {
       proposal: {
+        amendTargetSha: null,
         baseCommit: "a".repeat(40),
         changes: [
           {
@@ -480,9 +620,12 @@ test("loaded checkpoint proposal cards keep actions in the summary and clean exp
         committedSha: null,
         description: "Keep selected-path behavior explicit.",
         includeNewerAvailable: true,
+        mode: "commit",
         paths: ["src/edited.ts", "src/created.ts"],
         proposalId: "proposal-one",
         status: "proposed",
+        supersededByProposalId: null,
+        supersededBySha: null,
         title: "Polish checkpoints",
         unavailableReason: null,
       },

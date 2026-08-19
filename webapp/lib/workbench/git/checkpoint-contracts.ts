@@ -12,46 +12,59 @@ const checkpointPaths = z.array(nonEmptyString).min(1);
 
 const checkpointBaseRequest = {
   cwd: nonEmptyString,
+  harness: z.enum(["codex", "copilot", "opencode"]).default("codex"),
   threadId: nonEmptyString,
 };
 
 export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("plan"),
+    intentDescription: z.string().default(""),
     intentName: nonEmptyString,
     paths: checkpointPaths,
     ...checkpointBaseRequest,
   }),
   z.object({
-    action: z.literal("arcAdd"),
+    action: z.literal("arcContinue"),
     checkpointCommit: checkpointSha,
-    paths: checkpointPaths.optional(),
+    ...checkpointBaseRequest,
+  }),
+  z.object({
+    action: z.literal("arcStart"),
+    checkpointCommit: checkpointSha,
+    ...checkpointBaseRequest,
+  }),
+  z.object({
+    action: z.literal("arcAdd"),
+    paths: checkpointPaths,
+    ...checkpointBaseRequest,
+  }),
+  z.object({
+    action: z.literal("arcAdopt"),
+    paths: checkpointPaths,
     ...checkpointBaseRequest,
   }),
   z.object({
     action: z.literal("arcRemove"),
-    checkpointCommit: checkpointSha,
     paths: checkpointPaths,
     ...checkpointBaseRequest,
   }),
   z.object({
     action: z.literal("compare"),
-    checkpointCommit: checkpointSha,
     paths: checkpointPaths.optional(),
     ...checkpointBaseRequest,
   }),
   z.object({
     action: z.literal("diff"),
-    checkpointCommit: checkpointSha,
     paths: checkpointPaths.optional(),
     ...checkpointBaseRequest,
   }),
   z.object({
     action: z.literal("proposalCreate"),
-    checkpointCommit: checkpointSha,
+    amend: z.boolean().default(false),
     description: z.string(),
     paths: checkpointPaths.optional(),
-    title: nonEmptyString,
+    title: z.string(),
     ...checkpointBaseRequest,
   }),
   z.object({
@@ -98,15 +111,29 @@ export const GitCheckpointFileChangeSchema = z.object({
 
 export type GitCheckpointFileChange = z.infer<typeof GitCheckpointFileChangeSchema>;
 
+export const GitCheckpointCompareResultSchema = z.object({
+  changes: z.array(GitCheckpointFileChangeSchema),
+  checkpointCommit: checkpointSha,
+  checkpointRef: nonEmptyString,
+  intentName: z.string().nullable(),
+  repoRoot: nonEmptyString,
+  scopePaths: checkpointPaths,
+});
+export type GitCheckpointCompareResult = z.infer<typeof GitCheckpointCompareResultSchema>;
+
 export const GitCheckpointProposalSchema = z.object({
+  amendTargetSha: checkpointSha.nullable(),
   baseCommit: checkpointSha,
   changes: z.array(GitCheckpointFileChangeSchema),
   committedSha: checkpointSha.nullable(),
   description: z.string(),
   includeNewerAvailable: z.boolean(),
+  mode: z.enum(["amend", "commit"]),
   paths: checkpointPaths,
   proposalId: nonEmptyString,
-  status: z.enum(["proposed", "committed", "unavailable"]),
+  status: z.enum(["proposed", "committed", "superseded", "unavailable"]),
+  supersededByProposalId: nonEmptyString.nullable(),
+  supersededBySha: checkpointSha.nullable(),
   title: nonEmptyString,
   unavailableReason: z.string().nullable(),
 });

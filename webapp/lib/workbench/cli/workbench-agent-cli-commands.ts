@@ -13,7 +13,9 @@ export type WorkbenchAgentCliResponseKind =
   | "browse-command"
   | "browse-session-control"
   | "git-arc-add"
+  | "git-arc-adopt"
   | "git-arc-compare"
+  | "git-arc-continue"
   | "git-arc-diff"
   | "git-arc-plan"
   | "git-arc-propose"
@@ -44,6 +46,7 @@ export type WorkbenchAgentCliParseResult =
 
 interface CommandBuildContext {
   args: string[];
+  callerHarness: string;
   callerThreadId: string | null;
   cwd: string;
   workbenchOrigin: string | null;
@@ -167,22 +170,26 @@ const LEGACY_CHECKPOINT_MIGRATION_GUIDE = [
   "wb git checkpoint commands have been replaced by the named plan and arc workflow.",
   "",
   "Use these commands:",
-  "1. In Brief mode, create the one clean named baseline: wb git arc plan -m <short-intent> -- <path> [<path>...]",
-  "2. After approval, inspect the claimed files without creating another ref: wb git arc start --ref <ref>",
-  "3. Keep using the returned ref through implementation and Review.",
-  "4. To validate a later continuation without adding files: wb git arc add --ref <current-ref>",
-  "5. To validate and claim genuinely new clean files: wb git arc add --ref <current-ref> -- <additional-path> [<additional-path>...]",
-  "6. Always replace the current ref with the ref returned by arc add.",
-  "7. To relinquish exact clean claims: wb git arc remove --ref <current-ref> -- <claimed-path> [<claimed-path>...]",
-  "8. Always replace the current ref with the ref returned by arc remove.",
-  "9. Summarize the arc: wb git arc compare --ref <ref> [-- <path> [<path>...]]",
-  "10. Read unified diff content: wb git arc diff --ref <ref> [-- <path> [<path>...]]",
-  "11. Propose the commit: wb git arc propose --ref <ref> -m <fresh-title> [-m <optional-description>] [-- <claimed-path> [<claimed-path>...]]",
-  "12. Restore selected paths: wb git arc restore --ref <ref> -- <path> [<path>...]",
-  "13. Restore the full arc only after explicit user direction: wb git arc restore --ref <ref> --confirm",
+  "1. In Brief mode, create one inactive clean plan: wb git arc plan -m <short-intent> [-m <optional-description>] -- <path> [<path>...]",
+  "2. After approval, activate and inspect it without creating another ref: wb git arc start --ref <plan-ref>",
+  "3. Active commands resolve this thread's registered arc. Do not pass --ref to add, adopt, remove, compare, diff, or propose.",
+  "4. Before a later pass on the same files, continue from the remembered ref: wb git arc continue --ref <current-ref>",
+  "5. Continue while adding genuinely new clean paths: wb git arc add -- <additional-path> [<additional-path>...]",
+  "6. Adopt existing dirty workspace paths: wb git arc adopt -- <dirty-path> [<dirty-path>...]",
+  "7. Relinquish exact clean claims: wb git arc remove -- <claimed-path> [<claimed-path>...]",
+  "8. Record successors returned by add, adopt, remove, or continue for later continuation. Final clean removal releases the arc without an active successor.",
+  "9. Summarize or inspect the active arc: wb git arc compare [-- <path> [<path>...]] / wb git arc diff [-- <path> [<path>...]]",
+  "10. Propose a normal commit: wb git arc propose -m <fresh-title> [-m <optional-description>] [-- <claimed-path> [<claimed-path>...]]",
+  "11. Amend exact current unpushed HEAD: wb git arc propose --amend [-m <replacement-title> [-m <replacement-description>]]",
+  "12. Use the same arc continue command after a proposal is committed and before follow-up work.",
+  "13. Restore selected paths: wb git arc restore --ref <ref> -- <path> [<path>...]",
+  "14. Restore the full arc only after explicit user direction: wb git arc restore --ref <ref> --confirm",
   "",
-  "Plan and newly added paths must be clean against HEAD. If Workbench rejects them, stop and ask the user what changed; do not clean or restore them automatically.",
-  "Arc add checks committed HEAD movement across the existing claimed set even when no new paths are supplied.",
+  "Plan and arc add paths must be clean against HEAD. Arc adopt is only for paths that already contain workspace changes.",
+  "If Review finds more work while a proposal is pending, arc continue retires that stale proposal and continues the active arc. Use arc add only when that pass also claims new clean paths.",
+  "Starting checks sibling claim collisions. Active claims prevent thread settlement until they are committed, cleanly unclaimed, or explicitly restored.",
+  "A partial commit keeps only its remaining changed files claimed. Arc continue returns that successor instead of creating another baseline.",
+  "If Workbench rejects a claim or continuation, stop and inspect the reported owner or drift. Do not clean or restore paths automatically.",
   "Omit explicit compare, diff, or proposal paths to use the arc's claimed set. Proposal subsets must stay inside that set.",
   "",
 ].join("\n");
@@ -198,6 +205,11 @@ const RELOAD_SWITCHES = [
 function requireCallerThreadId(callerThreadId: string | null) {
   if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
   return callerThreadId;
+}
+
+function requireCallerHarness(callerHarness: string) {
+  if (callerHarness === "codex" || callerHarness === "copilot" || callerHarness === "opencode") return callerHarness;
+  throw new Error("A managed Workbench harness identity is required.");
 }
 
 function preservePowerShellTrailingPaths(args: string[], {
@@ -484,74 +496,112 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
-    description: "Create one clean named Git plan and claim its files.",
+    description: "Create one inactive clean Git plan with a named file set.",
     helpGroups: ["git-arc"],
     words: ["git", "arc", "plan"],
-    usage: "wb git arc plan -m <short-intent> -- <path> [<path>...]",
-    async build({ args, callerThreadId, cwd }) {
+    usage: "wb git arc plan -m <short-intent> [-m <optional-description>] -- <path> [<path>...]",
+    async build({ args, callerHarness, callerThreadId, cwd }) {
       const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["-m"] }), {
+        repeatable: ["-m"],
         trailing: true,
-        values: ["-m"],
       });
       if (!flags.trailing.length) throw new Error("Plan paths are required after --.");
+      const messages = flags.repeated("-m").map((message) => message.trim());
+      if (messages.length > 2) throw new Error("Arc plan accepts at most two -m values.");
+      if (!messages[0]) throw new Error("-m is required.");
       return post("/api/git-checkpoint", {
         action: "plan",
         cwd,
-        intentName: flags.required("-m"),
+        harness: requireCallerHarness(callerHarness),
+        intentDescription: messages[1] ?? "",
+        intentName: messages[0],
         paths: flags.trailing,
         threadId: requireCallerThreadId(callerThreadId),
       }, "git-arc-plan");
     },
   },
   {
-    description: "Compare a plan's claimed files before implementation without creating another ref.",
+    description: "Activate and compare a plan's files before implementation without creating another ref.",
     helpGroups: ["git-arc"],
     words: ["git", "arc", "start"],
     usage: "wb git arc start --ref <ref>",
-    async build({ args, callerThreadId, cwd }) {
+    async build({ args, callerHarness, callerThreadId, cwd }) {
       const flags = new ParsedFlags(args, { values: ["--ref"] });
       return post("/api/git-checkpoint", {
-        action: "compare",
+        action: "arcStart",
         checkpointCommit: flags.required("--ref"),
         cwd,
+        harness: requireCallerHarness(callerHarness),
         threadId: requireCallerThreadId(callerThreadId),
       }, "git-arc-start");
     },
   },
   {
-    description: "Validate arc continuation and optionally claim additional clean paths.",
+    description: "Continue an active arc or resume it after its proposal was committed.",
     helpGroups: ["git-arc"],
-    words: ["git", "arc", "add"],
-    usage: "wb git arc add --ref <ref> [-- <additional-path> [<additional-path>...]]",
-    async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["--ref"] }), {
-        trailing: true,
-        values: ["--ref"],
-      });
+    words: ["git", "arc", "continue"],
+    usage: "wb git arc continue --ref <last-known-ref>",
+    async build({ args, callerHarness, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(args, { values: ["--ref"] });
       return post("/api/git-checkpoint", {
-        action: "arcAdd",
+        action: "arcContinue",
         checkpointCommit: flags.required("--ref"),
         cwd,
-        ...(flags.trailing.length ? { paths: flags.trailing } : {}),
+        harness: requireCallerHarness(callerHarness),
+        threadId: requireCallerThreadId(callerThreadId),
+      }, "git-arc-continue");
+    },
+  },
+  {
+    description: "Continue an arc while claiming additional clean paths.",
+    helpGroups: ["git-arc"],
+    words: ["git", "arc", "add"],
+    usage: "wb git arc add -- <additional-path> [<additional-path>...]",
+    async build({ args, callerHarness, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: [] }), {
+        trailing: true,
+      });
+      if (!flags.trailing.length) throw new Error("Arc add requires at least one additional clean path after --.");
+      return post("/api/git-checkpoint", {
+        action: "arcAdd",
+        cwd,
+        harness: requireCallerHarness(callerHarness),
+        paths: flags.trailing,
         threadId: requireCallerThreadId(callerThreadId),
       }, "git-arc-add");
+    },
+  },
+  {
+    description: "Adopt existing dirty workspace paths into this thread's active arc.",
+    helpGroups: ["git-arc"],
+    words: ["git", "arc", "adopt"],
+    usage: "wb git arc adopt -- <path> [<path>...]",
+    async build({ args, callerHarness, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: [] }), { trailing: true });
+      if (!flags.trailing.length) throw new Error("Arc adopt requires at least one dirty path after --.");
+      return post("/api/git-checkpoint", {
+        action: "arcAdopt",
+        cwd,
+        harness: requireCallerHarness(callerHarness),
+        paths: flags.trailing,
+        threadId: requireCallerThreadId(callerThreadId),
+      }, "git-arc-adopt");
     },
   },
   {
     description: "Relinquish exact clean claims without changing working-tree files.",
     helpGroups: ["git-arc"],
     words: ["git", "arc", "remove"],
-    usage: "wb git arc remove --ref <ref> -- <claimed-path> [<claimed-path>...]",
-    async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["--ref"] }), {
+    usage: "wb git arc remove -- <claimed-path> [<claimed-path>...]",
+    async build({ args, callerHarness, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: [] }), {
         trailing: true,
-        values: ["--ref"],
       });
       if (!flags.trailing.length) throw new Error("Arc remove requires at least one claimed path after --.");
       return post("/api/git-checkpoint", {
         action: "arcRemove",
-        checkpointCommit: flags.required("--ref"),
         cwd,
+        harness: requireCallerHarness(callerHarness),
         paths: flags.trailing,
         threadId: requireCallerThreadId(callerThreadId),
       }, "git-arc-remove");
@@ -563,16 +613,15 @@ const COMMANDS: readonly CommandDefinition[] = [
       : "Show unified diff content for an arc's claimed set or selected paths.",
     helpGroups: ["git-arc"],
     words: ["git", "arc", action],
-    usage: `wb git arc ${action} --ref <ref> [-- <path> [<path>...]]`,
-    async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["--ref"] }), {
+    usage: `wb git arc ${action} [-- <path> [<path>...]]`,
+    async build({ args, callerHarness, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: [] }), {
         trailing: true,
-        values: ["--ref"],
       });
       return post("/api/git-checkpoint", {
         action,
-        checkpointCommit: flags.required("--ref"),
         cwd,
+        harness: requireCallerHarness(callerHarness),
         ...(flags.trailing.length ? { paths: flags.trailing } : {}),
         threadId: requireCallerThreadId(callerThreadId),
       }, action === "compare" ? "git-arc-compare" : "git-arc-diff");
@@ -582,23 +631,25 @@ const COMMANDS: readonly CommandDefinition[] = [
     description: "Create a durable editable commit proposal from an arc's claimed changes or a subset.",
     helpGroups: ["git-arc"],
     words: ["git", "arc", "propose"],
-    usage: "wb git arc propose --ref <ref> -m <title> [-m <description>] [-- <claimed-path> [<claimed-path>...]]",
-    async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["--ref", "-m"] }), {
+    usage: "wb git arc propose [--amend] [-m <title> [-m <description>]] [-- <claimed-path> [<claimed-path>...]]",
+    async build({ args, callerHarness, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { boolean: ["--amend"], values: ["-m"] }), {
+        boolean: ["--amend"],
         repeatable: ["-m"],
         trailing: true,
-        values: ["--ref"],
       });
-      const messages = flags.requiredRepeated("-m");
+      const messages = flags.repeated("-m").map((message) => message.trim());
       if (messages.length > 2) throw new Error("Arc proposal accepts at most two -m values.");
+      if (!flags.has("--amend") && !messages[0]) throw new Error("-m is required unless --amend is present.");
       return post("/api/git-checkpoint", {
         action: "proposalCreate",
-        checkpointCommit: flags.required("--ref"),
+        amend: flags.has("--amend"),
         cwd,
         description: messages[1] ?? "",
+        harness: requireCallerHarness(callerHarness),
         ...(flags.trailing.length ? { paths: flags.trailing } : {}),
         threadId: requireCallerThreadId(callerThreadId),
-        title: messages[0],
+        title: messages[0] ?? "",
       }, "git-arc-propose");
     },
   },
@@ -607,7 +658,7 @@ const COMMANDS: readonly CommandDefinition[] = [
     helpGroups: ["git-arc"],
     words: ["git", "arc", "restore"],
     usage: "wb git arc restore --ref <ref> (--confirm | -- <path> [<path>...])",
-    async build({ args, callerThreadId, cwd }) {
+    async build({ args, callerHarness, callerThreadId, cwd }) {
       const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, {
         boolean: ["--confirm"],
         values: ["--ref"],
@@ -620,6 +671,7 @@ const COMMANDS: readonly CommandDefinition[] = [
         checkpointCommit: flags.required("--ref"),
         ...(flags.has("--confirm") ? { confirmRestore: true } : {}),
         cwd,
+        harness: requireCallerHarness(callerHarness),
         ...(flags.trailing.length ? { paths: flags.trailing } : {}),
         threadId: requireCallerThreadId(callerThreadId),
       }, "git-arc-restore");
@@ -743,6 +795,7 @@ const ROOT_HELP_COMMAND_ORDER = [
   "git commit",
   "git arc plan",
   "git arc start",
+  "git arc continue",
   "git arc add",
   "git arc remove",
   "git arc compare",
@@ -803,6 +856,7 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     commandOrder: [
       "git arc plan",
       "git arc start",
+      "git arc continue",
       "git arc add",
       "git arc remove",
       "git arc compare",
@@ -931,9 +985,11 @@ export async function parseWorkbenchAgentCliCommand(
   argv: string[],
   {
     cwd = process.cwd(),
+    callerHarness = process.env.WORKBENCH_HARNESS?.trim() || "codex",
     callerThreadId = process.env.WORKBENCH_THREAD_ID?.trim() || process.env.CODEX_THREAD_ID?.trim() || null,
     workbenchOrigin = process.env.WORKBENCH_ORIGIN?.trim() || null,
   }: {
+    callerHarness?: string;
     callerThreadId?: string | null;
     cwd?: string;
     workbenchOrigin?: string | null;
@@ -963,7 +1019,7 @@ export async function parseWorkbenchAgentCliCommand(
   try {
     return {
       kind: "request",
-      request: await matched.definition.build({ args: argv.slice(matched.words.length), callerThreadId, cwd, workbenchOrigin }),
+      request: await matched.definition.build({ args: argv.slice(matched.words.length), callerHarness, callerThreadId, cwd, workbenchOrigin }),
     };
   } catch (error) {
     return {

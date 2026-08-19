@@ -14,7 +14,9 @@ import ThreadDurationText from "./ThreadDurationText";
 
 const ACTION_LABELS = {
   add: { completed: "Extended", failed: "Failed to extend", inProgress: "Extending" },
+  adopt: { completed: "Adopted workspace changes", failed: "Failed to adopt workspace changes", inProgress: "Adopting workspace changes" },
   compare: { completed: "Compared", failed: "Failed to compare", inProgress: "Comparing" },
+  continue: { completed: "Continued", failed: "Failed to continue", inProgress: "Continuing" },
   diff: { completed: "Diffed", failed: "Failed to diff", inProgress: "Diffing" },
   plan: { completed: "Planned", failed: "Failed to plan", inProgress: "Planning" },
   remove: { completed: "Reduced", failed: "Failed to reduce", inProgress: "Reducing" },
@@ -35,6 +37,7 @@ export default function ThreadGitArcItem({
   projectFilePaths,
   projectId,
   projectRootPath,
+  proposalRedirect,
   receipt,
   workspaceRoots,
 }: {
@@ -46,10 +49,27 @@ export default function ThreadGitArcItem({
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  proposalRedirect?: { onActivate: () => void; proposalId: string; title: string };
   receipt: GitArcReceipt | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  if (commandIntent.action === "propose") return null;
+  if (commandIntent.action === "propose") {
+    if (!proposalRedirect) return null;
+    return (
+      <article className="my-1.5 w-full rounded-[0.45rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] px-2.5 py-1.5" data-thread-git-arc-card="propose">
+        <button
+          className="flex w-full min-w-0 items-baseline gap-2 text-left text-[0.82em] leading-[1.45] text-muted hover:text-text"
+          onClick={proposalRedirect.onActivate}
+          type="button"
+        >
+          <GitArcIcon action="propose" />
+          <span>Proposed</span>
+          <span className="min-w-0 truncate font-medium text-text">{proposalRedirect.title.trim() || "Commit proposal"}</span>
+          <span className="shrink-0 font-mono text-[0.86em] text-muted">{proposalRedirect.proposalId.slice(0, 8)}</span>
+        </button>
+      </article>
+    );
+  }
   const state = actionState(outcome);
   const labels = ACTION_LABELS[commandIntent.action];
   const planName = receipt?.intentName ?? commandIntent.intentName ?? "Git arc";
@@ -58,11 +78,11 @@ export default function ThreadGitArcItem({
   const selectedPaths = receipt?.selectedPaths ?? commandIntent.paths;
   const primaryPaths = commandIntent.action === "plan"
     ? claimedPaths.length ? claimedPaths : selectedPaths
-    : commandIntent.action === "add" || commandIntent.action === "remove" || commandIntent.action === "restore"
+    : commandIntent.action === "add" || commandIntent.action === "adopt" || commandIntent.action === "remove" || commandIntent.action === "restore"
       ? selectedPaths
       : [];
   const primaryPathLabel = state === "failed"
-    ? commandIntent.action === "plan" || commandIntent.action === "add"
+    ? commandIntent.action === "plan" || commandIntent.action === "add" || commandIntent.action === "adopt"
       ? "Attempted to claim"
       : commandIntent.action === "remove" ? "Attempted to remove" : "Attempted to restore"
     : commandIntent.action === "remove" ? "Removed" : commandIntent.action === "restore" ? "Restored" : "Claimed";

@@ -1704,7 +1704,7 @@ function ThreadCommandExecutionDetails ({
   ), [browseResultEntries, commandDisplay.detailRows, isBrowseCommand, item.aggregatedOutput, item.id, item.status]);
   const shouldHideCommandOutput = commandDisplay.hideCommandOutput
     && (commandDetailRows.length > 0 || !item.aggregatedOutput?.trim());
-  if (checkpointCommitIntent || (gitArcAction === "propose" && (checkpointProposalId || gitArcReceipt?.proposalId))) {
+  if (gitArcAction === "propose") {
     return (
       <ThreadCheckpointCommitItem
         commandOutcome={commandOutcome}

@@ -193,12 +193,14 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   assert.equal((await parseWorkbenchAgentCliCommand(["git", "add", "--", "src/file.ts"], { callerThreadId: null, cwd: "C:/workspace" })).kind, "error");
 
   const plan = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "plan", "-m", "Update files", "--", "src/file.ts",
+    "git", "arc", "plan", "-m", "Update files", "-m", "Coordinate the shared boundary.", "--", "src/file.ts",
   ], gitOptions);
   assert.equal(plan.kind, "request");
   assert.deepEqual(plan.request.body, {
     action: "plan",
     cwd: "C:/workspace",
+    harness: "codex",
+    intentDescription: "Coordinate the shared boundary.",
     intentName: "Update files",
     paths: ["src/file.ts"],
     threadId: "thread-1",
@@ -209,64 +211,97 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   ], gitOptions);
   assert.equal(start.kind, "request");
   assert.deepEqual(start.request.body, {
-    action: "compare",
+    action: "arcStart",
     checkpointCommit: "abc",
     cwd: "C:/workspace",
+    harness: "codex",
     threadId: "thread-1",
   });
   assert.equal(start.request.responseKind, "git-arc-start");
 
+  const continuedArc = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "continue", "--ref", "abc",
+  ], gitOptions);
+  assert.equal(continuedArc.kind, "request");
+  assert.deepEqual(continuedArc.request.body, {
+    action: "arcContinue",
+    checkpointCommit: "abc",
+    cwd: "C:/workspace",
+    harness: "codex",
+    threadId: "thread-1",
+  });
+  assert.equal(continuedArc.request.responseKind, "git-arc-continue");
+
   const compare = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "compare", "--ref", "abc", "--", "src/file.ts",
+    "git", "arc", "compare", "--", "src/file.ts",
   ], gitOptions);
   assert.equal(compare.kind, "request");
   assert.deepEqual(compare.request.body, {
     action: "compare",
-    checkpointCommit: "abc",
     cwd: "C:/workspace",
+    harness: "codex",
     paths: ["src/file.ts"],
     threadId: "thread-1",
   });
   assert.equal(compare.request.responseKind, "git-arc-compare");
 
   const checkpointDiff = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "diff", "--ref", "abc",
+    "git", "arc", "diff",
   ], gitOptions);
   assert.equal(checkpointDiff.kind, "request");
   assert.equal(checkpointDiff.request.responseKind, "git-arc-diff");
 
-  const continuation = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "add", "--ref", "abc",
+  const emptyAddition = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "add",
   ], gitOptions);
-  assert.equal(continuation.kind, "request");
-  assert.deepEqual(continuation.request.body, {
+  assert.equal(emptyAddition.kind, "error");
+
+  const addition = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "add", "--", "src/new.ts",
+  ], gitOptions);
+  assert.equal(addition.kind, "request");
+  assert.deepEqual(addition.request.body, {
     action: "arcAdd",
-    checkpointCommit: "abc",
     cwd: "C:/workspace",
+    harness: "codex",
+    paths: ["src/new.ts"],
+    threadId: "thread-1",
+  });
+
+  const adoption = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "adopt", "--", "src/dirty.ts",
+  ], gitOptions);
+  assert.equal(adoption.kind, "request");
+  assert.deepEqual(adoption.request.body, {
+    action: "arcAdopt",
+    cwd: "C:/workspace",
+    harness: "codex",
+    paths: ["src/dirty.ts"],
     threadId: "thread-1",
   });
 
   const removal = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "remove", "--ref", "abc", "--", "src/file.ts",
+    "git", "arc", "remove", "--", "src/file.ts",
   ], gitOptions);
   assert.equal(removal.kind, "request");
   assert.deepEqual(removal.request.body, {
     action: "arcRemove",
-    checkpointCommit: "abc",
     cwd: "C:/workspace",
+    harness: "codex",
     paths: ["src/file.ts"],
     threadId: "thread-1",
   });
 
   const proposal = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "propose", "--ref", "abc", "-m", "Title", "-m", "Description",
+    "git", "arc", "propose", "-m", "Title", "-m", "Description",
   ], gitOptions);
   assert.equal(proposal.kind, "request");
   assert.deepEqual(proposal.request.body, {
     action: "proposalCreate",
-    checkpointCommit: "abc",
+    amend: false,
     cwd: "C:/workspace",
     description: "Description",
+    harness: "codex",
     threadId: "thread-1",
     title: "Title",
   });
@@ -281,6 +316,7 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     checkpointCommit: "abc",
     confirmRestore: true,
     cwd: "C:/workspace",
+    harness: "codex",
     threadId: "thread-1",
   });
   assert.equal(checkpointRestore.request.responseKind, "git-arc-restore");
@@ -293,6 +329,7 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     action: "restore",
     checkpointCommit: "abc",
     cwd: "C:/workspace",
+    harness: "codex",
     paths: ["src/one.ts", "src/two.ts"],
     threadId: "thread-1",
   });
@@ -454,9 +491,10 @@ test("renders complete root help and exact focused Git and orchestrator help", a
   assert.deepEqual(root, { help: WORKBENCH_AGENT_CLI_HELP, kind: "help" });
   assert.match(WORKBENCH_AGENT_CLI_HELP, /^Usage:\n/u);
   assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc plan -m <short-intent>/u);
-  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc add --ref <ref>/u);
-  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc remove --ref <ref>/u);
-  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc propose --ref <ref> -m <title>/u);
+  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc add -- <additional-path>/u);
+  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc adopt -- <path>/u);
+  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc remove -- <claimed-path>/u);
+  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc propose \[--amend\]/u);
   assert.doesNotMatch(WORKBENCH_AGENT_CLI_HELP, /git checkpoint/u);
   assert.match(WORKBENCH_AGENT_CLI_HELP, /--confirm \| -- <path> \[<path>\.\.\.\]/u);
   assert.doesNotMatch(WORKBENCH_AGENT_CLI_HELP, /wb collaboration/u);
@@ -512,21 +550,18 @@ Use the narrowest applicable scope.
 });
 
 test("every deprecated checkpoint command returns the current plan and arc migration guide", async () => {
+  let guide: string | null = null;
   for (const command of ["baseline", "plan", "implement", "compare", "diff", "commit", "restore"]) {
     const canonical = await parseWorkbenchAgentCliCommand(["git", "checkpoint", command]);
     const alias = await parseWorkbenchAgentCliCommand(["checkpoint", command]);
     assert.deepEqual(alias, canonical);
     assert.equal(canonical.kind, "help");
-    assert.match(canonical.help, /wb git arc plan -m/u);
-    assert.match(canonical.help, /wb git arc start --ref/u);
-    assert.match(canonical.help, /wb git arc add --ref <current-ref>/u);
-    assert.match(canonical.help, /wb git arc remove --ref <current-ref>/u);
-    assert.match(canonical.help, /even when no new paths are supplied/u);
-    assert.match(canonical.help, /wb git arc propose --ref/u);
+    guide ??= canonical.help;
+    assert.equal(canonical.help, guide);
   }
   const oldPlan = await parseWorkbenchAgentCliCommand(["git", "plan", "-m", "Old", "--", "src/a.ts"]);
   assert.equal(oldPlan.kind, "help");
-  assert.match(oldPlan.help, /wb git arc plan -m/u);
+  assert.equal(oldPlan.help, guide);
 });
 
 test("routes canonical, compatibility, and leaf help to the nearest owning group", async () => {
@@ -537,7 +572,7 @@ test("routes canonical, compatibility, and leaf help to the nearest owning group
   const canonicalArc = await parseWorkbenchAgentCliCommand(["git", "arc", "--help"]);
   const arcLeaf = await parseWorkbenchAgentCliCommand(["git", "arc", "plan", "--help"]);
   assert.deepEqual(arcLeaf, canonicalArc);
-  assert.match(canonicalArc.kind === "help" ? canonicalArc.help : "", /wb git arc remove --ref <ref>/u);
+  assert.match(canonicalArc.kind === "help" ? canonicalArc.help : "", /wb git arc remove -- <claimed-path>/u);
 
   const browse = await parseWorkbenchAgentCliCommand(["browse", "--help"]);
   const browseLeaf = await parseWorkbenchAgentCliCommand(["browse", "run", "--help"]);

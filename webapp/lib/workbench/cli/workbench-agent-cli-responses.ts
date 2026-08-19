@@ -76,11 +76,20 @@ export function adaptWorkbenchAgentCliResponse({
     }
     case "git-arc-plan":
     case "git-arc-add":
+    case "git-arc-adopt":
+    case "git-arc-continue":
     case "git-arc-remove": {
       const action = request.responseKind === "git-arc-plan"
         ? "plan"
-        : request.responseKind === "git-arc-add" ? "add" : "remove";
-      const label = action === "plan" ? "Created Git plan" : "Created successor arc ref";
+        : request.responseKind === "git-arc-add"
+          ? "add"
+          : request.responseKind === "git-arc-adopt"
+            ? "adopt"
+          : request.responseKind === "git-arc-continue" ? "continue" : "remove";
+      const label = action === "plan"
+        ? "Created Git plan"
+        : action === "adopt" ? "Adopted workspace changes"
+        : action === "continue" ? "Continued Git arc" : "Created successor arc ref";
       return succeeded(appendArcReceipt([
         `${label} ${readString(payload, "checkpointCommit") || "(unknown commit)"}`,
       ], createArcReceipt(action, payload, request)).join("\n"));

@@ -18,6 +18,7 @@ const RELOAD_TIMEOUT_MS = 60_000;
 
 interface WorkbenchAgentDirectPort {
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
+  executeGitArcRequest?: (body: object) => Promise<Response>;
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
   requestSubagent?: (message: JsonRpcRequest) => Promise<JsonRpcResponse>;
 }
@@ -132,12 +133,14 @@ export default class WorkbenchAgentCommandController {
       const argv = form.getAll("arg");
       const cwd = form.get("cwd")?.trim() || "";
       const callerThreadId = form.get("callerThreadId")?.trim() || null;
+      const callerHarness = form.get("callerHarness")?.trim() || "codex";
       const workbenchOrigin = form.get("workbenchOrigin")?.trim() || this.orchestratorOrigin;
       if (!cwd || argv.length > 256 || argv.some((arg) => arg.length > 65_536 || arg.includes("\0"))) {
         sendText(response, 400, "A valid Workbench agent command request is required.\n");
         return;
       }
       const parsed = await parseWorkbenchAgentCliCommand(argv, {
+        callerHarness,
         callerThreadId,
         cwd,
         workbenchOrigin,
@@ -181,6 +184,9 @@ export default class WorkbenchAgentCommandController {
     }
     if ((request.path === "/api/thread-status" || request.path === "/api/thread-title") && request.body) {
       return await this.dispatchManagedThreadRequest(request.path, request.body, signal);
+    }
+    if (request.path === "/api/git-checkpoint" && request.body && this.direct.executeGitArcRequest) {
+      return await this.direct.executeGitArcRequest(request.body);
     }
     if (request.path.startsWith("/api/browse/sessions")) {
       return await this.direct.executeSessionRequest({ body, method: request.method, url: request.path }, signal);

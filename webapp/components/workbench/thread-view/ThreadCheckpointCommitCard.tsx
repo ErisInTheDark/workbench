@@ -28,6 +28,7 @@ export type CheckpointCommitCardState =
 export default function ThreadCheckpointCommitCard({
   committing,
   description,
+  embedded = false,
   includeNewer,
   onCommit,
   onDescriptionChange,
@@ -45,6 +46,7 @@ export default function ThreadCheckpointCommitCard({
 }: {
   committing: boolean;
   description: string;
+  embedded?: boolean;
   includeNewer: boolean;
   onCommit: () => void;
   onDescriptionChange: (value: string) => void;
@@ -87,7 +89,14 @@ export default function ThreadCheckpointCommitCard({
   };
 
   return (
-    <article aria-label="Checkpoint commit proposal" className="my-2 w-full rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] px-3 py-2.5" data-thread-checkpoint-card="true">
+    <article
+      aria-label="Checkpoint commit proposal"
+      className={embedded
+        ? "w-full px-3 py-2.5"
+        : "my-2 w-full rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] px-3 py-2.5"}
+      data-thread-checkpoint-card="true"
+      data-thread-checkpoint-card-embedded={embedded ? "true" : undefined}
+    >
       <div className="flex min-w-0 gap-2" data-thread-checkpoint-card-content="true">
         <span className="mt-1 inline-flex size-5 shrink-0 items-center justify-center text-muted" aria-hidden="true">
           <GitArcIcon action="propose" className="size-5" />
@@ -148,6 +157,8 @@ export default function ThreadCheckpointCommitCard({
                     <span>Committed</span>
                     {proposal.committedSha ? <span className="font-mono text-text">{proposal.committedSha.slice(0, 8)}</span> : null}
                   </span>
+                ) : proposal?.status === "superseded" ? (
+                  <span className="text-[0.78em] text-muted">Superseded</span>
                 ) : proposal?.status === "unavailable" ? (
                   <span className="text-[0.78em] text-[color:var(--danger)]">
                     {proposal.unavailableReason || "This proposal is no longer mechanically available."}

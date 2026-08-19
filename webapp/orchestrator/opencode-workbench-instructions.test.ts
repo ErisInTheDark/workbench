@@ -11,4 +11,5 @@ test("injects the active OpenCode session as the managed Workbench thread id", (
   const source = buildOpenCodeSystemReplacementPluginSource();
   assert.match(source, /"shell\.env"/u);
   assert.match(source, /output\.env\.WORKBENCH_THREAD_ID = input\.sessionID/u);
+  assert.match(source, /output\.env\.WORKBENCH_HARNESS = "opencode"/u);
 });

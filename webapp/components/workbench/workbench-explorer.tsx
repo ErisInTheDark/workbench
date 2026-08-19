@@ -247,14 +247,19 @@ export function ThreadsList ({
     const baseStatus = entry.entryKind === "draft"
       ? "Draft"
       : lifecycle?.kind === "needsAttention" ? attentionLabel || "Needs attention" : lifecycle?.kind === "working" ? "Working" : lifecycle?.kind === "stopped" ? "Stopped" : "Completed";
-    const status = baseStatus;
+    const status = entry.entryKind !== "draft" && (lifecycle?.kind === "stopped" || lifecycle?.kind === "completed") && entry.fileClaim
+      ? entry.fileClaim.proposalStatus === "proposed"
+        ? `${lifecycle.kind === "stopped" ? "Stopped" : "Completed"} with proposed commit`
+        : `${lifecycle.kind === "stopped" ? "Stopped" : "Completed"} with file claims`
+      : baseStatus;
     const pinned = isPinned(entry);
     const timestamp = new Date(entry.activityAt);
     const relativeTime = formatThreadRelativeTimestamp(entry.activityAt / 1000, nowMs);
     const exactTime = timestamp.toLocaleString();
     const canComplete = entry.entryKind === "thread" && !isWorkbenchThreadStatusProviderOwned(entry.lifecycle) && (entry.lifecycle.kind === "needsAttention" || entry.lifecycle.kind === "stopped");
-    const baseAction = entry.entryKind === "draft" ? "discard" : group === "other" ? "restore" : group === "snoozed" ? "wake" : canComplete ? "complete" : lifecycle?.kind === "completed" && !lifecycle.settled ? "settle" : null;
-    const action = canComplete && isShiftPressed ? "settle" : baseAction;
+    const baseAction = entry.entryKind === "draft" ? "discard" : group === "other" ? "restore" : group === "snoozed" ? "wake" : canComplete ? "complete" : lifecycle?.kind === "completed" && !lifecycle.settled && !entry.fileClaim ? "settle" : null;
+    const canShiftSettle = canComplete && !entry.fileClaim;
+    const action = canShiftSettle && isShiftPressed ? "settle" : baseAction;
     const Icon = entry.entryKind === "draft" ? DraftThreadIcon : lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
     const statusClassName = entry.entryKind === "draft"
       ? "text-muted"
@@ -267,13 +272,13 @@ export function ThreadsList ({
             : "text-emerald-600 dark:text-emerald-300";
     const ActionIcon = action === "discard" ? DiscardDraftIcon : action === "restore" ? RestoreThreadIcon : action === "wake" ? UnsnoozeThreadIcon : SettleThreadIcon;
     const actionLabel = action === "complete" ? "Completed" : action === "discard" ? "Discard draft" : action === "restore" ? "Restore" : action === "settle" ? "Settle" : "Wake";
-    const rowName = `${entry.title}, ${baseStatus}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
+    const rowName = `${entry.title}, ${status}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
     const dimmed = !selected && (group === "snoozed" || group === "other");
     const hasDashedBorder = entry.entryKind === "draft" || lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped";
     const strokeOpacity = entry.entryKind === "draft" ? 0.24 : 1;
     const compact = group === "other";
     const actionButton = action ? (
-      <button type="button" aria-label={actionLabel} title={actionLabel} className={`pointer-events-auto z-20 row-start-1 -mt-1 -mb-1 ml-0 mr-0 hidden cursor-pointer items-center rounded-lg text-muted hover:text-text focus-visible:flex focus-visible:text-text group-hover/thread-row:flex group-focus-within/thread-row:flex ${compact ? "col-start-3 self-center" : "col-start-2 self-start"} ${action === "discard" ? "p-1" : "gap-1 px-1.5 py-1 text-[0.72rem] font-medium"}`} onClick={(event) => { event.stopPropagation(); onAction?.(entry, canComplete && (event.shiftKey || event.detail > 1) ? "settle" : action); }} onPointerDown={(event) => event.stopPropagation()}>
+      <button type="button" aria-label={actionLabel} title={actionLabel} className={`pointer-events-auto z-20 row-start-1 -mt-1 -mb-1 ml-0 mr-0 hidden cursor-pointer items-center rounded-lg text-muted hover:text-text focus-visible:flex focus-visible:text-text group-hover/thread-row:flex group-focus-within/thread-row:flex ${compact ? "col-start-3 self-center" : "col-start-2 self-start"} ${action === "discard" ? "p-1" : "gap-1 px-1.5 py-1 text-[0.72rem] font-medium"}`} onClick={(event) => { event.stopPropagation(); onAction?.(entry, canShiftSettle && (event.shiftKey || event.detail > 1) ? "settle" : action); }} onPointerDown={(event) => event.stopPropagation()}>
         <ActionIcon className="size-4" />
         {action === "discard" ? null : <span>{actionLabel}</span>}
       </button>

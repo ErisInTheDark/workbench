@@ -146,7 +146,7 @@ Use \`wb git arc start/compare/diff\` as the primary source for planned-path dri
 #### Plan and arc names
 
 * **Plan ref**: the one full Git-visible worktree snapshot created in Brief mode after Workbench verifies the exact planned paths are clean. It stores a short intent name and the claimed path set.
-* **Current arc ref**: initially the plan ref. \`arc add\` and \`arc remove\` return successor refs after validating claim changes; always replace the current ref with the returned SHA.
+* **Remembered arc ref**: initially the plan ref. Record successor refs returned by \`arc add\`, \`arc adopt\`, \`arc remove\`, or \`arc continue\` for later continuation or restore. Active commands resolve the registry without this ref. Removing the final clean claim ends the arc and leaves no active successor.
 * **Arc**: the approved changeset that keeps one original snapshot tree while successor parents advance to each accepted current HEAD through implementation, Review, corrections, and proposal.
 
 #### Before asking for approval in Brief mode
@@ -171,8 +171,8 @@ If the approved touch set changes later, return to Brief mode. Use \`arc add\` f
 After the user explicitly approves the current plan:
 
 1. Enter Implement mode.
-2. Run \`wb git arc start --ref <current-ref>\`. It compares the stored claimed set and creates no ref.
-3. Use that exact current ref for any needed \`arc diff\` command.
+2. If this is the inactive plan's first Implement pass, run \`wb git arc start --ref <plan-ref>\`. It compares the stored claimed set, activates the claims, and creates no ref.
+3. If the same implementation arc is already active, do not rerun \`arc start\`. Use ref-free \`arc compare\` or \`arc diff\` for inspection, and \`arc continue --ref <current-ref>\` before another implementation pass.
 4. Classify any drift before editing.
 
 Use this table:
@@ -181,7 +181,7 @@ Use this table:
 | --- | --- |
 | No drift, or only expected changes from the approved workflow | Keep using the same current ref and proceed. Do not create another baseline. |
 | Unrelated drift, including a compatible fast-forward HEAD commit, that does not touch the approved edit files, nearby ownership, contracts, dependencies, validation scope, or mechanics needed by the plan | State that the drift is unrelated, keep using the same current ref, and proceed. |
-| Drift that may dangerously intersect with the approved work | Use \`wb git arc diff --ref <current-ref> -- <relevant-path> [...]\`. Then decide whether the drift is safe or plan-affecting. |
+| Drift that may dangerously intersect with the approved work | Use \`wb git arc diff -- <relevant-path> [...]\`. Then decide whether the drift is safe or plan-affecting. |
 | Plan-affecting drift, including relevant-path changes, incompatible or non-fast-forward HEAD movement, missing files, disappeared files, ownership changes, dependency changes, validation-scope changes, or mechanics that invalidate the plan | Stop before editing. Re-inspect the changed state. Tell the user the workspace changed since approval. Return to Brief mode with an updated plan. Do not create a new checkpoint for this drift. |
 | Diff cannot run, or the drift cannot be confidently classified as safe or unrelated  | Stop before editing. Report degraded checkpoint safety. Continue only if the user explicitly approves degraded safety. |
 
@@ -193,17 +193,21 @@ Plan creation verifies clean claimed paths before approval. If it rejects dirty 
 
 Preserve unrelated user or agent changes.
 
-Reuse the current arc ref for corrections, direct bounded follow-ups, validation fixes, or continued implementation before Review.
+Keep the current arc ref for explicit start, post-commit continuation, and restore. Active-registry commands resolve the caller's current arc without a ref.
 
-When a later implementation pass needs a continuation guard without new files, run \`wb git arc add --ref <current-ref>\`. When approved follow-up work adds genuinely new planned paths, run \`wb git arc add --ref <current-ref> -- <additional-path> [...]\` before editing them. Never repeat paths already in the claimed set.
+Before a later implementation pass on the same claimed files, run \`wb git arc continue --ref <current-ref>\`. When approved follow-up work adds genuinely new clean paths, run \`wb git arc add -- <additional-path> [...]\` before editing them. Use \`wb git arc adopt -- <dirty-path> [...]\` only to claim existing workspace changes. Never repeat paths already in the claimed set.
 
-Every \`arc add\` checks whether committed content still matches the original snapshot for the existing claimed set. It preserves the original snapshot tree, advances the successor parent to the accepted current HEAD, optionally extends the claimed set, and returns a successor ref. Record that returned SHA as the current ref.
+Every \`arc continue\`, \`arc add\`, or \`arc adopt\` checks whether committed content still matches the baseline for the existing claimed set. It advances the successor parent to accepted current HEAD and returns a successor ref. Replace the remembered ref with that SHA; active commands still resolve the registry without it.
 
-When approved work no longer owns exact claimed entries, run \`wb git arc remove --ref <current-ref> -- <claimed-path> [...]\`. Workbench rejects dirty removals, non-exact claims, an empty resulting set, or drift under retained claims. It changes no working-tree or index content. Record the returned successor SHA as the current ref.
+If Review finds more implementation work while a proposal is pending, run \`wb git arc continue --ref <current-ref>\` before editing. Use \`arc add -- <additional-path> [...]\` instead when the next pass also claims genuinely new clean paths. Either continuation makes the frozen proposal unavailable, clears it from the active claim, and returns the successor ref. Do not commit a known-bad proposal merely to continue its arc.
+
+When approved work no longer owns exact claimed entries, run \`wb git arc remove -- <claimed-path> [...]\`. Workbench rejects dirty removals, non-exact claims, or drift under retained claims. It changes no working-tree or index content. Record a returned successor SHA when claims remain. Removing the final clean claim releases the arc and leaves no active successor.
+
+After any proposal is committed, use the same \`wb git arc continue --ref <current-ref>\` command before follow-up implementation. A partial commit returns its existing remaining-file successor. A complete commit creates one fresh baseline at current HEAD. Replace the current ref with the returned ref.
 
 #### In Review mode
 
-Before summarizing the work, run \`wb git arc compare --ref <current-ref>\`. It defaults to the claimed set and derives the changed files. Use \`wb git arc diff --ref <current-ref>\` for unified diff details when needed.
+Before summarizing the work, run \`wb git arc compare\`. It defaults to the active claimed set and derives the changed files. Use \`wb git arc diff\` for unified diff details when needed.
 
 Do not diff against:
 
@@ -221,7 +225,7 @@ Then summarize:
 * failed, skipped, or unavailable validation
 * remaining risks or follow-up decisions
 
-After validation, arc compare/diff, and the Review summary, run \`wb git arc propose --ref <current-ref> -m <fresh-title> [-m <optional-description>]\`. Workbench derives the exact changed files under the claimed set and excludes claimed paths that ended unchanged. Use an explicit claimed subset after \`--\` only when the proposal must be narrower. This creates the editable commit proposal UI; it does not commit the branch and does not require separate commit permission. Do not substitute the autonomous \`wb git commit\` workflow. If the implementation produced no touched files, do not create a proposal. Report proposal creation failures instead of silently ending Review without the UI.
+After validation, arc compare/diff, and the Review summary, run \`wb git arc propose -m <fresh-title> [-m <optional-description>]\`. Workbench derives the exact changed files under the active claimed set and excludes claimed paths that ended unchanged. Use an explicit claimed subset after \`--\` only when the proposal must be narrower. This creates the editable commit proposal UI; it does not commit the branch and does not require separate commit permission. Do not substitute the autonomous \`wb git commit\` workflow. If the implementation produced no touched files, do not create a proposal. Report proposal creation failures instead of silently ending Review without the UI.
 
 ## Project Quality
 
@@ -679,10 +683,11 @@ In Implement mode:
 
 Before the first file edit in Implement mode:
 
-- Run \`wb git arc start --ref <current-ref>\`; it compares the stored claimed set and creates no new ref.
+- For an inactive plan's first Implement pass, run \`wb git arc start --ref <plan-ref>\`; it compares the stored claimed set, activates the claims, and creates no new ref.
+- When the same implementation arc is already active, do not rerun \`arc start\`; use ref-free \`arc compare\` or \`arc diff\` for inspection, and \`arc continue --ref <current-ref>\` before another implementation pass.
 - If the comparison contains only expected changes from your own approved workflow, keep the same current ref and continue.
 - If the comparison contains unrelated changes, including a compatible fast-forward HEAD commit, that do not touch the approved edit files, nearby ownership, contracts, dependencies, validation scope, or mechanics needed by the plan, state that the drift is unrelated, keep the same current ref, and continue.
-- If a changed file might intersect dangerously with the approved work, use \`arc diff\` with the current ref and that exact path before deciding whether to proceed or re-brief.
+- If a changed file might intersect dangerously with the approved work, use \`wb git arc diff -- <path>\` before deciding whether to proceed or re-brief.
 - If plan creation rejected dirty claimed paths, stop and ask the user what changed. Include **Committed — the workspace should now be clean, try again** as an option.
 - If it differs in a way that affects the approved plan, stop before editing, re-inspect, and return to Brief mode. Tell the user the workspace changed since approval, but do not dump checkpoint plumbing unless they ask or the details matter for resolving the conflict. Do not create a new checkpoint for plan-affecting drift.
 - If the arc diff cannot run, or you cannot confidently classify the drift as unrelated, stop before editing and report degraded checkpoint safety. Continue without it only after explicit user approval.
@@ -697,7 +702,7 @@ Use Review mode after implementation and validation.
 
 In Review mode:
 
-- Run \`wb git arc compare --ref <current-ref>\` before summarizing changes. It defaults to the claimed set and derives changed files. Use \`arc diff\` for unified details. Do not substitute the newest unrelated ref, the oldest ref, or a predecessor superseded by \`arc add\` or \`arc remove\`. If the current ref is missing or ambiguous, report degraded checkpoint safety instead of guessing.
+- Run \`wb git arc compare\` before summarizing changes. It defaults to the active claimed set and derives changed files. Use \`wb git arc diff\` for unified details. Do not substitute raw Git or an unrelated historical ref. If no active arc can be resolved, report degraded checkpoint safety instead of guessing.
 - Do not use <plan></plan> in Review mode. If you need to propose a new follow-up implementation plan, switch back to Brief mode first.
 - summarize what changed and why
 - for each major existing owned shape touched, state whether it was preserved, changed, replaced, removed, merged, or moved. If anything was replaced, removed, merged, or moved, name the explicit plan line or user instruction that authorized it.
@@ -705,7 +710,7 @@ In Review mode:
 - report validation performed and what it proved
 - report failed, skipped, or unavailable validation
 - name remaining risks or follow-up decisions
-- after validation, arc compare/diff, and the Review summary, run \`wb git arc propose --ref <current-ref> -m <fresh-title> [-m <optional-description>]\`. Workbench derives exact changed files under the claimed set. Use an explicit claimed subset only when the proposal must be narrower. This creates the editable commit proposal UI; it does not commit the branch and does not require separate commit permission. Do not replace it with the autonomous \`wb git commit\` workflow. If no files were touched, do not create a proposal. Report proposal creation failures.
+- after validation, arc compare/diff, and the Review summary, run \`wb git arc propose -m <fresh-title> [-m <optional-description>]\`. Workbench derives exact changed files under the active claimed set. Use an explicit claimed subset only when the proposal must be narrower. This creates the editable commit proposal UI; it does not commit the branch and does not require separate commit permission. Do not replace it with the autonomous \`wb git commit\` workflow. If no files were touched, do not create a proposal. Report proposal creation failures.
 - ask what should happen next
 
 Do not close the task as complete unless the user explicitly says it is complete.

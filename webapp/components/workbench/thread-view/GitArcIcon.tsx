@@ -39,12 +39,12 @@ export default function GitArcIcon({ action, className = "size-4" }: { action: G
       </SvgFrame>
     );
   }
-  if (action === "add" || action === "remove") {
+  if (action === "add" || action === "adopt" || action === "remove") {
     return (
       <SvgFrame className={className}>
         <rect width="18" height="18" x="3" y="3" rx="2" />
         <path d="M8 12h8" />
-        {action === "add" ? <path d="M12 8v8" /> : null}
+        {action === "add" || action === "adopt" ? <path d="M12 8v8" /> : null}
       </SvgFrame>
     );
   }

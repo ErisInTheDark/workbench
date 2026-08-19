@@ -37,6 +37,7 @@ curl_args=(
   --header 'Content-Type: application/x-www-form-urlencoded'
   --data-urlencode "cwd=$PWD"
   --data-urlencode "callerThreadId=${WORKBENCH_THREAD_ID:-${CODEX_THREAD_ID:-}}"
+  --data-urlencode "callerHarness=${WORKBENCH_HARNESS:-codex}"
   --data-urlencode "workbenchOrigin=$WORKBENCH_ORIGIN"
 )
 for argument in "$@"; do

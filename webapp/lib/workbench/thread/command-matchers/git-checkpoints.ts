@@ -21,7 +21,9 @@ import type { CommandMatcherDefinition } from "./types";
 
 const ARC_MATCHER_IDS = {
   add: "git-arc.add",
+  adopt: "git-arc.adopt",
   compare: "git-arc.compare",
+  continue: "git-arc.continue",
   diff: "git-arc.diff",
   plan: "git-arc.plan",
   propose: "git-arc.propose",
@@ -34,7 +36,7 @@ const CHECKPOINT_PROPOSAL_PATTERN = /^Workbench arc proposal:\s*([A-Za-z0-9._-]+
 const CHECKPOINT_COMPARE_LINE_PATTERN = /^([ADMU])\t\+(\d+)\t-(\d+)\t(.+)$/u;
 
 export interface GitCheckpointCommitCommandIntent {
-  checkpointCommit: string;
+  amend: boolean;
   description: string;
   paths: string[];
   title: string;
@@ -91,11 +93,25 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     summary: "Checked Git arc",
   }),
   createMatcher({
+    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+continue(?:\s|$)/iu,
+    id: ARC_MATCHER_IDS.continue,
+    ongoing: "Continuing Git arc",
+    stats: { gitCheckpointCreates: 1 },
+    summary: "Continued Git arc",
+  }),
+  createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+add(?:\s|$)/iu,
     id: ARC_MATCHER_IDS.add,
     ongoing: "Extending Git arc",
     stats: { gitCheckpointCreates: 1 },
     summary: "Extended Git arc",
+  }),
+  createMatcher({
+    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+adopt(?:\s|$)/iu,
+    id: ARC_MATCHER_IDS.adopt,
+    ongoing: "Adopting workspace changes",
+    stats: { gitCheckpointCreates: 1 },
+    summary: "Adopted workspace changes",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+remove(?:\s|$)/iu,
@@ -181,7 +197,8 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
   }
   const paths = tokens[cursor] === "--" ? tokens.slice(cursor + 1) : [];
   if (action === "plan") return intentName && paths.length ? { action, intentName, paths, ref: null } : null;
-  if (!ref) return null;
+  const refRequired = action === "continue" || action === "restore" || action === "start";
+  if (refRequired !== Boolean(ref)) return null;
   return { action, intentName: null, paths, ref };
 }
 
@@ -210,20 +227,24 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
   if (tokens[cursor] !== "arc" || tokens[cursor + 1] !== "propose") return null;
   cursor += 2;
 
-  let checkpointCommit = "";
+  let amend = false;
   const messages: string[] = [];
   for (; cursor < tokens.length && tokens[cursor] !== "--"; cursor += 1) {
     const flag = tokens[cursor];
+    if (flag === "--amend") {
+      if (amend) return null;
+      amend = true;
+      continue;
+    }
     const value = tokens[cursor + 1];
-    if ((flag !== "--ref" && flag !== "-m") || !value) return null;
-    if (flag === "--ref") checkpointCommit = value;
-    else messages.push(value);
+    if (flag !== "-m" || !value) return null;
+    messages.push(value);
     cursor += 1;
   }
   const paths = tokens[cursor] === "--" ? tokens.slice(cursor + 1) : [];
-  if (!checkpointCommit || messages.length < 1 || messages.length > 2) return null;
+  if ((!amend && messages.length < 1) || messages.length > 2) return null;
   return {
-    checkpointCommit,
+    amend,
     description: messages[1] ?? "",
     paths,
     title: messages[0],

@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent } from "react";
 
 import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
@@ -57,7 +57,7 @@ import {
 } from "../../../lib/workbench/thread/inline-mention-highlights";
 import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
 import { ThreadMessageNotSentError } from "../../../lib/workbench/thread/thread-message-submission";
-import type { WorkbenchThreadStateRequest } from "../../../lib/workbench/thread/thread-state";
+import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "../../../lib/workbench/thread/thread-state";
 import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import {
   filterSubagentsByParentThreadId,
@@ -85,6 +85,8 @@ import ThreadComposer from "./ThreadComposer";
 import ThreadContextStatus from "./ThreadContextStatus";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadGoalControl from "./ThreadGoalControl";
+import ThreadGitArcLifecycleCard from "./ThreadGitArcLifecycleCard";
+import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadRateLimits from "./ThreadRateLimits";
 import ThreadScrollAnchorController, { type ThreadScrollSnapshot } from "./ThreadScrollAnchorController";
@@ -97,6 +99,7 @@ const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
 const EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS: readonly string[] = [];
 const EMPTY_BROWSE_RESULT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
 const EMPTY_PROJECT_FILE_CANDIDATES: readonly ProjectTreeFileCandidate[] = [];
+const EMPTY_THREAD_SIDEBAR_SUBSCRIBE = () => () => undefined;
 const THREAD_VIEW_BACKGROUND_REBUILD_SLICE_MS = 20;
 const threadViewBackgroundRebuildQueue = new CooperativeRebuildQueue();
 
@@ -720,6 +723,19 @@ export default memo(function ThreadView ({
   const activeThread = activeThreadId === thread.id
     ? getThreadDocumentFromSnapshot(threadDocuments, thread.id) ?? thread
     : relatedThreadsById[activeThreadId] ?? null;
+  const getActiveSidebarEntry = useCallback((): WorkbenchThreadSidebarEntry | null => {
+    if (!activeThread) return null;
+    return threadSidebarStore?.getSnapshot()?.entries.find((entry) => (
+      entry.entryKind !== "draft"
+      && entry.identity.harness === activeThread.harness
+      && entry.identity.threadId === activeThread.id
+    )) ?? null;
+  }, [activeThread, threadSidebarStore]);
+  const activeSidebarEntry = useSyncExternalStore(
+    threadSidebarStore?.subscribe ?? EMPTY_THREAD_SIDEBAR_SUBSCRIBE,
+    getActiveSidebarEntry,
+    getActiveSidebarEntry,
+  );
   const activeProfileSlot: WorkbenchComposerProfileSlot | null = activeThread
     ? activeThread.isDraft
       ? activeThread.id.startsWith("draft:")
@@ -1611,6 +1627,10 @@ export default memo(function ThreadView ({
       })}
     />
   ) : null;
+  const terminalFileClaim = activeSidebarEntry?.entryKind !== "draft"
+    && (activeSidebarEntry?.lifecycle.kind === "completed" || activeSidebarEntry?.lifecycle.kind === "stopped")
+    ? activeSidebarEntry.fileClaim ?? null
+    : null;
 
   return (
     <ProjectFilePathDisplayProvider
@@ -1618,6 +1638,10 @@ export default memo(function ThreadView ({
       disambiguationKey={projectFileIndexId}
       disambiguationPaths={projectFilePaths}
     >
+      <ThreadGitArcPresentationContext.Provider value={{
+        harness: activeThread?.harness ?? thread.harness,
+        hoistedProposalId: terminalFileClaim?.proposalId ?? null,
+      }}>
       <div
         ref={threadViewRef}
         data-thread-codeblock-wrap={threadCodeBlockWrap ? "true" : "false"}
@@ -1766,6 +1790,19 @@ export default memo(function ThreadView ({
             ) : null}
           </div>
         ) : null}
+        {terminalFileClaim && activeThread ? (
+          <ThreadGitArcLifecycleCard
+            claim={terminalFileClaim}
+            cwd={activeThread.cwd}
+            harness={activeThread.harness}
+            onReleased={async () => await onUpdateThreadState({ method: "workbench/thread-state/refresh", projectId })}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            threadId={activeThread.id}
+            workspaceRoots={workspaceFileLinkRoots}
+          />
+        ) : null}
         {activeThread?.harness === "codex" && threadGoalControls ? (
           <ThreadGoalControl controls={threadGoalControls} thread={activeThread}>
             {agentTabs}
@@ -1787,6 +1824,7 @@ export default memo(function ThreadView ({
         ) : null}
         <div aria-hidden="true" className="h-px w-full" />
       </div>
+      </ThreadGitArcPresentationContext.Provider>
     </ProjectFilePathDisplayProvider>
   );
 });

@@ -300,7 +300,7 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
   assert.equal(commit.ongoingSummaryText, "Committing selected files");
 
   const diff = getThreadCommandDisplay({
-    command: "wb git arc diff --ref abc -- src/file.ts",
+    command: "wb git arc diff -- src/file.ts",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
@@ -326,7 +326,7 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
   assert.doesNotMatch(String(legacyCheckpoint.claimedBy), /git-(?:checkpoint|arc|plan)/u);
 
   const addition = getThreadCommandDisplay({
-    command: "wb git arc add --ref abc -- src/new.ts",
+    command: "wb git arc add -- src/new.ts",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
@@ -334,8 +334,17 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
   assert.equal(addition.claimedBy, "git-arc.add");
   assert.equal(addition.summaryText, "Extended Git arc");
 
+  const adoption = getThreadCommandDisplay({
+    command: "wb git arc adopt -- src/dirty.ts",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(adoption.claimedBy, "git-arc.adopt");
+  assert.equal(adoption.summaryText, "Adopted workspace changes");
+
   const removal = getThreadCommandDisplay({
-    command: "wb git arc remove --ref abc -- src/old.ts",
+    command: "wb git arc remove -- src/old.ts",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
@@ -353,7 +362,7 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
   assert.equal(start.summaryText, "Checked Git arc");
 
   const compare = getThreadCommandDisplay({
-    command: "wb git arc compare --ref abc -- src/file.ts",
+    command: "wb git arc compare -- src/file.ts",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
@@ -362,7 +371,7 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
   assert.equal(compare.summaryText, "Compared Git arc");
 
   const proposal = getThreadCommandDisplay({
-    command: "wb git arc propose --ref abc -m Title -- src/file.ts",
+    command: "wb git arc propose -m Title -- src/file.ts",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
@@ -376,28 +385,28 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
   ].join("\n")), [{ additions: 4, deletions: 2, path: "src/file.ts", status: "M" }]);
   assert.equal(parseGitCheckpointProposalId("Workbench arc proposal: proposal-one\n"), "proposal-one");
   assert.deepEqual(parseGitCheckpointCommitCommand(
-    'wb git arc propose --ref abc1234 -m "Polish checkpoint cards" -m "Keep quoted context useful." -- src/one.ts "src/two words.ts"',
+    'wb git arc propose -m "Polish checkpoint cards" -m "Keep quoted context useful." -- src/one.ts "src/two words.ts"',
   ), {
-    checkpointCommit: "abc1234",
+    amend: false,
     description: "Keep quoted context useful.",
     paths: ["src/one.ts", "src/two words.ts"],
     title: "Polish checkpoint cards",
   });
   assert.deepEqual(parseGitCheckpointCommitCommand(
-    "wb git arc propose --ref abc1234 -m Title",
+    "wb git arc propose -m Title",
   ), {
-    checkpointCommit: "abc1234",
+    amend: false,
     description: "",
     paths: [],
     title: "Title",
   });
-  assert.equal(parseGitCheckpointCommitCommand("wb git arc propose --ref abc -- src/one.ts"), null);
+  assert.equal(parseGitCheckpointCommitCommand("wb git arc propose -- src/one.ts"), null);
   assert.equal(parseGitCheckpointCommitCommand("wb git checkpoint commit --sha abc --m Title -- src/one.ts"), null);
 });
 
 test("PowerShell-wrapped arc proposals preserve escaped messages and apostrophes", () => {
   const display = getThreadCommandDisplay({
-    command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "wb git arc propose --ref 27e60cc1019da6a4013c574ea9391c56bb0f582b -m \"Group thread context menu controls\" -m \"Add grouped controls and preserve Chiri's lifecycle status.\""`,
+    command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "wb git arc propose -m \"Group thread context menu controls\" -m \"Add grouped controls and preserve Chiri's lifecycle status.\""`,
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
@@ -405,7 +414,7 @@ test("PowerShell-wrapped arc proposals preserve escaped messages and apostrophes
 
   assert.equal(display.claimedBy, "git-arc.propose");
   assert.deepEqual(parseGitCheckpointCommitCommand(display.unwrappedCommand), {
-    checkpointCommit: "27e60cc1019da6a4013c574ea9391c56bb0f582b",
+    amend: false,
     description: "Add grouped controls and preserve Chiri's lifecycle status.",
     paths: [],
     title: "Group thread context menu controls",

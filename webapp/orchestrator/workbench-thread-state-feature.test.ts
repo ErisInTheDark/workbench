@@ -69,8 +69,23 @@ test("provider reconciliation starts concurrently and publishes each successful 
   const codexNextGate = new Promise<void>((resolve) => { releaseCodexNext = resolve; });
   let releaseCopilot = () => undefined;
   const copilotGate = new Promise<void>((resolve) => { releaseCopilot = resolve; });
+  const activeClaim = {
+    checkpointCommit: "a".repeat(40),
+    claimedPaths: ["one.txt"],
+    harness: "codex" as const,
+    intentDescription: "Keep the parent claim visible.",
+    intentName: "parent claim",
+    proposalId: "proposal-one",
+    proposalStatus: "proposed" as const,
+    threadId: "parent",
+    updatedAt: "2026-08-19T00:00:00.000Z",
+  };
   const feature = new WorkbenchThreadStateFeature({
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
+    gitArcs: {
+      findActiveClaim: async () => activeClaim,
+      listActiveClaims: async () => [activeClaim],
+    },
     listSubagents: async () => ({
       subagents: [{
         createdAt: 1,
@@ -111,9 +126,10 @@ test("provider reconciliation starts concurrently and publishes each successful 
       }
       return { error: { code: -32000, message: "OpenCode unavailable" }, id: request.id ?? null };
     },
-    resolveProjectById: async () => ({ id: "project", rootPath: "C:/projects/project" }),
+    resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
     resolveProjectFromCwd: async () => { throw new Error("Not used by this test."); },
     storageRoot,
+    transitions: { run: async (_key, operation) => await operation() },
   });
 
   await feature.controller.open("observer", "project");
@@ -125,7 +141,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
   assert.deepEqual(codexRequests[0]?.params, {
     archived: false,
     cursor: null,
-    cwd: "C:/projects/project",
+    cwd: storageRoot,
     limit: 50,
     sortDirection: "desc",
     sortKey: "updated_at",
@@ -137,18 +153,32 @@ test("provider reconciliation starts concurrently and publishes each successful 
   releaseCodexNext();
   releaseCopilot();
   await waitFor(() => publications.some((snapshot) => "entries" in snapshot && snapshot.error?.includes("opencode")), "Final partial provider result did not publish.");
+  await waitFor(() => publications.some((snapshot) => "entries" in snapshot && snapshot.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "parent")), "Deep Codex page did not publish its claimed parent.");
   const final = [...publications].reverse().find((snapshot) => "entries" in snapshot);
   assert.ok(final && "entries" in final);
   assert.equal(final.freshness, "partial");
   assert.match(final.error ?? "", /opencode: OpenCode unavailable/u);
   assert.equal(final.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "copilot-thread"), true);
   assert.equal(final.entries.some((entry) => entry.entryKind === "subagent" && entry.identity.threadId === "child"), true);
+  const parent = final.entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "parent");
+  assert.ok(parent && parent.entryKind !== "draft");
+  assert.equal(parent.fileClaim?.proposalStatus, "proposed");
+  const refreshedParent = await feature.controller.refreshFileClaim("project", "codex", "parent");
+  assert.equal(refreshedParent?.identity.threadId, "parent");
+  assert.equal(refreshedParent?.fileClaim?.proposalStatus, "proposed");
+  assert.equal("harness" in (refreshedParent?.fileClaim ?? {}), false);
+  assert.equal("threadId" in (refreshedParent?.fileClaim ?? {}), false);
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });
 });
 
 test("deep provider pages serialize across projects while both newest pages start immediately", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-pagination-"));
+  const projectRoots = new Map([
+    ["project-a", path.join(storageRoot, "project-a")],
+    ["project-b", path.join(storageRoot, "project-b")],
+  ]);
+  await Promise.all([...projectRoots.values()].map((rootPath) => fs.mkdir(rootPath)));
   const firstDeepGate = deferred<void>();
   const secondDeepGate = deferred<void>();
   const firstPages: string[] = [];
@@ -157,6 +187,7 @@ test("deep provider pages serialize across projects while both newest pages star
   let maximumActiveDeepPages = 0;
   const feature = new WorkbenchThreadStateFeature({
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
+    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     listSubagents: async () => ({ subagents: [] }),
     projectState: {
       getCurrentUpdate: () => null,
@@ -178,14 +209,15 @@ test("deep provider pages serialize across projects while both newest pages star
       activeDeepPages -= 1;
       return { id: request.id ?? null, result: { data: [], nextCursor: null } };
     },
-    resolveProjectById: async (projectId) => ({ id: projectId, rootPath: `C:/projects/${projectId}` }),
+    resolveProjectById: async (projectId) => ({ id: projectId, rootPath: projectRoots.get(projectId) ?? storageRoot }),
     resolveProjectFromCwd: async () => { throw new Error("Not used by this test."); },
     storageRoot,
+    transitions: { run: async (_key, operation) => await operation() },
   });
 
   await Promise.all([feature.controller.open("a", "project-a"), feature.controller.open("b", "project-b")]);
   await waitFor(() => firstPages.length === 2 && deepPages.length === 1, "Newest pages did not start before serialized continuation work.");
-  assert.deepEqual(new Set(firstPages), new Set(["C:/projects/project-a", "C:/projects/project-b"]));
+  assert.deepEqual(new Set(firstPages), new Set(projectRoots.values()));
   assert.equal(maximumActiveDeepPages, 1);
   firstDeepGate.resolve();
   await waitFor(() => deepPages.length === 2, "Second deep page did not start after the first completed.");

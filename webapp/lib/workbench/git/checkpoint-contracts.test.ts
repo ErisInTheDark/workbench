@@ -27,33 +27,46 @@ test("plan and arc requests encode claimed-path defaults and successor refs", ()
   }).success, false);
   assert.equal(GitCheckpointRequestSchema.safeParse({
     action: "arcAdd",
-    checkpointCommit: "abcdef1",
     cwd: "C:/repo",
+    threadId: "thread-one",
+  }).success, false);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcAdd",
+    cwd: "C:/repo",
+    paths: ["src/new.ts"],
+    threadId: "thread-one",
+  }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcAdd",
+    cwd: "C:/repo",
+    paths: [],
+    threadId: "thread-one",
+  }).success, false);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcAdopt",
+    cwd: "C:/repo",
+    paths: ["src/dirty.ts"],
     threadId: "thread-one",
   }).success, true);
   assert.equal(GitCheckpointRequestSchema.safeParse({
     action: "arcRemove",
-    checkpointCommit: "abcdef1",
     cwd: "C:/repo",
     paths: ["src/a.ts"],
     threadId: "thread-one",
   }).success, true);
   assert.equal(GitCheckpointRequestSchema.safeParse({
     action: "arcRemove",
-    checkpointCommit: "abcdef1",
     cwd: "C:/repo",
     paths: [],
     threadId: "thread-one",
   }).success, false);
   assert.equal(GitCheckpointRequestSchema.safeParse({
     action: "compare",
-    checkpointCommit: "abcdef1",
     cwd: "C:/repo",
     threadId: "thread-one",
   }).success, true);
   assert.equal(GitCheckpointRequestSchema.safeParse({
     action: "proposalCreate",
-    checkpointCommit: "abcdef1",
     cwd: "C:/repo",
     description: "",
     threadId: "thread-one",
@@ -63,6 +76,7 @@ test("plan and arc requests encode claimed-path defaults and successor refs", ()
 
 test("proposal contracts keep paths mandatory and terminal metadata explicit", () => {
   assert.equal(GitCheckpointProposalSchema.safeParse({
+    amendTargetSha: null,
     baseCommit: "abcdef1",
     changes: [{
       additions: 2,
@@ -74,9 +88,12 @@ test("proposal contracts keep paths mandatory and terminal metadata explicit", (
     committedSha: null,
     description: "",
     includeNewerAvailable: true,
+    mode: "commit",
     paths: ["src/a.ts"],
     proposalId: "proposal-one",
     status: "proposed",
+    supersededByProposalId: null,
+    supersededBySha: null,
     title: "Update A",
     unavailableReason: null,
   }).success, true);

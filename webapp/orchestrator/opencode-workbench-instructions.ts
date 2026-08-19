@@ -47,6 +47,7 @@ export const WorkbenchSystemReplacementPlugin = async () => ({
   "shell.env": async (input, output) => {
     if (input.sessionID) {
       output.env.WORKBENCH_THREAD_ID = input.sessionID;
+      output.env.WORKBENCH_HARNESS = "opencode";
     }
   },
   "experimental.chat.system.transform": async (_input, output) => {

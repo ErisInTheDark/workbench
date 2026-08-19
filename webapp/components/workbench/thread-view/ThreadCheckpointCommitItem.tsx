@@ -4,9 +4,10 @@
  */
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
+import type { WorkbenchHarness } from "../../../lib/types";
 import {
   GitCheckpointProposalSchema,
 } from "../../../lib/workbench/git/checkpoint-contracts";
@@ -18,6 +19,8 @@ import type {
 import ThreadCheckpointCommitCard, {
   type CheckpointCommitCardState,
 } from "./ThreadCheckpointCommitCard";
+import ThreadGitArcItem from "./ThreadGitArcItem";
+import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 
 async function readProposalResponse(response: Response) {
   const text = await response.text();
@@ -38,20 +41,12 @@ async function readProposalResponse(response: Response) {
   return parsed.data;
 }
 
-export default function ThreadCheckpointCommitItem({
-  commandOutcome,
-  cwd,
-  intent,
-  projectFilePaths,
-  projectId,
-  projectRootPath,
-  proposalId,
-  sourceItemId,
-  threadId,
-  workspaceRoots,
-}: {
+interface ThreadCheckpointCommitItemProps {
   commandOutcome: ThreadCommandExecutionOutcome;
   cwd: string;
+  embedded?: boolean;
+  harness?: WorkbenchHarness;
+  hoisted?: boolean;
   intent: GitCheckpointCommitCommandIntent | null;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
@@ -60,7 +55,22 @@ export default function ThreadCheckpointCommitItem({
   sourceItemId: string;
   threadId: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
-}) {
+}
+
+function ThreadCheckpointCommitController({
+  commandOutcome,
+  cwd,
+  embedded,
+  harness,
+  intent,
+  projectFilePaths,
+  projectId,
+  projectRootPath,
+  proposalId,
+  sourceItemId,
+  threadId,
+  workspaceRoots,
+}: ThreadCheckpointCommitItemProps & { harness: WorkbenchHarness }) {
   const [includeNewer, setIncludeNewer] = useState(false);
   const [title, setTitle] = useState(intent?.title ?? "");
   const [description, setDescription] = useState(intent?.description ?? "");
@@ -73,7 +83,7 @@ export default function ThreadCheckpointCommitItem({
     setState((current) => current.status === "loaded" ? current : { status: "pending" });
     try {
       const proposal = await readProposalResponse(await fetch("/api/git-checkpoint", {
-        body: JSON.stringify({ action: "proposalState", cwd, includeNewer, proposalId, threadId }),
+        body: JSON.stringify({ action: "proposalState", cwd, harness, includeNewer, proposalId, threadId }),
         cache: "no-store",
         headers: { "Content-Type": "application/json" },
         method: "POST",
@@ -95,7 +105,7 @@ export default function ThreadCheckpointCommitItem({
         status: "error",
       });
     }
-  }, [cwd, includeNewer, proposalId, threadId]);
+  }, [cwd, harness, includeNewer, proposalId, threadId]);
 
   useEffect(() => {
     if (!proposalId) {
@@ -132,6 +142,7 @@ export default function ThreadCheckpointCommitItem({
           action: "proposalCommit",
           cwd,
           description,
+          harness,
           includeNewer,
           proposalId,
           threadId,
@@ -159,6 +170,7 @@ export default function ThreadCheckpointCommitItem({
     <ThreadCheckpointCommitCard
       committing={committing}
       description={description}
+      embedded={embedded}
       includeNewer={includeNewer}
       onCommit={() => void commit()}
       onDescriptionChange={setDescription}
@@ -175,4 +187,29 @@ export default function ThreadCheckpointCommitItem({
       workspaceRoots={workspaceRoots}
     />
   );
+}
+
+export default function ThreadCheckpointCommitItem(props: ThreadCheckpointCommitItemProps) {
+  const presentation = useContext(ThreadGitArcPresentationContext);
+  const harness = props.harness ?? presentation?.harness ?? "codex";
+  const hoistedTargetId = props.proposalId ? `thread-checkpoint-proposal-${props.proposalId}` : null;
+  if (!props.hoisted && props.proposalId && presentation?.hoistedProposalId === props.proposalId) {
+    return (
+      <ThreadGitArcItem
+        commandIntent={{ action: "propose", intentName: null, paths: [], ref: null }}
+        durationMs={null}
+        outcome="completed"
+        proposalRedirect={{
+          onActivate: () => document.getElementById(hoistedTargetId)?.scrollIntoView({ behavior: "smooth", block: "center" }),
+          proposalId: props.proposalId,
+          title: props.intent?.title ?? "Commit proposal",
+        }}
+        receipt={null}
+      />
+    );
+  }
+  const controller = <ThreadCheckpointCommitController {...props} harness={harness} />;
+  return props.hoisted && hoistedTargetId
+    ? <div className="scroll-mt-6" id={hoistedTargetId}>{controller}</div>
+    : controller;
 }

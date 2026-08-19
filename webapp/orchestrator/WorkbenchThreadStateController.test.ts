@@ -4,10 +4,23 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import WorkbenchThreadStateController from "./WorkbenchThreadStateController";
+import WorkbenchThreadStateControllerOwner, { type WorkbenchThreadStateControllerOptions } from "./WorkbenchThreadStateController";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 import type { WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+
+type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolveFileClaim" | "runFileClaimTransition">
+  & Partial<Pick<WorkbenchThreadStateControllerOptions, "resolveFileClaim" | "runFileClaimTransition">>;
+
+class WorkbenchThreadStateController extends WorkbenchThreadStateControllerOwner {
+  constructor(options: TestControllerOptions) {
+    super({
+      resolveFileClaim: async () => null,
+      runFileClaimTransition: async (_projectId, operation) => await operation(),
+      ...options,
+    });
+  }
+}
 
 function projectUpdate(projectId: string, revision = 1): WorkbenchProjectStateUpdate {
   return {
@@ -629,6 +642,9 @@ test("restoring a terminal thread persists across provider reconciliation", asyn
 test("manual status persists, restores settled threads, and rejects provider-owned lifecycles", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-manual-attention-"));
   const published: WorkbenchThreadStateSnapshot[] = [];
+  let insideFileClaimTransition = false;
+  let fileClaimTransitions = 0;
+  let terminalHasFileClaim = false;
   const terminal: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 1,
     entryKind: "thread",
@@ -659,7 +675,27 @@ test("manual status persists, restores settled threads, and rejects provider-own
       acceptProviderSnapshot("codex", [terminal, pending, working], { complete: true });
       return [];
     },
+    resolveFileClaim: async (_projectId, _harness, threadId) => {
+      assert.equal(insideFileClaimTransition, true);
+      return terminalHasFileClaim && threadId === "terminal" ? {
+        checkpointCommit: "a".repeat(40),
+        claimedPaths: ["owned.ts"],
+        intentDescription: "",
+        intentName: "Keep owned work",
+        proposalId: null,
+        updatedAt: new Date(0).toISOString(),
+      } : null;
+    },
     resolveProjectRoot: async () => root,
+    runFileClaimTransition: async (_projectId, operation) => {
+      fileClaimTransitions += 1;
+      insideFileClaimTransition = true;
+      try {
+        return await operation();
+      } finally {
+        insideFileClaimTransition = false;
+      }
+    },
     storageRoot: root,
   });
   await controller.open("observer", "project");
@@ -720,6 +756,14 @@ test("manual status persists, restores settled threads, and rejects provider-own
     identity: terminal.identity, method: "workbench/thread-state/status/set", projectId: "project", status: "needsAttention",
   });
   assert.equal("result" in sameStatus ? (sameStatus.result as { accepted?: boolean }).accepted : false, true);
+  entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
+  assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
+  terminalHasFileClaim = true;
+  const claimedSettle = await controller.handleRequest("observer", {
+    identity: terminal.identity, method: "workbench/thread-state/settle", projectId: "project",
+  });
+  assert.equal("result" in claimedSettle ? (claimedSettle.result as { accepted?: boolean }).accepted : true, false);
+  assert.equal(fileClaimTransitions, 3);
   entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
   assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
   await controller.dispose();

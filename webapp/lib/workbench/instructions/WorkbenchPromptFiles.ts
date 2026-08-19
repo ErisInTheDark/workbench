@@ -650,63 +650,77 @@ Use \`wb git arc compare/diff\` as the primary source for planned-path drift and
 
 ### Create the plan
 
-Run after entering Brief mode once the exact planned edit files are known. Give the changeset a short intent name and name every planned path. Workbench requires those paths to be clean against current \`HEAD\`, then creates the full-worktree snapshot and records the claimed set. Keep the returned ref SHA as the current arc ref.
+Run after entering Brief mode once the exact planned edit files are known. Give the changeset a short intent name, add a second \`-m\` only when a description helps sibling agents judge overlap, and name every planned path. Workbench requires those paths to be clean against current \`HEAD\`, then creates an inactive full-worktree snapshot. Keep the returned ref SHA for \`arc start\`, \`arc continue\`, and explicit restore.
 
-\`wb git arc plan -m <short-intent> -- <path> [<path>...]\`
+\`wb git arc plan -m <short-intent> [-m <optional-description>] -- <path> [<path>...]\`
 
 If Workbench rejects a dirty planned path, stop and ask the user what changed; include **Committed — the workspace should now be clean, try again** as an option. Never clean, restore, or stage paths to bypass this guard.
 
 ### Start implementation
 
-Immediately after entering Implement mode, inspect the plan's claimed paths. This command creates no ref. If it reports drift, classify that drift before editing and return to Brief mode when it affects the plan.
+The first time an inactive plan enters Implement mode, inspect its paths and activate their claims. This command creates no ref. It rejects overlap with active sibling arcs and a settled owner thread. If it reports drift or collision, classify that result before editing and return to Brief mode when it affects the plan. Do not rerun \`arc start\` when returning to an implementation arc that is already active; use ref-free \`arc compare\` for inspection and \`arc continue --ref <current-ref>\` before another implementation pass.
 
-\`wb git arc start --ref <current-ref>\`
+\`wb git arc start --ref <plan-ref>\`
 
-Reuse the current ref for corrections, direct bounded follow-ups, validation fixes, and continued implementation before Review.
+After start, active-registry commands resolve this thread's current arc. Do not pass a ref to add, adopt, remove, compare, diff, or propose.
 
-### Continue or extend the arc
+### Continue the arc
 
-Run \`arc add\` when a later implementation pass needs a fresh continuation guard or the active arc gains genuinely new planned paths. Every call checks whether committed content still matches the fixed snapshot for the existing claimed set. Incompatible HEAD movement or changed committed content rejects even when no new paths are supplied.
+Before another implementation pass on the same claimed files, run \`arc continue\` with the current remembered ref. If a proposal is pending, continuation makes it unavailable before returning the successor. If a proposal was committed, a partial commit returns its existing remaining-file successor and a complete commit creates one fresh baseline at current \`HEAD\`. Always replace your remembered ref with the returned ref.
 
-Additional paths must be clean against current \`HEAD\`, unchanged since the original plan, and outside the existing claimed set. The returned successor ref preserves the original snapshot tree, advances its parent to the accepted current \`HEAD\`, and stores the extended claimed set. Always replace the current ref with the returned ref.
+\`wb git arc continue --ref <current-ref>\`
 
-\`wb git arc add --ref <current-ref> [-- <additional-path> [<additional-path>...]]\`
+### Extend the active arc
+
+Run \`arc add\` only with genuinely new clean paths that extend the active claim set. It verifies the existing claimed baseline against committed \`HEAD\`, continues the arc, and returns the successor ref. Replace your remembered ref with that SHA; active commands continue to resolve the registry without a ref.
+
+If Review finds more implementation work while a proposal is pending, use \`arc continue\` when the claimed set is unchanged. Use \`arc add\` when the next pass also claims new clean paths. Either command makes the frozen proposal unavailable and returns the successor ref. Do not commit a known-bad proposal merely to continue its arc.
+
+\`wb git arc add -- <additional-clean-path> [<additional-clean-path>...]\`
+
+Use \`arc adopt\` only for existing dirty workspace paths that must join the active arc. It preserves their worktree and index content while creating a successor baseline.
+
+\`wb git arc adopt -- <dirty-path> [<dirty-path>...]\`
 
 ### Remove clean claims
 
-Run \`arc remove\` only when the active arc no longer owns exact claimed entries. Workbench rejects requested entries with working-tree changes, non-exact claims, removal of the final claim, incompatible HEAD movement, or changed committed content under retained claims. It changes no working-tree or index content.
+Run \`arc remove\` only when the active arc no longer owns exact claimed entries. Workbench rejects requested entries with working-tree changes, non-exact claims, incompatible HEAD movement, or changed committed content under retained claims. It changes no working-tree or index content.
 
-The returned successor ref preserves the original snapshot tree, advances its parent to the accepted current \`HEAD\`, and stores the reduced claimed set. Always replace the current ref with the returned ref.
+When claims remain, the returned successor ref preserves the original snapshot tree, advances its parent to the accepted current \`HEAD\`, and stores the reduced claimed set. Record that ref for a later \`arc continue\`. Removing the final clean claim releases the arc and leaves no active successor.
 
-\`wb git arc remove --ref <current-ref> -- <claimed-path> [<claimed-path>...]\`
+\`wb git arc remove -- <claimed-path> [<claimed-path>...]\`
+
+An active claim prevents thread settlement. For a terminal thread, use **Unclaim files** when every claim is clean, or ask the user before **Restore & unclaim** when claimed work remains. Restore-and-unclaim restores only the active claimed paths before releasing the arc.
 
 ### Compare or diff the arc
 
 Omit paths to inspect the claimed set. Explicit paths select diagnostics from the full snapshot. Do not substitute the newest unrelated ref or guess from thread history.
 
-\`wb git arc compare --ref <current-ref> [-- <path> [<path>...]]\`
+\`wb git arc compare [-- <path> [<path>...]]\`
 
-\`wb git arc diff --ref <current-ref> [-- <path> [<path>...]]\`
+\`wb git arc diff [-- <path> [<path>...]]\`
 
 ### Propose a commit in Review
 
-After validation and arc compare/diff, run this command with the current ref and a fresh proposed title. Omit paths to use every changed file under the claimed set, or provide a claimed subset. Workbench derives exact changed files and excludes claimed paths that ended unchanged. The optional description is for useful context that the title cannot communicate. This creates the editable commit proposal UI; it does not commit the branch and does not require separate commit permission. Do not replace it with the autonomous \`wb git commit\` workflow.
+After validation and arc compare/diff, run this command with a fresh proposed title. Omit paths to use every changed file under the active claimed set, or provide a claimed subset. Workbench derives exact changed files and excludes claimed paths that ended unchanged. The optional description is for useful context that the title cannot communicate. This creates the editable commit proposal UI; it does not commit the branch and does not require separate commit permission. Do not replace it with the autonomous \`wb git commit\` workflow.
 
 The proposal freezes that file set and its current contents. The user can include or exclude newer edits to those same files; no other files can enter the proposal. Workbench rebases the frozen selected files across compatible fast-forward commits that do not change them. Committed changes to selected files or incompatible HEAD movement make the proposal unavailable. A final atomic branch update prevents a concurrent commit from being overwritten.
 
-\`wb git arc propose --ref <current-ref> -m <fresh-title> [-m <optional-description>] [-- <claimed-path> [<claimed-path>...]]\`
+\`wb git arc propose -m <fresh-title> [-m <optional-description>] [-- <claimed-path> [<claimed-path>...]]\`
+
+Use \`wb git arc propose --amend [-m <replacement-title> [-m <replacement-description>]]\` only to amend the exact current unpushed \`HEAD\`. Without \`-m\`, the proposal inherits the existing commit message. Detached \`HEAD\`, pushed commits, or unknown remote state reject.
 
 ### Restore selected paths after explicit user request
 
 First run the arc diff or another preview. Pass every file or directory to restore after \`--\`; Workbench restores only those paths from the specified arc snapshot, removes selected paths that were created after it, and leaves the real Git index unchanged. The repository root is not a valid selected path. Compatible fast-forward commits to unrelated paths do not block selected-path restore. Workbench blocks when selected committed content no longer matches the arc baseline or HEAD moved incompatibly.
 
-\`wb git arc restore --ref <current-ref> -- <path> [<path>...]\`
+\`wb git arc restore --ref <ref> -- <path> [<path>...]\`
 
 ### Restore a full arc after explicit user request
 
 Use the path form instead when only part of the worktree must be restored. Full restore uses an arc ref SHA supplied by the user or selected from the thread's arc output. The CLI requires \`--confirm\`, and Workbench blocks when the arc parent is not the current HEAD.
 
-\`wb git arc restore --ref <current-ref> --confirm\`
+\`wb git arc restore --ref <ref> --confirm\`
 `.trim();
 }
 

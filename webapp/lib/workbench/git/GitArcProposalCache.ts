@@ -24,6 +24,7 @@ const CacheFileSchema = z.object({
 interface ProposalCacheInput {
   baseTree: string;
   build: () => Promise<GitCheckpointFileChange[]>;
+  harness: "codex" | "copilot" | "opencode";
   paths: string[];
   proposalId: string;
   targetTree: string;
@@ -39,6 +40,7 @@ function pathsEqual(left: readonly string[], right: readonly string[]) {
 function cacheIdentity(input: Omit<ProposalCacheInput, "build" | "proposalId" | "threadId">) {
   return createHash("sha256").update(JSON.stringify({
     baseTree: input.baseTree,
+    harness: input.harness,
     paths: input.paths,
     targetTree: input.targetTree,
     version: 1,
@@ -59,10 +61,10 @@ function warnCacheFailure(action: string, proposalId: string, error: unknown) {
 }
 
 export default class GitArcProposalCache {
-  private readonly transcriptThreadsRoot: string;
+  private readonly transcriptsRoot: string;
 
   constructor(rootPath: string) {
-    this.transcriptThreadsRoot = path.join(rootPath, ".workbench", "transcripts", "codex", "threads");
+    this.transcriptsRoot = path.join(rootPath, ".workbench", "transcripts");
   }
 
   async readOrBuild(input: ProposalCacheInput) {
@@ -93,7 +95,9 @@ export default class GitArcProposalCache {
       throw new Error("Invalid Git arc proposal cache identity.");
     }
     const threadDirectoryPath = path.join(
-      this.transcriptThreadsRoot,
+      this.transcriptsRoot,
+      input.harness,
+      "threads",
       encodeTranscriptPathSegment(input.threadId.trim()),
     );
     try {
