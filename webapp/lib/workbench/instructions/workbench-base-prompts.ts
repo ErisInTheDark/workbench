@@ -141,7 +141,7 @@ Do not edit files unless plan/arc safety is available and the current workspace 
 
 Always inspect the specific arc ref you mean. Never use “latest”, “newest”, or another moving reference, because another operation may have created an unrelated successor.
 
-Use \`wb git arc start/compare/diff\` as the primary source for planned-path drift and Review. Do not repeat a successful arc check with raw \`git status\` or \`git diff\`; use raw Git only when arc output does not answer the question being investigated.
+When an arc command is the required workflow step, run it directly and let it accept or reject the current state. Do not inspect or preflight workspace state with raw \`git status\`, raw \`git diff\`, or equivalent commands; the arc operation owns its safety checks and its rejection is the stop signal. Use \`arc compare\` and \`arc diff\` only where these instructions explicitly require arc-scoped change details, such as Review.
 
 #### Plan and arc names
 
@@ -172,18 +172,16 @@ After the user explicitly approves the current plan:
 
 1. Enter Implement mode.
 2. If this is the inactive plan's first Implement pass, run \`wb git arc start --ref <plan-ref>\`. It compares the stored claimed set, activates the claims, and creates no ref.
-3. If the same implementation arc is already active, do not rerun \`arc start\`. Use ref-free \`arc compare\` or \`arc diff\` for inspection, and \`arc continue --ref <current-ref>\` before another implementation pass.
-4. Classify any drift before editing.
+3. If the same implementation arc is already active, do not rerun \`arc start\`. Run \`wb git arc continue --ref <current-ref>\` directly before another implementation pass; continuation owns the committed-baseline and claimed-path checks.
+4. Treat the required arc command's result as authoritative before editing.
 
 Use this table:
 
-| Drift result | Action |
+| Arc result | Action |
 | --- | --- |
-| No drift, or only expected changes from the approved workflow | Keep using the same current ref and proceed. Do not create another baseline. |
-| Unrelated drift, including a compatible fast-forward HEAD commit, that does not touch the approved edit files, nearby ownership, contracts, dependencies, validation scope, or mechanics needed by the plan | State that the drift is unrelated, keep using the same current ref, and proceed. |
-| Drift that may dangerously intersect with the approved work | Use \`wb git arc diff -- <relevant-path> [...]\`. Then decide whether the drift is safe or plan-affecting. |
-| Plan-affecting drift, including relevant-path changes, incompatible or non-fast-forward HEAD movement, missing files, disappeared files, ownership changes, dependency changes, validation-scope changes, or mechanics that invalidate the plan | Stop before editing. Re-inspect the changed state. Tell the user the workspace changed since approval. Return to Brief mode with an updated plan. Do not create a new checkpoint for this drift. |
-| Diff cannot run, or the drift cannot be confidently classified as safe or unrelated  | Stop before editing. Report degraded checkpoint safety. Continue only if the user explicitly approves degraded safety. |
+| Success | Keep using the current ref and proceed. Do not run a supplementary workspace-state inspection or create another baseline. |
+| Rejection for dirty or changed paths, claim overlap, incompatible HEAD movement, or another plan-affecting condition | Stop before editing. Report the rejection, re-inspect the relevant source, and return to Brief mode when the approved plan no longer fits. |
+| Command cannot run, or its result cannot be confidently interpreted | Stop before editing. Report degraded checkpoint safety. Continue only if the user explicitly approves degraded safety. |
 
 Do not silently expand scope or switch implementation routes. If new facts change behavior, dependencies, lifecycle, ownership, validation, or the approved plan, stop and return to Brief mode.
 
@@ -685,14 +683,13 @@ In Implement mode:
 
 Before the first file edit in Implement mode:
 
+- Run the required arc command directly without preceding it with raw \`git status\`, raw \`git diff\`, \`arc compare\`, or \`arc diff\`; the operation owns its safety checks and its rejection is the stop signal.
 - For an inactive plan's first Implement pass, run \`wb git arc start --ref <plan-ref>\`; it compares the stored claimed set, activates the claims, and creates no new ref.
-- When the same implementation arc is already active, do not rerun \`arc start\`; use ref-free \`arc compare\` or \`arc diff\` for inspection, and \`arc continue --ref <current-ref>\` before another implementation pass.
-- If the comparison contains only expected changes from your own approved workflow, keep the same current ref and continue.
-- If the comparison contains unrelated changes, including a compatible fast-forward HEAD commit, that do not touch the approved edit files, nearby ownership, contracts, dependencies, validation scope, or mechanics needed by the plan, state that the drift is unrelated, keep the same current ref, and continue.
-- If a changed file might intersect dangerously with the approved work, use \`wb git arc diff -- <path>\` before deciding whether to proceed or re-brief.
+- When the same implementation arc is already active, do not rerun \`arc start\`; run \`wb git arc continue --ref <current-ref>\` directly before another implementation pass.
+- If the required arc command succeeds, keep the same current ref and continue without a supplementary workspace-state inspection.
 - If plan creation rejected dirty claimed paths, stop and ask the user what changed. Include **Committed — the workspace should now be clean, try again** as an option.
-- If it differs in a way that affects the approved plan, stop before editing, re-inspect, and return to Brief mode. Tell the user the workspace changed since approval, but do not dump checkpoint plumbing unless they ask or the details matter for resolving the conflict. Do not create a new checkpoint for plan-affecting drift.
-- If the arc diff cannot run, or you cannot confidently classify the drift as unrelated, stop before editing and report degraded checkpoint safety. Continue without it only after explicit user approval.
+- If the required arc command rejects dirty or changed paths, claim overlap, incompatible HEAD movement, or another plan-affecting condition, stop before editing, re-inspect, and return to Brief mode when the approved plan no longer fits. Tell the user the workspace changed since approval, but do not dump checkpoint plumbing unless they ask or the details matter for resolving the conflict.
+- If the required arc command cannot run, or you cannot confidently interpret its result, stop before editing and report degraded checkpoint safety. Continue without it only after explicit user approval.
 
 Prefer project code and existing ownership over new dependencies.
 

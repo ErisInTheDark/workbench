@@ -9,6 +9,10 @@ import {
   buildWorkbenchGitInstructions,
   listWorkbenchInstructionMechanics,
 } from "./WorkbenchPromptFiles.ts";
+import {
+  WORKBENCH_AGENTS_PROMPT,
+  WORKBENCH_WORKFLOW_DEFAULT_PROMPT,
+} from "./workbench-base-prompts.ts";
 
 test("materialized top-level threads expose title/status while subagents omit title", () => {
   const topLevel = listWorkbenchInstructionMechanics({ harness: "codex", threadId: "thread-1", workbenchOrigin: "http://localhost" });
@@ -43,4 +47,24 @@ test("managed Git instructions describe the concise arc move workflow", () => {
   assert.match(instructions, /repeat it with `--confirm`/u);
   assert.match(instructions, /minimal source and destination claims/u);
   assert.doesNotMatch(instructions, /journal|process death|rollback failure/iu);
+});
+
+test("arc instructions make guarded commands authoritative for workspace state", () => {
+  const instructions = buildWorkbenchGitInstructions({
+    harness: "codex",
+    threadId: "thread-1",
+    workbenchOrigin: "http://localhost",
+  });
+  assert(instructions);
+
+  for (const prompt of [WORKBENCH_AGENTS_PROMPT, instructions]) {
+    assert.match(prompt, /run it directly and let it accept or reject the current state/u);
+    assert.match(prompt, /Do not inspect or preflight workspace state with raw `git status`, raw `git diff`, or equivalent commands/u);
+    assert.doesNotMatch(prompt, /primary source for planned-path drift/u);
+  }
+
+  assert.match(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, /Run the required arc command directly without preceding it with raw `git status`, raw `git diff`, `arc compare`, or `arc diff`/u);
+  assert.match(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, /run `wb git arc continue --ref <current-ref>` directly before another implementation pass/u);
+  assert.doesNotMatch(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, /use ref-free `arc compare` or `arc diff` for inspection, and `arc continue/u);
+  assert.doesNotMatch(instructions, /use ref-free `arc compare` for inspection and `arc continue/u);
 });

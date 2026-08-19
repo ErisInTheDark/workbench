@@ -646,7 +646,7 @@ Use these exact CLI shapes so Workbench can match and render checkpoint operatio
 
 Plans snapshot the full Git-visible worktree as structurally shared Git objects. They do not copy the workspace. Unchanged blobs and trees are reused; only changed and non-ignored untracked content creates new objects. The stored claimed paths select ordinary arc operations; they are not the snapshot's storage scope.
 
-Use \`wb git arc compare/diff\` as the primary source for planned-path drift and Review. Do not repeat a successful arc check with raw \`git status\` or \`git diff\`; use raw Git only when arc output does not answer the question being investigated.
+When an arc command is the required workflow step, run it directly and let it accept or reject the current state. Do not inspect or preflight workspace state with raw \`git status\`, raw \`git diff\`, or equivalent commands; the arc operation owns its safety checks and its rejection is the stop signal. Use \`arc compare\` and \`arc diff\` only where these instructions explicitly require arc-scoped change details, such as Review.
 
 ### Create the plan
 
@@ -658,7 +658,7 @@ If Workbench rejects a dirty planned path, stop and ask the user what changed; i
 
 ### Start implementation
 
-The first time an inactive plan enters Implement mode, inspect its paths and activate their claims. This command creates no ref. It rejects overlap with active sibling arcs and a settled owner thread. If it reports drift or collision, classify that result before editing and return to Brief mode when it affects the plan. Do not rerun \`arc start\` when returning to an implementation arc that is already active; use ref-free \`arc compare\` for inspection and \`arc continue --ref <current-ref>\` before another implementation pass.
+The first time an inactive plan enters Implement mode, run \`arc start\` directly to inspect its paths and activate their claims. This command creates no ref. It rejects changed planned paths, overlap with active sibling arcs, and a settled owner thread. Treat rejection as the stop signal instead of preflighting it with another workspace-state command. Do not rerun \`arc start\` when returning to an implementation arc that is already active; run \`arc continue --ref <current-ref>\` directly before another implementation pass.
 
 \`wb git arc start --ref <plan-ref>\`
 
@@ -710,7 +710,7 @@ An active claim prevents thread settlement. For a terminal thread, use **Unclaim
 
 ### Compare or diff the arc
 
-Omit paths to inspect the claimed set. Explicit paths select diagnostics from the full snapshot. Do not substitute the newest unrelated ref or guess from thread history.
+Omit paths to inspect the claimed set. Explicit paths select diagnostics from the full snapshot. Use these commands only when the workflow explicitly requires arc-scoped change details, such as Review; do not use them as preflight for another arc command. Do not substitute the newest unrelated ref or guess from thread history.
 
 \`wb git arc compare [-- <path> [<path>...]]\`
 
