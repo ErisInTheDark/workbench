@@ -5,6 +5,8 @@
  */
 "use client";
 
+import type { KeyboardEvent } from "react";
+
 import type { GitCheckpointProposal } from "../../../lib/workbench/git/checkpoint-contracts";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import PrimaryButton from "../PrimaryButton";
@@ -66,6 +68,23 @@ export default function ThreadCheckpointCommitCard({
   const changeSummary = proposal || paths.length
     ? `${fileCount} changed ${fileCount === 1 ? "file" : "files"}`
     : "Arc changes";
+  const canCommit = proposal?.status === "proposed" && !committing && Boolean(title.trim());
+  const commitFromEditable = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (
+      event.key !== "Enter"
+      || !event.ctrlKey
+      || event.altKey
+      || event.metaKey
+      || event.shiftKey
+      || event.nativeEvent.isComposing
+      || !canCommit
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    onCommit();
+  };
 
   return (
     <article aria-label="Checkpoint commit proposal" className="my-2 w-full rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] px-3 py-2.5" data-thread-checkpoint-card="true">
@@ -78,6 +97,7 @@ export default function ThreadCheckpointCommitCard({
             ariaLabel="Commit title"
             className="min-h-6 w-full bg-transparent px-0 py-0.5 text-[0.94em] font-medium outline-none data-[empty=true]:before:text-muted data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent"
             onChange={onTitleChange}
+            onKeyDown={commitFromEditable}
             placeholder="Commit title"
             readOnly={terminal}
             value={title}
@@ -87,6 +107,7 @@ export default function ThreadCheckpointCommitCard({
               ariaLabel="Commit description"
               className="min-h-7 w-full whitespace-pre-wrap bg-transparent px-0 py-0.5 text-[0.8em] leading-5 text-muted outline-none data-[empty=true]:before:text-[color:color-mix(in_srgb,var(--text)_32%,transparent)] data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent focus:text-text"
               onChange={onDescriptionChange}
+              onKeyDown={commitFromEditable}
               placeholder="Optional description"
               readOnly={terminal}
               value={description}
@@ -138,7 +159,7 @@ export default function ThreadCheckpointCommitCard({
                     </button>
                   ) : <span className="text-[0.78em] text-[color:var(--danger)]">Unavailable</span>
                 ) : (
-                  <PrimaryButton className="!px-3 !py-1.5 !text-[0.78rem]" disabled={committing || proposal?.status !== "proposed" || !title.trim()} onClick={onCommit} pendingHalo={committing}>
+                  <PrimaryButton className="!px-3 !py-1.5 !text-[0.78rem]" disabled={!canCommit} onClick={onCommit} pendingHalo={committing}>
                     {committing ? "Committing..." : "Commit"}
                   </PrimaryButton>
                 )}

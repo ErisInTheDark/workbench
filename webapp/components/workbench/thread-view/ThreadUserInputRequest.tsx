@@ -568,6 +568,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
               }}
               disabled={isSubmitting || isAttaching}
               className="justify-self-end text-[0.84em]"
+              pendingHalo={isSubmitting || isAttaching}
             >
               {isSubmitting ? "Submitting..." : isAttaching ? "Attaching..." : request.submitLabel}
             </PrimaryButton>

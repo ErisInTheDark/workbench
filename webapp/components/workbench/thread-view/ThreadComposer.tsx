@@ -1365,6 +1365,7 @@ export default function ThreadComposer ({
                       type="submit"
                       disabled={(!trimmedValue && !attachments.length) || isSendDisabled}
                       className="text-[0.84em]"
+                      pendingHalo={isSending || isAttaching}
                     >
                       {isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : sendLabel}
                     </PrimaryButton>

@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createElement } from "react";
+import { createElement, isValidElement, type KeyboardEvent, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { parseUnifiedDiff } from "../../../lib/workbench/thread/thread-file-diff";
@@ -14,6 +14,44 @@ import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadCodeDisplay from "./ThreadCodeDisplay";
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import { ThreadTurnDetails } from "./thread-view-items";
+
+interface EditableElementProps {
+  ariaLabel?: string;
+  children?: ReactNode;
+  onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
+}
+
+function findEditableProps(node: ReactNode): EditableElementProps[] {
+  if (Array.isArray(node)) {
+    return node.flatMap(findEditableProps);
+  }
+  if (!isValidElement<EditableElementProps>(node)) {
+    return [];
+  }
+
+  const descendants = findEditableProps(node.props.children);
+  return node.props.ariaLabel?.startsWith("Commit ")
+    ? [node.props, ...descendants]
+    : descendants;
+}
+
+function proposedCheckpointState(status: "proposed" | "unavailable" = "proposed") {
+  return {
+    proposal: {
+      baseCommit: "a".repeat(40),
+      changes: [],
+      committedSha: null,
+      description: "Commit description",
+      includeNewerAvailable: false,
+      paths: ["src/one.ts"],
+      proposalId: "proposal-one",
+      status,
+      title: "Commit title",
+      unavailableReason: status === "unavailable" ? "Unavailable." : null,
+    },
+    status: "loaded" as const,
+  };
+}
 
 test("checkpoint compare uses established file-change rows without empty disclosures", () => {
   const html = renderToStaticMarkup(createElement(ThreadCheckpointCompareItem, {
@@ -340,6 +378,45 @@ test("checkpoint commit progress uses the shared pill spinning border", () => {
   assert.match(html, />Committing\.\.\.</u);
   assert.match(html, /data-workbench-spinning-border="true"/u);
   assert.equal(html.match(/data-workbench-spinning-border-trail="true"/gu)?.length, 2);
+});
+
+test("checkpoint proposal editables commit on Ctrl+Enter only while available", () => {
+  let commits = 0;
+  let prevented = 0;
+  const renderCard = (status: "proposed" | "unavailable") => ThreadCheckpointCommitCard({
+    committing: false,
+    description: "Commit description",
+    includeNewer: false,
+    onCommit: () => { commits += 1; },
+    onDescriptionChange: () => undefined,
+    onIncludeNewerChange: () => undefined,
+    onRetry: () => undefined,
+    onTitleChange: () => undefined,
+    paths: ["src/one.ts"],
+    sourceItemId: "proposal-command",
+    state: proposedCheckpointState(status),
+    title: "Commit title",
+  });
+  const createShortcutEvent = (ctrlKey: boolean) => ({
+    altKey: false,
+    ctrlKey,
+    key: "Enter",
+    metaKey: false,
+    nativeEvent: { isComposing: false },
+    preventDefault: () => { prevented += 1; },
+    shiftKey: false,
+  }) as unknown as KeyboardEvent<HTMLDivElement>;
+
+  const proposedEditables = findEditableProps(renderCard("proposed"));
+  assert.deepEqual(proposedEditables.map((props) => props.ariaLabel), ["Commit title", "Commit description"]);
+  proposedEditables.forEach((props) => props.onKeyDown?.(createShortcutEvent(true)));
+  assert.equal(commits, 2);
+  assert.equal(prevented, 2);
+
+  proposedEditables[0]?.onKeyDown?.(createShortcutEvent(false));
+  findEditableProps(renderCard("unavailable"))[0]?.onKeyDown?.(createShortcutEvent(true));
+  assert.equal(commits, 2);
+  assert.equal(prevented, 2);
 });
 
 test("pending steers use the shared spinning border", () => {

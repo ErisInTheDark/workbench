@@ -25,7 +25,7 @@ const baseClassName = [
   "relative isolate inline-flex items-center justify-center overflow-visible bg-transparent font-medium [color:var(--text)]",
   "transition duration-150 ease-out",
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]",
-  "disabled:cursor-not-allowed disabled:[color:color-mix(in_srgb,var(--text)_10%,transparent)]",
+  "disabled:cursor-not-allowed",
   "[--primary-button-bg:color-mix(in_srgb,white_14%,var(--shell-fade-bg)_86%)]",
   "enabled:hover:[--primary-button-bg:color-mix(in_srgb,white_20%,var(--shell-fade-bg)_80%)]",
   "disabled:[--primary-button-bg:color-mix(in_srgb,white_7%,var(--shell-fade-bg)_93%)]",
@@ -54,6 +54,9 @@ export default function PrimaryButton ({
       className={joinClasses(
         baseClassName,
         shapeClassNames[shape],
+        pendingHalo
+          ? "disabled:[color:color-mix(in_srgb,var(--text)_32%,transparent)]"
+          : "disabled:[color:color-mix(in_srgb,var(--text)_10%,transparent)]",
         className,
       )}
     >

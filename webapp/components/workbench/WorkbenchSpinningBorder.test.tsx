@@ -25,10 +25,23 @@ test("spinning borders render two opposed motion-path elements", () => {
 test("PrimaryButton uses the shared border for pending pills", () => {
   const html = renderToStaticMarkup(createElement(PrimaryButton, {
     children: "Committing...",
+    disabled: true,
     pendingHalo: true,
   }));
 
   assert.match(html, />Committing\.\.\.</u);
   assert.match(html, /data-workbench-spinning-border="true"/u);
   assert.match(html, /inset-\[2px\]/u);
+  assert.match(html, /disabled:\[color:color-mix\(in_srgb,var\(--text\)_32%,transparent\)\]/u);
+  assert.doesNotMatch(html, /disabled:\[color:color-mix\(in_srgb,var\(--text\)_10%,transparent\)\]/u);
+});
+
+test("PrimaryButton keeps ordinary disabled actions visually quieter", () => {
+  const html = renderToStaticMarkup(createElement(PrimaryButton, {
+    children: "Unavailable",
+    disabled: true,
+  }));
+
+  assert.match(html, /disabled:\[color:color-mix\(in_srgb,var\(--text\)_10%,transparent\)\]/u);
+  assert.doesNotMatch(html, /disabled:\[color:color-mix\(in_srgb,var\(--text\)_32%,transparent\)\]|data-workbench-spinning-border="true"/u);
 });
