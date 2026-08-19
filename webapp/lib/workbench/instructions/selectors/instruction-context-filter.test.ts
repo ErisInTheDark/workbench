@@ -1,4 +1,4 @@
-/* No production exports. Tests protect final instruction selector behavior. */
+/* No production exports. Tests protect the selector owner's final instruction filtering behavior. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { filterWorkbenchInstructionContent, type WorkbenchInstructionFilterWarning } from "./instruction-context-filter";

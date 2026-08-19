@@ -9,10 +9,7 @@ import {
   buildWorkbenchGitInstructions,
   listWorkbenchInstructionMechanics,
 } from "./WorkbenchPromptFiles.ts";
-import {
-  WORKBENCH_AGENTS_PROMPT,
-  WORKBENCH_WORKFLOW_DEFAULT_PROMPT,
-} from "./workbench-base-prompts.ts";
+import { WORKBENCH_AGENTS_PROMPT, WORKBENCH_WORKFLOW_DEFAULT_PROMPT } from "./workbench-prompt-sources.ts";
 
 test("materialized top-level threads expose title/status while subagents omit title", () => {
   const topLevel = listWorkbenchInstructionMechanics({ harness: "codex", threadId: "thread-1", workbenchOrigin: "http://localhost" });

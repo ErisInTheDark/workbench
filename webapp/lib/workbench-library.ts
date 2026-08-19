@@ -21,8 +21,10 @@ import {
   WORKBENCH_LIBRARY_PROJECT_ID,
   workbenchLibraryRoot,
 } from "./workbench-library-paths";
-import { WORKBENCH_BUILTIN_SKILLS } from "./workbench/instructions/workbench-builtin-skills";
-import { WORKBENCH_SKILL_TRIGGER_AND_PRECEDENCE_INSTRUCTIONS } from "./workbench/instructions/workbench-skill-precedence";
+import {
+  WORKBENCH_BUILTIN_SKILLS,
+  WORKBENCH_SKILL_TRIGGER_AND_PRECEDENCE_INSTRUCTIONS,
+} from "./workbench/instructions/skills/workbench-builtin-skills";
 
 export { WORKBENCH_LIBRARY_PROJECT_ID, workbenchLibraryRoot };
 
