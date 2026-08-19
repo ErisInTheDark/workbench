@@ -2,7 +2,7 @@
  * Exports:
  * - CodexIcon/CopilotIcon/OpenCodeIcon/HarnessIcon: render harness-specific icons for thread and rate-limit UI. Keywords: workbench, icon, harness, codex, copilot, opencode.
  * - SaveIcon: render the save control icon with its disabled slash overlay. Keywords: workbench, icon, save.
- * - DraftThreadIcon/NeedsAttentionThreadIcon/CompletedThreadIcon/WorkingThreadIcon/StoppedThreadIcon: render shared sidebar lifecycle glyphs. Keywords: thread, status, sidebar.
+ * - DraftThreadIcon/NeedsAttentionThreadIcon/CompletedThreadIcon/ProposedCommitThreadIcon/WorkingThreadIcon/StoppedThreadIcon: render shared sidebar lifecycle glyphs. Keywords: thread, status, sidebar, commit.
  * - DiscardDraftIcon/SettleThreadIcon/RestoreThreadIcon/UnsnoozeThreadIcon/SnoozedThreadIcon: render shared sidebar action and snooze glyphs. Keywords: draft, settle, restore, snooze.
  * - BinIcon: render the discard-draft bin icon. Keywords: workbench, icon, reset.
  * - ZoomOutIcon: render the decrease text size icon. Keywords: workbench, icon, zoom.
@@ -312,6 +312,7 @@ export function DraftThreadIcon({ className = "size-4" }: IconProps) {
 }
 export function NeedsAttentionThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3", "M12 17h.01"]} />; }
 export function CompletedThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "m9 12 2 2 4-4"]} />; }
+export function ProposedCommitThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "M7.5 12h2.9m3.2 0h2.9", "M13.6 12a1.6 1.6 0 1 1-3.2 0 1.6 1.6 0 0 1 3.2 0"]} />; }
 export function WorkingThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "M8 12h.01", "M12 12h.01", "M16 12h.01"]} />; }
 export function StoppedThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "m15 9-6 6", "m9 9 6 6"]} />; }
 export function DiscardDraftIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={["M18 6 6 18", "m6 6 12 12"]} />; }

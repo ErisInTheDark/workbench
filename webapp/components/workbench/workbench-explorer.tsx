@@ -30,7 +30,7 @@ import {
   workbenchThreadListButtonClassName,
   workbenchThreadListLabelClassName,
 } from "./workbench-class-names";
-import { BrowserSessionIcon, CompletedThreadIcon, DiscardDraftIcon, DraftThreadIcon, NeedsAttentionThreadIcon, PinIcon, RestoreThreadIcon, SettleThreadIcon, SnoozedThreadIcon, SparkleIcon, StoppedThreadIcon, UnsnoozeThreadIcon, WorkingThreadIcon } from "./workbench-icons";
+import { BrowserSessionIcon, CompletedThreadIcon, DiscardDraftIcon, DraftThreadIcon, FlagIcon, NeedsAttentionThreadIcon, PinIcon, ProposedCommitThreadIcon, RestoreThreadIcon, SettleThreadIcon, SnoozedThreadIcon, SparkleIcon, StoppedThreadIcon, UnsnoozeThreadIcon, WorkingThreadIcon } from "./workbench-icons";
 import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 
 export function NewEntryIcon () {
@@ -244,14 +244,12 @@ export function ThreadsList ({
     const group = getThreadSidebarGroup(entry);
     const lifecycle = entry.entryKind === "draft" ? null : entry.lifecycle;
     const attentionLabel = entry.entryKind === "draft" ? "" : attentionLabelsByThreadId[entry.identity.threadId]?.trim() ?? "";
+    const claimedFileCount = entry.entryKind === "draft" ? 0 : entry.fileClaim?.claimedPaths.length ?? 0;
+    const hasProposedCommit = entry.entryKind !== "draft" && entry.fileClaim?.proposalStatus === "proposed";
     const baseStatus = entry.entryKind === "draft"
       ? "Draft"
       : lifecycle?.kind === "needsAttention" ? attentionLabel || "Needs attention" : lifecycle?.kind === "working" ? "Working" : lifecycle?.kind === "stopped" ? "Stopped" : "Completed";
-    const status = entry.entryKind !== "draft" && (lifecycle?.kind === "stopped" || lifecycle?.kind === "completed") && entry.fileClaim
-      ? entry.fileClaim.proposalStatus === "proposed"
-        ? `${lifecycle.kind === "stopped" ? "Stopped" : "Completed"} with proposed commit`
-        : `${lifecycle.kind === "stopped" ? "Stopped" : "Completed"} with file claims`
-      : baseStatus;
+    const status = hasProposedCommit ? "Proposed commit" : baseStatus;
     const pinned = isPinned(entry);
     const timestamp = new Date(entry.activityAt);
     const relativeTime = formatThreadRelativeTimestamp(entry.activityAt / 1000, nowMs);
@@ -260,7 +258,7 @@ export function ThreadsList ({
     const baseAction = entry.entryKind === "draft" ? "discard" : group === "other" ? "restore" : group === "snoozed" ? "wake" : canComplete ? "complete" : lifecycle?.kind === "completed" && !lifecycle.settled && !entry.fileClaim ? "settle" : null;
     const canShiftSettle = canComplete && !entry.fileClaim;
     const action = canShiftSettle && isShiftPressed ? "settle" : baseAction;
-    const Icon = entry.entryKind === "draft" ? DraftThreadIcon : lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
+    const Icon = entry.entryKind === "draft" ? DraftThreadIcon : hasProposedCommit ? ProposedCommitThreadIcon : lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
     const statusClassName = entry.entryKind === "draft"
       ? "text-muted"
       : lifecycle?.kind === "working"
@@ -272,7 +270,7 @@ export function ThreadsList ({
             : "text-emerald-600 dark:text-emerald-300";
     const ActionIcon = action === "discard" ? DiscardDraftIcon : action === "restore" ? RestoreThreadIcon : action === "wake" ? UnsnoozeThreadIcon : SettleThreadIcon;
     const actionLabel = action === "complete" ? "Completed" : action === "discard" ? "Discard draft" : action === "restore" ? "Restore" : action === "settle" ? "Settle" : "Wake";
-    const rowName = `${entry.title}, ${status}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
+    const rowName = `${entry.title}, ${status}${claimedFileCount ? `, ${claimedFileCount} claimed ${claimedFileCount === 1 ? "file" : "files"}` : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
     const dimmed = !selected && (group === "snoozed" || group === "other");
     const hasDashedBorder = entry.entryKind === "draft" || lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped";
     const strokeOpacity = entry.entryKind === "draft" ? 0.24 : 1;
@@ -341,7 +339,19 @@ export function ThreadsList ({
             <div className="pointer-events-none mt-0.5 grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-1.5 px-2 pb-1.5 text-[0.72rem] text-muted">
               <Icon className={`size-3.5 ${statusClassName}`} />
               <span className={`truncate ${statusClassName}`}>{status}</span>
-              <span className="inline-flex size-4 items-center justify-center">{group === "snoozed" ? <SnoozedThreadIcon className="size-3.5" /> : pinned ? <PinIcon className="size-3.5" /> : null}</span>
+              <span className="grid grid-cols-[auto_auto] items-center gap-1.5">
+                {claimedFileCount ? (
+                  <span data-role="thread-file-claim" className="inline-flex items-center gap-0.5" aria-hidden="true">
+                    <FlagIcon className="size-3.5" />
+                    <span>{claimedFileCount}</span>
+                  </span>
+                ) : null}
+                {group === "snoozed" || pinned ? (
+                  <span data-role="thread-priority-icon" className="inline-flex size-4 items-center justify-center">
+                    {group === "snoozed" ? <SnoozedThreadIcon className="size-3.5" /> : <PinIcon className="size-3.5" />}
+                  </span>
+                ) : null}
+              </span>
               <time dateTime={timestamp.toISOString()} title={exactTime}>{relativeTime}</time>
             </div>
           </div>
