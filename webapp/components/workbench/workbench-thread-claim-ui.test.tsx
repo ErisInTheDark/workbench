@@ -9,7 +9,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { WorkbenchThreadSidebarEntry } from "../../lib/workbench/thread/thread-state";
-import { ThreadsList } from "./workbench-explorer";
+import WorkbenchThreadList from "./WorkbenchThreadList";
 import WorkbenchContextMenuContext from "./WorkbenchContextMenuContext";
 
 type ThreadEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>;
@@ -52,13 +52,14 @@ function renderThreads(entries: ThreadEntry[]) {
   return renderToStaticMarkup(createElement(
     WorkbenchContextMenuContext.Provider,
     { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
-    createElement(ThreadsList, {
+    createElement(WorkbenchThreadList, {
       currentTarget: null,
       entries,
       getThreadHref: () => "/agent/thread/thread-one",
       nowMs: 1_723_456_790_000,
       onCreateThread: () => undefined,
       onOpenThread: () => undefined,
+      projectId: "project",
     }),
   ));
 }
@@ -92,7 +93,19 @@ test("proposed commits replace the completed label and inner status glyph", () =
 });
 
 test("claim and pin controls use independent auto-sized slots", async () => {
-  const source = await readFile(new URL("./workbench-explorer.tsx", import.meta.url), "utf8");
+  const source = await readFile(new URL("./WorkbenchThreadList.tsx", import.meta.url), "utf8");
   assert.match(source, /grid grid-cols-\[auto_auto\] items-center gap-1\.5/u);
   assert.match(source, /data-role="thread-file-claim"[\s\S]*?<PinIcon/u);
+});
+
+test("thread tooltips render every claimed path in an interactive wrapping scroll region", async () => {
+  const source = await readFile(new URL("./WorkbenchThreadList.tsx", import.meta.url), "utf8");
+  assert.match(source, /<WorkbenchTooltip[\s\S]*?interactive[\s\S]*?<a/u);
+  assert.match(source, /data-thread-project-file-link-boundary="true"/u);
+  assert.match(source, /claimedPaths\.map\(\(filePath\)[\s\S]*?<ProjectFilePath/u);
+  assert.match(source, /flex max-h-56 min-h-0 flex-wrap content-start items-center gap-1 overflow-y-auto rounded-\[0\.65rem\] bg-\[color-mix\(in_srgb,var\(--text\)_4%,transparent\)\] p-2/u);
+  assert.match(source, /overflow-y-auto[\s\S]*?<FlagIcon[\s\S]*?claimedPaths\.map/u);
+  assert.doesNotMatch(source, />Claimed files<\/span>/u);
+  assert.match(source, /title=\{entry\.title\}/u);
+  assert.doesNotMatch(source, /<a[\s\S]*?title=\{entry\.title\}[\s\S]*?onClick=/u);
 });

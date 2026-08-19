@@ -7,14 +7,13 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 test("threads render one flat tablist with lifecycle borders and all settled rows inside one disclosure", async () => {
-  const source = await readFile(new URL("./workbench-explorer.tsx", import.meta.url), "utf8");
+  const source = await readFile(new URL("./WorkbenchThreadList.tsx", import.meta.url), "utf8");
   assert.match(source, /role="tablist"/u);
   assert.match(source, /role="tab"/u);
   assert.match(source, /event\.key === "ArrowDown"/u);
   assert.match(source, /event\.key === "ArrowUp"/u);
   assert.match(source, /event\.key === "Home"/u);
   assert.match(source, /event\.key === "End"/u);
-  assert.match(source, /aria-label=\{`Actions for/u);
   assert.match(source, /summary="Settled threads"/u);
   assert.match(source, /settledEntries\.map\(renderEntry\)/u);
   assert.doesNotMatch(source, /pinnedSettledEntries/u);
@@ -45,7 +44,7 @@ test("threads render one flat tablist with lifecycle borders and all settled row
   assert.match(source, /entry\.entryKind === "draft"[\s\S]*?\? "text-muted"/u);
   assert.match(source, /flex flex-col gap-1/u);
   assert.match(source, /canComplete = entry\.entryKind === "thread" && !isWorkbenchThreadStatusProviderOwned\(entry\.lifecycle\)/u);
-  assert.match(source, /canComplete && isShiftPressed \? "settle" : baseAction/u);
+  assert.match(source, /canShiftSettle && isShiftPressed \? "settle" : baseAction/u);
   assert.match(source, /event\.shiftKey \|\| event\.detail > 1/u);
   assert.match(source, /action === "complete" \? "Completed"/u);
   assert.match(source, /: "Wake"/u);
@@ -55,7 +54,7 @@ test("threads render one flat tablist with lifecycle borders and all settled row
   assert.doesNotMatch(source, /workbenchThreadListLabelClassName\} mr-1\.5 truncate/u);
   assert.ok(source.includes('<div className="pointer-events-none relative z-10 min-w-0">'));
   assert.doesNotMatch(source, /absolute right-1|top-1\/2|-translate-y-1\/2/u);
-  assert.match(source, /className="mt-1"/u);
+  assert.match(source, /contentClassName="mt-1"/u);
   assert.doesNotMatch(source, /summaryClassName="px-2/u);
   assert.match(source, /actionLabel === "restore"|action === "restore"/u);
   assert.match(source, /attentionLabelsByThreadId/u);

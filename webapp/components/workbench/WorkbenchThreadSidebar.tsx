@@ -12,7 +12,7 @@ import type { WorkbenchDragPayload } from "../../lib/workbench/layout/workbench-
 import { createThreadHref } from "../../lib/workbench/navigation/workbench-route";
 import type { WorkbenchThreadTarget } from "../../lib/workbench/thread/thread-state";
 import { getThreadSidebarGroup, isWorkbenchThreadStatusProviderOwned, type WorkbenchThreadSidebarEntry } from "../../lib/workbench/thread/thread-state";
-import { SidebarLoadingSkeleton, ThreadsList } from "./workbench-explorer";
+import { SidebarLoadingSkeleton } from "./workbench-explorer";
 import {
   ArchiveIcon,
   CompletedThreadIcon,
@@ -26,6 +26,7 @@ import {
   StoppedThreadIcon,
 } from "./workbench-icons";
 import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
+import WorkbenchThreadList from "./WorkbenchThreadList";
 
 const THREAD_RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000;
 const EMPTY_UNSUBSCRIBE = () => {};
@@ -233,7 +234,7 @@ export default memo(function WorkbenchThreadSidebar({
   return (
     <>
       <nav aria-label="Threads">
-        <ThreadsList
+        <WorkbenchThreadList
           attentionLabelsByThreadId={attentionLabelsByThreadId}
           createThreadLabel="Create new thread"
           currentTarget={currentTarget}
@@ -256,6 +257,7 @@ export default memo(function WorkbenchThreadSidebar({
             onBeginPointerDrag(event, { harness, type: "new-thread" });
           } : undefined}
           onOpenThread={onOpenThread}
+          projectId={projectId}
           onThreadPointerDragStart={(event, entry) => {
             const target = entry.entryKind === "draft"
               ? { draftId: entry.draft.draftId, kind: "draft" as const }
