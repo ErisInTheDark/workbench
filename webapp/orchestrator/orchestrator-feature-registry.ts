@@ -17,9 +17,11 @@ import type { OrchestratorFeatureGeneration, OrchestratorFeatureLease } from "./
 import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
 import WorkbenchBridgeRequestController from "./WorkbenchBridgeRequestController";
 import WorkbenchLegacyMigrationSourceController, { readLegacyMigrationSourceConfig } from "./WorkbenchLegacyMigrationSourceController";
+import WorkbenchOrchestratorHttpRouter from "./WorkbenchOrchestratorHttpRouter";
 import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
 import WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
+import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import * as copilotThreadState from "./copilot-thread-state";
 import * as opencodeLiveThreadState from "./opencode-live-thread-state";
@@ -55,6 +57,7 @@ export interface OrchestratorFeatureContext {
   requestHarness(harness: HarnessKind, request: JsonRpcRequest): Promise<JsonRpcResponse>;
   requestSubagent(request: JsonRpcRequest): Promise<JsonRpcResponse>;
   subagentStore: { list(options: { projectId: string }): Promise<{ subagents: Array<{ createdAt: number; cwd: string; directSubagentIndex: number; harness: WorkbenchHarness; name: string; parentThreadId: string; profileId: string; profileName: string; projectId: string; threadId: string; title: string; updatedAt: number }> }> };
+  threadTransitions: WorkbenchThreadTransitionCoordinator;
 }
 
 export interface OrchestratorFeatures {
@@ -65,6 +68,7 @@ export interface OrchestratorFeatures {
   legacyMigrationSource: WorkbenchLegacyMigrationSourceController;
   modules: OrchestratorReloadableModules;
   nextDevHealth: NextDevHealthSupervisor;
+  orchestratorHttp: WorkbenchOrchestratorHttpRouter;
   projectCatalog: WorkbenchProjectCatalogController;
   projectSnapshot: WorkbenchProjectSnapshotController;
   threadState: WorkbenchThreadStateFeature;
@@ -106,6 +110,13 @@ export function createOrchestratorFeatureGeneration(
       ? await threadState.handleManagedThreadRequest(request)
       : await context.requestSubagent(request),
   });
+  const orchestratorHttp = new WorkbenchOrchestratorHttpRouter({
+    agentCommand,
+    bridgeRequest,
+    legacyMigrationSource,
+    projectCatalog,
+    projectSnapshot,
+  });
   const browseSessionCleanup = new BrowseSessionCleanupSupervisor({
     ...context.browseCleanupOptions,
     cleanupStaleInactiveSessions: async (options) => {
@@ -127,7 +138,7 @@ export function createOrchestratorFeatureGeneration(
     isShuttingDown: () => !lease.isCurrent() || context.codexHealthOptions.isShuttingDown(),
     requestRecovery: (reason) => { if (lease.isCurrent()) context.codexHealthOptions.requestRecovery(reason); },
   });
-  const features: OrchestratorFeatures = { agentCommand, bridgeRequest, browseSessionCleanup, codexHealth, legacyMigrationSource, modules, nextDevHealth, projectCatalog, projectSnapshot, threadState };
+  const features: OrchestratorFeatures = { agentCommand, bridgeRequest, browseSessionCleanup, codexHealth, legacyMigrationSource, modules, nextDevHealth, orchestratorHttp, projectCatalog, projectSnapshot, threadState };
   return {
     dispose: async () => {
       codexHealth.dispose();

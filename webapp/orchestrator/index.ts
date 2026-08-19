@@ -4,10 +4,7 @@
  *
  * Helpers:
  * - HTTP reload helpers: parse, proxy, queue, and report orchestrator reload scopes. Keywords: reload, next-dev, bridge.
- * - Server bridge request helpers: route allowlisted stateless Next RPCs over buffered HTTP into live harness bridges. Keywords: bridge, http, rpc, allowlist, server.
- * - Legacy migration source helper: expose capability-fenced bounded catalog pages and selected snapshots from stable bridges. Keywords: migration, readonly, lazy, bridge.
- * - Browse ingress helpers: route native agent commands directly and stateless Next proxies through the drainable orchestrator-owned Browse controller. Keywords: browse, agent, direct, controller, queue, streaming, reload.
- * - Project catalog and snapshot HTTP helpers: route stateless Next proxies through orchestrator-owned structured discovery and bounded tree caches. Keywords: project, catalog, tree, snapshot, cache, watcher, reload.
+ * - Reloadable HTTP handoff: delegate non-shell HTTP routing through one feature-host lease while stable reload, health, and Browse ingress stay process-owned. Keywords: orchestrator, http, router, reload, feature.
  * - Child process helpers: start, restart, and schedule managed process lifecycles. Keywords: process, restart, child.
  * - Bridge helpers: route websocket JSON-RPC messages across Codex, Copilot, and OpenCode harnesses. Keywords: websocket, harness, rpc.
  * - Health helpers: supervise the Next.js dev server and restart it after repeated 5xx health probes. Keywords: watchdog, turbopack, 500.
@@ -61,6 +58,7 @@ import { createOrchestratorFeatureModuleLoader } from "./orchestrator-feature-lo
 import type { OrchestratorFeatureContext, OrchestratorFeatures, OrchestratorProviderNotification } from "./orchestrator-feature-registry";
 import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
+import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import WorkbenchTurnRecoveryHandoffStore, { type WorkbenchTurnRecoveryHandoffCandidate } from "./WorkbenchTurnRecoveryHandoffStore";
 
@@ -79,11 +77,6 @@ const NEXT_DEV_HEALTH_SERVER_ERROR_THRESHOLD = 3;
 const ORCHESTRATOR_RELOAD_PATH = "/orchestrator/reload";
 const ORCHESTRATOR_BROWSE_PATH = "/orchestrator/browse";
 const ORCHESTRATOR_BROWSE_SESSIONS_PATH = "/orchestrator/browse/sessions";
-const ORCHESTRATOR_AGENT_COMMAND_PATH = "/orchestrator/agent-command";
-const ORCHESTRATOR_BRIDGE_REQUEST_PATH = "/orchestrator/bridge-request";
-const ORCHESTRATOR_LEGACY_MIGRATION_SOURCE_PATH = "/orchestrator/legacy-migration-source";
-const ORCHESTRATOR_PROJECTS_PATH = "/orchestrator/projects";
-const ORCHESTRATOR_TREE_PATH = "/orchestrator/tree";
 const CODEX_BRIDGE_RELOAD_DRAIN_TIMEOUT_MS = 10000;
 const CODEX_RECOVERY_INITIAL_RETRY_DELAY_MS = 4000;
 const CODEX_RECOVERY_MAX_RETRY_DELAY_MS = 60000;
@@ -176,6 +169,7 @@ const turnRecoveryController = new WorkbenchTurnRecoveryController(
   },
 );
 const subagentStore = new WorkbenchSubagentStore(PROJECT_ROOT);
+const threadTransitionCoordinator = new WorkbenchThreadTransitionCoordinator();
 const featureHost = new OrchestratorFeatureHost<OrchestratorFeatureContext, OrchestratorFeatures, OrchestratorProviderNotification>(
   createOrchestratorFeatureContext(),
   createOrchestratorFeatureModuleLoader(),
@@ -457,6 +451,7 @@ function createOrchestratorFeatureContext(): OrchestratorFeatureContext {
     requestHarness: requestLiveHarness,
     requestSubagent: (request) => requestLiveHarness("codex", request),
     subagentStore,
+    threadTransitions: threadTransitionCoordinator,
   };
 }
 
@@ -1371,36 +1366,6 @@ function startBridgeServer() {
   bridgeWebSocketServer = new WebSocketServer({ noServer: true });
   bridgeServer = http.createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://localhost").pathname;
-    if (requestPath === ORCHESTRATOR_AGENT_COMMAND_PATH && request.method === "POST") {
-      void featureHost.run("agentCommand", (controller) => controller.handleHttpRequest(request, response));
-      return;
-    }
-    if (requestPath === ORCHESTRATOR_BRIDGE_REQUEST_PATH && request.method === "POST") {
-      void featureHost.run("bridgeRequest", (controller) => controller.handleHttpRequest(request, response)).catch((error) => {
-        if (!response.headersSent) sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Bridge request failed." });
-      });
-      return;
-    }
-    if (requestPath === ORCHESTRATOR_LEGACY_MIGRATION_SOURCE_PATH) {
-      void featureHost.run("legacyMigrationSource", (controller) => controller.handleHttpRequest(request, response)).catch((error) => {
-        if (!response.headersSent) sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Legacy migration source failed." });
-      });
-      return;
-    }
-    if (requestPath === ORCHESTRATOR_PROJECTS_PATH && request.method === "GET") {
-      void featureHost.run("projectCatalog", (controller) => controller.handleHttpRequest(request, response)).catch((error) => {
-        if (!response.headersSent) sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Project discovery failed." });
-      });
-      return;
-    }
-
-    if (requestPath === ORCHESTRATOR_TREE_PATH && (request.method === "GET" || request.method === "POST")) {
-      void featureHost.run("projectSnapshot", (controller) => controller.handleTreeHttpRequest(request, response)).catch((error) => {
-        if (!response.headersSent) sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Project tree request failed." });
-      });
-      return;
-    }
-
     if (requestPath === ORCHESTRATOR_BROWSE_PATH && request.method === "POST") {
       void runAfterBrowseControllerReload(() => getBrowseController().handleBrowseHttpRequest(request, response)).catch((error) => {
         if (!response.headersSent) {
@@ -1438,7 +1403,13 @@ function startBridgeServer() {
       return;
     }
 
-    sendHttpJson(response, 404, { error: "Not found" });
+    void featureHost.run("orchestratorHttp", (router) => router.handleHttpRequest(request, response)).catch((error) => {
+      if (!response.headersSent) {
+        sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Orchestrator feature request failed." });
+      } else if (!response.writableEnded) {
+        response.end();
+      }
+    });
   });
 
   bridgeServer.on("upgrade", (request, socket, head) => {
