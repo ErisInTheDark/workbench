@@ -31,6 +31,7 @@ import ChevronIcon from "../ChevronIcon";
 import ProjectFilePath from "../ProjectFilePath";
 import { CheckIcon, CopyIcon, PreviewIcon, WrapTextIcon } from "../workbench-icons";
 import ThreadDisclosure from "./ThreadDisclosure";
+import ThreadPlanSummary from "./ThreadPlanSummary";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 
 // reusable classes only
@@ -325,7 +326,7 @@ function renderThreadPlanBlock (block: Extract<ParsedBlock, { type: "plan" }>, o
       contentClassName="mt-2"
       initialOpen
       key={keyPrefix}
-      summary="Plan"
+      summary={<ThreadPlanSummary markdown={block.text} />}
       summaryClassName="text-[0.92em] font-medium leading-[1.6]"
     >
       <ThreadPreviewFrame

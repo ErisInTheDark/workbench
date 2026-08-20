@@ -78,6 +78,7 @@ import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
 import ThreadFileChangeItem from "./ThreadFileChangeItem";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
+import ThreadPlanSummary from "./ThreadPlanSummary";
 import ThreadReasoningItem from "./ThreadReasoningItem";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadSubagentCreateItem from "./ThreadSubagentCreateItem";
@@ -880,7 +881,7 @@ function ThreadPlanItem ({
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
-      summary={<ThreadSummaryText text="Plan" />}
+      summary={<ThreadPlanSummary markdown={item.text} />}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"
     >
       <ThreadMarkdown
