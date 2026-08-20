@@ -10,7 +10,7 @@ import { normalizeThreadTitle } from "../lib/thread-bootstrap";
 import type { WorkbenchHarness, WorkbenchProjectsPayload } from "../lib/types";
 import type { GitArcActiveClaim, GitArcLifecycleState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
-import { normalizeWorkbenchActivityTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+import { normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchThreadStateController, { type WorkbenchObservedLifecycleEvent, type WorkbenchThreadReconciliationFailure } from "./WorkbenchThreadStateController";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
@@ -68,6 +68,12 @@ function asRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
+function normalizeOptionalTimestamp(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? normalizeWorkbenchTimestampMs(value)
+    : null;
+}
+
 export function normalizeProviderSidebarEntry(harness: HarnessKind, value: unknown): WorkbenchThreadSidebarEntry | null {
   const record = asRecord(value);
   const threadId = typeof record?.id === "string" ? record.id : null;
@@ -78,13 +84,20 @@ export function normalizeProviderSidebarEntry(harness: HarnessKind, value: unkno
   const turnId = typeof record.currentTurnId === "string" && record.currentTurnId.trim()
     ? record.currentTurnId
     : typeof activeTurn?.id === "string" && activeTurn.id.trim() ? activeTurn.id : undefined;
-  const updatedAt = normalizeWorkbenchActivityTimestampMs(typeof record.updatedAt === "number" ? record.updatedAt : Date.now());
+  const updatedAt = normalizeOptionalTimestamp(record.updatedAt) ?? Date.now();
+  let latestTurnStartedAt: number | null = null;
+  for (const turn of turns) {
+    const startedAt = normalizeOptionalTimestamp(asRecord(turn)?.startedAt);
+    if (startedAt !== null && (latestTurnStartedAt === null || startedAt > latestTurnStartedAt)) latestTurnStartedAt = startedAt;
+  }
+  const orderAt = latestTurnStartedAt ?? normalizeOptionalTimestamp(record.recencyAt) ?? updatedAt;
   return {
     activityAt: updatedAt, entryKind: "thread", identity: { harness, threadId },
     lifecycle: active
       ? { agent: { agentStatus: "working", ...(turnId ? { turnId } : {}) }, kind: "working", reason: "acceptedIntent", settled: false }
       : { kind: "completed", reason: "providerInactive", settled: true },
     metadata: { archived: false, pinned: false, snoozed: false },
+    orderAt,
     title: resolveWorkbenchThreadTitle({
       id: threadId,
       name: typeof record.name === "string" ? record.name : null,
@@ -126,10 +139,17 @@ export function mapProviderLifecycleNotification(notification: JsonRpcNotificati
   return null;
 }
 
-export function mapProviderActivityNotification(notification: JsonRpcNotification) {
+export function mapProviderActivityNotification(notification: JsonRpcNotification):
+  | { kind: "activity"; threadId: string }
+  | { kind: "turnStarted"; startedAt: number | null; threadId: string }
+  | null {
   if (notification.method !== "turn/started" && notification.method !== "item/started" && notification.method !== "item/completed") return null;
   const params = asRecord(notification.params);
-  return typeof params?.threadId === "string" && params.threadId.trim() ? params.threadId : null;
+  const threadId = typeof params?.threadId === "string" && params.threadId.trim() ? params.threadId : null;
+  if (!threadId) return null;
+  return notification.method === "turn/started"
+    ? { kind: "turnStarted", startedAt: normalizeOptionalTimestamp(asRecord(params.turn)?.startedAt), threadId }
+    : { kind: "activity", threadId };
 }
 
 export default class WorkbenchThreadStateFeature {
@@ -172,8 +192,8 @@ export default class WorkbenchThreadStateFeature {
       if (threadId && title) await this.controller.observeTitle(harness, threadId, title);
       return;
     }
-    const activityThreadId = mapProviderActivityNotification(notification);
-    if (activityThreadId) await this.controller.observeActivity(harness, activityThreadId);
+    const activity = mapProviderActivityNotification(notification);
+    if (activity) await this.controller.observeActivity(harness, activity.threadId, activity.kind === "turnStarted" ? activity.startedAt : undefined);
   }
 
   async handleManagedThreadRequest(request: JsonRpcRequest): Promise<JsonRpcResponse> {

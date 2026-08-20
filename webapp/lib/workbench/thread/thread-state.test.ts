@@ -1,11 +1,11 @@
 /* No production exports. Tests protect strict lifecycle, grouping, ordering, and draft rules. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { countDraftPromptTokens, createDraftTitle, getThreadSidebarGroup, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchActivityTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, sortThreadSidebarEntries, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
+import { countDraftPromptTokens, createDraftTitle, getThreadSidebarGroup, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, sortThreadSidebarEntries, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
 
-test("provider activity timestamps normalize seconds without double-converting milliseconds", () => {
-  assert.equal(normalizeWorkbenchActivityTimestampMs(1_723_456_789), 1_723_456_789_000);
-  assert.equal(normalizeWorkbenchActivityTimestampMs(1_723_456_789_123), 1_723_456_789_123);
+test("provider timestamps normalize seconds without double-converting milliseconds", () => {
+  assert.equal(normalizeWorkbenchTimestampMs(1_723_456_789), 1_723_456_789_000);
+  assert.equal(normalizeWorkbenchTimestampMs(1_723_456_789_123), 1_723_456_789_123);
 });
 
 test("draft threshold and title follow prompt text only", () => {
@@ -28,6 +28,9 @@ test("multiplexed updates strictly distinguish sidebar, activity, and project pa
   }).success, true);
   assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
     activityAt: 10, identity: { harness: "codex", threadId: "thread" }, projectId: "project", revision: 2, updateKind: "activity",
+  }).success, true);
+  assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
+    activityAt: 10, identity: { harness: "codex", threadId: "thread" }, orderAt: 9, projectId: "project", revision: 2, updateKind: "activity",
   }).success, true);
   const projectUpdate = WorkbenchThreadStateSnapshotSchema.safeParse({
     projectId: "project",
@@ -86,6 +89,26 @@ test("draft priority requests use draft identity and drive shared grouping and o
   assert.equal(getThreadSidebarGroup(entry), "snoozed");
   const first = sortThreadSidebarEntries([{ ...entry, metadata: { ...entry.metadata, pinned: false } }, entry])[0];
   assert.equal(first?.entryKind === "draft" ? first.metadata.pinned : null, true);
+});
+
+test("top-level threads sort by latest turn start while activity remains display-only", () => {
+  const entry = (threadId: string, activityAt: number, orderAt?: number): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
+    activityAt,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    ...(orderAt === undefined ? {} : { orderAt }),
+    title: threadId,
+  });
+  assert.deepEqual(
+    sortThreadSidebarEntries([entry("older-turn-busy", 100, 10), entry("newer-turn-quiet", 1, 20)]).map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""),
+    ["newer-turn-quiet", "older-turn-busy"],
+  );
+  assert.deepEqual(
+    sortThreadSidebarEntries([entry("fallback-older", 10), entry("fallback-newer", 20)]).map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""),
+    ["fallback-newer", "fallback-older"],
+  );
 });
 
 test("lifecycle parsing preserves two attention variants and normalizes legacy reasons", () => {

@@ -5,8 +5,8 @@
  * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchThreadActivityUpdateSchema: full sidebar state and tiny activity delta contracts. Keywords: sidebar, websocket, revision.
  * - WorkbenchThreadStateOpenResultSchema/WorkbenchThreadStateOpenResult: atomic catalog, tree, and sidebar observation bootstrap. Keywords: open, bootstrap, snapshot.
  * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema: multiplexed sidebar, activity, project, and request protocol. Keywords: orchestrator, websocket, revision.
- * - getThreadSidebarGroup/sortThreadSidebarEntries: exhaustive visible grouping and stable activity ordering. Keywords: grouping, pin, sort.
- * - normalizeWorkbenchActivityTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary. Keywords: timestamp, provider, normalization.
+ * - getThreadSidebarGroup/sortThreadSidebarEntries: exhaustive visible grouping and stable turn-start ordering. Keywords: grouping, pin, sort.
+ * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary. Keywords: timestamp, provider, normalization.
  * - resolveWorkbenchThreadTitle: choose a meaningful provider name, first-message preview, or neutral fallback. Keywords: title, preview, uuid.
  * - isWorkbenchThreadStatusProviderOwned/reduceWorkbenchThreadLifecycle/projectWorkbenchThreadSidebarEntries: manual-status eligibility, exact-turn transitions, and direct-child status projection. Keywords: working, attention, completed, stopped, parent.
  * - countDraftPromptTokens/createDraftTitle: durable draft materialization and title rules. Keywords: draft, threshold, title.
@@ -149,6 +149,7 @@ const TopLevelEntrySchema = SidebarCommonSchema.extend({
   identity: ThreadIdentitySchema,
   lifecycle: WorkbenchThreadLifecycleSchema,
   metadata: TopLevelMetadataSchema,
+  orderAt: z.number().int().nonnegative().optional(),
 }).strict();
 const SubagentEntrySchema = SidebarCommonSchema.extend({
   createdAt: z.number().int().nonnegative(),
@@ -192,6 +193,7 @@ export type WorkbenchThreadStateOpenResult = z.infer<typeof WorkbenchThreadState
 export const WorkbenchThreadActivityUpdateSchema = z.object({
   activityAt: z.number().int().nonnegative(),
   identity: ThreadIdentitySchema,
+  orderAt: z.number().int().nonnegative().optional(),
   projectId: z.string().min(1),
   revision: z.number().int().nonnegative(),
   updateKind: z.literal("activity"),
@@ -226,7 +228,7 @@ export type WorkbenchThreadStateRequest = z.infer<typeof WorkbenchThreadStateReq
 
 export type WorkbenchThreadSidebarGroup = "drafts" | "needsAttention" | "completed" | "working" | "snoozed" | "other" | "hidden";
 
-export function normalizeWorkbenchActivityTimestampMs(timestamp: number) {
+export function normalizeWorkbenchTimestampMs(timestamp: number) {
   return Math.trunc(timestamp < 100_000_000_000 ? timestamp * 1000 : timestamp);
 }
 
@@ -274,7 +276,9 @@ export function sortThreadSidebarEntries(entries: readonly WorkbenchThreadSideba
     const leftPinned = left.entryKind === "subagent" ? left.pinned : left.metadata.pinned;
     const rightPinned = right.entryKind === "subagent" ? right.pinned : right.metadata.pinned;
     if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;
-    if (left.activityAt !== right.activityAt) return right.activityAt - left.activityAt;
+    const leftOrderAt = left.entryKind === "draft" ? left.draft.createdAt : left.entryKind === "thread" ? left.orderAt ?? left.activityAt : left.createdAt;
+    const rightOrderAt = right.entryKind === "draft" ? right.draft.createdAt : right.entryKind === "thread" ? right.orderAt ?? right.activityAt : right.createdAt;
+    if (leftOrderAt !== rightOrderAt) return rightOrderAt - leftOrderAt;
     const leftHarness = left.entryKind === "draft" ? left.draft.harness : left.identity.harness;
     const rightHarness = right.entryKind === "draft" ? right.draft.harness : right.identity.harness;
     const harnessOrder = leftHarness.localeCompare(rightHarness);

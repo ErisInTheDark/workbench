@@ -64,27 +64,32 @@ test("newer pushed revisions win and foreign project revisions are ignored", asy
   assert.deepEqual(installed.map((value) => value?.revision), [2, 3]);
 });
 
-test("activity updates reorder only the matching observed thread", async () => {
+test("activity updates preserve turn order until a new turn-start order arrives", async () => {
   const installed: Array<WorkbenchThreadSidebarSnapshot | null> = [];
+  const entry = (threadId: string, activityAt: number, orderAt: number): WorkbenchThreadSidebarSnapshot["entries"][number] => ({
+    activityAt,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    orderAt,
+    title: threadId,
+  });
   const initial: WorkbenchThreadSidebarSnapshot = {
     ...snapshot(1),
-    entries: [{
-      activityAt: 1,
-      entryKind: "thread",
-      identity: { harness: "codex", threadId: "thread" },
-      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
-      metadata: { archived: false, pinned: false, snoozed: false },
-      title: "Thread",
-    }],
+    entries: [entry("newer-turn", 2, 20), entry("older-turn", 1, 10)],
   };
   const client = new ThreadSidebarClient({
     onChange: (value) => installed.push(value),
     transport: { close: async () => undefined, deleteDraft: async () => undefined, open: async () => initial, upsertDraft: async () => undefined },
   });
   await client.open("project");
-  client.acceptActivity({ activityAt: 50, identity: { harness: "codex", threadId: "thread" }, projectId: "project", revision: 2, updateKind: "activity" });
-  assert.equal(installed.at(-1)?.entries[0]?.activityAt, 50);
-  assert.equal(installed.at(-1)?.revision, 2);
+  client.acceptActivity({ activityAt: 50, identity: { harness: "codex", threadId: "older-turn" }, projectId: "project", revision: 2, updateKind: "activity" });
+  assert.deepEqual(installed.at(-1)?.entries.map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""), ["newer-turn", "older-turn"]);
+  client.acceptActivity({ activityAt: 60, identity: { harness: "codex", threadId: "older-turn" }, orderAt: 30, projectId: "project", revision: 3, updateKind: "activity" });
+  assert.deepEqual(installed.at(-1)?.entries.map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""), ["older-turn", "newer-turn"]);
+  client.acceptActivity({ activityAt: 70, identity: { harness: "codex", threadId: "newer-turn" }, projectId: "project", revision: 4, updateKind: "activity" });
+  assert.deepEqual(installed.at(-1)?.entries.map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""), ["older-turn", "newer-turn"]);
 });
 
 test("external-store subscribers receive each installed snapshot and can unsubscribe", async () => {
@@ -175,6 +180,7 @@ test("materialized draft becomes a working thread before its in-flight save sett
   assert.equal(optimisticEntries.some((entry) => entry.entryKind === "thread" && entry.identity.threadId === "materialized" && entry.lifecycle.kind === "working"), true);
   const materialized = optimisticEntries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "materialized");
   assert.deepEqual(materialized?.entryKind === "thread" ? materialized.metadata : null, { archived: false, pinned: true, snoozed: false });
+  assert.equal(materialized?.entryKind === "thread" ? materialized.orderAt : null, materialized?.activityAt);
   let acceptanceSettled = false;
   void accepting.then(() => { acceptanceSettled = true; });
   await new Promise((resolve) => setTimeout(resolve, 0));

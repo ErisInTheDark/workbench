@@ -529,9 +529,11 @@ test("accepted intent survives provider discovery lag and releases after its lif
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-accepted-"));
   const published: WorkbenchThreadSidebarEntry[] = [];
   const publishedSnapshots: WorkbenchThreadStateSnapshot[] = [];
+  let now = 42;
+  let providerEntries: WorkbenchThreadSidebarEntry[] = [];
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    now: () => 42,
+    now: () => now,
     publish: (_connectionId, snapshot) => {
       publishedSnapshots.push(snapshot);
       if (!("entries" in snapshot)) return;
@@ -540,7 +542,7 @@ test("accepted intent survives provider discovery lag and releases after its lif
     },
     projectState: projectState(),
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
-      acceptProviderSnapshot("codex", [], { complete: true });
+      acceptProviderSnapshot("codex", providerEntries, { complete: true });
       return [];
     },
     resolveProjectRoot: async () => root,
@@ -576,6 +578,7 @@ test("accepted intent survives provider discovery lag and releases after its lif
   assert.equal(entry.lifecycle.kind, "working");
   assert.deepEqual(entry.entryKind === "thread" ? entry.metadata : null, { archived: false, pinned: true, snoozed: false });
   assert.equal(entry?.activityAt, 42);
+  assert.equal(entry.entryKind === "thread" ? entry.orderAt : null, 42);
   assert.equal(published.at(-1)?.title, "First user message");
   assert.equal(publishedSnapshots.length, 1);
   assert.equal("entries" in publishedSnapshots[0]!, true);
@@ -583,13 +586,43 @@ test("accepted intent survives provider discovery lag and releases after its lif
     assert.equal(publishedSnapshots[0].entries.some((candidate) => candidate.entryKind === "draft"), false);
     assert.equal(publishedSnapshots[0].entries.some((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "provider"), true);
   }
-  const stored = JSON.parse(await fs.readFile(path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment("project")}.json`), "utf8")) as { drafts: unknown[]; threads: Array<{ threadId?: string }> };
+  publishedSnapshots.length = 0;
+  now = 50;
+  await controller.observeActivity("codex", "provider");
+  let observed = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "provider");
+  assert.equal(observed?.activityAt, 50);
+  assert.equal(observed?.entryKind === "thread" ? observed.orderAt : null, 42);
+  assert.equal("orderAt" in publishedSnapshots.at(-1)!, false);
+  now = 60;
+  await controller.observeActivity("codex", "provider", 55);
+  observed = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "provider");
+  assert.equal(observed?.activityAt, 60);
+  assert.equal(observed?.entryKind === "thread" ? observed.orderAt : null, 55);
+  const turnStartUpdate = publishedSnapshots.at(-1);
+  assert.equal(turnStartUpdate && "orderAt" in turnStartUpdate ? turnStartUpdate.orderAt : null, 55);
+  now = 70;
+  await controller.observeActivity("codex", "provider");
+  observed = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "provider");
+  assert.equal(observed?.entryKind === "thread" ? observed.orderAt : null, 55);
+  const stored = JSON.parse(await fs.readFile(path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment("project")}.json`), "utf8")) as { drafts: unknown[]; threads: Array<{ orderAt?: number; threadId?: string }> };
   assert.deepEqual(stored.drafts, []);
   assert.equal(stored.threads.some((candidate) => candidate.threadId === "provider"), true);
+  assert.equal(stored.threads.find((candidate) => candidate.threadId === "provider")?.orderAt, 55);
+  providerEntries = [{
+    activityAt: 999,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "provider" },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    orderAt: 999,
+    title: "New thread",
+  }];
   await controller.refresh("project");
   await new Promise((resolve) => setTimeout(resolve, 0));
   const laggingEntry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "provider");
   assert.equal(laggingEntry?.title, "First user message");
+  assert.equal(laggingEntry?.entryKind === "thread" ? laggingEntry.orderAt : null, 55);
+  providerEntries = [];
   await controller.observeLifecycle("codex", "provider", { kind: "turnCompleted", status: "completed", turnId: "turn" });
   await controller.refresh("project");
   await new Promise((resolve) => setTimeout(resolve, 0));

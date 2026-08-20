@@ -68,7 +68,9 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   acceptActivity(update: WorkbenchThreadActivityUpdate) {
     if (update.projectId !== this.projectId || update.revision <= this.revision || !this.snapshot) return;
     const entries = this.snapshot.entries.map((entry) => entry.entryKind !== "draft" && entry.identity.harness === update.identity.harness && entry.identity.threadId === update.identity.threadId
-      ? { ...entry, activityAt: update.activityAt }
+      ? entry.entryKind === "thread" && update.orderAt !== undefined
+        ? { ...entry, activityAt: update.activityAt, orderAt: update.orderAt }
+        : { ...entry, activityAt: update.activityAt }
       : entry);
     this.revision = update.revision;
     this.snapshot = { ...this.snapshot, entries: sortThreadSidebarEntries(entries), revision: update.revision };
@@ -102,6 +104,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
       });
     }
     if (this.snapshot) {
+      const activityAt = intent.activityAt ?? Date.now();
       const existing = this.snapshot.entries.find((entry) => entry.entryKind === "thread"
         && entry.identity.harness === intent.identity.harness
         && entry.identity.threadId === intent.identity.threadId);
@@ -109,13 +112,14 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
         ? this.snapshot.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === intent.draftId)
         : null;
       const entry = {
-        activityAt: intent.activityAt ?? Date.now(),
+        activityAt,
         entryKind: "thread" as const,
         identity: intent.identity,
         lifecycle: { agent: { agentStatus: "working" as const, turnId: intent.turnId }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const },
         metadata: existing?.entryKind === "thread"
           ? existing.metadata
           : { archived: false as const, pinned: sourceDraft?.entryKind === "draft" ? sourceDraft.metadata.pinned : false, snoozed: false },
+        orderAt: activityAt,
         title: existing?.entryKind === "thread" ? existing.title : intent.title,
       };
       this.snapshot = {

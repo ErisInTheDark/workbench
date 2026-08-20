@@ -23,8 +23,17 @@ function deferred<TValue>() {
 }
 
 test("provider sidebar normalization converts seconds at the reloadable feature boundary", () => {
-  const entry = normalizeProviderSidebarEntry("codex", { id: "thread", status: { type: "idle" }, updatedAt: 1_723_456_789 });
+  const entry = normalizeProviderSidebarEntry("codex", {
+    id: "thread",
+    recencyAt: 1_700_000_000,
+    status: { type: "idle" },
+    turns: [{ startedAt: 1_710_000_000 }, { startedAt: 1_720_000_000 }],
+    updatedAt: 1_723_456_789,
+  });
   assert.equal(entry?.activityAt, 1_723_456_789_000);
+  assert.equal(entry?.entryKind === "thread" ? entry.orderAt : null, 1_720_000_000_000);
+  const fallback = normalizeProviderSidebarEntry("codex", { id: "fallback", recencyAt: 1_700_000_000, status: { type: "idle" }, turns: [], updatedAt: 1_723_456_789 });
+  assert.equal(fallback?.entryKind === "thread" ? fallback.orderAt : null, 1_700_000_000_000);
 });
 
 test("provider sidebar normalization replaces identifier titles with first-message previews", () => {
@@ -54,8 +63,15 @@ test("provider lifecycle notification mapping is exact and bounded", () => {
 });
 
 test("provider activity mapping observes meaningful cross-provider work without token deltas", () => {
-  assert.equal(mapProviderActivityNotification({ method: "turn/started", params: { threadId: "thread", turn: { id: "turn" } } }), "thread");
-  assert.equal(mapProviderActivityNotification({ method: "item/completed", params: { threadId: "thread", turnId: "turn" } }), "thread");
+  assert.deepEqual(mapProviderActivityNotification({ method: "turn/started", params: { threadId: "thread", turn: { id: "turn", startedAt: 1_723_456_789 } } }), {
+    kind: "turnStarted", startedAt: 1_723_456_789_000, threadId: "thread",
+  });
+  assert.deepEqual(mapProviderActivityNotification({ method: "turn/started", params: { threadId: "thread", turn: { id: "turn" } } }), {
+    kind: "turnStarted", startedAt: null, threadId: "thread",
+  });
+  assert.deepEqual(mapProviderActivityNotification({ method: "item/completed", params: { threadId: "thread", turnId: "turn" } }), {
+    kind: "activity", threadId: "thread",
+  });
   assert.equal(mapProviderActivityNotification({ method: "item/agentMessage/delta", params: { threadId: "thread", turnId: "turn" } }), null);
 });
 
