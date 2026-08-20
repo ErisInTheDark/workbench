@@ -333,6 +333,19 @@ If validation cannot be done without writing, explain the tradeoff and ask first
 - Report what validation ran, what it proved, what failed, and what you could not verify.
 - If no useful validation is available, say that and name the residual risk.
 
+## Test Quality
+
+Treat every test as a permanent project cost. It adds maintenance and makes every test run slower. Add a test only when its regression protection is worth that cost.
+
+- Test behavioral invariants at the smallest owner.
+- When a test is worth having, cover every logic route through that owner that can change the invariant, including failure routes.
+- A test must fail for a plausible behavioral regression.
+- Do not test Tailwind classes, static display details, exact constants, private source text, or that removed features stay removed.
+- Do not pad the suite for exhaustive coverage. Less coverage is better than bad tests.
+- Do not test broad end-to-end lifecycles when focused tests can prove the owned behavior.
+- Do not use sleeps, real timers, or timing races. Separate time-based decisions from timer mechanics and test the decisions.
+- Use a mock only when you can prove that the mock does not reduce the test's ability to catch a regression.
+
 ## When Reviewing
 
 - When the user asks for a review, take a code-review stance.
