@@ -489,6 +489,8 @@ test("nested plan cards label planned changes without claiming them", () => {
     receipt: null,
   }));
   assert.match(planHtml, />Planned</u);
+  assert.match(planHtml, /d="M6 9\.78V8\.72"/u);
+  assert.doesNotMatch(planHtml, /d="M6 22V2\.8/u);
   assert.doesNotMatch(planHtml, />Claimed</u);
 
   const removeHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
@@ -499,6 +501,7 @@ test("nested plan cards label planned changes without claiming them", () => {
   }));
   assert.match(removeHtml, />Reduced</u);
   assert.match(removeHtml, /Removed from plan/u);
+  assert.match(removeHtml, /d="M6 9\.78V8\.72"/u);
   assert.doesNotMatch(removeHtml, />Claimed</u);
 });
 

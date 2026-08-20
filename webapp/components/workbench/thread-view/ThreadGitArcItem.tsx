@@ -143,6 +143,12 @@ export default function ThreadGitArcItem({
             : commandIntent.action === "remove"
               ? "Removed"
               : commandIntent.action === "restore" ? "Restored" : "Claimed";
+  const primaryPathMarker = commandIntent.action === "plan"
+    || commandIntent.action === "planAdd"
+    || commandIntent.action === "planAdopt"
+    || commandIntent.action === "planRemove"
+    ? "planned"
+    : "claimed";
   const showNestedClaims = commandIntent.action !== "plan" && commandIntent.action !== "planStart" && claimedPaths.length > 0;
   const normalizedFailure = failureReason?.trim() || (state === "failed" ? "This Git arc action did not complete." : null);
 
@@ -184,6 +190,7 @@ export default function ThreadGitArcItem({
         {primaryPaths.length ? (
           <ThreadClaimedFileList
             label={primaryPathLabel}
+            marker={primaryPathMarker}
             paths={primaryPaths}
             projectFilePaths={projectFilePaths}
             projectId={projectId}

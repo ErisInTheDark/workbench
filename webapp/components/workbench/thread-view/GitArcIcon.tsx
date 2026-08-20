@@ -2,6 +2,7 @@
  * Exports:
  * - default GitArcIcon: render the matching square action glyph for one Git arc command. Keywords: git, arc, icon, plan, start, continue, add, remove, compare, restore.
  * - GitArcClaimIcon: render the flag marker used by claimed-file rows. Keywords: git, arc, icon, claim, file.
+ * - GitArcPlannedClaimIcon: render the dashed flag marker used by planned-file rows. Keywords: git, arc, icon, plan, claim, file.
  */
 import type { ReactNode } from "react";
 
@@ -19,6 +20,20 @@ export function GitArcClaimIcon({ className = "size-5" }: { className?: string }
   return (
     <SvgFrame className={className}>
       <path d="M6 22V2.8a.8.8 0 0 1 1.17-.71l11.38 5.69a.8.8 0 0 1 0 1.44L6 15.5" />
+    </SvgFrame>
+  );
+}
+
+export function GitArcPlannedClaimIcon({ className = "size-5" }: { className?: string }) {
+  return (
+    <SvgFrame className={className}>
+      <path d="M6 6V3l2.7 1.3" />
+      <path d="m11.15 5.48 2.7 1.3" />
+      <path d="m16.3 7.95 2.7 1.3-2.7 1.3" />
+      <path d="m13.85 11.73-2.7 1.3" />
+      <path d="m8.7 14.2-2.7 1.3v-3" />
+      <path d="M6 9.78V8.72" />
+      <path d="M6 22v-3.75" />
     </SvgFrame>
   );
 }
