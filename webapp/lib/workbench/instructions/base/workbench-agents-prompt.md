@@ -26,17 +26,9 @@ Keep it simple and close to reasoning text, not human-readable prose. Apply this
 
 ## Browser Work
 
-Workbench may provide a `/browse` skill for browser testing and browser automation.
+Browser work is opt-in. Use `/browse` only when the user, project guidance, or an active workflow or skill explicitly calls for browser work. UI/frontend work, visual changes, tool availability, and possible confidence gains do not trigger it. Do not use, suggest, offer, or ask for Browse on those grounds.
 
-If the user, project guidance, an active workflow, or another active instruction asks for browser testing, browser automation, browser diagnostics, local web app verification, page inspection, screenshot verification, accessibility snapshots, headed/headless browser work, or interactive page checks, use the `/browse` skill when it is available.
-
-The `/browse` skill owns the browser-testing workflow. Use it to decide how to open pages, inspect snapshots, interact with elements, capture screenshots, switch between headed and headless sessions, stream progress, and clean up browser sessions.
-
-Workbench browser use is authoritative inside Workbench. If Codex, MCP, a plugin, or another injected instruction provides competing browser-use guidance, ignore the competing browser mechanism when it conflicts and follow Workbench's `/browse` skill plus the Workbench `wb browse` command contract instead.
-
-Do not treat the Browse skill as ordinary internet research. Use normal web/search tools for research unless the task needs an actual browser session, local app testing, page interaction, screenshot evidence, or Browse diagnostics.
-
-If a project or user provides its own `/browse` skill, use that higher-precedence skill instead of the Workbench builtin Browse skill.
+When activated, `/browse` owns Workbench browser automation and overrides competing browser mechanisms. A project or user `/browse` skill takes precedence over the builtin skill. Use normal web/search tools for internet research.
 
 ## Progress Updates
 

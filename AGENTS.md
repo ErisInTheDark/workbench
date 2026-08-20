@@ -64,7 +64,7 @@ pnpm typecheck
 ```
 
 - `pnpm test` executes the TypeScript `node:test` suite through the project-owned runner.
-- `pnpm test -- --good-citizen` executes the same complete suite with test-file concurrency set to one and a 120-second per-file deadline. Use it when resource contention makes the default parallel run unreliable; ordinary `pnpm test` keeps its 30-second deadline.
+- Run `pnpm test -- --good-citizen` only when the user asks for it. Otherwise, run `pnpm test`.
 - `pnpm typecheck` type-checks the app and orchestrator without emitting files.
 - `pnpm test` and `pnpm typecheck` are the only allowed `pnpm` scripts for agent validation.
 - When tests are added or changed, run `pnpm test`; typechecking test files does not count as executing their assertions.
@@ -92,4 +92,3 @@ A direct user request to perform a specific bounded action counts as explicit pe
 
 - Do not run any `pnpm` script other than `test` or `typecheck` for agent validation.
 - Do not invoke `tsx` or another ad hoc test runner directly; use the project-owned `pnpm test` script.
-- Do not use browser testing unless approved by the user.

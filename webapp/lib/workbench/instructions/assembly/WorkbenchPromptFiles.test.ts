@@ -10,6 +10,22 @@ import {
   listWorkbenchInstructionMechanics,
 } from "./WorkbenchPromptFiles.ts";
 import { WORKBENCH_AGENTS_PROMPT, WORKBENCH_WORKFLOW_DEFAULT_PROMPT } from "./workbench-prompt-sources.ts";
+import { buildWorkbenchBrowseInstructions } from "../mechanics/workbench-instruction-mechanics.ts";
+import { readWorkbenchBuiltinSkills } from "../skills/workbench-builtin-skills.ts";
+
+test("Browse stays explicitly opt-in instead of following UI work", async () => {
+  const builtinSkill = readWorkbenchBuiltinSkills().find((skill) => skill.name === "browse");
+  const mechanics = await buildWorkbenchBrowseInstructions({ workbenchOrigin: "http://localhost" });
+  assert(builtinSkill);
+  assert(mechanics);
+
+  assert.match(WORKBENCH_AGENTS_PROMPT, /Browser work is opt-in/u);
+  assert.match(WORKBENCH_AGENTS_PROMPT, /Do not use, suggest, offer, or ask for Browse/u);
+  assert.match(builtinSkill.content, /Use only when .* explicitly calls for browser testing/u);
+  assert.match(builtinSkill.content, /UI\/frontend work alone does not activate it/u);
+  assert.doesNotMatch(builtinSkill.content, /when a task needs browser testing/iu);
+  assert.match(mechanics, /Availability does not activate or authorize Browse/u);
+});
 
 test("materialized top-level threads expose title/status while subagents omit title", () => {
   const topLevel = listWorkbenchInstructionMechanics({ harness: "codex", threadId: "thread-1", workbenchOrigin: "http://localhost" });

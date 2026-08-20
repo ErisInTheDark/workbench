@@ -1,13 +1,11 @@
 ---
 name: browse
-description: Use when the user asks for browser testing, browser automation, local web app verification, page inspection, screenshots, headed/headless browser work, interactive page checks, accessibility snapshots, or Browse diagnostics.
+description: Use only when the user, project guidance, or an active workflow or skill explicitly calls for browser testing, automation, local-app verification, page inspection or interaction, screenshots, accessibility snapshots, or Browse diagnostics. UI/frontend work alone does not trigger it.
 ---
 
 ## When To Use
 
-Use this skill when a task needs browser testing, browser automation, local web app verification, page inspection, screenshots, headed/headless browser sessions, accessibility snapshots, interactive page checks, or Workbench Browse diagnostics.
-
-Do not use this skill for ordinary internet research. Use normal web/search tools unless the task needs an actual browser session, page interaction, screenshot, local app testing, or Browse diagnostics.
+Browse is opt-in under Workbench Browser Work instructions. UI/frontend work alone does not activate it. Use normal web/search tools for internet research.
 
 ## Source Of Truth
 
@@ -108,4 +106,3 @@ Do not retry the same failing command unchanged. Read its structured output, run
 ## Cleanup Rule
 
 Keep needed page state alive during active work, then stop named sessions when finished. Use `forget` only to delete persistent profile data, not as routine cleanup. Users can also manage Workbench-known sessions from the project sidebar.
-
