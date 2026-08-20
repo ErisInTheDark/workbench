@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { partitionWorkbenchGitTestFiles } from "../lib/workbench/git/WorkbenchGitTestFixtures";
 import ProjectTestRunner, { parseProjectTestRunnerArguments } from "./ProjectTestRunner";
 
 test("parses one cooperative mode without changing ordinary discovery inputs", () => {
@@ -100,6 +101,68 @@ test("starts Node with explicit bounded file concurrency and the project timeout
   assert(invocations[0]?.args.includes("--test-concurrency=3"));
   assert(invocations[0]?.args.includes("--test-timeout=30000"));
   assert(invocations[0]?.args.includes("alpha.test.ts"));
+});
+
+test("caps ordinary test-file concurrency", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-default-test-concurrency-"));
+  context.after(() => rm(root, { force: true, recursive: true }));
+  await writeFile(path.join(root, "alpha.test.ts"), "");
+  const invocations: Array<{ args: readonly string[]; command: string }> = [];
+  const runner = new ProjectTestRunner(root, {
+    prewarmTestFixtures: async () => undefined,
+    spawnProcess: (command, args) => {
+      invocations.push({ args, command });
+      const child = new EventEmitter() as ChildProcess;
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    },
+  });
+
+  assert.deepEqual(await runner.run(), { exitCode: 0, signal: null });
+  assert(invocations[0]?.args.includes(`--test-concurrency=${Math.max(1, Math.min(8, os.availableParallelism()))}`));
+});
+
+test("partitions Git-heavy suites without disturbing stable group order", () => {
+  assert.deepEqual(partitionWorkbenchGitTestFiles([
+    "components/zeta.test.ts",
+    "lib/workbench/git/WorkbenchThreadGit.test.ts",
+    "lib/alpha.test.ts",
+    "lib/git-checkpoints.test.ts",
+  ]), {
+    gitFiles: ["lib/workbench/git/WorkbenchThreadGit.test.ts"],
+    nestedGitFiles: ["lib/git-checkpoints.test.ts"],
+    ordinaryFiles: ["components/zeta.test.ts", "lib/alpha.test.ts"],
+  });
+});
+
+test("runs Git-heavy and ordinary files in concurrent bounded pools", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-test-pools-"));
+  context.after(() => rm(root, { force: true, recursive: true }));
+  await Promise.all([
+    writeFile(path.join(root, "git-checkpoints.test.ts"), ""),
+    writeFile(path.join(root, "WorkbenchThreadGit.test.ts"), ""),
+    writeFile(path.join(root, "ordinary.test.ts"), ""),
+  ]);
+  const invocations: Array<{ args: readonly string[]; command: string }> = [];
+  const runner = new ProjectTestRunner(root, {
+    prewarmTestFixtures: async () => undefined,
+    spawnProcess: (command, args) => {
+      invocations.push({ args, command });
+      const child = new EventEmitter() as ChildProcess;
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    },
+    testConcurrency: 8,
+  });
+
+  assert.deepEqual(await runner.run(), { exitCode: 0, signal: null });
+  assert.equal(invocations.length, 3);
+  const nestedGitPool = invocations.find(({ args }) => args.includes("git-checkpoints.test.ts"));
+  const gitPool = invocations.find(({ args }) => args.includes("WorkbenchThreadGit.test.ts"));
+  const ordinaryPool = invocations.find(({ args }) => args.includes("ordinary.test.ts"));
+  assert(nestedGitPool?.args.includes("--test-concurrency=2"));
+  assert(gitPool?.args.includes("--test-concurrency=3"));
+  assert(ordinaryPool?.args.includes("--test-concurrency=8"));
 });
 
 test("good-citizen mode runs the selected suite with one test file at a time", async (context) => {

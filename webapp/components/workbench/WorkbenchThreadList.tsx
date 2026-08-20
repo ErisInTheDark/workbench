@@ -208,10 +208,11 @@ export default function WorkbenchThreadList({
     const claimedPaths = gitArc?.claimedPaths ?? [];
     const claimedFileCount = claimedPaths.length;
     const hasProposedCommit = Boolean(gitArc?.proposals.some(({ status }) => status === "proposed"));
+    const showProposedCommit = lifecycle?.kind === "completed" && hasProposedCommit;
     const baseStatus = entry.entryKind === "draft"
       ? "Draft"
       : lifecycle?.kind === "needsAttention" ? attentionLabel || "Needs attention" : lifecycle?.kind === "working" ? "Working" : lifecycle?.kind === "stopped" ? "Stopped" : "Completed";
-    const status = hasProposedCommit ? "Proposed commit" : baseStatus;
+    const status = showProposedCommit ? "Proposed commit" : baseStatus;
     const pinned = isPinned(entry);
     const timestamp = new Date(entry.activityAt);
     const dateTime = timestamp.toISOString();
@@ -222,7 +223,7 @@ export default function WorkbenchThreadList({
     const baseAction = entry.entryKind === "draft" ? "discard" : group === "other" ? "restore" : group === "snoozed" ? "wake" : canComplete ? "complete" : lifecycle?.kind === "completed" && !lifecycle.settled && !hasLiveClaims ? "settle" : null;
     const canShiftSettle = canComplete && !hasLiveClaims;
     const action = canShiftSettle && isShiftPressed ? "settle" : baseAction;
-    const Icon = entry.entryKind === "draft" ? DraftThreadIcon : hasProposedCommit ? ProposedCommitThreadIcon : lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
+    const Icon = entry.entryKind === "draft" ? DraftThreadIcon : showProposedCommit ? ProposedCommitThreadIcon : lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
     const statusClassName = entry.entryKind === "draft"
       ? "text-muted"
       : lifecycle?.kind === "working"

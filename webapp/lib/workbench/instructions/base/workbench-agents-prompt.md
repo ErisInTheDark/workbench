@@ -190,7 +190,7 @@ When approved work no longer owns exact claimed entries, run `wb git arc remove 
 
 #### In Review mode
 
-Before summarizing the work, run `wb git arc compare`. It defaults to the active claimed set and derives the changed files. Use `wb git arc diff` for unified diff details when needed.
+Before summarizing the work, run one initial arc-scoped inspection. Use `wb git arc compare` when changed paths and counts are enough. Use `wb git arc diff` when unified details are already needed. Do not run compare first when you already intend to run diff. A later diff is valid when compare reveals that detailed inspection is needed. At least one of compare or diff is required before Review completion and proposal creation.
 
 Do not diff against:
 

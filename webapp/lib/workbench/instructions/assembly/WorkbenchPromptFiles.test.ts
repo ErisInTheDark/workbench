@@ -110,3 +110,13 @@ test("arc instructions describe the complete phase, proposal, and observed-claim
   assert.match(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, /If the approved plan is unchanged[\s\S]*wb git arc plan start -m/u);
   assert.match(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, /If the plan changed[\s\S]*wb git arc plan -m/u);
 });
+
+test("Review instructions choose compare or diff without redundant inspection", () => {
+  const instructions = buildWorkbenchGitInstructions({ harness: "codex", threadId: "thread-1", workbenchOrigin: "http://localhost" }) ?? "";
+  for (const prompt of [WORKBENCH_AGENTS_PROMPT, WORKBENCH_WORKFLOW_DEFAULT_PROMPT, instructions]) {
+    assert.match(prompt, /Use .*compare.*when .*paths and counts are enough/iu);
+    assert.match(prompt, /Use .*diff.*when .*unified details are already needed/iu);
+    assert.match(prompt, /do not run compare first/iu);
+    assert.match(prompt, /At least one of compare or diff is required/iu);
+  }
+});

@@ -120,6 +120,8 @@ An active claim prevents thread settlement. For a terminal thread, use **Unclaim
 
 Omit paths to inspect the claimed set. Explicit paths select diagnostics from the full snapshot. Use these commands only when the workflow explicitly requires arc-scoped change details, such as Review; do not use them as preflight for another arc command. Do not substitute the newest unrelated ref or guess from thread history.
 
+For the initial Review inspection, choose one command. Use compare when changed paths and counts are enough. Use diff when unified details are already needed, and do not run compare first in that case. A later diff is valid when compare reveals that detailed inspection is needed. At least one of compare or diff is required before Review completion and proposal creation.
+
 `wb git arc compare [-- <path> [<path>...]]`
 
 `wb git arc diff [-- <path> [<path>...]]`
@@ -128,7 +130,7 @@ Use `wb git arc diff --ref <plan-ref> -- <reported-path> [...]` only for inactiv
 
 ### Propose a commit in Review
 
-After validation and arc compare/diff, run this command with a fresh title. Omit paths to use all changed claimed files. Provide paths only for a narrower subset. This opens the proposal UI and does not commit. Do not use `wb git commit`. A failure keeps Review open. Fix it and retry. If user input or an external change is required, use the blocked path. Do not use the final channel.
+After validation and the required compare-or-diff inspection, run this command with a fresh title. Omit paths to use all changed claimed files. Provide paths only for a narrower subset. This opens the proposal UI and does not commit. Do not use `wb git commit`. A failure keeps Review open. Fix it and retry. If user input or an external change is required, use the blocked path. Do not use the final channel.
 
 The proposal freezes that file set and its current contents. Ordinary proposals are independent and append their durable IDs to the current arc. The user can accept compatible disjoint proposals in either order. Overlapping pending proposals become unavailable after accepted history changes their selected paths.
 

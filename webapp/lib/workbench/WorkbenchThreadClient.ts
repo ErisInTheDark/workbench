@@ -463,13 +463,16 @@ function mergeThreadTurnHistory(
     }
 
     incomingById.delete(entry.turnId);
-    const mergedEntry = entry.loadState === "loaded" && incomingEntry.loadState !== "loaded"
+    const incomingWithPreservedTimeline = incomingEntry.itemTimeline === undefined && entry.itemTimeline !== undefined
+      ? { ...incomingEntry, itemTimeline: entry.itemTimeline }
+      : incomingEntry;
+    const mergedEntry = entry.loadState === "loaded" && incomingWithPreservedTimeline.loadState !== "loaded"
       ? {
-        ...incomingEntry,
-        itemIds: incomingEntry.itemIds ?? entry.itemIds,
+        ...incomingWithPreservedTimeline,
+        itemIds: incomingWithPreservedTimeline.itemIds ?? entry.itemIds,
         loadState: entry.loadState,
       }
-      : incomingEntry;
+      : incomingWithPreservedTimeline;
     if (!areDeeplyEqual(mergedEntry, entry)) {
       changed = true;
     }

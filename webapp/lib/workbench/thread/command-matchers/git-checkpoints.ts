@@ -2,7 +2,7 @@
  * Exports:
  * - GIT_CHECKPOINT_COMMAND_MATCHERS: distinct command summaries for named arc plan and lifecycle operations. Keywords: thread, command, matcher, git arc.
  * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: detect specialized arc renderers. Keywords: git, arc, matcher, renderer.
- * - parseGitArcCommand/GitArcCommandIntent: read canonical arc action, ref, name, and selected paths. Keywords: git, arc, command, parser.
+ * - parseGitArcCommand/GitArcCommandIntent/GitArcCommandAction: read canonical arc presentation action, ref, name, proposal, and selected paths. Keywords: git, arc, command, parser.
  * - parseGitArcReceipt: decode persisted successful arc presentation metadata. Keywords: git, arc, receipt, parser.
  * - parseGitCheckpointCompareOutput: parse per-file checkpoint change counts. Keywords: checkpoint, compare, additions, deletions.
  * - parseGitCheckpointProposalId: parse the durable proposal id from CLI output. Keywords: checkpoint, proposal, commit.
@@ -20,6 +20,8 @@ import { CommandMatcher } from "./core";
 import { tokenizeCommand } from "./helpers";
 import type { CommandMatcherDefinition } from "./types";
 
+export type GitArcCommandAction = GitArcAction | "planAdd" | "planAdopt" | "planRemove" | "planStart" | "rescind";
+
 const ARC_MATCHER_IDS = {
   add: "git-arc.add",
   adopt: "git-arc.adopt",
@@ -32,7 +34,12 @@ const ARC_MATCHER_IDS = {
   remove: "git-arc.remove",
   restore: "git-arc.restore",
   start: "git-arc.start",
-} as const satisfies Record<GitArcAction, string>;
+  planAdd: "git-arc.plan-add",
+  planAdopt: "git-arc.plan-adopt",
+  planRemove: "git-arc.plan-remove",
+  planStart: "git-arc.plan-start",
+  rescind: "git-arc.rescind",
+} as const satisfies Record<GitArcCommandAction, string>;
 const CHECKPOINT_DIFF_ARTIFACT_PATTERN = /^Full diff artifact:\s*([a-f0-9]{64})\s*$/im;
 const CHECKPOINT_PROPOSAL_PATTERN = /^Workbench arc proposal:\s*([A-Za-z0-9._-]+)\s*$/im;
 const CHECKPOINT_COMPARE_LINE_PATTERN = /^([ADMU])\t\+(\d+)\t-(\d+)\t(.+)$/u;
@@ -45,10 +52,11 @@ export interface GitCheckpointCommitCommandIntent {
 }
 
 export interface GitArcCommandIntent {
-  action: GitArcAction;
+  action: GitArcCommandAction;
   intentName: string | null;
   move?: GitArcMoveArguments;
   paths: string[];
+  proposalId?: string | null;
   ref: string | null;
 }
 
@@ -217,8 +225,8 @@ export function isGitCheckpointCommitMatcherClaim(claimedBy: string | null | und
   return includesMatcher(claimedBy, ARC_MATCHER_IDS.propose);
 }
 
-export function getGitArcMatcherAction(claimedBy: string | null | undefined): GitArcAction | null {
-  for (const [action, matcherId] of Object.entries(ARC_MATCHER_IDS) as Array<[GitArcAction, string]>) {
+export function getGitArcMatcherAction(claimedBy: string | null | undefined): GitArcCommandAction | null {
+  for (const [action, matcherId] of Object.entries(ARC_MATCHER_IDS) as Array<[GitArcCommandAction, string]>) {
     if (includesMatcher(claimedBy, matcherId)) return action;
   }
   return null;
@@ -229,9 +237,13 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
   if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "")) return null;
   let cursor = tokens[1] === "git" ? 2 : 1;
   if (tokens[cursor] !== "arc") return null;
-  const action = tokens[cursor + 1] as GitArcAction | undefined;
+  const rootAction = tokens[cursor + 1];
+  const nestedPlanAction = rootAction === "plan"
+    ? ({ add: "planAdd", adopt: "planAdopt", remove: "planRemove", start: "planStart" } as const)[tokens[cursor + 2] as "add" | "adopt" | "remove" | "start"]
+    : undefined;
+  const action = (nestedPlanAction ?? rootAction) as GitArcCommandAction | undefined;
   if (!action || !(action in ARC_MATCHER_IDS)) return null;
-  cursor += 2;
+  cursor += nestedPlanAction ? 3 : 2;
 
   if (action === "mv") {
     try {
@@ -248,21 +260,33 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
   }
 
   let intentName: string | null = null;
+  let proposalId: string | null = null;
   let ref: string | null = null;
   for (; cursor < tokens.length && tokens[cursor] !== "--"; cursor += 1) {
     const flag = tokens[cursor];
     const value = tokens[cursor + 1];
-    if (!value || (flag !== "--ref" && flag !== "-m")) return null;
+    if (!value || (flag !== "--proposal" && flag !== "--ref" && flag !== "-m")) return null;
     if (flag === "--ref") {
       if (ref) return null;
       ref = value;
-    } else if (action === "plan" && intentName === null) {
+    } else if (flag === "--proposal") {
+      if (proposalId) return null;
+      proposalId = value;
+    } else if ((action === "plan" || action === "planStart") && intentName === null) {
       intentName = value;
     }
     cursor += 1;
   }
   const paths = tokens[cursor] === "--" ? tokens.slice(cursor + 1) : [];
-  if (action === "plan") return intentName ? { action, intentName, paths, ref: null } : null;
+  if (action === "plan" || action === "planStart") {
+    return intentName ? { action, intentName, paths, ref: null } : null;
+  }
+  if (action === "rescind") {
+    return proposalId && !ref && !paths.length
+      ? { action, intentName: null, paths: [], proposalId, ref: null }
+      : null;
+  }
+  if (proposalId) return null;
   const refRequired = action === "continue" || action === "restore";
   if (refRequired !== Boolean(ref)) return null;
   return { action, intentName: null, paths, ref };

@@ -10,9 +10,15 @@ import { availableParallelism } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { prewarmWorkbenchGitTestFixtures } from "../lib/workbench/git/WorkbenchGitTestFixtures";
+import {
+  partitionWorkbenchGitTestFiles,
+  prewarmWorkbenchGitTestFixtures,
+} from "../lib/workbench/git/WorkbenchGitTestFixtures";
 
 const EXCLUDED_DIRECTORY_NAMES = new Set([".next", "build", "coverage", "dist", "generated", "node_modules"]);
+const GIT_TEST_CONCURRENCY = 3;
+const NESTED_GIT_TEST_CONCURRENCY = 2;
+const ORDINARY_TEST_CONCURRENCY = 8;
 const GOOD_CITIZEN_TEST_TIMEOUT_MS = 120_000;
 const TEST_FILE_PATTERN = /\.test\.tsx?$/u;
 const TEST_CONCURRENCY = Math.max(1, Math.min(8, availableParallelism()));
@@ -93,10 +99,23 @@ export default class ProjectTestRunner {
     if (files.length === 0) throw new Error(`No .test.ts or .test.tsx files found under: ${inputs.join(", ")}`);
 
     await this.prewarmTestFixtures(files);
-    return await this.runTestFiles(files);
+    if (this.testConcurrency === 1) return await this.runTestFiles(files);
+    const { gitFiles, nestedGitFiles, ordinaryFiles } = partitionWorkbenchGitTestFiles(files);
+    const groups = [
+      ...(nestedGitFiles.length ? [{ concurrency: Math.min(NESTED_GIT_TEST_CONCURRENCY, this.testConcurrency), files: nestedGitFiles }] : []),
+      ...(gitFiles.length ? [{ concurrency: Math.min(GIT_TEST_CONCURRENCY, this.testConcurrency), files: gitFiles }] : []),
+      ...(ordinaryFiles.length ? [{ concurrency: Math.min(ORDINARY_TEST_CONCURRENCY, this.testConcurrency), files: ordinaryFiles }] : []),
+    ];
+    const results = await Promise.all(groups.map(async ({ concurrency, files: groupFiles }) => (
+      await this.runTestFiles(groupFiles, concurrency)
+    )));
+    const signaled = results.find((result) => result.signal !== null);
+    if (signaled) return signaled;
+    const failed = results.find((result) => result.exitCode !== 0);
+    return failed ?? { exitCode: 0, signal: null };
   }
 
-  protected async runTestFiles(files: readonly string[]) {
+  protected async runTestFiles(files: readonly string[], concurrency = this.testConcurrency) {
     const reporter = pathToFileURL(path.join(this.projectRoot, "scripts", "concise-test-reporter.mjs")).href;
     const testArguments = files.map((file) => path.relative(this.projectRoot, file).replaceAll("\\", "/"));
     return await new Promise<TestProcessResult>((resolve, reject) => {
@@ -105,7 +124,7 @@ export default class ProjectTestRunner {
         "--import",
         "tsx",
         "--test",
-        `--test-concurrency=${this.testConcurrency}`,
+        `--test-concurrency=${concurrency}`,
         `--test-timeout=${this.testTimeoutMs}`,
         `--test-reporter=${reporter}`,
         ...testArguments,

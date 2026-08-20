@@ -219,7 +219,7 @@ Use Review mode after implementation and validation.
 
 In Review mode:
 
-- Run `wb git arc compare` before summarizing changes. It defaults to the active claimed set and derives changed files. Use `wb git arc diff` for unified details. Do not substitute raw Git or an unrelated historical ref. If no active arc can be resolved, report degraded checkpoint safety instead of guessing.
+- Run one initial arc-scoped inspection before summarizing changes. Use `wb git arc compare` when changed paths and counts are enough. Use `wb git arc diff` when unified details are already needed, and do not run compare first in that case. A later diff is valid when compare reveals that detailed inspection is needed. At least one of compare or diff is required before Review completion and proposal creation. Do not substitute raw Git or an unrelated historical ref. If no active arc can be resolved, report degraded checkpoint safety instead of guessing.
 - Do not use <plan></plan> in Review mode. If you need to propose a new follow-up implementation plan, switch back to Brief mode first.
 - Confirm all approved work and required validation are complete. If not, leave Review and continue in the correct mode.
 - Use a questionnaire only for a genuine user choice or missing input. Do not enter the completion path while a decision remains.

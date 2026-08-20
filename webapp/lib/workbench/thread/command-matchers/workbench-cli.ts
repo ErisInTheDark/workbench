@@ -2,7 +2,8 @@
  * Exports:
  * - WorkbenchSubagentCommand/parseWorkbenchSubagentCommand: parse semantic subagent actions, create metadata, ordered child thread IDs, and messages from wb commands. Keywords: workbench, cli, subagent, parse, create, metadata, thread ids, message.
  * - WorkbenchThreadTitleCommand/parseWorkbenchThreadTitleCommand/isWorkbenchThreadTitleSetMatcherClaim: parse title set/get actions and identify standalone title-set displays. Keywords: workbench, cli, thread, title, parse, matcher.
- * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb title, subagent, and reload commands. Keywords: workbench, cli, title, subagent, reload.
+ * - WorkbenchThreadStatusCommand/parseWorkbenchThreadStatusCommand/isWorkbenchThreadStatusMatcherClaim: parse completed/blocked task status actions and identify standalone successful displays. Keywords: workbench, cli, thread, status, task, matcher.
+ * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb title, status, subagent, and reload commands. Keywords: workbench, cli, title, status, subagent, reload.
  */
 import type { CommandAction } from "../../../codex/generated/app-server/v2/CommandAction";
 
@@ -24,6 +25,10 @@ export interface WorkbenchSubagentCommand {
 export type WorkbenchThreadTitleCommand =
   | { action: "get" }
   | { action: "set"; title: string };
+
+export interface WorkbenchThreadStatusCommand {
+  status: "blocked" | "completed";
+}
 
 function readValue(command: string, startIndex: number) {
   let index = startIndex;
@@ -128,7 +133,43 @@ export function isWorkbenchThreadTitleSetMatcherClaim(claimedBy: string | null |
   return claimedBy?.split(",").includes("workbench-cli.thread-title-set") ?? false;
 }
 
+function parseSingleWorkbenchThreadStatusCommand(command: string): WorkbenchThreadStatusCommand | null {
+  const normalized = command.trim();
+  if (!/^wb(?:\.cmd)?\s+thread\s+status(?:\s|$)/iu.test(normalized)) return null;
+  const status = readFlagValue(normalized, "status");
+  return status === "completed" || status === "blocked" ? { status } : null;
+}
+
+export function parseWorkbenchThreadStatusCommand(
+  command: string,
+  commandActions: readonly CommandAction[] = [],
+): WorkbenchThreadStatusCommand | null {
+  for (const action of commandActions) {
+    const parsedAction = parseSingleWorkbenchThreadStatusCommand(action.command);
+    if (parsedAction) return parsedAction;
+  }
+  return parseSingleWorkbenchThreadStatusCommand(command);
+}
+
+export function isWorkbenchThreadStatusMatcherClaim(claimedBy: string | null | undefined) {
+  return claimedBy?.split(",").includes("workbench-cli.thread-status") ?? false;
+}
+
 export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
+  CommandMatcher({
+    id: "workbench-cli.thread-status",
+    match: ({ stage, summaryParts }) => {
+      const command = parseSingleWorkbenchThreadStatusCommand(stage.text);
+      if (summaryParts.length || !command) return null;
+      const completed = command.status === "completed";
+      return CommandMatcher.Result({
+        ongoingSummaryParts: [CommandMatcher.Text(completed ? "Marking task completed" : "Marking task blocked")],
+        remainingCommand: null,
+        stop: true,
+        summaryParts: [CommandMatcher.Text(completed ? "Task completed" : "Task blocked")],
+      });
+    },
+  }),
   CommandMatcher({
     id: "workbench-cli.thread-title-set",
     match: ({ stage, summaryParts }) => {

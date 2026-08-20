@@ -1,34 +1,39 @@
-/* No production exports. Regression wards cover bounded mapping, stateless regex batches, direct moves, and rollback. */
+/* No production exports. Bounded concurrent regression wards cover mapping, stateless regex batches, direct moves, and rollback. */
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { promisify } from "node:util";
 
 import GitArcPathMover, { MAX_GIT_ARC_MOVE_MAPPINGS } from "./GitArcPathMover.ts";
 import GitArcRegistry from "./GitArcRegistry.ts";
+import GitTestFixtureCache from "./GitTestFixtureCache.ts";
 import WorkbenchGitRepository from "./WorkbenchGitRepository.ts";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController.ts";
+import { PATH_MOVER_ARC_READY_FIXTURE, PATH_MOVER_BASE_FIXTURE } from "./WorkbenchGitTestFixtures.ts";
 
-const execFileAsync = promisify(execFile);
+const fixtureCache = new GitTestFixtureCache();
+const pathMoverCases: Array<{ name: string; run: (context: TestContext) => Promise<void> }> = [];
+
+function pathMoverTest(name: string, run: (context: TestContext) => Promise<void>) {
+  pathMoverCases.push({ name, run });
+}
 
 async function createRepository(context: TestContext) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-arc-mv-"));
-  context.after(() => fs.rm(root, { force: true, recursive: true }));
-  await execFileAsync("git", ["init"], { cwd: root });
-  await execFileAsync("git", ["config", "user.email", "test@example.com"], { cwd: root });
-  await execFileAsync("git", ["config", "user.name", "Test"], { cwd: root });
-  await fs.mkdir(path.join(root, "src"), { recursive: true });
-  await fs.writeFile(path.join(root, "src", "one.test.ts"), "one\n");
-  await execFileAsync("git", ["add", "."], { cwd: root });
-  await execFileAsync("git", ["commit", "-m", "initial"], { cwd: root });
+  const fixture = await fixtureCache.copy(PATH_MOVER_BASE_FIXTURE);
+  context.after(fixture.dispose);
+  const root = fixture.root;
   const repository = new WorkbenchGitRepository(root);
   return { mover: new GitArcPathMover(repository, 1_000), repository, root };
 }
 
-test("regex moves select 200 sorted mappings and report the honest remainder", async (context) => {
+async function createArcRepository(context: TestContext) {
+  const fixture = await fixtureCache.copy(PATH_MOVER_ARC_READY_FIXTURE);
+  context.after(fixture.dispose);
+  const repository = await WorkbenchGitRepository.open(fixture.root);
+  return { repository, root: fixture.root };
+}
+
+pathMoverTest("regex moves select 200 sorted mappings and report the honest remainder", async (context) => {
   const { mover, root } = await createRepository(context);
   await Promise.all(Array.from({ length: 246 }, async (_value, index) => {
     await fs.writeFile(path.join(root, "src", `${String(index).padStart(3, "0")}.test.ts`), `${index}\n`);
@@ -62,7 +67,7 @@ test("regex moves select 200 sorted mappings and report the honest remainder", a
   }]);
 });
 
-test("path mover applies direct moves without changing the ordinary index", async (context) => {
+pathMoverTest("path mover applies direct moves without changing the ordinary index", async (context) => {
   const { mover, root } = await createRepository(context);
   const beforeIndex = await fs.readFile(path.join(root, ".git", "index"));
   const batch = await mover.resolve({ kind: "operands", operands: ["src/one.test.ts", "tests/src/one.test.ts"] });
@@ -71,7 +76,7 @@ test("path mover applies direct moves without changing the ordinary index", asyn
   assert.deepEqual(await fs.readFile(path.join(root, ".git", "index")), beforeIndex);
 });
 
-test("path mover rolls completed moves back when publication fails", async (context) => {
+pathMoverTest("path mover rolls completed moves back when publication fails", async (context) => {
   const { mover, root } = await createRepository(context);
   await fs.writeFile(path.join(root, "src", "two.test.ts"), "two\n");
   const batch = await mover.resolve({
@@ -87,7 +92,7 @@ test("path mover rolls completed moves back when publication fails", async (cont
   await assert.rejects(fs.access(path.join(root, "tests")));
 });
 
-test("path mover rejects overlapping sources and occupied destinations", async (context) => {
+pathMoverTest("path mover rejects overlapping sources and occupied destinations", async (context) => {
   const { mover, root } = await createRepository(context);
   await fs.writeFile(path.join(root, "occupied.ts"), "occupied\n");
   await assert.rejects(mover.resolve({
@@ -100,22 +105,9 @@ test("path mover rejects overlapping sources and occupied destinations", async (
   await assert.rejects(mover.resolve({ kind: "operands", operands: ["src/one.test.ts", "occupied.ts"] }), /already exists/u);
 });
 
-test("arc move previews read-only, rejects sibling overlap, and applies minimal destination claims", async (context) => {
-  const { repository, root } = await createRepository(context);
+pathMoverTest("arc move previews read-only, rejects sibling overlap, and applies minimal destination claims", async (context) => {
+  const { repository, root } = await createArcRepository(context);
   const controller = new WorkbenchGitCheckpointController();
-  const plan = await controller.createPlan({
-    cwd: root,
-    harness: "codex",
-    intentName: "move one file",
-    paths: ["src"],
-    threadId: "move-thread",
-  });
-  await controller.startArc({
-    checkpointCommit: plan.checkpointCommit,
-    cwd: root,
-    harness: "codex",
-    threadId: "move-thread",
-  });
   const registry = new GitArcRegistry(repository);
   const activeBefore = await registry.find({ harness: "codex", threadId: "move-thread" });
 
@@ -166,4 +158,10 @@ test("arc move previews read-only, rejects sibling overlap, and applies minimal 
   assert.equal(await fs.readFile(path.join(root, "tests", "src", "one.test.ts"), "utf8"), "one\n");
   await assert.rejects(fs.access(path.join(root, "src", "one.test.ts")));
   assert.equal((await registry.find({ harness: "codex", threadId: "move-thread" }))?.checkpointCommit, moved.checkpointCommit);
+});
+
+test("Git arc path moves", { concurrency: 5 }, async (context) => {
+  await Promise.all(pathMoverCases.map(async ({ name, run }) => (
+    await context.test(name, { concurrency: true }, run)
+  )));
 });

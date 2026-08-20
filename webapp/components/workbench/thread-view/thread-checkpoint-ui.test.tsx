@@ -414,7 +414,7 @@ test("arc lifecycle cards stay outside adjacent generic command groups", () => {
   assert.doesNotMatch(html, /Restored a git checkpoint, checked 1 path/u);
 });
 
-test("arc cards keep main evidence open and nest the complete claimed set", () => {
+test("arc cards close compare details by default and nest claims for other open actions", () => {
   const previousRef = "a".repeat(40);
   const currentRef = "b".repeat(40);
   const receipt = {
@@ -448,8 +448,58 @@ test("arc cards keep main evidence open and nest the complete claimed set", () =
     outcome: "completed",
     receipt: { ...receipt, action: "compare" as const, selectedPaths: undefined },
   }));
-  assert(compareHtml.indexOf("Changed file evidence") < compareHtml.indexOf("2 claimed files"));
-  assert.equal(compareHtml.match(/open=""/gu)?.length, 1);
+  assert.doesNotMatch(compareHtml, /open=""/u);
+  assert.doesNotMatch(compareHtml, /Changed file evidence|2 claimed files/u);
+
+  const diffHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: { action: "diff", intentName: null, paths: [], ref: null },
+    durationMs: 5_000,
+    operationDetails: createElement("span", { "data-diff-artifact": true }, "Lazy diff evidence"),
+    outcome: "completed",
+    receipt: { ...receipt, action: "diff" as const, selectedPaths: undefined },
+  }));
+  assert.doesNotMatch(diffHtml, /open=""|Lazy diff evidence/u);
+});
+
+test("loading arc cards use lowercase fallback without a content divider", () => {
+  const loadingHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: { action: "start", intentName: null, paths: [], ref: null },
+    durationMs: null,
+    outcome: "inProgress",
+    receipt: null,
+  }));
+  assert.match(loadingHtml, />git arc</u);
+  assert.match(loadingHtml, /aria-label="start git arc"/u);
+  assert.doesNotMatch(loadingHtml, /border-t/u);
+
+  const completedHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: { action: "start", intentName: null, paths: [], ref: null },
+    durationMs: 10,
+    outcome: "completed",
+    receipt: null,
+  }));
+  assert.match(completedHtml, /border-t/u);
+});
+
+test("nested plan cards label planned changes without claiming them", () => {
+  const planHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: { action: "plan", intentName: "Polish cards", paths: ["src/one.ts"], ref: null },
+    durationMs: 10,
+    outcome: "completed",
+    receipt: null,
+  }));
+  assert.match(planHtml, />Planned</u);
+  assert.doesNotMatch(planHtml, />Claimed</u);
+
+  const removeHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: { action: "planRemove", intentName: null, paths: ["src/one.ts"], ref: null },
+    durationMs: 10,
+    outcome: "completed",
+    receipt: null,
+  }));
+  assert.match(removeHtml, />Reduced</u);
+  assert.match(removeHtml, /Removed from plan/u);
+  assert.doesNotMatch(removeHtml, />Claimed</u);
 });
 
 test("arc move cards distinguish previewed mappings from applied mappings", () => {
@@ -620,6 +670,211 @@ test("pending checkpoint proposal cards render command intent without a loading 
   assert.match(html, /<button[^>]*disabled=""/u);
   assert.match(html, />Commit<\/span>/u);
   assert.doesNotMatch(html, /Loading commit proposal/u);
+});
+
+test("failed task status commands keep the generic matched-command failure renderer", () => {
+  const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    defaultOpenCompletedWork: true,
+    projectRootPath: "C:/workspace",
+    threadId: "thread-one",
+    turn: {
+      completedAt: null,
+      durationMs: 1_000,
+      error: null,
+      id: "turn-one",
+      items: [{
+        aggregatedOutput: "status update rejected",
+        command: "wb thread status --status completed",
+        commandActions: [],
+        cwd: "C:/workspace",
+        durationMs: 10,
+        exitCode: 1,
+        id: "status-command",
+        processId: null,
+        source: "agent",
+        status: "failed",
+        type: "commandExecution",
+      }],
+      itemsView: "full",
+      startedAt: null,
+      status: "completed",
+    },
+  }));
+
+  assert.match(html, /Failed [^]*marking task completed/u);
+  assert.match(html, /status update rejected/u);
+  assert.doesNotMatch(html, /data-role="thread-status-command"/u);
+});
+
+test("task status keeps proposal and final output outside closed Worked content", () => {
+  const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    projectRootPath: "C:/workspace",
+    threadId: "thread-one",
+    turn: {
+      completedAt: null,
+      durationMs: 1_000,
+      error: null,
+      id: "turn-one",
+      items: [
+        {
+          aggregatedOutput: null,
+          command: "pnpm typecheck",
+          commandActions: [],
+          cwd: "C:/workspace",
+          durationMs: 800,
+          exitCode: 0,
+          id: "work-command",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          type: "commandExecution",
+        },
+        {
+          aggregatedOutput: null,
+          command: "wb thread status --status completed",
+          commandActions: [],
+          cwd: "C:/workspace",
+          durationMs: 10,
+          exitCode: 0,
+          id: "status-command",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          type: "commandExecution",
+        },
+        {
+          aggregatedOutput: "Workbench arc proposal: proposal-one\n",
+          command: "wb git arc propose -m \"Immediate proposal\" -- src/one.ts",
+          commandActions: [],
+          cwd: "C:/workspace",
+          durationMs: 10,
+          exitCode: 0,
+          id: "proposal-command",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          type: "commandExecution",
+        },
+        {
+          id: "final-message",
+          memoryCitation: null,
+          phase: "final_answer",
+          text: "All done.",
+          type: "agentMessage",
+        },
+      ],
+      itemsView: "full",
+      startedAt: null,
+      status: "completed",
+    },
+  }));
+
+  assert.match(html, /Task completed/u);
+  assert.match(html, /Immediate proposal/u);
+  assert.match(html, /All done\./u);
+  assert.match(html, />Worked</u);
+  assert.doesNotMatch(html, /<details[^>]*open=""[^>]*>[^]*Worked/u);
+});
+
+test("compacted, flattened, and hidden-final turns share the task-status terminal boundary", () => {
+  const turn = {
+    completedAt: null,
+    durationMs: 1_000,
+    error: null,
+    id: "turn-one",
+    items: [
+      {
+        aggregatedOutput: null,
+        command: "Write-Output older-work",
+        commandActions: [],
+        cwd: "C:/workspace",
+        durationMs: 300,
+        exitCode: 0,
+        id: "older-work",
+        processId: null,
+        source: "agent" as const,
+        status: "completed" as const,
+        type: "commandExecution" as const,
+      },
+      { id: "compaction-one", type: "contextCompaction" as const },
+      {
+        aggregatedOutput: null,
+        command: "Write-Output current-work",
+        commandActions: [],
+        cwd: "C:/workspace",
+        durationMs: 300,
+        exitCode: 0,
+        id: "current-work",
+        processId: null,
+        source: "agent" as const,
+        status: "completed" as const,
+        type: "commandExecution" as const,
+      },
+      { id: "compaction-two", type: "contextCompaction" as const },
+      {
+        aggregatedOutput: null,
+        command: "wb thread status --status completed",
+        commandActions: [],
+        cwd: "C:/workspace",
+        durationMs: 10,
+        exitCode: 0,
+        id: "status-command",
+        processId: null,
+        source: "agent" as const,
+        status: "completed" as const,
+        type: "commandExecution" as const,
+      },
+      {
+        aggregatedOutput: "Workbench arc proposal: proposal-one\n",
+        command: "wb git arc propose -m \"Immediate proposal\" -- src/one.ts",
+        commandActions: [],
+        cwd: "C:/workspace",
+        durationMs: 10,
+        exitCode: 0,
+        id: "proposal-command",
+        processId: null,
+        source: "agent" as const,
+        status: "completed" as const,
+        type: "commandExecution" as const,
+      },
+      {
+        id: "final-message",
+        memoryCitation: null,
+        phase: "final_answer" as const,
+        text: "All done.",
+        type: "agentMessage" as const,
+      },
+    ],
+    itemsView: "full" as const,
+    startedAt: null,
+    status: "completed" as const,
+  };
+  const sharedProps = {
+    projectRootPath: "C:/workspace",
+    threadId: "thread-one",
+    turn,
+  };
+
+  const compacted = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    ...sharedProps,
+    hideFinalAgentMessage: true,
+  }));
+  assert.match(compacted, /Task completed/u);
+  assert.match(compacted, /Immediate proposal/u);
+  assert.doesNotMatch(compacted, /older-work|current-work|All done\./u);
+
+  const flattened = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    ...sharedProps,
+    flattenCompletedWork: true,
+  }));
+  const workIndex = flattened.indexOf("current-work");
+  const statusIndex = flattened.indexOf("Task completed");
+  const proposalIndex = flattened.indexOf("Immediate proposal");
+  const finalIndex = flattened.indexOf("All done.");
+  assert(workIndex >= 0);
+  assert(statusIndex > workIndex);
+  assert(proposalIndex > statusIndex);
+  assert(finalIndex > proposalIndex);
 });
 
 test("pending arc-wide proposal cards show an honest summary before enrichment", () => {

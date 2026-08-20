@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; regression wards cover linear plumbing amendments, conflict rollback, and checkpoint SHA remapping. Keywords: git, amend, history, arc, test.
+ * - No production exports; bounded concurrent regression wards cover linear plumbing amendments, conflict rollback, and checkpoint SHA remapping. Keywords: git, amend, history, arc, concurrency, test.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -22,6 +22,11 @@ import { type ArcOutcome, outcomeRef } from "./git-arc-storage";
 
 const execFileAsync = promisify(execFile);
 const fixtureCache = new GitTestFixtureCache();
+const historyCases: Array<{ name: string; run: (context: TestContext) => Promise<void> }> = [];
+
+function historyTest(name: string, run: (context: TestContext) => Promise<void>) {
+  historyCases.push({ name, run });
+}
 
 async function git(cwd: string, args: string[]) {
   return (await execFileAsync("git", args, { cwd, encoding: "utf8", windowsHide: true })).stdout;
@@ -45,7 +50,7 @@ async function arcRepository(context: TestContext) {
   return { repository, root, state };
 }
 
-test("amends an older linear commit without changing worktree files or unrelated staged entries", async (context) => {
+historyTest("amends an older linear commit without changing worktree files or unrelated staged entries", async (context) => {
   const { root, storage, target } = await repository(context);
   const oldHead = (await git(root, ["rev-parse", "HEAD"])).trim();
   await write(root, "selected.txt", "amended\n");
@@ -68,7 +73,7 @@ test("amends an older linear commit without changing worktree files or unrelated
   assert.equal((await git(root, ["diff", "--cached", "--name-only"])).trim(), "later.txt");
 });
 
-test("a descendant conflict leaves branch, worktree, index, refs, and selection unchanged", async (context) => {
+historyTest("a descendant conflict leaves branch, worktree, index, refs, and selection unchanged", async (context) => {
   const { dispose, root, state, storageRootPath: storage } = await fixtureCache.copy(HISTORY_CONFLICT_READY_FIXTURE);
   context.after(dispose);
   const { target } = state;
@@ -90,7 +95,7 @@ test("a descendant conflict leaves branch, worktree, index, refs, and selection 
   assert.deepEqual((await owner.add(["later.txt"])).selectedPaths, ["later.txt", "selected.txt"]);
 });
 
-test("arc proposal amend remaps a sibling plan and every completed proposal SHA", async (context) => {
+historyTest("arc proposal amend remaps a sibling plan and every completed proposal SHA", async (context) => {
   const { repository, root, state } = await arcRepository(context);
   const controller = new WorkbenchGitCheckpointController();
   const { firstProposalId, oldHead, originalParent, siblingPlanCheckpoint } = state;
@@ -168,4 +173,10 @@ test("arc proposal amend remaps a sibling plan and every completed proposal SHA"
   });
   assert.notEqual(startedSibling.checkpointCommit, siblingPlanCheckpoint);
   assert.equal(await repository.resolveParent(startedSibling.checkpointCommit), amended.committedSha);
+});
+
+test("Git history rewrites", { concurrency: 3 }, async (context) => {
+  await Promise.all(historyCases.map(async ({ name, run }) => (
+    await context.test(name, { concurrency: true }, run)
+  )));
 });

@@ -11,7 +11,7 @@ import { test } from "node:test";
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { CodexJsonRpcResponse } from "../lib/codex/protocol";
 import type { WorkbenchSubagentRelationship, WorkbenchUserInputRequest } from "../lib/types";
-import { resolveAgentEndpointProjectFromCwd } from "../lib/workbench/project/agent-endpoint-project";
+import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 
 const callerThreadId = "parent-thread";
@@ -104,9 +104,9 @@ test("multiplexed wait immediately prefers questionnaires, then inactive turns",
   const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-wait-"));
   context.after(async () => await rm(storageRoot, { force: true, recursive: true }));
   const cwd = process.cwd();
-  const project = await resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench subagent wait test" });
-  const inactive = summary({ cwd, name: "Yuzu", projectId: project.project.id, threadId: inactiveThreadId });
-  const waiting = summary({ cwd, name: "Momo", projectId: project.project.id, threadId: questionnaireThreadId });
+  const projectId = "subagent-wait-project";
+  const inactive = summary({ cwd, name: "Yuzu", projectId, threadId: inactiveThreadId });
+  const waiting = summary({ cwd, name: "Momo", projectId, threadId: questionnaireThreadId });
   const metadataPath = path.join(storageRoot, ".workbench", "runtime", "subagents.json");
   await mkdir(path.dirname(metadataPath), { recursive: true });
   await writeFile(metadataPath, JSON.stringify({
@@ -117,6 +117,7 @@ test("multiplexed wait immediately prefers questionnaires, then inactive turns",
   const controller = new WorkbenchSubagentController({
     bridgeUrl: "ws://unused",
     createHarnessClient: () => client,
+    resolveProjectFromCwd: async () => ({ cwd, project: { id: projectId }, root: {} }) as AgentEndpointProjectResolution,
     storageRoot,
   });
   const params = { callerThreadId, cwd, threadIds: [inactiveThreadId, questionnaireThreadId] };

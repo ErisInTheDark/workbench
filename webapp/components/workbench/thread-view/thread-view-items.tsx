@@ -41,8 +41,10 @@ import {
   isGitCheckpointCompareMatcherClaim,
   isGitCheckpointDiffMatcherClaim,
   isThreadContextMatcherClaim,
+  isWorkbenchThreadStatusMatcherClaim,
   isWorkbenchThreadTitleSetMatcherClaim,
   parseWorkbenchSubagentCommand,
+  parseWorkbenchThreadStatusCommand,
   parseWorkbenchThreadTitleCommand,
   parseBrowseSequenceCommandOutput,
   parseGitCheckpointCommitCommand,
@@ -86,6 +88,7 @@ import ThreadSubagentIncomingMessage from "./ThreadSubagentIncomingMessage";
 import ThreadSubagentMessageItem from "./ThreadSubagentMessageItem";
 import ThreadSubagentStopItem from "./ThreadSubagentStopItem";
 import ThreadSubagentWaitItem from "./ThreadSubagentWaitItem";
+import ThreadStatusCommandItem from "./ThreadStatusCommandItem";
 import ThreadTitleCommandItem from "./ThreadTitleCommandItem";
 import ThreadUserImage from "./ThreadUserImage";
 import ThreadWebSearchItem, {
@@ -100,6 +103,7 @@ import {
   type ThreadSubagentWaitTiming,
 } from "./thread-subagent-wait-groups";
 import { createThreadTurnCompactionRenderPlan } from "./thread-turn-compaction-sections";
+import { partitionCompletedThreadWork } from "./thread-completed-work";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
 import { CheckIcon, ClockIcon, PlayIcon, WarningIcon } from "../workbench-icons";
 
@@ -1388,6 +1392,7 @@ type CommandSequenceRenderSegment =
   | { item: CommandItem; kind: "subagent" }
   | { group: ThreadSubagentWaitRenderGroup<CommandItem>; kind: "subagentWait" }
   | { item: CommandItem; kind: "threadContext" }
+  | { item: CommandItem; kind: "threadStatus"; status: "blocked" | "completed" }
   | { item: CommandItem; kind: "threadTitle"; title: string };
 
 function buildCommandSequenceRenderSegments({
@@ -1455,6 +1460,16 @@ function buildCommandSequenceRenderSegments({
       flushPendingCommands();
       flushPendingSubagentWaits();
       segments.push({ item, kind: "threadTitle", title: threadTitleCommand.title });
+      continue;
+    }
+    const commandOutcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
+    const threadStatusCommand = isWorkbenchThreadStatusMatcherClaim(commandDisplay.claimedBy)
+      ? parseWorkbenchThreadStatusCommand(commandDisplay.unwrappedCommand, item.commandActions)
+      : null;
+    if (threadStatusCommand && (commandOutcome === "completed" || commandOutcome === "inProgress")) {
+      flushPendingCommands();
+      flushPendingSubagentWaits();
+      segments.push({ item, kind: "threadStatus", status: threadStatusCommand.status });
       continue;
     }
     if (getGitArcMatcherAction(commandDisplay.claimedBy)) {
@@ -1697,6 +1712,7 @@ function ThreadCommandExecutionDetails ({
       action: gitArcAction,
       intentName: gitArcReceipt?.intentName ?? null,
       paths: gitArcReceipt?.selectedPaths ?? [],
+      proposalId: gitArcReceipt?.proposalId ?? null,
       ref: gitArcReceipt?.ref ?? null,
     }
     : null;
@@ -2209,6 +2225,12 @@ function ThreadCommandSequence ({
             outcome={getThreadCommandExecutionOutcome(segment.item.status, segment.item.exitCode)}
             title={segment.title}
           />
+        ) : segment.kind === "threadStatus" ? (
+          <ThreadStatusCommandItem
+            key={`thread-status:${segment.item.id}`}
+            outcome={getThreadCommandExecutionOutcome(segment.item.status, segment.item.exitCode) as "completed" | "inProgress"}
+            status={segment.status}
+          />
         ) : segment.kind === "gitArc" || segment.kind === "subagent" ? (
           <ThreadCommandExecutionDetails
             browseResultEntries={browseResultEntries}
@@ -2510,15 +2532,28 @@ function ThreadTurnDetailsComponent ({
       ? turn.items.find((item) => item.id === finalAgentMessageId) ?? null
       : null
   ), [finalAgentMessageId, turn.items]);
+  const completedWorkPartition = useMemo(() => (
+    isCompleted
+      ? partitionCompletedThreadWork({
+        finalAgentMessageId,
+        itemTimeline,
+        items: turn.items,
+        primaryUserItemId: primaryUserItem?.id ?? null,
+      })
+      : null
+  ), [finalAgentMessageId, isCompleted, itemTimeline, primaryUserItem?.id, turn.items]);
+  const visibleTerminalItems = useMemo(() => (
+    completedWorkPartition?.terminalItems.filter((item) => !hideFinalAgentMessage || item.id !== finalAgentMessageId) ?? []
+  ), [completedWorkPartition, finalAgentMessageId, hideFinalAgentMessage]);
   const pinnedCompactionItemIds = useMemo(() => new Set([
-    primaryUserItem?.id,
-    hideFinalAgentMessage ? null : finalAgentItem?.id,
-  ].filter((itemId): itemId is string => Boolean(itemId))), [finalAgentItem?.id, hideFinalAgentMessage, primaryUserItem?.id]);
+    completedWorkPartition ? null : primaryUserItem?.id,
+    completedWorkPartition || hideFinalAgentMessage ? null : finalAgentItem?.id,
+  ].filter((itemId): itemId is string => Boolean(itemId))), [completedWorkPartition, finalAgentItem?.id, hideFinalAgentMessage, primaryUserItem?.id]);
   const compactionRenderPlan = useMemo(() => createThreadTurnCompactionRenderPlan({
     itemTimeline,
-    items: turn.items,
+    items: completedWorkPartition?.workedItems ?? turn.items,
     pinnedItemIds: pinnedCompactionItemIds,
-  }), [itemTimeline, pinnedCompactionItemIds, turn.items]);
+  }), [completedWorkPartition, itemTimeline, pinnedCompactionItemIds, turn.items]);
   const turnBrowseResultEntries = browseResultEntries;
   const renderableBlocks = useMemo(() => buildRenderableBlocks(turn.items, hiddenItemIds), [hiddenItemIds, turn.items]);
   const allBlocks = useStableRenderableBlocks(renderableBlocks);
@@ -2574,11 +2609,9 @@ function ThreadTurnDetailsComponent ({
   if (compactionRenderPlan) {
     const primaryUserBlocks = primaryUserItem ? buildBlocksForItems([primaryUserItem]) : [];
     const primaryUserBlock = primaryUserBlocks.find((block) => isUserMessageBlock(block)) ?? null;
-    const finalAgentBlocks = isCompleted && finalAgentItem && !hideFinalAgentMessage
-      ? buildBlocksForItems([finalAgentItem]).filter((block) => isFinalAgentMessageBlock(block, finalAgentMessageId))
-      : [];
+    const terminalBlocks = isCompleted ? buildBlocksForItems(visibleTerminalItems) : [];
     const hasWorkedContent = Boolean(compactionRenderPlan.collapsedEarlierSection || compactionRenderPlan.visibleItems.length);
-    if (isCompleted && hideFinalAgentMessage && hideWorkbenchControlUserMessages && !primaryUserBlock && !hasWorkedContent && !finalAgentBlocks.length) {
+    if (isCompleted && hideFinalAgentMessage && hideWorkbenchControlUserMessages && !primaryUserBlock && !hasWorkedContent && !terminalBlocks.length) {
       return null;
     }
 
@@ -2623,7 +2656,7 @@ function ThreadTurnDetailsComponent ({
           <div className="space-y-2">
             {primaryUserBlock ? renderBlock(primaryUserBlock, 0, primaryUserBlocks, primaryUserBlock) : null}
             {renderCompactionWorkContent()}
-            {renderBlocks(finalAgentBlocks, primaryUserBlock)}
+            {renderBlocks(terminalBlocks, primaryUserBlock)}
           </div>
         ) : isCompleted ? (
           <div className="space-y-2">
@@ -2633,10 +2666,12 @@ function ThreadTurnDetailsComponent ({
               contentClassName="mt-2 space-y-2 pl-6"
               defaultOpen={defaultOpenCompletedWork}
               renderContent={renderCompactionWorkContent}
-              summary={getWorkedSummary(turn)}
+              summary={completedWorkPartition?.statusMarkerId
+                ? getWorkedSummaryForDuration(completedWorkPartition.workedDurationMs)
+                : getWorkedSummary(turn)}
               summaryClassName="text-[0.92em] leading-[1.6] text-muted"
             />
-            {renderBlocks(finalAgentBlocks, primaryUserBlock)}
+            {renderBlocks(terminalBlocks, primaryUserBlock)}
           </div>
         ) : (
           <div className="space-y-2">
@@ -2651,15 +2686,9 @@ function ThreadTurnDetailsComponent ({
   if (isCompleted && !flattenCompletedWork) {
     const primaryUserBlocks = primaryUserItem ? buildBlocksForItems([primaryUserItem]) : [];
     const primaryUserBlock = primaryUserBlocks.find((block) => isUserMessageBlock(block)) ?? null;
-    const finalAgentBlocks = finalAgentItem && !hideFinalAgentMessage
-      ? buildBlocksForItems([finalAgentItem]).filter((block) => isFinalAgentMessageBlock(block, finalAgentMessageId))
-      : [];
-    const completedPinnedItemIds = new Set([
-      primaryUserItem?.id,
-      finalAgentItem?.id,
-    ].filter((itemId): itemId is string => Boolean(itemId)));
-    const workedItems = turn.items.filter((item) => !completedPinnedItemIds.has(item.id));
-    if (hideFinalAgentMessage && hideWorkbenchControlUserMessages && !primaryUserBlock && !workedItems.length && !finalAgentBlocks.length) {
+    const terminalBlocks = buildBlocksForItems(visibleTerminalItems);
+    const workedItems = completedWorkPartition?.workedItems ?? [];
+    if (hideFinalAgentMessage && hideWorkbenchControlUserMessages && !primaryUserBlock && !workedItems.length && !terminalBlocks.length) {
       return null;
     }
 
@@ -2683,10 +2712,12 @@ function ThreadTurnDetailsComponent ({
             contentClassName="mt-2 space-y-2 pl-6"
             defaultOpen={defaultOpenCompletedWork}
             renderContent={renderCompletedWorkedContent}
-            summary={getWorkedSummary(turn)}
+            summary={completedWorkPartition?.statusMarkerId
+              ? getWorkedSummaryForDuration(completedWorkPartition.workedDurationMs)
+              : getWorkedSummary(turn)}
             summaryClassName="text-[0.92em] leading-[1.6] text-muted"
           />
-          {renderBlocks(finalAgentBlocks, primaryUserBlock)}
+          {renderBlocks(terminalBlocks, primaryUserBlock)}
         </div>
       </section>
     );
@@ -2696,13 +2727,11 @@ function ThreadTurnDetailsComponent ({
   const primaryUserBlock = isCompleted
     ? blocks.find((block) => isUserMessageBlock(block)) ?? null
     : null;
-  const finalAgentBlocks = isCompleted
-    ? hideFinalAgentMessage ? [] : blocks.filter((block) => isFinalAgentMessageBlock(block, finalAgentMessageId))
-    : [];
+  const terminalBlocks = isCompleted ? buildBlocksForItems(visibleTerminalItems) : [];
   const workedBlocks = isCompleted
-    ? blocks.filter((block) => block !== primaryUserBlock && !isFinalAgentMessageBlock(block, finalAgentMessageId))
+    ? buildBlocksForItems(completedWorkPartition?.workedItems ?? [])
     : blocks;
-  if (isCompleted && hideFinalAgentMessage && hideWorkbenchControlUserMessages && !primaryUserBlock && !workedBlocks.length && !finalAgentBlocks.length) {
+  if (isCompleted && hideFinalAgentMessage && hideWorkbenchControlUserMessages && !primaryUserBlock && !workedBlocks.length && !terminalBlocks.length) {
     return null;
   }
 
@@ -2712,7 +2741,7 @@ function ThreadTurnDetailsComponent ({
         <div className="space-y-2">
           {primaryUserBlock ? renderBlock(primaryUserBlock, 0, blocks, primaryUserBlock) : null}
           {renderBlocks(workedBlocks, primaryUserBlock)}
-          {renderBlocks(finalAgentBlocks, primaryUserBlock)}
+          {renderBlocks(terminalBlocks, primaryUserBlock)}
         </div>
       ) : (
         <div className="space-y-2">

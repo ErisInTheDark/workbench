@@ -137,6 +137,39 @@ test("proposed commits replace the completed label and inner status glyph", () =
   assert.doesNotMatch(html, /Completed with proposed commit/u);
 });
 
+test("live lifecycle presentation outranks a hanging proposed commit", () => {
+  const proposed = createThreadEntry({
+    claimedPaths: ["src/one.ts", "src/two.ts"],
+    proposalStatus: "proposed",
+    threadId: "proposal",
+    title: "Commit ready",
+  });
+  const cases = [
+    {
+      entry: { ...proposed, lifecycle: { agent: { agentStatus: "working" as const, turnId: "turn-two" }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const } },
+      iconPath: "M8 12h.01",
+      label: "Working",
+    },
+    {
+      entry: { ...proposed, lifecycle: { kind: "needsAttention" as const, reason: "pendingInput" as const, requestKey: "questionnaire:one", settled: false as const, turnId: "turn-two" } },
+      iconPath: "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3",
+      label: "Needs attention",
+    },
+    {
+      entry: { ...proposed, lifecycle: { kind: "stopped" as const, reason: "providerInterrupted" as const, settled: false as const, turnId: "turn-two" } },
+      iconPath: "m15 9-6 6",
+      label: "Stopped",
+    },
+  ];
+
+  for (const { entry, iconPath, label } of cases) {
+    const html = renderThreads([entry]);
+    assert.match(html, new RegExp(`aria-label="Commit ready, ${label}, 2 claimed files,`, "u"));
+    assert.match(html, new RegExp(iconPath.replaceAll(".", "\\."), "u"));
+    assert.doesNotMatch(html, /Proposed commit|M7\.5 12h2\.9m3\.2 0h2\.9/u);
+  }
+});
+
 test("claim and pin controls use independent auto-sized slots", async () => {
   const source = await readFile(new URL("./WorkbenchThreadList.tsx", import.meta.url), "utf8");
   assert.match(source, /grid grid-cols-\[auto_auto\] items-center gap-1\.5/u);

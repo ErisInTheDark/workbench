@@ -6,7 +6,8 @@ import type { ReactNode } from "react";
 
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import type { GitArcReceipt } from "../../../lib/workbench/git/git-arc-receipts";
-import type { GitArcCommandIntent, ThreadCommandExecutionOutcome } from "../../../lib/workbench/thread/thread-command-matchers";
+import type { GitArcAction } from "../../../lib/workbench/git/git-arc-receipts";
+import type { GitArcCommandAction, GitArcCommandIntent, ThreadCommandExecutionOutcome } from "../../../lib/workbench/thread/thread-command-matchers";
 import GitArcIcon from "./GitArcIcon";
 import ThreadClaimedFileList from "./ThreadClaimedFileList";
 import ThreadDisclosure from "./ThreadDisclosure";
@@ -21,10 +22,22 @@ const ACTION_LABELS = {
   diff: { completed: "Diffed", failed: "Failed to diff", inProgress: "Diffing" },
   mv: { completed: "Moved", failed: "Failed to move", inProgress: "Moving" },
   plan: { completed: "Planned", failed: "Failed to plan", inProgress: "Planning" },
+  planAdd: { completed: "Extended", failed: "Failed to extend plan", inProgress: "Extending plan" },
+  planAdopt: { completed: "Adopted changes", failed: "Failed to adopt changes into plan", inProgress: "Adopting changes into plan" },
+  planRemove: { completed: "Reduced", failed: "Failed to reduce plan", inProgress: "Reducing plan" },
+  planStart: { completed: "Started", failed: "Failed to create and start", inProgress: "Creating and starting" },
+  rescind: { completed: "Rescinded", failed: "Failed to rescind", inProgress: "Rescinding" },
   remove: { completed: "Reduced", failed: "Failed to reduce", inProgress: "Reducing" },
   restore: { completed: "Restored", failed: "Failed to restore", inProgress: "Restoring" },
   start: { completed: "Started", failed: "Failed to start", inProgress: "Starting" },
 } as const;
+
+function iconAction(action: GitArcCommandAction): GitArcAction {
+  if (action === "planAdd" || action === "planAdopt" || action === "planRemove") return "plan";
+  if (action === "planStart") return "start";
+  if (action === "rescind") return "propose";
+  return action;
+}
 
 function actionState(outcome: ThreadCommandExecutionOutcome) {
   return outcome === "completed" ? "completed" : outcome === "inProgress" ? "inProgress" : "failed";
@@ -94,31 +107,52 @@ export default function ThreadGitArcItem({
   const labels = movePreview
     ? { completed: "Previewed", failed: "Failed to preview moves", inProgress: "Previewing moves" }
     : ACTION_LABELS[commandIntent.action];
-  const planName = receipt?.intentName ?? commandIntent.intentName ?? "Git arc";
+  const planName = receipt?.intentName ?? commandIntent.intentName ?? "git arc";
   const ref = receipt?.ref ?? commandIntent.ref;
   const claimedPaths = receipt?.claimedPaths ?? [];
   const selectedPaths = receipt?.selectedPaths ?? commandIntent.paths;
   const moveMappings = commandIntent.action === "mv" ? receipt?.mappings ?? attemptedMoveMappings(commandIntent) : [];
-  const primaryPaths = commandIntent.action === "plan"
+  const primaryPaths = commandIntent.action === "plan" || commandIntent.action === "planStart"
     ? claimedPaths.length ? claimedPaths : selectedPaths
     : commandIntent.action === "add" || commandIntent.action === "adopt" || commandIntent.action === "remove" || commandIntent.action === "restore"
+      || commandIntent.action === "planAdd" || commandIntent.action === "planAdopt" || commandIntent.action === "planRemove"
       ? selectedPaths
       : [];
   const primaryPathLabel = state === "failed"
-    ? commandIntent.action === "plan" || commandIntent.action === "add" || commandIntent.action === "adopt"
-      ? "Attempted to claim"
-      : commandIntent.action === "remove" ? "Attempted to remove" : "Attempted to restore"
-    : commandIntent.action === "remove" ? "Removed" : commandIntent.action === "restore" ? "Restored" : "Claimed";
-  const showNestedClaims = commandIntent.action !== "plan" && claimedPaths.length > 0;
+    ? commandIntent.action === "plan"
+      ? "Attempted to plan"
+      : commandIntent.action === "planAdd"
+        ? "Attempted to add to plan"
+        : commandIntent.action === "planRemove"
+          ? "Attempted to remove from plan"
+          : commandIntent.action === "planAdopt"
+            ? "Attempted to adopt into plan"
+            : commandIntent.action === "planStart"
+              ? "Attempted to claim"
+              : commandIntent.action === "add" || commandIntent.action === "adopt"
+                ? "Attempted to claim"
+                : commandIntent.action === "remove" ? "Attempted to remove" : "Attempted to restore"
+    : commandIntent.action === "plan"
+      ? "Planned"
+      : commandIntent.action === "planAdd"
+        ? "Added to plan"
+        : commandIntent.action === "planRemove"
+          ? "Removed from plan"
+          : commandIntent.action === "planAdopt"
+            ? "Adopted into plan"
+            : commandIntent.action === "remove"
+              ? "Removed"
+              : commandIntent.action === "restore" ? "Restored" : "Claimed";
+  const showNestedClaims = commandIntent.action !== "plan" && commandIntent.action !== "planStart" && claimedPaths.length > 0;
   const normalizedFailure = failureReason?.trim() || (state === "failed" ? "This Git arc action did not complete." : null);
 
   return (
     <article className="my-1.5 w-full rounded-[0.45rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] px-2.5 py-1.5" data-thread-git-arc-card={commandIntent.action}>
       <ThreadDisclosure
-        contentClassName="mt-1 border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)]"
-        defaultOpen
-        leading={<GitArcIcon action={commandIntent.action} />}
-        leadingLabel={`${commandIntent.action} Git arc`}
+        contentClassName={state === "inProgress" ? "mt-1" : "mt-1 border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)]"}
+        defaultOpen={commandIntent.action !== "compare" && commandIntent.action !== "diff"}
+        leading={<GitArcIcon action={iconAction(commandIntent.action)} />}
+        leadingLabel={`${commandIntent.action} git arc`}
         summary={(
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
             <span className={state === "failed" ? "text-[color:var(--danger)]" : "text-text"}>
@@ -128,7 +162,10 @@ export default function ThreadGitArcItem({
                   : `Moved ${moveMappings.length} ${moveMappings.length === 1 ? "path" : "paths"}`
                 : labels[state]}
             </span>
-            <span className="min-w-0 truncate font-medium text-text">{planName}</span>
+            {commandIntent.action === "rescind" ? null : <span className="min-w-0 truncate font-medium text-text">{planName}</span>}
+            {commandIntent.action === "rescind" && commandIntent.proposalId ? (
+              <span className="font-mono text-[0.86em] text-muted">{commandIntent.proposalId.slice(0, 8)}</span>
+            ) : null}
             {ref ? <span className="font-mono text-[0.86em] text-muted">{ref.slice(0, 8)}</span> : null}
             {durationMs !== null ? <ThreadDurationText durationMs={durationMs} /> : null}
           </span>

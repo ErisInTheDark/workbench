@@ -471,7 +471,13 @@ test("project reset and a newer canonical notification fence stale reads before 
 }));
 
 test("previous Codex pages preserve live state and merge only their scoped sidecars", async () => withClient(async (client, socket) => {
-  const history = [historyEntry("older", "unloaded"), historyEntry("turn", "loaded")];
+  const olderTimeline = [{ completedAt: 2, firstSeenAt: 1, itemId: "older-item", lastSeenAt: 2, startedAt: 1 }];
+  const currentTimeline = [{ completedAt: 4, firstSeenAt: 2, itemId: "current-item", lastSeenAt: 4, startedAt: 2 }];
+  const replacementOlderTimeline = [{ completedAt: 3, firstSeenAt: 1, itemId: "older-item", lastSeenAt: 3, startedAt: 1 }];
+  const history = [
+    { ...historyEntry("older", "unloaded"), itemTimeline: olderTimeline },
+    { ...historyEntry("turn", "loaded"), itemTimeline: currentTimeline },
+  ];
   client.selectThreadPayload({ ...activeThread(), turnHistory: history });
   const deferredContextReads: SocketRequest[] = [];
   FakeWebSocket.intercept = (_target, request) => {
@@ -508,13 +514,18 @@ test("previous Codex pages preserve live state and merge only their scoped sidec
     entryScope: { mode: "turns", turnIds: ["older"] },
     questionnaireEntries: [],
     steerEntries: [],
-    thread: wireThreadWithHistory(["older"], history),
+    thread: wireThreadWithHistory(["older"], [
+      { ...historyEntry("older", "loaded"), itemTimeline: replacementOlderTimeline },
+      historyEntry("turn", "unloaded"),
+    ]),
   });
 
   const result = await previousRead;
   assert.ok(result);
   assert.deepEqual(result.turns.map((turn) => turn.id), ["older", "turn"]);
   assert.deepEqual(result.turns.find((turn) => turn.id === "turn")?.items.map((item) => item.id), ["live-item"]);
+  assert.deepEqual(result.turnHistory.find((entry) => entry.turnId === "turn")?.itemTimeline, currentTimeline);
+  assert.deepEqual(result.turnHistory.find((entry) => entry.turnId === "older")?.itemTimeline, replacementOlderTimeline);
   assert.deepEqual(result.browseResultEntries?.map((entry) => entry.entryKey), ["browse:older", "browse:turn"]);
   assert.equal(result.status, "active");
   assert.equal(socket.requests.filter((request) => request.method === "thread/resume").length, 2);

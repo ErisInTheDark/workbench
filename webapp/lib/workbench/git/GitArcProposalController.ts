@@ -411,7 +411,6 @@ export default class GitArcProposalController {
     const store = new GitCheckpointStore(repository);
     let replacementTarget: StoredProposal | null = null;
     if (replaceProposalId) {
-      if (!proposalIds.includes(replaceProposalId)) throw new Error("The replacement target does not belong to this Git arc.");
       replacementTarget = await store.readProposal(harness, threadId, replaceProposalId);
       if (replacementTarget.metadata.status === "committed") {
         throw new Error(`Proposal ${replaceProposalId} is already committed. Use wb git arc propose --amend ${replaceProposalId}.`);
@@ -420,7 +419,6 @@ export default class GitArcProposalController {
     }
     let amendTargetProposal: StoredProposal | null = null;
     if (amendProposalId) {
-      if (!proposalIds.includes(amendProposalId)) throw new Error("The amend target does not belong to this Git arc.");
       amendTargetProposal = await store.readProposal(harness, threadId, amendProposalId);
       if (amendTargetProposal.metadata.status !== "committed" || !amendTargetProposal.metadata.committedSha) {
         throw new Error("A targeted amend requires a committed proposal.");
@@ -539,12 +537,6 @@ export default class GitArcProposalController {
   async rescindProposal(input: ArcIdentityInput & { proposalId: string }) {
     const repository = await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
-    const registry = new GitArcRegistry(repository);
-    const entry = await registry.find({ harness, threadId: input.threadId });
-    const lifecycle = entry ? lifecycleEntry(entry) : null;
-    if (!entry || !lifecycle || !lifecycle.proposalIds.includes(input.proposalId)) {
-      throw new Error("The proposal does not belong to this thread's current Git arc.");
-    }
     const proposal = await new GitCheckpointStore(repository).readProposal(harness, input.threadId, input.proposalId);
     if (proposal.metadata.status === "committed") {
       throw new Error(`Proposal ${input.proposalId} is already committed. Use wb git arc propose --amend ${input.proposalId}.`);

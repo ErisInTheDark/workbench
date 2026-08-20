@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  getGitArcMatcherAction,
   getThreadCommandDisplay,
   getThreadCommandExecutionOutcome,
   getThreadCommandOutcomeDisplay,
@@ -15,6 +16,7 @@ import {
   parseGitCheckpointProposalId,
   parseGitArcCommand,
   parseWorkbenchSubagentCommand,
+  parseWorkbenchThreadStatusCommand,
   parseWorkbenchThreadTitleCommand,
 } from "./thread-command-matchers.ts";
 
@@ -175,6 +177,34 @@ test("Workbench thread title commands distinguish standalone sets from grouped r
   assert.equal(titleGet.claimedBy, "workbench-cli.thread-title-get");
   assert.equal(titleGet.summaryText, "Checked thread title");
   assert.equal(titleGet.ongoingSummaryText, "Checking thread title");
+});
+
+test("Workbench thread status commands match task completion and blocking across command shapes", () => {
+  const completed = getThreadCommandDisplay({
+    command: "wb thread status --status completed",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(completed.claimedBy, "workbench-cli.thread-status");
+  assert.equal(completed.summaryText, "Task completed");
+  assert.equal(completed.ongoingSummaryText, "Marking task completed");
+  assert.equal(getThreadCommandOutcomeDisplay(completed, "failed").summaryText, "Failed marking task completed");
+
+  const wrapped = getThreadCommandDisplay({
+    command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command 'wb thread status --status blocked'`,
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(wrapped.claimedBy, "workbench-cli.thread-status");
+  assert.equal(wrapped.summaryText, "Task blocked");
+  assert.equal(wrapped.ongoingSummaryText, "Marking task blocked");
+
+  assert.deepEqual(parseWorkbenchThreadStatusCommand("escaped wrapper", [
+    { type: "unknown", command: "wb thread status --status completed" },
+  ]), { status: "completed" });
+  assert.equal(parseWorkbenchThreadStatusCommand("wb thread status --status waiting"), null);
 });
 
 test("Workbench subagent create commands expose metadata through PowerShell wrappers", () => {
@@ -479,6 +509,32 @@ test("current-plan and proposal-lifecycle commands receive distinct truthful sum
     assert.equal(display.claimedBy, claimedBy);
     assert.equal(display.summaryText, summaryText);
   }
+
+  assert.deepEqual(parseGitArcCommand("wb git arc plan add -- src/a.ts"), {
+    action: "planAdd", intentName: null, paths: ["src/a.ts"], ref: null,
+  });
+  assert.deepEqual(parseGitArcCommand("wb git arc plan remove -- src/a.ts"), {
+    action: "planRemove", intentName: null, paths: ["src/a.ts"], ref: null,
+  });
+  assert.deepEqual(parseGitArcCommand("wb git arc plan adopt -- src/dirty.ts"), {
+    action: "planAdopt", intentName: null, paths: ["src/dirty.ts"], ref: null,
+  });
+  assert.deepEqual(parseGitArcCommand("wb git arc plan start -m Continue -- src/a.ts"), {
+    action: "planStart", intentName: "Continue", paths: ["src/a.ts"], ref: null,
+  });
+  assert.deepEqual(parseGitArcCommand("wb git arc rescind --proposal proposal-one"), {
+    action: "rescind", intentName: null, paths: [], proposalId: "proposal-one", ref: null,
+  });
+  assert.equal(getGitArcMatcherAction("powershell,git-arc.plan-remove"), "planRemove");
+
+  const wrappedPlanRemove = getThreadCommandDisplay({
+    command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command 'wb git arc plan remove -- src/a.ts'`,
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(wrappedPlanRemove.claimedBy, "git-arc.plan-remove");
+  assert.equal(getGitArcMatcherAction(wrappedPlanRemove.claimedBy), "planRemove");
 });
 
 test("PowerShell-wrapped arc proposals preserve escaped messages and apostrophes", () => {

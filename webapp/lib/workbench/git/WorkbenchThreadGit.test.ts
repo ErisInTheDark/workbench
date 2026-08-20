@@ -1,12 +1,12 @@
 /*
  * Exports:
- * - No production exports; Node tests cover thread-owned path selection, current-content commits, hook execution, isolation, unstage behavior, and failure recovery. Keywords: git, thread, selection, commit, hooks, test.
+ * - No production exports; bounded concurrent Node tests cover thread-owned path selection, current-content commits, hook execution, isolation, unstage behavior, and failure recovery. Keywords: git, thread, selection, commit, hooks, concurrency, test.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, test } from "node:test";
+import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
@@ -32,7 +32,11 @@ import {
 
 const execFileAsync = promisify(execFile);
 const fixtureCache = new GitTestFixtureCache();
-const temporaryPaths: string[] = [];
+const threadGitCases: Array<{ name: string; run: (context: TestContext) => Promise<void> }> = [];
+
+function threadGitTest(name: string, run: (context: TestContext) => Promise<void>) {
+  threadGitCases.push({ name, run });
+}
 
 class RacingGitRepository extends WorkbenchGitRepository {
   raced = false;
@@ -61,22 +65,18 @@ async function write(repoRoot: string, relativePath: string, contents: string) {
   await fs.writeFile(filePath, contents, "utf8");
 }
 
-async function createRepository() {
-  return await createRepositoryFrom(THREAD_GIT_BASE_FIXTURE);
+async function createRepository(context: TestContext) {
+  return await createRepositoryFrom(context, THREAD_GIT_BASE_FIXTURE);
 }
 
-async function createRepositoryFrom<State extends object>(spec: GitTestFixtureSpec<State>) {
+async function createRepositoryFrom<State extends object>(context: TestContext, spec: GitTestFixtureSpec<State>) {
   const { root: repoRoot, state, storageRootPath, temporaryRoot: testRoot } = await fixtureCache.copy(spec);
-  temporaryPaths.push(testRoot);
+  context.after(async () => await fs.rm(testRoot, { force: true, recursive: true }));
   return { repoRoot, state, storageRootPath, testRoot };
 }
 
-afterEach(async () => {
-  await Promise.all(temporaryPaths.splice(0).map((temporaryPath) => fs.rm(temporaryPath, { force: true, recursive: true })));
-});
-
-test("commits selected paths at commit time while preserving unrelated staged work", async () => {
-  const { repoRoot, storageRootPath } = await createRepository();
+threadGitTest("commits selected paths at commit time while preserving unrelated staged work", async (context) => {
+  const { repoRoot, storageRootPath } = await createRepository(context);
   await write(repoRoot, "selected.txt", "selected when marked\n");
   await write(repoRoot, "ordinary.txt", "ordinary staged\n");
   await git(repoRoot, ["add", "--", "ordinary.txt"]);
@@ -97,8 +97,8 @@ test("commits selected paths at commit time while preserving unrelated staged wo
   await assert.rejects(owner.commit("nothing selected"), /no selected files/u);
 });
 
-test("uses the repository's configured commit hooks", async () => {
-  const { repoRoot, storageRootPath } = await createRepository();
+threadGitTest("uses the repository's configured commit hooks", async (context) => {
+  const { repoRoot, storageRootPath } = await createRepository(context);
   const hookPath = path.join(repoRoot, ".git", "hooks", "pre-commit");
   await git(repoRoot, ["config", "core.hooksPath", ".git/hooks"]);
   await write(repoRoot, ".git/hooks/pre-commit", "#!/bin/sh\nprintf 'hook ran\\n' > hook-ran.txt\n");
@@ -112,8 +112,8 @@ test("uses the repository's configured commit hooks", async () => {
   assert.equal(await fs.readFile(path.join(repoRoot, "hook-ran.txt"), "utf8"), "hook ran\n");
 });
 
-test("isolates thread selections and stacks disjoint commits from the current HEAD", async () => {
-  const { repoRoot, storageRootPath } = await createRepository();
+threadGitTest("isolates thread selections and stacks disjoint commits from the current HEAD", async (context) => {
+  const { repoRoot, storageRootPath } = await createRepository(context);
   await write(repoRoot, "selected.txt", "thread one\n");
   await write(repoRoot, "ordinary.txt", "thread two\n");
   const first = await WorkbenchThreadGit.create({ cwd: repoRoot, storageRootPath, threadId: "thread-one" });
@@ -130,8 +130,8 @@ test("isolates thread selections and stacks disjoint commits from the current HE
   assert.equal(await git(repoRoot, ["show", "HEAD:ordinary.txt"]), "thread two\n");
 });
 
-test("expands directories to changed files and unstages selected descendants", async () => {
-  const { repoRoot, storageRootPath } = await createRepository();
+threadGitTest("expands directories to changed files and unstages selected descendants", async (context) => {
+  const { repoRoot, storageRootPath } = await createRepository(context);
   await fs.rm(path.join(repoRoot, "nested", "one.txt"));
   await write(repoRoot, "nested/two.txt", "two changed\n");
   await write(repoRoot, "nested/three.txt", "three untracked\n");
@@ -155,8 +155,8 @@ test("expands directories to changed files and unstages selected descendants", a
   assert.equal((await git(repoRoot, ["status", "--short"])).trim(), "M nested/two.txt");
 });
 
-test("restores a claimed selection when the selected files are no longer committable", async () => {
-  const { repoRoot, storageRootPath } = await createRepository();
+threadGitTest("restores a claimed selection when the selected files are no longer committable", async (context) => {
+  const { repoRoot, storageRootPath } = await createRepository(context);
   await write(repoRoot, "selected.txt", "temporary change\n");
   const owner = await WorkbenchThreadGit.create({ cwd: repoRoot, storageRootPath, threadId: "thread-one" });
   await owner.add(["selected.txt"]);
@@ -169,14 +169,14 @@ test("restores a claimed selection when the selected files are no longer committ
   assert.equal(await git(repoRoot, ["show", "HEAD:selected.txt"]), "change after failure\n");
 });
 
-test("rejects selections outside the repository", async () => {
-  const { repoRoot, storageRootPath } = await createRepository();
+threadGitTest("rejects selections outside the repository", async (context) => {
+  const { repoRoot, storageRootPath } = await createRepository(context);
   const owner = await WorkbenchThreadGit.create({ cwd: repoRoot, storageRootPath, threadId: "thread-one" });
   await assert.rejects(owner.add(["../outside.txt"]), /must stay inside the repository/u);
 });
 
-test("a primary control cwd selects and commits only inside an explicit registered secondary worktree", async () => {
-  const { repoRoot, storageRootPath, testRoot } = await createRepository();
+threadGitTest("a primary control cwd selects and commits only inside an explicit registered secondary worktree", async (context) => {
+  const { repoRoot, storageRootPath, testRoot } = await createRepository(context);
   const secondaryRoot = path.join(testRoot, "secondary");
   await git(repoRoot, ["worktree", "add", "-b", "secondary", secondaryRoot]);
   await write(repoRoot, "selected.txt", "primary selected\n");
@@ -199,8 +199,8 @@ test("a primary control cwd selects and commits only inside an explicit register
   assert.equal(await git(repoRoot, ["show", "HEAD:selected.txt"]), "primary selected\n");
 });
 
-test("explicit targets fail closed unless they are absolute registered worktrees of the control repository", async () => {
-  const { repoRoot, storageRootPath, testRoot } = await createRepository();
+threadGitTest("explicit targets fail closed unless they are absolute registered worktrees of the control repository", async (context) => {
+  const { repoRoot, storageRootPath, testRoot } = await createRepository(context);
   const ordinaryDirectory = path.join(testRoot, "ordinary-directory");
   await fs.mkdir(ordinaryDirectory);
   await assert.rejects(
@@ -221,8 +221,8 @@ test("explicit targets fail closed unless they are absolute registered worktrees
   );
 });
 
-test("older amendment can replace the unpushed root commit and replay the full linear stack", async () => {
-  const { repoRoot, storageRootPath, testRoot } = await createRepositoryFrom(THREAD_GIT_LINEAR_FIXTURE);
+threadGitTest("older amendment can replace the unpushed root commit and replay the full linear stack", async (context) => {
+  const { repoRoot, storageRootPath, testRoot } = await createRepositoryFrom(context, THREAD_GIT_LINEAR_FIXTURE);
   const rootCommit = (await git(repoRoot, ["rev-list", "--max-parents=0", "HEAD"])).trim();
   const secondaryRoot = path.join(testRoot, "secondary-amend-witness");
   await git(repoRoot, ["worktree", "add", "--quiet", "-b", "secondary-amend-witness", secondaryRoot]);
@@ -247,8 +247,8 @@ test("older amendment can replace the unpushed root commit and replay the full l
   assert.equal(await git(secondaryRoot, ["diff", "--cached", "--binary"]), secondaryIndex);
 });
 
-test("older amendment preserves selected/index state and remaps every Workbench SHA", async () => {
-  const { repoRoot, state, storageRootPath } = await createRepositoryFrom(HISTORY_GLOBAL_REMAP_READY_FIXTURE);
+threadGitTest("older amendment preserves selected/index state and remaps every Workbench SHA", async (context) => {
+  const { repoRoot, state, storageRootPath } = await createRepositoryFrom(context, HISTORY_GLOBAL_REMAP_READY_FIXTURE);
   const repository = new WorkbenchGitRepository(repoRoot);
   const controller = new WorkbenchGitCheckpointController();
   const brokenRefPath = path.join(repoRoot, state.brokenRefRelativePath);
@@ -306,8 +306,8 @@ test("older amendment preserves selected/index state and remaps every Workbench 
   assert.equal((await git(repoRoot, ["rev-parse", `${started.checkpointCommit}^`])).trim(), (await git(repoRoot, ["rev-parse", "HEAD"])).trim());
 });
 
-test("a concurrent Workbench ref writer rejects the entire older-amend publication transaction", async () => {
-  const { repoRoot } = await createRepositoryFrom(THREAD_GIT_LINEAR_FIXTURE);
+threadGitTest("a concurrent Workbench ref writer rejects the entire older-amend publication transaction", async (context) => {
+  const { repoRoot } = await createRepositoryFrom(context, THREAD_GIT_LINEAR_FIXTURE);
   const target = (await git(repoRoot, ["rev-parse", "HEAD^"])).trim();
   const racingRepository = new RacingGitRepository(repoRoot);
   const headBefore = await racingRepository.currentHead();
@@ -329,8 +329,8 @@ test("a concurrent Workbench ref writer rejects the entire older-amend publicati
   assert.notEqual(await racingRepository.readRef(GIT_STATE_GENERATION_REF), null);
 });
 
-test("older amendment rejects pushed targets and merge-containing descendant ranges without publication", async () => {
-  const pushed = await createRepositoryFrom(HISTORY_PUSHED_READY_FIXTURE);
+threadGitTest("older amendment rejects pushed targets and merge-containing descendant ranges without publication", async (context) => {
+  const pushed = await createRepositoryFrom(context, HISTORY_PUSHED_READY_FIXTURE);
   await write(pushed.repoRoot, "selected.txt", "must remain local\n");
   const pushedOwner = await WorkbenchThreadGit.create({
     cwd: pushed.repoRoot,
@@ -344,7 +344,7 @@ test("older amendment rejects pushed targets and merge-containing descendant ran
   assert.equal((await git(pushed.repoRoot, ["rev-parse", "HEAD"])).trim(), pushedHead);
   assert.deepEqual(await fs.readFile(path.join(pushed.repoRoot, "selected.txt")), pushedWorktree);
 
-  const merged = await createRepositoryFrom(HISTORY_MERGE_READY_FIXTURE);
+  const merged = await createRepositoryFrom(context, HISTORY_MERGE_READY_FIXTURE);
   await write(merged.repoRoot, "selected.txt", "must reject merge range\n");
   const mergedOwner = await WorkbenchThreadGit.create({
     cwd: merged.repoRoot,
@@ -359,8 +359,8 @@ test("older amendment rejects pushed targets and merge-containing descendant ran
   assert.deepEqual(await fs.readFile(path.join(merged.repoRoot, "selected.txt")), mergeWorktree);
 });
 
-test("older amendment rejects a real commit object containing a signature header", async () => {
-  const { repoRoot, state, storageRootPath } = await createRepositoryFrom(HISTORY_SIGNED_READY_FIXTURE);
+threadGitTest("older amendment rejects a real commit object containing a signature header", async (context) => {
+  const { repoRoot, state, storageRootPath } = await createRepositoryFrom(context, HISTORY_SIGNED_READY_FIXTURE);
   const repository = new WorkbenchGitRepository(repoRoot);
   await write(repoRoot, "selected.txt", "must reject signature\n");
   const owner = await WorkbenchThreadGit.create({ cwd: repoRoot, storageRootPath, threadId: "signed-thread" });
@@ -370,4 +370,10 @@ test("older amendment rejects a real commit object containing a signature header
 
   assert.equal(await repository.currentHead(), state.signedCommit);
   assert.equal(await fs.readFile(path.join(repoRoot, "selected.txt"), "utf8"), "must reject signature\n");
+});
+
+test("thread-owned Git operations", { concurrency: 4 }, async (context) => {
+  await Promise.all(threadGitCases.map(async ({ name, run }) => (
+    await context.test(name, { concurrency: true }, run)
+  )));
 });

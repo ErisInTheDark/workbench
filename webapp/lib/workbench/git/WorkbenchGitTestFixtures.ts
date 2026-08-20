@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - Workbench Git fixture specs: immutable real-Git base graphs and prepared lifecycle scenarios used by amendment/controller tests. Keywords: git, fixture, amend, arc, proposal, remote.
+ * - partitionWorkbenchGitTestFiles: separate nested Git, ordinary Git, and non-Git suites while preserving stable group order. Keywords: test runner, scheduling, git, fixture.
  * - prewarmWorkbenchGitTestFixtures: prepare only the cached scenarios required by selected test files before Node starts their timers. Keywords: test runner, cache, prewarm.
  */
 import fs from "node:fs/promises";
@@ -90,6 +91,157 @@ export const CHECKPOINT_OPERATIONS_BASE_FIXTURE = {
     message: "base",
   }],
   name: "checkpoint-operations-base",
+} satisfies GitTestFixtureSpec;
+
+export const CHECKPOINT_ADDITIONS_READY_FIXTURE = {
+  commits: CHECKPOINT_OPERATIONS_BASE_FIXTURE.commits,
+  name: "checkpoint-additions-ready",
+  prepare: async ({ repositoryRoot, runGit }) => {
+    await write(repositoryRoot, "later-claim.txt", "captured before plan\n");
+    const controller = new WorkbenchGitCheckpointController();
+    const original = await controller.createPlan({
+      cwd: repositoryRoot,
+      intentName: "Update selected",
+      paths: ["selected.txt"],
+      threadId: "thread-one",
+    });
+    await controller.startArc({ checkpointCommit: original.checkpointCommit, cwd: repositoryRoot, threadId: "thread-one" });
+    const originalTree = (await runGit(["rev-parse", `${original.checkpointCommit}^{tree}`])).trim();
+    const originalParent = (await runGit(["rev-parse", `${original.checkpointCommit}^`])).trim();
+    const released = await controller.removeFromArc({ cwd: repositoryRoot, paths: ["selected.txt"], threadId: "thread-one" });
+    await controller.startArc({ checkpointCommit: original.checkpointCommit, cwd: repositoryRoot, threadId: "thread-one" });
+    return {
+      originalCheckpoint: original.checkpointCommit,
+      originalParent,
+      originalTree,
+      releasedScopePaths: released.scopePaths,
+    };
+  },
+  revision: 1,
+} satisfies GitTestFixtureSpec<{
+  originalCheckpoint: string;
+  originalParent: string;
+  originalTree: string;
+  releasedScopePaths: string[];
+}>;
+
+export const CHECKPOINT_RELEASE_READY_FIXTURE = {
+  commits: CHECKPOINT_OPERATIONS_BASE_FIXTURE.commits,
+  name: "checkpoint-release-ready",
+  prepare: async ({ repositoryRoot, runGit }) => {
+    const controller = new WorkbenchGitCheckpointController();
+    const restoreThreadId = "thread-release-restore";
+    const restorePlan = await controller.createPlan({
+      cwd: repositoryRoot,
+      intentName: "Restore proposed work",
+      paths: ["selected.txt"],
+      threadId: restoreThreadId,
+    });
+    await controller.startArc({ checkpointCommit: restorePlan.checkpointCommit, cwd: repositoryRoot, threadId: restoreThreadId });
+    await write(repositoryRoot, "selected.txt", "proposed restore work\n");
+    const restoredProposal = await controller.createProposal({
+      cwd: repositoryRoot,
+      description: "",
+      paths: ["selected.txt"],
+      threadId: restoreThreadId,
+      title: "Restore this proposal",
+    });
+
+    const unclaimThreadId = "thread-release-clean";
+    const unclaimPlan = await controller.createPlan({
+      cwd: repositoryRoot,
+      intentName: "Unclaim proposed work",
+      paths: ["literal[1].txt"],
+      threadId: unclaimThreadId,
+    });
+    await controller.startArc({ checkpointCommit: unclaimPlan.checkpointCommit, cwd: repositoryRoot, threadId: unclaimThreadId });
+    await write(repositoryRoot, "literal[1].txt", "proposed clean release\n");
+    const unclaimedProposal = await controller.createProposal({
+      cwd: repositoryRoot,
+      description: "",
+      paths: ["literal[1].txt"],
+      threadId: unclaimThreadId,
+      title: "Unclaim this proposal",
+    });
+    await runGit(["restore", "--", "literal[1].txt"]);
+    return {
+      restorePlanCheckpoint: restorePlan.checkpointCommit,
+      restoredProposalId: restoredProposal.proposalId,
+      unclaimedProposalId: unclaimedProposal.proposalId,
+    };
+  },
+  revision: 1,
+} satisfies GitTestFixtureSpec<{
+  restorePlanCheckpoint: string;
+  restoredProposalId: string;
+  unclaimedProposalId: string;
+}>;
+
+export const CHECKPOINT_DIRTY_CLAIM_READY_FIXTURE = {
+  commits: CHECKPOINT_OPERATIONS_BASE_FIXTURE.commits,
+  name: "checkpoint-dirty-claim-ready",
+  prepare: async ({ repositoryRoot }) => {
+    const controller = new WorkbenchGitCheckpointController();
+    const owner = await controller.createPlan({
+      cwd: repositoryRoot,
+      intentName: "Own selected",
+      paths: ["selected.txt"],
+      threadId: "owner-thread",
+    });
+    await controller.startArc({ checkpointCommit: owner.checkpointCommit, cwd: repositoryRoot, threadId: "owner-thread" });
+    await write(repositoryRoot, "selected.txt", "already dirty\n");
+    return {};
+  },
+} satisfies GitTestFixtureSpec;
+
+export const CHECKPOINT_PROPOSAL_READY_FIXTURE = {
+  commits: CHECKPOINT_OPERATIONS_BASE_FIXTURE.commits,
+  name: "checkpoint-proposal-ready",
+  prepare: async ({ repositoryRoot }) => {
+    const controller = new WorkbenchGitCheckpointController();
+    const plans = [
+      { intentName: "Freeze proposal files", paths: ["selected.txt", "unrelated.txt"], threadId: "thread-frozen" },
+      { intentName: "Include newer proposal work", paths: ["deleted.txt"], threadId: "thread-newer" },
+      { intentName: "Expire a clean proposal", paths: ["literal[1].txt"], threadId: "thread-clean" },
+    ];
+    await write(repositoryRoot, ".git/info/exclude", ".workbench/\n");
+    for (const { intentName, paths, threadId } of plans) {
+      await createTranscript(repositoryRoot, "codex", threadId);
+      const plan = await controller.createPlan({ cwd: repositoryRoot, intentName, paths, threadId });
+      await controller.startArc({ checkpointCommit: plan.checkpointCommit, cwd: repositoryRoot, threadId });
+    }
+    await write(repositoryRoot, "selected.txt", "proposed version\n");
+    await write(repositoryRoot, "deleted.txt", "proposed newer-path version\n");
+    await write(repositoryRoot, "literal[1].txt", "proposed clean-path version\n");
+    return {};
+  },
+} satisfies GitTestFixtureSpec;
+
+export const PATH_MOVER_BASE_FIXTURE = {
+  commits: [{ files: { "src/one.test.ts": "one\n" }, message: "initial" }],
+  name: "path-mover-base",
+} satisfies GitTestFixtureSpec;
+
+export const PATH_MOVER_ARC_READY_FIXTURE = {
+  commits: PATH_MOVER_BASE_FIXTURE.commits,
+  name: "path-mover-arc-ready",
+  prepare: async ({ repositoryRoot }) => {
+    const controller = new WorkbenchGitCheckpointController();
+    const plan = await controller.createPlan({
+      cwd: repositoryRoot,
+      harness: "codex",
+      intentName: "move one file",
+      paths: ["src"],
+      threadId: "move-thread",
+    });
+    await controller.startArc({
+      checkpointCommit: plan.checkpointCommit,
+      cwd: repositoryRoot,
+      harness: "codex",
+      threadId: "move-thread",
+    });
+    return {};
+  },
 } satisfies GitTestFixtureSpec;
 
 export const THREAD_GIT_LINEAR_FIXTURE = {
@@ -469,6 +621,71 @@ export const CONTROLLER_PARTIAL_READY_FIXTURE = {
   revision: 1,
 } satisfies GitTestFixtureSpec<{ planCheckpoint: string; repositoryHead: string }>;
 
+export const CONTROLLER_REPLACEMENT_READY_FIXTURE = {
+  commits: CONTROLLER_COMMITS,
+  name: "controller-replacement-ready",
+  prepare: async ({ repositoryRoot }) => {
+    const controller = new WorkbenchGitCheckpointController();
+    await createTranscript(repositoryRoot, "codex", "partial-thread");
+    const plan = await controller.createPlan({
+      cwd: repositoryRoot,
+      harness: "codex",
+      intentName: "change both files",
+      paths: ["one.txt", "two.txt"],
+      threadId: "partial-thread",
+    });
+    await controller.startArc({
+      checkpointCommit: plan.checkpointCommit,
+      cwd: repositoryRoot,
+      harness: "codex",
+      threadId: "partial-thread",
+    });
+    await controller.addToArc({ cwd: repositoryRoot, harness: "codex", paths: ["three.txt"], threadId: "partial-thread" });
+    await write(repositoryRoot, "one.txt", "replace one\n");
+    await write(repositoryRoot, "two.txt", "rescind two\n");
+    await write(repositoryRoot, "three.txt", "commit three\n");
+    const replaceTarget = await controller.createProposal({
+      cwd: repositoryRoot, description: "", harness: "codex", paths: ["one.txt"], threadId: "partial-thread", title: "replace target",
+    });
+    const rescindTarget = await controller.createProposal({
+      cwd: repositoryRoot, description: "", harness: "codex", paths: ["two.txt"], threadId: "partial-thread", title: "rescind target",
+    });
+    const commitTarget = await controller.createProposal({
+      cwd: repositoryRoot, description: "", harness: "codex", paths: ["three.txt"], threadId: "partial-thread", title: "commit target",
+    });
+    const committed = await controller.commitProposal({
+      cwd: repositoryRoot,
+      description: "",
+      harness: "codex",
+      includeNewer: false,
+      proposalId: commitTarget.proposalId,
+      threadId: "partial-thread",
+      title: "commit target",
+    });
+    const replacementPlan = await controller.createPlan({
+      cwd: repositoryRoot, harness: "codex", intentName: "replace prior proposals", paths: ["one.txt", "two.txt"], threadId: "partial-thread",
+    });
+    await controller.startArc({
+      checkpointCommit: replacementPlan.checkpointCommit,
+      cwd: repositoryRoot,
+      harness: "codex",
+      threadId: "partial-thread",
+    });
+    return {
+      commitTargetProposalId: commitTarget.proposalId,
+      committedSha: committed.committedSha!,
+      replaceTargetProposalId: replaceTarget.proposalId,
+      rescindTargetProposalId: rescindTarget.proposalId,
+    };
+  },
+  revision: 1,
+} satisfies GitTestFixtureSpec<{
+  commitTargetProposalId: string;
+  committedSha: string;
+  replaceTargetProposalId: string;
+  rescindTargetProposalId: string;
+}>;
+
 export const CONTROLLER_PUSHED_AMEND_READY_FIXTURE = {
   commits: CONTROLLER_COMMITS,
   name: "controller-pushed-amend-ready",
@@ -496,40 +713,65 @@ export const CONTROLLER_PUSHED_AMEND_READY_FIXTURE = {
   revision: 1,
 } satisfies GitTestFixtureSpec<{ planCheckpoint: string }>;
 
-const prewarmersByTestFile = new Map<string, Array<(cache: GitTestFixtureCache) => Promise<string>>>([
-  ["git-checkpoints.test.ts", [
+type GitTestFileSpec = {
+  nested: boolean;
+  prewarmers: Array<(cache: GitTestFixtureCache) => Promise<string>>;
+};
+
+const specsByGitTestFile = new Map<string, GitTestFileSpec>([
+  ["GitArcPathMover.test.ts", { nested: false, prewarmers: [
+    (cache) => cache.template(PATH_MOVER_BASE_FIXTURE),
+    (cache) => cache.template(PATH_MOVER_ARC_READY_FIXTURE),
+  ] }],
+  ["git-checkpoints.test.ts", { nested: true, prewarmers: [
     (cache) => cache.template(CHECKPOINT_OPERATIONS_BASE_FIXTURE),
-  ]],
-  ["WorkbenchGitRepository.test.ts", [
+    (cache) => cache.template(CHECKPOINT_ADDITIONS_READY_FIXTURE),
+    (cache) => cache.template(CHECKPOINT_DIRTY_CLAIM_READY_FIXTURE),
+    (cache) => cache.template(CHECKPOINT_PROPOSAL_READY_FIXTURE),
+    (cache) => cache.template(CHECKPOINT_RELEASE_READY_FIXTURE),
+  ] }],
+  ["WorkbenchGitRepository.test.ts", { nested: false, prewarmers: [
     (cache) => cache.template(THREAD_GIT_BASE_FIXTURE),
-  ]],
-  ["WorkbenchGitHistoryRewriter.test.ts", [
+  ] }],
+  ["WorkbenchGitHistoryRewriter.test.ts", { nested: false, prewarmers: [
     (cache) => cache.template(HISTORY_LINEAR_FIXTURE),
     (cache) => cache.template(HISTORY_CONFLICT_READY_FIXTURE),
     (cache) => cache.template(HISTORY_ARC_READY_FIXTURE),
-  ]],
-  ["WorkbenchThreadGit.test.ts", [
+  ] }],
+  ["WorkbenchThreadGit.test.ts", { nested: false, prewarmers: [
     (cache) => cache.template(THREAD_GIT_BASE_FIXTURE),
     (cache) => cache.template(THREAD_GIT_LINEAR_FIXTURE),
     (cache) => cache.template(HISTORY_GLOBAL_REMAP_READY_FIXTURE),
     (cache) => cache.template(HISTORY_PUSHED_READY_FIXTURE),
     (cache) => cache.template(HISTORY_MERGE_READY_FIXTURE),
     (cache) => cache.template(HISTORY_SIGNED_READY_FIXTURE),
-  ]],
-  ["WorkbenchGitCheckpointController.test.ts", [
+  ] }],
+  ["WorkbenchGitCheckpointController.test.ts", { nested: true, prewarmers: [
     (cache) => cache.template(CONTROLLER_BASE_FIXTURE),
     (cache) => cache.template(CONTROLLER_START_READY_FIXTURE),
     (cache) => cache.template(CONTROLLER_ADOPT_READY_FIXTURE),
     (cache) => cache.template(CONTROLLER_FAILED_ADOPT_READY_FIXTURE),
     (cache) => cache.template(CONTROLLER_PARTIAL_READY_FIXTURE),
+    (cache) => cache.template(CONTROLLER_REPLACEMENT_READY_FIXTURE),
     (cache) => cache.template(CONTROLLER_PUSHED_AMEND_READY_FIXTURE),
-  ]],
+  ] }],
 ]);
+
+export function partitionWorkbenchGitTestFiles(testFiles: readonly string[]) {
+  const gitFiles: string[] = [];
+  const nestedGitFiles: string[] = [];
+  const ordinaryFiles: string[] = [];
+  for (const file of testFiles) {
+    const spec = specsByGitTestFile.get(path.basename(file));
+    (spec?.nested ? nestedGitFiles : spec ? gitFiles : ordinaryFiles).push(file);
+  }
+  return { gitFiles, nestedGitFiles, ordinaryFiles };
+}
 
 export async function prewarmWorkbenchGitTestFixtures(testFiles: readonly string[]) {
   const cache = new GitTestFixtureCache();
   const requested = new Set(testFiles.map((file) => path.basename(file)));
-  const prewarmers = [...requested].flatMap((file) => prewarmersByTestFile.get(file) ?? []);
+  const prewarmers = [...requested].flatMap((file) => specsByGitTestFile.get(file)?.prewarmers ?? []);
   const uniquePrewarmers = [...new Set(prewarmers)];
   const workers = Array.from({ length: Math.min(2, uniquePrewarmers.length) }, async (_, workerIndex) => {
     for (let index = workerIndex; index < uniquePrewarmers.length; index += 2) {
