@@ -17,6 +17,8 @@ import {
 
 export type CodexAppServerOptions = {
   createChild?: () => ChildProcess;
+  log?: (name: string, message: string) => void;
+  logError?: (name: string, message: string) => void;
   onFatalExit: (reason: string) => void;
   onMessage: (message: unknown) => void;
   projectRoot: string;
@@ -37,13 +39,17 @@ export default class CodexAppServer {
   private codexProcess: ChildProcess | null = null;
   private generation = 0;
   private readonly createChild: () => ChildProcess;
+  private readonly log: NonNullable<CodexAppServerOptions["log"]>;
+  private readonly logError: NonNullable<CodexAppServerOptions["logError"]>;
   private readonly onFatalExit: CodexAppServerOptions["onFatalExit"];
   private readonly onMessage: CodexAppServerOptions["onMessage"];
   private readonly projectRoot: string;
   private readonly terminateChild: (child: ChildProcess) => void;
 
-  constructor({ createChild, onFatalExit, onMessage, projectRoot, terminateChild }: CodexAppServerOptions) {
+  constructor({ createChild, log: lifecycleLog, logError: lifecycleLogError, onFatalExit, onMessage, projectRoot, terminateChild }: CodexAppServerOptions) {
     this.createChild = createChild ?? (() => this.createStdioChild());
+    this.log = lifecycleLog ?? log;
+    this.logError = lifecycleLogError ?? logError;
     this.onFatalExit = onFatalExit;
     this.onMessage = onMessage;
     this.projectRoot = projectRoot;
@@ -102,18 +108,18 @@ export default class CodexAppServer {
       if (!this.owns(codexProcess, generation)) return;
       this.codexProcess = null;
       this.generation += 1;
-      logError("codex-stdio", `failed to start: ${error instanceof Error ? error.message : String(error)}`);
+      this.logError("codex-stdio", `failed to start: ${error instanceof Error ? error.message : String(error)}`);
       this.onFatalExit("Codex app-server failed to start.");
     });
 
     codexProcess.once("exit", (code, signal) => {
-      log("codex-stdio", `exited (code=${code ?? "null"}, signal=${signal ?? "null"})`);
+      this.log("codex-stdio", `exited (code=${code ?? "null"}, signal=${signal ?? "null"})`);
       if (!this.owns(codexProcess, generation)) return;
       this.codexProcess = null;
       this.onFatalExit("Codex app-server exited.");
     });
 
-    log("codex-bridge", "started shared stdio app-server");
+    this.log("codex-bridge", "started shared stdio app-server");
     return codexProcess;
   }
 
@@ -139,7 +145,7 @@ export default class CodexAppServer {
         try {
           this.onMessage(JSON.parse(trimmedLine) as unknown);
         } catch (error) {
-          logError("codex-bridge", `invalid upstream JSON: ${error instanceof Error ? error.message : String(error)}`);
+          this.logError("codex-bridge", `invalid upstream JSON: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
     });

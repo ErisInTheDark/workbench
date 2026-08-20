@@ -5,16 +5,18 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { after, before, test, type TestContext } from "node:test";
+import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
 import WorkbenchGitCheckpointController from "./workbench/git/WorkbenchGitCheckpointController";
+import GitTestFixtureCache from "./workbench/git/GitTestFixtureCache";
+import { CHECKPOINT_OPERATIONS_BASE_FIXTURE } from "./workbench/git/WorkbenchGitTestFixtures";
 
 const execFileAsync = promisify(execFile);
 const checkpointCases: Array<{ name: string; run: (context: TestContext) => Promise<void> }> = [];
 const controller = new WorkbenchGitCheckpointController();
+const fixtureCache = new GitTestFixtureCache();
 const createGitPlan = controller.createPlan.bind(controller);
 const startGitArc = controller.startArc.bind(controller);
 const continueGitArc = controller.continueArc.bind(controller);
@@ -47,8 +49,6 @@ const restoreGitCheckpointPaths = async ({
   filePaths: string[];
   threadId: string;
 }) => await controller.restore({ checkpointCommit, cwd, paths: filePaths, threadId });
-let templateRoot = "";
-
 function checkpointTest(name: string, run: (context: TestContext) => Promise<void>) {
   checkpointCases.push({ name, run });
 }
@@ -78,31 +78,10 @@ async function write(repoRoot: string, relativePath: string, contents: string) {
 }
 
 async function createRepository(context: TestContext) {
-  const testRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-git-checkpoint-test-"));
-  context.after(async () => {
-    await fs.rm(testRoot, { force: true, recursive: true });
-  });
-  const repoRoot = path.join(testRoot, "repo");
-  await git(testRoot, ["clone", "--quiet", templateRoot, repoRoot]);
-  await git(repoRoot, ["config", "core.autocrlf", "false"]);
-  return { repoRoot, testRoot };
+  const fixture = await fixtureCache.copy(CHECKPOINT_OPERATIONS_BASE_FIXTURE);
+  context.after(fixture.dispose);
+  return { repoRoot: fixture.root, testRoot: fixture.temporaryRoot };
 }
-
-before(async () => {
-  templateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-git-checkpoint-template-"));
-  await git(templateRoot, ["init", "-b", "main"]);
-  await write(templateRoot, "selected.txt", "selected checkpoint\n");
-  await write(templateRoot, "deleted.txt", "deleted checkpoint\n");
-  await write(templateRoot, "unrelated.txt", "unrelated checkpoint\n");
-  await write(templateRoot, "literal[1].txt", "literal checkpoint\n");
-  await write(templateRoot, "literal1.txt", "neighbor checkpoint\n");
-  await git(templateRoot, ["add", "-A"]);
-  await git(templateRoot, ["commit", "-m", "base"]);
-});
-
-after(async () => {
-  await fs.rm(templateRoot, { force: true, recursive: true });
-});
 
 checkpointTest("restores only selected checkpoint paths while preserving the ordinary index and unrelated worktree changes", async (context) => {
   const { repoRoot } = await createRepository(context);

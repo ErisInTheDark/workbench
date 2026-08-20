@@ -40,9 +40,9 @@ export default class GitArcHistoryRewriter {
   constructor(private readonly repository: WorkbenchGitRepository) {}
 
   async resolveAlias(commit: string) {
-    const blob = await this.repository.readRef(COMMIT_REWRITE_MAP_REF);
-    if (!blob) return commit;
-    const aliases = JSON.parse(await this.repository.readBlob(blob)) as Record<string, string>;
+    const resolved = await this.repository.readBlobAtRef(COMMIT_REWRITE_MAP_REF);
+    if (!resolved) return commit;
+    const aliases = JSON.parse(resolved.contents) as Record<string, string>;
     let current = commit;
     const seen = new Set<string>();
     while (aliases[current] && !seen.has(current)) {
@@ -174,8 +174,9 @@ export default class GitArcHistoryRewriter {
       : await new GitArcRegistry(this.repository).prepareCommitRemap(commits);
     if (registryUpdate) updates.push(registryUpdate);
 
-    const priorMapBlob = await this.repository.readRef(COMMIT_REWRITE_MAP_REF);
-    const priorMap = priorMapBlob ? JSON.parse(await this.repository.readBlob(priorMapBlob)) as Record<string, string> : {};
+    const priorMapObject = await this.repository.readBlobAtRef(COMMIT_REWRITE_MAP_REF);
+    const priorMapBlob = priorMapObject?.blob ?? null;
+    const priorMap = priorMapObject ? JSON.parse(priorMapObject.contents) as Record<string, string> : {};
     const nextMap = Object.fromEntries(Object.entries(priorMap).map(([oldCommit, current]) => [oldCommit, commits.get(current) ?? current]));
     for (const [oldCommit, next] of commits) if (oldCommit !== next) nextMap[oldCommit] = next;
     const mapBlob = await this.repository.writeBlob(`${JSON.stringify(nextMap)}\n`);

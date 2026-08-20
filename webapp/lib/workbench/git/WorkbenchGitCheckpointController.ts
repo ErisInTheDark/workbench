@@ -117,12 +117,14 @@ interface ReadCheckpointResult {
   checkpointCommit: string;
   checkpointRef: string;
   metadata: CheckpointMetadata | null;
+  parent: string;
 }
 
 interface ReadProposalResult {
   metadata: ProposalMetadata;
   proposalCommit: string;
   proposalRef: string;
+  tree: string;
 }
 
 interface HeadMovement {
@@ -209,9 +211,9 @@ async function readArcOutcome(
   sourceCheckpoint: string,
 ) {
   const ref = outcomeRef(harness, threadId, sourceCheckpoint);
-  const blob = await repository.readRef(ref);
-  if (!blob) return null;
-  const parsed = JSON.parse(await repository.readBlob(blob)) as Partial<ArcOutcome>;
+  const resolved = await repository.readBlobAtRef(ref);
+  if (!resolved) return null;
+  const parsed = JSON.parse(resolved.contents) as Partial<ArcOutcome>;
   if (
     parsed.version !== 1
     || parsed.sourceCheckpoint !== sourceCheckpoint
@@ -359,7 +361,9 @@ async function checkpointRefName(repoRoot: string, harness: GitArcHarness, threa
 async function readCheckpoint(repoRoot: string, harness: GitArcHarness, threadId: string, rawCommit: string): Promise<ReadCheckpointResult> {
   const commit = normalizeCommit(rawCommit);
   const repository = new WorkbenchGitRepository(repoRoot);
-  let checkpointCommit = await repository.resolveCommit(commit);
+  let resolved = await repository.readCommitAt(commit);
+  if (!resolved) throw new Error(`Git object ${commit} is missing.`);
+  let checkpointCommit = resolved.commit;
   let checkpointRef = (await runGit(repoRoot, [
     "for-each-ref", "--format=%(refname)", "--points-at", checkpointCommit, "--count=1",
     checkpointNamespace(harness, threadId), legacyCheckpointNamespace(threadId),
@@ -367,7 +371,9 @@ async function readCheckpoint(repoRoot: string, harness: GitArcHarness, threadId
   if (!checkpointRef) {
     const remapped = await new GitArcHistoryRewriter(repository).resolveAlias(checkpointCommit);
     if (remapped !== checkpointCommit) {
-      checkpointCommit = await repository.resolveCommit(remapped);
+      resolved = await repository.readCommitAt(remapped);
+      if (!resolved) throw new Error(`Git object ${remapped} is missing.`);
+      checkpointCommit = resolved.commit;
       checkpointRef = (await runGit(repoRoot, [
         "for-each-ref", "--format=%(refname)", "--points-at", checkpointCommit, "--count=1",
         checkpointNamespace(harness, threadId), legacyCheckpointNamespace(threadId),
@@ -375,19 +381,19 @@ async function readCheckpoint(repoRoot: string, harness: GitArcHarness, threadId
     }
   }
   if (!checkpointRef) throw new Error("Checkpoint commit is not in this thread/worktree checkpoint timeline.");
-  const message = await runGit(repoRoot, ["show", "-s", "--format=%B", checkpointCommit]);
+  if (resolved.identity.parents.length !== 1) throw new Error("Checkpoint commit parent metadata is invalid.");
   return {
     checkpointCommit,
     checkpointRef,
-    metadata: parseMarkedMetadata<CheckpointMetadata>(message, CHECKPOINT_METADATA_MARKER),
+    metadata: parseMarkedMetadata<CheckpointMetadata>(resolved.identity.message, CHECKPOINT_METADATA_MARKER),
+    parent: resolved.identity.parents[0]!,
   };
 }
 
 async function readRestorableCheckpoint(repoRoot: string, harness: GitArcHarness, threadId: string, rawCommit: string) {
   const checkpoint = await readCheckpoint(repoRoot, harness, threadId, rawCommit);
-  const checkpointParent = (await runGit(repoRoot, ["rev-parse", `${checkpoint.checkpointCommit}^`])).trim();
   const currentHead = (await runGit(repoRoot, ["rev-parse", "HEAD"])).trim();
-  if (checkpointParent !== currentHead) throw new Error("Checkpoint parent differs from current HEAD. Ask the user before overriding.");
+  if (checkpoint.parent !== currentHead) throw new Error("Checkpoint parent differs from current HEAD. Ask the user before overriding.");
   return checkpoint;
 }
 
@@ -437,28 +443,7 @@ async function classifyHeadMovement(
 }
 
 async function buildFileChanges(repoRoot: string, from: string, to: string, paths: string[]) {
-  const changedPaths = await listChangedPaths(repoRoot, from, to, paths);
-  return await Promise.all(changedPaths.map(async (filePath): Promise<GitCheckpointFileChange> => {
-    const pathspec = literalPathspec(filePath);
-    const [statusText, numstat, diff] = await Promise.all([
-      runGit(repoRoot, ["diff", "--name-status", "--no-renames", from, to, "--", pathspec]),
-      runGit(repoRoot, ["diff", "--numstat", "--no-renames", from, to, "--", pathspec]),
-      runGit(repoRoot, ["diff", "--binary", "--no-renames", from, to, "--", pathspec]),
-    ]);
-    const status = statusText.trim().charAt(0);
-    const [added = "0", deleted = "0"] = numstat.trim().split("\t");
-    return {
-      additions: /^\d+$/u.test(added) ? Number(added) : 0,
-      deletions: /^\d+$/u.test(deleted) ? Number(deleted) : 0,
-      diff,
-      kind: status === "A"
-        ? { type: "add" }
-        : status === "D"
-          ? { type: "delete" }
-          : { move_path: null, type: "update" },
-      path: filePath,
-    };
-  }));
+  return await new WorkbenchGitRepository(repoRoot).buildFileChanges(from, to, paths);
 }
 
 async function readProposal(repoRoot: string, harness: GitArcHarness, threadId: string, proposalId: string): Promise<ReadProposalResult> {
@@ -466,13 +451,12 @@ async function readProposal(repoRoot: string, harness: GitArcHarness, threadId: 
   if (!/^[A-Za-z0-9._-]+$/u.test(normalizedProposalId)) throw new Error("Invalid checkpoint proposal id.");
   const canonicalRef = `${proposalNamespace(harness, threadId)}/${normalizedProposalId}`;
   const legacyRef = `${legacyProposalNamespace(threadId)}/${normalizedProposalId}`;
-  const proposalRef = await runGit(repoRoot, ["rev-parse", "--verify", "--symbolic-full-name", canonicalRef]).then(
-    () => canonicalRef,
-    async () => await runGit(repoRoot, ["rev-parse", "--verify", "--symbolic-full-name", legacyRef]).then(() => legacyRef),
-  );
-  const proposalCommit = (await runGit(repoRoot, ["rev-parse", "--verify", `${proposalRef}^{commit}`])).trim();
-  const message = await runGit(repoRoot, ["show", "-s", "--format=%B", proposalCommit]);
-  const parsedMetadata = parseMarkedMetadata<ProposalMetadata>(message, PROPOSAL_METADATA_MARKER);
+  const repository = new WorkbenchGitRepository(repoRoot);
+  const canonical = await repository.readCommitAt(canonicalRef);
+  const proposalRef = canonical ? canonicalRef : legacyRef;
+  const resolved = canonical ?? await repository.readCommitAt(legacyRef);
+  if (!resolved) throw new Error("Checkpoint proposal not found.");
+  const parsedMetadata = parseMarkedMetadata<ProposalMetadata>(resolved.identity.message, PROPOSAL_METADATA_MARKER);
   if (!parsedMetadata || parsedMetadata.proposalId !== normalizedProposalId) throw new Error("Checkpoint proposal metadata is invalid.");
   const metadata: ProposalMetadata = parsedMetadata.version === 1
     ? {
@@ -485,16 +469,16 @@ async function readProposal(repoRoot: string, harness: GitArcHarness, threadId: 
       supersededBySha: null,
     }
     : parsedMetadata;
-  return { metadata, proposalCommit, proposalRef };
+  return { metadata, proposalCommit: resolved.commit, proposalRef, tree: resolved.identity.tree };
 }
 
 async function transitionProposal(
   repoRoot: string,
   proposal: ReadProposalResult,
   metadata: ProposalMetadata,
-  treeish = proposal.proposalCommit,
+  treeish?: string,
 ) {
-  const tree = (await runGit(repoRoot, ["rev-parse", `${treeish}^{tree}`])).trim();
+  const tree = treeish ?? proposal.tree;
   const stateCommit = await createCommitFromTree(
     repoRoot,
     tree,
@@ -504,7 +488,7 @@ async function transitionProposal(
   await new WorkbenchGitRepository(repoRoot).updateRefs([
     { newValue: stateCommit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef },
   ]);
-  return { ...proposal, metadata, proposalCommit: stateCommit };
+  return { ...proposal, metadata, proposalCommit: stateCommit, tree };
 }
 
 async function prepareProposalUnavailableUpdate({
@@ -523,9 +507,8 @@ async function prepareProposalUnavailableUpdate({
   if (!proposalId) return null;
   const proposal = await readProposal(repository.root, harness, threadId, proposalId);
   if (proposal.metadata.status !== "proposed") return null;
-  const tree = await repository.resolveTree(proposal.proposalCommit);
   const stateCommit = await repository.createCommitFromTree(
-    tree,
+    proposal.tree,
     proposal.metadata.baseCommit,
     proposalMessage({
       ...proposal.metadata,
@@ -877,8 +860,7 @@ export default class WorkbenchGitCheckpointController {
       ) {
         throw new Error("The active Git arc registry does not match its checkpoint claim set.");
       }
-      const parent = await repository.resolveParent(source.checkpointCommit);
-      const headMovement = await repository.classifyHeadMovement(parent, metadata.scopePaths, source.checkpointCommit);
+      const headMovement = await repository.classifyHeadMovement(source.parent, metadata.scopePaths, source.checkpointCommit);
       if (headMovement.kind === "incompatible") {
         throw new Error("Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
       }
@@ -931,13 +913,12 @@ export default class WorkbenchGitCheckpointController {
     }
 
     const currentHead = await repository.currentHead();
-    const parent = await repository.resolveParent(source.checkpointCommit);
-    const headMovement = await repository.classifyHeadMovement(parent, metadata.scopePaths, source.checkpointCommit);
+    const headMovement = await repository.classifyHeadMovement(source.parent, metadata.scopePaths, source.checkpointCommit, currentHead);
     if (!outcome && (headMovement.kind !== "fast-forward" || !headMovement.changedPaths.length)) {
       throw new Error("This arc has no completed commit outcome to continue from.");
     }
     if (outcome?.committedSha && currentHead !== outcome.committedSha) {
-      const compatible = await repository.classifyHeadMovement(outcome.committedSha, metadata.scopePaths);
+      const compatible = await repository.classifyHeadMovement(outcome.committedSha, metadata.scopePaths, outcome.committedSha, currentHead);
       if (compatible.kind === "incompatible" || compatible.changedPaths.length) {
         throw new Error("Repository HEAD no longer matches this arc's committed outcome.");
       }
@@ -996,8 +977,7 @@ export default class WorkbenchGitCheckpointController {
     const { active, checkpoint, harness, metadata, registry, repository } = await this.requireActiveArc({ cwd, harness: rawHarness, threadId });
     if (!rawPaths.length) throw new Error("Arc add requires at least one additional clean path.");
     const paths = repository.normalizePaths(rawPaths);
-    const parent = await repository.resolveParent(checkpoint.checkpointCommit);
-    const headMovement = await repository.classifyHeadMovement(parent, metadata.scopePaths, checkpoint.checkpointCommit);
+    const headMovement = await repository.classifyHeadMovement(checkpoint.parent, metadata.scopePaths, checkpoint.checkpointCommit);
     if (headMovement.kind === "incompatible") {
       throw new Error("Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
     }
@@ -1035,8 +1015,7 @@ export default class WorkbenchGitCheckpointController {
     )));
     if (overlapping.length) throw new Error(`Arc paths are already covered by the claimed set: ${overlapping.join(", ")}`);
 
-    const parent = await repository.resolveParent(checkpoint.checkpointCommit);
-    const headMovement = await repository.classifyHeadMovement(parent, metadata.scopePaths, checkpoint.checkpointCommit);
+    const headMovement = await repository.classifyHeadMovement(checkpoint.parent, metadata.scopePaths, checkpoint.checkpointCommit);
     if (headMovement.kind === "incompatible") {
       throw new Error("Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
     }
@@ -1112,8 +1091,7 @@ export default class WorkbenchGitCheckpointController {
       };
     }
 
-    const parent = await repository.resolveParent(checkpoint.checkpointCommit);
-    const headMovement = await repository.classifyHeadMovement(parent, scopePaths, checkpoint.checkpointCommit);
+    const headMovement = await repository.classifyHeadMovement(checkpoint.parent, scopePaths, checkpoint.checkpointCommit);
     if (headMovement.kind === "incompatible") {
       throw new Error("Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
     }
@@ -1133,8 +1111,7 @@ export default class WorkbenchGitCheckpointController {
 
   async moveInArc({ cwd, harness: rawHarness, move, threadId }: ControllerInput & { move: GitArcMoveRequest }): Promise<GitArcMoveResult> {
     const { active, checkpoint, harness, metadata, registry, repository } = await this.requireActiveArc({ cwd, harness: rawHarness, threadId });
-    const parent = await repository.resolveParent(checkpoint.checkpointCommit);
-    const headMovement = await repository.classifyHeadMovement(parent, metadata.scopePaths, checkpoint.checkpointCommit);
+    const headMovement = await repository.classifyHeadMovement(checkpoint.parent, metadata.scopePaths, checkpoint.checkpointCommit);
     if (headMovement.kind === "incompatible") {
       throw new Error("Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
     }
@@ -1239,10 +1216,9 @@ export default class WorkbenchGitCheckpointController {
         throw new Error(`Proposed paths must stay within the arc's claimed set: ${outsideClaim.join(", ")}`);
       }
     }
-    const checkpointParent = (await runGit(repoRoot, ["rev-parse", `${checkpoint.checkpointCommit}^`])).trim();
     const headMovement = await classifyHeadMovement(
       repoRoot,
-      checkpointParent,
+      checkpoint.parent,
       requestedPaths,
       checkpoint.checkpointCommit,
     );
@@ -1305,7 +1281,6 @@ export default class WorkbenchGitCheckpointController {
     }, { expectedCheckpointCommit: active.checkpointCommit });
     let supersededProposalUpdate: { newValue: string; oldValue: string; ref: string } | null = null;
     if (priorProposal) {
-      const priorTree = await repository.resolveTree(priorProposal.proposalCommit);
       const supersededMetadata: ProposalMetadata = {
         ...priorProposal.metadata,
         status: "superseded",
@@ -1313,7 +1288,7 @@ export default class WorkbenchGitCheckpointController {
         supersededBySha: null,
       };
       const supersededState = await repository.createCommitFromTree(
-        priorTree,
+        priorProposal.tree,
         priorProposal.metadata.baseCommit,
         proposalMessage(supersededMetadata),
       );
@@ -1390,7 +1365,7 @@ export default class WorkbenchGitCheckpointController {
       const message = commitMessage(title, description);
       const targetTree = includeNewer && resolved.includeNewerAvailable
         ? resolved.currentTree!
-        : await repository.resolveTree(proposal.proposalCommit);
+        : proposal.tree;
       const source = await readCheckpoint(repoRoot, harness, threadId, proposal.metadata.sourceCheckpoint);
       const sourceMetadata = requireArcMetadata(source);
       const priorProposal = sourceMetadata.priorProposalId
@@ -1446,7 +1421,7 @@ export default class WorkbenchGitCheckpointController {
               supersededBySha: amendedCommit,
             };
             const priorState = await repository.createCommitFromTree(
-              await repository.resolveTree(supersededPrior.proposalCommit),
+              supersededPrior.tree,
               priorMetadata.baseCommit,
               proposalMessage(priorMetadata),
             );
@@ -1528,7 +1503,7 @@ export default class WorkbenchGitCheckpointController {
     const message = commitMessage(title, description);
     const targetTree = includeNewer && resolved.includeNewerAvailable
       ? resolved.currentTree!
-      : await repository.resolveTree(proposal.proposalCommit);
+      : proposal.tree;
     const committedSha = await createCommitFromTree(repoRoot, targetTree, proposal.metadata.baseCommit, message);
     const committedMetadata: ProposalMetadata = {
       ...proposal.metadata,
@@ -1553,7 +1528,6 @@ export default class WorkbenchGitCheckpointController {
         priorProposal.metadata.status === "committed"
         && priorProposal.metadata.committedSha === proposal.metadata.amendTargetSha
       ) {
-        const priorTree = await repository.resolveTree(priorProposal.proposalCommit);
         const supersededMetadata: ProposalMetadata = {
           ...priorProposal.metadata,
           status: "superseded",
@@ -1561,7 +1535,7 @@ export default class WorkbenchGitCheckpointController {
           supersededBySha: committedSha,
         };
         const supersededState = await repository.createCommitFromTree(
-          priorTree,
+          priorProposal.tree,
           priorProposal.metadata.baseCommit,
           proposalMessage(supersededMetadata),
         );
@@ -1733,10 +1707,9 @@ export default class WorkbenchGitCheckpointController {
     const checkpoint = releasingArc?.checkpoint
       ?? await readCheckpoint(repoRoot, harness, threadId, checkpointCommit);
     const metadata = releasingArc?.metadata ?? requireArcMetadata(checkpoint);
-    const checkpointParent = (await runGit(repoRoot, ["rev-parse", `${checkpoint.checkpointCommit}^`])).trim();
     const headMovement = await classifyHeadMovement(
       repoRoot,
-      checkpointParent,
+      checkpoint.parent,
       paths,
       checkpoint.checkpointCommit,
     );

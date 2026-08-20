@@ -41,10 +41,14 @@ test("intentional replacement ignores stale child output and exit", () => {
   const second = fakeChild(102);
   const children = [first, second];
   const fatalReasons: string[] = [];
+  const lifecycleErrors: string[] = [];
+  const lifecycleLogs: string[] = [];
   const messages: unknown[] = [];
   const terminated: ChildProcess[] = [];
   const server = new CodexAppServer({
     createChild: () => children.shift() ?? second,
+    log: (name, message) => lifecycleLogs.push(`[${name}] ${message}`),
+    logError: (name, message) => lifecycleErrors.push(`[${name}] ${message}`),
     onFatalExit: (reason) => fatalReasons.push(reason),
     onMessage: (message) => messages.push(message),
     projectRoot: "C:/workspace",
@@ -66,4 +70,11 @@ test("intentional replacement ignores stale child output and exit", () => {
 
   second.emit("exit", 1, null);
   assert.deepEqual(fatalReasons, ["Codex app-server exited."]);
+  assert.deepEqual(lifecycleErrors, []);
+  assert.deepEqual(lifecycleLogs, [
+    "[codex-bridge] started shared stdio app-server",
+    "[codex-bridge] started shared stdio app-server",
+    "[codex-stdio] exited (code=0, signal=null)",
+    "[codex-stdio] exited (code=1, signal=null)",
+  ]);
 });

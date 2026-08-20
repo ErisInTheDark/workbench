@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchGitRepository: own raw Git process, snapshot, path, tree, ref, and ancestry mechanics for one repository. Keywords: git, repository, snapshot, ref, transaction.
- * - GitHeadMovement/GitRefUpdate: typed Git ancestry and atomic ref-update inputs. Keywords: git, head, ref, transaction.
+ * - GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit: typed Git ancestry, object-read, and atomic ref-update inputs. Keywords: git, head, object, ref, transaction.
  */
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
@@ -45,6 +45,16 @@ export interface GitCommitIdentity {
 export interface GitCommitBatch {
   commits: Map<string, GitCommitIdentity>;
   errors: Map<string, string>;
+}
+
+export interface GitResolvedBlob {
+  blob: string;
+  contents: string;
+}
+
+export interface GitResolvedCommit {
+  commit: string;
+  identity: GitCommitIdentity;
 }
 
 function isWithinRoot(candidatePath: string, rootPath: string) {
@@ -244,6 +254,20 @@ export default class WorkbenchGitRepository {
     const metadata = batch.commits.get(commit);
     if (metadata) return metadata;
     throw new Error(batch.errors.get(commit) ?? `Unable to read commit metadata for ${commit}.`);
+  }
+
+  async readBlobAtRef(ref: string): Promise<GitResolvedBlob | null> {
+    const object = await this.readObject(ref);
+    if (!object) return null;
+    if (object.type !== "blob") throw new Error(`Git ref ${ref} does not resolve to a blob.`);
+    return { blob: object.objectId, contents: object.contents.toString("utf8") };
+  }
+
+  async readCommitAt(commitish: string): Promise<GitResolvedCommit | null> {
+    const object = await this.readObject(commitish);
+    if (!object) return null;
+    if (object.type !== "commit") throw new Error(`Git object ${commitish} is not a commit.`);
+    return { commit: object.objectId, identity: parseRawCommit(object.contents) };
   }
 
   async readCommits(commits: string[]): Promise<GitCommitBatch> {
@@ -492,8 +516,13 @@ export default class WorkbenchGitRepository {
     ])).sort((left, right) => left.localeCompare(right));
   }
 
-  async classifyHeadMovement(ancestryBaseCommit: string, paths: string[], contentBaseline = ancestryBaseCommit): Promise<GitHeadMovement> {
-    const currentHead = await this.currentHead();
+  async classifyHeadMovement(
+    ancestryBaseCommit: string,
+    paths: string[],
+    contentBaseline = ancestryBaseCommit,
+    knownCurrentHead?: string,
+  ): Promise<GitHeadMovement> {
+    const currentHead = knownCurrentHead ?? await this.currentHead();
     if (currentHead === ancestryBaseCommit) {
       return {
         changedPaths: contentBaseline === currentHead ? [] : await this.listChangedPaths(contentBaseline, currentHead, paths),
@@ -514,17 +543,20 @@ export default class WorkbenchGitRepository {
     const changedPaths = await this.listChangedPaths(from, to, paths);
     return await Promise.all(changedPaths.map(async (filePath): Promise<GitCheckpointFileChange> => {
       const pathspec = this.literalPathspec(filePath);
-      const [statusText, numstat, diff] = await Promise.all([
-        this.run(["diff", "--name-status", "--no-renames", from, to, "--", pathspec]),
-        this.run(["diff", "--numstat", "--no-renames", from, to, "--", pathspec]),
-        this.run(["diff", "--binary", "--no-renames", from, to, "--", pathspec]),
+      const inspected = await this.run([
+        "diff", "--raw", "--numstat", "--binary", "--no-renames", from, to, "--", pathspec,
       ]);
-      const status = statusText.trim().charAt(0);
-      const [added = "0", deleted = "0"] = numstat.trim().split("\t");
+      const patchOffset = inspected.indexOf("diff --git ");
+      if (patchOffset < 0) throw new Error(`Git did not return a patch for changed path ${filePath}.`);
+      const metadata = inspected.slice(0, patchOffset);
+      const status = /^:[0-7]{6} [0-7]{6} [a-f0-9]+ [a-f0-9]+ ([A-Z])/mu.exec(metadata)?.[1] ?? "";
+      const numstat = /^(\d+|-)\t(\d+|-)\t/mu.exec(metadata);
+      if (!status || !numstat) throw new Error(`Git returned invalid change metadata for ${filePath}.`);
+      const [, added = "0", deleted = "0"] = numstat;
       return {
         additions: /^\d+$/u.test(added) ? Number(added) : 0,
         deletions: /^\d+$/u.test(deleted) ? Number(deleted) : 0,
-        diff,
+        diff: inspected.slice(patchOffset),
         kind: status === "A" ? { type: "add" } : status === "D"
           ? { type: "delete" }
           : { move_path: null, type: "update" },
@@ -562,5 +594,28 @@ export default class WorkbenchGitRepository {
 
   async refContainsCommit(ref: string, commit: string) {
     return await this.succeeds(["merge-base", "--is-ancestor", commit, ref]);
+  }
+
+  private async readObject(objectish: string) {
+    const normalized = String(objectish ?? "").trim();
+    if (!normalized || /[\r\n]/u.test(normalized)) throw new Error("A valid Git object expression is required.");
+    const output = await this.runBufferWithInput(["cat-file", "--batch"], `${normalized}\n`);
+    const headerEnd = output.indexOf(0x0a);
+    if (headerEnd < 0) throw new Error("Git cat-file batch output ended before its object header.");
+    const header = output.subarray(0, headerEnd).toString("utf8");
+    if (/ missing$/u.test(header)) return null;
+    const match = /^([a-f0-9]+) (\S+) (\d+)$/iu.exec(header);
+    if (!match) throw new Error(`Git cat-file returned an invalid object header: ${header}`);
+    const size = Number(match[3]);
+    const contentsStart = headerEnd + 1;
+    const contentsEnd = contentsStart + size;
+    if (!Number.isSafeInteger(size) || size < 0 || contentsEnd > output.length) {
+      throw new Error(`Git object ${match[1]} has an invalid size.`);
+    }
+    return {
+      contents: output.subarray(contentsStart, contentsEnd),
+      objectId: match[1]!,
+      type: match[2]!,
+    };
   }
 }

@@ -86,9 +86,9 @@ export default class GitArcRegistry {
   constructor(private readonly repository: WorkbenchGitRepository) {}
 
   async read() {
-    const blob = await this.repository.readRef(REGISTRY_REF);
-    if (!blob) return { blob: null, state: { entries: [], version: 1 } satisfies GitArcRegistryState };
-    return { blob, state: parseState(await this.repository.readBlob(blob)) };
+    const resolved = await this.repository.readBlobAtRef(REGISTRY_REF);
+    if (!resolved) return { blob: null, state: { entries: [], version: 1 } satisfies GitArcRegistryState };
+    return { blob: resolved.blob, state: parseState(resolved.contents) };
   }
 
   async find(identity: GitArcIdentity) {

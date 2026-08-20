@@ -78,6 +78,20 @@ export const THREAD_GIT_BASE_FIXTURE = {
   name: "thread-git-base",
 } satisfies GitTestFixtureSpec;
 
+export const CHECKPOINT_OPERATIONS_BASE_FIXTURE = {
+  commits: [{
+    files: {
+      "deleted.txt": "deleted checkpoint\n",
+      "literal[1].txt": "literal checkpoint\n",
+      "literal1.txt": "neighbor checkpoint\n",
+      "selected.txt": "selected checkpoint\n",
+      "unrelated.txt": "unrelated checkpoint\n",
+    },
+    message: "base",
+  }],
+  name: "checkpoint-operations-base",
+} satisfies GitTestFixtureSpec;
+
 export const THREAD_GIT_LINEAR_FIXTURE = {
   commits: LINEAR_COMMITS,
   name: "thread-git-linear",
@@ -483,6 +497,12 @@ export const CONTROLLER_PUSHED_AMEND_READY_FIXTURE = {
 } satisfies GitTestFixtureSpec<{ planCheckpoint: string }>;
 
 const prewarmersByTestFile = new Map<string, Array<(cache: GitTestFixtureCache) => Promise<string>>>([
+  ["git-checkpoints.test.ts", [
+    (cache) => cache.template(CHECKPOINT_OPERATIONS_BASE_FIXTURE),
+  ]],
+  ["WorkbenchGitRepository.test.ts", [
+    (cache) => cache.template(THREAD_GIT_BASE_FIXTURE),
+  ]],
   ["WorkbenchGitHistoryRewriter.test.ts", [
     (cache) => cache.template(HISTORY_LINEAR_FIXTURE),
     (cache) => cache.template(HISTORY_CONFLICT_READY_FIXTURE),
