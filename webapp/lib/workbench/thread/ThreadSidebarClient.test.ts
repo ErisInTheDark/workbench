@@ -197,7 +197,8 @@ test("accepted intent immediately revives a stopped thread and a newer snapshot 
     entryKind: "thread",
     identity: { harness: "codex", threadId: "thread" },
     lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "old-turn" },
-    metadata: { archived: false, pinned: true, snoozed: false },
+    metadata: { archived: false, pinned: true, snoozed: true },
+    orderAt: 1,
     title: "Thread",
   };
   const client = new ThreadSidebarClient({
@@ -211,6 +212,8 @@ test("accepted intent immediately revives a stopped thread and a newer snapshot 
   if (optimistic?.entryKind === "thread") {
     assert.equal(optimistic.lifecycle.kind, "working");
     assert.equal(optimistic.metadata.pinned, true);
+    assert.equal(optimistic.metadata.snoozed, false);
+    assert.equal(optimistic.orderAt, optimistic.activityAt);
   }
   client.accept({ ...snapshot(2), entries: [{ ...stoppedEntry, lifecycle: { kind: "completed", reason: "providerInactive", settled: false } }] });
   const authoritative = installed.at(-1)?.entries[0];

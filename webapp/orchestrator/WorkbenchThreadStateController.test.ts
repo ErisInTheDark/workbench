@@ -631,6 +631,69 @@ test("accepted intent survives provider discovery lag and releases after its lif
   await controller.dispose();
 });
 
+test("successful user input wakes snoozed threads without changing questionnaire turn order", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-user-input-wake-"));
+  let discovered = false;
+  let now = 30;
+  const accepted: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 10,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "accepted" },
+    lifecycle: { agent: { agentStatus: "working", turnId: "old-turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+    metadata: { archived: false, pinned: true, snoozed: true },
+    orderAt: 10,
+    title: "Accepted",
+  };
+  const pending: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 20,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "pending" },
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "request", settled: false, turnId: "pending-turn" },
+    metadata: { archived: false, pinned: false, snoozed: true },
+    orderAt: 20,
+    title: "Pending",
+  };
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    now: () => now,
+    projectState: projectState(),
+    publish: (_connectionId, snapshot) => {
+      if ("entries" in snapshot && snapshot.entries.length === 2) discovered = true;
+    },
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      acceptProviderSnapshot("codex", [accepted, pending], { complete: true });
+      return [];
+    },
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+  await controller.open("observer", "project");
+  await waitFor(() => discovered, "Snoozed threads were not discovered.");
+
+  await controller.acceptIntent("observer", {
+    harness: "codex",
+    projectId: "project",
+    threadId: "accepted",
+    title: "Accepted",
+    turnId: "new-turn",
+  });
+  let entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "accepted");
+  assert.equal(entry?.entryKind === "thread" ? entry.metadata.snoozed : null, false);
+  assert.equal(entry?.entryKind === "thread" ? entry.metadata.pinned : null, true);
+  assert.equal(entry?.entryKind === "thread" ? entry.orderAt : null, 30);
+
+  now = 40;
+  await controller.observeLifecycle("codex", "pending", { kind: "inputResolved", requestKey: "request" });
+  entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "pending");
+  assert.equal(entry?.entryKind === "thread" ? entry.metadata.snoozed : null, false);
+  assert.equal(entry?.entryKind === "thread" ? entry.lifecycle.kind : null, "working");
+  assert.equal(entry?.activityAt, 40);
+  assert.equal(entry?.entryKind === "thread" ? entry.orderAt : null, 20);
+
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
 test("replayed questionnaire lifecycle does not invent fresh thread activity", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-questionnaire-replay-"));
   const publications: WorkbenchThreadStateSnapshot[] = [];

@@ -117,7 +117,9 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
         identity: intent.identity,
         lifecycle: { agent: { agentStatus: "working" as const, turnId: intent.turnId }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const },
         metadata: existing?.entryKind === "thread"
-          ? existing.metadata
+          ? existing.metadata.archived
+            ? { archived: true as const, pinned: false as const, snoozed: false as const }
+            : { archived: false as const, pinned: existing.metadata.pinned, snoozed: false as const }
           : { archived: false as const, pinned: sourceDraft?.entryKind === "draft" ? sourceDraft.metadata.pinned : false, snoozed: false },
         orderAt: activityAt,
         title: existing?.entryKind === "thread" ? existing.title : intent.title,

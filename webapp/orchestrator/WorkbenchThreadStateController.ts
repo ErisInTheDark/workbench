@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchThreadStateControllerOptions/WorkbenchThreadReconciliationFailure/WorkbenchObservedLifecycleEvent: catalog, project-state ports, progressive reconciliation, and identity-owned provider lifecycle input. Keywords: ownership, reconciliation, notification.
+ * - WorkbenchThreadStateControllerOptions/WorkbenchThreadReconciliationFailure/WorkbenchThreadClaimContext/WorkbenchObservedLifecycleEvent: catalog, project-state ports, claim context, progressive reconciliation, and identity-owned provider lifecycle input. Keywords: ownership, reconciliation, notification.
  * - default WorkbenchThreadStateController: own the shared project observer set, durable thread metadata, and pushed sidebar lifecycle. Keywords: drafts, project, lifecycle, observation.
  */
 import fs from "node:fs/promises";
@@ -326,7 +326,11 @@ export default class WorkbenchThreadStateController {
         ? { kind: "agentStatus" as const, status: "completed" as const, turnId: event.turnId }
         : event;
       const lifecycle = reduceWorkbenchThreadLifecycle(existing.lifecycle, ownedEvent);
-      const shouldUnsnooze = existing.entryKind === "thread" && existing.metadata.snoozed && existing.lifecycle.kind === "working" && (lifecycle.kind === "needsAttention" || lifecycle.kind === "completed" || lifecycle.kind === "stopped");
+      const shouldUnsnooze = existing.entryKind === "thread" && existing.metadata.snoozed && (
+        event.kind === "acceptedIntent"
+        || event.kind === "inputResolved"
+        || (existing.lifecycle.kind === "working" && (lifecycle.kind === "needsAttention" || lifecycle.kind === "completed" || lifecycle.kind === "stopped"))
+      );
       if (event.kind !== "acceptedIntent" && areDeeplyEqual(existing.lifecycle, lifecycle) && !shouldUnsnooze) return existing;
       const activityAt = event.kind === "acceptedIntent" && providerEntry?.entryKind === "thread" ? providerEntry.activityAt : this.now();
       const next = existing.entryKind === "subagent"
