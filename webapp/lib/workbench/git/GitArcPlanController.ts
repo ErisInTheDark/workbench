@@ -95,7 +95,6 @@ export default class GitArcPlanController {
     const harness = normalizeHarness(input.harness);
     const registry = new GitArcRegistry(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
-    await this.requirePlanCreationAllowed(repository, harness, input.threadId, current);
     return await this.writePlan(repository, registry, harness, input.threadId, {
       adoptPaths: input.adoptPaths ?? [],
       intentDescription: input.intentDescription ?? "",
@@ -122,7 +121,6 @@ export default class GitArcPlanController {
     const harness = normalizeHarness(input.harness);
     const registry = new GitArcRegistry(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
-    await this.requirePlanCreationAllowed(repository, harness, input.threadId, current);
     const plan = await this.preparePlan(repository, registry, harness, input.threadId, {
       adoptPaths: input.adoptPaths ?? [],
       intentDescription: input.intentDescription ?? "",
@@ -130,9 +128,16 @@ export default class GitArcPlanController {
       paths: input.paths,
       retainedArc: current ? presentation(current) : null,
     }, current?.checkpointCommit);
+    const retainedArc = await this.prepareRetainedArc(
+      repository,
+      harness,
+      input.threadId,
+      current ? presentation(current) : null,
+      plan.paths,
+    );
     if (!plan.paths.length) throw new Error("An empty Git arc plan cannot start. Add at least one path first.");
 
-    const permittedDirty = [...plan.adoptPaths, ...(current ? liveClaims(current) : [])];
+    const permittedDirty = [...plan.adoptPaths, ...(retainedArc?.claimedPaths ?? [])];
     const unexplained = plan.dirtyPaths.filter((candidate) => !permittedDirty.some((scopePath) => pathIsCoveredBy(candidate, scopePath)));
     if (unexplained.length) throw new GitCheckpointDirtyPathsError(unexplained, "Arc start");
     const activeMetadata: CheckpointMetadata = {
@@ -283,10 +288,23 @@ export default class GitArcPlanController {
     const harness = normalizeHarness(input.harness);
     const registry = new GitArcRegistry(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
-    if (!current || current.phase !== "plan") throw new Error("This thread does not have a current inactive Git arc plan.");
+    if (!current) throw new Error("This thread does not have a current Git arc or inactive plan.");
+    const paths = repository.normalizePaths(input.paths);
+    if (current.phase === "active") {
+      if (operation !== "add") {
+        throw new Error("Only arc plan add can create an inactive plan from an active Git arc.");
+      }
+      return await this.writePlan(repository, registry, harness, input.threadId, {
+        adoptPaths: [],
+        intentDescription: current.intentDescription,
+        intentName: current.intentName,
+        paths: [...new Set([...current.claimedPaths, ...paths])].sort((left, right) => left.localeCompare(right)),
+        retainedArc: presentation(current),
+      }, current.checkpointCommit);
+    }
+    if (current.phase !== "plan") throw new Error("This thread does not have a current inactive Git arc plan.");
     const plan = await new GitCheckpointStore(repository).readCheckpoint(harness, input.threadId, current.checkpointCommit);
     const metadata = requirePlanMetadata(plan.metadata);
-    const paths = repository.normalizePaths(input.paths);
     const existing = metadata.scopePaths;
     const existingAdopted = metadata.adoptedPaths ?? [];
     if (operation === "remove") {
@@ -317,6 +335,7 @@ export default class GitArcPlanController {
     expectedCheckpointCommit?: string,
   ): Promise<GitArcPlanResult> {
     const plan = await this.preparePlan(repository, registry, harness, threadId, input, expectedCheckpointCommit);
+    const retainedArc = await this.prepareRetainedArc(repository, harness, threadId, input.retainedArc, plan.paths);
     const registryMutation = await registry.prepareSet({
       checkpointCommit: plan.prepared.checkpointCommit,
       claimedPaths: [],
@@ -326,7 +345,7 @@ export default class GitArcPlanController {
       phase: "plan",
       proposalId: null,
       proposalIds: [],
-      retainedArc: input.retainedArc ?? undefined,
+      retainedArc: retainedArc ?? undefined,
       threadId,
     }, expectedCheckpointCommit);
     await repository.updateRefs([plan.prepared.update, ...(registryMutation.update ? [registryMutation.update] : [])]);
@@ -383,16 +402,28 @@ export default class GitArcPlanController {
     return { adoptPaths, dirtyPaths, head, metadata, paths: scopePaths, prepared, tree };
   }
 
-  private async requirePlanCreationAllowed(
+  private async prepareRetainedArc(
     repository: WorkbenchGitRepository,
     harness: GitArcHarness,
     threadId: string,
-    current: GitArcRegistryEntry | null,
-  ) {
-    if (current?.phase !== "active") return;
-    const outcome = await new GitCheckpointStore(repository).readOutcome(harness, threadId, current.checkpointCommit);
-    if (!outcome?.acceptedProposals?.length) {
-      throw new Error("This thread already owns an active Git arc. Create a new plan only after accepted commits require an explicit replan.");
+    retainedArc: GitArcRegistryEntry["retainedArc"] | null,
+    planPaths: string[],
+  ): Promise<GitArcRegistryEntry["retainedArc"] | null> {
+    if (!retainedArc || retainedArc.phase === "resolved" || !retainedArc.claimedPaths.length) return retainedArc;
+    const store = new GitCheckpointStore(repository);
+    const checkpoint = await store.readCheckpoint(harness, threadId, retainedArc.checkpointCommit);
+    const outcome = await store.readOutcome(harness, threadId, checkpoint.checkpointCommit);
+    const baseline = outcome?.acceptedProposals?.at(-1)?.headSha ?? checkpoint.parent;
+    const currentTree = await repository.writeScopedWorktreeTree(retainedArc.claimedPaths, baseline);
+    const dirtyPaths = await repository.listChangedPaths(baseline, currentTree, retainedArc.claimedPaths);
+    const uncovered = dirtyPaths.filter((dirtyPath) => !planPaths.some((planPath) => pathIsCoveredBy(dirtyPath, planPath)));
+    if (uncovered.length) {
+      throw new Error(`A replacement plan must include every dirty claimed file: ${uncovered.join(", ")}`);
     }
+    return {
+      ...retainedArc,
+      claimedPaths: dirtyPaths,
+      phase: dirtyPaths.length ? "active" : "resolved",
+    };
   }
 }

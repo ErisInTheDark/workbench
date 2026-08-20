@@ -13,7 +13,7 @@ import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
 import GitArcProposalCache from "./GitArcProposalCache";
 import GitArcPublishState from "./GitArcPublishState";
 import GitArcRegistry, { REGISTRY_REF, type GitArcRegistryEntry } from "./GitArcRegistry";
-import GitCheckpointStore, { type StoredProposal } from "./GitCheckpointStore";
+import GitCheckpointStore, { type StoredCheckpoint, type StoredProposal } from "./GitCheckpointStore";
 import WorkbenchGitHistoryRewriter from "./WorkbenchGitHistoryRewriter";
 import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
 import {
@@ -24,7 +24,6 @@ import {
   proposalMessage,
   proposalNamespace,
   type ProposalMetadata,
-  remapArcOutcome,
   remapProposalMetadata,
 } from "./git-arc-storage";
 
@@ -86,12 +85,14 @@ function lifecycleEntry(entry: GitArcRegistryEntry) {
   };
 }
 
-function acceptedReceiptMessage(receipts: Array<{ commitSha: string; proposalId: string }>) {
+function acceptedReceiptMessage(receipts: Array<{ commitSha: string; proposalId: string }>, claimedPaths: string[]) {
   return [
     "Accepted commit proposals:",
     ...receipts.map(({ commitSha, proposalId }) => `- ${proposalId} -> ${commitSha}`),
     "",
-    "The current Git arc still owns its previous claim set.",
+    claimedPaths.length
+      ? `This legacy Git arc still owns ${claimedPaths.length} claimed path${claimedPaths.length === 1 ? "" : "s"}.`
+      : "This Git arc is resolved and owns no live claims.",
     "Run wb git arc plan start -m <intent> -- <path> [...] with the explicit next paths when the approved plan is unchanged.",
     "Run wb git arc plan -m <intent> -- <path> [...] when the plan changed.",
   ].join("\n");
@@ -106,6 +107,112 @@ function requireArcMetadata(metadata: CheckpointMetadata | null) {
 
 function pathIsCoveredBy(candidate: string, scopePath: string) {
   return candidate === scopePath || candidate.startsWith(`${scopePath}/`);
+}
+
+async function readArcChain(
+  store: GitCheckpointStore,
+  harness: GitArcHarness,
+  threadId: string,
+  startCheckpoint: StoredCheckpoint,
+  requiredCheckpoint: string,
+) {
+  const chain: StoredCheckpoint[] = [];
+  let cursor = startCheckpoint;
+  for (let depth = 0; depth < 100; depth += 1) {
+    chain.push(cursor);
+    if (cursor.checkpointCommit === requiredCheckpoint) return chain;
+    if (!cursor.metadata?.amendedFrom) break;
+    cursor = await store.readCheckpoint(harness, threadId, cursor.metadata.amendedFrom);
+  }
+  throw new Error("The proposal no longer belongs to this thread's active Git arc.");
+}
+
+async function readAcceptedReceipts(
+  store: GitCheckpointStore,
+  harness: GitArcHarness,
+  threadId: string,
+  chain: StoredCheckpoint[],
+) {
+  const outcomes = await Promise.all(chain.map(async ({ checkpointCommit }) => (
+    await store.readOutcome(harness, threadId, checkpointCommit)
+  )));
+  const receipts = outcomes.slice().reverse().flatMap((outcome) => outcome?.acceptedProposals ?? []);
+  return receipts.filter((receipt, index) => receipts.findIndex(({ proposalId }) => proposalId === receipt.proposalId) === index);
+}
+
+async function prepareAcceptedClaimTransition({
+  acceptedHead,
+  active,
+  commitRemaps,
+  harness,
+  proposalId,
+  registry,
+  repository,
+  source,
+  store,
+  threadId,
+}: {
+  acceptedHead: string;
+  active: GitArcRegistryEntry;
+  commitRemaps?: ReadonlyMap<string, string>;
+  harness: GitArcHarness;
+  proposalId: string;
+  registry: GitArcRegistry;
+  repository: WorkbenchGitRepository;
+  source: StoredCheckpoint;
+  store: GitCheckpointStore;
+  threadId: string;
+}) {
+  const currentTree = await repository.writeScopedWorktreeTree(active.claimedPaths, acceptedHead);
+  const changedPaths = await repository.listChangedPaths(acceptedHead, currentTree, active.claimedPaths);
+  const claimedPaths = active.claimedPaths.filter((claimedPath) => (
+    changedPaths.some((changedPath) => pathIsCoveredBy(changedPath, claimedPath))
+  ));
+  const sourceCheckpoint = commitRemaps?.get(source.checkpointCommit) ?? source.checkpointCommit;
+  let successorCheckpoint: string | null = null;
+  const updates: GitRefUpdate[] = [];
+  if (claimedPaths.length) {
+    requireArcMetadata(source.metadata);
+    const metadata: CheckpointMetadata = {
+      amendedFrom: sourceCheckpoint,
+      ...(active.intentDescription ? { intentDescription: active.intentDescription } : {}),
+      ...(active.intentName ? { intentName: active.intentName } : {}),
+      kind: "arc",
+      priorProposalId: proposalId,
+      registryLifecycle: true,
+      scopePaths: claimedPaths,
+      version: 3,
+    };
+    const prepared = await store.prepareCheckpoint(
+      harness,
+      threadId,
+      await repository.resolveTree(acceptedHead),
+      acceptedHead,
+      metadata,
+    );
+    successorCheckpoint = prepared.checkpointCommit;
+    updates.push(prepared.update);
+  }
+  const registryMutation = await registry.prepareClaim({
+    checkpointCommit: successorCheckpoint ?? sourceCheckpoint,
+    claimedPaths,
+    harness,
+    intentDescription: active.intentDescription,
+    intentName: active.intentName,
+    phase: claimedPaths.length ? "active" : "resolved",
+    proposalId: active.proposalId ?? null,
+    proposalIds: active.proposalIds ?? (active.proposalId ? [active.proposalId] : []),
+    retainedArc: null,
+    threadId,
+  }, { commitRemaps, expectedCheckpointCommit: active.checkpointCommit });
+  if (registryMutation.update) updates.push(registryMutation.update);
+  return {
+    claimedPaths,
+    sourceCheckpoint,
+    status: claimedPaths.length ? "partial" as const : "committed" as const,
+    successorCheckpoint,
+    updates,
+  };
 }
 
 function commitMessage(title: string, description: string) {
@@ -265,7 +372,13 @@ export default class GitArcProposalController {
     const harness = normalizeHarness(input.harness);
     const outcome = await new GitCheckpointStore(repository).readOutcome(harness, input.threadId, input.checkpointCommit);
     const receipts = outcome?.acceptedProposals ?? [];
-    if (receipts.length) throw new Error(acceptedReceiptMessage(receipts));
+    if (receipts.length) {
+      const entry = await new GitArcRegistry(repository).find({ harness, threadId: input.threadId });
+      const claimedPaths = entry?.phase === "active" && entry.checkpointCommit === input.checkpointCommit
+        ? entry.claimedPaths
+        : [];
+      throw new Error(acceptedReceiptMessage(receipts, claimedPaths));
+    }
   }
 
   async logicalBaseline(input: ArcIdentityInput & { checkpointCommit: string; fallbackHead: string }) {
@@ -460,25 +573,23 @@ export default class GitArcProposalController {
       throw new Error(proposal.metadata.unavailableReason || "Checkpoint proposal is not available to commit.");
     }
     const store = new GitCheckpointStore(repository);
+    const proposalSource = await store.readCheckpoint(harness, threadId, proposal.metadata.sourceCheckpoint);
+    requireArcMetadata(proposalSource.metadata);
+    const registry = new GitArcRegistry(repository);
+    const active = await registry.find({ harness, threadId });
+    if (!active || active.phase !== "active") {
+      throw new Error("The proposal no longer belongs to this thread's active Git arc.");
+    }
+    const activeSource = await store.readCheckpoint(harness, threadId, active.checkpointCommit);
+    const activeChain = await readArcChain(store, harness, threadId, activeSource, proposalSource.checkpointCommit);
+    const previousAcceptedProposals = await readAcceptedReceipts(store, harness, threadId, activeChain);
     if (proposal.metadata.mode === "amend") {
       const message = commitMessage(title, description);
       const targetTree = includeNewer && resolved.includeNewerAvailable ? resolved.currentTree! : proposal.tree;
-      const source = await store.readCheckpoint(harness, threadId, proposal.metadata.sourceCheckpoint);
-      requireArcMetadata(source.metadata);
-      const registry = new GitArcRegistry(repository);
-      const active = await registry.find({ harness, threadId });
-      if (!active || active.phase !== "active" || active.checkpointCommit !== source.checkpointCommit) {
-        throw new Error("The proposal no longer belongs to this thread's active Git arc.");
-      }
-      const oldOutcomeRef = outcomeRef(harness, threadId, source.checkpointCommit);
-      const previousOutcome = await store.readOutcome(harness, threadId, source.checkpointCommit);
-      const supersededProposalId = previousOutcome?.acceptedProposals?.slice().reverse().find((receipt) => (
+      const oldOutcomeRef = outcomeRef(harness, threadId, activeSource.checkpointCommit);
+      const supersededProposalId = previousAcceptedProposals.slice().reverse().find((receipt) => (
         receipt.commitSha === proposal.metadata.amendTargetSha && receipt.proposalId !== proposalId
-      ))?.proposalId ?? (
-        previousOutcome?.committedSha === proposal.metadata.amendTargetSha && previousOutcome.proposalId !== proposalId
-          ? previousOutcome.proposalId
-          : null
-      );
+      ))?.proposalId ?? null;
       const supersededPrior = supersededProposalId
         ? await store.readProposal(harness, threadId, supersededProposalId)
         : await store.findCommittedProposalBySha(harness, threadId, proposal.metadata.amendTargetSha, proposalId);
@@ -496,7 +607,7 @@ export default class GitArcProposalController {
         target: proposal.metadata.amendTargetSha,
         targetTree,
         mutatePlan: async ({ amendedCommit, arcPlan, newHead }) => {
-          const remappedSource = arcPlan.commits.get(source.checkpointCommit) ?? source.checkpointCommit;
+          const remappedSource = arcPlan.commits.get(activeSource.checkpointCommit) ?? activeSource.checkpointCommit;
           committedMetadata = {
             ...remapProposalMetadata(proposal.metadata, arcPlan.commits),
             amendTargetSha: amendedCommit,
@@ -523,20 +634,34 @@ export default class GitArcProposalController {
             updates.push({ newValue: priorState, oldValue: supersededPrior.proposalCommit, ref: supersededPrior.proposalRef });
             replaceRefs.push(supersededPrior.proposalRef);
           }
-          const registryUpdate = await registry.prepareCommitRemap(arcPlan.commits);
-          if (registryUpdate) updates.push(registryUpdate);
+          const transition = await prepareAcceptedClaimTransition({
+            acceptedHead: newHead,
+            active,
+            commitRemaps: arcPlan.commits,
+            harness,
+            proposalId,
+            registry,
+            repository,
+            source: activeSource,
+            store,
+            threadId,
+          });
+          updates.push(...transition.updates);
           const oldOutcome = await repository.readRef(oldOutcomeRef);
-          const nextOutcomeRef = outcomeRef(harness, threadId, remappedSource);
-          const remappedOutcome = previousOutcome ? remapArcOutcome(previousOutcome, arcPlan.commits) : null;
-          const acceptedProposals = [...(remappedOutcome?.acceptedProposals ?? [])];
+          const nextOutcomeRef = outcomeRef(harness, threadId, transition.sourceCheckpoint);
+          const acceptedProposals = previousAcceptedProposals.map((receipt) => ({
+            ...receipt,
+            commitSha: arcPlan.commits.get(receipt.commitSha) ?? receipt.commitSha,
+            headSha: arcPlan.commits.get(receipt.headSha) ?? receipt.headSha,
+          }));
           acceptedProposals.push({ commitSha: amendedCommit, headSha: newHead, proposalId });
           const outcomeBlob = await repository.writeBlob(`${JSON.stringify({
             acceptedProposals,
             committedSha: amendedCommit,
             proposalId,
-            sourceCheckpoint: remappedSource,
-            status: "committed",
-            successorCheckpoint: null,
+            sourceCheckpoint: transition.sourceCheckpoint,
+            status: transition.status,
+            successorCheckpoint: transition.successorCheckpoint,
             version: 1,
           } satisfies ArcOutcome)}\n`);
           updates.push({
@@ -568,24 +693,28 @@ export default class GitArcProposalController {
       unavailableReason: null,
     };
     const stateCommit = await repository.createCommitFromTree(targetTree, proposal.metadata.baseCommit, proposalMessage(committedMetadata));
-    const source = await store.readCheckpoint(harness, threadId, proposal.metadata.sourceCheckpoint);
-    const registry = new GitArcRegistry(repository);
-    const active = await registry.find({ harness, threadId });
-    if (!active || active.phase !== "active" || active.checkpointCommit !== source.checkpointCommit) {
-      throw new Error("The proposal no longer belongs to this thread's active Git arc.");
-    }
-    const previousOutcome = await store.readOutcome(harness, threadId, source.checkpointCommit);
-    const acceptedProposals = [...(previousOutcome?.acceptedProposals ?? [])];
+    const acceptedProposals = [...previousAcceptedProposals];
     if (!acceptedProposals.some((receipt) => receipt.proposalId === proposalId)) {
       acceptedProposals.push({ commitSha: committedSha, headSha: committedSha, proposalId });
     }
+    const transition = await prepareAcceptedClaimTransition({
+      acceptedHead: committedSha,
+      active,
+      harness,
+      proposalId,
+      registry,
+      repository,
+      source: activeSource,
+      store,
+      threadId,
+    });
     const outcomeUpdate = await store.prepareOutcome(harness, threadId, {
       acceptedProposals,
       committedSha,
       proposalId,
-      sourceCheckpoint: source.checkpointCommit,
-      status: "committed",
-      successorCheckpoint: null,
+      sourceCheckpoint: transition.sourceCheckpoint,
+      status: transition.status,
+      successorCheckpoint: transition.successorCheckpoint,
       version: 1,
     });
     const headRef = await repository.symbolicHead() ?? "HEAD";
@@ -593,6 +722,7 @@ export default class GitArcProposalController {
       { newValue: committedSha, oldValue: proposal.metadata.liveBaseCommit, ref: headRef },
       { newValue: stateCommit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef },
       outcomeUpdate,
+      ...transition.updates,
     ]);
     await execFileAsync("git", [
       "reset", "--mixed", "--quiet", committedSha, "--", ...proposal.metadata.livePaths.map(literalPathspec),

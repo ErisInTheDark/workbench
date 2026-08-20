@@ -59,10 +59,12 @@ Run project validation from `webapp/` unless a command says otherwise.
 
 ```powershell
 pnpm test
+pnpm test -- --good-citizen
 pnpm typecheck
 ```
 
 - `pnpm test` executes the TypeScript `node:test` suite through the project-owned runner.
+- `pnpm test -- --good-citizen` executes the same complete suite with test-file concurrency set to one and a 120-second per-file deadline. Use it when resource contention makes the default parallel run unreliable; ordinary `pnpm test` keeps its 30-second deadline.
 - `pnpm typecheck` type-checks the app and orchestrator without emitting files.
 - `pnpm test` and `pnpm typecheck` are the only allowed `pnpm` scripts for agent validation.
 - When tests are added or changed, run `pnpm test`; typechecking test files does not count as executing their assertions.

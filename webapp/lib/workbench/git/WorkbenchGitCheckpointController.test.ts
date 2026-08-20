@@ -318,12 +318,14 @@ test("failed arc adoption publishes neither a successor ref nor a replacement re
   assert.deepEqual(await registry.find({ harness: "codex", threadId: "adopt-owner" }), activeBefore);
 });
 
-test("accepted proposals preserve the observed claim set until continuation requires an explicit replan", async (context) => {
-  const { repository, source, state } = await copyRepository(context, CONTROLLER_PARTIAL_READY_FIXTURE);
+test("accepted proposals narrow claims, continue through successors, and resolve after disjoint commits", async (context) => {
+  const { repository, source } = await copyRepository(context, CONTROLLER_PARTIAL_READY_FIXTURE);
   const controller = new WorkbenchGitCheckpointController();
+  const started = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
+  assert.equal(started?.phase, "active");
   await fs.writeFile(path.join(source, "one.txt"), "committed one\n");
   await fs.writeFile(path.join(source, "two.txt"), "remaining two\n");
-  const proposal = await controller.createProposal({
+  const firstProposal = await controller.createProposal({
     cwd: source,
     description: "",
     harness: "codex",
@@ -331,44 +333,138 @@ test("accepted proposals preserve the observed claim set until continuation requ
     threadId: "partial-thread",
     title: "commit one",
   });
+  const secondProposal = await controller.createProposal({
+    cwd: source,
+    description: "",
+    harness: "codex",
+    paths: ["two.txt"],
+    threadId: "partial-thread",
+    title: "commit two",
+  });
+  await fs.writeFile(path.join(source, "one.txt"), "newer one\n");
   await controller.commitProposal({
     cwd: source,
     description: "",
     harness: "codex",
     includeNewer: false,
-    proposalId: proposal.proposalId,
+    proposalId: firstProposal.proposalId,
     threadId: "partial-thread",
     title: "commit one",
   });
-  const active = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" }) as {
-    checkpointCommit?: string; claimedPaths?: string[]; phase?: string; proposalIds?: string[];
-  } | null;
-  assert.deepEqual({
-    checkpointCommit: active?.checkpointCommit,
-    claimedPaths: active?.claimedPaths,
-    phase: active?.phase,
-    proposalIds: active?.proposalIds,
-  }, {
-    checkpointCommit: state.planCheckpoint,
-    claimedPaths: ["one.txt", "two.txt"],
-    phase: "active",
-    proposalIds: [proposal.proposalId],
-  });
-  assert.equal(await git(source, ["show", `${active?.checkpointCommit}:two.txt`]), "two\n");
-
+  const partial = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
+  assert.equal(partial?.phase, "active");
+  assert.deepEqual(partial?.claimedPaths, ["one.txt", "two.txt"]);
+  assert.notEqual(partial?.checkpointCommit, started?.checkpointCommit);
+  assert.equal(await fs.readFile(path.join(source, "one.txt"), "utf8"), "newer one\n");
   assert.equal(await fs.readFile(path.join(source, "two.txt"), "utf8"), "remaining two\n");
   const compared = await controller.compare({ cwd: source, harness: "codex", threadId: "partial-thread" });
-  assert.deepEqual(compared.changes.map((change) => change.path), ["two.txt"]);
-
-  await assert.rejects(controller.continueArc({
-    checkpointCommit: state.planCheckpoint,
+  assert.deepEqual(compared.changes.map((change) => change.path), ["one.txt", "two.txt"]);
+  const continued = await controller.continueArc({
+    checkpointCommit: started!.checkpointCommit,
     cwd: source,
     harness: "codex",
     threadId: "partial-thread",
-  }), new RegExp(`Accepted commit proposals:[\\s\\S]*${proposal.proposalId}[\\s\\S]*[a-f0-9]{40}`, "u"));
-  const afterContinue = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
-  assert.deepEqual(afterContinue?.claimedPaths, ["one.txt", "two.txt"]);
-  assert.equal(afterContinue?.checkpointCommit, state.planCheckpoint);
+  });
+  assert.equal(continued.checkpointCommit, partial?.checkpointCommit);
+  assert.deepEqual(continued.scopePaths, ["one.txt", "two.txt"]);
+
+  await fs.writeFile(path.join(source, "one.txt"), "committed one\n");
+  await controller.commitProposal({
+    cwd: source,
+    description: "",
+    harness: "codex",
+    includeNewer: false,
+    proposalId: secondProposal.proposalId,
+    threadId: "partial-thread",
+    title: "commit two",
+  });
+  const resolved = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
+  assert.equal(resolved?.phase, "resolved");
+  assert.deepEqual(resolved?.claimedPaths, []);
+  await assert.rejects(controller.continueArc({
+    checkpointCommit: started!.checkpointCommit,
+    cwd: source,
+    harness: "codex",
+    threadId: "partial-thread",
+  }), new RegExp(`Accepted commit proposals:[\\s\\S]*${firstProposal.proposalId}[\\s\\S]*${secondProposal.proposalId}[\\s\\S]*resolved and owns no live claims`, "u"));
+});
+
+test("active plan add publishes an inactive successor without claiming new paths", async (context) => {
+  const { repository, source } = await copyRepository(context, CONTROLLER_PARTIAL_READY_FIXTURE);
+  const controller = new WorkbenchGitCheckpointController();
+  await fs.writeFile(path.join(source, "one.txt"), "retained one\n");
+
+  await assert.rejects(controller.removeFromPlan({
+    cwd: source, harness: "codex", paths: ["two.txt"], threadId: "partial-thread",
+  }), /Only arc plan add can create an inactive plan from an active Git arc/u);
+  await assert.rejects(controller.adoptIntoPlan({
+    cwd: source, harness: "codex", paths: ["planned.txt"], threadId: "partial-thread",
+  }), /Only arc plan add can create an inactive plan from an active Git arc/u);
+
+  const extended = await controller.addToPlan({
+    cwd: source, harness: "codex", paths: ["planned.txt"], threadId: "partial-thread",
+  });
+  assert.deepEqual(extended.scopePaths, ["one.txt", "planned.txt", "two.txt"]);
+  let registryEntry = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
+  assert.equal(registryEntry?.phase, "plan");
+  assert.deepEqual(registryEntry?.claimedPaths, []);
+  assert.deepEqual(registryEntry?.retainedArc?.claimedPaths, ["one.txt"]);
+
+  await controller.startArc({
+    checkpointCommit: extended.checkpointCommit, cwd: source, harness: "codex", threadId: "partial-thread",
+  });
+  const replacement = await controller.createPlan({
+    cwd: source,
+    harness: "codex",
+    intentName: "replan an ordinary active arc",
+    paths: ["one.txt", "planned.txt", "two.txt"],
+    threadId: "partial-thread",
+  });
+  assert.deepEqual(replacement.scopePaths, ["one.txt", "planned.txt", "two.txt"]);
+  registryEntry = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
+  assert.equal(registryEntry?.phase, "plan");
+  assert.deepEqual(registryEntry?.retainedArc?.claimedPaths, ["one.txt"]);
+});
+
+test("replacement plans retain every dirty claim and release claims that became clean", async (context) => {
+  const { repository, source } = await copyRepository(context, CONTROLLER_PARTIAL_READY_FIXTURE);
+  const controller = new WorkbenchGitCheckpointController();
+  await fs.writeFile(path.join(source, "one.txt"), "committed one\n");
+  await fs.writeFile(path.join(source, "two.txt"), "retained two\n");
+  const proposal = await controller.createProposal({
+    cwd: source, description: "", harness: "codex", paths: ["one.txt"], threadId: "partial-thread", title: "commit one",
+  });
+  await controller.commitProposal({
+    cwd: source, description: "", harness: "codex", includeNewer: false, proposalId: proposal.proposalId,
+    threadId: "partial-thread", title: "commit one",
+  });
+
+  await assert.rejects(controller.createPlan({
+    cwd: source, harness: "codex", intentName: "omit retained dirt", paths: ["one.txt"], threadId: "partial-thread",
+  }), /must include every dirty claimed file: two\.txt/u);
+  await assert.rejects(controller.createAndStartPlan({
+    cwd: source, harness: "codex", intentName: "skip retained dirt", paths: ["one.txt"], threadId: "partial-thread",
+  }), /must include every dirty claimed file: two\.txt/u);
+
+  const replacement = await controller.createPlan({
+    cwd: source, harness: "codex", intentName: "carry retained dirt", paths: ["one.txt", "two.txt"], threadId: "partial-thread",
+  });
+  let registryEntry = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
+  assert.equal(registryEntry?.phase, "plan");
+  assert.deepEqual(registryEntry?.retainedArc?.claimedPaths, ["two.txt"]);
+  await assert.rejects(controller.removeFromPlan({
+    cwd: source, harness: "codex", paths: ["two.txt"], threadId: "partial-thread",
+  }), /must include every dirty claimed file: two\.txt/u);
+
+  await fs.writeFile(path.join(source, "two.txt"), "two\n");
+  await controller.createPlan({
+    cwd: source, harness: "codex", intentName: "release clean retained work", paths: ["one.txt"], threadId: "partial-thread",
+  });
+  registryEntry = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
+  assert.equal(registryEntry?.phase, "plan");
+  assert.equal(registryEntry?.retainedArc?.phase, "resolved");
+  assert.deepEqual(registryEntry?.retainedArc?.claimedPaths, []);
+  assert.notEqual(registryEntry?.checkpointCommit, replacement.checkpointCommit);
 });
 
 

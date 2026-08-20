@@ -93,11 +93,20 @@ test("arc instructions describe the complete phase, proposal, and observed-claim
   const required = [
     "wb git arc plan add --", "wb git arc plan remove --", "wb git arc plan adopt --", "wb git arc plan start -m",
     "wb git arc rescind --proposal <proposal-id>", "wb git arc propose --replace <proposal-id>",
-    "wb git arc propose --amend <proposal-id>", "Accepted commit proposals", "previous claim set",
+    "wb git arc propose --amend <proposal-id>", "Accepted commit proposals", "every dirty file",
     "wb git arc diff --ref <plan-ref> -- <reported-path>", "missing phase", "active", "resolved",
     "already committed", "proposal IDs and commit SHAs", "--adopt <dirty-path>",
+    "Any active arc can publish a replacement plan", "does not claim the new paths",
   ];
   assert.deepEqual(required.filter((fragment) => !instructions.includes(fragment)), []);
+  assert.doesNotMatch(instructions, /previous claim set remains owned|still owns its previous claim set/u);
+  assert.match(instructions, /releases clean previous claims immediately/u);
+  assert.match(instructions, /narrowed successor/u);
+  assert.match(instructions, /Never use it during Brief or Decision to claim proposed files/u);
+  assert.doesNotMatch(instructions, /accepted commits require an explicit replan/u);
+  assert.match(WORKBENCH_AGENTS_PROMPT, /present one complete revised plan rather than an addendum/u);
+  assert.match(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, /make every revised plan complete and recoverable on its own/u);
+  assert.doesNotMatch(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, /addendum plan/u);
   assert.match(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, /If the approved plan is unchanged[\s\S]*wb git arc plan start -m/u);
   assert.match(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, /If the plan changed[\s\S]*wb git arc plan -m/u);
 });

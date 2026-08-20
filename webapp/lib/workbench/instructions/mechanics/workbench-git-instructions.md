@@ -42,9 +42,9 @@ Run after entering Brief mode once the exact planned edit files are known. Give 
 
 `wb git arc plan -m <short-intent> [-m <optional-description>] [--adopt <dirty-path>...] [-- <path>...]`
 
-Ordinary dirty paths are valid only while an active arc owns that dirt. Dirty unclaimed paths reject unless each is named with `--adopt <dirty-path>`. Adopted paths must be dirty and unclaimed. Plan creation does not claim fresh paths. When a prior active or resolved arc exists, the plan retains its presentation and active claims until successful start.
+Ordinary dirty paths are valid only while an active arc owns that dirt. Any active arc can publish a replacement plan; an accepted proposal is not a prerequisite. A replacement plan must cover every dirty file under this thread's previous claim set. Publishing the plan releases clean previous claims immediately and keeps only covered dirty files live through the retained arc. Dirty unclaimed paths reject unless each is named with `--adopt <dirty-path>`. Adopted paths must be dirty and unclaimed. Plan creation does not claim fresh paths.
 
-Revise the current inactive plan without remembering its ref:
+Extend an active arc's scope during Brief with `plan add`. It creates an inactive successor containing the active scope plus the new paths, retains only dirty old claims, and does not claim the new paths. The same command revises a current inactive plan without remembering its ref:
 
 `wb git arc plan add -- <path> [<path>...]`
 
@@ -52,7 +52,7 @@ Revise the current inactive plan without remembering its ref:
 
 `wb git arc plan adopt -- <dirty-path> [<dirty-path>...]`
 
-Each revision creates an immutable successor ref and moves the per-thread current-plan pointer. Old refs remain available for diagnostics.
+Each revision creates an immutable successor ref and moves the per-thread current-plan pointer. `plan remove` and `plan adopt` require an inactive plan. Removing a path that would uncover retained dirty work rejects. Old refs remain available for diagnostics.
 
 ### Start implementation
 
@@ -74,15 +74,15 @@ After start, active-registry commands resolve this thread's current arc. Do not 
 
 ### Continue the arc
 
-Before follow-up work on the same claimed files, run `arc continue` with the remembered ref. If proposals were accepted, the command exits nonzero before generic HEAD-drift checks and prints all proposal IDs and commit SHAs under `Accepted commit proposals`. The current Git arc still owns its previous claim set. Do not retry continuation or mutate claims after that receipt.
+Before follow-up work on the same claimed files, run `arc continue` with the remembered ref. Proposal acceptance releases every clean claim immediately. When dirty work remains, acceptance creates a narrowed successor and continuation returns it from the remembered ref without resurrecting released claims.
 
-When the approved plan is unchanged, run `wb git arc plan start -m <intent> -- <explicit-next-path> [...]`. When it changed, run `wb git arc plan -m <intent> -- <path> [...]` and return through approval. Until replanning, add, adopt, remove, and move reject. Compare, diff, proposal operations, and explicit restore remain available.
+When no dirty claims remain, continuation exits nonzero before generic HEAD-drift checks and prints all proposal IDs and commit SHAs under `Accepted commit proposals`. The receipt states that the arc is resolved with no live claims. When the approved plan is unchanged, run `wb git arc plan start -m <intent> -- <explicit-next-path> [...]`. When it changed, run `wb git arc plan -m <intent> -- <path> [...]` and return through approval. Legacy accepted arcs with historical claims fail closed and name those claims instead of guessing a successor.
 
 `wb git arc continue --ref <current-ref>`
 
 ### Extend the active arc
 
-After continuation, run `arc add` only for new clean paths. It checks the claimed baseline and returns a successor. Remember the newest ref.
+After approval and continuation in Implement mode, run `arc add` only for new clean paths already named by the approved plan. Never use it during Brief or Decision to claim proposed files. It checks the claimed baseline and returns a successor. Remember the newest ref.
 
 `wb git arc add -- <additional-clean-path> [<additional-clean-path>...]`
 
@@ -146,7 +146,7 @@ Replacement and rescission reject a target that is already committed and direct 
 
 Use `wb git arc propose --amend <proposal-id> [-m <replacement-title> [-m <replacement-description>]]` to amend that exact committed proposal when it is an unpushed commit on the current branch's linear first-parent chain. Omit the proposal ID only for the compatible exact-current-`HEAD` form. Targeted amend reuses the history rewriter and remaps proposal IDs and commit SHAs, checkpoint refs, outcomes, retained arcs, and aliases atomically.
 
-Proposal acceptance changes branch `HEAD`, proposal metadata, and the ordered accepted receipt ledger. It does not change the registry checkpoint, phase, previous claim set, proposal-id list, or agent-visible current ref.
+Proposal acceptance changes branch `HEAD`, proposal metadata, the ordered accepted receipt ledger, and live claims in one atomic publication. It creates an immutable active successor scoped to outstanding dirt, or changes the lifecycle to resolved when no dirty claims remain. Proposal IDs and excluded newer work remain preserved.
 
 ### Restore selected paths after explicit user request
 

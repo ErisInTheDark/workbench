@@ -1,7 +1,8 @@
 /*
  * Default export:
  * - ProjectTestRunner: deterministically discovers TypeScript tests and owns the Node test-runner child lifecycle. Keywords: tests, discovery, TypeScript, lifecycle, Windows.
- * - ProjectTestRunnerOptions: inject fixture prewarming, process spawning, and bounded file concurrency for regression wards. Keywords: tests, fixtures, process, concurrency.
+ * - ProjectTestRunnerOptions: inject fixture prewarming, process spawning, bounded file concurrency, and timeout for regression wards. Keywords: tests, fixtures, process, concurrency, timeout.
+ * - parseProjectTestRunnerArguments/ProjectTestRunnerArguments: parse the cooperative full-suite flag and discovery inputs. Keywords: tests, CLI, good citizen, concurrency.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { readdir, stat } from "node:fs/promises";
@@ -12,6 +13,7 @@ import { pathToFileURL } from "node:url";
 import { prewarmWorkbenchGitTestFixtures } from "../lib/workbench/git/WorkbenchGitTestFixtures";
 
 const EXCLUDED_DIRECTORY_NAMES = new Set([".next", "build", "coverage", "dist", "generated", "node_modules"]);
+const GOOD_CITIZEN_TEST_TIMEOUT_MS = 120_000;
 const TEST_FILE_PATTERN = /\.test\.tsx?$/u;
 const TEST_CONCURRENCY = Math.max(1, Math.min(8, availableParallelism()));
 const TEST_TIMEOUT_MS = 30_000;
@@ -25,6 +27,31 @@ export interface ProjectTestRunnerOptions {
   prewarmTestFixtures?: (files: readonly string[]) => Promise<void>;
   spawnProcess?: (command: string, args: readonly string[], options: { cwd: string; stdio: "inherit" }) => ChildProcess;
   testConcurrency?: number;
+  testTimeoutMs?: number;
+}
+
+export interface ProjectTestRunnerArguments {
+  inputs: string[];
+  testConcurrency?: number;
+  testTimeoutMs?: number;
+}
+
+export function parseProjectTestRunnerArguments(arguments_: readonly string[]): ProjectTestRunnerArguments {
+  const inputs: string[] = [];
+  let goodCitizen = false;
+  for (const argument of arguments_) {
+    if (argument === "--") continue;
+    if (argument === "--good-citizen") {
+      goodCitizen = true;
+      continue;
+    }
+    if (argument.startsWith("--")) throw new Error(`Unknown test runner option: ${argument}`);
+    inputs.push(argument);
+  }
+  return {
+    inputs: inputs.length ? inputs : ["."],
+    ...(goodCitizen ? { testConcurrency: 1, testTimeoutMs: GOOD_CITIZEN_TEST_TIMEOUT_MS } : {}),
+  };
 }
 
 function comparePaths(left: string, right: string) {
@@ -35,6 +62,7 @@ export default class ProjectTestRunner {
   private readonly prewarmTestFixtures: (files: readonly string[]) => Promise<void>;
   private readonly spawnProcess: NonNullable<ProjectTestRunnerOptions["spawnProcess"]>;
   private readonly testConcurrency: number;
+  private readonly testTimeoutMs: number;
 
   constructor(
     private readonly projectRoot = process.cwd(),
@@ -47,6 +75,11 @@ export default class ProjectTestRunner {
       throw new Error("Test concurrency must be a positive integer.");
     }
     this.testConcurrency = requestedConcurrency;
+    const requestedTimeoutMs = options.testTimeoutMs ?? TEST_TIMEOUT_MS;
+    if (!Number.isSafeInteger(requestedTimeoutMs) || requestedTimeoutMs < 1) {
+      throw new Error("Test timeout must be a positive integer of milliseconds.");
+    }
+    this.testTimeoutMs = requestedTimeoutMs;
   }
 
   async discoverTestFiles(inputs: readonly string[] = ["."]) {
@@ -73,7 +106,7 @@ export default class ProjectTestRunner {
         "tsx",
         "--test",
         `--test-concurrency=${this.testConcurrency}`,
-        `--test-timeout=${TEST_TIMEOUT_MS}`,
+        `--test-timeout=${this.testTimeoutMs}`,
         `--test-reporter=${reporter}`,
         ...testArguments,
       ], {
@@ -104,8 +137,12 @@ export default class ProjectTestRunner {
 }
 
 async function main() {
-  const inputs = process.argv.slice(2).filter((argument) => argument !== "--");
-  const result = await new ProjectTestRunner().run(inputs.length > 0 ? inputs : ["."]);
+  const { inputs, testConcurrency, testTimeoutMs } = parseProjectTestRunnerArguments(process.argv.slice(2));
+  const runnerOptions: ProjectTestRunnerOptions = {
+    ...(testConcurrency === undefined ? {} : { testConcurrency }),
+    ...(testTimeoutMs === undefined ? {} : { testTimeoutMs }),
+  };
+  const result = await new ProjectTestRunner(process.cwd(), runnerOptions).run(inputs);
   if (result.signal !== null) {
     process.kill(process.pid, result.signal);
     return;

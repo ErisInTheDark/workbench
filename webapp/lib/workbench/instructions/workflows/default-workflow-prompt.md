@@ -140,6 +140,7 @@ In Brief mode:
 - if any major existing owned shape is unknown, if the implementation route is still ambiguous, or if the plan does not say whether the shape is preserved or changed, return to Inspect or Brief before asking for implementation approval.
 - include any needed project hygiene
 - if the user distinguished two code shapes or architectures, restate that exact distinction before planning
+- make every revised plan complete and recoverable on its own. Do not present an addendum that depends on an older plan remaining in context.
 - do not edit files, except for user-requested plan-document iteration described above
 - do not use a questionnaire until after the plan is visible
 
@@ -173,7 +174,7 @@ Approval applies only to the exact user-visible planned edit set and the plan's 
 
 If the user approves the plan with a clear bounded constraint that only narrows the plan, carry that constraint into Implement mode. If the user adds scope, replaces the route, changes ownership, changes lifecycle, changes contracts, changes validation scope, changes mechanics, or leaves the remaining plan ambiguous, return to Brief mode with an updated plan.
 
-If the user otherwise changes the requested files or scope, replaces ownership, changes behavior, or changes implementation route, return to Brief mode and present the revised exact edit set. Use `arc add` for clean new paths, `arc remove` for exact clean claims no longer owned by the active changeset, or create a new named plan after the previous arc ended. Ask for approval again. Use non-checkpoint verification only if the user explicitly approves degraded safety.
+If the user otherwise changes the requested files or scope, replaces ownership, changes behavior, or changes implementation route, return to Brief mode and present one complete revised plan with the full exact edit set. When an active arc needs new clean paths, use `wb git arc plan add -- <path> [...]` to publish an inactive successor without claiming them. Use ordinary `wb git arc plan` when the whole plan or intent changed. Ask for approval again. Never use active `arc add` during Brief or Decision. Use non-checkpoint verification only if the user explicitly approves degraded safety.
 
 If the user asks for more investigation, return to Inspect mode.
 
@@ -202,8 +203,9 @@ Before the first file edit in Implement mode:
 - For an inactive plan's first Implement pass, run `wb git arc start` to resolve the current plan, or `wb git arc start --ref <plan-ref>` for an exact historical ref. Successful start creates a new active baseline and reports released and acquired claims.
 - When the same implementation arc is already active, do not rerun `arc start`; run `wb git arc continue --ref <current-ref>` directly before another implementation pass.
 - If the required arc command succeeds, remember the returned active ref and continue without a supplementary workspace-state inspection.
-- If `arc continue` reports `Accepted commit proposals`, keep the previous claim set untouched. If the approved plan is unchanged, run `wb git arc plan start -m <intent> -- <explicit-next-path> [...]`. If the plan changed, return to Brief with a new ordinary `wb git arc plan -m <intent> -- <path> [...]`.
-- Dirty paths owned by active arcs can appear in an ordinary plan. Dirty unclaimed paths require explicit `--adopt <dirty-path>` intent. Do not ask the user to clean another agent's claimed work.
+- Proposal acceptance releases clean claims immediately. If dirty work remains, `arc continue` returns the narrowed successor. If it reports `Accepted commit proposals`, read every proposal ID and SHA; the arc is resolved with no live claims or is a legacy arc that failed closed. If the approved plan is unchanged, run `wb git arc plan start -m <intent> -- <explicit-next-path> [...]`. If the plan changed, return to Brief with a new ordinary `wb git arc plan -m <intent> -- <path> [...]`.
+- A replacement plan must cover every still-dirty file claimed by this thread. Publishing it releases clean previous claims and retains only covered dirt through approval. Dirty unclaimed paths require explicit `--adopt <dirty-path>` intent. Do not ask the user to clean another agent's claimed work.
+- Use active `arc add` only after approval for clean paths already named by the approved plan. Brief and Decision scope extensions use `arc plan add` and remain unclaimed until `arc start`.
 - If the required arc command rejects dirty or changed paths, claim overlap, incompatible HEAD movement, or another plan-affecting condition, stop before editing, re-inspect, and return to Brief mode when the approved plan no longer fits. Tell the user the workspace changed since approval, but do not dump checkpoint plumbing unless they ask or the details matter for resolving the conflict.
 - If the required arc command cannot run, or you cannot confidently interpret its result, stop before editing and report degraded checkpoint safety. Continue without it only after explicit user approval.
 
@@ -266,7 +268,7 @@ Do the requested action when it is clear, bounded, and does not contradict the a
 
 After the direct action, re-enter the workflow. If the next step is not obvious, ask what should happen next.
 
-If the requested action is broad, risky, ambiguous, or changes the plan's behavior, ownership, dependencies, lifecycle, or validation scope, enter Brief mode with an addendum plan instead of silently expanding the work.
+If the requested action is broad, risky, ambiguous, or changes the plan's behavior, ownership, dependencies, lifecycle, or validation scope, enter Brief mode with one complete revised plan instead of silently expanding the work.
 
 ### Approval plus extra detail
 
@@ -274,7 +276,7 @@ When the user approves a plan and includes extra detail, decide whether the deta
 
 If the detail is a clarification, a specific bounded action that fits the approved plan, or a clear constraint that only narrows the approved plan, incorporate it and enter Implement mode.
 
-If the detail adds scope, replaces the route, changes ownership, changes lifecycle, changes contracts, changes validation scope, changes mechanics, or makes the remaining plan ambiguous, return to Inspect or Brief mode and prepare an addendum plan.
+If the detail adds scope, replaces the route, changes ownership, changes lifecycle, changes contracts, changes validation scope, changes mechanics, or makes the remaining plan ambiguous, return to Inspect or Brief mode and prepare one complete revised plan.
 
 Do not treat approval for one plan as approval for unrelated hidden scope.
 

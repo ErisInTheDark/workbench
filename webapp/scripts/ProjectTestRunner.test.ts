@@ -7,7 +7,26 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import ProjectTestRunner from "./ProjectTestRunner";
+import ProjectTestRunner, { parseProjectTestRunnerArguments } from "./ProjectTestRunner";
+
+test("parses one cooperative mode without changing ordinary discovery inputs", () => {
+  assert.deepEqual(parseProjectTestRunnerArguments([]), { inputs: ["."] });
+  assert.deepEqual(parseProjectTestRunnerArguments([
+    "--", "--good-citizen", "nested", "alpha.test.ts", "--good-citizen",
+  ]), {
+    inputs: ["nested", "alpha.test.ts"],
+    testConcurrency: 1,
+    testTimeoutMs: 120_000,
+  });
+  assert.throws(
+    () => parseProjectTestRunnerArguments(["--jobs", "2"]),
+    /Unknown test runner option: --jobs/u,
+  );
+  assert.throws(
+    () => new ProjectTestRunner(".", { testTimeoutMs: 0 }),
+    /Test timeout must be a positive integer of milliseconds/u,
+  );
+});
 
 test("discovers TypeScript tests exactly once in stable order and skips generated trees", async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "workbench-test-discovery-"));
@@ -80,5 +99,32 @@ test("starts Node with explicit bounded file concurrency and the project timeout
   assert.equal(invocations[0]?.command, process.execPath);
   assert(invocations[0]?.args.includes("--test-concurrency=3"));
   assert(invocations[0]?.args.includes("--test-timeout=30000"));
+  assert(invocations[0]?.args.includes("alpha.test.ts"));
+});
+
+test("good-citizen mode runs the selected suite with one test file at a time", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-good-citizen-runner-"));
+  context.after(() => rm(root, { force: true, recursive: true }));
+  await writeFile(path.join(root, "alpha.test.ts"), "");
+  const invocations: Array<{ args: readonly string[]; command: string }> = [];
+  const parsed = parseProjectTestRunnerArguments(["--", "--good-citizen", "alpha.test.ts"]);
+  if (parsed.testConcurrency === undefined) assert.fail("Good-citizen mode must select cooperative concurrency.");
+  if (parsed.testTimeoutMs === undefined) assert.fail("Good-citizen mode must select a cooperative timeout.");
+  const runner = new ProjectTestRunner(root, {
+    prewarmTestFixtures: async () => undefined,
+    spawnProcess: (command, args) => {
+      invocations.push({ args, command });
+      const child = new EventEmitter() as ChildProcess;
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    },
+    testConcurrency: parsed.testConcurrency,
+    testTimeoutMs: parsed.testTimeoutMs,
+  });
+
+  assert.deepEqual(await runner.run(parsed.inputs), { exitCode: 0, signal: null });
+  assert.equal(invocations.length, 1);
+  assert(invocations[0]?.args.includes("--test-concurrency=1"));
+  assert(invocations[0]?.args.includes("--test-timeout=120000"));
   assert(invocations[0]?.args.includes("alpha.test.ts"));
 });
