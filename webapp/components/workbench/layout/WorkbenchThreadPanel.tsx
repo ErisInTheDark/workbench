@@ -9,8 +9,8 @@ import { useCallback, useEffect, useState, type ComponentProps, type PointerEven
 import type { ThreadPayload, ThreadSummary, WorkbenchThreadHydrationRequest } from "../../../lib/types";
 import ThreadLoadingSkeleton from "../thread-view/ThreadLoadingSkeleton";
 import ThreadView from "../thread-view/ThreadView";
+import resolveThreadActivityTimestampMs from "../thread-view/thread-activity-timestamp";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "../thread-view/thread-view-formatters";
-import useThreadActivityTimestamp from "../thread-view/use-thread-activity-timestamp";
 import { workbenchIconButtonClassName } from "../workbench-class-names";
 import {
   PanelCloseIcon,
@@ -93,7 +93,7 @@ export default function WorkbenchThreadPanel ({
 
   const fallbackSummary = fallbackThreadSummary?.id === threadId ? fallbackThreadSummary : null;
   const threadDisplaySource = thread ?? fallbackSummary;
-  const threadActivityTimestampMs = useThreadActivityTimestamp(threadDisplaySource, fallbackSummary);
+  const threadActivityTimestampMs = resolveThreadActivityTimestampMs(threadDisplaySource, fallbackSummary);
   const threadLabel = threadDisplaySource ? getThreadTitle(threadDisplaySource) : "";
   const threadStatusLabel = threadActivityTimestampMs
     ? formatThreadRelativeTimestamp(threadActivityTimestampMs / 1000, relativeTimeNowMs)

@@ -327,6 +327,7 @@ export default class WorkbenchThreadStateController {
         : event;
       const lifecycle = reduceWorkbenchThreadLifecycle(existing.lifecycle, ownedEvent);
       const shouldUnsnooze = existing.entryKind === "thread" && existing.metadata.snoozed && existing.lifecycle.kind === "working" && (lifecycle.kind === "needsAttention" || lifecycle.kind === "completed" || lifecycle.kind === "stopped");
+      if (event.kind !== "acceptedIntent" && areDeeplyEqual(existing.lifecycle, lifecycle) && !shouldUnsnooze) return existing;
       const activityAt = event.kind === "acceptedIntent" && providerEntry?.entryKind === "thread" ? providerEntry.activityAt : this.now();
       const next = existing.entryKind === "subagent"
         ? { ...existing, activityAt, lifecycle }
@@ -626,28 +627,32 @@ export default class WorkbenchThreadStateController {
       if (!parsed.success || parsed.data.entryKind === "draft" || parsed.data.identity.harness !== harness) continue;
       const key = entryKey(parsed.data);
       providerKeys.add(key);
+      const existing = state.entries.get(key);
+      const providerEntry = existing && existing.entryKind !== "draft"
+        ? { ...parsed.data, activityAt: existing.activityAt }
+        : parsed.data;
       const overlay = state.overlays.get(key);
-      if (parsed.data.entryKind === "subagent") {
-        const lifecycle = overlay?.lifecycle ?? parsed.data.lifecycle;
+      if (providerEntry.entryKind === "subagent") {
+        const lifecycle = overlay?.lifecycle ?? providerEntry.lifecycle;
         state.entries.set(key, overlay ? {
-          ...parsed.data,
-          lifecycle: parsed.data.gitArc?.claimedPaths.length && lifecycle.settled ? { ...lifecycle, settled: false as const } : lifecycle,
+          ...providerEntry,
+          lifecycle: providerEntry.gitArc?.claimedPaths.length && lifecycle.settled ? { ...lifecycle, settled: false as const } : lifecycle,
           pinned: overlay.pinned,
-        } : parsed.data);
+        } : providerEntry);
         continue;
       }
       const metadata = overlay?.archived
         ? { archived: true as const, pinned: false as const, snoozed: false as const }
-        : { archived: false as const, pinned: overlay?.pinned ?? parsed.data.metadata.pinned, snoozed: overlay?.snoozed ?? parsed.data.metadata.snoozed };
+        : { archived: false as const, pinned: overlay?.pinned ?? providerEntry.metadata.pinned, snoozed: overlay?.snoozed ?? providerEntry.metadata.snoozed };
       state.entries.set(key, overlay ? {
-        ...parsed.data,
-        lifecycle: parsed.data.gitArc?.claimedPaths.length && overlay.lifecycle.settled
+        ...providerEntry,
+        lifecycle: providerEntry.gitArc?.claimedPaths.length && overlay.lifecycle.settled
           ? { ...overlay.lifecycle, settled: false as const }
           : overlay.lifecycle,
         metadata,
         ...(overlay.orderAt !== undefined ? { orderAt: overlay.orderAt } : {}),
-        title: parsed.data.title === "New thread" && overlay.titleFallback ? overlay.titleFallback : parsed.data.title,
-      } : parsed.data);
+        title: providerEntry.title === "New thread" && overlay.titleFallback ? overlay.titleFallback : providerEntry.title,
+      } : providerEntry);
     }
     if (!complete) return;
     for (const [key, entry] of state.entries) {

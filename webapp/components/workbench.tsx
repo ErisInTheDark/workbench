@@ -122,7 +122,7 @@ import ProjectPicker from "./workbench/ProjectPicker";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
 import ThreadLoadingSkeleton from "./workbench/thread-view/ThreadLoadingSkeleton";
 import ThreadView from "./workbench/thread-view/ThreadView";
-import useThreadActivityTimestamp from "./workbench/thread-view/use-thread-activity-timestamp";
+import resolveThreadActivityTimestampMs from "./workbench/thread-view/thread-activity-timestamp";
 import {
   workbenchFloatingToolbarClassName,
   workbenchFloatingToolbarGroupClassName,
@@ -1987,7 +1987,7 @@ export default function Workbench () {
   }, [activeProjectId, effectiveThreadTarget, navigateToRoute, threadForThreadView?.harness]);
   const threadSummaryForThreadView = showThreadView ? threadSummariesById.get(effectiveThreadId) ?? null : null;
   const threadShellSource = threadForThreadView ?? threadSummaryForThreadView;
-  const threadShellActivityTimestampMs = useThreadActivityTimestamp(threadShellSource, threadSummaryForThreadView);
+  const threadShellActivityTimestampMs = resolveThreadActivityTimestampMs(threadShellSource, threadSummaryForThreadView);
   const isThreadShellTitleLoading = showThreadView && !threadShellSource;
   const threadShellTitle = threadShellSource ? getThreadTitle(threadShellSource) : "";
   const threadShellStatusLabel = threadShellActivityTimestampMs

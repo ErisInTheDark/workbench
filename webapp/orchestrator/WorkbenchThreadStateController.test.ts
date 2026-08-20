@@ -620,6 +620,7 @@ test("accepted intent survives provider discovery lag and releases after its lif
   await controller.refresh("project");
   await new Promise((resolve) => setTimeout(resolve, 0));
   const laggingEntry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "provider");
+  assert.equal(laggingEntry?.activityAt, 70);
   assert.equal(laggingEntry?.title, "First user message");
   assert.equal(laggingEntry?.entryKind === "thread" ? laggingEntry.orderAt : null, 55);
   providerEntries = [];
@@ -628,6 +629,49 @@ test("accepted intent survives provider discovery lag and releases after its lif
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal((await controller.getSnapshot("project")).entries.some((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "provider"), false);
   await controller.dispose();
+});
+
+test("replayed questionnaire lifecycle does not invent fresh thread activity", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-questionnaire-replay-"));
+  const publications: WorkbenchThreadStateSnapshot[] = [];
+  let now = 20;
+  const providerEntry: WorkbenchThreadSidebarEntry = {
+    activityAt: 10,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "questionnaire" },
+    lifecycle: { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Questionnaire",
+  };
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    now: () => now,
+    projectState: projectState(),
+    publish: (_connectionId, snapshot) => { publications.push(snapshot); },
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      acceptProviderSnapshot("codex", [providerEntry], { complete: true });
+      return [];
+    },
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+  await controller.open("observer", "project");
+  await waitFor(() => publications.some((snapshot) => "entries" in snapshot && snapshot.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "questionnaire")), "Questionnaire thread was not discovered.");
+  publications.length = 0;
+
+  await controller.observeLifecycle("codex", "questionnaire", { kind: "pendingInput", requestKey: "request", turnId: "turn" });
+  let observed = (await controller.getSnapshot("project")).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "questionnaire");
+  assert.equal(observed?.activityAt, 20);
+  assert.equal(publications.length, 1);
+
+  now = 30;
+  await controller.observeLifecycle("codex", "questionnaire", { kind: "pendingInput", requestKey: "request", turnId: "turn" });
+  observed = (await controller.getSnapshot("project")).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "questionnaire");
+  assert.equal(observed?.activityAt, 20);
+  assert.equal(publications.length, 1);
+
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
 });
 
 test("provider completion auto-completes subagents while top-level turns still need an explicit status", async () => {
