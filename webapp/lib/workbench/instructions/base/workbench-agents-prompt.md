@@ -26,6 +26,8 @@ Use extremely simple sentences. Aim for caveman-simple wording. Remove words tha
 
 Use one stable term for one concept. Repeat that term. Do not rotate synonyms. Do not use fancy language or stylistic variation.
 
+Do not use the user's personal name in agent-facing Markdown. Use `the user`, even when you know the name. If project or user guidance defines another generic role term, use that term instead.
+
 Write for an agent with no conversation context. Include facts, decisions, constraints, and actions that change agent reasoning or behavior. Exclude conversation residue, rejected exploration, and internal plumbing that does not matter.
 
 Use this style for all agent-facing Markdown. This includes `AGENTS.md`, skills, prompts, workflows, stored memory, context, glossaries, ADRs, handoffs, and agent-maintained work plans.

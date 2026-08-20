@@ -33,6 +33,15 @@ test("Browse stays explicitly opt-in instead of following UI work", async () => 
   assert.match(mechanics, /Availability does not activate or authorize Browse/u);
 });
 
+test("agent-facing Markdown uses generic user terms", () => {
+  const required = [
+    "Do not use the user's personal name in agent-facing Markdown.",
+    "Use `the user`, even when you know the name.",
+    "If project or user guidance defines another generic role term, use that term instead.",
+  ];
+  assert.deepEqual(required.filter((fragment) => !WORKBENCH_AGENTS_PROMPT.includes(fragment)), []);
+});
+
 test("managed top-level threads expose current-thread mechanics before and after materialization", () => {
   for (const threadId of ["new", "draft:123", "thread-1"]) {
     const context = { harness: "codex" as const, threadId, workbenchOrigin: "http://localhost" };
