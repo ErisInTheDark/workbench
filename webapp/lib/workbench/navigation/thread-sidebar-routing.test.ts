@@ -1,7 +1,7 @@
 /* No production exports. Tests protect blank, draft, and provider route identity. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createThreadHref, getWorkbenchDraftIdFromThreadId, isWorkbenchRouteOwnerOfThread, parseWorkbenchRouteFromPath } from "./workbench-route";
+import { createThreadHref, getWorkbenchDraftIdFromThreadId, isWorkbenchRouteOwnerOfThread, isWorkbenchThreadTargetSelected, parseWorkbenchRouteFromPath } from "./workbench-route";
 import { parseWorkbenchMosaicRouteExpression, serializeWorkbenchMosaicRouteExpression } from "./workbench-mosaic-route";
 
 test("thread routes discriminate blank drafts and provider ids", () => {
@@ -32,6 +32,18 @@ test("private draft thread ids expose only canonical durable draft identities", 
   assert.equal(getWorkbenchDraftIdFromThreadId(`draft:${draftId}`), draftId);
   assert.equal(getWorkbenchDraftIdFromThreadId("draft:not-a-uuid"), null);
   assert.equal(getWorkbenchDraftIdFromThreadId("provider"), null);
+});
+
+test("thread target selection matches the visible root without crossing unrelated identities", () => {
+  const provider = { harness: "codex" as const, kind: "provider" as const, threadId: "parent" };
+  assert.equal(isWorkbenchThreadTargetSelected(provider, provider), true);
+  assert.equal(isWorkbenchThreadTargetSelected(provider, { harness: "codex", kind: "subagent", parentThreadId: "parent", threadId: "child" }), true);
+  assert.equal(isWorkbenchThreadTargetSelected(provider, { harness: "opencode", kind: "subagent", parentThreadId: "parent", threadId: "child" }), false);
+  assert.equal(isWorkbenchThreadTargetSelected(provider, { harness: "codex", kind: "provider", threadId: "other" }), false);
+  assert.equal(isWorkbenchThreadTargetSelected({ draftId: "draft-one", kind: "draft" }, { draftId: "draft-one", kind: "draft" }), true);
+  assert.equal(isWorkbenchThreadTargetSelected({ draftId: "draft-one", kind: "draft" }, { draftId: "draft-two", kind: "draft" }), false);
+  assert.equal(isWorkbenchThreadTargetSelected({ kind: "new" }, { kind: "new" }), true);
+  assert.equal(isWorkbenchThreadTargetSelected({ kind: "new" }, null), false);
 });
 
 test("missing or malformed draft routes never fall through to provider identity", () => {

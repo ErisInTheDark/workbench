@@ -48,6 +48,7 @@ interface WorkbenchThreadSidebarProps {
   onBeginPointerDrag: (event: PointerEvent<HTMLElement>, payload: WorkbenchDragPayload) => void;
   onCreateThread: () => void;
   onOpenThread: (target: WorkbenchThreadTarget) => void;
+  onThreadSettled: (target: WorkbenchThreadTarget) => void;
   projectId: string;
   showMosaicView: boolean;
   store: WorkbenchThreadSidebarStore | null;
@@ -62,6 +63,7 @@ export default memo(function WorkbenchThreadSidebar({
   onBeginPointerDrag,
   onCreateThread,
   onOpenThread,
+  onThreadSettled,
   projectId,
   showMosaicView,
   store,
@@ -90,7 +92,7 @@ export default memo(function WorkbenchThreadSidebar({
     if (payload) await controls.stopThread(payload);
   }, [controls]);
 
-  const mutateEntry = useCallback((entry: WorkbenchThreadSidebarEntry, method: "archive/set" | "pin/set" | "restore" | "settle" | "snooze/set" | "status/set", value?: boolean | "completed" | "needsAttention" | "stopped") => {
+  const mutateEntry = useCallback(async (entry: WorkbenchThreadSidebarEntry, method: "archive/set" | "pin/set" | "restore" | "settle" | "snooze/set" | "status/set", value?: boolean | "completed" | "needsAttention" | "stopped") => {
     if (!controls || !projectId) return;
     if (entry.entryKind === "draft") {
       if (method === "pin/set") void controls.updateThreadState({ draftId: entry.draft.draftId, method: "workbench/thread-state/draft/pin/set", pinned: Boolean(value), projectId });
@@ -109,8 +111,11 @@ export default memo(function WorkbenchThreadSidebar({
             : method === "restore"
               ? { identity, method: "workbench/thread-state/restore" as const, projectId }
               : { identity, method: "workbench/thread-state/settle" as const, projectId };
-    void controls.updateThreadState(request);
-  }, [controls, projectId]);
+    await controls.updateThreadState(request);
+    if (method === "settle") {
+      onThreadSettled({ harness: identity.harness, kind: "provider", threadId: identity.threadId });
+    }
+  }, [controls, onThreadSettled, projectId]);
 
   const getThreadContextMenu = useCallback((entry: WorkbenchThreadSidebarEntry): WorkbenchContextMenuDefinition => {
     const thread = entry.entryKind === "thread" ? threadSummariesById.get(entry.identity.threadId) ?? null : null;

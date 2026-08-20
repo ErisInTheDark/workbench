@@ -3,7 +3,7 @@
  * - WORKBENCH_ROUTE_MARKER: route marker for canonical workbench URLs. Keywords: URL, route, navigation.
  * - WorkbenchRouteView, WorkbenchSettingsScope, WorkbenchRoute, WorkbenchRouteParseResult: normalized route contracts. Keywords: URL source of truth, project, file, thread, settings, mosaic.
  * - createProjectRoute/createFileRoute/createThreadRoute/createSettingsRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct route objects. Keywords: navigation, route builder.
- * - getWorkbenchDraftIdFromThreadId/getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId: derive durable draft, parent hydration, and selected tab identity. Keywords: thread, draft, subagent, parent.
+ * - getWorkbenchDraftIdFromThreadId/getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/isWorkbenchThreadTargetSelected: derive durable draft, parent hydration, selected tab identity, and sidebar selection. Keywords: thread, draft, subagent, parent.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse browser URL state without mutating history. Keywords: route parser, legacy query, malformed URL.
  * - createWorkbenchHref/createProjectHref/createFileHref/createThreadHref/createSettingsHref: build canonical hrefs. Keywords: links, URL, encode.
  * - isSameWorkbenchRoute/routeHasSelection/isWorkbenchRouteOwnerOfThread: compare, classify, and fence route-owned thread transitions. Keywords: route equality, active selection, draft promotion.
@@ -99,6 +99,20 @@ export function getWorkbenchThreadTargetRootId(target: WorkbenchThreadTarget) {
 
 export function getWorkbenchThreadTargetSelectedId(target: WorkbenchThreadTarget) {
   return target.kind === "subagent" ? target.threadId : getWorkbenchThreadTargetRootId(target);
+}
+
+export function isWorkbenchThreadTargetSelected(
+  target: WorkbenchThreadTarget,
+  currentTarget: WorkbenchThreadTarget | null,
+) {
+  if (!currentTarget) return false;
+  if (target.kind === "provider" && currentTarget.kind === "subagent") return target.threadId === currentTarget.parentThreadId
+    && (!target.harness || !currentTarget.harness || target.harness === currentTarget.harness);
+  if (currentTarget.kind !== target.kind) return false;
+  if (target.kind === "new") return true;
+  if (target.kind === "draft" && currentTarget.kind === "draft") return target.draftId === currentTarget.draftId;
+  return target.kind === "provider" && currentTarget.kind === "provider" && target.threadId === currentTarget.threadId
+    && (!target.harness || !currentTarget.harness || target.harness === currentTarget.harness);
 }
 
 export function getWorkbenchDraftIdFromThreadId(threadId: string) {

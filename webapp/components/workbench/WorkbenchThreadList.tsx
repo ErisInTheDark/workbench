@@ -16,6 +16,7 @@ import {
 } from "react";
 
 import type { WorkbenchDragPayload } from "../../lib/workbench/layout/workbench-drag";
+import { isWorkbenchThreadTargetSelected } from "../../lib/workbench/navigation/workbench-route";
 import {
   getThreadSidebarGroup,
   isWorkbenchThreadStatusProviderOwned,
@@ -148,16 +149,6 @@ export default function WorkbenchThreadList({
 }) {
   const rowRefs = useRef<Array<HTMLAnchorElement | null>>([]);
   const visibleEntries = entries.filter((entry) => getThreadSidebarGroup(entry) !== "hidden" && entry.entryKind !== "subagent");
-  const targetSelected = (target: WorkbenchThreadTarget) => {
-    if (!currentTarget) return false;
-    if (target.kind === "provider" && currentTarget.kind === "subagent") return target.threadId === currentTarget.parentThreadId
-      && (!target.harness || !currentTarget.harness || target.harness === currentTarget.harness);
-    if (currentTarget.kind !== target.kind) return false;
-    if (target.kind === "new") return true;
-    if (target.kind === "draft" && currentTarget.kind === "draft") return target.draftId === currentTarget.draftId;
-    return target.kind === "provider" && currentTarget.kind === "provider" && target.threadId === currentTarget.threadId
-      && (!target.harness || !currentTarget.harness || target.harness === currentTarget.harness);
-  };
   const isPinned = (entry: WorkbenchThreadSidebarEntry) => entry.entryKind === "draft" ? entry.metadata.pinned : entry.entryKind === "thread" ? entry.metadata.pinned : entry.pinned;
   const settledEntries = visibleEntries.filter((entry) => getThreadSidebarGroup(entry) === "other");
   const [isOlderThreadsOpen, setIsOlderThreadsOpen] = useState(false);
@@ -200,7 +191,7 @@ export default function WorkbenchThreadList({
   const renderEntry = (entry: WorkbenchThreadSidebarEntry) => {
     const index = navigableEntries.indexOf(entry);
     const target = targetForEntry(entry);
-    const selected = targetSelected(target);
+    const selected = isWorkbenchThreadTargetSelected(target, currentTarget);
     const group = getThreadSidebarGroup(entry);
     const lifecycle = entry.entryKind === "draft" ? null : entry.lifecycle;
     const attentionLabel = entry.entryKind === "draft" ? "" : attentionLabelsByThreadId[entry.identity.threadId]?.trim() ?? "";
@@ -286,7 +277,7 @@ export default function WorkbenchThreadList({
               ref={(node) => { if (index >= 0) rowRefs.current[index] = node; }}
               href={getThreadHref(target)}
               role="tab"
-              tabIndex={selected || (!navigableEntries.some((candidate) => targetSelected(targetForEntry(candidate))) && index === 0) ? 0 : -1}
+              tabIndex={selected || (!navigableEntries.some((candidate) => isWorkbenchThreadTargetSelected(targetForEntry(candidate), currentTarget)) && index === 0) ? 0 : -1}
               aria-selected={selected}
               aria-label={rowName}
               className="absolute inset-0 z-10 cursor-pointer rounded-[0.8rem] border border-transparent outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"

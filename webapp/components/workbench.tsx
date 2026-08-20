@@ -71,6 +71,7 @@ import {
   getWorkbenchThreadTargetRootId,
   getWorkbenchThreadTargetSelectedId,
   isWorkbenchRouteOwnerOfThread,
+  isWorkbenchThreadTargetSelected,
   type WorkbenchRoute,
   type WorkbenchSettingsScope
 } from "../lib/workbench/navigation/workbench-route";
@@ -1644,9 +1645,9 @@ export default function Workbench () {
     return entry?.entryKind === "draft" ? getSidebarDraftComposerInput(entry.draft) : null;
   }, [getSidebarDraftComposerInput, threadComposerDraftsByThreadId, threadSidebarStore]);
 
-  const activeThreadComposerDraft = useMemo(() => getThreadComposerDraftForTarget(
-    route.view === "thread" ? route.threadTarget : null,
-  ), [getThreadComposerDraftForTarget, route]);
+  const activeThreadComposerDraft = route.view === "thread" && route.threadTarget?.kind === "draft"
+    ? getSidebarDraftComposerInput(activeSidebarDraft)
+    : getThreadComposerDraftForTarget(route.view === "thread" ? route.threadTarget : null);
 
   const handleThreadComposerDraftChange = useCallback((threadId: string, draft: WorkbenchComposerInputDraft, reason: "autosave" | "submission" = "autosave") => {
     if (!explorer.currentProjectId) {
@@ -1941,6 +1942,14 @@ export default function Workbench () {
     if (showMosaicView || !controls) return;
     navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, { kind: "new" }));
   }, [controls, explorer.currentProjectId, navigateToRoute, route.projectId, showMosaicView]);
+  const handleThreadSettled = useCallback((settledTarget: WorkbenchThreadTarget) => {
+    const currentRoute = currentRouteRef.current;
+    if (currentRoute.view !== "thread" || !isWorkbenchThreadTargetSelected(settledTarget, currentRoute.threadTarget)) {
+      return;
+    }
+
+    navigateToRoute(createThreadRoute(currentRoute.projectId, { kind: "new" }));
+  }, [navigateToRoute]);
   const usesDesktopSidebarCollapse = !isMobile;
   const isEffectiveDesktopSidebarCollapsed = usesDesktopSidebarCollapse && isDesktopSidebarCollapsed;
   const effectiveThreadTarget = mobileMosaicFallbackTarget?.kind === "thread" ? mobileMosaicFallbackTarget.target : route.threadTarget;
@@ -3060,6 +3069,7 @@ export default function Workbench () {
                         onBeginPointerDrag={beginWorkbenchPointerDrag}
                         onCreateThread={createThreadFromSidebar}
                         onOpenThread={openThreadFromExplorer}
+                        onThreadSettled={handleThreadSettled}
                         projectId={explorer.currentProjectId || route.projectId}
                         showMosaicView={showMosaicView}
                         store={threadSidebarStore}
