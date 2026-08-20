@@ -182,7 +182,8 @@ test("resolved arc cards keep committed proposals hoisted without live claim con
   assert.match(html, /committed-one/u);
   assert.doesNotMatch(html, /unavailable-one/u);
   assert.doesNotMatch(html, /rescinded-one|superseded-one/u);
-  assert.match(html, /Resolved/u);
+  assert.doesNotMatch(html, /data-thread-git-arc-resolution/u);
+  assert.doesNotMatch(html, />Resolved</u);
   assert.doesNotMatch(html, /Restore &amp; unclaim|Unclaim files/u);
 });
 

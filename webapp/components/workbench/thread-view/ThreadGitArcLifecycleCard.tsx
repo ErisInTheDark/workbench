@@ -164,51 +164,49 @@ export default function ThreadGitArcLifecycleCard({
             {claim.intentDescription ? <p className="m-0 mt-1 pl-6 text-[0.76em] leading-[1.45] text-muted">{claim.intentDescription}</p> : null}
           </div>
         )}
-        <div
-          className={`${visibleProposals.length ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] " : ""}px-3 py-2`}
-          data-thread-git-arc-resolution="true"
-          data-thread-git-arc-resolution-separator={visibleProposals.length ? "true" : undefined}
-        >
-          {phase === "resolved" ? (
-            <div className="text-[0.76em] leading-[1.45] text-muted">Resolved</div>
-          ) : (
-          <ThreadDisclosure
-            contentClassName="mt-1 pl-1"
-            summary={(
-              <span className="flex min-w-0 w-full flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                <span>{claim.claimedPaths.length} claimed {claim.claimedPaths.length === 1 ? "file" : "files"}</span>
-                <span className="inline-flex min-w-0 items-center justify-end gap-2" data-thread-summary-action="true">
-                  {changeState === "dirty" ? (
-                    <PrimaryButton
-                      className="!px-3 !py-1.5 !text-[0.76rem]"
-                      disabled={activeAction !== null}
-                      holdToConfirmMs={2000}
-                      onClick={() => void release("restore")}
-                      tone="danger"
-                    >
-                      {activeAction === "restore" ? "Restoring…" : "Restore & unclaim"}
-                    </PrimaryButton>
-                  ) : changeState === "clean" ? (
-                    <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void release("unclaim")}>
-                      {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim files"}
-                    </PrimaryButton>
-                  ) : changeState === "loading" ? <span className="text-[0.74em] text-muted">Checking claimed files…</span> : null}
-                </span>
-              </span>
-            )}
-            summaryClassName="text-[0.76em] leading-[1.45] text-muted"
+        {phase !== "resolved" ? (
+          <div
+            className={`${visibleProposals.length ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] " : ""}px-3 py-2`}
+            data-thread-git-arc-resolution="true"
+            data-thread-git-arc-resolution-separator={visibleProposals.length ? "true" : undefined}
           >
-            <ThreadClaimedFileList
-              paths={claim.claimedPaths}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
-              workspaceRoots={workspaceRoots}
-            />
-          </ThreadDisclosure>
-          )}
-          {error ? <p className="m-0 mt-1 text-[0.74em] leading-[1.45] text-[color:var(--danger)]">{error}</p> : null}
-        </div>
+            <ThreadDisclosure
+              contentClassName="mt-1 pl-1"
+              summary={(
+                <span className="flex min-w-0 w-full flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                  <span>{claim.claimedPaths.length} claimed {claim.claimedPaths.length === 1 ? "file" : "files"}</span>
+                  <span className="inline-flex min-w-0 items-center justify-end gap-2" data-thread-summary-action="true">
+                    {changeState === "dirty" ? (
+                      <PrimaryButton
+                        className="!px-3 !py-1.5 !text-[0.76rem]"
+                        disabled={activeAction !== null}
+                        holdToConfirmMs={2000}
+                        onClick={() => void release("restore")}
+                        tone="danger"
+                      >
+                        {activeAction === "restore" ? "Restoring…" : "Restore & unclaim"}
+                      </PrimaryButton>
+                    ) : changeState === "clean" ? (
+                      <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void release("unclaim")}>
+                        {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim files"}
+                      </PrimaryButton>
+                    ) : changeState === "loading" ? <span className="text-[0.74em] text-muted">Checking claimed files…</span> : null}
+                  </span>
+                </span>
+              )}
+              summaryClassName="text-[0.76em] leading-[1.45] text-muted"
+            >
+              <ThreadClaimedFileList
+                paths={claim.claimedPaths}
+                projectFilePaths={projectFilePaths}
+                projectId={projectId}
+                projectRootPath={projectRootPath}
+                workspaceRoots={workspaceRoots}
+              />
+            </ThreadDisclosure>
+            {error ? <p className="m-0 mt-1 text-[0.74em] leading-[1.45] text-[color:var(--danger)]">{error}</p> : null}
+          </div>
+        ) : null}
       </section>
     </div>
   );
