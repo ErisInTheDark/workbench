@@ -64,11 +64,11 @@ If start reports drift, run its exact scoped diagnostic before raw Git or whole-
 
 `wb git arc diff --ref <plan-ref> -- <reported-path> [<reported-path>...]`
 
-When the approved implementation plan still applies after proposal acceptance, use the atomic step-skipping route:
+Snapshot drift alone does not invalidate approval. Run the scoped diagnostic. Compare the current source to the user-visible plan. If the approved paths, behavior, structure, ownership, mechanics, and validation are unchanged, use the atomic route:
 
 `wb git arc plan start -m <intent> [-m <description>] [--adopt <dirty-path>...] -- <path> [...]`
 
-If the plan changed, use ordinary `wb git arc plan`, return through Brief and Decision, then start it after approval.
+Do not return through Brief or ask for approval only because the snapshot or ref changed. If the plan changed, use ordinary `wb git arc plan`, return through Brief and Decision, then start it after approval.
 
 After start, active-registry commands resolve this thread's current arc. Do not pass a ref to add, adopt, remove, compare, diff, or propose.
 

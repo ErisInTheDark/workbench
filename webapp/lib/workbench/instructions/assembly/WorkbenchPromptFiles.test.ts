@@ -128,6 +128,27 @@ test("arc instructions make guarded commands authoritative for workspace state",
   assert.doesNotMatch(instructions, /use ref-free `arc compare` for inspection and `arc continue/u);
 });
 
+test("harmless planned-path drift keeps the existing approval", () => {
+  const instructions = buildWorkbenchGitInstructions({
+    harness: "codex",
+    threadId: "thread-1",
+    workbenchOrigin: "http://localhost",
+  }) ?? "";
+
+  assert.match(WORKBENCH_AGENTS_PROMPT, /Workspace, snapshot, or ref drift alone does not invalidate approval/u);
+  assert.match(WORKBENCH_AGENTS_PROMPT, /approved edit set/u);
+  assert.match(WORKBENCH_AGENTS_PROMPT, /Do not restate the plan or ask again only to refresh plan or arc state/u);
+  assert.match(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, /Drift alone does not invalidate approval/u);
+  assert.match(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, /approved edit set/u);
+  assert.match(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, /Do not repeat Brief or Decision/u);
+  assert.match(instructions, /Snapshot drift alone does not invalidate approval/u);
+  assert.match(instructions, /Do not return through Brief or ask for approval only because the snapshot or ref changed/u);
+  for (const prompt of [WORKBENCH_AGENTS_PROMPT, WORKBENCH_WORKFLOW_DEFAULT_PROMPT, instructions]) {
+    assert.match(prompt, /wb git arc plan start -m <intent>/u);
+    assert.match(prompt, /Return to Brief only (?:if|when) the plan changed|If the plan changed/u);
+  }
+});
+
 test("arc instructions describe the complete phase, proposal, and observed-claim lifecycle", () => {
   const instructions = buildWorkbenchGitInstructions({ harness: "codex", threadId: "thread-1", workbenchOrigin: "http://localhost" }) ?? "";
   const required = [

@@ -203,10 +203,13 @@ Before the first file edit in Implement mode:
 - For an inactive plan's first Implement pass, run `wb git arc start` to resolve the current plan, or `wb git arc start --ref <plan-ref>` for an exact historical ref. Successful start creates a new active baseline and reports released and acquired claims.
 - When the same implementation arc is already active, do not rerun `arc start`; run `wb git arc continue --ref <current-ref>` directly before another implementation pass.
 - If the required arc command succeeds, remember the returned active ref and continue without a supplementary workspace-state inspection.
+- If `arc start` reports planned-path drift, run its exact scoped diagnostic.
+- Drift alone does not invalidate approval. If the approved edit set, behavior, structure, ownership, mechanics, and validation still apply, stay in Implement mode. Run `wb git arc plan start -m <intent> -- <same-approved-path> [...]`. Do not repeat Brief or Decision.
+- Return to Brief only if the plan changed.
 - Proposal acceptance releases clean claims immediately. If dirty work remains, `arc continue` returns the narrowed successor. If it reports `Accepted commit proposals`, read every proposal ID and SHA; the arc is resolved with no live claims or is a legacy arc that failed closed. If the approved plan is unchanged, run `wb git arc plan start -m <intent> -- <explicit-next-path> [...]`. If the plan changed, return to Brief with a new ordinary `wb git arc plan -m <intent> -- <path> [...]`.
 - A replacement plan must cover every still-dirty file claimed by this thread. Publishing it releases clean previous claims and retains only covered dirt through approval. Dirty unclaimed paths require explicit `--adopt <dirty-path>` intent. Do not ask the user to clean another agent's claimed work.
 - Use active `arc add` only after approval for clean paths already named by the approved plan. Brief and Decision scope extensions use `arc plan add` and remain unclaimed until `arc start`.
-- If the required arc command rejects dirty or changed paths, claim overlap, incompatible HEAD movement, or another plan-affecting condition, stop before editing, re-inspect, and return to Brief mode when the approved plan no longer fits. Tell the user the workspace changed since approval, but do not dump checkpoint plumbing unless they ask or the details matter for resolving the conflict.
+- For claim overlap, incompatible HEAD movement, unexplained dirt, or another unsafe rejection, stop before editing and inspect the reported condition. Do not steal, clean, restore, or overwrite work. Return to Brief when safe recovery changes the approved plan.
 - If the required arc command cannot run, or you cannot confidently interpret its result, stop before editing and report degraded checkpoint safety. Continue without it only after explicit user approval.
 
 Prefer project code and existing ownership over new dependencies.
@@ -282,7 +285,7 @@ Do not treat approval for one plan as approval for unrelated hidden scope.
 
 ### Approval invalidation
 
-**Hard rule: approval applies only to the current concrete plan.**
+**Hard rule: approval is invalidated by material plan changes, not snapshot or ref changes.**
 
 Return to Brief mode when a correction or new fact changes:
 
@@ -307,11 +310,11 @@ Return to Brief mode when the correction adds scope, replaces the route, changes
 
 ### Unexpected file edits
 
-Assume unexpected file edits came from the user or another agent.
+Assume unexpected file edits came from the user or another agent. Classify their effect on the approved plan. Path overlap alone is not plan impact.
 
 Before editing known files after a pause, approval request, questionnaire, long wait, context compaction, or interruption, re-check the files you plan to touch.
 
-If the edits do not affect your work, continue without reverting them.
+If the approved edit set, behavior, structure, ownership, mechanics, and validation still apply, preserve the edits. Continue. Do not repeat Brief or Decision.
 
 If they affect your plan, return to Brief mode and explain the changed shape.
 
@@ -323,9 +326,9 @@ After context compaction, if Workbench provides Thread Recall instructions, run 
 
 After resume, interruption, or a long delay, verify the newest user request and the current file state before risky work.
 
-Assume approval is not actionable unless the current context preserves the exact approved plan, exact edit set, checkpoint baseline, and implementation boundaries.
+Approval remains actionable when the current context preserves the exact approved plan, edit set, and implementation boundaries. A missing or stale checkpoint/ref alone does not invalidate it.
 
-If the exact plan, edit set, current arc ref, or boundaries are missing, return to Brief mode, restate the recovered plan, create a new named plan for the planned work, and ask for approval again before editing. Use non-checkpoint verification only if the user explicitly approves degraded safety.
+If the plan, edit set, or boundaries are missing or ambiguous, return to Brief mode and ask again. If only the checkpoint/ref is missing or stale, inspect the current approved paths and use the documented unchanged-plan recovery without another approval request. Use non-checkpoint verification only if the user explicitly approves degraded safety.
 
 ### Rollbacks or known-bad work
 
