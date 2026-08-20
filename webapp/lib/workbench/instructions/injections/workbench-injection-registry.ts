@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - WORKBENCH_INJECTION_TEMPLATES: module-cached Markdown template registry for AGENTS placeholder expansion. Keywords: prompt, injection, registry.
+ * - WORKBENCH_INJECTION_TEMPLATES: generation-cached Markdown template registry for AGENTS placeholder expansion. Keywords: prompt, injection, registry.
  */
 
 import { readInstructionSource } from "../instruction-source";
-import { WORKBENCH_SKILL_TRIGGER_AND_PRECEDENCE_INSTRUCTIONS } from "../skills/workbench-builtin-skills";
+import { readWorkbenchSkillTriggerAndPrecedenceInstructions } from "../skills/workbench-builtin-skills";
 import { injectionTemplate, type InstructionInjectionTemplate } from "./instruction-injection-template";
 
 const AGENT_DEFINITION_INJECTION = injectionTemplate(
@@ -41,7 +41,7 @@ const WORKBENCH_SKILLS_INJECTION = injectionTemplate(
   "workbench.skills",
   "Detected Workbench skill manifest and trigger rules. Skill files are active when their trigger conditions match.",
   readInstructionSource("injections/workbench-skills-injection.md")
-    .replaceAll("{{skill.precedence}}", WORKBENCH_SKILL_TRIGGER_AND_PRECEDENCE_INSTRUCTIONS),
+    .replaceAll("{{skill.precedence}}", readWorkbenchSkillTriggerAndPrecedenceInstructions()),
 );
 
 export const WORKBENCH_INJECTION_TEMPLATES = {

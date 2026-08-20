@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - Workbench prompt source constants: module-cached Markdown for generated agents, base prompts, workflows, and collaboration overlay. Keywords: prompts, markdown, sources.
+ * - Workbench prompt source constants: generation-cached Markdown for generated agents, base prompts, workflows, and collaboration overlay. Keywords: prompts, markdown, sources.
  */
 
 import { readInstructionSource } from "../instruction-source";

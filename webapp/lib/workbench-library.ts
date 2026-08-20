@@ -22,8 +22,8 @@ import {
   workbenchLibraryRoot,
 } from "./workbench-library-paths";
 import {
-  WORKBENCH_BUILTIN_SKILLS,
-  WORKBENCH_SKILL_TRIGGER_AND_PRECEDENCE_INSTRUCTIONS,
+  readWorkbenchBuiltinSkills,
+  readWorkbenchSkillTriggerAndPrecedenceInstructions,
 } from "./workbench/instructions/skills/workbench-builtin-skills";
 
 export { WORKBENCH_LIBRARY_PROJECT_ID, workbenchLibraryRoot };
@@ -225,7 +225,7 @@ async function writeGeneratedFile(relativePath: string, content: string) {
 }
 
 async function writeBuiltinSkills() {
-  await Promise.all(WORKBENCH_BUILTIN_SKILLS.map((skill) => (
+  await Promise.all(readWorkbenchBuiltinSkills().map((skill) => (
     writeGeneratedFile(skill.relativePath, skill.content)
   )));
 }
@@ -532,7 +532,7 @@ function buildDetectedSkillInstructions(skills: WorkbenchSkillDefinition[]) {
 
   return [
     "Workbench provides additional skills from automatically detected Workbench Skill files.",
-    WORKBENCH_SKILL_TRIGGER_AND_PRECEDENCE_INSTRUCTIONS,
+    readWorkbenchSkillTriggerAndPrecedenceInstructions(),
     "",
     "The `<skill>` blocks below are automatically detected Workbench Skill files. Treat the full SKILL.md text in each block as CRITICAL workflow instructions when the user invokes or otherwise triggers that skill.",
     "Automatic skill detection is not foolproof. If another skill path, skill name, or workflow appears necessary for the task, read that skill file before using it.",

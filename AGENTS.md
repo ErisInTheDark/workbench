@@ -17,7 +17,7 @@
 - Use kebab-case filenames for miscellaneous functions, types, and registries, such as `command-matchers.ts`.
 - Put related transformations in registries instead of hardcoded dispatch branches. Split large registries into a core registry that imports focused registry items or groups.
 - Add and maintain a start-of-file manifest comment in files containing multiple components, functions, types, or other exports. Include high-signal keywords and list every export with a one-line purpose; proactively fix nonconforming manifests in files you edit.
-- Organize Workbench instruction sources under `webapp/lib/workbench/instructions/` by kind. Keep instruction payload leaves as Markdown with one semantic unit per file, and let cumulative TypeScript owners read those sources once at module load. Keep `WorkbenchPromptFiles.ts` as the minimal public assembly entrypoint.
+- Organize Workbench instruction sources under `webapp/lib/workbench/instructions/` by kind. Keep instruction payload leaves as Markdown with one semantic unit per file. Read each source once per instruction-use generation, and do not permanently cache internal instruction content across uses. Keep `WorkbenchPromptFiles.ts` as the public freshness and assembly entrypoint.
 - Keep files small, reusable, and conceptually coherent. Plan the nearby refactor when the requested change would otherwise deepen a monolith, duplicate ownership, or add helper soup.
 - Do not create file-specific duplicate components, utilities, or types when a shared owner already exists.
 
