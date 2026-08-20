@@ -10,6 +10,10 @@
 
 - `/opencode-diagnostics` owns the bounded local SDK-probe workflow for diagnosing OpenCode connectivity, event streams, sessions, prompt delivery, and bridge behavior under `webapp/orchestrator/`.
 
+## Project Vocabulary
+
+- When the user says "transcripts," they mean the persisted transcript files under `.workbench/transcripts/`. For Codex threads, inspect `thread.json`, `turns/*.json`, `turns/*.ndjson`, orphan-event files, and `assets/`, with `CodexTranscriptStore` as their owner. Do not substitute the rendered thread UI, Thread Recall output, questionnaire transcript projections, or realtime audio transcript events unless the user explicitly names them.
+
 ## Code Organization
 
 - Prefer reusable components. A reusable component should be the default export of a matching PascalCase file, such as `ThreadView.tsx`.
