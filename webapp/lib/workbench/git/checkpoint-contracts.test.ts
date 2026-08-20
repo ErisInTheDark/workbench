@@ -9,6 +9,17 @@ import {
   GitCheckpointProposalSchema,
   GitCheckpointRequestSchema,
 } from "./checkpoint-contracts.ts";
+import GitArcRegistry from "./GitArcRegistry";
+import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
+import { remapArcOutcome } from "./git-arc-storage";
+
+function registryFromState(entries: object[]) {
+  let nextBlob = 0;
+  return new GitArcRegistry({
+    readBlobAtRef: async () => ({ blob: "a".repeat(40), contents: `${JSON.stringify({ entries, version: 1 })}\n` }),
+    writeBlob: async () => `${String(++nextBlob).padStart(40, "b")}`,
+  } as never);
+}
 
 test("plan and arc requests encode claimed-path defaults and successor refs", () => {
   assert.equal(GitCheckpointRequestSchema.safeParse({
@@ -24,7 +35,7 @@ test("plan and arc requests encode claimed-path defaults and successor refs", ()
     intentName: "Update A",
     paths: [],
     threadId: "thread-one",
-  }).success, false);
+  }).success, true);
   assert.equal(GitCheckpointRequestSchema.safeParse({
     action: "arcAdd",
     cwd: "C:/repo",
@@ -90,6 +101,64 @@ test("plan and arc requests encode claimed-path defaults and successor refs", ()
     threadId: "thread-one",
     title: "Update A",
   }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "proposalRescind",
+    cwd: "C:/repo",
+    proposalId: "proposal-one",
+    threadId: "thread-one",
+  }).success, true);
+});
+
+test("current-plan requests encode adoption, revision, atomic start, and ref-free activation", () => {
+  const common = { cwd: "C:/repo", threadId: "thread-one" };
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "plan",
+    adoptPaths: ["src/dirty-a.ts", "src/dirty-b.ts"],
+    intentName: "Draft",
+    paths: ["src/clean.ts"],
+    ...common,
+  }).success, true);
+  for (const action of ["planAdd", "planRemove", "planAdopt"] as const) {
+    assert.equal(GitCheckpointRequestSchema.safeParse({ action, paths: ["src/a.ts"], ...common }).success, true);
+  }
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "planStart",
+    adoptPaths: ["src/dirty.ts"],
+    intentDescription: "Keep the existing approved route.",
+    intentName: "Continue",
+    paths: ["src/a.ts"],
+    ...common,
+  }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({ action: "arcStart", ...common }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcStart",
+    checkpointCommit: "abcdef1",
+    ...common,
+  }).success, true);
+});
+
+test("proposal and plan diagnostics encode explicit lifecycle targets", () => {
+  const common = { cwd: "C:/repo", threadId: "thread-one" };
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "diff",
+    checkpointCommit: "abcdef1",
+    paths: ["src/reported.ts"],
+    ...common,
+  }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "proposalCreate",
+    amendProposalId: "proposal-ancestor",
+    description: "",
+    title: "Amend ancestor",
+    ...common,
+  }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "proposalCreate",
+    description: "",
+    replaceProposalId: "proposal-pending",
+    title: "Replace pending",
+    ...common,
+  }).success, true);
 });
 
 test("proposal contracts keep paths mandatory and terminal metadata explicit", () => {
@@ -116,6 +185,22 @@ test("proposal contracts keep paths mandatory and terminal metadata explicit", (
     unavailableReason: null,
   }).success, true);
   assert.equal(GitCheckpointProposalSchema.safeParse({
+    amendTargetSha: null,
+    baseCommit: "abcdef1",
+    changes: [{ additions: 0, deletions: 0, diff: "", kind: { move_path: null, type: "update" }, path: "src/a.ts" }],
+    committedSha: null,
+    description: "",
+    includeNewerAvailable: false,
+    mode: "commit",
+    paths: ["src/a.ts"],
+    proposalId: "proposal-one",
+    status: "rescinded",
+    supersededByProposalId: null,
+    supersededBySha: null,
+    title: "Update A",
+    unavailableReason: "Rescinded by the agent.",
+  }).success, true);
+  assert.equal(GitCheckpointProposalSchema.safeParse({
     baseCommit: "abcdef1",
     changes: [],
     committedSha: null,
@@ -127,4 +212,63 @@ test("proposal contracts keep paths mandatory and terminal metadata explicit", (
     title: "Update A",
     unavailableReason: null,
   }).success, false);
+});
+
+test("accepted proposal receipt ledgers remap both target and resulting HEAD commits", () => {
+  const remapped = remapArcOutcome({
+    acceptedProposals: [{ commitSha: "aaaaaaa", headSha: "bbbbbbb", proposalId: "proposal-one" }],
+    committedSha: "aaaaaaa", proposalId: "proposal-one", sourceCheckpoint: "ccccccc", status: "committed", successorCheckpoint: null, version: 1,
+  } as never, new Map([["aaaaaaa", "ddddddd"], ["bbbbbbb", "eeeeeee"]]));
+  assert.deepEqual((remapped as { acceptedProposals?: unknown }).acceptedProposals, [{ commitSha: "ddddddd", headSha: "eeeeeee", proposalId: "proposal-one" }]);
+});
+
+test("registry reads normalize legacy phase and scalar proposal identity without migration", async () => {
+  const registry = registryFromState([{
+    checkpointCommit: "a".repeat(40), claimedPaths: ["src/a.ts"], harness: "codex", intentDescription: "", intentName: "legacy",
+    proposalId: "proposal-one", threadId: "legacy", updatedAt: "2026-08-20T00:00:00.000Z",
+  }]);
+  const legacy = await registry.find({ harness: "codex", threadId: "legacy" }) as { phase?: string; proposalIds?: string[] } | null;
+  assert.deepEqual({ phase: legacy?.phase, proposalIds: legacy?.proposalIds }, { phase: "active", proposalIds: ["proposal-one"] });
+});
+
+test("registry collisions use only active and retained-plan claims", async () => {
+  const common = { checkpointCommit: "a".repeat(40), harness: "codex", intentDescription: "", proposalIds: [], updatedAt: "2026-08-20T00:00:00.000Z" };
+  const registry = registryFromState([
+    { ...common, claimedPaths: ["src/active.ts"], intentName: "active", phase: "active", threadId: "active" },
+    { ...common, claimedPaths: [], intentName: "fresh", phase: "plan", threadId: "fresh-plan" },
+    { ...common, claimedPaths: ["src/retained.ts"], intentName: "retained", phase: "plan", threadId: "retained-plan" },
+    { ...common, claimedPaths: ["src/resolved.ts"], intentName: "resolved", phase: "resolved", threadId: "resolved" },
+  ]);
+  const allowed = await registry.prepareClaim({
+    checkpointCommit: "b".repeat(40), claimedPaths: ["src/resolved.ts"], harness: "codex", intentDescription: "", intentName: "new", proposalId: null, threadId: "new",
+  });
+  let retainedCollision = false;
+  try {
+    await registry.prepareClaim({
+      checkpointCommit: "c".repeat(40), claimedPaths: ["src/retained.ts"], harness: "codex", intentDescription: "", intentName: "collision", proposalId: null, threadId: "collision",
+    });
+  } catch { retainedCollision = true; }
+  assert.deepEqual({
+    allowedClaims: allowed.nextState.entries.find((entry) => entry.threadId === "new")?.claimedPaths,
+    retainedCollision,
+  }, {
+    allowedClaims: ["src/resolved.ts"], retainedCollision: true,
+  });
+});
+
+test("checkpoint facade exposes the complete plan, proposal, and lifecycle owner surface", () => {
+  const prototype = WorkbenchGitCheckpointController.prototype as unknown as Record<string, unknown>;
+  const required = [
+    "addToPlan", "adoptIntoPlan", "createAndStartPlan", "listLifecycleStates", "removeFromPlan", "rescindProposal",
+  ];
+  assert.deepEqual(required.filter((method) => typeof prototype[method] !== "function"), []);
+});
+
+test("checkpoint, plan, and proposal responsibilities have dedicated owners", async () => {
+  const modules = await Promise.allSettled([
+    import("./GitCheckpointStore"),
+    import("./GitArcPlanController"),
+    import("./GitArcProposalController"),
+  ]);
+  assert.deepEqual(modules.map((result) => result.status), ["fulfilled", "fulfilled", "fulfilled"]);
 });

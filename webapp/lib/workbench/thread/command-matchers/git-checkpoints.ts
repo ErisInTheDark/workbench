@@ -82,6 +82,40 @@ function createMatcher({
 
 export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   createMatcher({
+    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+plan\s+add(?:\s|$)/iu,
+    id: "git-arc.plan-add",
+    ongoing: "Extending Git plan",
+    stats: { gitCheckpointCreates: 1 },
+    summary: "Extended Git plan",
+  }),
+  createMatcher({
+    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+plan\s+remove(?:\s|$)/iu,
+    id: "git-arc.plan-remove",
+    ongoing: "Reducing Git plan",
+    stats: { gitCheckpointCreates: 1 },
+    summary: "Reduced Git plan",
+  }),
+  createMatcher({
+    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+plan\s+adopt(?:\s|$)/iu,
+    id: "git-arc.plan-adopt",
+    ongoing: "Adopting changes into Git plan",
+    stats: { gitCheckpointCreates: 1 },
+    summary: "Adopted changes into Git plan",
+  }),
+  createMatcher({
+    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+plan\s+start(?:\s|$)/iu,
+    id: "git-arc.plan-start",
+    ongoing: "Creating and starting Git plan",
+    stats: { gitCheckpointCreates: 1 },
+    summary: "Created and started Git plan",
+  }),
+  createMatcher({
+    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+rescind(?:\s|$)/iu,
+    id: "git-arc.rescind",
+    ongoing: "Rescinding arc proposal",
+    summary: "Rescinded arc proposal",
+  }),
+  createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+plan(?:\s|$)/iu,
     id: ARC_MATCHER_IDS.plan,
     ongoing: "Creating Git plan",
@@ -228,8 +262,8 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
     cursor += 1;
   }
   const paths = tokens[cursor] === "--" ? tokens.slice(cursor + 1) : [];
-  if (action === "plan") return intentName && paths.length ? { action, intentName, paths, ref: null } : null;
-  const refRequired = action === "continue" || action === "restore" || action === "start";
+  if (action === "plan") return intentName ? { action, intentName, paths, ref: null } : null;
+  const refRequired = action === "continue" || action === "restore";
   if (refRequired !== Boolean(ref)) return null;
   return { action, intentName: null, paths, ref };
 }

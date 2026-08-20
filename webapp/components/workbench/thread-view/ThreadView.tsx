@@ -1627,9 +1627,9 @@ export default memo(function ThreadView ({
       })}
     />
   ) : null;
-  const terminalFileClaim = activeSidebarEntry?.entryKind !== "draft"
-    && (activeSidebarEntry?.lifecycle.kind === "completed" || activeSidebarEntry?.lifecycle.kind === "stopped")
-    ? activeSidebarEntry.fileClaim ?? null
+  const terminalGitArc = activeSidebarEntry && activeSidebarEntry.entryKind !== "draft"
+    && currentTurn?.status !== "inProgress"
+    ? activeSidebarEntry.gitArc ?? null
     : null;
 
   return (
@@ -1640,7 +1640,7 @@ export default memo(function ThreadView ({
     >
       <ThreadGitArcPresentationContext.Provider value={{
         harness: activeThread?.harness ?? thread.harness,
-        hoistedProposalId: terminalFileClaim?.proposalId ?? null,
+        hoistedProposalIds: new Set(terminalGitArc?.proposals.map(({ proposalId }) => proposalId) ?? []),
       }}>
       <div
         ref={threadViewRef}
@@ -1790,9 +1790,9 @@ export default memo(function ThreadView ({
             ) : null}
           </div>
         ) : null}
-        {terminalFileClaim && activeThread ? (
+        {terminalGitArc && activeThread ? (
           <ThreadGitArcLifecycleCard
-            claim={terminalFileClaim}
+            claim={terminalGitArc}
             cwd={activeThread.cwd}
             harness={activeThread.harness}
             onReleased={async () => await onUpdateThreadState({ method: "workbench/thread-state/refresh", projectId })}

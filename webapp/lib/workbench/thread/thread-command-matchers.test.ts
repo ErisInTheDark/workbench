@@ -466,6 +466,21 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
   assert.equal(parseGitCheckpointCommitCommand("wb git checkpoint commit --sha abc --m Title -- src/one.ts"), null);
 });
 
+test("current-plan and proposal-lifecycle commands receive distinct truthful summaries", () => {
+  const cases = [
+    ["wb git arc plan add -- src/a.ts", "git-arc.plan-add", "Extended Git plan"],
+    ["wb git arc plan remove -- src/a.ts", "git-arc.plan-remove", "Reduced Git plan"],
+    ["wb git arc plan adopt -- src/dirty.ts", "git-arc.plan-adopt", "Adopted changes into Git plan"],
+    ["wb git arc plan start -m Continue -- src/a.ts", "git-arc.plan-start", "Created and started Git plan"],
+    ["wb git arc rescind --proposal proposal-one", "git-arc.rescind", "Rescinded arc proposal"],
+  ] as const;
+  for (const [command, claimedBy, summaryText] of cases) {
+    const display = getThreadCommandDisplay({ command, commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT });
+    assert.equal(display.claimedBy, claimedBy);
+    assert.equal(display.summaryText, summaryText);
+  }
+});
+
 test("PowerShell-wrapped arc proposals preserve escaped messages and apostrophes", () => {
   const display = getThreadCommandDisplay({
     command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "wb git arc propose -m \"Group thread context menu controls\" -m \"Add grouped controls and preserve Chiri's lifecycle status.\""`,

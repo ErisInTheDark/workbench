@@ -207,17 +207,21 @@ checkpointTest("restores only selected checkpoint paths while preserving the ord
   }), /Selected restore paths no longer match the arc baseline.*selected\.txt/u);
 });
 
-checkpointTest("plans reject dirty claimed paths and snapshot the full worktree", async (context) => {
+checkpointTest("plans accept dirty claimed paths, reject mystery dirt, and snapshot the full worktree", async (context) => {
   const { repoRoot } = await createRepository(context);
+  const owner = await createGitPlan({ cwd: repoRoot, intentName: "Own selected", paths: ["selected.txt"], threadId: "owner-thread" });
+  await startGitArc({ checkpointCommit: owner.checkpointCommit, cwd: repoRoot, threadId: "owner-thread" });
   await write(repoRoot, "selected.txt", "already dirty\n");
-  await assert.rejects(createGitPlan({
+  const future = await createGitPlan({
     cwd: repoRoot,
     intentName: "Update selected",
     paths: ["selected.txt"],
     threadId: "thread-one",
-  }), /Plan paths must be clean against HEAD: selected\.txt/u);
+  });
+  assert.deepEqual(future.scopePaths, ["selected.txt"]);
 
   await git(repoRoot, ["restore", "--", "selected.txt"]);
+  await removeFromGitArc({ cwd: repoRoot, paths: ["selected.txt"], threadId: "owner-thread" });
   await write(repoRoot, "unrelated.txt", "unrelated dirty at checkpoint\n");
   await write(repoRoot, "untracked-at-checkpoint.txt", "untracked checkpoint content\n");
   const checkpoint = await createGitPlan({
@@ -262,6 +266,14 @@ checkpointTest("plans reject dirty claimed paths and snapshot the full worktree"
   });
   assert.deepEqual(proposal.paths, ["selected.txt"]);
   assert.equal("changes" in proposal, false);
+});
+
+checkpointTest("plans reject dirty unclaimed paths unless adoption is explicit", async (context) => {
+  const { repoRoot } = await createRepository(context);
+  await write(repoRoot, "selected.txt", "mystery dirt\n");
+  await assert.rejects(createGitPlan({
+    cwd: repoRoot, intentName: "reject mystery dirt", paths: ["selected.txt"], threadId: "mystery",
+  }), /clean against HEAD|adopt/u);
 });
 
 checkpointTest("releasing a proposed arc makes the proposal unavailable", async (context) => {
@@ -604,8 +616,8 @@ checkpointTest("proposal file sets stay frozen while newer selected edits remain
     proposalId: originalProposal.proposalId,
     threadId: frozenThreadId,
   });
-  assert.equal(superseded.status, "superseded");
-  assert.equal(superseded.supersededByProposalId, proposal.proposalId);
+  assert.equal(superseded.status, "proposed");
+  assert.equal(superseded.supersededByProposalId, null);
   assert.equal((await controller.findActiveClaim({ cwd: repoRoot, threadId: frozenThreadId }))?.proposalId, proposal.proposalId);
   assert.deepEqual(proposal.paths, ["selected.txt"]);
   const proposalCacheDirectory = path.join(

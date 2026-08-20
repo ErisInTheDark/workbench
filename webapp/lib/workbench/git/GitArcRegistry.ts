@@ -17,8 +17,24 @@ export interface GitArcRegistryEntry extends GitArcIdentity {
   claimedPaths: string[];
   intentDescription: string;
   intentName: string;
-  proposalId: string | null;
+  phase?: "active" | "plan" | "resolved";
+  proposalId?: string | null;
+  proposalIds?: string[];
+  retainedArc?: {
+    checkpointCommit: string;
+    claimedPaths: string[];
+    intentDescription: string;
+    intentName: string;
+    phase: "active" | "resolved";
+    proposalIds: string[];
+  } | null;
   updatedAt: string;
+}
+
+function liveClaimPaths(entry: Pick<GitArcRegistryEntry, "claimedPaths" | "phase" | "retainedArc">) {
+  if (entry.phase === "resolved") return [];
+  if (entry.phase === "plan") return entry.retainedArc?.claimedPaths ?? entry.claimedPaths;
+  return entry.claimedPaths;
 }
 
 export interface GitArcCollision {
@@ -68,7 +84,29 @@ function pathsOverlap(left: string, right: string) {
 function parseState(contents: string): GitArcRegistryState {
   const parsed = JSON.parse(contents) as Partial<GitArcRegistryState>;
   if (parsed.version !== 1 || !Array.isArray(parsed.entries)) throw new Error("The active arc registry is invalid.");
-  return { entries: parsed.entries, version: 1 };
+  return {
+    entries: parsed.entries.map((entry) => {
+      const proposalIds = Array.isArray(entry.proposalIds)
+        ? entry.proposalIds.filter((proposalId): proposalId is string => typeof proposalId === "string" && Boolean(proposalId.trim()))
+        : entry.proposalId ? [entry.proposalId] : [];
+      const phase = entry.phase ?? "active";
+      return {
+        ...entry,
+        claimedPaths: phase === "resolved" ? [] : entry.claimedPaths,
+        phase,
+        proposalId: proposalIds.at(-1) ?? null,
+        proposalIds,
+        retainedArc: entry.retainedArc ? {
+          ...entry.retainedArc,
+          intentDescription: entry.retainedArc.intentDescription ?? entry.intentDescription,
+          intentName: entry.retainedArc.intentName ?? entry.intentName,
+          phase: entry.retainedArc.phase ?? "active",
+          proposalIds: entry.retainedArc.proposalIds ?? [],
+        } : null,
+      };
+    }),
+    version: 1,
+  };
 }
 
 function remapState(state: GitArcRegistryState, commits?: ReadonlyMap<string, string>): GitArcRegistryState {
@@ -77,6 +115,12 @@ function remapState(state: GitArcRegistryState, commits?: ReadonlyMap<string, st
     entries: state.entries.map((entry) => ({
       ...entry,
       checkpointCommit: commits.get(entry.checkpointCommit) ?? entry.checkpointCommit,
+      ...(entry.retainedArc ? {
+        retainedArc: {
+          ...entry.retainedArc,
+          checkpointCommit: commits.get(entry.retainedArc.checkpointCommit) ?? entry.retainedArc.checkpointCommit,
+        },
+      } : {}),
     })),
     version: 1,
   };
@@ -105,7 +149,7 @@ export default class GitArcRegistry {
     const { blob, state } = await this.read();
     if (!blob) return null;
     const entries = remapState(state, commits).entries;
-    if (entries.every((entry, index) => entry.checkpointCommit === state.entries[index]?.checkpointCommit)) return null;
+    if (JSON.stringify(entries) === JSON.stringify(state.entries)) return null;
     const nextBlob = await this.repository.writeBlob(`${JSON.stringify({ entries, version: 1 } satisfies GitArcRegistryState)}\n`);
     return { newValue: nextBlob, oldValue: blob, ref: REGISTRY_REF };
   }
@@ -129,15 +173,24 @@ export default class GitArcRegistry {
     }
     const collisions = state.entries
       .filter((candidate) => identityKey(candidate) !== key)
+      .filter((candidate) => liveClaimPaths(candidate).length > 0)
       .map((candidate): GitArcCollision => ({
         entry: candidate,
-        overlaps: candidate.claimedPaths.flatMap((claimedPath) => entry.claimedPaths
+        overlaps: liveClaimPaths(candidate).flatMap((claimedPath) => liveClaimPaths(entry)
           .filter((requestedPath) => pathsOverlap(claimedPath, requestedPath))
           .map((requestedPath) => ({ claimedPath, requestedPath }))),
       }))
       .filter((collision) => collision.overlaps.length > 0);
     if (collisions.length) throw new GitArcCollisionError(collisions);
-    const nextEntry: GitArcRegistryEntry = { ...entry, updatedAt: new Date().toISOString() };
+    const proposalIds = entry.proposalIds ?? (entry.proposalId ? [entry.proposalId] : []);
+    const nextEntry: GitArcRegistryEntry = {
+      ...entry,
+      phase: entry.phase ?? "active",
+      proposalId: proposalIds.at(-1) ?? null,
+      proposalIds,
+      retainedArc: entry.retainedArc ?? null,
+      updatedAt: new Date().toISOString(),
+    };
     const entries = [...state.entries.filter((candidate) => identityKey(candidate) !== key), nextEntry]
       .sort((left, right) => identityKey(left).localeCompare(identityKey(right)));
     const nextState = { entries, version: 1 } satisfies GitArcRegistryState;
@@ -170,6 +223,38 @@ export default class GitArcRegistry {
     const mutation = await this.prepareClaim(entry);
     if (mutation.update) await this.repository.updateRefs([mutation.update]);
     return mutation.nextState.entries.find((candidate) => identityKey(candidate) === identityKey(entry))!;
+  }
+
+  async set(entry: Omit<GitArcRegistryEntry, "updatedAt">, expectedCheckpointCommit?: string) {
+    const mutation = await this.prepareSet(entry, expectedCheckpointCommit);
+    if (mutation.update) await this.repository.updateRefs([mutation.update]);
+    return mutation.nextState.entries.find((candidate) => identityKey(candidate) === identityKey(entry))!;
+  }
+
+  async prepareSet(entry: Omit<GitArcRegistryEntry, "updatedAt">, expectedCheckpointCommit?: string): Promise<GitArcRegistryMutation> {
+    const { blob, state } = await this.read();
+    const key = identityKey(entry);
+    const current = state.entries.find((candidate) => identityKey(candidate) === key) ?? null;
+    if (expectedCheckpointCommit && current?.checkpointCommit !== expectedCheckpointCommit) {
+      throw new Error("This thread's current Git arc changed before the registry update completed.");
+    }
+    const proposalIds = entry.proposalIds ?? (entry.proposalId ? [entry.proposalId] : []);
+    const nextEntry: GitArcRegistryEntry = {
+      ...entry,
+      claimedPaths: entry.phase === "resolved" ? [] : entry.claimedPaths,
+      phase: entry.phase ?? "active",
+      proposalId: proposalIds.at(-1) ?? null,
+      proposalIds,
+      retainedArc: entry.retainedArc ?? null,
+      updatedAt: new Date().toISOString(),
+    };
+    const entries = [...state.entries.filter((candidate) => identityKey(candidate) !== key), nextEntry]
+      .sort((left, right) => identityKey(left).localeCompare(identityKey(right)));
+    const nextBlob = await this.repository.writeBlob(`${JSON.stringify({ entries, version: 1 } satisfies GitArcRegistryState)}\n`);
+    return {
+      nextState: { entries, version: 1 },
+      update: { newValue: nextBlob, oldValue: blob ?? "0".repeat(40), ref: REGISTRY_REF },
+    };
   }
 
   async release(identity: GitArcIdentity) {

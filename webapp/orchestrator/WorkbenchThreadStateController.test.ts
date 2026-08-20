@@ -9,14 +9,14 @@ import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 import type { WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 
-type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolveFileClaim" | "runFileClaimTransition">
-  & Partial<Pick<WorkbenchThreadStateControllerOptions, "resolveFileClaim" | "runFileClaimTransition">>;
+type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "runGitArcTransition">
+  & Partial<Pick<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "runGitArcTransition">>;
 
 class WorkbenchThreadStateController extends WorkbenchThreadStateControllerOwner {
   constructor(options: TestControllerOptions) {
     super({
-      resolveFileClaim: async () => null,
-      runFileClaimTransition: async (_projectId, operation) => await operation(),
+      resolveGitArc: async () => null,
+      runGitArcTransition: async (_projectId, operation) => await operation(),
       ...options,
     });
   }
@@ -687,9 +687,10 @@ test("restoring a terminal thread persists across provider reconciliation", asyn
 test("manual status persists, restores settled threads, and rejects provider-owned lifecycles", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-manual-attention-"));
   const published: WorkbenchThreadStateSnapshot[] = [];
-  let insideFileClaimTransition = false;
-  let fileClaimTransitions = 0;
-  let terminalHasFileClaim = false;
+  let insideGitArcTransition = false;
+  let gitArcTransitions = 0;
+  let terminalHasGitArc = false;
+  let terminalGitArcResolved = false;
   const terminal: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 1,
     entryKind: "thread",
@@ -720,11 +721,11 @@ test("manual status persists, restores settled threads, and rejects provider-own
       acceptProviderSnapshot("codex", [terminal, pending, working], { complete: true });
       return [];
     },
-    resolveFileClaim: async (_projectId, _harness, threadId) => {
-      assert.equal(insideFileClaimTransition, true);
-      return terminalHasFileClaim && threadId === "terminal" ? {
+    resolveGitArc: async (_projectId, _harness, threadId) => {
+      assert.equal(insideGitArcTransition, true);
+      return terminalHasGitArc && threadId === "terminal" ? {
         checkpointCommit: "a".repeat(40),
-        claimedPaths: ["owned.ts"],
+        claimedPaths: terminalGitArcResolved ? [] : ["owned.ts"],
         intentDescription: "",
         intentName: "Keep owned work",
         proposalId: null,
@@ -732,13 +733,13 @@ test("manual status persists, restores settled threads, and rejects provider-own
       } : null;
     },
     resolveProjectRoot: async () => root,
-    runFileClaimTransition: async (_projectId, operation) => {
-      fileClaimTransitions += 1;
-      insideFileClaimTransition = true;
+    runGitArcTransition: async (_projectId, operation) => {
+      gitArcTransitions += 1;
+      insideGitArcTransition = true;
       try {
         return await operation();
       } finally {
-        insideFileClaimTransition = false;
+        insideGitArcTransition = false;
       }
     },
     storageRoot: root,
@@ -803,12 +804,21 @@ test("manual status persists, restores settled threads, and rejects provider-own
   assert.equal("result" in sameStatus ? (sameStatus.result as { accepted?: boolean }).accepted : false, true);
   entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
   assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
-  terminalHasFileClaim = true;
+  terminalHasGitArc = true;
+  terminalGitArcResolved = true;
+  const resolvedSettle = await controller.handleRequest("observer", {
+    identity: terminal.identity, method: "workbench/thread-state/settle", projectId: "project",
+  });
+  assert.equal("result" in resolvedSettle ? (resolvedSettle.result as { accepted?: boolean }).accepted : false, true);
+  await controller.handleRequest("observer", {
+    identity: terminal.identity, method: "workbench/thread-state/status/set", projectId: "project", status: "needsAttention",
+  });
+  terminalGitArcResolved = false;
   const claimedSettle = await controller.handleRequest("observer", {
     identity: terminal.identity, method: "workbench/thread-state/settle", projectId: "project",
   });
   assert.equal("result" in claimedSettle ? (claimedSettle.result as { accepted?: boolean }).accepted : true, false);
-  assert.equal(fileClaimTransitions, 3);
+  assert.equal(gitArcTransitions, 4);
   entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
   assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
   await controller.dispose();

@@ -5,7 +5,7 @@
  */
 import type http from "node:http";
 
-import WorkbenchGitCheckpointController, { type GitArcActiveClaim } from "../lib/workbench/git/WorkbenchGitCheckpointController";
+import WorkbenchGitCheckpointController, { type GitArcActiveClaim, type GitArcLifecycleState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
 import type { WorkbenchHarness } from "../lib/types";
 import { GitCheckpointRequestSchema, type GitCheckpointRequest } from "../lib/workbench/git/checkpoint-contracts";
@@ -22,9 +22,10 @@ export interface WorkbenchGitArcFeatureOptions {
 }
 
 const CLAIM_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
-  "arcAdd", "arcAdopt", "arcContinue", "arcMove", "arcRemove", "arcStart", "proposalCommit", "proposalCreate", "restore",
+  "arcAdd", "arcAdopt", "arcContinue", "arcMove", "arcRemove", "arcStart", "planAdd", "planAdopt", "planRemove", "planStart",
+  "proposalCommit", "proposalCreate", "proposalRescind", "restore",
 ]);
-const CLAIM_START_ACTIONS = new Set<GitCheckpointRequest["action"]>(["arcContinue", "arcStart"]);
+const CLAIM_START_ACTIONS = new Set<GitCheckpointRequest["action"]>(["arcContinue", "arcStart", "planStart"]);
 
 function sanitizeError(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 500);
@@ -65,6 +66,14 @@ export default class WorkbenchGitArcFeature {
 
   async listActiveClaims(cwd: string): Promise<GitArcActiveClaim[]> {
     return await this.controller.listActiveClaims({ cwd });
+  }
+
+  async findLifecycleState(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcLifecycleState | null> {
+    return await this.controller.findLifecycleState({ cwd, harness, threadId });
+  }
+
+  async listLifecycleStates(cwd: string): Promise<GitArcLifecycleState[]> {
+    return await this.controller.listLifecycleStates({ cwd });
   }
 
   async handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
@@ -134,7 +143,15 @@ export default class WorkbenchGitArcFeature {
   private async dispatch(input: GitCheckpointRequest) {
     const common = { cwd: input.cwd, harness: input.harness, threadId: input.threadId };
     switch (input.action) {
-      case "plan": return Response.json(await this.controller.createPlan({ ...common, intentDescription: input.intentDescription, intentName: input.intentName, paths: input.paths }));
+      case "plan": return Response.json(await this.controller.createPlan({
+        ...common, adoptPaths: input.adoptPaths, intentDescription: input.intentDescription, intentName: input.intentName, paths: input.paths,
+      }));
+      case "planAdd": return Response.json(await this.controller.addToPlan({ ...common, paths: input.paths }));
+      case "planAdopt": return Response.json(await this.controller.adoptIntoPlan({ ...common, paths: input.paths }));
+      case "planRemove": return Response.json(await this.controller.removeFromPlan({ ...common, paths: input.paths }));
+      case "planStart": return Response.json(await this.controller.createAndStartPlan({
+        ...common, adoptPaths: input.adoptPaths, intentDescription: input.intentDescription, intentName: input.intentName, paths: input.paths,
+      }));
       case "arcStart": return Response.json(await this.controller.startArc({ ...common, checkpointCommit: input.checkpointCommit }));
       case "arcContinue": return Response.json(await this.controller.continueArc({ ...common, checkpointCommit: input.checkpointCommit }));
       case "arcAdd": return Response.json(await this.controller.addToArc({ ...common, paths: input.paths }));
@@ -145,12 +162,15 @@ export default class WorkbenchGitArcFeature {
         ...common, ...(input.paths ? { paths: input.paths } : {}),
       }));
       case "diff": return Response.json(await this.controller.diff({
-        ...common, ...(input.paths ? { paths: input.paths } : {}),
+        ...common, ...(input.checkpointCommit ? { checkpointCommit: input.checkpointCommit } : {}), ...(input.paths ? { paths: input.paths } : {}),
       }));
       case "proposalCreate": return Response.json(await this.controller.createProposal({
         ...common, amend: input.amend, description: input.description,
-        ...(input.paths ? { paths: input.paths } : {}), title: input.title,
+        ...(input.amendProposalId ? { amendProposalId: input.amendProposalId } : {}),
+        ...(input.paths ? { paths: input.paths } : {}),
+        ...(input.replaceProposalId ? { replaceProposalId: input.replaceProposalId } : {}), title: input.title,
       }));
+      case "proposalRescind": return Response.json(await this.controller.rescindProposal({ ...common, proposalId: input.proposalId }));
       case "proposalState": return Response.json(await this.controller.getProposal({
         ...common, includeNewer: input.includeNewer, proposalId: input.proposalId,
       }));

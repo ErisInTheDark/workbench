@@ -132,9 +132,9 @@ When an arc command is the required workflow step, run it directly and let it ac
 
 #### Plan and arc names
 
-* **Plan ref**: the one full Git-visible worktree snapshot created in Brief mode after Workbench verifies the exact planned paths are clean. It stores a short intent name and the claimed path set.
-* **Remembered arc ref**: initially the plan ref. Record successor refs returned by `arc add`, `arc adopt`, `arc mv`, `arc remove`, or `arc continue` for later continuation or restore. Active commands resolve the registry without this ref. Removing the final clean claim ends the arc and leaves no active successor.
-* **Arc**: the approved changeset that keeps one original snapshot tree while successor parents advance to each accepted current HEAD through implementation, Review, corrections, and proposal.
+* **Plan ref**: an immutable full Git-visible worktree snapshot. The registry points to the thread's current plan, so empty plans and plan add/remove/adopt revisions do not require transcript reconstruction.
+* **Remembered arc ref**: the active ref returned by start or later active-arc mutations. Record it for continuation and restore. Accepted proposals do not change this ref or the previous claim set invisibly.
+* **Arc**: the approved changeset whose registry phase is plan, active, or resolved. A missing phase reads as active without migration.
 
 #### Before asking for approval in Brief mode
 
@@ -142,7 +142,7 @@ For any plan that would edit files:
 
 1. Identify the exact existing files you plan to edit.
 2. Confirm that Workbench Git plan/arc instructions are available.
-3. Create the named plan through `wb git arc plan -m <short-intent> -- <exact-path> [...]`.
+3. Create the named plan through `wb git arc plan -m <short-intent> -- <exact-path> [...]`. Dirty active-claimed paths can be ordinary plan paths. Use `--adopt <dirty-path>` only for intentional dirty unclaimed paths.
 4. Treat the returned SHA as the current arc ref.
 5. Keep that exact ref privately available for later drift checks.
 6. In the user-facing plan, name the planned edit files, but do not print checkpoint plumbing unless it is needed to explain a problem.
@@ -158,7 +158,7 @@ If the approved touch set changes later, return to Brief mode. Use `arc add` for
 After the user explicitly approves the current plan:
 
 1. Enter Implement mode.
-2. If this is the inactive plan's first Implement pass, run `wb git arc start --ref <plan-ref>`. It compares the stored claimed set, activates the claims, and creates no ref.
+2. If this is the inactive plan's first Implement pass, run `wb git arc start`, or use `--ref <plan-ref>` for an exact plan. Record the returned active ref and its released/acquired claims.
 3. If the same implementation arc is already active, do not rerun `arc start`. Run `wb git arc continue --ref <current-ref>` directly before another implementation pass; continuation owns the committed-baseline and claimed-path checks.
 4. Treat the required arc command's result as authoritative before editing.
 
@@ -166,13 +166,13 @@ Use this table:
 
 | Arc result | Action |
 | --- | --- |
-| Success | Keep using the current ref and proceed. Do not run a supplementary workspace-state inspection or create another baseline. |
+| Success | Record the returned active ref and proceed. Do not run a supplementary workspace-state inspection. |
 | Rejection for dirty or changed paths, claim overlap, incompatible HEAD movement, or another plan-affecting condition | Stop before editing. Report the rejection, re-inspect the relevant source, and return to Brief mode when the approved plan no longer fits. |
 | Command cannot run, or its result cannot be confidently interpreted | Stop before editing. Report degraded checkpoint safety. Continue only if the user explicitly approves degraded safety. |
 
 Do not silently expand scope or switch implementation routes. If new facts change behavior, dependencies, lifecycle, ownership, validation, or the approved plan, stop and return to Brief mode.
 
-Plan creation verifies clean claimed paths before approval. If it rejects dirty paths, stop and ask the user what changed. Include **Committed — the workspace should now be clean, try again** as an option. Do not alter dirty paths to manufacture a plan.
+Plan creation permits dirt already owned by an active arc. It rejects unexplained dirty unclaimed paths unless the plan explicitly adopts them. Do not clean or restore another agent's claimed paths to manufacture a plan.
 
 #### During implementation
 
@@ -180,13 +180,13 @@ Preserve unrelated user or agent changes.
 
 Keep the current arc ref for explicit start, post-commit continuation, and restore. Active-registry commands resolve the caller's current arc without a ref.
 
-Before follow-up work on the same claimed files, run `wb git arc continue --ref <current-ref>`. Do not ask whether a proposal was committed. The command resolves that state. Use its returned successor. Partial commits keep all claims. Use `arc remove` to release clean paths. Do not commit a known-bad proposal. If committed state moved, re-inspect and create a new plan. If it reports a claim collision, ask the user to reply with **Claim released — retry the approved plan**. That reply preserves approval. Retry the arc command. Continue Implement if it succeeds and the approved plan still fits. Rebrief only if the retry finds a plan-affecting change. For any other rejection, stop and follow the reported recovery.
+Before follow-up work on the same claimed files, run `wb git arc continue --ref <current-ref>`. If it reports `Accepted commit proposals`, read every proposal ID and commit SHA. The previous claim set remains owned. If the approved plan is unchanged, run `wb git arc plan start -m <intent> -- <explicit-next-path> [...]`. If it changed, return to Brief and create an ordinary plan. Do not retry continue or mutate claims after accepted receipts.
 
 When approved work moves paths, use `wb git arc mv`. It automatically keeps the source and destination claimed without changing the ordinary Git index. Explicit operands and repeated `--map <source> <destination>` pairs apply immediately. Regex mode previews at most 200 sorted mappings; repeat it with `--confirm`, then preview again if more matches remain. Record the returned successor ref.
 
 After continuation, use `wb git arc add -- <additional-path> [...]` for new clean paths. Use `wb git arc adopt -- <dirty-path> [...]` for existing workspace changes. Never repeat claimed paths. Each command checks the claimed baseline and returns a successor. Remember the newest ref.
 
-When approved work no longer owns exact claimed entries, run `wb git arc remove -- <claimed-path> [...]`. Workbench rejects dirty removals, non-exact claims, or drift under retained claims. It changes no working-tree or index content. Record a returned successor SHA when claims remain. Removing the final clean claim releases the arc and leaves no active successor.
+When approved work no longer owns exact claimed entries, run `wb git arc remove -- <claimed-path> [...]`. Workbench rejects dirty removals, non-exact claims, or drift under retained claims. Removing the final clean claim creates a zero-claim resolved lifecycle summary that does not block settlement.
 
 #### In Review mode
 
@@ -400,4 +400,3 @@ If an active workflow enters Implement mode after explicit approval, approved im
 ### Workflow
 
 {workflow.active}
-

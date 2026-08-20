@@ -80,12 +80,30 @@ test("provider reconciliation starts concurrently and publishes each successful 
     threadId: "parent",
     updatedAt: "2026-08-19T00:00:00.000Z",
   };
+  const lifecycleState = {
+    checkpointCommit: "a".repeat(40),
+    claimedPaths: ["one.txt"],
+    harness: "codex" as const,
+    intentDescription: "Keep the parent claim visible.",
+    intentName: "parent claim",
+    phase: "active" as const,
+    proposals: [
+      { proposalId: "proposal-one", status: "proposed" as const },
+      { proposalId: "proposal-two", status: "committed" as const },
+    ],
+    threadId: "parent",
+    updatedAt: "2026-08-19T00:00:00.000Z",
+  };
+  let lifecycleListCalls = 0;
+  const gitArcs = {
+    findActiveClaim: async () => activeClaim,
+    findLifecycleState: async () => lifecycleState,
+    listActiveClaims: async () => [activeClaim],
+    listLifecycleStates: async () => { lifecycleListCalls += 1; return [lifecycleState]; },
+  };
   const feature = new WorkbenchThreadStateFeature({
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
-    gitArcs: {
-      findActiveClaim: async () => activeClaim,
-      listActiveClaims: async () => [activeClaim],
-    },
+    gitArcs,
     listSubagents: async () => ({
       subagents: [{
         createdAt: 1,
@@ -162,12 +180,29 @@ test("provider reconciliation starts concurrently and publishes each successful 
   assert.equal(final.entries.some((entry) => entry.entryKind === "subagent" && entry.identity.threadId === "child"), true);
   const parent = final.entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "parent");
   assert.ok(parent && parent.entryKind !== "draft");
-  assert.equal(parent.fileClaim?.proposalStatus, "proposed");
+  assert.deepEqual({ gitArc: (parent as { gitArc?: unknown }).gitArc, lifecycleListCalls }, {
+    gitArc: {
+      checkpointCommit: lifecycleState.checkpointCommit,
+      claimedPaths: ["one.txt"],
+      intentDescription: lifecycleState.intentDescription,
+      intentName: lifecycleState.intentName,
+      phase: "active",
+      proposals: lifecycleState.proposals,
+      updatedAt: lifecycleState.updatedAt,
+    },
+    lifecycleListCalls: 1,
+  });
   const refreshedParent = await feature.controller.refreshFileClaim("project", "codex", "parent");
   assert.equal(refreshedParent?.identity.threadId, "parent");
-  assert.equal(refreshedParent?.fileClaim?.proposalStatus, "proposed");
-  assert.equal("harness" in (refreshedParent?.fileClaim ?? {}), false);
-  assert.equal("threadId" in (refreshedParent?.fileClaim ?? {}), false);
+  assert.deepEqual((refreshedParent as { gitArc?: unknown } | null)?.gitArc, {
+    checkpointCommit: lifecycleState.checkpointCommit,
+    claimedPaths: ["one.txt"],
+    intentDescription: lifecycleState.intentDescription,
+    intentName: lifecycleState.intentName,
+    phase: "active",
+    proposals: lifecycleState.proposals,
+    updatedAt: lifecycleState.updatedAt,
+  });
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });
 });

@@ -199,10 +199,11 @@ In Implement mode:
 Before the first file edit in Implement mode:
 
 - Run the required arc command directly without preceding it with raw `git status`, raw `git diff`, `arc compare`, or `arc diff`; the operation owns its safety checks and its rejection is the stop signal.
-- For an inactive plan's first Implement pass, run `wb git arc start --ref <plan-ref>`; it compares the stored claimed set, activates the claims, and creates no new ref.
+- For an inactive plan's first Implement pass, run `wb git arc start` to resolve the current plan, or `wb git arc start --ref <plan-ref>` for an exact historical ref. Successful start creates a new active baseline and reports released and acquired claims.
 - When the same implementation arc is already active, do not rerun `arc start`; run `wb git arc continue --ref <current-ref>` directly before another implementation pass.
-- If the required arc command succeeds, keep the same current ref and continue without a supplementary workspace-state inspection.
-- If plan creation rejected dirty claimed paths, stop and ask the user what changed. Include **Committed — the workspace should now be clean, try again** as an option.
+- If the required arc command succeeds, remember the returned active ref and continue without a supplementary workspace-state inspection.
+- If `arc continue` reports `Accepted commit proposals`, keep the previous claim set untouched. If the approved plan is unchanged, run `wb git arc plan start -m <intent> -- <explicit-next-path> [...]`. If the plan changed, return to Brief with a new ordinary `wb git arc plan -m <intent> -- <path> [...]`.
+- Dirty paths owned by active arcs can appear in an ordinary plan. Dirty unclaimed paths require explicit `--adopt <dirty-path>` intent. Do not ask the user to clean another agent's claimed work.
 - If the required arc command rejects dirty or changed paths, claim overlap, incompatible HEAD movement, or another plan-affecting condition, stop before editing, re-inspect, and return to Brief mode when the approved plan no longer fits. Tell the user the workspace changed since approval, but do not dump checkpoint plumbing unless they ask or the details matter for resolving the conflict.
 - If the required arc command cannot run, or you cannot confidently interpret its result, stop before editing and report degraded checkpoint safety. Continue without it only after explicit user approval.
 

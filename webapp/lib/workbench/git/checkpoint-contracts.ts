@@ -10,6 +10,7 @@ import { z } from "zod";
 const nonEmptyString = z.string().trim().min(1);
 const checkpointSha = nonEmptyString.regex(/^[a-f0-9]{7,64}$/iu);
 const checkpointPaths = z.array(nonEmptyString).min(1);
+const optionalCheckpointPaths = z.array(nonEmptyString);
 
 export const GitArcMoveMappingSchema = z.object({
   destination: nonEmptyString,
@@ -40,9 +41,21 @@ const checkpointBaseRequest = {
 export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("plan"),
+    adoptPaths: optionalCheckpointPaths.default([]),
     intentDescription: z.string().default(""),
     intentName: nonEmptyString,
-    paths: checkpointPaths,
+    paths: optionalCheckpointPaths,
+    ...checkpointBaseRequest,
+  }),
+  z.object({ action: z.literal("planAdd"), paths: checkpointPaths, ...checkpointBaseRequest }),
+  z.object({ action: z.literal("planAdopt"), paths: checkpointPaths, ...checkpointBaseRequest }),
+  z.object({ action: z.literal("planRemove"), paths: checkpointPaths, ...checkpointBaseRequest }),
+  z.object({
+    action: z.literal("planStart"),
+    adoptPaths: optionalCheckpointPaths.default([]),
+    intentDescription: z.string().default(""),
+    intentName: nonEmptyString,
+    paths: optionalCheckpointPaths,
     ...checkpointBaseRequest,
   }),
   z.object({
@@ -52,7 +65,7 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   }),
   z.object({
     action: z.literal("arcStart"),
-    checkpointCommit: checkpointSha,
+    checkpointCommit: checkpointSha.optional(),
     ...checkpointBaseRequest,
   }),
   z.object({
@@ -82,15 +95,23 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   }),
   z.object({
     action: z.literal("diff"),
+    checkpointCommit: checkpointSha.optional(),
     paths: checkpointPaths.optional(),
     ...checkpointBaseRequest,
   }),
   z.object({
     action: z.literal("proposalCreate"),
     amend: z.boolean().default(false),
+    amendProposalId: nonEmptyString.optional(),
     description: z.string(),
     paths: checkpointPaths.optional(),
+    replaceProposalId: nonEmptyString.optional(),
     title: z.string(),
+    ...checkpointBaseRequest,
+  }),
+  z.object({
+    action: z.literal("proposalRescind"),
+    proposalId: nonEmptyString,
     ...checkpointBaseRequest,
   }),
   z.object({
@@ -157,7 +178,7 @@ export const GitCheckpointProposalSchema = z.object({
   mode: z.enum(["amend", "commit"]),
   paths: checkpointPaths,
   proposalId: nonEmptyString,
-  status: z.enum(["proposed", "committed", "superseded", "unavailable"]),
+  status: z.enum(["proposed", "committed", "rescinded", "superseded", "unavailable"]),
   supersededByProposalId: nonEmptyString.nullable(),
   supersededBySha: checkpointSha.nullable(),
   title: nonEmptyString,

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadGitArcPresentationContext: identify the active harness and the one proposal hoisted into terminal thread controls. Keywords: thread, git, arc, proposal, presentation.
+ * - default ThreadGitArcPresentationContext: identify the active harness and proposal-id set hoisted into terminal thread controls. Keywords: thread, git, arc, proposal, presentation.
  * - getGitArcClaimReleaseAction: choose clean unclaim or dirty restore from the active comparison. Keywords: claim, compare, action.
  */
 "use client";
@@ -11,7 +11,9 @@ import type { WorkbenchHarness } from "../../../lib/types";
 
 export interface ThreadGitArcPresentation {
   harness: WorkbenchHarness;
-  hoistedProposalId: string | null;
+  /** @deprecated Transitional input for pre-grouped tests and callers. */
+  hoistedProposalId?: string | null;
+  hoistedProposalIds?: ReadonlySet<string>;
 }
 
 type ReleaseAction = "restore" | "unclaim";

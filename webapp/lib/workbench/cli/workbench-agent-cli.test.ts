@@ -23,6 +23,7 @@ import { adaptWorkbenchAgentCliResponse } from "./workbench-agent-cli-responses.
 import { parseGitArcReceipt } from "../git/git-arc-receipts.ts";
 
 const execFileAsync = promisify(execFile);
+const gitArcOptions = { callerThreadId: "thread-1", cwd: "C:/workspace" };
 const shellSourcePath = fileURLToPath(new URL("./workbench-agent-cli.sh", import.meta.url));
 const requests: Array<{ body: string; method: string; url: string }> = [];
 let agentCommandController: WorkbenchAgentCommandController;
@@ -364,6 +365,33 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     title: "Title",
   });
   assert.equal(proposal.request.responseKind, "git-arc-propose");
+
+  const replacementProposal = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "propose", "--replace", "proposal-one", "-m", "Replacement",
+  ], gitOptions);
+  assert.equal(replacementProposal.kind, "request");
+  assert.deepEqual(replacementProposal.request.body, {
+    action: "proposalCreate",
+    amend: false,
+    cwd: "C:/workspace",
+    description: "",
+    harness: "codex",
+    replaceProposalId: "proposal-one",
+    threadId: "thread-1",
+    title: "Replacement",
+  });
+
+  const rescindProposal = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "rescind", "--proposal", "proposal-one",
+  ], gitOptions);
+  assert.equal(rescindProposal.kind, "request");
+  assert.deepEqual(rescindProposal.request.body, {
+    action: "proposalRescind",
+    cwd: "C:/workspace",
+    harness: "codex",
+    proposalId: "proposal-one",
+    threadId: "thread-1",
+  });
 
   const checkpointRestore = await parseWorkbenchAgentCliCommand([
     "git", "arc", "restore", "--ref", "abc", "--confirm",
@@ -927,4 +955,53 @@ test("unwraps Browse output and honors Browse failure status inside HTTP success
     stderr: "Browse exploded\ndetails\n",
     stdout: "",
   });
+});
+
+test("parses current-plan creation and revision commands", async () => {
+  const empty = await parseWorkbenchAgentCliCommand(["git", "arc", "plan", "-m", "Draft"], gitArcOptions);
+  assert.equal(empty.kind, "request");
+  const adopted = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "plan", "-m", "Adopt dirt", "--adopt", "src/dirty-a.ts", "--adopt", "src/dirty-b.ts", "--", "src/clean.ts",
+  ], gitArcOptions);
+  assert.equal(adopted.kind, "request");
+  assert.deepEqual(adopted.request.body, {
+    action: "plan",
+    adoptPaths: ["src/dirty-a.ts", "src/dirty-b.ts"],
+    cwd: "C:/workspace",
+    harness: "codex",
+    intentDescription: "",
+    intentName: "Adopt dirt",
+    paths: ["src/clean.ts"],
+    threadId: "thread-1",
+  });
+  const add = await parseWorkbenchAgentCliCommand(["git", "arc", "plan", "add", "--", "src/a.ts"], gitArcOptions);
+  assert.equal(add.kind, "request");
+  assert.equal(add.request.body?.action, "planAdd");
+  const remove = await parseWorkbenchAgentCliCommand(["git", "arc", "plan", "remove", "--", "src/a.ts"], gitArcOptions);
+  assert.equal(remove.kind, "request");
+  assert.equal(remove.request.body?.action, "planRemove");
+  const adopt = await parseWorkbenchAgentCliCommand(["git", "arc", "plan", "adopt", "--", "src/a.ts"], gitArcOptions);
+  assert.equal(adopt.kind, "request");
+  assert.equal(adopt.request.body?.action, "planAdopt");
+});
+
+test("parses combined plan start and ref-free start", async () => {
+  const combined = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "plan", "start", "-m", "Continue", "--adopt", "src/dirty.ts", "--", "src/a.ts",
+  ], gitArcOptions);
+  assert.equal(combined.kind, "request");
+  assert.equal(combined.request.body?.action, "planStart");
+  assert.deepEqual(combined.request.body?.adoptPaths, ["src/dirty.ts"]);
+  const start = await parseWorkbenchAgentCliCommand(["git", "arc", "start"], gitArcOptions);
+  assert.equal(start.kind, "request");
+  assert.equal(start.request.body?.action, "arcStart");
+});
+
+test("parses explicit plan-ref diff and targeted amend", async () => {
+  const diff = await parseWorkbenchAgentCliCommand(["git", "arc", "diff", "--ref", "abcdef1", "--", "src/a.ts"], gitArcOptions);
+  assert.equal(diff.kind, "request");
+  assert.equal(diff.request.body?.checkpointCommit, "abcdef1");
+  const amend = await parseWorkbenchAgentCliCommand(["git", "arc", "propose", "--amend", "proposal-one"], gitArcOptions);
+  assert.equal(amend.kind, "request");
+  assert.equal(amend.request.body?.amendProposalId, "proposal-one");
 });

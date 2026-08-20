@@ -106,3 +106,37 @@ test("arc move previews do not refresh claims while applied moves do", async () 
   })).status, 200);
   assert.equal(refreshCount, 1);
 });
+
+test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actions", async () => {
+  const calls: string[] = [];
+  const feature = new WorkbenchGitArcFeature({
+    getThreadClaimContext: async () => ({
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+      title: "Thread",
+    }),
+    refreshThreadClaim: async () => undefined,
+    resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+  const internal = (feature as unknown as { controller: Record<string, (...args: never[]) => Promise<object>> }).controller;
+  for (const method of ["createPlan", "addToPlan", "removeFromPlan", "adoptIntoPlan", "createAndStartPlan", "startArc", "rescindProposal", "diff", "createProposal"] as const) {
+    internal[method] = async () => { calls.push(method); return {}; };
+  }
+  const common = { cwd: "C:/Git/Project", harness: "codex" as const, threadId: "thread-one" };
+  const requests = [
+    { action: "plan", intentDescription: "", intentName: "draft", paths: [], ...common },
+    { action: "planAdd", paths: ["src/a.ts"], ...common },
+    { action: "planRemove", paths: ["src/a.ts"], ...common },
+    { action: "planAdopt", paths: ["src/dirty.ts"], ...common },
+    { action: "planStart", intentDescription: "", intentName: "start", paths: ["src/a.ts"], ...common },
+    { action: "arcStart", ...common },
+    { action: "proposalRescind", proposalId: "proposal-one", ...common },
+    { action: "diff", checkpointCommit: "abcdef1", paths: ["src/a.ts"], ...common },
+    { action: "proposalCreate", amendProposalId: "proposal-one", description: "", title: "amend", ...common },
+  ];
+  const statuses = await Promise.all(requests.map(async (request) => (await feature.executeRequest(request)).status));
+  assert.deepEqual(statuses, Array.from({ length: requests.length }, () => 200));
+  assert.deepEqual([...calls].sort(), [
+    "createPlan", "addToPlan", "removeFromPlan", "adoptIntoPlan", "createAndStartPlan", "startArc", "rescindProposal", "diff", "createProposal",
+  ].sort());
+});

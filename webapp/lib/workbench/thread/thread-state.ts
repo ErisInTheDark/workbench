@@ -112,16 +112,26 @@ export const WorkbenchThreadLifecycleSchema = z.union([
   : lifecycle);
 export type WorkbenchThreadLifecycle = z.infer<typeof WorkbenchThreadLifecycleSchema>;
 
-export const WorkbenchGitArcFileClaimSchema = z.object({
+export const WorkbenchGitArcLifecycleStateSchema = z.object({
   checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
-  claimedPaths: z.array(z.string().min(1)).min(1),
+  claimedPaths: z.array(z.string().min(1)),
   intentDescription: z.string(),
   intentName: z.string().min(1),
-  proposalId: z.string().min(1).nullable(),
-  proposalStatus: z.enum(["committed", "proposed", "superseded", "unavailable"]).nullable().optional(),
+  phase: z.enum(["active", "resolved"]),
+  proposals: z.array(z.object({
+    proposalId: z.string().min(1),
+    status: z.enum(["committed", "proposed"]),
+  }).strict()),
   updatedAt: z.string().min(1),
-}).strict();
-export type WorkbenchGitArcFileClaim = z.infer<typeof WorkbenchGitArcFileClaimSchema>;
+}).strict().superRefine((value, context) => {
+  if (value.phase === "active" && !value.claimedPaths.length) {
+    context.addIssue({ code: "custom", message: "An active Git arc must own at least one claimed path." });
+  }
+  if (value.phase === "resolved" && value.claimedPaths.length) {
+    context.addIssue({ code: "custom", message: "A resolved Git arc cannot own claimed paths." });
+  }
+});
+export type WorkbenchGitArcLifecycleState = z.infer<typeof WorkbenchGitArcLifecycleStateSchema>;
 
 const VisibleMetadataSchema = z.object({ archived: z.literal(false), pinned: z.boolean(), snoozed: z.boolean() }).strict();
 const ArchivedMetadataSchema = z.object({ archived: z.literal(true), pinned: z.literal(false), snoozed: z.literal(false) }).strict();
@@ -135,7 +145,7 @@ const DraftEntrySchema = SidebarCommonSchema.extend({
 }).strict();
 const TopLevelEntrySchema = SidebarCommonSchema.extend({
   entryKind: z.literal("thread"),
-  fileClaim: WorkbenchGitArcFileClaimSchema.nullable().optional(),
+  gitArc: WorkbenchGitArcLifecycleStateSchema.nullable().optional(),
   identity: ThreadIdentitySchema,
   lifecycle: WorkbenchThreadLifecycleSchema,
   metadata: TopLevelMetadataSchema,
@@ -145,7 +155,7 @@ const SubagentEntrySchema = SidebarCommonSchema.extend({
   cwd: z.string().min(1),
   directSubagentIndex: z.number().int().nonnegative(),
   entryKind: z.literal("subagent"),
-  fileClaim: WorkbenchGitArcFileClaimSchema.nullable().optional(),
+  gitArc: WorkbenchGitArcLifecycleStateSchema.nullable().optional(),
   identity: ThreadIdentitySchema,
   lifecycle: WorkbenchThreadLifecycleSchema,
   name: z.string().trim().min(1),

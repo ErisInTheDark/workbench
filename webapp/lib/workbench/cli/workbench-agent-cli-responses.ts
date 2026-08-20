@@ -96,7 +96,10 @@ export function adaptWorkbenchAgentCliResponse({
             ? "adopt"
           : request.responseKind === "git-arc-continue" ? "continue" : "remove";
       const label = action === "plan"
-        ? "Created Git plan"
+        ? request.body?.action === "planAdd" ? "Extended Git plan"
+          : request.body?.action === "planRemove" ? "Reduced Git plan"
+            : request.body?.action === "planAdopt" ? "Adopted changes into Git plan"
+              : "Created Git plan"
         : action === "adopt" ? "Adopted workspace changes"
         : action === "continue" ? "Continued Git arc" : "Created successor arc ref";
       return succeeded(appendArcReceipt([
@@ -107,8 +110,14 @@ export function adaptWorkbenchAgentCliResponse({
     case "git-arc-compare": {
       const action = request.responseKind === "git-arc-start" ? "start" : "compare";
       const changes = Array.isArray(payload?.changes) ? payload.changes.filter(isRecord) : [];
+      const releasedClaims = readStringArray(payload, "releasedClaims");
+      const acquiredClaims = readStringArray(payload, "acquiredClaims");
       return succeeded(appendArcReceipt([
         "Workbench arc comparison",
+        ...(action === "start" ? [
+          `Released claims: ${releasedClaims.length ? releasedClaims.join(", ") : "none"}`,
+          `Acquired claims: ${acquiredClaims.length ? acquiredClaims.join(", ") : "none"}`,
+        ] : []),
         ...changes.map((change) => {
           const kind = isRecord(change.kind) ? readString(change.kind, "type").slice(0, 1).toUpperCase() : "M";
           const additions = typeof change.additions === "number" ? change.additions : 0;
@@ -150,8 +159,11 @@ export function adaptWorkbenchAgentCliResponse({
       ].filter(Boolean), createArcReceipt("diff", payload, request)).join("\n"));
     case "git-arc-propose": {
       const proposalId = readString(payload, "proposalId");
+      const rescinded = request.body?.action === "proposalRescind";
       return succeeded(appendArcReceipt([
-        `Workbench arc proposal: ${proposalId || "(unknown proposal)"}`,
+        rescinded
+          ? `Rescinded arc proposal: ${proposalId || "(unknown proposal)"}`
+          : `Workbench arc proposal: ${proposalId || "(unknown proposal)"}`,
       ], createArcReceipt("propose", payload, request)).join("\n"));
     }
     case "git-arc-restore": {

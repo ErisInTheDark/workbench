@@ -193,7 +193,9 @@ export default function ThreadCheckpointCommitItem(props: ThreadCheckpointCommit
   const presentation = useContext(ThreadGitArcPresentationContext);
   const harness = props.harness ?? presentation?.harness ?? "codex";
   const hoistedTargetId = props.proposalId ? `thread-checkpoint-proposal-${props.proposalId}` : null;
-  if (!props.hoisted && props.proposalId && presentation?.hoistedProposalId === props.proposalId) {
+  if (!props.hoisted && props.proposalId && (
+    presentation?.hoistedProposalIds?.has(props.proposalId) || presentation?.hoistedProposalId === props.proposalId
+  )) {
     return (
       <ThreadGitArcItem
         commandIntent={{ action: "propose", intentName: null, paths: [], ref: null }}

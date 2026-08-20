@@ -318,7 +318,7 @@ test("failed arc adoption publishes neither a successor ref nor a replacement re
   assert.deepEqual(await registry.find({ harness: "codex", threadId: "adopt-owner" }), activeBefore);
 });
 
-test("partial proposal commits retain the full claim set and advance every retained baseline", async (context) => {
+test("accepted proposals preserve the observed claim set until continuation requires an explicit replan", async (context) => {
   const { repository, source, state } = await copyRepository(context, CONTROLLER_PARTIAL_READY_FIXTURE);
   const controller = new WorkbenchGitCheckpointController();
   await fs.writeFile(path.join(source, "one.txt"), "committed one\n");
@@ -340,18 +340,37 @@ test("partial proposal commits retain the full claim set and advance every retai
     threadId: "partial-thread",
     title: "commit one",
   });
-  const active = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
-  assert.deepEqual(active?.claimedPaths, ["one.txt", "two.txt"]);
-  assert.notEqual(active?.checkpointCommit, state.planCheckpoint);
-  assert.equal(await git(source, ["show", `${active?.checkpointCommit}:one.txt`]), "committed one\n");
+  const active = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" }) as {
+    checkpointCommit?: string; claimedPaths?: string[]; phase?: string; proposalIds?: string[];
+  } | null;
+  assert.deepEqual({
+    checkpointCommit: active?.checkpointCommit,
+    claimedPaths: active?.claimedPaths,
+    phase: active?.phase,
+    proposalIds: active?.proposalIds,
+  }, {
+    checkpointCommit: state.planCheckpoint,
+    claimedPaths: ["one.txt", "two.txt"],
+    phase: "active",
+    proposalIds: [proposal.proposalId],
+  });
   assert.equal(await git(source, ["show", `${active?.checkpointCommit}:two.txt`]), "two\n");
 
   assert.equal(await fs.readFile(path.join(source, "two.txt"), "utf8"), "remaining two\n");
-
-  await fs.writeFile(path.join(source, "one.txt"), "revised committed one\n");
   const compared = await controller.compare({ cwd: source, harness: "codex", threadId: "partial-thread" });
-  assert.deepEqual(compared.changes.map((change) => change.path), ["one.txt", "two.txt"]);
+  assert.deepEqual(compared.changes.map((change) => change.path), ["two.txt"]);
+
+  await assert.rejects(controller.continueArc({
+    checkpointCommit: state.planCheckpoint,
+    cwd: source,
+    harness: "codex",
+    threadId: "partial-thread",
+  }), new RegExp(`Accepted commit proposals:[\\s\\S]*${proposal.proposalId}[\\s\\S]*[a-f0-9]{40}`, "u"));
+  const afterContinue = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
+  assert.deepEqual(afterContinue?.claimedPaths, ["one.txt", "two.txt"]);
+  assert.equal(afterContinue?.checkpointCommit, state.planCheckpoint);
 });
+
 
 test("amend proposal creation rejects HEAD already contained by a refreshed remote ref", async (context) => {
   const { source } = await copyRepository(context, CONTROLLER_PUSHED_AMEND_READY_FIXTURE);

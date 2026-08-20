@@ -529,21 +529,21 @@ const COMMANDS: readonly CommandDefinition[] = [
     },
   },
   {
-    description: "Create one inactive clean Git plan with a named file set.",
+    description: "Create or replace this thread's current inactive Git plan.",
     helpGroups: ["git-arc"],
     words: ["git", "arc", "plan"],
-    usage: "wb git arc plan -m <short-intent> [-m <optional-description>] -- <path> [<path>...]",
+    usage: "wb git arc plan -m <short-intent> [-m <optional-description>] [--adopt <dirty-path>]... [-- <path>...]",
     async build({ args, callerHarness, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["-m"] }), {
-        repeatable: ["-m"],
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["-m", "--adopt"] }), {
+        repeatable: ["-m", "--adopt"],
         trailing: true,
       });
-      if (!flags.trailing.length) throw new Error("Plan paths are required after --.");
       const messages = flags.repeated("-m").map((message) => message.trim());
       if (messages.length > 2) throw new Error("Arc plan accepts at most two -m values.");
       if (!messages[0]) throw new Error("-m is required.");
       return post("/api/git-checkpoint", {
         action: "plan",
+        ...(flags.repeated("--adopt").length ? { adoptPaths: flags.repeated("--adopt") } : {}),
         cwd,
         harness: requireCallerHarness(callerHarness),
         intentDescription: messages[1] ?? "",
@@ -553,16 +553,52 @@ const COMMANDS: readonly CommandDefinition[] = [
       }, "git-arc-plan");
     },
   },
+  ...(["add", "remove", "adopt"] as const).map((operation): CommandDefinition => ({
+    description: `${operation === "add" ? "Add clean paths to" : operation === "adopt" ? "Adopt dirty paths into" : "Remove paths from"} the current inactive plan.`,
+    helpGroups: ["git-arc"],
+    words: ["git", "arc", "plan", operation],
+    usage: `wb git arc plan ${operation} -- <path> [<path>...]`,
+    async build({ args, callerHarness, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: [] }), { trailing: true });
+      if (!flags.trailing.length) throw new Error(`Arc plan ${operation} requires at least one path after --.`);
+      return post("/api/git-checkpoint", {
+        action: operation === "add" ? "planAdd" : operation === "adopt" ? "planAdopt" : "planRemove",
+        cwd,
+        harness: requireCallerHarness(callerHarness),
+        paths: flags.trailing,
+        threadId: requireCallerThreadId(callerThreadId),
+      }, "git-arc-plan");
+    },
+  })),
+  {
+    description: "Create and activate a plan atomically.",
+    helpGroups: ["git-arc"],
+    words: ["git", "arc", "plan", "start"],
+    usage: "wb git arc plan start -m <short-intent> [-m <optional-description>] [--adopt <dirty-path>]... [-- <path>...]",
+    async build({ args, callerHarness, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["-m", "--adopt"] }), {
+        repeatable: ["-m", "--adopt"], trailing: true,
+      });
+      const messages = flags.repeated("-m").map((message) => message.trim());
+      if (messages.length > 2) throw new Error("Arc plan start accepts at most two -m values.");
+      if (!messages[0]) throw new Error("-m is required.");
+      return post("/api/git-checkpoint", {
+        action: "planStart", adoptPaths: flags.repeated("--adopt"), cwd,
+        harness: requireCallerHarness(callerHarness), intentDescription: messages[1] ?? "",
+        intentName: messages[0], paths: flags.trailing, threadId: requireCallerThreadId(callerThreadId),
+      }, "git-arc-start");
+    },
+  },
   {
     description: "Activate and compare a plan's files before implementation without creating another ref.",
     helpGroups: ["git-arc"],
     words: ["git", "arc", "start"],
-    usage: "wb git arc start --ref <ref>",
+    usage: "wb git arc start [--ref <ref>]",
     async build({ args, callerHarness, callerThreadId, cwd }) {
       const flags = new ParsedFlags(args, { values: ["--ref"] });
       return post("/api/git-checkpoint", {
         action: "arcStart",
-        checkpointCommit: flags.required("--ref"),
+        ...(flags.optional("--ref") ? { checkpointCommit: flags.optional("--ref")! } : {}),
         cwd,
         harness: requireCallerHarness(callerHarness),
         threadId: requireCallerThreadId(callerThreadId),
@@ -664,15 +700,16 @@ const COMMANDS: readonly CommandDefinition[] = [
       : "Show unified diff content for an arc's claimed set or selected paths.",
     helpGroups: ["git-arc"],
     words: ["git", "arc", action],
-    usage: `wb git arc ${action} [-- <path> [<path>...]]`,
+    usage: `wb git arc ${action} [--ref <plan-ref>] [-- <path> [<path>...]]`,
     async build({ args, callerHarness, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: [] }), {
-        trailing: true,
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["--ref"] }), {
+        trailing: true, values: ["--ref"],
       });
       return post("/api/git-checkpoint", {
         action,
         cwd,
         harness: requireCallerHarness(callerHarness),
+        ...(flags.optional("--ref") ? { checkpointCommit: flags.optional("--ref")! } : {}),
         ...(flags.trailing.length ? { paths: flags.trailing } : {}),
         threadId: requireCallerThreadId(callerThreadId),
       }, action === "compare" ? "git-arc-compare" : "git-arc-diff");
@@ -682,25 +719,47 @@ const COMMANDS: readonly CommandDefinition[] = [
     description: "Create a durable editable commit proposal from an arc's claimed changes or a subset.",
     helpGroups: ["git-arc"],
     words: ["git", "arc", "propose"],
-    usage: "wb git arc propose [--amend] [-m <title> [-m <description>]] [-- <claimed-path> [<claimed-path>...]]",
+    usage: "wb git arc propose [--amend] [<proposal-id>] [--replace <proposal-id>] [-m <title> [-m <description>]] [-- <claimed-path>...]",
     async build({ args, callerHarness, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { boolean: ["--amend"], values: ["-m"] }), {
-        boolean: ["--amend"],
-        repeatable: ["-m"],
+      let normalizedArgs = [...args];
+      const amendIndex = normalizedArgs.indexOf("--amend");
+      let amendProposalId: string | null = null;
+      if (amendIndex >= 0 && normalizedArgs[amendIndex + 1] && !normalizedArgs[amendIndex + 1].startsWith("-")) {
+        amendProposalId = normalizedArgs[amendIndex + 1];
+        normalizedArgs.splice(amendIndex + 1, 1);
+      }
+      const flags = new ParsedFlags(preservePowerShellTrailingPaths(normalizedArgs, { boolean: ["--amend"], values: ["-m", "--replace"] }), {
+        boolean: ["--amend"], repeatable: ["-m"], values: ["--replace"],
         trailing: true,
       });
+      if (flags.has("--amend") && flags.optional("--replace")) throw new Error("--amend and --replace cannot be combined.");
       const messages = flags.repeated("-m").map((message) => message.trim());
       if (messages.length > 2) throw new Error("Arc proposal accepts at most two -m values.");
       if (!flags.has("--amend") && !messages[0]) throw new Error("-m is required unless --amend is present.");
       return post("/api/git-checkpoint", {
         action: "proposalCreate",
         amend: flags.has("--amend"),
+        ...(amendProposalId ? { amendProposalId } : {}),
         cwd,
         description: messages[1] ?? "",
         harness: requireCallerHarness(callerHarness),
         ...(flags.trailing.length ? { paths: flags.trailing } : {}),
+        ...(flags.optional("--replace") ? { replaceProposalId: flags.optional("--replace")! } : {}),
         threadId: requireCallerThreadId(callerThreadId),
         title: messages[0] ?? "",
+      }, "git-arc-propose");
+    },
+  },
+  {
+    description: "Rescind one pending proposal without changing the arc.",
+    helpGroups: ["git-arc"],
+    words: ["git", "arc", "rescind"],
+    usage: "wb git arc rescind --proposal <proposal-id>",
+    async build({ args, callerHarness, callerThreadId, cwd }) {
+      const flags = new ParsedFlags(args, { values: ["--proposal"] });
+      return post("/api/git-checkpoint", {
+        action: "proposalRescind", cwd, harness: requireCallerHarness(callerHarness),
+        proposalId: flags.required("--proposal"), threadId: requireCallerThreadId(callerThreadId),
       }, "git-arc-propose");
     },
   },

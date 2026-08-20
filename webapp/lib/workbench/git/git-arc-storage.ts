@@ -11,9 +11,10 @@ const CHECKPOINT_COMMIT_PATTERN = /^[a-f0-9]{7,64}$/iu;
 
 export type CheckpointKind = "arc" | "implement" | "plan";
 export type GitArcHarness = "codex" | "copilot" | "opencode";
-export type GitArcProposalStatus = "committed" | "proposed" | "superseded" | "unavailable";
+export type GitArcProposalStatus = "committed" | "proposed" | "rescinded" | "superseded" | "unavailable";
 
 export interface CheckpointMetadata {
+  adoptedPaths?: string[];
   amendedFrom: string | null;
   intentDescription?: string;
   kind: CheckpointKind;
@@ -44,12 +45,26 @@ export interface ProposalMetadata {
 }
 
 export interface ArcOutcome {
+  acceptedProposals?: Array<{ commitSha: string; headSha: string; proposalId: string }>;
   committedSha: string | null;
   proposalId: string | null;
   sourceCheckpoint: string;
   status: "committed" | "continued" | "partial" | "proposed" | "released";
   successorCheckpoint: string | null;
   version: 1;
+}
+
+export function normalizeArcOutcome(outcome: ArcOutcome, currentHead?: string): ArcOutcome {
+  if (outcome.acceptedProposals) return outcome;
+  if (!outcome.proposalId || !outcome.committedSha) return { ...outcome, acceptedProposals: [] };
+  return {
+    ...outcome,
+    acceptedProposals: [{
+      commitSha: outcome.committedSha,
+      headSha: currentHead ?? outcome.committedSha,
+      proposalId: outcome.proposalId,
+    }],
+  };
 }
 
 export function normalizeThreadId(threadId: string) {
@@ -125,6 +140,13 @@ export function remapProposalMetadata(metadata: ProposalMetadata, commits: Reado
 export function remapArcOutcome(outcome: ArcOutcome, commits: ReadonlyMap<string, string>): ArcOutcome {
   return {
     ...outcome,
+    ...(outcome.acceptedProposals ? {
+      acceptedProposals: outcome.acceptedProposals.map((proposal) => ({
+        ...proposal,
+        commitSha: mapped(proposal.commitSha, commits)!,
+        headSha: mapped(proposal.headSha, commits)!,
+      })),
+    } : {}),
     committedSha: mapped(outcome.committedSha, commits),
     sourceCheckpoint: mapped(outcome.sourceCheckpoint, commits)!,
     successorCheckpoint: mapped(outcome.successorCheckpoint, commits),

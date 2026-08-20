@@ -128,7 +128,7 @@ export default memo(function WorkbenchThreadSidebar({
       onSelect: () => onOpenThread(target),
     }];
 
-    if (terminal && (entry.lifecycle.settled || !entry.fileClaim)) {
+    if (terminal && (entry.lifecycle.settled || !entry.gitArc?.claimedPaths.length)) {
       items.push(entry.lifecycle.settled ? {
         icon: <RestoreThreadIcon className="size-4" />,
         id: "restore",

@@ -204,9 +204,10 @@ export default function WorkbenchThreadList({
     const group = getThreadSidebarGroup(entry);
     const lifecycle = entry.entryKind === "draft" ? null : entry.lifecycle;
     const attentionLabel = entry.entryKind === "draft" ? "" : attentionLabelsByThreadId[entry.identity.threadId]?.trim() ?? "";
-    const claimedPaths = entry.entryKind === "draft" ? [] : entry.fileClaim?.claimedPaths ?? [];
+    const gitArc = entry.entryKind === "draft" ? null : entry.gitArc ?? null;
+    const claimedPaths = gitArc?.claimedPaths ?? [];
     const claimedFileCount = claimedPaths.length;
-    const hasProposedCommit = entry.entryKind !== "draft" && entry.fileClaim?.proposalStatus === "proposed";
+    const hasProposedCommit = Boolean(gitArc?.proposals.some(({ status }) => status === "proposed"));
     const baseStatus = entry.entryKind === "draft"
       ? "Draft"
       : lifecycle?.kind === "needsAttention" ? attentionLabel || "Needs attention" : lifecycle?.kind === "working" ? "Working" : lifecycle?.kind === "stopped" ? "Stopped" : "Completed";
@@ -217,8 +218,9 @@ export default function WorkbenchThreadList({
     const relativeTime = formatThreadRelativeTimestamp(entry.activityAt / 1000, nowMs);
     const exactTime = timestamp.toLocaleString();
     const canComplete = entry.entryKind === "thread" && !isWorkbenchThreadStatusProviderOwned(entry.lifecycle) && (entry.lifecycle.kind === "needsAttention" || entry.lifecycle.kind === "stopped");
-    const baseAction = entry.entryKind === "draft" ? "discard" : group === "other" ? "restore" : group === "snoozed" ? "wake" : canComplete ? "complete" : lifecycle?.kind === "completed" && !lifecycle.settled && !entry.fileClaim ? "settle" : null;
-    const canShiftSettle = canComplete && !entry.fileClaim;
+    const hasLiveClaims = claimedFileCount > 0;
+    const baseAction = entry.entryKind === "draft" ? "discard" : group === "other" ? "restore" : group === "snoozed" ? "wake" : canComplete ? "complete" : lifecycle?.kind === "completed" && !lifecycle.settled && !hasLiveClaims ? "settle" : null;
+    const canShiftSettle = canComplete && !hasLiveClaims;
     const action = canShiftSettle && isShiftPressed ? "settle" : baseAction;
     const Icon = entry.entryKind === "draft" ? DraftThreadIcon : hasProposedCommit ? ProposedCommitThreadIcon : lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
     const statusClassName = entry.entryKind === "draft"

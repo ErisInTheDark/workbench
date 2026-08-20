@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadGitArcLifecycleCard: render and release one terminal thread's durable Git arc file claim. Keywords: thread, git, arc, claim, restore, release.
+ * - default ThreadGitArcLifecycleCard: render ordered proposals and claim resolution for one durable Git arc lifecycle. Keywords: thread, git, arc, proposal, restore, resolved.
  */
 "use client";
 
@@ -9,7 +9,8 @@ import { useEffect, useState } from "react";
 import { GitCheckpointCompareResultSchema } from "../../../lib/workbench/git/checkpoint-contracts";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import reportClientSchemaError from "../../../lib/workbench/report-client-schema-error";
-import type { WorkbenchGitArcFileClaim, WorkbenchHarnessId } from "../../../lib/workbench/thread/thread-state";
+import type { GitArcProposalStatus } from "../../../lib/workbench/git/git-arc-storage";
+import type { WorkbenchGitArcLifecycleState, WorkbenchHarnessId } from "../../../lib/workbench/thread/thread-state";
 import PrimaryButton from "../PrimaryButton";
 import GitArcIcon from "./GitArcIcon";
 import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
@@ -19,6 +20,11 @@ import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
 
 type ReleaseAction = "restore" | "unclaim";
 type ClaimChangeState = "clean" | "dirty" | "error" | "loading";
+type LifecyclePresentation = Omit<WorkbenchGitArcLifecycleState, "phase" | "proposals"> & {
+  phase?: "active" | "resolved";
+  proposalIds?: string[];
+  proposals: Array<{ proposalId: string; status: GitArcProposalStatus }>;
+};
 
 export default function ThreadGitArcLifecycleCard({
   claim,
@@ -31,7 +37,7 @@ export default function ThreadGitArcLifecycleCard({
   threadId,
   workspaceRoots,
 }: {
-  claim: WorkbenchGitArcFileClaim;
+  claim: LifecyclePresentation;
   cwd: string;
   harness: WorkbenchHarnessId;
   onReleased: () => Promise<void>;
@@ -41,11 +47,17 @@ export default function ThreadGitArcLifecycleCard({
   threadId: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  const phase = claim.phase ?? (claim.claimedPaths.length ? "active" : "resolved");
+  const visibleProposals = claim.proposals.filter(({ status }) => status === "proposed" || status === "committed");
   const [activeAction, setActiveAction] = useState<ReleaseAction | null>(null);
   const [changeState, setChangeState] = useState<ClaimChangeState>("loading");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (phase === "resolved" || !claim.claimedPaths.length) {
+      setChangeState("clean");
+      return;
+    }
     const controller = new AbortController();
     void (async () => {
       try {
@@ -70,7 +82,7 @@ export default function ThreadGitArcLifecycleCard({
       }
     })();
     return () => controller.abort();
-  }, [claim.checkpointCommit, cwd, harness, threadId]);
+  }, [claim.checkpointCommit, claim.claimedPaths.length, cwd, harness, phase, threadId]);
 
   const release = async (action: ReleaseAction) => {
     if (activeAction) return;
@@ -118,22 +130,30 @@ export default function ThreadGitArcLifecycleCard({
   return (
     <div className="my-2 w-full" data-thread-git-arc-lifecycle="true">
       <section className="w-full overflow-hidden rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)]" data-thread-git-arc-lifecycle-card="true">
-        {claim.proposalId ? (
-          <ThreadCheckpointCommitItem
-            commandOutcome="completed"
-            cwd={cwd}
-            embedded
-            harness={harness}
-            hoisted
-            intent={null}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            proposalId={claim.proposalId}
-            sourceItemId={`lifecycle-proposal:${claim.proposalId}`}
-            threadId={threadId}
-            workspaceRoots={workspaceRoots}
-          />
+        {visibleProposals.length ? (
+          visibleProposals.map(({ proposalId }, index) => (
+            <div
+              className={index ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]" : undefined}
+              data-thread-git-arc-proposal-separator={index ? "true" : undefined}
+              key={proposalId}
+            >
+              <ThreadCheckpointCommitItem
+                commandOutcome="completed"
+                cwd={cwd}
+                embedded
+                harness={harness}
+                hoisted
+                intent={null}
+                projectFilePaths={projectFilePaths}
+                projectId={projectId}
+                projectRootPath={projectRootPath}
+                proposalId={proposalId}
+                sourceItemId={`lifecycle-proposal:${proposalId}`}
+                threadId={threadId}
+                workspaceRoots={workspaceRoots}
+              />
+            </div>
+          ))
         ) : (
           <div className="px-3 py-2.5">
             <div className="flex min-w-0 items-center gap-2 text-[0.82em] leading-[1.45]">
@@ -144,7 +164,14 @@ export default function ThreadGitArcLifecycleCard({
             {claim.intentDescription ? <p className="m-0 mt-1 pl-6 text-[0.76em] leading-[1.45] text-muted">{claim.intentDescription}</p> : null}
           </div>
         )}
-        <div className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3 py-2" data-thread-git-arc-resolution="true">
+        <div
+          className={`${visibleProposals.length ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] " : ""}px-3 py-2`}
+          data-thread-git-arc-resolution="true"
+          data-thread-git-arc-resolution-separator={visibleProposals.length ? "true" : undefined}
+        >
+          {phase === "resolved" ? (
+            <div className="text-[0.76em] leading-[1.45] text-muted">Resolved</div>
+          ) : (
           <ThreadDisclosure
             contentClassName="mt-1 pl-1"
             summary={(
@@ -179,6 +206,7 @@ export default function ThreadGitArcLifecycleCard({
               workspaceRoots={workspaceRoots}
             />
           </ThreadDisclosure>
+          )}
           {error ? <p className="m-0 mt-1 text-[0.74em] leading-[1.45] text-[color:var(--danger)]">{error}</p> : null}
         </div>
       </section>

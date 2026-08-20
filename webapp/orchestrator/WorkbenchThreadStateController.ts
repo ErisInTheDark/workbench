@@ -23,7 +23,7 @@ import {
   type WorkbenchLifecycleEvent,
   type WorkbenchThreadLifecycle,
   type WorkbenchThreadDraft,
-  type WorkbenchGitArcFileClaim,
+  type WorkbenchGitArcLifecycleState,
   type WorkbenchHarnessId,
   type WorkbenchThreadActivityUpdate,
   type WorkbenchThreadSidebarEntry,
@@ -39,6 +39,23 @@ interface StoredThreadMetadata { archived: boolean; harness: "codex" | "copilot"
 type StoredThreadDraft = WorkbenchThreadDraft & { pinned?: boolean; snoozed?: boolean };
 interface StoredProjectStateV1 { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 1 }
 interface StoredProjectState { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 2 }
+type LegacyGitArcClaim = Omit<WorkbenchGitArcLifecycleState, "phase" | "proposals"> & { proposalId?: string | null; proposalStatus?: "committed" | "proposed" | null };
+
+function normalizeResolvedGitArc(value: WorkbenchGitArcLifecycleState | LegacyGitArcClaim | null) {
+  if (!value) return null;
+  if ("phase" in value) return value;
+  return {
+    checkpointCommit: value.checkpointCommit,
+    claimedPaths: value.claimedPaths,
+    intentDescription: value.intentDescription,
+    intentName: value.intentName,
+    phase: "active" as const,
+    proposals: value.proposalId && value.proposalStatus
+      ? [{ proposalId: value.proposalId, status: value.proposalStatus }]
+      : [],
+    updatedAt: value.updatedAt,
+  };
+}
 
 export interface WorkbenchThreadStateControllerOptions {
   getProjectCatalog: () => WorkbenchProjectsPayload;
@@ -55,9 +72,9 @@ export interface WorkbenchThreadStateControllerOptions {
     signal: AbortSignal,
     acceptProviderSnapshot: (harness: WorkbenchHarnessId, entries: WorkbenchThreadSidebarEntry[], options: { complete: boolean }) => void,
   ) => Promise<WorkbenchThreadReconciliationFailure[]>;
-  resolveFileClaim: (projectId: string, harness: WorkbenchHarnessId, threadId: string) => Promise<WorkbenchGitArcFileClaim | null>;
+  resolveGitArc: (projectId: string, harness: WorkbenchHarnessId, threadId: string) => Promise<WorkbenchGitArcLifecycleState | LegacyGitArcClaim | null>;
   resolveProjectRoot: (projectId: string) => Promise<string>;
-  runFileClaimTransition: <TValue>(projectId: string, operation: () => Promise<TValue>) => Promise<TValue>;
+  runGitArcTransition: <TValue>(projectId: string, operation: () => Promise<TValue>) => Promise<TValue>;
   storageRoot: string;
 }
 
@@ -427,8 +444,8 @@ export default class WorkbenchThreadStateController {
     return await this.enqueue(`${projectId}:thread:${key}`, async () => {
       const entry = state.entries.get(key);
       if (!entry || entry.entryKind === "draft") return null;
-      const fileClaim = await this.options.resolveFileClaim(projectId, harness, threadId);
-      const next = WorkbenchThreadSidebarEntrySchema.parse({ ...entry, fileClaim });
+      const gitArc = normalizeResolvedGitArc(await this.options.resolveGitArc(projectId, harness, threadId));
+      const next = WorkbenchThreadSidebarEntrySchema.parse({ ...entry, gitArc });
       if (next.entryKind === "draft") return null;
       if (areDeeplyEqual(entry, next)) return next;
       state.entries.set(key, next);
@@ -596,7 +613,7 @@ export default class WorkbenchThreadStateController {
         const lifecycle = overlay?.lifecycle ?? parsed.data.lifecycle;
         state.entries.set(key, overlay ? {
           ...parsed.data,
-          lifecycle: parsed.data.fileClaim && lifecycle.settled ? { ...lifecycle, settled: false as const } : lifecycle,
+          lifecycle: parsed.data.gitArc?.claimedPaths.length && lifecycle.settled ? { ...lifecycle, settled: false as const } : lifecycle,
           pinned: overlay.pinned,
         } : parsed.data);
         continue;
@@ -606,7 +623,7 @@ export default class WorkbenchThreadStateController {
         : { archived: false as const, pinned: overlay?.pinned ?? parsed.data.metadata.pinned, snoozed: overlay?.snoozed ?? parsed.data.metadata.snoozed };
       state.entries.set(key, overlay ? {
         ...parsed.data,
-        lifecycle: parsed.data.fileClaim && overlay.lifecycle.settled
+        lifecycle: parsed.data.gitArc?.claimedPaths.length && overlay.lifecycle.settled
           ? { ...overlay.lifecycle, settled: false as const }
           : overlay.lifecycle,
         metadata,
@@ -700,7 +717,7 @@ export default class WorkbenchThreadStateController {
       }
       if (
         request.method === "workbench/thread-state/settle"
-        && await this.options.resolveFileClaim(request.projectId, entry.identity.harness, entry.identity.threadId)
+        && normalizeResolvedGitArc(await this.options.resolveGitArc(request.projectId, entry.identity.harness, entry.identity.threadId))?.claimedPaths.length
       ) {
         return { accepted: false, revision: state.revision };
       }
@@ -739,7 +756,7 @@ export default class WorkbenchThreadStateController {
       return { accepted: true, revision: state.revision };
     });
     return request.method === "workbench/thread-state/settle"
-      ? await this.options.runFileClaimTransition(request.projectId, mutate)
+      ? await this.options.runGitArcTransition(request.projectId, mutate)
       : await mutate();
   }
 

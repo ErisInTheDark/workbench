@@ -3,6 +3,7 @@
  * - No production exports; Node tests protect checkpoint compare reuse, immediate proposal cards, summary actions, and clean diff rendering. Keywords: checkpoint, compare, proposal, card, file changes.
  */
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { createElement, Fragment, isValidElement, type KeyboardEvent, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -134,8 +135,14 @@ test("terminal proposals and claim resolution share one lifecycle card", () => {
       claimedPaths: ["src/one.ts", "src/two.ts"],
       intentDescription: "Keep the lifecycle visible.",
       intentName: "Harden arc lifecycle",
-      proposalId: "proposal-one",
-      proposalStatus: "proposed",
+      proposalIds: ["proposal-one", "proposal-two"],
+      proposals: [
+        { proposalId: "proposal-one", status: "proposed" },
+        { proposalId: "proposal-two", status: "committed" },
+        { proposalId: "proposal-unavailable", status: "unavailable" },
+        { proposalId: "proposal-rescinded", status: "rescinded" },
+        { proposalId: "proposal-superseded", status: "superseded" },
+      ],
       updatedAt: "2026-08-19T00:00:00.000Z",
     },
     cwd: "C:/workspace",
@@ -146,12 +153,44 @@ test("terminal proposals and claim resolution share one lifecycle card", () => {
   }));
 
   assert.equal((html.match(/data-thread-git-arc-lifecycle-card="true"/gu) ?? []).length, 1);
-  assert.equal((html.match(/data-thread-checkpoint-card="true"/gu) ?? []).length, 1);
+  assert.equal((html.match(/data-thread-checkpoint-card="true"/gu) ?? []).length, 2);
+  assert.equal((html.match(/data-thread-git-arc-proposal-separator="true"/gu) ?? []).length, 1);
   assert.match(html, /data-thread-checkpoint-card-embedded="true"/u);
   assert.match(html, /data-thread-git-arc-resolution="true"/u);
+  assert.match(html, /data-thread-git-arc-resolution-separator="true"/u);
   assert.match(html, /2 claimed files/u);
   assert.match(html, /Checking claimed files/u);
   assert.doesNotMatch(html, /Harden arc lifecycle/u);
+});
+
+test("resolved arc cards keep committed proposals hoisted without live claim controls", () => {
+  const html = renderToStaticMarkup(createElement(ThreadGitArcLifecycleCard, {
+    claim: {
+      checkpointCommit: "a".repeat(40), claimedPaths: [], intentDescription: "", intentName: "Resolved arc",
+      phase: "resolved", proposalIds: ["committed-one", "unavailable-one", "rescinded-one", "superseded-one"],
+      proposals: [
+        { proposalId: "committed-one", status: "committed" },
+        { proposalId: "unavailable-one", status: "unavailable" },
+        { proposalId: "rescinded-one", status: "rescinded" },
+        { proposalId: "superseded-one", status: "superseded" },
+      ],
+      updatedAt: "2026-08-20T00:00:00.000Z",
+    } as never,
+    cwd: "C:/workspace", harness: "codex", onReleased: async () => undefined, projectRootPath: "C:/workspace", threadId: "thread-one",
+  }));
+  assert.equal((html.match(/data-thread-checkpoint-card="true"/gu) ?? []).length, 1);
+  assert.match(html, /committed-one/u);
+  assert.doesNotMatch(html, /unavailable-one/u);
+  assert.doesNotMatch(html, /rescinded-one|superseded-one/u);
+  assert.match(html, /Resolved/u);
+  assert.doesNotMatch(html, /Restore &amp; unclaim|Unclaim files/u);
+});
+
+test("ThreadView hoists gitArc lifecycle state only after the active turn ends", async () => {
+  const source = await readFile(new URL("./ThreadView.tsx", import.meta.url), "utf8");
+  assert.equal(source.includes("activeSidebarEntry.gitArc"), true);
+  assert.equal(source.includes('currentTurn?.status !== "inProgress"'), true);
+  assert.equal(source.includes("terminalFileClaim") || source.includes("activeSidebarEntry.fileClaim"), false);
 });
 
 test("in-progress checkpoint commit commands render an immediate standalone card", () => {

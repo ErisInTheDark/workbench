@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type { WorkbenchThreadSidebarEntry } from "../../lib/workbench/thread/thread-state";
+import { WorkbenchThreadSidebarEntrySchema, type WorkbenchThreadSidebarEntry } from "../../lib/workbench/thread/thread-state";
 import WorkbenchThreadList from "./WorkbenchThreadList";
 import WorkbenchContextMenuContext from "./WorkbenchContextMenuContext";
 
@@ -23,7 +23,7 @@ function createThreadEntry({
 }: {
   claimedPaths?: string[];
   pinned?: boolean;
-  proposalStatus?: "committed" | "proposed" | "superseded" | "unavailable" | null;
+  proposalStatus?: "committed" | "proposed" | null;
   threadId: string;
   title: string;
 }): ThreadEntry {
@@ -31,13 +31,13 @@ function createThreadEntry({
     activityAt: 1_723_456_789_000,
     entryKind: "thread",
     ...(claimedPaths ? {
-      fileClaim: {
+      gitArc: {
         checkpointCommit: "a".repeat(40),
         claimedPaths,
         intentDescription: "Protect the focused sidebar presentation.",
         intentName: "sidebar claim",
-        proposalId: proposalStatus ? "proposal-one" : null,
-        proposalStatus,
+        phase: "active",
+        proposals: proposalStatus ? [{ proposalId: "proposal-one", status: proposalStatus }] : [],
         updatedAt: "2026-08-20T00:00:00.000Z",
       },
     } : {}),
@@ -78,6 +78,51 @@ test("thread rows render counts only for active file claims", () => {
 
   const unclaimedHtml = renderThreads([createThreadEntry({ threadId: "planned", title: "Planned work" })]);
   assert.doesNotMatch(unclaimedHtml, /data-role="thread-file-claim"|claimed files/u);
+});
+
+test("thread rows project resolved Git arcs without treating them as live file claims", () => {
+  const entry = createThreadEntry({ threadId: "resolved", title: "Resolved work" });
+  const html = renderThreads([{ ...entry, gitArc: {
+    checkpointCommit: "a".repeat(40), claimedPaths: [], intentDescription: "", intentName: "resolved",
+    phase: "resolved", proposals: [{ proposalId: "proposal-one", status: "committed" }], updatedAt: "2026-08-20T00:00:00.000Z",
+  } } as never]);
+  assert.doesNotMatch(html, /claimed files/u);
+  assert.match(html, /Completed/u);
+});
+
+test("thread state accepts phase-aware Git arc lifecycle state", () => {
+  const entry = createThreadEntry({ threadId: "resolved-contract", title: "Resolved contract" });
+  assert.equal(WorkbenchThreadSidebarEntrySchema.safeParse({
+    ...entry,
+    gitArc: {
+      checkpointCommit: "a".repeat(40),
+      claimedPaths: [],
+      intentDescription: "",
+      intentName: "resolved",
+      phase: "resolved",
+      proposals: [{ proposalId: "proposal-one", status: "committed" }],
+      updatedAt: "2026-08-20T00:00:00.000Z",
+    },
+  }).success, true);
+});
+
+test("thread state rejects the legacy fileClaim projection", () => {
+  assert.equal(WorkbenchThreadSidebarEntrySchema.safeParse({
+    ...createThreadEntry({ threadId: "legacy-contract", title: "Legacy contract" }),
+    fileClaim: {
+      checkpointCommit: "a".repeat(40), claimedPaths: ["src/legacy.ts"], intentDescription: "", intentName: "legacy",
+      proposalId: null, updatedAt: "2026-08-20T00:00:00.000Z",
+    },
+  }).success, false);
+});
+
+test("sidebar derives proposed status and live claim count from gitArc", () => {
+  const entry = createThreadEntry({ threadId: "git-arc-sidebar", title: "Git arc sidebar" });
+  const html = renderThreads([{ ...entry, gitArc: {
+    checkpointCommit: "a".repeat(40), claimedPaths: ["src/one.ts", "src/two.ts"], intentDescription: "", intentName: "active",
+    phase: "active", proposals: [{ proposalId: "proposal-one", status: "proposed" }], updatedAt: "2026-08-20T00:00:00.000Z",
+  } } as never]);
+  assert.match(html, /aria-label="Git arc sidebar, Proposed commit, 2 claimed files,/u);
 });
 
 test("proposed commits replace the completed label and inner status glyph", () => {
