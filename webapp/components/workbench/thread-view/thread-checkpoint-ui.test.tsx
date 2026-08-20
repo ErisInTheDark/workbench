@@ -96,18 +96,22 @@ test("terminal arc presentation hoists one proposal controller and leaves a tran
   const shared = {
     commandOutcome: "completed" as const,
     cwd: "C:/workspace",
-    intent: {
-      amend: false,
-      description: "",
-      paths: ["src/one.ts"],
-      title: "Harden arc ownership workflow",
-    },
+    intent: null,
     proposalId: "def81282-proposal-one",
     sourceItemId: "proposal-item",
     threadId: "thread-one",
   };
   const html = renderToStaticMarkup(createElement(ThreadGitArcPresentationContext.Provider, {
-    value: { harness: "opencode", hoistedProposalId: "def81282-proposal-one" },
+    value: {
+      harness: "opencode",
+      hoistedProposalId: "def81282-proposal-one",
+      proposalIntents: new Map([["def81282-proposal-one", {
+        amend: false,
+        description: "Keep its message visible before enrichment.",
+        paths: ["src/one.ts"],
+        title: "Harden arc ownership workflow",
+      }]]),
+    },
     children: createElement(Fragment, null,
       createElement(ThreadCheckpointCommitItem, shared),
       createElement(ThreadCheckpointCommitItem, { ...shared, hoisted: true, sourceItemId: "lifecycle-proposal" }),
@@ -117,6 +121,7 @@ test("terminal arc presentation hoists one proposal controller and leaves a tran
   assert.match(html, /data-thread-git-arc-card="propose"/u);
   assert.match(html, />Proposed</u);
   assert.match(html, /Harden arc ownership workflow/u);
+  assert.match(html, /Keep its message visible before enrichment\./u);
   assert.match(html, /def81282/u);
   assert.doesNotMatch(html, /\[proposed a commit\]/u);
   assert.match(html, /id="thread-checkpoint-proposal-def81282-proposal-one"/u);

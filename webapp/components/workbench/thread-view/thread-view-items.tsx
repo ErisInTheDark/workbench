@@ -37,7 +37,6 @@ import {
   getThreadCommandOutcomeDisplay,
   getGitArcMatcherAction,
   isBrowseCommandMatcherClaim,
-  isGitCheckpointCommitMatcherClaim,
   isGitCheckpointCompareMatcherClaim,
   isGitCheckpointDiffMatcherClaim,
   isThreadContextMatcherClaim,
@@ -47,11 +46,9 @@ import {
   parseWorkbenchThreadStatusCommand,
   parseWorkbenchThreadTitleCommand,
   parseBrowseSequenceCommandOutput,
-  parseGitCheckpointCommitCommand,
   parseGitCheckpointCompareOutput,
   parseGitCheckpointDiffArtifactId,
   parseGitCheckpointDiffOutput,
-  parseGitCheckpointProposalId,
   parseGitArcCommand,
   parseGitArcReceipt,
   type ThreadCommandDetailRow,
@@ -70,6 +67,7 @@ import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadCheckpointDiffItem from "./ThreadCheckpointDiffItem";
 import ThreadGitArcItem from "./ThreadGitArcItem";
+import { readThreadGitArcProposalTranscriptItem } from "./thread-git-arc-proposal-intents";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
 import ThreadCommandDetails from "./ThreadCommandDetails";
 import ThreadContextCompactionItem from "./ThreadContextCompactionItem";
@@ -1702,10 +1700,8 @@ function ThreadCommandExecutionDetails ({
   const checkpointCompareChanges = isGitCheckpointCompareMatcherClaim(commandDisplay.claimedBy)
     ? parseGitCheckpointCompareOutput(item.aggregatedOutput ?? "")
     : null;
-  const checkpointProposalId = isGitCheckpointCommitMatcherClaim(commandDisplay.claimedBy)
-    ? parseGitCheckpointProposalId(item.aggregatedOutput ?? "")
-    : null;
-  const gitArcReceipt = parseGitArcReceipt(item.aggregatedOutput ?? "");
+  const gitArcProposal = readThreadGitArcProposalTranscriptItem(item, commandDisplay);
+  const gitArcReceipt = gitArcProposal?.receipt ?? parseGitArcReceipt(item.aggregatedOutput ?? "");
   const gitArcAction = getGitArcMatcherAction(commandDisplay.claimedBy);
   const gitArcCommandIntent = gitArcAction
     ? parseGitArcCommand(commandDisplay.unwrappedCommand) ?? {
@@ -1715,9 +1711,6 @@ function ThreadCommandExecutionDetails ({
       proposalId: gitArcReceipt?.proposalId ?? null,
       ref: gitArcReceipt?.ref ?? null,
     }
-    : null;
-  const checkpointCommitIntent = isGitCheckpointCommitMatcherClaim(commandDisplay.claimedBy)
-    ? parseGitCheckpointCommitCommand(commandDisplay.unwrappedCommand)
     : null;
   const isBrowseCommand = isBrowseCommandMatcherClaim(commandDisplay.claimedBy);
   const shouldRenderCheckpointDiff = checkpointDiffChanges !== null
@@ -1739,11 +1732,11 @@ function ThreadCommandExecutionDetails ({
       <ThreadCheckpointCommitItem
         commandOutcome={commandOutcome}
         cwd={item.cwd}
-        intent={checkpointCommitIntent}
+        intent={gitArcProposal?.intent ?? null}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
         projectRootPath={projectRootPath}
-        proposalId={checkpointProposalId ?? gitArcReceipt?.proposalId ?? null}
+        proposalId={gitArcProposal?.proposalId ?? null}
         sourceItemId={item.id}
         threadId={threadId}
         workspaceRoots={workspaceRoots}

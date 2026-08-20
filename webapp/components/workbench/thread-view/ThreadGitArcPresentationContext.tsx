@@ -7,6 +7,7 @@
 
 import { createContext } from "react";
 
+import type { GitCheckpointCommitCommandIntent } from "../../../lib/workbench/thread/thread-command-matchers";
 import type { WorkbenchHarness } from "../../../lib/types";
 
 export interface ThreadGitArcPresentation {
@@ -14,6 +15,7 @@ export interface ThreadGitArcPresentation {
   /** @deprecated Transitional input for pre-grouped tests and callers. */
   hoistedProposalId?: string | null;
   hoistedProposalIds?: ReadonlySet<string>;
+  proposalIntents?: ReadonlyMap<string, GitCheckpointCommitCommandIntent>;
 }
 
 type ReleaseAction = "restore" | "unclaim";

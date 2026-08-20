@@ -75,6 +75,7 @@ import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext
 import previousTurnLoadReducer from "./previous-turn-load-state";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
 import { ThreadTurnDetails, ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./thread-view-items";
+import getThreadGitArcProposalIntents from "./thread-git-arc-proposal-intents";
 import { getThreadVisibleHistoryEntries } from "./thread-visible-history";
 import {
   getThreadWebSearchLiveLabel,
@@ -838,6 +839,12 @@ export default memo(function ThreadView ({
     projectFilePaths,
     projectFileIndexId,
   );
+  const visibleGitArcProposalIntents = useMemo(() => getThreadGitArcProposalIntents({
+    knownSkills: workbenchSkills,
+    projectRootPath,
+    turns: activeThread?.turns ?? [],
+    workspaceRoots: workspaceFileLinkRoots,
+  }), [activeThread?.turns, projectRootPath, workbenchSkills, workspaceFileLinkRoots]);
 
   const tabDefinitions = useMemo(() => {
     const baseLabelCounts = new Map<string, number>();
@@ -1641,6 +1648,7 @@ export default memo(function ThreadView ({
       <ThreadGitArcPresentationContext.Provider value={{
         harness: activeThread?.harness ?? thread.harness,
         hoistedProposalIds: new Set(terminalGitArc?.proposals.map(({ proposalId }) => proposalId) ?? []),
+        proposalIntents: visibleGitArcProposalIntents,
       }}>
       <div
         ref={threadViewRef}

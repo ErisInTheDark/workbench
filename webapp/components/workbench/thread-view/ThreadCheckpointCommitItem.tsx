@@ -193,6 +193,7 @@ export default function ThreadCheckpointCommitItem(props: ThreadCheckpointCommit
   const presentation = useContext(ThreadGitArcPresentationContext);
   const harness = props.harness ?? presentation?.harness ?? "codex";
   const hoistedTargetId = props.proposalId ? `thread-checkpoint-proposal-${props.proposalId}` : null;
+  const resolvedIntent = props.intent ?? (props.proposalId ? presentation?.proposalIntents?.get(props.proposalId) ?? null : null);
   if (!props.hoisted && props.proposalId && (
     presentation?.hoistedProposalIds?.has(props.proposalId) || presentation?.hoistedProposalId === props.proposalId
   )) {
@@ -204,13 +205,13 @@ export default function ThreadCheckpointCommitItem(props: ThreadCheckpointCommit
         proposalRedirect={{
           onActivate: () => document.getElementById(hoistedTargetId)?.scrollIntoView({ behavior: "smooth", block: "center" }),
           proposalId: props.proposalId,
-          title: props.intent?.title ?? "Commit proposal",
+          title: resolvedIntent?.title ?? "Commit proposal",
         }}
         receipt={null}
       />
     );
   }
-  const controller = <ThreadCheckpointCommitController {...props} harness={harness} />;
+  const controller = <ThreadCheckpointCommitController {...props} harness={harness} intent={resolvedIntent} />;
   return props.hoisted && hoistedTargetId
     ? <div className="scroll-mt-6" id={hoistedTargetId}>{controller}</div>
     : controller;
