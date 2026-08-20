@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchGitRepository: own raw Git process, snapshot, path, tree, ref, and ancestry mechanics for one repository. Keywords: git, repository, snapshot, ref, transaction.
- * - GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit: typed Git ancestry, object-read, and atomic ref-update inputs. Keywords: git, head, object, ref, transaction.
+ * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit: typed Git history, ancestry, object-read, and atomic ref-update inputs. Keywords: git, commit, paths, head, object, ref, transaction.
  */
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
@@ -21,6 +21,12 @@ export interface GitHeadMovement {
   changedPaths: string[];
   currentHead: string;
   kind: "fast-forward" | "incompatible" | "same";
+}
+
+export interface GitCommitPathChange {
+  changedPaths: string[];
+  commit: string;
+  subject: string;
 }
 
 export interface GitRefUpdate {
@@ -514,6 +520,27 @@ export default class WorkbenchGitRepository {
       "diff", "--name-only", "-z", "--no-renames", from, to, "--",
       ...paths.map((candidate) => this.literalPathspec(candidate)),
     ])).sort((left, right) => left.localeCompare(right));
+  }
+
+  async listFirstParentCommitPathChanges(fromExclusive: string, toInclusive: string, paths: string[]): Promise<GitCommitPathChange[]> {
+    if (fromExclusive === toInclusive || !paths.length) return [];
+    const commits = (await this.run([
+      "rev-list", "--reverse", "--first-parent", `${fromExclusive}..${toInclusive}`,
+    ])).split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
+    const batch = await this.readCommits(commits);
+    return (await Promise.all(commits.map(async (commit): Promise<GitCommitPathChange | null> => {
+      const identity = batch.commits.get(commit);
+      if (!identity) throw new Error(batch.errors.get(commit) ?? `Unable to read commit metadata for ${commit}.`);
+      const parent = identity.parents[0];
+      if (!parent) throw new Error(`Intervening Git commit ${commit} does not have a first parent.`);
+      const changedPaths = await this.listChangedPaths(parent, commit, paths);
+      if (!changedPaths.length) return null;
+      return {
+        changedPaths,
+        commit,
+        subject: identity.message.split(/\r?\n/u, 1)[0]?.trim() ?? "",
+      };
+    }))).filter((change): change is GitCommitPathChange => change !== null);
   }
 
   async classifyHeadMovement(

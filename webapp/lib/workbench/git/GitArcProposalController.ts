@@ -415,7 +415,9 @@ export default class GitArcProposalController {
       if (replacementTarget.metadata.status === "committed") {
         throw new Error(`Proposal ${replaceProposalId} is already committed. Use wb git arc propose --amend ${replaceProposalId}.`);
       }
-      if (replacementTarget.metadata.status !== "proposed") throw new Error("Only a pending proposal can be replaced.");
+      if (replacementTarget.metadata.status !== "proposed" && replacementTarget.metadata.status !== "unavailable") {
+        throw new Error("Only a pending or unavailable proposal can be replaced.");
+      }
     }
     let amendTargetProposal: StoredProposal | null = null;
     if (amendProposalId) {
@@ -493,6 +495,7 @@ export default class GitArcProposalController {
         status: "superseded",
         supersededByProposalId: proposalId,
         supersededBySha: null,
+        unavailableReason: null,
       };
       const supersededState = await repository.createCommitFromTree(
         replacementTarget.tree,

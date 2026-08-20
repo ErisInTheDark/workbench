@@ -5,7 +5,12 @@
  * - GitArcPlanResult/GitArcStartResult: typed immutable plan and visible claim-transition receipts. Keywords: git, plan, start, claims.
  */
 import type { GitCheckpointFileChange } from "./checkpoint-contracts";
-import GitArcRegistry, { type GitArcRegistryEntry } from "./GitArcRegistry";
+import createGitArcStartDiagnosticError from "./git-arc-start-diagnostics";
+import GitArcRegistry, {
+  findGitArcCollisions,
+  GitArcCollisionError,
+  type GitArcRegistryEntry,
+} from "./GitArcRegistry";
 import GitCheckpointStore from "./GitCheckpointStore";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import { type CheckpointMetadata, type GitArcHarness } from "./git-arc-storage";
@@ -202,7 +207,19 @@ export default class GitArcPlanController {
       const currentTree = await repository.writeScopedWorktreeTree(paths);
       const changes = await repository.buildFileChanges(plan.checkpointCommit, currentTree, paths);
       if (metadata.version >= 3 && changes.length && current?.checkpointCommit !== plan.checkpointCommit) {
-        throw new Error(`Arc start paths changed after the plan was created: ${changes.map(({ path }) => path).join(", ")}`);
+        throw await createGitArcStartDiagnosticError({
+          adoptedPaths: [],
+          currentHead: await repository.currentHead(),
+          currentTree,
+          harness,
+          planBaseCommit: plan.parent,
+          planCheckpointCommit: plan.checkpointCommit,
+          planPaths: paths,
+          registryEntries: await registry.list(),
+          repository,
+          snapshotDrift: changes.map(({ path }) => path),
+          threadId: input.threadId,
+        });
       }
       const claimed = await registry.claim({
         checkpointCommit: plan.checkpointCommit,
@@ -233,17 +250,34 @@ export default class GitArcPlanController {
     const adoptedPaths = metadata.adoptedPaths?.length ? repository.normalizePaths(metadata.adoptedPaths) : [];
     const currentTree = await repository.writeScopedWorktreeTree(paths);
     const snapshotDrift = await repository.listChangedPaths(plan.checkpointCommit, currentTree, paths);
-    if (snapshotDrift.length) {
-      throw new Error(`Arc start paths changed after the plan was created: ${snapshotDrift.join(", ")}. Run wb git arc diff --ref ${plan.checkpointCommit} -- ${snapshotDrift.join(" ")}`);
-    }
     const head = await repository.currentHead();
+    const registryEntries = await registry.list();
+    if (snapshotDrift.length) {
+      throw await createGitArcStartDiagnosticError({
+        adoptedPaths,
+        currentHead: head,
+        currentTree,
+        harness,
+        planBaseCommit: plan.parent,
+        planCheckpointCommit: plan.checkpointCommit,
+        planPaths: paths,
+        registryEntries,
+        repository,
+        snapshotDrift,
+        threadId: input.threadId,
+      });
+    }
+    const collisions = findGitArcCollisions(registryEntries, { harness, threadId: input.threadId }, paths);
+    if (collisions.length) throw new GitArcCollisionError(collisions);
     const dirtyPaths = await repository.listChangedPaths(head, currentTree, paths);
     const retainedClaims = current?.phase === "plan" ? current.retainedArc?.claimedPaths ?? [] : [];
     const permittedDirty = [...adoptedPaths, ...retainedClaims];
     const unexplained = dirtyPaths.filter((candidate) => !permittedDirty.some((scopePath) => pathIsCoveredBy(candidate, scopePath)));
     if (unexplained.length) throw new GitCheckpointDirtyPathsError(unexplained, "Arc start");
     const cleanAdoptions = adoptedPaths.filter((candidate) => !dirtyPaths.some((dirtyPath) => pathIsCoveredBy(dirtyPath, candidate)));
-    if (cleanAdoptions.length) throw new Error(`Adopted plan paths must still contain working-tree changes: ${cleanAdoptions.join(", ")}`);
+    if (cleanAdoptions.length) {
+      throw new Error(`Adopted plan paths are clean against current HEAD: ${cleanAdoptions.join(", ")}. Clean or committed paths belong after -- as ordinary plan paths, not under --adopt.`);
+    }
 
     const activeMetadata: CheckpointMetadata = {
       amendedFrom: plan.checkpointCommit,
@@ -307,6 +341,10 @@ export default class GitArcPlanController {
     const metadata = requirePlanMetadata(plan.metadata);
     const existing = metadata.scopePaths;
     const existingAdopted = metadata.adoptedPaths ?? [];
+    if (operation === "adopt") {
+      const collisions = findGitArcCollisions(await registry.list(), { harness, threadId: input.threadId }, paths);
+      if (collisions.length) throw new GitArcCollisionError(collisions);
+    }
     if (operation === "remove") {
       const unknown = paths.filter((candidate) => !existing.includes(candidate));
       if (unknown.length) throw new Error(`Arc plan remove paths must exactly match planned entries: ${unknown.join(", ")}`);
@@ -369,8 +407,13 @@ export default class GitArcPlanController {
   ) {
     const paths = input.paths.length ? repository.normalizePaths(input.paths) : [];
     const adoptPaths = input.adoptPaths.length ? repository.normalizePaths(input.adoptPaths) : [];
-    const overlap = adoptPaths.filter((candidate) => paths.some((ordinary) => pathIsCoveredBy(candidate, ordinary) || pathIsCoveredBy(ordinary, candidate)));
-    if (overlap.length) throw new Error(`Adopted paths must not overlap ordinary plan paths: ${overlap.join(", ")}`);
+    const overlap = adoptPaths.flatMap((adoptedPath) => paths
+      .filter((ordinaryPath) => pathIsCoveredBy(adoptedPath, ordinaryPath) || pathIsCoveredBy(ordinaryPath, adoptedPath))
+      .map((ordinaryPath) => ({ adoptedPath, ordinaryPath })));
+    if (overlap.length) {
+      const details = overlap.map(({ adoptedPath, ordinaryPath }) => `${adoptedPath} (--adopt) overlaps ${ordinaryPath} (after --)`).join(", ");
+      throw new Error(`Adopted paths already join the plan scope and must not overlap ordinary plan paths: ${details}. Keep dirty unclaimed paths under --adopt, and remove their duplicate ordinary scope after --.`);
+    }
     const scopePaths = [...new Set([...paths, ...adoptPaths])].sort((left, right) => left.localeCompare(right));
     const head = await repository.currentHead();
     const tree = await repository.writeWorktreeTree();
@@ -382,8 +425,12 @@ export default class GitArcPlanController {
       && !liveOwners.some((claim) => pathIsCoveredBy(dirtyPath, claim))
     ));
     if (unexplained.length) throw new GitCheckpointDirtyPathsError(unexplained);
+    const adoptionCollisions = findGitArcCollisions(entries, { harness, threadId }, adoptPaths);
+    if (adoptionCollisions.length) throw new GitArcCollisionError(adoptionCollisions);
     const cleanAdoptions = adoptPaths.filter((candidate) => !dirtyPaths.some((dirtyPath) => pathIsCoveredBy(dirtyPath, candidate)));
-    if (cleanAdoptions.length) throw new Error(`Arc plan adopt paths must contain working-tree changes: ${cleanAdoptions.join(", ")}`);
+    if (cleanAdoptions.length) {
+      throw new Error(`Arc plan adopt paths are clean against current HEAD: ${cleanAdoptions.join(", ")}. Clean or committed paths belong after -- as ordinary plan paths, not under --adopt.`);
+    }
     const claimedAdoptions = adoptPaths.filter((candidate) => liveOwners.some((claim) => pathIsCoveredBy(candidate, claim) || pathIsCoveredBy(claim, candidate)));
     if (claimedAdoptions.length) throw new Error(`Arc plan adopt paths must be unclaimed: ${claimedAdoptions.join(", ")}`);
 

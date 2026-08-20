@@ -2,7 +2,9 @@
  * Exports:
  * - default GitArcRegistry: own durable active arc claims and compare-and-swap registry transitions for one worktree. Keywords: git, arc, registry, claims, collision.
  * - GitArcIdentity/GitArcRegistryEntry/GitArcRegistryMutation: typed registry identities, entries, and prepared atomic transitions. Keywords: git, arc, registry, transaction.
+ * - findGitArcCollisions/getGitArcLiveClaimPaths: share exact live-claim overlap semantics with diagnostics and registry enforcement. Keywords: git, arc, collision, overlap, diagnostics.
  */
+import { areDeeplyEqual } from "../deep-equality";
 import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
 
 export const REGISTRY_REF = "refs/worktree/workbench/active-arcs";
@@ -31,7 +33,7 @@ export interface GitArcRegistryEntry extends GitArcIdentity {
   updatedAt: string;
 }
 
-function liveClaimPaths(entry: Pick<GitArcRegistryEntry, "claimedPaths" | "phase" | "retainedArc">) {
+export function getGitArcLiveClaimPaths(entry: Pick<GitArcRegistryEntry, "claimedPaths" | "phase" | "retainedArc">) {
   if (entry.phase === "resolved") return [];
   if (entry.phase === "plan") return entry.retainedArc?.claimedPaths ?? entry.claimedPaths;
   return entry.claimedPaths;
@@ -79,6 +81,24 @@ function identityKey(identity: GitArcIdentity) {
 
 function pathsOverlap(left: string, right: string) {
   return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+}
+
+export function findGitArcCollisions(
+  entries: readonly GitArcRegistryEntry[],
+  identity: GitArcIdentity,
+  requestedPaths: readonly string[],
+) {
+  const key = identityKey(identity);
+  return entries
+    .filter((candidate) => identityKey(candidate) !== key)
+    .filter((candidate) => getGitArcLiveClaimPaths(candidate).length > 0)
+    .map((candidate): GitArcCollision => ({
+      entry: candidate,
+      overlaps: getGitArcLiveClaimPaths(candidate).flatMap((claimedPath) => requestedPaths
+        .filter((requestedPath) => pathsOverlap(claimedPath, requestedPath))
+        .map((requestedPath) => ({ claimedPath, requestedPath }))),
+    }))
+    .filter((collision) => collision.overlaps.length > 0);
 }
 
 function parseState(contents: string): GitArcRegistryState {
@@ -149,7 +169,7 @@ export default class GitArcRegistry {
     const { blob, state } = await this.read();
     if (!blob) return null;
     const entries = remapState(state, commits).entries;
-    if (JSON.stringify(entries) === JSON.stringify(state.entries)) return null;
+    if (areDeeplyEqual(entries, state.entries)) return null;
     const nextBlob = await this.repository.writeBlob(`${JSON.stringify({ entries, version: 1 } satisfies GitArcRegistryState)}\n`);
     return { newValue: nextBlob, oldValue: blob, ref: REGISTRY_REF };
   }
@@ -171,16 +191,7 @@ export default class GitArcRegistry {
       if (current.checkpointCommit === entry.checkpointCommit) return { nextState: state, update: null };
       throw new Error("This thread already owns a different active Git arc.");
     }
-    const collisions = state.entries
-      .filter((candidate) => identityKey(candidate) !== key)
-      .filter((candidate) => liveClaimPaths(candidate).length > 0)
-      .map((candidate): GitArcCollision => ({
-        entry: candidate,
-        overlaps: liveClaimPaths(candidate).flatMap((claimedPath) => liveClaimPaths(entry)
-          .filter((requestedPath) => pathsOverlap(claimedPath, requestedPath))
-          .map((requestedPath) => ({ claimedPath, requestedPath }))),
-      }))
-      .filter((collision) => collision.overlaps.length > 0);
+    const collisions = findGitArcCollisions(state.entries, entry, getGitArcLiveClaimPaths(entry));
     if (collisions.length) throw new GitArcCollisionError(collisions);
     const proposalIds = entry.proposalIds ?? (entry.proposalId ? [entry.proposalId] : []);
     const nextEntry: GitArcRegistryEntry = {

@@ -6,6 +6,7 @@
 import type http from "node:http";
 
 import WorkbenchGitCheckpointController, { type GitArcActiveClaim, type GitArcLifecycleState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
+import { formatGitArcCollisionLines } from "../lib/workbench/git/git-arc-start-diagnostics";
 import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
 import type { WorkbenchHarness } from "../lib/types";
 import { GitCheckpointRequestSchema, type GitCheckpointRequest } from "../lib/workbench/git/checkpoint-contracts";
@@ -104,15 +105,24 @@ export default class WorkbenchGitArcFeature {
           response = await this.dispatch(request);
         } catch (error) {
           if (!(error instanceof GitArcCollisionError)) throw error;
-          const details = await Promise.all(error.collisions.map(async ({ entry, overlaps }) => {
-            const owner = await this.options.getThreadClaimContext(project.project.id, entry.harness as WorkbenchHarness, entry.threadId);
-            const description = entry.intentDescription.trim() ? `, ${entry.intentDescription.trim()}` : "";
-            const lifecycle = owner ? owner.lifecycle.kind : "unknown lifecycle";
-            const title = owner?.title.trim() || entry.threadId;
-            const overlapText = overlaps.map(({ claimedPath, requestedPath }) => `${claimedPath} <> ${requestedPath}`).join(", ");
-            return `${entry.harness}/${entry.threadId} \"${title}\" [${lifecycle}] ${entry.checkpointCommit.slice(0, 8)} ${entry.intentName}${description}; overlaps: ${overlapText}`;
+          const presentations = await Promise.all(error.collisions.map(async (collision) => {
+            const owner = await this.options.getThreadClaimContext(
+              project.project.id,
+              collision.entry.harness as WorkbenchHarness,
+              collision.entry.threadId,
+            );
+            return {
+              collision,
+              lifecycle: owner?.lifecycle.kind ?? "unknown lifecycle",
+              title: owner?.title.trim() || collision.entry.intentName,
+            };
           }));
-          throw new Error(`Arc claims overlap active sibling work: ${details.join("; ")}`);
+          throw new Error([
+            "Git arc operation blocked by active sibling claims.",
+            "",
+            "Planned paths claimed by other arcs:",
+            ...formatGitArcCollisionLines(presentations),
+          ].join("\n"));
         }
         if (response.ok && mutatesClaims(request)) {
           if (CLAIM_START_ACTIONS.has(request.action)) {

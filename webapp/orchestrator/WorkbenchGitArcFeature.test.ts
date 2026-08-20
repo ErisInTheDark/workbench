@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 
 test("sibling threads in one worktree share the Git arc transition lane", async () => {
@@ -51,6 +52,53 @@ test("settled threads cannot start claims", async () => {
   });
   assert.equal(response.status, 400);
   assert.match(JSON.stringify(await response.json()), /settled thread cannot start or continue/u);
+});
+
+test("atomic claim collisions use structured owner and path diagnostics", async () => {
+  const feature = new WorkbenchGitArcFeature({
+    getThreadClaimContext: async (_projectId, _harness, threadId) => ({
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+      title: threadId === "owner-thread" ? "Render ownership" : "Starting thread",
+    }),
+    refreshThreadClaim: async () => undefined,
+    resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+  Object.defineProperty(feature, "dispatch", {
+    value: async () => {
+      throw new GitArcCollisionError([{
+        entry: {
+          checkpointCommit: "b".repeat(40),
+          claimedPaths: ["webapp/components/workbench"],
+          harness: "opencode",
+          intentDescription: "",
+          intentName: "change rendering",
+          phase: "active",
+          threadId: "owner-thread",
+          updatedAt: "2026-08-21T00:00:00.000Z",
+        },
+        overlaps: [{
+          claimedPath: "webapp/components/workbench",
+          requestedPath: "webapp/components/workbench/thread-view/ThreadView.tsx",
+        }],
+      }]);
+    },
+  });
+
+  const response = await feature.executeRequest({
+    action: "arcStart",
+    checkpointCommit: "a".repeat(40),
+    cwd: "C:/Git/Project",
+    harness: "codex",
+    threadId: "starting-thread",
+  });
+  const result = await response.json() as { error: string };
+  assert.equal(response.status, 400);
+  assert.match(result.error, /Git arc operation blocked by active sibling claims\./u);
+  assert.match(result.error, /Planned paths claimed by other arcs:/u);
+  assert.match(result.error, /opencode\/owner-thread.*Render ownership.*completed/u);
+  assert.match(result.error, /intent: change rendering/u);
+  assert.match(result.error, /claims `webapp\/components\/workbench` through planned path `webapp\/components\/workbench\/thread-view\/ThreadView\.tsx`/u);
 });
 
 test("successful Git responses survive a failed thread claim refresh", async (context) => {
