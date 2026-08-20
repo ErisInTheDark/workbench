@@ -96,10 +96,7 @@ export function normalizeThreadTitle(value: string | null | undefined) {
   return truncateText(normalized, MAX_THREAD_TITLE_LENGTH);
 }
 
-export function buildThreadTitleBootstrapInstructions(_context: {
-  harness: WorkbenchHarness;
-  threadId: string;
-}) {
+export function buildThreadTitleBootstrapInstructions() {
   return `
 ## Workbench Thread Title CLI
 

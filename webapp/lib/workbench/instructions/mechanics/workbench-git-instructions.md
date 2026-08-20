@@ -25,7 +25,7 @@ Workbench stores agent workflow baselines as real local Git commit objects under
 This thread's checkpoint namespace is owned by Workbench and scoped to the current Git worktree:
 
 ```text
-refs/worktree/agents/{{thread.id}}/checkpoints
+refs/worktree/agents/<thread-id>/checkpoints
 ```
 
 Plan and arc refs are convenience state, not a security boundary. Do not use them to store secrets unless the repo state is already allowed to contain those secrets.

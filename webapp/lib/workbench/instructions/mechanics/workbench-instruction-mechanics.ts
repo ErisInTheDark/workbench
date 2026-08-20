@@ -1,15 +1,21 @@
 /*
  * Exports:
- * - Workbench mechanic builders/listWorkbenchInstructionMechanics: render fresh Markdown for available CLI mechanics. Keywords: instructions, mechanics, CLI.
+ * - isManagedPromptThread: detect prompt contexts that belong to a managed Workbench thread. Keywords: instructions, thread, context.
+ * - listWorkbenchInstructionMechanics: list CLI mechanics relevant to a prompt context. Keywords: instructions, mechanics, availability.
+ * - buildWorkbenchBrowseInstructions: render fresh Browse CLI mechanics. Keywords: browse, instructions, CLI.
+ * - buildWorkbenchGitInstructions: render fresh managed Git CLI mechanics. Keywords: git, instructions, CLI.
+ * - buildWorkbenchOrchestratorReloadInstructions: render fresh orchestrator reload mechanics. Keywords: orchestrator, reload, instructions.
+ * - buildWorkbenchSubagentInstructions: render fresh subagent CLI mechanics. Keywords: subagent, instructions, CLI.
+ * - buildWorkbenchThreadRecallInstructions: render fresh current-thread recall mechanics. Keywords: thread, recall, instructions.
+ * - buildThreadStatusInstructions: render fresh current-thread status mechanics. Keywords: thread, status, instructions.
  */
 
 import WorkbenchServerSettings from "../../settings/WorkbenchServerSettings";
 import type { WorkbenchPromptContext } from "../assembly/workbench-prompt-types";
 import { readInstructionSource } from "../instruction-source";
 
-export function isMaterializedPromptThread(context: WorkbenchPromptContext) {
-  const threadId = context.threadId?.trim();
-  return Boolean(threadId && threadId !== "new" && !threadId.startsWith("draft:") && context.workbenchOrigin?.trim());
+export function isManagedPromptThread(context: WorkbenchPromptContext) {
+  return Boolean(context.threadId?.trim() && context.workbenchOrigin?.trim());
 }
 
 export function listWorkbenchInstructionMechanics(context: WorkbenchPromptContext) {
@@ -19,7 +25,7 @@ export function listWorkbenchInstructionMechanics(context: WorkbenchPromptContex
     available.add("orchestrator-reload");
     available.add("subagents");
   }
-  if (isMaterializedPromptThread(context)) {
+  if (isManagedPromptThread(context)) {
     available.add("thread-git");
     available.add("thread-recall");
     available.add("thread-status");
@@ -45,9 +51,9 @@ export async function buildWorkbenchBrowseInstructions(context: WorkbenchPromptC
 }
 
 export function buildWorkbenchGitInstructions(context: WorkbenchPromptContext) {
-  const threadId = context.threadId?.trim();
-  if (!threadId || threadId === "new" || threadId.startsWith("draft:") || !context.workbenchOrigin?.trim()) return null;
-  return readInstructionSource("mechanics/workbench-git-instructions.md").replaceAll("{{thread.id}}", threadId);
+  return isManagedPromptThread(context)
+    ? readInstructionSource("mechanics/workbench-git-instructions.md")
+    : null;
 }
 
 export function buildWorkbenchOrchestratorReloadInstructions(context: WorkbenchPromptContext) {
@@ -63,13 +69,13 @@ export function buildWorkbenchSubagentInstructions(context: WorkbenchPromptConte
 }
 
 export function buildWorkbenchThreadRecallInstructions(context: WorkbenchPromptContext) {
-  const threadId = context.threadId?.trim();
-  if (!threadId || threadId === "new" || threadId.startsWith("draft:") || !context.workbenchOrigin?.trim()) return null;
-  return readInstructionSource("mechanics/workbench-thread-recall-instructions.md").replaceAll("{{thread.id}}", threadId);
+  return isManagedPromptThread(context)
+    ? readInstructionSource("mechanics/workbench-thread-recall-instructions.md")
+    : null;
 }
 
 export function buildThreadStatusInstructions(context: WorkbenchPromptContext) {
-  return isMaterializedPromptThread(context)
+  return isManagedPromptThread(context)
     ? readInstructionSource("mechanics/workbench-thread-status-instructions.md")
     : null;
 }

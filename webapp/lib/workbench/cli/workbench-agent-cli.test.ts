@@ -102,7 +102,7 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
 
   const recall = await parseWorkbenchAgentCliCommand([
     "thread", "recall", "--thread", "thread/1", "--kind", "user-message", "--kind", "commentary", "--before", "user:item-1",
-  ]);
+  ], { callerThreadId: "ambient/thread" });
   const context = await parseWorkbenchAgentCliCommand([
     "thread", "context", "--thread", "thread/1", "--kind", "user-message", "--kind", "commentary", "--before", "user:item-1",
   ]);
@@ -114,7 +114,7 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   const search = await parseWorkbenchAgentCliCommand([
     "thread", "recall", "search", "--thread", "thread/1", "--query", "normal commentary",
     "--kind", "user-message", "--kind", "commentary", "--limit", "12", "--before", "agent:item-9",
-  ]);
+  ], { callerThreadId: "ambient/thread" });
   const contextSearch = await parseWorkbenchAgentCliCommand([
     "thread", "context", "search", "--thread", "thread/1", "--query", "normal commentary",
     "--kind", "user-message", "--kind", "commentary", "--limit", "12", "--before", "agent:item-9",
@@ -134,13 +134,31 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
 
   const expand = await parseWorkbenchAgentCliCommand([
     "thread", "recall", "expand", "--thread", "thread/1", "--ref", "agent:item-2", "--cursor", "recall-v1:cursor",
-  ]);
+  ], { callerThreadId: "ambient/thread" });
   assert.equal(expand.kind, "request");
   assert.deepEqual(expand.request.body, {
     action: "expand",
     cursor: "recall-v1:cursor",
     ref: "agent:item-2",
   });
+
+  const currentThreadOptions = { callerThreadId: "current/thread", cwd: "C:/workspace" };
+  const currentRecall = await parseWorkbenchAgentCliCommand(["thread", "recall", "--kind", "user-message"], currentThreadOptions);
+  const currentSearch = await parseWorkbenchAgentCliCommand(["thread", "recall", "search", "--query", "needle"], currentThreadOptions);
+  const currentExpand = await parseWorkbenchAgentCliCommand(["thread", "recall", "expand", "--ref", "agent:item-2"], currentThreadOptions);
+  assert.equal(currentRecall.kind, "request");
+  assert.equal(currentSearch.kind, "request");
+  assert.equal(currentExpand.kind, "request");
+  assert.equal(currentRecall.request.path, "/api/thread-context/current%2Fthread?kind=user-message");
+  assert.equal(currentSearch.request.path, "/api/thread-context/current%2Fthread");
+  assert.equal(currentExpand.request.path, "/api/thread-context/current%2Fthread");
+  for (const command of [
+    ["thread", "recall"],
+    ["thread", "recall", "search", "--query", "needle"],
+    ["thread", "recall", "expand", "--ref", "agent:item-2"],
+  ]) {
+    assert.equal((await parseWorkbenchAgentCliCommand(command, { callerThreadId: null })).kind, "error");
+  }
 
   const gitOptions = { callerThreadId: "thread-1", cwd: "C:/workspace" };
   const gitAdd = await parseWorkbenchAgentCliCommand([

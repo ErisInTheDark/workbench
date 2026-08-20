@@ -229,6 +229,16 @@ function requireCallerThreadId(callerThreadId: string | null) {
   return callerThreadId;
 }
 
+function resolveTargetThreadId(flags: ParsedFlags, callerThreadId: string | null) {
+  const explicitThreadId = flags.optional("--thread");
+  if (explicitThreadId !== null) {
+    const threadId = explicitThreadId.trim();
+    if (!threadId) throw new Error("--thread cannot be empty.");
+    return threadId;
+  }
+  return requireCallerThreadId(callerThreadId);
+}
+
 function requireCallerHarness(callerHarness: string) {
   if (callerHarness === "codex" || callerHarness === "copilot" || callerHarness === "opencode") return callerHarness;
   throw new Error("A managed Workbench harness identity is required.");
@@ -441,8 +451,8 @@ const COMMANDS: readonly CommandDefinition[] = [
     description: "Search visible narrative history and return stable result references.",
     helpGroups: ["thread", "thread-recall"],
     words: ["thread", "recall", "search"],
-    usage: "wb thread recall search --thread <id> --query <text> [--kind <kind>...] [--limit <count>] [--before <ref>]",
-    async build({ args }) {
+    usage: "wb thread recall search [--thread <id>] --query <text> [--kind <kind>...] [--limit <count>] [--before <ref>]",
+    async build({ args, callerThreadId }) {
       const flags = new ParsedFlags(args, {
         repeatable: ["--kind"],
         values: [...THREAD_FLAG, "--query", "--limit", "--before"],
@@ -450,7 +460,7 @@ const COMMANDS: readonly CommandDefinition[] = [
       const kinds = flags.repeated("--kind");
       const limit = flags.optionalNonNegativeInteger("--limit");
       if (limit !== null && (limit < 1 || limit > 50)) throw new Error("--limit must be between 1 and 50.");
-      return post(`/api/thread-context/${encodeURIComponent(flags.required("--thread"))}`, {
+      return post(`/api/thread-context/${encodeURIComponent(resolveTargetThreadId(flags, callerThreadId))}`, {
         action: "search",
         query: flags.required("--query"),
         ...(kinds.length ? { kinds } : {}),
@@ -464,10 +474,10 @@ const COMMANDS: readonly CommandDefinition[] = [
     description: "Read one referenced record through fixed-budget content pages.",
     helpGroups: ["thread", "thread-recall"],
     words: ["thread", "recall", "expand"],
-    usage: "wb thread recall expand --thread <id> --ref <ref> [--cursor <cursor>]",
-    async build({ args }) {
+    usage: "wb thread recall expand [--thread <id>] --ref <ref> [--cursor <cursor>]",
+    async build({ args, callerThreadId }) {
       const flags = new ParsedFlags(args, { values: [...THREAD_FLAG, "--ref", "--cursor"] });
-      return post(`/api/thread-context/${encodeURIComponent(flags.required("--thread"))}`, {
+      return post(`/api/thread-context/${encodeURIComponent(resolveTargetThreadId(flags, callerThreadId))}`, {
         action: "expand",
         ref: flags.required("--ref"),
         ...(flags.optional("--cursor") ? { cursor: flags.optional("--cursor") } : {}),
@@ -479,10 +489,10 @@ const COMMANDS: readonly CommandDefinition[] = [
     description: "Read filtered history newest-first, or continue before an emitted cursor.",
     helpGroups: ["thread", "thread-recall"],
     words: ["thread", "recall"],
-    usage: "wb thread recall --thread <id> [--kind <kind>...] [--before <cursor>]",
-    async build({ args }) {
+    usage: "wb thread recall [--thread <id>] [--kind <kind>...] [--before <cursor>]",
+    async build({ args, callerThreadId }) {
       const flags = new ParsedFlags(args, { repeatable: ["--kind"], values: [...THREAD_FLAG, "--before"] });
-      const threadId = flags.required("--thread");
+      const threadId = resolveTargetThreadId(flags, callerThreadId);
       return get(queryPath(`/api/thread-context/${encodeURIComponent(threadId)}`, {
         before: flags.optional("--before"),
         kind: flags.repeated("--kind"),

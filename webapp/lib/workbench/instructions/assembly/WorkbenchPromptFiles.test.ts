@@ -7,10 +7,16 @@ import { test } from "node:test";
 
 import {
   buildWorkbenchGitInstructions,
+  filterWorkbenchInstructionContent,
   listWorkbenchInstructionMechanics,
 } from "./WorkbenchPromptFiles.ts";
 import { WORKBENCH_AGENTS_PROMPT, WORKBENCH_WORKFLOW_DEFAULT_PROMPT } from "./workbench-prompt-sources.ts";
-import { buildWorkbenchBrowseInstructions } from "../mechanics/workbench-instruction-mechanics.ts";
+import {
+  buildThreadStatusInstructions,
+  buildWorkbenchBrowseInstructions,
+  buildWorkbenchThreadRecallInstructions,
+} from "../mechanics/workbench-instruction-mechanics.ts";
+import { buildThreadTitleInstructions } from "../mechanics/workbench-thread-title-instructions.ts";
 import { readWorkbenchBuiltinSkills } from "../skills/workbench-builtin-skills.ts";
 
 test("Browse stays explicitly opt-in instead of following UI work", async () => {
@@ -27,24 +33,42 @@ test("Browse stays explicitly opt-in instead of following UI work", async () => 
   assert.match(mechanics, /Availability does not activate or authorize Browse/u);
 });
 
-test("materialized top-level threads expose title/status while subagents omit title", () => {
-  const topLevel = listWorkbenchInstructionMechanics({ harness: "codex", threadId: "thread-1", workbenchOrigin: "http://localhost" });
-  assert.equal(topLevel.has("thread-title"), true);
-  assert.equal(topLevel.has("thread-status"), true);
-  assert.equal(topLevel.has("subagents"), true);
-  assert.equal(topLevel.has("thread-git"), true);
+test("managed top-level threads expose current-thread mechanics before and after materialization", () => {
+  for (const threadId of ["new", "draft:123", "thread-1"]) {
+    const context = { harness: "codex" as const, threadId, workbenchOrigin: "http://localhost" };
+    const available = listWorkbenchInstructionMechanics(context);
+    for (const mechanic of ["thread-title", "thread-status", "thread-git", "thread-recall"]) {
+      assert.equal(available.has(mechanic), true, `${threadId} should expose ${mechanic}`);
+    }
+    assert.match(buildThreadTitleInstructions(context) ?? "", /wb thread title --title/u);
+    assert.match(buildThreadStatusInstructions(context) ?? "", /wb thread status --status/u);
+    assert.match(buildWorkbenchGitInstructions(context) ?? "", /wb git arc plan/u);
+    assert.match(buildWorkbenchThreadRecallInstructions(context) ?? "", /wb thread recall/u);
+  }
 
-  const subagent = listWorkbenchInstructionMechanics({ harness: "codex", subagentName: "Akari", threadId: "thread-2", workbenchOrigin: "http://localhost" });
+  const subagentContext = { harness: "codex" as const, subagentName: "Akari", threadId: "draft:child", workbenchOrigin: "http://localhost" };
+  const subagent = listWorkbenchInstructionMechanics(subagentContext);
   assert.equal(subagent.has("thread-title"), false);
   assert.equal(subagent.has("thread-status"), true);
+  assert.equal(subagent.has("thread-git"), true);
+  assert.equal(subagent.has("thread-recall"), true);
+  assert.equal(buildThreadTitleInstructions(subagentContext), null);
 });
 
-test("blank and durable drafts expose no managed-thread mechanics", () => {
-  for (const threadId of ["new", "draft:123"]) {
-    const available = listWorkbenchInstructionMechanics({ harness: "codex", threadId, workbenchOrigin: "http://localhost" });
-    assert.equal(available.has("thread-title"), false);
-    assert.equal(available.has("thread-status"), false);
-  }
+test("default workflow filtering retains required thread behavior during materialization", () => {
+  const available = listWorkbenchInstructionMechanics({ harness: "codex", threadId: "draft:123", workbenchOrigin: "http://localhost" });
+  const warnings: string[] = [];
+  const filtered = filterWorkbenchInstructionContent(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, {
+    available,
+    field: "test.workflow",
+    harness: "codex",
+    onWarning: (warning) => warnings.push(`${warning.recovery}:${warning.line}`),
+    shell: "pwsh",
+  });
+  assert.match(filtered ?? "", /setting a concise title is required, not optional/u);
+  assert.match(filtered ?? "", /wb thread status --status completed/u);
+  assert.doesNotMatch(filtered ?? "", /<\/?available:/u);
+  assert.deepEqual(warnings, []);
 });
 
 test("default workflow requires title commands before new-thread and new-arc work", () => {

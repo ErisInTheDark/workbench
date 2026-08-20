@@ -46,7 +46,7 @@ user-owned agent prompt
       fs.writeFile(path.join(temporaryInstructionRoot, "base", "workbench-agents-prompt.md"), "generated base revision two\n", "utf8"),
       fs.writeFile(path.join(temporaryInstructionRoot, "workflows", "default-workflow-prompt.md"), "generated workflow revision two\n", "utf8"),
       fs.writeFile(path.join(temporaryInstructionRoot, "agents", "default-agent-prompt.md"), "generated agent revision two\n", "utf8"),
-      fs.writeFile(path.join(temporaryInstructionRoot, "mechanics", "workbench-git-instructions.md"), "git revision two for {{thread.id}}\n", "utf8"),
+      fs.writeFile(path.join(temporaryInstructionRoot, "mechanics", "workbench-git-instructions.md"), "git revision two\n", "utf8"),
       fs.writeFile(path.join(temporaryInstructionRoot, "injections", "workbench-tools-injection.md"), "tools revision two\n", "utf8"),
       fs.writeFile(path.join(temporaryInstructionRoot, "skills", "workbench-skill-precedence.md"), "skill precedence revision two\n", "utf8"),
       fs.writeFile(path.join(temporaryInstructionRoot, "skills", "browse-builtin-skill.md"), "---\nname: browse\n---\nbuiltin skill revision two\n", "utf8"),
@@ -75,7 +75,7 @@ user-owned agent prompt
         threadId: "freshness-thread",
         workbenchOrigin: "http://workbench.test",
       }),
-      "git revision two for freshness-thread",
+      "git revision two",
     );
 
     assert.equal(await fs.readFile(path.join(temporaryLibraryRoot, "AGENTS.md"), "utf8"), "generated base revision two\n");
