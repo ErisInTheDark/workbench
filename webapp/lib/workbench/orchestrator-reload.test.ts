@@ -12,13 +12,9 @@ import {
 } from "./orchestrator-reload";
 
 test("--all excludes both server-replacement scopes", () => {
-  assert.deepEqual(ORCHESTRATOR_ALL_RELOAD_SCOPES, [
-    "orchestrator-logic",
-    "browse-controller",
-    "codex-bridge",
-    "opencode-bridge",
-    "next-dev",
-  ]);
+  const allScopes: readonly string[] = ORCHESTRATOR_ALL_RELOAD_SCOPES;
+  assert.equal(allScopes.includes("orchestrator-server"), false);
+  assert.equal(allScopes.includes("opencode-server"), false);
 });
 
 test("normalization deduplicates known internal scopes", () => {

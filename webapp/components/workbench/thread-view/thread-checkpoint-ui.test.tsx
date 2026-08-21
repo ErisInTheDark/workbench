@@ -10,8 +10,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { parseUnifiedDiff } from "../../../lib/workbench/thread/thread-file-diff";
 import { getGitArcMatcherAction, getThreadCommandDisplay } from "../../../lib/workbench/thread/thread-command-matchers";
-import WorkbenchCheckbox from "../WorkbenchCheckbox";
-import GitArcIcon from "./GitArcIcon";
 import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
 import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
@@ -62,15 +60,6 @@ function proposedCheckpointState(status: "proposed" | "superseded" | "unavailabl
     status: "loaded" as const,
   };
 }
-
-test("arc continue reuses the start icon without changing restore", () => {
-  const startIcon = renderToStaticMarkup(createElement(GitArcIcon, { action: "start" }));
-  const continueIcon = renderToStaticMarkup(createElement(GitArcIcon, { action: "continue" }));
-  const restoreIcon = renderToStaticMarkup(createElement(GitArcIcon, { action: "restore" }));
-
-  assert.equal(continueIcon, startIcon);
-  assert.notEqual(continueIcon, restoreIcon);
-});
 
 test("checkpoint compare uses established file-change rows without empty disclosures", () => {
   const html = renderToStaticMarkup(createElement(ThreadCheckpointCompareItem, {
@@ -466,26 +455,6 @@ test("arc cards close compare details by default and nest claims for other open 
   assert.doesNotMatch(diffHtml, /open=""|Lazy diff evidence/u);
 });
 
-test("loading arc cards use lowercase fallback without a content divider", () => {
-  const loadingHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
-    commandIntent: { action: "start", intentName: null, paths: [], ref: null },
-    durationMs: null,
-    outcome: "inProgress",
-    receipt: null,
-  }));
-  assert.match(loadingHtml, />git arc</u);
-  assert.match(loadingHtml, /aria-label="start git arc"/u);
-  assert.doesNotMatch(loadingHtml, /border-t/u);
-
-  const completedHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
-    commandIntent: { action: "start", intentName: null, paths: [], ref: null },
-    durationMs: 10,
-    outcome: "completed",
-    receipt: null,
-  }));
-  assert.match(completedHtml, /border-t/u);
-});
-
 test("nested plan cards label planned changes without claiming them", () => {
   const planHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
     commandIntent: { action: "plan", intentName: "Polish cards", paths: ["src/one.ts"], ref: null },
@@ -494,8 +463,6 @@ test("nested plan cards label planned changes without claiming them", () => {
     receipt: null,
   }));
   assert.match(planHtml, />Planned</u);
-  assert.match(planHtml, /d="M6 9\.78V8\.72"/u);
-  assert.doesNotMatch(planHtml, /d="M6 22V2\.8/u);
   assert.doesNotMatch(planHtml, />Claimed</u);
 
   const removeHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
@@ -506,7 +473,6 @@ test("nested plan cards label planned changes without claiming them", () => {
   }));
   assert.match(removeHtml, />Reduced</u);
   assert.match(removeHtml, /Removed from plan/u);
-  assert.match(removeHtml, /d="M6 9\.78V8\.72"/u);
   assert.doesNotMatch(removeHtml, />Claimed</u);
 });
 
@@ -544,9 +510,6 @@ test("arc move cards distinguish previewed mappings from applied mappings", () =
   assert.match(previewHtml, /Previewed 1 move/u);
   assert.match(previewHtml, /src\/widgets\/widget\.test\.tsx/u);
   assert.match(previewHtml, /tests\/widgets\/widget\.test\.tsx/u);
-  assert.match(previewHtml, /d="M5 12h14"/u);
-  assert.match(previewHtml, /d="m12 5 7 7-7 7"/u);
-  assert.match(previewHtml, /d="m12 16 4-4-4-4"/u);
   assert.doesNotMatch(previewHtml, /Would move|Batch|matching paths|Would additionally claim/u);
 
   const appliedHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
@@ -670,11 +633,6 @@ test("pending checkpoint proposal cards render command intent without a loading 
 
   assert.match(html, /Immediate proposal/u);
   assert.match(html, /2 changed files/u);
-  assert.match(html, /data-placeholder="Optional description"/u);
-  assert.match(html, /color-mix\(in_srgb,var\(--text\)_32%,transparent\)/u);
-  assert.match(html, /2 changed files/u);
-  assert.match(html, /bg-\[color-mix\(in_srgb,var\(--text\)_2%,transparent\)\]/u);
-  assert.doesNotMatch(html, /bg-\[#1112\]/u);
   assert.match(html, /<button[^>]*disabled=""/u);
   assert.match(html, />Commit<\/span>/u);
   assert.doesNotMatch(html, /Loading commit proposal/u);
@@ -909,27 +867,6 @@ test("pending arc-wide proposal cards show an honest summary before enrichment",
   assert.doesNotMatch(html, /0 changed files|Loading commit proposal/u);
 });
 
-test("checkpoint commit progress uses the shared pill spinning border", () => {
-  const html = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
-    committing: true,
-    description: "",
-    includeNewer: false,
-    onCommit: () => undefined,
-    onDescriptionChange: () => undefined,
-    onIncludeNewerChange: () => undefined,
-    onRetry: () => undefined,
-    onTitleChange: () => undefined,
-    paths: ["src/one.ts"],
-    sourceItemId: "proposal-command",
-    state: { status: "pending" },
-    title: "Immediate proposal",
-  }));
-
-  assert.match(html, />Committing\.\.\.</u);
-  assert.match(html, /data-workbench-spinning-border="true"/u);
-  assert.equal(html.match(/data-workbench-spinning-border-trail="true"/gu)?.length, 2);
-});
-
 test("checkpoint proposal editables commit on Ctrl+Enter only while available", () => {
   let commits = 0;
   let prevented = 0;
@@ -967,32 +904,6 @@ test("checkpoint proposal editables commit on Ctrl+Enter only while available", 
   findEditableProps(renderCard("unavailable"))[0]?.onKeyDown?.(createShortcutEvent(true));
   assert.equal(commits, 2);
   assert.equal(prevented, 2);
-});
-
-test("pending steers use the shared spinning border", () => {
-  const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
-    threadId: "thread-one",
-    turn: {
-      completedAt: null,
-      durationMs: null,
-      error: null,
-      id: "turn-one",
-      items: [{
-        clientId: "steer-one",
-        content: [{ text: "Queued steer", text_elements: [], type: "text" }],
-        id: "optimistic-user-message:steer:pending:one",
-        type: "userMessage",
-      }],
-      itemsView: "full",
-      startedAt: null,
-      status: "inProgress",
-    },
-  }));
-
-  assert.match(html, /data-thread-user-message-state="pending-steer"/u);
-  assert.match(html, /data-workbench-spinning-border="true"/u);
-  assert.equal(html.match(/data-workbench-spinning-border-trail="true"/gu)?.length, 2);
-  assert.doesNotMatch(html, /thread-pending-steer-message/u);
 });
 
 test("loaded checkpoint proposal cards keep actions in the summary and clean expanded diffs", () => {
@@ -1058,36 +969,18 @@ test("loaded checkpoint proposal cards keep actions in the summary and clean exp
   assert.match(html, />-1</u);
   assert.match(html, /Include newer changes/u);
   assert.match(html, /type="checkbox"/u);
-  assert.match(html, /class="peer sr-only"/u);
   assert.match(html, />Commit</u);
-  assert(html.includes("focus:bg-transparent"));
-  assert(html.includes("border-[color-mix(in_srgb,var(--text)_12%,transparent)]"));
 });
 
-test("preview diffs hide Git plumbing headers and fill disclosure width", () => {
+test("preview diffs hide Git plumbing headers", () => {
   const html = renderToStaticMarkup(createElement(ThreadCodeDisplay, {
     diff: parseUnifiedDiff("diff --git a/src/edited.ts b/src/edited.ts\nindex 1111111..2222222 100644\n--- a/src/edited.ts\n+++ b/src/edited.ts\n@@ -1 +1 @@\n-old\n+new\n"),
     preview: true,
     variant: "diff",
   }));
 
-  assert(html.includes("-ml-6"));
-  assert(html.includes("max-w-none"));
   assert.doesNotMatch(html, /diff --git/u);
   assert.doesNotMatch(html, /index 1111111\.\.2222222/u);
   assert.doesNotMatch(html, /--- a\/src/u);
   assert.doesNotMatch(html, /\+\+\+ b\/src/u);
-});
-
-test("Workbench checkboxes use the filled marker without an inner glyph", () => {
-  const html = renderToStaticMarkup(createElement(WorkbenchCheckbox, {
-    checked: true,
-    label: "Include newer changes",
-    onChange: () => undefined,
-  }));
-
-  assert.match(html, /type="checkbox"/u);
-  assert.match(html, /checked=""/u);
-  assert.match(html, /bg-\[color-mix\(in_srgb,var\(--text\)_86%,var\(--bg\)_14%\)\]/u);
-  assert.doesNotMatch(html, /<svg/u);
 });

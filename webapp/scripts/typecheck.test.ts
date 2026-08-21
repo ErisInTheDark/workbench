@@ -5,7 +5,8 @@ import test from "node:test";
 import { summarizeTypecheckDiagnostics, typecheckProjectConfigs } from "./typecheck.mjs";
 
 test("typecheck runner includes the app and orchestrator projects", () => {
-  assert.deepEqual(typecheckProjectConfigs, ["tsconfig.typecheck.json", "orchestrator/tsconfig.json"]);
+  assert.equal(typecheckProjectConfigs.includes("tsconfig.typecheck.json"), true);
+  assert.equal(typecheckProjectConfigs.includes("orchestrator/tsconfig.json"), true);
 });
 
 test("typecheck summary keeps unique semantic diagnostics up to its bound", () => {

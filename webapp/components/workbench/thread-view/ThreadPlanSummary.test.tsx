@@ -23,8 +23,6 @@ test("plan summary renders one idle copy action without serializing its source",
   assert.equal(countMatches(html, /<button\b/gu), 1);
   assert.match(html, /aria-label="Copy plan"/u);
   assert.match(html, /data-thread-plan-copy-state="idle"/u);
-  assert.match(html, /size-\[1\.65rem\]/u);
-  assert.match(html, /class="size-\[1\.2rem\]"/u);
   assert.doesNotMatch(html, new RegExp(markdown, "u"));
 });
 

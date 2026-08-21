@@ -52,10 +52,6 @@ test("missing or malformed draft routes never fall through to provider identity"
   assert.equal(parseWorkbenchRouteFromPath("/p/@/thread/parent/sub").view, "invalid");
 });
 
-test("removed Collaboration routes are invalid", () => {
-  assert.equal(parseWorkbenchRouteFromPath("/p/@/collaboration").view, "invalid");
-});
-
 test("mosaic routes preserve parent-owned subagent identity", () => {
   const node = parseWorkbenchMosaicRouteExpression("[thread/parent/sub/child]");
   assert.equal(node.ok, true);

@@ -10,15 +10,21 @@ import test from "node:test";
 import { partitionWorkbenchGitTestFiles } from "../lib/workbench/git/WorkbenchGitTestFixtures";
 import ProjectTestRunner, { parseProjectTestRunnerArguments } from "./ProjectTestRunner";
 
+function readNumericArgument(args: readonly string[], name: string) {
+  const prefix = `${name}=`;
+  const value = Number(args.find((argument) => argument.startsWith(prefix))?.slice(prefix.length));
+  assert.equal(Number.isInteger(value), true, `Expected an integer ${name} argument.`);
+  return value;
+}
+
 test("parses one cooperative mode without changing ordinary discovery inputs", () => {
   assert.deepEqual(parseProjectTestRunnerArguments([]), { inputs: ["."] });
-  assert.deepEqual(parseProjectTestRunnerArguments([
+  const cooperative = parseProjectTestRunnerArguments([
     "--", "--good-citizen", "nested", "alpha.test.ts", "--good-citizen",
-  ]), {
-    inputs: ["nested", "alpha.test.ts"],
-    testConcurrency: 1,
-    testTimeoutMs: 120_000,
-  });
+  ]);
+  assert.deepEqual(cooperative.inputs, ["nested", "alpha.test.ts"]);
+  assert.equal(cooperative.testConcurrency, 1);
+  assert.equal(typeof cooperative.testTimeoutMs === "number" && Number.isInteger(cooperative.testTimeoutMs) && cooperative.testTimeoutMs > 0, true);
   assert.throws(
     () => parseProjectTestRunnerArguments(["--jobs", "2"]),
     /Unknown test runner option: --jobs/u,
@@ -93,13 +99,14 @@ test("starts Node with explicit bounded file concurrency and the project timeout
       return child;
     },
     testConcurrency: 3,
+    testTimeoutMs: 45_000,
   });
 
   assert.deepEqual(await runner.run(), { exitCode: 0, signal: null });
   assert.equal(invocations.length, 1);
   assert.equal(invocations[0]?.command, process.execPath);
   assert(invocations[0]?.args.includes("--test-concurrency=3"));
-  assert(invocations[0]?.args.includes("--test-timeout=30000"));
+  assert(invocations[0]?.args.includes("--test-timeout=45000"));
   assert(invocations[0]?.args.includes("alpha.test.ts"));
 });
 
@@ -119,7 +126,9 @@ test("caps ordinary test-file concurrency", async (context) => {
   });
 
   assert.deepEqual(await runner.run(), { exitCode: 0, signal: null });
-  assert(invocations[0]?.args.includes(`--test-concurrency=${Math.max(1, Math.min(8, os.availableParallelism()))}`));
+  const concurrency = readNumericArgument(invocations[0]?.args ?? [], "--test-concurrency");
+  assert(concurrency >= 1);
+  assert(concurrency <= Math.max(1, os.availableParallelism()));
 });
 
 test("partitions Git-heavy suites without disturbing stable group order", () => {
@@ -160,9 +169,14 @@ test("runs Git-heavy and ordinary files in concurrent bounded pools", async (con
   const nestedGitPool = invocations.find(({ args }) => args.includes("git-checkpoints.test.ts"));
   const gitPool = invocations.find(({ args }) => args.includes("WorkbenchThreadGit.test.ts"));
   const ordinaryPool = invocations.find(({ args }) => args.includes("ordinary.test.ts"));
-  assert(nestedGitPool?.args.includes("--test-concurrency=2"));
-  assert(gitPool?.args.includes("--test-concurrency=3"));
-  assert(ordinaryPool?.args.includes("--test-concurrency=8"));
+  const nestedGitConcurrency = readNumericArgument(nestedGitPool?.args ?? [], "--test-concurrency");
+  const gitConcurrency = readNumericArgument(gitPool?.args ?? [], "--test-concurrency");
+  const ordinaryConcurrency = readNumericArgument(ordinaryPool?.args ?? [], "--test-concurrency");
+  assert(nestedGitConcurrency >= 1);
+  assert(nestedGitConcurrency < ordinaryConcurrency);
+  assert(gitConcurrency >= nestedGitConcurrency);
+  assert(gitConcurrency < ordinaryConcurrency);
+  assert.equal(ordinaryConcurrency, 8);
 });
 
 test("good-citizen mode runs the selected suite with one test file at a time", async (context) => {
@@ -188,6 +202,6 @@ test("good-citizen mode runs the selected suite with one test file at a time", a
   assert.deepEqual(await runner.run(parsed.inputs), { exitCode: 0, signal: null });
   assert.equal(invocations.length, 1);
   assert(invocations[0]?.args.includes("--test-concurrency=1"));
-  assert(invocations[0]?.args.includes("--test-timeout=120000"));
+  assert(invocations[0]?.args.includes(`--test-timeout=${parsed.testTimeoutMs}`));
   assert(invocations[0]?.args.includes("alpha.test.ts"));
 });

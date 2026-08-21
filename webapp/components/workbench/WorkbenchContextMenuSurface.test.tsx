@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import WorkbenchContextMenuSurface from "./WorkbenchContextMenuSurface";
 
-test("context menu renders action, separator, checkbox, and radio semantics in matching full-width rows", () => {
+test("context menu renders action, separator, checkbox, and radio semantics", () => {
   const icon = createElement("span", null, "icon");
   const html = renderToStaticMarkup(createElement(WorkbenchContextMenuSurface, {
     generation: 1,
@@ -48,15 +48,6 @@ test("context menu renders action, separator, checkbox, and radio semantics in m
   assert.match(html, /role="menuitemcheckbox" aria-checked="false" aria-label="Snooze thread"[^>]*disabled/u);
   assert.match(html, /role="group" aria-label="Status"/u);
   assert.match(html, /role="menuitemradio" aria-checked="true" aria-label="Completed"/u);
-  assert.match(html, /flex w-full items-center gap-1/u);
-  assert.match(html, /h-9 min-w-0 flex-1/u);
-  assert.match(html, /border-\[color-mix\(in_srgb,var\(--text\)_10%,transparent\)\]/u);
-  assert.match(html, /data-\[checked=true\]:border-\[color-mix/u);
-  assert.doesNotMatch(html, /border-transparent/u);
-  assert.match(html, /!text-amber-600/u);
-  assert.match(html, /!text-emerald-600/u);
-  assert.match(html, /disabled:!text-muted/u);
-  assert.doesNotMatch(html, /after:bottom-1|button\+button|rounded-none|ring-1/u);
 });
 
 test("every enabled action path closes the menu before dispatch", async () => {

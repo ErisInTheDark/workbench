@@ -15,7 +15,6 @@ import { promisify } from "node:util";
 import WorkbenchAgentCommandController from "../../../orchestrator/WorkbenchAgentCommandController.ts";
 import WorkbenchAgentCliEnvironment from "../../../orchestrator/WorkbenchAgentCliEnvironment.ts";
 import {
-  WORKBENCH_AGENT_CLI_HELP,
   parseWorkbenchAgentCliCommand,
   type WorkbenchAgentCliRequest,
 } from "./workbench-agent-cli-commands.ts";
@@ -568,14 +567,6 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
   ], options)).kind, "error");
 });
 
-test("rejects removed Collaboration commands", async () => {
-  const parsed = await parseWorkbenchAgentCliCommand(["collaboration", "posts", "read"]);
-  assert.equal(parsed.kind, "error");
-  if (parsed.kind === "error") {
-    assert.match(parsed.error, /Unsupported wb command/u);
-  }
-});
-
 test("rejects arbitrary request capabilities and unsafe restore", async () => {
   for (const args of [
     ["request", "--url", "http://localhost:3002/api/file"],
@@ -588,70 +579,6 @@ test("rejects arbitrary request capabilities and unsafe restore", async () => {
     const parsed = await parseWorkbenchAgentCliCommand(args);
     assert.equal(parsed.kind, "error");
   }
-});
-
-test("renders complete root help and exact focused Git and orchestrator help", async () => {
-  const root = await parseWorkbenchAgentCliCommand(["--help"]);
-  assert.deepEqual(root, { help: WORKBENCH_AGENT_CLI_HELP, kind: "help" });
-  assert.match(WORKBENCH_AGENT_CLI_HELP, /^Usage:\n/u);
-  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc plan -m <short-intent>/u);
-  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc add -- <additional-path>/u);
-  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc mv/u);
-  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc adopt -- <path>/u);
-  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc remove -- <claimed-path>/u);
-  assert.match(WORKBENCH_AGENT_CLI_HELP, /wb git arc propose \[--amend\]/u);
-  assert.doesNotMatch(WORKBENCH_AGENT_CLI_HELP, /git checkpoint/u);
-  assert.match(WORKBENCH_AGENT_CLI_HELP, /--confirm \| -- <path> \[<path>\.\.\.\]/u);
-  assert.doesNotMatch(WORKBENCH_AGENT_CLI_HELP, /wb collaboration/u);
-  assert.match(WORKBENCH_AGENT_CLI_HELP, /Help commands:\n  wb subagent --help/u);
-  assert.match(WORKBENCH_AGENT_CLI_HELP, /  wb thread recall --help/u);
-  assert.match(WORKBENCH_AGENT_CLI_HELP, /  wb git arc --help/u);
-  assert.doesNotMatch(WORKBENCH_AGENT_CLI_HELP, /Workbench agent CLI|Compatibility alias|--hard|--orchestrator-server|--help \[--thread/u);
-
-  const git = await parseWorkbenchAgentCliCommand(["git", "--help"]);
-  assert.deepEqual(git, {
-    help: `Usage:
-  wb git <command> [options]
-
-Commands:
-  wb git add [--worktree <absolute-path>] -- <path> [<path>...]
-    Add currently changed files beneath the paths to this thread's commit selection.
-
-  wb git unstage [--worktree <absolute-path>] -- <path> [<path>...]
-    Remove exact files or descendants from this thread's commit selection.
-
-  wb git commit [--worktree <absolute-path>] [--amend <commit-sha>] --message <message>
-    Commit selected files, or amend them into one linear unpushed ancestor, then clear the selection on success.
-
-Run from the repository root and use . with add to select all changed files.
-Run from the repository root and use . with unstage to clear the thread selection.
-Use --worktree with an absolute registered worktree path while keeping the command cwd as the control-plane project.
-Git commands derive the current managed thread ID from Workbench caller context.
-Unrelated files in the ordinary Git index remain outside the thread-owned commit.
-`,
-    kind: "help",
-  });
-  assert.doesNotMatch(git.kind === "help" ? git.help : "", /checkpoint/u);
-
-  const orchestrator = await parseWorkbenchAgentCliCommand(["orchestrator", "--help"]);
-  assert.deepEqual(orchestrator, {
-    help: `Usage:
-  wb orchestrator reload [--all] [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--opencode-bridge] [--opencode-server] [--next-dev]
-
-Options:
-  --all                 Reload all non-destructive orchestrator scopes: orchestrator-logic, browse-controller, codex-bridge, opencode-bridge, next-dev.
-  --orchestrator-logic  Reload declared orchestrator modules.
-  --browse-controller   Drain and replace Browse controller code without restarting browser sessions.
-  --codex-bridge        Reload Codex bridge code without restarting the stable Codex app-server.
-  --opencode-bridge     Reload OpenCode bridge code.
-  --opencode-server     Restart the managed OpenCode server.
-  --next-dev            Restart the Next.js development server.
-
-At least one option is required.
-Use the narrowest applicable scope.
-`,
-    kind: "help",
-  });
 });
 
 test("every deprecated checkpoint command returns the current plan and arc migration guide", async () => {

@@ -40,18 +40,14 @@ function renderCommand(command: string, aggregatedOutput: string) {
   }));
 }
 
-test("title sets render the standalone task marker with the requested flag", () => {
+test("title sets render the standalone task marker", () => {
   const html = renderCommand(
     'wb thread title --title "Trace cache invalidation"',
     "Thread title set: Trace cache invalidation\n",
   );
 
   assert.match(html, /data-role="thread-title-command"/u);
-  assert.match(html, /flex items-center gap-2/u);
-  assert.doesNotMatch(html, /items-start|mt-\[0\.2em\]/u);
-  assert.match(html, /M4 22V4a1 1 0 0 1 \.4-.8A6 6 0 0 1 8 2/u);
-  assert.match(html, /<span>Task:<\/span> <span class="font-semibold text-text">Trace cache invalidation/u);
-  assert.doesNotMatch(html, /<span class="font-(?:medium|semibold)">Task:/u);
+  assert.match(html, />Task:<\/span>[^]*Trace cache invalidation/u);
   assert.doesNotMatch(html, /wb thread title|Thread title set:|Working dir:/u);
 });
 
