@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchThreadStateControllerOptions/WorkbenchThreadReconciliationFailure/WorkbenchThreadClaimContext/WorkbenchObservedLifecycleEvent: catalog, project-state ports, claim context, progressive reconciliation, and identity-owned provider lifecycle input. Keywords: ownership, reconciliation, notification.
+ * - WorkbenchThreadStateControllerOptions/WorkbenchThreadReconciliationFailure/WorkbenchThreadClaimContext/WorkbenchObservedLifecycleEvent: catalog, project-state and title ports, claim context, progressive reconciliation, and identity-owned provider lifecycle input. Keywords: ownership, reconciliation, notification, title.
  * - default WorkbenchThreadStateController: own the shared project observer set, durable thread metadata, and pushed sidebar lifecycle. Keywords: drafts, project, lifecycle, observation.
  */
 import fs from "node:fs/promises";
@@ -68,6 +68,7 @@ export interface WorkbenchThreadStateControllerOptions {
     observe: (projectId: string, publish: (update: WorkbenchProjectStateUpdate) => void) => () => void;
   };
   publish: (connectionId: string, snapshot: WorkbenchThreadStateSnapshot) => void;
+  renameThread?: (projectId: string, harness: WorkbenchHarnessId, threadId: string, title: string) => Promise<string>;
   reconcileProject: (
     projectId: string,
     signal: AbortSignal,
@@ -225,6 +226,16 @@ export default class WorkbenchThreadStateController {
         title: request.title,
         turnId: request.turnId,
       }) };
+      case "workbench/thread-state/title/set": {
+        if (this.connectionProjects.get(connectionId) !== request.projectId) {
+          return { error: { code: "invalidProjectObservation", message: "The title request does not belong to this connection's observed project." } };
+        }
+        try {
+          return { result: await this.renameThread(request) };
+        } catch (error) {
+          return { error: { code: "threadTitleMutationFailed", message: sanitizeError(error) } };
+        }
+      }
       case "workbench/thread-state/draft/upsert": return { result: await this.upsertDraft(request.projectId, request.draft) };
       case "workbench/thread-state/draft/delete": return { result: await this.deleteDraft(request.projectId, request.draftId, request.clientUpdatedAt) };
       case "workbench/thread-state/draft/pin/set":
@@ -426,18 +437,35 @@ export default class WorkbenchThreadStateController {
   async setTitle(projectId: string, harness: "codex" | "copilot" | "opencode", threadId: string, title: string) {
     const state = await this.getProject(projectId);
     const key = `${harness}:${threadId}`;
-    return await this.enqueue(`${projectId}:thread:${key}`, async () => {
+    return await this.enqueue(`${projectId}:thread:${key}`, async () => await this.setTitleOwned(projectId, state, key, title));
+  }
+
+  private async renameThread(request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/title/set" }>) {
+    const renameThread = this.options.renameThread;
+    if (!renameThread) throw new Error("Thread title mutation is unavailable.");
+    const state = await this.getProject(request.projectId);
+    const key = `${request.identity.harness}:${request.identity.threadId}`;
+    return await this.enqueue(`${request.projectId}:thread:${key}`, async () => {
       const entry = state.entries.get(key);
-      if (!entry || entry.entryKind === "draft") return null;
-      const next = WorkbenchThreadSidebarEntrySchema.parse({ ...entry, title });
-      if (next.entryKind === "draft") return null;
-      if (areDeeplyEqual(entry, next)) return next;
-      state.entries.set(key, next);
-      state.overlays.set(key, this.overlayFromEntry(next));
-      await this.persist(projectId, state);
-      this.publish(projectId, state, next);
-      return next;
+      if (!entry || entry.entryKind === "draft") throw new Error("The thread is not available in the observed project.");
+      const title = await renameThread(request.projectId, request.identity.harness, request.identity.threadId, request.title);
+      const renamed = await this.setTitleOwned(request.projectId, state, key, title);
+      if (!renamed) throw new Error("The renamed thread is no longer available in the observed project.");
+      return { identity: request.identity, ok: true as const, title };
     });
+  }
+
+  private async setTitleOwned(projectId: string, state: ProjectState, key: string, title: string) {
+    const entry = state.entries.get(key);
+    if (!entry || entry.entryKind === "draft") return null;
+    const next = WorkbenchThreadSidebarEntrySchema.parse({ ...entry, title });
+    if (next.entryKind === "draft") return null;
+    if (areDeeplyEqual(entry, next)) return next;
+    state.entries.set(key, next);
+    state.overlays.set(key, this.overlayFromEntry(next));
+    await this.persist(projectId, state);
+    this.publish(projectId, state, next);
+    return next;
   }
 
   async getSnapshot(projectId: string) {

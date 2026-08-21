@@ -4,7 +4,7 @@
  * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchGitArcPlanStateSchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts. Keywords: zod, lifecycle, plan, sidebar.
  * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchThreadActivityUpdateSchema: full sidebar state and tiny activity delta contracts. Keywords: sidebar, websocket, revision.
  * - WorkbenchThreadStateOpenResultSchema/WorkbenchThreadStateOpenResult: atomic catalog, tree, and sidebar observation bootstrap. Keywords: open, bootstrap, snapshot.
- * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema: multiplexed sidebar, activity, project, and request protocol. Keywords: orchestrator, websocket, revision.
+ * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadTitleMutationResultSchema: multiplexed sidebar, activity, title, project, and request protocol. Keywords: orchestrator, websocket, revision.
  * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries/sortThreadSidebarEntries: exhaustive visible grouping, shared presentation order, and stable turn-start ordering. Keywords: grouping, pin, sort.
  * - getWorkbenchThreadPlanConflictEntries/createWorkbenchThreadPlanConflictSelector: derive and identity-stabilize visible sibling claim conflicts from one inactive plan and the live sidebar snapshot. Keywords: plan, claim, conflict, sidebar, selector.
  * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary. Keywords: timestamp, provider, normalization.
@@ -221,12 +221,20 @@ export const WorkbenchThreadStateSnapshotSchema = z.union([
 ]);
 export type WorkbenchThreadStateSnapshot = z.infer<typeof WorkbenchThreadStateSnapshotSchema>;
 
+export const WorkbenchThreadTitleMutationResultSchema = z.object({
+  identity: ThreadIdentitySchema,
+  ok: z.literal(true),
+  title: z.string().trim().min(1),
+}).strict();
+export type WorkbenchThreadTitleMutationResult = z.infer<typeof WorkbenchThreadTitleMutationResultSchema>;
+
 const ProjectRequestBase = z.object({ projectId: z.string().trim().min(1) }).strict();
 export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", [
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/open"), version: z.literal(2).optional() }),
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/close") }),
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/refresh") }),
   ProjectRequestBase.extend({ draftId: CanonicalUuidSchema.optional(), identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/intent/accept"), title: z.string().trim().min(1), turnId: z.string().trim().min(1) }),
+  ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/title/set"), title: z.string().trim().min(1) }),
   ProjectRequestBase.extend({ draft: WorkbenchThreadDraftSchema, method: z.literal("workbench/thread-state/draft/upsert") }),
   ProjectRequestBase.extend({ clientUpdatedAt: z.number().int().nonnegative(), draftId: CanonicalUuidSchema, method: z.literal("workbench/thread-state/draft/delete") }),
   ProjectRequestBase.extend({ draftId: CanonicalUuidSchema, method: z.literal("workbench/thread-state/draft/pin/set"), pinned: z.boolean() }),

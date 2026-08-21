@@ -1,4 +1,7 @@
-/* No production exports. Tests protect provider normalization and progressive per-harness reconciliation. */
+/*
+ * Exports:
+ * - No production exports; tests protect provider normalization, progressive reconciliation, and controller-owned title mutation. Keywords: provider, sidebar, title, reconciliation, test.
+ */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -368,4 +371,87 @@ test("managed title reads use the validated provider thread without mirrored tit
     params: { cwd: "C:/workspace", includeTurns: true, threadId: "thread-one" },
   }]);
   await feature.dispose();
+});
+
+test("observed title mutations update the provider and published sidebar together", async () => {
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-title-"));
+  const publications: WorkbenchThreadStateSnapshot[] = [];
+  const titleRequests: Array<{ harness: string; params: unknown }> = [];
+  let rejectTitle = false;
+  const feature = new WorkbenchThreadStateFeature({
+    getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
+    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    listSubagents: async () => ({ subagents: [] }),
+    projectState: {
+      getCurrentUpdate: () => null,
+      handleRequest: async () => ({ accepted: true }),
+      observe: () => () => undefined,
+    },
+    publish: (_connectionId, snapshot) => { publications.push(snapshot); },
+    requestHarness: async (harness, request) => {
+      if (request.method === "thread/name/set") {
+        titleRequests.push({ harness, params: request.params });
+        return rejectTitle
+          ? { error: { code: -32000, message: "Provider rejected title" }, id: request.id ?? null }
+          : { id: request.id ?? null, result: {} };
+      }
+      return {
+        id: request.id ?? null,
+        result: {
+          data: harness === "codex"
+            ? [{ id: "thread-one", name: "Old title", status: { type: "idle" }, updatedAt: 1 }]
+            : [],
+          nextCursor: null,
+        },
+      };
+    },
+    resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
+    storageRoot,
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+
+  await feature.controller.open("observer", "project");
+  await waitFor(() => publications.some((snapshot) => (
+    "entries" in snapshot
+    && snapshot.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "thread-one")
+  )), "Provider title entry did not load.");
+  publications.length = 0;
+
+  const renamed = await feature.controller.handleRequest("observer", {
+    identity: { harness: "codex", threadId: "thread-one" },
+    method: "workbench/thread-state/title/set",
+    projectId: "project",
+    title: '  "Renamed   thread..."  ',
+  });
+
+  assert.deepEqual(renamed, {
+    result: { identity: { harness: "codex", threadId: "thread-one" }, ok: true, title: "Renamed thread" },
+  });
+  assert.deepEqual(titleRequests, [{
+    harness: "codex",
+    params: { cwd: storageRoot, name: "Renamed thread", threadId: "thread-one" },
+  }]);
+  const renamedEntry = (await feature.controller.getSnapshot("project")).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "thread-one");
+  assert.equal(renamedEntry?.title, "Renamed thread");
+  const lastPublication = publications.at(-1);
+  const publishedEntry = lastPublication && "entries" in lastPublication
+    ? lastPublication.entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "thread-one")
+    : null;
+  assert.equal(publishedEntry?.title, "Renamed thread");
+
+  rejectTitle = true;
+  const publicationCount = publications.length;
+  const rejected = await feature.controller.handleRequest("observer", {
+    identity: { harness: "codex", threadId: "thread-one" },
+    method: "workbench/thread-state/title/set",
+    projectId: "project",
+    title: "Rejected title",
+  });
+  assert.deepEqual(rejected, { error: { code: "threadTitleMutationFailed", message: "Provider rejected title" } });
+  assert.equal(publications.length, publicationCount);
+  assert.equal((await feature.controller.getSnapshot("project")).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "thread-one")?.title, "Renamed thread");
+
+  await feature.dispose();
+  await fs.rm(storageRoot, { force: true, recursive: true });
 });

@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchThreadStateFeatureContext: stable ports required by the reloadable sidebar, lifecycle, and shared project-observation owner. Keywords: dependency injection, thread state, project.
  * - normalizeProviderSidebarEntry/normalizeSubagentProviderLifecycle/mapProviderLifecycleNotification/mapProviderActivityNotification: normalize provider rows, subagent defaults, lifecycle, and activity notifications. Keywords: timestamp, lifecycle, harness.
- * - default WorkbenchThreadStateFeature: own reconciliation, project observation, managed status commands, notification observation, and the current controller. Keywords: sidebar, project, lifecycle, reloadable feature.
+ * - default WorkbenchThreadStateFeature: own reconciliation, project observation, provider-backed title and status commands, notification observation, and the current controller. Keywords: sidebar, project, lifecycle, title, reloadable feature.
  */
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import { getCurrentTurn } from "../lib/codex/thread-state";
@@ -186,6 +186,13 @@ export default class WorkbenchThreadStateFeature {
       projectState: context.projectState,
       publish: context.publish,
       reconcileProject: (projectId, signal, acceptProviderSnapshot) => this.reconcileProject(projectId, signal, acceptProviderSnapshot),
+      renameThread: async (projectId, harness, threadId, candidateTitle) => {
+        const title = normalizeThreadTitle(candidateTitle);
+        if (!title) throw new Error("A non-empty thread title is required.");
+        const project = await context.resolveProjectById(projectId);
+        await this.setProviderThreadTitle(harness, threadId, title, project.rootPath);
+        return title;
+      },
       resolveGitArc: async (projectId, harness, threadId) => {
         const project = await context.resolveProjectById(projectId);
         const state = context.gitArcs.findLifecycleState
@@ -225,6 +232,15 @@ export default class WorkbenchThreadStateFeature {
     if (activity) await this.controller.observeActivity(harness, activity.threadId, activity.kind === "turnStarted" ? activity.startedAt : undefined);
   }
 
+  private async setProviderThreadTitle(harness: WorkbenchHarness, threadId: string, title: string, cwd: string) {
+    const response = await this.context.requestHarness(harness, {
+      id: `thread-state:title:${threadId}`,
+      method: "thread/name/set",
+      params: { cwd, name: title, threadId },
+    });
+    if (response.error) throw new Error(response.error.message);
+  }
+
   async handleManagedThreadRequest(request: JsonRpcRequest): Promise<JsonRpcResponse> {
     const id = request.id ?? null;
     try {
@@ -248,8 +264,7 @@ export default class WorkbenchThreadStateFeature {
         if (params.action !== "set") throw new Error("A thread title action is required.");
         const title = normalizeThreadTitle(typeof params.title === "string" ? params.title : null);
         if (!title) throw new Error("--title requires non-empty text.");
-        const response = await this.context.requestHarness(resolved.harness, { id, method: "thread/name/set", params: { cwd: resolved.cwd, name: title, threadId: resolved.thread.id } });
-        if (response.error) throw new Error(response.error.message);
+        await this.setProviderThreadTitle(resolved.harness, resolved.thread.id, title, resolved.cwd);
         await this.controller.setTitle(resolved.projectId, resolved.harness, resolved.thread.id, title);
         return { id, result: { harness: resolved.harness, threadId: resolved.thread.id, title } };
       }

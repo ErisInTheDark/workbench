@@ -239,6 +239,27 @@ function browseEntry(entryKey: string, turnId: string): WorkbenchBrowseResultEnt
   };
 }
 
+test("accepted thread titles update only the matching canonical source name", async () => withClient(async (client) => {
+  const original = activeThread("codex", "original");
+  const progressed = { ...original, preview: "newer preview", updatedAt: 2 };
+  const selected = activeThread("opencode", "selected");
+  client.selectThreadPayload(progressed);
+  client.selectThreadPayload(selected);
+
+  assert.equal(client.applyAcceptedThreadTitle(original.id, original.harness, "Renamed original"), true);
+
+  const snapshot = client.getSnapshot();
+  const originalKey = snapshot.threadDocuments.keysByThreadId[original.id];
+  const renamedOriginal = originalKey ? snapshot.threadDocuments.documentsByKey[originalKey] : null;
+  assert.equal(renamedOriginal?.name, "Renamed original");
+  assert.equal(renamedOriginal?.preview, "newer preview");
+  assert.equal(renamedOriginal?.updatedAt, 2);
+  assert.equal(snapshot.currentThread?.id, selected.id);
+  assert.equal(snapshot.currentThread?.name, selected.name);
+  assert.equal(client.applyAcceptedThreadTitle(selected.id, "codex", "Wrong harness"), false);
+  assert.equal(client.getSnapshot().currentThread?.name, selected.name);
+}));
+
 test("selected active Codex steers settle at admission and canonical notification owns placement", async () => {
   const originalWindow = globalThis.window;
   const originalWebSocket = globalThis.WebSocket;

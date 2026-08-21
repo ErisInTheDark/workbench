@@ -206,6 +206,7 @@ export interface WorkbenchThreadClientOptions {
 }
 
 interface WorkbenchThreadClient {
+  applyAcceptedThreadTitle: (threadId: string, harness: WorkbenchHarness, title: string) => boolean;
   clearThreadSelection: () => void;
   createThread: (harness: WorkbenchHarness, threadId?: string, options?: { select?: boolean }) => ThreadPayload;
   dispose: () => void;
@@ -4988,6 +4989,10 @@ function WorkbenchThreadClient(
     });
   }
 
+  function applyAcceptedThreadTitle(threadId: string, harness: WorkbenchHarness, title: string) {
+    return updateThreadSourceFields({ harness, id: threadId }, { name: title });
+  }
+
   function setCurrentThreadAgent(threadId: string, agentPath: string | null) {
     if (!state.currentThread || state.currentThread.id !== threadId) {
       return;
@@ -5123,6 +5128,7 @@ function WorkbenchThreadClient(
   }
 
   return {
+    applyAcceptedThreadTitle,
     clearThreadSelection,
     createThread,
     dispose,

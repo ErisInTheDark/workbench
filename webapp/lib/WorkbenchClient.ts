@@ -46,7 +46,7 @@ import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
 import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./workbench/WorkbenchThreadClient";
 import { WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema, type WorkbenchProjectStateUpdate } from "./workbench/project/project-state";
 import ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
-import { WorkbenchThreadSidebarSnapshotSchema, WorkbenchThreadStateOpenResultSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarSnapshot } from "./workbench/thread/thread-state";
+import { WorkbenchThreadSidebarSnapshotSchema, WorkbenchThreadStateOpenResultSchema, WorkbenchThreadStateSnapshotSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarSnapshot } from "./workbench/thread/thread-state";
 import { getTurnRenderSignature } from "./workbench/thread/thread-item-signature";
 import reportClientSchemaError from "./workbench/report-client-schema-error";
 
@@ -904,6 +904,24 @@ export async function WorkbenchClient(
     readThread,
     refreshRateLimits,
     sendThreadMessage,
+    setThreadTitle: async (request) => {
+      const projectId = projectClient.getSnapshot().currentProjectId;
+      if (!projectId) throw new Error("A project must be selected before renaming a thread.");
+      const parsed = WorkbenchThreadTitleMutationResultSchema.safeParse(await threadClient.requestWorkbench("workbench/thread-state/title/set", {
+        identity: { harness: request.harness, threadId: request.threadId },
+        projectId,
+        title: request.title,
+      }));
+      if (!parsed.success) {
+        reportClientSchemaError("Rejected Workbench thread title mutation response", parsed.error);
+        throw new Error("The thread title mutation response was invalid.");
+      }
+      if (parsed.data.identity.harness !== request.harness || parsed.data.identity.threadId !== request.threadId) {
+        throw new Error("The thread title response did not match the requested thread.");
+      }
+      threadClient.applyAcceptedThreadTitle(request.threadId, request.harness, parsed.data.title);
+      return parsed.data.title;
+    },
     compactThread,
     pauseThread,
     resumeThread,

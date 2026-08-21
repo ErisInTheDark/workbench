@@ -88,6 +88,7 @@
  * - ChangeSummary: file-change summary.
  * - ThreadSummary: thread-list summary.
  * - ThreadPayload: full rendered thread payload.
+ * - WorkbenchThreadTitleRequest: provider-backed thread title mutation request.
  * - WorkbenchThreadDocumentSnapshot: thread document-store snapshot.
  * - WorkbenchThreadTurnLoadState: turn hydration state.
  * - WorkbenchThreadTurnHistoryEntry: turn history metadata.
@@ -808,6 +809,12 @@ export interface ThreadPayload extends ThreadSummary {
   turns: Turn[];
 }
 
+export interface WorkbenchThreadTitleRequest {
+  harness: WorkbenchHarness;
+  threadId: string;
+  title: string;
+}
+
 export interface WorkbenchThreadDocumentSnapshot {
   documentsByKey: Record<string, ThreadPayload | undefined>;
   keysByThreadId: Record<string, string | undefined>;
@@ -1083,6 +1090,7 @@ export interface WorkbenchControls {
   pauseThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   resumeThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   stopThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
+  setThreadTitle: (request: WorkbenchThreadTitleRequest) => Promise<string>;
   threadGoals: WorkbenchThreadGoalControls;
   submitPendingUserInputRequest: (
     threadId: string,

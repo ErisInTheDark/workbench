@@ -120,6 +120,7 @@ import WorkbenchMainLayoutView from "./workbench/layout/WorkbenchMainLayoutView"
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
 import PrimaryButton from "./workbench/PrimaryButton";
 import ProjectPicker from "./workbench/ProjectPicker";
+import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
 import ThreadLoadingSkeleton from "./workbench/thread-view/ThreadLoadingSkeleton";
 import ThreadView from "./workbench/thread-view/ThreadView";
@@ -3305,15 +3306,32 @@ export default function Workbench () {
                   className="pointer-events-none absolute inset-0 -z-10 md:mx-auto md:max-w-[58rem] bg-[linear-gradient(to_bottom,var(--shell-fade-bg)_calc(100%-var(--spacing)*6),transparent)] md:backdrop-blur-none"
                 />
                 <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                  <div className="order-2 min-w-0 md:order-1" hidden={Boolean(currentThread?.isDraft)}>
-                    <p id="file-path" ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
-                      {isThreadShellTitleLoading ? (
-                        <span className="block h-4 w-48 max-w-[60vw] rounded-full workbench-skeleton" aria-hidden="true" />
-                      ) : showThreadView ? threadShellTitle : showSettingsView ? "Settings" : "Select a file"}
-                    </p>
-                    <p id="status-line" ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted">
-                      {showThreadView ? threadShellStatusLabel : showSettingsView ? "Theme and local Workbench preferences." : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
-                    </p>
+                  <div className="order-2 min-w-0 w-full flex-1 md:order-1" hidden={Boolean(currentThread?.isDraft)}>
+                    {showThreadView && threadShellSource && !isThreadShellTitleLoading ? (
+                      <ThreadShellTitleInput
+                        key={`${threadShellSource.harness}:${threadShellSource.id}`}
+                        activityLabel={threadShellStatusLabel}
+                        statusRef={statusLineRef}
+                        title={threadShellTitle}
+                        titleRef={filePathLabelRef}
+                        onSave={controls ? async (title) => await controls.setThreadTitle({
+                          harness: threadShellSource.harness,
+                          threadId: threadShellSource.id,
+                          title,
+                        }) : undefined}
+                      />
+                    ) : (
+                      <>
+                        <p id="file-path" ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
+                          {isThreadShellTitleLoading ? (
+                            <span className="block h-4 w-48 max-w-[60vw] rounded-full workbench-skeleton" aria-hidden="true" />
+                          ) : showSettingsView ? "Settings" : "Select a file"}
+                        </p>
+                        <p id="status-line" ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-muted">
+                          {showSettingsView ? "Theme and local Workbench preferences." : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
+                        </p>
+                      </>
+                    )}
                   </div>
                   <div className="order-1 flex items-center justify-between gap-3 md:order-2 md:ml-auto md:flex-none md:justify-end">
                     <button
