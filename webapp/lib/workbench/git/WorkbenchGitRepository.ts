@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchGitRepository: own raw Git process, snapshot, path, tree, ref, and ancestry mechanics for one repository. Keywords: git, repository, snapshot, ref, transaction.
+ * - default WorkbenchGitRepository: own raw Git process, snapshot, path, tree, ref, index-normalized publication, and ancestry mechanics for one repository. Keywords: git, repository, snapshot, ref, index, transaction.
  * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit: typed Git history, ancestry, object-read, and atomic ref-update inputs. Keywords: git, commit, paths, head, object, ref, transaction.
  */
 import { execFile, spawn } from "node:child_process";
@@ -601,6 +601,40 @@ export default class WorkbenchGitRepository {
 
   async resetMixedPaths(commit: string, paths: string[]) {
     await this.run(["reset", "--mixed", "--quiet", commit, "--", ...paths.map((candidate) => this.literalPathspec(candidate))]);
+  }
+
+  async writeIndexTree() {
+    return (await this.run(["write-tree"])).trim();
+  }
+
+  async publishRefsAfterIndexNormalization({
+    deletes = [],
+    expectedStateGeneration,
+    indexCommit,
+    paths,
+    updates,
+  }: {
+    deletes?: Array<{ oldValue?: string; ref: string }>;
+    expectedStateGeneration?: string | null;
+    indexCommit: string;
+    paths: string[];
+    updates: GitRefUpdate[];
+  }) {
+    const previousIndexTree = await this.writeIndexTree();
+    await this.resetMixedPaths(indexCommit, paths);
+    try {
+      await this.updateRefs(updates, deletes, { expectedStateGeneration });
+    } catch (publicationError) {
+      try {
+        await this.resetMixedPaths(previousIndexTree, paths);
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [publicationError, rollbackError],
+          "Git ref publication failed and the selected index paths could not be restored.",
+        );
+      }
+      throw publicationError;
+    }
   }
 
   async restorePaths(source: string, paths: string[]) {

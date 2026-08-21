@@ -383,6 +383,19 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   });
   assert.equal(proposal.request.responseKind, "git-arc-propose");
 
+  const bulletDescription = "- move thread Git out of Next\n- keep claims until index normalization succeeds\n- prevent optional explorer index writes";
+  const bulletProposal = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "propose", "-m", "Two-state Git acceptance", "-m", bulletDescription,
+  ], gitOptions);
+  assert.equal(bulletProposal.kind, "request");
+  assert.equal(bulletProposal.request.body?.description, bulletDescription);
+
+  const missingProposalTitle = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "propose", "-m", "-m", "Description",
+  ], gitOptions);
+  assert.equal(missingProposalTitle.kind, "error");
+  assert.match(missingProposalTitle.error, /-m requires a value/u);
+
   const replacementProposal = await parseWorkbenchAgentCliCommand([
     "git", "arc", "propose", "--replace", "proposal-one", "-m", "Replacement",
   ], gitOptions);

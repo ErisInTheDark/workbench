@@ -16,9 +16,11 @@ interface ProjectSnapshotHttpController {
 export interface WorkbenchOrchestratorHttpRouterOptions {
   agentCommand: HttpController;
   bridgeRequest: HttpController;
+  gitArc: HttpController;
   legacyMigrationSource: HttpController;
   projectCatalog: HttpController;
   projectSnapshot: ProjectSnapshotHttpController;
+  threadGit: HttpController;
 }
 
 interface RouteDefinition {
@@ -41,6 +43,18 @@ export default class WorkbenchOrchestratorHttpRouter {
 
   constructor(options: WorkbenchOrchestratorHttpRouterOptions) {
     this.routes = [
+      {
+        errorMessage: "Git arc request failed.",
+        handle: (request, response) => options.gitArc.handleHttpRequest(request, response),
+        methods: ["POST"],
+        path: "/orchestrator/git-arc",
+      },
+      {
+        errorMessage: "Thread Git request failed.",
+        handle: (request, response) => options.threadGit.handleHttpRequest(request, response),
+        methods: ["POST"],
+        path: "/orchestrator/thread-git",
+      },
       {
         errorMessage: "Agent command failed.",
         handle: (request, response) => options.agentCommand.handleHttpRequest(request, response),

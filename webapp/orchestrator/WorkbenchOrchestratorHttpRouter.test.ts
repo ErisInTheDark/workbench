@@ -50,9 +50,11 @@ function createRouter(events: string[], failurePath: string | null = null) {
   return new WorkbenchOrchestratorHttpRouter({
     agentCommand: controller("agent"),
     bridgeRequest: controller("bridge"),
+    gitArc: controller("git-arc"),
     legacyMigrationSource: controller("migration"),
     projectCatalog: controller("projects"),
     projectSnapshot,
+    threadGit: controller("thread-git"),
   } satisfies WorkbenchOrchestratorHttpRouterOptions);
 }
 
@@ -62,6 +64,8 @@ test("routes every reloadable HTTP controller and preserves method gates", async
   for (const [url, method, expected] of [
     ["/orchestrator/agent-command", "POST", "agent"],
     ["/orchestrator/bridge-request", "POST", "bridge"],
+    ["/orchestrator/git-arc", "POST", "git-arc"],
+    ["/orchestrator/thread-git", "POST", "thread-git"],
     ["/orchestrator/legacy-migration-source", "DELETE", "migration"],
     ["/orchestrator/projects", "GET", "projects"],
     ["/orchestrator/tree", "POST", "tree"],
@@ -70,7 +74,7 @@ test("routes every reloadable HTTP controller and preserves method gates", async
     await router.handleHttpRequest(request(url, method), output);
     assert.equal((output as unknown as TestResponse).body, expected);
   }
-  assert.deepEqual(events, ["agent", "bridge", "migration", "projects", "tree"]);
+  assert.deepEqual(events, ["agent", "bridge", "git-arc", "thread-git", "migration", "projects", "tree"]);
 
   const rejected = response();
   await router.handleHttpRequest(request("/orchestrator/projects", "POST"), rejected);

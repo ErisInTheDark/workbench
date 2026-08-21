@@ -616,6 +616,50 @@ test("PowerShell-wrapped arc proposals preserve escaped messages and apostrophes
   });
 });
 
+test("PowerShell literal here-string proposal setup renders and preserves Markdown intent", () => {
+  const description = [
+    "- move thread Git out of Next and serialize worktree mutations",
+    "- preserve proposals, claims, and selected index state until publication succeeds",
+  ].join("\n");
+  const display = getThreadCommandDisplay({
+    command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "$description = @'
+${description}
+'@
+wb git arc propose --replace proposal-one -m \"make arc Git transactions consistent\" -m $description"`,
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+
+  assert.equal(
+    display.claimedBy,
+    "powershell.hide-literal-here-string-assignment,git-arc.propose",
+  );
+  assert.equal(display.summaryText, "Proposed arc commit");
+  assert.equal(display.ongoingSummaryText, "Creating arc commit proposal");
+  assert.deepEqual(parseGitCheckpointCommitCommand(display.unwrappedCommand), {
+    amend: false,
+    description,
+    paths: [],
+    title: "make arc Git transactions consistent",
+  });
+});
+
+test("PowerShell interpolated here-string proposal setup remains raw", () => {
+  const display = getThreadCommandDisplay({
+    command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "$description = @\"
+- include $dynamicValue
+\"@
+wb git arc propose -m \"dynamic proposal\" -m $description"`,
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+
+  assert.equal(display.claimedBy, null);
+  assert.equal(display.summaryKind, "raw");
+});
+
 test("PowerShell numbered reads resolve a preceding literal path assignment", () => {
   const display = getThreadCommandDisplay({
     command: String.raw`"c:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command '$p='"'"'webapp\\lib\\workbench\\thread\\command-matchers\\workbench-cli.ts'"'"'; $c=Get-Content $p; $c[80..116]'`,

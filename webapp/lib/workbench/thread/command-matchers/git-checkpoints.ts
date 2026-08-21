@@ -18,6 +18,7 @@ import { parseGitArcMoveArguments, type GitArcMoveArguments } from "../../git/gi
 import { parseUnifiedDiffFileChanges } from "../thread-file-diff";
 import { CommandMatcher } from "./core";
 import { tokenizeCommand } from "./helpers";
+import { unwrapLeadingPowerShellLiteralHereStringAssignment } from "./shells";
 import type { CommandMatcherDefinition } from "./types";
 
 export type GitArcCommandAction = GitArcAction | "planAdd" | "planAdopt" | "planRemove" | "planStart" | "rescind";
@@ -310,7 +311,8 @@ export function parseGitCheckpointProposalId(output: string) {
 }
 
 export function parseGitCheckpointCommitCommand(command: string): GitCheckpointCommitCommandIntent | null {
-  const tokens = tokenizeCommand(String(command ?? "").trim());
+  const literalAssignment = unwrapLeadingPowerShellLiteralHereStringAssignment(command);
+  const tokens = tokenizeCommand(String(literalAssignment?.command ?? command ?? "").trim());
   if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "")) return null;
   let cursor = 1;
   if (tokens[cursor] === "git") cursor += 1;
@@ -318,6 +320,7 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
   cursor += 2;
 
   let amend = false;
+  let replacementProposalId: string | null = null;
   const messages: string[] = [];
   for (; cursor < tokens.length && tokens[cursor] !== "--"; cursor += 1) {
     const flag = tokens[cursor];
@@ -327,8 +330,18 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
       continue;
     }
     const value = tokens[cursor + 1];
+    if (flag === "--replace") {
+      if (replacementProposalId || !value) return null;
+      replacementProposalId = value;
+      cursor += 1;
+      continue;
+    }
     if (flag !== "-m" || !value) return null;
-    messages.push(value);
+    messages.push(
+      literalAssignment && value.toLowerCase() === `$${literalAssignment.variableName.toLowerCase()}`
+        ? literalAssignment.value
+        : value,
+    );
     cursor += 1;
   }
   const paths = tokens[cursor] === "--" ? tokens.slice(cursor + 1) : [];

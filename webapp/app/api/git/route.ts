@@ -1,80 +1,15 @@
 /*
  * Exports:
- * - runtime: force thread-owned Git operations onto the Node.js runtime. Keywords: api, git, node runtime.
- * - dynamic: disable static caching for thread-owned Git operations. Keywords: api, git, dynamic.
- * - POST: validate cwd ownership and dispatch bounded add, unstage, or commit operations. Keywords: api, git, thread, commit.
+ * - runtime/dynamic: keep the stateless thread Git proxy on the uncached Node.js route boundary. Keywords: api, git, thread, proxy.
+ * - POST: forward one buffered thread Git request to the reloadable orchestrator feature. Keywords: api, git, orchestrator, proxy.
  */
-import { NextRequest, NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 
-import WorkbenchThreadGit from "../../../lib/workbench/git/WorkbenchThreadGit";
-import { resolveAgentEndpointProjectFromCwd } from "../../../lib/workbench/project/agent-endpoint-project";
+import { proxyWorkbenchOrchestratorRequest } from "../../../lib/workbench/orchestrator-http-proxy";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type ThreadGitAction = "add" | "commit" | "unstage";
-
-function readAction(value: unknown): ThreadGitAction | null {
-  return value === "add" || value === "commit" || value === "unstage" ? value : null;
-}
-
-function readString(value: unknown) {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function readPaths(value: unknown) {
-  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
-}
-
-function selectionResponse(verb: string, changedPaths: string[], selectedPaths: string[]) {
-  const lines = [
-    `${verb} ${changedPaths.length} ${changedPaths.length === 1 ? "file" : "files"}.`,
-    `Thread selection (${selectedPaths.length}):`,
-    ...selectedPaths.map((filePath) => `  ${filePath}`),
-  ];
-  return new NextResponse(`${lines.join("\n")}\n`, {
-    headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
-  });
-}
-
 export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json() as Record<string, unknown>;
-    const action = readAction(body.action);
-    const cwd = readString(body.cwd);
-    const targetWorktree = readString(body.targetWorktree) || undefined;
-    const threadId = readString(body.threadId);
-    if (!action) return NextResponse.json({ error: "A valid thread Git action is required." }, { status: 400 });
-    if (!threadId) return NextResponse.json({ error: "A managed Workbench thread id is required." }, { status: 400 });
-    const resolved = await resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Thread Git" });
-    const threadGit = await WorkbenchThreadGit.create({ cwd: resolved.cwd, targetWorktree, threadId });
-
-    if (action === "commit") {
-      const amendTarget = readString(body.amendTarget) || undefined;
-      const result = await threadGit.commit(readString(body.message), amendTarget);
-      return new NextResponse([
-        ...(result.amendedCommit ? [
-          `Amended ${amendTarget} as ${result.amendedCommit}`,
-          `Rewritten HEAD ${result.commit} (${result.rewrittenCommitCount} commits)`,
-        ] : [`Committed ${result.commit}`]),
-        `Committed files (${result.committedPaths.length}):`,
-        ...result.committedPaths.map((filePath) => `  ${filePath}`),
-        ...(result.warnings?.map((warning) => `Warning: ${warning}`) ?? []),
-        "",
-      ].join("\n"), {
-        headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
-      });
-    }
-
-    const paths = readPaths(body.paths);
-    const result = action === "add" ? await threadGit.add(paths) : await threadGit.unstage(paths);
-    return selectionResponse(action === "add" ? "Selected" : "Unselected", result.changedPaths, result.selectedPaths);
-  } catch (error) {
-    return NextResponse.json({
-      error: error instanceof Error ? error.message : "Unable to run thread Git operation.",
-    }, {
-      headers: { "Cache-Control": "no-store" },
-      status: 400,
-    });
-  }
+  return await proxyWorkbenchOrchestratorRequest(request, "/orchestrator/thread-git", { responseMode: "buffer" });
 }

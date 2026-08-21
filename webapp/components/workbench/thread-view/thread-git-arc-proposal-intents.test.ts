@@ -79,3 +79,26 @@ test("later loaded transcript entries replace an earlier intent for the same pro
   assert.equal(intents.get("shared-proposal")?.title, "Later title");
   assert.equal(intents.get("shared-proposal")?.description, "Latest visible description");
 });
+
+test("visible proposal intents resolve a preceding literal PowerShell here-string", () => {
+  const description = "- preserve proposal claims\n- retry the same Commit action";
+  const command = String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "$description = @'
+${description}
+'@
+wb git arc propose --replace proposal-one -m \"keep proposal recovery ordinary\" -m $description"`;
+  const intents = getThreadGitArcProposalIntents({
+    projectRootPath: "C:/workspace",
+    turns: [turn("turn-one", [commandItem(
+      "proposal",
+      command,
+      "Workbench arc proposal: proposal-one\n",
+    )])],
+  });
+
+  assert.deepEqual(intents.get("proposal-one"), {
+    amend: false,
+    description,
+    paths: [],
+    title: "keep proposal recovery ordinary",
+  });
+});

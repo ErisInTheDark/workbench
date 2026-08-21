@@ -202,7 +202,7 @@ export default class WorkbenchThreadStateFeature {
       resolveProjectRoot: async (projectId) => (await context.resolveProjectById(projectId)).rootPath,
       runGitArcTransition: async (projectId, operation) => {
         const project = await context.resolveProjectById(projectId);
-        return await context.transitions.run(`git-arc\0${project.rootPath.toLowerCase()}`, operation);
+        return await context.transitions.run(project.rootPath, operation);
       },
       storageRoot: context.storageRoot,
     });

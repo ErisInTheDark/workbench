@@ -93,6 +93,7 @@ interface HelpGroupDefinition {
 
 interface FlagSpec {
   boolean?: readonly string[];
+  leadingDashValues?: readonly string[];
   repeatable?: readonly string[];
   trailing?: boolean;
   values?: readonly string[];
@@ -105,6 +106,7 @@ class ParsedFlags {
 
   constructor(args: string[], spec: FlagSpec) {
     const booleanFlags = new Set(spec.boolean ?? []);
+    const leadingDashValueFlags = new Set(spec.leadingDashValues ?? []);
     const repeatableFlags = new Set(spec.repeatable ?? []);
     const valueFlags = new Set([...(spec.values ?? []), ...repeatableFlags]);
     const trailingIndex = args.indexOf("--");
@@ -127,7 +129,8 @@ class ParsedFlags {
         throw new Error(`Unsupported option: ${flag}`);
       }
       const value = optionArgs[index + 1];
-      if (!value || value.startsWith("-")) {
+      const recognizedOption = value && (booleanFlags.has(value) || valueFlags.has(value));
+      if (!value || (value.startsWith("-") && (!leadingDashValueFlags.has(flag) || recognizedOption))) {
         throw new Error(`${flag} requires a value.`);
       }
       index += 1;
@@ -739,7 +742,7 @@ const COMMANDS: readonly CommandDefinition[] = [
         normalizedArgs.splice(amendIndex + 1, 1);
       }
       const flags = new ParsedFlags(preservePowerShellTrailingPaths(normalizedArgs, { boolean: ["--amend"], values: ["-m", "--replace"] }), {
-        boolean: ["--amend"], repeatable: ["-m"], values: ["--replace"],
+        boolean: ["--amend"], leadingDashValues: ["-m"], repeatable: ["-m"], values: ["--replace"],
         trailing: true,
       });
       if (flags.has("--amend") && flags.optional("--replace")) throw new Error("--amend and --replace cannot be combined.");

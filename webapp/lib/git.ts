@@ -51,6 +51,7 @@ async function runGit(rootDir: string, args: string[]) {
   return execFileAsync("git", args, {
     cwd: rootDir,
     encoding: "utf8",
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
     maxBuffer: 4 * 1024 * 1024,
     windowsHide: true,
   });

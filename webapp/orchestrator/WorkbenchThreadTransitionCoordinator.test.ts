@@ -2,7 +2,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createWorktreeGitTransitions } from "./orchestrator-feature-registry";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
+
+test("normalizes one canonical worktree Git transition key before persistent coordination", async () => {
+  const keys: string[] = [];
+  const transitions = createWorktreeGitTransitions({
+    run: async (key, operation) => {
+      keys.push(key);
+      return await operation();
+    },
+  });
+  await transitions.run(" C:\\Git\\Project\\ ", async () => undefined);
+  await transitions.run("c:/git/project", async () => undefined);
+  assert.deepEqual(keys, ["git-worktree\0c:/git/project", "git-worktree\0c:/git/project"]);
+  await assert.rejects(transitions.run("  ", async () => undefined), /worktree path is required/u);
+});
 
 test("serializes one transition key while allowing unrelated keys to proceed", async () => {
   const coordinator = new WorkbenchThreadTransitionCoordinator();

@@ -30,7 +30,7 @@ test("sibling threads in one worktree share the Git arc transition lane", async 
   await feature.executeRequest({ ...request, harness: "codex", threadId: "thread-one" });
   await feature.executeRequest({ ...request, harness: "opencode", threadId: "thread-two" });
 
-  assert.deepEqual(keys, ["git-arc\0c:/git/project", "git-arc\0c:/git/project"]);
+  assert.deepEqual(keys, ["C:/Git/Project", "C:/Git/Project"]);
 });
 
 test("settled threads cannot start claims", async () => {
@@ -126,7 +126,32 @@ test("successful Git responses survive a failed thread claim refresh", async (co
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { proposalId: "proposal-one" });
   assert.equal(reported.mock.callCount(), 1);
-  assert.match(String(reported.mock.calls[0]?.arguments[0]), /operation succeeded.*projection exploded/u);
+  assert.match(String(reported.mock.calls[0]?.arguments[0]), /mutation attempt.*projection exploded/u);
+});
+
+test("failed Git mutations still refresh durable arc projection once", async () => {
+  let refreshCount = 0;
+  const feature = new WorkbenchGitArcFeature({
+    getThreadClaimContext: async () => null,
+    refreshThreadGitArcState: async () => { refreshCount += 1; },
+    resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+  Object.defineProperty(feature, "dispatch", { value: async () => { throw new Error("mutation failed"); } });
+
+  const response = await feature.executeRequest({
+    action: "proposalCreate",
+    amend: false,
+    cwd: "C:/Git/Project",
+    description: "",
+    harness: "codex",
+    threadId: "thread-one",
+    title: "Proposal",
+  });
+
+  assert.equal(response.status, 400);
+  assert.match(JSON.stringify(await response.json()), /mutation failed/u);
+  assert.equal(refreshCount, 1);
 });
 
 test("plan creation and applied arc moves refresh Git arc state while move previews do not", async () => {

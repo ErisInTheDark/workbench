@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - POWERSHELL_COMMAND_MATCHERS: PowerShell stage matchers for probes, reads, listings, filters, searches, deletes, and web requests. Keywords: thread, command, matcher, powershell, delete, web, request.
+ * - POWERSHELL_COMMAND_MATCHERS: PowerShell stage matchers for literal setup, probes, reads, listings, filters, searches, deletes, and web requests. Keywords: thread, command, matcher, powershell, assignment, delete, web, request.
  */
 
 import {
@@ -10,7 +10,10 @@ import {
   getCommandPathKnownSkill,
 } from "./helpers";
 import { CommandMatcher } from "./core";
-import { consumeNextCommandStage } from "./shells";
+import {
+  consumeNextCommandStage,
+  unwrapLeadingPowerShellLiteralHereStringAssignment,
+} from "./shells";
 import type { CommandMatcherDefinition } from "./types";
 
 interface ParsedPowerShellStage {
@@ -34,6 +37,22 @@ interface ParsedPowerShellNumericAssignment {
 }
 
 export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
+  CommandMatcher({
+    id: "powershell.hide-literal-here-string-assignment",
+    match: (context) => {
+      const assignment = unwrapLeadingPowerShellLiteralHereStringAssignment(context.stage.text);
+      if (!assignment) {
+        return null;
+      }
+
+      return CommandMatcher.Result({
+        hide: true,
+        ongoingSummaryParts: [],
+        remainingCommand: assignment.command,
+        summaryParts: [],
+      });
+    },
+  }),
   CommandMatcher({
     id: "powershell.delete-resolved-folder",
     match: (context) => {

@@ -456,6 +456,27 @@ isolatedControllerTest("accepted proposals narrow claims, continue through succe
     title: "commit two",
   });
   await fs.writeFile(path.join(source, "one.txt"), "newer one\n");
+  const headBeforeLock = await repository.currentHead();
+  const lockPath = path.resolve(source, (await git(source, ["rev-parse", "--git-path", "index.lock"])).trim());
+  await fs.writeFile(lockPath, "locked\n", "utf8");
+  context.after(async () => { await fs.rm(lockPath, { force: true }); });
+  await assert.rejects(controller.commitProposal({
+    cwd: source,
+    description: "",
+    harness: "codex",
+    includeNewer: false,
+    proposalId: firstProposal.proposalId,
+    threadId: "partial-thread",
+    title: "commit one",
+  }), /Commit was not published[\s\S]*proposal remains pending[\s\S]*index\.lock/u);
+  assert.equal(await repository.currentHead(), headBeforeLock);
+  assert.equal((await controller.getProposal({
+    cwd: source, harness: "codex", includeNewer: false, proposalId: firstProposal.proposalId, threadId: "partial-thread",
+  })).status, "proposed");
+  const locked = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
+  assert.equal(locked?.phase, "active");
+  assert.deepEqual(locked?.claimedPaths, ["one.txt", "two.txt"]);
+  await fs.rm(lockPath, { force: true });
   await controller.commitProposal({
     cwd: source,
     description: "",

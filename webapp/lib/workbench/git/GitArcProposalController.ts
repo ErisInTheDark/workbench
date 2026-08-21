@@ -4,9 +4,7 @@
  * - GitArcLifecycleState: durable active or resolved arc projection with ordered visible proposal summaries. Keywords: git, arc, lifecycle, sidebar, proposals.
  * - GitCheckpointProposalReceipt: durable proposal identity returned after proposal publication. Keywords: git, proposal, receipt, commit.
  */
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { promisify } from "node:util";
 
 import type { GitCheckpointProposal } from "./checkpoint-contracts";
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
@@ -26,8 +24,6 @@ import {
   type ProposalMetadata,
   remapProposalMetadata,
 } from "./git-arc-storage";
-
-const execFileAsync = promisify(execFile);
 
 interface ArcIdentityInput {
   cwd: string;
@@ -226,8 +222,14 @@ function parseCommitMessage(message: string) {
   return { description: description.join("\n").trim(), title: title.trim() };
 }
 
-function literalPathspec(relativePath: string) {
-  return `:(literal)${relativePath}`;
+function acceptanceFailure(error: unknown) {
+  const cause = (error instanceof Error ? error.message : String(error))
+    .replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?")
+    .slice(0, 500);
+  return new Error(
+    `Commit was not published. The proposal remains pending and its files remain claimed. Resolve the reported cause, then retry the same Commit action. No arc repair command is required. Cause: ${cause}`,
+    { cause },
+  );
 }
 
 async function buildProposalFileChanges(
@@ -589,19 +591,21 @@ export default class GitArcProposalController {
         ? await store.readProposal(harness, threadId, supersededProposalId)
         : await store.findCommittedProposalBySha(harness, threadId, proposal.metadata.amendTargetSha, proposalId);
       let committedMetadata: ProposalMetadata | null = null;
-      const rewritten = await new WorkbenchGitHistoryRewriter(repository).amend({
-        excludeArcRefs: [
-          proposal.proposalRef,
-          REGISTRY_REF,
-          oldOutcomeRef,
-          ...(supersededPrior ? [supersededPrior.proposalRef] : []),
-        ],
-        expectedHead: proposal.metadata.liveBaseCommit,
-        message,
-        paths: proposal.metadata.livePaths,
-        target: proposal.metadata.amendTargetSha,
-        targetTree,
-        mutatePlan: async ({ amendedCommit, arcPlan, newHead }) => {
+      let committedResult: GitCheckpointProposal | null = null;
+      try {
+        await new WorkbenchGitHistoryRewriter(repository).amend({
+          excludeArcRefs: [
+            proposal.proposalRef,
+            REGISTRY_REF,
+            oldOutcomeRef,
+            ...(supersededPrior ? [supersededPrior.proposalRef] : []),
+          ],
+          expectedHead: proposal.metadata.liveBaseCommit,
+          message,
+          paths: proposal.metadata.livePaths,
+          target: proposal.metadata.amendTargetSha,
+          targetTree,
+          mutatePlan: async ({ amendedCommit, arcPlan, newHead }) => {
           const remappedSource = arcPlan.commits.get(activeSource.checkpointCommit) ?? activeSource.checkpointCommit;
           committedMetadata = {
             ...remapProposalMetadata(proposal.metadata, arcPlan.commits),
@@ -665,15 +669,19 @@ export default class GitArcProposalController {
             ref: nextOutcomeRef,
           });
           replaceRefs.push(oldOutcomeRef, nextOutcomeRef);
+          committedResult = await buildProposalResult(repository, committedMetadata, amendedCommit, harness, threadId);
           return {
             deletes: oldOutcome && oldOutcomeRef !== nextOutcomeRef ? [{ oldValue: oldOutcome, ref: oldOutcomeRef }] : [],
             replaceRefs,
             updates,
           };
-        },
-      });
-      if (!committedMetadata) throw new Error("Amend proposal metadata was not committed.");
-      return await buildProposalResult(repository, committedMetadata, rewritten.amendedCommit, harness, threadId);
+          },
+        });
+      } catch (error) {
+        throw acceptanceFailure(error);
+      }
+      if (!committedMetadata || !committedResult) throw new Error("Amend proposal metadata was not committed.");
+      return committedResult;
     }
 
     const message = commitMessage(title, description);
@@ -713,16 +721,22 @@ export default class GitArcProposalController {
       version: 1,
     });
     const headRef = await repository.symbolicHead() ?? "HEAD";
-    await repository.updateRefs([
-      { newValue: committedSha, oldValue: proposal.metadata.liveBaseCommit, ref: headRef },
-      { newValue: stateCommit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef },
-      outcomeUpdate,
-      ...transition.updates,
-    ]);
-    await execFileAsync("git", [
-      "reset", "--mixed", "--quiet", committedSha, "--", ...proposal.metadata.livePaths.map(literalPathspec),
-    ], { cwd: repository.root, encoding: "utf8", windowsHide: true });
-    return await buildProposalResult(repository, committedMetadata, committedSha, harness, threadId);
+    const result = await buildProposalResult(repository, committedMetadata, committedSha, harness, threadId);
+    try {
+      await repository.publishRefsAfterIndexNormalization({
+        indexCommit: committedSha,
+        paths: proposal.metadata.livePaths,
+        updates: [
+          { newValue: committedSha, oldValue: proposal.metadata.liveBaseCommit, ref: headRef },
+          { newValue: stateCommit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef },
+          outcomeUpdate,
+          ...transition.updates,
+        ],
+      });
+    } catch (error) {
+      throw acceptanceFailure(error);
+    }
+    return result;
   }
 
   async prepareUnavailableUpdates({

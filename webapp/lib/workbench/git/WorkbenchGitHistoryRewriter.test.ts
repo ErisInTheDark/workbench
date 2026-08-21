@@ -10,6 +10,7 @@ import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
+import WorkbenchGitHistoryRewriter from "./WorkbenchGitHistoryRewriter";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import GitTestFixtureCache from "./GitTestFixtureCache";
 import WorkbenchThreadGit from "./WorkbenchThreadGit";
@@ -173,6 +174,36 @@ historyTest("arc proposal amend remaps a sibling plan and every completed propos
   });
   assert.notEqual(startedSibling.checkpointCommit, siblingPlanCheckpoint);
   assert.equal(await repository.resolveParent(startedSibling.checkpointCommit), amended.committedSha);
+});
+
+historyTest("index locks leave targeted amendments unpublished and retryable", async (context) => {
+  const { root, target } = await repository(context);
+  const gitRepository = await WorkbenchGitRepository.open(root);
+  const rewriter = new WorkbenchGitHistoryRewriter(gitRepository);
+  await write(root, "selected.txt", "locked amendment\n");
+  const headBefore = await gitRepository.currentHead();
+  const indexBefore = await git(root, ["diff", "--cached", "--binary"]);
+  const lockPath = path.resolve(root, (await git(root, ["rev-parse", "--git-path", "index.lock"])).trim());
+  await fs.writeFile(lockPath, "locked\n", "utf8");
+  context.after(async () => { await fs.rm(lockPath, { force: true }); });
+
+  await assert.rejects(rewriter.amend({
+    message: "locked amendment",
+    paths: ["selected.txt"],
+    target,
+  }), /index\.lock/u);
+  assert.equal(await gitRepository.currentHead(), headBefore);
+  assert.equal(await fs.readFile(path.join(root, "selected.txt"), "utf8"), "locked amendment\n");
+  assert.equal(await git(root, ["diff", "--cached", "--binary"]), indexBefore);
+
+  await fs.rm(lockPath, { force: true });
+  const committed = await rewriter.amend({
+    message: "locked amendment",
+    paths: ["selected.txt"],
+    target,
+  });
+  assert.notEqual(committed.commit, headBefore);
+  assert.equal(await git(root, ["status", "--short", "--", "selected.txt"]), "");
 });
 
 test("Git history rewrites", { concurrency: 3 }, async (context) => {

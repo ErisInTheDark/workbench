@@ -2,6 +2,7 @@
  * Exports:
  * - OrchestratorReloadableModules: helper modules consumed dynamically by persistent provider bridges. Keywords: bridge, module, reload.
  * - OrchestratorFeatures/OrchestratorFeatureContext/OrchestratorProviderNotification: typed stable-to-reloadable feature contract. Keywords: registry, ports, lifecycle.
+ * - createWorktreeGitTransitions: adapt resolved worktree paths into canonical keys for the persistent transition coordinator. Keywords: git, worktree, transition, reload.
  * - createOrchestratorFeatureGeneration: construct the ordered reloadable feature graph and own start/disposal/notification dispatch. Keywords: feature generation, dependency order.
  */
 import * as project from "../lib/project";
@@ -21,6 +22,7 @@ import WorkbenchLegacyMigrationSourceController, { readLegacyMigrationSourceConf
 import WorkbenchOrchestratorHttpRouter from "./WorkbenchOrchestratorHttpRouter";
 import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
+import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
@@ -73,11 +75,22 @@ export interface OrchestratorFeatures {
   orchestratorHttp: WorkbenchOrchestratorHttpRouter;
   projectCatalog: WorkbenchProjectCatalogController;
   projectSnapshot: WorkbenchProjectSnapshotController;
+  threadGit: WorkbenchThreadGitFeature;
   threadState: WorkbenchThreadStateFeature;
 }
 
 function createModules(): OrchestratorReloadableModules {
   return { copilotThreadState, opencodeLiveThreadState, opencodeThreadState, opencodeWorkbenchInstructions, project, threadBootstrap, workbenchLibrary, workbenchPromptFiles };
+}
+
+export function createWorktreeGitTransitions(transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">) {
+  return {
+    run: async <TValue>(worktreePath: string, operation: () => Promise<TValue>) => {
+      const normalized = worktreePath.trim().replace(/\\/gu, "/").replace(/\/+$/u, "").toLowerCase();
+      if (!normalized) throw new Error("A worktree path is required for Git transition coordination.");
+      return await transitions.run(`git-worktree\0${normalized}`, operation);
+    },
+  };
 }
 
 export function createOrchestratorFeatureGeneration(
@@ -87,6 +100,7 @@ export function createOrchestratorFeatureGeneration(
   const modules = createModules();
   const projectCatalog = new WorkbenchProjectCatalogController();
   const projectSnapshot = new WorkbenchProjectSnapshotController();
+  const worktreeGitTransitions = createWorktreeGitTransitions(context.threadTransitions);
   let threadState: WorkbenchThreadStateFeature | null = null;
   const gitArc = new WorkbenchGitArcFeature({
     getThreadClaimContext: async (projectId, harness, threadId) => {
@@ -98,7 +112,11 @@ export function createOrchestratorFeatureGeneration(
       await threadState.controller.refreshGitArcState(projectId, harness, threadId);
     },
     resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Git arc" }),
-    transitions: context.threadTransitions,
+    transitions: worktreeGitTransitions,
+  });
+  const threadGit = new WorkbenchThreadGitFeature({
+    resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Thread Git" }),
+    transitions: worktreeGitTransitions,
   });
   threadState = new WorkbenchThreadStateFeature({
     getProjectCatalog: () => projectCatalog.getCurrentSnapshot(),
@@ -111,7 +129,7 @@ export function createOrchestratorFeatureGeneration(
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
     resolveProjectFromCwd: (cwd, options) => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
     storageRoot: context.legacyMigrationProjectRoot,
-    transitions: context.threadTransitions,
+    transitions: worktreeGitTransitions,
   });
   threadState.controller.subscribe(context.notifyThreadLifecycle);
   const { allowedProjectIds, capability } = readLegacyMigrationSourceConfig(context.legacyMigrationProjectRoot);
@@ -135,6 +153,7 @@ export function createOrchestratorFeatureGeneration(
     legacyMigrationSource,
     projectCatalog,
     projectSnapshot,
+    threadGit,
   });
   const browseSessionCleanup = new BrowseSessionCleanupSupervisor({
     ...context.browseCleanupOptions,
@@ -157,7 +176,7 @@ export function createOrchestratorFeatureGeneration(
     isShuttingDown: () => !lease.isCurrent() || context.codexHealthOptions.isShuttingDown(),
     requestRecovery: (reason) => { if (lease.isCurrent()) context.codexHealthOptions.requestRecovery(reason); },
   });
-  const features: OrchestratorFeatures = { agentCommand, bridgeRequest, browseSessionCleanup, codexHealth, gitArc, legacyMigrationSource, modules, nextDevHealth, orchestratorHttp, projectCatalog, projectSnapshot, threadState };
+  const features: OrchestratorFeatures = { agentCommand, bridgeRequest, browseSessionCleanup, codexHealth, gitArc, legacyMigrationSource, modules, nextDevHealth, orchestratorHttp, projectCatalog, projectSnapshot, threadGit, threadState };
   return {
     dispose: async () => {
       codexHealth.dispose();

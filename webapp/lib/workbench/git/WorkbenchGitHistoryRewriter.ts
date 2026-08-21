@@ -134,8 +134,13 @@ export default class WorkbenchGitHistoryRewriter {
     const updateRefs = new Set(updatesByRef.keys());
     const duplicateDelete = plannedDeletes.find(({ ref }) => updateRefs.has(ref));
     if (duplicateDelete) throw new Error(`Commit rewrite prepared both deletion and update for ${duplicateDelete.ref}.`);
-    await this.repository.updateRefs([...updatesByRef.values()], plannedDeletes, { expectedStateGeneration: generation });
-    await this.repository.resetMixedPaths(newParent, livePaths);
+    await this.repository.publishRefsAfterIndexNormalization({
+      deletes: plannedDeletes,
+      expectedStateGeneration: generation,
+      indexCommit: newParent,
+      paths: livePaths,
+      updates: [...updatesByRef.values()],
+    });
     return {
       amendedCommit,
       commit: newParent,

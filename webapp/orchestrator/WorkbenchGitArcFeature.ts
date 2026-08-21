@@ -101,49 +101,50 @@ export default class WorkbenchGitArcFeature {
     try {
       const project = await this.options.resolveProjectFromCwd(parsed.data.cwd);
       const request = { ...parsed.data, cwd: project.cwd };
-      const key = `git-arc\0${project.cwd.toLowerCase()}`;
-      return await this.options.transitions.run(key, async () => {
-        if (CLAIM_START_ACTIONS.has(request.action)) {
-          const before = await this.options.getThreadClaimContext(project.project.id, request.harness, request.threadId);
-          if (!before) throw new Error("The managed thread is not available for Git arc ownership.");
-          if (before.lifecycle.settled) throw new Error("A settled thread cannot start or continue a Git arc.");
-        }
-        let response: Response;
+      return await this.options.transitions.run(project.cwd, async () => {
         try {
-          response = await this.dispatch(request);
-        } catch (error) {
-          if (!(error instanceof GitArcCollisionError)) throw error;
-          const presentations = await Promise.all(error.collisions.map(async (collision) => {
-            const owner = await this.options.getThreadClaimContext(
-              project.project.id,
-              collision.entry.harness as WorkbenchHarness,
-              collision.entry.threadId,
-            );
-            return {
-              collision,
-              lifecycle: owner?.lifecycle.kind ?? "unknown lifecycle",
-              title: owner?.title.trim() || collision.entry.intentName,
-            };
-          }));
-          throw new Error([
-            "Git arc operation blocked by active sibling claims.",
-            "",
-            "Planned paths claimed by other arcs:",
-            ...formatGitArcCollisionLines(presentations),
-          ].join("\n"));
-        }
-        if (response.ok && mutatesGitArcState(request)) {
           if (CLAIM_START_ACTIONS.has(request.action)) {
+            const before = await this.options.getThreadClaimContext(project.project.id, request.harness, request.threadId);
+            if (!before) throw new Error("The managed thread is not available for Git arc ownership.");
+            if (before.lifecycle.settled) throw new Error("A settled thread cannot start or continue a Git arc.");
+          }
+          let response: Response;
+          try {
+            response = await this.dispatch(request);
+          } catch (error) {
+            if (!(error instanceof GitArcCollisionError)) throw error;
+            const presentations = await Promise.all(error.collisions.map(async (collision) => {
+              const owner = await this.options.getThreadClaimContext(
+                project.project.id,
+                collision.entry.harness as WorkbenchHarness,
+                collision.entry.threadId,
+              );
+              return {
+                collision,
+                lifecycle: owner?.lifecycle.kind ?? "unknown lifecycle",
+                title: owner?.title.trim() || collision.entry.intentName,
+              };
+            }));
+            throw new Error([
+              "Git arc operation blocked by active sibling claims.",
+              "",
+              "Planned paths claimed by other arcs:",
+              ...formatGitArcCollisionLines(presentations),
+            ].join("\n"));
+          }
+          if (response.ok && CLAIM_START_ACTIONS.has(request.action)) {
             const after = await this.options.getThreadClaimContext(project.project.id, request.harness, request.threadId);
             if (after?.lifecycle.settled) {
               await this.controller.releaseActiveClaim({ cwd: project.cwd, harness: request.harness, threadId: request.threadId });
-              await this.refreshThreadGitArcState(project.project.id, request.harness, request.threadId);
               throw new Error("The thread settled while its Git arc claim was starting. The new claim was released.");
             }
           }
-          await this.refreshThreadGitArcState(project.project.id, request.harness, request.threadId);
+          return response;
+        } finally {
+          if (mutatesGitArcState(request)) {
+            await this.refreshThreadGitArcState(project.project.id, request.harness, request.threadId);
+          }
         }
-        return response;
       });
     } catch (error) {
       return Response.json({ error: error instanceof Error ? error.message : "Unable to run Git arc operation." }, { status: 400 });
@@ -154,7 +155,7 @@ export default class WorkbenchGitArcFeature {
     try {
       await this.options.refreshThreadGitArcState(projectId, harness, threadId);
     } catch (error) {
-      console.error(`Git arc operation succeeded, but thread Git arc state refresh failed: ${sanitizeError(error)}`);
+      console.error(`Git arc state refresh failed after a mutation attempt: ${sanitizeError(error)}`);
     }
   }
 

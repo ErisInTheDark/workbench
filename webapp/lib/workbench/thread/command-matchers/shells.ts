@@ -2,6 +2,8 @@
  * Exports:
  * - consumeNextCommandStage: consume the next shell-aware command stage and its trailing remainder. Keywords: thread, command, shell, stage.
  * - getCommandShellGroup: map shell launchers to matcher families. Keywords: thread, command, shell, matcher.
+ * - PowerShellLiteralHereStringAssignment: literal binding metadata for a following PowerShell command. Keywords: powershell, here-string, assignment, command.
+ * - unwrapLeadingPowerShellLiteralHereStringAssignment: peel one literal here-string binding from a following PowerShell command. Keywords: powershell, here-string, assignment, command.
  * - unwrapShellCommand: unwrap shell launchers like powershell, bash, and cmd. Keywords: thread, command, shell, unwrap.
  */
 
@@ -28,6 +30,41 @@ const SHELL_WRAPPERS = [
     shell: () => "cmd" as CommandShell,
   },
 ];
+
+export interface PowerShellLiteralHereStringAssignment {
+  command: string;
+  value: string;
+  variableName: string;
+}
+
+export function unwrapLeadingPowerShellLiteralHereStringAssignment(
+  command: string,
+): PowerShellLiteralHereStringAssignment | null {
+  const normalizedCommand = String(command ?? "").trimStart();
+  const assignment = /^\$([A-Za-z_][\w]*)\s*=\s*@'\r?\n/u.exec(normalizedCommand);
+  if (!assignment?.[1]) {
+    return null;
+  }
+
+  const contentStart = assignment[0].length;
+  const terminatorPattern = /\r?\n'@[ \t]*(?:;[ \t]*(?:\r?\n[ \t]*)?|\r?\n[ \t]*)/gu;
+  terminatorPattern.lastIndex = contentStart;
+  const terminator = terminatorPattern.exec(normalizedCommand);
+  if (!terminator) {
+    return null;
+  }
+
+  const remainingCommand = normalizedCommand.slice(terminator.index + terminator[0].length).trimStart();
+  if (!remainingCommand) {
+    return null;
+  }
+
+  return {
+    command: remainingCommand,
+    value: normalizedCommand.slice(contentStart, terminator.index),
+    variableName: assignment[1],
+  };
+}
 
 export function unwrapShellCommand(command: string) {
   let currentCommand = String(command ?? "").trim();
