@@ -49,6 +49,7 @@ function setup(
     getLifecycleState: () => ({ ...lifecycle }),
     getThreadStatus: (value) => value.status,
     optimisticInputs,
+    publishAccepted: ({ turnId }) => events.push(`accepted:${turnId}`),
     renderSource: options.renderSource ?? (() => events.push("render")),
     sources,
   });
@@ -118,6 +119,7 @@ test("idle thread resumes once and starts one turn with native identity", async 
   assert.equal(admission.kind, "turnStarted");
   assert.deepEqual(requests.map(({ method }) => method), ["thread/resume", "turn/start"]);
   assert.equal((requests[1]?.params as { clientUserMessageId?: string }).clientUserMessageId, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+  assert.equal(result.events.at(-1), "accepted:new-turn");
 });
 
 test("idle source churn during resume cannot steer a stale in-progress turn", async () => {

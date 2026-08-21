@@ -53,12 +53,28 @@ test("inactive subagents remain completed but unsettled until an explicit settle
 });
 
 test("provider lifecycle notification mapping is exact and bounded", () => {
+  assert.deepEqual(mapProviderLifecycleNotification({
+    method: "item/started",
+    params: { item: { id: "user", type: "userMessage" }, threadId: "child", turnId: "turn" },
+  }), {
+    event: { kind: "userInputDelivered", turnId: "turn" }, threadId: "child",
+  });
+  assert.deepEqual(mapProviderLifecycleNotification({
+    method: "turn/started",
+    params: { threadId: "child", turn: { id: "new-turn", items: [{ id: "user", type: "userMessage" }] } },
+  }), {
+    event: { kind: "userInputDelivered", turnId: "new-turn" }, threadId: "child",
+  });
   assert.deepEqual(mapProviderLifecycleNotification({ method: "turn/completed", params: { threadId: "child", turn: { id: "turn", status: "completed" } } }), {
     event: { kind: "turnCompleted", status: "completed", turnId: "turn" }, threadId: "child",
   });
   assert.deepEqual(mapProviderLifecycleNotification({ method: "questionnaire/requested", params: { requestKey: "question", threadId: "child", turnId: null } }), {
     event: { kind: "pendingInput", requestKey: "question", turnId: null }, threadId: "child",
   });
+  assert.equal(mapProviderLifecycleNotification({
+    method: "item/completed",
+    params: { item: { id: "agent", type: "agentMessage" }, threadId: "child", turnId: "turn" },
+  }), null);
   assert.equal(mapProviderLifecycleNotification({ method: "turn/completed", params: { threadId: "child", turn: { id: "turn", status: "inProgress" } } }), null);
 });
 

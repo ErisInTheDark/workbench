@@ -124,6 +124,21 @@ export function mapProviderLifecycleNotification(notification: JsonRpcNotificati
   const params = asRecord(notification.params);
   const threadId = typeof params?.threadId === "string" && params.threadId.trim() ? params.threadId : null;
   if (!threadId) return null;
+  if (notification.method === "item/started" || notification.method === "item/completed") {
+    const item = asRecord(params.item);
+    const turnId = typeof params.turnId === "string" ? params.turnId : null;
+    return item?.type === "userMessage" && turnId
+      ? { event: { kind: "userInputDelivered", turnId }, threadId }
+      : null;
+  }
+  if (notification.method === "turn/started") {
+    const turn = asRecord(params.turn);
+    const turnId = typeof turn?.id === "string" ? turn.id : null;
+    const items = Array.isArray(turn?.items) ? turn.items : [];
+    return turnId && items.some((item) => asRecord(item)?.type === "userMessage")
+      ? { event: { kind: "userInputDelivered", turnId }, threadId }
+      : null;
+  }
   if (notification.method === "turn/completed") {
     const turn = asRecord(params.turn);
     const turnId = typeof turn?.id === "string" ? turn.id : null;
@@ -197,7 +212,7 @@ export default class WorkbenchThreadStateFeature {
     const mapped = mapProviderLifecycleNotification(notification);
     if (mapped) {
       await this.controller.observeLifecycle(harness, mapped.threadId, mapped.event);
-      return;
+      if (mapped.event.kind !== "userInputDelivered") return;
     }
     if (notification.method === "thread/name/updated") {
       const params = asRecord(notification.params);

@@ -350,6 +350,7 @@ export function sortThreadSidebarEntries(entries: readonly WorkbenchThreadSideba
 
 export type WorkbenchLifecycleEvent =
   | { kind: "acceptedIntent"; turnId: string }
+  | { kind: "userInputDelivered"; turnId: string }
   | { kind: "pendingInput"; requestKey: string; turnId: string }
   | { kind: "inputResolved"; requestKey: string; turnId: string }
   | { kind: "agentStatus"; status: "completed" | "blocked"; turnId: string }
@@ -376,6 +377,13 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
   const currentTurnId = getWorkbenchLifecycleTurnId(current);
   switch (event.kind) {
     case "acceptedIntent":
+      return { agent: { agentStatus: "working", turnId: event.turnId }, kind: "working", reason: "acceptedIntent", settled: false };
+    case "userInputDelivered":
+      if (
+        (current?.kind === "completed" && current.reason === "userCompleted")
+        || current?.kind === "stopped"
+        || (current?.kind === "needsAttention" && current.reason === "pendingInput")
+      ) return current;
       return { agent: { agentStatus: "working", turnId: event.turnId }, kind: "working", reason: "acceptedIntent", settled: false };
     case "pendingInput":
       if (currentTurnId && currentTurnId !== event.turnId) return current!;

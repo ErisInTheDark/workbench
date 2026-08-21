@@ -216,6 +216,30 @@ test("exact-turn transitions reject stale completion and manual settlement becom
   assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, { kind: "userNeedsAttention" }), pendingInput);
 });
 
+test("delivered user input reactivates provider-owned terminal state without overriding user-owned state", () => {
+  const working = reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId: "old-turn" });
+  const completed = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "completed", turnId: "old-turn" });
+  const blocked = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "blocked", turnId: "old-turn" });
+  const delivered = { kind: "userInputDelivered" as const, turnId: "delivered-turn" };
+  const reactivated = {
+    agent: { agentStatus: "working" as const, turnId: "delivered-turn" },
+    kind: "working" as const,
+    reason: "acceptedIntent" as const,
+    settled: false as const,
+  };
+
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(completed, delivered), reactivated);
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(blocked, delivered), reactivated);
+  assert.deepEqual(reduceWorkbenchThreadLifecycle({ kind: "completed", reason: "providerInactive", settled: true }, delivered), reactivated);
+
+  const userCompleted = reduceWorkbenchThreadLifecycle(completed, { kind: "userCompleted" });
+  const stopped = reduceWorkbenchThreadLifecycle(completed, { kind: "userStopped" });
+  const pendingInput = reduceWorkbenchThreadLifecycle(working, { kind: "pendingInput", requestKey: "request", turnId: "old-turn" });
+  assert.equal(reduceWorkbenchThreadLifecycle(userCompleted, delivered), userCompleted);
+  assert.equal(reduceWorkbenchThreadLifecycle(stopped, delivered), stopped);
+  assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, delivered), pendingInput);
+});
+
 test("grouping keeps terminal status while settlement moves it to other", () => {
   const entry = {
     activityAt: 1,

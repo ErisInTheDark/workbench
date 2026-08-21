@@ -597,9 +597,20 @@ export function applyCopilotEvent(
 
       const activeTurn = getActiveTurn(state);
       if (activeTurn) {
-        activeTurn.items.push(makeUserMessageItem(input));
+        const item = makeUserMessageItem(input);
+        activeTurn.items.push(item);
         state.thread.preview = content;
         state.thread.updatedAt = timestampSeconds;
+        if (emitNotifications) {
+          onNotification({
+            method: "item/completed",
+            params: {
+              item: structuredClone(item),
+              threadId: state.thread.id,
+              turnId: activeTurn.id,
+            },
+          });
+        }
         return;
       }
 

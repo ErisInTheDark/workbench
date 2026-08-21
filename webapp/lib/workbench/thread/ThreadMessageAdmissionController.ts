@@ -172,7 +172,6 @@ function ThreadMessageAdmissionController({
         render(capture.selectedThreadKey);
       }
       if (status === "sent") {
-        reportAccepted(capture, entry.handle, activeTurn.id);
         return { handle: entry.handle, kind: "admitted" };
       }
       throw error;
@@ -184,7 +183,6 @@ function ThreadMessageAdmissionController({
         render(capture.selectedThreadKey);
       }
       if (status === "sent") {
-        reportAccepted(capture, entry.handle, activeTurn.id);
         return { handle: entry.handle, kind: "admitted" };
       }
       throw new Error(response.error.message);
@@ -199,7 +197,6 @@ function ThreadMessageAdmissionController({
         render(capture.selectedThreadKey);
       }
       if (status === "sent") {
-        reportAccepted(capture, entry.handle, activeTurn.id);
         return { handle: entry.handle, kind: "admitted" };
       }
       throw new Error("turn/steer returned an empty turn id.");
@@ -222,7 +219,6 @@ function ThreadMessageAdmissionController({
     }
 
     if (acknowledgedTurnId === activeTurn.id) {
-      reportAccepted(capture, entry.handle, acknowledgedTurnId);
       return { handle: entry.handle, kind: "admitted" };
     }
     if (sources.has(capture.selectedThreadKey)) {
