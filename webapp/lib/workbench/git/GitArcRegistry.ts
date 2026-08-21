@@ -5,6 +5,7 @@
  * - findGitArcCollisions/getGitArcLiveClaimPaths: share exact live-claim overlap semantics with diagnostics and registry enforcement. Keywords: git, arc, collision, overlap, diagnostics.
  */
 import { areDeeplyEqual } from "../deep-equality";
+import { gitArcPathsOverlap } from "./git-arc-paths";
 import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
 
 export const REGISTRY_REF = "refs/worktree/workbench/active-arcs";
@@ -79,10 +80,6 @@ function identityKey(identity: GitArcIdentity) {
   return `${normalizeIdentityPart(identity.harness, "harness")}\0${normalizeIdentityPart(identity.threadId, "thread id")}`;
 }
 
-function pathsOverlap(left: string, right: string) {
-  return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
-}
-
 export function findGitArcCollisions(
   entries: readonly GitArcRegistryEntry[],
   identity: GitArcIdentity,
@@ -95,7 +92,7 @@ export function findGitArcCollisions(
     .map((candidate): GitArcCollision => ({
       entry: candidate,
       overlaps: getGitArcLiveClaimPaths(candidate).flatMap((claimedPath) => requestedPaths
-        .filter((requestedPath) => pathsOverlap(claimedPath, requestedPath))
+        .filter((requestedPath) => gitArcPathsOverlap(claimedPath, requestedPath))
         .map((requestedPath) => ({ claimedPath, requestedPath }))),
     }))
     .filter((collision) => collision.overlaps.length > 0);

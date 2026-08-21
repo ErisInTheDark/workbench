@@ -1,7 +1,7 @@
 /* No production exports. Tests protect strict lifecycle, grouping, ordering, and draft rules. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { countDraftPromptTokens, createDraftTitle, getThreadSidebarGroup, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, sortThreadSidebarEntries, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
+import { countDraftPromptTokens, createDraftTitle, createWorkbenchThreadPlanConflictSelector, getThreadSidebarGroup, getWorkbenchThreadPlanConflictEntries, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, sortThreadSidebarEntries, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
 
 test("provider timestamps normalize seconds without double-converting milliseconds", () => {
   assert.equal(normalizeWorkbenchTimestampMs(1_723_456_789), 1_723_456_789_000);
@@ -109,6 +109,54 @@ test("top-level threads sort by latest turn start while activity remains display
     sortThreadSidebarEntries([entry("fallback-older", 10), entry("fallback-newer", 20)]).map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""),
     ["fallback-newer", "fallback-older"],
   );
+});
+
+test("planned conflicts share sidebar grouping, exclude subagents, and stabilize irrelevant snapshots", () => {
+  const thread = (
+    threadId: string,
+    lifecycle: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>["lifecycle"],
+    claimedPaths: string[] = [],
+  ): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
+    activityAt: 10,
+    entryKind: "thread",
+    gitArc: claimedPaths.length ? {
+      checkpointCommit: "a".repeat(40), claimedPaths, intentDescription: "", intentName: threadId,
+      phase: "active", proposals: [], updatedAt: "2026-08-20T00:00:00.000Z",
+    } : null,
+    identity: { harness: "codex", threadId },
+    lifecycle,
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: threadId,
+  });
+  const owner = {
+    ...thread("owner", { kind: "completed", reason: "providerInactive", settled: false }),
+    gitArcPlan: {
+      checkpointCommit: "b".repeat(40), intentDescription: "", intentName: "plan",
+      scopePaths: ["src/feature"], updatedAt: "2026-08-21T00:00:00.000Z",
+    },
+  };
+  const attention = thread("attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }, ["src/feature/card.tsx"]);
+  const completed = thread("completed", { kind: "completed", reason: "providerInactive", settled: false }, ["src/feature"]);
+  const working = thread("working", { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false }, ["src"]);
+  const settled = thread("settled", { kind: "completed", reason: "providerInactive", settled: true }, ["src/feature/deep/file.ts"]);
+  const unrelated = thread("unrelated", { kind: "completed", reason: "providerInactive", settled: false }, ["docs"]);
+  const child: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> = {
+    activityAt: 10, createdAt: 1, cwd: "C:/repo", directSubagentIndex: 0, entryKind: "subagent",
+    gitArc: working.gitArc, identity: { harness: "codex", threadId: "child" }, lifecycle: working.lifecycle,
+    name: "child", parentThreadId: "owner", pinned: false, profileId: "default", profileName: "Default",
+    projectId: "project", title: "child", updatedAt: 10,
+  };
+  const entries = [owner, settled, working, completed, attention, unrelated, child];
+  assert.deepEqual(groupWorkbenchThreadSidebarEntries(entries).primaryEntries.map((entry) => entry.title), ["attention", "owner", "completed", "unrelated", "working"]);
+  assert.deepEqual(getWorkbenchThreadPlanConflictEntries(entries, owner.identity).map((entry) => entry.title), ["attention", "completed", "working", "settled"]);
+
+  const select = createWorkbenchThreadPlanConflictSelector(owner.identity);
+  const snapshot = { entries, error: null, freshness: "fresh" as const, projectId: "project", revision: 1 };
+  const first = select(snapshot);
+  assert.equal(select({ ...snapshot, error: "unrelated", revision: 2 }), first);
+  const changed = select({ ...snapshot, entries: entries.map((entry) => entry === working ? { ...working, title: "working changed" } : entry), revision: 3 });
+  assert.notEqual(changed, first);
+  assert.equal(changed[2]?.title, "working changed");
 });
 
 test("lifecycle parsing preserves two attention variants and normalizes legacy reasons", () => {

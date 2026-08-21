@@ -10,6 +10,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { WorkbenchThreadSidebarEntrySchema, type WorkbenchThreadSidebarEntry } from "../../lib/workbench/thread/thread-state";
 import WorkbenchThreadList from "./WorkbenchThreadList";
+import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import WorkbenchContextMenuContext from "./WorkbenchContextMenuContext";
 
 type ThreadEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>;
@@ -62,6 +63,19 @@ function renderThreads(entries: ThreadEntry[]) {
   ));
 }
 
+function renderThreadItem(entry: ThreadEntry) {
+  return renderToStaticMarkup(createElement(
+    WorkbenchContextMenuContext.Provider,
+    { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
+    createElement(WorkbenchThreadListItem, {
+      entry,
+      href: "/agent/thread/thread-one",
+      projectId: "project",
+      showActions: true,
+    }),
+  ));
+}
+
 test("thread rows render counts only for active file claims", () => {
   const claimedHtml = renderThreads([createThreadEntry({
     claimedPaths: ["src/one.ts", "src/two.ts", "src/three.ts"],
@@ -85,6 +99,22 @@ test("thread rows project resolved Git arcs without treating them as live file c
   assert.match(html, /Completed/u);
 });
 
+test("compact sidebar rows hide metadata only while a real action is available", () => {
+  const entry = createThreadEntry({ threadId: "settled", title: "Settled work" });
+  const html = renderThreadItem({
+    ...entry,
+    lifecycle: {
+      agent: { agentStatus: "completed", turnId: "turn-one" },
+      kind: "completed",
+      reason: "agentCompleted",
+      settled: true,
+    },
+  });
+  assert.match(html, /aria-label="Restore"/u);
+  assert.match(html, /group-hover\/thread-row:invisible/u);
+  assert.match(html, /group-focus-within\/thread-row:invisible/u);
+});
+
 test("thread state accepts phase-aware Git arc lifecycle state", () => {
   const entry = createThreadEntry({ threadId: "resolved-contract", title: "Resolved contract" });
   assert.equal(WorkbenchThreadSidebarEntrySchema.safeParse({
@@ -99,6 +129,23 @@ test("thread state accepts phase-aware Git arc lifecycle state", () => {
       updatedAt: "2026-08-20T00:00:00.000Z",
     },
   }).success, true);
+});
+
+test("thread state projects inactive plan scope separately from live claims", () => {
+  const entry = createThreadEntry({ threadId: "plan-contract", title: "Plan contract" });
+  const parsed = WorkbenchThreadSidebarEntrySchema.safeParse({
+    ...entry,
+    gitArc: null,
+    gitArcPlan: {
+      checkpointCommit: "b".repeat(40),
+      intentDescription: "Warn before activation.",
+      intentName: "planned overlap",
+      scopePaths: ["src/feature"],
+      updatedAt: "2026-08-21T00:00:00.000Z",
+    },
+  });
+  assert.equal(parsed.success, true);
+  assert.deepEqual(parsed.success && parsed.data.entryKind === "thread" ? parsed.data.gitArc : undefined, null);
 });
 
 test("sidebar derives proposed status and live claim count from gitArc", () => {
@@ -150,10 +197,22 @@ test("live lifecycle presentation outranks a hanging proposed commit", () => {
 });
 
 test("thread tooltips expose every claimed path through interactive project links", async () => {
-  const source = await readFile(new URL("./WorkbenchThreadList.tsx", import.meta.url), "utf8");
-  assert.match(source, /<WorkbenchTooltip[\s\S]*?interactive[\s\S]*?<a/u);
+  const source = await readFile(new URL("./WorkbenchThreadListItem.tsx", import.meta.url), "utf8");
+  assert.match(source, /<WorkbenchTooltip[\s\S]*?interactive[\s\S]*?\{anchor\}/u);
   assert.match(source, /data-thread-project-file-link-boundary="true"/u);
   assert.match(source, /claimedPaths\.map\(\(filePath\)[\s\S]*?<ProjectFilePath/u);
   assert.match(source, /title=\{entry\.title\}/u);
   assert.doesNotMatch(source, /<a[\s\S]*?title=\{entry\.title\}[\s\S]*?onClick=/u);
+});
+
+test("sidebar and planned-conflict card share grouping and the real thread item", async () => {
+  const [listSource, cardSource] = await Promise.all([
+    readFile(new URL("./WorkbenchThreadList.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./thread-view/ThreadPlanConflictCard.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(listSource, /groupWorkbenchThreadSidebarEntries\(entries\)/u);
+  assert.match(listSource, /<WorkbenchThreadListItem/u);
+  assert.match(cardSource, /createWorkbenchThreadPlanConflictSelector/u);
+  assert.match(cardSource, /<WorkbenchThreadListItem[\s\S]*?compact[\s\S]*?showTooltip=\{false\}/u);
+  assert.doesNotMatch(cardSource, /\bborder-t(?:\s|")|\bdivide-y|WorkbenchTooltip/u);
 });

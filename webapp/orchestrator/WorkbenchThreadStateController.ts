@@ -24,6 +24,7 @@ import {
   type WorkbenchThreadLifecycle,
   type WorkbenchThreadDraft,
   type WorkbenchGitArcLifecycleState,
+  type WorkbenchGitArcPlanState,
   type WorkbenchHarnessId,
   type WorkbenchThreadActivityUpdate,
   type WorkbenchThreadSidebarEntry,
@@ -73,6 +74,7 @@ export interface WorkbenchThreadStateControllerOptions {
     acceptProviderSnapshot: (harness: WorkbenchHarnessId, entries: WorkbenchThreadSidebarEntry[], options: { complete: boolean }) => void,
   ) => Promise<WorkbenchThreadReconciliationFailure[]>;
   resolveGitArc: (projectId: string, harness: WorkbenchHarnessId, threadId: string) => Promise<WorkbenchGitArcLifecycleState | LegacyGitArcClaim | null>;
+  resolveGitArcPlan: (projectId: string, harness: WorkbenchHarnessId, threadId: string) => Promise<WorkbenchGitArcPlanState | null>;
   resolveProjectRoot: (projectId: string) => Promise<string>;
   runGitArcTransition: <TValue>(projectId: string, operation: () => Promise<TValue>) => Promise<TValue>;
   storageRoot: string;
@@ -460,14 +462,18 @@ export default class WorkbenchThreadStateController {
     };
   }
 
-  async refreshFileClaim(projectId: string, harness: WorkbenchHarnessId, threadId: string) {
+  async refreshGitArcState(projectId: string, harness: WorkbenchHarnessId, threadId: string) {
     const state = await this.getProject(projectId);
     const key = `${harness}:${threadId}`;
     return await this.enqueue(`${projectId}:thread:${key}`, async () => {
       const entry = state.entries.get(key);
       if (!entry || entry.entryKind === "draft") return null;
-      const gitArc = normalizeResolvedGitArc(await this.options.resolveGitArc(projectId, harness, threadId));
-      const next = WorkbenchThreadSidebarEntrySchema.parse({ ...entry, gitArc });
+      const [resolvedGitArc, gitArcPlan] = await Promise.all([
+        this.options.resolveGitArc(projectId, harness, threadId),
+        this.options.resolveGitArcPlan(projectId, harness, threadId),
+      ]);
+      const gitArc = normalizeResolvedGitArc(resolvedGitArc);
+      const next = WorkbenchThreadSidebarEntrySchema.parse({ ...entry, gitArc, gitArcPlan });
       if (next.entryKind === "draft") return null;
       if (areDeeplyEqual(entry, next)) return next;
       state.entries.set(key, next);

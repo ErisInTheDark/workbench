@@ -5,7 +5,7 @@
  */
 import type http from "node:http";
 
-import WorkbenchGitCheckpointController, { type GitArcActiveClaim, type GitArcLifecycleState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
+import WorkbenchGitCheckpointController, { type GitArcActiveClaim, type GitArcLifecycleState, type GitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import { formatGitArcCollisionLines } from "../lib/workbench/git/git-arc-start-diagnostics";
 import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
 import type { WorkbenchHarness } from "../lib/types";
@@ -17,13 +17,13 @@ const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 
 export interface WorkbenchGitArcFeatureOptions {
   getThreadClaimContext(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<WorkbenchThreadClaimContext | null>;
-  refreshThreadClaim(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<void>;
+  refreshThreadGitArcState(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<void>;
   resolveProjectFromCwd(cwd: string): Promise<{ cwd: string; project: { id: string } }>;
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">;
 }
 
-const CLAIM_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
-  "arcAdd", "arcAdopt", "arcContinue", "arcMove", "arcRemove", "arcStart", "planAdd", "planAdopt", "planRemove", "planStart",
+const GIT_ARC_STATE_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
+  "arcAdd", "arcAdopt", "arcContinue", "arcMove", "arcRemove", "arcStart", "plan", "planAdd", "planAdopt", "planRemove", "planStart",
   "proposalCommit", "proposalCreate", "proposalRescind", "restore",
 ]);
 const CLAIM_START_ACTIONS = new Set<GitCheckpointRequest["action"]>(["arcContinue", "arcStart", "planStart"]);
@@ -32,8 +32,8 @@ function sanitizeError(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 500);
 }
 
-function mutatesClaims(request: GitCheckpointRequest) {
-  return CLAIM_MUTATION_ACTIONS.has(request.action)
+function mutatesGitArcState(request: GitCheckpointRequest) {
+  return GIT_ARC_STATE_MUTATION_ACTIONS.has(request.action)
     && !(request.action === "arcMove" && request.move.kind === "regex" && !request.move.confirm);
 }
 
@@ -75,6 +75,14 @@ export default class WorkbenchGitArcFeature {
 
   async listLifecycleStates(cwd: string): Promise<GitArcLifecycleState[]> {
     return await this.controller.listLifecycleStates({ cwd });
+  }
+
+  async findPlanState(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcPlanState | null> {
+    return await this.controller.findPlanState({ cwd, harness, threadId });
+  }
+
+  async listPlanStates(cwd: string): Promise<GitArcPlanState[]> {
+    return await this.controller.listPlanStates({ cwd });
   }
 
   async handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
@@ -124,16 +132,16 @@ export default class WorkbenchGitArcFeature {
             ...formatGitArcCollisionLines(presentations),
           ].join("\n"));
         }
-        if (response.ok && mutatesClaims(request)) {
+        if (response.ok && mutatesGitArcState(request)) {
           if (CLAIM_START_ACTIONS.has(request.action)) {
             const after = await this.options.getThreadClaimContext(project.project.id, request.harness, request.threadId);
             if (after?.lifecycle.settled) {
               await this.controller.releaseActiveClaim({ cwd: project.cwd, harness: request.harness, threadId: request.threadId });
-              await this.refreshThreadClaim(project.project.id, request.harness, request.threadId);
+              await this.refreshThreadGitArcState(project.project.id, request.harness, request.threadId);
               throw new Error("The thread settled while its Git arc claim was starting. The new claim was released.");
             }
           }
-          await this.refreshThreadClaim(project.project.id, request.harness, request.threadId);
+          await this.refreshThreadGitArcState(project.project.id, request.harness, request.threadId);
         }
         return response;
       });
@@ -142,11 +150,11 @@ export default class WorkbenchGitArcFeature {
     }
   }
 
-  private async refreshThreadClaim(projectId: string, harness: WorkbenchHarness, threadId: string) {
+  private async refreshThreadGitArcState(projectId: string, harness: WorkbenchHarness, threadId: string) {
     try {
-      await this.options.refreshThreadClaim(projectId, harness, threadId);
+      await this.options.refreshThreadGitArcState(projectId, harness, threadId);
     } catch (error) {
-      console.error(`Git arc operation succeeded, but thread claim refresh failed: ${sanitizeError(error)}`);
+      console.error(`Git arc operation succeeded, but thread Git arc state refresh failed: ${sanitizeError(error)}`);
     }
   }
 

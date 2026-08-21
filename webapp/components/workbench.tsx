@@ -3396,6 +3396,7 @@ export default function Workbench () {
                       livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
                       onDraftHarnessChange={handleHarnessChange}
                       onListModels={listThreadModels}
+                      onOpenThread={openThreadFromExplorer}
                       onPauseThread={pauseThread}
                       onReadThread={readThread}
                       onResumeThread={resumeThread}
@@ -3629,6 +3630,7 @@ export default function Workbench () {
                             livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
                             onDraftHarnessChange={handleHarnessChange}
                             onListModels={listThreadModels}
+                            onOpenThread={openThreadFromExplorer}
                             onPauseThread={pauseThread}
                             onReadThread={readThread}
                             onResumeThread={resumeThread}

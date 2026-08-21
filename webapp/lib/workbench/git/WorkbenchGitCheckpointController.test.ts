@@ -616,10 +616,21 @@ isolatedControllerTest("active plan add publishes an inactive successor without 
   assert.equal(registryEntry?.phase, "plan");
   assert.deepEqual(registryEntry?.claimedPaths, []);
   assert.deepEqual(registryEntry?.retainedArc?.claimedPaths, ["one.txt"]);
+  assert.deepEqual(await controller.findPlanState({ cwd: source, harness: "codex", threadId: "partial-thread" }), {
+    checkpointCommit: extended.checkpointCommit,
+    harness: "codex",
+    intentDescription: "",
+    intentName: "change both files",
+    scopePaths: ["one.txt", "planned.txt", "two.txt"],
+    threadId: "partial-thread",
+    updatedAt: registryEntry?.updatedAt,
+  });
+  assert.equal((await controller.listPlanStates({ cwd: source })).length, 1);
 
   await controller.startArc({
     checkpointCommit: extended.checkpointCommit, cwd: source, harness: "codex", threadId: "partial-thread",
   });
+  assert.equal(await controller.findPlanState({ cwd: source, harness: "codex", threadId: "partial-thread" }), null);
   const replacement = await controller.createPlan({
     cwd: source,
     harness: "codex",

@@ -259,7 +259,7 @@ test("registry collisions use only active and retained-plan claims", async () =>
 test("checkpoint facade exposes the complete plan, proposal, and lifecycle owner surface", () => {
   const prototype = WorkbenchGitCheckpointController.prototype as unknown as Record<string, unknown>;
   const required = [
-    "addToPlan", "adoptIntoPlan", "createAndStartPlan", "listLifecycleStates", "removeFromPlan", "rescindProposal",
+    "addToPlan", "adoptIntoPlan", "createAndStartPlan", "findPlanState", "listLifecycleStates", "listPlanStates", "removeFromPlan", "rescindProposal",
   ];
   assert.deepEqual(required.filter((method) => typeof prototype[method] !== "function"), []);
 });

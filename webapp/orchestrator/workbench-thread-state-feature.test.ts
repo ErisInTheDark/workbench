@@ -110,12 +110,23 @@ test("provider reconciliation starts concurrently and publishes each successful 
     threadId: "parent",
     updatedAt: "2026-08-19T00:00:00.000Z",
   };
+  const planState = {
+    checkpointCommit: "b".repeat(40),
+    harness: "codex" as const,
+    intentDescription: "Plan around the active owner.",
+    intentName: "planned overlap",
+    scopePaths: ["one.txt", "two.txt"],
+    threadId: "parent",
+    updatedAt: "2026-08-20T00:00:00.000Z",
+  };
   let lifecycleListCalls = 0;
   const gitArcs = {
     findActiveClaim: async () => activeClaim,
     findLifecycleState: async () => lifecycleState,
+    findPlanState: async () => planState,
     listActiveClaims: async () => [activeClaim],
     listLifecycleStates: async () => { lifecycleListCalls += 1; return [lifecycleState]; },
+    listPlanStates: async () => [planState],
   };
   const feature = new WorkbenchThreadStateFeature({
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
@@ -196,7 +207,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
   assert.equal(final.entries.some((entry) => entry.entryKind === "subagent" && entry.identity.threadId === "child"), true);
   const parent = final.entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "parent");
   assert.ok(parent && parent.entryKind !== "draft");
-  assert.deepEqual({ gitArc: (parent as { gitArc?: unknown }).gitArc, lifecycleListCalls }, {
+  assert.deepEqual({ gitArc: parent.gitArc, gitArcPlan: parent.gitArcPlan, lifecycleListCalls }, {
     gitArc: {
       checkpointCommit: lifecycleState.checkpointCommit,
       claimedPaths: ["one.txt"],
@@ -206,9 +217,16 @@ test("provider reconciliation starts concurrently and publishes each successful 
       proposals: lifecycleState.proposals,
       updatedAt: lifecycleState.updatedAt,
     },
+    gitArcPlan: {
+      checkpointCommit: planState.checkpointCommit,
+      intentDescription: planState.intentDescription,
+      intentName: planState.intentName,
+      scopePaths: planState.scopePaths,
+      updatedAt: planState.updatedAt,
+    },
     lifecycleListCalls: 1,
   });
-  const refreshedParent = await feature.controller.refreshFileClaim("project", "codex", "parent");
+  const refreshedParent = await feature.controller.refreshGitArcState("project", "codex", "parent");
   assert.equal(refreshedParent?.identity.threadId, "parent");
   assert.deepEqual((refreshedParent as { gitArc?: unknown } | null)?.gitArc, {
     checkpointCommit: lifecycleState.checkpointCommit,
@@ -218,6 +236,13 @@ test("provider reconciliation starts concurrently and publishes each successful 
     phase: "active",
     proposals: lifecycleState.proposals,
     updatedAt: lifecycleState.updatedAt,
+  });
+  assert.deepEqual(refreshedParent?.entryKind === "thread" ? refreshedParent.gitArcPlan : null, {
+    checkpointCommit: planState.checkpointCommit,
+    intentDescription: planState.intentDescription,
+    intentName: planState.intentName,
+    scopePaths: planState.scopePaths,
+    updatedAt: planState.updatedAt,
   });
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });

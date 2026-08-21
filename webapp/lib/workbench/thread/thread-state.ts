@@ -1,11 +1,12 @@
 /*
  * Exports:
  * - WorkbenchThreadTargetSchema/WorkbenchThreadTarget: canonical blank, draft, provider, and parent-owned subagent identity. Keywords: route, draft, provider, subagent.
- * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts. Keywords: zod, lifecycle, sidebar.
+ * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchGitArcPlanStateSchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts. Keywords: zod, lifecycle, plan, sidebar.
  * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchThreadActivityUpdateSchema: full sidebar state and tiny activity delta contracts. Keywords: sidebar, websocket, revision.
  * - WorkbenchThreadStateOpenResultSchema/WorkbenchThreadStateOpenResult: atomic catalog, tree, and sidebar observation bootstrap. Keywords: open, bootstrap, snapshot.
  * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema: multiplexed sidebar, activity, project, and request protocol. Keywords: orchestrator, websocket, revision.
- * - getThreadSidebarGroup/sortThreadSidebarEntries: exhaustive visible grouping and stable turn-start ordering. Keywords: grouping, pin, sort.
+ * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries/sortThreadSidebarEntries: exhaustive visible grouping, shared presentation order, and stable turn-start ordering. Keywords: grouping, pin, sort.
+ * - getWorkbenchThreadPlanConflictEntries/createWorkbenchThreadPlanConflictSelector: derive and identity-stabilize visible sibling claim conflicts from one inactive plan and the live sidebar snapshot. Keywords: plan, claim, conflict, sidebar, selector.
  * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary. Keywords: timestamp, provider, normalization.
  * - resolveWorkbenchThreadTitle: choose a meaningful provider name, first-message preview, or neutral fallback. Keywords: title, preview, uuid.
  * - isWorkbenchThreadStatusProviderOwned/reduceWorkbenchThreadLifecycle/projectWorkbenchThreadSidebarEntries: manual-status eligibility, exact-turn transitions, and direct-child status projection. Keywords: working, attention, completed, stopped, parent.
@@ -14,6 +15,8 @@
 
 import { z } from "zod";
 
+import { gitArcPathsOverlap } from "../git/git-arc-paths";
+import { areDeeplyEqual } from "../deep-equality";
 import { WorkbenchProjectsPayloadSchema, WorkbenchProjectStateUpdateSchema } from "../project/project-state";
 
 export const WorkbenchHarnessSchema = z.enum(["codex", "copilot", "opencode"]);
@@ -133,6 +136,15 @@ export const WorkbenchGitArcLifecycleStateSchema = z.object({
 });
 export type WorkbenchGitArcLifecycleState = z.infer<typeof WorkbenchGitArcLifecycleStateSchema>;
 
+export const WorkbenchGitArcPlanStateSchema = z.object({
+  checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
+  intentDescription: z.string(),
+  intentName: z.string().min(1),
+  scopePaths: z.array(z.string().min(1)),
+  updatedAt: z.string().min(1),
+}).strict();
+export type WorkbenchGitArcPlanState = z.infer<typeof WorkbenchGitArcPlanStateSchema>;
+
 const VisibleMetadataSchema = z.object({ archived: z.literal(false), pinned: z.boolean(), snoozed: z.boolean() }).strict();
 const ArchivedMetadataSchema = z.object({ archived: z.literal(true), pinned: z.literal(false), snoozed: z.literal(false) }).strict();
 const TopLevelMetadataSchema = z.union([VisibleMetadataSchema, ArchivedMetadataSchema]);
@@ -146,6 +158,7 @@ const DraftEntrySchema = SidebarCommonSchema.extend({
 const TopLevelEntrySchema = SidebarCommonSchema.extend({
   entryKind: z.literal("thread"),
   gitArc: WorkbenchGitArcLifecycleStateSchema.nullable().optional(),
+  gitArcPlan: WorkbenchGitArcPlanStateSchema.nullable().optional(),
   identity: ThreadIdentitySchema,
   lifecycle: WorkbenchThreadLifecycleSchema,
   metadata: TopLevelMetadataSchema,
@@ -157,6 +170,7 @@ const SubagentEntrySchema = SidebarCommonSchema.extend({
   directSubagentIndex: z.number().int().nonnegative(),
   entryKind: z.literal("subagent"),
   gitArc: WorkbenchGitArcLifecycleStateSchema.nullable().optional(),
+  gitArcPlan: WorkbenchGitArcPlanStateSchema.nullable().optional(),
   identity: ThreadIdentitySchema,
   lifecycle: WorkbenchThreadLifecycleSchema,
   name: z.string().trim().min(1),
@@ -269,6 +283,51 @@ export function getThreadSidebarGroup(entry: WorkbenchThreadSidebarEntry): Workb
   if ((entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped") && !entry.lifecycle.settled) return "completed";
   if (entry.lifecycle.kind === "working") return "working";
   return "other";
+}
+
+const PRIMARY_THREAD_SIDEBAR_GROUPS = ["drafts", "needsAttention", "completed", "working", "snoozed"] as const;
+
+export function groupWorkbenchThreadSidebarEntries(entries: readonly WorkbenchThreadSidebarEntry[]) {
+  const visibleEntries = entries.filter((entry) => getThreadSidebarGroup(entry) !== "hidden" && entry.entryKind !== "subagent");
+  const primaryEntries = PRIMARY_THREAD_SIDEBAR_GROUPS.flatMap((group) => (
+    visibleEntries.filter((entry) => getThreadSidebarGroup(entry) === group)
+  ));
+  return {
+    primaryEntries,
+    settledEntries: visibleEntries.filter((entry) => getThreadSidebarGroup(entry) === "other"),
+  };
+}
+
+export function getWorkbenchThreadPlanConflictEntries(
+  entries: readonly WorkbenchThreadSidebarEntry[],
+  identity: { harness: WorkbenchHarnessId; threadId: string },
+) {
+  const owner = entries.find((entry): entry is WorkbenchTopLevelThreadSidebarEntry => (
+    entry.entryKind === "thread"
+    && entry.identity.harness === identity.harness
+    && entry.identity.threadId === identity.threadId
+  ));
+  const scopePaths = owner?.gitArcPlan?.scopePaths ?? [];
+  if (!scopePaths.length) return [];
+  const conflicts = entries.filter((entry): entry is WorkbenchTopLevelThreadSidebarEntry => (
+    entry.entryKind === "thread"
+    && (entry.identity.harness !== identity.harness || entry.identity.threadId !== identity.threadId)
+    && Boolean(entry.gitArc?.claimedPaths.some((claimedPath) => (
+      scopePaths.some((scopePath) => gitArcPathsOverlap(claimedPath, scopePath))
+    )))
+  ));
+  const grouped = groupWorkbenchThreadSidebarEntries(conflicts);
+  return [...grouped.primaryEntries, ...grouped.settledEntries] as WorkbenchTopLevelThreadSidebarEntry[];
+}
+
+export function createWorkbenchThreadPlanConflictSelector(identity: { harness: WorkbenchHarnessId; threadId: string }) {
+  let selected: WorkbenchTopLevelThreadSidebarEntry[] = [];
+  return (snapshot: WorkbenchThreadSidebarSnapshot | null) => {
+    const next = snapshot ? getWorkbenchThreadPlanConflictEntries(snapshot.entries, identity) : [];
+    if (areDeeplyEqual(selected, next)) return selected;
+    selected = next;
+    return selected;
+  };
 }
 
 export function sortThreadSidebarEntries(entries: readonly WorkbenchThreadSidebarEntry[]) {

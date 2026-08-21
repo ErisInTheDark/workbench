@@ -12,7 +12,7 @@ test("sibling threads in one worktree share the Git arc transition lane", async 
   const keys: string[] = [];
   const feature = new WorkbenchGitArcFeature({
     getThreadClaimContext: async () => null,
-    refreshThreadClaim: async () => undefined,
+    refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
     transitions: {
       run: async (key: string) => {
@@ -39,7 +39,7 @@ test("settled threads cannot start claims", async () => {
       lifecycle: { kind: "completed", reason: "userCompleted", settled: true },
       title: "Finished thread",
     }),
-    refreshThreadClaim: async () => undefined,
+    refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
@@ -60,7 +60,7 @@ test("atomic claim collisions use structured owner and path diagnostics", async 
       lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
       title: threadId === "owner-thread" ? "Render ownership" : "Starting thread",
     }),
-    refreshThreadClaim: async () => undefined,
+    refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
@@ -105,7 +105,7 @@ test("successful Git responses survive a failed thread claim refresh", async (co
   const reported = context.mock.method(console, "error", () => undefined);
   const feature = new WorkbenchGitArcFeature({
     getThreadClaimContext: async () => null,
-    refreshThreadClaim: async () => { throw new Error("projection exploded"); },
+    refreshThreadGitArcState: async () => { throw new Error("projection exploded"); },
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
@@ -129,11 +129,11 @@ test("successful Git responses survive a failed thread claim refresh", async (co
   assert.match(String(reported.mock.calls[0]?.arguments[0]), /operation succeeded.*projection exploded/u);
 });
 
-test("arc move previews do not refresh claims while applied moves do", async () => {
+test("plan creation and applied arc moves refresh Git arc state while move previews do not", async () => {
   let refreshCount = 0;
   const feature = new WorkbenchGitArcFeature({
     getThreadClaimContext: async () => null,
-    refreshThreadClaim: async () => { refreshCount += 1; },
+    refreshThreadGitArcState: async () => { refreshCount += 1; },
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
@@ -141,18 +141,27 @@ test("arc move previews do not refresh claims while applied moves do", async () 
 
   const common = { cwd: "C:/Git/Project", harness: "codex", threadId: "thread-one" } as const;
   assert.equal((await feature.executeRequest({
+    action: "plan",
+    intentDescription: "",
+    intentName: "plan",
+    paths: ["src/a.ts"],
+    ...common,
+  })).status, 200);
+  assert.equal(refreshCount, 1);
+
+  assert.equal((await feature.executeRequest({
     action: "arcMove",
     move: { confirm: false, kind: "regex", pattern: "^src/(.+)$", replacement: "tests/$1", roots: ["src"] },
     ...common,
   })).status, 200);
-  assert.equal(refreshCount, 0);
+  assert.equal(refreshCount, 1);
 
   assert.equal((await feature.executeRequest({
     action: "arcMove",
     move: { kind: "operands", operands: ["src/a.ts", "tests/a.ts"] },
     ...common,
   })).status, 200);
-  assert.equal(refreshCount, 1);
+  assert.equal(refreshCount, 2);
 });
 
 test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actions", async () => {
@@ -162,7 +171,7 @@ test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actio
       lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
       title: "Thread",
     }),
-    refreshThreadClaim: async () => undefined,
+    refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
     transitions: { run: async (_key, operation) => await operation() },
   });

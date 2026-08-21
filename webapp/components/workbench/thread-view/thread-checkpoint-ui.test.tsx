@@ -17,7 +17,9 @@ import ThreadCodeDisplay from "./ThreadCodeDisplay";
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import ThreadGitArcLifecycleCard from "./ThreadGitArcLifecycleCard";
 import ThreadGitArcPresentationContext, { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
+import ThreadPlanConflictCard from "./ThreadPlanConflictCard";
 import { ThreadTurnDetails } from "./thread-view-items";
+import WorkbenchContextMenuContext from "../WorkbenchContextMenuContext";
 
 interface EditableElementProps {
   ariaLabel?: string;
@@ -181,11 +183,71 @@ test("resolved arc cards keep committed proposals hoisted without live claim con
   assert.doesNotMatch(html, /Restore &amp; unclaim|Unclaim files/u);
 });
 
-test("ThreadView hoists gitArc lifecycle state only after the active turn ends", async () => {
+test("ThreadView keeps lifecycle cards terminal while showing plan conflicts during active turns", async () => {
   const source = await readFile(new URL("./ThreadView.tsx", import.meta.url), "utf8");
-  assert.equal(source.includes("activeSidebarEntry.gitArc"), true);
+  assert.equal(source.includes("activeGitArcSelection.gitArc"), true);
+  assert.equal(source.includes("activeGitArcSelectionRef"), true);
+  assert.equal(source.includes("areDeeplyEqual(activeGitArcSelectionRef.current, next)"), true);
   assert.equal(source.includes('currentTurn?.status !== "inProgress"'), true);
+  assert.match(source, /\{activeThread && !isDraftThreadView \? \(\s*<ThreadPlanConflictCard/u);
+  assert.doesNotMatch(source, /activeThread && !isDraftThreadView && currentTurn\?\.status[^\n]+\n\s*<ThreadPlanConflictCard/u);
   assert.equal(source.includes("terminalFileClaim") || source.includes("activeSidebarEntry.fileClaim"), false);
+  assert.equal(source.includes("proposalIntents: visibleGitArcProposalIntents"), true);
+});
+
+test("planned conflict card renders collapsed shared thread rows without tooltips or dividers", () => {
+  const owner = {
+    activityAt: 10,
+    entryKind: "thread" as const,
+    gitArcPlan: {
+      checkpointCommit: "a".repeat(40), intentDescription: "", intentName: "plan",
+      scopePaths: ["src/feature"], updatedAt: "2026-08-21T00:00:00.000Z",
+    },
+    identity: { harness: "codex" as const, threadId: "owner" },
+    lifecycle: { kind: "completed" as const, reason: "providerInactive" as const, settled: false as const },
+    metadata: { archived: false as const, pinned: false, snoozed: false },
+    title: "Owner",
+  };
+  const claimant = {
+    ...owner,
+    gitArc: {
+      checkpointCommit: "b".repeat(40), claimedPaths: ["src/feature/card.tsx"], intentDescription: "", intentName: "claim",
+      phase: "active" as const, proposals: [], updatedAt: "2026-08-21T00:00:00.000Z",
+    },
+    gitArcPlan: null,
+    identity: { harness: "opencode" as const, threadId: "claimant" },
+    title: "Claiming thread",
+  };
+  const snapshot = { entries: [owner, claimant], error: null, freshness: "fresh" as const, projectId: "project", revision: 1 };
+  const html = renderToStaticMarkup(createElement(
+    WorkbenchContextMenuContext.Provider,
+    { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
+    createElement(ThreadPlanConflictCard, {
+      harness: "codex",
+      onOpenThread: () => undefined,
+      projectId: "project",
+      store: { getSnapshot: () => snapshot, subscribe: () => () => undefined },
+      threadId: "owner",
+    }),
+  ));
+  assert.match(html, /data-thread-plan-conflict-card="true"/u);
+  assert.match(html, /<path d="m15 9-6 6"><\/path><path d="m9 9 6 6"><\/path>/u);
+  assert.match(html, /<h2 class="[^"]*text-\[0\.82em\][^"]*leading-\[1\.45\][^"]*"/u);
+  assert.match(html, /<span class="[^"]*font-medium text-text">Planned changes overlap active threads<\/span>/u);
+  assert.match(html, /Planned changes overlap active threads/u);
+  assert.match(html, /Claiming thread/u);
+  assert.match(html, /<li class="[^"]*\bpb-px\b/u);
+  assert.doesNotMatch(html, /group-hover\/thread-row:invisible|group-focus-within\/thread-row:invisible/u);
+  assert.doesNotMatch(html, /data-tooltip|data-thread-project-file-link-boundary|\bborder-t(?:\s|")|\bdivide-y/u);
+});
+
+test("planned conflict rows use the owning in-app thread navigation callback", async () => {
+  const [cardSource, viewSource] = await Promise.all([
+    readFile(new URL("./ThreadPlanConflictCard.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./ThreadView.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(cardSource, /<WorkbenchThreadListItem[\s\S]*?onActivate=\{onOpenThread\}/u);
+  assert.match(viewSource, /<ThreadPlanConflictCard[\s\S]*?onOpenThread=\{onOpenThread\}/u);
 });
 
 test("in-progress checkpoint commit commands render an immediate standalone card", () => {

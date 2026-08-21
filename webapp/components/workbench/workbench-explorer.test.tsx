@@ -7,23 +7,27 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 test("threads render one keyboard-navigable tablist with settled rows inside one disclosure", async () => {
-  const source = await readFile(new URL("./WorkbenchThreadList.tsx", import.meta.url), "utf8");
-  assert.match(source, /role="tablist"/u);
-  assert.match(source, /role="tab"/u);
-  assert.match(source, /event\.key === "ArrowDown"/u);
-  assert.match(source, /event\.key === "ArrowUp"/u);
-  assert.match(source, /event\.key === "Home"/u);
-  assert.match(source, /event\.key === "End"/u);
-  assert.match(source, /summary="Settled threads"/u);
-  assert.match(source, /displayedSettledEntries\.map\(renderEntry\)/u);
-  assert.match(source, /<a[\s\S]*?href=\{getThreadHref\(target\)\}[\s\S]*?role="tab"/u);
-  assert.match(source, /href=\{getThreadHref\(\{ kind: "new" \}\)\}/u);
-  assert.match(source, /event\.preventDefault\(\);[\s\S]*?onOpenThread\(target\)/u);
-  assert.match(source, /canComplete = entry\.entryKind === "thread" && !isWorkbenchThreadStatusProviderOwned\(entry\.lifecycle\)/u);
-  assert.match(source, /canShiftSettle && isShiftPressed \? "settle" : baseAction/u);
-  assert.match(source, /event\.shiftKey \|\| event\.detail > 1/u);
-  assert.match(source, /actionLabel === "restore"|action === "restore"/u);
-  assert.match(source, /attentionLabelsByThreadId/u);
+  const [listSource, itemSource] = await Promise.all([
+    readFile(new URL("./WorkbenchThreadList.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./WorkbenchThreadListItem.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(listSource, /role="tablist"/u);
+  assert.match(listSource, /role="tab"/u);
+  assert.match(listSource, /event\.key === "ArrowDown"/u);
+  assert.match(listSource, /event\.key === "ArrowUp"/u);
+  assert.match(listSource, /event\.key === "Home"/u);
+  assert.match(listSource, /event\.key === "End"/u);
+  assert.match(listSource, /summary="Settled threads"/u);
+  assert.match(listSource, /displayedSettledEntries\.map\(renderEntry\)/u);
+  assert.match(listSource, /<WorkbenchThreadListItem[\s\S]*?href=\{getThreadHref\(target\)\}[\s\S]*?role="tab"/u);
+  assert.match(itemSource, /<a[\s\S]*?href=\{href\}[\s\S]*?role=\{role\}/u);
+  assert.match(listSource, /href=\{getThreadHref\(\{ kind: "new" \}\)\}/u);
+  assert.match(itemSource, /event\.preventDefault\(\);[\s\S]*?onActivate\(target\)/u);
+  assert.match(itemSource, /canComplete = entry\.entryKind === "thread" && !isWorkbenchThreadStatusProviderOwned\(entry\.lifecycle\)/u);
+  assert.match(itemSource, /canShiftSettle && isShiftPressed \? "settle" : baseAction/u);
+  assert.match(itemSource, /event\.shiftKey \|\| event\.detail > 1/u);
+  assert.match(itemSource, /actionLabel === "restore"|action === "restore"/u);
+  assert.match(listSource, /attentionLabelsByThreadId/u);
 });
 
 test("agent tabs keep a persistent settled toggle and durable thread routing", async () => {
@@ -57,6 +61,12 @@ test("provider child routes canonicalize from durable subagent relationships", a
   assert.match(source, /kind: "subagent"/u);
   assert.match(source, /parentThreadId,/u);
   assert.match(source, /threadId: providerTarget\.threadId/u);
+});
+
+test("thread views reuse the sidebar's in-app thread navigation owner", async () => {
+  const source = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
+  assert.match(source, /<ThreadView[\s\S]*?onOpenThread=\{openThreadFromExplorer\}/u);
+  assert.match(source, /<WorkbenchThreadPanel[\s\S]*?onOpenThread=\{openThreadFromExplorer\}/u);
 });
 
 test("live sidebar state subscribes below the Workbench root", async () => {

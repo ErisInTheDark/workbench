@@ -3,6 +3,7 @@
  * - default GitArcIcon: render the matching square action glyph for one Git arc command. Keywords: git, arc, icon, plan, start, continue, add, remove, compare, restore.
  * - GitArcClaimIcon: render the flag marker used by claimed-file rows. Keywords: git, arc, icon, claim, file.
  * - GitArcPlannedClaimIcon: render the dashed flag marker used by planned-file rows. Keywords: git, arc, icon, plan, claim, file.
+ * - GitArcConflictIcon: render the square-x marker used for conflicting planned and active claims. Keywords: git, arc, icon, conflict, overlap.
  */
 import type { ReactNode } from "react";
 
@@ -34,6 +35,16 @@ export function GitArcPlannedClaimIcon({ className = "size-5" }: { className?: s
       <path d="m8.7 14.2-2.7 1.3v-3" />
       <path d="M6 9.78V8.72" />
       <path d="M6 22v-3.75" />
+    </SvgFrame>
+  );
+}
+
+export function GitArcConflictIcon({ className = "size-4" }: { className?: string }) {
+  return (
+    <SvgFrame className={className}>
+      <rect height="18" rx="2" ry="2" width="18" x="3" y="3" />
+      <path d="m15 9-6 6" />
+      <path d="m9 9 6 6" />
     </SvgFrame>
   );
 }

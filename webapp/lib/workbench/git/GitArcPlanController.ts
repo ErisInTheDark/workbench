@@ -2,7 +2,7 @@
  * Exports:
  * - default GitArcPlanController: own inactive plan creation, revision, adoption, current-plan resolution, and atomic activation. Keywords: git, arc, plan, start, retained claims.
  * - GitCheckpointDirtyPathsError: identify unexplained dirty paths rejected by plan and claim operations. Keywords: git, plan, dirty paths, adoption.
- * - GitArcPlanResult/GitArcStartResult: typed immutable plan and visible claim-transition receipts. Keywords: git, plan, start, claims.
+ * - GitArcPlanResult/GitArcPlanState/GitArcStartResult: typed immutable plan, current-plan projection, and visible claim-transition receipts. Keywords: git, plan, start, claims.
  */
 import type { GitCheckpointFileChange } from "./checkpoint-contracts";
 import createGitArcStartDiagnosticError from "./git-arc-start-diagnostics";
@@ -38,6 +38,16 @@ export interface GitArcPlanResult {
   kind: "plan";
   repoRoot: string;
   scopePaths: string[];
+}
+
+export interface GitArcPlanState {
+  checkpointCommit: string;
+  harness: string;
+  intentDescription: string;
+  intentName: string;
+  scopePaths: string[];
+  threadId: string;
+  updatedAt: string;
 }
 
 export interface GitArcStartResult {
@@ -95,6 +105,32 @@ function requirePlanMetadata(metadata: CheckpointMetadata | null) {
 }
 
 export default class GitArcPlanController {
+  async listPlanStates({ cwd }: { cwd: string }): Promise<GitArcPlanState[]> {
+    const repository = await WorkbenchGitRepository.tryOpen(cwd);
+    if (!repository) return [];
+    const entries = (await new GitArcRegistry(repository).list()).filter((entry) => entry.phase === "plan");
+    const store = new GitCheckpointStore(repository);
+    return await Promise.all(entries.map(async (entry) => {
+      const checkpoint = await store.readCheckpoint(normalizeHarness(entry.harness), entry.threadId, entry.checkpointCommit);
+      const metadata = requirePlanMetadata(checkpoint.metadata);
+      return {
+        checkpointCommit: entry.checkpointCommit,
+        harness: entry.harness,
+        intentDescription: metadata.intentDescription ?? "",
+        intentName: metadata.intentName ?? entry.intentName,
+        scopePaths: repository.normalizePaths(metadata.scopePaths),
+        threadId: entry.threadId,
+        updatedAt: entry.updatedAt,
+      };
+    }));
+  }
+
+  async findPlanState(input: PlanIdentityInput): Promise<GitArcPlanState | null> {
+    const states = await this.listPlanStates({ cwd: input.cwd });
+    const harness = normalizeHarness(input.harness);
+    return states.find((state) => state.harness === harness && state.threadId === input.threadId) ?? null;
+  }
+
   async createPlan(input: PlanInput): Promise<GitArcPlanResult> {
     const repository = await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);

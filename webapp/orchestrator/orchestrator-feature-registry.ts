@@ -93,9 +93,9 @@ export function createOrchestratorFeatureGeneration(
       if (!threadState) throw new Error("Thread state is not ready for Git arc ownership.");
       return await threadState.controller.getThreadClaimContext(projectId, harness, threadId);
     },
-    refreshThreadClaim: async (projectId, harness, threadId) => {
+    refreshThreadGitArcState: async (projectId, harness, threadId) => {
       if (!threadState) throw new Error("Thread state is not ready for Git arc publication.");
-      await threadState.controller.refreshFileClaim(projectId, harness, threadId);
+      await threadState.controller.refreshGitArcState(projectId, harness, threadId);
     },
     resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Git arc" }),
     transitions: context.threadTransitions,

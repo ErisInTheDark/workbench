@@ -57,7 +57,7 @@ import {
 } from "../../../lib/workbench/thread/inline-mention-highlights";
 import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
 import { ThreadMessageNotSentError } from "../../../lib/workbench/thread/thread-message-submission";
-import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "../../../lib/workbench/thread/thread-state";
+import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcPlanState, WorkbenchThreadStateRequest, WorkbenchThreadTarget } from "../../../lib/workbench/thread/thread-state";
 import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import {
   filterSubagentsByParentThreadId,
@@ -89,6 +89,7 @@ import ThreadGoalControl from "./ThreadGoalControl";
 import ThreadGitArcLifecycleCard from "./ThreadGitArcLifecycleCard";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadMarkdown from "./ThreadMarkdown";
+import ThreadPlanConflictCard from "./ThreadPlanConflictCard";
 import ThreadRateLimits from "./ThreadRateLimits";
 import ThreadScrollAnchorController, { type ThreadScrollSnapshot } from "./ThreadScrollAnchorController";
 import {
@@ -576,6 +577,7 @@ export default memo(function ThreadView ({
   onDraftHarnessChange,
   onThreadCodeBlockWrapChange,
   onListModels,
+  onOpenThread,
   onPauseThread,
   onReadThread,
   onResumeThread,
@@ -624,6 +626,7 @@ export default memo(function ThreadView ({
   onDraftHarnessChange: (harness: WorkbenchHarness) => void;
   onThreadCodeBlockWrapChange: (nextValue: boolean) => void;
   onListModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
+  onOpenThread: (target: WorkbenchThreadTarget) => void;
   onPauseThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   onReadThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
   onResumeThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
@@ -724,18 +727,25 @@ export default memo(function ThreadView ({
   const activeThread = activeThreadId === thread.id
     ? getThreadDocumentFromSnapshot(threadDocuments, thread.id) ?? thread
     : relatedThreadsById[activeThreadId] ?? null;
-  const getActiveSidebarEntry = useCallback((): WorkbenchThreadSidebarEntry | null => {
+  const activeGitArcSelectionRef = useRef<{ gitArc: WorkbenchGitArcLifecycleState | null; gitArcPlan: WorkbenchGitArcPlanState | null } | null>(null);
+  const getActiveGitArcSelection = useCallback(() => {
     if (!activeThread) return null;
-    return threadSidebarStore?.getSnapshot()?.entries.find((entry) => (
-      entry.entryKind !== "draft"
-      && entry.identity.harness === activeThread.harness
-      && entry.identity.threadId === activeThread.id
-    )) ?? null;
+    const entry = threadSidebarStore?.getSnapshot()?.entries.find((candidate) => (
+      candidate.entryKind !== "draft"
+      && candidate.identity.harness === activeThread.harness
+      && candidate.identity.threadId === activeThread.id
+    ));
+    const next = entry && entry.entryKind !== "draft"
+      ? { gitArc: entry.gitArc ?? null, gitArcPlan: entry.gitArcPlan ?? null }
+      : null;
+    if (areDeeplyEqual(activeGitArcSelectionRef.current, next)) return activeGitArcSelectionRef.current;
+    activeGitArcSelectionRef.current = next;
+    return next;
   }, [activeThread, threadSidebarStore]);
-  const activeSidebarEntry = useSyncExternalStore(
+  const activeGitArcSelection = useSyncExternalStore(
     threadSidebarStore?.subscribe ?? EMPTY_THREAD_SIDEBAR_SUBSCRIBE,
-    getActiveSidebarEntry,
-    getActiveSidebarEntry,
+    getActiveGitArcSelection,
+    getActiveGitArcSelection,
   );
   const activeProfileSlot: WorkbenchComposerProfileSlot | null = activeThread
     ? activeThread.isDraft
@@ -1634,9 +1644,8 @@ export default memo(function ThreadView ({
       })}
     />
   ) : null;
-  const terminalGitArc = activeSidebarEntry && activeSidebarEntry.entryKind !== "draft"
-    && currentTurn?.status !== "inProgress"
-    ? activeSidebarEntry.gitArc ?? null
+  const terminalGitArc = activeGitArcSelection && currentTurn?.status !== "inProgress"
+    ? activeGitArcSelection.gitArc
     : null;
 
   return (
@@ -1797,6 +1806,15 @@ export default memo(function ThreadView ({
               </p>
             ) : null}
           </div>
+        ) : null}
+        {activeThread && !isDraftThreadView ? (
+          <ThreadPlanConflictCard
+            harness={activeThread.harness}
+            onOpenThread={onOpenThread}
+            projectId={projectId}
+            store={threadSidebarStore}
+            threadId={activeThread.id}
+          />
         ) : null}
         {terminalGitArc && activeThread ? (
           <ThreadGitArcLifecycleCard

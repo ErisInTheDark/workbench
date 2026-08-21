@@ -8,7 +8,7 @@ import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/Th
 import { getCurrentTurn } from "../lib/codex/thread-state";
 import { normalizeThreadTitle } from "../lib/thread-bootstrap";
 import type { WorkbenchHarness, WorkbenchProjectsPayload } from "../lib/types";
-import type { GitArcActiveClaim, GitArcLifecycleState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
+import type { GitArcActiveClaim, GitArcLifecycleState, GitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
 import { normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
@@ -45,8 +45,10 @@ export interface WorkbenchThreadStateFeatureContext {
   gitArcs: {
     findActiveClaim(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcActiveClaim | null>;
     findLifecycleState?(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcLifecycleState | null>;
+    findPlanState?(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcPlanState | null>;
     listActiveClaims(cwd: string): Promise<GitArcActiveClaim[]>;
     listLifecycleStates?(cwd: string): Promise<GitArcLifecycleState[]>;
+    listPlanStates?(cwd: string): Promise<GitArcPlanState[]>;
   };
   getProjectCatalog(): WorkbenchProjectsPayload;
   listSubagents(projectId: string): Promise<SubagentRelationshipList>;
@@ -66,6 +68,12 @@ export interface WorkbenchThreadStateFeatureContext {
 
 function asRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function projectGitArcPlan(state: GitArcPlanState | undefined) {
+  if (!state) return null;
+  const { harness: _harness, threadId: _threadId, ...gitArcPlan } = state;
+  return gitArcPlan;
 }
 
 function normalizeOptionalTimestamp(value: unknown) {
@@ -170,6 +178,12 @@ export default class WorkbenchThreadStateFeature {
           : await context.gitArcs.findActiveClaim(project.rootPath, harness, threadId).then((claim) => claim ? legacyGitArc(claim) : null);
         return projectGitArc(state ?? undefined);
       },
+      resolveGitArcPlan: async (projectId, harness, threadId) => {
+        if (!context.gitArcs.findPlanState) return null;
+        const project = await context.resolveProjectById(projectId);
+        const state = await context.gitArcs.findPlanState(project.rootPath, harness, threadId);
+        return projectGitArcPlan(state ?? undefined);
+      },
       resolveProjectRoot: async (projectId) => (await context.resolveProjectById(projectId)).rootPath,
       runGitArcTransition: async (projectId, operation) => {
         const project = await context.resolveProjectById(projectId);
@@ -249,18 +263,19 @@ export default class WorkbenchThreadStateFeature {
     acceptProviderSnapshot: (harness: WorkbenchHarness, entries: WorkbenchThreadSidebarEntry[], options: { complete: boolean }) => void,
   ) {
     const project = await this.context.resolveProjectById(projectId);
-    const [relationships, gitArcs] = await Promise.all([
+    const [relationships, gitArcs, gitArcPlans] = await Promise.all([
       this.context.listSubagents(projectId),
       this.context.gitArcs.listLifecycleStates
         ? this.context.gitArcs.listLifecycleStates(project.rootPath)
         : this.context.gitArcs.listActiveClaims(project.rootPath).then((claims) => claims.map(legacyGitArc)),
+      this.context.gitArcs.listPlanStates?.(project.rootPath) ?? Promise.resolve([]),
     ]);
     const results = await Promise.all((["codex", "copilot", "opencode"] as const).map(async (harness): Promise<WorkbenchThreadReconciliationFailure | null> => {
       try {
         const providerEntries = await this.listProviderEntries(harness, project.rootPath, signal, (entries) => {
-          acceptProviderSnapshot(harness, this.projectProviderEntries(projectId, harness, entries, relationships, gitArcs), { complete: false });
+          acceptProviderSnapshot(harness, this.projectProviderEntries(projectId, harness, entries, relationships, gitArcs, gitArcPlans), { complete: false });
         });
-        acceptProviderSnapshot(harness, this.projectProviderEntries(projectId, harness, providerEntries, relationships, gitArcs), { complete: true });
+        acceptProviderSnapshot(harness, this.projectProviderEntries(projectId, harness, providerEntries, relationships, gitArcs, gitArcPlans), { complete: true });
         return null;
       } catch (error) {
         if (signal.aborted) throw signal.reason ?? new Error("Thread-state reconciliation cancelled.");
@@ -321,6 +336,7 @@ export default class WorkbenchThreadStateFeature {
     providerEntries: WorkbenchThreadSidebarEntry[],
     relationships: SubagentRelationshipList,
     gitArcs: GitArcLifecycleState[],
+    gitArcPlans: GitArcPlanState[],
   ) {
     const harnessRelationships = relationships.subagents.filter((relationship) => relationship.harness === harness);
     const relationshipKeys = new Set(harnessRelationships.map((relationship) => relationship.threadId));
@@ -329,9 +345,11 @@ export default class WorkbenchThreadStateFeature {
       .map((entry) => {
         if (entry.entryKind === "draft") return entry;
         const gitArc = projectGitArc(gitArcs.find((state) => state.harness === harness && state.threadId === entry.identity.threadId));
+        const gitArcPlan = projectGitArcPlan(gitArcPlans.find((state) => state.harness === harness && state.threadId === entry.identity.threadId));
         return {
           ...entry,
           gitArc,
+          gitArcPlan,
           lifecycle: gitArc?.claimedPaths.length && entry.lifecycle.settled ? { ...entry.lifecycle, settled: false as const } : entry.lifecycle,
         };
       });
@@ -339,11 +357,12 @@ export default class WorkbenchThreadStateFeature {
     return [...topLevelEntries, ...harnessRelationships.map((relationship): WorkbenchThreadSidebarEntry => {
       const provider = providerById.get(relationship.threadId);
       const gitArc = projectGitArc(gitArcs.find((state) => state.harness === harness && state.threadId === relationship.threadId));
+      const gitArcPlan = projectGitArcPlan(gitArcPlans.find((state) => state.harness === harness && state.threadId === relationship.threadId));
       const lifecycle = normalizeSubagentProviderLifecycle(provider?.lifecycle);
       return {
         activityAt: provider?.activityAt ?? relationship.updatedAt, createdAt: relationship.createdAt, cwd: relationship.cwd,
         directSubagentIndex: relationship.directSubagentIndex, entryKind: "subagent", identity: { harness, threadId: relationship.threadId },
-        gitArc, lifecycle: gitArc?.claimedPaths.length && lifecycle.settled ? { ...lifecycle, settled: false as const } : lifecycle, name: relationship.name,
+        gitArc, gitArcPlan, lifecycle: gitArc?.claimedPaths.length && lifecycle.settled ? { ...lifecycle, settled: false as const } : lifecycle, name: relationship.name,
         parentThreadId: relationship.parentThreadId, pinned: false, profileId: relationship.profileId, profileName: relationship.profileName,
         projectId, title: relationship.title, updatedAt: relationship.updatedAt,
       };

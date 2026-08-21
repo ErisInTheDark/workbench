@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchGitCheckpointController: route plan and proposal owners while owning active claim mutation, compare, diff, and restore orchestration. Keywords: git, checkpoint, arc, claims, restore.
- * - GitArcActiveClaim/GitArcProposalStatus: expose resolved active-claim proposal lifecycle for thread-state projection. Keywords: git, arc, claim, proposal, status.
+ * - GitArcActiveClaim/GitArcPlanState/GitArcProposalStatus: expose active-claim, inactive-plan, and proposal lifecycle for thread-state projection. Keywords: git, arc, claim, plan, proposal, status.
  * - GitCheckpointDirtyPathsError: identify paths that must be clean before an arc operation. Keywords: git, checkpoint, dirty paths.
  * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt/GitArcMoveResult: typed controller operation results. Keywords: git, checkpoint, arc, move, proposal, result.
  */
@@ -19,7 +19,7 @@ import type {
 } from "./checkpoint-contracts";
 import GitArcRegistry, { type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitArcPathMover, { type GitArcResolvedMove } from "./GitArcPathMover";
-import GitArcPlanController, { GitCheckpointDirtyPathsError } from "./GitArcPlanController";
+import GitArcPlanController, { GitCheckpointDirtyPathsError, type GitArcPlanState } from "./GitArcPlanController";
 import GitArcProposalController, {
   type GitArcLifecycleState,
   type GitCheckpointProposalReceipt,
@@ -43,6 +43,7 @@ import {
 
 export type { GitArcProposalStatus } from "./git-arc-storage";
 export { GitCheckpointDirtyPathsError } from "./GitArcPlanController";
+export type { GitArcPlanState } from "./GitArcPlanController";
 export type { GitArcLifecycleState, GitCheckpointProposalReceipt } from "./GitArcProposalController";
 
 const execFileAsync = promisify(execFile);
@@ -484,6 +485,14 @@ export default class WorkbenchGitCheckpointController {
 
   async findLifecycleState(input: ControllerInput): Promise<GitArcLifecycleState | null> {
     return await this.proposals.findLifecycleState(input);
+  }
+
+  async listPlanStates({ cwd }: { cwd: string }): Promise<GitArcPlanState[]> {
+    return await this.plans.listPlanStates({ cwd });
+  }
+
+  async findPlanState(input: ControllerInput): Promise<GitArcPlanState | null> {
+    return await this.plans.findPlanState(input);
   }
 
   async releaseActiveClaim({ cwd, harness: rawHarness, threadId }: ControllerInput): Promise<void> {

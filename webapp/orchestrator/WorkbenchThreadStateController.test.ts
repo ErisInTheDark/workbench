@@ -9,13 +9,14 @@ import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 import type { WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 
-type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "runGitArcTransition">
-  & Partial<Pick<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "runGitArcTransition">>;
+type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "resolveGitArcPlan" | "runGitArcTransition">
+  & Partial<Pick<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "resolveGitArcPlan" | "runGitArcTransition">>;
 
 class WorkbenchThreadStateController extends WorkbenchThreadStateControllerOwner {
   constructor(options: TestControllerOptions) {
     super({
       resolveGitArc: async () => null,
+      resolveGitArcPlan: async () => null,
       runGitArcTransition: async (_projectId, operation) => await operation(),
       ...options,
     });
