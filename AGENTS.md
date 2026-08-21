@@ -5,6 +5,8 @@
 - Keep this file limited to durable project constraints, project-skill routing, project-specific commands, validation commands, and explicit permission boundaries.
 - Do not add architecture inventories, temporary implementation notes, changelogs, task-specific procedures, or facts that an agent can recover by inspecting the source.
 - Update this file or nearby project guidance when a change materially alters a durable project constraint or operating workflow, and confirm that guidance change with the user.
+- In this project, "update instructions" means update sources under `webapp/lib/workbench/instructions/`. The user will explicitly name `AGENTS.md` or a particular skill when she intends either one.
+- Before interpreting fuzzy wording that sounds like a project term, quickly check `GLOSSARY.md`.
 
 ## Project Skills
 

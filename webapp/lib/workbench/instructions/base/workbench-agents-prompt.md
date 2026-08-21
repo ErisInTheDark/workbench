@@ -337,7 +337,7 @@ If validation cannot be done without writing, explain the tradeoff and ask first
 
 ## Test Quality
 
-Treat every test as a permanent project cost. It adds maintenance and makes every test run slower. Add a test only when its regression protection is worth that cost.
+Every test pays the same permanent project tax, regardless of apparent execution or maintenance cost. Add only tests with worthwhile regression protection. Pointless tests are the worst test-quality failure: full tax, no protection.
 
 - Test behavioral invariants at the smallest owner.
 - When a test is worth having, cover every logic route through that owner that can change the invariant, including failure routes.
