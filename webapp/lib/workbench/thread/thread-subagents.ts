@@ -1,16 +1,25 @@
 /*
  * Exports:
  * - mergeWorkbenchSubagentSummaries/reconcileWorkbenchSubagentPage/getSubagentThreadIds/getSubagentSummary/getSubagentHarness/filterSubagentsByParentThreadId/filterSubagentThreadSummaries: merge, reconcile, derive, and filter direct-child identity from pushed summaries. Keywords: workbench, thread, subagent, metadata, harness, sidebar.
+ * - WorkbenchSubagentCommandDisplayTarget/getWorkbenchSubagentCommandTargetKey/resolveWorkbenchSubagentCommandTargets: resolve parsed id/name selectors into safe durable display identity without guessing reused names. Keywords: command, target, name, identity, fallback.
  * - sortWorkbenchSubagents/getSubagentTabLayout/getNextSubagentHydrationBatch: derive lifecycle/Lock order, settled folding, and bounded body hydration. Keywords: subagent, tabs, lock, lifecycle, hydration.
  * - getThreadAgentAccentColor/getThreadAgentLabelParts/getThreadAgentTabLabel: parent-derived child colors and metadata-first labels. Keywords: subagent, color, hue, label, tabs.
  */
 import type { ThreadPayload, ThreadSummary, WorkbenchSubagentSummary } from "../../types";
 import { areDeeplyEqual } from "../deep-equality";
+import type { WorkbenchSubagentCommandTarget } from "./command-matchers/workbench-cli";
 
 export interface ThreadAgentLabelParts {
   nickname: string | null;
   role: string | null;
   text: string;
+}
+
+export interface WorkbenchSubagentCommandDisplayTarget {
+  fallbackName: string | null;
+  subagent: WorkbenchSubagentSummary | null;
+  targetKey: string;
+  threadId: string | null;
 }
 
 type ThreadAgentIdentity = Pick<ThreadPayload, "agentNickname" | "agentRole">;
@@ -122,6 +131,30 @@ export function reconcileWorkbenchSubagentPage({
 
 export function getSubagentSummary(subagents: readonly WorkbenchSubagentSummary[], threadId: string) {
   return subagents.find((record) => record.threadId === threadId) ?? null;
+}
+
+export function getWorkbenchSubagentCommandTargetKey(target: WorkbenchSubagentCommandTarget) {
+  return target.kind === "name"
+    ? `name:${target.value.toLocaleLowerCase()}`
+    : `id:${target.value}`;
+}
+
+export function resolveWorkbenchSubagentCommandTargets(
+  subagents: readonly WorkbenchSubagentSummary[],
+  targets: readonly WorkbenchSubagentCommandTarget[],
+): WorkbenchSubagentCommandDisplayTarget[] {
+  return targets.map((target) => {
+    const matches = target.kind === "id"
+      ? subagents.filter((subagent) => subagent.threadId === target.value)
+      : subagents.filter((subagent) => subagent.name.localeCompare(target.value, undefined, { sensitivity: "accent" }) === 0);
+    const subagent = matches.length === 1 ? matches[0]! : null;
+    return {
+      fallbackName: target.kind === "name" ? target.value : null,
+      subagent,
+      targetKey: getWorkbenchSubagentCommandTargetKey(target),
+      threadId: subagent?.threadId ?? (target.kind === "id" ? target.value : null),
+    };
+  });
 }
 
 export function getSubagentHarness(

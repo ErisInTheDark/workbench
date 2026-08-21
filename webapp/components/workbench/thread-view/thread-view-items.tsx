@@ -54,7 +54,11 @@ import {
   type ThreadCommandDetailRow,
   type ThreadCommandDetailTarget,
 } from "../../../lib/workbench/thread/thread-command-matchers";
-import { getSubagentSummary } from "../../../lib/workbench/thread/thread-subagents";
+import {
+  getSubagentSummary,
+  getWorkbenchSubagentCommandTargetKey,
+  resolveWorkbenchSubagentCommandTargets,
+} from "../../../lib/workbench/thread/thread-subagents";
 import WorkbenchSpinningBorder from "../WorkbenchSpinningBorder";
 import {
   formatThreadDuration,
@@ -84,7 +88,7 @@ import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadSubagentCreateItem from "./ThreadSubagentCreateItem";
 import ThreadSubagentIncomingMessage from "./ThreadSubagentIncomingMessage";
 import ThreadSubagentMessageItem from "./ThreadSubagentMessageItem";
-import ThreadSubagentStopItem from "./ThreadSubagentStopItem";
+import ThreadSubagentTargetActionItem from "./ThreadSubagentTargetActionItem";
 import ThreadSubagentWaitItem from "./ThreadSubagentWaitItem";
 import ThreadStatusCommandItem from "./ThreadStatusCommandItem";
 import ThreadTitleCommandItem from "./ThreadTitleCommandItem";
@@ -1477,12 +1481,12 @@ function buildCommandSequenceRenderSegments({
       continue;
     }
     const subagentCommand = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand, item.commandActions);
-    if (subagentCommand?.action === "wait" && subagentCommand.threadIds.length) {
+    if (subagentCommand?.action === "wait" && subagentCommand.targets.length) {
       flushPendingCommands();
       pendingSubagentWaits.push({
         item,
         outcome: getThreadCommandExecutionOutcome(item.status, item.exitCode),
-        threadIds: subagentCommand.threadIds,
+        targetKeys: subagentCommand.targets.map(getWorkbenchSubagentCommandTargetKey),
       });
       continue;
     }
@@ -1691,6 +1695,9 @@ function ThreadCommandExecutionDetails ({
     [commandDisplay, commandOutcome],
   );
   const subagentCommand = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand, item.commandActions);
+  const resolvedSubagentTargets = subagentCommand
+    ? resolveWorkbenchSubagentCommandTargets(subagents, subagentCommand.targets)
+    : [];
   const checkpointDiffChanges = isGitCheckpointDiffMatcherClaim(commandDisplay.claimedBy)
     ? parseGitCheckpointDiffOutput(item.aggregatedOutput ?? "")
     : null;
@@ -1783,7 +1790,7 @@ function ThreadCommandExecutionDetails ({
   }
   if (
     subagentCommand?.action === "wait"
-    && subagentCommand.threadIds.length
+    && resolvedSubagentTargets.length
   ) {
     return (
       <ThreadSubagentWaitItem
@@ -1809,10 +1816,10 @@ function ThreadCommandExecutionDetails ({
             />
           )}
         durationMs={subagentWaitTiming ? subagentWaitTiming.durationMs : item.durationMs}
-        entries={subagentCommand.threadIds.map((childThreadId) => {
-          const childThread = relatedThreadsById[childThreadId];
+        entries={resolvedSubagentTargets.map((target) => {
+          const childThread = target.threadId ? relatedThreadsById[target.threadId] : undefined;
           return {
-            content: (
+            content: target.threadId ? (
               <ThreadSubagentCurrentActivityPreview
                 inlineMentionSources={inlineMentionSources}
                 knownSkills={knownSkills}
@@ -1823,10 +1830,11 @@ function ThreadCommandExecutionDetails ({
                 thread={childThread}
                 workspaceRoots={workspaceRoots}
               />
-            ),
-            subagent: getSubagentSummary(subagents, childThreadId),
+            ) : undefined,
+            fallbackName: target.fallbackName,
+            subagent: target.subagent,
+            targetKey: target.targetKey,
             thread: childThread,
-            threadId: childThreadId,
           };
         })}
         exitCode={item.exitCode}
@@ -1834,7 +1842,6 @@ function ThreadCommandExecutionDetails ({
       />
     );
   }
-  const subagentThreadId = subagentCommand?.threadIds[0] ?? null;
   if (
     subagentCommand?.action === "create"
     && subagentCommand.message
@@ -1845,13 +1852,17 @@ function ThreadCommandExecutionDetails ({
     && (item.exitCode === null || item.exitCode === 0)
   ) {
     const createdThreadId = item.status === "completed" ? item.aggregatedOutput?.trim() || null : null;
+    const createdTarget = resolveWorkbenchSubagentCommandTargets(subagents, [{
+      kind: createdThreadId ? "id" : "name",
+      value: createdThreadId ?? subagentCommand.name,
+    }])[0] ?? null;
     return (
       <ThreadSubagentCreateItem
         active={item.status === "inProgress"}
         fallbackName={subagentCommand.name}
         profileId={subagentCommand.profileId}
         fallbackTitle={subagentCommand.title}
-        subagent={createdThreadId ? getSubagentSummary(subagents, createdThreadId) : null}
+        subagent={createdTarget?.subagent}
       >
         <ThreadMarkdown
           inlineMentionSources={inlineMentionSources}
@@ -1867,15 +1878,17 @@ function ThreadCommandExecutionDetails ({
   }
   if (
     subagentCommand?.action === "message"
-    && subagentThreadId
+    && resolvedSubagentTargets.length === 1
     && subagentCommand.message
     && (item.status === "inProgress" || item.status === "completed")
     && (item.exitCode === null || item.exitCode === 0)
   ) {
-    const childThread = relatedThreadsById[subagentThreadId];
+    const target = resolvedSubagentTargets[0]!;
+    const childThread = target.threadId ? relatedThreadsById[target.threadId] : undefined;
     return (
       <ThreadSubagentMessageItem
-        subagent={getSubagentSummary(subagents, subagentThreadId)}
+        fallbackName={target.fallbackName}
+        subagent={target.subagent}
         thread={childThread}
       >
         <ThreadMarkdown
@@ -1891,17 +1904,21 @@ function ThreadCommandExecutionDetails ({
     );
   }
   if (
-    subagentCommand?.action === "stop"
-    && subagentThreadId
+    (subagentCommand?.action === "settle" || subagentCommand?.action === "stop")
+    && resolvedSubagentTargets.length
     && (item.status === "inProgress" || item.status === "completed")
     && (item.exitCode === null || item.exitCode === 0)
   ) {
-    const childThread = relatedThreadsById[subagentThreadId];
     return (
-      <ThreadSubagentStopItem
+      <ThreadSubagentTargetActionItem
+        action={subagentCommand.action}
         active={item.status === "inProgress"}
-        subagent={getSubagentSummary(subagents, subagentThreadId)}
-        thread={childThread}
+        entries={resolvedSubagentTargets.map((target) => ({
+          fallbackName: target.fallbackName,
+          subagent: target.subagent,
+          targetKey: target.targetKey,
+          thread: target.threadId ? relatedThreadsById[target.threadId] : undefined,
+        }))}
       />
     );
   }

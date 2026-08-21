@@ -17,9 +17,10 @@ import ThreadSummaryText from "./ThreadSummaryText";
 
 interface ThreadSubagentWaitEntry {
   content?: ReactNode;
+  fallbackName?: string | null;
   subagent?: WorkbenchSubagentSummary | null;
+  targetKey: string;
   thread?: ThreadPayload | null;
-  threadId: string;
 }
 
 export default function ThreadSubagentWaitItem ({
@@ -38,8 +39,8 @@ export default function ThreadSubagentWaitItem ({
   outcome: ThreadCommandExecutionOutcome;
 }) {
   const tabSetId = useId();
-  const [selectedThreadId, setSelectedThreadId] = useState(entries[0]?.threadId ?? "");
-  const selectedEntry = entries.find((entry) => entry.threadId === selectedThreadId) ?? entries[0] ?? null;
+  const [selectedTargetKey, setSelectedTargetKey] = useState(entries[0]?.targetKey ?? "");
+  const selectedEntry = entries.find((entry) => entry.targetKey === selectedTargetKey) ?? entries[0] ?? null;
   const multiplexed = entries.length > 1;
   const active = outcome === "inProgress";
   const [nowMs, setNowMs] = useState<number | null>(null);
@@ -72,7 +73,7 @@ export default function ThreadSubagentWaitItem ({
         : outcome === "declined" ? "Declined waiting for "
         : "Waited for "}
       {entries.map((entry, index) => (
-        <span key={entry.threadId}>
+        <span key={`${entry.targetKey}:${index}`}>
           {index === 0
             ? null
             : index === entries.length - 1
@@ -80,7 +81,7 @@ export default function ThreadSubagentWaitItem ({
               : ", "}
           <ThreadAgentName
             subagent={entry.subagent}
-            thread={entry.thread}
+            thread={entry.thread ?? (entry.fallbackName ? { agentNickname: entry.fallbackName, agentRole: null } : null)}
           />
         </span>
       ))}
@@ -119,7 +120,7 @@ export default function ThreadSubagentWaitItem ({
             role="tablist"
           >
             {entries.map((entry, index) => {
-              const selected = entry.threadId === selectedEntry.threadId;
+              const selected = entry.targetKey === selectedEntry.targetKey;
               const tabId = `${tabSetId}-tab-${index}`;
               const panelId = `${tabSetId}-panel`;
               return (
@@ -130,12 +131,15 @@ export default function ThreadSubagentWaitItem ({
                     ? " border-text text-text"
                     : " border-transparent text-muted hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text"}`}
                   id={tabId}
-                  key={entry.threadId}
-                  onClick={() => setSelectedThreadId(entry.threadId)}
+                  key={`${entry.targetKey}:${index}`}
+                  onClick={() => setSelectedTargetKey(entry.targetKey)}
                   role="tab"
                   type="button"
                 >
-                  <ThreadAgentName subagent={entry.subagent} thread={entry.thread} />
+                  <ThreadAgentName
+                    subagent={entry.subagent}
+                    thread={entry.thread ?? (entry.fallbackName ? { agentNickname: entry.fallbackName, agentRole: null } : null)}
+                  />
                 </button>
               );
             })}

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchSubagentCommand/parseWorkbenchSubagentCommand: parse semantic subagent actions, create metadata, ordered child thread IDs, and messages from wb commands. Keywords: workbench, cli, subagent, parse, create, metadata, thread ids, message.
+ * - WorkbenchSubagentCommand/WorkbenchSubagentCommandTarget/parseWorkbenchSubagentCommand: parse semantic subagent actions, create metadata, ordered id/name targets, and messages from wb commands. Keywords: workbench, cli, subagent, parse, create, target, message.
  * - WorkbenchThreadTitleCommand/parseWorkbenchThreadTitleCommand/isWorkbenchThreadTitleSetMatcherClaim: parse title set/get actions and identify standalone title-set displays. Keywords: workbench, cli, thread, title, parse, matcher.
  * - WorkbenchThreadStatusCommand/parseWorkbenchThreadStatusCommand/isWorkbenchThreadStatusMatcherClaim: parse completed/blocked task status actions and identify standalone successful displays. Keywords: workbench, cli, thread, status, task, matcher.
  * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb title, status, subagent, and reload commands. Keywords: workbench, cli, title, status, subagent, reload.
@@ -10,14 +10,19 @@ import type { CommandAction } from "../../../codex/generated/app-server/v2/Comma
 import { CommandMatcher } from "./core";
 import type { CommandMatcherDefinition } from "./types";
 
-export type WorkbenchSubagentCommandAction = "create" | "list" | "message" | "profiles" | "stop" | "wait";
+export type WorkbenchSubagentCommandAction = "create" | "list" | "message" | "profiles" | "settle" | "stop" | "wait";
+
+export interface WorkbenchSubagentCommandTarget {
+  kind: "id" | "name";
+  value: string;
+}
 
 export interface WorkbenchSubagentCommand {
   action: WorkbenchSubagentCommandAction;
   message: string | null;
   name: string | null;
   profileId: string | null;
-  threadIds: string[];
+  targets: WorkbenchSubagentCommandTarget[];
   title: string | null;
   toParent: boolean;
 }
@@ -30,7 +35,31 @@ export interface WorkbenchThreadStatusCommand {
   status: "blocked" | "completed";
 }
 
+function readPowerShellHereString(command: string, startIndex: number) {
+  const opener = command.slice(startIndex, startIndex + 2);
+  if (opener !== "@'" && opener !== '@"') return null;
+
+  let contentStart = startIndex + opener.length;
+  if (command.startsWith("\r\n", contentStart)) contentStart += 2;
+  else if (command[contentStart] === "\n") contentStart += 1;
+  else return null;
+
+  const terminatorPattern = opener === "@'"
+    ? /\r?\n'@(?=$|\s|[;&|"])/gu
+    : /\r?\n"@(?=$|\s|[;&|"])/gu;
+  terminatorPattern.lastIndex = contentStart;
+  const terminator = terminatorPattern.exec(command);
+  if (!terminator) return null;
+  return {
+    nextIndex: terminator.index + terminator[0].length,
+    value: command.slice(contentStart, terminator.index),
+  };
+}
+
 function readValue(command: string, startIndex: number) {
+  const hereString = readPowerShellHereString(command, startIndex);
+  if (hereString) return hereString;
+
   let index = startIndex;
   const quote = command[index] === "\"" || command[index] === "'" ? command[index++] : null;
   let value = "";
@@ -81,17 +110,36 @@ function hasBooleanFlag(command: string, flag: string) {
   return new RegExp(`(?:^|\\s)--${flag}(?=\\s|$|[;&|])`, "u").test(command);
 }
 
+function readSubagentTargets(command: string) {
+  const pattern = /(?:^|\s)--(id|name)(?:\s+|=)/gu;
+  const targets: WorkbenchSubagentCommandTarget[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(command))) {
+    const result = readValue(command, match.index + match[0].length);
+    if (result.value) {
+      targets.push({
+        kind: match[1] as WorkbenchSubagentCommandTarget["kind"],
+        value: result.value,
+      });
+    }
+    pattern.lastIndex = Math.max(pattern.lastIndex, result.nextIndex);
+  }
+  return targets;
+}
+
 function parseSingleWorkbenchSubagentCommand(command: string): WorkbenchSubagentCommand | null {
   const normalized = command.trim();
-  const actionMatch = normalized.match(/^wb(?:\.cmd)?\s+subagent\s+(list|profiles|create|wait|message|stop)\b/iu);
+  const actionMatch = normalized.match(/^wb(?:\.cmd)?\s+subagent\s+(list|profiles|create|wait|message|stop|settle)\b/iu);
   if (!actionMatch) return null;
   const action = actionMatch[1].toLowerCase() as WorkbenchSubagentCommandAction;
   return {
     action,
     message: readFlagValue(normalized, "message"),
-    name: readFlagValue(normalized, "name"),
+    name: action === "create" ? readFlagValue(normalized, "name") : null,
     profileId: readFlagValue(normalized, "profile"),
-    threadIds: readFlagValues(normalized, "id"),
+    targets: action === "message" || action === "settle" || action === "stop" || action === "wait"
+      ? readSubagentTargets(normalized)
+      : [],
     title: readFlagValue(normalized, "title"),
     toParent: hasBooleanFlag(normalized, "parent"),
   };
@@ -223,27 +271,33 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     match: ({ stage }) => {
       const command = parseWorkbenchSubagentCommand(stage.text);
       if (!command) return null;
-      const labels: Record<Exclude<WorkbenchSubagentCommandAction, "wait">, string> = {
+      const targetCount = command.targets.length;
+      const labels: Record<Exclude<WorkbenchSubagentCommandAction, "settle" | "stop" | "wait">, string> = {
         create: "Created subagent",
         list: "Listed subagents",
         message: "Messaged subagent",
         profiles: "Listed subagent profiles",
-        stop: "Stopped subagent",
       };
       const label = command.action === "message" && command.toParent
         ? "Messaged parent"
         : command.action === "wait"
-        ? command.threadIds.length > 1 ? `Waited for ${command.threadIds.length} subagents` : "Waited for subagent"
+        ? targetCount > 1 ? `Waited for ${targetCount} subagents` : "Waited for subagent"
+        : command.action === "stop"
+        ? targetCount > 1 ? `Stopped ${targetCount} subagents` : "Stopped subagent"
+        : command.action === "settle"
+        ? targetCount > 1 ? `Settled ${targetCount} subagents` : "Settled subagent"
         : labels[command.action];
       const ongoingLabel = command.action === "message" && command.toParent
         ? "Messaging parent"
         : command.action === "wait"
-        ? command.threadIds.length > 1 ? `Waiting for ${command.threadIds.length} subagents` : "Waiting for subagent"
+        ? targetCount > 1 ? `Waiting for ${targetCount} subagents` : "Waiting for subagent"
         : command.action === "create" ? "Creating subagent"
         : command.action === "list" ? "Listing subagents"
         : command.action === "message" ? "Messaging subagent"
         : command.action === "profiles" ? "Listing subagent profiles"
-        : "Stopping subagent";
+        : command.action === "settle"
+        ? targetCount > 1 ? `Settling ${targetCount} subagents` : "Settling subagent"
+        : targetCount > 1 ? `Stopping ${targetCount} subagents` : "Stopping subagent";
       return CommandMatcher.Result({
         ongoingSummaryParts: [CommandMatcher.Text(ongoingLabel)],
         remainingCommand: null,

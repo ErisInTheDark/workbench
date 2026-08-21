@@ -14,10 +14,12 @@ import ThreadSubagentUserMessage from "./ThreadSubagentUserMessage";
 
 export default function ThreadSubagentMessageItem ({
   children,
+  fallbackName,
   subagent,
   thread,
 }: {
   children: ReactNode;
+  fallbackName?: string | null;
   subagent?: WorkbenchSubagentSummary | null;
   thread?: ThreadPayload | null;
 }) {
@@ -27,7 +29,10 @@ export default function ThreadSubagentMessageItem ({
       contentClassName="mt-2 pl-6"
       summary={(
         <span>
-          Messaged <ThreadAgentName subagent={subagent} thread={thread} />
+          Messaged <ThreadAgentName
+            subagent={subagent}
+            thread={thread ?? (fallbackName ? { agentNickname: fallbackName, agentRole: null } : null)}
+          />
         </span>
       )}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"

@@ -14,7 +14,7 @@ type CommandItem = Extract<ThreadItem, { type: "commandExecution" }>;
 export interface ThreadSubagentWaitRenderEntry<Item = CommandItem> {
   item: Item;
   outcome: ThreadCommandExecutionOutcome;
-  threadIds: readonly string[];
+  targetKeys: readonly string[];
 }
 
 export interface ThreadSubagentWaitRenderGroup<Item = CommandItem> {
@@ -31,18 +31,18 @@ function compareStrings(left: string, right: string) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function getCanonicalThreadIds(threadIds: readonly string[]) {
-  return [...threadIds].sort(compareStrings);
+function getCanonicalTargetKeys(targetKeys: readonly string[]) {
+  return [...targetKeys].sort(compareStrings);
 }
 
 function hasIdenticalTargets<Item>(
   left: ThreadSubagentWaitRenderEntry<Item>,
   right: ThreadSubagentWaitRenderEntry<Item>,
 ) {
-  const leftIds = getCanonicalThreadIds(left.threadIds);
-  const rightIds = getCanonicalThreadIds(right.threadIds);
-  return leftIds.length === rightIds.length
-    && leftIds.every((threadId, index) => threadId === rightIds[index]);
+  const leftKeys = getCanonicalTargetKeys(left.targetKeys);
+  const rightKeys = getCanonicalTargetKeys(right.targetKeys);
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every((targetKey, index) => targetKey === rightKeys[index]);
 }
 
 function singleEntryGroup<Item>(entry: ThreadSubagentWaitRenderEntry<Item>): ThreadSubagentWaitRenderGroup<Item> {

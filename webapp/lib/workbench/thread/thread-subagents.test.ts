@@ -11,10 +11,12 @@ import {
   getSubagentSummary,
   getSubagentHarness,
   getSubagentThreadIds,
+  getWorkbenchSubagentCommandTargetKey,
   filterSubagentsByParentThreadId,
   filterSubagentThreadSummaries,
   mergeWorkbenchSubagentSummaries,
   reconcileWorkbenchSubagentPage,
+  resolveWorkbenchSubagentCommandTargets,
   getThreadAgentAccentColor,
   getThreadAgentLabelParts,
   getThreadAgentTabLabel,
@@ -54,6 +56,27 @@ test("derives child identity exclusively from durable summaries", () => {
     ] as never, new Set(["child"])).map(({ id }) => id),
     ["parent"],
   );
+});
+
+test("resolves command selectors without guessing reused subagent names", () => {
+  const reusedName = { ...subagent, lifecycle: { kind: "completed" as const, reason: "userCompleted" as const, settled: true }, threadId: "older-child" };
+  const targets = [
+    { kind: "id" as const, value: "child" },
+    { kind: "id" as const, value: "unknown-child" },
+    { kind: "name" as const, value: "MIMI" },
+    { kind: "name" as const, value: "Missing" },
+  ];
+
+  assert.deepEqual(resolveWorkbenchSubagentCommandTargets([subagent], targets), [
+    { fallbackName: null, subagent, targetKey: "id:child", threadId: "child" },
+    { fallbackName: null, subagent: null, targetKey: "id:unknown-child", threadId: "unknown-child" },
+    { fallbackName: "MIMI", subagent, targetKey: "name:mimi", threadId: "child" },
+    { fallbackName: "Missing", subagent: null, targetKey: "name:missing", threadId: null },
+  ]);
+  assert.deepEqual(resolveWorkbenchSubagentCommandTargets([subagent, reusedName], [targets[2]!]), [
+    { fallbackName: "MIMI", subagent: null, targetKey: "name:mimi", threadId: null },
+  ]);
+  assert.equal(getWorkbenchSubagentCommandTargetKey({ kind: "id", value: "Case-Sensitive" }), "id:Case-Sensitive");
 });
 
 test("filters durable summaries to direct children without changing their order", () => {
