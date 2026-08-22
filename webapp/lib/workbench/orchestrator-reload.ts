@@ -12,6 +12,7 @@ export const ORCHESTRATOR_RELOAD_SCOPES = [
   "orchestrator-logic",
   "browse-controller",
   "codex-bridge",
+  "mcp",
   "opencode-bridge",
   "opencode-server",
   "next-dev",
@@ -22,6 +23,7 @@ export const ORCHESTRATOR_ALL_RELOAD_SCOPES = [
   "orchestrator-logic",
   "browse-controller",
   "codex-bridge",
+  "mcp",
   "opencode-bridge",
   "next-dev",
 ] as const satisfies readonly OrchestratorReloadScope[];

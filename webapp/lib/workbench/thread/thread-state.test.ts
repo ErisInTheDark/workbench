@@ -282,10 +282,13 @@ test("delivered user input reactivates provider-owned terminal state without ove
   assert.deepEqual(reduceWorkbenchThreadLifecycle({ kind: "completed", reason: "providerInactive", settled: true }, delivered), reactivated);
 
   const userCompleted = reduceWorkbenchThreadLifecycle(completed, { kind: "userCompleted" });
-  const stopped = reduceWorkbenchThreadLifecycle(completed, { kind: "userStopped" });
+  const providerStopped = reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "interrupted", turnId: "old-turn" });
+  const userStopped = reduceWorkbenchThreadLifecycle(completed, { kind: "userStopped" });
   const pendingInput = reduceWorkbenchThreadLifecycle(working, { kind: "pendingInput", requestKey: "request", turnId: "old-turn" });
+  assert.equal(reduceWorkbenchThreadLifecycle(providerStopped, { kind: "userInputDelivered", turnId: "old-turn" }), providerStopped);
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(providerStopped, delivered), reactivated);
   assert.equal(reduceWorkbenchThreadLifecycle(userCompleted, delivered), userCompleted);
-  assert.equal(reduceWorkbenchThreadLifecycle(stopped, delivered), stopped);
+  assert.equal(reduceWorkbenchThreadLifecycle(userStopped, delivered), userStopped);
   assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, delivered), pendingInput);
 });
 

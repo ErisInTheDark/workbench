@@ -38,6 +38,7 @@ import { log, logError } from "./process-helpers";
 import ReloadableWorkbenchSubagentController, {
   type ReloadableWorkbenchSubagentControllerState,
 } from "./ReloadableWorkbenchSubagentController";
+import { withWorkbenchCodexMcpConfig } from "./workbench-codex-mcp-config";
 import { readWorkbenchPromptContext, WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
 import WorkbenchSubagentController, { type WorkbenchSubagentControllerOptions } from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
@@ -79,6 +80,7 @@ type CodexStdioBridgeOptions = {
   bridgeUrl: string;
   initialState?: CodexStdioBridgeReloadState;
   onNotification: (notification: JsonRpcNotification) => void;
+  prepareTurnStart?: (message: JsonRpcRequest) => Promise<void>;
   resolveProjectFromCwd: NonNullable<WorkbenchSubagentControllerOptions["resolveProjectFromCwd"]>;
   sendToClient: (client: BridgeClient, message: unknown) => void;
   storageRoot: string;
@@ -875,7 +877,7 @@ function toLegacyApprovalDecision(choice: ApprovalDecisionChoice): ReviewDecisio
     case "allow-session":
       return "approved_for_session";
     case "decline":
-      return "denied";
+      return { denied: { rejection: "User declined the request." } };
   }
 }
 
@@ -947,6 +949,7 @@ export default class CodexStdioBridge {
   private readonly appServer: CodexAppServer;
   private readonly bridgeUrl: string;
   private readonly onNotification: CodexStdioBridgeOptions["onNotification"];
+  private readonly prepareTurnStart: NonNullable<CodexStdioBridgeOptions["prepareTurnStart"]>;
   private readonly sendToClient: CodexStdioBridgeOptions["sendToClient"];
   private readonly storageRoot: string;
   private transcriptStore: CodexTranscriptStoreInstance | null = null;
@@ -981,10 +984,11 @@ export default class CodexStdioBridge {
   private readonly resolveProjectFromCwd: CodexStdioBridgeOptions["resolveProjectFromCwd"];
   private readonly subagentController: ReloadableWorkbenchSubagentController;
 
-  constructor({ appServer, bridgeUrl, initialState, onNotification, resolveProjectFromCwd, sendToClient, storageRoot, subagentStore = new WorkbenchSubagentStore(storageRoot), threadState }: CodexStdioBridgeOptions) {
+  constructor({ appServer, bridgeUrl, initialState, onNotification, prepareTurnStart = async () => undefined, resolveProjectFromCwd, sendToClient, storageRoot, subagentStore = new WorkbenchSubagentStore(storageRoot), threadState }: CodexStdioBridgeOptions) {
     this.appServer = appServer;
     this.bridgeUrl = bridgeUrl;
     this.onNotification = onNotification;
+    this.prepareTurnStart = prepareTurnStart;
     this.resolveProjectFromCwd = resolveProjectFromCwd;
     this.sendToClient = sendToClient;
     this.storageRoot = storageRoot;
@@ -1141,6 +1145,7 @@ export default class CodexStdioBridge {
   }
 
   async forwardRequest(message: JsonRpcRequest, client: BridgeClient, clientRequestId: number | string) {
+    if (message.method === "turn/start") await this.prepareTurnStart(message);
     await this.enqueueOperation(() => {
       this.assertAcceptingWork();
       return this.dispatchRequest(message, { client, clientRequestId });
@@ -1166,9 +1171,13 @@ export default class CodexStdioBridge {
     return await this.enqueueOperation(() => this.handleBridgeRequestImmediately(message));
   }
 
-  async handleServerRequest(message: JsonRpcRequest, options: { timeoutMs?: number } = {}): Promise<JsonRpcResponse> {
-    const controller = options.timeoutMs === undefined ? null : new AbortController();
+  async handleServerRequest(message: JsonRpcRequest, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<JsonRpcResponse> {
+    const controller = options.timeoutMs === undefined && !options.signal ? null : new AbortController();
+    const abortFromCaller = () => controller?.abort(options.signal?.reason);
+    if (options.signal?.aborted) abortFromCaller();
+    else options.signal?.addEventListener("abort", abortFromCaller, { once: true });
     const run = async () => {
+      if (message.method === "turn/start") await this.prepareTurnStart(message);
       const bridgeResponse = await this.handleBridgeRequest(message);
       if (bridgeResponse) return bridgeResponse;
       const dispatch = await this.enqueueOperation(() => {
@@ -1179,7 +1188,13 @@ export default class CodexStdioBridge {
       if (!dispatch.response) throw new Error(`Codex internal request ${message.method} did not create a response.`);
       return await dispatch.response;
     };
-    if (!controller || options.timeoutMs === undefined) return await run();
+    if (!controller || options.timeoutMs === undefined) {
+      try {
+        return await run();
+      } finally {
+        options.signal?.removeEventListener("abort", abortFromCaller);
+      }
+    }
 
     let timer: ReturnType<typeof setTimeout> | null = null;
     const deadline = new Promise<never>((_resolve, reject) => {
@@ -1194,6 +1209,7 @@ export default class CodexStdioBridge {
       return await Promise.race([run(), deadline]);
     } finally {
       if (timer) clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abortFromCaller);
     }
   }
 
@@ -1344,10 +1360,7 @@ export default class CodexStdioBridge {
       : readRequestSource(message);
     const method = typeof message.method === "string" ? message.method : null;
     const threadHydration = readThreadHydration(message);
-    const upstreamMessage = createUpstreamRequest(
-      await this.withWorkbenchPromptInstructions(message, method),
-      upstreamRequestId,
-    );
+    const upstreamMessage = createUpstreamRequest(await this.withWorkbenchPromptInstructions(message, method), upstreamRequestId);
 
     if (internal) {
       if (signal?.aborted) throw signal.reason;
@@ -1455,17 +1468,23 @@ export default class CodexStdioBridge {
       const developerInstructions = await workbenchPromptFiles.buildWorkbenchThreadUtilityDeveloperInstructions(promptContext);
       return {
         ...message,
-        params: buildWorkbenchOwnedDeveloperInstructionParams(params, filter(developerInstructions, "developerInstructions")),
+        params: withWorkbenchCodexMcpConfig(
+          buildWorkbenchOwnedDeveloperInstructionParams(params, filter(developerInstructions, "developerInstructions")),
+          this.bridgeUrl,
+        ),
       };
     }
 
     const promptInstructions = await workbenchPromptFiles.buildWorkbenchPromptInstructions(promptContext);
     return {
       ...message,
-      params: buildWorkbenchOwnedPromptParams(params, {
-        baseInstructions: filter(promptInstructions.baseInstructions, "baseInstructions"),
-        developerInstructions: filter(promptInstructions.developerInstructions, "developerInstructions"),
-      }),
+      params: withWorkbenchCodexMcpConfig(
+        buildWorkbenchOwnedPromptParams(params, {
+          baseInstructions: filter(promptInstructions.baseInstructions, "baseInstructions"),
+          developerInstructions: filter(promptInstructions.developerInstructions, "developerInstructions"),
+        }),
+        this.bridgeUrl,
+      ),
     };
   }
 

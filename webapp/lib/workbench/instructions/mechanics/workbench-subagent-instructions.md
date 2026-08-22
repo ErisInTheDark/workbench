@@ -1,77 +1,33 @@
-## Workbench Subagent CLI
+## Workbench Subagents
 
-Workbench owns subagents exclusively through the allowlisted `wb subagent` command suite. No other subagent tools are approved.
-Run every command from the intended project cwd; the CLI privately supplies that cwd and the current managed thread identity.
+Workbench owns subagents exclusively through the typed wb MCP subagent tools. No other subagent tools are approved.
 
-### Managing subagents
-`wb subagent list` lists every unsettled direct child.
+Run every call from the intended project cwd. Managed caller identity supplies the parent thread privately.
 
-`wb subagent list --settled [--cursor <cursor>] [--limit <1-20>]` lists settled history.
+### managing subagents
 
-`wb subagent profiles` lists profiles available to this thread. Use a profile ID only as the machine value for `--profile`. When talking to the user, always use the profile's user-facing `name`, never its ID.
+- `mcp__wb__subagent_list` lists unsettled direct children. Set `settled: true` for settled history and use its cursor and limit fields for pagination.
+- `mcp__wb__subagent_profiles` lists profiles available to this thread. Use a profile ID only as the machine value. Tell the user the profile's display name.
+- `mcp__wb__subagent_create` creates and starts a direct child. Supply `profileId`, a unique person-like `name`, a task `title`, and a self-contained `message`.
+- `mcp__wb__subagent_message` steers a direct child or parent. Select exactly one of `name`, `threadId`, or `parent`.
+- `mcp__wb__subagent_stop` stops selected direct children.
+- `mcp__wb__subagent_settle` settles completed or stopped direct children and releases their names.
 
-`wb subagent create --profile <profile-id> --name <name> --title <title> --message <message>` creates and starts a child. Every flag is required. Choose a unique, person-like name the user can use conversationally. Let your active agent identity influence the name, but do not use a task slug, role label, or operation codename; `--title` owns the task description. Workbench preserves display spelling and resolves names case-insensitively.
+Let the active agent identity influence child names. Do not use task slugs, role labels, operation codenames, or version suffixes for names. The title owns the task description.
 
-When replacing a superseded child, choose a new person-like name. Do not append `2`, `II`, or another version suffix to the old name.
+### waiting
 
-### Waiting for subagents
-`wb subagent wait --name <name> [--name <name>...]` waits until the first target needs attention, completes, or stops.
+`mcp__wb__subagent_wait` accepts any number of `names` and `threadIds` and returns when the first selected child needs attention, completes, or stops.
 
-Pass every active child in one wait command instead of building separate parallel waits. Treat the command as a blocking event wait, not as a polling primitive. Use a 25-minute shell timeout and keep the outer execution tool attached for the complete wait. A wait timeout cancels only that wait request, not any child turn.
+Pass every active child in one wait call. Treat it as a blocking event wait, not polling. Allow the outer tool execution to remain attached for up to 25 minutes. Do not hide waits behind generic sleeping, repeated polling, or separate concurrent waits.
 
-Do not hide waits behind `Promise.all`, let an outer wrapper yield into a cell and repeatedly poll that cell with generic `functions.wait`, or substitute generic sleeping or idling. Those shapes conceal child questionnaires and completions behind unrelated work.
+The wait tool is the only way to receive a child's final output. Do not leave children running without a later wait.
 
-Do not include pointless "anxiety commentary" between waits. We include a timeout on waits solely to allow user steers a chance to arrive. Workbench automatically combines waits in the log, but if you're interleaving waits with noisy commentary, this compression does not happen.
+### notes
 
-Use this command shape when `functions.exec` owns the shell call:
-
-````js
-// @exec: {"yield_time_ms": 1505000, "max_output_tokens": 5000}
-const result = await tools.shell_command({
-  command: "wb subagent wait --name <first-name> --name <second-name>",
-  workdir: "<project cwd>",
-  timeout_ms: 1500000,
-});
-text(result);
-````
-
-`wb subagent message --name <name> --message <message>` sends ordinary prose to an unsettled direct child as a steer. When no turn is active, it starts a new turn.
-
-`wb subagent message --parent --message <message>` lets a direct child send info to its direct parent.
-
-`wb subagent stop --name <name> [--name <name>...]` stops any number of unsettled direct children.
-
-`wb subagent settle --name <name> [--name <name>...]` settles Completed or Stopped children and releases their names for reuse.
-
-<shell:pwsh>
-For a multiline create or message value in PowerShell, use a literal single-quoted here-string:
-
-````powershell
-wb subagent message --name <name> --message @'
-first line
-second line
-'@
-````
-</shell:pwsh>
-
-<shell:bash>
-For a multiline create or message value in Bash, use a quoted heredoc:
-
-````bash
-wb subagent message --name <name> --message "$(cat <<'EOF'
-first line
-second line
-EOF
-)"
-````
-</shell:bash>
-
-The returned subagent ID is its thread ID and can be used with Workbench Thread Recall. You may operate only on direct children owned by the current thread; sideways and grandchild access fails closed.
-
-### Subagent notes & recipes
-- The wait command is the only way to receive a subagent's final output. Do not leave them hanging with no wait.
-- Without explicit instruction, subagents communicate through commentary (not visible to you). If you need to get preliminary info from a subagent before completion, ask it specifically to message you with what you need using the `wb subagent message --parent` command.
-- Subagents are entirely isolated, they do not inherit any context of the parent or sibling threads. Prompts must be self-contained. Do not poison subagents by telling them to do or not to do <thing they don't know anything about>, they WILL hallucinate.
-- Do not blindly trust subagent output. Subagents are often less intelligent models.
-- When you are orchestrating subagent review passes, you must orchestrate STRONGLY and DELIBERATELY against infinite review loops and scope creep. You are responsible for getting the implementation or plan to an acceptable state as defined by the user or project requirements in a reasonable time frame. If you don't plan, prompt, or implement effectively, subagents will continue to find additional work to do endlessly.
-
+- Subagents are isolated and do not inherit parent or sibling context. Give each child a self-contained message.
+- Without explicit instruction, child commentary is not visible to the parent. Ask a child to use `mcp__wb__subagent_message` with `parent: true` when preliminary information is required.
+- The returned subagent ID is its thread ID and can be used with Thread Recall.
+- A thread may operate only on direct children it owns. Sideways and grandchild access fails closed.
+- Do not blindly trust subagent output. The parent owns verification and scope control.
+- When orchestrating reviews, prevent infinite review loops and scope creep. The parent owns the acceptance threshold.

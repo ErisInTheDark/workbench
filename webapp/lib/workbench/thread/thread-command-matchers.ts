@@ -18,6 +18,7 @@
  * - getThreadCommandDisplay: unwrap shell launchers and describe common command patterns with staged shell matchers. Keywords: thread, command, matcher, shell.
  * - getThreadCommandBlockDisplay: aggregate multiple command displays into one grouped summary label. Keywords: thread, command, summary, aggregate.
  * - getThreadCommandExecutionOutcome/getThreadCommandOutcomeDisplay: classify command lifecycle results and select completed or ongoing structured grammar. Keywords: command, timeout, failure, tense.
+ * - getWorkbenchMcpCommandDisplay/getWorkbenchMcpCommandRoute: map recorded wb MCP calls into a simple summary or dedicated renderer operation. Keywords: workbench, MCP, command, rendering.
  * - ThreadCommandExecutionOutcome: semantic completed, ongoing, timeout, failure, or decline state for command summaries. Keywords: command, lifecycle, outcome.
  */
 
@@ -91,6 +92,11 @@ import {
     type WorkbenchThreadStatusCommand,
     WORKBENCH_CLI_COMMAND_MATCHERS,
 } from "./command-matchers/workbench-cli";
+import {
+    getWorkbenchMcpCommandDisplay,
+    getWorkbenchMcpCommandRoute,
+    shouldUseWorkbenchMcpSpecializedRenderer,
+} from "./command-matchers/workbench-mcp";
 
 type KnownCommandSummaryStatKey = Exclude<keyof ThreadCommandSummaryStats, "otherCommands">;
 
@@ -230,6 +236,8 @@ export {
     parseGitCheckpointDiffOutput,
     parseGitCheckpointProposalId, parseWorkbenchSubagentCommand, parseWorkbenchThreadStatusCommand, parseWorkbenchThreadTitleCommand
 };
+export { getWorkbenchMcpCommandDisplay, getWorkbenchMcpCommandRoute, shouldUseWorkbenchMcpSpecializedRenderer };
+export type { WorkbenchCommandRoute, WorkbenchSpecializedOperation } from "./command-matchers/workbench-command-rendering";
 export type {
     GitArcCommandAction,
     GitArcCommandIntent,

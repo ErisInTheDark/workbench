@@ -1,12 +1,13 @@
 /*
  * Exports:
  * - isManagedPromptThread: detect prompt contexts that belong to a managed Workbench thread. Keywords: instructions, thread, context.
- * - listWorkbenchInstructionMechanics: list CLI mechanics relevant to a prompt context. Keywords: instructions, mechanics, availability.
- * - buildWorkbenchBrowseInstructions: render fresh Browse CLI mechanics. Keywords: browse, instructions, CLI.
- * - buildWorkbenchGitInstructions: render fresh managed Git CLI mechanics. Keywords: git, instructions, CLI.
+ * - listWorkbenchInstructionMechanics: list typed Workbench mechanics relevant to a prompt context. Keywords: instructions, mechanics, availability.
+ * - buildWorkbenchBrowseInstructions: render fresh typed Browse mechanics. Keywords: browse, instructions, MCP.
+ * - buildWorkbenchGitInstructions: render fresh managed Git mechanics. Keywords: git, instructions, MCP.
  * - buildWorkbenchOrchestratorReloadInstructions: render fresh orchestrator reload mechanics. Keywords: orchestrator, reload, instructions.
- * - buildWorkbenchSubagentInstructions: render fresh subagent CLI mechanics. Keywords: subagent, instructions, CLI.
+ * - buildWorkbenchSubagentInstructions: render fresh typed subagent mechanics. Keywords: subagent, instructions, MCP.
  * - buildWorkbenchThreadRecallInstructions: render fresh current-thread recall mechanics. Keywords: thread, recall, instructions.
+ * - buildWorkbenchThreadResumeInstructions: render fresh current-thread resume mechanics. Keywords: thread, resume, instructions.
  * - buildThreadStatusInstructions: render fresh current-thread status mechanics. Keywords: thread, status, instructions.
  */
 
@@ -28,6 +29,7 @@ export function listWorkbenchInstructionMechanics(context: WorkbenchPromptContex
   if (isManagedPromptThread(context)) {
     available.add("thread-git");
     available.add("thread-recall");
+    available.add("thread-resume");
     available.add("thread-status");
     if (!context.subagentName?.trim()) available.add("thread-title");
   }
@@ -71,6 +73,12 @@ export function buildWorkbenchSubagentInstructions(context: WorkbenchPromptConte
 export function buildWorkbenchThreadRecallInstructions(context: WorkbenchPromptContext) {
   return isManagedPromptThread(context)
     ? readInstructionSource("mechanics/workbench-thread-recall-instructions.md")
+    : null;
+}
+
+export function buildWorkbenchThreadResumeInstructions(context: WorkbenchPromptContext) {
+  return isManagedPromptThread(context)
+    ? readInstructionSource("mechanics/workbench-thread-resume-instructions.md")
     : null;
 }
 

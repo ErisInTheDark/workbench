@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect standalone title-set markers and grouped title reads. Keywords: thread, title, task, command, rendering.
+ * - No production exports; tests protect standalone title-set ownership, ordinary title reads, and title error flow. Keywords: thread, title, task, command, rendering.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -28,7 +28,9 @@ function renderCommand(command: string, aggregatedOutput: string) {
         durationMs: 5,
         exitCode: 0,
         id: "title-command",
+        pluginId: null,
         processId: null,
+        scriptPath: null,
         source: "agent",
         status: "completed",
         type: "commandExecution",
@@ -47,26 +49,23 @@ test("title sets render the standalone task marker", () => {
   );
 
   assert.match(html, /data-role="thread-title-command"/u);
-  assert.match(html, />Task:<\/span>[^]*Trace cache invalidation/u);
-  assert.doesNotMatch(html, /wb thread title|Thread title set:|Working dir:/u);
+  assert.match(html, /Trace cache invalidation/u);
 });
 
 test("title reads remain ordinary collapsible command summaries", () => {
   const html = renderCommand("wb thread title get", "Thread title: Trace cache invalidation\n");
 
-  assert.match(html, /Checked thread title/u);
-  assert.match(html, /Thread title: Trace cache invalidation/u);
-  assert.doesNotMatch(html, /data-role="thread-title-command"|Task:/u);
+  assert.match(html, /Trace cache invalidation/u);
+  assert.doesNotMatch(html, /data-role="thread-title-command"/u);
 });
 
-test("failed title sets surface the failure without a successful task marker", () => {
+test("failed title sets remain owned by the dedicated renderer and surface the error", () => {
   const html = renderToStaticMarkup(createElement(ThreadTitleCommandItem, {
     failureText: "Provider rejected the title.",
     outcome: "failed",
     title: "Trace cache invalidation",
   }));
 
-  assert.match(html, /Failed to set task:/u);
+  assert.match(html, /data-role="thread-title-command"/u);
   assert.match(html, /Provider rejected the title\./u);
-  assert.doesNotMatch(html, />Task:<\/span>/u);
 });

@@ -1,4 +1,4 @@
-/* No production exports. Tests protect observation replay, request telemetry, reconciliation, persistence mutations, and stale publication fences. */
+/* No production exports. Tests protect headless ownership, MCP generation, observation replay, request telemetry, reconciliation, persistence mutations, and stale publication fences. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -75,7 +75,7 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, message: str
   }
 }
 
-test("observations are reference counted and warm snapshots do not duplicate reconciliation", async () => {
+test("UI subscribers share headless observation and warm snapshots without owning reconciliation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-state-"));
   const published: Array<{ connectionId: string; revision: number }> = [];
   let reconciliations = 0;
@@ -124,8 +124,9 @@ test("observations are reference counted and warm snapshots do not duplicate rec
   await controller.close("a");
   assert.equal(projectObservationStops, 0);
   await controller.close("b");
-  assert.equal(projectObservationStops, 1);
+  assert.equal(projectObservationStops, 0);
   await controller.dispose();
+  assert.equal(projectObservationStops, 1);
 });
 
 test("incomplete provider snapshots retain unseen rows until an authoritative snapshot arrives", async () => {
@@ -208,8 +209,9 @@ test("concurrent first opens share one project initialization and observation", 
   await controller.close("first");
   assert.equal(observationStops, 0);
   await controller.close("second");
-  assert.equal(observationStops, 1);
+  assert.equal(observationStops, 0);
   await controller.dispose();
+  assert.equal(observationStops, 1);
 });
 
 test("project-local thread state copies centrally without deleting or modifying legacy data", async () => {
@@ -262,13 +264,84 @@ test("project-local thread state copies centrally without deleting or modifying 
   assert.deepEqual(centralEntry?.entryKind === "draft" ? centralEntry.metadata : null, { archived: false, pinned: false, snoozed: false });
   assert.deepEqual(resolvedProjects, ["migrated"]);
   const stored = JSON.parse(await fs.readFile(statePath(storageRoot, "migrated"), "utf8")) as { version?: number };
-  assert.equal(stored.version, 2);
+  assert.equal(stored.version, 3);
   assert.deepEqual(JSON.parse(await fs.readFile(statePath(legacyRoot, "migrated"), "utf8")), { drafts: [migratedDraft], threads: [], version: 1 });
   assert.deepEqual(JSON.parse(await fs.readFile(statePath(centralWinsRoot, "central-wins"), "utf8")), { drafts: [staleDraft], threads: [], version: 1 });
-  assert.deepEqual(JSON.parse(await fs.readFile(statePath(storageRoot, "central-wins"), "utf8")), { drafts: [centralDraft], threads: [], version: 2 });
+  assert.deepEqual(JSON.parse(await fs.readFile(statePath(storageRoot, "central-wins"), "utf8")), { drafts: [centralDraft], records: [], version: 3 });
   assert.equal(await fs.readFile(path.join(centralWinsRoot, ".workbench", "keep.txt"), "utf8"), "keep");
   await controller.dispose();
   await Promise.all([storageRoot, legacyRoot, centralWinsRoot].map((root) => fs.rm(root, { force: true, recursive: true })));
+});
+
+test("headless provider state persists MCP generation without leaking internal fields into sidebar projection", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-headless-mcp-"));
+  const createController = () => new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async () => [],
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+  const providerEntry: Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> = {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "headless" },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Headless thread",
+  };
+
+  const controller = createController();
+  await controller.ensureProviderEntry("project", providerEntry);
+  await controller.setMcpGeneration("project", "codex", "headless", "epoch:2");
+  assert.equal(await controller.getMcpGeneration("project", "codex", "headless"), "epoch:2");
+  const projected = await controller.getSnapshot("project");
+  assert.equal(projected.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "headless"), true);
+  assert.equal(JSON.stringify(projected).includes("mcpGeneration"), false);
+  assert.equal(JSON.stringify(projected).includes("providerObserved"), false);
+  await controller.dispose();
+
+  const reopened = createController();
+  assert.equal(await reopened.getMcpGeneration("project", "codex", "headless"), "epoch:2");
+  await reopened.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
+test("v2 thread metadata migrates into hidden internal records with MCP freshness intact", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-v2-mcp-"));
+  const statePath = path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment("project")}.json`);
+  await fs.mkdir(path.dirname(statePath), { recursive: true });
+  await fs.writeFile(statePath, JSON.stringify({
+    drafts: [],
+    threads: [{
+      archived: false,
+      harness: "codex",
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
+      mcpGeneration: "legacy:4",
+      pinned: false,
+      snoozed: false,
+      threadId: "legacy-thread",
+      titleFallback: "Legacy thread",
+    }],
+    version: 2,
+  }), "utf8");
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async () => [],
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+
+  assert.equal(await controller.getMcpGeneration("project", "codex", "legacy-thread"), "legacy:4");
+  assert.equal((await controller.getSnapshot("project")).entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "legacy-thread"), false);
+  const stored = JSON.parse(await fs.readFile(statePath, "utf8")) as { records: Array<{ mcpGeneration?: string | null; providerObserved?: boolean }>; version?: number };
+  assert.equal(stored.version, 3);
+  assert.deepEqual(stored.records.map(({ mcpGeneration, providerObserved }) => ({ mcpGeneration, providerObserved })), [{ mcpGeneration: "legacy:4", providerObserved: false }]);
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
 });
 
 test("constructing and disposing does not enumerate projects or start migration", async () => {
@@ -346,7 +419,10 @@ test("a late project observer receives the best-known snapshot without starting 
   await controller.open("first", "project");
   const late = await controller.open("late", "project");
   const projectPublications = publications.filter((entry) => "updateKind" in entry.snapshot && entry.snapshot.updateKind === "project");
-  assert.deepEqual(projectPublications.map((entry) => ({ connectionId: entry.connectionId, revision: entry.snapshot.revision })), [{ connectionId: "late", revision: 7 }]);
+  assert.deepEqual(projectPublications.map((entry) => ({ connectionId: entry.connectionId, revision: entry.snapshot.revision })), [
+    { connectionId: "first", revision: 7 },
+    { connectionId: "late", revision: 7 },
+  ]);
   assert.equal(late.project?.revision, 7);
   assert.deepEqual(late.catalog, projectCatalog());
   assert.equal(currentUpdateReads, 2);
@@ -380,10 +456,10 @@ test("an observer joining before the first project snapshot receives the normal 
   await controller.dispose();
 });
 
-test("aborted background reconciliation never downgrades or blocks a warm reopen", async () => {
+test("background reconciliation survives UI disconnect and a warm reopen", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-warm-reopen-"));
   let reconciliationCount = 0;
-  let staleAccept: ((harness: "codex", entries: WorkbenchThreadSidebarEntry[]) => void) | null = null;
+  let staleAccept: ((harness: "codex", entries: WorkbenchThreadSidebarEntry[], options: { complete: boolean }) => void) | null = null;
   let releaseStale = () => undefined;
   const known = {
     activityAt: 1,
@@ -399,7 +475,7 @@ test("aborted background reconciliation never downgrades or blocks a warm reopen
     publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       reconciliationCount += 1;
-      if (reconciliationCount === 1 || reconciliationCount === 3) {
+      if (reconciliationCount === 1) {
         acceptProviderSnapshot("codex", [known], { complete: true });
         return [];
       }
@@ -421,12 +497,11 @@ test("aborted background reconciliation never downgrades or blocks a warm reopen
   const reopened = await controller.open("reopened", "project");
   assert.equal(reopened.sidebar.freshness, "fresh");
   assert.equal(reopened.sidebar.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "known"), true);
-  await waitFor(() => reconciliationCount === 3, "Reopened observation did not start a new reconciliation.");
+  assert.equal(reconciliationCount, 2);
 
-  staleAccept?.("codex", [{ ...known, identity: { harness: "codex", threadId: "stale" }, title: "Stale" }]);
+  staleAccept?.("codex", [{ ...known, identity: { harness: "codex", threadId: "stale" }, title: "Stale" }], { complete: true });
   releaseStale();
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal((await controller.getSnapshot("project")).entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "stale"), false);
+  await waitFor(async () => (await controller.getSnapshot("project")).entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "stale"), "Headless reconciliation did not publish after the UI reconnected.");
   await controller.dispose();
 });
 
@@ -521,7 +596,7 @@ test("draft priority survives autosave and controller restart without a storage 
   assert.equal(entry?.entryKind === "draft" ? entry.draft.prompt : null, "Updated priority draft");
   assert.deepEqual(entry?.entryKind === "draft" ? entry.metadata : null, { archived: false, pinned: true, snoozed: true });
   const stored = JSON.parse(await fs.readFile(path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment("project")}.json`), "utf8")) as { drafts: Array<{ pinned?: boolean; snoozed?: boolean }>; version?: number };
-  assert.equal(stored.version, 2);
+  assert.equal(stored.version, 3);
   assert.deepEqual(stored.drafts.map(({ pinned, snoozed }) => ({ pinned, snoozed })), [{ pinned: true, snoozed: true }]);
   await reopened.dispose();
 });
@@ -605,10 +680,10 @@ test("accepted intent survives provider discovery lag and releases after its lif
   await controller.observeActivity("codex", "provider");
   observed = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "provider");
   assert.equal(observed?.entryKind === "thread" ? observed.orderAt : null, 55);
-  const stored = JSON.parse(await fs.readFile(path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment("project")}.json`), "utf8")) as { drafts: unknown[]; threads: Array<{ orderAt?: number; threadId?: string }> };
+  const stored = JSON.parse(await fs.readFile(path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment("project")}.json`), "utf8")) as { drafts: unknown[]; records: Array<{ identity: { threadId: string }; orderAt?: number }> };
   assert.deepEqual(stored.drafts, []);
-  assert.equal(stored.threads.some((candidate) => candidate.threadId === "provider"), true);
-  assert.equal(stored.threads.find((candidate) => candidate.threadId === "provider")?.orderAt, 55);
+  assert.equal(stored.records.some((candidate) => candidate.identity.threadId === "provider"), true);
+  assert.equal(stored.records.find((candidate) => candidate.identity.threadId === "provider")?.orderAt, 55);
   providerEntries = [{
     activityAt: 999,
     entryKind: "thread",

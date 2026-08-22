@@ -10,5 +10,8 @@ Do not transform the user's stated architecture into unrelated options. If the u
 
 Use available harness tools before shell fallbacks when they are better suited to the task.
 
-If local browser, MCP, or computer-control features are unavailable in this harness, use the available alternatives and explain any meaningful limitation.
+Use typed `mcp__wb__...` tools for Workbench operations when they are available.
 
+The wb mcp commands are also available through the wb cli. use `wb --help` if the wb mcp commands are not available.
+
+If local browser, MCP, or computer-control features are unavailable in this harness, use the available alternatives and explain any meaningful limitation.

@@ -105,6 +105,12 @@ export function classifyCodexAppServerNotification(
         refreshThreads: true,
       });
 
+    case "thread/environment/connected":
+    case "thread/environment/disconnected":
+      return createHandling(notification, "thread", {
+        refreshThread: true,
+      });
+
     case "thread/goal/updated":
     case "thread/goal/cleared":
       return createHandling(notification, "thread", {
@@ -127,6 +133,7 @@ export function classifyCodexAppServerNotification(
     case "item/autoApprovalReview/completed":
     case "item/completed":
     case "rawResponseItem/completed":
+    case "rawResponse/completed":
     case "item/agentMessage/delta":
     case "item/plan/delta":
     case "command/exec/outputDelta":

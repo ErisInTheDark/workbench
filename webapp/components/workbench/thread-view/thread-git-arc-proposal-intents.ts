@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ThreadGitArcProposalTranscriptItem: associate one rendered proposal command with its receipt and editable message intent. Keywords: thread, git, arc, proposal, transcript.
- * - readThreadGitArcProposalTranscriptItem: read proposal identity and message intent through the same matcher path used by transcript rendering. Keywords: thread, command, proposal, intent.
+ * - readThreadGitArcProposalTranscriptItem/readThreadGitArcMcpProposalTranscriptItem: read CLI or MCP proposal identity and editable message intent. Keywords: thread, command, MCP, proposal, intent.
  * - default getThreadGitArcProposalIntents: index proposal message intents from the currently loaded transcript turns. Keywords: thread, git, arc, proposal, visible, intent.
  */
 
@@ -11,6 +11,7 @@ import type { GitArcReceipt } from "../../../lib/workbench/git/git-arc-receipts"
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import {
   getGitArcMatcherAction,
+  getWorkbenchMcpCommandRoute,
   getThreadCommandDisplay,
   parseGitArcReceipt,
   parseGitCheckpointCommitCommand,
@@ -18,8 +19,10 @@ import {
   type GitCheckpointCommitCommandIntent,
   type ThreadCommandDisplay,
 } from "../../../lib/workbench/thread/thread-command-matchers";
+import { formatToolCallOutput } from "./format-thread-tool-call";
 
 type CommandItem = Extract<ThreadItem, { type: "commandExecution" }>;
+type McpToolCallItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 
 export interface ThreadGitArcProposalTranscriptItem {
   intent: GitCheckpointCommitCommandIntent | null;
@@ -49,6 +52,29 @@ export function readThreadGitArcProposalTranscriptItem(
   };
 }
 
+export function readThreadGitArcMcpProposalTranscriptItem(
+  item: McpToolCallItem,
+): ThreadGitArcProposalTranscriptItem | null {
+  const route = getWorkbenchMcpCommandRoute({
+    argumentsValue: item.arguments,
+    server: item.server,
+    tool: item.tool,
+  });
+  if (route?.kind !== "specialized" || route.operation.kind !== "gitArc" || route.operation.operation.action !== "propose") {
+    return null;
+  }
+  const output = item.error?.message || formatToolCallOutput({
+    content: item.result?.content,
+    fallback: item.result?.structuredContent ?? item.result?._meta,
+  }) || "";
+  const receipt = parseGitArcReceipt(output);
+  return {
+    intent: route.operation.operation.proposalIntent ?? null,
+    proposalId: parseGitCheckpointProposalId(output) ?? receipt?.proposalId ?? null,
+    receipt,
+  };
+}
+
 export default function getThreadGitArcProposalIntents({
   knownSkills,
   projectRootPath,
@@ -63,15 +89,16 @@ export default function getThreadGitArcProposalIntents({
   const intents = new Map<string, GitCheckpointCommitCommandIntent>();
   for (const turn of turns) {
     for (const item of turn.items) {
-      if (item.type !== "commandExecution") continue;
-      const proposal = readThreadGitArcProposalTranscriptItem(item, getThreadCommandDisplay({
-        command: item.command,
-        commandActions: item.commandActions,
-        cwd: item.cwd,
-        knownSkills,
-        projectRootPath,
-        workspaceRoots,
-      }));
+      const proposal = item.type === "commandExecution"
+        ? readThreadGitArcProposalTranscriptItem(item, getThreadCommandDisplay({
+          command: item.command,
+          commandActions: item.commandActions,
+          cwd: item.cwd,
+          knownSkills,
+          projectRootPath,
+          workspaceRoots,
+        }))
+        : item.type === "mcpToolCall" ? readThreadGitArcMcpProposalTranscriptItem(item) : null;
       if (proposal?.proposalId && proposal.intent) intents.set(proposal.proposalId, proposal.intent);
     }
   }

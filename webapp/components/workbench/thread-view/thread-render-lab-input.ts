@@ -154,6 +154,8 @@ function createCommandExecutionItem(value: string | JsonObject, index: number): 
     aggregatedOutput: record ? readString(record, "aggregatedOutput") : null,
     exitCode: record ? readNumber(record, "exitCode") : 0,
     durationMs: record ? readNumber(record, "durationMs") : null,
+    pluginId: record ? readString(record, "pluginId") : null,
+    scriptPath: record ? readString(record, "scriptPath") : null,
   };
 }
 
@@ -200,6 +202,7 @@ function createWebSearchItem(record: JsonObject, index: number): WebSearchItem {
     id: readString(record, "id") ?? `lab-web-search-${index + 1}`,
     query: readString(record, "query") ?? "",
     action: null,
+    results: null,
   };
 }
 

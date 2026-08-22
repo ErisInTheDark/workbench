@@ -15,6 +15,7 @@ test("--all excludes both server-replacement scopes", () => {
   const allScopes: readonly string[] = ORCHESTRATOR_ALL_RELOAD_SCOPES;
   assert.equal(allScopes.includes("orchestrator-server"), false);
   assert.equal(allScopes.includes("opencode-server"), false);
+  assert.equal(allScopes.includes("mcp"), true);
 });
 
 test("normalization deduplicates known internal scopes", () => {

@@ -564,6 +564,7 @@ export class CopilotBridge {
       },
       rateLimitReachedType: null,
       secondary: null,
+      spendControlReached: null,
     };
   }
 
@@ -577,6 +578,7 @@ export class CopilotBridge {
       primary: null,
       rateLimitReachedType: null,
       secondary: null,
+      spendControlReached: null,
     };
   }
 

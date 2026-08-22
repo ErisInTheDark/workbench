@@ -16,17 +16,24 @@ function deferred<TValue>() {
   return { promise, resolve };
 }
 
-function createThreadResponse(threadId: string, turnId: string): ThreadReadResponse {
+function createThreadResponse(
+  threadId: string,
+  turnId: string,
+  items: ThreadReadResponse["thread"]["turns"][number]["items"] = [],
+): ThreadReadResponse {
   return {
     thread: {
       agentNickname: null,
       agentRole: null,
+      canAcceptDirectInput: null,
       cliVersion: "test",
       createdAt: 0,
       cwd: "C:/workspace",
       ephemeral: false,
+      extra: null,
       forkedFromId: null,
       gitInfo: null,
+      historyMode: "legacy",
       id: threadId,
       modelProvider: "test",
       name: null,
@@ -34,6 +41,8 @@ function createThreadResponse(threadId: string, turnId: string): ThreadReadRespo
       path: null,
       preview: "",
       recencyAt: null,
+      section: null,
+      sectionEnteredAt: null,
       sessionId: "session-1",
       source: "appServer",
       status: { activeFlags: [], type: "active" },
@@ -43,7 +52,7 @@ function createThreadResponse(threadId: string, turnId: string): ThreadReadRespo
         durationMs: null,
         error: null,
         id: turnId,
-        items: [],
+        items,
         itemsView: "full",
         startedAt: 0,
         status: "inProgress",
@@ -86,6 +95,35 @@ test("records one thread's deferred results in emission order", async () => {
 
   assert.deepEqual(recorded.map((entry) => entry.action), ["first", "second"]);
   assert.deepEqual(recorded.map((entry) => entry.turnId), ["turn-1", "turn-1"]);
+});
+
+test("attaches Browse sidecars to the active wb MCP Browse item", async () => {
+  const recorded: WorkbenchBrowseResultEntry[] = [];
+  const response = createThreadResponse("thread-1", "turn-1", [{
+    appContext: null,
+    arguments: { commands: ["snapshot --compact"] },
+    durationMs: null,
+    error: null,
+    id: "mcp-browse-1",
+    pluginId: null,
+    readOnlyHint: false,
+    result: null,
+    server: "wb",
+    status: "inProgress",
+    tool: "browse_run",
+    type: "mcpToolCall",
+  }]);
+  const controller = new WorkbenchBrowseResultController({
+    logError: () => undefined,
+    readThread: async () => response,
+    recordResult: async (entry) => { recorded.push(entry); },
+    steerTurn: async () => null,
+  });
+
+  controller.record(createEvent("snapshot"));
+  await controller.waitForIdle();
+
+  assert.equal(recorded[0]?.commandItemId, "mcp-browse-1");
 });
 
 test("logs background metadata failures without rejecting Browse execution", async () => {

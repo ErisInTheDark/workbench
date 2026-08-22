@@ -15,11 +15,13 @@ import { promisify } from "node:util";
 import WorkbenchAgentCommandController from "../../../orchestrator/WorkbenchAgentCommandController.ts";
 import WorkbenchAgentCliEnvironment from "../../../orchestrator/WorkbenchAgentCliEnvironment.ts";
 import {
+  listWorkbenchAgentCliCommandDescriptors,
   parseWorkbenchAgentCliCommand,
   type WorkbenchAgentCliRequest,
 } from "./workbench-agent-cli-commands.ts";
 import { adaptWorkbenchAgentCliResponse } from "./workbench-agent-cli-responses.ts";
 import { parseGitArcReceipt } from "../git/git-arc-receipts.ts";
+import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry.ts";
 
 const execFileAsync = promisify(execFile);
 const gitArcOptions = { callerThreadId: "thread-1", cwd: "C:/workspace" };
@@ -30,6 +32,19 @@ let origin = "";
 let server: http.Server;
 let temporaryDirectoryPath = "";
 let reloadStatusReadCount = 0;
+
+test("canonical command descriptors are immutable and unique", () => {
+  const descriptors = listWorkbenchAgentCliCommandDescriptors();
+  const definitions = listWorkbenchAgentCommands();
+  assert.ok(descriptors.length > 0);
+  assert.equal(descriptors.length, definitions.length);
+  assert.equal(new Set(descriptors.map(({ words }) => words.join(" "))).size, descriptors.length);
+  assert.ok(descriptors.every(({ description, usage, words }) => description && usage.startsWith("wb ") && words.length > 0));
+  assert.equal(Object.isFrozen(descriptors), true);
+  assert.equal(Object.isFrozen(descriptors[0]), true);
+  assert.equal(Object.isFrozen(descriptors[0]?.words), true);
+  assert.equal(definitions.find(({ words }) => words.join(" ") === "browse raw")?.hideFromMcp, true);
+});
 
 before(async () => {
   server = http.createServer((request, response) => {
@@ -97,6 +112,15 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     method: "POST",
     path: "/api/thread-title",
     responseKind: "thread-title-get",
+  });
+
+  const resume = await parseWorkbenchAgentCliCommand(["thread", "resume"], { callerThreadId: "thread/1", cwd: "C:/workspace" });
+  assert.equal(resume.kind, "request");
+  assert.deepEqual(resume.request, {
+    body: { callerThreadId: "thread/1", cwd: "C:/workspace" },
+    method: "POST",
+    path: "/api/thread-resume",
+    responseKind: "thread-resume",
   });
 
   const recall = await parseWorkbenchAgentCliCommand([
@@ -648,13 +672,13 @@ test("expands safe reload all without server replacement and keeps hard restart 
   const parsed = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--all"]);
   assert.equal(parsed.kind, "request");
   assert.deepEqual(parsed.request.body, {
-    scopes: ["orchestrator-logic", "browse-controller", "codex-bridge", "opencode-bridge", "next-dev"],
+    scopes: ["orchestrator-logic", "browse-controller", "codex-bridge", "mcp", "opencode-bridge", "next-dev"],
   });
   const explicitServer = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--all", "--opencode-server"]);
   assert.equal(explicitServer.kind, "request");
   if (explicitServer.kind === "request") {
     assert.deepEqual(explicitServer.request.body, {
-      scopes: ["orchestrator-logic", "browse-controller", "codex-bridge", "opencode-bridge", "next-dev", "opencode-server"],
+      scopes: ["orchestrator-logic", "browse-controller", "codex-bridge", "mcp", "opencode-bridge", "next-dev", "opencode-server"],
     });
   }
   const hard = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--hard"]);
@@ -814,6 +838,7 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     stderr: "",
     stdout: "Thread title: Current task\n",
   });
+  assert.equal(adapt("thread-resume", { accepted: true }).stdout, "Thread resume scheduled.\n");
   const planRef = "a".repeat(40);
   const successorRef = "b".repeat(40);
   const planResponse = adapt("git-arc-plan", {

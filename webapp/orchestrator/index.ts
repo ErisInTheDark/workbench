@@ -57,6 +57,7 @@ import OrchestratorFeatureHost from "./OrchestratorFeatureHost";
 import { createOrchestratorFeatureModuleLoader } from "./orchestrator-feature-loader";
 import type { OrchestratorFeatureContext, OrchestratorFeatures, OrchestratorProviderNotification } from "./orchestrator-feature-registry";
 import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
+import WorkbenchCodexMcpGenerationController from "./WorkbenchCodexMcpGenerationController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
@@ -154,6 +155,7 @@ let codexRecoverySupervisor: CodexRecoverySupervisor;
 let controlledRestartPending = false;
 const codexBridgeTransitionController = new CodexBridgeTransitionController();
 const turnRecoveryHandoffStore = new WorkbenchTurnRecoveryHandoffStore(PROJECT_ROOT);
+const codexMcpGenerationController = new WorkbenchCodexMcpGenerationController();
 const turnRecoveryController = new WorkbenchTurnRecoveryController(
   turnRecoveryHandoffStore,
   (message) => log("turn-recovery", message),
@@ -450,6 +452,7 @@ function createOrchestratorFeatureContext(): OrchestratorFeatureContext {
     publishThreadState,
     requestHarness: requestLiveHarness,
     requestSubagent: (request) => requestLiveHarness("codex", request),
+    requestThreadResume,
     subagentStore,
     threadTransitions: threadTransitionCoordinator,
   };
@@ -586,6 +589,15 @@ function createSubagentThreadStatePort() {
   };
 }
 
+async function requestThreadResume(harness: "codex" | "opencode", threadId: string) {
+  const { candidate, handoff } = await turnRecoveryController.persistManualResume(harness, threadId);
+  setImmediate(() => {
+    void turnRecoveryController.recover([candidate], recoverTurnCandidate, handoff).catch((error) => {
+      logError("turn-recovery", `Manual resume failed outside the recovery boundary: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  });
+}
+
 function resolveProjectFromCurrentCatalog(
   cwd: string | null | undefined,
   options: { endpointName?: string } = {},
@@ -604,6 +616,22 @@ async function requestLiveHarness(harness: HarnessKind, request: JsonRpcRequest)
     await ensureCodexReady();
     return await codexBridge.handleServerRequest(request);
   });
+}
+
+async function prepareCodexTurnStart(request: JsonRpcRequest) {
+  const params = asRecord(request.params);
+  const threadId = typeof params?.threadId === "string" ? params.threadId.trim() : "";
+  if (!threadId) throw new Error("Codex turn/start requires a thread id before MCP freshness can be checked.");
+  const state = await featureHost.run("threadState", (feature) => feature.getCodexMcpState(threadId));
+  const generation = await codexMcpGenerationController.prepare(state.generation, async () => {
+    const response = await requestLiveHarness("codex", {
+      id: `workbench:mcp-refresh:${codexMcpGenerationController.generation}`,
+      method: "config/mcpServer/reload",
+      params: null,
+    });
+    if (response.error) throw new Error(response.error.message);
+  });
+  await featureHost.run("threadState", (feature) => feature.setManagedCodexMcpGeneration(state.projectId, threadId, generation));
 }
 
 async function requestLiveCodexWithDeadline(request: JsonRpcRequest, timeoutMs = CODEX_HEALTH_REQUEST_TIMEOUT_MS) {
@@ -784,6 +812,7 @@ function createCodexBridge() {
     onNotification: (notification) => {
       broadcastToClients("codex", notification);
     },
+    prepareTurnStart: prepareCodexTurnStart,
     resolveProjectFromCwd: resolveProjectFromCurrentCatalog,
     sendToClient: (client, message) => {
       sendJsonToClient(client, message);
@@ -1044,11 +1073,11 @@ function queueReload(scopes: OrchestratorReloadScope[]) {
     void (async () => {
       try {
         const shouldRestartOpenCodeServer = scopes.includes("opencode-server");
-        if (scopes.includes("orchestrator-logic") || shouldRestartOpenCodeServer) {
+        if (scopes.includes("orchestrator-logic") || scopes.includes("mcp") || shouldRestartOpenCodeServer) {
           await reloadOrchestratorLogic();
         }
 
-        if (scopes.includes("orchestrator-logic") || scopes.includes("browse-controller") || scopes.includes("codex-bridge") || scopes.includes("opencode-bridge") || shouldRestartOpenCodeServer) {
+        if (scopes.includes("orchestrator-logic") || scopes.includes("browse-controller") || scopes.includes("codex-bridge") || scopes.includes("mcp") || scopes.includes("opencode-bridge") || shouldRestartOpenCodeServer) {
           await ensureWorkbenchPromptFiles();
         }
 
@@ -1072,6 +1101,10 @@ function queueReload(scopes: OrchestratorReloadScope[]) {
 
           restartChild(nextSpec);
           log("orchestrator", "queued Next.js dev restart");
+        }
+        if (scopes.includes("mcp")) {
+          const generation = codexMcpGenerationController.bump();
+          log("orchestrator", `advanced wb MCP generation to ${generation}`);
         }
         finalizeReloadResponse(startedAt, {
           completedAt: Date.now(),

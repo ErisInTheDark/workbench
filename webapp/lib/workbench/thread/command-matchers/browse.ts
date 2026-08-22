@@ -6,15 +6,17 @@
  */
 import { CommandMatcher } from "./core";
 import { tokenizeCommand } from "./helpers";
-import type { CommandMatcherDefinition, ThreadCommandDetailRow, ThreadCommandDisplayPart } from "./types";
+import type { CommandMatcherDefinition, ThreadCommandDetailRow } from "./types";
+import {
+  getWorkbenchCommandRendering,
+  type WorkbenchCommandPresentationName,
+} from "./workbench-command-rendering";
 
 const BROWSE_MATCHER_ID = "browse.command";
 
-interface BrowseCommandSummary {
-  detailRows?: ThreadCommandDetailRow[];
-  ongoingSummaryParts: ThreadCommandDisplayPart[];
-  session: string | null;
-  summaryParts: ThreadCommandDisplayPart[];
+interface BrowseCommandPresentation {
+  argumentsValue: { [key: string]: string | string[] };
+  name: WorkbenchCommandPresentationName;
 }
 
 export const BROWSE_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
@@ -24,25 +26,16 @@ export const BROWSE_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       if (summaryParts.length) {
         return null;
       }
-      const summary = summarizeBrowseCommand(stage.text);
-      if (!summary) {
+      const presentation = parseBrowseCommandPresentation(stage.text);
+      if (!presentation) {
         return null;
       }
-      return CommandMatcher.Result({
-        detailRows: summary.detailRows,
-        hideCommandCwd: true,
-        hideCommandOutput: true,
-        ongoingSummaryParts: summary.ongoingSummaryParts,
-        remainingCommand: null,
-        stop: true,
-        summaryParts: summary.summaryParts,
-        summaryStats: { webRequests: 1 },
-      });
+      return getWorkbenchCommandRendering(presentation.name, presentation.argumentsValue)?.result ?? null;
     },
   }),
 ];
 
-function summarizeBrowseCommand(commandText: string): BrowseCommandSummary | null {
+function parseBrowseCommandPresentation(commandText: string): BrowseCommandPresentation | null {
   const tokens = tokenizeCommand(commandText.trim());
   if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "") || tokens[1] !== "browse") {
     return null;
@@ -53,39 +46,30 @@ function summarizeBrowseCommand(commandText: string): BrowseCommandSummary | nul
     const commands = readRepeatedFlag(tokens, "--command");
     const scriptPath = readFlag(tokens, "--script-path");
     const summary = readFlag(tokens, "--summary");
-    const detailRows = commands.map((command, index) => buildBrowseDetailRow(command, index));
-    const summaryParts: ThreadCommandDisplayPart[] = summary
-      ? [CommandMatcher.Text("Browse: "), primary(summary)]
-      : scriptPath
-        ? [CommandMatcher.Text("Browse: run script "), CommandMatcher.Code(scriptPath)]
-        : [CommandMatcher.Text(`Browse: run ${commands.length} ${pluralize(commands.length, "action")}`)];
-    const ongoingSummaryParts: ThreadCommandDisplayPart[] = summary
-      ? [CommandMatcher.Text("Browsing: "), primary(summary)]
-      : scriptPath
-        ? [CommandMatcher.Text("Browsing: running script "), CommandMatcher.Code(scriptPath)]
-        : [CommandMatcher.Text(`Browsing: running ${commands.length} ${pluralize(commands.length, "action")}`)];
-    appendSession(summaryParts, session);
-    appendSession(ongoingSummaryParts, session);
-    return { detailRows, ongoingSummaryParts, session, summaryParts };
+    return {
+      argumentsValue: {
+        commands,
+        ...(scriptPath ? { scriptPath } : {}),
+        ...(session ? { session } : {}),
+        ...(summary ? { summary } : {}),
+      },
+      name: "browse_run",
+    };
   }
   if (operation === "raw") {
     const separator = tokens.indexOf("--");
-    const rawAction = separator >= 0 ? tokens[separator + 1] : null;
-    const summaryParts = [CommandMatcher.Text(`Browse: ${formatBrowseAction(rawAction ?? "raw")}`)];
-    const ongoingSummaryParts = [CommandMatcher.Text(`Browsing: running ${formatBrowseAction(rawAction ?? "raw")}`)];
+    const rawAction = separator >= 0 ? tokens[separator + 1] ?? "raw" : "raw";
     const resolvedSession = session || readFlag(tokens.slice(separator + 1), "--session");
-    appendSession(summaryParts, resolvedSession);
-    appendSession(ongoingSummaryParts, resolvedSession);
-    return { ongoingSummaryParts, session, summaryParts };
+    return {
+      argumentsValue: { rawAction, ...(resolvedSession ? { session: resolvedSession } : {}) },
+      name: "browse_raw",
+    };
   }
   if (["sessions", "stop", "forget"].includes(operation)) {
-    const label = operation === "sessions" ? "list sessions" : operation === "stop" ? "stop session" : "forget persistent profile";
-    const summaryParts = [CommandMatcher.Text(`Browse: ${label}`)];
-    const ongoingLabel = operation === "sessions" ? "listing sessions" : operation === "stop" ? "stopping session" : "forgetting persistent profile";
-    const ongoingSummaryParts = [CommandMatcher.Text(`Browsing: ${ongoingLabel}`)];
-    appendSession(summaryParts, session);
-    appendSession(ongoingSummaryParts, session);
-    return { ongoingSummaryParts, session, summaryParts };
+    return {
+      argumentsValue: { ...(session ? { session } : {}) },
+      name: `browse_${operation}` as WorkbenchCommandPresentationName,
+    };
   }
   return null;
 }
@@ -104,80 +88,6 @@ function readRepeatedFlag(tokens: string[], flag: string) {
     }
   }
   return values;
-}
-
-function buildBrowseDetailRow(command: string, index: number): ThreadCommandDetailRow {
-  const tokens = tokenizeCommand(command) ?? [command];
-  const action = tokens[0] ?? "command";
-  const targetText = readBrowseTarget(action, tokens.slice(1));
-  return {
-    id: `browse-command-${index}`,
-    label: formatBrowseActionLabel(action),
-    summaryParts: [CommandMatcher.Text(formatBrowseActionLabel(action))],
-    ...(targetText
-      ? {
-        target: {
-          kind: looksLikeUrl(targetText) ? "url" as const : "code" as const,
-          text: targetText,
-        },
-      }
-      : {}),
-  };
-}
-
-function readBrowseTarget(action: string, args: string[]) {
-  if (["open", "click", "fill", "get", "is", "highlight", "select", "eval", "wait"].includes(action)) {
-    return args.filter((value) => !value.startsWith("--"))[0] ?? null;
-  }
-  if (["mouse", "move"].includes(action)) {
-    return args.join(" ") || null;
-  }
-  return null;
-}
-
-function formatBrowseActionLabel(action: string) {
-  const labels: Record<string, string> = {
-    cleanup: "Clean up",
-    click: "Click",
-    doctor: "Diagnostics",
-    eval: "Evaluate",
-    fill: "Fill",
-    forget: "Forget persistent profile",
-    get: "Read",
-    highlight: "Highlight",
-    is: "Check",
-    key: "Press key",
-    open: "Open",
-    refs: "Refs",
-    reload: "Reload",
-    screenshot: "Screenshot",
-    select: "Select",
-    snapshot: "Snapshot",
-    status: "Status",
-    stop: "Stop",
-    type: "Type",
-    viewport: "Viewport",
-    wait: "Wait",
-  };
-  return labels[action] ?? action.replace(/[-_]+/gu, " ").replace(/^./u, (character) => character.toUpperCase());
-}
-
-function formatBrowseAction(action: string) {
-  return formatBrowseActionLabel(action).toLowerCase();
-}
-
-function appendSession(parts: ThreadCommandDisplayPart[], session: string | null) {
-  if (session) {
-    parts.push(CommandMatcher.Text(" in "), CommandMatcher.Code(session));
-  }
-}
-
-function primary(text: string): ThreadCommandDisplayPart {
-  return { text, type: "text", variant: "primary" };
-}
-
-function looksLikeUrl(value: string) {
-  return /^https?:\/\//iu.test(value);
 }
 
 export function isBrowseCommandMatcherClaim(value: string | null | undefined) {
@@ -269,8 +179,4 @@ function readFirstJsonObject(value: string) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function pluralize(count: number, singular: string) {
-  return count === 1 ? singular : `${singular}s`;
 }

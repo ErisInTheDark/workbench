@@ -40,7 +40,7 @@ Browser work is opt-in. Use `/browse` only when the user, project guidance, or a
 
 `/browse` is the only allowed browser automation mechanism. Do not use a competing browser automation tool, MCP server, CLI, plugin, or other mechanism. When Browse is inactive, use no browser automation.
 
-Without activation, do not invoke `/browse` or run any `wb browse` command. This includes checking availability, listing or inspecting sessions, and session-management or cleanup commands.
+Without activation, do not invoke `/browse` or call any `mcp__wb__browse_...` tool. This includes checking availability, listing or inspecting sessions, and session-management or cleanup calls.
 
 UI/frontend work, visual changes, tool availability, session availability, convenience, visual confirmation, and confidence gains do not activate Browse. If it is impossible to figure out the problem without browser work, explain the exact blocker and use a questionnaire to ask the user to activate Browse. Browse remains inactive unless the user explicitly activates it in response. More confidence does not make browser work necessary.
 
@@ -153,7 +153,7 @@ For any plan that would edit files:
 
 1. Identify the exact existing files you plan to edit.
 2. Confirm that Workbench Git plan/arc instructions are available.
-3. Create the named plan through `wb git arc plan -m <short-intent> -- <exact-path> [...]`. Dirty active-claimed paths can be ordinary plan paths. Use `--adopt <dirty-path>` only for intentional dirty unclaimed paths.
+3. Create the named plan through `mcp__wb__git_arc_plan` with the exact paths and a short intent. Dirty active-claimed paths can be ordinary plan paths. Use `adoptPaths` only for intentional dirty unclaimed paths.
 4. Treat the returned SHA as the current arc ref.
 5. Keep that exact ref privately available for later drift checks.
 6. In the user-facing plan, name the planned edit files, but do not print arc-ref details unless they are needed to explain a problem.
@@ -164,15 +164,15 @@ If the exact edit set is still unknown, do not present an implementation plan. P
 
 If the approved touch set changes later, return to Brief mode and present one complete revised plan rather than an addendum. Ask for approval again.
 
-After the revised plan names its exact edit set, make the inactive Git plan ref match that path set with `wb git arc plan add`, `plan remove`, or `plan adopt`. Revising the user-visible plan does not by itself require replacing the Git plan ref. Use active `arc add` only after approval in Implement mode.
+After the revised plan names its exact edit set, make the inactive Git plan ref match with `mcp__wb__git_arc_plan_add`, `mcp__wb__git_arc_plan_remove`, or `mcp__wb__git_arc_plan_adopt`. Revising the user-visible plan does not by itself require replacing the Git plan ref. Use the active-arc add tool only after approval in Implement mode.
 
 #### Before the first edit in Implement mode
 
 After the user explicitly approves the current plan:
 
 1. Enter Implement mode.
-2. If this is the inactive plan's first Implement pass, run `wb git arc start`, or use `--ref <plan-ref>` for an exact plan. Record the returned active ref and its released/acquired claims.
-3. If the same implementation arc is already active, do not rerun `arc start`. Run `wb git arc continue --ref <current-ref>` directly before another implementation pass; continuation owns the committed-baseline and claimed-path checks.
+2. If this is the inactive plan's first Implement pass, call `mcp__wb__git_arc_start`, optionally with an exact `ref`. Record the returned active ref and its released/acquired claims.
+3. If the same implementation arc is already active, do not start it again. Call `mcp__wb__git_arc_continue` with the current ref before another implementation pass. Continuation owns the committed-baseline and claimed-path checks.
 4. Treat the required arc command's result as authoritative before editing.
 
 Use this table:
@@ -180,7 +180,7 @@ Use this table:
 | Arc result | Action |
 | --- | --- |
 | Success | Record the returned active ref and proceed. Do not run a supplementary workspace-state inspection. |
-| Planned paths changed after approval | Stop. Run the reported scoped diagnostic. If the plan still fits, stay in Implement mode. Run `wb git arc plan start -m <intent> -- <same-approved-path> [...]`. Keep approval. Return to Brief only if the plan changed. |
+| Planned paths changed after approval | Stop. Run the reported scoped diagnostic. If the plan still fits, stay in Implement mode. Call `mcp__wb__git_arc_plan_start` with the same intent and approved paths. Keep approval. Return to Brief only if the plan changed. |
 | Claim overlap, incompatible HEAD movement, unexplained dirt, or another unsafe rejection | Stop. Inspect the reported condition. Do not steal, clean, restore, or overwrite work. Return to Brief if safe recovery changes the plan. |
 | Command cannot run, or its result cannot be confidently interpreted | Stop before editing. Report degraded arc safety. Continue only if the user explicitly approves degraded safety. |
 
@@ -194,17 +194,17 @@ Preserve unrelated user or agent changes.
 
 Keep the current arc ref for explicit start, post-commit continuation, and restore. Active-registry commands resolve the caller's current arc without a ref.
 
-Before follow-up work on the same claimed files, run `wb git arc continue --ref <current-ref>`. Proposal acceptance releases clean claims immediately. When dirty work remains, continuation returns the already-created narrowed successor. If it reports `Accepted commit proposals`, read every proposal ID and commit SHA; the arc is resolved with no live claims or is a legacy arc that failed closed. If the approved plan is unchanged, run `wb git arc plan start -m <intent> -- <explicit-next-path> [...]`. If it changed, return to Brief and create an ordinary plan that includes every still-dirty claimed file.
+Before follow-up work on the same claimed files, call `mcp__wb__git_arc_continue` with the current ref. Proposal acceptance releases clean claims immediately. When dirty work remains, continuation returns the already-created narrowed successor. If it reports accepted commit proposals, read every proposal ID and commit SHA. If the approved plan is unchanged, call `mcp__wb__git_arc_plan_start` with the explicit next paths. If it changed, return to Brief and create an ordinary plan that includes every still-dirty claimed file.
 
-When approved work moves paths, use `wb git arc mv`. It automatically keeps the source and destination claimed without changing the ordinary Git index. Explicit operands and repeated `--map <source> <destination>` pairs apply immediately. Regex mode previews at most 200 sorted mappings; repeat it with `--confirm`, then preview again if more matches remain. Record the returned successor ref.
+When approved work moves paths, use `mcp__wb__git_arc_mv`. It keeps source and destination claimed without changing the ordinary Git index. Its `move` input accepts operands, source/destination mappings, or regex preview and confirmation. Record the returned successor ref.
 
-After approval and continuation, use `wb git arc add -- <additional-path> [...]` for approved new clean paths. Use `wb git arc adopt -- <dirty-path> [...]` for approved existing workspace changes. Never run these active-arc commands during Brief or Decision, and never repeat claimed paths. Each command checks the claimed baseline and returns a successor. Remember the newest ref.
+After approval and continuation, use `mcp__wb__git_arc_add` for approved new clean paths and `mcp__wb__git_arc_adopt` for approved existing workspace changes. Never call these active-arc tools during Brief or Decision, and never repeat claimed paths. Each call checks the claimed baseline and returns a successor. Remember the newest ref.
 
-When approved work no longer owns exact claimed entries, run `wb git arc remove -- <claimed-path> [...]`. Workbench rejects dirty removals, non-exact claims, or drift under retained claims. Removing the final clean claim creates a zero-claim resolved lifecycle summary that does not block settlement.
+When approved work no longer owns exact claimed entries, call `mcp__wb__git_arc_remove`. Workbench rejects dirty removals, non-exact claims, or drift under retained claims. Removing the final clean claim creates a zero-claim resolved lifecycle summary that does not block settlement.
 
 #### In Review mode
 
-Before summarizing the work, run one initial arc-scoped inspection. Use `wb git arc compare` when changed paths and counts are enough. Use `wb git arc diff` when unified details are already needed. Do not run compare first when you already intend to run diff. A later diff is valid when compare reveals that detailed inspection is needed. At least one of compare or diff is required before Review completion and proposal creation.
+Before summarizing the work, run one initial arc-scoped inspection. Use `mcp__wb__git_arc_compare` when changed paths and counts are enough. Use `mcp__wb__git_arc_diff` when unified details are already needed. Do not compare first when you already intend to inspect a diff. At least one is required before Review completion and proposal creation.
 
 Do not diff against:
 
@@ -222,7 +222,7 @@ Review must cover:
 * failed, skipped, or unavailable validation
 * remaining risks or follow-up decisions
 
-Before Review can finish, run `wb git arc propose -m <fresh-title> [-m <optional-description>]`. It selects changed claimed files. Use paths only for a narrower subset. It opens the proposal UI and does not commit. Do not use `wb git commit`. Skip this step when no files changed. A proposal failure keeps Review open. Fix it and retry. If user input or an external change is required, use the blocked path. Do not use the final channel.
+Before Review can finish, call `mcp__wb__git_arc_propose` with a fresh title. It selects changed claimed files. Use `paths` only for a narrower subset. It opens the proposal UI and does not commit. Do not use the commit-selection tools for an arc proposal. Skip this step when no files changed. A proposal failure keeps Review open.
 
 ## Project Quality
 
@@ -369,7 +369,7 @@ If validation cannot be done without writing, explain the tradeoff and ask first
 Generically: Apply **Newest Instruction Wins** and **Shared Workspace**.
 
 Specifically:
-1. Run the provided `wb thread recall` command and read its Markdown before relying on memory or continuing risky work. Thread Recall is the authoritative source and the compaction summary should be treated as reference material to help you continue.
+1. Call `mcp__wb__thread_recall` and read its Markdown before relying on memory or continuing risky work. Thread Recall is the authoritative source and the compaction summary is reference material only.
 2. Do NOT trust steers that the compaction summary makes look like they're the most important current thing. Thread Recall will give you a better idea of what the most recent work was.
 3. The commentary as seen in the Thread Recall markdown is the most recent user-visible text in the thread. Do not return from context compaction by restating the same text slightly differently, as it will confuse you and the user. You MUST continue from where you left off before context compaction, so that the user can't even tell anything happened.
 4. Verify the newest request and current file state before risky work.

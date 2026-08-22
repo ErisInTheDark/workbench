@@ -24,6 +24,19 @@ test("controller admits only observed starts, excludes goals, and keeps newest t
   assert.equal(captured[0]?.threadId, "thread-10");
 });
 
+test("manual resume captures an exact active request even for a goal-owned thread", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-manual-resume-"));
+  const store = new WorkbenchTurnRecoveryHandoffStore(root);
+  const controller = new WorkbenchTurnRecoveryController(store, () => undefined);
+  controller.observeRequest("codex", { id: "original", method: "turn/start", params: { input: [{ text: "hello", type: "text" }], threadId: "thread" } });
+  controller.observeNotification("codex", { method: "turn/started", params: { threadId: "thread", turn: { id: "turn" } } });
+  controller.observeRequest("codex", { id: "goal", method: "thread/goal/set", params: { threadId: "thread" } });
+  const { candidate, handoff } = await controller.persistManualResume("codex", "thread");
+  assert.equal(candidate.turnId, "turn");
+  assert.deepEqual(candidate.request.params, { input: [{ text: "hello", type: "text" }], threadId: "thread" });
+  assert.deepEqual((await store.load())?.candidates, handoff.candidates);
+});
+
 test("terminal notifications retire the exact candidate", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-recovery-terminal-"));
   const controller = new WorkbenchTurnRecoveryController(new WorkbenchTurnRecoveryHandoffStore(root), () => undefined);

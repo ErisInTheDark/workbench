@@ -1,84 +1,29 @@
 /*
  * Exports:
- * - WorkbenchAgentCliRequest/WorkbenchAgentCliParseResult: normalized allowlisted CLI request and parse result contracts. Keywords: workbench, cli, request, parse.
+ * - WorkbenchAgentCliRequest/WorkbenchAgentCliResponseKind/WorkbenchAgentCliParseResult: compatibility names for normalized CLI request and parse contracts. Keywords: workbench, cli, request, parse.
+ * - WorkbenchAgentCliCommandDescriptor/listWorkbenchAgentCliCommandDescriptors: expose immutable canonical command metadata. Keywords: workbench, cli, metadata, tools.
  * - WORKBENCH_AGENT_CLI_HELP: complete agent-facing command reference. Keywords: workbench, cli, help, commands.
- * - parseWorkbenchAgentCliCommand: parse one allowlisted wb command into a fixed Workbench request. Keywords: workbench, cli, allowlist, cwd.
+ * - parseWorkbenchAgentCliCommand: adapt allowlisted wb argv into the canonical typed command registry. Keywords: workbench, cli, allowlist, cwd.
  */
-import { ORCHESTRATOR_ALL_RELOAD_SCOPES } from "../orchestrator-reload";
-import { parseGitArcMoveArguments, type GitArcMoveArguments } from "../git/git-arc-move-arguments";
+import { WORKBENCH_AGENT_COMMANDS } from "../commands/workbench-agent-command-registry";
+import type {
+  WorkbenchAgentCommandDefinition,
+  WorkbenchAgentCommandRequest,
+  WorkbenchAgentCommandResponseKind,
+} from "../commands/workbench-agent-command-definition";
 
-type JsonPrimitive = boolean | number | string | null;
-type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
-
-function gitArcMoveArgumentsToJson(move: GitArcMoveArguments): { [key: string]: JsonValue } {
-  if (move.kind === "operands") return { kind: move.kind, operands: [...move.operands] };
-  if (move.kind === "maps") {
-    return {
-      kind: move.kind,
-      mappings: move.mappings.map(({ destination, source }) => ({ destination, source })),
-    };
-  }
-  return {
-    confirm: move.confirm,
-    kind: move.kind,
-    pattern: move.pattern,
-    replacement: move.replacement,
-    roots: [...move.roots],
-  };
-}
-
-export type WorkbenchAgentCliResponseKind =
-  | "browse-command"
-  | "browse-session-control"
-  | "git-arc-add"
-  | "git-arc-adopt"
-  | "git-arc-compare"
-  | "git-arc-continue"
-  | "git-arc-diff"
-  | "git-arc-mv"
-  | "git-arc-plan"
-  | "git-arc-propose"
-  | "git-arc-remove"
-  | "git-arc-restore"
-  | "git-arc-start"
-  | "json"
-  | "native"
-  | "orchestrator-reload"
-  | "subagent-create"
-  | "subagent-list"
-  | "subagent-settle"
-  | "thread-status"
-  | "thread-title-get"
-  | "thread-title";
-
-export interface WorkbenchAgentCliRequest {
-  body?: { [key: string]: JsonValue };
-  method: "GET" | "POST";
-  path: string;
-  responseKind: WorkbenchAgentCliResponseKind;
-  waitForReload?: boolean;
-}
+export type WorkbenchAgentCliRequest = WorkbenchAgentCommandRequest;
+export type WorkbenchAgentCliResponseKind = WorkbenchAgentCommandResponseKind;
 
 export type WorkbenchAgentCliParseResult =
   | { help: string; kind: "help" }
   | { error: string; kind: "error" }
-  | { kind: "request"; request: WorkbenchAgentCliRequest };
+  | { kind: "request"; request: WorkbenchAgentCommandRequest };
 
-interface CommandBuildContext {
-  args: string[];
-  callerHarness: string;
-  callerThreadId: string | null;
-  cwd: string;
-  workbenchOrigin: string | null;
-}
-
-interface CommandDefinition {
-  aliases?: readonly (readonly string[])[];
-  build: (context: CommandBuildContext) => Promise<WorkbenchAgentCliRequest>;
-  description: string;
-  helpGroups: readonly string[];
-  usage: string;
-  words: readonly string[];
+export interface WorkbenchAgentCliCommandDescriptor {
+  readonly description: string;
+  readonly usage: string;
+  readonly words: readonly string[];
 }
 
 interface HelpGroupDefinition {
@@ -91,104 +36,6 @@ interface HelpGroupDefinition {
   words: readonly string[];
 }
 
-interface FlagSpec {
-  boolean?: readonly string[];
-  leadingDashValues?: readonly string[];
-  repeatable?: readonly string[];
-  trailing?: boolean;
-  values?: readonly string[];
-}
-
-class ParsedFlags {
-  readonly booleans = new Set<string>();
-  readonly trailing: string[];
-  readonly values = new Map<string, string[]>();
-
-  constructor(args: string[], spec: FlagSpec) {
-    const booleanFlags = new Set(spec.boolean ?? []);
-    const leadingDashValueFlags = new Set(spec.leadingDashValues ?? []);
-    const repeatableFlags = new Set(spec.repeatable ?? []);
-    const valueFlags = new Set([...(spec.values ?? []), ...repeatableFlags]);
-    const trailingIndex = args.indexOf("--");
-    this.trailing = trailingIndex >= 0 ? args.slice(trailingIndex + 1) : [];
-    const optionArgs = trailingIndex >= 0 ? args.slice(0, trailingIndex) : args;
-    if (trailingIndex >= 0 && !spec.trailing) {
-      throw new Error("This command does not accept trailing arguments after --.");
-    }
-
-    for (let index = 0; index < optionArgs.length; index += 1) {
-      const flag = optionArgs[index];
-      if (!flag.startsWith("-")) {
-        throw new Error(`Unexpected argument: ${flag}`);
-      }
-      if (booleanFlags.has(flag)) {
-        this.booleans.add(flag);
-        continue;
-      }
-      if (!valueFlags.has(flag)) {
-        throw new Error(`Unsupported option: ${flag}`);
-      }
-      const value = optionArgs[index + 1];
-      const recognizedOption = value && (booleanFlags.has(value) || valueFlags.has(value));
-      if (!value || (value.startsWith("-") && (!leadingDashValueFlags.has(flag) || recognizedOption))) {
-        throw new Error(`${flag} requires a value.`);
-      }
-      index += 1;
-      if (!repeatableFlags.has(flag) && this.values.has(flag)) {
-        throw new Error(`${flag} may only be supplied once.`);
-      }
-      this.values.set(flag, [...(this.values.get(flag) ?? []), value]);
-    }
-  }
-
-  has(flag: string) {
-    return this.booleans.has(flag);
-  }
-
-  optional(flag: string) {
-    return this.values.get(flag)?.[0] ?? null;
-  }
-
-  repeated(flag: string) {
-    return this.values.get(flag) ?? [];
-  }
-
-  required(flag: string) {
-    const value = this.optional(flag)?.trim();
-    if (!value) {
-      throw new Error(`${flag} is required.`);
-    }
-    return value;
-  }
-
-  requiredRepeated(flag: string) {
-    const values = this.repeated(flag).map((value) => value.trim());
-    if (!values.length || values.some((value) => !value)) {
-      throw new Error(`${flag} is required.`);
-    }
-    if (new Set(values).size !== values.length) {
-      throw new Error(`${flag} values must be unique.`);
-    }
-    return values;
-  }
-
-  optionalNonNegativeInteger(flag: string) {
-    const value = this.optional(flag);
-    if (value === null) {
-      return null;
-    }
-    if (!/^\d+$/u.test(value)) {
-      throw new Error(`${flag} must be a non-negative integer.`);
-    }
-    const parsed = Number(value);
-    if (!Number.isSafeInteger(parsed)) {
-      throw new Error(`${flag} must be a safe non-negative integer.`);
-    }
-    return parsed;
-  }
-}
-
-const THREAD_FLAG = ["--thread"] as const;
 const LEGACY_CHECKPOINT_MIGRATION_GUIDE = [
   "wb git checkpoint commands have been replaced by the named plan and arc workflow.",
   "",
@@ -218,739 +65,36 @@ const LEGACY_CHECKPOINT_MIGRATION_GUIDE = [
   "Omit explicit compare, diff, or proposal paths to use the arc's claimed set. Proposal subsets must stay inside that set.",
   "",
 ].join("\n");
-const RELOAD_SWITCHES = [
-  "--orchestrator-logic",
-  "--browse-controller",
-  "--codex-bridge",
-  "--opencode-bridge",
-  "--opencode-server",
-  "--next-dev",
-] as const;
 
-function requireCallerThreadId(callerThreadId: string | null) {
-  if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
-  return callerThreadId;
-}
-
-function resolveTargetThreadId(flags: ParsedFlags, callerThreadId: string | null) {
-  const explicitThreadId = flags.optional("--thread");
-  if (explicitThreadId !== null) {
-    const threadId = explicitThreadId.trim();
-    if (!threadId) throw new Error("--thread cannot be empty.");
-    return threadId;
-  }
-  return requireCallerThreadId(callerThreadId);
-}
-
-function requireCallerHarness(callerHarness: string) {
-  if (callerHarness === "codex" || callerHarness === "copilot" || callerHarness === "opencode") return callerHarness;
-  throw new Error("A managed Workbench harness identity is required.");
-}
-
-function preservePowerShellTrailingPaths(args: string[], {
-  boolean = [],
-  values = ["--worktree"],
-}: {
-  boolean?: readonly string[];
-  values?: readonly string[];
-} = {}) {
-  if (args.includes("--")) return args;
-  for (let index = 0; index < args.length; index += 1) {
-    if (values.includes(args[index])) {
-      index += 1;
-      continue;
-    }
-    if (boolean.includes(args[index])) continue;
-    if (!args[index].startsWith("-")) {
-      return [...args.slice(0, index), "--", ...args.slice(index)];
-    }
-  }
-  return args;
-}
-
-function queryPath(pathname: string, values: Record<string, string | readonly string[] | null>) {
-  const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(values)) {
-    if (Array.isArray(value)) {
-      value.filter(Boolean).forEach((entry) => query.append(key, entry));
-    } else if (typeof value === "string" && value) {
-      query.set(key, value);
-    }
-  }
-  const suffix = query.toString();
-  return suffix ? `${pathname}?${suffix}` : pathname;
-}
-
-function post(
-  path: string,
-  body: WorkbenchAgentCliRequest["body"],
-  responseKind: WorkbenchAgentCliResponseKind = "native",
-): WorkbenchAgentCliRequest {
-  return { body, method: "POST", path, responseKind };
-}
-
-function get(path: string, responseKind: WorkbenchAgentCliResponseKind = "native"): WorkbenchAgentCliRequest {
-  return { method: "GET", path, responseKind };
-}
-
-function parseVariables(values: string[]) {
-  const variables: Record<string, JsonValue> = {};
-  for (const value of values) {
-    const separator = value.indexOf("=");
-    const key = separator > 0 ? value.slice(0, separator).trim() : "";
-    if (!key) {
-      throw new Error(`Browse variable must use key=value syntax: ${value}`);
-    }
-    variables[key] = value.slice(separator + 1);
-  }
-  return variables;
-}
-
-function readSubagentTargets(flags: ParsedFlags) {
-  const threadIds = flags.repeated("--id").map((value) => value.trim());
-  const names = flags.repeated("--name").map((value) => value.trim());
-  if (!threadIds.length && !names.length) throw new Error("At least one --id or --name target is required.");
-  if (threadIds.some((value) => !value) || names.some((value) => !value)) throw new Error("Subagent targets cannot be empty.");
-  if (new Set(threadIds).size !== threadIds.length) throw new Error("--id values must be unique.");
-  if (new Set(names.map((value) => value.toLocaleLowerCase())).size !== names.length) throw new Error("--name values must be unique ignoring case.");
-  return {
-    ...(names.length ? { names } : {}),
-    ...(threadIds.length ? { threadIds } : {}),
-  };
-}
-
-const COMMANDS: readonly CommandDefinition[] = [
-  {
-    description: "List unsettled direct children, or settled history.",
-    helpGroups: ["subagent"],
-    words: ["subagent", "list"],
-    usage: "wb subagent list [--settled [--cursor <cursor>] [--limit <1-20>]]",
-    async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(args, { boolean: ["--settled"], values: ["--cursor", "--limit"] });
-      if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
-      const limit = flags.optionalNonNegativeInteger("--limit");
-      if (limit !== null && (limit < 1 || limit > 20)) throw new Error("--limit must be between 1 and 20.");
-      if (!flags.has("--settled") && (flags.optional("--cursor") || limit !== null)) throw new Error("--cursor and --limit require --settled.");
-      return post("/api/subagents", {
-        action: "list", callerThreadId, cwd, settled: flags.has("--settled"),
-        ...(flags.optional("--cursor") ? { cursor: flags.optional("--cursor")! } : {}),
-        ...(limit !== null ? { limit } : {}),
-      }, "subagent-list");
-    },
-  },
-  {
-    description: "List the subagent profiles available to this thread.",
-    helpGroups: ["subagent"],
-    words: ["subagent", "profiles"],
-    usage: "wb subagent profiles",
-    async build({ args, callerThreadId, cwd, workbenchOrigin }) {
-      new ParsedFlags(args, {});
-      if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
-      return post("/api/subagents", { action: "profiles", callerThreadId, cwd, ...(workbenchOrigin ? { workbenchOrigin } : {}) }, "json");
-    },
-  },
-  {
-    description: "Create and start a direct child, then print its thread ID.",
-    helpGroups: ["subagent"],
-    words: ["subagent", "create"],
-    usage: "wb subagent create --profile <profile-id> --name <name> --title <title> --message <message>",
-    async build({ args, callerThreadId, cwd, workbenchOrigin }) {
-      const flags = new ParsedFlags(args, { values: ["--profile", "--name", "--title", "--message"] });
-      if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
-      return post("/api/subagents", {
-        action: "create", callerThreadId, cwd, message: flags.required("--message"), name: flags.required("--name"),
-        profileId: flags.required("--profile"), title: flags.required("--title"), ...(workbenchOrigin ? { workbenchOrigin } : {}),
-      }, "subagent-create");
-    },
-  },
-  {
-    description: "Wait until any selected child needs attention or reaches a terminal state.",
-    helpGroups: ["subagent"],
-    words: ["subagent", "wait"],
-    usage: "wb subagent wait (--id <id> | --name <name>) [...]",
-    async build({ args, callerThreadId, cwd, workbenchOrigin }) {
-      const flags = new ParsedFlags(args, { repeatable: ["--id", "--name"] });
-      if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
-      return post("/api/subagents", {
-        action: "wait", callerThreadId, cwd, ...readSubagentTargets(flags), ...(workbenchOrigin ? { workbenchOrigin } : {}),
-      });
-    },
-  },
-  {
-    description: "Stop one or more direct child threads.",
-    helpGroups: ["subagent"],
-    words: ["subagent", "stop"],
-    usage: "wb subagent stop (--id <id> | --name <name>) [...]",
-    async build({ args, callerThreadId, cwd, workbenchOrigin }) {
-      const flags = new ParsedFlags(args, { repeatable: ["--id", "--name"] });
-      if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
-      return post("/api/subagents", {
-        action: "stop", callerThreadId, cwd, ...readSubagentTargets(flags), ...(workbenchOrigin ? { workbenchOrigin } : {}),
-      });
-    },
-  },
-  {
-    description: "Settle one or more completed or stopped direct children.",
-    helpGroups: ["subagent"],
-    words: ["subagent", "settle"],
-    usage: "wb subagent settle (--id <id> | --name <name>) [...]",
-    async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(args, { repeatable: ["--id", "--name"] });
-      return post("/api/subagents", { action: "settle", callerThreadId: requireCallerThreadId(callerThreadId), cwd, ...readSubagentTargets(flags) }, "subagent-settle");
-    },
-  },
-  {
-    description: "Message a direct child or parent, steering an active turn or starting an idle one.",
-    helpGroups: ["subagent"],
-    words: ["subagent", "message"],
-    usage: "wb subagent message (--id <id> | --name <name> | --parent) --message <message>",
-    async build({ args, callerThreadId, cwd, workbenchOrigin }) {
-      const flags = new ParsedFlags(args, { boolean: ["--parent"], values: ["--id", "--name", "--message"] });
-      if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
-      const threadId = flags.optional("--id")?.trim() ?? "";
-      const name = flags.optional("--name")?.trim() ?? "";
-      const parent = flags.has("--parent");
-      if ([Boolean(threadId), Boolean(name), parent].filter(Boolean).length !== 1) throw new Error("Exactly one of --id, --name, or --parent is required.");
-      return post("/api/subagents", {
-        action: "message", callerThreadId, cwd, message: flags.required("--message"),
-        ...(parent ? { parent: true } : threadId ? { threadId } : { name }),
-        ...(workbenchOrigin ? { workbenchOrigin } : {}),
-      });
-    },
-  },
-  {
-    description: "Get the current title for a managed thread.",
-    helpGroups: ["thread"],
-    words: ["thread", "title", "get"],
-    usage: "wb thread title get",
-    async build({ callerThreadId, cwd }) {
-      return post("/api/thread-title", { action: "get", callerThreadId: requireCallerThreadId(callerThreadId), cwd }, "thread-title-get");
-    },
-  },
-  {
-    description: "Set a concise title for a managed thread.",
-    helpGroups: ["thread"],
-    words: ["thread", "title"],
-    usage: "wb thread title --title <text>",
-    async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(args, { values: ["--title"] });
-      return post("/api/thread-title", { action: "set", callerThreadId: requireCallerThreadId(callerThreadId), cwd, title: flags.required("--title") }, "thread-title");
-    },
-  },
-  {
-    description: "Set the exact current turn status for this managed thread.",
-    helpGroups: ["thread"],
-    words: ["thread", "status"],
-    usage: "wb thread status --status <completed|blocked>",
-    async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(args, { values: ["--status"] });
-      const status = flags.required("--status");
-      if (status !== "completed" && status !== "blocked") throw new Error("--status must be completed or blocked.");
-      return post("/api/thread-status", { callerThreadId: requireCallerThreadId(callerThreadId), cwd, status }, "thread-status");
-    },
-  },
-  {
-    aliases: [["thread", "context", "search"]],
-    description: "Search visible narrative history and return stable result references.",
-    helpGroups: ["thread", "thread-recall"],
-    words: ["thread", "recall", "search"],
-    usage: "wb thread recall search [--thread <id>] --query <text> [--kind <kind>...] [--limit <count>] [--before <ref>]",
-    async build({ args, callerThreadId }) {
-      const flags = new ParsedFlags(args, {
-        repeatable: ["--kind"],
-        values: [...THREAD_FLAG, "--query", "--limit", "--before"],
-      });
-      const kinds = flags.repeated("--kind");
-      const limit = flags.optionalNonNegativeInteger("--limit");
-      if (limit !== null && (limit < 1 || limit > 50)) throw new Error("--limit must be between 1 and 50.");
-      return post(`/api/thread-context/${encodeURIComponent(resolveTargetThreadId(flags, callerThreadId))}`, {
-        action: "search",
-        query: flags.required("--query"),
-        ...(kinds.length ? { kinds } : {}),
-        ...(limit !== null ? { limit } : {}),
-        ...(flags.optional("--before") ? { before: flags.optional("--before") } : {}),
-      });
-    },
-  },
-  {
-    aliases: [["thread", "context", "expand"]],
-    description: "Read one referenced record through fixed-budget content pages.",
-    helpGroups: ["thread", "thread-recall"],
-    words: ["thread", "recall", "expand"],
-    usage: "wb thread recall expand [--thread <id>] --ref <ref> [--cursor <cursor>]",
-    async build({ args, callerThreadId }) {
-      const flags = new ParsedFlags(args, { values: [...THREAD_FLAG, "--ref", "--cursor"] });
-      return post(`/api/thread-context/${encodeURIComponent(resolveTargetThreadId(flags, callerThreadId))}`, {
-        action: "expand",
-        ref: flags.required("--ref"),
-        ...(flags.optional("--cursor") ? { cursor: flags.optional("--cursor") } : {}),
-      });
-    },
-  },
-  {
-    aliases: [["thread", "context"]],
-    description: "Read filtered history newest-first, or continue before an emitted cursor.",
-    helpGroups: ["thread", "thread-recall"],
-    words: ["thread", "recall"],
-    usage: "wb thread recall [--thread <id>] [--kind <kind>...] [--before <cursor>]",
-    async build({ args, callerThreadId }) {
-      const flags = new ParsedFlags(args, { repeatable: ["--kind"], values: [...THREAD_FLAG, "--before"] });
-      const threadId = resolveTargetThreadId(flags, callerThreadId);
-      return get(queryPath(`/api/thread-context/${encodeURIComponent(threadId)}`, {
-        before: flags.optional("--before"),
-        kind: flags.repeated("--kind"),
-      }));
-    },
-  },
-  ...(["add", "unstage"] as const).map((action): CommandDefinition => ({
-    description: action === "add"
-      ? "Add currently changed files beneath the paths to this thread's commit selection."
-      : "Remove exact files or descendants from this thread's commit selection.",
-    helpGroups: ["git"],
-    words: ["git", action],
-    usage: `wb git ${action} [--worktree <absolute-path>] -- <path> [<path>...]`,
-    async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args), { trailing: true, values: ["--worktree"] });
-      if (!flags.trailing.length) throw new Error(`wb git ${action} requires at least one path.`);
-      const targetWorktree = flags.optional("--worktree");
-      return post("/api/git", {
-        action,
-        cwd,
-        paths: flags.trailing,
-        ...(targetWorktree ? { targetWorktree } : {}),
-        threadId: requireCallerThreadId(callerThreadId),
-      });
-    },
+const COMMAND_DESCRIPTORS: readonly WorkbenchAgentCliCommandDescriptor[] = Object.freeze(
+  WORKBENCH_AGENT_COMMANDS.map(({ description, usage, words }) => Object.freeze({
+    description,
+    usage,
+    words: Object.freeze([...words]),
   })),
-  {
-    description: "Commit selected files, or amend them into one linear unpushed ancestor, then clear the selection on success.",
-    helpGroups: ["git"],
-    words: ["git", "commit"],
-    usage: "wb git commit [--worktree <absolute-path>] [--amend <commit-sha>] --message <message>",
-    async build({ args, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(args, { values: ["--amend", "--message", "--worktree"] });
-      const targetWorktree = flags.optional("--worktree");
-      const amendTarget = flags.optional("--amend");
-      return post("/api/git", {
-        action: "commit",
-        ...(amendTarget ? { amendTarget } : {}),
-        cwd,
-        message: flags.required("--message"),
-        ...(targetWorktree ? { targetWorktree } : {}),
-        threadId: requireCallerThreadId(callerThreadId),
-      });
-    },
-  },
-  {
-    description: "Create or replace this thread's current inactive Git plan.",
-    helpGroups: ["git-arc"],
-    words: ["git", "arc", "plan"],
-    usage: "wb git arc plan -m <short-intent> [-m <optional-description>] [--adopt <dirty-path>]... [-- <path>...]",
-    async build({ args, callerHarness, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["-m", "--adopt"] }), {
-        repeatable: ["-m", "--adopt"],
-        trailing: true,
-      });
-      const messages = flags.repeated("-m").map((message) => message.trim());
-      if (messages.length > 2) throw new Error("Arc plan accepts at most two -m values.");
-      if (!messages[0]) throw new Error("-m is required.");
-      return post("/api/git-checkpoint", {
-        action: "plan",
-        ...(flags.repeated("--adopt").length ? { adoptPaths: flags.repeated("--adopt") } : {}),
-        cwd,
-        harness: requireCallerHarness(callerHarness),
-        intentDescription: messages[1] ?? "",
-        intentName: messages[0],
-        paths: flags.trailing,
-        threadId: requireCallerThreadId(callerThreadId),
-      }, "git-arc-plan");
-    },
-  },
-  ...(["add", "remove", "adopt"] as const).map((operation): CommandDefinition => ({
-    description: `${operation === "add" ? "Add clean paths to" : operation === "adopt" ? "Adopt dirty paths into" : "Remove paths from"} the current inactive plan.`,
-    helpGroups: ["git-arc"],
-    words: ["git", "arc", "plan", operation],
-    usage: `wb git arc plan ${operation} -- <path> [<path>...]`,
-    async build({ args, callerHarness, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: [] }), { trailing: true });
-      if (!flags.trailing.length) throw new Error(`Arc plan ${operation} requires at least one path after --.`);
-      return post("/api/git-checkpoint", {
-        action: operation === "add" ? "planAdd" : operation === "adopt" ? "planAdopt" : "planRemove",
-        cwd,
-        harness: requireCallerHarness(callerHarness),
-        paths: flags.trailing,
-        threadId: requireCallerThreadId(callerThreadId),
-      }, "git-arc-plan");
-    },
-  })),
-  {
-    description: "Create and activate a plan atomically.",
-    helpGroups: ["git-arc"],
-    words: ["git", "arc", "plan", "start"],
-    usage: "wb git arc plan start -m <short-intent> [-m <optional-description>] [--adopt <dirty-path>]... [-- <path>...]",
-    async build({ args, callerHarness, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["-m", "--adopt"] }), {
-        repeatable: ["-m", "--adopt"], trailing: true,
-      });
-      const messages = flags.repeated("-m").map((message) => message.trim());
-      if (messages.length > 2) throw new Error("Arc plan start accepts at most two -m values.");
-      if (!messages[0]) throw new Error("-m is required.");
-      return post("/api/git-checkpoint", {
-        action: "planStart", adoptPaths: flags.repeated("--adopt"), cwd,
-        harness: requireCallerHarness(callerHarness), intentDescription: messages[1] ?? "",
-        intentName: messages[0], paths: flags.trailing, threadId: requireCallerThreadId(callerThreadId),
-      }, "git-arc-start");
-    },
-  },
-  {
-    description: "Activate and compare a plan's files before implementation without creating another ref.",
-    helpGroups: ["git-arc"],
-    words: ["git", "arc", "start"],
-    usage: "wb git arc start [--ref <ref>]",
-    async build({ args, callerHarness, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(args, { values: ["--ref"] });
-      return post("/api/git-checkpoint", {
-        action: "arcStart",
-        ...(flags.optional("--ref") ? { checkpointCommit: flags.optional("--ref")! } : {}),
-        cwd,
-        harness: requireCallerHarness(callerHarness),
-        threadId: requireCallerThreadId(callerThreadId),
-      }, "git-arc-start");
-    },
-  },
-  {
-    description: "Continue an active arc or resume it after its proposal was committed.",
-    helpGroups: ["git-arc"],
-    words: ["git", "arc", "continue"],
-    usage: "wb git arc continue --ref <last-known-ref>",
-    async build({ args, callerHarness, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(args, { values: ["--ref"] });
-      return post("/api/git-checkpoint", {
-        action: "arcContinue",
-        checkpointCommit: flags.required("--ref"),
-        cwd,
-        harness: requireCallerHarness(callerHarness),
-        threadId: requireCallerThreadId(callerThreadId),
-      }, "git-arc-continue");
-    },
-  },
-  {
-    description: "Continue an arc while claiming additional clean paths.",
-    helpGroups: ["git-arc"],
-    words: ["git", "arc", "add"],
-    usage: "wb git arc add -- <additional-path> [<additional-path>...]",
-    async build({ args, callerHarness, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: [] }), {
-        trailing: true,
-      });
-      if (!flags.trailing.length) throw new Error("Arc add requires at least one additional clean path after --.");
-      return post("/api/git-checkpoint", {
-        action: "arcAdd",
-        cwd,
-        harness: requireCallerHarness(callerHarness),
-        paths: flags.trailing,
-        threadId: requireCallerThreadId(callerThreadId),
-      }, "git-arc-add");
-    },
-  },
-  {
-    description: "Adopt existing dirty workspace paths into this thread's active arc.",
-    helpGroups: ["git-arc"],
-    words: ["git", "arc", "adopt"],
-    usage: "wb git arc adopt -- <path> [<path>...]",
-    async build({ args, callerHarness, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: [] }), { trailing: true });
-      if (!flags.trailing.length) throw new Error("Arc adopt requires at least one dirty path after --.");
-      return post("/api/git-checkpoint", {
-        action: "arcAdopt",
-        cwd,
-        harness: requireCallerHarness(callerHarness),
-        paths: flags.trailing,
-        threadId: requireCallerThreadId(callerThreadId),
-      }, "git-arc-adopt");
-    },
-  },
-  {
-    description: "Move paths while automatically claiming the source and destination sides in this thread's active arc.",
-    helpGroups: ["git-arc"],
-    words: ["git", "arc", "mv"],
-    usage: "wb git arc mv (<source>... <destination> | --map <source> <destination>... | [--confirm] --regex <pattern> --replace <replacement> -- <root> [<root>...])",
-    async build({ args, callerHarness, callerThreadId, cwd }) {
-      const normalizedArgs = args.includes("--regex") || args.includes("--replace")
-        ? preservePowerShellTrailingPaths(args, { boolean: ["--confirm"], values: ["--regex", "--replace"] })
-        : args;
-      return post("/api/git-checkpoint", {
-        action: "arcMove",
-        cwd,
-        harness: requireCallerHarness(callerHarness),
-        move: gitArcMoveArgumentsToJson(parseGitArcMoveArguments(normalizedArgs)),
-        threadId: requireCallerThreadId(callerThreadId),
-      }, "git-arc-mv");
-    },
-  },
-  {
-    description: "Relinquish exact clean claims without changing working-tree files.",
-    helpGroups: ["git-arc"],
-    words: ["git", "arc", "remove"],
-    usage: "wb git arc remove -- <claimed-path> [<claimed-path>...]",
-    async build({ args, callerHarness, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: [] }), {
-        trailing: true,
-      });
-      if (!flags.trailing.length) throw new Error("Arc remove requires at least one claimed path after --.");
-      return post("/api/git-checkpoint", {
-        action: "arcRemove",
-        cwd,
-        harness: requireCallerHarness(callerHarness),
-        paths: flags.trailing,
-        threadId: requireCallerThreadId(callerThreadId),
-      }, "git-arc-remove");
-    },
-  },
-  ...(["compare", "diff"] as const).map((action): CommandDefinition => ({
-    description: action === "compare"
-      ? "Show per-file change counts for an arc's claimed set or selected paths."
-      : "Show unified diff content for an arc's claimed set or selected paths.",
-    helpGroups: ["git-arc"],
-    words: ["git", "arc", action],
-    usage: `wb git arc ${action} [--ref <plan-ref>] [-- <path> [<path>...]]`,
-    async build({ args, callerHarness, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, { values: ["--ref"] }), {
-        trailing: true, values: ["--ref"],
-      });
-      return post("/api/git-checkpoint", {
-        action,
-        cwd,
-        harness: requireCallerHarness(callerHarness),
-        ...(flags.optional("--ref") ? { checkpointCommit: flags.optional("--ref")! } : {}),
-        ...(flags.trailing.length ? { paths: flags.trailing } : {}),
-        threadId: requireCallerThreadId(callerThreadId),
-      }, action === "compare" ? "git-arc-compare" : "git-arc-diff");
-    },
-  })),
-  {
-    description: "Create a durable editable commit proposal from an arc's claimed changes or a subset.",
-    helpGroups: ["git-arc"],
-    words: ["git", "arc", "propose"],
-    usage: "wb git arc propose [--amend] [<proposal-id>] [--replace <proposal-id>] [-m <title> [-m <description>]] [-- <claimed-path>...]",
-    async build({ args, callerHarness, callerThreadId, cwd }) {
-      let normalizedArgs = [...args];
-      const amendIndex = normalizedArgs.indexOf("--amend");
-      let amendProposalId: string | null = null;
-      if (amendIndex >= 0 && normalizedArgs[amendIndex + 1] && !normalizedArgs[amendIndex + 1].startsWith("-")) {
-        amendProposalId = normalizedArgs[amendIndex + 1];
-        normalizedArgs.splice(amendIndex + 1, 1);
-      }
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(normalizedArgs, { boolean: ["--amend"], values: ["-m", "--replace"] }), {
-        boolean: ["--amend"], leadingDashValues: ["-m"], repeatable: ["-m"], values: ["--replace"],
-        trailing: true,
-      });
-      if (flags.has("--amend") && flags.optional("--replace")) throw new Error("--amend and --replace cannot be combined.");
-      const messages = flags.repeated("-m").map((message) => message.trim());
-      if (messages.length > 2) throw new Error("Arc proposal accepts at most two -m values.");
-      if (!flags.has("--amend") && !messages[0]) throw new Error("-m is required unless --amend is present.");
-      return post("/api/git-checkpoint", {
-        action: "proposalCreate",
-        amend: flags.has("--amend"),
-        ...(amendProposalId ? { amendProposalId } : {}),
-        cwd,
-        description: messages[1] ?? "",
-        harness: requireCallerHarness(callerHarness),
-        ...(flags.trailing.length ? { paths: flags.trailing } : {}),
-        ...(flags.optional("--replace") ? { replaceProposalId: flags.optional("--replace")! } : {}),
-        threadId: requireCallerThreadId(callerThreadId),
-        title: messages[0] ?? "",
-      }, "git-arc-propose");
-    },
-  },
-  {
-    description: "Rescind one pending proposal without changing the arc.",
-    helpGroups: ["git-arc"],
-    words: ["git", "arc", "rescind"],
-    usage: "wb git arc rescind --proposal <proposal-id>",
-    async build({ args, callerHarness, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(args, { values: ["--proposal"] });
-      return post("/api/git-checkpoint", {
-        action: "proposalRescind", cwd, harness: requireCallerHarness(callerHarness),
-        proposalId: flags.required("--proposal"), threadId: requireCallerThreadId(callerThreadId),
-      }, "git-arc-propose");
-    },
-  },
-  {
-    description: "Restore selected paths from an arc, or restore its full snapshot after explicit confirmation.",
-    helpGroups: ["git-arc"],
-    words: ["git", "arc", "restore"],
-    usage: "wb git arc restore --ref <ref> (--confirm | -- <path> [<path>...])",
-    async build({ args, callerHarness, callerThreadId, cwd }) {
-      const flags = new ParsedFlags(preservePowerShellTrailingPaths(args, {
-        boolean: ["--confirm"],
-        values: ["--ref"],
-      }), { boolean: ["--confirm"], trailing: true, values: ["--ref"] });
-      if (!flags.trailing.length && !flags.has("--confirm")) {
-        throw new Error("Full arc restore requires --confirm; otherwise provide paths after --.");
-      }
-      return post("/api/git-checkpoint", {
-        action: "restore",
-        checkpointCommit: flags.required("--ref"),
-        ...(flags.has("--confirm") ? { confirmRestore: true } : {}),
-        cwd,
-        harness: requireCallerHarness(callerHarness),
-        ...(flags.trailing.length ? { paths: flags.trailing } : {}),
-        threadId: requireCallerThreadId(callerThreadId),
-      }, "git-arc-restore");
-    },
-  },
-  {
-    description: "Run inline BrowseMD commands or one project BrowseMD script.",
-    helpGroups: ["browse"],
-    words: ["browse", "run"],
-    usage: "wb browse run --thread <id> [--session <name>] (--command <line>... | --script-path <file>) [--var <key=value>...] [--summary <text>]",
-    async build({ args, cwd }) {
-      const flags = new ParsedFlags(args, {
-        repeatable: ["--command", "--var"],
-        values: [...THREAD_FLAG, "--session", "--script-path", "--summary"],
-      });
-      const commands = flags.repeated("--command");
-      const scriptPath = flags.optional("--script-path");
-      if ((!commands.length && !scriptPath) || (commands.length && scriptPath)) {
-        throw new Error("Browse run requires either repeated --command values or one --script-path.");
-      }
-      const variables = parseVariables(flags.repeated("--var"));
-      return post("/api/browse", {
-        cwd,
-        ...(commands.length ? { script: commands.join("\n") } : { scriptPath: scriptPath as string }),
-        ...(flags.optional("--session") ? { session: flags.optional("--session") as string } : {}),
-        ...(flags.optional("--summary") ? { summary: flags.optional("--summary") as string } : {}),
-        ...(Object.keys(variables).length ? { vars: variables } : {}),
-        threadId: flags.required("--thread"),
-      }, "browse-command");
-    },
-  },
-  {
-    description: "Run the explicitly gated raw Browse CLI passthrough.",
-    helpGroups: ["browse"],
-    words: ["browse", "raw"],
-    usage: "wb browse raw --thread <id> -- <Browse CLI args>",
-    async build({ args, cwd }) {
-      const flags = new ParsedFlags(args, { trailing: true, values: THREAD_FLAG });
-      if (!flags.trailing.length) {
-        throw new Error("Browse raw requires Browse CLI arguments after --.");
-      }
-      return post("/api/browse", {
-        args: flags.trailing,
-        cwd,
-        threadId: flags.required("--thread"),
-      }, "browse-command");
-    },
-  },
-  {
-    description: "List Workbench-known browser sessions for the thread.",
-    helpGroups: ["browse"],
-    words: ["browse", "sessions"],
-    usage: "wb browse sessions --thread <id>",
-    async build({ args, cwd }) {
-      const flags = new ParsedFlags(args, { values: THREAD_FLAG });
-      return get(queryPath("/api/browse/sessions", { cwd, threadId: flags.required("--thread") }), "json");
-    },
-  },
-  ...(["stop", "forget"] as const).map((action): CommandDefinition => ({
-    description: action === "stop"
-      ? "Stop a browser session without deleting persistent profile data."
-      : "Forget a stopped session and delete its persistent profile data.",
-    helpGroups: ["browse"],
-    words: ["browse", action],
-    usage: `wb browse ${action} --thread <id> --session <name>${action === "stop" ? " [--force]" : ""}`,
-    async build({ args, cwd }) {
-      const flags = new ParsedFlags(args, {
-        boolean: action === "stop" ? ["--force"] : [],
-        values: [...THREAD_FLAG, "--session"],
-      });
-      return post("/api/browse/sessions", {
-        action,
-        cwd,
-        ...(action === "stop" && flags.has("--force") ? { force: true } : {}),
-        session: flags.required("--session"),
-        threadId: flags.required("--thread"),
-      }, "browse-session-control");
-    },
-  })),
-  {
-    description: "Reload selected Workbench runtime subsystems and wait for terminal reload status.",
-    helpGroups: ["orchestrator"],
-    words: ["orchestrator", "reload"],
-    usage: "wb orchestrator reload [--all] [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--opencode-bridge] [--opencode-server] [--next-dev]",
-    async build({ args }) {
-      const flags = new ParsedFlags(args, { boolean: [...RELOAD_SWITCHES, "--all", "--hard"] });
-      const selectedOrdinaryFlags = RELOAD_SWITCHES.filter((flag) => flags.has(flag));
-      if (flags.has("--hard") && (flags.has("--all") || selectedOrdinaryFlags.length)) {
-        throw new Error("--hard must be requested by itself.");
-      }
-      const scopes = flags.has("--hard")
-        ? ["orchestrator-server"]
-        : Array.from(new Set([
-          ...(flags.has("--all") ? ORCHESTRATOR_ALL_RELOAD_SCOPES : []),
-          ...selectedOrdinaryFlags.map((flag) => flag.slice(2)),
-        ]));
-      if (!scopes.length) {
-        throw new Error("Orchestrator reload requires at least one reload switch.");
-      }
-      return {
-        ...post("/api/orchestrator/reload", { scopes }, "orchestrator-reload"),
-        waitForReload: true,
-      };
-    },
-  },
-];
+);
+
+export function listWorkbenchAgentCliCommandDescriptors() {
+  return COMMAND_DESCRIPTORS;
+}
 
 const ROOT_HELP_COMMAND_ORDER = [
-  "subagent list",
-  "subagent profiles",
-  "subagent create",
-  "subagent wait",
-  "subagent stop",
-  "subagent message",
-  "thread title",
-  "thread title get",
-  "thread recall",
-  "thread recall search",
-  "thread recall expand",
-  "git add",
-  "git unstage",
-  "git commit",
-  "git arc plan",
-  "git arc start",
-  "git arc continue",
-  "git arc add",
-  "git arc mv",
-  "git arc remove",
-  "git arc compare",
-  "git arc diff",
-  "git arc propose",
-  "git arc restore",
-  "browse run",
-  "browse raw",
-  "browse sessions",
-  "browse stop",
-  "browse forget",
-  "orchestrator reload",
+  "subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop", "subagent message",
+  "thread title", "thread title get", "thread recall", "thread recall search", "thread recall expand",
+  "git add", "git unstage", "git commit", "git arc plan", "git arc start", "git arc continue", "git arc add",
+  "git arc mv", "git arc remove", "git arc compare", "git arc diff", "git arc propose", "git arc restore",
+  "browse run", "browse raw", "browse sessions", "browse stop", "browse forget", "orchestrator reload",
 ] as const;
 
 const HELP_GROUPS: readonly HelpGroupDefinition[] = [
   {
     commandOrder: ["subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent message", "subagent stop"],
-    footer: [
-      "The current managed thread is always the parent.",
-      "Run commands from the intended project working directory.",
-    ].join("\n"),
-    key: "subagent",
-    usage: "wb subagent <command> [options]",
-    words: ["subagent"],
+    footer: ["The current managed thread is always the parent.", "Run commands from the intended project working directory."].join("\n"),
+    key: "subagent", usage: "wb subagent <command> [options]", words: ["subagent"],
   },
   {
     commandOrder: ["thread title", "thread title get", "thread recall", "thread recall search", "thread recall expand"],
-    key: "thread",
-    usage: "wb thread <command> [options]",
-    words: ["thread"],
+    key: "thread", usage: "wb thread <command> [options]", words: ["thread"],
   },
   {
     aliases: [["thread", "context"]],
@@ -960,9 +104,7 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
       "Recall excludes reasoning, raw commands, tool output, Browse data, hooks, and compaction markers.",
       "Run one recall command at a time and follow the exact continuation command emitted by the current page.",
     ].join("\n"),
-    key: "thread-recall",
-    usage: "wb thread recall [command] [options]",
-    words: ["thread", "recall"],
+    key: "thread-recall", usage: "wb thread recall [command] [options]", words: ["thread", "recall"],
   },
   {
     commandOrder: ["git add", "git unstage", "git commit"],
@@ -973,30 +115,15 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
       "Git commands derive the current managed thread ID from Workbench caller context.",
       "Unrelated files in the ordinary Git index remain outside the thread-owned commit.",
     ].join("\n"),
-    key: "git",
-    usage: "wb git <command> [options]",
-    words: ["git"],
+    key: "git", usage: "wb git <command> [options]", words: ["git"],
   },
   {
-    commandOrder: [
-      "git arc plan",
-      "git arc start",
-      "git arc continue",
-      "git arc add",
-      "git arc mv",
-      "git arc remove",
-      "git arc compare",
-      "git arc diff",
-      "git arc propose",
-      "git arc restore",
-    ],
+    commandOrder: ["git arc plan", "git arc start", "git arc continue", "git arc add", "git arc mv", "git arc remove", "git arc compare", "git arc diff", "git arc propose", "git arc restore"],
     footer: [
       "Pass paths after -- to restore only those files or directories from the arc snapshot.",
       "Use --confirm without paths only when the user explicitly requested a full arc restore.",
     ].join("\n"),
-    key: "git-arc",
-    usage: "wb git arc <command> [options]",
-    words: ["git", "arc"],
+    key: "git-arc", usage: "wb git arc <command> [options]", words: ["git", "arc"],
   },
   {
     commandOrder: ["browse run", "browse sessions", "browse stop", "browse forget", "browse raw"],
@@ -1005,105 +132,57 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
       "Raw passthrough is unavailable unless Workbench explicitly enables it.",
       "Each wb browse call must contain only one BrowseMD run, raw invocation, or session command.",
     ].join("\n"),
-    key: "browse",
-    usage: "wb browse <command> [options]",
-    words: ["browse"],
+    key: "browse", usage: "wb browse <command> [options]", words: ["browse"],
   },
   {
     key: "orchestrator",
     options: [
       "Options:",
-      "  --all                 Reload all non-destructive orchestrator scopes: orchestrator-logic, browse-controller, codex-bridge, opencode-bridge, next-dev.",
+      "  --all                 Reload all non-destructive orchestrator scopes: orchestrator-logic, browse-controller, codex-bridge, mcp, opencode-bridge, next-dev.",
       "  --orchestrator-logic  Reload declared orchestrator modules.",
       "  --browse-controller   Drain and replace Browse controller code without restarting browser sessions.",
       "  --codex-bridge        Reload Codex bridge code without restarting the stable Codex app-server.",
+      "  --mcp                 Reload the wb MCP implementation and advance its freshness generation.",
       "  --opencode-bridge     Reload OpenCode bridge code.",
       "  --opencode-server     Restart the managed OpenCode server.",
       "  --next-dev            Restart the Next.js development server.",
     ].join("\n"),
-    footer: [
-      "At least one option is required.",
-      "Use the narrowest applicable scope.",
-    ].join("\n"),
-    usage: "wb orchestrator reload [--all] [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--opencode-bridge] [--opencode-server] [--next-dev]",
+    footer: ["At least one option is required.", "Use the narrowest applicable scope."].join("\n"),
+    usage: "wb orchestrator reload [--all] [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--mcp] [--opencode-bridge] [--opencode-server] [--next-dev]",
     words: ["orchestrator"],
   },
 ];
 
-function commandKey(command: CommandDefinition) {
-  return command.words.join(" ");
-}
-
-function orderCommands(commands: readonly CommandDefinition[], order: readonly string[]) {
+function commandKey(command: WorkbenchAgentCommandDefinition) { return command.words.join(" "); }
+function orderCommands(commands: readonly WorkbenchAgentCommandDefinition[], order: readonly string[]) {
   const indexes = new Map(order.map((key, index) => [key, index]));
-  return [...commands].sort((left, right) => (
-    (indexes.get(commandKey(left)) ?? Number.MAX_SAFE_INTEGER)
-    - (indexes.get(commandKey(right)) ?? Number.MAX_SAFE_INTEGER)
-  ));
+  return [...commands].sort((left, right) => (indexes.get(commandKey(left)) ?? Number.MAX_SAFE_INTEGER) - (indexes.get(commandKey(right)) ?? Number.MAX_SAFE_INTEGER));
 }
-
 function renderRootHelp() {
-  const commands = orderCommands(COMMANDS, ROOT_HELP_COMMAND_ORDER);
-  const helpGroups = HELP_GROUPS.filter((group) => COMMANDS.some((command) => command.helpGroups.includes(group.key)));
+  const commands = orderCommands(WORKBENCH_AGENT_COMMANDS, ROOT_HELP_COMMAND_ORDER);
+  const helpGroups = HELP_GROUPS.filter((group) => WORKBENCH_AGENT_COMMANDS.some((command) => command.helpGroups.includes(group.key)));
   return [
-    "Usage:",
-    "  wb --help",
-    "  wb <command> [options]",
-    "",
-    "Commands:",
-    ...commands.map((command) => `  ${command.usage}`),
-    "",
-    "Help commands:",
-    ...helpGroups.map((group) => `  wb ${group.words.join(" ")} --help`),
-    "",
-    "Project ownership is derived from the current working directory.",
-    "",
+    "Usage:", "  wb --help", "  wb <command> [options]", "", "Commands:",
+    ...commands.map((command) => `  ${command.usage}`), "", "Help commands:",
+    ...helpGroups.map((group) => `  wb ${group.words.join(" ")} --help`), "",
+    "Project ownership is derived from the current working directory.", "",
   ].join("\n");
 }
-
 function renderGroupHelp(group: HelpGroupDefinition) {
-  const commands = orderCommands(
-    COMMANDS.filter((command) => command.helpGroups.includes(group.key)),
-    group.commandOrder ?? [],
-  );
-  const commandSection = group.options
-    ? group.options
-    : [
-      "Commands:",
-      ...commands.flatMap((command, index) => [
-        ...(index ? [""] : []),
-        `  ${command.usage}`,
-        `    ${command.description}`,
-      ]),
-    ].join("\n");
-  return [
-    "Usage:",
-    `  ${group.usage}`,
-    "",
-    commandSection,
-    ...(group.footer ? ["", group.footer] : []),
-    "",
+  const commands = orderCommands(WORKBENCH_AGENT_COMMANDS.filter((command) => command.helpGroups.includes(group.key)), group.commandOrder ?? []);
+  const commandSection = group.options ?? [
+    "Commands:",
+    ...commands.flatMap((command, index) => [...(index ? [""] : []), `  ${command.usage}`, `    ${command.description}`]),
   ].join("\n");
+  return ["Usage:", `  ${group.usage}`, "", commandSection, ...(group.footer ? ["", group.footer] : []), ""].join("\n");
 }
-
-function matchesWords(argv: readonly string[], words: readonly string[]) {
-  return words.every((word, index) => argv[index] === word);
-}
-
+function matchesWords(argv: readonly string[], words: readonly string[]) { return words.every((word, index) => argv[index] === word); }
 function matchHelpGroup(argv: readonly string[]) {
-  return HELP_GROUPS.flatMap((group) => (
-    [group.words, ...(group.aliases ?? [])].map((words) => ({ group, words }))
-  ))
+  return HELP_GROUPS.flatMap((group) => [group.words, ...(group.aliases ?? [])].map((words) => ({ group, words })))
     .filter((candidate) => matchesWords(argv, candidate.words))
     .sort((left, right) => right.words.length - left.words.length)[0]?.group ?? null;
 }
-
-function helpPath(argv: readonly string[]) {
-  if (argv[0] === "help") {
-    return [];
-  }
-  return argv.filter((argument) => argument !== "--help");
-}
+function helpPath(argv: readonly string[]) { return argv[0] === "help" ? [] : argv.filter((argument) => argument !== "--help"); }
 
 export const WORKBENCH_AGENT_CLI_HELP = renderRootHelp();
 
@@ -1121,36 +200,22 @@ export async function parseWorkbenchAgentCliCommand(
     workbenchOrigin?: string | null;
   } = {},
 ): Promise<WorkbenchAgentCliParseResult> {
-  const isLegacyCheckpointCommand = (
-    argv[0] === "git" && argv[1] === "checkpoint"
-  ) || argv[0] === "checkpoint" || (argv[0] === "git" && argv[1] === "plan");
-  if (isLegacyCheckpointCommand) {
-    return { help: LEGACY_CHECKPOINT_MIGRATION_GUIDE, kind: "help" };
-  }
-
+  const isLegacyCheckpointCommand = (argv[0] === "git" && argv[1] === "checkpoint") || argv[0] === "checkpoint" || (argv[0] === "git" && argv[1] === "plan");
+  if (isLegacyCheckpointCommand) return { help: LEGACY_CHECKPOINT_MIGRATION_GUIDE, kind: "help" };
   if (!argv.length || argv.includes("--help") || argv[0] === "help") {
     const group = matchHelpGroup(helpPath(argv));
     return { help: group ? renderGroupHelp(group) : renderRootHelp(), kind: "help" };
   }
-
-  const matched = COMMANDS.flatMap((definition) => (
+  const matched = WORKBENCH_AGENT_COMMANDS.flatMap((definition) => (
     [definition.words, ...(definition.aliases ?? [])].map((words) => ({ definition, words }))
-  ))
-    .filter((candidate) => matchesWords(argv, candidate.words))
-    .sort((left, right) => right.words.length - left.words.length)[0];
-  if (!matched) {
-    return { error: `Unsupported wb command: ${argv.join(" ")}\n\n${WORKBENCH_AGENT_CLI_HELP}`, kind: "error" };
-  }
-
+  )).filter((candidate) => matchesWords(argv, candidate.words)).sort((left, right) => right.words.length - left.words.length)[0];
+  if (!matched) return { error: `Unsupported wb command: ${argv.join(" ")}\n\n${WORKBENCH_AGENT_CLI_HELP}`, kind: "error" };
   try {
     return {
       kind: "request",
-      request: await matched.definition.build({ args: argv.slice(matched.words.length), callerHarness, callerThreadId, cwd, workbenchOrigin }),
+      request: await matched.definition.buildRequestFromCli(argv.slice(matched.words.length), { callerHarness, callerThreadId, cwd, workbenchOrigin }),
     };
   } catch (error) {
-    return {
-      error: `${error instanceof Error ? error.message : String(error)}\n\nUsage: ${matched.definition.usage}`,
-      kind: "error",
-    };
+    return { error: `${error instanceof Error ? error.message : String(error)}\n\nUsage: ${matched.definition.usage}`, kind: "error" };
   }
 }

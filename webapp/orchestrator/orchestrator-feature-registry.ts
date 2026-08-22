@@ -16,6 +16,7 @@ import CodexHealthMonitor, { type CodexHealthMonitorOptions } from "./CodexHealt
 import NextDevHealthSupervisor, { type NextDevHealthSupervisorOptions } from "./NextDevHealthSupervisor";
 import type { OrchestratorFeatureGeneration, OrchestratorFeatureLease } from "./OrchestratorFeatureHost";
 import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
+import WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
 import WorkbenchBridgeRequestController from "./WorkbenchBridgeRequestController";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import WorkbenchLegacyMigrationSourceController, { readLegacyMigrationSourceConfig } from "./WorkbenchLegacyMigrationSourceController";
@@ -58,6 +59,7 @@ export interface OrchestratorFeatureContext {
   notifyThreadLifecycle(projectId: string, entry: import("../lib/workbench/thread/thread-state").WorkbenchThreadSidebarEntry): void;
   publishThreadState(connectionId: string, snapshot: WorkbenchThreadStateSnapshot): void;
   requestHarness(harness: HarnessKind, request: JsonRpcRequest): Promise<JsonRpcResponse>;
+  requestThreadResume(harness: "codex" | "opencode", threadId: string): Promise<void>;
   requestSubagent(request: JsonRpcRequest): Promise<JsonRpcResponse>;
   subagentStore: { list(options: { projectId: string }): Promise<{ subagents: Array<{ createdAt: number; cwd: string; directSubagentIndex: number; harness: WorkbenchHarness; name: string; parentThreadId: string; profileId: string; profileName: string; projectId: string; threadId: string; title: string; updatedAt: number }> }> };
   threadTransitions: WorkbenchThreadTransitionCoordinator;
@@ -70,6 +72,7 @@ export interface OrchestratorFeatures {
   codexHealth: CodexHealthMonitor;
   gitArc: WorkbenchGitArcFeature;
   legacyMigrationSource: WorkbenchLegacyMigrationSourceController;
+  mcp: WorkbenchAgentMcpController;
   modules: OrchestratorReloadableModules;
   nextDevHealth: NextDevHealthSupervisor;
   orchestratorHttp: WorkbenchOrchestratorHttpRouter;
@@ -126,6 +129,7 @@ export function createOrchestratorFeatureGeneration(
     projectState: projectSnapshot,
     publish: (connectionId, snapshot) => { if (lease.isCurrent()) context.publishThreadState(connectionId, snapshot); },
     requestHarness: context.requestHarness,
+    requestThreadResume: context.requestThreadResume,
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
     resolveProjectFromCwd: (cwd, options) => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
     storageRoot: context.legacyMigrationProjectRoot,
@@ -146,11 +150,17 @@ export function createOrchestratorFeatureGeneration(
       ? await threadState.handleManagedThreadRequest(request)
       : await context.requestSubagent(request),
   });
+  const mcp = new WorkbenchAgentMcpController({
+    executeCommand: async (request, signal) => await agentCommand.executeStructuredRequest(request, signal),
+    orchestratorOrigin: context.localOrchestratorOrigin,
+    requestCodex: context.requestSubagent,
+  });
   const orchestratorHttp = new WorkbenchOrchestratorHttpRouter({
     agentCommand,
     bridgeRequest,
     gitArc,
     legacyMigrationSource,
+    mcp,
     projectCatalog,
     projectSnapshot,
     threadGit,
@@ -176,7 +186,7 @@ export function createOrchestratorFeatureGeneration(
     isShuttingDown: () => !lease.isCurrent() || context.codexHealthOptions.isShuttingDown(),
     requestRecovery: (reason) => { if (lease.isCurrent()) context.codexHealthOptions.requestRecovery(reason); },
   });
-  const features: OrchestratorFeatures = { agentCommand, bridgeRequest, browseSessionCleanup, codexHealth, gitArc, legacyMigrationSource, modules, nextDevHealth, orchestratorHttp, projectCatalog, projectSnapshot, threadGit, threadState };
+  const features: OrchestratorFeatures = { agentCommand, bridgeRequest, browseSessionCleanup, codexHealth, gitArc, legacyMigrationSource, mcp, modules, nextDevHealth, orchestratorHttp, projectCatalog, projectSnapshot, threadGit, threadState };
   return {
     dispose: async () => {
       codexHealth.dispose();

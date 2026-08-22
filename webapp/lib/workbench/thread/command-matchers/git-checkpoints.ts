@@ -20,6 +20,7 @@ import { CommandMatcher } from "./core";
 import { tokenizeCommand } from "./helpers";
 import { unwrapLeadingPowerShellLiteralHereStringAssignment } from "./shells";
 import type { CommandMatcherDefinition } from "./types";
+import { getWorkbenchCommandRendering, type WorkbenchCommandPresentationName } from "./workbench-command-rendering";
 
 export type GitArcCommandAction = GitArcAction | "planAdd" | "planAdopt" | "planRemove" | "planStart" | "rescind";
 
@@ -64,27 +65,17 @@ export interface GitArcCommandIntent {
 function createMatcher({
   commandPattern,
   id,
-  ongoing,
-  summary,
-  stats,
+  presentationName,
 }: {
   commandPattern: RegExp;
   id: string;
-  ongoing: string;
-  stats?: { gitCheckpointCreates?: number; gitCheckpointDiffs?: number; gitCheckpointRestores?: number };
-  summary: string;
+  presentationName: WorkbenchCommandPresentationName;
 }): CommandMatcherDefinition {
   return CommandMatcher({
     id,
     match: ({ stage }) => {
       if (!commandPattern.test(stage.text.trim())) return null;
-      return CommandMatcher.Result({
-        ongoingSummaryParts: [CommandMatcher.Text(ongoing)],
-        remainingCommand: null,
-        stop: true,
-        summaryParts: [CommandMatcher.Text(summary)],
-        ...(stats ? { summaryStats: stats } : {}),
-      });
+      return getWorkbenchCommandRendering(presentationName, {})?.result ?? null;
     },
   });
 }
@@ -93,71 +84,52 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+plan\s+add(?:\s|$)/iu,
     id: "git-arc.plan-add",
-    ongoing: "Extending Git plan",
-    stats: { gitCheckpointCreates: 1 },
-    summary: "Extended Git plan",
+    presentationName: "git_arc_plan_add",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+plan\s+remove(?:\s|$)/iu,
     id: "git-arc.plan-remove",
-    ongoing: "Reducing Git plan",
-    stats: { gitCheckpointCreates: 1 },
-    summary: "Reduced Git plan",
+    presentationName: "git_arc_plan_remove",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+plan\s+adopt(?:\s|$)/iu,
     id: "git-arc.plan-adopt",
-    ongoing: "Adopting changes into Git plan",
-    stats: { gitCheckpointCreates: 1 },
-    summary: "Adopted changes into Git plan",
+    presentationName: "git_arc_plan_adopt",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+plan\s+start(?:\s|$)/iu,
     id: "git-arc.plan-start",
-    ongoing: "Creating and starting Git plan",
-    stats: { gitCheckpointCreates: 1 },
-    summary: "Created and started Git plan",
+    presentationName: "git_arc_plan_start",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+rescind(?:\s|$)/iu,
     id: "git-arc.rescind",
-    ongoing: "Rescinding arc proposal",
-    summary: "Rescinded arc proposal",
+    presentationName: "git_arc_rescind",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+plan(?:\s|$)/iu,
     id: ARC_MATCHER_IDS.plan,
-    ongoing: "Creating Git plan",
-    stats: { gitCheckpointCreates: 1 },
-    summary: "Created Git plan",
+    presentationName: "git_arc_plan",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+start(?:\s|$)/iu,
     id: ARC_MATCHER_IDS.start,
-    ongoing: "Checking Git arc",
-    stats: { gitCheckpointDiffs: 1 },
-    summary: "Checked Git arc",
+    presentationName: "git_arc_start",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+continue(?:\s|$)/iu,
     id: ARC_MATCHER_IDS.continue,
-    ongoing: "Continuing Git arc",
-    stats: { gitCheckpointCreates: 1 },
-    summary: "Continued Git arc",
+    presentationName: "git_arc_continue",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+add(?:\s|$)/iu,
     id: ARC_MATCHER_IDS.add,
-    ongoing: "Extending Git arc",
-    stats: { gitCheckpointCreates: 1 },
-    summary: "Extended Git arc",
+    presentationName: "git_arc_add",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+adopt(?:\s|$)/iu,
     id: ARC_MATCHER_IDS.adopt,
-    ongoing: "Adopting workspace changes",
-    stats: { gitCheckpointCreates: 1 },
-    summary: "Adopted workspace changes",
+    presentationName: "git_arc_adopt",
   }),
   CommandMatcher({
     id: ARC_MATCHER_IDS.mv,
@@ -165,48 +137,38 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       const intent = parseGitArcCommand(stage.text.trim());
       if (intent?.action !== "mv") return null;
       const preview = intent.move?.kind === "regex" && !intent.move.confirm;
-      return CommandMatcher.Result({
-        ongoingSummaryParts: [CommandMatcher.Text(preview ? "Previewing Git arc moves" : "Moving Git arc paths")],
-        remainingCommand: null,
-        stop: true,
-        summaryParts: [CommandMatcher.Text(preview ? "Previewed Git arc moves" : "Moved Git arc paths")],
-        ...(!preview ? { summaryStats: { gitCheckpointCreates: 1 } } : {}),
-      });
+      return getWorkbenchCommandRendering("git_arc_mv", {
+        move: {
+          confirm: !preview,
+          kind: intent.move?.kind ?? "operands",
+        },
+      })?.result ?? null;
     },
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+remove(?:\s|$)/iu,
     id: ARC_MATCHER_IDS.remove,
-    ongoing: "Reducing Git arc",
-    stats: { gitCheckpointCreates: 1 },
-    summary: "Reduced Git arc",
+    presentationName: "git_arc_remove",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+compare(?:\s|$)/iu,
     id: ARC_MATCHER_IDS.compare,
-    ongoing: "Comparing Git arc",
-    stats: { gitCheckpointDiffs: 1 },
-    summary: "Compared Git arc",
+    presentationName: "git_arc_compare",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+diff(?:\s|$)/iu,
     id: ARC_MATCHER_IDS.diff,
-    ongoing: "Diffing Git arc",
-    stats: { gitCheckpointDiffs: 1 },
-    summary: "Diffed Git arc",
+    presentationName: "git_arc_diff",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+propose(?:\s|$)/iu,
     id: ARC_MATCHER_IDS.propose,
-    ongoing: "Creating arc commit proposal",
-    summary: "Proposed arc commit",
+    presentationName: "git_arc_propose",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+restore(?:\s|$)/iu,
     id: ARC_MATCHER_IDS.restore,
-    ongoing: "Restoring Git arc",
-    stats: { gitCheckpointRestores: 1 },
-    summary: "Restored Git arc",
+    presentationName: "git_arc_restore",
   }),
 ];
 

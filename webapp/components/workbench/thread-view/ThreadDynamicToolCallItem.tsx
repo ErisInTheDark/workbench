@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ThreadDynamicToolCallItem: render dynamic tool calls, including structured questionnaire results, inside thread history. Keywords: workbench, thread, dynamic tool, questionnaire.
- * - Local helpers: normalize questionnaire payloads, parse recorded answers, and render generic JSON sections for non-questionnaire tools. Keywords: JSON, tool result, user input, display.
+ * - Local helpers: normalize questionnaire payloads, parse recorded answers, and render special questionnaire/skill/subagent tools. Keywords: tool result, user input, display.
  */
 "use client";
 
@@ -25,7 +25,9 @@ import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadSummaryText from "./ThreadSummaryText";
+import ThreadToolCallDetails from "./ThreadToolCallDetails";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
+import { formatDynamicToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
 import { humanizeThreadLabel } from "./thread-view-formatters";
 
 type DynamicToolCallItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
@@ -50,14 +52,6 @@ function asString (value: unknown) {
 
 function asBoolean (value: unknown) {
   return typeof value === "boolean" ? value : false;
-}
-
-function hasJsonValue (value: unknown) {
-  return value !== null && value !== undefined;
-}
-
-function formatJsonValue (value: unknown) {
-  return JSON.stringify(value, null, 2) ?? "null";
 }
 
 function createFallbackQuestionId (index: number) {
@@ -359,25 +353,6 @@ function getToolLabelText (item: DynamicToolCallItem, fallback = "tool") {
     || humanizeThreadLabel(asString(asRecord(item.arguments)?.agent_type)?.trim() || fallback);
 }
 
-function ThreadJsonSection ({
-  label,
-  value,
-}: {
-  label: string;
-  value: unknown;
-}) {
-  if (!hasJsonValue(value)) {
-    return null;
-  }
-
-  return (
-    <div className="space-y-2">
-      <p className="m-0 text-[0.67em] uppercase tracking-[0.18em] text-muted">{label}</p>
-      <pre className={JSON_BLOCK_CLASS}>{formatJsonValue(value)}</pre>
-    </div>
-  );
-}
-
 function ThreadMetaLine ({
   label,
   value,
@@ -500,6 +475,12 @@ function ThreadGenericDynamicToolCallItem ({
   item: DynamicToolCallItem;
 }) {
   const metaParts = buildMetaParts(item);
+  const invocation = formatDynamicToolInvocation({
+    argumentsValue: item.arguments,
+    namespace: item.namespace,
+    tool: item.tool,
+  });
+  const output = formatToolCallOutput({ content: item.contentItems });
 
   return (
     <ThreadDisclosure
@@ -525,16 +506,9 @@ function ThreadGenericDynamicToolCallItem ({
           ) : null}
         </>
       )}
-      summaryClassName="text-[0.92em] leading-[1.6] text-text"
+      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
     >
-      <>
-        <ThreadMetaLine
-          label="Success:"
-          value={item.success === null ? "pending" : item.success ? "true" : "false"}
-        />
-        <ThreadJsonSection label="Arguments" value={item.arguments} />
-        <ThreadJsonSection label="Content items" value={item.contentItems} />
-      </>
+      <ThreadToolCallDetails invocation={invocation} output={output} />
     </ThreadDisclosure>
   );
 }

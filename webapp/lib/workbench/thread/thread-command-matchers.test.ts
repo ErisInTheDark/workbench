@@ -6,11 +6,23 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import type { JsonValue } from "../../codex/generated/app-server/serde_json/JsonValue.ts";
+import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry.ts";
+import { getWorkbenchAgentCommandToolName } from "../commands/workbench-agent-command-definition.ts";
+import type { ThreadCommandDisplayPart } from "./command-matchers/types.ts";
+import {
+  WORKBENCH_COMMAND_PRESENTATION_NAMES,
+  type WorkbenchCommandPresentationName,
+} from "./command-matchers/workbench-command-rendering.ts";
+
 import {
   getGitArcMatcherAction,
   getThreadCommandDisplay,
   getThreadCommandExecutionOutcome,
   getThreadCommandOutcomeDisplay,
+  getWorkbenchMcpCommandDisplay,
+  getWorkbenchMcpCommandRoute,
+  shouldUseWorkbenchMcpSpecializedRenderer,
   parseGitCheckpointCompareOutput,
   parseGitCheckpointCommitCommand,
   parseGitCheckpointProposalId,
@@ -22,6 +34,153 @@ import {
 
 const PROJECT_ROOT = "C:/git/web/workbench";
 
+function assertRouteOnlyDisplay(
+  display: ReturnType<typeof getThreadCommandDisplay>,
+  claimedBy: string,
+) {
+  assert.equal(display.claimedBy, claimedBy);
+  assert.equal(display.omitFromDisplay, true);
+  assert.deepEqual(display.summaryParts, []);
+  assert.deepEqual(display.ongoingSummaryParts, []);
+}
+
+function displayPartKinds(parts: readonly ThreadCommandDisplayPart[]) {
+  return parts.map((part) => part.type === "text" ? part.variant ?? "plain" : part.type);
+}
+
+function codeOperands(parts: readonly ThreadCommandDisplayPart[]) {
+  return parts.flatMap((part) => part.type === "text" && part.variant === "code" ? [part.text] : []);
+}
+
+function pathOperands(parts: readonly ThreadCommandDisplayPart[]) {
+  return parts.flatMap((part) => part.type === "path" ? [part.path] : []);
+}
+
+function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
+  switch (name) {
+    case "thread_title": return { title: "Render typed wb tools" };
+    case "thread_status": return { status: "completed" };
+    case "subagent_wait":
+    case "subagent_stop":
+    case "subagent_settle": return { names: ["Lumi"] };
+    case "subagent_message": return { message: "continue", parent: true };
+    case "subagent_create": return { message: "inspect", name: "Lumi", profileId: "profile", title: "Inspect" };
+    case "git_arc_mv": return { move: { confirm: false, kind: "regex", pattern: "^src", replacement: "test", roots: ["src"] } };
+    case "browse_run": return { commands: ["snapshot --compact"], session: "rendering" };
+    case "browse_stop": return { force: true, session: "rendering" };
+    case "browse_forget": return { force: false, session: "rendering" };
+    case "orchestrator_reload": return { scopes: ["mcp"] };
+    default: return {};
+  }
+}
+
+test("every exposed typed wb MCP tool has a semantic route", () => {
+  const exposedNames = listWorkbenchAgentCommands()
+    .filter((definition) => !definition.hideFromMcp)
+    .map(getWorkbenchAgentCommandToolName)
+    .sort();
+  const presentationNames = WORKBENCH_COMMAND_PRESENTATION_NAMES
+    .filter((name) => name !== "browse_raw")
+    .toSorted();
+  assert.deepEqual(presentationNames, exposedNames);
+
+  for (const tool of exposedNames) {
+    assert.ok(getWorkbenchMcpCommandRoute({
+      argumentsValue: representativeMcpArguments(tool as WorkbenchCommandPresentationName),
+      server: "wb",
+      tool,
+    }), tool);
+  }
+});
+
+test("simple typed wb MCP calls share argument-sensitive CLI presentations", () => {
+  const cases = [
+    ["wb thread resume", "thread_resume", {}],
+    ["wb orchestrator reload --mcp", "orchestrator_reload", { scopes: ["mcp"] }],
+    ["wb git add -- src/a.ts", "git_add", { paths: ["src/a.ts"] }],
+    ["wb thread title get", "thread_title_get", {}],
+    ["wb subagent list", "subagent_list", {}],
+    ['wb browse run --thread thread-one --session rendering --summary "Check page" --command "snapshot --compact"', "browse_run", { commands: ["snapshot --compact"], session: "rendering", summary: "Check page" }],
+  ] satisfies Array<[string, string, JsonValue]>;
+
+  for (const [command, tool, argumentsValue] of cases) {
+    const cli = getThreadCommandDisplay({ command, commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT });
+    const mcp = getWorkbenchMcpCommandDisplay({ argumentsValue, server: "wb", tool });
+    assert.ok(mcp, tool);
+    assert.equal(mcp.claimedBy, cli.claimedBy, tool);
+    assert.deepEqual(mcp.summaryParts, cli.summaryParts, tool);
+    assert.deepEqual(mcp.ongoingSummaryParts, cli.ongoingSummaryParts, tool);
+    assert.deepEqual(mcp.summaryStats, cli.summaryStats, tool);
+    assert.deepEqual(getThreadCommandOutcomeDisplay(mcp, "failed").summaryParts, getThreadCommandOutcomeDisplay(cli, "failed").summaryParts, tool);
+  }
+});
+
+test("every valid simple typed wb MCP route emphasizes its important target", () => {
+  const cases = [
+    ["thread_title_get", {}, ["plain", "primary"]],
+    ["thread_resume", {}, ["plain", "primary"]],
+    ["git_add", { paths: ["src/a.ts"] }, ["plain", "primary"]],
+    ["git_unstage", { paths: ["src/a.ts"] }, ["plain", "primary"]],
+    ["git_commit", { message: "Commit" }, ["plain", "primary"]],
+    ["orchestrator_reload", { scopes: ["orchestrator-logic", "mcp"] }, ["plain", "primary"]],
+    ["subagent_list", {}, ["plain", "primary"]],
+    ["subagent_profiles", {}, ["plain", "primary"]],
+    ["browse_run", { commands: ["snapshot --compact"] }, ["plain", "primary"]],
+    ["browse_sessions", {}, ["plain", "primary"]],
+    ["browse_stop", { session: "rendering" }, ["plain", "primary", "plain", "code"]],
+    ["browse_forget", { session: "rendering" }, ["plain", "primary", "plain", "code"]],
+  ] satisfies Array<[string, JsonValue, string[]]>;
+
+  for (const [tool, argumentsValue, expectedKinds] of cases) {
+    const display = getWorkbenchMcpCommandDisplay({ argumentsValue, server: "wb", tool });
+    assert.ok(display, tool);
+    assert.deepEqual(displayPartKinds(display.summaryParts), expectedKinds, tool);
+    assert.deepEqual(displayPartKinds(display.ongoingSummaryParts), expectedKinds, tool);
+  }
+});
+
+test("specialized typed wb MCP calls share CLI claims without duplicate summaries", () => {
+  const cases = [
+    ["wb thread status --status blocked", "thread_status", { status: "blocked" }],
+    ['wb thread title --title "Render typed wb tools"', "thread_title", { title: "Render typed wb tools" }],
+    ["wb subagent wait --name Lumi --name Nova", "subagent_wait", { names: ["Lumi", "Nova"] }],
+    ['wb subagent message --parent --message "progress"', "subagent_message", { message: "progress", parent: true }],
+    ["wb git arc mv --regex ^src --replace test -- src", "git_arc_mv", { move: { confirm: false, kind: "regex", pattern: "^src", replacement: "test", roots: ["src"] } }],
+    ["wb git arc compare", "git_arc_compare", { paths: [] }],
+    ["wb thread recall", "thread_recall", {}],
+  ] satisfies Array<[string, string, JsonValue]>;
+
+  for (const [command, tool, argumentsValue] of cases) {
+    const cli = getThreadCommandDisplay({ command, commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT });
+    const route = getWorkbenchMcpCommandRoute({ argumentsValue, server: "wb", tool });
+    assert.equal(route?.kind, "specialized", tool);
+    if (!route || route.kind !== "specialized") continue;
+    assert.equal(route.rendering.claimedBy, cli.claimedBy, tool);
+    assert.deepEqual(route.rendering.result.summaryParts, [], tool);
+    assert.equal(route.rendering.result.omitFromDisplay, true, tool);
+  }
+});
+
+test("non-wb and unknown MCP tools keep generic rendering", () => {
+  assert.equal(getWorkbenchMcpCommandDisplay({ argumentsValue: {}, server: "other", tool: "git_arc_compare" }), null);
+  assert.equal(getWorkbenchMcpCommandDisplay({ argumentsValue: {}, server: "wb", tool: "future_command" }), null);
+  assert.equal(getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "other", tool: "git_arc_compare" }), null);
+  assert.equal(getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wb", tool: "future_command" }), null);
+});
+
+test("failed Recall MCP calls use the generic error renderer", () => {
+  const recallRoute = getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wb", tool: "thread_recall" });
+  const gitRoute = getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wb", tool: "git_arc_compare" });
+
+  assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(recallRoute, false), true);
+  assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(recallRoute, true), false);
+  assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(gitRoute, true), true);
+  const statusRoute = getWorkbenchMcpCommandRoute({ argumentsValue: { status: "blocked" }, server: "wb", tool: "thread_status" });
+  const subagentRoute = getWorkbenchMcpCommandRoute({ argumentsValue: { message: "progress", parent: true }, server: "wb", tool: "subagent_message" });
+  assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(statusRoute, true), false);
+  assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(subagentRoute, true), false);
+});
+
 test("PowerShell ripgrep summaries do not treat an uppercase context value as the query", () => {
   const display = getThreadCommandDisplay({
     command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command 'rg -n -C 8 "rotate|selectedHarness|onHarness|HarnessIcon|harness" webapp/components/workbench.tsx | Select-Object -First 180'`,
@@ -31,14 +190,9 @@ test("PowerShell ripgrep summaries do not treat an uppercase context value as th
   });
 
   assert.equal(display.claimedBy, "powershell.search-rg,powershell.select-object-limit");
-  assert.equal(
-    display.summaryText,
-    'Search for "rotate|selectedHarness|onHarness|HarnessIcon|harness" in webapp/components/workbench.tsx -> Take first 180',
-  );
-  assert.equal(
-    display.ongoingSummaryText,
-    'Searching for "rotate|selectedHarness|onHarness|HarnessIcon|harness" in webapp/components/workbench.tsx -> Taking first 180',
-  );
+  assert.deepEqual(codeOperands(display.summaryParts), ['"rotate|selectedHarness|onHarness|HarnessIcon|harness"']);
+  assert.deepEqual(pathOperands(display.summaryParts), ["webapp/components/workbench.tsx"]);
+  assert.equal(display.summaryStats.searchedFiles, 1);
 });
 
 test("PowerShell ripgrep summaries preserve lowercase count flags as non-consuming", () => {
@@ -50,8 +204,8 @@ test("PowerShell ripgrep summaries preserve lowercase count flags as non-consumi
   });
 
   assert.equal(display.claimedBy, "powershell.search-rg");
-  assert.equal(display.summaryText, 'Search for "needle" in webapp/components/workbench.tsx');
-  assert.equal(display.ongoingSummaryText, 'Searching for "needle" in webapp/components/workbench.tsx');
+  assert.deepEqual(codeOperands(display.summaryParts), ['"needle"']);
+  assert.deepEqual(pathOperands(display.summaryParts), ["webapp/components/workbench.tsx"]);
 });
 
 test("Workbench subagent commands share one semantic parser", () => {
@@ -127,8 +281,6 @@ test("Workbench subagent commands share one semantic parser", () => {
     projectRootPath: PROJECT_ROOT,
   });
   assert.equal(display.claimedBy, "workbench-cli.subagent");
-  assert.equal(display.summaryText, "Waited for subagent");
-  assert.equal(display.ongoingSummaryText, "Waiting for subagent");
 
   const multiplexedDisplay = getThreadCommandDisplay({
     command: "wb subagent wait --id child-thread --id other-child",
@@ -137,8 +289,6 @@ test("Workbench subagent commands share one semantic parser", () => {
     projectRootPath: PROJECT_ROOT,
   });
   assert.equal(multiplexedDisplay.claimedBy, "workbench-cli.subagent");
-  assert.equal(multiplexedDisplay.summaryText, "Waited for 2 subagents");
-  assert.equal(multiplexedDisplay.ongoingSummaryText, "Waiting for 2 subagents");
 
   const parentMessageDisplay = getThreadCommandDisplay({
     command: 'wb subagent message --parent --message "Progress note"',
@@ -146,8 +296,7 @@ test("Workbench subagent commands share one semantic parser", () => {
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(parentMessageDisplay.summaryText, "Messaged parent");
-  assert.equal(parentMessageDisplay.ongoingSummaryText, "Messaging parent");
+  assert.equal(parentMessageDisplay.claimedBy, "workbench-cli.subagent");
 
 });
 
@@ -181,20 +330,6 @@ test("Workbench subagent parser preserves ordered name and id targets", () => {
     toParent: false,
   });
 
-  for (const [command, summaryText, ongoingSummaryText] of [
-    ["wb subagent wait --name Hikari --name Momo --name Aster", "Waited for 3 subagents", "Waiting for 3 subagents"],
-    ["wb subagent stop --name Hikari --name Momo", "Stopped 2 subagents", "Stopping 2 subagents"],
-    ["wb subagent settle --name Hikari --name Momo", "Settled 2 subagents", "Settling 2 subagents"],
-  ] as const) {
-    const display = getThreadCommandDisplay({
-      command,
-      commandActions: [],
-      cwd: PROJECT_ROOT,
-      projectRootPath: PROJECT_ROOT,
-    });
-    assert.equal(display.summaryText, summaryText);
-    assert.equal(display.ongoingSummaryText, ongoingSummaryText);
-  }
 });
 
 test("Workbench subagent parser preserves valid PowerShell here-string messages", () => {
@@ -227,8 +362,8 @@ test("Workbench thread title commands distinguish standalone sets from grouped r
     projectRootPath: PROJECT_ROOT,
   });
   assert.equal(titleSet.claimedBy, "workbench-cli.thread-title-set");
-  assert.equal(titleSet.omitFromDisplay, false);
-  assert.equal(titleSet.summaryText, "Task: Trace cache invalidation");
+  assert.equal(titleSet.omitFromDisplay, true);
+  assert.deepEqual(titleSet.summaryParts, []);
 
   const titleGet = getThreadCommandDisplay({
     command: "wb thread title get",
@@ -237,8 +372,6 @@ test("Workbench thread title commands distinguish standalone sets from grouped r
     projectRootPath: PROJECT_ROOT,
   });
   assert.equal(titleGet.claimedBy, "workbench-cli.thread-title-get");
-  assert.equal(titleGet.summaryText, "Checked thread title");
-  assert.equal(titleGet.ongoingSummaryText, "Checking thread title");
 });
 
 test("Workbench thread status commands match task completion and blocking across command shapes", () => {
@@ -249,9 +382,6 @@ test("Workbench thread status commands match task completion and blocking across
     projectRootPath: PROJECT_ROOT,
   });
   assert.equal(completed.claimedBy, "workbench-cli.thread-status");
-  assert.equal(completed.summaryText, "Task completed");
-  assert.equal(completed.ongoingSummaryText, "Marking task completed");
-  assert.equal(getThreadCommandOutcomeDisplay(completed, "failed").summaryText, "Failed marking task completed");
 
   const wrapped = getThreadCommandDisplay({
     command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command 'wb thread status --status blocked'`,
@@ -260,8 +390,6 @@ test("Workbench thread status commands match task completion and blocking across
     projectRootPath: PROJECT_ROOT,
   });
   assert.equal(wrapped.claimedBy, "workbench-cli.thread-status");
-  assert.equal(wrapped.summaryText, "Task blocked");
-  assert.equal(wrapped.ongoingSummaryText, "Marking task blocked");
 
   assert.deepEqual(parseWorkbenchThreadStatusCommand("escaped wrapper", [
     { type: "unknown", command: "wb thread status --status completed" },
@@ -287,8 +415,6 @@ test("Workbench subagent create commands expose metadata through PowerShell wrap
     projectRootPath: PROJECT_ROOT,
   });
   assert.equal(wrappedCreateDisplay.claimedBy, "workbench-cli.subagent");
-  assert.equal(wrappedCreateDisplay.summaryText, "Created subagent");
-  assert.equal(wrappedCreateDisplay.ongoingSummaryText, "Creating subagent");
 });
 
 test("Workbench subagent commands prefer clean semantic actions over escaped PowerShell wrappers", () => {
@@ -326,68 +452,18 @@ test("Workbench subagent list gets dedicated metadata labels", () => {
     projectRootPath: PROJECT_ROOT,
   });
   assert.equal(listDisplay.claimedBy, "workbench-cli.subagent");
-  assert.equal(listDisplay.summaryText, "Listed subagents");
-  assert.equal(listDisplay.ongoingSummaryText, "Listing subagents");
 });
 
-test("all Workbench CLI matcher families show the alternate install cwd name", () => {
-  const commands = [
-    "wb orchestrator reload --orchestrator-logic",
-    "wb thread recall --thread thread-id",
-    "wb browse sessions --thread thread-id",
-    "wb git add --thread thread-id -- file.ts",
-    "wb git arc diff --ref abc -- file.ts",
-  ];
-  for (const command of commands) {
-    const display = getThreadCommandDisplay({
-      command,
-      commandActions: [],
-      cwd: "C:/git/web/workbench/.workbench/worktrees/convex-lab",
-      projectRootPath: PROJECT_ROOT,
-    });
-    assert.match(display.summaryText, /^convex-lab: /u, command);
-    assert.match(display.ongoingSummaryText, /^convex-lab: /u, command);
-  }
-
-  const caseDistinctPosixDisplay = getThreadCommandDisplay({
-    command: "wb subagent list",
-    commandActions: [],
-    cwd: "/workspace/Workbench",
-    projectRootPath: "/workspace/workbench",
-  });
-  assert.match(caseDistinctPosixDisplay.summaryText, /^Workbench: /u);
-
-  const failedDisplay = getThreadCommandOutcomeDisplay(getThreadCommandDisplay({
-    command: "wb subagent list",
-    commandActions: [],
-    cwd: "C:/git/web/workbench/.workbench/worktrees/convex-lab",
-    projectRootPath: PROJECT_ROOT,
-  }), "failed");
-  assert.equal(failedDisplay.summaryText, "convex-lab: Failed listing subagents");
-});
-
-test("command execution outcomes select the explicit ongoing tense", () => {
-  const display = getThreadCommandDisplay({
-    command: "pwsh -Command 'rg needle webapp'",
-    commandActions: [],
-    cwd: PROJECT_ROOT,
-    projectRootPath: PROJECT_ROOT,
-  });
-
+test("command execution outcomes preserve lifecycle semantics", () => {
   assert.equal(getThreadCommandExecutionOutcome("inProgress", null), "inProgress");
   assert.equal(getThreadCommandExecutionOutcome("failed", 124), "timedOut");
   assert.equal(getThreadCommandExecutionOutcome("completed", 124), "timedOut");
   assert.equal(getThreadCommandExecutionOutcome("failed", 1), "failed");
   assert.equal(getThreadCommandExecutionOutcome("declined", null), "declined");
   assert.equal(getThreadCommandExecutionOutcome("completed", 0), "completed");
-
-  assert.equal(getThreadCommandOutcomeDisplay(display, "inProgress").summaryText, 'Searching for "needle" in webapp');
-  assert.equal(getThreadCommandOutcomeDisplay(display, "timedOut").summaryText, 'Timed out searching for "needle" in webapp');
-  assert.equal(getThreadCommandOutcomeDisplay(display, "failed").summaryText, 'Failed searching for "needle" in webapp');
-  assert.equal(getThreadCommandOutcomeDisplay(display, "declined").summaryText, 'Declined searching for "needle" in webapp');
 });
 
-test("raw commands receive an explicit ongoing fallback", () => {
+test("raw commands preserve the command operand across lifecycle displays", () => {
   const display = getThreadCommandDisplay({
     command: "mystery-command --flag",
     commandActions: [],
@@ -395,12 +471,16 @@ test("raw commands receive an explicit ongoing fallback", () => {
     projectRootPath: PROJECT_ROOT,
   });
 
-  assert.equal(display.summaryText, "mystery-command --flag");
-  assert.equal(display.ongoingSummaryText, "Running mystery-command --flag");
-  assert.equal(getThreadCommandOutcomeDisplay(display, "timedOut").summaryText, "Timed out running mystery-command --flag");
+  assert.equal(display.claimedBy, null);
+  assert.equal(display.summaryKind, "raw");
+  assert.deepEqual(displayPartKinds(display.summaryParts), ["code"]);
+  assert.deepEqual(displayPartKinds(display.ongoingSummaryParts), ["plain", "code"]);
+  assert.deepEqual(codeOperands(display.summaryParts), ["mystery-command --flag"]);
+  assert.deepEqual(codeOperands(display.ongoingSummaryParts), ["mystery-command --flag"]);
+  assert.deepEqual(codeOperands(getThreadCommandOutcomeDisplay(display, "timedOut").summaryParts), ["mystery-command --flag"]);
 });
 
-test("Workbench Git commands receive bounded selection, commit, plan, and arc summaries", () => {
+test("Workbench Git commands route to bounded selection, commit, plan, and arc owners", () => {
   const selection = getThreadCommandDisplay({
     command: "wb git add --worktree C:/workspace/.worktrees/lab -- src/file.ts",
     commandActions: [],
@@ -408,8 +488,6 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
     projectRootPath: PROJECT_ROOT,
   });
   assert.equal(selection.claimedBy, "workbench-git.selection");
-  assert.equal(selection.summaryText, "Selected files for commit");
-  assert.equal(selection.ongoingSummaryText, "Selecting files for commit");
 
   const commit = getThreadCommandDisplay({
     command: 'wb git commit --worktree C:/workspace/.worktrees/lab --message "A bounded commit"',
@@ -418,8 +496,6 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
     projectRootPath: PROJECT_ROOT,
   });
   assert.equal(commit.claimedBy, "workbench-git.commit");
-  assert.equal(commit.summaryText, "Committed selected files");
-  assert.equal(commit.ongoingSummaryText, "Committing selected files");
 
   const diff = getThreadCommandDisplay({
     command: "wb git arc diff -- src/file.ts",
@@ -427,8 +503,7 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(diff.claimedBy, "git-arc.diff");
-  assert.equal(diff.summaryText, "Diffed Git arc");
+  assertRouteOnlyDisplay(diff, "git-arc.diff");
 
   const plan = getThreadCommandDisplay({
     command: "wb git arc plan -m Update -- src/file.ts",
@@ -436,8 +511,7 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(plan.claimedBy, "git-arc.plan");
-  assert.equal(plan.summaryText, "Created Git plan");
+  assertRouteOnlyDisplay(plan, "git-arc.plan");
 
   const legacyCheckpoint = getThreadCommandDisplay({
     command: "wb git checkpoint plan",
@@ -453,8 +527,7 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(addition.claimedBy, "git-arc.add");
-  assert.equal(addition.summaryText, "Extended Git arc");
+  assertRouteOnlyDisplay(addition, "git-arc.add");
 
   const adoption = getThreadCommandDisplay({
     command: "wb git arc adopt -- src/dirty.ts",
@@ -462,8 +535,7 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(adoption.claimedBy, "git-arc.adopt");
-  assert.equal(adoption.summaryText, "Adopted workspace changes");
+  assertRouteOnlyDisplay(adoption, "git-arc.adopt");
 
   const movePreview = getThreadCommandDisplay({
     command: "wb git arc mv --regex ^src/(.+)$ --replace tests/$1 -- src",
@@ -471,9 +543,7 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(movePreview.claimedBy, "git-arc.mv");
-  assert.equal(movePreview.summaryText, "Previewed Git arc moves");
-  assert.equal(movePreview.ongoingSummaryText, "Previewing Git arc moves");
+  assertRouteOnlyDisplay(movePreview, "git-arc.mv");
 
   const moveApplied = getThreadCommandDisplay({
     command: "wb git arc mv src/one.ts tests/src/one.ts",
@@ -481,8 +551,7 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(moveApplied.claimedBy, "git-arc.mv");
-  assert.equal(moveApplied.summaryText, "Moved Git arc paths");
+  assertRouteOnlyDisplay(moveApplied, "git-arc.mv");
   assert.deepEqual(parseGitArcCommand("wb git arc mv --map src/one.ts tests/one.ts --map src/two.ts tests/two.ts"), {
     action: "mv",
     intentName: null,
@@ -503,8 +572,7 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(removal.claimedBy, "git-arc.remove");
-  assert.equal(removal.summaryText, "Reduced Git arc");
+  assertRouteOnlyDisplay(removal, "git-arc.remove");
 
   const start = getThreadCommandDisplay({
     command: "wb git arc start --ref abc",
@@ -512,8 +580,7 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(start.claimedBy, "git-arc.start");
-  assert.equal(start.summaryText, "Checked Git arc");
+  assertRouteOnlyDisplay(start, "git-arc.start");
 
   const compare = getThreadCommandDisplay({
     command: "wb git arc compare -- src/file.ts",
@@ -521,8 +588,7 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(compare.claimedBy, "git-arc.compare");
-  assert.equal(compare.summaryText, "Compared Git arc");
+  assertRouteOnlyDisplay(compare, "git-arc.compare");
 
   const proposal = getThreadCommandDisplay({
     command: "wb git arc propose -m Title -- src/file.ts",
@@ -530,8 +596,7 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(proposal.claimedBy, "git-arc.propose");
-  assert.equal(proposal.summaryText, "Proposed arc commit");
+  assertRouteOnlyDisplay(proposal, "git-arc.propose");
 
   assert.deepEqual(parseGitCheckpointCompareOutput([
     "Workbench arc comparison",
@@ -558,18 +623,17 @@ test("Workbench Git commands receive bounded selection, commit, plan, and arc su
   assert.equal(parseGitCheckpointCommitCommand("wb git checkpoint commit --sha abc --m Title -- src/one.ts"), null);
 });
 
-test("current-plan and proposal-lifecycle commands receive distinct truthful summaries", () => {
+test("current-plan and proposal-lifecycle commands expose route-only matcher claims", () => {
   const cases = [
-    ["wb git arc plan add -- src/a.ts", "git-arc.plan-add", "Extended Git plan"],
-    ["wb git arc plan remove -- src/a.ts", "git-arc.plan-remove", "Reduced Git plan"],
-    ["wb git arc plan adopt -- src/dirty.ts", "git-arc.plan-adopt", "Adopted changes into Git plan"],
-    ["wb git arc plan start -m Continue -- src/a.ts", "git-arc.plan-start", "Created and started Git plan"],
-    ["wb git arc rescind --proposal proposal-one", "git-arc.rescind", "Rescinded arc proposal"],
+    ["wb git arc plan add -- src/a.ts", "git-arc.plan-add"],
+    ["wb git arc plan remove -- src/a.ts", "git-arc.plan-remove"],
+    ["wb git arc plan adopt -- src/dirty.ts", "git-arc.plan-adopt"],
+    ["wb git arc plan start -m Continue -- src/a.ts", "git-arc.plan-start"],
+    ["wb git arc rescind --proposal proposal-one", "git-arc.rescind"],
   ] as const;
-  for (const [command, claimedBy, summaryText] of cases) {
+  for (const [command, claimedBy] of cases) {
     const display = getThreadCommandDisplay({ command, commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT });
-    assert.equal(display.claimedBy, claimedBy);
-    assert.equal(display.summaryText, summaryText);
+    assertRouteOnlyDisplay(display, claimedBy);
   }
 
   assert.deepEqual(parseGitArcCommand("wb git arc plan add -- src/a.ts"), {
@@ -635,8 +699,9 @@ wb git arc propose --replace proposal-one -m \"make arc Git transactions consist
     display.claimedBy,
     "powershell.hide-literal-here-string-assignment,git-arc.propose",
   );
-  assert.equal(display.summaryText, "Proposed arc commit");
-  assert.equal(display.ongoingSummaryText, "Creating arc commit proposal");
+  assert.equal(display.omitFromDisplay, true);
+  assert.deepEqual(display.summaryParts, []);
+  assert.deepEqual(display.ongoingSummaryParts, []);
   assert.deepEqual(parseGitCheckpointCommitCommand(display.unwrappedCommand), {
     amend: false,
     description,
@@ -669,20 +734,12 @@ test("PowerShell numbered reads resolve a preceding literal path assignment", ()
   });
 
   assert.equal(display.claimedBy, "powershell.hide-trivial-assignment,powershell.read-numbered-lines");
-  assert.equal(
-    display.summaryText,
-    "Read lines 81-117 of webapp/lib/workbench/thread/command-matchers/workbench-cli.ts",
-  );
-  assert.equal(
-    display.ongoingSummaryText,
-    "Reading lines 81-117 of webapp/lib/workbench/thread/command-matchers/workbench-cli.ts",
-  );
-
-  const pathPart = display.summaryParts.at(-1);
-  assert.equal(pathPart?.type, "path");
-  if (pathPart?.type === "path") {
-    assert.equal(pathPart.path, "webapp/lib/workbench/thread/command-matchers/workbench-cli.ts");
-  }
+  assert.deepEqual(pathOperands(display.summaryParts), [
+    "webapp/lib/workbench/thread/command-matchers/workbench-cli.ts",
+  ]);
+  assert.deepEqual(pathOperands(display.ongoingSummaryParts), [
+    "webapp/lib/workbench/thread/command-matchers/workbench-cli.ts",
+  ]);
 });
 
 test("PowerShell numbered reads invalidate a literal path after dynamic reassignment", () => {
@@ -697,6 +754,6 @@ test("PowerShell numbered reads invalidate a literal path after dynamic reassign
     display.claimedBy,
     "powershell.hide-trivial-assignment,powershell.hide-trivial-assignment,powershell.read-numbered-lines",
   );
-  assert.equal(display.summaryText, "Read lines 1-2 of $p");
-  assert.equal(display.ongoingSummaryText, "Reading lines 1-2 of $p");
+  assert.deepEqual(pathOperands(display.summaryParts), ["$p"]);
+  assert.deepEqual(pathOperands(display.ongoingSummaryParts), ["$p"]);
 });

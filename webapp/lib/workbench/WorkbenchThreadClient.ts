@@ -3913,6 +3913,8 @@ function WorkbenchThreadClient(
       case "thread/deleted":
       case "thread/unarchived":
       case "thread/closed":
+      case "thread/environment/connected":
+      case "thread/environment/disconnected":
       case "thread/settings/updated":
       case "thread/goal/updated":
       case "thread/goal/cleared":
@@ -3924,6 +3926,7 @@ function WorkbenchThreadClient(
       case "item/autoApprovalReview/started":
       case "item/autoApprovalReview/completed":
       case "rawResponseItem/completed":
+      case "rawResponse/completed":
       case "command/exec/outputDelta":
       case "item/commandExecution/terminalInteraction":
       case "item/fileChange/outputDelta":

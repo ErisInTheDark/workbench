@@ -60,6 +60,7 @@ export interface WorkbenchThreadStateFeatureContext {
   };
   publish(connectionId: string, snapshot: WorkbenchThreadStateSnapshot): void;
   requestHarness(harness: HarnessKind, request: JsonRpcRequest): Promise<JsonRpcResponse>;
+  requestThreadResume(harness: "codex" | "opencode", threadId: string): Promise<void>;
   resolveProjectById(projectId: string): Promise<ProjectRecord>;
   resolveProjectFromCwd(cwd: string, options?: { endpointName?: string }): Promise<ProjectResolution>;
   storageRoot: string;
@@ -256,6 +257,9 @@ export default class WorkbenchThreadStateFeature {
     try {
       const params = asRecord(request.params) ?? {};
       const resolved = await this.resolveManagedThread(params);
+      const providerEntry = normalizeProviderSidebarEntry(resolved.harness, resolved.thread);
+      if (!providerEntry || providerEntry.entryKind === "draft") throw new Error("The managed provider thread could not be normalized.");
+      await this.controller.ensureProviderEntry(resolved.projectId, providerEntry);
       if (request.method === "workbench/thread/title") {
         if (params.action === "get") {
           return {
@@ -283,11 +287,17 @@ export default class WorkbenchThreadStateFeature {
         if (!status) throw new Error("--status must be completed or blocked.");
         const turn = getCurrentTurn(resolved.thread);
         if (!turn?.id) throw new Error("The managed thread has no current turn to label.");
-        const providerEntry = normalizeProviderSidebarEntry(resolved.harness, resolved.thread);
         const entry = await this.controller.applyLifecycle(resolved.projectId, resolved.harness, resolved.thread.id, { kind: "agentStatus", status, turnId: turn.id }, providerEntry ?? undefined);
         if (!entry || entry.entryKind !== "thread") throw new Error("The current managed lifecycle could not be updated.");
         const snapshot = await this.controller.getSnapshot(resolved.projectId);
         return { id, result: { agentStatus: status, revision: snapshot.revision, threadId: resolved.thread.id, turnId: turn.id, userStatus: entry.lifecycle.kind } };
+      }
+      if (request.method === "workbench/thread/resume") {
+        if (resolved.harness === "copilot") throw new Error("Manual thread resume is unavailable for Copilot threads.");
+        const turn = getCurrentTurn(resolved.thread);
+        if (!turn?.id) throw new Error("The managed thread has no current turn to resume.");
+        await this.context.requestThreadResume(resolved.harness, resolved.thread.id);
+        return { id, result: { accepted: true, threadId: resolved.thread.id, turnId: turn.id } };
       }
       throw new Error("Unsupported managed thread command.");
     } catch (error) {
@@ -296,6 +306,25 @@ export default class WorkbenchThreadStateFeature {
   }
 
   async dispose() { await this.controller.dispose(); }
+
+  async getCodexMcpState(threadId: string) {
+    const response = await this.context.requestHarness("codex", { id: 0, method: "thread/read", params: { includeTurns: true, threadId } });
+    if (response.error) throw new Error(response.error.message);
+    const thread = (response.result as ThreadReadResponse | undefined)?.thread;
+    if (!thread || thread.id !== threadId) throw new Error("The managed Codex thread could not be read before turn admission.");
+    const project = await this.context.resolveProjectFromCwd(thread.cwd, { endpointName: "Codex MCP freshness" });
+    const providerEntry = normalizeProviderSidebarEntry("codex", thread);
+    if (!providerEntry || providerEntry.entryKind === "draft") throw new Error("The managed Codex thread could not be normalized.");
+    await this.controller.ensureProviderEntry(project.project.id, providerEntry);
+    return {
+      generation: await this.controller.getMcpGeneration(project.project.id, "codex", threadId),
+      projectId: project.project.id,
+    };
+  }
+
+  async setManagedCodexMcpGeneration(projectId: string, threadId: string, generation: string) {
+    await this.controller.setMcpGeneration(projectId, "codex", threadId, generation);
+  }
 
   private async reconcileProject(
     projectId: string,

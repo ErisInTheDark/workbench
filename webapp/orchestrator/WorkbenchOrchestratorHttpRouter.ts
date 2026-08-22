@@ -18,6 +18,7 @@ export interface WorkbenchOrchestratorHttpRouterOptions {
   bridgeRequest: HttpController;
   gitArc: HttpController;
   legacyMigrationSource: HttpController;
+  mcp: HttpController;
   projectCatalog: HttpController;
   projectSnapshot: ProjectSnapshotHttpController;
   threadGit: HttpController;
@@ -60,6 +61,12 @@ export default class WorkbenchOrchestratorHttpRouter {
         handle: (request, response) => options.agentCommand.handleHttpRequest(request, response),
         methods: ["POST"],
         path: "/orchestrator/agent-command",
+      },
+      {
+        errorMessage: "Workbench MCP request failed.",
+        handle: (request, response) => options.mcp.handleHttpRequest(request, response),
+        methods: ["GET", "POST", "DELETE"],
+        path: "/orchestrator/mcp",
       },
       {
         errorMessage: "Bridge request failed.",

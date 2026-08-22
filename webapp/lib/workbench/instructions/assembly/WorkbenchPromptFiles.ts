@@ -3,7 +3,7 @@
  * - WorkbenchPromptContext/WorkbenchPromptInstructions: public prompt assembly contracts. Keywords: prompt, context, instructions.
  * - ensureWorkbenchPromptFiles: write generated Workbench prompt files and scaffold prompt folders. Keywords: AGENTS, workflows, default agent.
  * - buildWorkbenchPromptInstructions: resolve fresh prompt files and expand Workbench injections. Keywords: prompt, injections, app-server.
- * - buildWorkbenchThreadUtilityDeveloperInstructions: resolve workflow-free Workbench CLI instructions. Keywords: thread, utilities, cli.
+ * - buildWorkbenchThreadUtilityDeveloperInstructions: resolve workflow-free typed Workbench instructions. Keywords: thread, utilities, MCP.
  * - buildWorkbenchCollaborationDeveloperInstructions: build Workbench-owned questionnaire collaboration instructions. Keywords: collaboration, plan mode.
  * - buildWorkbenchGitInstructions: re-export managed Git instruction rendering. Keywords: git, arc, checkpoint.
  * - filterWorkbenchInstructionContent/listWorkbenchInstructionMechanics: re-export final selector filtering and mechanic availability. Keywords: selector, mechanics.
@@ -41,6 +41,7 @@ import {
   buildWorkbenchOrchestratorReloadInstructions,
   buildWorkbenchSubagentInstructions,
   buildWorkbenchThreadRecallInstructions,
+  buildWorkbenchThreadResumeInstructions,
   buildThreadStatusInstructions,
   listWorkbenchInstructionMechanics,
 } from "../mechanics/workbench-instruction-mechanics";
@@ -464,6 +465,7 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
     browseInstructions,
     buildWorkbenchOrchestratorReloadInstructions(context),
     buildWorkbenchThreadRecallInstructions(context),
+    buildWorkbenchThreadResumeInstructions(context),
     buildWorkbenchGitInstructions(context),
     buildWorkbenchSubagentInstructions(context),
     buildThreadTitleInstructions(context),
@@ -486,6 +488,7 @@ export async function buildWorkbenchThreadUtilityDeveloperInstructions(
     browseInstructions,
     buildWorkbenchOrchestratorReloadInstructions(context),
     buildWorkbenchThreadRecallInstructions(context),
+    buildWorkbenchThreadResumeInstructions(context),
     buildWorkbenchGitInstructions(context),
     buildWorkbenchSubagentInstructions(context),
     buildThreadTitleInstructions(context),
@@ -515,6 +518,7 @@ export async function buildWorkbenchCollaborationDeveloperInstructions(
     browseInstructions,
     buildWorkbenchOrchestratorReloadInstructions(context),
     buildWorkbenchThreadRecallInstructions(context),
+    buildWorkbenchThreadResumeInstructions(context),
     buildWorkbenchGitInstructions(context),
     buildWorkbenchSubagentInstructions(context),
     buildThreadTitleInstructions(context),

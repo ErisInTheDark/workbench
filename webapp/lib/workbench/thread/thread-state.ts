@@ -435,7 +435,10 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
     case "userInputDelivered":
       if (
         (current?.kind === "completed" && current.reason === "userCompleted")
-        || current?.kind === "stopped"
+        || (current?.kind === "stopped" && (
+          current.reason === "userMarkedStopped"
+          || current.turnId === event.turnId
+        ))
         || (current?.kind === "needsAttention" && current.reason === "pendingInput")
       ) return current;
       return { agent: { agentStatus: "working", turnId: event.turnId }, kind: "working", reason: "acceptedIntent", settled: false };

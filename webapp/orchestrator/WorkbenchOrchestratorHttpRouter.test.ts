@@ -52,6 +52,7 @@ function createRouter(events: string[], failurePath: string | null = null) {
     bridgeRequest: controller("bridge"),
     gitArc: controller("git-arc"),
     legacyMigrationSource: controller("migration"),
+    mcp: controller("mcp"),
     projectCatalog: controller("projects"),
     projectSnapshot,
     threadGit: controller("thread-git"),
@@ -63,6 +64,7 @@ test("routes every reloadable HTTP controller and preserves method gates", async
   const router = createRouter(events);
   for (const [url, method, expected] of [
     ["/orchestrator/agent-command", "POST", "agent"],
+    ["/orchestrator/mcp", "POST", "mcp"],
     ["/orchestrator/bridge-request", "POST", "bridge"],
     ["/orchestrator/git-arc", "POST", "git-arc"],
     ["/orchestrator/thread-git", "POST", "thread-git"],
@@ -74,7 +76,7 @@ test("routes every reloadable HTTP controller and preserves method gates", async
     await router.handleHttpRequest(request(url, method), output);
     assert.equal((output as unknown as TestResponse).body, expected);
   }
-  assert.deepEqual(events, ["agent", "bridge", "git-arc", "thread-git", "migration", "projects", "tree"]);
+  assert.deepEqual(events, ["agent", "mcp", "bridge", "git-arc", "thread-git", "migration", "projects", "tree"]);
 
   const rejected = response();
   await router.handleHttpRequest(request("/orchestrator/projects", "POST"), rejected);

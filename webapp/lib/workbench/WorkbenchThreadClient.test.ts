@@ -27,9 +27,9 @@ function wireThread(
   turnStatus: Thread["turns"][number]["status"] = "inProgress",
 ): Thread {
   return {
-    agentNickname: null, agentRole: null, cliVersion: "test", createdAt: 1, cwd: "C:/repo", ephemeral: false,
-    forkedFromId: null, gitInfo: null, id, modelProvider: "openai", name: null, parentThreadId: null, path: null,
-    preview: "", recencyAt: null, sessionId: `${id}-session`, source: "appServer",
+    agentNickname: null, agentRole: null, canAcceptDirectInput: null, cliVersion: "test", createdAt: 1, cwd: "C:/repo", ephemeral: false,
+    extra: null, forkedFromId: null, gitInfo: null, historyMode: "legacy", id, modelProvider: "openai", name: null, parentThreadId: null, path: null,
+    preview: "", recencyAt: null, section: null, sectionEnteredAt: null, sessionId: `${id}-session`, source: "appServer",
     status: turnStatus === "inProgress" ? { activeFlags: [], type: "active" } : { type: "idle" },
     threadSource: null, turns: [{
       completedAt: turnStatus === "inProgress" ? null : 2,
@@ -1075,9 +1075,9 @@ test("live compaction notifications preserve distinct markers and complete one o
 
 test("status and token owners survive canonical updates, authoritative nulls, and compact clears", async () => withClient(async (client, socket) => {
   const usage = (totalTokens: number) => ({
-    last: { cachedInputTokens: 0, inputTokens: totalTokens, outputTokens: 0, reasoningOutputTokens: 0, totalTokens },
+    last: { cacheWriteInputTokens: 0, cachedInputTokens: 0, inputTokens: totalTokens, outputTokens: 0, reasoningOutputTokens: 0, totalTokens },
     modelContextWindow: 100,
-    total: { cachedInputTokens: 0, inputTokens: totalTokens, outputTokens: 0, reasoningOutputTokens: 0, totalTokens },
+    total: { cacheWriteInputTokens: 0, cachedInputTokens: 0, inputTokens: totalTokens, outputTokens: 0, reasoningOutputTokens: 0, totalTokens },
   });
   const selected = {
     ...activeThread(),

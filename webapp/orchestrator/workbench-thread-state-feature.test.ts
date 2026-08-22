@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect provider normalization, progressive reconciliation, and controller-owned title mutation. Keywords: provider, sidebar, title, reconciliation, test.
+ * - No production exports; tests protect provider normalization, progressive reconciliation, managed resume, and controller-owned title mutation. Keywords: provider, sidebar, title, resume, reconciliation, test.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -172,6 +172,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
       observe: () => () => undefined,
     },
     publish: (_connectionId, snapshot) => { publications.push(snapshot); },
+    requestThreadResume: async () => undefined,
     requestHarness: async (harness, request) => {
       const params = request.params as { cursor?: string | null };
       if (!starts.includes(harness)) starts.push(harness);
@@ -290,6 +291,7 @@ test("deep provider pages serialize across projects while both newest pages star
       observe: () => () => undefined,
     },
     publish: () => undefined,
+    requestThreadResume: async () => undefined,
     requestHarness: async (harness, request) => {
       const params = request.params as { cursor?: string | null; cwd: string };
       if (harness !== "codex") return { id: request.id ?? null, result: { data: [], nextCursor: null } };
@@ -323,6 +325,7 @@ test("deep provider pages serialize across projects while both newest pages star
 });
 
 test("managed title reads use the validated provider thread without mirrored title state", async () => {
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-managed-title-"));
   const requests: Array<{ harness: string; method: string; params: unknown }> = [];
   const feature = new WorkbenchThreadStateFeature({
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
@@ -334,6 +337,7 @@ test("managed title reads use the validated provider thread without mirrored tit
       observe: () => () => undefined,
     },
     publish: () => undefined,
+    requestThreadResume: async () => undefined,
     requestHarness: async (harness, request) => {
       requests.push({ harness, method: request.method, params: request.params });
       if (harness !== "codex") return { id: request.id ?? null, error: { code: -32000, message: "Not found" } };
@@ -351,7 +355,7 @@ test("managed title reads use the validated provider thread without mirrored tit
     },
     resolveProjectById: async () => ({ id: "project", rootPath: "C:/workspace" }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: "C:/workspace" } }),
-    storageRoot: "C:/storage",
+    storageRoot,
     transitions: { run: async (_key, operation) => await operation() },
   });
 
@@ -365,12 +369,72 @@ test("managed title reads use the validated provider thread without mirrored tit
     id: 1,
     result: { harness: "codex", threadId: "thread-one", title: "Current task" },
   });
-  assert.deepEqual(requests, [{
+  assert.deepEqual(requests[0], {
     harness: "codex",
     method: "thread/read",
     params: { cwd: "C:/workspace", includeTurns: true, threadId: "thread-one" },
-  }]);
+  });
+  assert.deepEqual(requests.slice(1).map(({ harness, method }) => ({ harness, method })), [
+    { harness: "codex", method: "thread/list" },
+    { harness: "copilot", method: "thread/list" },
+    { harness: "opencode", method: "thread/list" },
+  ]);
   await feature.dispose();
+  await fs.rm(storageRoot, { force: true, recursive: true });
+});
+
+test("managed resume validates the provider thread before requesting lifecycle-owned replacement", async () => {
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-managed-resume-"));
+  const resumes: Array<{ harness: string; threadId: string }> = [];
+  const feature = new WorkbenchThreadStateFeature({
+    getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
+    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    listSubagents: async () => ({ subagents: [] }),
+    projectState: {
+      getCurrentUpdate: () => null,
+      handleRequest: async () => ({ accepted: true }),
+      observe: () => () => undefined,
+    },
+    publish: () => undefined,
+    requestThreadResume: async (harness, threadId) => { resumes.push({ harness, threadId }); },
+    requestHarness: async (harness, request) => {
+      if (request.method === "thread/read" && harness === "codex") {
+        return {
+          id: request.id ?? null,
+          result: {
+            thread: {
+              cwd: storageRoot,
+              id: "thread-one",
+              name: "Current task",
+              preview: "Initial request",
+              status: { type: "active" },
+              turns: [{ id: "turn-one", status: "inProgress" }],
+              updatedAt: 1,
+            },
+          },
+        };
+      }
+      return { id: request.id ?? null, result: { data: [], nextCursor: null } };
+    },
+    resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
+    storageRoot,
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+
+  const response = await feature.handleManagedThreadRequest({
+    id: 2,
+    method: "workbench/thread/resume",
+    params: { callerThreadId: "thread-one", cwd: storageRoot },
+  });
+
+  assert.deepEqual(response, {
+    id: 2,
+    result: { accepted: true, threadId: "thread-one", turnId: "turn-one" },
+  });
+  assert.deepEqual(resumes, [{ harness: "codex", threadId: "thread-one" }]);
+  await feature.dispose();
+  await fs.rm(storageRoot, { force: true, recursive: true });
 });
 
 test("observed title mutations update the provider and published sidebar together", async () => {
@@ -388,6 +452,7 @@ test("observed title mutations update the provider and published sidebar togethe
       observe: () => () => undefined,
     },
     publish: (_connectionId, snapshot) => { publications.push(snapshot); },
+    requestThreadResume: async () => undefined,
     requestHarness: async (harness, request) => {
       if (request.method === "thread/name/set") {
         titleRequests.push({ harness, params: request.params });

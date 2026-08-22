@@ -26,7 +26,7 @@ function fakeChild(pid: number) {
   return child as unknown as ChildProcess;
 }
 
-test("managed Codex disables native subagents before launching app-server", () => {
+test("managed Codex disables native subagents without process-scoped MCP config", () => {
   assert.deepEqual(getCodexAppServerArgs(), [
     "--config",
     "features.multi_agent=false",

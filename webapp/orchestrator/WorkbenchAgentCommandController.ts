@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchAgentCommandController: parse native-shell wb argv, directly dispatch requests, release reload admission leases before terminal polling, adapt output, and stream native responses. Keywords: workbench, agent, command, shell, orchestrator, reload, transport, subagent.
+ * - default WorkbenchAgentCommandController: parse native-shell wb argv and execute shared structured commands while preserving reload, streaming, and direct-port lifecycle. Keywords: workbench, agent, command, shell, orchestrator, reload, transport, subagent.
  */
 import { randomUUID } from "node:crypto";
 import type http from "node:http";
@@ -157,11 +157,21 @@ export default class WorkbenchAgentCommandController {
         await this.admitReloadRequest(parsed.request, response, signal);
         return;
       }
-      await this.writeCliResponse(parsed.request, response, await this.dispatchRequest(parsed.request, signal), signal);
+      await this.writeCliResponse(parsed.request, response, await this.executeStructuredRequest(parsed.request, signal), signal);
     } catch (error) {
       if (signal.aborted) return;
       sendText(response, 500, `${error instanceof Error ? error.message : String(error)}\n`);
     }
+  }
+
+  async executeStructuredRequest(request: WorkbenchAgentCliRequest, signal: AbortSignal) {
+    if (!request.waitForReload) return await this.dispatchRequest(request, signal);
+    const admission = await this.fetchRequest(this.resolveUrl(request.path), this.buildRequestInit(request, signal));
+    const text = await admission.text();
+    if (!admission.ok || readReloadState(text) !== "running") {
+      return new Response(text, { headers: admission.headers, status: admission.status });
+    }
+    return await this.pollReloadRequest(request, signal, text);
   }
 
   private buildRequestInit(request: WorkbenchAgentCliRequest, signal: AbortSignal): RequestInit {
@@ -182,7 +192,7 @@ export default class WorkbenchAgentCommandController {
     if (request.path === "/api/subagents" && request.body) {
       return await this.dispatchSubagentRequest(request.body, signal);
     }
-    if ((request.path === "/api/thread-status" || request.path === "/api/thread-title") && request.body) {
+    if ((request.path === "/api/thread-status" || request.path === "/api/thread-title" || request.path === "/api/thread-resume") && request.body) {
       return await this.dispatchManagedThreadRequest(request.path, request.body, signal);
     }
     if (request.path === "/api/git-checkpoint" && request.body && this.direct.executeGitArcRequest) {
@@ -202,7 +212,11 @@ export default class WorkbenchAgentCommandController {
     if (signal.aborted) throw signal.reason;
     const response = await this.direct.requestSubagent({
       id: 0,
-      method: pathname === "/api/thread-status" ? "workbench/thread/status" : "workbench/thread/title",
+      method: pathname === "/api/thread-status"
+        ? "workbench/thread/status"
+        : pathname === "/api/thread-resume"
+          ? "workbench/thread/resume"
+          : "workbench/thread/title",
       params: body,
     });
     if (response.error) return Response.json({ error: response.error.message }, { status: 400 });

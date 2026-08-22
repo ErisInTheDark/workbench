@@ -1,53 +1,52 @@
 /*
  * Exports:
  * - default ThreadContextCommandItem: render a Thread Recall command or context alias as a semantic tagged-record disclosure. Keywords: thread recall, context, records, disclosure.
- * - Local helpers: format command execution metadata for the Thread Recall disclosure summary. Keywords: status, duration, exit code.
+ * - ThreadContextCommandSource: transport-neutral Thread Recall lifecycle and output data. Keywords: thread recall, CLI, MCP, source.
+ * - Local helpers: format execution metadata for the Thread Recall disclosure summary. Keywords: status, duration, exit code.
  */
 "use client";
 
 import type { ReactNode } from "react";
 
-import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import type { WorkbenchThreadRecallOutputRecord } from "../../../lib/workbench/thread/thread-recall-output";
-import {
-  getThreadCommandDisplay,
-  getThreadCommandExecutionOutcome,
-  getThreadCommandOutcomeDisplay,
-  type ThreadCommandExecutionOutcome,
-} from "../../../lib/workbench/thread/thread-command-matchers";
+import type { ThreadCommandExecutionOutcome } from "../../../lib/workbench/thread/thread-command-matchers";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadRecallOutput from "./ThreadRecallOutput";
 import ThreadSummaryText from "./ThreadSummaryText";
-import { ThreadCommandSummary } from "./thread-view-primitives";
 
-type CommandItem = Extract<ThreadItem, { type: "commandExecution" }>;
+export interface ThreadContextCommandSource {
+  cwd: string;
+  durationMs: number | null;
+  exitCode: number | null;
+  id: string;
+  outcome: ThreadCommandExecutionOutcome;
+  output: string;
+}
 
 function ThreadContextCommandMetaParts({
-  item,
-  outcome,
+  source,
 }: {
-  item: CommandItem;
-  outcome: ThreadCommandExecutionOutcome;
+  source: ThreadContextCommandSource;
 }) {
   const metaParts: ReactNode[] = [];
 
-  if (outcome === "failed" && item.exitCode !== null && item.exitCode !== 0) {
+  if (source.outcome === "failed" && source.exitCode !== null && source.exitCode !== 0) {
     metaParts.push(
       <ThreadSummaryText
-        key={`${item.id}:exit`}
-        text={`exit ${item.exitCode}`}
+        key={`${source.id}:exit`}
+        text={`exit ${source.exitCode}`}
       />,
     );
   }
 
-  if (item.durationMs !== null) {
+  if (source.durationMs !== null) {
     metaParts.push(
       <ThreadDurationText
-        key={`${item.id}:duration`}
-        durationMs={item.durationMs}
+        key={`${source.id}:duration`}
+        durationMs={source.durationMs}
       />,
     );
   }
@@ -59,7 +58,7 @@ function ThreadContextCommandMetaParts({
   return (
     <span className="ml-2 text-[0.78em] text-muted">
       {metaParts.map((part, index) => (
-        <span key={`${item.id}:meta:${index}`}>
+        <span key={`${source.id}:meta:${index}`}>
           {index ? <span className="text-muted"> | </span> : null}
           {part}
         </span>
@@ -70,7 +69,7 @@ function ThreadContextCommandMetaParts({
 
 export default function ThreadContextCommandItem ({
   defaultOpen = false,
-  item,
+  source,
   projectFilePaths,
   projectId,
   projectRootPath,
@@ -79,7 +78,7 @@ export default function ThreadContextCommandItem ({
   workspaceRoots,
 }: {
   defaultOpen?: boolean;
-  item: CommandItem;
+  source: ThreadContextCommandSource;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
@@ -87,16 +86,16 @@ export default function ThreadContextCommandItem ({
   threadCwdPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const markdown = item.aggregatedOutput?.trim() ?? "";
-  const commandDisplay = getThreadCommandDisplay({
-    command: item.command,
-    commandActions: item.commandActions,
-    cwd: item.cwd,
-    projectRootPath,
-    workspaceRoots,
-  });
-  const outcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
-  const outcomeDisplay = getThreadCommandOutcomeDisplay(commandDisplay, outcome);
+  const markdown = source.output.trim();
+  const summary = source.outcome === "completed"
+    ? "Recalled thread history"
+    : source.outcome === "inProgress"
+      ? "Recalling thread history"
+      : source.outcome === "timedOut"
+        ? "Timed out recalling thread history"
+        : source.outcome === "declined"
+          ? "Declined Thread Recall"
+          : "Failed recalling thread history";
 
   return (
     <ThreadDisclosure
@@ -105,8 +104,8 @@ export default function ThreadContextCommandItem ({
       defaultOpen={defaultOpen}
       summary={(
         <>
-          <ThreadCommandSummary display={outcomeDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />
-          <ThreadContextCommandMetaParts item={item} outcome={outcome} />
+          <ThreadSummaryText text={summary} />
+          <ThreadContextCommandMetaParts source={source} />
         </>
       )}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"
@@ -125,7 +124,7 @@ export default function ThreadContextCommandItem ({
             projectId={projectId}
             projectRootPath={projectRootPath}
             renderRecord={renderRecord}
-            threadCwdPath={threadCwdPath ?? item.cwd}
+            threadCwdPath={threadCwdPath ?? source.cwd}
             workspaceRoots={workspaceRoots}
           />
         ) : (

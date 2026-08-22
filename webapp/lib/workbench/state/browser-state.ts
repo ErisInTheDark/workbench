@@ -52,10 +52,12 @@ function normalizeTokenUsageBreakdown(value: unknown): TokenUsageBreakdown | nul
   }
 
   const candidate = value as Partial<TokenUsageBreakdown>;
+  const cacheWriteInputTokens = candidate.cacheWriteInputTokens ?? 0;
   if (
     !Number.isFinite(candidate.totalTokens)
     || !Number.isFinite(candidate.inputTokens)
     || !Number.isFinite(candidate.cachedInputTokens)
+    || !Number.isFinite(cacheWriteInputTokens)
     || !Number.isFinite(candidate.outputTokens)
     || !Number.isFinite(candidate.reasoningOutputTokens)
   ) {
@@ -66,6 +68,7 @@ function normalizeTokenUsageBreakdown(value: unknown): TokenUsageBreakdown | nul
     totalTokens: Math.max(0, Math.trunc(candidate.totalTokens)),
     inputTokens: Math.max(0, Math.trunc(candidate.inputTokens)),
     cachedInputTokens: Math.max(0, Math.trunc(candidate.cachedInputTokens)),
+    cacheWriteInputTokens: Math.max(0, Math.trunc(cacheWriteInputTokens)),
     outputTokens: Math.max(0, Math.trunc(candidate.outputTokens)),
     reasoningOutputTokens: Math.max(0, Math.trunc(candidate.reasoningOutputTokens)),
   };

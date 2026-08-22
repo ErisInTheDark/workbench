@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover direct Browse/subagent dispatch, response adaptation, and caller cancellation. Keywords: workbench, agent, command, browse, subagent, cancellation, transport, test.
+ * - No production exports; Node tests cover direct Browse/subagent/thread dispatch, response adaptation, and caller cancellation. Keywords: workbench, agent, command, browse, subagent, thread, cancellation, transport, test.
  */
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -130,6 +130,39 @@ test("dispatches native subagent commands directly without waiting on Next fetch
       callerThreadId: "parent-thread",
       cwd: process.cwd(),
       workbenchOrigin: "http://127.0.0.1:4500",
+    });
+  } finally {
+    await server.close();
+  }
+});
+
+test("dispatches thread resume through the direct managed-thread transport", async () => {
+  let receivedRequest: { method?: string; params?: unknown } | null = null;
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:3002",
+    "http://127.0.0.1:4500",
+    {
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      requestSubagent: async (request) => {
+        receivedRequest = request;
+        return { id: request.id ?? null, result: { accepted: true, threadId: "parent-thread", turnId: "turn-one" } };
+      },
+    },
+    async () => { throw new Error("unexpected internal fetch"); },
+  );
+  const server = await startController(controller);
+  try {
+    const response = await fetch(`${server.origin}/orchestrator/agent-command`, {
+      body: subagentCommandBody(["thread", "resume"]),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "Thread resume scheduled.\n");
+    assert.deepEqual(receivedRequest, {
+      id: 0,
+      method: "workbench/thread/resume",
+      params: { callerThreadId: "parent-thread", cwd: process.cwd() },
     });
   } finally {
     await server.close();

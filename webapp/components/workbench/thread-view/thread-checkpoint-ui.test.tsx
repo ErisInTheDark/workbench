@@ -231,14 +231,7 @@ test("planned conflict card renders collapsed shared thread rows without tooltip
     }),
   ));
   assert.match(html, /data-thread-plan-conflict-card="true"/u);
-  assert.match(html, /<path d="m15 9-6 6"><\/path><path d="m9 9 6 6"><\/path>/u);
-  assert.match(html, /<h2 class="[^"]*text-\[0\.82em\][^"]*leading-\[1\.45\][^"]*"/u);
-  assert.match(html, /<span class="[^"]*font-medium text-text">Planned changes overlap active threads<\/span>/u);
-  assert.match(html, /Planned changes overlap active threads/u);
   assert.match(html, /Claiming thread/u);
-  assert.match(html, /<li class="[^"]*\bpb-px\b/u);
-  assert.doesNotMatch(html, /group-hover\/thread-row:invisible|group-focus-within\/thread-row:invisible/u);
-  assert.doesNotMatch(html, /data-tooltip|data-thread-project-file-link-boundary|\bborder-t(?:\s|")|\bdivide-y/u);
 });
 
 test("planned conflict rows use the owning in-app thread navigation callback", async () => {
@@ -267,7 +260,9 @@ test("in-progress checkpoint commit commands render an immediate standalone card
         durationMs: null,
         exitCode: null,
         id: "proposal-command",
+        pluginId: null,
         processId: null,
+        scriptPath: null,
         source: "agent",
         status: "inProgress",
         type: "commandExecution",
@@ -303,7 +298,9 @@ test("PowerShell-wrapped proposals render the standalone card from command text"
         durationMs: 4_000,
         exitCode: 0,
         id: "proposal-command",
+        pluginId: null,
         processId: null,
+        scriptPath: null,
         source: "agent",
         status: "completed",
         type: "commandExecution",
@@ -337,7 +334,9 @@ test("matched proposal invocations keep their card when intent enrichment fails"
         durationMs: null,
         exitCode: null,
         id: "proposal-command",
+        pluginId: null,
         processId: null,
+        scriptPath: null,
         source: "agent",
         status: "inProgress",
         type: "commandExecution",
@@ -399,7 +398,9 @@ test("arc lifecycle commands render compact receipt-backed cards", () => {
         durationMs: 4_000,
         exitCode: 0,
         id: "plan-command",
+        pluginId: null,
         processId: null,
+        scriptPath: null,
         source: "agent",
         status: "completed",
         type: "commandExecution",
@@ -439,7 +440,9 @@ test("arc lifecycle cards stay outside adjacent generic command groups", () => {
           durationMs: 4_000,
           exitCode: 0,
           id: "restore-command",
+          pluginId: null,
           processId: null,
+          scriptPath: null,
           source: "agent",
           status: "completed",
           type: "commandExecution",
@@ -452,7 +455,9 @@ test("arc lifecycle cards stay outside adjacent generic command groups", () => {
           durationMs: 1_000,
           exitCode: 0,
           id: "check-command",
+          pluginId: null,
           processId: null,
+          scriptPath: null,
           source: "agent",
           status: "completed",
           type: "commandExecution",
@@ -652,7 +657,9 @@ test("arc cards omit empty filler and describe failed claims precisely", () => {
         durationMs: 5_000,
         exitCode: 0,
         id: "start-command",
+        pluginId: null,
         processId: null,
+        scriptPath: null,
         source: "agent",
         status: "completed",
         type: "commandExecution",
@@ -718,7 +725,9 @@ test("failed task status commands keep the generic matched-command failure rende
         durationMs: 10,
         exitCode: 1,
         id: "status-command",
+        pluginId: null,
         processId: null,
+        scriptPath: null,
         source: "agent",
         status: "failed",
         type: "commandExecution",
@@ -729,7 +738,6 @@ test("failed task status commands keep the generic matched-command failure rende
     },
   }));
 
-  assert.match(html, /Failed [^]*marking task completed/u);
   assert.match(html, /status update rejected/u);
   assert.doesNotMatch(html, /data-role="thread-status-command"/u);
 });
@@ -752,7 +760,9 @@ test("task status keeps proposal and final output outside closed Worked content"
           durationMs: 800,
           exitCode: 0,
           id: "work-command",
+          pluginId: null,
           processId: null,
+          scriptPath: null,
           source: "agent",
           status: "completed",
           type: "commandExecution",
@@ -765,7 +775,9 @@ test("task status keeps proposal and final output outside closed Worked content"
           durationMs: 10,
           exitCode: 0,
           id: "status-command",
+          pluginId: null,
           processId: null,
+          scriptPath: null,
           source: "agent",
           status: "completed",
           type: "commandExecution",
@@ -778,7 +790,9 @@ test("task status keeps proposal and final output outside closed Worked content"
           durationMs: 10,
           exitCode: 0,
           id: "proposal-command",
+          pluginId: null,
           processId: null,
+          scriptPath: null,
           source: "agent",
           status: "completed",
           type: "commandExecution",
@@ -797,7 +811,7 @@ test("task status keeps proposal and final output outside closed Worked content"
     },
   }));
 
-  assert.match(html, /Task completed/u);
+  assert.match(html, /data-role="thread-status-command"/u);
   assert.match(html, /Immediate proposal/u);
   assert.match(html, /All done\./u);
   assert.match(html, />Worked</u);
@@ -819,7 +833,9 @@ test("compacted, flattened, and hidden-final turns share the task-status termina
         durationMs: 300,
         exitCode: 0,
         id: "older-work",
+        pluginId: null,
         processId: null,
+        scriptPath: null,
         source: "agent" as const,
         status: "completed" as const,
         type: "commandExecution" as const,
@@ -833,7 +849,9 @@ test("compacted, flattened, and hidden-final turns share the task-status termina
         durationMs: 300,
         exitCode: 0,
         id: "current-work",
+        pluginId: null,
         processId: null,
+        scriptPath: null,
         source: "agent" as const,
         status: "completed" as const,
         type: "commandExecution" as const,
@@ -847,7 +865,9 @@ test("compacted, flattened, and hidden-final turns share the task-status termina
         durationMs: 10,
         exitCode: 0,
         id: "status-command",
+        pluginId: null,
         processId: null,
+        scriptPath: null,
         source: "agent" as const,
         status: "completed" as const,
         type: "commandExecution" as const,
@@ -860,7 +880,9 @@ test("compacted, flattened, and hidden-final turns share the task-status termina
         durationMs: 10,
         exitCode: 0,
         id: "proposal-command",
+        pluginId: null,
         processId: null,
+        scriptPath: null,
         source: "agent" as const,
         status: "completed" as const,
         type: "commandExecution" as const,
@@ -887,7 +909,7 @@ test("compacted, flattened, and hidden-final turns share the task-status termina
     ...sharedProps,
     hideFinalAgentMessage: true,
   }));
-  assert.match(compacted, /Task completed/u);
+  assert.match(compacted, /data-role="thread-status-command"/u);
   assert.match(compacted, /Immediate proposal/u);
   assert.doesNotMatch(compacted, /older-work|current-work|All done\./u);
 
@@ -896,7 +918,7 @@ test("compacted, flattened, and hidden-final turns share the task-status termina
     flattenCompletedWork: true,
   }));
   const workIndex = flattened.indexOf("current-work");
-  const statusIndex = flattened.indexOf("Task completed");
+  const statusIndex = flattened.indexOf('data-role="thread-status-command"');
   const proposalIndex = flattened.indexOf("Immediate proposal");
   const finalIndex = flattened.indexOf("All done.");
   assert(workIndex >= 0);

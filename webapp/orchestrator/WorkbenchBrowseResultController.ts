@@ -29,12 +29,17 @@ export interface WorkbenchBrowseResultCallbacks {
   steerTurn: (harness: WorkbenchHarness, threadId: string, expectedTurnId: string, input: UserInput[]) => Promise<string | null>;
 }
 
+function isActiveBrowseCommandItem(item: ThreadReadResponse["thread"]["turns"][number]["items"][number]) {
+  return (item.type === "commandExecution" && item.status === "inProgress" && item.command.includes("/api/browse"))
+    || (item.type === "mcpToolCall" && item.status === "inProgress" && item.server === "wb" && item.tool === "browse_run");
+}
+
 function findLatestBrowseCommandItemId(response: ThreadReadResponse) {
   const turn = getCurrentInProgressTurn(response.thread) ?? response.thread.turns.at(-1) ?? null;
   if (!turn) return null;
   for (let index = turn.items.length - 1; index >= 0; index -= 1) {
     const item = turn.items[index];
-    if (item.type === "commandExecution" && item.status === "inProgress" && item.command.includes("/api/browse")) return item.id;
+    if (isActiveBrowseCommandItem(item)) return item.id;
   }
   return null;
 }

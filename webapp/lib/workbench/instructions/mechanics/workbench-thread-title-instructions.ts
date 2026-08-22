@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - buildThreadTitleInstructions: render managed top-level thread title guidance. Keywords: thread, title, cli.
+ * - buildThreadTitleInstructions: render managed top-level thread title guidance. Keywords: thread, title, MCP.
  */
 
-import { buildThreadTitleBootstrapInstructions } from "../../../thread-bootstrap";
 import type { WorkbenchPromptContext } from "../assembly/workbench-prompt-types";
+import { readInstructionSource } from "../instruction-source";
 import { isManagedPromptThread } from "./workbench-instruction-mechanics";
 
 export function buildThreadTitleInstructions(context: WorkbenchPromptContext) {
@@ -12,5 +12,5 @@ export function buildThreadTitleInstructions(context: WorkbenchPromptContext) {
     return null;
   }
 
-  return buildThreadTitleBootstrapInstructions();
+  return readInstructionSource("mechanics/workbench-thread-title-instructions.md");
 }

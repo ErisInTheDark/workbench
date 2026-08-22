@@ -91,6 +91,8 @@ export function adaptWorkbenchAgentCliResponse({
       return succeeded(`Thread title set: ${readString(payload, "title") || "untitled"}`);
     case "thread-status":
       return succeeded(`Thread status set: ${readString(payload, "agentStatus") || "unknown"}`);
+    case "thread-resume":
+      return succeeded("Thread resume scheduled.");
     case "subagent-create":
       return succeeded(readString(payload, "threadId") || "");
     case "subagent-list": {

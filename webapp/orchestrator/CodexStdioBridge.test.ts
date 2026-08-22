@@ -1,17 +1,35 @@
 /*
  * Exports:
- * - No production exports; Node tests cover bridge pending cleanup, context-read queue bypass, and scoped-entry negotiation. Keywords: codex, bridge, transcript, context, test.
+ * - No production exports; Node tests cover bridge pending cleanup, turn-start preflight, context reads, managed MCP config, and scoped-entry negotiation. Keywords: codex, bridge, transcript, MCP, test.
  */
 
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { test } from "node:test";
+import { after, before, test } from "node:test";
 
 import type CodexAppServer from "./CodexAppServer";
-import CodexStdioBridge from "./CodexStdioBridge";
 import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
+
+const originalWorkbenchLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
+let testWorkbenchLibraryRoot = "";
+let CodexStdioBridge: typeof import("./CodexStdioBridge.js").default;
+
+before(async () => {
+  testWorkbenchLibraryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-library-test-"));
+  process.env.WORKBENCH_LIBRARY_ROOT = testWorkbenchLibraryRoot;
+  const bridgeModule = await import("./CodexStdioBridge.js");
+  CodexStdioBridge = bridgeModule.default as unknown as typeof CodexStdioBridge;
+});
+
+after(async () => {
+  if (originalWorkbenchLibraryRoot === undefined) delete process.env.WORKBENCH_LIBRARY_ROOT;
+  else process.env.WORKBENCH_LIBRARY_ROOT = originalWorkbenchLibraryRoot;
+  if (testWorkbenchLibraryRoot) {
+    await fs.rm(testWorkbenchLibraryRoot, { force: true, recursive: true });
+  }
+});
 
 function deferred<TValue>() {
   let resolve!: (value: TValue) => void;
@@ -145,10 +163,64 @@ test("successful external send remaps the response id and detaches with settled 
   }
 });
 
+test("turn-start preflight completes before upstream delivery and blocks delivery on failure", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-turn-preflight-"));
+  const client: BridgeClient = {
+    OPEN: 1, close() {}, on() {}, once() {}, readyState: 1, send() {},
+  };
+  const gate = deferred<void>();
+  const events: string[] = [];
+  const upstreamRequests: JsonRpcRequest[] = [];
+  let rejectPreflight = false;
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      events.push(`send:${message.method}`);
+      upstreamRequests.push(message);
+    },
+  } as unknown as CodexAppServer;
+  const bridge = new CodexStdioBridge({
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    onNotification() {},
+    prepareTurnStart: async () => {
+      events.push("prepare:start");
+      if (rejectPreflight) throw new Error("MCP refresh failed");
+      await gate.promise;
+      events.push("prepare:complete");
+    },
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  const request = (id: number): JsonRpcRequest => ({
+    id,
+    method: "turn/start",
+    params: { input: [{ text: "continue", text_elements: [], type: "text" }], threadId: "thread" },
+  });
+  try {
+    const admitted = bridge.forwardRequest(request(1), client, 1);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(events, ["prepare:start"]);
+    assert.deepEqual(upstreamRequests, []);
+
+    gate.resolve();
+    await admitted;
+    assert.deepEqual(events, ["prepare:start", "prepare:complete", "send:turn/start"]);
+    assert.equal(upstreamRequests.length, 1);
+
+    rejectPreflight = true;
+    await assert.rejects(bridge.forwardRequest(request(2), client, 2), /MCP refresh failed/u);
+    assert.equal(upstreamRequests.length, 1);
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("context reads bypass the operation queue and negotiate scoped entries without forwarding the capability", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-context-test-"));
   const upstreamRequests: JsonRpcRequest[] = [];
-  let bridge!: CodexStdioBridge;
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
   const appServer = {
     send(message: JsonRpcRequest) {
       upstreamRequests.push(message);
@@ -216,7 +288,7 @@ test("context reads bypass the operation queue and negotiate scoped entries with
 test("observational internal thread lists skip transcripts without forwarding the marker", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-observational-test-"));
   const upstreamRequests: JsonRpcRequest[] = [];
-  let bridge!: CodexStdioBridge;
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
   const appServer = {
     send(message: JsonRpcRequest) {
       upstreamRequests.push(message);
@@ -247,6 +319,79 @@ test("observational internal thread lists skip transcripts without forwarding th
     assert.equal(instrumentation.transcriptAutoRefreshSkippedCount, 2);
     assert.equal(instrumentation.transcriptLabelCounts.get("client-request") ?? 0, 0);
     assert.equal(instrumentation.transcriptLabelCounts.get("upstream-response:thread/list") ?? 0, 0);
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("caller cancellation clears a pending internal app-server response", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-internal-cancel-test-"));
+  const requestSent = deferred<void>();
+  const bridge = new CodexStdioBridge({
+    appServer: {
+      send() { requestSent.resolve(); },
+    } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:4500/codex",
+    onNotification() {},
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  const abortController = new AbortController();
+  try {
+    const response = bridge.handleServerRequest({
+      id: 101,
+      method: "thread/read",
+      params: { includeTurns: false, threadId: "thread" },
+    }, { signal: abortController.signal });
+    await requestSent.promise;
+    abortController.abort(new Error("turn ended"));
+    await assert.rejects(response, /turn ended/u);
+    const state = await bridge.detachForReload();
+    assert.equal(state.pendingResponses.size, 0);
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("managed thread starts, resumes, and forks receive wb MCP config without replacing caller config", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-mcp-config-test-"));
+  const bridge = new CodexStdioBridge({
+    appServer: { send() {} } as unknown as CodexAppServer,
+    bridgeUrl: "ws://0.0.0.0:4500",
+    onNotification() {},
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  const owner = bridge as unknown as {
+    withWorkbenchPromptInstructions(message: JsonRpcRequest, method: string): Promise<JsonRpcRequest>;
+  };
+  try {
+    for (const method of ["thread/start", "thread/resume", "thread/fork"]) {
+      const result = await owner.withWorkbenchPromptInstructions({
+        method,
+        params: {
+          config: {
+            existing_setting: "preserved",
+            mcp_servers: { docs: { url: "https://example.com/mcp" } },
+          },
+          threadId: "thread",
+        },
+        workbenchPromptContext: { instructionScope: "threadUtilities", threadId: "thread" },
+      }, method);
+      const config = (result.params as { config: Record<string, unknown> }).config;
+      assert.equal(config.existing_setting, "preserved");
+      assert.deepEqual((config.mcp_servers as Record<string, unknown>).docs, { url: "https://example.com/mcp" });
+      assert.deepEqual((config.mcp_servers as Record<string, unknown>).wb, {
+        default_tools_approval_mode: "approve",
+        required: true,
+        tool_timeout_sec: 1800,
+        url: "http://127.0.0.1:4500/orchestrator/mcp",
+      });
+    }
   } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });

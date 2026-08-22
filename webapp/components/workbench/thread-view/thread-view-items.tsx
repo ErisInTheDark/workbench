@@ -38,6 +38,8 @@ import {
   getThreadCommandDisplay,
   getThreadCommandExecutionOutcome,
   getThreadCommandOutcomeDisplay,
+  getWorkbenchMcpCommandRoute,
+  shouldUseWorkbenchMcpSpecializedRenderer,
   getGitArcMatcherAction,
   isBrowseCommandMatcherClaim,
   isGitCheckpointCompareMatcherClaim,
@@ -95,6 +97,8 @@ import ThreadSubagentTargetActionItem from "./ThreadSubagentTargetActionItem";
 import ThreadSubagentWaitItem from "./ThreadSubagentWaitItem";
 import ThreadStatusCommandItem from "./ThreadStatusCommandItem";
 import ThreadTitleCommandItem from "./ThreadTitleCommandItem";
+import ThreadWorkbenchCommandItem from "./ThreadWorkbenchCommandItem";
+import { formatToolCallOutput } from "./format-thread-tool-call";
 import ThreadUserImage from "./ThreadUserImage";
 import ThreadWebSearchItem, {
   ThreadWebSearchSequence,
@@ -586,11 +590,19 @@ function isHiddenCommandExecution (command: string) {
     return true;
   }
 
-  return getThreadCommandDisplay({
+  const display = getThreadCommandDisplay({
     command,
     commandActions: [],
     cwd: "",
-  }).omitFromDisplay;
+  });
+  const hasDedicatedRenderer = Boolean(
+    getGitArcMatcherAction(display.claimedBy)
+    || isThreadContextMatcherClaim(display.claimedBy)
+    || isWorkbenchThreadStatusMatcherClaim(display.claimedBy)
+    || isWorkbenchThreadTitleSetMatcherClaim(display.claimedBy)
+    || display.claimedBy?.split(",").includes("workbench-cli.subagent"),
+  );
+  return display.omitFromDisplay && !hasDedicatedRenderer;
 }
 
 function hasReasoningSteps (item: ReasoningItem) {
@@ -1440,7 +1452,11 @@ function buildCommandSequenceRenderSegments({
   };
 
   for (const item of items) {
-    if (isThreadContextCommandItem({ item, knownSkills, projectRootPath, workspaceRoots })) {
+    const commandOutcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
+    if (
+      isThreadContextCommandItem({ item, knownSkills, projectRootPath, workspaceRoots })
+      && (commandOutcome === "completed" || commandOutcome === "inProgress")
+    ) {
       flushPendingCommands();
       flushPendingSubagentWaits();
       segments.push({
@@ -1467,7 +1483,6 @@ function buildCommandSequenceRenderSegments({
       segments.push({ item, kind: "threadTitle", title: threadTitleCommand.title });
       continue;
     }
-    const commandOutcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
     const threadStatusCommand = isWorkbenchThreadStatusMatcherClaim(commandDisplay.claimedBy)
       ? parseWorkbenchThreadStatusCommand(commandDisplay.unwrappedCommand, item.commandActions)
       : null;
@@ -2212,7 +2227,6 @@ function ThreadCommandSequence ({
         segment.kind === "threadContext" ? (
           <ThreadContextCommandItem
             defaultOpen={isMostRecent && index === renderSegments.length - 1}
-            item={segment.item}
             key={`thread-context:${segment.item.id}`}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
@@ -2228,6 +2242,14 @@ function ThreadCommandSequence ({
                 workspaceRoots={workspaceRoots}
               />
             )}
+            source={{
+              cwd: segment.item.cwd,
+              durationMs: segment.item.durationMs,
+              exitCode: segment.item.exitCode,
+              id: segment.item.id,
+              outcome: getThreadCommandExecutionOutcome(segment.item.status, segment.item.exitCode),
+              output: segment.item.aggregatedOutput ?? "",
+            }}
             threadCwdPath={threadCwdPath}
             workspaceRoots={workspaceRoots}
           />
@@ -2429,8 +2451,73 @@ function ThreadRenderableBlockViewComponent ({
       const isActive = turnStatus === "inProgress" && (!timelineEntry || timelineEntry.completedAt === null);
       return <ThreadContextCompactionItem isActive={isActive} item={block.item} />;
     }
-    case "mcpToolCall":
-      return <ThreadMcpToolCallItem item={block.item} />;
+    case "mcpToolCall": {
+      const route = getWorkbenchMcpCommandRoute({
+        argumentsValue: block.item.arguments,
+        server: block.item.server,
+        tool: block.item.tool,
+      });
+      const isMcpFailure = block.item.status === "failed" || Boolean(block.item.error);
+      if (shouldUseWorkbenchMcpSpecializedRenderer(route, isMcpFailure) && route?.kind === "specialized" && threadCwdPath) {
+        return (
+          <ThreadWorkbenchCommandItem
+            inlineMentionSources={inlineMentionSources}
+            item={block.item}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            relatedThreadsById={relatedThreadsById}
+            renderRecallRecord={(record) => (
+              <ThreadRecallRecordItem
+                inlineMentionSources={inlineMentionSources}
+                record={record}
+                projectFilePaths={projectFilePaths}
+                projectId={projectId}
+                projectRootPath={projectRootPath}
+                threadCwdPath={threadCwdPath}
+                workspaceRoots={workspaceRoots}
+              />
+            )}
+            renderSubagentActivity={(thread) => (
+              <ThreadSubagentCurrentActivityPreview
+                inlineMentionSources={inlineMentionSources}
+                knownSkills={knownSkills}
+                projectFilePaths={projectFilePaths}
+                projectId={projectId}
+                projectRootPath={projectRootPath}
+                relatedThreadsById={relatedThreadsById}
+                thread={thread}
+                workspaceRoots={workspaceRoots}
+              />
+            )}
+            route={route}
+            subagents={subagents}
+            threadCwdPath={threadCwdPath}
+            threadId={threadId}
+            workspaceRoots={workspaceRoots}
+          />
+        );
+      }
+      const browseDetails = route?.kind === "simple" && route.rendering.claimedBy === "browse.command"
+        ? mergeCommandDetailRowsWithBrowseOutput(
+          route.rendering.result.detailRows,
+          formatToolCallOutput({
+            content: block.item.result?.content,
+            fallback: block.item.result?.structuredContent ?? block.item.result?._meta,
+          }),
+          (browseResultEntries ?? []).filter((entry) => entry.commandItemId === block.item.id),
+          block.item.status,
+        )
+        : [];
+      return (
+        <ThreadMcpToolCallItem
+          details={browseDetails.length ? (
+            <ThreadCommandDetailRows rows={browseDetails} projectFilePaths={projectFilePaths} projectId={projectId} />
+          ) : undefined}
+          item={block.item}
+        />
+      );
+    }
     case "dynamicToolCall":
       return <ThreadDynamicToolCallItem inlineMentionSources={inlineMentionSources} item={block.item} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
     case "webSearch":

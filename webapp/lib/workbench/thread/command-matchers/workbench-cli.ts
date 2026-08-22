@@ -9,6 +9,9 @@ import type { CommandAction } from "../../../codex/generated/app-server/v2/Comma
 
 import { CommandMatcher } from "./core";
 import type { CommandMatcherDefinition } from "./types";
+import {
+  getWorkbenchCommandRendering,
+} from "./workbench-command-rendering";
 
 export type WorkbenchSubagentCommandAction = "create" | "list" | "message" | "profiles" | "settle" | "stop" | "wait";
 
@@ -203,19 +206,44 @@ export function isWorkbenchThreadStatusMatcherClaim(claimedBy: string | null | u
   return claimedBy?.split(",").includes("workbench-cli.thread-status") ?? false;
 }
 
+function semanticMatcherResult(ongoing: string, completed: string) {
+  return CommandMatcher.Result({
+    ongoingSummaryParts: [CommandMatcher.Text(ongoing)],
+    remainingCommand: null,
+    stop: true,
+    summaryParts: [CommandMatcher.Text(completed)],
+  });
+}
+
+function subagentCountLabel(count: number) {
+  return count === 1 ? "subagent" : `${count} subagents`;
+}
+
+function renderSubagentCliFallback(command: WorkbenchSubagentCommand) {
+  const countLabel = subagentCountLabel(command.targets.length);
+  switch (command.action) {
+    case "create": return semanticMatcherResult("Creating subagent", "Created subagent");
+    case "message": return command.toParent
+      ? semanticMatcherResult("Messaging parent", "Messaged parent")
+      : semanticMatcherResult("Messaging subagent", "Messaged subagent");
+    case "settle": return semanticMatcherResult(`Settling ${countLabel}`, `Settled ${countLabel}`);
+    case "stop": return semanticMatcherResult(`Stopping ${countLabel}`, `Stopped ${countLabel}`);
+    case "wait": return semanticMatcherResult(`Waiting for ${countLabel}`, `Waited for ${countLabel}`);
+    case "list":
+    case "profiles":
+      return getWorkbenchCommandRendering(`subagent_${command.action}`, {})?.result ?? null;
+  }
+}
+
 export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
     id: "workbench-cli.thread-status",
     match: ({ stage, summaryParts }) => {
       const command = parseSingleWorkbenchThreadStatusCommand(stage.text);
       if (summaryParts.length || !command) return null;
-      const completed = command.status === "completed";
-      return CommandMatcher.Result({
-        ongoingSummaryParts: [CommandMatcher.Text(completed ? "Marking task completed" : "Marking task blocked")],
-        remainingCommand: null,
-        stop: true,
-        summaryParts: [CommandMatcher.Text(completed ? "Task completed" : "Task blocked")],
-      });
+      return command.status === "completed"
+        ? semanticMatcherResult("Marking task completed", "Task completed")
+        : semanticMatcherResult("Marking task blocked", "Task blocked");
     },
   }),
   CommandMatcher({
@@ -223,12 +251,7 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     match: ({ stage, summaryParts }) => {
       const command = parseSingleWorkbenchThreadTitleCommand(stage.text);
       if (summaryParts.length || command?.action !== "set") return null;
-      return CommandMatcher.Result({
-        ongoingSummaryParts: [CommandMatcher.Text(`Setting task: ${command.title}`)],
-        remainingCommand: null,
-        stop: true,
-        summaryParts: [CommandMatcher.Text(`Task: ${command.title}`)],
-      });
+      return getWorkbenchCommandRendering("thread_title", { title: command.title })?.result ?? null;
     },
   }),
   CommandMatcher({
@@ -236,12 +259,14 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     match: ({ stage, summaryParts }) => {
       const command = parseSingleWorkbenchThreadTitleCommand(stage.text);
       if (summaryParts.length || command?.action !== "get") return null;
-      return CommandMatcher.Result({
-        ongoingSummaryParts: [CommandMatcher.Text("Checking thread title")],
-        remainingCommand: null,
-        stop: true,
-        summaryParts: [CommandMatcher.Text("Checked thread title")],
-      });
+      return getWorkbenchCommandRendering("thread_title_get", {})?.result ?? null;
+    },
+  }),
+  CommandMatcher({
+    id: "workbench-cli.thread-resume",
+    match: ({ stage, summaryParts }) => {
+      if (summaryParts.length || !/^wb(?:\.cmd)?\s+thread\s+resume(?:\s|$)/iu.test(stage.text.trim())) return null;
+      return getWorkbenchCommandRendering("thread_resume", {})?.result ?? null;
     },
   }),
   CommandMatcher({
@@ -251,19 +276,13 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       if (!/^wb(?:\.cmd)?\s+orchestrator\s+reload(?:\s|$)/iu.test(normalized)) {
         return null;
       }
-      const scopes = ["orchestrator-logic", "browse-controller", "codex-bridge", "opencode-bridge", "opencode-server", "next-dev"]
+      const scopes = ["orchestrator-logic", "browse-controller", "codex-bridge", "mcp", "opencode-bridge", "opencode-server", "next-dev"]
         .filter((scope) => new RegExp(`(?:^|\\s)--${scope}(?:\\s|$)`, "u").test(normalized));
-      const label = /(?:^|\s)--hard(?:\s|$)/u.test(normalized)
-        ? "orchestrator server"
-        : /(?:^|\s)--all(?:\s|$)/u.test(normalized)
-          ? scopes.length ? scopes.join(", ") : "all reloadable scopes"
-          : scopes.length ? scopes.join(", ") : "orchestrator";
-      return CommandMatcher.Result({
-        ongoingSummaryParts: [CommandMatcher.Text(`${label === "orchestrator server" ? "Restarting" : "Reloading"} ${label}`)],
-        remainingCommand: null,
-        stop: true,
-        summaryParts: [CommandMatcher.Text(`${label === "orchestrator server" ? "Restarted" : "Reloaded"} ${label}`)],
-      });
+      return getWorkbenchCommandRendering("orchestrator_reload", {
+        all: /(?:^|\s)--all(?:\s|$)/u.test(normalized),
+        hard: /(?:^|\s)--hard(?:\s|$)/u.test(normalized),
+        scopes,
+      })?.result ?? null;
     },
   }),
   CommandMatcher({
@@ -271,39 +290,7 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     match: ({ stage }) => {
       const command = parseWorkbenchSubagentCommand(stage.text);
       if (!command) return null;
-      const targetCount = command.targets.length;
-      const labels: Record<Exclude<WorkbenchSubagentCommandAction, "settle" | "stop" | "wait">, string> = {
-        create: "Created subagent",
-        list: "Listed subagents",
-        message: "Messaged subagent",
-        profiles: "Listed subagent profiles",
-      };
-      const label = command.action === "message" && command.toParent
-        ? "Messaged parent"
-        : command.action === "wait"
-        ? targetCount > 1 ? `Waited for ${targetCount} subagents` : "Waited for subagent"
-        : command.action === "stop"
-        ? targetCount > 1 ? `Stopped ${targetCount} subagents` : "Stopped subagent"
-        : command.action === "settle"
-        ? targetCount > 1 ? `Settled ${targetCount} subagents` : "Settled subagent"
-        : labels[command.action];
-      const ongoingLabel = command.action === "message" && command.toParent
-        ? "Messaging parent"
-        : command.action === "wait"
-        ? targetCount > 1 ? `Waiting for ${targetCount} subagents` : "Waiting for subagent"
-        : command.action === "create" ? "Creating subagent"
-        : command.action === "list" ? "Listing subagents"
-        : command.action === "message" ? "Messaging subagent"
-        : command.action === "profiles" ? "Listing subagent profiles"
-        : command.action === "settle"
-        ? targetCount > 1 ? `Settling ${targetCount} subagents` : "Settling subagent"
-        : targetCount > 1 ? `Stopping ${targetCount} subagents` : "Stopping subagent";
-      return CommandMatcher.Result({
-        ongoingSummaryParts: [CommandMatcher.Text(ongoingLabel)],
-        remainingCommand: null,
-        stop: true,
-        summaryParts: [CommandMatcher.Text(label)],
-      });
+      return renderSubagentCliFallback(command);
     },
   }),
 ];
