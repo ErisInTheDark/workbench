@@ -74,6 +74,8 @@ export interface GitCheckpointCreateResult {
   checkpointRef: string;
   intentName: string | null;
   kind: CheckpointKind;
+  preservedDriftPathCount?: number;
+  preservedDriftPaths?: string[];
   repoRoot: string;
   scopePaths: string[];
 }

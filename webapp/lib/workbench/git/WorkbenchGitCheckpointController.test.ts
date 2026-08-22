@@ -13,6 +13,7 @@ import GitArcPublishState from "./GitArcPublishState";
 import GitArcProposalCache from "./GitArcProposalCache";
 import createGitArcStartDiagnosticError from "./git-arc-start-diagnostics";
 import GitArcRegistry, { GitArcCollisionError } from "./GitArcRegistry";
+import GitCheckpointStore from "./GitCheckpointStore";
 import GitTestFixtureCache, { type GitTestFixtureSpec } from "./GitTestFixtureCache";
 import {
   CONTROLLER_ADOPT_READY_FIXTURE,
@@ -263,13 +264,58 @@ isolatedControllerTest("arc start requires fresh v3 plans but adopts dirty legac
     paths: [],
     threadId: "clean-thread",
   }), /clean against current HEAD[\s\S]*belong after -- as ordinary plan paths/u);
-  await fs.writeFile(path.join(source, "one.txt"), "dirty before start\n");
-  await assert.rejects(controller.startArc({
-    checkpointCommit: state.freshPlanCheckpoint,
+  const original = await controller.createPlan({
     cwd: source,
     harness: "codex",
-    threadId: "fresh-thread",
-  }), /stored plan no longer matches[\s\S]*New commits affecting planned files:[\s\S]*- none[\s\S]*Dirty unclaimed planned files:[\s\S]*one\.txt/u);
+    intentName: "fresh plan",
+    paths: ["one.txt"],
+    threadId: "preserved-plan-thread",
+  });
+  const originalCheckpoint = await new GitCheckpointStore(repository).readCheckpoint(
+    "codex",
+    "preserved-plan-thread",
+    original.checkpointCommit,
+  );
+  await fs.rm(path.join(source, "one.txt"));
+  await git(source, ["add", "-A"]);
+  await git(source, ["commit", "--quiet", "-m", "delete planned one"]);
+  const causalCommit = await repository.currentHead();
+  const replacement = await controller.createPlan({
+    cwd: source,
+    harness: "codex",
+    intentName: "restate the plan",
+    paths: ["one.txt"],
+    threadId: "preserved-plan-thread",
+  });
+  assert.deepEqual(replacement.preservedDriftPaths, ["one.txt"]);
+  assert.equal(replacement.preservedDriftPathCount, 1);
+  const replacementCheckpoint = await new GitCheckpointStore(repository).readCheckpoint(
+    "codex",
+    "preserved-plan-thread",
+    replacement.checkpointCommit,
+  );
+  assert.equal(replacementCheckpoint.parent, originalCheckpoint.parent);
+  await assert.rejects(controller.startArc({
+    checkpointCommit: replacement.checkpointCommit,
+    cwd: source,
+    harness: "codex",
+    threadId: "preserved-plan-thread",
+  }), new RegExp(`${causalCommit.slice(0, 8)}[^\\n]*delete planned one[\\s\\S]*one\\.txt`, "u"));
+  const refreshed = await controller.addToPlan({
+    cwd: source,
+    harness: "codex",
+    paths: ["one.txt"],
+    threadId: "preserved-plan-thread",
+  });
+  assert.deepEqual(refreshed.scopePaths, ["one.txt"]);
+  assert.deepEqual(refreshed.preservedDriftPaths, []);
+  assert.equal(refreshed.preservedDriftPathCount, 0);
+  await controller.startArc({
+    checkpointCommit: refreshed.checkpointCommit,
+    cwd: source,
+    harness: "codex",
+    threadId: "preserved-plan-thread",
+  });
 
   await fs.writeFile(path.join(source, "one.txt"), "legacy implementation\n");
   await fs.writeFile(path.join(source, "two.txt"), "legacy implementation\n");

@@ -24,6 +24,7 @@ const checkpointCases: Array<{ name: string; priority: number; run: (context: Te
 const controller = new WorkbenchGitCheckpointController();
 const fixtureCache = new GitTestFixtureCache();
 const createGitPlan = controller.createPlan.bind(controller);
+const addToGitPlan = controller.addToPlan.bind(controller);
 const startGitArc = controller.startArc.bind(controller);
 const continueGitArc = controller.continueArc.bind(controller);
 const addToGitArc = controller.addToArc.bind(controller);
@@ -235,14 +236,28 @@ checkpointTest("plans accept dirty claimed paths, reject mystery dirt, and snaps
     paths: ["selected.txt"],
     threadId: "thread-one",
   });
-  await startGitArc({
+  assert.deepEqual(checkpoint.preservedDriftPaths, ["selected.txt"]);
+  assert.equal(checkpoint.preservedDriftPathCount, 1);
+  await assert.rejects(startGitArc({
     checkpointCommit: checkpoint.checkpointCommit,
     cwd: repoRoot,
     threadId: "thread-one",
+  }), /stored plan no longer matches[\s\S]*selected\.txt/u);
+  const refreshedCheckpoint = await addToGitPlan({
+    cwd: repoRoot,
+    paths: ["selected.txt"],
+    threadId: "thread-one",
   });
-  assert.equal(await git(repoRoot, ["show", `${checkpoint.checkpointCommit}:unrelated.txt`]), "unrelated dirty at checkpoint\n");
+  assert.deepEqual(refreshedCheckpoint.preservedDriftPaths, []);
+  assert.equal(refreshedCheckpoint.preservedDriftPathCount, 0);
+  await startGitArc({
+    checkpointCommit: refreshedCheckpoint.checkpointCommit,
+    cwd: repoRoot,
+    threadId: "thread-one",
+  });
+  assert.equal(await git(repoRoot, ["show", `${refreshedCheckpoint.checkpointCommit}:unrelated.txt`]), "unrelated dirty at checkpoint\n");
   assert.equal(
-    await git(repoRoot, ["show", `${checkpoint.checkpointCommit}:untracked-at-checkpoint.txt`]),
+    await git(repoRoot, ["show", `${refreshedCheckpoint.checkpointCommit}:untracked-at-checkpoint.txt`]),
     "untracked checkpoint content\n",
   );
   await write(repoRoot, "selected.txt", "implementation\n");

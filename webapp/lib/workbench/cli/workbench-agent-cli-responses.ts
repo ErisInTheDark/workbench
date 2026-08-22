@@ -48,6 +48,28 @@ function appendArcReceipt(lines: string[], receipt: string | null) {
   return receipt ? [...lines, receipt] : lines;
 }
 
+function preservedPlanDriftLines(payload: Record<string, unknown> | null) {
+  const paths = readStringArray(payload, "preservedDriftPaths");
+  const count = readNumber(payload, "preservedDriftPathCount") ?? paths.length;
+  const ref = readString(payload, "checkpointCommit");
+  if (!count || !paths.length || !ref) return [];
+  const pathArgs = paths.join(" ");
+  return [
+    "",
+    "WARNING: These paths still use older plan baselines:",
+    ...paths.map((filePath) => `- ${filePath}`),
+    ...(count > paths.length ? [`- ... ${count - paths.length} more`] : []),
+    "",
+    "Inspect this drift first:",
+    `wb git arc diff --ref ${ref} -- ${pathArgs}`,
+    "",
+    "If the approved plan still applies, re-snapshot only the inspected paths:",
+    `wb git arc plan add -- ${pathArgs}`,
+    "",
+    "Otherwise, revise the plan. arc start will reject preserved drift.",
+  ];
+}
+
 export function adaptWorkbenchAgentCliResponse({
   httpOk,
   request,
@@ -104,6 +126,7 @@ export function adaptWorkbenchAgentCliResponse({
         : action === "continue" ? "Continued Git arc" : "Created successor arc ref";
       return succeeded(appendArcReceipt([
         `${label} ${readString(payload, "checkpointCommit") || "(unknown commit)"}`,
+        ...preservedPlanDriftLines(payload),
       ], createArcReceipt(action, payload, request)).join("\n"));
     }
     case "git-arc-start":

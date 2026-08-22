@@ -830,6 +830,26 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     selectedPaths: ["src/one.ts"],
     version: 1,
   });
+  const driftResponse = adapt("git-arc-plan", {
+    checkpointCommit: successorRef,
+    intentName: "Polish arc UI",
+    preservedDriftPathCount: 2,
+    preservedDriftPaths: ["src/one.ts", "src/two.ts"],
+    scopePaths: ["src/one.ts", "src/two.ts"],
+  }, { action: "planAdd", paths: ["src/three.ts"] });
+  assert.match(driftResponse.stdout, /WARNING: These paths still use older plan baselines:[\s\S]*src\/one\.ts[\s\S]*src\/two\.ts/u);
+  assert.match(driftResponse.stdout, new RegExp(`wb git arc diff --ref ${successorRef} -- src/one\\.ts src/two\\.ts`, "u"));
+  assert.match(driftResponse.stdout, /wb git arc plan add -- src\/one\.ts src\/two\.ts/u);
+  assert.ok(driftResponse.stdout.indexOf("arc diff") < driftResponse.stdout.indexOf("arc plan add"));
+  assert.match(driftResponse.stdout, /arc start will reject preserved drift/u);
+  assert.deepEqual(parseGitArcReceipt(driftResponse.stdout), {
+    action: "plan",
+    claimedPaths: ["src/one.ts", "src/two.ts"],
+    intentName: "Polish arc UI",
+    ref: successorRef,
+    selectedPaths: ["src/three.ts"],
+    version: 1,
+  });
   assert.match(adapt("git-arc-add", { checkpointCommit: successorRef }, { action: "arcAdd" }).stdout, /^Created successor arc ref/u);
   const movePreview = adapt("git-arc-mv", {
     additionalClaims: ["src/old.ts", "tests/old.ts"],

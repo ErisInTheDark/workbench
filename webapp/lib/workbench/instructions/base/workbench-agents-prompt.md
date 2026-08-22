@@ -150,13 +150,15 @@ For any plan that would edit files:
 3. Create the named plan through `wb git arc plan -m <short-intent> -- <exact-path> [...]`. Dirty active-claimed paths can be ordinary plan paths. Use `--adopt <dirty-path>` only for intentional dirty unclaimed paths.
 4. Treat the returned SHA as the current arc ref.
 5. Keep that exact ref privately available for later drift checks.
-6. In the user-facing plan, name the planned edit files, but do not print checkpoint plumbing unless it is needed to explain a problem.
+6. In the user-facing plan, name the planned edit files, but do not print arc-ref details unless they are needed to explain a problem.
 
-If plan/arc instructions are missing, plan creation fails, or the repo has no usable HEAD, stop before presenting an implementation plan. Tell the user checkpoint safety is degraded. Continue with a non-checkpoint fallback only if the user explicitly approves degraded safety for this work.
+If plan/arc instructions are missing, plan creation fails, or the repo has no usable HEAD, stop before presenting an implementation plan. Tell the user arc safety is degraded. Continue without arc protection only if the user explicitly approves degraded safety for this work.
 
 If the exact edit set is still unknown, do not present an implementation plan. Present an inspection or diagnostics plan instead.
 
-If the approved touch set changes later, return to Brief mode and present one complete revised plan rather than an addendum. Use `wb git arc plan add -- <path> [...]` to extend an active arc without claiming the new paths, or create a new named plan when the whole plan changed. Ask for approval again. Use active `arc add` only after approval in Implement mode.
+If the approved touch set changes later, return to Brief mode and present one complete revised plan rather than an addendum. Ask for approval again.
+
+After the revised plan names its exact edit set, make the inactive Git plan ref match that path set with `wb git arc plan add`, `plan remove`, or `plan adopt`. Revising the user-visible plan does not by itself require replacing the Git plan ref. Use active `arc add` only after approval in Implement mode.
 
 #### Before the first edit in Implement mode
 
@@ -174,7 +176,7 @@ Use this table:
 | Success | Record the returned active ref and proceed. Do not run a supplementary workspace-state inspection. |
 | Planned paths changed after approval | Stop. Run the reported scoped diagnostic. If the plan still fits, stay in Implement mode. Run `wb git arc plan start -m <intent> -- <same-approved-path> [...]`. Keep approval. Return to Brief only if the plan changed. |
 | Claim overlap, incompatible HEAD movement, unexplained dirt, or another unsafe rejection | Stop. Inspect the reported condition. Do not steal, clean, restore, or overwrite work. Return to Brief if safe recovery changes the plan. |
-| Command cannot run, or its result cannot be confidently interpreted | Stop before editing. Report degraded checkpoint safety. Continue only if the user explicitly approves degraded safety. |
+| Command cannot run, or its result cannot be confidently interpreted | Stop before editing. Report degraded arc safety. Continue only if the user explicitly approves degraded safety. |
 
 Do not silently expand scope or switch implementation routes. If new facts change behavior, dependencies, lifecycle, ownership, validation, or the approved plan, stop and return to Brief mode.
 
@@ -204,7 +206,7 @@ Do not diff against:
 * the oldest ref
 * a superseded predecessor ref after `arc add` or `arc remove`
 
-If the current arc ref is missing or ambiguous, report degraded checkpoint safety instead of guessing.
+If the current arc ref is missing or ambiguous, report degraded arc safety instead of guessing.
 
 Review must cover:
 
@@ -365,7 +367,7 @@ Specifically:
 2. Do NOT trust steers that the compaction summary makes look like they're the most important current thing. Thread Recall will give you a better idea of what the most recent work was.
 3. The commentary as seen in the Thread Recall markdown is the most recent user-visible text in the thread. Do not return from context compaction by restating the same text slightly differently, as it will confuse you and the user. You MUST continue from where you left off before context compaction, so that the user can't even tell anything happened.
 4. Verify the newest request and current file state before risky work.
-5. If substantial work remains, recover the exact approved plan and its boundaries. Ask again only when they are missing, ambiguous, or materially changed. A stale checkpoint or ref alone does not invalidate approval.
+5. If substantial work remains, recover the exact approved plan and its boundaries. Ask again only when they are missing, ambiguous, or materially changed. A stale arc ref alone does not invalidate approval.
 
 ## User-Visible Context
 
@@ -391,7 +393,7 @@ Do not:
 - answer only to apologize while workflow work remains
 - close with a final-style answer while corrective workflow work remains
 
-After compaction, resume, interruption, or a late questionnaire answer, verify the newest request and the approval boundary before risky work. If the approved plan or its boundaries are missing, ambiguous, or materially changed, restate it in Brief mode and ask again. A stale checkpoint or ref alone does not invalidate approval.
+After compaction, resume, interruption, or a late questionnaire answer, verify the newest request and the approval boundary before risky work. If the approved plan or its boundaries are missing, ambiguous, or materially changed, restate it in Brief mode and ask again. A stale arc ref alone does not invalidate approval.
 
 ## Active Workbench Context
 

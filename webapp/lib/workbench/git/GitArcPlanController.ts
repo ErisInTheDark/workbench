@@ -11,7 +11,7 @@ import GitArcRegistry, {
   GitArcCollisionError,
   type GitArcRegistryEntry,
 } from "./GitArcRegistry";
-import GitCheckpointStore from "./GitCheckpointStore";
+import GitCheckpointStore, { type StoredCheckpoint } from "./GitCheckpointStore";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import { type CheckpointMetadata, type GitArcHarness } from "./git-arc-storage";
 
@@ -36,6 +36,8 @@ export interface GitArcPlanResult {
   checkpointRef: string;
   intentName: string | null;
   kind: "plan";
+  preservedDriftPathCount: number;
+  preservedDriftPaths: string[];
   repoRoot: string;
   scopePaths: string[];
 }
@@ -79,6 +81,14 @@ function normalizeHarness(harness: string | undefined): GitArcHarness {
 
 function pathIsCoveredBy(candidate: string, scopePath: string) {
   return candidate === scopePath || candidate.startsWith(`${scopePath}/`);
+}
+
+function overlappingBaselinePaths(previousPaths: string[], nextPaths: string[]) {
+  return [...new Set(previousPaths.flatMap((previousPath) => nextPaths.flatMap((nextPath) => {
+    if (pathIsCoveredBy(nextPath, previousPath)) return [nextPath];
+    if (pathIsCoveredBy(previousPath, nextPath)) return [previousPath];
+    return [];
+  })))].sort((left, right) => left.localeCompare(right));
 }
 
 function liveClaims(entry: GitArcRegistryEntry) {
@@ -136,13 +146,16 @@ export default class GitArcPlanController {
     const harness = normalizeHarness(input.harness);
     const registry = new GitArcRegistry(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
+    const baselinePlan = current?.phase === "plan"
+      ? await new GitCheckpointStore(repository).readCheckpoint(harness, input.threadId, current.checkpointCommit)
+      : null;
     return await this.writePlan(repository, registry, harness, input.threadId, {
       adoptPaths: input.adoptPaths ?? [],
       intentDescription: input.intentDescription ?? "",
       intentName: input.intentName,
       paths: input.paths,
       retainedArc: current ? presentation(current) : null,
-    }, current?.checkpointCommit);
+    }, current?.checkpointCommit, { baselinePlan });
   }
 
   async addToPlan(input: PlanIdentityInput & { paths: string[] }) {
@@ -377,6 +390,7 @@ export default class GitArcPlanController {
     const metadata = requirePlanMetadata(plan.metadata);
     const existing = metadata.scopePaths;
     const existingAdopted = metadata.adoptedPaths ?? [];
+    const existingOrdinary = existing.filter((candidate) => !existingAdopted.includes(candidate));
     if (operation === "adopt") {
       const collisions = findGitArcCollisions(await registry.list(), { harness, threadId: input.threadId }, paths);
       if (collisions.length) throw new GitArcCollisionError(collisions);
@@ -386,8 +400,13 @@ export default class GitArcPlanController {
       if (unknown.length) throw new Error(`Arc plan remove paths must exactly match planned entries: ${unknown.join(", ")}`);
     }
     const nextPaths = operation === "remove"
-      ? existing.filter((candidate) => !paths.includes(candidate))
-      : [...new Set([...existing, ...paths])].sort((left, right) => left.localeCompare(right));
+      ? existingOrdinary.filter((candidate) => !paths.includes(candidate))
+      : operation === "add"
+        ? [...new Set([
+          ...existingOrdinary,
+          ...paths.filter((candidate) => !existing.some((scopePath) => pathIsCoveredBy(candidate, scopePath))),
+        ])].sort((left, right) => left.localeCompare(right))
+        : existingOrdinary;
     const nextAdopted = operation === "remove"
       ? existingAdopted.filter((candidate) => !paths.includes(candidate))
       : operation === "adopt" ? [...new Set([...existingAdopted, ...paths])].sort((left, right) => left.localeCompare(right)) : existingAdopted;
@@ -397,7 +416,10 @@ export default class GitArcPlanController {
       intentName: metadata.intentName ?? current.intentName,
       paths: nextPaths,
       retainedArc: current.retainedArc ?? null,
-    }, current.checkpointCommit);
+    }, current.checkpointCommit, {
+      baselinePlan: plan,
+      refreshPaths: operation === "add" ? paths : [],
+    });
   }
 
   private async writePlan(
@@ -407,8 +429,9 @@ export default class GitArcPlanController {
     threadId: string,
     input: { adoptPaths: string[]; intentDescription: string; intentName: string; paths: string[]; retainedArc: GitArcRegistryEntry["retainedArc"] | null },
     expectedCheckpointCommit?: string,
+    options: { baselinePlan?: StoredCheckpoint | null; refreshPaths?: string[] } = {},
   ): Promise<GitArcPlanResult> {
-    const plan = await this.preparePlan(repository, registry, harness, threadId, input, expectedCheckpointCommit);
+    const plan = await this.preparePlan(repository, registry, harness, threadId, input, expectedCheckpointCommit, options);
     const retainedArc = await this.prepareRetainedArc(repository, harness, threadId, input.retainedArc, plan.paths);
     const registryMutation = await registry.prepareSet({
       checkpointCommit: plan.prepared.checkpointCommit,
@@ -428,6 +451,8 @@ export default class GitArcPlanController {
       checkpointRef: plan.prepared.checkpointRef,
       intentName: plan.metadata.intentName ?? null,
       kind: "plan",
+      preservedDriftPathCount: plan.preservedDriftPathCount,
+      preservedDriftPaths: plan.preservedDriftPaths,
       repoRoot: repository.root,
       scopePaths: plan.paths,
     };
@@ -440,6 +465,7 @@ export default class GitArcPlanController {
     threadId: string,
     input: { adoptPaths: string[]; intentDescription: string; intentName: string; paths: string[]; retainedArc: GitArcRegistryEntry["retainedArc"] | null },
     amendedFrom?: string,
+    options: { baselinePlan?: StoredCheckpoint | null; refreshPaths?: string[] } = {},
   ) {
     const paths = input.paths.length ? repository.normalizePaths(input.paths) : [];
     const adoptPaths = input.adoptPaths.length ? repository.normalizePaths(input.adoptPaths) : [];
@@ -452,8 +478,8 @@ export default class GitArcPlanController {
     }
     const scopePaths = [...new Set([...paths, ...adoptPaths])].sort((left, right) => left.localeCompare(right));
     const head = await repository.currentHead();
-    const tree = await repository.writeWorktreeTree();
-    const dirtyPaths = scopePaths.length ? await repository.listChangedPaths(head, tree, scopePaths) : [];
+    const worktreeTree = await repository.writeWorktreeTree();
+    const dirtyPaths = scopePaths.length ? await repository.listChangedPaths(head, worktreeTree, scopePaths) : [];
     const entries = await registry.list();
     const liveOwners = entries.flatMap((entry) => liveClaims(entry));
     const unexplained = dirtyPaths.filter((dirtyPath) => (
@@ -481,8 +507,36 @@ export default class GitArcPlanController {
       version: 3,
     };
     const store = new GitCheckpointStore(repository);
-    const prepared = await store.prepareCheckpoint(harness, threadId, tree, head, metadata);
-    return { adoptPaths, dirtyPaths, head, metadata, paths: scopePaths, prepared, tree };
+    const baselineMetadata = options.baselinePlan ? requirePlanMetadata(options.baselinePlan.metadata) : null;
+    const preservedPaths = baselineMetadata
+      ? overlappingBaselinePaths(baselineMetadata.scopePaths, scopePaths)
+      : [];
+    let tree = preservedPaths.length
+      ? await repository.writeTreeWithPathsFromSource(worktreeTree, options.baselinePlan!.checkpointCommit, preservedPaths)
+      : worktreeTree;
+    const refreshPaths = options.refreshPaths?.length ? repository.normalizePaths(options.refreshPaths) : [];
+    if (refreshPaths.length) {
+      tree = await repository.writeTreeWithPathsFromSource(tree, worktreeTree, refreshPaths);
+    }
+    const preservedDrift = scopePaths.length ? await repository.listChangedPaths(tree, worktreeTree, scopePaths) : [];
+    const prepared = await store.prepareCheckpoint(
+      harness,
+      threadId,
+      tree,
+      options.baselinePlan?.parent ?? head,
+      metadata,
+    );
+    return {
+      adoptPaths,
+      dirtyPaths,
+      head,
+      metadata,
+      paths: scopePaths,
+      prepared,
+      preservedDriftPathCount: preservedDrift.length,
+      preservedDriftPaths: preservedDrift.slice(0, 20),
+      tree,
+    };
   }
 
   private async prepareRetainedArc(

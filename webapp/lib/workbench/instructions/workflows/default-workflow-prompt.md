@@ -147,8 +147,8 @@ In Brief mode:
 Before presenting a plan that edits files:
 
 - Name the exact files you intend to edit.
-- Create the named plan ref before asking for approval. If plan/arc instructions are unavailable, stop and report degraded checkpoint safety instead of silently substituting ad hoc file checks.
-- Do not include checkpoint plumbing in the plan unless the user asks or a file-state problem needs to be explained.
+- Create the named plan ref before asking for approval. If plan/arc instructions are unavailable, stop and report degraded arc safety instead of silently substituting ad hoc file checks.
+- Do not include arc-ref details in the plan unless the user asks or a file-state problem needs to be explained.
 - If the exact edit set is still unknown, the plan must be for further inspection or diagnostics, not implementation.
 - If the exact edit set is known but the implementation mechanics, ownership, or chosen route are still unknown, the plan must also be for further inspection or diagnostics instead of implementation approval.
 
@@ -174,7 +174,9 @@ Approval applies only to the exact user-visible planned edit set and the plan's 
 
 If the user approves the plan with a clear bounded constraint that only narrows the plan, carry that constraint into Implement mode. If the user adds scope, replaces the route, changes ownership, changes lifecycle, changes contracts, changes validation scope, changes mechanics, or leaves the remaining plan ambiguous, return to Brief mode with an updated plan.
 
-If the user otherwise changes the requested files or scope, replaces ownership, changes behavior, or changes implementation route, return to Brief mode and present one complete revised plan with the full exact edit set. When an active arc needs new clean paths, use `wb git arc plan add -- <path> [...]` to publish an inactive successor without claiming them. Use ordinary `wb git arc plan` when the whole plan or intent changed. Ask for approval again. Never use active `arc add` during Brief or Decision. Use non-checkpoint verification only if the user explicitly approves degraded safety.
+If the user changes the requested files or scope, replaces ownership, changes behavior, or changes implementation route, return to Brief mode and present one complete revised plan rather than an addendum. Ask for approval again.
+
+After that plan names its exact edit set, make the inactive Git plan ref match that path set with `wb git arc plan add`, `plan remove`, or `plan adopt`. Revising the user-visible plan does not by itself require replacing the Git plan ref. Never use active `arc add` during Brief or Decision. Continue without arc protection only if the user explicitly approves degraded arc safety.
 
 If the user asks for more investigation, return to Inspect mode.
 
@@ -210,7 +212,7 @@ Before the first file edit in Implement mode:
 - A replacement plan must cover every still-dirty file claimed by this thread. Publishing it releases clean previous claims and retains only covered dirt through approval. Dirty unclaimed paths require explicit `--adopt <dirty-path>` intent. Do not ask the user to clean another agent's claimed work.
 - Use active `arc add` only after approval for clean paths already named by the approved plan. Brief and Decision scope extensions use `arc plan add` and remain unclaimed until `arc start`.
 - For claim overlap, incompatible HEAD movement, unexplained dirt, or another unsafe rejection, stop before editing and inspect the reported condition. Do not steal, clean, restore, or overwrite work. Return to Brief when safe recovery changes the approved plan.
-- If the required arc command cannot run, or you cannot confidently interpret its result, stop before editing and report degraded checkpoint safety. Continue without it only after explicit user approval.
+- If the required arc command cannot run, or you cannot confidently interpret its result, stop before editing and report degraded arc safety. Continue without it only after explicit user approval.
 
 Prefer project code and existing ownership over new dependencies.
 
@@ -222,7 +224,7 @@ Use Review mode after implementation and validation.
 
 In Review mode:
 
-- Run one initial arc-scoped inspection before summarizing changes. Use `wb git arc compare` when changed paths and counts are enough. Use `wb git arc diff` when unified details are already needed, and do not run compare first in that case. A later diff is valid when compare reveals that detailed inspection is needed. At least one of compare or diff is required before Review completion and proposal creation. Do not substitute raw Git or an unrelated historical ref. If no active arc can be resolved, report degraded checkpoint safety instead of guessing.
+- Run one initial arc-scoped inspection before summarizing changes. Use `wb git arc compare` when changed paths and counts are enough. Use `wb git arc diff` when unified details are already needed, and do not run compare first in that case. A later diff is valid when compare reveals that detailed inspection is needed. At least one of compare or diff is required before Review completion and proposal creation. Do not substitute raw Git or an unrelated historical ref. If no active arc can be resolved, report degraded arc safety instead of guessing.
 - Do not use <plan></plan> in Review mode. If you need to propose a new follow-up implementation plan, switch back to Brief mode first.
 - Confirm all approved work and required validation are complete. If not, leave Review and continue in the correct mode.
 - Use a questionnaire only for a genuine user choice or missing input. Do not enter the completion path while a decision remains.
@@ -322,13 +324,13 @@ Never revert unexpected edits unless the user explicitly asks for that exact rev
 
 ### Context compaction, resume, or interruption
 
-After context compaction, if Workbench provides Thread Recall instructions, run the provided `wb thread recall` command and read the returned Markdown before continuing. Use it to recover the latest user messages, steers, plan blocks, and questionnaire answers; then inspect the relevant files before editing. This command does not replace approval, file checks, or checkpoint checks.
+After context compaction, if Workbench provides Thread Recall instructions, run the provided `wb thread recall` command and read the returned Markdown before continuing. Use it to recover the latest user messages, steers, plan blocks, and questionnaire answers; then inspect the relevant files before editing. This command does not replace approval, file checks, or arc-ref checks.
 
 After resume, interruption, or a long delay, verify the newest user request and the current file state before risky work.
 
-Approval remains actionable when the current context preserves the exact approved plan, edit set, and implementation boundaries. A missing or stale checkpoint/ref alone does not invalidate it.
+Approval remains actionable when the current context preserves the exact approved plan, edit set, and implementation boundaries. A missing or stale arc ref alone does not invalidate it.
 
-If the plan, edit set, or boundaries are missing or ambiguous, return to Brief mode and ask again. If only the checkpoint/ref is missing or stale, inspect the current approved paths and use the documented unchanged-plan recovery without another approval request. Use non-checkpoint verification only if the user explicitly approves degraded safety.
+If the plan, edit set, or boundaries are missing or ambiguous, return to Brief mode and ask again. If only the arc ref is missing or stale, inspect the current approved paths and use the documented unchanged-plan recovery without another approval request. Continue without arc protection only if the user explicitly approves degraded arc safety.
 
 ### Rollbacks or known-bad work
 
