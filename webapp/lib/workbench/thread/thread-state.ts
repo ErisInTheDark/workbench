@@ -294,7 +294,7 @@ export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", 
 ]);
 export type WorkbenchThreadStateRequest = z.infer<typeof WorkbenchThreadStateRequestSchema>;
 
-export type WorkbenchThreadSidebarGroup = "drafts" | "needsAttention" | "completed" | "working" | "snoozed" | "other" | "hidden";
+export type WorkbenchThreadSidebarGroup = "drafts" | "needsAttentionActive" | "completed" | "working" | "needsAttentionPending" | "snoozed" | "other" | "hidden";
 
 export function normalizeWorkbenchTimestampMs(timestamp: number) {
   return Math.trunc(timestamp < 100_000_000_000 ? timestamp * 1000 : timestamp);
@@ -333,13 +333,13 @@ export function getThreadSidebarGroup(entry: WorkbenchThreadSidebarEntry): Workb
   if (entry.entryKind !== "subagent" && entry.metadata.archived) return "hidden";
   if (entry.entryKind !== "subagent" && entry.metadata.snoozed) return "snoozed";
   if (entry.entryKind === "draft") return "drafts";
-  if (entry.lifecycle.kind === "needsAttention") return "needsAttention";
+  if (entry.lifecycle.kind === "needsAttention") return entry.gitArc?.phase === "active" ? "needsAttentionActive" : "needsAttentionPending";
   if ((entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped") && !entry.lifecycle.settled) return "completed";
   if (entry.lifecycle.kind === "working") return "working";
   return "other";
 }
 
-const PRIMARY_THREAD_SIDEBAR_GROUPS = ["drafts", "needsAttention", "completed", "working", "snoozed"] as const;
+const PRIMARY_THREAD_SIDEBAR_GROUPS = ["drafts", "needsAttentionActive", "completed", "working", "needsAttentionPending", "snoozed"] as const;
 
 export function groupWorkbenchThreadSidebarEntries(entries: readonly WorkbenchThreadSidebarEntry[]) {
   const visibleEntries = entries.filter((entry) => getThreadSidebarGroup(entry) !== "hidden" && entry.entryKind !== "subagent");

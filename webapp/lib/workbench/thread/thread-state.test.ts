@@ -167,18 +167,36 @@ test("planned conflicts share sidebar grouping, exclude subagents, and stabilize
     },
   };
   const attention = thread("attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }, ["src/feature/card.tsx"]);
+  const pendingAttention = thread("pending-attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false });
+  const resolvedAttention = {
+    ...thread("resolved-attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }),
+    gitArc: {
+      checkpointCommit: "c".repeat(40), claimedPaths: [], intentDescription: "", intentName: "resolved-attention",
+      phase: "resolved" as const, proposals: [], updatedAt: "2026-08-20T00:00:00.000Z",
+    },
+  };
   const completed = thread("completed", { kind: "completed", reason: "providerInactive", settled: false }, ["src/feature"]);
   const working = thread("working", { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false }, ["src"]);
   const settled = thread("settled", { kind: "completed", reason: "providerInactive", settled: true }, ["src/feature/deep/file.ts"]);
   const unrelated = thread("unrelated", { kind: "completed", reason: "providerInactive", settled: false }, ["docs"]);
+  const snoozedAttention = {
+    ...thread("snoozed-attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }),
+    metadata: { archived: false as const, pinned: false, snoozed: true },
+  };
   const child: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> = {
     activityAt: 10, createdAt: 1, cwd: "C:/repo", directSubagentIndex: 0, entryKind: "subagent",
     gitArc: working.gitArc, identity: { harness: "codex", threadId: "child" }, lifecycle: working.lifecycle,
     name: "child", parentThreadId: "owner", pinned: false, profileId: "default", profileName: "Default",
     projectId: "project", title: "child", updatedAt: 10,
   };
-  const entries = [owner, settled, working, completed, attention, unrelated, child];
-  assert.deepEqual(groupWorkbenchThreadSidebarEntries(entries).primaryEntries.map((entry) => entry.title), ["attention", "owner", "completed", "unrelated", "working"]);
+  const entries = [owner, settled, working, pendingAttention, completed, attention, unrelated, resolvedAttention, snoozedAttention, child];
+  assert.equal(getThreadSidebarGroup(attention), "needsAttentionActive");
+  assert.equal(getThreadSidebarGroup(pendingAttention), "needsAttentionPending");
+  assert.equal(getThreadSidebarGroup(resolvedAttention), "needsAttentionPending");
+  assert.equal(getThreadSidebarGroup(snoozedAttention), "snoozed");
+  assert.deepEqual(groupWorkbenchThreadSidebarEntries(entries).primaryEntries.map((entry) => entry.title), [
+    "attention", "owner", "completed", "unrelated", "working", "pending-attention", "resolved-attention", "snoozed-attention",
+  ]);
   assert.deepEqual(getWorkbenchThreadPlanConflictEntries(entries, owner.identity).map((entry) => entry.title), ["attention", "completed", "working", "settled"]);
 
   const select = createWorkbenchThreadPlanConflictSelector(owner.identity);

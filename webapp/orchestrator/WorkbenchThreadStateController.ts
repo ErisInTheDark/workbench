@@ -693,7 +693,7 @@ export default class WorkbenchThreadStateController {
   private legacyFilePath(projectRoot: string, projectId: string) { return path.join(projectRoot, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment(projectId)}.json`); }
   private draftEntry(draft: WorkbenchThreadDraft, metadata = { archived: false as const, pinned: false, snoozed: false }): WorkbenchThreadSidebarEntry { return { activityAt: draft.updatedAt, draft, entryKind: "draft", metadata, title: draft.prompt.trim().split(/\r?\n/u).find(Boolean)?.trim().replace(/\s+/gu, " ") || "Draft" }; }
   private snapshot(projectId: string, state: ProjectState): WorkbenchThreadSidebarSnapshot { return { entries: sortThreadSidebarEntries(projectWorkbenchThreadSidebarEntries([...state.entries.values()])).filter((entry) => getThreadSidebarGroup(entry) !== "hidden"), error: state.error, freshness: state.freshness, projectId, revision: state.revision }; }
-  private countActiveQueueEntries(state: ProjectState) { return [...state.entries.values()].filter((entry) => { const group = getThreadSidebarGroup(entry); return group === "drafts" || group === "needsAttention" || group === "completed" || group === "working"; }).length; }
+  private countActiveQueueEntries(state: ProjectState) { return [...state.entries.values()].filter((entry) => { const group = getThreadSidebarGroup(entry); return group === "drafts" || group === "needsAttentionActive" || group === "completed" || group === "working" || group === "needsAttentionPending"; }).length; }
 
   private publish(projectId: string, state: ProjectState, changedEntry?: WorkbenchThreadSidebarEntry) {
     if (!this.active || !state.observers.size) return;
