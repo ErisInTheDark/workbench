@@ -1012,6 +1012,67 @@ test("raw canonical notifications preserve waiting status and stable preferences
   assert.deepEqual(current?.turns[0]?.items.map((item) => item.id), ["canonical"]);
 }));
 
+test("live compaction notifications preserve distinct markers and complete one owned timeline entry", async () => withClient(async (client, socket) => {
+  const source = activeThread();
+  source.turns[0] = {
+    ...source.turns[0]!,
+    items: [
+      { id: "compaction-one", type: "contextCompaction" },
+      { id: "between", memoryCitation: null, phase: "commentary", text: "between", type: "agentMessage" },
+    ],
+  };
+  client.selectThreadPayload(source);
+
+  socket.notify("item/started", {
+    item: { id: "compaction-two", type: "contextCompaction" },
+    startedAtMs: 100,
+    threadId: "thread",
+    turnId: "turn",
+  });
+  let current = client.getSnapshot().currentThread;
+  assert.deepEqual(current?.turns[0]?.items.map((item) => item.id), ["compaction-one", "between", "compaction-two"]);
+  assert.deepEqual(current?.turnHistory[0]?.itemTimeline, [{
+    completedAt: null,
+    firstSeenAt: 100,
+    itemId: "compaction-two",
+    lastSeenAt: 100,
+    startedAt: 100,
+  }]);
+
+  socket.notify("item/completed", {
+    completedAtMs: 200,
+    item: { id: "compaction-two", type: "contextCompaction" },
+    threadId: "thread",
+    turnId: "turn",
+  });
+  current = client.getSnapshot().currentThread;
+  assert.deepEqual(current?.turns[0]?.items.map((item) => item.id), ["compaction-one", "between", "compaction-two"]);
+  assert.deepEqual(current?.turnHistory[0]?.itemTimeline, [{
+    completedAt: 200,
+    firstSeenAt: 100,
+    itemId: "compaction-two",
+    lastSeenAt: 200,
+    startedAt: 100,
+  }]);
+
+  socket.notify("item/completed", {
+    completedAtMs: 250,
+    item: { id: "item-99", type: "contextCompaction" },
+    threadId: "thread",
+    turnId: "turn",
+  });
+  current = client.getSnapshot().currentThread;
+  assert.deepEqual(current?.turns[0]?.items.map((item) => item.id), ["compaction-one", "between", "compaction-two"]);
+  assert.deepEqual(current?.turnHistory[0]?.itemTimeline, [{
+    aliases: ["item-99"],
+    completedAt: 250,
+    firstSeenAt: 100,
+    itemId: "compaction-two",
+    lastSeenAt: 250,
+    startedAt: 100,
+  }]);
+}));
+
 test("status and token owners survive canonical updates, authoritative nulls, and compact clears", async () => withClient(async (client, socket) => {
   const usage = (totalTokens: number) => ({
     last: { cachedInputTokens: 0, inputTokens: totalTokens, outputTokens: 0, reasoningOutputTokens: 0, totalTokens },

@@ -16,7 +16,10 @@ import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import { getCurrentTurn } from "../../../lib/codex/thread-state";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchSkillSummary, WorkbenchSubagentSummary, WorkbenchThreadTurnHistoryEntry } from "../../../lib/types";
-import type { WorkbenchThreadItemTimelineEntry } from "../../../lib/workbench/thread/thread-item-timeline";
+import {
+  findWorkbenchThreadItemTimelineEntry,
+  type WorkbenchThreadItemTimelineEntry,
+} from "../../../lib/workbench/thread/thread-item-timeline";
 import type { WorkbenchThreadRecallOutputRecord } from "../../../lib/workbench/thread/thread-recall-output";
 import { getThreadItemsRenderChunkSignature } from "../../../lib/workbench/thread/thread-item-signature";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
@@ -2421,8 +2424,11 @@ function ThreadRenderableBlockViewComponent ({
           workspaceRoots={workspaceRoots}
         />
       );
-    case "contextCompaction":
-      return <ThreadContextCompactionItem isActive={turnStatus === "inProgress"} item={block.item} />;
+    case "contextCompaction": {
+      const timelineEntry = findWorkbenchThreadItemTimelineEntry(block.item.id, itemTimeline);
+      const isActive = turnStatus === "inProgress" && (!timelineEntry || timelineEntry.completedAt === null);
+      return <ThreadContextCompactionItem isActive={isActive} item={block.item} />;
+    }
     case "mcpToolCall":
       return <ThreadMcpToolCallItem item={block.item} />;
     case "dynamicToolCall":

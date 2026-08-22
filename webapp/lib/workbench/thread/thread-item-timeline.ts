@@ -2,6 +2,8 @@
  * Exports:
  * - WorkbenchThreadItemTimelineEntry: Workbench-owned item timing metadata carried with hydrated thread turns. Keywords: thread, timeline, timing.
  * - normalizeWorkbenchThreadItemTimeline: validate and normalize raw item timeline metadata from hydrated payloads. Keywords: thread, timeline, payload.
+ * - findWorkbenchThreadItemTimelineEntry: resolve one item's timeline entry by canonical id or alias. Keywords: thread, timeline, alias, lookup.
+ * - upsertWorkbenchThreadItemTimelineEntry: merge one live lifecycle observation into the owned item timeline. Keywords: thread, timeline, lifecycle, merge.
  * - getThreadItemTimelineDurationMs: compute a duration for a set of thread items from timeline metadata. Keywords: thread, duration, compaction.
  */
 
@@ -57,6 +59,59 @@ export function normalizeWorkbenchThreadItemTimeline(value: unknown): WorkbenchT
 
 function timelineEntryMatchesItemId(entry: WorkbenchThreadItemTimelineEntry, itemIds: ReadonlySet<string>) {
   return itemIds.has(entry.itemId) || Boolean(entry.aliases?.some((alias) => itemIds.has(alias)));
+}
+
+export function findWorkbenchThreadItemTimelineEntry(
+  itemId: string,
+  itemTimeline: readonly WorkbenchThreadItemTimelineEntry[] | null | undefined,
+) {
+  if (!itemTimeline?.length || !itemId) {
+    return null;
+  }
+
+  const itemIds = new Set([itemId]);
+  return itemTimeline.find((entry) => timelineEntryMatchesItemId(entry, itemIds)) ?? null;
+}
+
+function getEarliestTimestamp(left: number | null, right: number | null) {
+  if (left === null) return right;
+  if (right === null) return left;
+  return Math.min(left, right);
+}
+
+function getLatestTimestamp(left: number | null, right: number | null) {
+  if (left === null) return right;
+  if (right === null) return left;
+  return Math.max(left, right);
+}
+
+export function upsertWorkbenchThreadItemTimelineEntry(
+  itemTimeline: readonly WorkbenchThreadItemTimelineEntry[] | null | undefined,
+  incomingEntry: WorkbenchThreadItemTimelineEntry,
+) {
+  const currentTimeline = itemTimeline ?? [];
+  const incomingItemIds = new Set([incomingEntry.itemId, ...(incomingEntry.aliases ?? [])]);
+  const existingIndex = currentTimeline.findIndex((entry) => timelineEntryMatchesItemId(entry, incomingItemIds));
+  if (existingIndex === -1) {
+    return [...currentTimeline, incomingEntry];
+  }
+
+  const existingEntry = currentTimeline[existingIndex]!;
+  const aliases = Array.from(new Set([
+    ...(existingEntry.aliases ?? []),
+    ...(incomingEntry.aliases ?? []),
+    ...(existingEntry.itemId === incomingEntry.itemId ? [] : [existingEntry.itemId]),
+  ])).filter((alias) => alias !== incomingEntry.itemId);
+  const mergedEntry: WorkbenchThreadItemTimelineEntry = {
+    ...(aliases.length ? { aliases } : {}),
+    completedAt: incomingEntry.completedAt ?? existingEntry.completedAt,
+    firstSeenAt: getEarliestTimestamp(existingEntry.firstSeenAt, incomingEntry.firstSeenAt),
+    itemId: incomingEntry.itemId,
+    lastSeenAt: getLatestTimestamp(existingEntry.lastSeenAt, incomingEntry.lastSeenAt),
+    startedAt: getEarliestTimestamp(existingEntry.startedAt, incomingEntry.startedAt),
+  };
+
+  return currentTimeline.map((entry, index) => index === existingIndex ? mergedEntry : entry);
 }
 
 function getEntryStartMs(entry: WorkbenchThreadItemTimelineEntry) {

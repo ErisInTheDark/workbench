@@ -104,6 +104,7 @@ import LifecycleScope from "./state/LifecycleScope";
 import ThreadDocumentStore from "./state/ThreadDocumentStore";
 import ThreadSourceStore from "./state/ThreadSourceStore";
 import { getTurnRenderSignature } from "./thread/thread-item-signature";
+import { upsertWorkbenchThreadItemTimelineEntry } from "./thread/thread-item-timeline";
 import { applyQuestionnaireHistoryToThread, isSyntheticQuestionnaireHistoryItem } from "./thread/thread-questionnaire-history";
 import { applySteerHistoryToThread, isSyntheticSteerHistoryItem } from "./thread/thread-steer-history";
 import {
@@ -3500,6 +3501,47 @@ function WorkbenchThreadClient(
     });
   }
 
+  function upsertThreadItemTimeline(
+    turnId: string,
+    incomingItem: ThreadItem,
+    method: "item/started" | "item/completed",
+    timestamp: number,
+  ) {
+    return updateCurrentThread((thread) => {
+      const turn = thread.turns.find((candidate) => candidate.id === turnId);
+      if (!turn) {
+        return null;
+      }
+
+      const exactItem = turn.items.find((item) => item.id === incomingItem.id);
+      const lifecycleItem = exactItem ?? (() => {
+        const index = findContextCompactionLifecycleItemIndex(turn.items, incomingItem);
+        return index === -1 ? null : turn.items[index] ?? null;
+      })();
+      const itemId = lifecycleItem?.id ?? incomingItem.id;
+      const aliases = itemId === incomingItem.id ? undefined : [incomingItem.id];
+      let updated = false;
+      const turnHistory = thread.turnHistory.map((entry) => {
+        if (entry.turnId !== turnId) {
+          return entry;
+        }
+
+        const itemTimeline = upsertWorkbenchThreadItemTimelineEntry(entry.itemTimeline, {
+          ...(aliases ? { aliases } : {}),
+          completedAt: method === "item/completed" ? timestamp : null,
+          firstSeenAt: timestamp,
+          itemId,
+          lastSeenAt: timestamp,
+          startedAt: method === "item/started" ? timestamp : null,
+        });
+        updated = true;
+        return { ...entry, itemTimeline };
+      });
+
+      return updated ? { ...thread, turnHistory } : null;
+    }, { pruneStreamingDuplicates: false });
+  }
+
   function mergeContextCompactionLifecycleItem(incomingItem: ThreadItem, existingItem: ThreadItem) {
     if (incomingItem.type !== "contextCompaction" || existingItem.type !== "contextCompaction") {
       return incomingItem;
@@ -3532,7 +3574,7 @@ function WorkbenchThreadClient(
       return preferredIndex;
     }
 
-    return compactionIndexes.length === 1 ? compactionIndexes[0]! : -1;
+    return -1;
   }
 
   function createStreamingAgentMessageItem(itemId: string): Extract<ThreadItem, { type: "agentMessage" }> {
@@ -3810,8 +3852,21 @@ function WorkbenchThreadClient(
         }
         return upsertTurnMetadata(notification.params.turn);
       case "item/started":
-      case "item/completed":
-        return upsertThreadItem(notification.params.turnId, notification.params.item);
+      case "item/completed": {
+        const didUpdateItem = upsertThreadItem(notification.params.turnId, notification.params.item);
+        const timestamp = notification.method === "item/started"
+          ? notification.params.startedAtMs
+          : notification.params.completedAtMs;
+        const didUpdateTimeline = Number.isFinite(timestamp)
+          ? upsertThreadItemTimeline(
+            notification.params.turnId,
+            notification.params.item,
+            notification.method,
+            timestamp,
+          )
+          : false;
+        return didUpdateItem || didUpdateTimeline;
+      }
       case "item/agentMessage/delta":
         return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingAgentMessageItem(notification.params.itemId), (item) => (
           item.type === "agentMessage"
