@@ -13,6 +13,7 @@ import { createThreadHref } from "../../lib/workbench/navigation/workbench-route
 import type { WorkbenchThreadTarget } from "../../lib/workbench/thread/thread-state";
 import { getThreadSidebarGroup, isWorkbenchThreadStatusProviderOwned, type WorkbenchThreadSidebarEntry } from "../../lib/workbench/thread/thread-state";
 import { SidebarLoadingSkeleton } from "./workbench-explorer";
+import { getNeedsAttentionThreadStatusTone } from "./workbench-thread-status-colors";
 import {
   ArchiveIcon,
   CompletedThreadIcon,
@@ -193,7 +194,7 @@ export default memo(function WorkbenchThreadSidebar({
           id: "needs-attention",
           label: "Needs attention",
           onSelect: () => selectStatus("needsAttention"),
-          tone: "needs-attention",
+          tone: getNeedsAttentionThreadStatusTone(entry.gitArc?.phase === "active"),
         }, {
           checked: entry.lifecycle.kind === "completed",
           disabled: providerOwned,

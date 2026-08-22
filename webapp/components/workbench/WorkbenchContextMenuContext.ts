@@ -10,6 +10,8 @@
 
 import { createContext, useContext, type ReactNode } from "react";
 
+import type { WorkbenchThreadStatusControlTone } from "./workbench-thread-status-colors";
+
 export interface WorkbenchContextMenuAction {
   disabled?: boolean;
   icon?: ReactNode;
@@ -27,7 +29,7 @@ export interface WorkbenchContextMenuControl {
   id: string;
   label: string;
   onSelect: () => void;
-  tone?: "completed" | "default" | "danger" | "needs-attention" | "stopped";
+  tone?: WorkbenchThreadStatusControlTone | "default" | "danger";
 }
 
 export interface WorkbenchContextMenuControlGroup {

@@ -17,6 +17,11 @@ import ProjectFilePath from "./ProjectFilePath";
 import { formatThreadRelativeTimestamp } from "./thread-view/thread-view-formatters";
 import { workbenchThreadListLabelClassName } from "./workbench-class-names";
 import {
+  getNeedsAttentionThreadStatusTone,
+  getWorkbenchThreadStatusClassName,
+  type WorkbenchThreadStatusTone,
+} from "./workbench-thread-status-colors";
+import {
   CompletedThreadIcon,
   DiscardDraftIcon,
   DraftThreadIcon,
@@ -141,6 +146,7 @@ export default function WorkbenchThreadListItem({
   const group = getThreadSidebarGroup(entry);
   const lifecycle = entry.entryKind === "draft" ? null : entry.lifecycle;
   const gitArc = entry.entryKind === "draft" ? null : entry.gitArc ?? null;
+  const hasActiveGitArc = gitArc?.phase === "active";
   const claimedPaths = gitArc?.claimedPaths ?? [];
   const claimedFileCount = claimedPaths.length;
   const hasProposedCommit = Boolean(gitArc?.proposals.some(({ status }) => status === "proposed"));
@@ -161,15 +167,14 @@ export default function WorkbenchThreadListItem({
   const canShiftSettle = canComplete && !hasLiveClaims;
   const action = canShiftSettle && isShiftPressed ? "settle" : baseAction;
   const Icon = entry.entryKind === "draft" ? DraftThreadIcon : showProposedCommit ? ProposedCommitThreadIcon : lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
-  const statusClassName = entry.entryKind === "draft"
-    ? "text-muted"
-    : lifecycle?.kind === "working"
-      ? "text-sky-600 dark:text-sky-300"
-      : lifecycle?.kind === "needsAttention"
-        ? "text-amber-600 dark:text-amber-300"
-        : lifecycle?.kind === "stopped"
-          ? "text-red-600 dark:text-red-300"
-          : "text-emerald-600 dark:text-emerald-300";
+  const statusTone: WorkbenchThreadStatusTone = lifecycle?.kind === "working"
+    ? "working"
+    : lifecycle?.kind === "needsAttention"
+      ? getNeedsAttentionThreadStatusTone(hasActiveGitArc)
+      : lifecycle?.kind === "stopped"
+        ? "stopped"
+        : "completed";
+  const statusClassName = entry.entryKind === "draft" ? "text-muted" : getWorkbenchThreadStatusClassName(statusTone);
   const ActionIcon = action === "discard" ? DiscardDraftIcon : action === "restore" ? RestoreThreadIcon : action === "wake" ? UnsnoozeThreadIcon : SettleThreadIcon;
   const actionLabel = action === "complete" ? "Completed" : action === "discard" ? "Discard draft" : action === "restore" ? "Restore" : action === "settle" ? "Settle" : "Wake";
   const rowName = `${entry.title}, ${status}${claimedFileCount ? `, ${claimedFileCount} claimed ${claimedFileCount === 1 ? "file" : "files"}` : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
@@ -212,7 +217,7 @@ export default function WorkbenchThreadListItem({
   ) : anchor;
 
   return (
-    <li className={`group/thread-row relative isolate m-0 list-none${dimmed ? " opacity-50 hover:opacity-100 focus-within:opacity-100" : ""}${className ? ` ${className}` : ""}`}>
+    <li className={`group/thread-row relative isolate m-0 list-none${dimmed ? " opacity-50 hover:opacity-100 focus-within:opacity-100" : ""}${className ? ` ${className}` : ""}`} data-thread-status-tone={entry.entryKind === "draft" ? "draft" : statusTone}>
       <svg aria-hidden="true" className={`pointer-events-none absolute inset-0 z-0 size-full transition-opacity duration-75 ease-out ${statusClassName} ${selected ? "opacity-100" : "opacity-0 group-hover/thread-row:opacity-100 group-focus-within/thread-row:opacity-100"}`}>
         <rect x="0.5" y="0.5" width="calc(100% - 1px)" height="calc(100% - 1px)" rx="12.8" fill="color-mix(in srgb, var(--text) 4%, transparent)" stroke="currentColor" strokeWidth="1" strokeOpacity={strokeOpacity} strokeDasharray={hasDashedBorder ? "6 4" : undefined} vectorEffect="non-scaling-stroke" />
       </svg>

@@ -7,7 +7,8 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
+import { getWorkbenchThreadStatusControlClassName } from "./workbench-thread-status-colors";
+import type { WorkbenchContextMenuControl, WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 
 const CONTEXT_MENU_VIEWPORT_PADDING = 8;
 
@@ -29,12 +30,10 @@ function clampMenuPosition(value: number, size: number, viewportSize: number) {
 const actionClassName = "flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-muted data-[tone=danger]:text-danger data-[tone=danger]:hover:bg-[color-mix(in_srgb,var(--danger)_14%,transparent)] data-[tone=danger]:hover:text-danger data-[tone=danger]:focus-visible:bg-[color-mix(in_srgb,var(--danger)_14%,transparent)] data-[tone=danger]:focus-visible:text-danger";
 const controlClassName = "relative inline-flex h-9 min-w-0 flex-1 items-center justify-center rounded-xl border border-[color-mix(in_srgb,var(--text)_10%,transparent)] text-muted transition-[background-color,border-color,color,opacity] hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent disabled:!text-muted disabled:hover:!text-muted data-[checked=true]:border-[color-mix(in_srgb,currentColor_55%,transparent)] data-[checked=true]:bg-[color-mix(in_srgb,currentColor_12%,transparent)] data-[checked=true]:text-accent data-[checked=true]:hover:bg-[color-mix(in_srgb,currentColor_16%,transparent)] data-[checked=true]:focus-visible:bg-[color-mix(in_srgb,currentColor_16%,transparent)]";
 
-function getControlToneClassName(tone: "completed" | "default" | "danger" | "needs-attention" | "stopped" | undefined) {
-  if (tone === "needs-attention") return "!text-amber-600 hover:!text-amber-600 focus-visible:!text-amber-600 dark:!text-amber-300 dark:hover:!text-amber-300 dark:focus-visible:!text-amber-300";
-  if (tone === "completed") return "!text-emerald-600 hover:!text-emerald-600 focus-visible:!text-emerald-600 dark:!text-emerald-300 dark:hover:!text-emerald-300 dark:focus-visible:!text-emerald-300";
-  if (tone === "stopped") return "!text-red-600 hover:!text-red-600 focus-visible:!text-red-600 dark:!text-red-300 dark:hover:!text-red-300 dark:focus-visible:!text-red-300";
+function getControlToneClassName(tone: WorkbenchContextMenuControl["tone"]) {
   if (tone === "danger") return "!text-danger hover:!text-danger focus-visible:!text-danger";
-  return "";
+  if (tone === "default") return "";
+  return getWorkbenchThreadStatusControlClassName(tone);
 }
 
 export default function WorkbenchContextMenuSurface({

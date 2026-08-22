@@ -98,7 +98,7 @@ test("thread context actions group priority checkboxes and canonical status radi
   assert.match(sidebarSource, /label: "Needs attention"/u);
   assert.match(sidebarSource, /label: "Completed"/u);
   assert.match(sidebarSource, /label: "Stopped"/u);
-  assert.match(sidebarSource, /tone: "needs-attention"/u);
+  assert.match(sidebarSource, /tone: getNeedsAttentionThreadStatusTone\(entry\.gitArc\?\.phase === "active"\)/u);
   assert.match(sidebarSource, /tone: "completed"/u);
   assert.match(sidebarSource, /tone: "stopped"/u);
   assert.match(sidebarSource, /status === "stopped" && thread/u);

@@ -1620,6 +1620,7 @@ export default memo(function ThreadView ({
     >
       <ThreadGitArcPresentationContext.Provider value={{
         harness: activeThread?.harness ?? thread.harness,
+        hasActiveGitArc: activeGitArcSelection?.gitArc?.phase === "active",
         hoistedProposalIds: new Set(terminalGitArc?.proposals.map(({ proposalId }) => proposalId) ?? []),
         proposalIntents: visibleGitArcProposalIntents,
       }}>
