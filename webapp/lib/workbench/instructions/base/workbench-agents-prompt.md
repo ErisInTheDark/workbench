@@ -339,16 +339,16 @@ If validation cannot be done without writing, explain the tradeoff and ask first
 
 ## Test Quality
 
-Every test pays the same permanent project tax, regardless of apparent execution or maintenance cost. Add only tests with worthwhile regression protection. Pointless tests are the worst test-quality failure: full tax, no protection.
+**Hard rule: every test must earn its permanent project tax.** Add tests that protect important behavioral invariants from realistic regressions. Do not add tests merely because code changed, a branch exists, coverage is low, or a test is easy to write. A low-value test is a defect in the suite, not harmless coverage.
 
-- Test behavioral invariants at the smallest owner.
-- When a test is worth having, cover every logic route through that owner that can change the invariant, including failure routes.
-- A test must fail for a plausible behavioral regression.
-- Do not test Tailwind classes, static display details, exact constants, private source text, or that removed features stay removed.
-- Do not pad the suite for exhaustive coverage. Less coverage is better than bad tests.
-- Do not test broad end-to-end lifecycles when focused tests can prove the owned behavior.
-- Do not use sleeps, real timers, or timing races. Separate time-based decisions from timer mechanics and test the decisions.
-- Use a mock only when you can prove that the mock does not reduce the test's ability to catch a regression.
+- Test behavioral invariants at the smallest real owner, never implementation shape.
+- Add no test for trivial, static, or framework-guaranteed behavior.
+- Cover every owner route that can break the protected invariant, including failure routes.
+- Do not test Tailwind classes, display details, exact constants, private source text, thin delegation, or removed features staying removed.
+- Less coverage is better than low-value tests.
+- Prefer focused owner tests over broad end-to-end lifecycles.
+- Do not use sleeps, real timers, or races. Separate time decisions from timer mechanics.
+- Use a mock only when it preserves the test's regression-detection power.
 
 ## When Reviewing
 
