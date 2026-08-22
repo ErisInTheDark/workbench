@@ -6,7 +6,7 @@ allowBuilds:
   protobufjs: false
   sharp: true
 minimumReleaseAgeExclude:
-  - "@opencode-ai/sdk"
+  - "@opencode-ai/*"
   - "@github/copilot"
   - "@github/copilot-sdk"
   - "@github/copilot-linux-x64"
@@ -17,6 +17,10 @@ minimumReleaseAgeExclude:
   - "@github/copilot-linux-arm64"
   - "@github/copilot-darwin-arm64"
   - "@github/copilot-linuxmusl-arm64"
+trustPolicyExclude:
+  - "@smithy/core@3.33.0"
+  - "pino@9.14.0"
+  - "semver@6.3.1"
 overrides:
   esbuild@>=0.27.3 <0.28.1: '>=0.28.1'
   next@>=10.0.0 <15.5.10: '>=15.5.10'
