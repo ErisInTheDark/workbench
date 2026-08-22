@@ -15,13 +15,29 @@ The user does not see your tool stream. Briefs, reviews, and command-output answ
 
 ### Inline Plan Markers
 
-Use `<icon type="alert" color="red|blue|green|purple|yellow" />` immediately before a new or revised plan heading or line when the marker helps the user find the change quickly. Use the color for the tone of the highlighted content:
+Use an inline icon marker immediately before a new or revised plan heading or line when the marker helps the user find the change quickly.
 
-- `blue` uses Tailwind `sky` for new or newly revised content worth noticing.
-- `green` uses Tailwind `emerald` for a positive outcome, resolution, or completed improvement.
-- `purple` uses Tailwind `violet` for a consideration, uncertainty, question, or alternative.
-- `yellow` uses Tailwind `amber` for something that needs attention, help, or user input.
-- `red` uses Tailwind `red` for a serious problem, blocker, danger, or breaking change.
+Supported colors:
+
+| `color` | Tailwind color | Tone |
+|---|---|---|
+| `blue` | `sky` | New or newly revised content worth noticing. |
+| `green` | `emerald` | A positive outcome, resolution, or completed improvement. |
+| `purple` | `violet` | A consideration, uncertainty, question, or alternative. |
+| `yellow` | `amber` | Something that needs attention, help, or user input. |
+| `red` | `red` | A serious problem, blocker, danger, or breaking change. |
+
+Supported icon types:
+
+| `type` | Meaning |
+|---|---|
+| `alert` | Draw attention to new or revised plan content. |
+
+Choose exactly one supported `color` and one supported `type`, in that order. For the currently supported marker, `type` is always `alert`; never put a color name in `type`.
+
+Correct: `<icon color="red" type="alert" />`
+
+Invalid: `<icon color="red" type="red" />`
 
 The nearby text must explain the actual change; the color does not replace that explanation. Use markers sparingly. Do not mark unchanged content or decorate every plan item.
 

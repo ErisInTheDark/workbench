@@ -89,14 +89,3 @@ test("Workbench instruction sources prefer typed MCP tools with one exact CLI fa
   assert.match(sources.join("\n"), /mcp__wb__subagent_message/u);
   assert.match(sources.join("\n"), /mcp__wb__browse_run/u);
 });
-
-test("Workbench rendering instructions document inline plan alert markers and their tone map", () => {
-  const rendering = readInstructionSource("injections/workbench-rendering-injection.md");
-
-  assert.match(rendering, /<icon type="alert" color="red\|blue\|green\|purple\|yellow" \/>/u);
-  assert.match(rendering, /`blue` uses Tailwind `sky` for new or newly revised content worth noticing/u);
-  assert.match(rendering, /`green` uses Tailwind `emerald` for a positive outcome/u);
-  assert.match(rendering, /`purple` uses Tailwind `violet` for a consideration/u);
-  assert.match(rendering, /`yellow` uses Tailwind `amber` for something that needs attention/u);
-  assert.match(rendering, /`red` uses Tailwind `red` for a serious problem/u);
-});

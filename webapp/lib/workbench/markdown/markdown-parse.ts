@@ -521,17 +521,26 @@ function parseThreadIconMarker(markdown: string, index: number, options: Markdow
     return null;
   }
 
-  const match = /^<icon type="([a-z][a-z0-9-]*)" color="([a-z][a-z0-9-]*)"\s*\/>/u.exec(markdown.slice(index));
-  if (!match) {
+  const source = markdown.slice(index);
+  const colorFirstMatch = /^<icon color="([a-z][a-z0-9-]*)" type="([a-z][a-z0-9-]*)"\s*\/>/u.exec(source);
+  const typeFirstMatch = colorFirstMatch
+    ? null
+    : /^<icon type="([a-z][a-z0-9-]*)" color="([a-z][a-z0-9-]*)"\s*\/>/u.exec(source);
+  const marker = colorFirstMatch
+    ? { color: colorFirstMatch[1], iconType: colorFirstMatch[2], source: colorFirstMatch[0] }
+    : typeFirstMatch
+      ? { color: typeFirstMatch[2], iconType: typeFirstMatch[1], source: typeFirstMatch[0] }
+      : null;
+  if (!marker) {
     return null;
   }
 
   return {
-    end: index + match[0].length,
+    end: index + marker.source.length,
     node: {
-      color: match[2],
-      iconType: match[1],
-      source: match[0],
+      color: marker.color,
+      iconType: marker.iconType,
+      source: marker.source,
       type: "threadIcon" as const,
     },
   };
