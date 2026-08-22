@@ -851,6 +851,7 @@ export interface WorkbenchSendThreadMessageOptions {
   instructionInjections?: Record<string, string>;
   onThreadCreated?: (thread: ThreadPayload) => void;
   onThreadMaterialized?: (thread: ThreadPayload) => void;
+  onTurnAdmitted?: (turnId: string) => void;
   selectThread?: boolean;
   startNewTurn?: boolean;
   workflowIds?: string[];

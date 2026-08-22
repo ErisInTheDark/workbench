@@ -954,6 +954,40 @@ test("proper questionnaires and late-response history survive controller restart
   }, "Persisted questionnaire was not restored after controller restart.");
   const restored = (await second.getSnapshot("project")).entries.find((entry) => entry.entryKind === "thread");
   assert.equal(restored?.entryKind === "thread" ? restored.pendingQuestionnaire?.requestKey : null, "request-key");
+  const rejectedDismissal = await second.handleRequest("second", {
+    identity: { harness: "codex", threadId: "thread" },
+    method: "workbench/thread-state/questionnaire/dismiss",
+    projectId: "project",
+    requestKey: "different-request",
+  });
+  assert.equal("result" in rejectedDismissal && (rejectedDismissal.result as { accepted?: boolean }).accepted, false);
+  const dismissal = await second.handleRequest("second", {
+    identity: { harness: "codex", threadId: "thread" },
+    method: "workbench/thread-state/questionnaire/dismiss",
+    projectId: "project",
+    requestKey: "request-key",
+  });
+  assert.equal("result" in dismissal && (dismissal.result as { accepted?: boolean }).accepted, true);
+  const dismissed = (await second.getSnapshot("project")).entries.find((entry) => entry.entryKind === "thread");
+  assert.equal(dismissed?.entryKind === "thread" ? dismissed.pendingQuestionnaire ?? null : null, null);
+  assert.deepEqual(dismissed?.entryKind === "thread" ? dismissed.questionnaireHistory ?? [] : null, []);
+  await second.dispose();
+
+  const third = createController();
+  await third.open("third", "project");
+  await waitFor(async () => (await third.getSnapshot("project")).entries.some((entry) => entry.entryKind === "thread"), "Dismissed questionnaire thread was not restored.");
+  const reloadedDismissal = (await third.getSnapshot("project")).entries.find((entry) => entry.entryKind === "thread");
+  assert.equal(reloadedDismissal?.entryKind === "thread" ? reloadedDismissal.pendingQuestionnaire ?? null : null, null);
+  assert.deepEqual(reloadedDismissal?.entryKind === "thread" ? reloadedDismissal.questionnaireHistory ?? [] : null, []);
+  const repeatedDismissal = await third.handleRequest("third", {
+    identity: { harness: "codex", threadId: "thread" },
+    method: "workbench/thread-state/questionnaire/dismiss",
+    projectId: "project",
+    requestKey: "request-key",
+  });
+  assert.equal("result" in repeatedDismissal && (repeatedDismissal.result as { accepted?: boolean }).accepted, true);
+
+  await third.observeLifecycle("codex", "thread", { kind: "pendingInput", questionnaire, requestKey: questionnaire.requestKey, turnId: questionnaire.turnId });
   const historyEntry = {
     ...questionnaire,
     insertAfterItemId: "item",
@@ -963,28 +997,28 @@ test("proper questionnaires and late-response history survive controller restart
     threadId: "thread",
     turnId: "turn",
   };
-  const resolved = await second.handleRequest("second", {
+  const resolved = await third.handleRequest("third", {
     entry: historyEntry,
     identity: { harness: "codex", threadId: "thread" },
     method: "workbench/thread-state/questionnaire/resolve",
     projectId: "project",
   });
   assert.equal("result" in resolved && (resolved.result as { accepted?: boolean }).accepted, true);
-  const completed = (await second.getSnapshot("project")).entries.find((entry) => entry.entryKind === "thread");
+  const completed = (await third.getSnapshot("project")).entries.find((entry) => entry.entryKind === "thread");
   assert.equal(completed?.entryKind === "thread" ? completed.pendingQuestionnaire ?? null : null, null);
   assert.equal(completed?.entryKind === "thread" ? completed.questionnaireHistory?.[0]?.requestKey : null, "request-key");
-  await second.dispose();
+  await third.dispose();
 
-  const third = createController();
-  await third.open("third", "project");
+  const fourth = createController();
+  await fourth.open("fourth", "project");
   await waitFor(async () => {
-    const entry = (await third.getSnapshot("project")).entries.find((candidate) => candidate.entryKind === "thread");
+    const entry = (await fourth.getSnapshot("project")).entries.find((candidate) => candidate.entryKind === "thread");
     return entry?.entryKind === "thread" && entry.questionnaireHistory?.[0]?.requestKey === "request-key";
   }, "Persisted questionnaire history was not restored after controller restart.");
-  const reloaded = (await third.getSnapshot("project")).entries.find((entry) => entry.entryKind === "thread");
+  const reloaded = (await fourth.getSnapshot("project")).entries.find((entry) => entry.entryKind === "thread");
   assert.equal(reloaded?.entryKind === "thread" ? reloaded.pendingQuestionnaire ?? null : null, null);
   assert.equal(reloaded?.entryKind === "thread" ? reloaded.questionnaireHistory?.[0]?.response.answers.route?.answers[0] : null, "Approve");
-  await third.dispose();
+  await fourth.dispose();
   await fs.rm(root, { force: true, recursive: true });
 });
 

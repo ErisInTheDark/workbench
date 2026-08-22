@@ -54,6 +54,7 @@ import ThreadModelPicker from "./ThreadModelPicker";
 import ThreadProfilePicker from "./ThreadProfilePicker";
 import { getComposerProfileDisplayLabel } from "./composer-profile-label";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
+import { getThreadComposerStopControlState } from "./thread-composer-controls";
 import { getThreadUserInputRequestPreviewText } from "./thread-user-input-request-preview";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 
@@ -351,7 +352,8 @@ export default function ThreadComposer ({
   const canRecoverInterruptedTurn = isWorkbenchThreadRecoveryEligible(thread, threadLifecycle, hasPendingUserInputRequest, controlsMode);
   const isInputDisabled = isSending || isRecoveringInterruptedTurn || isAttaching || isThreadStateBroken || isCopilotAuthRequired;
   const isSendDisabled = isInputDisabled;
-  const isStopDisabled = !isActiveThread || isStopping;
+  const stopControlState = getThreadComposerStopControlState({ hasPendingUserInputRequest, isActiveThread, isCommentMode, isStopping });
+  const isStopDisabled = stopControlState.disabled;
   const isMobileTextInput = useMobileTextInputEnvironment();
   const helperText = hasVisiblePendingUserInputRequest
       ? "\xa0"
@@ -404,7 +406,7 @@ export default function ThreadComposer ({
         : thread.isDraft
           ? "Start a new thread..."
           : "Continue this thread...";
-  const showStopButton = !isCommentMode && (isActiveThread || isStopping);
+  const showStopButton = stopControlState.visible;
   const selectedAgent = availableAgents.find((agent) => areWorkbenchAgentPathsEqual(agent.path, thread.agentPath)) ?? null;
   const agentButtonLabel = selectedAgent?.name
     ?? getWorkbenchAgentPathLabel(thread.agentPath)
@@ -984,8 +986,8 @@ export default function ThreadComposer ({
   const stopButton = showStopButton ? (
     <PrimaryButton
       type="button"
-      aria-label={isStopping ? "Stopping current turn" : "Stop current turn"}
-      title={isStopping ? "Stopping current turn" : "Stop current turn"}
+      aria-label={isStopping ? "Stopping current turn" : isActiveThread ? "Stop current turn" : "Dismiss questionnaire"}
+      title={isStopping ? "Stopping current turn" : isActiveThread ? "Stop current turn" : "Dismiss questionnaire"}
       disabled={isStopDisabled}
       shape="circle"
       onClick={() => {

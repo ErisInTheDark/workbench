@@ -4008,6 +4008,7 @@ function WorkbenchThreadClient(
   ) {
     if (
       sendOptions.selectThread === false
+      || sendOptions.onTurnAdmitted !== undefined
       || thread.harness !== "codex"
       || thread.isDraft
       || !thread.id.trim()
@@ -4662,6 +4663,7 @@ function WorkbenchThreadClient(
       ) {
         return null;
       }
+      sendOptions.onTurnAdmitted?.(turnStartResponse.turn.id);
       const liveThread = threadSources.get(turnStartFence.threadKey) ?? resumedThread;
       const admittedTurn = mergeLiveStreamingTurn(
         turnStartResponse.turn,
@@ -4733,23 +4735,45 @@ function WorkbenchThreadClient(
     }
 
     const activeTurn = getCurrentInProgressTurn(thread);
-    if (!activeTurn) {
+    const pendingRequest = state.pendingUserInputRequestsByThreadId.get(thread.id);
+    if (!activeTurn && !pendingRequest) {
       return thread;
     }
 
     messageAdmissionIntentRevision += 1;
     const projectIdentity = captureProjectOperationIdentity();
 
-    await stopWorkbenchThread({
-      harness: thread.harness,
-      sendRequest: async (harness, request) => {
-        await sendBridgeRequest(harness, request);
-      },
-      threadId: thread.id,
-      turnId: activeTurn.id,
-    });
+    if (activeTurn) {
+      await stopWorkbenchThread({
+        harness: thread.harness,
+        sendRequest: async (harness, request) => {
+          await sendBridgeRequest(harness, request);
+        },
+        threadId: thread.id,
+        turnId: activeTurn.id,
+      });
+    }
     if (!isProjectOperationIdentityCurrent(projectIdentity)) {
       return thread;
+    }
+
+    if (pendingRequest) {
+      const dismissal = await requestWorkbench<{ accepted: boolean }>("workbench/thread-state/questionnaire/dismiss", {
+        identity: { harness: pendingRequest.harness, threadId: pendingRequest.threadId },
+        projectId: state.projectId,
+        requestKey: pendingRequest.requestKey,
+      });
+      if (!dismissal.accepted) {
+        throw new Error("The pending questionnaire could not be dismissed.");
+      }
+      if (!isProjectOperationIdentityCurrent(projectIdentity)) {
+        return thread;
+      }
+      const clearedPendingRequest = clearPendingUserInputRequest(thread.id, pendingRequest.requestKey);
+      const clearedWaitingFlag = clearThreadWaitingOnUserInputFlag(thread.id);
+      if (clearedPendingRequest || clearedWaitingFlag) {
+        emit();
+      }
     }
 
     const refreshedThread = await readThread(thread.id, thread.harness).catch(() => null);
@@ -4866,12 +4890,19 @@ function WorkbenchThreadClient(
         threadId: pendingRequest.threadId,
         turnId: originalTurnId,
       };
-      const admittedThread = await sendThreadMessage(
+      let admittedTurnId: string | null = null;
+      await sendThreadMessage(
         thread,
         createWorkbenchQuestionnaireResponseInput(response),
-        { selectThread: false, startNewTurn: true },
+        {
+          onTurnAdmitted: (turnId) => {
+            admittedTurnId = turnId;
+          },
+          selectThread: false,
+          startNewTurn: true,
+        },
       );
-      if (!admittedThread) {
+      if (!admittedTurnId) {
         throw new Error("The questionnaire response turn was not admitted.");
       }
       const resolution = await requestWorkbench<{ accepted: boolean }>("workbench/thread-state/questionnaire/resolve", {

@@ -109,7 +109,7 @@ class FakeWebSocket {
     } else if (request.method === "turn/start") {
       const threadId = String(request.params?.threadId ?? "thread");
       queueMicrotask(() => this.respond(request.id, { turn: wireThread(threadId, `${threadId}-started`).turns[0] }));
-    } else if (request.method === "workbench/thread-state/intent/accept" || request.method === "workbench/thread-state/questionnaire/resolve") {
+    } else if (request.method === "workbench/thread-state/intent/accept" || request.method === "workbench/thread-state/questionnaire/dismiss" || request.method === "workbench/thread-state/questionnaire/resolve") {
       queueMicrotask(() => this.respond(request.id, { accepted: true, revision: 1 }));
     } else {
       queueMicrotask(() => this.fail(request.id, `unexpected ${request.method}`));
@@ -1610,7 +1610,54 @@ test("interrupted proper questionnaires detach while approvals are discarded", a
   assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
 }));
 
-test("durable detached questionnaire responses start hidden turns and resolve only after admission", async () => withClient(async (client, socket) => {
+test("stop dismisses detached questionnaires without interrupting an inactive provider turn", async () => withClient(async (client, socket) => {
+  const source = activeThread("codex", "thread", "interrupted");
+  client.selectThreadPayload(source);
+  const request = {
+    id: "question",
+    questions: [{ allowOther: false, header: "Route", id: "route", isSecret: false, options: [{ description: "Continue", label: "Approve" }], question: "Continue?" }],
+    submitLabel: "Send",
+    summary: "Choose",
+    title: "Questionnaire",
+  };
+  client.installSidebarSnapshot({
+    entries: [{ activityAt: 2, entryKind: "thread", identity: { harness: "codex", threadId: "thread" }, lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" }, metadata: { archived: false, pinned: false, snoozed: false }, pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" }, title: "Thread" }],
+    error: null, freshness: "fresh", projectId: "project", revision: 1,
+  });
+  await waitForCondition(() => client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode === "newTurn", "Durable questionnaire did not reconcile as detached.");
+
+  await client.stopThread(source);
+
+  assert.equal(socket.requests.some((candidate) => candidate.method === "turn/interrupt"), false);
+  assert.equal(socket.requests.some((candidate) => candidate.method === "workbench/thread-state/questionnaire/dismiss"), true);
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
+}));
+
+test("stop interrupts an active questionnaire turn before dismissing its durable request", async () => withClient(async (client, socket) => {
+  const source = activeThread();
+  client.selectThreadPayload(source);
+  socket.notify("questionnaire/requested", {
+    itemId: "item",
+    request: {
+      id: "question",
+      questions: [{ allowOther: false, header: "Route", id: "route", isSecret: false, options: [{ description: "Continue", label: "Approve" }], question: "Continue?" }],
+      submitLabel: "Send",
+      summary: "Choose",
+      title: "Questionnaire",
+    },
+    requestKey: "question",
+    threadId: "thread",
+    turnId: "turn",
+  });
+
+  await client.stopThread(source);
+
+  const methods = socket.requests.map((candidate) => candidate.method);
+  assert.ok(methods.indexOf("turn/interrupt") < methods.indexOf("workbench/thread-state/questionnaire/dismiss"));
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
+}));
+
+test("durable detached questionnaire responses resolve after admission even when immediate reconciliation fails", async () => withClient(async (client, socket) => {
   const source = activeThread("codex", "thread", "interrupted");
   const questionnairePrompt = { id: "prompt", memoryCitation: null, phase: "commentary" as const, text: "Choose a route.", type: "agentMessage" as const };
   source.turns[0]!.items = [questionnairePrompt];
@@ -1650,11 +1697,7 @@ test("durable detached questionnaire responses start hidden turns and resolve on
       return true;
     }
     if (turnStarted && candidate.method === "thread/resume") {
-      queueMicrotask(() => target.respond(candidate.id, { model: "model", reasoningEffort: null, serviceTier: null, thread: admitted }));
-      return true;
-    }
-    if (turnStarted && candidate.method === "thread/context/read") {
-      queueMicrotask(() => target.respond(candidate.id, { browseResultEntries: [], questionnaireEntries: [], steerEntries: [], thread: admitted }));
+      queueMicrotask(() => target.fail(candidate.id, "immediate reconciliation failed"));
       return true;
     }
     return false;

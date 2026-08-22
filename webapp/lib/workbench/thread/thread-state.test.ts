@@ -120,6 +120,17 @@ test("durable questionnaire state accepts proper questions and rejects approvals
     method: "workbench/thread-state/questionnaire/resolve",
     projectId: "project",
   }).success, true);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
+    identity: { harness: "codex", threadId: "thread" },
+    method: "workbench/thread-state/questionnaire/dismiss",
+    projectId: "project",
+    requestKey: "request-key",
+  }).success, true);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
+    identity: { harness: "codex", threadId: "thread" },
+    method: "workbench/thread-state/questionnaire/dismiss",
+    projectId: "project",
+  }).success, false);
 });
 
 test("top-level threads sort by latest turn start while activity remains display-only", () => {

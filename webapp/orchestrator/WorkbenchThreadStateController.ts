@@ -927,6 +927,13 @@ export default class WorkbenchThreadStateController {
         next = { ...entry, lifecycle, metadata: { ...entry.metadata, snoozed: false } };
       }
       if (entry.entryKind === "thread" && request.method === "workbench/thread-state/archive/set" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, metadata: request.archived ? { archived: true, pinned: false, snoozed: false } : { archived: false, pinned: false, snoozed: false } };
+      if (request.method === "workbench/thread-state/questionnaire/dismiss") {
+        if (entry.pendingQuestionnaire?.requestKey === request.requestKey) {
+          next = { ...entry, pendingQuestionnaire: null };
+        } else if (entry.pendingQuestionnaire) {
+          return { accepted: false, revision: state.revision };
+        }
+      }
       if (request.method === "workbench/thread-state/questionnaire/resolve") {
         if (
           request.entry.threadId !== request.identity.threadId
