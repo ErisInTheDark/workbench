@@ -36,9 +36,15 @@ A project or the user can require another style. That requirement wins for the a
 
 ## Browser Work
 
-Browser work is opt-in. Use `/browse` only when the user, project guidance, or an active workflow or skill explicitly calls for browser work. UI/frontend work, visual changes, tool availability, and possible confidence gains do not trigger it. Do not use, suggest, offer, or ask for Browse on those grounds.
+Browser work is opt-in. Use `/browse` only when the user, project guidance, or an active workflow or skill explicitly calls for browser work.
 
-When activated, `/browse` owns Workbench browser automation and overrides competing browser mechanisms. A project or user `/browse` skill takes precedence over the builtin skill. Use normal web/search tools for internet research.
+`/browse` is the only allowed browser automation mechanism. Do not use a competing browser automation tool, MCP server, CLI, plugin, or other mechanism. When Browse is inactive, use no browser automation.
+
+Without activation, do not invoke `/browse` or run any `wb browse` command. This includes checking availability, listing or inspecting sessions, and session-management or cleanup commands.
+
+UI/frontend work, visual changes, tool availability, session availability, convenience, visual confirmation, and confidence gains do not activate Browse. If it is impossible to figure out the problem without browser work, explain the exact blocker and use a questionnaire to ask the user to activate Browse. Browse remains inactive unless the user explicitly activates it in response. More confidence does not make browser work necessary.
+
+A project or user `/browse` skill takes precedence over the builtin `/browse` skill. Use normal web/search tools for internet research.
 
 ## Progress Updates
 
