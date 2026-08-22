@@ -106,7 +106,6 @@
  * - WorkbenchUserInputRequest: questionnaire request contract.
  * - WorkbenchUserInputAnswer: questionnaire answer contract.
  * - WorkbenchUserInputResponse: questionnaire response contract.
- * - WorkbenchUserInputControlKind: hidden control request kind.
  * - WorkbenchSubmitUserInputRequestOptions: questionnaire submission options.
  * - WorkbenchPendingUserInputRequest: pending questionnaire state.
  * - WorkbenchQuestionnaireHistoryEntry: questionnaire history entry.
@@ -853,6 +852,7 @@ export interface WorkbenchSendThreadMessageOptions {
   onThreadCreated?: (thread: ThreadPayload) => void;
   onThreadMaterialized?: (thread: ThreadPayload) => void;
   selectThread?: boolean;
+  startNewTurn?: boolean;
   workflowIds?: string[];
 }
 
@@ -915,8 +915,6 @@ export interface WorkbenchUserInputResponse {
   answers: Record<string, WorkbenchUserInputAnswer | undefined>;
 }
 
-export type WorkbenchUserInputControlKind = "pause";
-
 export interface WorkbenchSubmitUserInputRequestOptions {
   turnId?: string | null;
   insertAfterItemId?: string | null;
@@ -931,8 +929,7 @@ export interface WorkbenchPendingUserInputRequest {
   turnId: string | null;
   itemId: string | null;
   request: WorkbenchUserInputRequest;
-  hidden?: boolean;
-  controlKind?: WorkbenchUserInputControlKind | null;
+  responseMode?: "native" | "newTurn";
 }
 
 export interface WorkbenchQuestionnaireHistoryEntry {
@@ -945,8 +942,6 @@ export interface WorkbenchQuestionnaireHistoryEntry {
   request: WorkbenchUserInputRequest;
   response: WorkbenchUserInputResponse;
   resolvedAt: number;
-  hidden?: boolean;
-  controlKind?: WorkbenchUserInputControlKind | null;
 }
 
 export type WorkbenchSteerHistoryStatus = "pending" | "sent" | "interrupted" | "failed";
@@ -1087,8 +1082,6 @@ export interface WorkbenchControls {
     options?: WorkbenchSendThreadMessageOptions,
   ) => Promise<ThreadPayload | null>;
   compactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
-  pauseThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
-  resumeThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   stopThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   setThreadTitle: (request: WorkbenchThreadTitleRequest) => Promise<string>;
   threadGoals: WorkbenchThreadGoalControls;

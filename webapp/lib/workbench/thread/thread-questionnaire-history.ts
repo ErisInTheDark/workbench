@@ -3,7 +3,7 @@
  * - WORKBENCH_QUESTIONNAIRE_TOOL_NAME: stable dynamic-tool name used for rendered questionnaire history entries. Keywords: questionnaire, dynamic tool, thread history.
  * - SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX: item id prefix reserved for workbench-injected questionnaire history items. Keywords: synthetic, questionnaire, history.
  * - isSyntheticQuestionnaireHistoryItem: detect workbench-injected questionnaire history items in a turn. Keywords: synthetic, questionnaire, history, guard.
- * - applyQuestionnaireHistoryToThread: strip duplicate questionnaire items and reinsert persisted questionnaire history into supported thread turns. Keywords: questionnaire, thread, overlay, persisted history, codex, opencode.
+ * - applyQuestionnaireHistoryToThread: strip duplicate questionnaire items and reinsert persisted questionnaire history into thread turns. Keywords: questionnaire, thread, overlay, persisted history.
  */
 
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem";
@@ -184,7 +184,7 @@ function isQuestionnaireHistoryAnchorItem(item: ThreadItem) {
 }
 
 function sortQuestionnaireHistoryEntries(entries: WorkbenchQuestionnaireHistoryEntry[]) {
-  return entries.filter((entry) => !entry.hidden).sort((left, right) => {
+  return [...entries].sort((left, right) => {
     if (left.resolvedAt !== right.resolvedAt) {
       return left.resolvedAt - right.resolvedAt;
     }
@@ -294,10 +294,6 @@ export function applyQuestionnaireHistoryToThread(
   thread: ThreadPayload,
   entries: WorkbenchQuestionnaireHistoryEntry[],
 ) {
-  if (thread.harness !== "codex" && thread.harness !== "opencode") {
-    return thread;
-  }
-
   const entriesByTurnId = new Map<string, WorkbenchQuestionnaireHistoryEntry[]>();
   for (const entry of entries) {
     if (entry.threadId !== thread.id) {

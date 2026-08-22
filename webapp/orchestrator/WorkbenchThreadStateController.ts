@@ -10,6 +10,8 @@ import type { WorkbenchProjectsPayload } from "../lib/types";
 import { areDeeplyEqual } from "../lib/workbench/deep-equality";
 import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
 import {
+  WorkbenchDurableQuestionnaireSchema,
+  WorkbenchQuestionnaireHistoryEntrySchema,
   WorkbenchThreadDraftSchema,
   WorkbenchThreadLifecycleSchema,
   WorkbenchThreadSidebarEntrySchema,
@@ -21,6 +23,8 @@ import {
   reduceWorkbenchThreadLifecycle,
   sortThreadSidebarEntries,
   type WorkbenchLifecycleEvent,
+  type WorkbenchDurableQuestionnaire,
+  type WorkbenchQuestionnaireHistoryEntryState,
   type WorkbenchThreadLifecycle,
   type WorkbenchThreadDraft,
   type WorkbenchGitArcLifecycleState,
@@ -36,10 +40,13 @@ import {
 import AtomicJsonStore from "./AtomicJsonStore";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 
-interface StoredThreadMetadata { archived: boolean; harness: "codex" | "copilot" | "opencode"; lifecycle: WorkbenchThreadLifecycle; orderAt?: number; pinned: boolean; snoozed: boolean; threadId: string; titleFallback?: string }
+interface StoredThreadMetadata { archived: boolean; harness: "codex" | "copilot" | "opencode"; lifecycle: WorkbenchThreadLifecycle; orderAt?: number; pendingQuestionnaire?: WorkbenchDurableQuestionnaire | null; pinned: boolean; questionnaireHistory?: WorkbenchQuestionnaireHistoryEntryState[]; snoozed: boolean; threadId: string; titleFallback?: string }
 type StoredThreadDraft = WorkbenchThreadDraft & { pinned?: boolean; snoozed?: boolean };
 interface StoredProjectStateV1 { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 1 }
 interface StoredProjectState { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 2 }
+type QuestionnaireStateMutation =
+  | { kind: "clear"; requestKey: string }
+  | { kind: "set"; questionnaire: WorkbenchDurableQuestionnaire };
 type LegacyGitArcClaim = Omit<WorkbenchGitArcLifecycleState, "phase" | "proposals"> & { proposalId?: string | null; proposalStatus?: "committed" | "proposed" | null };
 
 function normalizeResolvedGitArc(value: WorkbenchGitArcLifecycleState | LegacyGitArcClaim | null) {
@@ -111,7 +118,7 @@ export interface WorkbenchThreadClaimContext {
 export type WorkbenchObservedLifecycleEvent =
   | Exclude<WorkbenchLifecycleEvent, { kind: "inputResolved" | "pendingInput" }>
   | { kind: "inputResolved"; requestKey: string }
-  | { kind: "pendingInput"; requestKey: string; turnId: string | null };
+  | { kind: "pendingInput"; questionnaire: WorkbenchDurableQuestionnaire | null; requestKey: string; turnId: string | null };
 
 interface ProjectState {
   abort: AbortController | null;
@@ -344,7 +351,14 @@ export default class WorkbenchThreadStateController {
     return this.snapshot(projectId, state);
   }
 
-  async applyLifecycle(projectId: string, harness: "codex" | "copilot" | "opencode", threadId: string, event: WorkbenchLifecycleEvent, providerEntry?: WorkbenchThreadSidebarEntry) {
+  async applyLifecycle(
+    projectId: string,
+    harness: "codex" | "copilot" | "opencode",
+    threadId: string,
+    event: WorkbenchLifecycleEvent,
+    providerEntry?: WorkbenchThreadSidebarEntry,
+    questionnaireMutation?: QuestionnaireStateMutation,
+  ) {
     const state = await this.getProject(projectId);
     const key = `${harness}:${threadId}`;
     return await this.enqueue(`${projectId}:thread:${key}`, async () => {
@@ -361,9 +375,19 @@ export default class WorkbenchThreadStateController {
         || event.kind === "inputResolved"
         || (existing.lifecycle.kind === "working" && (lifecycle.kind === "needsAttention" || lifecycle.kind === "completed" || lifecycle.kind === "stopped"))
       );
-      if (event.kind !== "acceptedIntent" && areDeeplyEqual(existing.lifecycle, lifecycle) && !shouldUnsnooze) return existing;
+      const shouldClearQuestionnaire = questionnaireMutation?.kind === "clear"
+        && existing.pendingQuestionnaire?.requestKey === questionnaireMutation.requestKey;
+      const shouldSetQuestionnaire = questionnaireMutation?.kind === "set"
+        && !areDeeplyEqual(existing.pendingQuestionnaire, questionnaireMutation.questionnaire);
+      if (
+        event.kind !== "acceptedIntent"
+        && areDeeplyEqual(existing.lifecycle, lifecycle)
+        && !shouldUnsnooze
+        && !shouldClearQuestionnaire
+        && !shouldSetQuestionnaire
+      ) return existing;
       const activityAt = event.kind === "acceptedIntent" && providerEntry?.entryKind === "thread" ? providerEntry.activityAt : this.now();
-      const next = existing.entryKind === "subagent"
+      const lifecycleEntry = existing.entryKind === "subagent"
         ? { ...existing, activityAt, lifecycle }
         : {
           ...existing,
@@ -374,6 +398,11 @@ export default class WorkbenchThreadStateController {
             : { ...existing.metadata, snoozed: shouldUnsnooze ? false : existing.metadata.snoozed },
           ...(event.kind === "acceptedIntent" ? { orderAt: providerEntry?.entryKind === "thread" ? providerEntry.orderAt ?? activityAt : activityAt } : {}),
         };
+      const next = questionnaireMutation?.kind === "set"
+        ? { ...lifecycleEntry, pendingQuestionnaire: questionnaireMutation.questionnaire }
+        : shouldClearQuestionnaire
+          ? { ...lifecycleEntry, pendingQuestionnaire: null }
+          : lifecycleEntry;
       const parsedNext = WorkbenchThreadSidebarEntrySchema.parse(next);
       if (parsedNext.entryKind === "draft") throw new Error("Lifecycle transitions cannot produce draft entries.");
       state.entries.set(key, parsedNext);
@@ -406,8 +435,42 @@ export default class WorkbenchThreadStateController {
           ? { kind: "inputResolved", requestKey: event.requestKey, turnId: entry.lifecycle.turnId }
           : null;
       }
-      if (exactEvent) await this.applyLifecycle(projectId, harness, threadId, exactEvent);
+      const questionnaireMutation = event.kind === "pendingInput" && event.questionnaire
+        ? { kind: "set" as const, questionnaire: event.questionnaire }
+        : event.kind === "inputResolved"
+          ? { kind: "clear" as const, requestKey: event.requestKey }
+          : undefined;
+      if (exactEvent) {
+        await this.applyLifecycle(projectId, harness, threadId, exactEvent, undefined, questionnaireMutation);
+      } else if (questionnaireMutation) {
+        await this.updateQuestionnaireState(projectId, harness, threadId, questionnaireMutation);
+      }
     }
+  }
+
+  private async updateQuestionnaireState(
+    projectId: string,
+    harness: WorkbenchHarnessId,
+    threadId: string,
+    mutation: QuestionnaireStateMutation,
+  ) {
+    const state = await this.getProject(projectId);
+    const key = `${harness}:${threadId}`;
+    return await this.enqueue(`${projectId}:thread:${key}`, async () => {
+      const existing = state.entries.get(key);
+      if (!existing || existing.entryKind === "draft") return null;
+      const shouldClear = mutation.kind === "clear" && existing.pendingQuestionnaire?.requestKey === mutation.requestKey;
+      const next = WorkbenchThreadSidebarEntrySchema.parse({
+        ...existing,
+        ...(mutation.kind === "set" ? { pendingQuestionnaire: mutation.questionnaire } : shouldClear ? { pendingQuestionnaire: null } : {}),
+      });
+      if (next.entryKind === "draft" || areDeeplyEqual(existing, next)) return existing;
+      state.entries.set(key, next);
+      state.overlays.set(key, this.overlayFromEntry(next));
+      await this.persist(projectId, state);
+      this.publish(projectId, state, next);
+      return next;
+    });
   }
 
   async observeActivity(harness: "codex" | "copilot" | "opencode", threadId: string, turnStartedAt?: number | null) {
@@ -563,8 +626,17 @@ export default class WorkbenchThreadStateController {
           archived: Boolean(candidate.archived),
           harness: candidate.harness,
           lifecycle: lifecycle.data,
+          ...(WorkbenchDurableQuestionnaireSchema.safeParse(candidate.pendingQuestionnaire).success
+            ? { pendingQuestionnaire: WorkbenchDurableQuestionnaireSchema.parse(candidate.pendingQuestionnaire) }
+            : {}),
           ...(typeof candidate.orderAt === "number" && Number.isInteger(candidate.orderAt) && candidate.orderAt >= 0 ? { orderAt: candidate.orderAt } : {}),
           pinned: candidate.archived ? false : Boolean(candidate.pinned),
+          ...(Array.isArray(candidate.questionnaireHistory)
+            ? { questionnaireHistory: candidate.questionnaireHistory.flatMap((entry) => {
+              const parsed = WorkbenchQuestionnaireHistoryEntrySchema.safeParse(entry);
+              return parsed.success ? [parsed.data] : [];
+            }) }
+            : {}),
           snoozed: candidate.archived ? false : Boolean(candidate.snoozed),
           threadId: String(candidate.threadId),
           ...(typeof candidate.titleFallback === "string" && candidate.titleFallback.trim() ? { titleFallback: candidate.titleFallback.trim() } : {}),
@@ -692,7 +764,9 @@ export default class WorkbenchThreadStateController {
         state.entries.set(key, overlay ? {
           ...providerEntry,
           lifecycle: providerEntry.gitArc?.claimedPaths.length && lifecycle.settled ? { ...lifecycle, settled: false as const } : lifecycle,
+          ...(overlay.pendingQuestionnaire ? { pendingQuestionnaire: overlay.pendingQuestionnaire } : {}),
           pinned: overlay.pinned,
+          ...(overlay.questionnaireHistory?.length ? { questionnaireHistory: overlay.questionnaireHistory } : {}),
         } : providerEntry);
         continue;
       }
@@ -707,6 +781,8 @@ export default class WorkbenchThreadStateController {
           : lifecycle,
         metadata,
         ...(overlay.orderAt !== undefined ? { orderAt: overlay.orderAt } : {}),
+        ...(overlay.pendingQuestionnaire ? { pendingQuestionnaire: overlay.pendingQuestionnaire } : {}),
+        ...(overlay.questionnaireHistory?.length ? { questionnaireHistory: overlay.questionnaireHistory } : {}),
         title: providerEntry.title === "New thread" && overlay.titleFallback ? overlay.titleFallback : providerEntry.title,
       } : providerEntry);
     }
@@ -827,6 +903,20 @@ export default class WorkbenchThreadStateController {
         next = { ...entry, lifecycle, metadata: { ...entry.metadata, snoozed: false } };
       }
       if (entry.entryKind === "thread" && request.method === "workbench/thread-state/archive/set" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, metadata: request.archived ? { archived: true, pinned: false, snoozed: false } : { archived: false, pinned: false, snoozed: false } };
+      if (request.method === "workbench/thread-state/questionnaire/resolve") {
+        if (
+          request.entry.threadId !== request.identity.threadId
+          || entry.pendingQuestionnaire?.requestKey !== request.entry.requestKey
+        ) return { accepted: false, revision: state.revision };
+        next = {
+          ...entry,
+          pendingQuestionnaire: null,
+          questionnaireHistory: [
+            ...(entry.questionnaireHistory ?? []).filter((candidate) => candidate.requestKey !== request.entry.requestKey),
+            request.entry,
+          ],
+        };
+      }
       const parsed = WorkbenchThreadSidebarEntrySchema.safeParse(next);
       if (!parsed.success) return { accepted: false, revision: state.revision };
       if (areDeeplyEqual(entry, parsed.data)) return { accepted: true, revision: state.revision };
@@ -856,8 +946,12 @@ export default class WorkbenchThreadStateController {
   }
 
   private overlayFromEntry(entry: Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>): StoredThreadMetadata {
+    const questionnaireState = {
+      ...(entry.pendingQuestionnaire ? { pendingQuestionnaire: entry.pendingQuestionnaire } : {}),
+      ...(entry.questionnaireHistory?.length ? { questionnaireHistory: entry.questionnaireHistory } : {}),
+    };
     return entry.entryKind === "subagent"
-      ? { archived: false, harness: entry.identity.harness, lifecycle: entry.lifecycle, pinned: entry.pinned, snoozed: false, threadId: entry.identity.threadId, titleFallback: entry.title }
-      : { archived: entry.metadata.archived, harness: entry.identity.harness, lifecycle: entry.lifecycle, ...(entry.orderAt !== undefined ? { orderAt: entry.orderAt } : {}), pinned: entry.metadata.pinned, snoozed: entry.metadata.snoozed, threadId: entry.identity.threadId, titleFallback: entry.title };
+      ? { archived: false, harness: entry.identity.harness, lifecycle: entry.lifecycle, pinned: entry.pinned, ...questionnaireState, snoozed: false, threadId: entry.identity.threadId, titleFallback: entry.title }
+      : { archived: entry.metadata.archived, harness: entry.identity.harness, lifecycle: entry.lifecycle, ...(entry.orderAt !== undefined ? { orderAt: entry.orderAt } : {}), pinned: entry.metadata.pinned, ...questionnaireState, snoozed: entry.metadata.snoozed, threadId: entry.identity.threadId, titleFallback: entry.title };
   }
 }

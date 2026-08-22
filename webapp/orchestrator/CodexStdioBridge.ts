@@ -32,7 +32,6 @@ import type {
     WorkbenchUserInputResponse,
 } from "../lib/types";
 import type { WorkbenchPromptInstructions } from "../lib/workbench/instructions/WorkbenchPromptFiles";
-import { isWorkbenchPauseControlRequest, WORKBENCH_PAUSE_CONTROL_KIND } from "../lib/workbench/thread/thread-pause-control";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type CodexAppServer from "./CodexAppServer";
 import { log, logError } from "./process-helpers";
@@ -107,8 +106,6 @@ type CodexStdioBridgeReloadOptions = {
 };
 
 type PendingCodexUserInputRequestBase = {
-  controlKind?: "pause" | null;
-  hidden?: boolean;
   itemId: string | null;
   request: WorkbenchUserInputRequest;
   requestKey: string;
@@ -1788,10 +1785,7 @@ export default class CodexStdioBridge {
   ) {
     const requestKey = String(request.id);
     const normalizedRequest = normalizeQuestionnaireRequest(request.params, requestKey);
-    const isPauseControl = isWorkbenchPauseControlRequest(normalizedRequest);
     this.pendingUserInputRequests.set(requestKey, {
-      controlKind: isPauseControl ? WORKBENCH_PAUSE_CONTROL_KIND : null,
-      hidden: isPauseControl || undefined,
       kind: "questionnaire",
       itemId: request.params.itemId?.trim() || null,
       request: normalizedRequest,
@@ -1804,8 +1798,6 @@ export default class CodexStdioBridge {
       method: "questionnaire/requested",
       params: {
         itemId: request.params.itemId?.trim() || null,
-        controlKind: isPauseControl ? WORKBENCH_PAUSE_CONTROL_KIND : null,
-        hidden: isPauseControl || undefined,
         request: normalizedRequest,
         requestKey,
         threadId: request.params.threadId,
@@ -1952,8 +1944,6 @@ export default class CodexStdioBridge {
   private listPendingQuestionnaires() {
     return {
       data: Array.from(this.pendingUserInputRequests.values(), (pendingRequest) => ({
-        controlKind: pendingRequest.controlKind ?? null,
-        hidden: pendingRequest.hidden || undefined,
         itemId: pendingRequest.itemId,
         request: pendingRequest.request,
         requestKey: pendingRequest.requestKey,
@@ -2245,8 +2235,6 @@ export default class CodexStdioBridge {
       requestKey: pendingRequest.requestKey,
       resolvedAt: Date.now(),
       response: resolvedResponse.response,
-      controlKind: pendingRequest.controlKind ?? null,
-      hidden: pendingRequest.hidden || undefined,
       threadId: pendingRequest.threadId,
       turnId: resolvedResponse.turnId ?? pendingRequest.turnId ?? "",
     };

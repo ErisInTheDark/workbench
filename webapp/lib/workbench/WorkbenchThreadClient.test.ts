@@ -109,7 +109,7 @@ class FakeWebSocket {
     } else if (request.method === "turn/start") {
       const threadId = String(request.params?.threadId ?? "thread");
       queueMicrotask(() => this.respond(request.id, { turn: wireThread(threadId, `${threadId}-started`).turns[0] }));
-    } else if (request.method === "workbench/thread-state/intent/accept") {
+    } else if (request.method === "workbench/thread-state/intent/accept" || request.method === "workbench/thread-state/questionnaire/resolve") {
       queueMicrotask(() => this.respond(request.id, { accepted: true, revision: 1 }));
     } else {
       queueMicrotask(() => this.fail(request.id, `unexpected ${request.method}`));
@@ -144,6 +144,14 @@ async function waitForRequest(socket: FakeWebSocket, method: string, offset = 0)
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   throw new Error(`Timed out waiting for ${method} request ${offset}.`);
+}
+
+async function waitForCondition(predicate: () => boolean, message: string) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error(message);
 }
 
 async function withClient(
@@ -1498,26 +1506,14 @@ test("selection drift after dispatch keeps exact failed evidence without selecti
   assert.equal(client.getSnapshot().threadDocuments.selectedThreadKey, "codex:d");
 }));
 
-test("questionnaire, pause, resume, and stop controls keep native steer identity off control payloads", async () => withClient(async (client, socket) => {
+test("questionnaire supplemental input and stop keep native steer identity off control payloads", async () => withClient(async (client, socket) => {
   const source = activeThread();
   client.selectThreadPayload(source);
-  socket.notify("questionnaire/requested", {
-    hidden: true, itemId: "question", requestKey: "pause-key", threadId: "thread", turnId: "turn", controlKind: "pause",
-    request: { id: "pause", questions: [], submitLabel: "resume", summary: "paused", title: "paused" },
-  });
-  await client.resumeThread(source);
-  const response = socket.requests.find((request) => request.method === "questionnaire/respond");
-  assert.ok(response);
-
-  await client.pauseThread(source);
-  const pauseSteer = socket.requests.filter((request) => request.method === "turn/steer").at(-1);
-  assert.equal(pauseSteer?.params?.clientUserMessageId, undefined);
-
   await client.stopThread(source);
   assert.ok(socket.requests.some((request) => request.method === "turn/interrupt"));
 
   socket.notify("questionnaire/requested", {
-    hidden: false, itemId: "question-2", requestKey: "question-key", threadId: "thread", turnId: "turn",
+    itemId: "question-2", requestKey: "question-key", threadId: "thread", turnId: "turn",
     request: { id: "question", questions: [], submitLabel: "send", summary: "question", title: "question" },
   });
   await client.submitPendingUserInputRequest("thread", { answers: {} }, {
@@ -1525,4 +1521,147 @@ test("questionnaire, pause, resume, and stop controls keep native steer identity
   });
   const supplemental = socket.requests.filter((request) => request.method === "turn/steer").at(-1);
   assert.equal(supplemental?.params?.clientUserMessageId, undefined);
+}));
+
+test("interrupted proper questionnaires detach while approvals are discarded", async () => withClient(async (client, socket) => {
+  const source = activeThread();
+  client.selectThreadPayload(source);
+  const question = {
+    id: "question",
+    questions: [{ allowOther: false, header: "Route", id: "route", isSecret: false, options: [{ description: "Continue", label: "Approve" }], question: "Continue?" }],
+    submitLabel: "Send",
+    summary: "Choose",
+    title: "Questionnaire",
+  };
+  socket.notify("questionnaire/requested", { itemId: "item", request: question, requestKey: "question", threadId: "thread", turnId: "turn" });
+  socket.notify("turn/completed", { threadId: "thread", turn: { ...source.turns[0], completedAt: 2, status: "interrupted" } });
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode, "newTurn");
+
+  socket.notify("questionnaire/resolved", { requestKey: "question", threadId: "thread", turnId: "turn" });
+  socket.notify("questionnaire/requested", {
+    itemId: "approval-item",
+    request: { ...question, approval: {}, id: "approval" },
+    requestKey: "approval",
+    threadId: "thread",
+    turnId: "turn",
+  });
+  socket.notify("turn/completed", { threadId: "thread", turn: { ...source.turns[0], completedAt: 2, status: "interrupted" } });
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
+}));
+
+test("durable detached questionnaire responses start hidden turns and resolve only after admission", async () => withClient(async (client, socket) => {
+  const source = activeThread("codex", "thread", "interrupted");
+  const questionnairePrompt = { id: "prompt", memoryCitation: null, phase: "commentary" as const, text: "Choose a route.", type: "agentMessage" as const };
+  source.turns[0]!.items = [questionnairePrompt];
+  client.selectThreadPayload(source);
+  const request = {
+    id: "question",
+    questions: [{ allowOther: false, header: "Route", id: "route", isSecret: false, options: [{ description: "Continue", label: "Approve" }], question: "Continue?" }],
+    submitLabel: "Send",
+    summary: "Choose",
+    title: "Questionnaire",
+  };
+  client.installSidebarSnapshot({
+    entries: [{
+      activityAt: 2,
+      entryKind: "thread",
+      identity: { harness: "codex", threadId: "thread" },
+      lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" },
+      title: "Thread",
+    }],
+    error: null,
+    freshness: "fresh",
+    projectId: "project",
+    revision: 1,
+  });
+  await waitForCondition(() => client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode === "newTurn", "Durable questionnaire did not reconcile as detached.");
+
+  const admitted = wireThread("thread", "thread-started");
+  admitted.turns = [wireThread("thread", "turn", "interrupted").turns[0]!, admitted.turns[0]!];
+  admitted.turns[0]!.items = [questionnairePrompt];
+  let turnStarted = false;
+  FakeWebSocket.intercept = (target, candidate) => {
+    if (candidate.method === "turn/start") {
+      turnStarted = true;
+      queueMicrotask(() => target.respond(candidate.id, { turn: admitted.turns[1] }));
+      return true;
+    }
+    if (turnStarted && candidate.method === "thread/resume") {
+      queueMicrotask(() => target.respond(candidate.id, { model: "model", reasoningEffort: null, serviceTier: null, thread: admitted }));
+      return true;
+    }
+    if (turnStarted && candidate.method === "thread/context/read") {
+      queueMicrotask(() => target.respond(candidate.id, { browseResultEntries: [], questionnaireEntries: [], steerEntries: [], thread: admitted }));
+      return true;
+    }
+    return false;
+  };
+
+  await client.submitPendingUserInputRequest("thread", { answers: { route: { answers: ["Approve"] } } }, {
+    insertAfterItemId: "prompt",
+    insertAfterItemIndex: 0,
+    turnId: "turn",
+  });
+  const start = socket.requests.find((candidate) => candidate.method === "turn/start");
+  const input = start?.params?.input as Array<{ text?: string; type?: string }> | undefined;
+  assert.match(input?.[0]?.text ?? "", /^<workbench:questionnaire-response>/u);
+  assert.equal(socket.requests.some((candidate) => candidate.method === "questionnaire/respond"), false);
+  assert.equal(socket.requests.some((candidate) => candidate.method === "workbench/thread-state/questionnaire/resolve"), true);
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
+  const originalTurn = client.getSnapshot().currentThread?.turns.find((turn) => turn.id === "turn");
+  assert.equal(originalTurn?.items.some((item) => item.id.startsWith("workbench:questionnaire-history:")), true);
+}));
+
+test("failed detached questionnaire admission leaves the durable request retryable", async () => withClient(async (client, socket) => {
+  const source = activeThread("codex", "thread", "interrupted");
+  client.selectThreadPayload(source);
+  const request = {
+    id: "question",
+    questions: [{ allowOther: false, header: "Route", id: "route", isSecret: false, options: [{ description: "Continue", label: "Approve" }], question: "Continue?" }],
+    submitLabel: "Send",
+    summary: "Choose",
+    title: "Questionnaire",
+  };
+  client.installSidebarSnapshot({
+    entries: [{ activityAt: 2, entryKind: "thread", identity: { harness: "codex", threadId: "thread" }, lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" }, metadata: { archived: false, pinned: false, snoozed: false }, pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" }, title: "Thread" }],
+    error: null, freshness: "fresh", projectId: "project", revision: 1,
+  });
+  await waitForCondition(() => client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode === "newTurn", "Durable questionnaire did not reconcile as detached.");
+  FakeWebSocket.intercept = (target, candidate) => {
+    if (candidate.method !== "turn/start") return false;
+    queueMicrotask(() => target.fail(candidate.id, "admission failed"));
+    return true;
+  };
+  await assert.rejects(client.submitPendingUserInputRequest("thread", { answers: { route: { answers: ["Approve"] } } }), /admission failed/u);
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.requestKey, "question");
+  assert.equal(socket.requests.some((candidate) => candidate.method === "workbench/thread-state/questionnaire/resolve"), false);
+}));
+
+test("rejected durable questionnaire resolution does not clear the detached request", async () => withClient(async (client, socket) => {
+  const source = activeThread("codex", "thread", "interrupted");
+  client.selectThreadPayload(source);
+  const request = {
+    id: "question",
+    questions: [{ allowOther: false, header: "Route", id: "route", isSecret: false, options: [{ description: "Continue", label: "Approve" }], question: "Continue?" }],
+    submitLabel: "Send",
+    summary: "Choose",
+    title: "Questionnaire",
+  };
+  client.installSidebarSnapshot({
+    entries: [{ activityAt: 2, entryKind: "thread", identity: { harness: "codex", threadId: "thread" }, lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" }, metadata: { archived: false, pinned: false, snoozed: false }, pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" }, title: "Thread" }],
+    error: null, freshness: "fresh", projectId: "project", revision: 1,
+  });
+  await waitForCondition(() => client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode === "newTurn", "Durable questionnaire did not reconcile as detached.");
+  FakeWebSocket.intercept = (target, candidate) => {
+    if (candidate.method !== "workbench/thread-state/questionnaire/resolve") return false;
+    queueMicrotask(() => target.respond(candidate.id, { accepted: false, revision: 2 }));
+    return true;
+  };
+  await assert.rejects(
+    client.submitPendingUserInputRequest("thread", { answers: { route: { answers: ["Approve"] } } }),
+    /durable history could not be resolved/u,
+  );
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.requestKey, "question");
 }));

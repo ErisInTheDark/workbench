@@ -28,7 +28,6 @@ import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bri
 import type { CopilotThreadState } from "./copilot-thread-state";
 import { appendCopilotEventLog, log, logError } from "./process-helpers";
 import type { OrchestratorReloadableModules } from "./orchestrator-feature-registry";
-import { isWorkbenchPauseControlRequest, WORKBENCH_PAUSE_CONTROL_KIND } from "../lib/workbench/thread/thread-pause-control";
 import type { WorkbenchPromptContext } from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import { readWorkbenchPromptContext } from "./workbench-prompt-context";
 
@@ -43,8 +42,6 @@ type CopilotBridgeOptions = {
 
 type CopilotReasoningEffort = "low" | "medium" | "high" | "xhigh";
 type PendingQuestionnaireRequest = {
-  controlKind?: "pause" | null;
-  hidden?: boolean;
   request: WorkbenchUserInputRequest;
   resolve: (response: WorkbenchUserInputResponse) => void;
   reject: (reason?: unknown) => void;
@@ -736,8 +733,6 @@ Treat the Workbench instructions below as active for this session. If Copilot-pr
     return {
       data: Array.from(this.pendingQuestionnaires.values(), (pending) => ({
         itemId: null,
-        controlKind: pending.controlKind ?? null,
-        hidden: pending.hidden || undefined,
         request: pending.request,
         requestKey: pending.toolCallId,
         threadId: pending.threadId,
@@ -751,11 +746,8 @@ Treat the Workbench instructions below as active for this session. If Copilot-pr
     invocation: { sessionId: string; toolCallId: string },
     request: WorkbenchUserInputRequest,
   ) {
-    const isPauseControl = isWorkbenchPauseControlRequest(request);
     return await new Promise<WorkbenchUserInputResponse>((resolve, reject) => {
       this.pendingQuestionnaires.set(invocation.toolCallId, {
-        controlKind: isPauseControl ? WORKBENCH_PAUSE_CONTROL_KIND : null,
-        hidden: isPauseControl || undefined,
         request,
         reject,
         resolve,
@@ -767,8 +759,6 @@ Treat the Workbench instructions below as active for this session. If Copilot-pr
         method: "questionnaire/requested",
         params: {
           itemId: null,
-          controlKind: isPauseControl ? WORKBENCH_PAUSE_CONTROL_KIND : null,
-          hidden: isPauseControl || undefined,
           request,
           requestKey: invocation.toolCallId,
           threadId,

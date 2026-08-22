@@ -57,7 +57,8 @@ import {
 } from "../../../lib/workbench/thread/inline-mention-highlights";
 import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
 import { ThreadMessageNotSentError } from "../../../lib/workbench/thread/thread-message-submission";
-import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcPlanState, WorkbenchThreadStateRequest, WorkbenchThreadTarget } from "../../../lib/workbench/thread/thread-state";
+import { isWorkbenchQuestionnaireResponseInput } from "../../../lib/workbench/thread/thread-recovery-message";
+import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcPlanState, WorkbenchThreadLifecycle, WorkbenchThreadStateRequest, WorkbenchThreadTarget } from "../../../lib/workbench/thread/thread-state";
 import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import {
   filterSubagentsByParentThreadId,
@@ -578,9 +579,7 @@ export default memo(function ThreadView ({
   onThreadCodeBlockWrapChange,
   onListModels,
   onOpenThread,
-  onPauseThread,
   onReadThread,
-  onResumeThread,
   onCompactThread,
   onSendMessage,
   onStopThread,
@@ -627,9 +626,7 @@ export default memo(function ThreadView ({
   onThreadCodeBlockWrapChange: (nextValue: boolean) => void;
   onListModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   onOpenThread: (target: WorkbenchThreadTarget) => void;
-  onPauseThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   onReadThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
-  onResumeThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   onCompactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   onSendMessage: (
     thread: ThreadPayload,
@@ -727,7 +724,7 @@ export default memo(function ThreadView ({
   const activeThread = activeThreadId === thread.id
     ? getThreadDocumentFromSnapshot(threadDocuments, thread.id) ?? thread
     : relatedThreadsById[activeThreadId] ?? null;
-  const activeGitArcSelectionRef = useRef<{ gitArc: WorkbenchGitArcLifecycleState | null; gitArcPlan: WorkbenchGitArcPlanState | null } | null>(null);
+  const activeGitArcSelectionRef = useRef<{ gitArc: WorkbenchGitArcLifecycleState | null; gitArcPlan: WorkbenchGitArcPlanState | null; lifecycle: WorkbenchThreadLifecycle } | null>(null);
   const getActiveGitArcSelection = useCallback(() => {
     if (!activeThread) return null;
     const entry = threadSidebarStore?.getSnapshot()?.entries.find((candidate) => (
@@ -736,7 +733,7 @@ export default memo(function ThreadView ({
       && candidate.identity.threadId === activeThread.id
     ));
     const next = entry && entry.entryKind !== "draft"
-      ? { gitArc: entry.gitArc ?? null, gitArcPlan: entry.gitArcPlan ?? null }
+      ? { gitArc: entry.gitArc ?? null, gitArcPlan: entry.gitArcPlan ?? null, lifecycle: entry.lifecycle }
       : null;
     if (areDeeplyEqual(activeGitArcSelectionRef.current, next)) return activeGitArcSelectionRef.current;
     activeGitArcSelectionRef.current = next;
@@ -1305,34 +1302,6 @@ export default memo(function ThreadView ({
     }
   }, [activeThread, onStopThread, thread.id]);
 
-  const handlePauseThread = useCallback(async () => {
-    if (!activeThread) {
-      return;
-    }
-
-    const payload = await onPauseThread(activeThread);
-    if (payload && activeThread.id !== thread.id) {
-      setSubthreadsById((current) => ({
-        ...current,
-        [activeThread.id]: payload,
-      }));
-    }
-  }, [activeThread, onPauseThread, thread.id]);
-
-  const handleResumeThread = useCallback(async () => {
-    if (!activeThread) {
-      return;
-    }
-
-    const payload = await onResumeThread(activeThread);
-    if (payload && activeThread.id !== thread.id) {
-      setSubthreadsById((current) => ({
-        ...current,
-        [activeThread.id]: payload,
-      }));
-    }
-  }, [activeThread, onResumeThread, thread.id]);
-
   const handleThreadModelChange = useCallback((threadId: string, model: string) => {
     if (threadId === thread.id) {
       onThreadModelChange(threadId, model);
@@ -1579,12 +1548,6 @@ export default memo(function ThreadView ({
       onListModels={onListModels}
       onHarnessToggle={handleComposerHarnessToggle}
       highlightSources={inlineMentionSources}
-      onPauseThread={() => {
-        void handlePauseThread();
-      }}
-      onResumeThread={() => {
-        void handleResumeThread();
-      }}
       onSendMessage={handleSendMessage}
       onStopThread={() => {
         void handleStopThread();
@@ -1614,6 +1577,7 @@ export default memo(function ThreadView ({
         : null}
       knownSkills={workbenchSkills}
       thread={resolvedActiveThread!}
+      threadLifecycle={activeGitArcSelection?.lifecycle ?? null}
     >
       {isDraftThreadView ? ({ isProfilePickerOpen }) => <ThreadRateLimits canToggleHarness harness={activeThread.harness} onHarnessToggle={handleComposerHarnessToggle} rateLimits={rateLimits} showsHarnessControl={!isProfilePickerOpen} trailingContent={<ThreadContextStatus onCompactThread={onCompactThread} thread={activeThread} />} /> : null}
     </ThreadComposer>
@@ -1706,6 +1670,7 @@ export default memo(function ThreadView ({
                       browseResultEntries={activeThreadBrowseResultEntriesByTurnId.get(entry.turnId) ?? EMPTY_BROWSE_RESULT_ENTRIES}
                       hiddenDynamicToolCallItemIds={turn.id === currentTurn?.id ? hiddenDynamicToolCallItemIds : EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS}
                       hideFinalAgentMessage={hideFinalAgentMessage}
+                      hideTopBorder={turn.items.some((item) => item.type === "userMessage" && isWorkbenchQuestionnaireResponseInput(item.content))}
                       hideWorkbenchControlAgentMessages={hideWorkbenchControlAgentMessages}
                       hideWorkbenchControlUserMessages={hideWorkbenchControlUserMessages}
                       inlineMentionSources={inlineMentionSources}

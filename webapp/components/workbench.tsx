@@ -1769,22 +1769,6 @@ export default function Workbench () {
     return await controls.stopThread(thread);
   }, [controls]);
 
-  const pauseThread = useCallback(async (thread: ThreadPayload) => {
-    if (!controls) {
-      return null;
-    }
-
-    return await controls.pauseThread(thread);
-  }, [controls]);
-
-  const resumeThread = useCallback(async (thread: ThreadPayload) => {
-    if (!controls) {
-      return null;
-    }
-
-    return await controls.resumeThread(thread);
-  }, [controls]);
-
   const compactThread = useCallback(async (thread: ThreadPayload) => {
     if (!controls) {
       return null;
@@ -2021,13 +2005,12 @@ export default function Workbench () {
   ), [harnessUserInputRequestsByThreadId, locallyResolvedUserInputRequestKeysByThreadId]);
   const threadAttentionLabelsById = useMemo(() => Object.fromEntries(
     Object.entries(visibleUserInputRequestsByThreadId).flatMap(([threadId, pending]) => {
-      const title = pending.hidden ? "" : pending.request.title.trim();
+      const title = pending.request.title.trim();
       return title ? [[threadId, title]] : [];
     }),
   ), [visibleUserInputRequestsByThreadId]);
   const pendingQuestionnaireThreadIds = useMemo(
     () => new Set(Object.entries(visibleUserInputRequestsByThreadId)
-      .filter(([, request]) => !request.hidden)
       .map(([threadId]) => threadId)),
     [visibleUserInputRequestsByThreadId],
   );
@@ -3415,9 +3398,7 @@ export default function Workbench () {
                       onDraftHarnessChange={handleHarnessChange}
                       onListModels={listThreadModels}
                       onOpenThread={openThreadFromExplorer}
-                      onPauseThread={pauseThread}
                       onReadThread={readThread}
-                      onResumeThread={resumeThread}
                       onCompactThread={compactThread}
                       onSendMessage={sendThreadMessage}
                       onStopThread={stopThread}
@@ -3649,9 +3630,7 @@ export default function Workbench () {
                             onDraftHarnessChange={handleHarnessChange}
                             onListModels={listThreadModels}
                             onOpenThread={openThreadFromExplorer}
-                            onPauseThread={pauseThread}
                             onReadThread={readThread}
-                            onResumeThread={resumeThread}
                             onCompactThread={compactThread}
                             onCreateDraftThread={() => controls?.createThreadDraft(harness) ?? null}
                             onSendMessage={sendThreadMessage}

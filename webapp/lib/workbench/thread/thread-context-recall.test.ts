@@ -26,8 +26,7 @@ import {
   selectWorkbenchThreadRecallRecords,
   type WorkbenchThreadRecallRecord,
 } from "./thread-context-recall.ts";
-import { WORKBENCH_COLLABORATION_CONTROL_MARKER } from "./thread-pause-control.ts";
-import { createWorkbenchThreadRecoveryId, createWorkbenchThreadRecoveryInput } from "./thread-recovery-message.ts";
+import { createWorkbenchQuestionnaireResponseInput, createWorkbenchThreadRecoveryId, createWorkbenchThreadRecoveryInput } from "./thread-recovery-message.ts";
 import { createWorkbenchSubagentMessageText } from "./thread-subagent-message.ts";
 
 const ALL_KINDS: WorkbenchThreadRecallKind[] = [
@@ -134,14 +133,10 @@ function createBundle(): WorkbenchThreadContextBundle {
     }, {
       attemptedAt: 11,
       canonicalItemId: null,
-      entryKey: "turn-steer:pause-control",
+      entryKey: "turn-steer:questionnaire-response",
       error: null,
-      input: [{
-        text: `${WORKBENCH_COLLABORATION_CONTROL_MARKER}\nDeliberately different control prose.`,
-        text_elements: [],
-        type: "text",
-      }],
-      requestId: "pause-control-request",
+      input: createWorkbenchQuestionnaireResponseInput({ answers: { route: { answers: ["approved"] } } }),
+      requestId: "questionnaire-response-request",
       resolvedAt: 12,
       status: "sent",
       threadId: "thread-1",
@@ -180,7 +175,9 @@ function createBundle(): WorkbenchThreadContextBundle {
             durationMs: 1,
             exitCode: 0,
             id: "command-old",
+            pluginId: null,
             processId: null,
+            scriptPath: null,
             source: "agent",
             status: "completed",
             type: "commandExecution",

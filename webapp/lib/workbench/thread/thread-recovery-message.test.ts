@@ -8,10 +8,13 @@ import test from "node:test";
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem";
 import {
   WORKBENCH_THREAD_RECOVERY_MESSAGE,
+  createWorkbenchQuestionnaireResponseInput,
   createWorkbenchThreadRecoveryId,
   createWorkbenchThreadRecoveryInput,
+  isWorkbenchHiddenSystemSteerInput,
+  isWorkbenchQuestionnaireResponseInput,
+  isWorkbenchThreadRecoveryEligible,
   isWorkbenchThreadRecoveryInput,
-  isWorkbenchInterruptedThreadRecoveryEligible,
   isWorkbenchThreadRecoveryUserMessage,
 } from "./thread-recovery-message";
 
@@ -30,24 +33,36 @@ test("deterministic seeds create stable provider-safe recovery ids", () => {
   assert.notEqual(createWorkbenchThreadRecoveryId("thread:turn"), createWorkbenchThreadRecoveryId("thread:other"));
 });
 
-test("manual recovery is eligible only for inactive interrupted Codex and OpenCode threads", () => {
+test("manual recovery follows inactive Workbench lifecycle without competing with pending input", () => {
   const interruptedTurn = { completedAt: 1, durationMs: 1, error: null, id: "turn", items: [], itemsView: "full" as const, startedAt: 1, status: "interrupted" as const };
-  assert.equal(isWorkbenchInterruptedThreadRecoveryEligible({ harness: "codex", turns: [interruptedTurn] }), true);
-  assert.equal(isWorkbenchInterruptedThreadRecoveryEligible({ harness: "opencode", turns: [interruptedTurn] }), true);
-  assert.equal(isWorkbenchInterruptedThreadRecoveryEligible({ harness: "copilot", turns: [interruptedTurn] }), false);
-  assert.equal(isWorkbenchInterruptedThreadRecoveryEligible({ harness: "codex", turns: [interruptedTurn] }, "comment"), false);
-  assert.equal(isWorkbenchInterruptedThreadRecoveryEligible({ harness: "codex", turns: [{ ...interruptedTurn, completedAt: null, status: "inProgress" }] }), false);
+  const attention = { kind: "needsAttention", reason: "noActiveTurn", settled: false } as const;
+  assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, attention, false), true);
+  assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, { kind: "stopped", reason: "userMarkedStopped", settled: false }, false), true);
+  assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, attention, true), false);
+  assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, { kind: "needsAttention", reason: "pendingInput", requestKey: "request", settled: false, turnId: "turn" }, false), false);
+  assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, { kind: "completed", reason: "userCompleted", settled: false }, false), false);
+  assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, attention, false, "comment"), false);
+  assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [{ ...interruptedTurn, completedAt: null, status: "inProgress" }] }, attention, false), false);
 });
 
 test("only the exact single recovery text is recognized", () => {
+  assert.equal(WORKBENCH_THREAD_RECOVERY_MESSAGE, "<workbench:resume />");
   assert.equal(isWorkbenchThreadRecoveryInput(createWorkbenchThreadRecoveryInput()), true);
   assert.equal(isWorkbenchThreadRecoveryInput([{ text: `${WORKBENCH_THREAD_RECOVERY_MESSAGE} extra`, text_elements: [], type: "text" }]), false);
 });
 
-test("user messages require both exact content and a provider recovery marker", () => {
+test("user messages hide exact recovery content regardless of provider identity", () => {
   const recoveryId = createWorkbenchThreadRecoveryId("candidate");
   assert.equal(isWorkbenchThreadRecoveryUserMessage(userItem({ clientId: recoveryId })), true);
   assert.equal(isWorkbenchThreadRecoveryUserMessage(userItem({ id: `opencode:user:${recoveryId}` })), true);
-  assert.equal(isWorkbenchThreadRecoveryUserMessage(userItem()), false);
+  assert.equal(isWorkbenchThreadRecoveryUserMessage(userItem()), true);
   assert.equal(isWorkbenchThreadRecoveryUserMessage(userItem({ clientId: recoveryId, content: [{ text: "ordinary", text_elements: [], type: "text" }] })), false);
+});
+
+test("questionnaire response elements carry exact response JSON and are hidden system steers", () => {
+  const input = createWorkbenchQuestionnaireResponseInput({ answers: { route: { answers: ["approved"] } } });
+  const text = input[0]?.type === "text" ? input[0].text : "";
+  assert.equal(isWorkbenchQuestionnaireResponseInput(input), true);
+  assert.equal(isWorkbenchHiddenSystemSteerInput(input), true);
+  assert.equal(isWorkbenchQuestionnaireResponseInput([{ text: `${text} extra`, text_elements: [], type: "text" }]), false);
 });

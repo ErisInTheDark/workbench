@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadTargetSchema/WorkbenchThreadTarget: canonical blank, draft, provider, and parent-owned subagent identity. Keywords: route, draft, provider, subagent.
- * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchGitArcPlanStateSchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts. Keywords: zod, lifecycle, plan, sidebar.
+ * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchGitArcPlanStateSchema/WorkbenchDurableQuestionnaireSchema/WorkbenchQuestionnaireHistoryEntrySchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts. Keywords: zod, lifecycle, plan, questionnaire, sidebar.
  * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchThreadActivityUpdateSchema: full sidebar state and tiny activity delta contracts. Keywords: sidebar, websocket, revision.
  * - WorkbenchThreadStateOpenResultSchema/WorkbenchThreadStateOpenResult: atomic catalog, tree, and sidebar observation bootstrap. Keywords: open, bootstrap, snapshot.
  * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadTitleMutationResultSchema: multiplexed sidebar, activity, title, project, and request protocol. Keywords: orchestrator, websocket, revision.
@@ -145,6 +145,47 @@ export const WorkbenchGitArcPlanStateSchema = z.object({
 }).strict();
 export type WorkbenchGitArcPlanState = z.infer<typeof WorkbenchGitArcPlanStateSchema>;
 
+const WorkbenchUserInputOptionSchema = z.object({
+  description: z.string(),
+  label: z.string(),
+}).strict();
+const WorkbenchUserInputQuestionSchema = z.object({
+  allowOther: z.boolean(),
+  header: z.string(),
+  id: z.string().min(1),
+  isSecret: z.boolean(),
+  options: z.array(WorkbenchUserInputOptionSchema),
+  question: z.string(),
+}).strict();
+const WorkbenchUserInputRequestSchema = z.object({
+  id: z.string().min(1),
+  questions: z.array(WorkbenchUserInputQuestionSchema).min(1),
+  submitLabel: z.string(),
+  summary: z.string(),
+  title: z.string(),
+}).strict();
+const WorkbenchUserInputResponseSchema = z.object({
+  answers: z.record(z.string(), z.object({ answers: z.array(z.string()) }).strict()),
+}).strict();
+
+export const WorkbenchDurableQuestionnaireSchema = z.object({
+  itemId: z.string().nullable(),
+  request: WorkbenchUserInputRequestSchema,
+  requestKey: z.string().min(1),
+  turnId: z.string().nullable(),
+}).strict();
+export type WorkbenchDurableQuestionnaire = z.infer<typeof WorkbenchDurableQuestionnaireSchema>;
+
+export const WorkbenchQuestionnaireHistoryEntrySchema = WorkbenchDurableQuestionnaireSchema.extend({
+  insertAfterItemId: z.string().nullable(),
+  insertAfterItemIndex: z.number().int().nonnegative().nullable(),
+  resolvedAt: z.number().int().nonnegative(),
+  response: WorkbenchUserInputResponseSchema,
+  threadId: z.string().min(1),
+  turnId: z.string().min(1),
+}).strict();
+export type WorkbenchQuestionnaireHistoryEntryState = z.infer<typeof WorkbenchQuestionnaireHistoryEntrySchema>;
+
 const VisibleMetadataSchema = z.object({ archived: z.literal(false), pinned: z.boolean(), snoozed: z.boolean() }).strict();
 const ArchivedMetadataSchema = z.object({ archived: z.literal(true), pinned: z.literal(false), snoozed: z.literal(false) }).strict();
 const TopLevelMetadataSchema = z.union([VisibleMetadataSchema, ArchivedMetadataSchema]);
@@ -163,6 +204,8 @@ const TopLevelEntrySchema = SidebarCommonSchema.extend({
   lifecycle: WorkbenchThreadLifecycleSchema,
   metadata: TopLevelMetadataSchema,
   orderAt: z.number().int().nonnegative().optional(),
+  pendingQuestionnaire: WorkbenchDurableQuestionnaireSchema.nullable().optional(),
+  questionnaireHistory: z.array(WorkbenchQuestionnaireHistoryEntrySchema).optional(),
 }).strict();
 const SubagentEntrySchema = SidebarCommonSchema.extend({
   createdAt: z.number().int().nonnegative(),
@@ -179,6 +222,8 @@ const SubagentEntrySchema = SidebarCommonSchema.extend({
   profileId: z.string(),
   profileName: z.string(),
   projectId: z.string().min(1),
+  pendingQuestionnaire: WorkbenchDurableQuestionnaireSchema.nullable().optional(),
+  questionnaireHistory: z.array(WorkbenchQuestionnaireHistoryEntrySchema).optional(),
   updatedAt: z.number().int().nonnegative(),
 }).strict().superRefine((value, context) => {
   if (value.lifecycle.settled && value.pinned) context.addIssue({ code: "custom", message: "Settled subagents cannot remain locked." });
@@ -244,6 +289,7 @@ export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", 
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/settle") }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/restore") }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/status/set"), status: z.enum(["needsAttention", "completed", "stopped"]) }),
+  ProjectRequestBase.extend({ entry: WorkbenchQuestionnaireHistoryEntrySchema, identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/questionnaire/resolve") }),
   ProjectRequestBase.extend({ archived: z.boolean(), identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/archive/set") }),
 ]);
 export type WorkbenchThreadStateRequest = z.infer<typeof WorkbenchThreadStateRequestSchema>;

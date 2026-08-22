@@ -25,7 +25,6 @@ import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import { getCurrentTurn } from "../lib/codex/thread-state";
 import type { WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "../lib/types";
-import { isWorkbenchPauseControlRequest, WORKBENCH_PAUSE_CONTROL_KIND } from "../lib/workbench/thread/thread-pause-control";
 import {
   createWorkbenchThreadRecoveryInput,
   isWorkbenchThreadRecoveryInput,
@@ -290,6 +289,10 @@ function requestThreadId(params: unknown) {
 function requestInput(params: unknown) {
   const input = asRecord(params)?.input;
   return Array.isArray(input) ? input.filter((entry): entry is UserInput => asRecord(entry) !== null && typeof asRecord(entry)?.type === "string") : [];
+}
+
+function markWorkbenchApprovalRequest(request: WorkbenchUserInputRequest): WorkbenchUserInputRequest {
+  return { ...request, approval: {} };
 }
 
 function requestModel(params: unknown) {
@@ -1187,9 +1190,9 @@ export class OpenCodeBridge {
       method: "questionnaire/requested",
       params: {
         itemId: null,
-        request: kind === "v2"
+        request: markWorkbenchApprovalRequest(kind === "v2"
           ? this.getReloadableModules().opencodeThreadState.createOpenCodePermissionRequest(permission as PermissionV2Request)
-          : this.getReloadableModules().opencodeThreadState.createOpenCodeLegacyPermissionRequest(permission as PermissionRequest),
+          : this.getReloadableModules().opencodeThreadState.createOpenCodeLegacyPermissionRequest(permission as PermissionRequest)),
         requestKey,
         threadId: permission.sessionID,
         turnId: null,
@@ -1208,14 +1211,6 @@ export class OpenCodeBridge {
         turnId: null,
       },
     });
-  }
-
-  private pauseControlMetadata(request: WorkbenchUserInputRequest) {
-    const isPauseControl = isWorkbenchPauseControlRequest(request);
-    return {
-      controlKind: isPauseControl ? WORKBENCH_PAUSE_CONTROL_KIND : null,
-      hidden: isPauseControl || undefined,
-    };
   }
 
   private clearPendingUserInputForThread(threadId: string) {
@@ -1275,13 +1270,9 @@ export class OpenCodeBridge {
       return;
     }
     const request = this.getReloadableModules().opencodeThreadState.createOpenCodeQuestionRequest(displayQuestion);
-    const pauseControl = this.pauseControlMetadata(request);
-
     this.onNotification({
       method: "questionnaire/requested",
       params: {
-        controlKind: pauseControl.controlKind,
-        hidden: pauseControl.hidden,
         itemId: null,
         request,
         requestKey,
@@ -1330,9 +1321,9 @@ export class OpenCodeBridge {
 
           return [{
             itemId: null,
-            request: permission.v2
+            request: markWorkbenchApprovalRequest(permission.v2
               ? this.getReloadableModules().opencodeThreadState.createOpenCodePermissionRequest(permission.v2)
-              : this.getReloadableModules().opencodeThreadState.createOpenCodeLegacyPermissionRequest(displayPermission as PermissionRequest),
+              : this.getReloadableModules().opencodeThreadState.createOpenCodeLegacyPermissionRequest(displayPermission as PermissionRequest)),
             requestKey: permission.requestKey,
             threadId: displayPermission.sessionID,
             turnId: null,
@@ -1343,11 +1334,8 @@ export class OpenCodeBridge {
           const request = displayQuestion
             ? this.getReloadableModules().opencodeThreadState.createOpenCodeQuestionRequest(displayQuestion)
             : null;
-          const pauseControl = request ? this.pauseControlMetadata(request) : null;
           return displayQuestion
             ? [{
-              controlKind: pauseControl?.controlKind ?? null,
-              hidden: pauseControl?.hidden,
               itemId: null,
               request,
               requestKey: question.requestKey,

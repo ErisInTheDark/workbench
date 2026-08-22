@@ -67,9 +67,9 @@ function projectOption(id: string, rootPath: string) {
   };
 }
 
-async function waitFor(predicate: () => boolean, message: string) {
+async function waitFor(predicate: () => boolean | Promise<boolean>, message: string) {
   const deadline = Date.now() + 1_000;
-  while (!predicate()) {
+  while (!await predicate()) {
     if (Date.now() >= deadline) throw new Error(message);
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
@@ -723,13 +723,13 @@ test("replayed questionnaire lifecycle does not invent fresh thread activity", a
   await waitFor(() => publications.some((snapshot) => "entries" in snapshot && snapshot.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "questionnaire")), "Questionnaire thread was not discovered.");
   publications.length = 0;
 
-  await controller.observeLifecycle("codex", "questionnaire", { kind: "pendingInput", requestKey: "request", turnId: "turn" });
+  await controller.observeLifecycle("codex", "questionnaire", { kind: "pendingInput", questionnaire: null, requestKey: "request", turnId: "turn" });
   let observed = (await controller.getSnapshot("project")).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "questionnaire");
   assert.equal(observed?.activityAt, 20);
   assert.equal(publications.length, 1);
 
   now = 30;
-  await controller.observeLifecycle("codex", "questionnaire", { kind: "pendingInput", requestKey: "request", turnId: "turn" });
+  await controller.observeLifecycle("codex", "questionnaire", { kind: "pendingInput", questionnaire: null, requestKey: "request", turnId: "turn" });
   observed = (await controller.getSnapshot("project")).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "questionnaire");
   assert.equal(observed?.activityAt, 20);
   assert.equal(publications.length, 1);
@@ -782,8 +782,8 @@ test("inactive providers release stale questionnaire ownership without changing 
   });
   await controller.open("observer", "project");
   await waitFor(() => publishedEntries.length === 2, "Provider threads were not discovered.");
-  await controller.observeLifecycle("codex", "top", { kind: "pendingInput", requestKey: "top-request", turnId: "top-turn" });
-  await controller.observeLifecycle("codex", "child", { kind: "pendingInput", requestKey: "child-request", turnId: "child-turn" });
+  await controller.observeLifecycle("codex", "top", { kind: "pendingInput", questionnaire: null, requestKey: "top-request", turnId: "top-turn" });
+  await controller.observeLifecycle("codex", "child", { kind: "pendingInput", questionnaire: null, requestKey: "child-request", turnId: "child-turn" });
 
   await controller.refresh("project");
   await waitFor(() => publishedEntries.every((entry) => entry.entryKind === "draft" || entry.lifecycle.reason === "pendingInput"), "Active questionnaires lost provider ownership.");
@@ -817,6 +817,99 @@ test("inactive providers release stale questionnaire ownership without changing 
   assert.equal(top?.entryKind === "thread" ? top.lifecycle.settled : null, true);
 
   await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
+test("proper questionnaires and late-response history survive controller restarts", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-questionnaire-"));
+  const providerEntry: WorkbenchThreadSidebarEntry = {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "thread" },
+    lifecycle: { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Thread",
+  };
+  const createController = () => new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      acceptProviderSnapshot("codex", [providerEntry], { complete: true });
+      return [];
+    },
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+  const questionnaire = {
+    itemId: "item",
+    request: {
+      id: "request",
+      questions: [{ allowOther: false, header: "Route", id: "route", isSecret: false, options: [{ description: "Continue", label: "Approve" }], question: "Continue?" }],
+      submitLabel: "Send",
+      summary: "Choose",
+      title: "Questionnaire",
+    },
+    requestKey: "request-key",
+    turnId: "turn",
+  };
+
+  const first = createController();
+  await first.open("first", "project");
+  await waitFor(async () => (await first.getSnapshot("project")).entries.length > 0, "Provider thread was not discovered.");
+  const jsonOwner = first as unknown as { json: { write(filePath: string, value: unknown): Promise<void> } };
+  const write = jsonOwner.json.write.bind(jsonOwner.json);
+  let writes = 0;
+  jsonOwner.json.write = async (filePath, value) => { writes += 1; await write(filePath, value); };
+  await first.observeLifecycle("codex", "thread", { kind: "pendingInput", questionnaire, requestKey: questionnaire.requestKey, turnId: questionnaire.turnId });
+  assert.equal(writes, 1);
+  const pending = (await first.getSnapshot("project")).entries[0];
+  assert.equal(pending?.entryKind === "thread"
+    ? pending.pendingQuestionnaire?.requestKey
+    : null, "request-key");
+  await first.dispose();
+
+  const second = createController();
+  await second.open("second", "project");
+  await waitFor(async () => {
+    const entry = (await second.getSnapshot("project")).entries.find(
+      (candidate): candidate is Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => candidate.entryKind === "thread",
+    );
+    return entry?.pendingQuestionnaire?.requestKey === "request-key";
+  }, "Persisted questionnaire was not restored after controller restart.");
+  const restored = (await second.getSnapshot("project")).entries.find((entry) => entry.entryKind === "thread");
+  assert.equal(restored?.entryKind === "thread" ? restored.pendingQuestionnaire?.requestKey : null, "request-key");
+  const historyEntry = {
+    ...questionnaire,
+    insertAfterItemId: "item",
+    insertAfterItemIndex: 0,
+    resolvedAt: 3,
+    response: { answers: { route: { answers: ["Approve"] } } },
+    threadId: "thread",
+    turnId: "turn",
+  };
+  const resolved = await second.handleRequest("second", {
+    entry: historyEntry,
+    identity: { harness: "codex", threadId: "thread" },
+    method: "workbench/thread-state/questionnaire/resolve",
+    projectId: "project",
+  });
+  assert.equal("result" in resolved && (resolved.result as { accepted?: boolean }).accepted, true);
+  const completed = (await second.getSnapshot("project")).entries.find((entry) => entry.entryKind === "thread");
+  assert.equal(completed?.entryKind === "thread" ? completed.pendingQuestionnaire ?? null : null, null);
+  assert.equal(completed?.entryKind === "thread" ? completed.questionnaireHistory?.[0]?.requestKey : null, "request-key");
+  await second.dispose();
+
+  const third = createController();
+  await third.open("third", "project");
+  await waitFor(async () => {
+    const entry = (await third.getSnapshot("project")).entries.find((candidate) => candidate.entryKind === "thread");
+    return entry?.entryKind === "thread" && entry.questionnaireHistory?.[0]?.requestKey === "request-key";
+  }, "Persisted questionnaire history was not restored after controller restart.");
+  const reloaded = (await third.getSnapshot("project")).entries.find((entry) => entry.entryKind === "thread");
+  assert.equal(reloaded?.entryKind === "thread" ? reloaded.pendingQuestionnaire ?? null : null, null);
+  assert.equal(reloaded?.entryKind === "thread" ? reloaded.questionnaireHistory?.[0]?.response.answers.route?.answers[0] : null, "Approve");
+  await third.dispose();
   await fs.rm(root, { force: true, recursive: true });
 });
 

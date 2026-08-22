@@ -10,7 +10,7 @@ import { normalizeThreadTitle } from "../lib/thread-bootstrap";
 import type { WorkbenchHarness, WorkbenchProjectsPayload } from "../lib/types";
 import type { GitArcActiveClaim, GitArcLifecycleState, GitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
-import { normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+import { WorkbenchDurableQuestionnaireSchema, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchThreadStateController, { type WorkbenchObservedLifecycleEvent, type WorkbenchThreadReconciliationFailure } from "./WorkbenchThreadStateController";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
@@ -150,7 +150,17 @@ export function mapProviderLifecycleNotification(notification: JsonRpcNotificati
   if (notification.method === "questionnaire/requested") {
     const requestKey = typeof params.requestKey === "string" ? params.requestKey : null;
     const turnId = typeof params.turnId === "string" ? params.turnId : null;
-    return requestKey ? { event: { kind: "pendingInput", requestKey, turnId }, threadId } : null;
+    if (!requestKey) return null;
+    const questionnaire = WorkbenchDurableQuestionnaireSchema.safeParse({
+      itemId: typeof params.itemId === "string" ? params.itemId : null,
+      request: params.request,
+      requestKey,
+      turnId,
+    });
+    return {
+      event: { kind: "pendingInput", questionnaire: questionnaire.success ? questionnaire.data : null, requestKey, turnId },
+      threadId,
+    };
   }
   if (notification.method === "questionnaire/resolved") {
     const requestKey = typeof params.requestKey === "string" ? params.requestKey : null;

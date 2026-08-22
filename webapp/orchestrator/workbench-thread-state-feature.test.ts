@@ -72,7 +72,7 @@ test("provider lifecycle notification mapping is exact and bounded", () => {
     event: { kind: "turnCompleted", status: "completed", turnId: "turn" }, threadId: "child",
   });
   assert.deepEqual(mapProviderLifecycleNotification({ method: "questionnaire/requested", params: { requestKey: "question", threadId: "child", turnId: null } }), {
-    event: { kind: "pendingInput", requestKey: "question", turnId: null }, threadId: "child",
+    event: { kind: "pendingInput", questionnaire: null, requestKey: "question", turnId: null }, threadId: "child",
   });
   assert.equal(mapProviderLifecycleNotification({
     method: "item/completed",

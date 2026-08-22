@@ -29,7 +29,7 @@ import {
 } from "../../../lib/workbench/thread/thread-steer-markers";
 import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import { readWorkbenchSubagentMessageInput } from "../../../lib/workbench/thread/thread-subagent-message";
-import { isWorkbenchThreadRecoveryUserMessage } from "../../../lib/workbench/thread/thread-recovery-message";
+import { isWorkbenchHiddenSystemSteerInput } from "../../../lib/workbench/thread/thread-recovery-message";
 import {
   getThreadCommandBlockDisplay,
   getThreadCommandDisplay,
@@ -221,7 +221,7 @@ function isUserMessageBlock (block: ThreadRenderableBlock) {
 }
 
 function isWorkbenchControlUserMessage(item: Extract<ThreadItem, { type: "userMessage" }>) {
-  return item.content.some((content) => content.type === "text" && content.text.includes("<!-- workbench-collaboration-control -->"));
+  return isWorkbenchHiddenSystemSteerInput(item.content);
 }
 
 function getSteerUserMessageState(item: Extract<ThreadItem, { type: "userMessage" }>) {
@@ -359,7 +359,7 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
   };
 
   for (const item of items) {
-    if (item.type === "userMessage" && isWorkbenchThreadRecoveryUserMessage(item)) {
+    if (item.type === "userMessage" && isWorkbenchHiddenSystemSteerInput(item.content)) {
       continue;
     }
     const narrativeSnapshotDedupeKey = getNarrativeSnapshotDedupeKey(item);

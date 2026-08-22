@@ -1,7 +1,7 @@
 /* No production exports. Tests protect strict lifecycle, grouping, ordering, and draft rules. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { countDraftPromptTokens, createDraftTitle, createWorkbenchThreadPlanConflictSelector, getThreadSidebarGroup, getWorkbenchThreadPlanConflictEntries, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, sortThreadSidebarEntries, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
+import { countDraftPromptTokens, createDraftTitle, createWorkbenchThreadPlanConflictSelector, getThreadSidebarGroup, getWorkbenchThreadPlanConflictEntries, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, sortThreadSidebarEntries, WorkbenchDurableQuestionnaireSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
 
 test("provider timestamps normalize seconds without double-converting milliseconds", () => {
   assert.equal(normalizeWorkbenchTimestampMs(1_723_456_789), 1_723_456_789_000);
@@ -89,6 +89,37 @@ test("draft priority requests use draft identity and drive shared grouping and o
   assert.equal(getThreadSidebarGroup(entry), "snoozed");
   const first = sortThreadSidebarEntries([{ ...entry, metadata: { ...entry.metadata, pinned: false } }, entry])[0];
   assert.equal(first?.entryKind === "draft" ? first.metadata.pinned : null, true);
+});
+
+test("durable questionnaire state accepts proper questions and rejects approvals", () => {
+  const request = {
+    id: "request",
+    questions: [{ allowOther: false, header: "Route", id: "route", isSecret: false, options: [{ description: "Continue", label: "Approve" }], question: "Continue?" }],
+    submitLabel: "Send",
+    summary: "Choose a route",
+    title: "Questionnaire",
+  };
+  const pending = { itemId: "item", request, requestKey: "request-key", turnId: "turn" };
+  assert.equal(WorkbenchDurableQuestionnaireSchema.safeParse(pending).success, true);
+  assert.equal(WorkbenchDurableQuestionnaireSchema.safeParse({ ...pending, request: { ...request, approval: {} } }).success, false);
+
+  const entry = {
+    insertAfterItemId: "item",
+    insertAfterItemIndex: 1,
+    itemId: "item",
+    request,
+    requestKey: "request-key",
+    resolvedAt: 2,
+    response: { answers: { route: { answers: ["Approve"] } } },
+    threadId: "thread",
+    turnId: "turn",
+  };
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
+    entry,
+    identity: { harness: "codex", threadId: "thread" },
+    method: "workbench/thread-state/questionnaire/resolve",
+    projectId: "project",
+  }).success, true);
 });
 
 test("top-level threads sort by latest turn start while activity remains display-only", () => {

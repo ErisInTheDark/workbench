@@ -8,6 +8,7 @@ import { test } from "node:test";
 
 import type { ThreadPayload, WorkbenchThreadContextBundle } from "../../types.ts";
 import { buildWorkbenchThreadContextPieces } from "./thread-context-projection.ts";
+import { createWorkbenchQuestionnaireResponseInput, createWorkbenchThreadRecoveryInput } from "./thread-recovery-message.ts";
 
 function thread(): ThreadPayload {
   return {
@@ -32,6 +33,21 @@ test("native steer suppresses and positions only its exact canonical message", (
   const pieces = buildWorkbenchThreadContextPieces(bundle);
   assert.deepEqual(pieces.map((piece) => [piece.kind, piece.itemId]), [["userSteer", null], ["userMessage", "canonical-b"]]);
   assert.ok(pieces[0]!.sortKey < pieces[1]!.sortKey);
+});
+
+test("exact Workbench resume and questionnaire-response steers stay out of projected context", () => {
+  const source = thread();
+  source.turns[0]!.items.push(
+    { clientId: null, content: createWorkbenchThreadRecoveryInput(), id: "resume", type: "userMessage" },
+    { clientId: null, content: createWorkbenchQuestionnaireResponseInput({ answers: { route: { answers: ["approved"] } } }), id: "response", type: "userMessage" },
+  );
+  const bundle: WorkbenchThreadContextBundle = {
+    browseResultEntries: [],
+    questionnaireEntries: [],
+    steerEntries: [],
+    thread: source,
+  };
+  assert.deepEqual(buildWorkbenchThreadContextPieces(bundle).map((piece) => piece.itemId), ["canonical-a", "canonical-b"]);
 });
 
 test("native client identity still correlates after a canonical item id alias changes", () => {

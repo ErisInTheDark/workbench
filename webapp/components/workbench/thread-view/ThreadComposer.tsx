@@ -34,20 +34,17 @@ import {
   buildInlineMentionHighlights,
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
-import {
-  WORKBENCH_PAUSE_CONTROL_KIND,
-  WORKBENCH_PAUSE_PENDING_HALO_MS,
-} from "../../../lib/workbench/thread/thread-pause-control";
 import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
 import { isWorkbenchSyntheticSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import { runThreadComposerSubmission } from "../../../lib/workbench/thread/thread-message-submission";
 import {
   createWorkbenchThreadRecoveryInput,
-  isWorkbenchInterruptedThreadRecoveryEligible,
+  isWorkbenchThreadRecoveryEligible,
 } from "../../../lib/workbench/thread/thread-recovery-message";
+import type { WorkbenchThreadLifecycle } from "../../../lib/workbench/thread/thread-state";
 import PrimaryButton from "../PrimaryButton";
 import ChevronIcon from "../ChevronIcon";
-import { PauseIcon, PlayIcon, StopIcon } from "../workbench-icons";
+import { PlayIcon, StopIcon } from "../workbench-icons";
 import PlaintextEditable from "./PlaintextEditable";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import ThreadAgentPicker from "./ThreadAgentPicker";
@@ -214,8 +211,6 @@ export default function ThreadComposer ({
   layout = "thread",
   onListModels,
   onHarnessToggle,
-  onPauseThread,
-  onResumeThread,
   onSendMessage,
   onStopThread,
   onThreadComposerDraftChange,
@@ -241,6 +236,7 @@ export default function ThreadComposer ({
   trailingActions,
   threadQuestionnaireDraft,
   threadComposerDraft,
+  threadLifecycle,
   knownSkills,
   highlightSources,
   thread,
@@ -253,8 +249,6 @@ export default function ThreadComposer ({
   layout?: "thread" | "inline";
   onListModels: (harness: ThreadPayload["harness"], options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   onHarnessToggle?: () => void;
-  onPauseThread: (threadId: string) => Promise<void> | void;
-  onResumeThread: (threadId: string) => Promise<void> | void;
   onSendMessage: (threadId: string, input: UserInput[]) => Promise<void>;
   onStopThread: (threadId: string) => Promise<void> | void;
   onThreadComposerDraftChange: (threadId: string, draft: WorkbenchComposerInputDraft, reason?: "autosave" | "submission") => void;
@@ -287,6 +281,7 @@ export default function ThreadComposer ({
   knownSkills: WorkbenchSkillSummary[];
   highlightSources: InlineMentionHighlightSources;
   thread: ThreadPayload;
+  threadLifecycle: WorkbenchThreadLifecycle | null;
 }) {
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const [value, setValue] = useState(threadComposerDraft?.text ?? "");
@@ -312,10 +307,7 @@ export default function ThreadComposer ({
   const [modelsError, setModelsError] = useState("");
   const [isQuestionnaireVisible, setIsQuestionnaireVisible] = useState(Boolean(pendingUserInputRequest));
   const [pendingAttachmentReads, setPendingAttachmentReads] = useState(0);
-  const [pauseRequestedAt, setPauseRequestedAt] = useState<number | null>(null);
   const [isSending, setIsSending] = useState(false);
-  const [isPausing, setIsPausing] = useState(false);
-  const [isResuming, setIsResuming] = useState(false);
   const [isRecoveringInterruptedTurn, setIsRecoveringInterruptedTurn] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [isStickyComposerArmed, setIsStickyComposerArmed] = useState(false);
@@ -348,12 +340,7 @@ export default function ThreadComposer ({
   const trimmedValue = value.trim();
   const isAttaching = pendingAttachmentReads > 0;
   const hasPendingUserInputRequest = pendingUserInputRequest !== null;
-  const hiddenPauseRequest = pendingUserInputRequest?.hidden && pendingUserInputRequest.controlKind === WORKBENCH_PAUSE_CONTROL_KIND
-    ? pendingUserInputRequest
-    : null;
-  const visiblePendingUserInputRequest = pendingUserInputRequest && !pendingUserInputRequest.hidden
-    ? pendingUserInputRequest
-    : null;
+  const visiblePendingUserInputRequest = pendingUserInputRequest;
   const hasVisiblePendingUserInputRequest = visiblePendingUserInputRequest !== null;
   const questionnaireRequestKey = pendingUserInputRequest?.requestKey ?? "";
   const showQuestionnairePanel = hasVisiblePendingUserInputRequest && isQuestionnaireVisible;
@@ -361,17 +348,12 @@ export default function ThreadComposer ({
   const isThreadStateBroken = hasStaleApprovalState(thread);
   const isApprovalBlocked = isCurrentTurnWaitingOnApproval(thread);
   const isActiveThread = getCurrentInProgressTurn(thread) !== null;
-  const canRecoverInterruptedTurn = isWorkbenchInterruptedThreadRecoveryEligible(thread, controlsMode);
+  const canRecoverInterruptedTurn = isWorkbenchThreadRecoveryEligible(thread, threadLifecycle, hasPendingUserInputRequest, controlsMode);
   const isInputDisabled = isSending || isRecoveringInterruptedTurn || isAttaching || isThreadStateBroken || isCopilotAuthRequired;
   const isSendDisabled = isInputDisabled;
   const isStopDisabled = !isActiveThread || isStopping;
-  const isPauseRequestPending = pauseRequestedAt !== null && !hiddenPauseRequest;
-  const isPauseDisabled = !isActiveThread || isPausing || isResuming || isPauseRequestPending;
-  const isResumeDisabled = !hiddenPauseRequest || isResuming;
   const isMobileTextInput = useMobileTextInputEnvironment();
-  const helperText = hiddenPauseRequest
-    ? "Paused. Send a steer or resume the agent."
-    : hasVisiblePendingUserInputRequest
+  const helperText = hasVisiblePendingUserInputRequest
       ? "\xa0"
       : isAttaching
         ? "Attaching pasted image..."
@@ -707,28 +689,6 @@ export default function ThreadComposer ({
   }, [thread.id, visiblePendingUserInputRequest?.request.id]);
 
   useEffect(() => {
-    if (hiddenPauseRequest) {
-      setPauseRequestedAt(null);
-      setIsPausing(false);
-      return;
-    }
-
-    if (pauseRequestedAt === null) {
-      return;
-    }
-
-    const remainingMs = Math.max(0, WORKBENCH_PAUSE_PENDING_HALO_MS - (Date.now() - pauseRequestedAt));
-    const timeoutId = window.setTimeout(() => {
-      setPauseRequestedAt(null);
-      setIsPausing(false);
-    }, remainingMs);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [hiddenPauseRequest, pauseRequestedAt]);
-
-  useEffect(() => {
     void loadAvailableAgents({ clearBeforeLoad: true });
 
     return () => {
@@ -935,41 +895,6 @@ export default function ThreadComposer ({
     }
   };
 
-  const pause = async () => {
-    if (isPauseDisabled || isPickerOpen) {
-      return;
-    }
-
-    setIsPausing(true);
-    setPauseRequestedAt(Date.now());
-    setError("");
-    try {
-      await onPauseThread(thread.id);
-    } catch (pauseError) {
-      setPauseRequestedAt(null);
-      setError(pauseError instanceof Error ? pauseError.message : "Unable to pause that turn.");
-    } finally {
-      setIsPausing(false);
-    }
-  };
-
-  const resume = async () => {
-    if (isResumeDisabled || isPickerOpen) {
-      return;
-    }
-
-    setIsResuming(true);
-    setError("");
-    try {
-      await onResumeThread(thread.id);
-      setPauseRequestedAt(null);
-    } catch (resumeError) {
-      setError(resumeError instanceof Error ? resumeError.message : "Unable to resume that turn.");
-    } finally {
-      setIsResuming(false);
-    }
-  };
-
   const recoverInterruptedTurn = async () => {
     if (!canRecoverInterruptedTurn || isRecoveringInterruptedTurn || isPickerOpen) {
       return;
@@ -1056,22 +981,6 @@ export default function ThreadComposer ({
     );
   };
 
-  const pauseButton = showStopButton || hiddenPauseRequest || isPauseRequestPending ? (
-    <PrimaryButton
-      type="button"
-      aria-label={hiddenPauseRequest ? (isResuming ? "Resuming paused agent" : "Resume paused agent") : isPauseRequestPending ? "Pause request pending" : "Pause current turn"}
-      title={hiddenPauseRequest ? (isResuming ? "Resuming paused agent" : "Resume paused agent") : isPauseRequestPending ? "Pause request pending" : "Pause current turn"}
-      disabled={hiddenPauseRequest ? isResumeDisabled : isPauseDisabled}
-      pendingHalo={isPauseRequestPending}
-      shape="circle"
-      onClick={() => {
-        void (hiddenPauseRequest ? resume() : pause());
-      }}
-    >
-      {hiddenPauseRequest ? <PlayIcon className="h-4.5 w-4.5" /> : <PauseIcon className="h-4.5 w-4.5" />}
-    </PrimaryButton>
-  ) : null;
-
   const stopButton = showStopButton ? (
     <PrimaryButton
       type="button"
@@ -1086,11 +995,11 @@ export default function ThreadComposer ({
       <StopIcon className="h-4.5 w-4.5" />
     </PrimaryButton>
   ) : null;
-  const interruptedResumeButton = canRecoverInterruptedTurn ? (
+  const resumeButton = canRecoverInterruptedTurn ? (
     <PrimaryButton
       type="button"
-      aria-label={isRecoveringInterruptedTurn ? "Resuming interrupted turn" : "Resume interrupted turn"}
-      title={isRecoveringInterruptedTurn ? "Resuming interrupted turn" : "Resume interrupted turn"}
+      aria-label={isRecoveringInterruptedTurn ? "Resuming thread" : "Resume thread"}
+      title={isRecoveringInterruptedTurn ? "Resuming thread" : "Resume thread"}
       disabled={isRecoveringInterruptedTurn}
       shape="circle"
       onClick={() => {
@@ -1370,8 +1279,7 @@ export default function ThreadComposer ({
                       {isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : sendLabel}
                     </PrimaryButton>
                     {trailingActions}
-                    {interruptedResumeButton}
-                    {pauseButton}
+                    {resumeButton}
                     {stopButton}
                   </div>
                 </div>
