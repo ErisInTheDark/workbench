@@ -345,7 +345,7 @@ If validation cannot be done without writing, explain the tradeoff and ask first
 
 ## Test Quality
 
-**Hard rule: every test must earn its permanent project tax.** Add tests that protect important behavioral invariants from realistic regressions. Do not add tests merely because code changed, a branch exists, coverage is low, or a test is easy to write. A low-value test is a defect in the suite, not harmless coverage.
+**Hard rule: every test must earn its permanent project tax.** Test semantic and logical invariants, not representation. Assertions that pin exact constants, user-facing text, display details, or implementation shape are defects, not coverage. Add tests that protect important behavioral invariants from realistic regressions. Do not add tests merely because code changed, a branch exists, coverage is low, or a test is easy to write. A low-value test is a defect in the suite, not harmless coverage.
 
 - Test behavioral invariants at the smallest real owner, never implementation shape.
 - Add no test for trivial, static, or framework-guaranteed behavior.
