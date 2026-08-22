@@ -22,6 +22,7 @@ import {
   isWorkbenchThreadStatusProviderOwned,
   projectWorkbenchThreadSidebarEntries,
   reduceWorkbenchThreadLifecycle,
+  resolveWorkbenchThreadTitle,
   sortThreadSidebarEntries,
   type WorkbenchLifecycleEvent,
   type WorkbenchDurableQuestionnaire,
@@ -422,6 +423,9 @@ export default class WorkbenchThreadStateController {
             ? { archived: true as const, pinned: false as const, snoozed: false as const }
             : { ...existing.metadata, snoozed: shouldUnsnooze ? false : existing.metadata.snoozed },
           ...(event.kind === "acceptedIntent" ? { orderAt: providerEntry?.entryKind === "thread" ? providerEntry.orderAt ?? activityAt : activityAt } : {}),
+          ...(event.kind === "acceptedIntent" && providerEntry?.entryKind === "thread" ? {
+            title: resolveWorkbenchThreadTitle({ id: threadId, name: existing.title, preview: providerEntry.title }),
+          } : {}),
         };
       const next = questionnaireMutation?.kind === "set"
         ? { ...lifecycleEntry, pendingQuestionnaire: questionnaireMutation.questionnaire }

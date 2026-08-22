@@ -723,6 +723,49 @@ test("accepted intent survives provider discovery lag and releases after its lif
   await controller.dispose();
 });
 
+test("accepted intent replaces only a neutral headless provider title with the first message", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-accepted-title-"));
+  const published: WorkbenchThreadSidebarEntry[] = [];
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: (_connectionId, snapshot) => {
+      if (!("entries" in snapshot)) return;
+      published.push(...snapshot.entries.filter((entry) => entry.entryKind !== "draft"));
+    },
+    reconcileProject: async () => [],
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+  const providerEntry = (threadId: string, title: string): Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> => ({
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title,
+  });
+
+  await controller.open("observer", "project");
+  await controller.ensureProviderEntry("project", providerEntry("neutral", "New thread"));
+  await controller.acceptIntent("observer", {
+    harness: "codex", projectId: "project", threadId: "neutral", title: "First user message", turnId: "neutral-turn",
+  });
+  await controller.ensureProviderEntry("project", providerEntry("named", "Meaningful provider title"));
+  await controller.acceptIntent("observer", {
+    harness: "codex", projectId: "project", threadId: "named", title: "Different user message", turnId: "named-turn",
+  });
+
+  const snapshot = await controller.getSnapshot("project");
+  assert.equal(snapshot.entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "neutral")?.title, "First user message");
+  assert.equal(snapshot.entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "named")?.title, "Meaningful provider title");
+  assert.equal(published.filter((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "neutral").at(-1)?.title, "First user message");
+  const stored = JSON.parse(await fs.readFile(path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment("project")}.json`), "utf8")) as { records: Array<{ identity: { threadId: string }; title: string }> };
+  assert.equal(stored.records.find((entry) => entry.identity.threadId === "neutral")?.title, "First user message");
+  assert.equal(stored.records.find((entry) => entry.identity.threadId === "named")?.title, "Meaningful provider title");
+  await controller.dispose();
+});
+
 test("successful user input wakes snoozed threads without changing questionnaire turn order", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-user-input-wake-"));
   let discovered = false;
