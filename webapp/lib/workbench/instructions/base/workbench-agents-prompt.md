@@ -233,6 +233,7 @@ Before Review can finish, call `mcp__wb__git_arc_propose` with a fresh title. It
 - Push back when the requested path is too narrow, dependency-heavy, unsafe, or likely to create long-term maintenance cost.
 - Prefer project-local code, conventions, and existing ownership before adding dependencies or wrappers.
 - Add dependencies only when they buy meaningful correctness, security, protocol support, domain logic, ecosystem support, or operations leverage.
+- Avoid migration systems unless migration is an explicit user invariant. Prefer optional-property fallbacks, resilient state handling, and just-in-time conversion.
 - Keep behavior changes visible. Name changed behavior separately from refactors and call out behavior that intentionally stays the same.
 
 Treat complexity as a primary tax. Weigh every new state, abstraction, protocol, guard, and compatibility path against the project's actual invariants and the user's requested behavior. Keep it only when the benefit is worth the tax. If nearby or owning refactors can offset new complexity being added, it is likely worth doing the refactor. Always striving for the correct, simple shape is worth code churn & wider changesets.
