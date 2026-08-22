@@ -58,6 +58,23 @@ function normalizeResolvedGitArc(value: WorkbenchGitArcLifecycleState | LegacyGi
   };
 }
 
+function reconcileProviderLifecycle(
+  providerEntry: Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>,
+  overlay: StoredThreadMetadata | undefined,
+): WorkbenchThreadLifecycle {
+  if (!overlay || !isWorkbenchThreadStatusProviderOwned(overlay.lifecycle) || isWorkbenchThreadStatusProviderOwned(providerEntry.lifecycle)) {
+    return overlay?.lifecycle ?? providerEntry.lifecycle;
+  }
+  if (
+    providerEntry.entryKind === "thread"
+    && providerEntry.lifecycle.kind === "completed"
+    && providerEntry.lifecycle.reason === "providerInactive"
+  ) {
+    return { kind: "needsAttention", reason: "noActiveTurn", settled: false };
+  }
+  return providerEntry.lifecycle;
+}
+
 export interface WorkbenchThreadStateControllerOptions {
   getProjectCatalog: () => WorkbenchProjectsPayload;
   log?: (message: string) => void;
@@ -671,7 +688,7 @@ export default class WorkbenchThreadStateController {
         : parsed.data;
       const overlay = state.overlays.get(key);
       if (providerEntry.entryKind === "subagent") {
-        const lifecycle = overlay?.lifecycle ?? providerEntry.lifecycle;
+        const lifecycle = reconcileProviderLifecycle(providerEntry, overlay);
         state.entries.set(key, overlay ? {
           ...providerEntry,
           lifecycle: providerEntry.gitArc?.claimedPaths.length && lifecycle.settled ? { ...lifecycle, settled: false as const } : lifecycle,
@@ -682,11 +699,12 @@ export default class WorkbenchThreadStateController {
       const metadata = overlay?.archived
         ? { archived: true as const, pinned: false as const, snoozed: false as const }
         : { archived: false as const, pinned: overlay?.pinned ?? providerEntry.metadata.pinned, snoozed: overlay?.snoozed ?? providerEntry.metadata.snoozed };
+      const lifecycle = reconcileProviderLifecycle(providerEntry, overlay);
       state.entries.set(key, overlay ? {
         ...providerEntry,
-        lifecycle: providerEntry.gitArc?.claimedPaths.length && overlay.lifecycle.settled
-          ? { ...overlay.lifecycle, settled: false as const }
-          : overlay.lifecycle,
+        lifecycle: providerEntry.gitArc?.claimedPaths.length && lifecycle.settled
+          ? { ...lifecycle, settled: false as const }
+          : lifecycle,
         metadata,
         ...(overlay.orderAt !== undefined ? { orderAt: overlay.orderAt } : {}),
         title: providerEntry.title === "New thread" && overlay.titleFallback ? overlay.titleFallback : providerEntry.title,

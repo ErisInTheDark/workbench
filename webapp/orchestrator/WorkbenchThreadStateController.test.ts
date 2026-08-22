@@ -738,6 +738,88 @@ test("replayed questionnaire lifecycle does not invent fresh thread activity", a
   await fs.rm(root, { force: true, recursive: true });
 });
 
+test("inactive providers release stale questionnaire ownership without changing terminal semantics", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-inactive-questionnaire-"));
+  const working = (threadId: string): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId },
+    lifecycle: { agent: { agentStatus: "working", turnId: `${threadId}-turn` }, kind: "working", reason: "acceptedIntent", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: threadId,
+  });
+  const child: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> = {
+    activityAt: 1,
+    createdAt: 1,
+    cwd: root,
+    directSubagentIndex: 0,
+    entryKind: "subagent",
+    identity: { harness: "codex", threadId: "child" },
+    lifecycle: { agent: { agentStatus: "working", turnId: "child-turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+    name: "Child",
+    parentThreadId: "parent",
+    pinned: false,
+    profileId: "default",
+    profileName: "Default",
+    projectId: "project",
+    title: "Child",
+    updatedAt: 1,
+  };
+  let providerEntries: WorkbenchThreadSidebarEntry[] = [working("top"), child];
+  let publishedEntries: WorkbenchThreadSidebarEntry[] = [];
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: (_connectionId, snapshot) => {
+      if ("entries" in snapshot) publishedEntries = snapshot.entries;
+    },
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      acceptProviderSnapshot("codex", providerEntries, { complete: true });
+      return [];
+    },
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+  await controller.open("observer", "project");
+  await waitFor(() => publishedEntries.length === 2, "Provider threads were not discovered.");
+  await controller.observeLifecycle("codex", "top", { kind: "pendingInput", requestKey: "top-request", turnId: "top-turn" });
+  await controller.observeLifecycle("codex", "child", { kind: "pendingInput", requestKey: "child-request", turnId: "child-turn" });
+
+  await controller.refresh("project");
+  await waitFor(() => publishedEntries.every((entry) => entry.entryKind === "draft" || entry.lifecycle.reason === "pendingInput"), "Active questionnaires lost provider ownership.");
+
+  providerEntries = [
+    { ...working("top"), lifecycle: { kind: "completed", reason: "providerInactive", settled: true } },
+    { ...child, lifecycle: { kind: "completed", reason: "providerInactive", settled: false } },
+  ];
+  await controller.refresh("project");
+  await waitFor(() => {
+    const top = publishedEntries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "top");
+    const settledChild = publishedEntries.find((entry) => entry.entryKind === "subagent" && entry.identity.threadId === "child");
+    return top?.entryKind === "thread"
+      && top.lifecycle.kind === "needsAttention"
+      && top.lifecycle.reason === "noActiveTurn"
+      && settledChild?.entryKind === "subagent"
+      && settledChild.lifecycle.kind === "completed"
+      && !settledChild.lifecycle.settled;
+  }, "Inactive providers did not release stale questionnaire ownership.");
+
+  const completed = await controller.handleRequest("observer", {
+    identity: { harness: "codex", threadId: "top" }, method: "workbench/thread-state/status/set", projectId: "project", status: "completed",
+  });
+  assert.equal("result" in completed ? (completed.result as { accepted?: boolean }).accepted : false, true);
+  const settled = await controller.handleRequest("observer", {
+    identity: { harness: "codex", threadId: "top" }, method: "workbench/thread-state/settle", projectId: "project",
+  });
+  assert.equal("result" in settled ? (settled.result as { accepted?: boolean }).accepted : false, true);
+  const top = publishedEntries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "top");
+  assert.equal(top?.entryKind === "thread" ? top.lifecycle.kind : null, "completed");
+  assert.equal(top?.entryKind === "thread" ? top.lifecycle.settled : null, true);
+
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
 test("provider completion auto-completes subagents while top-level turns still need an explicit status", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-lifecycle-"));
   const working = (threadId: string): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
