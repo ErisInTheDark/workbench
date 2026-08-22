@@ -31,6 +31,7 @@ import ChevronIcon from "../ChevronIcon";
 import ProjectFilePath from "../ProjectFilePath";
 import { CheckIcon, CopyIcon, PreviewIcon, WrapTextIcon } from "../workbench-icons";
 import ThreadDisclosure from "./ThreadDisclosure";
+import ThreadInlineIcon from "./ThreadInlineIcon";
 import ThreadPlanSummary from "./ThreadPlanSummary";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 
@@ -161,6 +162,15 @@ function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string, 
           >
             {renderThreadInlineNodes(node.children, key, options)}
           </span>
+        );
+      case "threadIcon":
+        return (
+          <ThreadInlineIcon
+            color={node.color}
+            iconType={node.iconType}
+            key={key}
+            source={node.source}
+          />
         );
       case "knownSkillMention":
         return (

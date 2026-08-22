@@ -71,6 +71,7 @@ export type ParsedInlineNode =
   | { type: "break" }
   | { type: "link"; children: ParsedInlineNode[]; external: boolean; href: string }
   | { type: "inlineComment"; children: ParsedInlineNode[] }
+  | { type: "threadIcon"; color: string; iconType: string; source: string }
   | { type: "knownSkillMention"; text: string; title: string }
   | {
     type: "projectFileLink";
@@ -515,6 +516,27 @@ function parseExplicitProjectFileMention(markdown: string, index: number, option
   };
 }
 
+function parseThreadIconMarker(markdown: string, index: number, options: MarkdownParseOptions) {
+  if ((options.profile ?? "editor") !== "thread" || !markdown.startsWith("<icon ", index)) {
+    return null;
+  }
+
+  const match = /^<icon type="([a-z][a-z0-9-]*)" color="([a-z][a-z0-9-]*)"\s*\/>/u.exec(markdown.slice(index));
+  if (!match) {
+    return null;
+  }
+
+  return {
+    end: index + match[0].length,
+    node: {
+      color: match[2],
+      iconType: match[1],
+      source: match[0],
+      type: "threadIcon" as const,
+    },
+  };
+}
+
 export function parseInlineMarkdown(markdown: string, options: MarkdownParseOptions = {}) {
   const nodes: ParsedInlineNode[] = [];
   let index = 0;
@@ -525,6 +547,13 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
     if (markdown[index] === "\\") {
       pushTextNode(nodes, markdown.slice(index + 1, index + 2));
       index += 2;
+      continue;
+    }
+
+    const threadIconMarker = parseThreadIconMarker(markdown, index, options);
+    if (threadIconMarker) {
+      nodes.push(threadIconMarker.node);
+      index = threadIconMarker.end;
       continue;
     }
 

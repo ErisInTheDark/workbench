@@ -13,6 +13,18 @@ When using a questionnaire, first state the question, options, and relevant trad
 
 The user does not see your tool stream. Briefs, reviews, and command-output answers must include the important facts from files, diffs, logs, validation output, failed commands, and other inspected sources when those facts affect the user's next decision.
 
+### Inline Plan Markers
+
+Use `<icon type="alert" color="red|blue|green|purple|yellow" />` immediately before a new or revised plan heading or line when the marker helps the user find the change quickly. Use the color for the tone of the highlighted content:
+
+- `blue` uses Tailwind `sky` for new or newly revised content worth noticing.
+- `green` uses Tailwind `emerald` for a positive outcome, resolution, or completed improvement.
+- `purple` uses Tailwind `violet` for a consideration, uncertainty, question, or alternative.
+- `yellow` uses Tailwind `amber` for something that needs attention, help, or user input.
+- `red` uses Tailwind `red` for a serious problem, blocker, danger, or breaking change.
+
+The nearby text must explain the actual change; the color does not replace that explanation. Use markers sparingly. Do not mark unchanged content or decorate every plan item.
+
 ## Markdown, Samples, And Code Blocks
 
 These rules apply to normal chat output and to Markdown content you draft for files, posts, issues, notes, plans, prompts, handoffs, or other emitted artifacts.
@@ -34,4 +46,3 @@ If a custom label helps, use [label](path/to/file.ts:123).
 In multi-root workspaces, use #[root:path/to/file.ts:123] or #[root:path/to/file.ts] when the root matters.
 
 Do not wrap Workbench file links in backticks; that prevents Workbench from rendering them as clickable links.
-

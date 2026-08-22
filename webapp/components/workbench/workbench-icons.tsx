@@ -15,7 +15,7 @@
  * - BlocksIcon: render the Lucide-style composer profile control icon. Keywords: workbench, icon, composer, profile, blocks.
  * - BrowserSessionIcon: render the Browse session sidebar icon. Keywords: workbench, icon, browse, session.
  * - ReloadIcon: render the local runtime reload icon. Keywords: workbench, icon, reload.
- * - StopIcon/PauseIcon/PlayIcon/ClockIcon/WarningIcon: render shared thread turn and command-status icons. Keywords: workbench, icon, thread, stop, pause, play, progress.
+ * - StopIcon/PauseIcon/PlayIcon/ClockIcon/WarningIcon/CircleAlertIcon: render shared thread turn, command-status, and alert icons. Keywords: workbench, icon, thread, stop, pause, play, progress, alert.
  * - PinIcon/LockIcon/UnlockIcon: render pinned and subagent ownership controls. Keywords: workbench, icon, thread, pin, lock.
  * - FlagIcon: render the Codex goal control icon. Keywords: workbench, icon, thread, goal, flag.
  * - OpenThreadIcon/ArchiveIcon: render thread navigation and archive context-menu icons. Keywords: workbench, icon, thread, open, archive.
@@ -280,6 +280,26 @@ export function WarningIcon ({ className = "size-4" }: IconProps) {
       <path d="M8 2.7L14 13.3H2L8 2.7Z" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M8 6.25V9.2" strokeLinecap="round" />
       <path d="M8 11.45H8.01" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function CircleAlertIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" x2="12" y1="8" y2="12" />
+      <line x1="12" x2="12.01" y1="16" y2="16" />
     </svg>
   );
 }
