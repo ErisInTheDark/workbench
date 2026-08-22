@@ -10,7 +10,7 @@ import { normalizeThreadTitle } from "../lib/thread-bootstrap";
 import type { WorkbenchHarness, WorkbenchProjectsPayload } from "../lib/types";
 import type { GitArcActiveClaim, GitArcLifecycleState, GitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
-import { WorkbenchDurableQuestionnaireSchema, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+import { WorkbenchDurableQuestionnaireSchema, gitArcPreventsThreadSettlement, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchThreadStateController, { type WorkbenchObservedLifecycleEvent, type WorkbenchThreadReconciliationFailure } from "./WorkbenchThreadStateController";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
@@ -419,7 +419,7 @@ export default class WorkbenchThreadStateFeature {
           ...entry,
           gitArc,
           gitArcPlan,
-          lifecycle: gitArc?.claimedPaths.length && entry.lifecycle.settled ? { ...entry.lifecycle, settled: false as const } : entry.lifecycle,
+          lifecycle: gitArcPreventsThreadSettlement(gitArc) && entry.lifecycle.settled ? { ...entry.lifecycle, settled: false as const } : entry.lifecycle,
         };
       });
     const providerById = new Map(providerEntries.filter((entry): entry is Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => entry.entryKind === "thread").map((entry) => [entry.identity.threadId, entry]));
@@ -431,7 +431,7 @@ export default class WorkbenchThreadStateFeature {
       return {
         activityAt: provider?.activityAt ?? relationship.updatedAt, createdAt: relationship.createdAt, cwd: relationship.cwd,
         directSubagentIndex: relationship.directSubagentIndex, entryKind: "subagent", identity: { harness, threadId: relationship.threadId },
-        gitArc, gitArcPlan, lifecycle: gitArc?.claimedPaths.length && lifecycle.settled ? { ...lifecycle, settled: false as const } : lifecycle, name: relationship.name,
+        gitArc, gitArcPlan, lifecycle: gitArcPreventsThreadSettlement(gitArc) && lifecycle.settled ? { ...lifecycle, settled: false as const } : lifecycle, name: relationship.name,
         parentThreadId: relationship.parentThreadId, pinned: false, profileId: relationship.profileId, profileName: relationship.profileName,
         projectId, title: relationship.title, updatedAt: relationship.updatedAt,
       };

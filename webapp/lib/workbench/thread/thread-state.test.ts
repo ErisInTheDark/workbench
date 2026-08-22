@@ -1,7 +1,23 @@
 /* No production exports. Tests protect strict lifecycle, grouping, ordering, and draft rules. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { countDraftPromptTokens, createDraftTitle, createWorkbenchThreadPlanConflictSelector, getThreadSidebarGroup, getWorkbenchThreadPlanConflictEntries, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, sortThreadSidebarEntries, WorkbenchDurableQuestionnaireSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
+import { countDraftPromptTokens, createDraftTitle, createWorkbenchThreadPlanConflictSelector, getThreadSidebarGroup, getWorkbenchThreadPlanConflictEntries, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, sortThreadSidebarEntries, WorkbenchDurableQuestionnaireSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
+
+test("live claims and proposed commit proposals prevent thread settlement", () => {
+  const resolved = {
+    checkpointCommit: "a".repeat(40), claimedPaths: [], intentDescription: "", intentName: "arc",
+    phase: "resolved" as const, proposals: [], updatedAt: "2026-08-23T00:00:00.000Z",
+  };
+  assert.equal(gitArcPreventsThreadSettlement(null), false);
+  assert.equal(gitArcPreventsThreadSettlement(resolved), false);
+  assert.equal(gitArcPreventsThreadSettlement({ ...resolved, claimedPaths: ["owned.ts"], phase: "active" }), true);
+  assert.equal(gitArcPreventsThreadSettlement({ ...resolved, proposals: [{ proposalId: "pending", status: "proposed" }] }), true);
+  assert.equal(gitArcPreventsThreadSettlement({ ...resolved, proposals: [{ proposalId: "accepted", status: "committed" }] }), false);
+});
+
+test("thread state mutation results preserve explicit rejection", () => {
+  assert.deepEqual(WorkbenchThreadStateMutationResultSchema.parse({ accepted: false, revision: 4 }), { accepted: false, revision: 4 });
+});
 
 test("provider timestamps normalize seconds without double-converting milliseconds", () => {
   assert.equal(normalizeWorkbenchTimestampMs(1_723_456_789), 1_723_456_789_000);

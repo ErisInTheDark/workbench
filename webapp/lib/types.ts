@@ -1099,6 +1099,7 @@ export interface WorkbenchControls {
   setCurrentThreadComposerSettings: (threadId: string, settings: WorkbenchComposerSettings) => void;
   toggleDirectory: (path: string) => void;
   updateThreadState: (request: WorkbenchThreadStateRequest) => Promise<void>;
+  updateThreadStateWithAcceptance: (request: WorkbenchThreadStateRequest) => Promise<boolean>;
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
   deleteFile: (filePath: string, options?: { confirmUntracked?: boolean }) => Promise<DeleteFileResponse>;
   deleteThreadDraft: (draftId: string) => Promise<void>;

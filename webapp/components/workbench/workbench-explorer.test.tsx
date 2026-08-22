@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; static regression checks cover thread accessibility, grouped context actions, routing, lifecycle ownership, and agent tabs. Keywords: explorer, sidebar, context menu, tablist, keyboard.
+ * - No production exports; static regression checks cover thread accessibility, grouped context actions, accepted settlement routing, lifecycle ownership, and agent tabs. Keywords: explorer, sidebar, context menu, tablist, keyboard, settlement.
  */
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -159,7 +159,8 @@ test("blank thread routes render their private draft and preserve one view insta
 test("successful settlement leaves the still-selected thread for a fresh draft", async () => {
   const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
   const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebar.tsx", import.meta.url), "utf8");
-  assert.match(sidebarSource, /await controls\.updateThreadState\(request\);[\s\S]*?method === "settle"[\s\S]*?onThreadSettled/u);
+  assert.match(sidebarSource, /const accepted = await controls\.updateThreadStateWithAcceptance\(request\);[\s\S]*?method === "settle" && accepted[\s\S]*?onThreadSettled/u);
+  assert.match(sidebarSource, /entry\.lifecycle\.settled \|\| !gitArcPreventsThreadSettlement\(entry\.gitArc\)/u);
   assert.match(workbenchSource, /currentRouteRef\.current[\s\S]*?isWorkbenchThreadTargetSelected\(settledTarget, currentRoute\.threadTarget\)[\s\S]*?createThreadRoute\(currentRoute\.projectId, \{ kind: "new" \}\)/u);
   assert.match(workbenchSource, /onThreadSettled=\{handleThreadSettled\}/u);
 });

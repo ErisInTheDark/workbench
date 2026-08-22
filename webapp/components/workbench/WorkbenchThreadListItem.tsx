@@ -8,6 +8,7 @@ import type { ComponentType, KeyboardEvent as ReactKeyboardEvent, MouseEvent, Po
 
 import {
   getThreadSidebarGroup,
+  gitArcPreventsThreadSettlement,
   isWorkbenchThreadStatusProviderOwned,
   type WorkbenchThreadSidebarEntry,
   type WorkbenchThreadTarget,
@@ -162,9 +163,9 @@ export default function WorkbenchThreadListItem({
   const relativeTime = formatThreadRelativeTimestamp(entry.activityAt / 1000, nowMs);
   const exactTime = timestamp.toLocaleString();
   const canComplete = entry.entryKind === "thread" && !isWorkbenchThreadStatusProviderOwned(entry.lifecycle) && (entry.lifecycle.kind === "needsAttention" || entry.lifecycle.kind === "stopped");
-  const hasLiveClaims = claimedFileCount > 0;
-  const baseAction: ThreadAction | null = entry.entryKind === "draft" ? "discard" : group === "other" ? "restore" : group === "snoozed" ? "wake" : canComplete ? "complete" : lifecycle?.kind === "completed" && !lifecycle.settled && !hasLiveClaims ? "settle" : null;
-  const canShiftSettle = canComplete && !hasLiveClaims;
+  const settlementBlocked = gitArcPreventsThreadSettlement(gitArc);
+  const baseAction: ThreadAction | null = entry.entryKind === "draft" ? "discard" : group === "other" ? "restore" : group === "snoozed" ? "wake" : canComplete ? "complete" : lifecycle?.kind === "completed" && !lifecycle.settled && !settlementBlocked ? "settle" : null;
+  const canShiftSettle = canComplete && !settlementBlocked;
   const action = canShiftSettle && isShiftPressed ? "settle" : baseAction;
   const Icon = entry.entryKind === "draft" ? DraftThreadIcon : showProposedCommit ? ProposedCommitThreadIcon : lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
   const statusTone: WorkbenchThreadStatusTone = lifecycle?.kind === "working"

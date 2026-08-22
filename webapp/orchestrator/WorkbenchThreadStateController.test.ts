@@ -273,13 +273,23 @@ test("project-local thread state copies centrally without deleting or modifying 
   await Promise.all([storageRoot, legacyRoot, centralWinsRoot].map((root) => fs.rm(root, { force: true, recursive: true })));
 });
 
-test("headless provider state persists MCP generation without leaking internal fields into sidebar projection", async () => {
+test("headless provider refresh preserves Git lifecycle and MCP generation without leaking internal fields", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-headless-mcp-"));
+  const gitArc = {
+    checkpointCommit: "a".repeat(40), claimedPaths: ["owned.ts"], intentDescription: "", intentName: "Retain Git state",
+    phase: "active" as const, proposals: [{ proposalId: "proposal-one", status: "proposed" as const }], updatedAt: new Date(0).toISOString(),
+  };
+  const gitArcPlan = {
+    checkpointCommit: "b".repeat(40), intentDescription: "", intentName: "Retain plan state",
+    scopePaths: ["planned.ts"], updatedAt: new Date(1).toISOString(),
+  };
   const createController = () => new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async () => [],
+    resolveGitArc: async () => gitArc,
+    resolveGitArcPlan: async () => gitArcPlan,
     resolveProjectRoot: async () => root,
     storageRoot: root,
   });
@@ -295,8 +305,12 @@ test("headless provider state persists MCP generation without leaking internal f
   const controller = createController();
   await controller.ensureProviderEntry("project", providerEntry);
   await controller.setMcpGeneration("project", "codex", "headless", "epoch:2");
+  await controller.refreshGitArcState("project", "codex", "headless");
+  await controller.ensureProviderEntry("project", providerEntry);
   assert.equal(await controller.getMcpGeneration("project", "codex", "headless"), "epoch:2");
   const projected = await controller.getSnapshot("project");
+  const projectedEntry = projected.entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "headless");
+  assert.deepEqual(projectedEntry?.entryKind === "thread" ? { gitArc: projectedEntry.gitArc, gitArcPlan: projectedEntry.gitArcPlan } : null, { gitArc, gitArcPlan });
   assert.equal(projected.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "headless"), true);
   assert.equal(JSON.stringify(projected).includes("mcpGeneration"), false);
   assert.equal(JSON.stringify(projected).includes("providerObserved"), false);
@@ -304,6 +318,8 @@ test("headless provider state persists MCP generation without leaking internal f
 
   const reopened = createController();
   assert.equal(await reopened.getMcpGeneration("project", "codex", "headless"), "epoch:2");
+  const reopenedEntry = (await reopened.getSnapshot("project")).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "headless");
+  assert.deepEqual(reopenedEntry?.entryKind === "thread" ? { gitArc: reopenedEntry.gitArc, gitArcPlan: reopenedEntry.gitArcPlan } : null, { gitArc, gitArcPlan });
   await reopened.dispose();
   await fs.rm(root, { force: true, recursive: true });
 });
@@ -1116,6 +1132,7 @@ test("manual status persists, restores settled threads, and rejects provider-own
   let gitArcTransitions = 0;
   let terminalHasGitArc = false;
   let terminalGitArcResolved = false;
+  let terminalProposalStatus: "proposed" | null = null;
   const terminal: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 1,
     entryKind: "thread",
@@ -1153,7 +1170,8 @@ test("manual status persists, restores settled threads, and rejects provider-own
         claimedPaths: terminalGitArcResolved ? [] : ["owned.ts"],
         intentDescription: "",
         intentName: "Keep owned work",
-        proposalId: null,
+        proposalId: terminalProposalStatus ? "proposal-one" : null,
+        proposalStatus: terminalProposalStatus,
         updatedAt: new Date(0).toISOString(),
       } : null;
     },
@@ -1243,7 +1261,13 @@ test("manual status persists, restores settled threads, and rejects provider-own
     identity: terminal.identity, method: "workbench/thread-state/settle", projectId: "project",
   });
   assert.equal("result" in claimedSettle ? (claimedSettle.result as { accepted?: boolean }).accepted : true, false);
-  assert.equal(gitArcTransitions, 4);
+  terminalGitArcResolved = true;
+  terminalProposalStatus = "proposed";
+  const proposedSettle = await controller.handleRequest("observer", {
+    identity: terminal.identity, method: "workbench/thread-state/settle", projectId: "project",
+  });
+  assert.equal("result" in proposedSettle ? (proposedSettle.result as { accepted?: boolean }).accepted : true, false);
+  assert.equal(gitArcTransitions, 5);
   entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
   assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
   await controller.dispose();

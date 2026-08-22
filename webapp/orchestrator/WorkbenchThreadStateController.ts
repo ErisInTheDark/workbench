@@ -16,6 +16,7 @@ import {
   WorkbenchThreadLifecycleSchema,
   WorkbenchThreadSidebarEntrySchema,
   WorkbenchThreadStateRequestSchema,
+  gitArcPreventsThreadSettlement,
   getWorkbenchLifecycleTurnId,
   getThreadSidebarGroup,
   isWorkbenchThreadStatusProviderOwned,
@@ -775,13 +776,18 @@ export default class WorkbenchThreadStateController {
       const existingEntry = state.entries.get(key);
       const existing = existingEntry?.entryKind === "draft" ? undefined : existingEntry;
       const providerEntry = existing
-        ? { ...parsed.data, activityAt: existing.activityAt }
+        ? {
+          ...parsed.data,
+          activityAt: existing.activityAt,
+          ...(parsed.data.gitArc === undefined && existing.gitArc !== undefined ? { gitArc: existing.gitArc } : {}),
+          ...(parsed.data.gitArcPlan === undefined && existing.gitArcPlan !== undefined ? { gitArcPlan: existing.gitArcPlan } : {}),
+        }
         : parsed.data;
       if (providerEntry.entryKind === "subagent") {
         const lifecycle = reconcileProviderLifecycle(providerEntry, existing);
         state.entries.set(key, parseWorkbenchThreadStateEntry(existing ? {
           ...providerEntry,
-          lifecycle: providerEntry.gitArc?.claimedPaths.length && lifecycle.settled ? { ...lifecycle, settled: false as const } : lifecycle,
+          lifecycle: gitArcPreventsThreadSettlement(providerEntry.gitArc) && lifecycle.settled ? { ...lifecycle, settled: false as const } : lifecycle,
           mcpGeneration: existing.mcpGeneration,
           ...(existing.pendingQuestionnaire ? { pendingQuestionnaire: existing.pendingQuestionnaire } : {}),
           pinned: existing.entryKind === "subagent" ? existing.pinned : existing.metadata.pinned,
@@ -796,7 +802,7 @@ export default class WorkbenchThreadStateController {
       const lifecycle = reconcileProviderLifecycle(providerEntry, existing);
       state.entries.set(key, parseWorkbenchThreadStateEntry(existing ? {
         ...providerEntry,
-        lifecycle: providerEntry.gitArc?.claimedPaths.length && lifecycle.settled
+        lifecycle: gitArcPreventsThreadSettlement(providerEntry.gitArc) && lifecycle.settled
           ? { ...lifecycle, settled: false as const }
           : lifecycle,
         mcpGeneration: existing.mcpGeneration,
@@ -897,7 +903,7 @@ export default class WorkbenchThreadStateController {
       }
       if (
         request.method === "workbench/thread-state/settle"
-        && normalizeResolvedGitArc(await this.options.resolveGitArc(request.projectId, entry.identity.harness, entry.identity.threadId))?.claimedPaths.length
+        && gitArcPreventsThreadSettlement(normalizeResolvedGitArc(await this.options.resolveGitArc(request.projectId, entry.identity.harness, entry.identity.threadId)))
       ) {
         return { accepted: false, revision: state.revision };
       }

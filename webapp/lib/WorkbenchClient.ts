@@ -46,7 +46,7 @@ import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
 import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./workbench/WorkbenchThreadClient";
 import { WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema, type WorkbenchProjectStateUpdate } from "./workbench/project/project-state";
 import ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
-import { WorkbenchThreadSidebarSnapshotSchema, WorkbenchThreadStateOpenResultSchema, WorkbenchThreadStateSnapshotSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarSnapshot } from "./workbench/thread/thread-state";
+import { WorkbenchThreadSidebarSnapshotSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateOpenResultSchema, WorkbenchThreadStateSnapshotSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarSnapshot } from "./workbench/thread/thread-state";
 import { getTurnRenderSignature } from "./workbench/thread/thread-item-signature";
 import reportClientSchemaError from "./workbench/report-client-schema-error";
 
@@ -838,6 +838,15 @@ export async function WorkbenchClient(
     return result;
   }
 
+  async function updateThreadStateWithAcceptance(request: Parameters<WorkbenchControls["updateThreadState"]>[0]) {
+    const parsed = WorkbenchThreadStateMutationResultSchema.safeParse(await threadClient.requestWorkbench(request.method, request));
+    if (!parsed.success) {
+      reportClientSchemaError("Rejected Workbench thread state mutation response", parsed.error);
+      throw new Error("The thread state mutation response was invalid.");
+    }
+    return parsed.data.accepted;
+  }
+
   const controls: MountedWorkbenchControls = {
     applyRoute,
     createFilePanelClient: (surfaces, filePanelOptions = {}) => WorkbenchFilePanelClient({
@@ -921,8 +930,9 @@ export async function WorkbenchClient(
     },
     toggleDirectory,
     updateThreadState: async (request) => {
-      await threadClient.requestWorkbench(request.method, request);
+      await updateThreadStateWithAcceptance(request);
     },
+    updateThreadStateWithAcceptance,
   };
 
   emitExplorerStateChange();

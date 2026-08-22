@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; rendered regression checks protect active claim counts and proposed-commit sidebar presentation. Keywords: sidebar, thread, claim, proposal, commit.
+ * - No production exports; rendered regression checks protect active claim counts, proposed-commit presentation, and settlement suppression. Keywords: sidebar, thread, claim, proposal, commit, settlement.
  */
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -35,7 +35,7 @@ function createThreadEntry({
         claimedPaths,
         intentDescription: "Protect the focused sidebar presentation.",
         intentName: "sidebar claim",
-        phase: "active",
+        phase: claimedPaths.length ? "active" : "resolved",
         proposals: proposalStatus ? [{ proposalId: "proposal-one", status: proposalStatus }] : [],
         updatedAt: "2026-08-20T00:00:00.000Z",
       },
@@ -165,6 +165,16 @@ test("proposed commits replace the completed state", () => {
     title: "Commit ready",
   })]);
   assert.match(html, /aria-label="Commit ready, Proposed commit, 2 claimed files,/u);
+});
+
+test("hanging proposals without claims do not expose settlement", () => {
+  const html = renderThreadItem(createThreadEntry({
+    claimedPaths: [],
+    proposalStatus: "proposed",
+    threadId: "proposal-only",
+    title: "Commit still pending",
+  }));
+  assert.doesNotMatch(html, /aria-label="Settle"/u);
 });
 
 test("live lifecycle presentation outranks a hanging proposed commit", () => {

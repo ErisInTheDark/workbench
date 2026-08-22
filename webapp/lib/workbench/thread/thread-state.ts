@@ -4,7 +4,8 @@
  * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchGitArcPlanStateSchema/WorkbenchDurableQuestionnaireSchema/WorkbenchQuestionnaireHistoryEntrySchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts. Keywords: zod, lifecycle, plan, questionnaire, sidebar.
  * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchThreadActivityUpdateSchema: full sidebar state and tiny activity delta contracts. Keywords: sidebar, websocket, revision.
  * - WorkbenchThreadStateOpenResultSchema/WorkbenchThreadStateOpenResult: atomic catalog, tree, and sidebar observation bootstrap. Keywords: open, bootstrap, snapshot.
- * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadTitleMutationResultSchema: multiplexed sidebar, activity, title, project, and request protocol. Keywords: orchestrator, websocket, revision.
+ * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: multiplexed sidebar, activity, mutation, title, project, and request protocol. Keywords: orchestrator, websocket, revision.
+ * - gitArcPreventsThreadSettlement: identify live claims or proposed commit proposals that keep a thread unsettled. Keywords: git, arc, settlement, proposal.
  * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries/sortThreadSidebarEntries: exhaustive visible grouping, shared presentation order, and stable turn-start ordering. Keywords: grouping, pin, sort.
  * - getWorkbenchThreadPlanConflictEntries/createWorkbenchThreadPlanConflictSelector: derive and identity-stabilize visible sibling claim conflicts from one inactive plan and the live sidebar snapshot. Keywords: plan, claim, conflict, sidebar, selector.
  * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary. Keywords: timestamp, provider, normalization.
@@ -136,6 +137,10 @@ export const WorkbenchGitArcLifecycleStateSchema = z.object({
 });
 export type WorkbenchGitArcLifecycleState = z.infer<typeof WorkbenchGitArcLifecycleStateSchema>;
 
+export function gitArcPreventsThreadSettlement(gitArc: WorkbenchGitArcLifecycleState | null | undefined) {
+  return Boolean(gitArc?.claimedPaths.length || gitArc?.proposals.some(({ status }) => status === "proposed"));
+}
+
 export const WorkbenchGitArcPlanStateSchema = z.object({
   checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
   intentDescription: z.string(),
@@ -265,6 +270,12 @@ export const WorkbenchThreadStateSnapshotSchema = z.union([
   WorkbenchProjectStateUpdateSchema,
 ]);
 export type WorkbenchThreadStateSnapshot = z.infer<typeof WorkbenchThreadStateSnapshotSchema>;
+
+export const WorkbenchThreadStateMutationResultSchema = z.object({
+  accepted: z.boolean(),
+  revision: z.number().int().nonnegative(),
+}).strict();
+export type WorkbenchThreadStateMutationResult = z.infer<typeof WorkbenchThreadStateMutationResultSchema>;
 
 export const WorkbenchThreadTitleMutationResultSchema = z.object({
   identity: ThreadIdentitySchema,

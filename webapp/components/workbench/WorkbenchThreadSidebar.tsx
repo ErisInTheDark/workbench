@@ -10,8 +10,7 @@ import type { ThreadSummary, WorkbenchControls, WorkbenchHarness, WorkbenchThrea
 import { writeTextToClipboard } from "../../lib/workbench/dom/clipboard";
 import type { WorkbenchDragPayload } from "../../lib/workbench/layout/workbench-drag";
 import { createThreadHref } from "../../lib/workbench/navigation/workbench-route";
-import type { WorkbenchThreadTarget } from "../../lib/workbench/thread/thread-state";
-import { getThreadSidebarGroup, isWorkbenchThreadStatusProviderOwned, type WorkbenchThreadSidebarEntry } from "../../lib/workbench/thread/thread-state";
+import { getThreadSidebarGroup, gitArcPreventsThreadSettlement, isWorkbenchThreadStatusProviderOwned, type WorkbenchThreadSidebarEntry, type WorkbenchThreadTarget } from "../../lib/workbench/thread/thread-state";
 import { SidebarLoadingSkeleton } from "./workbench-explorer";
 import { getNeedsAttentionThreadStatusTone } from "./workbench-thread-status-colors";
 import {
@@ -112,8 +111,8 @@ export default memo(function WorkbenchThreadSidebar({
             : method === "restore"
               ? { identity, method: "workbench/thread-state/restore" as const, projectId }
               : { identity, method: "workbench/thread-state/settle" as const, projectId };
-    await controls.updateThreadState(request);
-    if (method === "settle") {
+    const accepted = await controls.updateThreadStateWithAcceptance(request);
+    if (method === "settle" && accepted) {
       onThreadSettled({ harness: identity.harness, kind: "provider", threadId: identity.threadId });
     }
   }, [controls, onThreadSettled, projectId]);
@@ -134,7 +133,7 @@ export default memo(function WorkbenchThreadSidebar({
       onSelect: () => onOpenThread(target),
     }];
 
-    if (terminal && (entry.lifecycle.settled || !entry.gitArc?.claimedPaths.length)) {
+    if (terminal && (entry.lifecycle.settled || !gitArcPreventsThreadSettlement(entry.gitArc))) {
       items.push(entry.lifecycle.settled ? {
         icon: <RestoreThreadIcon className="size-4" />,
         id: "restore",
