@@ -430,9 +430,9 @@ export function sortThreadSidebarEntries(entries: readonly WorkbenchThreadSideba
     const lifecycleRank = (entry: WorkbenchThreadSidebarEntry) => {
       if (entry.entryKind === "draft") return 0;
       if (entry.lifecycle.kind === "needsAttention" && entry.gitArc?.phase === "active") return 1;
-      if ((entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped") && !entry.lifecycle.settled) return 2;
-      if (entry.lifecycle.kind === "working") return 3;
-      if (entry.lifecycle.kind === "needsAttention") return 4;
+      if (entry.lifecycle.kind === "working") return 2;
+      if (entry.lifecycle.kind === "needsAttention") return 3;
+      if ((entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped") && !entry.lifecycle.settled) return 4;
       return 5;
     };
     const groupOrder = lifecycleRank(left) - lifecycleRank(right);

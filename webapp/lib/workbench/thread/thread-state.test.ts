@@ -216,6 +216,32 @@ test("top-level threads sort by latest turn start while activity remains display
   );
 });
 
+test("working and needs-attention threads sort above completed and stopped threads", () => {
+  const entry = (
+    threadId: string,
+    lifecycle: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>["lifecycle"],
+    orderAt: number,
+  ): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
+    activityAt: orderAt,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId },
+    lifecycle,
+    metadata: { archived: false, pinned: false, snoozed: false },
+    orderAt,
+    title: threadId,
+  });
+  const entries = [
+    entry("stopped", { kind: "stopped", reason: "userMarkedStopped", settled: false }, 50),
+    entry("completed", { kind: "completed", reason: "userCompleted", settled: false }, 40),
+    entry("attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }, 20),
+    entry("working", { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false }, 10),
+  ];
+  assert.deepEqual(
+    sortThreadSidebarEntries(entries).map((candidate) => candidate.title),
+    ["working", "attention", "stopped", "completed"],
+  );
+});
+
 test("planned conflicts share sidebar grouping, exclude subagents, and stabilize irrelevant snapshots", () => {
   const thread = (
     threadId: string,
