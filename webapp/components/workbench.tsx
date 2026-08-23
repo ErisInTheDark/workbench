@@ -31,6 +31,7 @@ import type {
   WorkbenchThreadSidebarStore,
   WorkbenchUserInputResponse
 } from "../lib/types";
+import { installBrowserRandomUuidPolyfill } from "../lib/workbench/browser-random-uuid-polyfill";
 import { areDeeplyEqual } from "../lib/workbench/deep-equality";
 import { writeTextToClipboard } from "../lib/workbench/dom/clipboard";
 import WorkbenchDragController from "../lib/workbench/layout/WorkbenchDragController";
@@ -171,6 +172,8 @@ import WorkbenchOptionCards, { WorkbenchOptionCard } from "./workbench/Workbench
 import WorkbenchStepSlider from "./workbench/WorkbenchStepSlider";
 import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/WorkbenchTabIcon";
 import WorkbenchThreadSidebar from "./workbench/WorkbenchThreadSidebar";
+
+installBrowserRandomUuidPolyfill();
 
 const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   currentProjectId: "",
