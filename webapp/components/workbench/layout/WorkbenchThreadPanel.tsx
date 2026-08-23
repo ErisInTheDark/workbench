@@ -24,7 +24,7 @@ type ThreadViewProps = ComponentProps<typeof ThreadView>;
 
 const THREAD_PANEL_REFRESH_INTERVAL_MS = 1500;
 const THREAD_PANEL_IDLE_REFRESH_INTERVAL_MS = 5000;
-const THREAD_PANEL_HYDRATION: WorkbenchThreadHydrationRequest = { mode: "legacyFull" };
+const THREAD_PANEL_HYDRATION: WorkbenchThreadHydrationRequest = { mode: "latest" };
 const THREAD_PANEL_RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000;
 
 interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "thread"> {

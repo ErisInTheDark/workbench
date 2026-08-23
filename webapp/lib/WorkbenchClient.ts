@@ -34,6 +34,7 @@ import {
     readStoredFontSize,
 } from "./workbench/state/browser-state";
 import FileDraftStore from "./workbench/state/FileDraftStore";
+import { persistLastProjectLaunch } from "./workbench/state/last-project-cookie";
 import LifecycleScope from "./workbench/state/LifecycleScope";
 import SessionState from "./workbench/state/SessionState";
 import {
@@ -739,6 +740,7 @@ export async function WorkbenchClient(
 
     const nextProjectId = projectClient.getSnapshot().currentProjectId;
     if (!route.projectId && nextProjectId) await threadSidebarClient.open(nextProjectId);
+    if (nextProjectId) persistLastProjectLaunch(nextProjectId);
     if (nextProjectId && previousProjectId !== nextProjectId) {
       await draftStore.hydratePersistedDrafts();
     }

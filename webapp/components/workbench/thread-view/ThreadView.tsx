@@ -570,6 +570,7 @@ function useBackgroundProjectFilePathDisambiguationIndex (
 export default memo(function ThreadView ({
   composerSpellCheck,
   contained = false,
+  mobileFullBleed = false,
   fontSizeRem,
   hideFinalAgentMessage = false,
   hideWorkbenchControlAgentMessages = false,
@@ -617,6 +618,7 @@ export default memo(function ThreadView ({
 }: {
   composerSpellCheck: boolean;
   contained?: boolean;
+  mobileFullBleed?: boolean;
   fontSizeRem: number;
   hideFinalAgentMessage?: boolean;
   hideWorkbenchControlAgentMessages?: boolean;
@@ -1632,10 +1634,10 @@ export default memo(function ThreadView ({
         data-thread-codeblock-wrap={threadCodeBlockWrap ? "true" : "false"}
         data-thread-project-file-link-boundary="true"
         className={joinClasses(
-          "mx-auto w-full min-w-0 max-w-[56rem] overflow-x-hidden md:overflow-x-visible",
+          "mx-auto w-full min-w-0 max-w-[56rem] overflow-x-clip md:overflow-x-visible",
+          mobileFullBleed ? "px-5 pb-0" : contained ? "pb-8" : "pb-16",
           !isDraftThreadView && "flex flex-col justify-end",
           !isDraftThreadView && (contained ? "min-h-full" : "min-h-[calc(100dvh-8rem)]"),
-          contained ? "pb-8" : "pb-16",
         )}
         onClick={handleThreadViewClick}
         style={{ fontSize: `${fontSizeRem}rem` }}

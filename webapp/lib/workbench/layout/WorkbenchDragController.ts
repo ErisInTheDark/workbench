@@ -50,8 +50,8 @@ export default class WorkbenchDragController {
     };
   }
 
-  begin(event: { button: number; clientX: number; clientY: number }, options: { dropTargetIds: readonly string[]; label: string; payload: WorkbenchDragPayload }) {
-    if (event.button !== 0 || this.pending || this.snapshot.active) return false;
+  begin(event: { button: number; clientX: number; clientY: number; pointerType?: string }, options: { dropTargetIds: readonly string[]; label: string; payload: WorkbenchDragPayload }) {
+    if (event.button !== 0 || event.pointerType === "touch" || this.pending || this.snapshot.active) return false;
     this.allowedTargetIds = new Set(options.dropTargetIds);
     this.pending = { label: options.label, payload: options.payload, startX: event.clientX, startY: event.clientY };
     window.addEventListener("pointermove", this.handlePointerMove, { passive: false });

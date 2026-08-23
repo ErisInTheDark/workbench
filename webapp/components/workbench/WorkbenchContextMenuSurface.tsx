@@ -43,6 +43,7 @@ export default function WorkbenchContextMenuSurface({
   x,
   y,
 }: WorkbenchContextMenuSurfaceProps) {
+  const backdropRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: x, top: y });
 
@@ -62,7 +63,9 @@ export default function WorkbenchContextMenuSurface({
 
   useEffect(() => {
     function handlePointerDown(event: PointerEvent) {
-      if (!menuRef.current?.contains(event.target as Node)) onClose();
+      const target = event.target as Node;
+      if (backdropRef.current?.contains(target)) return;
+      if (!menuRef.current?.contains(target)) onClose();
     }
 
     function handleKeyDown(event: KeyboardEvent) {
@@ -94,13 +97,29 @@ export default function WorkbenchContextMenuSurface({
   };
 
   return (
-    <div
-      ref={menuRef}
-      role="menu"
-      aria-label={menu.label}
-      className="fixed z-50 min-w-48 max-w-[min(18rem,calc(100vw-1rem))] rounded-[1.25rem] bg-[color-mix(in_srgb,var(--bg)_90%,transparent)] p-1 text-sm shadow-float backdrop-blur-xl"
-      style={{ left: position.left, top: position.top }}
-    >
+    <>
+      <button
+        ref={backdropRef}
+        type="button"
+        aria-label="Close context menu"
+        className="pointer-events-none fixed inset-0 z-50 cursor-default border-0 bg-transparent p-0"
+        data-workbench-context-menu-backdrop="true"
+        tabIndex={-1}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onClose();
+        }}
+        onPointerDown={(event) => event.stopPropagation()}
+      />
+      <div
+        ref={menuRef}
+        role="menu"
+        aria-label={menu.label}
+        className="fixed z-[51] min-w-48 max-w-[min(18rem,calc(100vw-1rem))] rounded-[1.25rem] bg-[color-mix(in_srgb,var(--bg)_90%,transparent)] p-1 text-sm shadow-float backdrop-blur-xl"
+        data-workbench-context-menu="true"
+        style={{ left: position.left, top: position.top }}
+      >
       {menu.items.map((item) => {
         if (item.kind === "separator") {
           return <div key={item.id} role="separator" className="mx-2 my-1 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]" />;
@@ -149,6 +168,7 @@ export default function WorkbenchContextMenuSurface({
           </button>
         );
       })}
-    </div>
+      </div>
+    </>
   );
 }

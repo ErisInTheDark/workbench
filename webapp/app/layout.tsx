@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - metadata: root document metadata for the Workbench app. Keywords: metadata, title, icons.
- * - viewport: root viewport settings for responsive Workbench rendering. Keywords: viewport, mobile.
+ * - metadata: root document metadata for the standalone-capable Workbench app. Keywords: metadata, title, icons, iOS, standalone.
+ * - viewport: root viewport settings for responsive Workbench rendering and color-scheme chrome. Keywords: viewport, mobile, theme.
  * - default RootLayout: application document shell with early theme bootstrap. Keywords: layout, theme, bootstrap.
  */
 import type { Metadata, Viewport } from "next";
@@ -22,8 +22,14 @@ try {
 export const metadata: Metadata = {
   title: "Workbench",
   description: "Minimal project file explorer and WYSIWYG markdown editor.",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "Workbench",
+  },
   icons: {
-    icon: "/tab-icons/default.png",
+    apple: [{ url: "/icon", sizes: "512x512", type: "image/png" }],
+    icon: [{ url: "/icon", sizes: "512x512", type: "image/png" }],
     shortcut: "/tab-icons/default.png",
   },
   formatDetection: {
@@ -36,6 +42,12 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   initialScale: 1,
+  maximumScale: 1,
+  themeColor: [
+    { color: "#f7f8fb", media: "(prefers-color-scheme: light)" },
+    { color: "#10131a", media: "(prefers-color-scheme: dark)" },
+  ],
+  userScalable: false,
   width: "device-width",
 };
 

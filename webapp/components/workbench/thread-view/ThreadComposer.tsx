@@ -55,14 +55,27 @@ import ThreadProfilePicker from "./ThreadProfilePicker";
 import { getComposerProfileDisplayLabel } from "./composer-profile-label";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
 import { getThreadComposerStopControlState } from "./thread-composer-controls";
+import { isStickyComposerSentinelBelowVisibleBoundary } from "./thread-composer-sticky-state";
 import { getThreadUserInputRequestPreviewText } from "./thread-user-input-request-preview";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 
 const PICKER_REFRESH_COOLDOWN_MS = 1500;
 const PICKER_REFRESH_MIN_SPIN_MS = 500;
+const THREAD_SCROLL_TARGET_SELECTOR = '[data-thread-scroll-target="true"]';
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
+}
+
+function isStickyComposerArmedForElement(sentinelElement: HTMLElement) {
+  const viewport = window.visualViewport;
+  const viewportBottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
+  const scrollTarget = sentinelElement.closest<HTMLElement>(THREAD_SCROLL_TARGET_SELECTOR);
+  return isStickyComposerSentinelBelowVisibleBoundary({
+    scrollTargetBottom: scrollTarget?.getBoundingClientRect().bottom ?? null,
+    sentinelTop: sentinelElement.getBoundingClientRect().top,
+    viewportBottom,
+  });
 }
 
 async function waitForMinimumDuration (work: Promise<void>, durationMs: number): Promise<void> {
@@ -722,31 +735,37 @@ export default function ThreadComposer ({
       return;
     }
 
+    const scrollTarget = sentinelElement.closest<HTMLElement>(THREAD_SCROLL_TARGET_SELECTOR);
     let frameId: number | null = null;
     const updateArmedState = () => {
       frameId = null;
-      setIsStickyComposerArmed(sentinelElement.getBoundingClientRect().top > window.innerHeight);
+      setIsStickyComposerArmed(isStickyComposerArmedForElement(sentinelElement));
     };
-
     const requestUpdateArmedState = () => {
-      if (frameId !== null) {
-        return;
+      if (frameId === null) {
+        frameId = window.requestAnimationFrame(updateArmedState);
       }
-
-      frameId = window.requestAnimationFrame(updateArmedState);
     };
+    const resizeObserver = scrollTarget && typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(requestUpdateArmedState)
+      : null;
+    const scrollEventTarget: HTMLElement | Window = scrollTarget ?? window;
 
     updateArmedState();
-
-    window.addEventListener("scroll", requestUpdateArmedState, { passive: true });
+    resizeObserver?.observe(scrollTarget!);
+    scrollEventTarget.addEventListener("scroll", requestUpdateArmedState, { passive: true });
     window.addEventListener("resize", requestUpdateArmedState);
+    window.visualViewport?.addEventListener("resize", requestUpdateArmedState);
+    window.visualViewport?.addEventListener("scroll", requestUpdateArmedState);
     return () => {
       if (frameId !== null) {
         window.cancelAnimationFrame(frameId);
       }
-
-      window.removeEventListener("scroll", requestUpdateArmedState);
+      resizeObserver?.disconnect();
+      scrollEventTarget.removeEventListener("scroll", requestUpdateArmedState);
       window.removeEventListener("resize", requestUpdateArmedState);
+      window.visualViewport?.removeEventListener("resize", requestUpdateArmedState);
+      window.visualViewport?.removeEventListener("scroll", requestUpdateArmedState);
     };
   }, [stickyMode, thread.id]);
 
@@ -760,7 +779,7 @@ export default function ThreadComposer ({
       return;
     }
 
-    setIsStickyComposerArmed(sentinelElement.getBoundingClientRect().top > window.innerHeight);
+    setIsStickyComposerArmed(isStickyComposerArmedForElement(sentinelElement));
   }, [stickyMode, thread]);
 
   useEffect(() => {

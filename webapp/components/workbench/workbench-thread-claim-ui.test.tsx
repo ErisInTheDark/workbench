@@ -11,7 +11,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { WorkbenchThreadSidebarEntrySchema, type WorkbenchThreadSidebarEntry } from "../../lib/workbench/thread/thread-state";
 import WorkbenchThreadList from "./WorkbenchThreadList";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
-import WorkbenchContextMenuContext from "./WorkbenchContextMenuContext";
+import WorkbenchContextMenuContext, { type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 
 type ThreadEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>;
 
@@ -58,19 +58,18 @@ function renderThreads(entries: ThreadEntry[]) {
       nowMs: 1_723_456_790_000,
       onCreateThread: () => undefined,
       onOpenThread: () => undefined,
-      projectId: "project",
     }),
   ));
 }
 
-function renderThreadItem(entry: ThreadEntry) {
+function renderThreadItem(entry: ThreadEntry, contextMenu: WorkbenchContextMenuDefinition | null = null) {
   return renderToStaticMarkup(createElement(
     WorkbenchContextMenuContext.Provider,
     { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
     createElement(WorkbenchThreadListItem, {
+      contextMenu,
       entry,
       href: "/agent/thread/thread-one",
-      projectId: "project",
       showActions: true,
     }),
   ));
@@ -228,11 +227,14 @@ test("needs-attention thread rows use amber only during an active Git arc", () =
   assert.match(activeHtml, /data-thread-status-tone="needs-attention-active"/u);
 });
 
-test("thread tooltips expose every claimed path through interactive project links", async () => {
+test("thread rows expose explicit context-menu access without a tooltip interception layer", async () => {
+  const entry = createThreadEntry({ threadId: "menu", title: "Menu work" });
+  const html = renderThreadItem(entry, {
+    id: "thread:menu",
+    items: [{ id: "open", label: "Open", onSelect: () => undefined }],
+    label: "Thread actions for Menu work",
+  });
   const source = await readFile(new URL("./WorkbenchThreadListItem.tsx", import.meta.url), "utf8");
-  assert.match(source, /<WorkbenchTooltip[\s\S]*?interactive[\s\S]*?\{anchor\}/u);
-  assert.match(source, /data-thread-project-file-link-boundary="true"/u);
-  assert.match(source, /claimedPaths\.map\(\(filePath\)[\s\S]*?<ProjectFilePath/u);
-  assert.match(source, /title=\{entry\.title\}/u);
-  assert.doesNotMatch(source, /<a[\s\S]*?title=\{entry\.title\}[\s\S]*?onClick=/u);
+  assert.match(html, /aria-label="More actions for Menu work"/u);
+  assert.doesNotMatch(source, /WorkbenchTooltip|ThreadTooltipContent/u);
 });

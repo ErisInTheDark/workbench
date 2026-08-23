@@ -21,7 +21,7 @@
  * - OpenThreadIcon/ArchiveIcon: render thread navigation and archive context-menu icons. Keywords: workbench, icon, thread, open, archive.
  * - WrapTextIcon: render the thread codeblock line-wrap toggle icon. Keywords: workbench, icon, thread, code, wrap.
  * - PreviewIcon: render the thread codeblock preview toggle icon. Keywords: workbench, icon, thread, code, preview.
- * - CopyIcon: render thread copy action icons for context menus and code blocks. Keywords: workbench, icon, thread, copy.
+ * - CopyIcon/MoreVerticalIcon: render thread copy and overflow action icons. Keywords: workbench, icon, thread, copy, menu.
  * - CheckIcon: render the thread codeblock copied confirmation icon. Keywords: workbench, icon, thread, code, copied.
  * - SparkleIcon/ReplyArrowIcon: render shared creation and reply action icons. Keywords: workbench, icon, create, sparkle, reply.
  * - FileAddIcon/FileDeleteIcon/FileUpdateIcon/FileMoveIcon: render thread file-change kind icons. Keywords: workbench, icon, file change, add, delete, update, move.
@@ -403,6 +403,16 @@ export function CopyIcon ({ className = "size-4" }: { className?: string }) {
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
       <path d="M7.5 6.5V4.8C7.5 4.08 8.08 3.5 8.8 3.5H15.2C15.92 3.5 16.5 4.08 16.5 4.8V11.2C16.5 11.92 15.92 12.5 15.2 12.5H13.5" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M4.8 7.5H11.2C11.92 7.5 12.5 8.08 12.5 8.8V15.2C12.5 15.92 11.92 16.5 11.2 16.5H4.8C4.08 16.5 3.5 15.92 3.5 15.2V8.8C3.5 8.08 4.08 7.5 4.8 7.5Z" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function MoreVerticalIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className={className}>
+      <circle cx="10" cy="4.25" r="1.35" />
+      <circle cx="10" cy="10" r="1.35" />
+      <circle cx="10" cy="15.75" r="1.35" />
     </svg>
   );
 }

@@ -2082,6 +2082,7 @@ export default function Workbench () {
   ), [activeWorkbenchDrag?.payload.type, isMobile, routePanelTarget, showMosaicView]);
   const mainLayoutForRender = routeMosaicProjection?.layout ?? temporaryDropLayout;
   const shouldRenderMainLayout = Boolean(mainLayoutForRender);
+  const isDirectMobileThreadSurface = isMobile && showThreadView && !shouldRenderMainLayout;
 
   useEffect(() => {
     if (!showMosaicView || !controls) {
@@ -3140,15 +3141,18 @@ export default function Workbench () {
 
             <main
               ref={mainPaneRef}
-              className={`explorer-scrollbar flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden overflow-y-auto md:w-auto${showFullBleedMainView
-                ? " px-5 pb-5 md:h-screen md:min-h-0 md:overflow-hidden md:px-0 md:pb-0"
-                : " px-5 pb-5 md:h-auto md:min-h-screen md:overflow-visible md:px-6 md:pb-5"
+              className={`explorer-scrollbar flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden overflow-y-auto md:w-auto${isDirectMobileThreadSurface
+                ? " px-0 pb-0 md:h-auto md:min-h-screen md:overflow-visible md:px-6 md:pb-5"
+                : showFullBleedMainView
+                  ? " px-5 pb-5 md:h-screen md:min-h-0 md:overflow-hidden md:px-0 md:pb-0"
+                  : " px-5 pb-5 md:h-auto md:min-h-screen md:overflow-visible md:px-6 md:pb-5"
                 }`}
+              data-thread-scroll-target={isDirectMobileThreadSurface ? "true" : undefined}
             >
               <header
                 ref={shellHeaderRef}
                 className={`
-              sticky top-0 z-10 transform-gpu py-3 transition-[translate,opacity] duration-200 ease-out will-change-translate motion-reduce:transition-none -mx-5 px-5 md:-mx-6 md:px-6
+              sticky top-0 z-10 transform-gpu py-3 transition-[translate,opacity] duration-200 ease-out will-change-translate motion-reduce:transition-none ${isDirectMobileThreadSurface ? "px-5" : "-mx-5 px-5"} md:-mx-6 md:px-6
               md:translate-y-0 md:opacity-100
               ${isMobileShellHeaderVisible
                     ? "-translate-y-1 opacity-100"
@@ -3267,6 +3271,7 @@ export default function Workbench () {
                       thread={threadForThreadView}
                       composerSpellCheck={resolvedSettings.composerSpellCheck}
                       fontSizeRem={resolvedSettings.editorFontSize}
+                      mobileFullBleed={isDirectMobileThreadSurface}
                       livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
                       onDraftHarnessChange={handleHarnessChange}
                       onListModels={listThreadModels}

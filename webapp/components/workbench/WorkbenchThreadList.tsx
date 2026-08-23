@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadList: orchestrate grouped sidebar thread navigation, actions, pagination, and shared row rendering. Keywords: workbench, threads, sidebar, tooltip.
+ * - default WorkbenchThreadList: orchestrate grouped sidebar thread navigation, actions, pagination, and shared row rendering. Keywords: workbench, threads, sidebar, context menu.
  */
 "use client";
 
@@ -51,7 +51,6 @@ export default function WorkbenchThreadList({
   onCreateThreadPointerDragStart,
   onOpenThread,
   onReorder,
-  projectId,
 }: {
   attentionLabelsByThreadId?: Record<string, string | undefined>;
   createThreadLabel?: string;
@@ -66,7 +65,6 @@ export default function WorkbenchThreadList({
   onCreateThreadPointerDragStart?: (event: import("react").PointerEvent<HTMLAnchorElement>) => void;
   onOpenThread: (target: WorkbenchThreadTarget) => void;
   onReorder?: (sourceKey: string, section: WorkbenchThreadDisplaySection, beforeKey: string | null) => void;
-  projectId: string;
 }) {
   const rowRefs = useRef<Array<HTMLAnchorElement | null>>([]);
   const { mainEntries, pinnedEntries, settledEntries, snoozedEntries } = groupWorkbenchThreadSidebarEntries(entries);
@@ -129,7 +127,6 @@ export default function WorkbenchThreadList({
         onDragStart={(event) => onDragStart(event)}
         onKeyDown={(event) => moveFocus(event, index)}
         onPointerDown={(event) => onPointerDown(event)}
-        projectId={projectId}
         role="tab"
         selected={selected}
         showActions

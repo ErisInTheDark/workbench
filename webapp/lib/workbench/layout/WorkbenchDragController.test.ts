@@ -69,3 +69,28 @@ test("the controller resolves extended targets inside the closest boundary and d
     if (originalDocument) Object.defineProperty(globalThis, "document", originalDocument); else Reflect.deleteProperty(globalThis, "document");
   }
 });
+
+test("touch pointers cannot arm drag listeners or suppress their click", () => {
+  const listeners: string[] = [];
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    addEventListener: (type: string) => { listeners.push(type); },
+    removeEventListener: () => undefined,
+  } });
+
+  try {
+    const controller = new WorkbenchDragController();
+    const started = controller.begin({ button: 0, clientX: 12, clientY: 18, pointerType: "touch" }, {
+      dropTargetIds: [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID],
+      label: "thread",
+      payload: { section: "pinned", sourceKey: "codex:thread", target: { kind: "thread", target: { kind: "provider", threadId: "thread" } }, type: "thread-row" },
+    });
+
+    assert.equal(started, false);
+    assert.deepEqual(listeners, []);
+    assert.equal(controller.getSnapshot().active, false);
+    controller.dispose();
+  } finally {
+    if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow); else Reflect.deleteProperty(globalThis, "window");
+  }
+});
